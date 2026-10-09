@@ -2,7 +2,7 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-`npm run storybook` · `npm run build-storybook`.
+`pnpm storybook` · `pnpm build-storybook`.
 
 **This page deliberately carries no story, story-file or docs-page totals.** It used to, and
 the figure conflicted on five consecutive merges of `main` — a count is a fact about a *tree*,
@@ -12,7 +12,7 @@ archaeology that grew up around defending it was longer than the rules it sat ab
 If you need the numbers, measure them and do not write them down here:
 
 ```powershell
-npm run build-storybook
+pnpm build-storybook
 # then, over storybook-static/index.json:
 #   Object.values(index.entries) grouped by `type`  -> story / docs counts
 #   distinct `importPath`         -> story files (+1 for DesignSystem.mdx)
@@ -46,7 +46,7 @@ it says `tags: ["autodocs"]`.
   extracts `generate_handler!` command names, and fails if a backend command lacks a fake handler or if a fake
   handler exists for a command Rust no longer registers. Commands deliberately left unimplemented must be
   declared with an explicit reason in the `ABSENT` map.
-- **The fake is shared with `npm run mobile:dev`** (`apps/light/vite.config.ts`, port 5175): Both configs import
+- **The fake is shared with `pnpm mobile:dev`** (`apps/light/vite.config.ts`, port 5175): Both configs import
   `fake/aliases.ts`, ensuring web and mobile mock behaviors stay identical. **`?seed=` and `?fault=` in that
   server's address are a story's `parameters.fake`** (`apps/light/fakeBoot.ts`, read once before React), so a state
   a story reaches by seed or fault — `/settings?seed=paired&fault=lentStorage` — can be stood behind the whole
@@ -226,7 +226,7 @@ it says `tags: ["autodocs"]`.
   static site that draws card art without touching Scryfall. **No card image bytes are
   committed.**
 - **`.storybook` is type-checked by its own program** — `tsc -p .storybook`, run by
-  `npm run build` — so the fake is checked against `ipc.ts` by `verify` like the app is. And
+  `pnpm build` — so the fake is checked against `ipc.ts` by `verify` like the app is. And
   **`@types/node` must never be installed**: `types: []` blocks only the _automatic_ include,
   not a transitive `/// <reference types="node" />`, and `vitest` and `vite` each carry one. Its
   mere presence in the tree leaks Node types into the **app** program, which type-checks
@@ -234,7 +234,7 @@ it says `tags: ["autodocs"]`.
   Its absence is the only fence; `.storybook/node-url.d.ts` shims the one function `main.ts`
   needs.
 - **`packages/ui/stories.test.tsx` runs every story's `play` under Vitest** through `composeStories`,
-  which is what puts a story's own claim inside `npm run verify` — `build-storybook` compiles
+  which is what puts a story's own claim inside `pnpm verify` — `build-storybook` compiles
   stories, it never plays them. `composeStories` **snapshots project annotations at call time**,
   so `setProjectAnnotations` must run before it, at module scope; after the scan it is a no-op
   and the failure is a story running with no decorator.
@@ -270,7 +270,7 @@ it says `tags: ["autodocs"]`.
   the third line since phase 3**: the light app's phone UI is storied where it lives, and
   `packages/ui/index.css` must not scan `apps/light/` for the desktop bundle — `apps/light/mobile.css` declares it
   for the light build, and `preview.css` for the workbench.
-- **`npm run build-storybook` runs in CI's `storybook` job**, and it is the **only** gate the
+- **`pnpm build-storybook` runs in CI's `storybook` job**, and it is the **only** gate the
   `.mdx` page has. Stories are `.tsx` under `packages/ui/` or `apps/light/`, so `tsc` and ESLint already see them;
   `DesignSystem.mdx` is seen by neither — `tsc` reads only `.ts`/`.tsx` however the `include`
   glob is written, and `eslint` answers "File ignored because no matching configuration was

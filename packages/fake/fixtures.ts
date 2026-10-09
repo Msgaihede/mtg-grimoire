@@ -27,13 +27,12 @@
  * names neither.
  */
 import { CARDS, type FakeCard } from "./cards";
-import { finishPrice } from "@/lib/finish";
-import { formatPrice } from "@/lib/prices";
-import { deckCardSlot } from "@/features/decks/dnd";
-import { buildGroups, type GroupBy } from "@/features/decks/grouping";
-import type { SortBy } from "@/features/decks/sorting";
-import { theoryMatchPlan, type TheoryPlan } from "@/features/decks/theoryMatch";
-import type { ValidationIssue } from "@/features/decks/validation/types";
+import { finishPrice } from "@grimoire/ui/lib/finish";
+import { deckCardSlot } from "@grimoire/ui/features/decks/dnd";
+import { buildGroups, type GroupBy } from "@grimoire/ui/features/decks/grouping";
+import type { SortBy } from "@grimoire/ui/features/decks/sorting";
+import { theoryMatchPlan, type TheoryPlan } from "@grimoire/ui/features/decks/theoryMatch";
+import type { ValidationIssue } from "@grimoire/ui/features/decks/validation/types";
 import type {
   CategoryKind,
   CategoryOrigin,
@@ -42,8 +41,7 @@ import type {
   ReleaseInfo,
   ReleaseNote,
   UpdateAsset,
-} from "@/lib/ipc";
-import type { WallItem } from "../../apps/light/phone/CardWall";
+} from "@grimoire/ui/lib/ipc";
 
 /**
  * A fixture printing, by the two columns that identify one — the set code and the collector
@@ -65,32 +63,6 @@ export function printing(setCode: string, collectorNumber: string): FakeCard {
   const card = CARDS.find((c) => c.setCode === setCode && c.collectorNumber === collectorNumber);
   if (!card) throw new Error(`No fixture printing ${setCode} ${collectorNumber}`);
   return card;
-}
-
-/**
- * A fixture printing as the phone face's wall draws it — the shape `apps/light/phone/items.ts`'
- * `searchItem` gives a search result, filled from the corpus's own row, so the art, the chin and
- * the price are a real card's. `items.ts` itself takes the IPC DTOs, and `items.test.ts` holds
- * what it picks out of each; a story built on this is about the wall, not about that mapping.
- * Unmarked, held once and named by its printing, as a search result for a card not owned is.
- */
-export function wallItem(card: FakeCard, over: Partial<WallItem> = {}): WallItem {
-  return {
-    key: card.id,
-    cardId: card.id,
-    name: card.name,
-    rarity: card.rarity,
-    chin: {
-      setCode: card.setCode,
-      collectorNumber: card.collectorNumber,
-      printingTitle: card.setName,
-    },
-    finish: null,
-    money: formatPrice(card.priceUsd, "usd"),
-    count: 1,
-    pressLabel: `${card.name}, ${card.setCode.toUpperCase()} ${card.collectorNumber}`,
-    ...over,
-  };
 }
 
 /**

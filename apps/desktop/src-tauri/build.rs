@@ -5,7 +5,7 @@ fn main() {
 
     // **The three load together or the cfg is off.** A bundle embedded without its models, or
     // the reverse, is a half-shipped scanner — see the 2026-09-15 scanner spec §4.2.
-    // `npm run scanner:assets` is what puts them here, and the release workflow runs it.
+    // `pnpm scanner:assets` is what puts them here, and the release workflow runs it.
     //
     // **`rerun-if-changed` on a path that does not exist reruns this script on every build**,
     // so the directory line relies on the directory always existing — which is what its tracked

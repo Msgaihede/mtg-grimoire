@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // The web host's smoke run: the built app, in a real browser, over the real engine — a first run.
 //
-//     npm run web:wasm && npm run web:build && npm run web:smoke
+//     pnpm web:wasm && pnpm web:build && pnpm web:smoke
 //
 // A green suite proves the host it ran on, and no suite runs the WASM module: vitest drives the
 // Worker's logic over a fake, and cargo compiles the engine for a browser without starting one.

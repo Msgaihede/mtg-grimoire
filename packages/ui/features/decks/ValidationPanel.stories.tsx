@@ -2,7 +2,7 @@ import type { RefObject } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
 import type { DeckCard } from "@/lib/ipc";
-import { deckCard, MISSING, orphanDeckCard, printing } from "../../../fake/fixtures";
+import { deckCard, MISSING, orphanDeckCard, printing } from "@grimoire/fake/fixtures";
 import { SPECS } from "./validation/fixtures";
 import { ValidationPanel } from "./ValidationPanel";
 

@@ -16,7 +16,7 @@
  *
  * Rewriting the `src` rather than vendoring a trimmed copy of the CSS keeps node_modules
  * the source of truth: `keyrune` ships a new `.ss-<code>` class every time a set is
- * printed, and a vendored copy would go stale on the next `npm update`. Only `@font-face`
+ * printed, and a vendored copy would go stale on the next `pnpm update`. Only `@font-face`
  * blocks are touched; every glyph class passes through untouched.
  */
 // Type-only: `vite` is a devDependency and this import leaves nothing behind at runtime.

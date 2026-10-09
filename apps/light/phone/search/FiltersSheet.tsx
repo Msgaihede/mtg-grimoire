@@ -1,8 +1,8 @@
 import type { ReactNode, Ref } from "react";
 import { ArrowUp, SlidersHorizontal } from "lucide-react";
 import { motion } from "motion/react";
-import { Dialog } from "@/components/Dialog";
-import { Dropdown } from "@/components/Dropdown/Dropdown";
+import { Dialog } from "@grimoire/ui/components/Dialog";
+import { Dropdown } from "@grimoire/ui/components/Dropdown/Dropdown";
 import {
   FILTER_CONTROL,
   FILTER_FOCUS,
@@ -13,9 +13,9 @@ import {
   RarityChip,
   ResetAll,
   ToggleChip,
-} from "@/components/FilterChips";
-import { PriceRange } from "@/components/PriceRange";
-import { colorDisabled, countDisabled, facetTitle, optionDisabled } from "@/features/search/facets";
+} from "@grimoire/ui/components/FilterChips";
+import { PriceRange } from "@grimoire/ui/components/PriceRange";
+import { colorDisabled, countDisabled, facetTitle, optionDisabled } from "@grimoire/ui/features/search/facets";
 import {
   conditionChip,
   formatPickerRows,
@@ -26,17 +26,17 @@ import {
   type TrayCell,
   sortDirectionName,
   useFormatOptions,
-} from "@/features/search/filterOptions";
-import { countOf } from "@/features/search/resultCount";
-import { SetCombobox } from "@/features/search/SetCombobox";
-import type { FilterSurface } from "@/features/search/FilterBar";
-import { CARD_TYPES, cycleTriState } from "@/features/search/useCardSearch";
-import { BORDERS, BORDER_LABEL } from "@/lib/border";
-import { FINISHES, FINISH_LABEL } from "@/lib/finish";
-import { CONDITIONS, CONDITION_NOT_SET } from "@/lib/conditions";
-import { MANA_KEYS, MANA_LABEL } from "@/lib/mana";
-import { TRANSITION } from "@/lib/motion";
-import { cn } from "@/lib/utils";
+} from "@grimoire/ui/features/search/filterOptions";
+import { countOf } from "@grimoire/ui/features/search/resultCount";
+import { SetCombobox } from "@grimoire/ui/features/search/SetCombobox";
+import type { FilterSurface } from "@grimoire/ui/features/search/FilterBar";
+import { CARD_TYPES, cycleTriState } from "@grimoire/ui/features/search/useCardSearch";
+import { BORDERS, BORDER_LABEL } from "@grimoire/ui/lib/border";
+import { FINISHES, FINISH_LABEL } from "@grimoire/ui/lib/finish";
+import { CONDITIONS, CONDITION_NOT_SET } from "@grimoire/ui/lib/conditions";
+import { MANA_KEYS, MANA_LABEL } from "@grimoire/ui/lib/mana";
+import { TRANSITION } from "@grimoire/ui/lib/motion";
+import { cn } from "@grimoire/ui/lib/utils";
 
 /**
  * **Every control in the sheet is a 44px touch target, whatever the pointer.** The shared chips

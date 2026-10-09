@@ -40,7 +40,7 @@ export type SearchSection = "deck" | "collection" | "wishlist";
  * every deck they opened (issue #183). A deck is *built* out of a search; the column is the work.
  *
  * **The collection and the wishlist followed it for a day and were measured out of it**
- * (2026-09-07, `npm run tauri dev`, a debug build, driven at seven window widths). Two things the
+ * (2026-09-07, `pnpm tauri dev`, a debug build, driven at seven window widths). Two things the
  * suite cannot see decided it. At **544px and below the panel is an overlay, not a rail** — these
  * pages have no docked card pane to suppress it, so `roomy === false` always implies `overWidth`,
  * and a default of open means arriving at your own wishlist to find a card search drawn over it.

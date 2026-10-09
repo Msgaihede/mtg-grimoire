@@ -1,8 +1,8 @@
 import { useEffect, useEffectEvent, useLayoutEffect, useRef, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import type { ChinPrinting } from "@/components/CardChin";
-import type { Finish } from "@/lib/finish";
-import { useElementWidth } from "@/lib/useElementWidth";
+import type { ChinPrinting } from "@grimoire/ui/components/CardChin";
+import type { Finish } from "@grimoire/ui/lib/finish";
+import { useElementWidth } from "@grimoire/ui/lib/useElementWidth";
 import { columnsFor, GAP, rowHeightFor, tileWidthFor } from "./wall";
 import { WallTile } from "./WallTile";
 

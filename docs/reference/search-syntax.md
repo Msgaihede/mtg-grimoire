@@ -611,7 +611,7 @@ which changes no answer (`picked_tags` sorts and dedups anyway) and is what keep
 
 ### The tagger pass, 2026-08-22
 
-`npm run tauri dev` from the `tag-search` worktree, **debug build**, window 1920×1080, first-run
+`pnpm tauri dev` from the `tag-search` worktree, **debug build**, window 1920×1080, first-run
 sync: **116,700 cards**, **4,525 oracle tags** / 230,243 taggings, **11,530 art tags**. Both
 surfaces were driven — the search page and the deck editor's docked panel — and they answered
 identically, which is the claim "one wiring reaches both" made good.
@@ -655,7 +655,7 @@ overhang** at that width, and 290px at the panel's normal 384.
 
 ### The query-syntax pass
 
-`npm run tauri dev` from the `scryfall-search-syntax` worktree, **debug build**, 2026-09-22,
+`pnpm tauri dev` from the `scryfall-search-syntax` worktree, **debug build**, 2026-09-22,
 window 1920×1080, against a copy of the main checkout's real data. The launch migrated the corpus
 to schema 5 and then ran a full ingest: **118,609 printings, 49,801 of them carrying keywords**.
 

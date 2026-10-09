@@ -17,7 +17,7 @@ import { NoteEditorDialog, type NoteDraft } from "./NoteEditorDialog";
  * scrolls the selection into view, jsdom has **no such method**, and the `TypeError` is thrown
  * inside the view's own dispatch — so it escapes as an **unhandled error**, and
  * `stories.test.tsx` records what that costs in this repo's own words: *"Vitest fails a run on an
- * unhandled error even when every test passed."* A red `npm run verify` reporting
+ * unhandled error even when every test passed."* A red `pnpm verify` reporting
  * `Tests 0 failed`.
  *
  * Nothing below types or focuses, so it may well never fire — which is exactly why it is written

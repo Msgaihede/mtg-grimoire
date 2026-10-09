@@ -7,7 +7,7 @@
 // Launch the app with the debugging port open first (PowerShell):
 //
 //     $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
-//     npm run tauri dev
+//     pnpm tauri dev
 //
 // Then, from another shell:
 //

@@ -8,7 +8,7 @@ import {
   SCANNER_WASM_FILE,
   wasmContentType,
   wasmPath,
-} from "../../../packages/ui/lib/core/web/assets";
+} from "@grimoire/ui/lib/core/web/assets";
 import { headersFor, parseHeaders } from "./headers";
 
 /**

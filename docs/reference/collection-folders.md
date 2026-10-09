@@ -3045,7 +3045,7 @@ rather than what was in it.
 
 ### Folder shelves — four passes, 2026-09-26 and 2026-09-27
 
-**All on the debug build** (`npm run tauri dev` in the branch's worktree), in a 1920×1080 window at
+**All on the debug build** (`pnpm tauri dev` in the branch's worktree), in a 1920×1080 window at
 DPR 1, driven with real CDP input and read back with DOM and rect probes, per-frame
 `requestAnimationFrame` samplers, and `user.db` over `node:sqlite`. The data was a byte copy of the
 main checkout's dev `data/` folder, migrated from user v46 on its first launch, with folders staged

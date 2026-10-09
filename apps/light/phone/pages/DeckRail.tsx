@@ -1,30 +1,30 @@
 import { useId, useMemo, useState, type ReactNode } from "react";
 import { CircleCheck, Plus, TriangleAlert } from "lucide-react";
-import { BracketAdvisory, useBracketReading } from "@/features/decks/DeckBracket";
-import { deckStats } from "@/features/decks/DeckStats";
+import { BracketAdvisory, useBracketReading } from "@grimoire/ui/features/decks/DeckBracket";
+import { deckStats } from "@grimoire/ui/features/decks/DeckStats";
 import {
   isHandAdded,
   NOT_MADE_BY_DECK,
   tokenCardName,
   type DeckTokenView,
-} from "@/features/decks/deckTokens";
-import { noteTitle } from "@/features/decks/deckNotes";
-import { DeleteNoteDialog } from "@/features/decks/DeleteNoteDialog";
-import { NoteBody } from "@/features/decks/noteBody";
-import { NoteEditorDialog, type NoteDraft } from "@/features/decks/NoteEditorDialog";
-import { ManaCurveChart } from "@/features/decks/stats/ManaCurveChart";
-import { TodoBody } from "@/features/decks/todoBody";
-import { DeleteTodoListDialog, TodoListDialog } from "@/features/decks/TodoListDialog";
-import { listTitle, parseTodoBody, toggleTodo } from "@/features/decks/todoMarkdown";
-import type { DeckCore } from "@/features/decks/useDeckCore";
-import type { DeckNotes } from "@/features/decks/useDeckNotes";
-import { useDeckTodoLists } from "@/features/decks/useDeckTodos";
-import { useDeckTokens } from "@/features/decks/useDeckTokens";
-import { bracketWarning } from "@/features/decks/validation/bracket";
-import { validateDeck } from "@/features/decks/validation/engine";
-import { ValidationFindings } from "@/features/decks/ValidationPanel";
-import { plural } from "@/lib/counts";
-import { FOCUS, FOCUS_INSET } from "@/lib/focus";
+} from "@grimoire/ui/features/decks/deckTokens";
+import { noteTitle } from "@grimoire/ui/features/decks/deckNotes";
+import { DeleteNoteDialog } from "@grimoire/ui/features/decks/DeleteNoteDialog";
+import { NoteBody } from "@grimoire/ui/features/decks/noteBody";
+import { NoteEditorDialog, type NoteDraft } from "@grimoire/ui/features/decks/NoteEditorDialog";
+import { ManaCurveChart } from "@grimoire/ui/features/decks/stats/ManaCurveChart";
+import { TodoBody } from "@grimoire/ui/features/decks/todoBody";
+import { DeleteTodoListDialog, TodoListDialog } from "@grimoire/ui/features/decks/TodoListDialog";
+import { listTitle, parseTodoBody, toggleTodo } from "@grimoire/ui/features/decks/todoMarkdown";
+import type { DeckCore } from "@grimoire/ui/features/decks/useDeckCore";
+import type { DeckNotes } from "@grimoire/ui/features/decks/useDeckNotes";
+import { useDeckTodoLists } from "@grimoire/ui/features/decks/useDeckTodos";
+import { useDeckTokens } from "@grimoire/ui/features/decks/useDeckTokens";
+import { bracketWarning } from "@grimoire/ui/features/decks/validation/bracket";
+import { validateDeck } from "@grimoire/ui/features/decks/validation/engine";
+import { ValidationFindings } from "@grimoire/ui/features/decks/ValidationPanel";
+import { plural } from "@grimoire/ui/lib/counts";
+import { FOCUS, FOCUS_INSET } from "@grimoire/ui/lib/focus";
 import {
   AUTO_BRACKET,
   ipcError,
@@ -34,9 +34,9 @@ import {
   type DeckTodoList,
   type DeckVariant,
   type FormatSpec,
-} from "@/lib/ipc";
-import { PRESS_SOFT } from "@/lib/motion";
-import { cn } from "@/lib/utils";
+} from "@grimoire/ui/lib/ipc";
+import { PRESS_SOFT } from "@grimoire/ui/lib/motion";
+import { cn } from "@grimoire/ui/lib/utils";
 import type { Receipt } from "../deck/receipt";
 
 /**

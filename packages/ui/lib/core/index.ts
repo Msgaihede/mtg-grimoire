@@ -39,7 +39,7 @@ const HOST_UNLOADED = "MTG Grimoire could not finish loading. Check your connect
  * that names the command on the light app's Android host, and in the web app a message to the
  * database Worker.
  *
- * **Which build this is, is `import.meta.env.MODE`** — `web` is the mode `npm run web:build` and
+ * **Which build this is, is `import.meta.env.MODE`** — `web` is the mode `pnpm web:build` and
  * `web:dev` run `apps/light/vite.config.ts` in. It is not a probe: Vite replaces it at compile time,
  * as it does for the `fake` mode `apps/light/main.tsx` reads, and nothing is asked of the window.
  *

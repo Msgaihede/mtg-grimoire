@@ -871,7 +871,7 @@ beforeAll(() => {
  * **How long every `findBy*` and `waitFor` here gives the page to settle — a ceiling, never a
  * pause.** Nothing on this page exists until reads have answered in turn: the folder census,
  * then the per-shelf counts and the page of rows, then the virtualiser's measure. Under
- * `npm run verify`, with the whole suite beside `tsc`, `vite build` and `eslint`, that chain ran
+ * `pnpm verify`, with the whole suite beside `tsc`, `vite build` and `eslint`, that chain ran
  * past Testing Library's 1000ms default — `closes a naming field when the reader walks into
  * another folder` failed on `findHeading("Trade binder")` there on 2026-09-26 and passed alone —
  * and every case here opens on the same chain, so the ceiling is the file's rather than one

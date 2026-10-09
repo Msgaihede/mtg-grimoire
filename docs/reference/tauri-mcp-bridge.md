@@ -2,7 +2,7 @@
 
 The second way to drive the real window, beside
 [the CDP harness](live-ui-verification.md). Everything below was measured on 2026-08-14
-against a **debug** build (`npm run tauri dev`), plugin `0.12.0`, Tauri 2.11.5.
+against a **debug** build (`pnpm tauri dev`), plugin `0.12.0`, Tauri 2.11.5.
 
 ## It is two halves, and only one of them was ever installed
 
@@ -18,7 +18,7 @@ Five pieces, and the bridge is dark if any one is missing:
 | --- | --- | --- |
 | `tauri-plugin-mcp-bridge = "0.12"` | `apps/desktop/src-tauri/Cargo.toml` | the server half |
 | `Builder::new().bind_address("127.0.0.1").build()` | `apps/desktop/src-tauri/src/desktop.rs`, under `#[cfg(debug_assertions)]` | opens the port |
-| **`MTG_GRIMOIRE_MCP_BRIDGE=1`** | the environment `npm run tauri dev` is launched from | since 2026-09-28 the registration is also inside an `if` on it — see below |
+| **`MTG_GRIMOIRE_MCP_BRIDGE=1`** | the environment `pnpm tauri dev` is launched from | since 2026-09-28 the registration is also inside an `if` on it — see below |
 | `"withGlobalTauri": true` | `apps/desktop/src-tauri/tauri.conf.json` | `bridge.js` reaches IPC through `window.__TAURI__` |
 | three `mcp-bridge:` permissions | `apps/desktop/src-tauri/capabilities/desktop.json` | the ACL gates the webview's half |
 
@@ -37,7 +37,7 @@ app owns. With the variable unset the port is simply shut, which is what most de
 
 ```powershell
 $env:MTG_GRIMOIRE_MCP_BRIDGE = "1"
-npm run tauri dev
+pnpm tauri dev
 ```
 
 The app prints one stderr line when it opens the port, so a launch that forgot the variable reads

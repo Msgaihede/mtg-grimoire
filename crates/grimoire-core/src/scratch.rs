@@ -4,7 +4,7 @@
 //! `std::env::temp_dir()` is one directory for every worktree and every process on the machine,
 //! so the fixed `mtgtest-<name>` paths this replaces were the same path in two runs at once.
 //! Observed 2026-09-28: `ingest::tests::a_writer_gets_the_connection_between_batches_of_an_ingest`
-//! failed inside an `npm run verify` with `UNIQUE constraint failed: cards_staging.id` — another
+//! failed inside an `pnpm verify` with `UNIQUE constraint failed: cards_staging.id` — another
 //! worktree's run of the same test was ingesting the same card ids into the same `corpus.db` —
 //! and passed 6/6 run alone. The process id separates the runs; the thread separates the tests
 //! inside one, because libtest gives every test a thread of its own, so a name has to be unique

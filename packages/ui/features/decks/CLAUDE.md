@@ -93,11 +93,11 @@ Execute verification tests only at the end of feature work:
 
 | Command | Action |
 | --- | --- |
-| `npm run test` / `npx vitest packages/ui/features/decks` | Run deck builder unit and validation tests |
-| `npx vitest packages/ui/features/decks/validation` | Run isolated deck validation rules tests |
+| `pnpm test` / `pnpm exec vitest packages/ui/features/decks` | Run deck builder unit and validation tests |
+| `pnpm exec vitest packages/ui/features/decks/validation` | Run isolated deck validation rules tests |
 | `cargo test -p grimoire-core deck::` | Run Rust core deck storage tests |
 | `cargo test -p mtg-grimoire deck::` | Run desktop host wrapper tests |
-| `npm run storybook:test` | Run Storybook deck component interaction tests |
+| `pnpm storybook:test` | Run Storybook deck component interaction tests |
 
 Commit discipline:
 - One commit per feature matching feature size, bundling domain logic, UI views, tests, and documentation for `release-please`.

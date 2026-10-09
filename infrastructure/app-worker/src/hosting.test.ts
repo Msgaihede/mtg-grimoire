@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import headersText from "../_headers?raw";
 import wranglerText from "../wrangler.jsonc?raw";
+import assetsText from "../../../packages/ui/lib/core/web/assets.ts?raw";
 import desktopConf from "../../../apps/desktop/src-tauri/tauri.conf.json?raw";
 import launchRs from "../../../crates/grimoire-core/src/launch.rs?raw";
 import imageUriRs from "../../../crates/grimoire-core/src/image_uri.rs?raw";
@@ -12,6 +13,13 @@ import entitlementRs from "../../../crates/grimoire-core/src/sync_engine/entitle
 import socketRs from "../../../crates/grimoire-core/src/platform/socket.rs?raw";
 import webCoreTs from "../../../packages/ui/lib/core/web/index.ts?raw";
 import { headersFor, parseHeaders } from "./headers";
+
+/** This folder's own modules, as text — at every depth: a module in a subfolder is bundled too. */
+const OWN: Record<string, string> = import.meta.glob("./**/*.ts", {
+  query: "?raw",
+  import: "default",
+  eager: true,
+});
 
 /**
  * **The fence between the hosting policy and the engine it hosts.** Nothing compiles the two
@@ -543,6 +551,7 @@ describe("wrangler.jsonc", () => {
         "$schema",
         "name",
         "main",
+        "alias",
         "compatibility_date",
         "routes",
         "workers_dev",
@@ -551,6 +560,48 @@ describe("wrangler.jsonc", () => {
         "observability",
       ].sort(),
     );
+  });
+});
+
+describe("what the script imports, in a job that installs only wrangler", () => {
+  /** Every specifier a source names — `from "x"`, `import "x"`, `import("x")` — comments out. */
+  const named = (source: string): string[] =>
+    [
+      ...source
+        .replace(/\/\*[\s\S]*?\*\//g, " ")
+        .replace(/(^|[^:"'`])\/\/[^\n]*/g, "$1")
+        .matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)["']([^"']+)["']/g),
+    ].map(([, spec]) => spec);
+  /** The script: this folder's modules, less the tests and the ambient declarations. */
+  const script = Object.entries(OWN).filter(([path]) => !/\.(?:test|d)\.ts$/.test(path));
+  const alias = jsonc(wranglerText).alias as Record<string, string>;
+
+  it("is a file beside it, or a module `wrangler.jsonc` gives a path for", () => {
+    // `release.yml`'s `web-deploy` runs no pnpm, so nothing links `@grimoire/ui` into this
+    // folder there: a package name the config does not name fails the bundle at the release,
+    // and at no pull request before it.
+    const paths = script.map(([path]) => path).sort();
+    expect(paths).toEqual(["./headers.ts", "./index.ts"]);
+    const specs = script.flatMap(([, source]) => named(source));
+    // A relative import has to be one of the modules listed above. One that is not — a file
+    // in another language, or one outside this folder — is a part of the bundle this never
+    // read, and whatever it imports is unchecked.
+    for (const spec of specs.filter((s) => s.startsWith(".")))
+      expect(paths, spec).toContain(`${spec}.ts`);
+    // A type-only import counts here although the compiler erases it: `named` does not tell
+    // the two apart, and failing on one is the safe direction.
+    const outside = specs.filter((spec) => !spec.startsWith("."));
+    expect(outside).toEqual(["@grimoire/ui/lib/core/web/assets"]);
+    expect(alias).toEqual({
+      "@grimoire/ui/lib/core/web/assets": "../../packages/ui/lib/core/web/assets.ts",
+    });
+  });
+
+  it("reaches a module that imports nothing of its own", () => {
+    // What the alias points at is bundled with the script, and anything it named would need the
+    // install that job does not run.
+    expect(assetsText).toContain("export function isNavigation");
+    expect(named(assetsText)).toEqual([]);
   });
 });
 

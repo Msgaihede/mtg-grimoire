@@ -1,7 +1,7 @@
 //! Grants the webview permission to use the camera — and only the camera — so the in-app QR
 //! scanner can open one.
 //!
-//! **Measured live 2026-08-31** against `npm run tauri dev` (debug, Windows/WebView2):
+//! **Measured live 2026-08-31** against `pnpm tauri dev` (debug, Windows/WebView2):
 //! `window.isSecureContext` is `true`, `document.featurePolicy.allowsFeature('camera')` is
 //! `true`, `navigator.permissions.query({name:'camera'})` answers `granted`, and
 //! `enumerateDevices()` lists a real `videoinput` — yet

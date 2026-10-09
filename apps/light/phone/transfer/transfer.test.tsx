@@ -2,17 +2,17 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => import("../../../../packages/fake/core"));
-vi.mock("@tauri-apps/api/event", () => import("../../../../packages/fake/event"));
-vi.mock("@tauri-apps/api/window", () => import("../../../../packages/fake/window"));
+vi.mock("@tauri-apps/api/core", () => import("@grimoire/fake/core"));
+vi.mock("@tauri-apps/api/event", () => import("@grimoire/fake/event"));
+vi.mock("@tauri-apps/api/window", () => import("@grimoire/fake/window"));
 
 /**
  * What the save dialog answered, for the one test that plays the host whose save is a dialog —
  * `null` everywhere else, which is the real `saveText` and so the browser's download.
  */
 const dialogAnswer = vi.hoisted(() => ({ next: null as "saved" | "cancelled" | null }));
-vi.mock("@/lib/core/files", async (importOriginal) => {
-  const real = await importOriginal<typeof import("@/lib/core/files")>();
+vi.mock("@grimoire/ui/lib/core/files", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@grimoire/ui/lib/core/files")>();
   return {
     ...real,
     saveText: (fileName: string, text: string) =>
@@ -28,21 +28,21 @@ vi.mock("@/lib/core/files", async (importOriginal) => {
  * the seam is stood in for, as the desktop dialog's suite stands in for it.
  */
 const copied = vi.hoisted(() => ({ text: null as string | null }));
-vi.mock("@/lib/clipboard", () => ({
+vi.mock("@grimoire/ui/lib/clipboard", () => ({
   copyText: (text: string) => {
     copied.text = text;
     return Promise.resolve();
   },
 }));
 
-import { exportFileName } from "@/features/decks/deckExport";
-import { formatExport, isActivePile } from "@/features/transfer/export/format";
-import { defaultFields } from "@/features/transfer/fields";
-import type { ExportFormat } from "@/features/transfer/formats";
-import { fromCollectionRow, fromDeckCard } from "@/features/transfer/TransferCard";
-import { resetBulkUndo } from "@/lib/bulkUndo";
-import { ipc, type CollectionRow, type DeckCard } from "@/lib/ipc";
-import { DEFAULT_MARKETPLACE } from "@/lib/marketplace";
+import { exportFileName } from "@grimoire/ui/features/decks/deckExport";
+import { formatExport, isActivePile } from "@grimoire/ui/features/transfer/export/format";
+import { defaultFields } from "@grimoire/ui/features/transfer/fields";
+import type { ExportFormat } from "@grimoire/ui/features/transfer/formats";
+import { fromCollectionRow, fromDeckCard } from "@grimoire/ui/features/transfer/TransferCard";
+import { resetBulkUndo } from "@grimoire/ui/lib/bulkUndo";
+import { ipc, type CollectionRow, type DeckCard } from "@grimoire/ui/lib/ipc";
+import { DEFAULT_MARKETPLACE } from "@grimoire/ui/lib/marketplace";
 import { PhoneFace } from "../PhoneApp";
 import { installLayout, renderPhone } from "../testing";
 import { CollectionTransfer } from "./CollectionTransfer";

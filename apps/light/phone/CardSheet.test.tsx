@@ -2,16 +2,16 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => import("../../../packages/fake/core"));
-vi.mock("@tauri-apps/api/event", () => import("../../../packages/fake/event"));
-vi.mock("@tauri-apps/api/window", () => import("../../../packages/fake/window"));
+vi.mock("@tauri-apps/api/core", () => import("@grimoire/fake/core"));
+vi.mock("@tauri-apps/api/event", () => import("@grimoire/fake/event"));
+vi.mock("@tauri-apps/api/window", () => import("@grimoire/fake/window"));
 
-import { CARDS } from "../../../packages/fake/cards";
-import type { FakeParams } from "../../../packages/fake/world";
-import { COMBO_CARD_NAMES, ORACLE_TAGGED_NAMES } from "../../../packages/fake/db";
-import { COMBOS_NEVER_FETCHED, COMBOS_NONE } from "@/features/card/combos";
-import { ORACLE_TAGS_NEVER_FETCHED, ORACLE_TAGS_UNTAGGED } from "@/features/card/oracleTags";
-import { ipc } from "@/lib/ipc";
+import { CARDS } from "@grimoire/fake/cards";
+import type { FakeParams } from "@grimoire/fake/world";
+import { COMBO_CARD_NAMES, ORACLE_TAGGED_NAMES } from "@grimoire/fake/db";
+import { COMBOS_NEVER_FETCHED, COMBOS_NONE } from "@grimoire/ui/features/card/combos";
+import { ORACLE_TAGS_NEVER_FETCHED, ORACLE_TAGS_UNTAGGED } from "@grimoire/ui/features/card/oracleTags";
+import { ipc } from "@grimoire/ui/lib/ipc";
 import { placeHref } from "../routes";
 import { CardSheet } from "./CardSheet";
 import { usePlace } from "./router";

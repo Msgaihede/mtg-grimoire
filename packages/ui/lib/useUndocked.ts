@@ -33,7 +33,7 @@ const UNSEEN: Seen = { el: null, undocked: false };
  * **The state carries the element it was measured for, and the answer is derived from it** —
  * `false` unless the element in state is the one being asked about. That is how a changed or
  * removed element reads as docked with no effect writing a reset: a synchronous `setState` in an
- * effect body is what `react-hooks/set-state-in-effect` refuses, and only `npm run verify` runs
+ * effect body is what `react-hooks/set-state-in-effect` refuses, and only `pnpm verify` runs
  * that rule. The observer's callback is the one writer.
  *
  * `false` wherever the question cannot be asked: no element, no `IntersectionObserver`, or no

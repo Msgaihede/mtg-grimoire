@@ -1,9 +1,9 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { VERDICTS } from "@/features/scanner/fixtures";
-import { matchStrip, type LastAdded } from "@/features/scanner/reader/readerText";
-import type { ScanMode, ScannerResolution, ScannerVerdict } from "@/lib/ipc";
+import { VERDICTS } from "@grimoire/ui/features/scanner/fixtures";
+import { matchStrip, type LastAdded } from "@grimoire/ui/features/scanner/reader/readerText";
+import type { ScanMode, ScannerResolution, ScannerVerdict } from "@grimoire/ui/lib/ipc";
 import { CameraBox } from "./CameraBox";
 import { MatchLine } from "./MatchLine";
 import { ScanControls } from "./ScanControls";

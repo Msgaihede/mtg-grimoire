@@ -337,7 +337,7 @@ const HEADER = `/**
  * deletes that branch's only fixture.
  *
  * Nothing is imported here on purpose: \`tsconfig\` has \`noUnusedLocals\`, and a type pulled in
- * only to be named in a doc comment is an unused import that fails \`npm run build\`. The DTO
+ * only to be named in a doc comment is an unused import that fails \`pnpm build\`. The DTO
  * names below are prose; \`packages/ui/lib/ipc.ts\` is where they are defined.
  */
 

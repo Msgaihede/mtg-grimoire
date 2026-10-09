@@ -1,8 +1,8 @@
 import { useId, useState } from "react";
 import { skipToken, useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { ChevronDown } from "lucide-react";
-import { CardArt } from "@/components/CardArt";
-import { ManaText } from "@/components/ManaText";
+import { CardArt } from "@grimoire/ui/components/CardArt";
+import { ManaText } from "@grimoire/ui/components/ManaText";
 import {
   bracketRange,
   bracketSentence,
@@ -17,14 +17,14 @@ import {
   ownedNote,
   ownedSummary,
   splitLines,
-} from "@/features/card/combos";
-import { COMBO_TAG } from "@/features/decks/DeckBracket";
-import { comboBrackets } from "@/features/decks/validation/bracket";
-import { count, plural } from "@/lib/counts";
-import { FOCUS_INSET } from "@/lib/focus";
-import { ipc, ipcError, type CardCombo, type ComboStatus } from "@/lib/ipc";
-import { COMBOS_STATUS_KEY, cardCombosKey } from "@/lib/query";
-import { cn } from "@/lib/utils";
+} from "@grimoire/ui/features/card/combos";
+import { COMBO_TAG } from "@grimoire/ui/features/decks/DeckBracket";
+import { comboBrackets } from "@grimoire/ui/features/decks/validation/bracket";
+import { count, plural } from "@grimoire/ui/lib/counts";
+import { FOCUS_INSET } from "@grimoire/ui/lib/focus";
+import { ipc, ipcError, type CardCombo, type ComboStatus } from "@grimoire/ui/lib/ipc";
+import { COMBOS_STATUS_KEY, cardCombosKey } from "@grimoire/ui/lib/query";
+import { cn } from "@grimoire/ui/lib/utils";
 import { Note, SheetSection, ShowMore, Source } from "./parts";
 
 /**

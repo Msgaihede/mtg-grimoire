@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID } from "@/components/tooltip/TooltipProvider";
 import type { DeckCard } from "@/lib/ipc";
-import { deckCard, orphanDeckCard, printing } from "../../../fake/fixtures";
+import { deckCard, orphanDeckCard, printing } from "@grimoire/fake/fixtures";
 import { CardStack, STACK_OPEN_ATTR, stackHeight } from "./CardStack";
 import { LANDED_ATTR, SELECTED_ATTR } from "./cardControl";
 import { deckCardSlot } from "./dnd";

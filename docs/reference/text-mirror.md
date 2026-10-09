@@ -27,7 +27,7 @@ fence](#the-golden-fence-necessary-and-not-sufficient) is what makes it legal.
 
 ## What lands on disk
 
-Default root `data/export/`, movable from Settings → Backup. Under `npm run tauri dev` that is
+Default root `data/export/`, movable from Settings → Backup. Under `pnpm tauri dev` that is
 `target/debug/data/export/`.
 
 ```
@@ -543,7 +543,7 @@ Two writers, one behaviour, and a build that goes red the moment they disagree.
 - **One golden set, committed.** Every scenario × seven formats × two field sets (everything
   available, and the format's own defaults). Both suites count what they compared and assert the
   total, so a deleted golden is a red build rather than a quietly smaller matrix.
-- **TypeScript generates; both suites assert.** `npm run golden` rewrites the files from the TS
+- **TypeScript generates; both suites assert.** `pnpm golden` rewrites the files from the TS
   writer, which is the behaviour of record because it is what shipped. Vitest asserts byte equality
   against them; `cargo test` asserts byte equality against the same files.
 - **The round trip got stronger rather than weaker.** Vitest parses the golden files through
@@ -558,7 +558,7 @@ Two writers, one behaviour, and a build that goes red the moment they disagree.
   one from the dialog with all 70 files green. CSV was fenced all along because its header row
   **is** `available_fields` spelled out. `fields.json` holds `SURFACE_FIELDS` and what
   `availableFields`/`defaultFields` answer for all 21 (format, surface) pairs, written by
-  `npm run golden` from the TypeScript side and asserted by `golden.test.ts` and
+  `pnpm golden` from the TypeScript side and asserted by `golden.test.ts` and
   `transfer/fields.rs`. **Measured by mutation on 2026-08-25**: that drift reddens exactly one test
   on each side and no golden file. `FieldId::key` and `Surface::key` exist for it, and are
   self-fencing — a wrong wire word is red in the same test.

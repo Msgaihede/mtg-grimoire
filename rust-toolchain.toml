@@ -10,7 +10,7 @@
 # Workflows never install a toolchain of their own: `.github/actions/rust-toolchain` reads the
 # channel below, and `scripts/toolchain.test.mjs` fails if any workflow names one directly.
 #
-# Locally, after moving the pin, re-add `llvm-tools-preview` (for `npm run test:coverage:rust`)
+# Locally, after moving the pin, re-add `llvm-tools-preview` (for `pnpm test:coverage:rust`)
 # with `rustup component add` — components are per-toolchain, so the old pin's do not carry over.
 [toolchain]
 channel = "1.98.1"

@@ -57,7 +57,7 @@ The Worker executes on a single thread with no parallel background threads:
 | `glue` | `wasm32-unknown-unknown` only | `#[wasm_bindgen]` bindings, OPFS pool setup, `thread_local` handles |
 
 - **Keep decisions out of `glue.rs`**: Only `glue.rs` is target-gated. All business decisions reside in `host.rs` or `wire.rs` and are tested natively via `cargo test -p grimoire-web`.
-- **Desktop tests vs browser runs**: Native tests mock browser features via scratch directories and mock servers (`httpmock`). Module execution in real browser environments is verified via `npm run web:smoke`, and live sync between two of them via `npm run web:sync-smoke`.
+- **Desktop tests vs browser runs**: Native tests mock browser features via scratch directories and mock servers (`httpmock`). Module execution in real browser environments is verified via `pnpm web:smoke`, and live sync between two of them via `pnpm web:sync-smoke`.
 
 ---
 
@@ -91,12 +91,12 @@ Run verification only at the end of a feature (not after each change):
 | Command | Action |
 | --- | --- |
 | `cargo test -p grimoire-web` | Run native logic and wire tests |
-| `npm run web:wasm` | Build both WASM modules using the `wasm` profile: this host's into `dist-wasm/`, the scanner's (`grimoire-scan`, with `simd128`) into `dist-wasm/scanner/`. `-- --only engine` for this one alone |
-| `npm run web:dev` | Start Vite dev server on port 5176 using current WASM build |
-| `npm run web:build` | Build production web bundle into `apps/light/dist-web/` |
-| `npm run web:smoke` | Run headless Chromium offline smoke tests |
-| `npm run web:sync-smoke` | Pair two headless Chromium profiles through the relay under workerd and sync both ways (runs `app-worker`'s pinned wrangler — `npm ci --ignore-scripts --prefix infrastructure/app-worker` first — or `WRANGLER=<wrangler.js>`) |
-| `npm run web:preview` | Preview production build on port 4176 with Service Worker |
+| `pnpm web:wasm` | Build both WASM modules using the `wasm` profile: this host's into `dist-wasm/`, the scanner's (`grimoire-scan`, with `simd128`) into `dist-wasm/scanner/`. `--only engine` for this one alone |
+| `pnpm web:dev` | Start Vite dev server on port 5176 using current WASM build |
+| `pnpm web:build` | Build production web bundle into `apps/light/dist-web/` |
+| `pnpm web:smoke` | Run headless Chromium offline smoke tests |
+| `pnpm web:sync-smoke` | Pair two headless Chromium profiles through the relay under workerd and sync both ways (runs the pinned wrangler — `npm ci --ignore-scripts --prefix infrastructure/wrangler` first — or `WRANGLER=<wrangler.js>`) |
+| `pnpm web:preview` | Preview production build on port 4176 with Service Worker |
 
 Formatting and clippy:
 - `cargo fmt -p grimoire-web` (never use `cargo fmt --all`).

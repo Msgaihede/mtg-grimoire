@@ -1,6 +1,6 @@
-import { GrimoireMark } from "@/components/GrimoireMark";
-import type { StartupStatus } from "@/lib/ipc";
-import { cn } from "@/lib/utils";
+import { GrimoireMark } from "@grimoire/ui/components/GrimoireMark";
+import type { StartupStatus } from "@grimoire/ui/lib/ipc";
+import { cn } from "@grimoire/ui/lib/utils";
 import { ReloadLink } from "./ReloadLink";
 
 /**

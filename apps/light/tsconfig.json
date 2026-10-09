@@ -1,0 +1,12 @@
+{
+  /* The light app's program: this folder and every shared-UI module it reaches. `types` and the
+     setup file are `apps/desktop/tsconfig.json`'s, for its reasons.
+
+     Not its build: the two Vite configs are Node programs and this one has no Node types, `dist*`
+     is what a build wrote, and `src-tauri` is the Android host. `node_modules` is named because
+     `exclude` replaces TypeScript's default list. */
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "types": ["vite/client"] },
+  "include": [".", "../../packages/ui/test-setup.ts"],
+  "exclude": ["node_modules", "vite.*.ts", "dist*", "src-tauri"]
+}

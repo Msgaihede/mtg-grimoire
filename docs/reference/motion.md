@@ -153,4 +153,4 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `--bundle --minify`, `NODE_ENV=production`, gzip -9). `m` + `LazyMotion(domAnimation)` measures
   +29.3 kB and code-splits; it was **not** taken, because the app loads from local disk in a
   Tauri window and `m` throws if its wrapper is ever forgotten. An unused dep costs 0 — dist was
-  byte-identical after `npm install motion` and before the first import.
+  byte-identical after `pnpm install motion` and before the first import.

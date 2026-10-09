@@ -6,7 +6,7 @@ Read this when you are launching Storybook. The `storybook` lock and why it exis
 ```powershell
 $L = ".claude\skills\running-the-app\lock.ps1"
 pwsh -NoProfile -File $L acquire storybook -Wait -What "component work"
-Start-Process npm.cmd -ArgumentList "run","storybook" -WindowStyle Hidden `
+Start-Process pnpm.cmd -ArgumentList "storybook" -WindowStyle Hidden `
     -RedirectStandardOutput ".claude\skills\running-the-app\storybook.stdout.local" `
     -RedirectStandardError ".claude\skills\running-the-app\storybook.stderr.local"
 $deadline = (Get-Date).AddMinutes(3)
@@ -23,8 +23,8 @@ No console window pops; Storybook's own stdout/stderr — including a boot failu
 — comfortably past the ~70s this machine measured to bind the port — and on expiry reads
 `storybook.stderr.local` and releases the lock rather than spin silently.
 
-`npm` resolves to a `.ps1` wrapper on this machine that `Start-Process` cannot launch —
-use `npm.cmd`. It also spawns Storybook as a **child** process, so adopt the pid actually
+`pnpm` resolves to a `.ps1` wrapper on this machine that `Start-Process` cannot launch —
+use `pnpm.cmd`. It also spawns Storybook as a **child** process, so adopt the pid actually
 listening on 6006 (the loop above), never `Start-Process`'s own pid, or `release` stops
 the wrapper and leaves node holding the port.
 

@@ -2,9 +2,9 @@ import type { ReactElement } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { render, type RenderResult } from "@testing-library/react";
 import { onTestFinished, vi } from "vitest";
-import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
-import type { CommandTable } from "../../../packages/fake/scope";
-import { installWorld, type FakeParams } from "../../../packages/fake/world";
+import { TooltipProvider } from "@grimoire/ui/components/tooltip/TooltipProvider";
+import type { CommandTable } from "@grimoire/fake/scope";
+import { installWorld, type FakeParams } from "@grimoire/fake/world";
 
 /**
  * The layout jsdom does not have. **Any test that _mounts_ a wall calls this first** — not only

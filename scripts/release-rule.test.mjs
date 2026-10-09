@@ -17,7 +17,6 @@ import { describe, expect, it } from "vitest";
 import releaseConfig from "../release-please-config.json?raw";
 import releaseManifest from "../.release-please-manifest.json?raw";
 import packageJson from "../package.json?raw";
-import packageLock from "../package-lock.json?raw";
 import workspaceToml from "../Cargo.toml?raw";
 import cargoLock from "../Cargo.lock?raw";
 import desktopToml from "../apps/desktop/src-tauri/Cargo.toml?raw";
@@ -28,8 +27,10 @@ import scanToml from "../crates/grimoire-scan/Cargo.toml?raw";
 import desktopConf from "../apps/desktop/src-tauri/tauri.conf.json?raw";
 import lightConf from "../apps/light/src-tauri/tauri.conf.json?raw";
 import appGradle from "../apps/light/src-tauri/gen/android/app/build.gradle.kts?raw";
+import deployToolPackage from "../infrastructure/wrangler/package.json?raw";
+import deployToolLock from "../infrastructure/wrangler/package-lock.json?raw";
 import appWorkerPackage from "../infrastructure/app-worker/package.json?raw";
-import appWorkerLock from "../infrastructure/app-worker/package-lock.json?raw";
+import workspaceYaml from "../pnpm-workspace.yaml?raw";
 import releaseYml from "../.github/workflows/release.yml?raw";
 import ciYml from "../.github/workflows/ci.yml?raw";
 import syncSmoke from "./web-sync-smoke.mjs?raw";
@@ -44,6 +45,9 @@ const WORKFLOWS = import.meta.glob("/.github/workflows/*.yml", {
   import: "default",
   eager: true,
 });
+
+/** Which lockfiles the root holds, by name. Not read: pnpm's is a quarter of a megabyte. */
+const ROOT_LOCKS = import.meta.glob(["/package-lock.json", "/npm-shrinkwrap.json", "/yarn.lock", "/pnpm-lock.yaml"]);
 
 /** The cargo workspace's members: where each lives, its manifest, and whether it is a Tauri host. */
 const CRATES = [
@@ -87,9 +91,10 @@ describe("one version in the tree", () => {
     expect(version).toMatch(/^\d+\.\d+\.\d+$/);
     // The deploy guard finds the last tag here (`scripts/web-deploy-guard.mjs`).
     expect(JSON.parse(releaseManifest)).toEqual({ ".": version });
-    const lock = JSON.parse(packageLock);
-    expect(lock.version).toBe(version);
-    expect(lock.packages[""].version).toBe(version);
+    // pnpm's lockfile records no version for the root package, so a release moves nothing in
+    // it. npm's did, and release-please would go on bumping one left behind; a `yarn.lock` would
+    // do worse, because `tauri-action` asks for yarn before pnpm (read at v1.0.0).
+    expect(Object.keys(ROOT_LOCKS)).toEqual(["/pnpm-lock.yaml"]);
   });
 
   it("knows every member of the cargo workspace", () => {
@@ -261,7 +266,7 @@ const secretRefs = (text) =>
 /**
  * What can run a program, as a word on a line: package runners, interpreters, build tools,
  * downloaders, `gh`. Lines that only *name* one — an action, the shell, the Node pin — are not
- * commands. (No `tauri`: its CLI is only ever reached through `npx`, `npm` or `cargo`, and the
+ * commands. (No `tauri`: its CLI is only ever reached through `pnpm`, `npx` or `cargo`, and the
  * word is in every path under `apps/light/src-tauri/`.)
  */
 const RUNS_SOMETHING =
@@ -321,11 +326,13 @@ describe("release.yml", () => {
   });
 
   it("builds the desktop through the root's `tauri` script", () => {
-    // `tauri-action` runs `npm run tauri build` from the repository root, so a release depends on
-    // this script's text: it is what takes the build into the desktop host's folder. Moving the
-    // host without it builds nothing, or the wrong app. The light host's script is pinned in
-    // `apps/light/host.test.ts`.
+    // `tauri-action` runs `pnpm tauri build` from the repository root: it finds `pnpm-lock.yaml`
+    // and, in this manifest, `@tauri-apps/cli` (read at v1.0.0, `src/runner.ts`). So a release
+    // depends on this script's text — it is what takes the build into the desktop host's folder —
+    // and on the CLI being declared here: without it the action installs a global one with npm.
+    // The light host's script is pinned in `apps/light/host.test.ts`.
     expect(JSON.parse(packageJson).scripts.tauri).toBe("cd apps/desktop && tauri");
+    expect(JSON.parse(packageJson).devDependencies["@tauri-apps/cli"]).toBeDefined();
   });
 
   it("runs every job after release-please on a release, and on nothing looser", () => {
@@ -393,8 +400,9 @@ describe("release.yml", () => {
   });
 
   // The rule the removed `sign` job left behind: a secret never sits in a build leg, because a
-  // build leg runs every npm lifecycle script, cargo build script and Gradle plugin, and any of
-  // them can read a file or an environment. **Held as a list of everything the job may run**,
+  // build leg runs every build tool and plugin, cargo build script, Gradle plugin and whatever
+  // install script pnpm is told to allow, and any of them can read a file or an environment.
+  // **Held as a list of everything the job may run**,
   // to the letter: a second `npx`, a `node -e`, an `npm run`, a `curl | sh` is a line that is
   // not on it.
   it.each([
@@ -408,9 +416,9 @@ describe("release.yml", () => {
       ["actions/checkout", "actions/download-artifact", "actions/setup-node"],
       [
         'latest=$(gh api "repos/$REPO/releases/latest" --jq .tag_name)',
-        // The lockfile's packages, no lifecycle script; then what that installed, or nothing.
+        // The lockfile's packages, no lifecycle script; then the file that installed, by path.
         "run: npm ci --ignore-scripts",
-        "run: npx --no-install wrangler deploy",
+        "run: node ../wrangler/node_modules/wrangler/bin/wrangler.js deploy",
         "run: node scripts/web-deploy-probe.mjs apps/light/dist-web",
       ],
     ],
@@ -418,6 +426,13 @@ describe("release.yml", () => {
     expect([...jobs[name].matchAll(/uses: ([\w./-]+)@/g)].map((m) => m[1]).sort()).toEqual(actions);
     expect(commandsOf(jobs[name])).toEqual(commands);
     expect(jobs[name]).not.toMatch(/rust-cache|rust-toolchain|tauri-action|\bcache:/);
+  });
+
+  // The workspace is pnpm's; the two jobs that hold a secret are not part of it. Neither sets
+  // pnpm up, installs with it or runs it: what they run is the list above, to the letter.
+  // `jobsOf` has already dropped comment lines, so this reads what the job runs.
+  it.each(["android-sign", "web-deploy"])("%s never sees pnpm", (name) => {
+    expect(code(jobs[name])).not.toMatch(/pnp[mx]|corepack/);
   });
 
   it.each([
@@ -511,7 +526,7 @@ describe("release.yml", () => {
     // The two build legs are copies of jobs that run green on every pull request; a command
     // that differs is one no pull request has run.
     for (const command of [
-      "npx tauri android build --apk --aab --target aarch64 --ci",
+      "pnpm exec tauri android build --apk --aab --target aarch64 --ci",
       'bash scripts/android-release/check-version.sh "$VERSION"',
       "key: android-aarch64",
     ]) {
@@ -521,13 +536,13 @@ describe("release.yml", () => {
     for (const command of [
       "sudo apt-get update && sudo apt-get install -y clang",
       'cargo install wasm-bindgen-cli --version "$bindgen" --locked',
-      "run: npm run web:wasm",
+      "run: pnpm web:wasm",
       // The card scanner's three files, and a build that fails without them (step 7.5): a web
       // app released without its scanner opens, passes its smoke, and cannot scan.
-      "run: npm run scanner:assets -- --web",
+      "run: pnpm scanner:assets --web",
       "GRIMOIRE_SCANNER_ASSETS: required",
-      "run: npm run web:build",
-      "run: npm run web:smoke",
+      "run: pnpm web:build",
+      "run: pnpm web:smoke",
       "key: web-wasm32",
     ]) {
       expect(jobs.web, command).toContain(command);
@@ -537,12 +552,12 @@ describe("release.yml", () => {
     // the page's build ships what is there when it runs.
     for (const text of [jobs.web, ciYml]) {
       const at = (needle) => text.indexOf(needle);
-      expect(at("run: npm run scanner:assets -- --web")).toBeGreaterThan(at("run: npm run web:wasm"));
-      expect(at("run: npm run web:build")).toBeGreaterThan(at("run: npm run scanner:assets -- --web"));
-      expect(at("run: npm run web:build")).toBeGreaterThan(at("GRIMOIRE_SCANNER_ASSETS: required"));
+      expect(at("run: pnpm scanner:assets --web")).toBeGreaterThan(at("run: pnpm web:wasm"));
+      expect(at("run: pnpm web:build")).toBeGreaterThan(at("run: pnpm scanner:assets --web"));
+      expect(at("run: pnpm web:build")).toBeGreaterThan(at("GRIMOIRE_SCANNER_ASSETS: required"));
     }
     // And a pull request scans a card with what it built.
-    expect(ciYml).toContain("run: npm run web:scanner-smoke");
+    expect(ciYml).toContain("run: pnpm web:scanner-smoke");
     // And the signing a release runs is the signing a pull request proved: `ci.yml` runs the
     // proof over its own bundle, and the proof runs the script `android-sign` runs.
     expect(ciYml).toMatch(
@@ -554,8 +569,8 @@ describe("release.yml", () => {
   it("deploys the bundle `web` built and opened in a browser, then asks the host", () => {
     const web = stepsOf(jobs.web);
     const at = (needle) => web.findIndex((step) => step.includes(needle));
-    expect(at("npm run web:smoke")).toBeGreaterThan(at("npm run web:build"));
-    expect(at("name: web-bundle")).toBeGreaterThan(at("npm run web:smoke"));
+    expect(at("pnpm web:smoke")).toBeGreaterThan(at("pnpm web:build"));
+    expect(at("name: web-bundle")).toBeGreaterThan(at("pnpm web:smoke"));
 
     const deploy = stepsOf(jobs["web-deploy"]);
     const step = (needle) => deploy.findIndex((s) => s.includes(needle));
@@ -564,7 +579,7 @@ describe("release.yml", () => {
       'gh api "repos/$REPO/releases/latest"',
       "name: web-bundle",
       "run: npm ci --ignore-scripts",
-      "run: npx --no-install wrangler deploy",
+      "run: node ../wrangler/node_modules/wrangler/bin/wrangler.js deploy",
       "run: node scripts/web-deploy-probe.mjs apps/light/dist-web",
     ].map(step);
     expect(order[0]).toBeGreaterThan(-1);
@@ -608,40 +623,51 @@ describe("deploys, across every workflow", () => {
   // **The one job that may deploy anything, and the one Worker it may deploy.** The relay holds
   // secrets and a D1 with real entitlements, and the share Worker a D1 and R2 of its own; their
   // deploys stay by hand (root CLAUDE.md, "Deployments").
-  it("runs wrangler once: `web-deploy`, the lockfile's, from infrastructure/app-worker/", () => {
+  it("runs wrangler once: `web-deploy`, the lockfile's install, from infrastructure/app-worker/", () => {
     const wrangler = lines.filter(({ line }) => /\bwrangler\b/.test(line));
     expect(wrangler).toEqual([
       {
-        // Not a run of it: the name of the `web` job's step that *installs* the same lockfile,
-        // for the sync smoke (phase 6, step 6.3). No workflow line there starts wrangler; the
-        // script does, and the test below holds what it may ask of it.
+        // Not a run of it: the `web` job's step that *installs* the same lockfile, for the sync
+        // smoke (phase 6, step 6.3). No workflow line there starts wrangler; the script does,
+        // and the test below holds what it may ask of it.
         path: "/.github/workflows/ci.yml",
-        line: "      - name: Install wrangler from app-worker's lockfile",
+        line: "      - name: Install wrangler from its lockfile",
+      },
+      {
+        path: "/.github/workflows/ci.yml",
+        line: "        run: npm ci --ignore-scripts --prefix infrastructure/wrangler",
+      },
+      {
+        // The deploy job's install, in the tool's own folder.
+        path: "/.github/workflows/release.yml",
+        line: "        working-directory: infrastructure/wrangler",
       },
       {
         path: "/.github/workflows/release.yml",
-        // `--no-install`: what the lockfile's install put there, or a failure. Never a
-        // version typed here, which `npx` would resolve — with everything under it — on the day.
-        line: "        run: npx --no-install wrangler deploy",
+        // By path: the file the install put there, or a failure. No runner resolves a name, so
+        // there is nothing to fetch — a version typed here could not even be asked for.
+        line: "        run: node ../wrangler/node_modules/wrangler/bin/wrangler.js deploy",
       },
     ]);
     const steps = stepsOf(jobsOf(releaseYml)["web-deploy"]);
-    const at = steps.findIndex((s) => /\bwrangler\b/.test(s));
+    const at = steps.findIndex((s) => /wrangler\.js deploy$/m.test(s));
+    expect(at).toBeGreaterThan(0);
+    // From the Worker's folder, where `wrangler.jsonc` is…
     expect(steps[at]).toMatch(/^ {8}working-directory: infrastructure\/app-worker$/m);
     expect(secretsOf(steps[at])).toEqual(CLOUDFLARE_SECRETS);
-    // The install is the step before it, in the same directory, and **nothing is in its
+    // …and the install is the step before it, in the tool's folder, with **nothing in its
     // environment**: what it installs is not run until the token's step, and it runs no script.
     expect(steps[at - 1]).toMatch(/^ {8}run: npm ci --ignore-scripts$/m);
-    expect(steps[at - 1]).toMatch(/^ {8}working-directory: infrastructure\/app-worker$/m);
+    expect(steps[at - 1]).toMatch(/^ {8}working-directory: infrastructure\/wrangler$/m);
     expect(steps[at - 1]).not.toMatch(/^ {8}env:/m);
     expect(secretRefs(steps[at - 1])).toEqual([]);
   });
 
   // **What "pinned" means here: a lockfile.** `npx wrangler@4.146.0` pinned one package of
   // ninety-one; the rest came through floating ranges, resolved on the day of the deploy.
-  it("pins wrangler and everything under it in app-worker's lockfile", () => {
-    const manifest = JSON.parse(appWorkerPackage);
-    const lock = JSON.parse(appWorkerLock);
+  it("pins wrangler and everything under it in a lockfile of its own, outside the workspace", () => {
+    const manifest = JSON.parse(deployToolPackage);
+    const lock = JSON.parse(deployToolLock);
     expect(manifest.private).toBe(true);
     expect(manifest.dependencies).toBeUndefined();
     expect(manifest.scripts).toBeUndefined();
@@ -662,6 +688,21 @@ describe("deploys, across every workflow", () => {
     // The runner's platform is in it: `npm ci` on Linux installs these two without a script.
     expect(lock.packages["node_modules/@esbuild/linux-x64"]).toBeDefined();
     expect(lock.packages["node_modules/@cloudflare/workerd-linux-64"]).toBeDefined();
+    // The tool's folder is npm's. pnpm's workspace is these five entries and no glob that could
+    // take `infrastructure/wrangler` in — a member's dependencies are resolved by pnpm-lock.yaml,
+    // and this lockfile would stop being what installs.
+    const members = [...workspaceYaml.matchAll(/^ {2}- (\S+)$/gm)].map((m) => m[1]);
+    expect(members).toEqual([
+      "packages/*",
+      "apps/*",
+      "infrastructure/relay",
+      "infrastructure/share-worker",
+      "infrastructure/app-worker",
+    ]);
+    // And the Worker's own manifest, in the folder the tool left, is not a second home for it.
+    const worker = JSON.parse(appWorkerPackage);
+    expect(worker.name).toBe("@grimoire/app-worker");
+    expect({ ...worker.dependencies, ...worker.devDependencies }).not.toHaveProperty("wrangler");
   });
 
   // **The other place wrangler is installed, and why it is not a deploy** (phase 6, step 6.3):
@@ -674,10 +715,10 @@ describe("deploys, across every workflow", () => {
     const steps = stepsOf(jobsOf(ciYml).web);
     const install = steps.findIndex((s) => /\bwrangler\b/.test(s));
     expect(steps[install]).toMatch(
-      /^ {8}run: npm ci --ignore-scripts --prefix infrastructure\/app-worker$/m,
+      /^ {8}run: npm ci --ignore-scripts --prefix infrastructure\/wrangler$/m,
     );
     expect(steps[install]).not.toMatch(/^ {8}env:/m);
-    expect(steps[install + 1]).toMatch(/^ {8}run: npm run web:sync-smoke$/m);
+    expect(steps[install + 1]).toMatch(/^ {8}run: pnpm web:sync-smoke$/m);
     expect(steps[install + 1]).not.toMatch(/^ {8}env:/m);
     expect(secretRefs(code(jobsOf(ciYml).web))).toEqual([]);
 
@@ -773,7 +814,7 @@ describe("deploys, across every workflow", () => {
   });
 
   it("commits no account id: the deploy reads it from a secret", () => {
-    const step = stepsOf(jobsOf(releaseYml)["web-deploy"]).find((s) => /\bwrangler\b/.test(s));
+    const step = stepsOf(jobsOf(releaseYml)["web-deploy"]).find((s) => /wrangler\.js deploy$/m.test(s));
     expect(step).toContain("CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}");
     // A Cloudflare account id is 32 hex characters; an action's pin is 40.
     expect(code(releaseYml)).not.toMatch(/(?<![0-9a-f])[0-9a-f]{32}(?![0-9a-f])/);

@@ -1381,7 +1381,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   emptied — because it describes the discarded database, by uids the restored rows may carry too.
   It is not in an archive at all: `archive::tables()` leaves out every `sync_*` table.
   ⚠️ **The rung moves `USER_SCHEMA_VERSION`, and sync stamps every op with it** — so, like every
-  rung, a v59 peer holds a v60 device's ops until it updates, and `npm run web:deploy-guard`
+  rung, a v59 peer holds a v60 device's ops until it updates, and `pnpm web:deploy-guard`
   refuses a by-hand web deploy from a tree at 60 until a release carries it.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks

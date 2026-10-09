@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fakeEnvOver, type Row, type Tables } from "../../relay/src/fakeD1";
+import { fakeEnvOver, type Row, type Tables } from "@grimoire/relay/src/fakeD1";
 import worker, { type Env } from "./index";
 import { sweepLapsed } from "./lapse";
 

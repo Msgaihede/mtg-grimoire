@@ -2,9 +2,9 @@ import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => import("../../../../packages/fake/core"));
-vi.mock("@tauri-apps/api/event", () => import("../../../../packages/fake/event"));
-vi.mock("@tauri-apps/api/window", () => import("../../../../packages/fake/window"));
+vi.mock("@tauri-apps/api/core", () => import("@grimoire/fake/core"));
+vi.mock("@tauri-apps/api/event", () => import("@grimoire/fake/event"));
+vi.mock("@tauri-apps/api/window", () => import("@grimoire/fake/window"));
 
 /**
  * Whether the page is out of sight, driven by the test — `useParked.test.ts` owns the hidden
@@ -25,35 +25,35 @@ const parked = vi.hoisted(() => {
     },
   };
 });
-vi.mock("@/features/scanner/useParked", async (original) => {
+vi.mock("@grimoire/ui/features/scanner/useParked", async (original) => {
   const { useSyncExternalStore } = await import("react");
   return {
-    ...(await original<typeof import("@/features/scanner/useParked")>()),
+    ...(await original<typeof import("@grimoire/ui/features/scanner/useParked")>()),
     usePageParked: () => useSyncExternalStore(parked.subscribe, parked.get),
   };
 });
 
-import type { CommandTable } from "../../../../packages/fake/scope";
-import { FRAMES_PER_CARD, newScanScript, scanStep } from "../../../../packages/fake/scannerScript";
+import type { CommandTable } from "@grimoire/fake/scope";
+import { FRAMES_PER_CARD, newScanScript, scanStep } from "@grimoire/fake/scannerScript";
 import {
   DEFAULT_SCANNER_PREFS,
   NEEDS_A_FINISH_ROW,
   TRAY_ROWS,
   VERDICTS,
-} from "@/features/scanner/fixtures";
+} from "@grimoire/ui/features/scanner/fixtures";
 import {
   DB_BUSY,
   SCANNER_NOT_IN_A_BROWSER_YET,
   SCANNER_OPEN_ELSEWHERE,
-} from "@/features/scanner/verdictText";
+} from "@grimoire/ui/features/scanner/verdictText";
 import type {
   CollectionImportItem,
   ScannerOptions,
   ScannerPrefs,
   ScannerTrayRow,
   ScannerVerdict,
-} from "@/lib/ipc";
-import type { FakeParams } from "../../../../packages/fake/world";
+} from "@grimoire/ui/lib/ipc";
+import type { FakeParams } from "@grimoire/fake/world";
 import { PhoneFace } from "../PhoneApp";
 import { installLayout, renderPhone } from "../testing";
 

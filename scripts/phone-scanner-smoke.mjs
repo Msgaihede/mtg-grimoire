@@ -1,9 +1,9 @@
 // The phone face's Scanner page, driven with a camera: **a card is scanned, reviewed and filed,
 // at a phone's width, under a touch pointer.**
 //
-//   npm run mobile:dev                          # the light app over the Storybook fake, port 5175
-//   npm run mobile:scanner-smoke                # or: npm run mobile:scanner-smoke -- http://localhost:5186
-//   npm run mobile:scanner-smoke -- --shots=out # also save the screenshots it takes into ./out
+//   pnpm mobile:dev                          # the light app over the Storybook fake, port 5175
+//   pnpm mobile:scanner-smoke                # or: pnpm mobile:scanner-smoke http://localhost:5186
+//   pnpm mobile:scanner-smoke --shots=out # also save the screenshots it takes into ./out
 //
 // `apps/light/phone/pages/ScannerPage.tsx` has a vitest suite, and jsdom gives that suite no camera,
 // no canvas pixels and no layout. This is the pass that has all three, as a command, and it needs
@@ -249,7 +249,7 @@ async function openPage(send, width, height, path) {
     await call("Page.navigate", { url: `${ORIGIN}${to}` });
     await until(
       `document.querySelector('nav[aria-label="Views"]') !== null && typeof window.smoke === 'object'`,
-      `the light app at ${ORIGIN} — is \`npm run mobile:dev\` running?`,
+      `the light app at ${ORIGIN} — is \`pnpm mobile:dev\` running?`,
       30_000,
     );
   };

@@ -1,10 +1,14 @@
 {
-  "name": "mtg-grimoire-app-worker-deploy",
+  "name": "@grimoire/app-worker",
   "version": "0.0.0",
   "private": true,
-  "description": "The one tool that deploys this Worker, and the lockfile that says exactly which bytes it is. Not a workspace of the root package and not part of the app: `npm ci --ignore-scripts --prefix infrastructure/app-worker`, then `npx --no-install wrangler …` from this directory (README, \"Deploying\").",
+  "license": "AGPL-3.0-or-later",
   "type": "module",
+  "dependencies": {
+    "@grimoire/ui": "workspace:*"
+  },
   "devDependencies": {
-    "wrangler": "4.146.0"
+    "@cloudflare/workers-types": "catalog:",
+    "vitest": "catalog:"
   }
 }

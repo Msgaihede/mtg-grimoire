@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
-import { deckCard, printing } from "../../../fake/fixtures";
+import { deckCard, printing } from "@grimoire/fake/fixtures";
 import type { DeckCard } from "@/lib/ipc";
 import { DeckCoverPicker } from "./DeckCoverPicker";
 

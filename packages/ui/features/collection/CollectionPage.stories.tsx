@@ -98,7 +98,7 @@ const headingNamed = (canvas: ReturnType<typeof within>, name: string): HTMLElem
 /**
  * **How long a play waits for the wall to settle — a ceiling, never a pause.** A heading or a tile
  * exists only once three reads have answered in turn — the folder census, the per-shelf counts,
- * then the page of rows — and the virtualiser has measured. Under `npm run verify`, where the
+ * then the page of rows — and the virtualiser has measured. Under `pnpm verify`, where the
  * whole suite runs beside `tsc`, `vite build` and `eslint`, that chain has run past the 1000ms a
  * `findBy*` or a `waitFor` gives up at by default: `CardMode` and `Filtering` failed exactly there
  * on 2026-09-26 and passed alone. A wait that finds its element returns the moment it does, so a

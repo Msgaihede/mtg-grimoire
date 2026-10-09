@@ -10,11 +10,11 @@ import {
   Trash2,
   UserRound,
 } from "lucide-react";
-import { cardPrintingsKey } from "@/features/card/cardKeys";
-import { ALREADY_HERE, finishChoices, REGULAR, zoneClaims } from "@/features/decks/deckCardRules";
-import type { DeckCore } from "@/features/decks/useDeckCore";
-import { useDeckMeta } from "@/features/decks/useDeckMeta";
-import { FINISH_LABEL } from "@/lib/finish";
+import { cardPrintingsKey } from "@grimoire/ui/features/card/cardKeys";
+import { ALREADY_HERE, finishChoices, REGULAR, zoneClaims } from "@grimoire/ui/features/decks/deckCardRules";
+import type { DeckCore } from "@grimoire/ui/features/decks/useDeckCore";
+import { useDeckMeta } from "@grimoire/ui/features/decks/useDeckMeta";
+import { FINISH_LABEL } from "@grimoire/ui/lib/finish";
 import {
   ipc,
   ipcError,
@@ -24,9 +24,9 @@ import {
   type DeckLabel,
   type DeckVariant,
   type FormatSpec,
-} from "@/lib/ipc";
-import { useMarketplace } from "@/lib/useMarketplace";
-import { cn } from "@/lib/utils";
+} from "@grimoire/ui/lib/ipc";
+import { useMarketplace } from "@grimoire/ui/lib/useMarketplace";
+import { cn } from "@grimoire/ui/lib/utils";
 import { PRINTING_ROW, PrintingFace, printingCode } from "../card/Printings";
 import type { Receipt } from "./receipt";
 import { ReceiptBar } from "./receipt";

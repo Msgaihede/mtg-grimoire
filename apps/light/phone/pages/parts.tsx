@@ -1,7 +1,7 @@
 import { useCallback, type ReactNode } from "react";
-import { FOCUS } from "@/lib/focus";
-import { PRESS } from "@/lib/motion";
-import { cn } from "@/lib/utils";
+import { FOCUS } from "@grimoire/ui/lib/focus";
+import { PRESS } from "@grimoire/ui/lib/motion";
+import { cn } from "@grimoire/ui/lib/utils";
 
 /**
  * The four things every list page here says the same way: that a read failed, a sentence where

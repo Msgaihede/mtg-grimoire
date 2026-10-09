@@ -1,8 +1,8 @@
 {
   /* The share Worker's type-check program. Every compiler option below is
      `infrastructure/relay/tsconfig.json`'s byte for byte, and that file carries the whole argument
-     for why a Worker gets a program of its own rather than a wider `include` in the root
-     `tsconfig.json`: `@cloudflare/workers-types` declares `Request`, `Response` and about four
+     for why a Worker gets a program of its own rather than a place in a webview
+     package's program: `@cloudflare/workers-types` declares `Request`, `Response` and about four
      hundred other globals, and the app under `packages/ui/` must see the DOM's versions of those
      names and nothing else.
 

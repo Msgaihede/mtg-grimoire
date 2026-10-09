@@ -1,5 +1,5 @@
 // The deploy guard's two pure halves: reading the constant, and the verdict. No git here — the
-// script's `main` is the only part that asks it, and `npm run web:deploy-guard` is that part's
+// script's `main` is the only part that asks it, and `pnpm web:deploy-guard` is that part's
 // own test, against the real tag.
 import { describe, expect, it } from "vitest";
 import {

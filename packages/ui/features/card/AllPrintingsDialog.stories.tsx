@@ -8,9 +8,9 @@ import { useDeck } from "@/features/decks/useDeck";
 import type { PrintingsResponse } from "@/lib/ipc";
 import { DEFAULT_MARKETPLACE } from "@/lib/marketplace";
 import { useAppStore, type CardWalkStop, type PaneDeckContext } from "@/lib/store";
-import { readHandlers } from "../../../fake/db";
-import { printing } from "../../../fake/fixtures";
-import { seed } from "../../../fake/seeds";
+import { readHandlers } from "@grimoire/fake/db";
+import { printing } from "@grimoire/fake/fixtures";
+import { seed } from "@grimoire/fake/seeds";
 import { AllPrintingsDialog } from "./AllPrintingsDialog";
 
 /**

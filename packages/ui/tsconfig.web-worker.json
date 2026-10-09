@@ -13,7 +13,7 @@
      inside the library files and leaves `self` typed as a `Window` in the one file where it is
      not one.
 
-     So the root `tsconfig.json` **excludes** that file and this program holds it. The modules it
+     So `packages/ui/tsconfig.json` **excludes** that file and this program holds it. The modules it
      imports — `engine.ts`, `protocol.ts`, `assets.ts` and the hand-written `grimoire_web.d.ts` —
      are followed from it and so are checked twice, once under each lib, which is the point: they
      are the half both sides read, and may name no global only one of them has.
@@ -25,10 +25,10 @@
      This file sits in `packages/ui/` since 2026-10-08, beside the folder its two entries are
      under, and `include` is spelled from here.
 
-     `npm run build` and `npm run web:build` both run it. */
+     `pnpm build` and `pnpm web:build` both run it. */
   "compilerOptions": {
     "target": "ES2020",
-    /* No `DOM`: this is not a page. `ES2022.Error` for the root program's reason. */
+    /* No `DOM`: this is not a page. `ES2022.Error` for `tsconfig.base.json`'s reason. */
     "lib": ["ES2020", "ES2022.Error", "WebWorker"],
     "module": "ESNext",
     "moduleResolution": "bundler",

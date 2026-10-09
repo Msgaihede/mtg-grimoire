@@ -6,13 +6,13 @@ import {
   MANA_LINE_GRADIENT,
   type ManaKey,
   type ManaLineSync,
-} from "@/lib/mana";
-import { setGlyphClass } from "@/lib/keyrune";
-import { cn } from "@/lib/utils";
-import { ManaChip } from "@/components/FilterChips";
-import { ManaLine } from "@/components/ManaLine";
-import { ManaText } from "@/components/ManaText";
-import { RarityGem } from "@/components/RarityGem";
+} from "@grimoire/ui/lib/mana";
+import { setGlyphClass } from "@grimoire/ui/lib/keyrune";
+import { cn } from "@grimoire/ui/lib/utils";
+import { ManaChip } from "@grimoire/ui/components/FilterChips";
+import { ManaLine } from "@grimoire/ui/components/ManaLine";
+import { ManaText } from "@grimoire/ui/components/ManaText";
+import { RarityGem } from "@grimoire/ui/components/RarityGem";
 
 /**
  * The specimens `DesignSystem.mdx` draws, as a module rather than as the page's own JS.
@@ -215,7 +215,7 @@ function Swatch({ name, value }: ColorToken) {
  *
  * A lazy `useState` initialiser rather than an effect, and that is the lint's doing as much as
  * the design's: `react-hooks/set-state-in-effect` refuses a `setState` in an effect body
- * (measured — it fails `npm run lint`), and it is right to. Nothing here is subscribing to
+ * (measured — it fails `pnpm lint`), and it is right to. Nothing here is subscribing to
  * anything. The stylesheet is loaded before the preview renders in both `storybook dev` (Vite
  * injects it as the module graph loads) and `storybook build` (a `<link>` the browser blocks
  * on), so the first render is already late enough to read it, and it never changes afterwards.

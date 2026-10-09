@@ -2,8 +2,8 @@
 // Live sync between two browsers, through the relay's own code: the light app's phase 6, end to
 // end.
 //
-//     npm run web:wasm && npm run web:build && npm run web:sync-smoke
-//     npm run web:sync-smoke -- --measure      the same, and what the loop costs an idle page
+//     pnpm web:wasm && pnpm web:build && pnpm web:sync-smoke
+//     pnpm web:sync-smoke --measure      the same, and what the loop costs an idle page
 //
 // `web-smoke.mjs` proves the web host on a device that has paired nothing. This is the run in
 // which it pairs: two headless Chromiums on two profiles — two devices — each serving the built
@@ -65,8 +65,9 @@
 // code path a reader's own claim takes.
 //
 // **wrangler is not one of this repository's root dependencies.** It is looked for at
-// `infrastructure/app-worker/node_modules/wrangler/` — where `npm ci --ignore-scripts --prefix infrastructure/app-worker` puts
-// the one version that directory's lockfile pins, which is what CI does — and then at the path
+// `infrastructure/wrangler/node_modules/wrangler/` — where
+// `npm ci --ignore-scripts --prefix infrastructure/wrangler` puts the one version that
+// directory's lockfile pins, which is what CI does — and then at the path
 // in `WRANGLER`, a `wrangler.js`. The only wrangler commands this runs are `d1 execute --local`
 // and `dev --local`: nothing here reaches Cloudflare.
 //

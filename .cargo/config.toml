@@ -16,7 +16,7 @@
 # **It reaches every cargo run under the repository, which includes the standalone
 # `crates/card-scanner`** — cargo finds config files from the working directory, not from
 # `--manifest-path`. That package keeps its own tree: `crates/card-scanner/.cargo/config.toml`
-# answers a run started inside it, and every scripted run from the root (`npm run verify`,
+# answers a run started inside it, and every scripted run from the root (`pnpm verify`,
 # `ci.yml`, `scanner-bundle.yml`) passes `--target-dir crates/card-scanner/target`.
 [build]
 target-dir = "target"

@@ -1,4 +1,4 @@
-import { isLightView, LIGHT_START, type LightView } from "@/lib/edition";
+import { isLightView, LIGHT_START, type LightView } from "@grimoire/ui/lib/edition";
 
 /**
  * Where the reader is, as the URL says it.

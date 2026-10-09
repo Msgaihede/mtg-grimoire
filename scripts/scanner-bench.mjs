@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 // What one frame costs the card scanner as WebAssembly in a Worker — and, beside it, natively.
 //
-//   npm run scanner:bench                        build, run in headless Chrome, print the summary
-//   npm run scanner:bench -- --native            the same frames through the native runner too
-//   npm run scanner:bench -- --sizes             the module's size, with the readers and without
-//   npm run scanner:bench -- --simd              the module built with WebAssembly's 128-bit SIMD,
+//   pnpm scanner:bench                        build, run in headless Chrome, print the summary
+//   pnpm scanner:bench --native            the same frames through the native runner too
+//   pnpm scanner:bench --sizes             the module's size, with the readers and without
+//   pnpm scanner:bench --simd              the module built with WebAssembly's 128-bit SIMD,
 //                                                which the readers' inference has a kernel for
-//   npm run scanner:bench -- --dir <inputs>      a directory `bench-prep` made (a real bundle)
-//   npm run scanner:bench -- --serve --port 8787 leave the page up for a browser — a phone's,
+//   pnpm scanner:bench --dir <inputs>      a directory `bench-prep` made (a real bundle)
+//   pnpm scanner:bench --serve --port 8787 leave the page up for a browser — a phone's,
 //                                                after `adb reverse tcp:8787 tcp:8787`
-//   npm run scanner:bench -- --summarise <file>  reduce a native runner's output (`adb shell`)
-//   npm run scanner:bench -- --trap              after the run, panic in the module on purpose
+//   pnpm scanner:bench --summarise <file>  reduce a native runner's output (`adb shell`)
+//   pnpm scanner:bench --trap              after the run, panic in the module on purpose
 //                                                and report what the next frame meets
 //
 // Also `--runs <n>` (3), `--frames <n>` (30), `--no-build`, which trusts `web/pkg/` as it is,

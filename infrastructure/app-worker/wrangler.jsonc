@@ -1,7 +1,7 @@
 {
-  // Resolves once `npm ci --ignore-scripts --prefix infrastructure/app-worker` has run: this directory's own
-  // `package.json` and lockfile pin the `wrangler` that deploys it (README, "Deploying").
-  "$schema": "node_modules/wrangler/config-schema.json",
+  // Resolves once `npm ci --ignore-scripts --prefix infrastructure/wrangler` has run: that folder's
+  // `package.json` and lockfile pin the `wrangler` that deploys this Worker (README, "Deploying").
+  "$schema": "../wrangler/node_modules/wrangler/config-schema.json",
   // The light app's web host: `apps/light/dist-web/` at an origin root. A third Worker beside the relay and
   // the share Worker and never either of them (light-app spec §6) — for the share Worker's
   // reason, blast radius: a bad deploy of a page must not be a sync outage — the more so since
@@ -14,6 +14,15 @@
   // at all: without it the single-page fallback below answers a *missing file* with the document
   // and a 200. It runs only for a request that matched no file and is not a browser's navigation.
   "main": "src/index.ts",
+
+  // The script's one import of another package's module, as a path wrangler follows with nothing
+  // installed. `release.yml`'s `web-deploy` checks the repository out and installs wrangler from
+  // `infrastructure/wrangler`'s lockfile — no pnpm, so no `node_modules` link for `@grimoire/ui`
+  // — and without this line the bundle stops at "Could not resolve". An exact module, not the
+  // package: wrangler matches an alias against the whole specifier (measured 2026-10-08: an
+  // alias from `@grimoire/ui` to the folder resolved nothing). `hosting.test.ts` holds the pair,
+  // and holds the module it points at to importing nothing.
+  "alias": { "@grimoire/ui/lib/core/web/assets": "../../packages/ui/lib/core/web/assets.ts" },
 
   // The relay's date, as `infrastructure/share-worker/wrangler.jsonc` chose for itself: three Workers on one
   // account with one fewer thing to differ by, and nothing here wants a newer runtime.
@@ -48,7 +57,7 @@
   "preview_urls": false,
 
   "assets": {
-    // What `npm run web:build` writes. ⚠️ **`wrangler deploy` uploads whatever is in it** — the
+    // What `pnpm web:build` writes. ⚠️ **`wrangler deploy` uploads whatever is in it** — the
     // bundle of the last build on that machine, not of this commit — and fails naming the
     // directory when it is absent. The README's steps build it first.
     "directory": "../../apps/light/dist-web",

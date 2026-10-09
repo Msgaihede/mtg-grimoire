@@ -1,9 +1,9 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/window", () => import("../../../fake/window"));
+vi.mock("@tauri-apps/api/window", () => import("@grimoire/fake/window"));
 
-import { resetWindow, setMinimized } from "../../../fake/window";
+import { resetWindow, setMinimized } from "@grimoire/fake/window";
 import { PARK_GRACE_MS, useWindowMinimized, useWindowParked } from "./useWindowParked";
 
 beforeEach(() => resetWindow());

@@ -1684,7 +1684,7 @@ mod tests {
     ///
     /// `#[cfg(debug_assertions)]` because that is what makes the overflow a panic: a release
     /// build wraps instead, and the pass would then succeed and this test would be red for a
-    /// reason that is not the guard. `npm run verify` and CI both run `cargo test` in debug.
+    /// reason that is not the guard. `pnpm verify` and CI both run `cargo test` in debug.
     #[cfg(debug_assertions)]
     #[test]
     fn a_panic_inside_the_pass_is_recorded_and_not_fatal() {

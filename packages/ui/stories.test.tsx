@@ -3,7 +3,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import { composeStories, setProjectAnnotations } from "@storybook/react-vite";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import preview from "../../.storybook/preview";
-import { CARDS } from "../fake/cards";
+import { CARDS } from "@grimoire/fake/cards";
 // **The two story modules the block at the foot of this file names.** Imported rather than
 // pulled out of the glob below, because `composeStories` types its result from the module's own
 // exports and the glob types every module as `unknown` — a story reached that way has no
@@ -46,12 +46,12 @@ import * as DecksPageStories from "./features/decks/DecksPage.stories";
  * `mtgimg://` URL for a synthetic data URI, and jsdom loads neither — so a play asserts that an
  * image is *present*, never what its `src` says.
  */
-vi.mock("@tauri-apps/api/core", () => import("../fake/core"));
-vi.mock("@tauri-apps/api/event", () => import("../fake/event"));
+vi.mock("@tauri-apps/api/core", () => import("@grimoire/fake/core"));
+vi.mock("@tauri-apps/api/event", () => import("@grimoire/fake/event"));
 // The third boundary, mirroring `.storybook/main.ts`'s third alias. `TitleBar` reaches it
 // through `packages/ui/lib/window.ts`, which is in this file's graph, so the specifier is rewritten
 // and the paragraph below about `node_modules` does not apply.
-vi.mock("@tauri-apps/api/window", () => import("../fake/window"));
+vi.mock("@tauri-apps/api/window", () => import("@grimoire/fake/window"));
 
 /**
  * The two Tauri **plugin** wrappers, re-pointed at the same fake — because **the two mocks
@@ -91,14 +91,14 @@ vi.mock("@tauri-apps/api/window", () => import("../fake/window"));
  * fake refuses the first and third and answers the second.
  */
 vi.mock("@tauri-apps/plugin-clipboard-manager", async () => {
-  const { invoke } = await import("../fake/core");
+  const { invoke } = await import("@grimoire/fake/core");
   return {
     writeText: (text: string, opts?: { label?: string }) =>
       invoke("plugin:clipboard-manager|write_text", { label: opts?.label, text }),
   };
 });
 vi.mock("@tauri-apps/plugin-opener", async () => {
-  const { invoke } = await import("../fake/core");
+  const { invoke } = await import("@grimoire/fake/core");
   // `with`, not `openWith` — the wire name is a reserved word in the package's own call, and
   // `invoke` matches by name, so a typo here is a rejection exactly as it is in the app.
   return {
@@ -158,10 +158,10 @@ beforeAll(() => {
  *
  * A `play` is the right place for a story's claim: it travels with the story, and a reader who
  * opens Storybook sees it pass or fail in the Interactions panel beside the thing it is about.
- * But nothing else in this repository's checks runs one — `npm run build-storybook` compiles
+ * But nothing else in this repository's checks runs one — `pnpm build-storybook` compiles
  * stories, it does not play them. So the stories whose entire subject is a fact nobody can
  * *see* (a component that renders `null`, an ARIA attribute that must be absent, an `sr-only`
- * accessible name) would be asserted only by a browser `npm run verify` never opens.
+ * accessible name) would be asserted only by a browser `pnpm verify` never opens.
  *
  * `composeStories` closes that: it applies each story's args and returns something renderable,
  * and `.run()` renders it and awaits its `play`.

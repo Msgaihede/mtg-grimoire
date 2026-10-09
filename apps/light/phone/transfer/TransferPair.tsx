@@ -1,6 +1,6 @@
 import { SquareArrowRightEnter, SquareArrowRightExit } from "lucide-react";
-import { FOCUS_INSET } from "@/lib/focus";
-import { cn } from "@/lib/utils";
+import { FOCUS_INSET } from "@grimoire/ui/lib/focus";
+import { cn } from "@grimoire/ui/lib/utils";
 
 /**
  * The two transfer buttons as one joined pair, at the phone's 44px — **the desktop's

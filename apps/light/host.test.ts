@@ -29,8 +29,8 @@ import adaptiveIcon from "./src-tauri/gen/android/app/src/main/res/mipmap-anydpi
 import privacyPage from "./public/privacy.html?raw";
 import privacySheet from "./public/privacy.css?raw";
 import hostHeaders from "../../infrastructure/app-worker/_headers?raw";
-import { HOST_MARK } from "@/lib/core";
-import { MEMBERSHIP_ELSEWHERE } from "@/lib/core/hostMembership";
+import { HOST_MARK } from "@grimoire/ui/lib/core";
+import { MEMBERSHIP_ELSEWHERE } from "@grimoire/ui/lib/core/hostMembership";
 
 /** The launcher's pictures as data URLs — small files, and a PNG's size is in its first bytes. */
 const launcherPngs = import.meta.glob(
@@ -83,9 +83,12 @@ describe("the Android project's hand edits", () => {
   });
 
   it("has Gradle call the Tauri CLI from apps/light/, where it finds this project", () => {
-    // `npm run tauri` would start the CLI at the repository root, which finds the desktop's.
+    // Gradle starts the task in `apps/light/src-tauri`. `pnpm run` there would look in the light
+    // app's own manifest, which has no such script, and `pnpm run tauri` at the root would start
+    // the CLI where it finds the desktop's project. So: the root's script, by name, from anywhere.
+    expect(buildTask).toContain('val executable = """pnpm""";');
     expect(buildTask).toMatch(
-      /listOf\("run", "--", "tauri:light", "android", "android-studio-script"\)/,
+      /listOf\("--workspace-root", "run", "tauri:light", "android", "android-studio-script"\)/,
     );
     expect(JSON.parse(packageJson).scripts["tauri:light"]).toBe("cd apps/light && tauri");
   });

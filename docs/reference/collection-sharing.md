@@ -70,7 +70,7 @@ exactly — it is what points a dev build at `wrangler dev --local`.
 | The cron | `30 3 * * *` is registered on the script, beside the relay's `0 * * * *` — two of the free plan's five |
 | `RELAY_HMAC_KEY` on this Worker | **set at 20:15 UTC**, five minutes after the deploy. The relay's was rotated at 20:03 — Cloudflare never shows a secret back and the old value had not been kept — and `wrangler secret put` here could not stick before the Worker existed, so it was put a second time once it did. **The tell is a malformed bearer**: `GET /g/abc/shares` with `authorization: Bearer nonsense` answered **500** between the deploy and the secret, because `required()` throws before `verify` can refuse, and **401** after it. A bearer-less probe answers 401 either way and proves nothing. ⚠️ **What no probe can show is that the two Workers hold the _same_ value**: a different one also answers 401 — to every real publish — and only a token the relay minted can tell the two apart |
 | The relay's `dev` claim | **deployed 2026-10-01** — the gate's precondition, see [the Worker](#the-worker) |
-| `apps/share/dist-share/` | built by no automated command — see [what nothing runs](#what-no-build-runs-and-what-that-costs). ⚠️ **In a worktree with no `node_modules` of its own, `npm run share:build` exits 0 and writes the wrong thing**: Node resolves the main checkout's Vite, a Vite 7 ignores `rolldownOptions`, and `apps/share/dist-share/assets/` holds the *app's* `index-*.js` and no `share.js` — which `wrangler deploy` would upload happily and the shell would then link to nothing. Measured 2026-10-01; check that `apps/share/dist-share/assets/share.js` exists before any deploy |
+| `apps/share/dist-share/` | built by no automated command — see [what nothing runs](#what-no-build-runs-and-what-that-costs). ⚠️ **In a worktree with no `node_modules` of its own, `pnpm share:build` exits 0 and writes the wrong thing**: Node resolves the main checkout's Vite, a Vite 7 ignores `rolldownOptions`, and `apps/share/dist-share/assets/` holds the *app's* `index-*.js` and no `share.js` — which `wrangler deploy` would upload happily and the shell would then link to nothing. Measured 2026-10-01; check that `apps/share/dist-share/assets/share.js` exists before any deploy |
 
 **What only a real publish can settle, and none has been made:**
 
@@ -744,7 +744,7 @@ config and adds no `define` of its own.
 `apps/share/dist-share/assets/share.js` is **486.74 kB, 141.49 kB gzipped**, one chunk, with the fonts as
 separate assets beside it. (It read **486.47 / 141.43** earlier the same day; the whole-branch
 review's guards — the total that declines to state itself, the `== null` absences — are the 0.27 kB
-between them. Re-measured rather than left standing, because `npm run share:build` answers it in
+between them. Re-measured rather than left standing, because `pnpm share:build` answers it in
 three seconds and this is one of the few numbers on this page a command re-derives.) **The entry name is pinned rather than content-hashed**, because the
 Worker's shell links `/assets/share.js` by a fixed name and cannot learn a Vite manifest without a
 second Worker request.
@@ -1133,8 +1133,8 @@ phone layout on 2026-09-27; the example stays because the rule does.)
 
 ## What no build runs, and what that costs
 
-* **`npm run share:build` is in neither `npm run verify` nor CI.** The type-checking half is
-  covered — `apps/share/` is in the root `tsconfig.json`'s `include`, and `npm run build` also runs
+* **`pnpm share:build` is in neither `pnpm verify` nor CI.** The type-checking half is
+  covered — `apps/share/` has a `tsconfig.json` of its own, `pnpm build` runs `tsc -p apps/share`, and it also runs
   `tsc -p infrastructure/share-worker/tsconfig.json` — and `vitest` collects both `apps/share/**/*.test.{ts,tsx}` and
   `infrastructure/share-worker/src/**/*.test.ts` through globs named in `vitest.config.ts`. **What nothing runs is
   the bundle**, so `apps/share/dist-share/` existing at all is a manual step, and `wrangler deploy` fails

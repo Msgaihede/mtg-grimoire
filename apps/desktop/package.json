@@ -1,0 +1,25 @@
+{
+  "name": "@grimoire/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "dependencies": {
+    "@grimoire/ui": "workspace:*",
+    "keyrune": "catalog:",
+    "mana-font": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@grimoire/fake": "workspace:*",
+    "@storybook/react-vite": "catalog:",
+    "@tauri-apps/api": "catalog:",
+    "@testing-library/react": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "storybook": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  }
+}

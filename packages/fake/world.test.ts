@@ -21,11 +21,11 @@ import type { SeedName } from "./seeds";
 import { CARDS } from "./cards";
 import { CLOCK_BASE } from "./db";
 import type { FakeDb, FakeDeck, FakeDeckCard, FakeEntry } from "./db";
-import { SITE_DATA_WARNING } from "@/lib/core/web/storage";
-import { useAppStore } from "@/lib/store";
-import { SPECS } from "@/features/decks/validation/fixtures";
-import { validateDeck } from "@/features/decks/validation/engine";
-import type { CollectionPage, DeckDetail, DeckRow, EntryChange, SearchResponse } from "@/lib/ipc";
+import { SITE_DATA_WARNING } from "@grimoire/ui/lib/core/web/storage";
+import { useAppStore } from "@grimoire/ui/lib/store";
+import { SPECS } from "@grimoire/ui/features/decks/validation/fixtures";
+import { validateDeck } from "@grimoire/ui/features/decks/validation/engine";
+import type { CollectionPage, DeckDetail, DeckRow, EntryChange, SearchResponse } from "@grimoire/ui/lib/ipc";
 
 /** The one row every isolation test edits: `starter`'s first collection entry, four copies of
  *  Lightning Bolt `2x2 117`. */

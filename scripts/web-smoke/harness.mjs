@@ -463,7 +463,7 @@ const NOT_FOUND = {
  */
 async function serve() {
   if (!existsSync(join(DIST, "index.html"))) {
-    fail("apps/light/dist-web/index.html is missing. Run `npm run web:wasm` and `npm run web:build` first.");
+    fail("apps/light/dist-web/index.html is missing. Run `pnpm web:wasm` and `pnpm web:build` first.");
   }
   if (!existsSync(join(DIST, "_headers"))) {
     fail("apps/light/dist-web/_headers is missing: the build did not emit the host's policy.");

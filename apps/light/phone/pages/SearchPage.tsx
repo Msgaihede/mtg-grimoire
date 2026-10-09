@@ -1,9 +1,9 @@
 import { useMemo, useRef, useState } from "react";
-import { activeChips } from "@/features/search/filterOptions";
-import { countOf } from "@/features/search/resultCount";
-import { StatedFiltersLine } from "@/features/search/StatedFiltersLine";
-import { TagQueryRow } from "@/features/search/TagQueryRow";
-import { useCardSearch, type CardSearch } from "@/features/search/useCardSearch";
+import { activeChips } from "@grimoire/ui/features/search/filterOptions";
+import { countOf } from "@grimoire/ui/features/search/resultCount";
+import { StatedFiltersLine } from "@grimoire/ui/features/search/StatedFiltersLine";
+import { TagQueryRow } from "@grimoire/ui/features/search/TagQueryRow";
+import { useCardSearch, type CardSearch } from "@grimoire/ui/features/search/useCardSearch";
 import { useCardData } from "../cardData";
 import { CardWall, type WallItem } from "../CardWall";
 import { searchItem } from "../items";

@@ -69,7 +69,7 @@ bundle.
 
 ### 2.1 In a browser, over the fake
 
-**`npm run mobile:dev` (Vite's dev server, not a build), the Storybook fake's `starter` seed,
+**`pnpm mobile:dev` (Vite's dev server, not a build), the Storybook fake's `starter` seed,
 driven in the Claude desktop app's built-in Chromium pane with its viewport emulated.**
 `?art=live` was on, so the pictures are Scryfall's.
 
@@ -120,7 +120,7 @@ driven in the Claude desktop app's built-in Chromium pane with its viewport emul
 
 ### 2.2 In the Tauri window, over the real core
 
-**`npm run mobile:tauri` — a debug build, under the `app` lock, WebView2 driven over CDP on 9222
+**`pnpm mobile:tauri` — a debug build, under the `app` lock, WebView2 driven over CDP on 9222
 (`scripts/cdp.mjs`), the frame measured with Win32.** The database was a copy of the main
 checkout's dev `data/` folder, so the corpus, the decks and the picture cache are real. The desk
 is one 2560 × 1392 work area at 100% scale.
@@ -150,7 +150,7 @@ is one 2560 × 1392 work area at 100% scale.
   cards`) and the wall drew regardless. Narrowed again, it was the phone face on the same place.
 - After the lock's `release`, nothing was left listening on 5175 or 1420.
 
-**Then `npm run tauri dev`, to see the desktop app had not moved** (27 s rebuild — the overlay
+**Then `pnpm tauri dev`, to see the desktop app had not moved** (27 s rebuild — the overlay
 arrives through the build's environment, so each switch rebuilds): client **1920 × 1080** (the
 ladder's top rung on this desk), `http://localhost:1420/` with no path written, the in-app
 caption drawn, the rail's rows Home, Search, Tagger, Decks, Collection, Wishlist, Scanner, Trade,
@@ -161,21 +161,21 @@ chord guard's desktop half rests on `AppShell.test.tsx`.
 
 ### 2.3 The suites
 
-`npm run verify` on the branch with `main` merged in — the build's four `tsc` programs, ESLint,
+`pnpm verify` on the branch with `main` merged in — the build's four `tsc` programs, ESLint,
 `cargo fmt --check`, clippy, Vitest and both cargo test runs — was run twice: once before the
 whole-branch review's fixes (2026-10-01, exit 0 in 847 s) and once on the last commit that
 changed code, `f2c6fb99` (2026-10-02, exit 0 in 576 s). Everything after that commit is prose.
 No total is written here; a count is a fact about one tree.
 
 Two builds `verify` does not run were run by hand between those two runs, both exit 0:
-`npm run mobile:build` (§3's checks repeated — the page at the root, no fake in any chunk) and
-`npm run share:build`, because `apps/share/ShareTile.tsx` now draws through `CardTile` and nothing
+`pnpm mobile:build` (§3's checks repeated — the page at the root, no fake in any chunk) and
+`pnpm share:build`, because `apps/share/ShareTile.tsx` now draws through `CardTile` and nothing
 else bundles the public viewer. **The share viewer was built, not looked at**: its tile gained
 one wrapper element, and whether that moved a pixel on the public page is unmeasured.
 
 ## 3. The build
 
-**`npm run mobile:build`, 2026-10-01, before `main` was merged in: exit 0 in 21 s including
+**`pnpm mobile:build`, 2026-10-01, before `main` was merged in: exit 0 in 21 s including
 `tsc`.** Neither `verify` nor CI runs it.
 
 | Chunk | Raw | gzip | Loaded by |
@@ -197,7 +197,7 @@ one wrapper element, and whether that moved a pixel on the public page is unmeas
 
 ## 4. What the first live pass found
 
-**`npm run mobile:dev` did not stay up.** The server printed its URL and exited a few seconds
+**`pnpm mobile:dev` did not stay up.** The server printed its URL and exited a few seconds
 later, during "bundling dependencies", with `UNLOADABLE_DEPENDENCY: Could not load
 ../../../../../.storybook/fake/core.ts`; the page was blank and every dependency request was
 `ERR_CONNECTION_REFUSED`. The two Tauri plugins the app imports each import
@@ -214,7 +214,7 @@ reached a plugin.
 Every jsdom suite was green over this. It is the repo's standing rule — a green suite proves
 nothing about the running app — arriving on schedule.
 
-**The same server then died a second way, left up while `npm run verify` ran**: `EBUSY: resource
+**The same server then died a second way, left up while `pnpm verify` ran**: `EBUSY: resource
 busy or locked, watch '…\crates\card-scanner\target\…\sqlite3.o'`, the moment cargo reached that
 crate, having already reloaded the page once for `dist/index.html`. The root is the whole
 repository, so Vite watches all of it, and Windows refuses a watch on a file a compiler is still
@@ -996,8 +996,8 @@ The copy afterwards: `user_version` 59, 33 tables, 5 decks, 699 deck cards, 277 
 entries, 89 wishes, `foreign_key_check` 0, `integrity_check` `ok`.
 
 **The frontend**: `ipc.test.ts` reads each split module as both halves, joined under the name
-its assertions already used, and passes unedited below its imports; `npm run test:run`, 459
-files and 12 904 tests with `main` at `7e397710` merged in; `npm run build` and `npm run lint` clean.
+its assertions already used, and passes unedited below its imports; `pnpm test:run`, 459
+files and 12 904 tests with `main` at `7e397710` merged in; `pnpm build` and `pnpm lint` clean.
 
 **Nothing in [data-and-sync.md](data-and-sync.md) or [search-faceting.md](search-faceting.md)
 was re-taken, and this is the step that could have moved a release figure most.** A debug build
@@ -1101,7 +1101,7 @@ damage mark — go through `platform::files` too, so nothing the crate ships nam
 | `cargo build` and `clippy --lib -p grimoire-core --target wasm32-unknown-unknown` | clean — after clippy refused `drop(file)` on a writer that is a unit struct in a browser (`drop_non_drop`), which no desktop build can see. Hence `Writer::close` |
 | `cargo tree -p mtg-grimoire -e features,normal,build -i grimoire-core` | `default`, and no `testing` |
 | `Cargo.lock` | 653 packages before and after: seven new edges from `grimoire-core`, no new crate |
-| `npm run build`, `npm run lint`, `npm run test:run` | clean; 459 files, 12 905 tests |
+| `pnpm build`, `pnpm lint`, `pnpm test:run` | clean; 459 files, 12 905 tests |
 
 **An existing database, upgraded by `main`'s binary and by this branch's.** Two byte copies of
 the main checkout's dev data (user schema v46, 4 645 rows, corpus schema 6), one launched under
@@ -1189,7 +1189,7 @@ compared equal — and four things that were wrong anyway.
 - **`sync::run_sync`, which drives all three moved modules, is still the desktop's**, as are the
   facet index's lifecycle, the feeds and the image cache — the step's second and third parts.
   `State` gains no field here: `scryfall::Client` is the core's type, held by `AppState`.
-- **`npm run test:coverage:rust` ran for the first time since it was rewritten for two workspace
+- **`pnpm test:coverage:rust` ran for the first time since it was rewritten for two workspace
   members**, and works: one `cargo llvm-cov --workspace` run, 93.77% of 105 876 lines with the
   test modules in and **82.93% of 35 234 shipped lines** with them out — 82.20% of 31 399 before
   the script's cut was fixed (above), which is 3 835 shipped lines it had been calling tests.
@@ -1276,7 +1276,7 @@ mock Scryfall, with a sink that records and an observer that counts:
 | `cargo build` and `clippy --lib -p grimoire-core --target wasm32-unknown-unknown` | clean |
 | `cargo tree -p mtg-grimoire -e features,normal,build -i grimoire-core` | no `testing` |
 | `Cargo.lock` | 653 packages before and after |
-| `npm run build`, `npm run lint`, `npm run test:run` | clean; 459 files, 12 916 tests |
+| `pnpm build`, `pnpm lint`, `pnpm test:run` | clean; 459 files, 12 916 tests |
 
 **An existing database, upgraded by `main`'s binary and by this branch's** — the check §6.5
 describes, on two fresh byte copies of the main checkout's dev data (user schema v46):
@@ -1424,7 +1424,7 @@ sink**, by name and by key; and a lockout that runs out.
 | `cargo build` and `clippy --lib -p grimoire-core --target wasm32-unknown-unknown` | clean |
 | `cargo tree -p mtg-grimoire -e features,normal,build -i grimoire-core` | no `testing` |
 | `Cargo.lock` | 653 packages before and after |
-| `npm run build`, `npm run lint`, `npm run test:run` | clean; 459 files, 12 916 tests |
+| `pnpm build`, `pnpm lint`, `pnpm test:run` | clean; 459 files, 12 916 tests |
 
 **An existing database, upgraded by `main`'s binary and by this branch's** — §6.5's check, on
 two fresh byte copies of the main checkout's dev data (user schema v46, 4 645 rows):
@@ -1868,7 +1868,7 @@ carries #780 (the sync fix §6.9 left open), which merged twelve minutes before 
 The plan is [the phase 3 plan](../superpowers/plans/2026-10-03-light-app-phase-3.md): one pull
 request per step. **The owner waived the built-options round for this phase** (2026-10-03): each
 page is the implementer's pick, shipped, and redirected in review. Every figure below is from
-`npm run mobile:dev` — Vite's dev server over the Storybook fake's `starter` seed — in headless
+`pnpm mobile:dev` — Vite's dev server over the Storybook fake's `starter` seed — in headless
 Chromium 141 on **Linux**, emulating a touch phone; nothing here was measured on a phone or
 against a production bundle.
 
@@ -2507,7 +2507,7 @@ page's own sticky line (Search's box) still stops at the inset** — it is the p
 - **Stories for phone UI**: Storybook's story glob, its stylesheet's `@source` and
   `packages/ui/stories.test.tsx`'s module glob reach `apps/light/` (the desktop's own `packages/ui/index.css` does
   not, so the desktop bundle carries no phone class). `Shell`, `TabBar` and `CardWall` have
-  stories; a page's stories come with its step. `npx storybook build` listed `phone-shell`,
+  stories; a page's stories come with its step. `pnpm exec storybook build` listed `phone-shell`,
   `phone-tabbar` and `phone-cardwall`, and the phone-only `.h-13` was in the iframe's CSS.
 - **`packages/ui/lib/tokens.test.ts` reads `apps/light/`**, every sweep of it. The one exception it kept is
   the `MotionConfig` count, which is now one mount per face — `packages/ui/App.tsx` and
@@ -2570,18 +2570,18 @@ to tell the page what it is.
   the mark (`phone/fence.test.ts`).
 - **`imageOrigin` answers `http://mtgimg.localhost` for an Android user agent**, as for Windows:
   Android's WebView serves a custom scheme from that origin.
-- **`gen/android` is committed**, generated by `npx tauri android init --ci
+- **`gen/android` is committed**, generated by `pnpm exec tauri android init --ci
   --skip-targets-install` against a stub SDK (an empty `ANDROID_HOME` and an `NDK_HOME` holding
   only a `source.properties` — the generator reads the NDK's version and nothing else). **Hand
   edits, each held by `apps/light/host.test.ts`** because a re-init reverts them: `allowBackup="false"`
   and `fullBackupContent="false"`; the `CAMERA` permission with the camera feature *not required*;
   the TV launcher removed; the `FileProvider` narrowed from the whole of external storage and the
   cache to `cache/exports/`; the release build type signed with the debug key; and **Gradle's Rust
-  task calling `npm run tauri:light`** (`cd mobile && tauri`, a root script) rather than `npm run
+  task calling `pnpm tauri:light`** (`cd mobile && tauri`, a root script) rather than `npm run
   tauri` — `npm run` starts a script at the repository root, where the CLI finds the desktop's
   project, and the first `android` run failed exactly so: *"Android Studio project directory
   …/src-tauri/gen/android doesn't exist"*, after the release Rust build had finished in 4 m 47 s.
-- **CI's `android` job** builds `npx tauri android build --apk --target aarch64` from `apps/light/` on
+- **CI's `android` job** builds `pnpm exec tauri android build --apk --target aarch64` from `apps/light/` on
   `ubuntu-24.04` with JDK 21 from the image (`JAVA_HOME_21_X64`) and the image's newest NDK,
   writes the APK's size and the `.so`'s to the step summary, and uploads the APK as an artifact for
   14 days. The router sends it the host's tree, the cargo workspace's shared files and the
@@ -2601,10 +2601,10 @@ anyone has recorded**; every desktop figure elsewhere in this repo is Windows):
 - `cargo clippy -p grimoire-light -p mtg-grimoire -p grimoire-core --all-targets -- -D warnings`
   clean; the lockfile gained the one package and no other edge.
 - **The Tauri CLI picks the project by the directory it starts in**: from the repository root
-  `npx tauri info` reports the desktop's (`frontendDist: ../dist`, `devUrl` 1420), from `apps/light/`
-  the light host's (`../../apps/light/dist-mobile`, 5175). So `npm run tauri dev`, `tauri-action` in
+  `pnpm exec tauri info` reports the desktop's (`frontendDist: ../dist`, `devUrl` 1420), from `apps/light/`
+  the light host's (`../../apps/light/dist-mobile`, 5175). So `pnpm tauri dev`, `tauri-action` in
   `release.yml` and every other root-level invocation still find the desktop.
-- `npm run mobile:build` builds the light bundle in 5.0 s.
+- `pnpm mobile:build` builds the light bundle in 5.0 s.
 
 **Not measured.** Nothing here has run on a phone or an emulator: the APK's first build is this
 PR's `android` job, and its size is that job's summary. The cold start, the first corpus ingest on
@@ -2840,7 +2840,7 @@ run's step summary and artifact, not copied here. The phone figures are §8.6.
 
 **What it does.**
 
-- **Builds an x86_64 release APK** — `npx tauri android build --apk --target x86_64 --ci` from
+- **Builds an x86_64 release APK** — `pnpm exec tauri android build --apk --target x86_64 --ci` from
   `apps/light/`, the `android` job's steps otherwise (JDK 21, the image's newest NDK, the composite
   toolchain action, `rust-cache` keyed `android-x86_64`). x86_64 because the emulator is x86_64
   under KVM and cannot run arm64 code; the shipped APK is arm64 (§8.1). **So the `.so` measured
@@ -3195,7 +3195,7 @@ no `wrangler`.
 - **The Worker, in `packages/ui/lib/core/web/`.** `worker.ts` is the dedicated Worker — not an
   optimisation: OPFS's synchronous access handles exist only off the main thread, and the pool
   permits one connection, so there is nowhere else for the database to be. It is **its own
-  `tsc` program** (`packages/ui/tsconfig.web-worker.json`, the `WebWorker` lib; the root program excludes
+  `tsc` program** (`packages/ui/tsconfig.web-worker.json`, the `WebWorker` lib; `packages/ui/tsconfig.json` excludes
   the one file), and everything it decides is in `engine.ts`, which the suite drives with
   neither a Worker nor a module. `grimoire_web.d.ts` types the module **by hand**, because
   `dist-wasm/` is ignored and `tsc` runs on machines that never built it. The Worker loads the
@@ -3245,7 +3245,7 @@ no `wrangler`.
   where the reader already is, which `FaceBoundary` now draws too. A failure a reload can cure
   is told in the plain text colour; one that stays failed keeps the destructive one.
 - **The `web` mode.** `apps/light/vite.config.ts` in mode `web` builds the light entry into
-  **`apps/light/dist-web/`**; every other mode is `apps/light/dist-mobile/` as before. `npm run web:dev` serves it on
+  **`apps/light/dist-web/`**; every other mode is `apps/light/dist-mobile/` as before. `pnpm web:dev` serves it on
   **port 5176** (the light server keeps 5175, so both can be up), `web:build` runs `tsc`, the
   Worker's program and the bundle, and `web:preview` serves the result on 4176 with Vite's own
   single-page fallback turned off, so a file a deploy removed is a 404 as on a real host.
@@ -3258,7 +3258,7 @@ no `wrangler`.
   is the word `dev` and it serves `dist-wasm/` uncached. A directory and not a query, because
   the glue finds what it imports beside itself by its own URL. A `web` build whose engine is
   not there **fails**, with the sentence that says what to run.
-- **`scripts/build-wasm.mjs`** (`npm run web:wasm`): `cargo build -p grimoire-web --lib` for
+- **`scripts/build-wasm.mjs`** (`pnpm web:wasm`): `cargo build -p grimoire-web --lib` for
   the target under **a profile of its own, `wasm`** — it inherits `release` and adds fat LTO,
   one codegen unit and `panic = "abort"`, and `[profile.release]` is deliberately not written,
   so nothing here reaches the desktop's or the APK's build — then `wasm-bindgen --target web`
@@ -3266,7 +3266,7 @@ no `wrangler`.
   that fail without naming themselves: the CLI is exactly the version `Cargo.lock` resolves,
   clang 18 or newer is reachable (it looks in the LLVM installer's folder on Windows), and
   every function the Worker imports is exported.
-- **`scripts/web-smoke.mjs`** (`npm run web:smoke`): serves `apps/light/dist-web/` on `localhost`, opens
+- **`scripts/web-smoke.mjs`** (`pnpm web:smoke`): serves `apps/light/dist-web/` on `localhost`, opens
   it in headless Chromium over the DevTools protocol with no dependency, and asks five things —
   the app got past its gate and said which journal it got; the database is in OPFS; a read came
   back through the engine; a reload opens the database a second time, heard as a second console
@@ -3309,7 +3309,7 @@ no `wrangler`.
   removed; which profile that module was built under is not on this record): the whole engine
   as WASM over SQLite's in-memory VFS — launch to schema 59 in 76 ms, `journal: "delete"` on
   both files, 27 commands of every kind answered, no trap.
-- **In a browser, the built app** (`npm run web:build`, then `npm run web:smoke`; headless
+- **In a browser, the built app** (`pnpm web:build`, then `pnpm web:smoke`; headless
   Chrome 154.0.8037.95, `--headless=new`, an 800-wide window and so the phone face). All five
   checks passed, in 3.4 s to 4.1 s across five runs. The page's console line read `journal
   delete, corpus journal delete, schema 59`; OPFS held `mtg-grimoire/` with 65 entries; the
@@ -3319,7 +3319,7 @@ no `wrangler`.
   database again; and the second tab was told *"MTG Grimoire is already open in another tab of this
   browser. Close that tab, then reload this one."* and offered a Reload. `apps/light/dist-web/` is
   11 996 428 B in total.
-- **In a browser, the dev build under React StrictMode** (`npm run web:dev`, Vite's dev server
+- **In a browser, the dev build under React StrictMode** (`pnpm web:dev`, Vite's dev server
   on port 5176 over the module in `dist-wasm/`; the same Chrome, driven over CDP by importing
   the page's own `core`). **One Worker** was requested. `startup_status` settled `ready` **900 ms** after
   the page's first ask on an empty OPFS — instantiate, install the pool, open, migrate to head,
@@ -3795,7 +3795,7 @@ writes staging…* and *The command table*; the picture cache's are
   (which request is whose, and the cache's name), `pictures.ts` (a picture's path, the
   budget), `bridge.ts` (asking the page where a picture is) and `serve.ts` (the install, the
   activation and every answer, with its caches, its `fetch`, its pages and its clock handed
-  in). `packages/ui/tsconfig.web-sw.json` holds `sw.ts` under the `WebWorker` lib and the root program
+  in). `packages/ui/tsconfig.web-sw.json` holds `sw.ts` under the `WebWorker` lib and `packages/ui/tsconfig.json`
   excludes that one file, as it excludes the database Worker's; the four modules are followed
   from both programs, so each is checked under both libs and may name no global only one has.
 - **Built by the `web` mode alone, and last.** `apps/light/vite.sw.ts`'s plugin runs in `closeBundle` —
@@ -3809,8 +3809,8 @@ writes staging…* and *The command table*; the picture cache's are
   that build's files as this one's. A nested build that fails, fails `web:build`.
 - **Registered only by the built web app's page, and never by `web:dev`.** The web core's page
   half registers `/sw.js` under `import.meta.env.PROD`, with `updateViaCache: "none"`. A dev
-  server behind a service worker goes on serving the last build it cached, so `npm run
-  web:dev` registers nothing — **and therefore draws no card picture**. `npm run web:preview`
+  server behind a service worker goes on serving the last build it cached, so `pnpm
+  web:dev` registers nothing — **and therefore draws no card picture**. `pnpm web:preview`
   is the command that runs the worker, and it serves `sw.js` `no-cache`, as a host must.
 - **One shell cache per build, `grimoire-shell-<build id>`.** The id is `shell.ts`'s
   `shellBuildId` — `assets.ts`'s `buildIdOf`, the engine's own FNV hash — over every file the
@@ -4371,7 +4371,7 @@ unresolvable (`--host-resolver-rules`), so nothing below is over a corpus.
   no-ops, and were not driven there**: that build picks the desktop's host, whose two plugin
   commands the fake accepts and does nothing with — a `Copied.` over it is the press accepted,
   not text on a clipboard. The copy and the link above are the web build's, over the engine.
-- **The smoke run passed on the merged tree** (`npm run web:smoke`), with no request to a
+- **The smoke run passed on the merged tree** (`pnpm web:smoke`), with no request to a
   host without a fixture. The manifest and the icons are requests to the app's own origin,
   which that run lets through — and which it does not ask for: nothing in CI opens the
   manifest in a browser.
@@ -4448,7 +4448,7 @@ stands below**; every measurement here is still of the tree it names.
   never either (spec §6), for the share Worker's reason: every deploy is by hand, by one person,
   and a bad build of a page must not be a sync outage. **It shares nothing with them**: no D1, no
   R2, no KV, no Durable Object, no `vars`, no secret. Its own `tsc` program,
-  `infrastructure/app-worker/tsconfig.json`, runs in `npm run build`.
+  `infrastructure/app-worker/tsconfig.json`, runs in `pnpm build`.
 - **Static assets, and one thing configuration could not say.** `not_found_handling:
   "single-page-application"` answers every address that matches no file with `index.html` and a
   200 — which `/decks/12` needs, and a chunk a deploy renamed must never get: a page loaded
@@ -4483,7 +4483,7 @@ stands below**; every measurement here is still of the tree it names.
 
   | Build, listed 2026-10-04 | `_headers` | Manifest and icons | Engine and its Worker |
   | --- | --- | --- | --- |
-  | `apps/desktop/dist/` (`npm run build`) | — | — | — |
+  | `apps/desktop/dist/` (`pnpm build`) | — | — | — |
   | `apps/light/dist-mobile/` (`mobile:build`) | — | yes | — |
   | `apps/share/dist-share/` (`share:build`) | — | — | — |
   | `apps/light/dist-web/` (`web:build`) | at the root, byte for byte the source | yes | yes |
@@ -4495,7 +4495,7 @@ stands below**; every measurement here is still of the tree it names.
   accepts in silence**, each read off its parser: a second rule for a path, of which the host
   keeps only the last (the rules are stored by path), and a rule with nothing under it, which
   the host drops. Either would be a file the preview and the host read differently. It exists so the policy is met before a
-  deploy: **`npm run web:preview` sends what the built file says each address is sent**, answers
+  deploy: **`pnpm web:preview` sends what the built file says each address is sent**, answers
   a missing file with a bare 404 as the script does, and answers `/_headers` itself with a 404,
   as the host does. The dev server sends none of it — Vite's injected `<style>`, its inline
   preamble and its WebSocket are each what the policy forbids.
@@ -4637,12 +4637,12 @@ object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'self'; fo
   and nothing here relies on it or checks it. (**Pinned there**: `shell.test.ts`'s *moves when
   only the host's `_headers` changed* — §9.3.)
 
-**What a browser said under the policy** — the same Chrome, over `npm run web:build` of `main`
+**What a browser said under the policy** — the same Chrome, over `pnpm web:build` of `main`
 at `92cbc02b` with this step merged in. **The module was a copy from the phase's working tree
 that day, not this tree's own build**: `grimoire_web_bg.wasm` at 8 623 589 B, 3 065.86 kB
 gzipped by Vite's report.
 
-- **`npm run web:smoke` passed as it stands** (4.5 s), all nine checks. It serves the build
+- **`pnpm web:smoke` passed as it stands** (4.5 s), all nine checks. It serves the build
   with no policy. (It serves under the policy since the step's second half — §9.6.)
 - **The same first run, under the policy**: a scratch copy of that script whose server sends
   what `headersFor` answers and which listens for violations on the page and, by auto-attach,
@@ -5077,9 +5077,9 @@ to see a rollback work — *Three deploys*. (Until the final deploy this paragra
 production was `4929cc6e` and not `main`: #813 had merged after that build was taken.)
 
 **What was deployed.** `main` at `d8c3779b`, the merge of #810, from a clean tree:
-`npm run web:build` over the engine `npm run web:wasm` built from the same source — engine
+`pnpm web:build` over the engine `pnpm web:wasm` built from the same source — engine
 build id `6d63009f7fa1062b`, the module 6 767 338 B, which is §9.6's *module that ships* to the
-byte. `npm run web:smoke` passed on that bundle (17.0 s).
+byte. `pnpm web:smoke` passed on that bundle (17.0 s).
 
 **The runbook's step 5, run for the first time: `wrangler dev --local`** (wrangler 4.146.0,
 port 8787) — Cloudflare's asset worker and router over this `wrangler.jsonc` and this
@@ -5411,7 +5411,7 @@ driver called `registration.update()` in his browser — and it is in a second e
 
 **The final deploy: the first to rename chunks.** Asked for by the owner in chat — *"Lets go
 ahead and run the last deploy"*, then *"go ahead and run the deploy"*. `wrangler deploy` at
-**13:43:02 UTC**, from `main` at `e1e76f78`, the merge of #813; `npm run web:smoke` had passed
+**13:43:02 UTC**, from `main` at `e1e76f78`, the merge of #813; `pnpm web:smoke` had passed
 on the bundle first (15.3 s). Version `e9947184-6ee1-4a07-ad79-841d93196210` — **v3** below —
 and *Uploaded 9 files (34 already uploaded)*.
 
@@ -5899,7 +5899,7 @@ and `hosting.test.ts` derives the second from `RELAY_BASE` by `ws_origin`'s rule
 rule out of `socket.rs`, and holds `connect-src` to it: every source `https://`, that one
 `wss://` and no other, in no other directive.
 
-**The walk** (`npm run web:sync-smoke`, `scripts/web-sync-smoke.mjs`, written in the first
+**The walk** (`pnpm web:sync-smoke`, `scripts/web-sync-smoke.mjs`, written in the first
 smoke's harness — the server, the browser and the two fences, which are a module of their own
 now, `scripts/web-smoke/harness.mjs`, so that neither run has to ask whether it is the script
 Node started; the first cut asked, by comparing two spellings of a path, and a run that
@@ -5932,7 +5932,7 @@ the last three back to back and alike:
 | The keepalive | a `ping` at once on each socket and one 45 s later, each answered `pong` |
 | The whole walk | 35 s; 155 s with the two idle minutes |
 
-**One thread, one connection** (`-- --measure`: V8's sampling profiler on the engine's Worker,
+**One thread, one connection** (`--measure`: V8's sampling profiler on the engine's Worker,
 a minute each). **Idle and in no group the Worker was busy 5.0–6.2 ms of the minute** — the
 loop's twelve reads of `sync_group` are inside that, most of the rest is the collector. **Idle,
 paired and live: 4.8–9.3 ms of the minute**, 240 ticks and two pings inside it. Not visible, and
@@ -5957,7 +5957,7 @@ upgrade — and makes no request to the relay, which has no fixture there.
 - **wrangler 4.146 on Windows turns an absolute `--persist-to` into `./C:\…`**, and its D1 then
   answers *internal error*. The run keeps its state under `relay/.wrangler/` (`infrastructure/relay/.wrangler/` since 2026-10-08), named relatively.
 - **A `wrangler dev` stopped by force leaves its bundle in `.wrangler/tmp/`, and `eslint .`
-  walked into it**: 620 errors on the first `npm run verify` after the walk, none in a file a
+  walked into it**: 620 errors on the first `pnpm verify` after the walk, none in a file a
   person wrote. The lint ignores `**/.wrangler/` now, as git always did, and the walk removes
   what it made.
 - **A run that is interrupted stops what it started** (review, the same day): Ctrl-C, an
@@ -5974,8 +5974,8 @@ upgrade — and makes no request to the relay, which has no fixture there.
   control and checks the write landed where it was made.
 
 **CI**: `infrastructure/relay/**` and the new script route to `web`, and the job runs the walk after the first
-smoke. wrangler is not a root dependency: the step installs it from `infrastructure/app-worker/`'s own
-lockfile (step 6.6's, `npm ci --ignore-scripts --prefix app-worker`), which is also where the
+smoke. wrangler is not a root dependency: the step installs it from `infrastructure/wrangler/`'s own
+lockfile (step 6.6's, now `npm ci --ignore-scripts --prefix infrastructure/wrangler`), which is also where the
 script looks first. **It has run on one Windows machine and on no runner**: its first run there
 is this step's own pull request.
 
@@ -6116,7 +6116,7 @@ it in exactly that shape, once, and says so when it does.
 7. A round trip whose token is refused because a rotation landed behind its key check adopts
    the rotation and asks once more, where it failed and waited for the next trip.
 
-**The walk, extended** (`npm run web:sync-smoke`; three more steps, 41–54 s for the whole of it
+**The walk, extended** (`pnpm web:sync-smoke`; three more steps, 41–54 s for the whole of it
 over some thirty runs on a machine other work was loading, and up to 72 s at its worst):
 
 | | |
@@ -6214,7 +6214,7 @@ none was measured under a finger. `controls.test.ts` pins each utility in its co
 compiles it against `packages/ui/index.css`; the panel's and the dialog's suites pin them on the rendered
 boxes.
 
-**The scanner, with a camera** — `npm run mobile:scan-smoke` (`scripts/pairing-scan-smoke.mjs`),
+**The scanner, with a camera** — `pnpm mobile:scan-smoke` (`scripts/pairing-scan-smoke.mjs`),
 against `mobile:dev`. A headless Chromium launched with
 `--headless=new --remote-debugging-port=0 --user-data-dir=<temp> --use-fake-device-for-media-stream
 --use-fake-ui-for-media-stream --use-file-for-fake-video-capture=<invite.y4m>` takes a file for a
@@ -6278,7 +6278,7 @@ with one linear memory. **Measured, and nothing is changed by this step**: the m
 script, the engine and the relay are as they were, and what the figures ask for is a relay
 deploy, so it is written down below as a design and not built.
 
-**The run** — `npm run web:sync-pull -- --ops <n>` (`scripts/web-sync-pull.mjs`), a sibling of
+**The run** — `pnpm web:sync-pull --ops <n>` (`scripts/web-sync-pull.mjs`), a sibling of
 the sync smoke on its harness: the relay's own code under workerd (`wrangler dev --local`
 4.146.0, workerd 1.20261001.1), two headless Chrome 154.0.8037.95 profiles on Windows 11 (Ryzen
 9 5900X, 32 GB), everything on loopback, the built app under the hosting's headers, the engine
@@ -6855,7 +6855,7 @@ this step's test held paged to live and, in its last assertion, the difference i
 now writes the decision down and takes it back when the binder returns, and the test holds
 all three equal.
 
-**Measured again, a page at a time** — `npm run web:sync-pull`, the same harness and machine
+**Measured again, a page at a time** — `pnpm web:sync-pull`, the same harness and machine
 as §10.5, the engine at 6 869 005 B, on 2026-10-05. **Every figure below is of the pull as
 committed** (fetch, classify, then a page at a time, against the relay that measures a page's
 sizes a row at a time; the engine committed is 6 861 693 B — the one measured still carried a
@@ -7053,8 +7053,8 @@ cut since, and nothing below has met a real key, a real token or a real tag.
 - **`web-deploy` deploys `infrastructure/app-worker/` and asks the address whether it serves that bundle**
   (`scripts/web-deploy-probe.mjs`: 200, the built policy, the built document). It is the only
   job that deploys anything and this is the only Worker — so **merging the release PR is a
-  deploy**. `wrangler` is pinned by a lockfile, `infrastructure/app-worker/package-lock.json`: installed with
-  `npm ci --ignore-scripts` in a step that holds nothing, run with `npx --no-install`. It goes
+  deploy**. `wrangler` is pinned by a lockfile, `infrastructure/wrangler/package-lock.json`: installed with
+  `npm ci --ignore-scripts` in a step that holds nothing, run by path from `infrastructure/app-worker/`. It goes
   last, because a deploy is live the moment it returns, and it refuses a tag older than the
   newest published release.
 - **`publish` waits for all three.** Any failure leaves the release a draft.
@@ -7066,7 +7066,7 @@ failure; a debug-signed APK is never attached. `scripts/release-rule.test.mjs` h
 the trigger, every spelling of `secrets` and which job may read which, and the exact list of
 commands those two jobs may run — each checked by breaking the workflow that way, 23 mutations.
 
-**Between releases**, `npm run web:deploy-guard` is the same rule for a deploy by hand: it
+**Between releases**, `pnpm web:deploy-guard` is the same rule for a deploy by hand: it
 refuses a tree whose user schema is not the last release tag's, or whose last release is still a
 draft — release-please makes the tag with the draft. **59 on both sides and v0.40.0 published
 that day**, so `main` was not ahead. ⚠️ Equal schemas are necessary, not sufficient: a wire
@@ -7142,7 +7142,7 @@ it at 23:09.
 **The web app, at 23:19:22 UTC.** From `main` at `2bbd4446` (through #824 — step 6.3's engine
 and the `wss://` source; not 6.3b, not 6.5b), version `befbcbd9-be3d-45f5-8150-4af8ff5337c9`,
 engine build id `d6f5dc2a123a220e`, `index-B-KQBiDj.js`, `worker-WDxbzWW_.js`; the wrangler
-`app-worker`'s lockfile pins. The runbook's steps in order: `npm ci`; `web:wasm` (6 836 569 B);
+`app-worker`'s lockfile pins. The runbook's steps in order: `pnpm install --frozen-lockfile`; `web:wasm` (6 836 569 B);
 `web:build`; `web:smoke` passed in 19.0 s; `web:sync-smoke` passed in 37.9 s;
 `web:deploy-guard` exit 0 (59 on both sides, v0.40.0); `wrangler dev --local` with probes 1–11
 and 14–19 answering as the table says; `deploy --dry-run` (48 files read); the deploy (13 files
@@ -7199,7 +7199,7 @@ says the three are in it is the tree that was deployed.
 and beside them #828's backup archive and #830's *Not sorted* controls, two other sessions'
 work that `main` held — version `685ae2ad-2309-4824-b707-6a39c159053e`, engine build id
 `a3947b5c7a3ba658` (the module 6 862 338 B), `index-ByCbemTm.js`, `worker-DfcE0hqp.js`. The
-runbook's steps in order: `npm ci`; `web:wasm`; `web:build`; `web:smoke` passed in 20.9 s;
+runbook's steps in order: `pnpm install --frozen-lockfile`; `web:wasm`; `web:build`; `web:smoke` passed in 20.9 s;
 `web:sync-smoke` — below; `web:deploy-guard` exit 0 (59 on both sides, v0.40.0); `wrangler
 dev --local` with probes 1–11 and 14–19 answering as the table says (the module's brotli
 2 025 348 B locally); `deploy --dry-run` (48 files read); the deploy (12 files uploaded, 31
@@ -7361,7 +7361,7 @@ thread and, on a machine that has many, on any thread holding `host::inline()`.
 **Proved by running it, which is what a compile never showed.** `crates/card-scanner/bench` is a
 package beside the crate with two faces over one `load` and one `frame`: the crate as a WASM
 module in a dedicated Worker — a frame in as a transferred `ArrayBuffer`, the trip a camera
-page's frame makes — and a native runner over the same inputs. `npm run scanner:bench` builds
+page's frame makes — and a native runner over the same inputs. `pnpm scanner:bench` builds
 the module with the web host's profile, drives the page in headless Chrome over the web smoke's
 own launcher, and prints what the page itself shows as text. `bench-prep` writes the inputs
 from the published bundle, the corpus and card pictures. CI's `rust` job runs the bench's tests
@@ -7448,8 +7448,8 @@ did:
 - *Native*: CI's `core` job checks `crates/card-scanner/bench` for Android; built there with
   `cargo build --release --bin scanner-bench-native --target aarch64-linux-android`, pushed
   with the inputs to `/data/local/tmp` and run from `adb shell`, its output reduced by
-  `npm run scanner:bench -- --summarise <file>`.
-- *The browser*: `npm run scanner:bench -- --simd --dir <inputs> --serve --port 8787`, then
+  `pnpm scanner:bench --summarise <file>`.
+- *The browser*: `pnpm scanner:bench --simd --dir <inputs> --serve --port 8787`, then
   `adb reverse tcp:8787 tcp:8787` and the phone's browser on `http://localhost:8787`.
 
 **Not seen**: any phone, natively or in a tab; any browser but one headless Chrome; a
@@ -7700,7 +7700,7 @@ hosting census, the phone's import fence and the token sweep. The workflow's dig
 run by hand in Git Bash against the real models, a tampered one and a source it could not
 read: matched, refused, refused.
 
-**Seen on the phone face, over the fake.** `npm run mobile:scanner-smoke`, a headless Chromium
+**Seen on the phone face, over the fake.** `pnpm mobile:scanner-smoke`, a headless Chromium
 at 360×800 and 412×915 under a touch pointer with its test-pattern camera running: with the
 scanner's data absent the slot draws the offer and its size, nothing scrolls sideways and
 Download is at least 44px; a press draws the bar; and when the fake's download lands the offer
@@ -7932,7 +7932,7 @@ the scanner's module** until the first scan online: the new module's address is 
 cache. An offer for a file the scanner is already running on — every release that rebuilt the
 bundle — reads *Newer card data is available*, not that the scanner *needs* anything.
 
-**Measured**, `npm run web:scanner-smoke`, headless Chrome 154 on Windows, the built app under
+**Measured**, `pnpm web:scanner-smoke`, headless Chrome 154 on Windows, the built app under
 the hosting's own headers, a 1280 × 720 Y4M of Counterspell (MH2 267) for a camera, a corpus of
 seven cards: the desktop face at 1440 × 900 in three clean passes (45.3 s, 44.2 s with a cargo
 build beside it, and the last with the phone face's leg behind it, 54.5 s in all).
@@ -8061,7 +8061,7 @@ the `decision_seq` the loop takes as its baseline (§11), so over the fake a cam
 It is a script now (`packages/fake/scannerScript.ts`): a pile of five cards, thirteen frames a
 card, 110 ms a frame, and in Exact a last card that is three reprints it cannot split.
 
-**Driven** — `npm run mobile:scanner-smoke` (`scripts/phone-scanner-smoke.mjs`), headless Chrome
+**Driven** — `pnpm mobile:scanner-smoke` (`scripts/phone-scanner-smoke.mjs`), headless Chrome
 154 with `--use-fake-device-for-media-stream` under a touch pointer and the dark scheme, over
 `mobile:dev`. The fake, not the engine.
 
@@ -8174,9 +8174,9 @@ the same tray and the same commit.
 
 | | |
 | --- | --- |
-| The crate as WASM beside native (`npm run scanner:bench`) | the published bundle and models, 120 frames of eight real printings: the hosts agree on every decision and every read |
-| The web app (`npm run web:scanner-smoke`) | a fake camera showing a real card: the offer, the fetch, the card recognised, filed and drawn in the Collection, on both faces; a fault, an idle end, and a second scan with the server refusing |
-| The phone's page (`npm run mobile:scanner-smoke`) | over the fake at 360, 412 and 800 wide under a touch pointer: scanning, the tray's edits, the folder, the commit, the offer |
+| The crate as WASM beside native (`pnpm scanner:bench`) | the published bundle and models, 120 frames of eight real printings: the hosts agree on every decision and every read |
+| The web app (`pnpm web:scanner-smoke`) | a fake camera showing a real card: the offer, the fetch, the card recognised, filed and drawn in the Collection, on both faces; a fault, an idle end, and a second scan with the server refusing |
+| The phone's page (`pnpm mobile:scanner-smoke`) | over the fake at 360, 412 and 800 wide under a touch pointer: scanning, the tray's edits, the folder, the commit, the offer |
 | The fetch in the core | the three published files, once, for real: landed, checked against their digests and loaded with no restart |
 
 **Nothing was deployed.** The web app ships at the next release tag, by `release.yml`'s

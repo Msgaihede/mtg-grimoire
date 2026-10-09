@@ -36,7 +36,7 @@
 //! ([`spawn_live_sync`] says why).
 //!
 //! **It also builds and runs on a desktop**, as a debugging aid: `cargo run -p grimoire-light`
-//! after `npm run mobile:build` opens the light app in a phone-sized window over its own data
+//! after `pnpm mobile:build` opens the light app in a phone-sized window over its own data
 //! folder (`light-data` beside the binary, never the desktop app's). Nothing ships that way.
 
 use std::path::PathBuf;

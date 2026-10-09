@@ -1,9 +1,9 @@
 import type { ReactNode } from "react";
 import { Check, ChevronLeft, ChevronRight, Minus, Plus, Trash2 } from "lucide-react";
-import { Dialog } from "@/components/Dialog";
-import { FOCUS, FOCUS_INSET } from "@/lib/focus";
-import { PRESS } from "@/lib/motion";
-import { cn } from "@/lib/utils";
+import { Dialog } from "@grimoire/ui/components/Dialog";
+import { FOCUS, FOCUS_INSET } from "@grimoire/ui/lib/focus";
+import { PRESS } from "@grimoire/ui/lib/motion";
+import { cn } from "@grimoire/ui/lib/utils";
 
 /**
  * The phone face's **action sheet**: a panel at the foot of the window, over a scrim, with the

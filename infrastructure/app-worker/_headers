@@ -2,7 +2,7 @@
 # Workers static assets from the root of the uploaded directory. The web build copies this file
 # into `apps/light/dist-web/` and into no other bundle (`apps/light/vite.config.ts`, mode `web`); it is parsed at
 # deploy and is not itself served. `infrastructure/app-worker/src/headers.ts` reads it the same way for
-# `npm run web:preview`, and `infrastructure/app-worker/src/hosting.test.ts` holds every line below to the
+# `pnpm web:preview`, and `infrastructure/app-worker/src/hosting.test.ts` holds every line below to the
 # engine's own constants.
 #
 # Every matching rule applies, in order, and a header two rules both set is JOINED WITH A COMMA.

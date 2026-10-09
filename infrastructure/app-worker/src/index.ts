@@ -1,4 +1,4 @@
-import { isNavigation } from "../../../packages/ui/lib/core/web/assets";
+import { isNavigation } from "@grimoire/ui/lib/core/web/assets";
 
 /**
  * The web app's hosting Worker — **and almost none of the hosting**. `wrangler.jsonc`'s `assets`

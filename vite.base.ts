@@ -22,7 +22,7 @@ const HERE = import.meta.url;
 
 /** The repository root: where `node_modules`, the lockfile and any `.env` file are. */
 export const REPO = fileURLToPath(new URL("./", HERE));
-/** What `@/*` means, as `tsconfig.json`'s `paths` and `components.json`'s aliases say. */
+/** What `@/*` means, as `tsconfig.base.json`'s `paths` and `components.json`'s aliases say. */
 export const UI = fileURLToPath(new URL("./packages/ui", HERE));
 
 // @ts-expect-error process is a nodejs global
@@ -35,6 +35,14 @@ export default defineConfig({
 
   resolve: {
     alias: { "@": UI },
+    // One copy of each, whichever package's import reached it first. pnpm already gives every
+    // package the same files — the three builds were byte for byte the same with and without
+    // this line, 2026-10-08 — so it holds nothing today; it is here for the day two packages
+    // declare different ranges and a second React would otherwise be a silent second context.
+    // Resolved from each program's root: every app declares the first two, and the root manifest
+    // declares all three for the programs rooted there (Vitest, Storybook) and for the two apps
+    // that do not import the query library themselves.
+    dedupe: ["react", "react-dom", "@tanstack/react-query"],
   },
 
   // An app's root is `apps/<name>`, and Vite looks for `.env` files in the root unless told.
@@ -67,8 +75,9 @@ export default defineConfig({
     //    Vite's default, which is the nearest folder above the root holding a workspace file or,
     //    failing one, a `package.json`. Today that is the repository as well: measured
     //    2026-10-08, the share viewer's server still answered 200 for a shared file with this
-    //    line taken out. It stops being so the day an app has a `package.json` of its own and
-    //    nothing above it says workspace. `scripts/vite-base.test.mjs` holds the line.
+    //    line taken out. Each app has a `package.json` of its own since 2026-10-08, and
+    //    `pnpm-workspace.yaml` at the root is what Vite's default now finds.
+    //    `scripts/vite-base.test.mjs` holds the line.
     fs: { allow: [REPO] },
   },
 });

@@ -1,8 +1,8 @@
-// Every `npm run <name>` a workflow, a composite action or another npm script asks for is a script
-// `package.json` has.
+// Every script a workflow, a composite action, a Tauri config or another script asks pnpm for is
+// a script `package.json` has.
 //
 // On 2026-10-04 an edit that added `lint:claude` took `web:smoke`'s line instead of the one below
-// it. Nothing local runs `web:smoke` — `npm run verify` does not — so the first thing to notice was
+// it. Nothing local runs `web:smoke` — `pnpm verify` does not — so the first thing to notice was
 // CI's `web` job, on `main` and on the release PR that merged it: `npm error Missing script`. A
 // name is checkable from the files' text, so it is checked here, where `verify` reads it.
 //
@@ -33,30 +33,94 @@ const code = (src) =>
     .filter((line) => !/^\s*#/.test(line))
     .join("\n");
 
-/** Every script name a text runs, once each. */
+const TAURI_CONFIGS = import.meta.glob("/apps/*/src-tauri/tauri*.conf.json", {
+  query: "?raw",
+  import: "default",
+  eager: true,
+});
+
+/** pnpm's own commands that something here runs. Any other word after `pnpm` is a script's name. */
+const PNPM_OWN = new Set(["install", "exec"]);
+
+/**
+ * Every script name a text runs, once each: `pnpm <name>` and `pnpm run <name>`, either after
+ * `-w`. Not `pnpm/action-setup` and not `cache: pnpm`: a name follows `pnpm` and a space.
+ */
 const runsOf = (src) => [
-  ...new Set([...src.matchAll(/\bnpm run ([\w][\w:.-]*)/g)].map((m) => m[1])),
+  ...new Set(
+    [...src.matchAll(/\bpnpm (?:(?:-w|--workspace-root) )?(?:run )?([\w][\w:.-]*)/g)]
+      .map((m) => m[1])
+      .filter((name) => !PNPM_OWN.has(name)),
+  ),
 ];
+
+/** The two commands the Tauri CLI runs for a config, from the app's folder. */
+const hooksOf = (conf) =>
+  [...conf.matchAll(/"before(?:Dev|Build)Command":\s*"([^"]+)"/g)].map((m) => m[1]);
 
 const CALLERS = [
   ...Object.entries({ ...WORKFLOWS, ...ACTIONS }).map(([path, src]) => [path, code(src)]),
+  ...Object.entries(TAURI_CONFIGS).map(([path, conf]) => [path, hooksOf(conf).join("\n")]),
   ["/package.json", Object.values(pkg.scripts).join("\n")],
 ];
 
-describe("every npm script that is run", () => {
+describe("every script that is run", () => {
   it.each(CALLERS)("%s names only scripts package.json has", (_path, src) => {
     expect(runsOf(src).filter((name) => !(name in pkg.scripts))).toEqual([]);
+  });
+
+  // The census above reads a name only where it directly follows `pnpm`, `pnpm run`, or either
+  // after `-w`. A call spelled any other way — `pnpm --filter x run y`, `pnpm -r run y`,
+  // `pnpm -C dir y` — would name a script it never checked, so that spelling fails here.
+  it.each(CALLERS)("%s calls pnpm only in a form this can read", (_path, src) => {
+    expect(src).not.toMatch(/\bpnpm (?!(?:(?:-w|--workspace-root) )?(?:run )?\w)/);
+  });
+
+  // npm strips a `--` before a script's arguments; pnpm hands it to the script. Vitest then reads
+  // `--shard=1/3` as a file to look for, and `scanner-assets.mjs` never sees `--web`.
+  // Anywhere on the line: `pnpm test:run --coverage -- --shard=1/3` hands the `--` on just the same.
+  it.each(CALLERS)("%s puts no `--` between a script and its arguments", (_path, src) => {
+    expect(src).not.toMatch(/\bpnpm [^\n]* -- /);
+  });
+
+  // The one npm left is the deploy tool's install, which is npm's on purpose. The whole line, and
+  // only in its two spellings: with the folder as `--prefix`, or with it as the step's
+  // `working-directory`.
+  it.each(CALLERS)("%s runs npm for the deploy tool's install and nothing else", (_path, src) => {
+    const other = src.split("\n").filter((line) => /\b(?:npm|npx|pnpx|corepack)\b/.test(line));
+    expect(
+      other.filter(
+        (line) => !/^\s*run: npm ci --ignore-scripts(?: --prefix infrastructure\/wrangler)?$/.test(line),
+      ),
+    ).toEqual([]);
+  });
+
+  // The Tauri CLI runs these in `apps/<name>`, where a plain `pnpm run` reads that app's manifest
+  // and finds no script (measured 2026-10-08).
+  it("reaches a root script from an app's folder through the workspace root", () => {
+    const hooks = Object.values(TAURI_CONFIGS).flatMap(hooksOf);
+    expect(hooks.length).toBe(5);
+    for (const hook of hooks) expect(hook).toMatch(/^pnpm -w run [\w:.-]+$/);
   });
 });
 
 describe("the rule's own guards", () => {
-  // A census that matched nothing would pass the assertion above.
+  // A census that matched nothing would pass the assertions above.
   it("sees the calls it is about", () => {
     const ci = code(WORKFLOWS["/.github/workflows/ci.yml"]);
-    expect(runsOf(ci)).toEqual(expect.arrayContaining(["build", "lint", "web:smoke"]));
+    expect(runsOf(ci)).toEqual(expect.arrayContaining(["build", "lint", "web:smoke", "test:run"]));
     expect(runsOf(pkg.scripts.verify).length).toBeGreaterThan(0);
-    expect(runsOf("run: npm run web:smoke\n# npm run gone")).toEqual(["web:smoke", "gone"]);
-    expect(runsOf(code("  # npm run gone\n  run: npm run build"))).toEqual(["build"]);
+    expect(runsOf("run: pnpm web:smoke\n# pnpm gone")).toEqual(["web:smoke", "gone"]);
+    expect(runsOf(code("  # pnpm gone\n  run: pnpm -w run build"))).toEqual(["build"]);
+    expect(runsOf("pnpm --workspace-root run tauri:light android")).toEqual(["tauri:light"]);
+    expect(
+      runsOf("run: pnpm install --frozen-lockfile\nrun: pnpm exec tauri android build\nuses: pnpm/action-setup@abc\ncache: pnpm"),
+    ).toEqual([]);
+    const unreadable = /\bpnpm (?!(?:(?:-w|--workspace-root) )?(?:run )?\w)/;
+    for (const call of ["pnpm --filter @grimoire/ui run gone", "pnpm -r run gone", "pnpm -C apps/light gone"])
+      expect(call, call).toMatch(unreadable);
+    for (const call of ["pnpm build", "pnpm -w run dev", "pnpm --workspace-root run tauri:light android", "pnpm install --frozen-lockfile"])
+      expect(call, call).not.toMatch(unreadable);
   });
 });
 

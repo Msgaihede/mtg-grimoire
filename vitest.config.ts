@@ -1,9 +1,21 @@
 import { defineConfig, mergeConfig } from "vitest/config";
 import base from "./vite.base.ts";
 
-// The one test program: every package's tests, from the repository root, over the plugins and
-// the alias the apps build with. It lived in `vite.config.ts` until 2026-10-08, when that file
-// became the desktop app's and moved into it.
+// The one test program: every package's tests, as one project per package, from the repository
+// root, over the plugins and the alias the apps build with. It lived in `vite.config.ts` until
+// 2026-10-08, when that file became the desktop app's and moved into it.
+
+/**
+ * One Vitest project. `extends: true` gives it everything this file sets — the plugins, the
+ * alias, jsdom, the one setup file, the timeout — and leaves its root where this file is. That
+ * root is not negotiable: thirty-eight `import.meta.glob` calls in the suite start their pattern
+ * at `/`, which is the repository only while a project's root is.
+ */
+const project = (name: string, include: string[]) => ({
+  extends: true as const,
+  test: { name, include },
+});
+
 export default mergeConfig(
   base,
   defineConfig({
@@ -28,10 +40,14 @@ export default mergeConfig(
       // cost is the only thing this trades away: a test that genuinely hangs now reports in 15s
       // rather than 5s.
       testTimeout: 15_000,
-      // ⚠️ A directory this list does not name is collected by **nothing**, and `vitest run
-      // <that folder>` answers `No test files found` — which prints on stdout and is easy to
-      // read as a pass.
-      include: [
+      // ⚠️ A folder no project's glob names is collected by **nothing**, and `vitest run <that
+      // folder>` answers `No test files found` — which prints on stdout and is easy to read as a
+      // pass.
+      //
+      // One project per package, named for it since 2026-10-08, so `vitest run --project light`
+      // is that package's tests. The suite is still one program: one root, one environment, one
+      // setup file. `scripts/ci-route.test.mjs` mirrors these globs.
+      projects: [
         // The shared UI. No `*.stories.tsx` is ever collected as a **test file** — every glob
         // here requires a literal `.test.` segment, not a particular extension, so
         // `packages/ui/components/RarityGem.stories.tsx` matches none of them. Stories are
@@ -40,32 +56,28 @@ export default mergeConfig(
         // shape — one collected file that owns the Storybook wiring (project annotations, the
         // fake-backend module mocks), rather than every story file inheriting a test runner's
         // environment.
-        "packages/ui/**/*.test.{ts,tsx}",
+        project("ui", ["packages/ui/**/*.test.{ts,tsx}"]),
         // The Storybook fake, in scope so the fake backend is covered by the one suite `verify`
         // runs. It was `.storybook/fake/` until 2026-10-08, and the workbench's own glob below
         // is what collected it. What the narrower `.test.ts` rules out is a
         // `packages/fake/**/*.test.tsx`: the fakes are plain modules, and a test needing JSX is
         // testing a component, which lives under `packages/ui/`.
-        "packages/fake/**/*.test.ts",
+        project("fake", ["packages/fake/**/*.test.ts"]),
         // The desktop app's own page — its entry and the boot components that hold `App` back
         // until the database is open. They were under the first glob until 2026-10-08, when
         // they moved out of the shared UI and into the one app that mounts them.
-        "apps/desktop/src/**/*.test.{ts,tsx}",
+        project("desktop", ["apps/desktop/src/**/*.test.{ts,tsx}"]),
         // The **light app** — `apps/light/`, built by `apps/light/vite.config.ts`. A React entry
         // like `apps/share/`, with one difference: it has a core, so its tests mock Tauri's API
         // modules with the Storybook fake the way `packages/ui/stories.test.tsx` does.
-        "apps/light/**/*.test.{ts,tsx}",
+        project("light", ["apps/light/**/*.test.{ts,tsx}"]),
         // The **public web viewer** — `apps/share/`, built by `apps/share/vite.config.ts` into
         // `apps/share/dist-share/` and served by the share Worker's `assets` binding. It is a
         // React page like the shared UI, so unlike the three Worker globs below it needs `.tsx`,
         // and unlike the shared UI it has no core: no `ipc`, no store, no Tauri boundary
         // anywhere in it. `apps/share/SharePage.test.tsx` holds a sweep of its own import graph
         // that keeps it that way.
-        "apps/share/**/*.test.{ts,tsx}",
-        // The workbench's own folder. Nothing in it is a test since the fake moved out, and the
-        // glob stays for the warning above: a test written beside `preview.tsx` is collected
-        // rather than silently not. `.test.ts` and no `.tsx`, for the fake's reason.
-        ".storybook/**/*.test.ts",
+        project("share", ["apps/share/**/*.test.{ts,tsx}"]),
         // The Cloudflare relay's pure logic, and a glob of its own rather than a widening of the
         // first because `packages/ui/**` is anchored at the repo root and does not reach
         // `infrastructure/relay/src/`. **The rule is that every pure decision in
@@ -82,26 +94,32 @@ export default mergeConfig(
         // `infrastructure/relay/` is absent from `coverage.include` for the same reason
         // `apps/desktop/src-tauri/` is: it is not app code and would move a number that is about
         // the app.
-        "infrastructure/relay/src/**/*.test.ts",
+        project("relay", ["infrastructure/relay/src/**/*.test.ts"]),
         // The *share* Worker — a second Cloudflare Worker beside the relay, for spec §5.1's
         // blast-radius reason — and everything the relay's paragraph says applies to it
         // unchanged: no workerd, plain handlers over an injected `Env`, `fakeD1`'s SQL evaluator
         // standing in for D1. It is absent from `coverage.include` beside
         // `infrastructure/relay/`. This is the directory the warning above was learned on: no
         // glob named it for exactly one commit.
-        "infrastructure/share-worker/src/**/*.test.ts",
+        project("share-worker", ["infrastructure/share-worker/src/**/*.test.ts"]),
         // The third Worker — `infrastructure/app-worker/`, the web app's hosting — on the two
         // above's terms: a plain handler over a fake of its one binding. Its other two files are
         // not about a handler at all: `headers.test.ts` holds the reader of Cloudflare's
         // `_headers` format, and `hosting.test.ts` reads that file, `wrangler.jsonc` and the
         // engine's Rust as text and fails when the Content-Security-Policy and the hosts the
         // engine asks part.
-        "infrastructure/app-worker/src/**/*.test.ts",
+        project("app-worker", ["infrastructure/app-worker/src/**/*.test.ts"]),
+        // The root package's own two folders, which belong to no other.
+        //
+        // The workbench's own folder. Nothing in it is a test since the fake moved out, and the
+        // glob stays for the warning above: a test written beside `preview.tsx` is collected
+        // rather than silently not. `.test.ts` and no `.tsx`, for the fake's reason.
+        //
         // CI's own router, `scripts/ci-route.mjs`, and the fences beside it: plain `.mjs` like
         // the rest of `scripts/`, so their tests are too — no `tsc` program includes `scripts/`,
         // and a `.ts` test under `packages/ui/` importing one would need a declaration file to
         // satisfy `strict`.
-        "scripts/**/*.test.mjs",
+        project("root", [".storybook/**/*.test.ts", "scripts/**/*.test.mjs"]),
       ],
       // Vitest stubs CSS imports as empty strings by default, which would hand
       // `iconFont.test.ts` an empty `mana.css?raw` to assert against. No *component* imports

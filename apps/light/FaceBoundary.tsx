@@ -1,8 +1,8 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
-import { GrimoireMark } from "@/components/GrimoireMark";
-import { FOCUS } from "@/lib/focus";
-import { PRESS } from "@/lib/motion";
-import { cn } from "@/lib/utils";
+import { GrimoireMark } from "@grimoire/ui/components/GrimoireMark";
+import { FOCUS } from "@grimoire/ui/lib/focus";
+import { PRESS } from "@grimoire/ui/lib/motion";
+import { cn } from "@grimoire/ui/lib/utils";
 import { ReloadLink } from "./ReloadLink";
 import { useHostUpdate } from "./useHostUpdate";
 

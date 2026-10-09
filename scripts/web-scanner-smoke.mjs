@@ -2,10 +2,10 @@
 // The web app's card scanner, in a real browser: **a camera shows a card, and the built app
 // scans it** — the light app's step 7.5.
 //
-//     npm run web:wasm && npm run scanner:assets -- --web && npm run web:build
-//     npm run web:scanner-smoke
+//     pnpm web:wasm && pnpm scanner:assets --web && pnpm web:build
+//     pnpm web:scanner-smoke
 //
-// `npm run web:smoke` proves the engine. This is the run that proves the *second* module: the
+// `pnpm web:smoke` proves the engine. This is the run that proves the *second* module: the
 // scanner's own WASM, built with `simd128`, in a Worker of its own, fed the three files a reader
 // downloads and the labels the engine hands across. Vitest drives the page's half over a fake
 // Worker and cargo tests the module's logic natively; neither instantiates the module in a

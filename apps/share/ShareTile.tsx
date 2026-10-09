@@ -1,11 +1,11 @@
-import { CardTile } from "@/components/CardTile";
-import { CountTag } from "@/components/CountTag";
-import { DEFAULT_ZOOM } from "@/lib/cardZoom";
-import { CONDITION_LABEL, type Condition } from "@/lib/conditions";
-import { isFinish, type Finish } from "@/lib/finish";
-import type { Currency } from "@/lib/marketplace";
-import { formatPrice } from "@/lib/prices";
-import type { ShareCard } from "@/lib/shareSnapshot";
+import { CardTile } from "@grimoire/ui/components/CardTile";
+import { CountTag } from "@grimoire/ui/components/CountTag";
+import { DEFAULT_ZOOM } from "@grimoire/ui/lib/cardZoom";
+import { CONDITION_LABEL, type Condition } from "@grimoire/ui/lib/conditions";
+import { isFinish, type Finish } from "@grimoire/ui/lib/finish";
+import type { Currency } from "@grimoire/ui/lib/marketplace";
+import { formatPrice } from "@grimoire/ui/lib/prices";
+import type { ShareCard } from "@grimoire/ui/lib/shareSnapshot";
 
 /**
  * The absence, drawn.

@@ -1,16 +1,16 @@
 import { useId, useRef, useState, type ReactNode } from "react";
 import { FileUp } from "lucide-react";
-import { Dialog } from "@/components/Dialog";
-import type { ImportDestination } from "@/features/transfer/import/destination";
-import { LEGACY_ENCODING_NOTICE } from "@/features/transfer/import/ImportDialog";
-import { CsvNotes } from "@/features/transfer/import/shared/CsvNotes";
-import { useImportSource } from "@/features/transfer/import/useImportSource";
-import { plural } from "@/lib/counts";
-import { FOCUS } from "@/lib/focus";
-import { DECKLIST_ACCEPT, readDecklistFile } from "@/lib/core/browserFiles";
-import { ipcError } from "@/lib/ipc";
-import { PRESS_SOFT } from "@/lib/motion";
-import { cn } from "@/lib/utils";
+import { Dialog } from "@grimoire/ui/components/Dialog";
+import type { ImportDestination } from "@grimoire/ui/features/transfer/import/destination";
+import { LEGACY_ENCODING_NOTICE } from "@grimoire/ui/features/transfer/import/ImportDialog";
+import { CsvNotes } from "@grimoire/ui/features/transfer/import/shared/CsvNotes";
+import { useImportSource } from "@grimoire/ui/features/transfer/import/useImportSource";
+import { plural } from "@grimoire/ui/lib/counts";
+import { FOCUS } from "@grimoire/ui/lib/focus";
+import { DECKLIST_ACCEPT, readDecklistFile } from "@grimoire/ui/lib/core/browserFiles";
+import { ipcError } from "@grimoire/ui/lib/ipc";
+import { PRESS_SOFT } from "@grimoire/ui/lib/motion";
+import { cn } from "@grimoire/ui/lib/utils";
 
 /**
  * **The touch floor for the desktop's second step**, set from the container rather than on each

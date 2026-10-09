@@ -1,9 +1,9 @@
 import type { ReactNode } from "react";
 import { Settings } from "lucide-react";
-import { ManaLine } from "@/components/ManaLine";
-import type { ManaLineSync } from "@/lib/mana";
-import { FOCUS_INSET } from "@/lib/focus";
-import { cn } from "@/lib/utils";
+import { ManaLine } from "@grimoire/ui/components/ManaLine";
+import type { ManaLineSync } from "@grimoire/ui/lib/mana";
+import { FOCUS_INSET } from "@grimoire/ui/lib/focus";
+import { cn } from "@grimoire/ui/lib/utils";
 import { linkTo, usePlace } from "./router";
 import { TabBar } from "./TabBar";
 

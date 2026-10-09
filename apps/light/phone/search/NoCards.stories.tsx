@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, within } from "storybook/test";
-import { RANK } from "@/lib/activity";
+import { RANK } from "@grimoire/ui/lib/activity";
 import { NoCards } from "./NoCards";
 
 /**
