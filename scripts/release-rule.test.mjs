@@ -425,7 +425,29 @@ describe("release.yml", () => {
   ])("%s builds nothing, and runs only what is listed here", (name, actions, commands) => {
     expect([...jobs[name].matchAll(/uses: ([\w./-]+)@/g)].map((m) => m[1]).sort()).toEqual(actions);
     expect(commandsOf(jobs[name])).toEqual(commands);
-    expect(jobs[name]).not.toMatch(/rust-cache|rust-toolchain|tauri-action|\bcache:/);
+    // No cache of any kind, under any key. One line has the word and turns a cache *off*; it is
+    // taken out to the letter, so `package-manager-cache: true` is still a line that is refused.
+    expect(jobs[name].replace(/^ {10}package-manager-cache: false$/gm, "")).not.toMatch(
+      /rust-cache|rust-toolchain|tauri-action|\bcache\b/,
+    );
+  });
+
+  // `setup-node` turns a cache on by itself when `package.json`'s `packageManager` names npm
+  // (`getNameFromPackageManagerField`, read at the pinned v7.0.0). It names pnpm, so nothing is
+  // cached with or without the key; the key is what keeps that true if the field or the action's
+  // default moves. **The step is held whole**: a `cache:` or a `cache-dependency-path:` beside
+  // it is a line that is not here.
+  it("sets Node up in `web-deploy` with caching off by name, and with nothing else", () => {
+    const node = stepsOf(jobs["web-deploy"]).filter((step) => /^uses: actions\/setup-node@/.test(step));
+    expect(node).toHaveLength(1);
+    expect(node[0].trimEnd().split("\n").slice(1)).toEqual([
+      "        if: steps.token.outputs.present == 'true'",
+      "        with:",
+      "          node-version-file: .nvmrc",
+      "          package-manager-cache: false",
+    ]);
+    // `android-sign` runs no Node at all, so there is no second step to hold.
+    expect(jobs["android-sign"]).not.toMatch(/setup-node/);
   });
 
   // The workspace is pnpm's; the two jobs that hold a secret are not part of it. Neither sets
