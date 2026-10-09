@@ -229,8 +229,14 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   that install, and the deploy, now `node ../wrangler/node_modules/wrangler/bin/wrangler.js
   deploy` from `infrastructure/app-worker`, a path where it was `npx --no-install wrangler`.
   The Worker's one import from the shared UI is also a `wrangler.jsonc` `alias`, because that job
-  has no workspace links. **The release build's runner is `pnpm tauri build`**: `tauri-action`
-  finds `pnpm-lock.yaml` at the root and runs the root's `tauri` script, which goes to
+  has no workspace links. **A third line, 2026-10-09: `package-manager-cache: false` on its Node
+  step.** `setup-node` (read at the pinned v7.0.0) turns a cache on by itself when
+  `package.json`'s `packageManager` names npm; it names pnpm, so the job cached nothing before
+  the key and caches nothing with it, and the key keeps that so if the field or the action's
+  default moves. `scripts/release-rule.test.mjs` holds the step whole, and still refuses the
+  word `cache` anywhere else in the two jobs. **The release build's runner is `pnpm tauri
+  build`**: `tauri-action` finds `pnpm-lock.yaml` at the root and runs the root's `tauri` script,
+  which goes to
   `apps/desktop`; that is why the root keeps `@tauri-apps/cli` in its manifest
   (`scripts/release-rule.test.mjs` holds the script's text and the dependency).
   `scripts/workflow-scripts.test.mjs` reads `pnpm <name>` (and the `-w` forms), refuses a pnpm

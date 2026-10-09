@@ -15,7 +15,7 @@ SessionStart. It reports both and installs when `node_modules` is missing or old
 run `pnpm install` yourself before any test, build or app command**, or nothing resolves
 and `pnpm verify` never reaches `cargo test` — failures that are not yours.
 
-**pnpm installs before it runs.** With a `package.json` edited, `pnpm exec <anything>` and `pnpm <script>` first run a full install, which rewrites `pnpm-lock.yaml` to match and relinks `node_modules`, and only then run the command. Put back a manifest edit that is not meant to stay *before* any `pnpm` command, and expect `git status` to show a lockfile nobody meant to change if you did not.
+**pnpm refuses to run on a tree a manifest has moved past.** With a `package.json` edited and not installed, `pnpm exec <anything>` and `pnpm <script>` exit 1 with `ERR_PNPM_VERIFY_DEPS_BEFORE_RUN` and `Run "pnpm install"`, and change nothing (`verifyDepsBeforeRun: error` in `pnpm-workspace.yaml`; pnpm's own default would install and rewrite `pnpm-lock.yaml`). Put back an edit that was not meant to stay, or run `pnpm install` for one that was. It does **not** see a lockfile that moved by itself: after a merge that brings only `pnpm-lock.yaml`, commands run against the old tree until `pnpm install`.
 
 **A worktree resolves more than it declares.** Node looks for a package in every folder above
 a file, and a worktree sits under the main checkout: an import no manifest here declares can

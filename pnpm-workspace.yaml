@@ -51,3 +51,17 @@ allowBuilds:
 # off an install always reads the lockfile: about 0.75 s where it was 0.3 s, when there is
 # nothing to do.
 optimisticRepeatInstall: false
+
+# pnpm 11 checks the tree before `pnpm <script>` and `pnpm exec`, and its default answer to one
+# that is behind is to install: with one manifest edited, `pnpm exec node -v` took 9 s, rewrote
+# `pnpm-lock.yaml` to match the edit and exited 0. With this it refuses and changes nothing.
+# Measured 2026-10-09 on 11.5.0, each one `ERR_PNPM_VERIFY_DEPS_BEFORE_RUN`, exit 1 and `Run
+# "pnpm install"`: a manifest the lockfile does not satisfy; a manifest and a lockfile that
+# arrived together and were never installed; a `node_modules` with no record of an install. A
+# tree that is up to date pays nothing (`pnpm exec node -v` in 0.7 s with it and without), and a
+# manifest put back as it was runs again with no install in between.
+# **It does not see a lockfile that moved by itself.** With no manifest's modification time
+# moved the check does not read the lockfile at all: replaced by one line that is not a
+# lockfile, every command still ran. That case stays `pnpm install`'s, which the setting above
+# makes read it, and `.claude/hooks/worktree-deps.sh`'s, which runs one.
+verifyDepsBeforeRun: error

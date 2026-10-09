@@ -7,6 +7,7 @@ import toolchainToml from "../rust-toolchain.toml?raw";
 import rustAction from "../.github/actions/rust-toolchain/action.yml?raw";
 import nvmrc from "../.nvmrc?raw";
 import packageJson from "../package.json?raw";
+import workspaceYaml from "../pnpm-workspace.yaml?raw";
 
 // Every workflow, so a new one is held to the same rules the day it lands.
 const WORKFLOWS = import.meta.glob("/.github/workflows/*.yml", {
@@ -119,5 +120,14 @@ describe("pnpm", () => {
   it("is pinned in package.json, to a version and the hash of its tarball", () => {
     // Corepack and the setup action both read this field; the hash is what makes the pin a pin.
     expect(JSON.parse(packageJson).packageManager).toMatch(/^pnpm@\d+\.\d+\.\d+\+sha512\.[0-9a-f]{128}$/);
+  });
+
+  // Two settings decide what a command does on a tree that is behind, and each has its
+  // measurement in the file's own comment. A setting nothing holds is one a tidy-up deletes, and
+  // the docs go on describing it. This is the whole list of the file's one-line settings, so a
+  // third is added here on purpose.
+  it("reads the lockfile on every install, and refuses to run on a tree a manifest has moved past", () => {
+    const settings = workspaceYaml.split("\n").filter((line) => /^[A-Za-z]+: \S/.test(line));
+    expect(settings).toEqual(["optimisticRepeatInstall: false", "verifyDepsBeforeRun: error"]);
   });
 });

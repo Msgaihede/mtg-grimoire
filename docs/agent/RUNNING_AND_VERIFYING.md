@@ -96,11 +96,15 @@ Related: the `running-the-app` skill (locks and ports), [live-ui-verification.md
 
 Measured 2026-10-08 with pnpm 11.5.0 in this repository.
 
-- **pnpm installs before it runs.** With a `package.json` edited, `pnpm exec <anything>` and
-  `pnpm <script>` first run a full install, which rewrites `pnpm-lock.yaml` to match the edited
-  manifest and relinks `node_modules`, and only then run the command. An edit to a manifest that
-  is not meant to stay is put back *before* any `pnpm` command, and `git status` after a run may
-  show a lockfile nobody meant to change.
+- **pnpm refuses to run on a tree a manifest has moved past.** pnpm 11's own default is to
+  install first: with a `package.json` edited, `pnpm exec <anything>` and `pnpm <script>` rewrote
+  `pnpm-lock.yaml` to match the edit, relinked `node_modules` and only then ran the command.
+  `pnpm-workspace.yaml` sets `verifyDepsBeforeRun: error` (measured 2026-10-09; its comment has
+  the cases): the command exits 1 with `ERR_PNPM_VERIFY_DEPS_BEFORE_RUN` and `Run "pnpm
+  install"`, and changes nothing. Put back an edit that was not meant to stay and the command
+  runs again; run `pnpm install` for one that was. **It does not see a lockfile that moved by
+  itself** — a merge that brings only `pnpm-lock.yaml` — so `pnpm install` after a merge is
+  still yours, or the session hook's.
 - **`pnpm install` always reads the lockfile here.** pnpm 11's default answers "Already up to
   date" whenever no manifest's modification time has moved, without reading the lockfile — a
   lockfile changed by itself got that answer and exit 0. `pnpm-workspace.yaml` sets

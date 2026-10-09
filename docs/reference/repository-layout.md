@@ -60,10 +60,13 @@ from any folder under it.
 no `--`. From an app's folder — which is where the Tauri CLI and Gradle start — a root script is
 `pnpm -w run <name>`.
 
-**Three things pnpm does that npm did not.** (a) It installs before it runs: with a manifest
-edited, `pnpm exec <anything>` and `pnpm <script>` first rewrite `pnpm-lock.yaml` to match and
-relink `node_modules`, so a manifest edit that is not meant to stay is put back before any
-`pnpm` command. (b) `pnpm install` is told always to read the lockfile
+**Three things pnpm does that npm did not.** (a) It checks the tree before it runs, and is told
+to refuse one that is behind (`verifyDepsBeforeRun: error` in `pnpm-workspace.yaml`): pnpm 11's
+default is to install first, which with a manifest edited rewrote `pnpm-lock.yaml` to match and
+relinked `node_modules` before `pnpm exec <anything>` or `pnpm <script>` ran. Now the command
+exits 1 and says `Run "pnpm install"`. It does not see a lockfile that moved by itself, so
+`pnpm install` after a merge is still needed. (b) `pnpm install` is told always to read the
+lockfile
 (`optimisticRepeatInstall: false` in `pnpm-workspace.yaml`): pnpm 11's default answers "Already
 up to date" from the manifests' modification times alone, and a lockfile changed by itself was
 not installed. (c) It does not replace a tree npm made: `pnpm install` over an npm-installed
