@@ -111,7 +111,6 @@ Run verification tests only at the end of feature work:
 | Command | Action |
 | --- | --- |
 | `pnpm test` / `pnpm exec vitest packages/ui/` | Run frontend unit and component tests |
-| `pnpm storybook:test` | Run Storybook interaction tests |
 | `pnpm lint` | Run ESLint and token verification |
 
 Commit discipline:
