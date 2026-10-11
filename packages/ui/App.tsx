@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { MotionConfig } from "motion/react";
 import { AppShell } from "@/components/AppShell";
@@ -17,17 +18,49 @@ import { DeckEditor } from "@/features/decks/DeckEditor";
 import { DecksPage } from "@/features/decks/DecksPage";
 import { HomePage } from "@/features/home/HomePage";
 import { PriceHistoryDialog } from "@/features/home/priceHistory/PriceHistoryDialog";
-import { PlaytestingPage } from "@/features/playtesting/PlaytestingPage";
-import { ScannerPage } from "@/features/scanner/ScannerPage";
 import { SearchPage } from "@/features/search/SearchPage";
-import { SharedPage } from "@/features/share/SharedPage";
-import { SettingsPage } from "@/features/settings/SettingsPage";
-import { TagsPage } from "@/features/tags/TagsPage";
-import { TradePage } from "@/features/trade/TradePage";
 import { WishlistPage } from "@/features/wishlist/WishlistPage";
 import { queryClient } from "@/lib/query";
 import { useAppStore } from "@/lib/store";
 import { useUpdate, type Update } from "@/lib/useUpdate";
+
+/**
+ * **Six views are a chunk of their own each, fetched the first time the reader opens one**
+ * (issue #557). Every view used to be a static import here, so the app's first script was one
+ * 1.72 MB file (537 KB gzipped) that carried the scanner, `jsQR` for the pairing camera, the
+ * Settings panels and four more views the reader may never open in a session — and on the web
+ * app, which is a page over the network rather than files on a disk, that whole file stood
+ * between the reader and the first paint.
+ *
+ * **Which six, and why not the rest.** The five the reader works in every day — Home, Search,
+ * the Collection, the Wishlist and the Decks view — stay in the first chunk: the app opens on one
+ * of them (`useStartView`), the sidebar's drop targets borrow their writes, and a fetch on a
+ * press is a blank frame on the views a reader moves between most. Scanner, Settings, Tags,
+ * Trade, Playtesting and Shared are the ones a session can go without, and the scanner and
+ * Settings are where the heavy dependencies are.
+ *
+ * A named export each, so `.then` lifts it into the default `lazy` wants. **The `import()`
+ * literals are what Vite splits on**, so they stay written out here rather than built from a
+ * table. The light app's `LightApp.tsx` splits its two faces the same way, one level up.
+ */
+const ScannerPage = lazy(() =>
+  import("@/features/scanner/ScannerPage").then((m) => ({ default: m.ScannerPage })),
+);
+const SettingsPage = lazy(() =>
+  import("@/features/settings/SettingsPage").then((m) => ({ default: m.SettingsPage })),
+);
+const TagsPage = lazy(() =>
+  import("@/features/tags/TagsPage").then((m) => ({ default: m.TagsPage })),
+);
+const TradePage = lazy(() =>
+  import("@/features/trade/TradePage").then((m) => ({ default: m.TradePage })),
+);
+const PlaytestingPage = lazy(() =>
+  import("@/features/playtesting/PlaytestingPage").then((m) => ({ default: m.PlaytestingPage })),
+);
+const SharedPage = lazy(() =>
+  import("@/features/share/SharedPage").then((m) => ({ default: m.SharedPage })),
+);
 
 function ActiveView({ update }: { update: Update }) {
   const activeView = useAppStore((s) => s.activeView);
@@ -161,7 +194,15 @@ export default function App() {
               <AppShell update={update}>
                 {/* No flank column beside the view any more: the card is a centred modal
                     mounted below, so nothing here reserves width for it. */}
-                <ActiveView update={update} />
+                {/* **The boundary for the six lazy views, and it draws nothing while one
+                    arrives.** A view's chunk is a file read on the desktop and one request on
+                    the web, so the wait is a frame or two; a spinner there would be a flash of
+                    chrome longer than the wait it reports. Around the view and inside the shell,
+                    so the rail and the title bar never blank with it — and the five views in
+                    the first chunk never suspend, so they are drawn as before. */}
+                <Suspense fallback={null}>
+                  <ActiveView update={update} />
+                </Suspense>
               </AppShell>
               {/* **A sibling of the shell, not a child of any view.** The badge is `fixed` and takes
             `LAYER.popup`, and a z-index only competes inside its own stacking context — so

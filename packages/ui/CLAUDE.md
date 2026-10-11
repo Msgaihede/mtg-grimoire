@@ -25,6 +25,7 @@ For global repo workflow, style, and testing conventions, refer to:
 - **Hand-written wire mirror**: `packages/ui/lib/ipc.ts` mirrors Rust structs. Checked by `ipc.test.ts`, which parses Rust source files to ensure struct and parameter parity.
 - **IPC dispatch (`Core.call`)**: Abstraction layer below `@/lib/core` routing calls to desktop Tauri invoke, Android `core_call`, or WebAssembly Worker dispatch.
 - **ASCII JSON headers**: Serializing JSON for IPC headers (e.g. scanner frames) must use `asciiJson` (escapes non-ASCII) to satisfy header byte constraints.
+- **One rejection shape**: every `ipc.*` wrapper rejects with the backend's sentence as a plain `string` on every host (`invoke` runs the rejection through `ipcError`). Never branch on `instanceof Error` for an IPC failure; render it with `ipcError(e)`.
 
 ---
 
@@ -105,6 +106,8 @@ For global repo workflow, style, and testing conventions, refer to:
 | `packages/ui/components/` | Reusable design system primitives (`CardImage`, `Dialog`, `VirtualTable`, `menu/`) |
 | `packages/ui/features/` | Feature surfaces (`decks/`, `search/`, `collection/`, `wishlist/`, `transfer/`, `settings/`) |
 | `packages/ui/lib/` | Infrastructure (`ipc.ts`, `layers.ts`, `motion.ts`, `shortcuts.ts`, `tokens.ts`) |
+
+- **Occasional views are lazy**: `App.tsx` loads Scanner, Settings, Tags, Trade, Playtesting and Shared with `React.lazy` under one `Suspense`; a static import of any of them puts its chunk back in the first load (`App.test.tsx` fences it).
 
 Run verification tests only at the end of feature work:
 

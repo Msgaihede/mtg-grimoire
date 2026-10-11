@@ -246,6 +246,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import App from "./App";
+import appSource from "./App.tsx?raw";
 import { DECK_CARD_VARIANT } from "@/features/decks/cardControl";
 // The attribute the deck's own cards carry, which is both how the printings modal's caret finds
 // its way home and — here — the only way to count the deck's rows on a screen whose modal is a
@@ -640,6 +641,27 @@ it("draws the search view", async () => {
   expect(await screen.findByRole("heading", { name: "Card search", level: 2 })).toBeInTheDocument();
 });
 
+/**
+ * **The six occasional views stay out of the first chunk** (issue #557). Nothing goes red when a
+ * view is imported statically again — the app works, it only starts slower, and on the web app
+ * that is the whole cost of a first visit. A static import of any of them anywhere in `App.tsx`
+ * pulls its chunk, and the scanner's and Settings' dependencies with it, back into `index-*.js`.
+ * Read as text because the build's chunk graph is not something a unit test can see.
+ */
+it("loads the six occasional views on first open rather than with the app", () => {
+  for (const view of [
+    "scanner/ScannerPage",
+    "settings/SettingsPage",
+    "tags/TagsPage",
+    "trade/TradePage",
+    "playtesting/PlaytestingPage",
+    "share/SharedPage",
+  ]) {
+    expect(appSource).toContain(`import("@/features/${view}")`);
+    expect(appSource).not.toMatch(new RegExp(`^import [^;]*"@/features/${view}";`, "m"));
+  }
+});
+
 it("swaps the main pane when a sidebar entry is picked", async () => {
   render(<App />);
 
@@ -648,7 +670,9 @@ it("swaps the main pane when a sidebar entry is picked", async () => {
   // The ribbon's `h1` is the only place the view is named — the placeholder used to
   // repeat it as an `h2`, which was a second heading saying the same word.
   expect(screen.getByRole("heading", { name: "Settings", level: 1 })).toBeInTheDocument();
-  expect(screen.getByText(/import \(coming soon\)/i)).toBeInTheDocument();
+  // `find`, not `get`: Settings is one of the six views `App.tsx` loads on first open (issue
+  // #557), so its panels arrive a tick after the ribbon has already named the view.
+  expect(await screen.findByText(/import \(coming soon\)/i)).toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "Card search" })).not.toBeInTheDocument();
 });
 
