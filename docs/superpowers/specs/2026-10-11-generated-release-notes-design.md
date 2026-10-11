@@ -39,9 +39,9 @@ draws it; and every release from 0.2.0 to 0.43.0 has a file and a release body i
 - **The inputs are there.** 660 merged pull requests, none with an empty description; the
   average is 3,086 characters and the longest 34,672.
 - **Pull requests per release are recoverable from the tags.** 48 `v*` tags. 0.43.0's commit
-  subjects name 16 numbers, 12 of them on the first-parent line; 0.41.0's name 47. The earliest
-  releases name none: 0.3.0 is 24 direct commits, and 0.2.0 is the 165 commits before the first
-  tag.
+  subjects name 16 numbers, 12 of them on the first-parent line; 0.41.0's name 47, and 0.18.0's
+  77, the most. The earliest releases name none: 0.3.0 is 24 direct commits, and 0.2.0 is the 165
+  commits before the first tag.
 - **`anthropic/claude-haiku-5.5` is on OpenRouter** with `reasoning`, `response_format` and
   `structured_outputs` among its supported parameters, a 1,000,000-token context, and a price of
   $0.10 per million input tokens and $0.50 per million output (the public model list).
@@ -138,13 +138,17 @@ fakes and no test reaches the network.
 ### Write
 
 One request per release, so the model sees the whole release at once — that is what removes the
-duplicates. With the cut above, the largest release so far (0.41.0, 47 numbers) is at most about
-75,000 tokens of input.
+duplicates. The two largest are 0.18.0, with about 80 entries, and 0.2.0, whose 163 direct
+commits are about 185,000 characters of messages; both are far inside a 1,000,000-token context.
+(This paragraph named 0.41.0 as the largest until the review measured every range.)
 
 - `POST https://openrouter.ai/api/v1/chat/completions`
 - `model: "anthropic/claude-haiku-5.5"`, `reasoning: { effort: "medium" }`
 - `response_format`: a strict JSON schema, so the answer is data and not markdown
-- A two-minute timeout; a 429 or a 5xx is retried three times with a growing wait.
+- 32,000 tokens for reasoning and the answer together, sized for 0.2.0, whose answer must name
+  every one of those 163 commits.
+- A five-minute deadline on the whole request, body included; a 429, a 5xx, or a request or a
+  body that never completes is retried three times with a growing wait.
 
 The instructions say what the app is and who reads the notes, give the shape's rules, and carry
 a short glossary so *tags*, *labels*, *keywords* and *notes* are used as
@@ -170,7 +174,10 @@ Code checks the answer before anything is written:
 2. **Every entry is either cited by an item or listed in `omitted`.** Nothing is dropped without
    a reason on record. This is what "scan through all the PRs" is held to.
 3. **No text carries a link or a URL**, and every text is one line. A pull request's description
-   is text somebody else wrote, the app opens `https:` links, and this closes that path.
+   is text somebody else wrote, the app opens `https:` links, and this closes that path. Since
+   the review that includes what GitHub's own page would link: raw HTML, any `scheme://`, an
+   `@name` and a `#number`. A reason for leaving something out is held to one line too, because
+   it is printed in a workflow's log.
 4. At most five highlights; every area is one from the list.
 
 A failed check is sent back once with what failed. A second failure ends that release with an

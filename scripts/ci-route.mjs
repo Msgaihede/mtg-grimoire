@@ -154,6 +154,13 @@ export const ARMS = [
   // prose arm**, where this file sat until a test read it.
   { match: [".release-please-manifest.json"], jobs: ["frontend"] },
 
+  // The release notes, one file a release (`changelog/0.43.0.md`). `frontend`, because
+  // `scripts/changelog/files.test.mjs` reads every one and holds it to the shape the generator
+  // writes — and a correction to a published note is a pull request that changes nothing else.
+  // It reads them through `import.meta.glob`, which `ci-route.test.mjs`'s census does not see,
+  // so this arm is here by hand. **Above the prose arm**, whose `*.md` would take them.
+  { match: ["changelog/*"], jobs: ["frontend"] },
+
   // Affects no job. Nothing here is compiled, linted or tested: `eslint .` never sees a `.md`,
   // and no test on either side reads one (`ci-route.test.mjs` holds that to the census). **Keep
   // this list small — it is the only arm that can wrongly skip work.**

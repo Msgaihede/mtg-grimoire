@@ -36,6 +36,17 @@
 4. **OpenRouter answering 200 with an error body, an empty text, or a cut-off answer** → an error in OpenRouter's words and no file. Pinned in Task 4.
 5. **An install whose cache still holds a release-please body** → it draws exactly as before, and a sentence with `(#12)` in the middle keeps it. Pinned in Task 8.
 
+## After the review (2026-10-11)
+
+**The tree is ahead of the code printed below.** This plan was executed inline and reviewed once, whole, by a fresh reviewer; what the review and the first real run changed is in the tree and not all of it in this document:
+
+- `openrouter.mjs`: the body is read inside the retry (a deadline lands there, not on `fetch`); 32,000 tokens and a five-minute deadline, sized for 0.2.0's 163 commits.
+- `notes.mjs`: the link rule also refuses raw HTML and any `scheme://`; a new rule refuses `@name` and `#number`; an asterisk in a lead, a reason of more than one line and a ref that is not an id are refused; no problem sentence echoes a line of the model's own; a highlight's text is closed with a full stop.
+- `collect.mjs`: the repository's first commit, which has no parent, is read.
+- `cli.mjs`: `push` is `pushOne` + `pushVerdict`, tested; it exits 1 on any release not pushed, keeps a body once, and says on every edit whether the release is the latest one.
+- `files.test.mjs` uses the generator's own link rule. Docs no longer say "since 0.44.0".
+- Task 12 ran `pnpm verify` before the backfill, not after; its Vitest step met one known flake and was run again.
+
 ## Before starting
 
 - **This worktree had no `node_modules` on 2026-10-11.** Follow the `worktree-setup` skill before Task 10; nothing runs without it.
@@ -693,6 +704,15 @@ describe("render", () => {
     expect(render(answer)).toContain("- **Custom deck covers are gone!** The Scanner");
   });
 
+  // The first real answer, for 0.43.0, closed every lead and left every highlight's text open.
+  it("closes a highlight's text with a full stop when the model left it open", () => {
+    const answer = good();
+    answer.highlights[0].text = "The Scanner comes to the Android and web apps";
+    expect(render(answer)).toContain(
+      "- **Scan cards from your phone or browser.** The Scanner comes to the Android and web apps.\n",
+    );
+  });
+
   it("writes one line for a release with nothing a user sees", () => {
     const answer = { highlights: [], new: [], changed: [], fixed: [], omitted: good().omitted };
     expect(render(answer)).toBe(`${MAINTENANCE}\n`);
@@ -932,8 +952,11 @@ function references(refs) {
   return numbers.length ? ` (${numbers.map((n) => `#${n}`).join(", ")})` : "";
 }
 
-/** A lead closes with a mark of its own, or is given a full stop. */
-const closed = (lead) => (/[.!?]$/.test(lead) ? lead : `${lead}.`);
+/**
+ * A highlight's lead and its text are sentences: each closes with a mark of its own, or is given
+ * a full stop. The first real answer (0.43.0) left every highlight's text open.
+ */
+const closed = (sentence) => (/[.!?]$/.test(sentence) ? sentence : `${sentence}.`);
 
 /** A checked answer, as `changelog/<version>.md`. */
 export function render(answer) {
@@ -943,7 +966,7 @@ export function render(answer) {
       [
         "### Highlights",
         "",
-        ...answer.highlights.map((h) => `- **${closed(h.lead.trim())}** ${h.text.trim()}`),
+        ...answer.highlights.map((h) => `- **${closed(h.lead.trim())}** ${closed(h.text.trim())}`),
       ].join("\n"),
     );
   }
@@ -1271,6 +1294,17 @@ describe("complete", () => {
     );
     expect((await ask(io)).text).toBe("{}");
     expect(io.waits).toEqual([WAITS_MS[0]]);
+  });
+
+  // The retry above passes with the body's `error` ignored, too: an ignored error is an answer
+  // with no text, and that is asked again. This is the case only reading the error gets right.
+  it("says what an error inside a 200 said, and does not ask again for one that will not change", async () => {
+    const io = scripted(answer(200, { error: { message: "Insufficient credits", code: 402 } }));
+    const error = await ask(io).catch((e) => e);
+    expect(error).toBeInstanceOf(OpenRouterError);
+    expect(error.status).toBe(402);
+    expect(error.message).toBe("OpenRouter answered 402: Insufficient credits");
+    expect(io.calls).toHaveLength(1);
   });
 
   it("refuses an answer that was cut off, without asking again", async () => {

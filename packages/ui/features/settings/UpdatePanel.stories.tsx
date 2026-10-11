@@ -421,6 +421,34 @@ export const HistoryOpened: Story = {
   },
 };
 
+/**
+ * A release whose notes the generator wrote.
+ *
+ * A release's body can be written from its pull requests
+ * (`scripts/changelog/`), in a shape of its own: **Highlights** first, then what is new, what
+ * changed and what was fixed, each item under the part of the app it belongs to. The reader
+ * draws it with the rules it already had — a heading, a list, a bold run — and one new one:
+ * the pull requests closing an item are dropped, as a commit hash is.
+ */
+export const HistoryGeneratedNotes: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    const row = canvas.getByRole("button", { name: /^0\.2\.0/ });
+    await userEvent.click(row);
+    await expect(row).toHaveAttribute("aria-expanded", "true");
+
+    // Presence inside the row's own item, for `HistoryOpened`'s reasons.
+    const entry = within(row.closest("li") as HTMLElement);
+    await expect(await entry.findByText("Highlights")).toBeInTheDocument();
+    await expect(
+      entry.getByText(/sync turns on by pairing with another device/),
+    ).toBeInTheDocument();
+    await expect(entry.queryByText(/#860/)).toBeNull();
+    await expect(entry.queryByText(/#854/)).toBeNull();
+  },
+};
+
 export const Failed: Story = {
   args: {
     update: update({
