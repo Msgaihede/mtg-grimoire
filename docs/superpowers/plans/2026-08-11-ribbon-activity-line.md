@@ -1539,23 +1539,23 @@ A second instance exits silently with code 0 (`tauri-plugin-single-instance`), s
 
 - [ ] **Step 3: Drive it**
 
-Start the console recorder first (`node scripts/cdp.mjs console out.jsonl`), then in another
+Start the console recorder first (`node scripts/cdp.ts console out.jsonl`), then in another
 shell:
 
-1. `node scripts/cdp.mjs click "button[aria-label*='Refresh'], button:has-text" ` — use
-   `node scripts/cdp.mjs text "Refresh data"` to press it by its visible text.
-2. Immediately: `node scripts/cdp.mjs eval "document.querySelector('[role=status]').textContent"`
+1. `node scripts/cdp.ts click "button[aria-label*='Refresh'], button:has-text" ` — use
+   `node scripts/cdp.ts text "Refresh data"` to press it by its visible text.
+2. Immediately: `node scripts/cdp.ts eval "document.querySelector('[role=status]').textContent"`
    — expect the corpus summary, **not** a phase, for the first 400 ms.
 3. Then poll it: expect `Checking for card data updates`, and — if the day's bulk file has
    rotated — `Downloading card data · N / 77 MB` and `Importing cards · N cards`.
    **Take the ingest the day offers**; do not reset `sync_meta` to force one, because a
    hand-written `sync_meta` makes every later measurement a fiction.
-4. Width: `node scripts/cdp.mjs size 1024 768 "..."` with a probe reading the ribbon row's
+4. Width: `node scripts/cdp.ts size 1024 768 "..."` with a probe reading the ribbon row's
    `scrollWidth` vs `clientWidth`, mid-sync, to prove the longest sentence
    (`Downloading update 0.3.0 · 12 / 40 MB` beside the update button) does not push the row
    sideways. Read `innerWidth`/`innerHeight` **before** the first override and end the run
    with an explicit `size 1280 800` — `clearDeviceMetricsOverride` restores nothing.
-5. `node scripts/cdp.mjs shot ribbon-activity.png` mid-sync, and look at it.
+5. `node scripts/cdp.ts shot ribbon-activity.png` mid-sync, and look at it.
 
 Check the recorder's line count afterwards: a recorder dies with the window it is attached
 to and says nothing about it.

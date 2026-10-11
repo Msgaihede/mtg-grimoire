@@ -1075,9 +1075,9 @@ From another shell, and **in two evals, because clicking and reading in one answ
 frame before React re-rendered**:
 
 ```powershell
-node scripts/cdp.mjs hover "#snap-maximize-button" --rest 200
-node scripts/cdp.mjs click "#snap-maximize-button"
-node scripts/cdp.mjs eval "(() => ({ w: window.outerWidth, h: window.outerHeight }))()"
+node scripts/cdp.ts hover "#snap-maximize-button" --rest 200
+node scripts/cdp.ts click "#snap-maximize-button"
+node scripts/cdp.ts eval "(() => ({ w: window.outerWidth, h: window.outerHeight }))()"
 ```
 
 A cold pointer makes `click` a no-op that still prints "clicked", which is why the `hover` comes
@@ -2085,7 +2085,7 @@ convention, but this app has never been run there and the convention is not a me
 - [ ] **Step 4: Write `scripts/android-devtools.ps1`**
 
 ```powershell
-# Forward the running app's WebView DevTools socket to a local port, so `scripts/cdp.mjs` can
+# Forward the running app's WebView DevTools socket to a local port, so `scripts/cdp.ts` can
 # drive the phone exactly as it drives the desktop window.
 #
 # CDP_PORT 9444 rather than 9222: 9222 is the desktop app's, and 9223 is the MCP bridge's.
@@ -2120,13 +2120,13 @@ if (-not $name) { Write-Error "No devtools socket matched pid $appPid. Sockets a
 
 & $adb forward "tcp:$Port" "localabstract:$name"
 Write-Host "forwarded tcp:$Port -> localabstract:$name"
-Write-Host "now:  `$env:CDP_PORT = '$Port'; node scripts/cdp.mjs eval `"location.href`""
+Write-Host "now:  `$env:CDP_PORT = '$Port'; node scripts/cdp.ts eval `"location.href`""
 ```
 
-`scripts/cdp.mjs` already reads `CDP_PORT` (`scripts/cdp.mjs:32`), so **no change to the harness
+`scripts/cdp.ts` already reads `CDP_PORT` (`scripts/cdp.ts:32`), so **no change to the harness
 is needed** — that was checked before this script was written.
 
-> ⚠️ **`cdp.mjs` takes the first target of `type: "page"`.** On a phone that is very likely the
+> ⚠️ **`cdp.ts` takes the first target of `type: "page"`.** On a phone that is very likely the
 > only one, but if DevTools or a second WebView is attached it will silently answer about the
 > wrong DOM and every probe will read as the feature being broken. Put `location.href` in the
 > first payload of every pass.
@@ -2136,7 +2136,7 @@ is needed** — that was checked before this script was written.
 ```powershell
 pwsh -File scripts/android-devtools.ps1
 $env:CDP_PORT = "9444"
-node scripts/cdp.mjs eval "(() => ({ href: location.href, ua: navigator.userAgent, w: innerWidth, h: innerHeight, dpr: devicePixelRatio }))()"
+node scripts/cdp.ts eval "(() => ({ href: location.href, ua: navigator.userAgent, w: innerWidth, h: innerHeight, dpr: devicePixelRatio }))()"
 ```
 
 Then, in order, and **recording every number with "debug build, OnePlus 12, optimistic bound"
@@ -2145,7 +2145,7 @@ attached**:
 | What | How |
 | --- | --- |
 | **First sync end to end** | delete the app's data (`adb shell pm clear com.mtggrimoire.app.debug`), relaunch, and time from launch to the ribbon reporting done. Compare against the spike's **36.5 s** browser figure and desktop's **10.4 s** — this is native, so it should beat the browser one. |
-| **FTS5 is really there** | `node scripts/cdp.mjs eval "…"` driving a search for `dragon`; a missing FTS5 is a zero-row answer, not an error |
+| **FTS5 is really there** | `node scripts/cdp.ts eval "…"` driving a search for `dragon`; a missing FTS5 is a zero-row answer, not an error |
 | **The facet index warms** | `facet_cards` answering `ready: true`; time it against desktop's ~767 ms |
 | **The collapsed browse** | spec §8 calls this the implementation-PR gate. It is 131.8 ms end-to-end on desktop. Take the Android number. |
 | **Card images render** | one tile with real art — this proves `mtgimg://` resolves through `http://mtgimg.localhost` and the CSP allows it |
@@ -2206,9 +2206,9 @@ which it did not** — Task 9 writes them down either way.
 ```bash
 npm run verify > /tmp/verify.log 2>&1; grep -E "Test Files|Tests |test result" /tmp/verify.log
 git add scripts/android-devtools.ps1
-git commit -m "chore(android): forward the app's WebView DevTools socket to cdp.mjs
+git commit -m "chore(android): forward the app's WebView DevTools socket to cdp.ts
 
-scripts/cdp.mjs already reads CDP_PORT, so the desktop harness drives the phone unchanged
+scripts/cdp.ts already reads CDP_PORT, so the desktop harness drives the phone unchanged
 once the socket is forwarded. Port 9444 because 9222 is the desktop app's and 9223 is the MCP
 bridge's, and both are hardcoded in tracked files.
 

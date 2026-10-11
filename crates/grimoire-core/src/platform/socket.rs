@@ -26,7 +26,7 @@
 //! system store is asked for. The manifest has the argument for the version.
 //!
 //! **The browser arm first ran on 2026-10-04**, in headless Chrome against the relay's own code
-//! under workerd (`scripts/web-sync-smoke.mjs`; `docs/reference/light-app.md` §10.3). What it
+//! under workerd (`scripts/web-sync-smoke.ts`; `docs/reference/light-app.md` §10.3). What it
 //! decides — which frame is the keepalive's answer, what a caller is handed, when a keepalive
 //! fails — is the `heard` module below, which compiles for a test too, so a desktop's
 //! `cargo test` reaches every rule of it; the arm itself is a constructor, four event handlers

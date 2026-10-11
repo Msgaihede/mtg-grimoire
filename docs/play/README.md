@@ -110,7 +110,7 @@ required wording and is not to be edited.
 | Feature graphic | 1024×500, no alpha | `docs/play/feature-graphic-1024x500.jpg` |
 | Phone screenshots | 2–8, JPEG or 24-bit PNG, each side 320–3840px, the longer side at most twice the shorter | taken on a phone — below |
 
-Both graphics are rendered by `node scripts/light-icons.mjs` from `logos/svg/mtg-grimoire-mark.svg`.
+Both graphics are rendered by `node scripts/light-icons.ts` from `logos/svg/mtg-grimoire-mark.svg`.
 
 **Screenshots.** Taken on a phone from the internal-testing install, because Play requires them
 to show the app as it is. Five, in this order:

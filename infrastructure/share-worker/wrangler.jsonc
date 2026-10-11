@@ -7,7 +7,7 @@
   // wrangler from `infrastructure/wrangler`'s lockfile — no pnpm, so no `node_modules` link for
   // `@grimoire/relay` — and without this line the bundle stops at "Could not resolve". An exact
   // module, not the package: wrangler matches an alias against the whole specifier
-  // (`infrastructure/app-worker/wrangler.jsonc`, measured 2026-10-08). `scripts/share-worker-alias.test.mjs`
+  // (`infrastructure/app-worker/wrangler.jsonc`, measured 2026-10-08). `scripts/share-worker-alias.test.ts`
   // holds the pair, and holds the module it points at to importing nothing.
   "alias": { "@grimoire/relay/src/token": "../relay/src/token.ts" },
   // The relay's date, deliberately rather than today's: this Worker runs beside it on the same

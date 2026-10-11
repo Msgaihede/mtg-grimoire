@@ -129,7 +129,7 @@ option won is the chrome, and it won on a number: the rail is half the card art 
 - **Re-verify every shipped drag at touch sizes**, and remember that a working new drop is never
   evidence the old one survived.
 - **The dialog against a real URL bar is still owed** — the recipe is in
-  `docs/reference/frontend-design.md`, and it needs hardware because `cdp.mjs size` hardcodes
+  `docs/reference/frontend-design.md`, and it needs hardware because `cdp.ts size` hardcodes
   `mobile: false`.
 
 ---
@@ -1238,14 +1238,14 @@ attributed to the 2026-08-29 chrome pass is **arithmetic over the shipped consta
 overflow figures in particular are derived rather than read. Take this before 9b:
 
 ```powershell
-node scripts/cdp.mjs size 390 844
+node scripts/cdp.ts size 390 844
 # Open a multi-category deck first — deck 4 in the fake, or any Commander deck in the real db —
 # and run the eval once per view, switching the toolbar picker across Stacks / Text / Grid.
 # Single quotes throughout and no $: a double quote cannot survive the PowerShell hop into
-# cdp.mjs eval, so the selectors are attributes the views already stamp and the one string
+# cdp.ts eval, so the selectors are attributes the views already stamp and the one string
 # compare is single-quoted.
-node scripts/cdp.mjs eval "(() => { const r = e => e ? { w: Math.round(e.getBoundingClientRect().width), sw: e.scrollWidth, cw: e.clientWidth, over: e.scrollWidth - e.clientWidth } : null; const g = document.querySelector('[data-deck-group]'); let root = g; while (root && getComputedStyle(root).overflowX !== 'auto') root = root.parentElement; const box = root && root.parentElement; const desk = box && box.parentElement; const panel = [...document.querySelectorAll('section')].find(s => s.getAttribute('aria-label') === 'Add cards'); return { innerWidth: window.innerWidth, clientWidth: document.documentElement.clientWidth, bodyScrollWidth: document.body.scrollWidth, desk: r(desk), viewBox: r(box), viewRoot: r(root), panel: r(panel), stack: r(document.querySelector('[data-deck-stack]')), rail: r(document.querySelector('[data-deck-rail]')), command: r(document.querySelector('[data-deck-command]')) }; })()"
-node scripts/cdp.mjs size 1280 800
+node scripts/cdp.ts eval "(() => { const r = e => e ? { w: Math.round(e.getBoundingClientRect().width), sw: e.scrollWidth, cw: e.clientWidth, over: e.scrollWidth - e.clientWidth } : null; const g = document.querySelector('[data-deck-group]'); let root = g; while (root && getComputedStyle(root).overflowX !== 'auto') root = root.parentElement; const box = root && root.parentElement; const desk = box && box.parentElement; const panel = [...document.querySelectorAll('section')].find(s => s.getAttribute('aria-label') === 'Add cards'); return { innerWidth: window.innerWidth, clientWidth: document.documentElement.clientWidth, bodyScrollWidth: document.body.scrollWidth, desk: r(desk), viewBox: r(box), viewRoot: r(root), panel: r(panel), stack: r(document.querySelector('[data-deck-stack]')), rail: r(document.querySelector('[data-deck-rail]')), command: r(document.querySelector('[data-deck-command]')) }; })()"
+node scripts/cdp.ts size 1280 800
 ```
 
 Three things about that recipe, each of which has cost somebody a pass:

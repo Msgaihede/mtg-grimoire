@@ -3014,7 +3014,7 @@ Copy `.scanner-bundle/card-hashes-v5.bin` to `src-tauri/target/debug/data/scanne
 
 - [ ] **Step 2: Run the app and open the view**
 
-Follow the `running-the-app` skill (the lock, `npm run tauri dev`). Press `Ctrl+6`; the ribbon reads *Scanner*. Over CDP (`scripts/cdp.mjs`, per `docs/reference/live-ui-verification.md`) read: the Match region's head, the `progressbar`'s `aria-valuenow` climbing, the rate, and the frame budget's rows. Hold a card in the webcam. Expected: `voting` then `decided`, frozen, `misses` 0 while the card stays; press *Reset evidence* and watch the tally restart.
+Follow the `running-the-app` skill (the lock, `npm run tauri dev`). Press `Ctrl+6`; the ribbon reads *Scanner*. Over CDP (`scripts/cdp.ts`, per `docs/reference/live-ui-verification.md`) read: the Match region's head, the `progressbar`'s `aria-valuenow` climbing, the rate, and the frame budget's rows. Hold a card in the webcam. Expected: `voting` then `decided`, frozen, `misses` 0 while the card stays; press *Reset evidence* and watch the tally restart.
 
 - [ ] **Step 3: Measurement 1 — IPC cost per frame (release)**
 

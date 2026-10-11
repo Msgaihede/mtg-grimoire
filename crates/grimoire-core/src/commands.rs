@@ -70,7 +70,7 @@
 //! one window, and the mask is `AppState`'s), and telling the plain-text mirror (the desktop's for
 //! good). An event a wrapper sends through its window is sent through [`State::events`] instead, as
 //! the core sends every other. The reads were drafted from the wrappers by
-//! `scripts/core-command-table.mjs` and checked by hand; every other entry was written by hand,
+//! `scripts/core-command-table.ts` and checked by hand; every other entry was written by hand,
 //! next to its neighbours, and a new one is too.
 
 use std::sync::Arc;

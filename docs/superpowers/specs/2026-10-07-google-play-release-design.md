@@ -31,10 +31,10 @@ update; nothing in the Play build can earn a payments-policy strike.
 - **The release builds an APK and signs it with `apksigner`** (`scripts/android-sign.sh`). Play
   takes an Android App Bundle, which `apksigner` does not sign.
 - `targetSdk 36`, `minSdk 26`, 16 KB alignment and a `versionCode` that rises with the version
-  (`scripts/release-rule.test.mjs`) already meet Play's rules.
+  (`scripts/release-rule.test.ts`) already meet Play's rules.
 - **The launcher icon is Tauri's stock logo** (`gen/android/app/src/main/res/mipmap-*`,
   `drawable*/ic_launcher_*.xml`). The app's own mark is in `mobile/src-tauri/icons/icon.png` and
-  `mobile/public/icons/`, rendered by `scripts/light-icons.mjs`.
+  `mobile/public/icons/`, rendered by `scripts/light-icons.ts`.
 - **There is no privacy policy** in the repository or on the web app.
 - **The Sync panel's *Connect Patreon*** is drawn by the shared `SupporterSection`
   (`src/features/settings/SyncPanelBody.tsx`) on every host, and on Android opens the system
@@ -92,9 +92,9 @@ graph: the tag *produces* all three hosts, and the Android one reaches phones wh
 uploads it and Play has reviewed it. Android can trail the desktop and the web app by hours or
 days; a device on an older build holds a newer op until it updates, which sync already does.
 
-**Fences and docs that change with it:** `scripts/release-rule.test.mjs` (the job graph, the
+**Fences and docs that change with it:** `scripts/release-rule.test.ts` (the job graph, the
 commands a secret-holding job may run, no `gh release upload` in `android-sign`),
-`mobile/host.test.ts`, `scripts/ci-route.mjs` and its test (the new script routes to `android`),
+`mobile/host.test.ts`, `scripts/ci-route.ts` and its test (the new script routes to `android`),
 `.github/CLAUDE.md`, `mobile/CLAUDE.md`, the root `CLAUDE.md`'s "Android APK", and
 `docs/reference/ci-and-releases.md` — the release rule and *What only the owner can do*.
 
@@ -133,7 +133,7 @@ kind of host it is on, so `mobile/phone/fence.test.ts` holds untouched.
 
 ## 6. Piece C — what the store asks for
 
-**Launcher icon.** `scripts/light-icons.mjs` grows the Android set from the mark it already
+**Launcher icon.** `scripts/light-icons.ts` grows the Android set from the mark it already
 renders: an adaptive icon (`mipmap-anydpi-v26`, foreground and background layers inside the safe
 zone), the legacy and round mipmaps at five densities, and the 512×512 listing icon. The stock
 Tauri vectors are deleted. `mobile/host.test.ts` holds that the committed files are the script's

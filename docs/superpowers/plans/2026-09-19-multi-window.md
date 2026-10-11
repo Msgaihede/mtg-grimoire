@@ -72,7 +72,7 @@ Its §1 tables are the measured facts every task below rests on.
 | `src/features/settings/UpdatePanel.tsx` (+ test), `SettingsPage.tsx` | 5 | "Restarting closes all N windows." |
 | `src/features/scanner/{ScannerPage.tsx,verdictText.ts,useScannerElsewhere.ts}` (+ tests, story) | 6 | The scanner gate |
 | `.storybook/fake/db.ts`, `.storybook/fake/event.ts`, `.storybook/CLAUDE.md` | 7 | Fake handlers, the `scannerElsewhere` fault, the event list |
-| `scripts/cdp.mjs` | 8 | `pages` command, `CDP_PAGE` |
+| `scripts/cdp.ts` | 8 | `pages` command, `CDP_PAGE` |
 | docs (see Task 11) | 11 | Reference doc, skill, CLAUDE.md lines |
 
 ---
@@ -1780,11 +1780,11 @@ export function windowHandlers() {
   `CLAUDE.md` rule about counts.
 - [ ] **Step 5: Run** `npx vitest run .storybook/fake/db.test.ts -t scanner` and report.
 
-### Task 8: `cdp.mjs` with two windows
+### Task 8: `cdp.ts` with two windows
 
-**Files:** Modify: `scripts/cdp.mjs`
+**Files:** Modify: `scripts/cdp.ts`
 
-- [ ] **Step 1:** Replace `pageTarget()` (`cdp.mjs:35-49`) with:
+- [ ] **Step 1:** Replace `pageTarget()` (`cdp.ts:35-49`) with:
 
 ```js
 /** Every page target — one per window. WebView2 also lists workers and about:blank helpers. */
@@ -1813,15 +1813,15 @@ async function pageTarget() {
     const hit = /^\d+$/.test(want) ? pages[Number(want)] : pages.find((p) => p.id === want);
     if (!hit) {
       throw new Error(
-        `CDP_PAGE=${want} names none of the ${pages.length} pages — "node scripts/cdp.mjs pages" lists them`,
+        `CDP_PAGE=${want} names none of the ${pages.length} pages — "node scripts/cdp.ts pages" lists them`,
       );
     }
     return hit;
   }
   if (pages.length > 1) {
     console.error(
-      `cdp.mjs: ${pages.length} windows are open; driving page 0 (${pages[0].id}). ` +
-        `Set CDP_PAGE to choose — "node scripts/cdp.mjs pages" lists them.`,
+      `cdp.ts: ${pages.length} windows are open; driving page 0 (${pages[0].id}). ` +
+        `Set CDP_PAGE to choose — "node scripts/cdp.ts pages" lists them.`,
     );
   }
   return pages[0];
@@ -1840,8 +1840,8 @@ async function pageTarget() {
 ```
 
   Add `pages` to the usage string, and a header example:
-  `//     node scripts/cdp.mjs pages                     # one line per window; CDP_PAGE=<n> picks`.
-- [ ] **Step 3:** `node --check scripts/cdp.mjs`. Report.
+  `//     node scripts/cdp.ts pages                     # one line per window; CDP_PAGE=<n> picks`.
+- [ ] **Step 3:** `node --check scripts/cdp.ts`. Report.
 
 ---
 
@@ -1870,7 +1870,7 @@ async function pageTarget() {
 
 Follow the `running-the-app` skill: `lock.ps1 acquire app -Wait`, launch `npm run tauri dev` with
 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222`, adopt the `mtg-grimoire` pid.
-Use `node scripts/cdp.mjs pages` and `CDP_PAGE` to drive each window. Record every figure with the
+Use `node scripts/cdp.ts pages` and `CDP_PAGE` to drive each window. Record every figure with the
 build (debug) and the date.
 
 - [ ] 1. Ctrl+Shift+N opens a sized, cascaded window; a second `mtg-grimoire.exe` launch (the debug
@@ -1901,7 +1901,7 @@ After Task 10, so a doc edit under `src-tauri/` cannot restart the `tauri dev` a
   line now says a second launch opens a window **in the running app** — including a dev build from
   another worktree, which then shows the running worktree's frontend.
 - [ ] `.claude/skills/running-the-app/SKILL.md` and `lock.ps1`'s header: the same consequence, and
-  fix the stale line references (`lib.rs:203` → `desktop.rs`'s single-instance block; `cdp.mjs:31`
+  fix the stale line references (`lib.rs:203` → `desktop.rs`'s single-instance block; `cdp.ts:31`
   → the `CDP_PORT` line) and mention `pages`/`CDP_PAGE`.
 - [ ] `src-tauri/CLAUDE.md`: the Android gating paragraph names `focus_existing_window`, which is
   gone; the window-size bullet says `open_sized_to_monitor` sizes "the main window"; the capabilities

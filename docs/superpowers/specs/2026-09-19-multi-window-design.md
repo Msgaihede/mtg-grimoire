@@ -409,7 +409,7 @@ unchanged key — and that already reaches every window, because `marketplace:pr
 
 ## 6. Dev tooling and documentation
 
-- **`scripts/cdp.mjs` picks the first `page` in `/json/list`** (`cdp.mjs:46`); every window has the
+- **`scripts/cdp.ts` picks the first `page` in `/json/list`** (`cdp.ts:46`); every window has the
   same URL and title, so with two open it drives an arbitrary one. It gains a `pages` command that
   lists targets, a `CDP_PAGE` override, and a stderr warning when it had to choose among several.
 - **The Storybook fake** gains `window_new`, `window_count`, `db:changed` and the scanner's

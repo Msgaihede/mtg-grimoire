@@ -40,7 +40,7 @@
     "noFallthroughCasesInSwitch": true,
 
     /* `@/` is the shared UI's own alias, and only a file inside `packages/ui` may write it
-       (`scripts/workspace.test.mjs`). It is declared here, not in that package's config, because
+       (`scripts/workspace.test.ts`). It is declared here, not in that package's config, because
        every program that reaches a UI module compiles that module's source, `@/` imports and
        all. No `baseUrl`: deprecated in TS 6, and `paths` resolve from the file that declares
        them — this one, whichever config extends it. */
@@ -61,8 +61,10 @@
        `/// <reference types="node" />` inside a dependency's own declarations walks straight
        past it — measured 2026-08-09, with `@types/node` merely present in the tree both
        `vitest` and `vite` pulled it into this program despite this line. **The fence that
-       actually holds is that `@types/node` is not installed**; see `.storybook/node-url.d.ts`
-       for the shim that keeps it that way. This line is the second lock, not the first.
+       actually holds is that this program cannot resolve `@types/node`**. The scripts workspace
+       installs it separately; `pnpm-workspace.yaml` excludes its hoisting and removes Vite/Vitest's
+       optional Node peers. `scripts/workspace.test.ts` checks the program's actual source files.
+       See `.storybook/node-url.d.ts` for the workbench's small Node shim. This line is the second lock.
        A program that does not include that file names `vite/client` in `types` itself. */
     "types": []
   }

@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- **Pull request 874 merges first.** This plan edits `scripts/release-rule.test.mjs` as that PR leaves it (`runsOf`, `RUNS`, `RUN_KEYS`). Before Task 1: `gh pr view 874 --json state --jq .state` must print `MERGED`, then bring `main` into this branch (`mcp__ccd_host__sync_with_base_branch`). If it is still open, stop and tell the owner.
+- **Pull request 874 merges first.** This plan edits `scripts/release-rule.test.ts` as that PR leaves it (`runsOf`, `RUNS`, `RUN_KEYS`). Before Task 1: `gh pr view 874 --json state --jq .state` must print `MERGED`, then bring `main` into this branch (`mcp__ccd_host__sync_with_base_branch`). If it is still open, stop and tell the owner.
 - **One commit for the whole piece**, `feat:`, with code, tests, the spec and both plan files together (root `CLAUDE.md`, "Commit style"). No task commits; Task 6 does.
 - **`pnpm verify` runs once, in Task 6.** While building, run only the single test file a step names (`pnpm exec vitest run <file>`). Never two verifies at once.
 - **No agent deploys anything.** No `wrangler deploy`, no `--remote`, no `wrangler secret`, no `gh secret set`. The only wrangler commands in this plan are `--local`.
@@ -21,7 +21,7 @@
 - **Secret names:** `CLOUDFLARE_INFRA_API_TOKEN` (new) and `CLOUDFLARE_ACCOUNT_ID` (already set). The account id is in no file.
 - **The token alone decides whether an infra job runs.** `CLOUDFLARE_ACCOUNT_ID` is already set for `web-deploy`, so "some but not all is a failure" would turn every release red until the owner makes the new token. No token: green, deployed nothing. Token and no account id: red.
 - **D1 names:** database `mtg-grimoire-relay`; tables `d1_migrations` (relay) and `d1_migrations_share` (share Worker); migration files `NNNN_what-it-does.sql`, four digits from `0001`, no gaps.
-- **Documents are written in the repository's voice** (dated, plain, no marketing), and a `CLAUDE.md` stays under 200 lines (`node scripts/check-claude-md.mjs`).
+- **Documents are written in the repository's voice** (dated, plain, no marketing), and a `CLAUDE.md` stays under 200 lines (`node scripts/check-claude-md.ts`).
 
 ## Review Focus
 
@@ -40,15 +40,15 @@
 | `infrastructure/relay/applied-by-hand/*.sql` | The five migrations applied by hand before 2026-10-11, moved, unchanged. History only. |
 | `infrastructure/relay/migrations/README.md` | The tracked folder's rules. Holds the folder in git while it has no `.sql`. |
 | `infrastructure/share-worker/migrations/README.md` | The same for the share Worker. |
-| `scripts/d1-migrations.test.mjs` | The baseline's hash, the file-name order, a replay on `node:sqlite`, the two bindings' settings. |
-| `scripts/deploy-probe.mjs` | What both Worker probes share: build a request, read an answer, compare, ask again, report. |
-| `scripts/relay-deploy-probe.mjs` | The relay's probes and its `main`. |
-| `scripts/share-deploy-probe.mjs` | The share Worker's probes, the viewer comparison and its `main`. |
-| `scripts/relay-deploy-probe.test.mjs`, `scripts/share-deploy-probe.test.mjs`, `scripts/deploy-probe.test.mjs` | Each probe held to this tree's router; the helper's pure halves. |
-| `scripts/share-worker-alias.test.mjs` | The share Worker's one cross-package import, held to the `alias` that lets it bundle with no install. |
+| `scripts/d1-migrations.test.ts` | The baseline's hash, the file-name order, a replay on `node:sqlite`, the two bindings' settings. |
+| `scripts/deploy-probe.ts` | What both Worker probes share: build a request, read an answer, compare, ask again, report. |
+| `scripts/relay-deploy-probe.ts` | The relay's probes and its `main`. |
+| `scripts/share-deploy-probe.ts` | The share Worker's probes, the viewer comparison and its `main`. |
+| `scripts/relay-deploy-probe.test.ts`, `scripts/share-deploy-probe.test.ts`, `scripts/deploy-probe.test.ts` | Each probe held to this tree's router; the helper's pure halves. |
+| `scripts/share-worker-alias.test.ts` | The share Worker's one cross-package import, held to the `alias` that lets it bundle with no install. |
 | `.github/workflows/release.yml` | Jobs `share`, `relay-deploy`, `share-deploy`; new `needs` on `web-deploy` and `publish`. |
 | `.github/workflows/ci.yml` | `pnpm share:build` in the `frontend` build leg. |
-| `scripts/release-rule.test.mjs` | The fence, extended. |
+| `scripts/release-rule.test.ts` | The fence, extended. |
 
 ---
 
@@ -57,17 +57,17 @@
 **Files:**
 - Move: `infrastructure/relay/migrations/2026-*.sql` → `infrastructure/relay/applied-by-hand/`
 - Create: `infrastructure/relay/migrations/README.md`, `infrastructure/share-worker/migrations/README.md`
-- Create: `scripts/d1-migrations.test.mjs`
+- Create: `scripts/d1-migrations.test.ts`
 - Modify: `infrastructure/relay/wrangler.jsonc` (the `d1_databases` entry), `infrastructure/share-worker/wrangler.jsonc` (the `d1_databases` entry)
-- Modify: `scripts/web-smoke/sync-harness.mjs` (after the `d1("--file", "infrastructure/relay/schema.sql");` line)
-- Modify: `scripts/ci-route.test.mjs` (one row)
+- Modify: `scripts/web-smoke/sync-harness.ts` (after the `d1("--file", "infrastructure/relay/schema.sql");` line)
+- Modify: `scripts/ci-route.test.ts` (one row)
 
 **Interfaces:**
 - Produces: `migrations_dir: "migrations"` on both D1 bindings; `migrations_table` `d1_migrations` (relay) and `d1_migrations_share` (share Worker). Task 4's jobs run `d1 migrations apply mtg-grimoire-relay --remote` from each Worker's folder and rely on these.
 
 - [ ] **Step 1: Write the failing test**
 
-Create `scripts/d1-migrations.test.mjs`:
+Create `scripts/d1-migrations.test.ts`:
 
 ```js
 // The relay's D1, as a release changes it (`release.yml`, `relay-deploy` and `share-deploy`):
@@ -226,7 +226,7 @@ describe("the two bindings", () => {
 
 - [ ] **Step 2: Run it and see it fail**
 
-Run: `pnpm exec vitest run scripts/d1-migrations.test.mjs`
+Run: `pnpm exec vitest run scripts/d1-migrations.test.ts`
 Expected: FAIL — `hold none of the migrations that were applied by hand` (the by-hand folder is empty and the tracked one holds five `2026-…` files) and `name the tracked folder…` (no `migrations_dir`).
 
 - [ ] **Step 3: Move the five applied files**
@@ -254,7 +254,7 @@ from `infrastructure/relay` before it deploys. wrangler applies every `.sql` fil
 table `d1_migrations` does not name yet, in name order, and records it. A file runs once.
 
 - **`../schema.sql` is the baseline and is never edited.** It is the shape production held on
-  2026-10-11. `scripts/d1-migrations.test.mjs` pins its hash; a red hash means the change
+  2026-10-11. `scripts/d1-migrations.test.ts` pins its hash; a red hash means the change
   belongs in a new file here.
 - **Name a file `NNNN_what-it-does.sql`**: four digits, the next number, lower case and hyphens.
   The same test refuses a number used twice and a gap.
@@ -320,7 +320,7 @@ In `infrastructure/share-worker/wrangler.jsonc`, the same edit to its `d1_databa
 
 - [ ] **Step 6: Run the test and see it pass**
 
-Run: `pnpm exec vitest run scripts/d1-migrations.test.mjs`
+Run: `pnpm exec vitest run scripts/d1-migrations.test.ts`
 Expected: PASS, 7 tests.
 
 - [ ] **Step 7: Ask wrangler what it does with a folder of no `.sql` files**
@@ -341,7 +341,7 @@ If the empty-folder run exits non-zero: stop and report to the owner. Do not wor
 
 - [ ] **Step 8: Apply the tracked files in the sync smoke's local database**
 
-In `scripts/web-smoke/sync-harness.mjs`, directly under `d1("--file", "infrastructure/relay/schema.sql");`, add:
+In `scripts/web-smoke/sync-harness.ts`, directly under `d1("--file", "infrastructure/relay/schema.sql");`, add:
 
 ```js
   // Then every tracked migration, in name order: what a release's `relay-deploy` applies to
@@ -354,19 +354,19 @@ In `scripts/web-smoke/sync-harness.mjs`, directly under `d1("--file", "infrastru
   }
 ```
 
-`readdirSync`, `join` and `ROOT` are already in that module. It adds no `spawn` and no wrangler subcommand, so `release-rule.test.mjs`'s count of what the smoke run starts is unchanged.
+`readdirSync`, `join` and `ROOT` are already in that module. It adds no `spawn` and no wrangler subcommand, so `release-rule.test.ts`'s count of what the smoke run starts is unchanged.
 
 - [ ] **Step 9: Route the folder in the CI router's table**
 
-In `scripts/ci-route.test.mjs`, under the row `["infrastructure/relay/schema.sql", T, T, F, F, F, F, T],` add:
+In `scripts/ci-route.test.ts`, under the row `["infrastructure/relay/schema.sql", T, T, F, F, F, F, T],` add:
 
 ```js
-    // A tracked migration: the sync smoke applies it (`web`), and `d1-migrations.test.mjs`
+    // A tracked migration: the sync smoke applies it (`web`), and `d1-migrations.test.ts`
     // replays it (`frontend`).
     ["infrastructure/relay/migrations/0001_add-a-column.sql", T, T, F, F, F, F, T],
 ```
 
-Run: `pnpm exec vitest run scripts/ci-route.test.mjs`
+Run: `pnpm exec vitest run scripts/ci-route.test.ts`
 Expected: PASS. (The relay's arm, `infrastructure/relay/*`, already routes it; if the row is red, read the arm and fix the row, not the router.)
 
 ---
@@ -374,11 +374,11 @@ Expected: PASS. (The relay's arm, `infrastructure/relay/*`, already routes it; i
 ### Task 2: The probe helper and the relay's probe
 
 **Files:**
-- Create: `scripts/deploy-probe.mjs`, `scripts/deploy-probe.test.mjs`
-- Create: `scripts/relay-deploy-probe.mjs`, `scripts/relay-deploy-probe.test.mjs`
+- Create: `scripts/deploy-probe.ts`, `scripts/deploy-probe.test.ts`
+- Create: `scripts/relay-deploy-probe.ts`, `scripts/relay-deploy-probe.test.ts`
 
 **Interfaces:**
-- Produces, from `scripts/deploy-probe.mjs`:
+- Produces, from `scripts/deploy-probe.ts`:
   - `requestOf(origin: string, probe: Probe): Request`
   - `answerOf(response: Response): Promise<{ status: number, type: string | null, body: string, allowOrigin: string | null }>`
   - `problemsOf(probe: Probe, answer): string[]`
@@ -386,17 +386,17 @@ Expected: PASS. (The relay's arm, `infrastructure/relay/*`, already routes it; i
   - `askUntil(once: () => Promise<string[]>, options?: { attempts?, wait?, sleep?, log? }): Promise<{ wrong: string[], asked: number }>`
   - `report(heading: { passed: string, failed: string }, passedDetail: string, result: { wrong, asked }): number` (the exit code)
   - A `Probe` is `{ name, path, method?, headers?, body?, status, says?, type?, allowOrigin?, means? }`.
-- Produces, from `scripts/relay-deploy-probe.mjs`: `RELAY`, `APP`, `PROBES`. Task 4's job runs `node scripts/relay-deploy-probe.mjs`.
+- Produces, from `scripts/relay-deploy-probe.ts`: `RELAY`, `APP`, `PROBES`. Task 4's job runs `node scripts/relay-deploy-probe.ts`.
 
 - [ ] **Step 1: Write the helper's failing test**
 
-Create `scripts/deploy-probe.test.mjs`:
+Create `scripts/deploy-probe.test.ts`:
 
 ```js
-// What the two Worker probes share (`relay-deploy-probe.mjs`, `share-deploy-probe.mjs`): how a
+// What the two Worker probes share (`relay-deploy-probe.ts`, `share-deploy-probe.ts`): how a
 // probe becomes a request, how an answer is compared, and how many times the host is asked.
 import { describe, expect, it } from "vitest";
-import { answerOf, askAll, askUntil, problemsOf, requestOf } from "./deploy-probe.mjs";
+import { answerOf, askAll, askUntil, problemsOf, requestOf } from "./deploy-probe.ts";
 
 describe("requestOf", () => {
   it("builds a GET with the probe's headers, following no redirect", () => {
@@ -547,16 +547,16 @@ describe("askUntil", () => {
 
 - [ ] **Step 2: Run it and see it fail**
 
-Run: `pnpm exec vitest run scripts/deploy-probe.test.mjs`
-Expected: FAIL — `Failed to resolve import "./deploy-probe.mjs"`.
+Run: `pnpm exec vitest run scripts/deploy-probe.test.ts`
+Expected: FAIL — `Failed to resolve import "./deploy-probe.ts"`.
 
 - [ ] **Step 3: Write the helper**
 
-Create `scripts/deploy-probe.mjs`:
+Create `scripts/deploy-probe.ts`:
 
 ```js
-// What a Worker's post-deploy probe is made of — `relay-deploy-probe.mjs` and
-// `share-deploy-probe.mjs`, which `release.yml` runs the moment a `wrangler deploy` returns.
+// What a Worker's post-deploy probe is made of — `relay-deploy-probe.ts` and
+// `share-deploy-probe.ts`, which `release.yml` runs the moment a `wrangler deploy` returns.
 //
 // A probe is a request any stranger could make and the answer this tree's router gives it:
 //
@@ -686,12 +686,12 @@ export function report(heading, passedDetail, { wrong, asked }) {
 
 - [ ] **Step 4: Run it and see it pass**
 
-Run: `pnpm exec vitest run scripts/deploy-probe.test.mjs`
+Run: `pnpm exec vitest run scripts/deploy-probe.test.ts`
 Expected: PASS, 13 tests.
 
 - [ ] **Step 5: Write the relay probe's failing test**
 
-Create `scripts/relay-deploy-probe.test.mjs`:
+Create `scripts/relay-deploy-probe.test.ts`:
 
 ```js
 // The relay's post-deploy probes, held to the relay: every one is asked of this tree's own
@@ -703,8 +703,8 @@ import { describe, expect, it } from "vitest";
 import worker from "../infrastructure/relay/src/index.ts";
 import { fakeEnvOver, fakeTables } from "../infrastructure/relay/src/fakeD1.ts";
 import relayWrangler from "../infrastructure/relay/wrangler.jsonc?raw";
-import { askAll } from "./deploy-probe.mjs";
-import { APP, PROBES, RELAY } from "./relay-deploy-probe.mjs";
+import { askAll } from "./deploy-probe.ts";
+import { APP, PROBES, RELAY } from "./relay-deploy-probe.ts";
 
 const limiter = { limit: () => Promise.resolve({ success: true }) };
 const env = {
@@ -753,22 +753,22 @@ describe("the relay's probes", () => {
 
 - [ ] **Step 6: Run it and see it fail**
 
-Run: `pnpm exec vitest run scripts/relay-deploy-probe.test.mjs`
-Expected: FAIL — `Failed to resolve import "./relay-deploy-probe.mjs"`.
+Run: `pnpm exec vitest run scripts/relay-deploy-probe.test.ts`
+Expected: FAIL — `Failed to resolve import "./relay-deploy-probe.ts"`.
 
 - [ ] **Step 7: Write the relay probe**
 
-Create `scripts/relay-deploy-probe.mjs`:
+Create `scripts/relay-deploy-probe.ts`:
 
 ```js
 // Is the relay up and routing, the moment `wrangler deploy` returned? — asked by
 // `release.yml`'s `relay-deploy`.
 //
-//   node scripts/relay-deploy-probe.mjs [origin]     # origin: the relay's own address
+//   node scripts/relay-deploy-probe.ts [origin]     # origin: the relay's own address
 //
 // The probes are `docs/reference/hosted-relay-deploy.md`'s step 0, less the two that open a
 // socket: ten requests a stranger could make, each answered before any Durable Object, and each
-// with the answer this tree's router gives (`relay-deploy-probe.test.mjs` asks the router).
+// with the answer this tree's router gives (`relay-deploy-probe.test.ts` asks the router).
 //
 // **What it proves, and what it does not.** That the Worker answers, that the tables its doors
 // read are there (a missing one is a 500, and the probe says which), and that a page at the web
@@ -778,7 +778,7 @@ Create `scripts/relay-deploy-probe.mjs`:
 //
 // It deploys nothing and holds no token.
 import { pathToFileURL } from "node:url";
-import { askAll, askUntil, report } from "./deploy-probe.mjs";
+import { askAll, askUntil, report } from "./deploy-probe.ts";
 
 /** `RELAY_BASE` in `infrastructure/relay/wrangler.jsonc`, and in every binary. */
 export const RELAY = "https://mtg-grimoire-relay.denmark-east.workers.dev";
@@ -882,7 +882,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 
 - [ ] **Step 8: Run it and see it pass**
 
-Run: `pnpm exec vitest run scripts/relay-deploy-probe.test.mjs`
+Run: `pnpm exec vitest run scripts/relay-deploy-probe.test.ts`
 Expected: PASS, 13 tests.
 
 **If a probe is red, do not edit its expectation to make it green.** The expectations are the host's recorded answers. Find out why this tree's router answers differently (a table the fake does not hold, a header the request lacks), fix the test's `env` or the request — and if the router really answers otherwise, stop and report it: the runbook is then wrong about production.
@@ -897,7 +897,7 @@ node ../wrangler/node_modules/wrangler/bin/wrangler.js dev --local --port 8799 -
 (as a background command), then from the repository root:
 
 ```bash
-PROBE_ATTEMPTS=1 node scripts/relay-deploy-probe.mjs http://127.0.0.1:8799; echo "exit $?"
+PROBE_ATTEMPTS=1 node scripts/relay-deploy-probe.ts http://127.0.0.1:8799; echo "exit $?"
 ```
 
 Expected: the heading `### http://127.0.0.1:8799 does not answer as this relay` listing only probes that read D1 (the local database has no tables), or `answers as this relay` — either shows `main` runs under plain Node and reports by name. Stop the dev server. Record what it printed in `docs/reference/ci-and-releases.md` in Task 5.
@@ -908,16 +908,16 @@ Expected: the heading `### http://127.0.0.1:8799 does not answer as this relay` 
 
 **Files:**
 - Modify: `infrastructure/share-worker/wrangler.jsonc` (add `alias`)
-- Create: `scripts/share-worker-alias.test.mjs`
-- Create: `scripts/share-deploy-probe.mjs`, `scripts/share-deploy-probe.test.mjs`
+- Create: `scripts/share-worker-alias.test.ts`
+- Create: `scripts/share-deploy-probe.ts`, `scripts/share-deploy-probe.test.ts`
 
 **Interfaces:**
-- Consumes: `askAll`, `askUntil`, `report`, `answerOf`, `requestOf` from `scripts/deploy-probe.mjs` (Task 2).
-- Produces: `SHARE`, `PROBES`, `VIEWER`, `viewerProblems(built: string, answered: { status: number, body: string }): string[]` from `scripts/share-deploy-probe.mjs`. Task 4's job runs `node scripts/share-deploy-probe.mjs apps/share/dist-share`.
+- Consumes: `askAll`, `askUntil`, `report`, `answerOf`, `requestOf` from `scripts/deploy-probe.ts` (Task 2).
+- Produces: `SHARE`, `PROBES`, `VIEWER`, `viewerProblems(built: string, answered: { status: number, body: string }): string[]` from `scripts/share-deploy-probe.ts`. Task 4's job runs `node scripts/share-deploy-probe.ts apps/share/dist-share`.
 
 - [ ] **Step 1: Write the alias's failing test**
 
-Create `scripts/share-worker-alias.test.mjs` (in `scripts/`, as plain JavaScript: the share Worker's own type-check program declares neither `?raw` nor `import.meta.glob`):
+Create `scripts/share-worker-alias.test.ts` (in `scripts/`, as plain JavaScript: the share Worker's own type-check program declares neither `?raw` nor `import.meta.glob`):
 
 ```js
 // What the share Worker's script imports, in a job that installs only wrangler —
@@ -988,7 +988,7 @@ describe("what the share Worker's script imports, in a job that installs only wr
 
 - [ ] **Step 2: Run it and see it fail**
 
-Run: `pnpm exec vitest run scripts/share-worker-alias.test.mjs`
+Run: `pnpm exec vitest run scripts/share-worker-alias.test.ts`
 Expected: FAIL — `alias` is `undefined`, not the one pair.
 
 - [ ] **Step 3: Add the alias**
@@ -1001,14 +1001,14 @@ In `infrastructure/share-worker/wrangler.jsonc`, under the `"main": "src/index.t
   // wrangler from `infrastructure/wrangler`'s lockfile — no pnpm, so no `node_modules` link for
   // `@grimoire/relay` — and without this line the bundle stops at "Could not resolve". An exact
   // module, not the package: wrangler matches an alias against the whole specifier
-  // (`infrastructure/app-worker/wrangler.jsonc`, measured 2026-10-08). `scripts/share-worker-alias.test.mjs`
+  // (`infrastructure/app-worker/wrangler.jsonc`, measured 2026-10-08). `scripts/share-worker-alias.test.ts`
   // holds the pair, and holds the module it points at to importing nothing.
   "alias": { "@grimoire/relay/src/token": "../relay/src/token.ts" },
 ```
 
 - [ ] **Step 4: Run it and see it pass, then prove the bundle resolves with no workspace link**
 
-Run: `pnpm exec vitest run scripts/share-worker-alias.test.mjs`
+Run: `pnpm exec vitest run scripts/share-worker-alias.test.ts`
 Expected: PASS, 3 tests.
 
 Then the fact the test cannot hold — that wrangler bundles the script through the alias. `--dry-run` uploads nothing and needs no token:
@@ -1026,7 +1026,7 @@ If `ls` finds no `share.js` after `pnpm share:build`, this worktree's `node_modu
 
 - [ ] **Step 5: Write the share probe's failing test**
 
-Create `scripts/share-deploy-probe.test.mjs`:
+Create `scripts/share-deploy-probe.test.ts`:
 
 ```js
 // The share Worker's post-deploy probes, held to the Worker: each is asked of this tree's own
@@ -1039,8 +1039,8 @@ import worker from "../infrastructure/share-worker/src/index.ts";
 import { fakeEnvOver } from "../infrastructure/relay/src/fakeD1.ts";
 import shareWrangler from "../infrastructure/share-worker/wrangler.jsonc?raw";
 import pageTs from "../infrastructure/share-worker/src/page.ts?raw";
-import { askAll } from "./deploy-probe.mjs";
-import { PROBES, SHARE, VIEWER, viewerProblems } from "./share-deploy-probe.mjs";
+import { askAll } from "./deploy-probe.ts";
+import { PROBES, SHARE, VIEWER, viewerProblems } from "./share-deploy-probe.ts";
 
 const refused = () => Promise.reject(new Error("no probe reaches the bucket or the assets"));
 const env = {
@@ -1095,18 +1095,18 @@ describe("viewerProblems", () => {
 
 - [ ] **Step 6: Run it and see it fail**
 
-Run: `pnpm exec vitest run scripts/share-deploy-probe.test.mjs`
-Expected: FAIL — `Failed to resolve import "./share-deploy-probe.mjs"`.
+Run: `pnpm exec vitest run scripts/share-deploy-probe.test.ts`
+Expected: FAIL — `Failed to resolve import "./share-deploy-probe.ts"`.
 
 - [ ] **Step 7: Write the share probe**
 
-Create `scripts/share-deploy-probe.mjs`:
+Create `scripts/share-deploy-probe.ts`:
 
 ```js
 // Is the share Worker serving the build that was just deployed? — asked by `release.yml`'s
 // `share-deploy` the moment `wrangler deploy` returns.
 //
-//   node scripts/share-deploy-probe.mjs <apps/share/dist-share> [origin]
+//   node scripts/share-deploy-probe.ts <apps/share/dist-share> [origin]
 //
 // `infrastructure/share-worker/README.md`'s five, "Deploying": four requests of the Worker —
 // a page for a share nobody published, the gate with no bearer, the gate with a malformed one
@@ -1118,7 +1118,7 @@ Create `scripts/share-deploy-probe.mjs`:
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { answerOf, askAll, askUntil, report, requestOf } from "./deploy-probe.mjs";
+import { answerOf, askAll, askUntil, report, requestOf } from "./deploy-probe.ts";
 
 /** `SHARE_BASE` in `infrastructure/share-worker/wrangler.jsonc`, and in every binary. */
 export const SHARE = "https://mtg-grimoire-share.denmark-east.workers.dev";
@@ -1167,7 +1167,7 @@ export function viewerProblems(built, answered) {
 async function main() {
   const [dist, origin = SHARE] = process.argv.slice(2);
   if (!dist) {
-    console.error("usage: node scripts/share-deploy-probe.mjs <apps/share/dist-share> [origin]");
+    console.error("usage: node scripts/share-deploy-probe.ts <apps/share/dist-share> [origin]");
     process.exitCode = 2;
     return;
   }
@@ -1193,7 +1193,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 
 - [ ] **Step 8: Run it and see it pass**
 
-Run: `pnpm exec vitest run scripts/share-deploy-probe.test.mjs`
+Run: `pnpm exec vitest run scripts/share-deploy-probe.test.ts`
 Expected: PASS, 10 tests.
 
 The rule of Task 2, Step 8 holds here too: a red probe is investigated, never re-pointed. If `worker.fetch` needs a third argument for a probed route, pass `{ waitUntil: () => {} }` in the test's `send`.
@@ -1205,15 +1205,15 @@ The rule of Task 2, Step 8 holds here too: a red probe is investigated, never re
 **Files:**
 - Modify: `.github/workflows/release.yml` (the header comment's diagram; new jobs `share`, `relay-deploy`, `share-deploy` between `web` and `web-deploy`; `web-deploy`'s `needs` and comment; `publish`'s `needs` and comment)
 - Modify: `.github/workflows/ci.yml` (`frontend` job, after the `pnpm build` step)
-- Modify: `scripts/release-rule.test.mjs`
+- Modify: `scripts/release-rule.test.ts`
 
 **Interfaces:**
-- Consumes: `node scripts/relay-deploy-probe.mjs` (Task 2), `node scripts/share-deploy-probe.mjs apps/share/dist-share` (Task 3), the two bindings' `migrations_dir` (Task 1).
+- Consumes: `node scripts/relay-deploy-probe.ts` (Task 2), `node scripts/share-deploy-probe.ts apps/share/dist-share` (Task 3), the two bindings' `migrations_dir` (Task 1).
 - Produces: jobs `share`, `relay-deploy`, `share-deploy`; artifact `share-bundle`; step id `token` with output `present` in both deploy jobs. Piece B adds `play-upload` to `publish`'s `needs` after `web-deploy`.
 
 - [ ] **Step 1: Extend the fence first (it fails until the workflow follows)**
 
-All edits are in `scripts/release-rule.test.mjs`.
+All edits are in `scripts/release-rule.test.ts`.
 
 **(a)** Under `const CLOUDFLARE_SECRETS = …`, add:
 
@@ -1305,7 +1305,7 @@ const refuseOlder = (what) => [
     // Deploy the Worker
     [`${WRANGLER} deploy`],
     // Ask the host
-    ["node scripts/relay-deploy-probe.mjs"],
+    ["node scripts/relay-deploy-probe.ts"],
   ],
   "share-deploy": [
     // Is there a token to deploy with
@@ -1329,7 +1329,7 @@ const refuseOlder = (what) => [
     // Deploy the Worker
     [`${WRANGLER} deploy`],
     // Ask the host
-    ["node scripts/share-deploy-probe.mjs apps/share/dist-share"],
+    ["node scripts/share-deploy-probe.ts apps/share/dist-share"],
   ],
 ```
 
@@ -1494,7 +1494,7 @@ Keep the comment that stood above the old test, above the new `it.each`.
       "run: npm ci --ignore-scripts",
       `run: ${WRANGLER} d1 migrations apply mtg-grimoire-relay --remote`,
       `run: ${WRANGLER} deploy`,
-      "run: node scripts/relay-deploy-probe.mjs",
+      "run: node scripts/relay-deploy-probe.ts",
     ]);
     orderOf("share-deploy", [
       'gh api "repos/$REPO/releases/latest"',
@@ -1503,7 +1503,7 @@ Keep the comment that stood above the old test, above the new `it.each`.
       "run: npm ci --ignore-scripts",
       `run: ${WRANGLER} d1 migrations apply mtg-grimoire-relay --remote`,
       `run: ${WRANGLER} deploy`,
-      "run: node scripts/share-deploy-probe.mjs apps/share/dist-share",
+      "run: node scripts/share-deploy-probe.ts apps/share/dist-share",
     ]);
     // What `share-deploy` uploads is what `share` built: one artifact name, one folder.
     expect(stepsOf(jobs["share-deploy"]).find((s) => s.includes("name: share-bundle"))).toContain(
@@ -1640,7 +1640,7 @@ Keep the comment that stood above the old test, above the new `it.each`.
 
 - [ ] **Step 2: Run the fence and see it fail**
 
-Run: `pnpm exec vitest run scripts/release-rule.test.mjs`
+Run: `pnpm exec vitest run scripts/release-rule.test.ts`
 Expected: FAIL — `has the ten jobs…` (seven found), and every test that reads `jobs["relay-deploy"]`.
 
 - [ ] **Step 3: Add `pnpm share:build` to `ci.yml`**
@@ -1742,7 +1742,7 @@ and, in the paragraph under it, replace `The two jobs that hold a secret — `an
   # hand.
   #
   # It builds nothing, for `web-deploy`'s reasons: the pinned `wrangler`, installed with no
-  # script run and no token in reach, run by path. `scripts/release-rule.test.mjs` holds every
+  # script run and no token in reach, run by path. `scripts/release-rule.test.ts` holds every
   # line it runs.
   relay-deploy:
     name: relay (deploy)
@@ -1847,7 +1847,7 @@ and, in the paragraph under it, replace `The two jobs that hold a secret — `an
       - name: Ask the host
         if: steps.token.outputs.present == 'true'
         timeout-minutes: 5
-        run: node scripts/relay-deploy-probe.mjs
+        run: node scripts/relay-deploy-probe.ts
 
   # **The share Worker, deployed by a release**, behind the relay and with the relay's token:
   # the two share one database and one signing key, so they share the token that can write
@@ -1952,7 +1952,7 @@ and, in the paragraph under it, replace `The two jobs that hold a secret — `an
         run: node ../wrangler/node_modules/wrangler/bin/wrangler.js d1 migrations apply mtg-grimoire-relay --remote
 
       # From the Worker's folder; its `alias` is what lets the script's one import of the
-      # relay's token module bundle in a job with no workspace links (`scripts/share-worker-alias.test.mjs`).
+      # relay's token module bundle in a job with no workspace links (`scripts/share-worker-alias.test.ts`).
       - name: Deploy the Worker
         if: steps.token.outputs.present == 'true'
         working-directory: infrastructure/share-worker
@@ -1968,7 +1968,7 @@ and, in the paragraph under it, replace `The two jobs that hold a secret — `an
       - name: Ask the host
         if: steps.token.outputs.present == 'true'
         timeout-minutes: 5
-        run: node scripts/share-deploy-probe.mjs apps/share/dist-share
+        run: node scripts/share-deploy-probe.ts apps/share/dist-share
 ```
 
 **(c)** In `web-deploy`: change `needs: [release-please, build, android-sign, web]` to `needs: [release-please, build, android-sign, web, share-deploy]`. In the comment block above it, replace the paragraph that begins `**The one job in this repository that deploys anything, and it deploys one Worker**` through `…and fails one more.` with:
@@ -1979,7 +1979,7 @@ and, in the paragraph under it, replace `The two jobs that hold a secret — `an
   # has why the relay is first). The owner decided on 2026-10-04 that a release deploys it — one
   # core means one user schema per commit, so the three hosts ship from one tag
   # (docs/reference/ci-and-releases.md, "The release rule") — and on 2026-10-11 that a release
-  # deploys the other two Workers as well. `scripts/release-rule.test.mjs` lists every workflow
+  # deploys the other two Workers as well. `scripts/release-rule.test.ts` lists every workflow
   # line that names `wrangler`, and fails one more.
 ```
 
@@ -1999,14 +1999,14 @@ Leave the rest of that comment block as it is, except the sentence `a token that
 
 - [ ] **Step 5: Run the fence and its neighbours, and see them pass**
 
-Run: `pnpm exec vitest run scripts/release-rule.test.mjs scripts/actions-pinned.test.mjs scripts/toolchain.test.mjs scripts/workflow-scripts.test.mjs scripts/ci-route.test.mjs`
+Run: `pnpm exec vitest run scripts/release-rule.test.ts scripts/actions-pinned.test.ts scripts/toolchain.test.ts scripts/workflow-scripts.test.ts scripts/ci-route.test.ts`
 Expected: PASS, all five files.
 
-The likeliest red is `runs only what is listed here` for a new job: a line of a `run:` block that differs from its `RUNS` entry by a character. The test prints both; fix whichever is not what Step 4 says. If `toolchain.test.mjs` or `workflow-scripts.test.mjs` is red on a new job, read the assertion: both already pass for `web-deploy`, which has the same shape, so the difference from it is the bug.
+The likeliest red is `runs only what is listed here` for a new job: a line of a `run:` block that differs from its `RUNS` entry by a character. The test prints both; fix whichever is not what Step 4 says. If `toolchain.test.ts` or `workflow-scripts.test.ts` is red on a new job, read the assertion: both already pass for `web-deploy`, which has the same shape, so the difference from it is the bug.
 
 - [ ] **Step 6: Prove the fence bites**
 
-One mutation per new rule, each in a single shell call that restores the file. For each: make the change, run `pnpm exec vitest run scripts/release-rule.test.mjs`, expect the named test red, then `git checkout -- .github/workflows/release.yml` (the workflow is uncommitted work — instead keep a copy: `cp .github/workflows/release.yml "$SCRATCH/release.yml"` before, `cp "$SCRATCH/release.yml" .github/workflows/release.yml` after, and `cmp` them).
+One mutation per new rule, each in a single shell call that restores the file. For each: make the change, run `pnpm exec vitest run scripts/release-rule.test.ts`, expect the named test red, then `git checkout -- .github/workflows/release.yml` (the workflow is uncommitted work — instead keep a copy: `cp .github/workflows/release.yml "$SCRATCH/release.yml"` before, `cp "$SCRATCH/release.yml" .github/workflows/release.yml` after, and `cmp` them).
 
 | Mutation in `release.yml` | Test that must go red |
 | --- | --- |
@@ -2027,7 +2027,7 @@ Record the table, with what each printed, for Task 5.
 - Modify: `CLAUDE.md`, `.github/CLAUDE.md`, `docs/agent/EXTERNAL_SERVICES.md`, `docs/reference/ci-and-releases.md`, `docs/reference/hosted-relay-deploy.md`, `infrastructure/relay/README.md`, `infrastructure/share-worker/README.md`, `infrastructure/app-worker/wrangler.jsonc` (one comment), `infrastructure/share-worker/wrangler.jsonc` (comments), `infrastructure/relay/schema.sql` — **no**: it is hash-pinned; leave it and its stale "Applied with" comment alone.
 - Modify: `docs/superpowers/specs/2026-10-11-release-deploys-everything-design.md` (a "What changed in execution" section)
 
-No test cycle of its own; `node scripts/check-claude-md.mjs` and the two fences that read documents (`pnpm lint:claude`, if `package.json` has it) are the gate.
+No test cycle of its own; `node scripts/check-claude-md.ts` and the two fences that read documents (`pnpm lint:claude`, if `package.json` has it) are the gate.
 
 - [ ] **Step 1: Find every sentence that states the old rule**
 
@@ -2051,7 +2051,7 @@ Replace the bullet `**Deployments require explicit instruction**: …` with:
 - Add a sub-bullet after `android-sign`'s:
 
 ```markdown
-  - `relay-deploy`, then `share-deploy`, run `wrangler d1 migrations apply mtg-grimoire-relay --remote` and `wrangler deploy` from their Worker's folder (`infrastructure/relay`, `infrastructure/share-worker`), then a probe of the live address (`scripts/relay-deploy-probe.mjs`, `scripts/share-deploy-probe.mjs`). `share-deploy` uploads the viewer `share` built. Migrations are numbered files in each Worker's `migrations/`; `schema.sql` is the frozen baseline (`scripts/d1-migrations.test.mjs`).
+  - `relay-deploy`, then `share-deploy`, run `wrangler d1 migrations apply mtg-grimoire-relay --remote` and `wrangler deploy` from their Worker's folder (`infrastructure/relay`, `infrastructure/share-worker`), then a probe of the live address (`scripts/relay-deploy-probe.ts`, `scripts/share-deploy-probe.ts`). `share-deploy` uploads the viewer `share` built. Migrations are numbered files in each Worker's `migrations/`; `schema.sql` is the frozen baseline (`scripts/d1-migrations.test.ts`).
 ```
 
 - Replace the bullet **Secrets live in jobs that build nothing…**'s list of jobs (`android-sign` and `web-deploy`) with `android-sign`, `relay-deploy`, `share-deploy` and `web-deploy`, and add: ``The two Worker jobs read `CLOUDFLARE_INFRA_API_TOKEN`, and **that token alone decides whether they run**: none → deploy nothing, end green; a token with no `CLOUDFLARE_ACCOUNT_ID` → fail.``
@@ -2064,7 +2064,7 @@ Replace the bullet `**Deployments require explicit instruction**: …` with:
 - In the **Fence** bullet, replace `the single `wrangler` line and its lockfile` with `the five `wrangler` lines and their lockfile`.
 - In `ci.yml`'s **`frontend`** job-specifics bullet, add `and `pnpm share:build`` to what the first leg runs.
 
-Then `node scripts/check-claude-md.mjs` — the file must stay at or under 200 lines; tighten the wording above if it does not.
+Then `node scripts/check-claude-md.ts` — the file must stay at or under 200 lines; tighten the wording above if it does not.
 
 - [ ] **Step 4: `docs/agent/EXTERNAL_SERVICES.md`**
 
@@ -2098,9 +2098,9 @@ Then `node scripts/check-claude-md.mjs` — the file must stay at or under 200 l
 
 - [ ] **Step 6: The two runbooks and the READMEs**
 
-- `docs/reference/hosted-relay-deploy.md`: at the top, a dated note — since 2026-10-11 a release runs this deploy (`relay-deploy`); the page remains the record of every deploy before it and the runbook for a deploy between releases; step 0's probes are what `scripts/relay-deploy-probe.mjs` asks. Re-point every `migrations/2026-…` path to `applied-by-hand/2026-…`. In step 2, add that a **new** schema change is a file in `infrastructure/relay/migrations/` and is applied by the release, not by a `d1 execute`.
+- `docs/reference/hosted-relay-deploy.md`: at the top, a dated note — since 2026-10-11 a release runs this deploy (`relay-deploy`); the page remains the record of every deploy before it and the runbook for a deploy between releases; step 0's probes are what `scripts/relay-deploy-probe.ts` asks. Re-point every `migrations/2026-…` path to `applied-by-hand/2026-…`. In step 2, add that a **new** schema change is a file in `infrastructure/relay/migrations/` and is applied by the release, not by a `d1 execute`.
 - `infrastructure/relay/README.md`: the same two changes where it lists the migration commands (near line 904), and one sentence in its deploy section naming `relay-deploy`.
-- `infrastructure/share-worker/README.md`, *Deploying*: replace the opening warning's `Those are the repo owner's.` with `Those are the repo owner's, or a release's: since 2026-10-11 `release.yml`'s `share-deploy` runs this deploy at a tag.`; say the five `curl`s are what `scripts/share-deploy-probe.mjs` asks.
+- `infrastructure/share-worker/README.md`, *Deploying*: replace the opening warning's `Those are the repo owner's.` with `Those are the repo owner's, or a release's: since 2026-10-11 `release.yml`'s `share-deploy` runs this deploy at a tag.`; say the five `curl`s are what `scripts/share-deploy-probe.ts` asks.
 - `infrastructure/share-worker/wrangler.jsonc`: two comments are stale and are corrected in passing — the R2 one (`The bucket does not exist yet…`) and the assets one (``../../apps/share/dist-share` does not exist yet…`). Both exist since 2026-10-01; say so in one line each and say that `release.yml`'s `share` job builds the directory.
 - `infrastructure/app-worker/wrangler.jsonc`: the `name` comment's `while the relay's deploys stayed by hand` becomes `and, since 2026-10-11, the relay and the share Worker by jobs of their own`.
 
@@ -2143,7 +2143,7 @@ in that order, ahead of the web app, each followed by a probe of the live addres
   hand move to `infrastructure/relay/applied-by-hand/`.
 - A second token, `CLOUDFLARE_INFRA_API_TOKEN`, read by the two new deploy jobs only.
   Without it they deploy nothing and end green.
-- The fence (`scripts/release-rule.test.mjs`) holds the ten jobs, the five wrangler
+- The fence (`scripts/release-rule.test.ts`) holds the ten jobs, the five wrangler
   lines and every line the two new jobs run.
 
 Reverses "the relay and the share Worker are deployed by no job" (2026-10-04), at the

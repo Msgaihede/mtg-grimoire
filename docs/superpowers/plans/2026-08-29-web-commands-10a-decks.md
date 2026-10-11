@@ -503,7 +503,7 @@ found something the suite could not, and 9b's four layouts were falsified by the
 - [ ] **Step 1: Build and serve**
 
 ```bash
-node scripts/build-wasm.mjs
+node scripts/build-wasm.ts
 npx vite build
 npx vite preview --host
 ```

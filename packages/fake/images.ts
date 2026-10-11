@@ -197,7 +197,7 @@ function cardById(cardId: string): FakeCard | undefined {
  * function's signature.
  *
  * Under `live`, **face 0 only**. The generator keeps `image_uris` from the top level *or*
- * from `card_faces[0]` (`scripts/gen-storybook-cards.mjs:194`), so every URL in the fixture is
+ * from `card_faces[0]` (`scripts/gen-storybook-cards.ts:194`), so every URL in the fixture is
  * a front; handing one back for face 1 would draw Delver of Secrets on the back of Delver of
  * Secrets — the exact mistake `images.rs:274-277` calls out as the reason the real resolver
  * tries the face before the top-level image. A back face therefore falls through to synthetic,
@@ -207,7 +207,7 @@ export function cardImageUrl(cardId: string, face: number, variant: ImageVariant
   const card = cardById(cardId);
   if ((mode === "live" || mode === "bundled") && card && face === 0) {
     // The fixture carries two of Scryfall's six `image_uris` keys — `art_crop` and `normal`
-    // (`gen-storybook-cards.mjs:230-231`) — so `thumb` and `display` are served the 488x680
+    // (`gen-storybook-cards.ts:230-231`) — so `thumb` and `display` are served the 488x680
     // `normal` too: upscaled a little at `display`, downscaled at `thumb`, and honest about
     // which printing it is either way. Deriving `/small/` and `/large/` from the path is one
     // `replace` away and is deliberately not done — it would be a URL nobody has fetched.

@@ -53,7 +53,7 @@
 | --- | --- |
 | `src/features/transfer/__golden__/corpus.json` | The shared fixture corpus both suites read |
 | `src/features/transfer/__golden__/*.txt` | 70 generated golden files (committed) |
-| `scripts/golden.mjs` | Regenerates them from the TypeScript writer |
+| `scripts/golden.ts` | Regenerates them from the TypeScript writer |
 | `src/features/transfer/golden.test.ts` | Byte equality + the round trip through `parse.ts` |
 | `src/features/settings/BackupPanel.tsx` (+`.test.tsx`, `.stories.tsx`) | The Settings panel |
 
@@ -88,7 +88,7 @@ Wave 4 (sequential)
 
 **Files:**
 - Create: `src/features/transfer/__golden__/corpus.json`
-- Create: `scripts/golden.mjs`
+- Create: `scripts/golden.ts`
 - Create: `src/features/transfer/golden.test.ts`
 - Modify: `package.json` (add the `golden` script)
 - Generated: `src/features/transfer/__golden__/*.txt` (70 files, committed)
@@ -159,7 +159,7 @@ Hand-write it. Every card object lists all 28 fields. Use this shape (one card s
 }
 ```
 
-- [ ] **Step 2: Write `scripts/golden.mjs`**
+- [ ] **Step 2: Write `scripts/golden.ts`**
 
 ```js
 // Regenerates the golden files from the TypeScript writer, which is the behaviour of record.
@@ -199,7 +199,7 @@ console.log(`wrote ${written} golden files`);
 
 - [ ] **Step 3: Add the npm script**
 
-In `package.json` `"scripts"`: `"golden": "node --experimental-strip-types scripts/golden.mjs"`.
+In `package.json` `"scripts"`: `"golden": "node --experimental-strip-types scripts/golden.ts"`.
 
 - [ ] **Step 4: Generate and eyeball the output**
 
@@ -1351,7 +1351,7 @@ A greyed row's accessible name includes its reason, so reach any disabled contro
 
 **Files:** none — this task produces findings, and a `fix:` commit if it finds something.
 
-Read `docs/reference/live-ui-verification.md` first; it documents traps that have each cost a session. Take the app lock through `.claude/skills/running-the-app/lock.ps1`. **Drive CDP from PowerShell, not Bash** — Bash refuses `cdp.mjs eval` in a worktree — and avoid nested quotes and `$`.
+Read `docs/reference/live-ui-verification.md` first; it documents traps that have each cost a session. Take the app lock through `.claude/skills/running-the-app/lock.ps1`. **Drive CDP from PowerShell, not Bash** — Bash refuses `cdp.ts eval` in a worktree — and avoid nested quotes and `$`.
 
 - [ ] **Step 1: Launch and let the startup pass run.** Confirm `src-tauri/target/debug/data/export/` appears with `Decks/`, `Collection/`, `Wishlist/` and `README.txt`.
 - [ ] **Step 2: Check a real deck's file.** Open `Decks/Azula/Azula.archidekt.txt` and compare it against what the export dialog produces for the same deck with every field ticked. **They must be byte-identical.** This is the golden fence meeting the real corpus, and it is the check most likely to find something the fixtures missed.

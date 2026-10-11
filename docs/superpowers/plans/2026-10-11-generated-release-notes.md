@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Model `anthropic/claude-haiku-5.5`, `reasoning: { effort: "medium" }`, one request per release.
-- The generator has **no dependency beyond Node**. No `npm`, `npx`, `pnpm` or install step in any job that holds a key; `scripts/workflow-scripts.test.mjs` refuses the words.
+- The generator has **no dependency beyond Node**. No `npm`, `npx`, `pnpm` or install step in any job that holds a key; `scripts/workflow-scripts.test.ts` refuses the words.
 - Notes live at `changelog/<version>.md`, body only: no version heading, no date.
 - Sections, in order: `### Highlights` (0–5), `### New`, `### Changed`, `### Fixed`. An empty section is left out. Nothing user-facing renders `Maintenance release with no user-facing changes.`
 - Areas, exactly: Decks, Collection, Wishlist, Search, Scanner, Sync, Import & export, Sharing, Prices, Backup, Settings, Android, Web, General.
@@ -21,8 +21,8 @@
 - Every entry is cited by an item or listed in `omitted`; no text carries a link or a URL; every text is one line.
 - No model is called on a release. `publish` never fails a release over notes.
 - `CHANGELOG.md` and `release-please-config.json` are not touched.
-- Every third-party action is pinned by 40-character SHA with its tag in a trailing comment; every checkout says `persist-credentials: false` (`scripts/actions-pinned.test.mjs`).
-- No workflow line may contain the words `relay` or `share-worker` (`scripts/release-rule.test.mjs`, "names neither of the other two Workers").
+- Every third-party action is pinned by 40-character SHA with its tag in a trailing comment; every checkout says `persist-credentials: false` (`scripts/actions-pinned.test.ts`).
+- No workflow line may contain the words `relay` or `share-worker` (`scripts/release-rule.test.ts`, "names neither of the other two Workers").
 - **This repository's rules override the skill's defaults** (root `CLAUDE.md`, `docs/agent/WORKFLOW.md`):
   - **Tests run once, at the end.** Tasks 1–9 write code and tests and run nothing. Task 10 runs the new suites; Task 12 runs `pnpm verify`, once.
   - **One commit for the feature.** Tasks 1–11 commit nothing. Task 12 makes the commit.
@@ -40,17 +40,17 @@
 
 **The tree is ahead of the code printed below.** This plan was executed inline and reviewed once, whole, by a fresh reviewer; what the review and the first real run changed is in the tree and not all of it in this document:
 
-- `openrouter.mjs`: the body is read inside the retry (a deadline lands there, not on `fetch`); 32,000 tokens and a five-minute deadline, sized for 0.2.0's 163 commits.
-- `notes.mjs`: the link rule also refuses raw HTML and any `scheme://`; a new rule refuses `@name` and `#number`; an asterisk in a lead, a reason of more than one line and a ref that is not an id are refused; no problem sentence echoes a line of the model's own; a highlight's text is closed with a full stop.
-- `collect.mjs`: the repository's first commit, which has no parent, is read.
-- `cli.mjs`: `push` is `pushOne` + `pushVerdict`, tested; it exits 1 on any release not pushed, keeps a body once, and says on every edit whether the release is the latest one.
-- `files.test.mjs` uses the generator's own link rule. Docs no longer say "since 0.44.0".
+- `openrouter.ts`: the body is read inside the retry (a deadline lands there, not on `fetch`); 32,000 tokens and a five-minute deadline, sized for 0.2.0's 163 commits.
+- `notes.ts`: the link rule also refuses raw HTML and any `scheme://`; a new rule refuses `@name` and `#number`; an asterisk in a lead, a reason of more than one line and a ref that is not an id are refused; no problem sentence echoes a line of the model's own; a highlight's text is closed with a full stop.
+- `collect.ts`: the repository's first commit, which has no parent, is read.
+- `cli.ts`: `push` is `pushOne` + `pushVerdict`, tested; it exits 1 on any release not pushed, keeps a body once, and says on every edit whether the release is the latest one.
+- `files.test.ts` uses the generator's own link rule. Docs no longer say "since 0.44.0".
 - Task 12 ran `pnpm verify` before the backfill, not after; its Vitest step met one known flake and was run again.
 
 ## Before starting
 
 - **This worktree had no `node_modules` on 2026-10-11.** Follow the `worktree-setup` skill before Task 10; nothing runs without it.
-- **The code in Tasks 1–8 has been run once already**, from this document, in a scratch folder against the main checkout's Vitest (2026-10-11): the generator's six suites (70 tests), and `release-rule`, `actions-pinned`, `toolchain` and `releaseNotes` with Tasks 7 and 8 applied to copies (135 tests). The edited `release.yml` parsed, and its three scripts passed `bash -n`. Not run: ESLint, the story, `workflow-scripts.test.mjs`, and anything that needs a key. So a failure in Task 10 is more likely a slip in applying an edit than a fault in the edit.
+- **The code in Tasks 1–8 has been run once already**, from this document, in a scratch folder against the main checkout's Vitest (2026-10-11): the generator's six suites (70 tests), and `release-rule`, `actions-pinned`, `toolchain` and `releaseNotes` with Tasks 7 and 8 applied to copies (135 tests). The edited `release.yml` parsed, and its three scripts passed `bash -n`. Not run: ESLint, the story, `workflow-scripts.test.ts`, and anything that needs a key. So a failure in Task 10 is more likely a slip in applying an edit than a fault in the edit.
 - Read `.github/CLAUDE.md`, `packages/ui/CLAUDE.md` and `.storybook/CLAUDE.md`; they bind Tasks 7 and 8.
 - Tasks 1, 2, 4, 7, 8 and 9 touch disjoint files and can run in parallel. Task 3 needs Task 2's exports, Task 5 needs Tasks 2 and 3, Task 6 needs Tasks 1, 2, 4 and 5.
 - Tasks 11 and 13 need things only the owner can supply. Stop and ask at those points.
@@ -59,30 +59,30 @@
 
 | File | Responsibility |
 | --- | --- |
-| `scripts/changelog/collect.mjs` | A commit range → the entries the model reads. |
-| `scripts/changelog/notes.mjs` | The answer's schema, its checks, and the markdown renderer. |
-| `scripts/changelog/prompt.mjs` | The instructions, the input, and the retry message. |
-| `scripts/changelog/openrouter.mjs` | One request to OpenRouter, with a timeout and retries. |
-| `scripts/changelog/generate.mjs` | Entries → checked notes: ask, check, ask once more, or fail. |
-| `scripts/changelog/cli.mjs` | `next`, `tag`, `backfill`, `push`; the only file that touches git, disk and the network. |
-| `scripts/changelog/*.test.mjs` | One beside each module. |
+| `scripts/changelog/collect.ts` | A commit range → the entries the model reads. |
+| `scripts/changelog/notes.ts` | The answer's schema, its checks, and the markdown renderer. |
+| `scripts/changelog/prompt.ts` | The instructions, the input, and the retry message. |
+| `scripts/changelog/openrouter.ts` | One request to OpenRouter, with a timeout and retries. |
+| `scripts/changelog/generate.ts` | Entries → checked notes: ask, check, ask once more, or fail. |
+| `scripts/changelog/cli.ts` | `next`, `tag`, `backfill`, `push`; the only file that touches git, disk and the network. |
+| `scripts/changelog/*.test.ts` | One beside each module. |
 | `.github/workflows/release.yml` | Two new jobs; one new step in `publish`. |
-| `scripts/release-rule.test.mjs` | The fence, widened to nine jobs. |
+| `scripts/release-rule.test.ts` | The fence, widened to nine jobs. |
 | `packages/ui/lib/releaseNotes.ts` | One new rule: trailing pull request references are dropped. |
 | `packages/fake/fixtures.ts`, `UpdatePanel.stories.tsx` | One history row in the new shape, and a story that opens it. |
 | `changelog/*.md` | 48 backfilled files (Task 11). |
-| `scripts/changelog/files.test.mjs` | Every file in `changelog/` is in the generator's shape (Task 11). |
-| `scripts/ci-route.mjs`, `scripts/ci-route.test.mjs` | `changelog/*` routes to `frontend`, which now reads it (Task 11). |
+| `scripts/changelog/files.test.ts` | Every file in `changelog/` is in the generator's shape (Task 11). |
+| `scripts/ci-route.ts`, `scripts/ci-route.test.ts` | `changelog/*` routes to `frontend`, which now reads it (Task 11). |
 
-`generate.mjs` is not in the spec's table of files; the spec put the retry in prose. It is its own file so the retry can be tested without git or the network.
+`generate.ts` is not in the spec's table of files; the spec put the retry in prose. It is its own file so the retry can be tested without git or the network.
 
 ---
 
-### Task 1: `collect.mjs` — a commit range into entries
+### Task 1: `collect.ts` — a commit range into entries
 
 **Files:**
-- Create: `scripts/changelog/collect.mjs`
-- Test: `scripts/changelog/collect.test.mjs`
+- Create: `scripts/changelog/collect.ts`
+- Test: `scripts/changelog/collect.test.ts`
 
 **Interfaces:**
 - Consumes: nothing.
@@ -97,7 +97,7 @@
 
 - [ ] **Step 1: Write the tests**
 
-Create `scripts/changelog/collect.test.mjs`:
+Create `scripts/changelog/collect.test.ts`:
 
 ```js
 import { describe, expect, it } from "vitest";
@@ -110,7 +110,7 @@ import {
   githubPulls,
   parseLog,
   prNumberOf,
-} from "./collect.mjs";
+} from "./collect.ts";
 
 const hash = (pair) => pair.repeat(20);
 const commit = (pair, subject, parents = ["p0"], body = "") => ({
@@ -353,7 +353,7 @@ describe("githubPulls", () => {
 
 - [ ] **Step 2: Write the module**
 
-Create `scripts/changelog/collect.mjs`:
+Create `scripts/changelog/collect.ts`:
 
 ```js
 // Which changes are in a release? — the entries its notes are written from
@@ -372,7 +372,7 @@ Create `scripts/changelog/collect.mjs`:
 // naming a merged pull request. Known gap, accepted: a commit pushed straight to `main` that a
 // later local merge put on the *second*-parent side is not on that line and is not read.
 //
-// Dependency-free, and `git` and GitHub are passed in, so `collect.test.mjs` needs neither.
+// Dependency-free, and `git` and GitHub are passed in, so `collect.test.ts` needs neither.
 
 /** A release PR's head branch starts with this; it is the release, not a change in it. */
 export const RELEASE_BRANCH_PREFIX = "release-please--";
@@ -497,11 +497,11 @@ export function githubPulls({ repo, token, fetch }) {
 
 ---
 
-### Task 2: `notes.mjs` — the schema, the checks, the renderer
+### Task 2: `notes.ts` — the schema, the checks, the renderer
 
 **Files:**
-- Create: `scripts/changelog/notes.mjs`
-- Test: `scripts/changelog/notes.test.mjs`
+- Create: `scripts/changelog/notes.ts`
+- Test: `scripts/changelog/notes.test.ts`
 
 **Interfaces:**
 - Consumes: nothing.
@@ -514,7 +514,7 @@ export function githubPulls({ repo, token, fetch }) {
 
 - [ ] **Step 1: Write the tests**
 
-Create `scripts/changelog/notes.test.mjs`:
+Create `scripts/changelog/notes.test.ts`:
 
 ```js
 import { describe, expect, it } from "vitest";
@@ -526,7 +526,7 @@ import {
   omittedLines,
   problems,
   render,
-} from "./notes.mjs";
+} from "./notes.ts";
 
 const IDS = ["#860", "#861", "#854", "#856", "#848", "abc1234"];
 
@@ -749,7 +749,7 @@ describe("SCHEMA", () => {
 
 - [ ] **Step 2: Write the module**
 
-Create `scripts/changelog/notes.mjs`:
+Create `scripts/changelog/notes.ts`:
 
 ```js
 // What the model answers, whether that answer is acceptable, and the markdown it becomes
@@ -764,7 +764,7 @@ Create `scripts/changelog/notes.mjs`:
 // it. It does not, and cannot, hold the answer to the truth: that is the owner's read of the
 // file on the release PR.
 //
-// Pure, so `notes.test.mjs` needs nothing.
+// Pure, so `notes.test.ts` needs nothing.
 
 /** Where a user would notice a change. Closed, so the same thing is not filed two ways. */
 export const AREAS = [
@@ -991,14 +991,14 @@ export function omittedLines(answer) {
 
 ---
 
-### Task 3: `prompt.mjs` — what the model is told and given
+### Task 3: `prompt.ts` — what the model is told and given
 
 **Files:**
-- Create: `scripts/changelog/prompt.mjs`
-- Test: `scripts/changelog/prompt.test.mjs`
+- Create: `scripts/changelog/prompt.ts`
+- Test: `scripts/changelog/prompt.test.ts`
 
 **Interfaces:**
-- Consumes: `AREAS`, `MAX_HIGHLIGHTS` from `./notes.mjs` (Task 2).
+- Consumes: `AREAS`, `MAX_HIGHLIGHTS` from `./notes.ts` (Task 2).
 - Produces:
   - `instructions(): string` — the system message
   - `input(entries: Entry[], version: string): string` — the user message
@@ -1006,12 +1006,12 @@ export function omittedLines(answer) {
 
 - [ ] **Step 1: Write the tests**
 
-Create `scripts/changelog/prompt.test.mjs`:
+Create `scripts/changelog/prompt.test.ts`:
 
 ```js
 import { describe, expect, it } from "vitest";
-import { AREAS, MAX_HIGHLIGHTS } from "./notes.mjs";
-import { input, instructions, retryMessage } from "./prompt.mjs";
+import { AREAS, MAX_HIGHLIGHTS } from "./notes.ts";
+import { input, instructions, retryMessage } from "./prompt.ts";
 
 describe("instructions", () => {
   const text = instructions();
@@ -1075,7 +1075,7 @@ describe("retryMessage", () => {
 
 - [ ] **Step 2: Write the module**
 
-Create `scripts/changelog/prompt.mjs`:
+Create `scripts/changelog/prompt.ts`:
 
 ```js
 // What the model is told, and what it is given
@@ -1088,8 +1088,8 @@ Create `scripts/changelog/prompt.mjs`:
 // The glossary is `docs/agent/DOMAIN_VOCABULARY.md`'s, said for a reader: this app has four
 // things a careless sentence calls a tag and five it calls a note.
 //
-// Pure, so `prompt.test.mjs` needs nothing.
-import { AREAS, MAX_HIGHLIGHTS } from "./notes.mjs";
+// Pure, so `prompt.test.ts` needs nothing.
+import { AREAS, MAX_HIGHLIGHTS } from "./notes.ts";
 
 /** The system message: who reads the notes, what goes in them, and what does not. */
 export function instructions() {
@@ -1159,11 +1159,11 @@ export function retryMessage(problems) {
 
 ---
 
-### Task 4: `openrouter.mjs` — one request, with a deadline and retries
+### Task 4: `openrouter.ts` — one request, with a deadline and retries
 
 **Files:**
-- Create: `scripts/changelog/openrouter.mjs`
-- Test: `scripts/changelog/openrouter.test.mjs`
+- Create: `scripts/changelog/openrouter.ts`
+- Test: `scripts/changelog/openrouter.test.ts`
 
 **Interfaces:**
 - Consumes: nothing.
@@ -1177,7 +1177,7 @@ export function retryMessage(problems) {
 
 - [ ] **Step 1: Write the tests**
 
-Create `scripts/changelog/openrouter.test.mjs`:
+Create `scripts/changelog/openrouter.test.ts`:
 
 ```js
 import { describe, expect, it } from "vitest";
@@ -1190,7 +1190,7 @@ import {
   WAITS_MS,
   complete,
   requestBody,
-} from "./openrouter.mjs";
+} from "./openrouter.ts";
 
 const KEY = "sk-or-v1-not-a-real-key";
 const MESSAGES = [{ role: "user", content: "hello" }];
@@ -1329,7 +1329,7 @@ describe("complete", () => {
 
 - [ ] **Step 2: Write the module**
 
-Create `scripts/changelog/openrouter.mjs`:
+Create `scripts/changelog/openrouter.ts`:
 
 ```js
 // One request to OpenRouter, and the answer's text
@@ -1346,7 +1346,7 @@ Create `scripts/changelog/openrouter.mjs`:
 // **Three things are a 200 and are not an answer**: an `error` object in the body, a text that
 // was cut off (`finish_reason: "length"`), and no text at all. Each is an error here.
 //
-// `fetch` and `sleep` are passed in, so `openrouter.test.mjs` reaches nothing.
+// `fetch` and `sleep` are passed in, so `openrouter.test.ts` reaches nothing.
 
 export const ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
 export const MODEL = "anthropic/claude-haiku-5.5";
@@ -1448,26 +1448,26 @@ export async function complete({ key, messages, schema, fetch, sleep }) {
 
 ---
 
-### Task 5: `generate.mjs` — ask, check, ask once more
+### Task 5: `generate.ts` — ask, check, ask once more
 
 **Files:**
-- Create: `scripts/changelog/generate.mjs`
-- Test: `scripts/changelog/generate.test.mjs`
+- Create: `scripts/changelog/generate.ts`
+- Test: `scripts/changelog/generate.test.ts`
 
 **Interfaces:**
-- Consumes: `instructions()`, `input(entries, version)`, `retryMessage(problems)` from `./prompt.mjs`; `MAINTENANCE`, `problems(answer, ids)`, `render(answer)` from `./notes.mjs`.
+- Consumes: `instructions()`, `input(entries, version)`, `retryMessage(problems)` from `./prompt.ts`; `MAINTENANCE`, `problems(answer, ids)`, `render(answer)` from `./notes.ts`.
 - Produces:
   - `notesFor({ version, entries, ask }): Promise<{ markdown: string, answer: Answer | null, attempts: number }>` where `ask(messages): Promise<string>`
   - `class NotesError extends Error` with `.problems: string[]`
 
 - [ ] **Step 1: Write the tests**
 
-Create `scripts/changelog/generate.test.mjs`:
+Create `scripts/changelog/generate.test.ts`:
 
 ```js
 import { describe, expect, it } from "vitest";
-import { NotesError, notesFor } from "./generate.mjs";
-import { MAINTENANCE } from "./notes.mjs";
+import { NotesError, notesFor } from "./generate.ts";
+import { MAINTENANCE } from "./notes.ts";
 
 const ENTRIES = [
   { id: "#860", title: "feat(android): pairing", body: "what it does" },
@@ -1547,7 +1547,7 @@ describe("notesFor", () => {
 
 - [ ] **Step 2: Write the module**
 
-Create `scripts/changelog/generate.mjs`:
+Create `scripts/changelog/generate.ts`:
 
 ```js
 // One release's entries into its checked notes
@@ -1557,9 +1557,9 @@ Create `scripts/changelog/generate.mjs`:
 // error and there is no file: a note nobody could hold to its pull requests is worse than
 // release-please's, which is what a release without a file publishes.
 //
-// `ask(messages)` is the model; it is passed in, so `generate.test.mjs` needs no key.
-import { MAINTENANCE, problems, render } from "./notes.mjs";
-import { input, instructions, retryMessage } from "./prompt.mjs";
+// `ask(messages)` is the model; it is passed in, so `generate.test.ts` needs no key.
+import { MAINTENANCE, problems, render } from "./notes.ts";
+import { input, instructions, retryMessage } from "./prompt.ts";
 
 export class NotesError extends Error {
   constructor(version, failed) {
@@ -1605,11 +1605,11 @@ export async function notesFor({ version, entries, ask }) {
 
 ---
 
-### Task 6: `cli.mjs` — the four commands
+### Task 6: `cli.ts` — the four commands
 
 **Files:**
-- Create: `scripts/changelog/cli.mjs`
-- Test: `scripts/changelog/cli.test.mjs`
+- Create: `scripts/changelog/cli.ts`
+- Test: `scripts/changelog/cli.test.ts`
 - Modify: `package.json` (one script), `.gitignore` (one line)
 
 **Interfaces:**
@@ -1627,7 +1627,7 @@ export async function notesFor({ version, entries, ask }) {
 
 - [ ] **Step 1: Write the tests**
 
-Create `scripts/changelog/cli.test.mjs`:
+Create `scripts/changelog/cli.test.ts`:
 
 ```js
 import { describe, expect, it } from "vitest";
@@ -1639,7 +1639,7 @@ import {
   releaseTags,
   versionArg,
   versionOf,
-} from "./cli.mjs";
+} from "./cli.ts";
 
 describe("versionOf", () => {
   it("reads the root package's version from release-please's manifest", () => {
@@ -1731,17 +1731,17 @@ describe("parseArgs", () => {
 
 - [ ] **Step 2: Write the module**
 
-Create `scripts/changelog/cli.mjs`:
+Create `scripts/changelog/cli.ts`:
 
 ```js
 // Release notes, written from the pull requests in a release
 // (docs/superpowers/specs/2026-10-11-generated-release-notes-design.md).
 //
-//   node scripts/changelog/cli.mjs next                      # CI: the coming release's notes
-//   node scripts/changelog/cli.mjs tag v0.41.0 [--force]     # one past release's file
-//   node scripts/changelog/cli.mjs backfill [--force]        # every tag that has no file yet
-//   node scripts/changelog/cli.mjs push 0.41.0 [0.42.0 …]    # a file → its release's body
-//   node scripts/changelog/cli.mjs push --all [--backup <dir>]
+//   node scripts/changelog/cli.ts next                      # CI: the coming release's notes
+//   node scripts/changelog/cli.ts tag v0.41.0 [--force]     # one past release's file
+//   node scripts/changelog/cli.ts backfill [--force]        # every tag that has no file yet
+//   node scripts/changelog/cli.ts push 0.41.0 [0.42.0 …]    # a file → its release's body
+//   node scripts/changelog/cli.ts push --all [--backup <dir>]
 //
 // **`next`** is what `release.yml`'s `changelog-write` runs on a push that cut no release. The
 // released version is this tree's `.release-please-manifest.json`; the coming one is the release
@@ -1760,7 +1760,7 @@ Create `scripts/changelog/cli.mjs`:
 // Needs `OPENROUTER_API_KEY` for everything but `push`. GitHub is read with `GITHUB_TOKEN`,
 // `GH_TOKEN`, or `gh auth token`, and `push` runs `gh`.
 //
-// The parsing and the planning are pure, and `cli.test.mjs` holds them. Everything that touches
+// The parsing and the planning are pure, and `cli.test.ts` holds them. Everything that touches
 // git, the disk or the network is in `main`.
 import { execFileSync } from "node:child_process";
 import {
@@ -1774,10 +1774,10 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { collect, githubPulls } from "./collect.mjs";
-import { notesFor } from "./generate.mjs";
-import { SCHEMA, omittedLines } from "./notes.mjs";
-import { complete } from "./openrouter.mjs";
+import { collect, githubPulls } from "./collect.ts";
+import { notesFor } from "./generate.ts";
+import { SCHEMA, omittedLines } from "./notes.ts";
+import { complete } from "./openrouter.ts";
 
 export const REPO = "Msgaihede/mtg-grimoire";
 /** release-please's branch for this repository's one package. */
@@ -1872,10 +1872,10 @@ export function parseArgs(argv) {
 }
 
 const USAGE = [
-  "node scripts/changelog/cli.mjs next",
-  "node scripts/changelog/cli.mjs tag <version>… [--force]",
-  "node scripts/changelog/cli.mjs backfill [--force]",
-  "node scripts/changelog/cli.mjs push <version>… | --all [--backup <dir>]",
+  "node scripts/changelog/cli.ts next",
+  "node scripts/changelog/cli.ts tag <version>… [--force]",
+  "node scripts/changelog/cli.ts backfill [--force]",
+  "node scripts/changelog/cli.ts push <version>… | --all [--backup <dir>]",
 ].join("\n");
 
 async function main() {
@@ -2071,7 +2071,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 In `package.json`, after the `"golden"` line in `"scripts"`, add:
 
 ```json
-    "changelog": "node scripts/changelog/cli.mjs",
+    "changelog": "node scripts/changelog/cli.ts",
 ```
 
 - [ ] **Step 4: Ignore `next`'s output folder**
@@ -2079,7 +2079,7 @@ In `package.json`, after the `"golden"` line in `"scripts"`, add:
 Append to the root `.gitignore`:
 
 ```
-# `node scripts/changelog/cli.mjs next` leaves the coming release's notes here for the job that
+# `node scripts/changelog/cli.ts next` leaves the coming release's notes here for the job that
 # commits them to the release branch. The kept copy is `changelog/<version>.md`.
 /release-notes/
 ```
@@ -2090,10 +2090,10 @@ Append to the root `.gitignore`:
 
 **Files:**
 - Modify: `.github/workflows/release.yml` (header comment; two jobs appended; one step in `publish`)
-- Modify: `scripts/release-rule.test.mjs`
+- Modify: `scripts/release-rule.test.ts`
 
 **Interfaces:**
-- Consumes: `node scripts/changelog/cli.mjs next` (Task 6) — writes `release-notes/<version>.md` and the step output `version`.
+- Consumes: `node scripts/changelog/cli.ts next` (Task 6) — writes `release-notes/<version>.md` and the step output `version`.
 - Produces: the artifact `release-notes`; `changelog/<version>.md` on the release branch; the release body at publish.
 
 - [ ] **Step 1: Say what changed in the workflow's header**
@@ -2148,7 +2148,7 @@ In the `publish` job, insert this step **before** `- name: Publish the draft rel
               echo "### Release notes — release-please's"
               echo
               echo "\`$file\` could not be read at $SHA or set on the release, so $TAG keeps the notes"
-              echo "release-please wrote. To replace them afterwards: \`node scripts/changelog/cli.mjs push $VERSION\`."
+              echo "release-please wrote. To replace them afterwards: \`node scripts/changelog/cli.ts push $VERSION\`."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
@@ -2240,7 +2240,7 @@ At the end of `.github/workflows/release.yml`, after the `publish` job, append:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/changelog/cli.mjs next
+        run: node scripts/changelog/cli.ts next
 
       # Handed to `changelog-commit`, and to no other job.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -2301,7 +2301,7 @@ At the end of `.github/workflows/release.yml`, after the `publish` job, append:
 
 - [ ] **Step 4: Widen the fence — constants**
 
-In `scripts/release-rule.test.mjs`, replace the `MAY_READ` block and the `ON_A_RELEASE` line:
+In `scripts/release-rule.test.ts`, replace the `MAY_READ` block and the `ON_A_RELEASE` line:
 
 ```js
 /** Every secret each job may read, and it must read exactly these. */
@@ -2368,7 +2368,7 @@ Then add this entry to `RUNS`, after the `"web-deploy": [ … ],` entry and befo
       '} >> "$GITHUB_STEP_SUMMARY"',
     ],
     // Write the notes for the coming release
-    ["node scripts/changelog/cli.mjs next"],
+    ["node scripts/changelog/cli.ts next"],
   ],
 ```
 
@@ -2529,7 +2529,7 @@ Directly before the test `it("publishes last, and nothing else flips the draft",
     }
     // The key itself reaches exactly one step, and that step runs one file.
     expect(rest.filter((step) => secretsOf(step).length > 0)).toHaveLength(1);
-    expect(rest[1]).toMatch(/^ {8}run: node scripts\/changelog\/cli\.mjs next$/m);
+    expect(rest[1]).toMatch(/^ {8}run: node scripts\/changelog\/cli\.ts next$/m);
     expect(secretsOf(rest[1])).toEqual(["OPENROUTER_API_KEY"]);
   });
 
@@ -2572,7 +2572,7 @@ In `packages/ui/lib/releaseNotes.test.ts`, add this constant after `V0_9_1`:
 
 ```ts
 /**
- * One release body in the generator's shape — what `scripts/changelog/notes.mjs` renders, and
+ * One release body in the generator's shape — what `scripts/changelog/notes.ts` renders, and
  * what every release since 0.44.0 publishes.
  */
 const GENERATED = `### Highlights
@@ -2659,7 +2659,7 @@ In `packages/ui/lib/releaseNotes.ts`, add after the `COMMIT_TRAILER` constant:
 /**
  * The pull requests a generated bullet came from: `(#860)`, `(#854, #856)`.
  *
- * `scripts/changelog/notes.mjs` closes an item with them, and GitHub links each one in a release
+ * `scripts/changelog/notes.ts` closes an item with them, and GitHub links each one in a release
  * body by itself. Here they are the commit trailer's case again — a reader of a desktop
  * changelog can do nothing with a number — so they go the same way.
  *
@@ -2694,7 +2694,7 @@ In `packages/ui/lib/releaseNotes.ts`, replace the opening doc comment from its f
  * **This is a reader for two known shapes, not a markdown parser**, and the narrow name is the
  * honest one. A release body is one of:
  *
- * - **the generator's** (`scripts/changelog/notes.mjs`: every release since 0.44.0, and an
+ * - **the generator's** (`scripts/changelog/notes.ts`: every release since 0.44.0, and an
  *   older one once its backfilled notes are pushed): `### Highlights`, `### New`,
  *   `### Changed`, `### Fixed`, bullets that open with a bold lead or a bold area and close
  *   with the pull requests they came from. A program writes it, so the vocabulary is closed;
@@ -2767,7 +2767,7 @@ Add this function directly after `notesFor`:
 
 ```ts
 /**
- * A release body in **the generator's shape** (`scripts/changelog/notes.mjs`), which is what a
+ * A release body in **the generator's shape** (`scripts/changelog/notes.ts`), which is what a
  * release publishes since 0.44.0.
  *
  * It carries the three things the reader does with that shape: a **Highlights** bullet whose
@@ -2849,7 +2849,7 @@ export const HistoryGeneratedNotes: Story = {
 - Modify: `docs/reference/in-app-updates.md`
 - Modify: `docs/agent/WORKFLOW.md`
 
-`.github/CLAUDE.md` has a 200-line budget (`scripts/check-claude-md.mjs`); it is at 130.
+`.github/CLAUDE.md` has a 200-line budget (`scripts/check-claude-md.ts`); it is at 130.
 
 - [ ] **Step 1: `.github/CLAUDE.md`**
 
@@ -2857,13 +2857,13 @@ In the `## release.yml — Automated Releases` section, add this bullet directly
 
 ```markdown
 - **Release notes are written between releases, from pull requests** (2026-10-11): two jobs run on a push that cut **no** release (`release_created != 'true'`), and nothing `needs` them.
-  - `changelog-write` (`environment: changelog`, `OPENROUTER_API_KEY`) installs nothing and runs `node scripts/changelog/cli.mjs next`: every pull request since the last tag, one request to Claude Haiku 5.5 through OpenRouter, the answer checked and rendered by code. No key, no release branch, or the released version still on it → nothing written, green.
+  - `changelog-write` (`environment: changelog`, `OPENROUTER_API_KEY`) installs nothing and runs `node scripts/changelog/cli.ts next`: every pull request since the last tag, one request to Claude Haiku 5.5 through OpenRouter, the answer checked and rendered by code. No key, no release branch, or the released version still on it → nothing written, green.
   - `changelog-commit` (`contents: write`, no key, no checkout) puts the file on the release branch as `changelog/<version>.md` through the contents API. The file is written again whenever `main` moves.
   - `publish` sets the release body from `changelog/<version>.md` at the run's commit before it flips the draft. A missing file keeps release-please's notes and still publishes. **No model is called on a release.**
-  - A lasting correction goes in the pull request's description. A published note is corrected in its file, then `node scripts/changelog/cli.mjs push <version>`. `CHANGELOG.md` stays release-please's raw log.
+  - A lasting correction goes in the pull request's description. A published note is corrected in its file, then `node scripts/changelog/cli.ts push <version>`. `CHANGELOG.md` stays release-please's raw log.
 ```
 
-In the `- **Fence**: `scripts/release-rule.test.mjs` holds the job graph, …` bullet, replace:
+In the `- **Fence**: `scripts/release-rule.test.ts` holds the job graph, …` bullet, replace:
 
 ```markdown
   A line added to or changed in any `run:` of `android-sign` or `web-deploy` — a summary's wording included — is made in `RUNS` in the same commit.
@@ -2891,12 +2891,12 @@ Insert this bullet directly **before** the bullet that starts `- **What only the
 
   | Job | Needs | Holds a secret | What it does |
   | --- | --- | --- | --- |
-  | `changelog-write` | `release-please` | `OPENROUTER_API_KEY` (`environment: changelog`) | Installs nothing. `node scripts/changelog/cli.mjs next`: the released version from `main`'s manifest, the coming one from the release branch's; the entries of `v<released>..HEAD`; the notes as the artifact `release-notes` (14 days). `contents: read` |
+  | `changelog-write` | `release-please` | `OPENROUTER_API_KEY` (`environment: changelog`) | Installs nothing. `node scripts/changelog/cli.ts next`: the released version from `main`'s manifest, the coming one from the release branch's; the entries of `v<released>..HEAD`; the notes as the artifact `release-notes` (14 days). `contents: read` |
   | `changelog-commit` | `release-please`, `changelog-write` | no | Puts that file on release-please's branch as `changelog/<version>.md` through the contents API, as `docs(changelog): notes for <version> from <commit>`. No checkout; `contents: write` |
 
   - **Nothing needs either job.** A failure there is a red run on that push and holds no release
     up; a release merged without the file is published with release-please's notes.
-  - **The checks** (`scripts/changelog/notes.mjs`): every entry is cited by an item or listed as
+  - **The checks** (`scripts/changelog/notes.ts`): every entry is cited by an item or listed as
     left out; no reference is to something that was not sent; no text carries a link or a URL,
     and each is one line; at most five highlights; every area is from the list. A failed answer
     is sent back once with what failed, and a second failure writes nothing. They hold the answer
@@ -2909,7 +2909,7 @@ Insert this bullet directly **before** the bullet that starts `- **What only the
     draft, and no model is called on a release. Missing, empty or unreadable → release-please's
     notes stay, the summary says so, and the release is published.
   - **A published note is corrected in its file**, by pull request, then
-    `node scripts/changelog/cli.mjs push <version>`, which keeps the body it replaces in a folder
+    `node scripts/changelog/cli.ts push <version>`, which keeps the body it replaces in a folder
     outside the repository and refuses a draft. `changelog/` holds a file for every release since
     0.2.0, written by the same generator; `push --all` is what puts those on the releases
     published before this, and it is run on the owner's word.
@@ -2943,7 +2943,7 @@ Insert this bullet directly **after** the bullet that starts `- **The release bo
 - **Since 2026-10-11 the body is written from the release's pull requests**, not by
   release-please ([ci-and-releases.md](ci-and-releases.md), *Release notes are written from pull
   requests*). `release.yml`'s `publish` sets it from `changelog/<version>.md`; the releases
-  published before that get theirs from backfilled files, by `cli.mjs push --all`, when the owner
+  published before that get theirs from backfilled files, by `cli.ts push --all`, when the owner
   says. So the reader has **two known shapes**: the generator's — `### Highlights`, `### New`,
   `### Changed`, `### Fixed`,
   bullets opening with a bold lead or a bold area and closing with `(#860)` — and
@@ -2979,10 +2979,10 @@ This is the first time anything in Tasks 1–9 is run. `pnpm verify` is Task 12'
 Run:
 
 ```bash
-pnpm exec vitest run scripts/changelog scripts/release-rule.test.mjs scripts/actions-pinned.test.mjs scripts/workflow-scripts.test.mjs scripts/toolchain.test.mjs scripts/ci-route.test.mjs scripts/claude-md.test.mjs packages/ui/lib/releaseNotes.test.ts
+pnpm exec vitest run scripts/changelog scripts/release-rule.test.ts scripts/actions-pinned.test.ts scripts/workflow-scripts.test.ts scripts/toolchain.test.ts scripts/ci-route.test.ts scripts/claude-md.test.ts packages/ui/lib/releaseNotes.test.ts
 ```
 
-Expected: every file passes. Fix what fails in the file that is wrong. If a fence in `release-rule.test.mjs` and the workflow disagree about a line, the workflow's line in Task 7 is the intended one.
+Expected: every file passes. Fix what fails in the file that is wrong. If a fence in `release-rule.test.ts` and the workflow disagree about a line, the workflow's line in Task 7 is the intended one.
 
 - [ ] **Step 2: The story and the panel's tests**
 
@@ -2999,7 +2999,7 @@ Expected: PASS, including `HistoryGeneratedNotes`. Do not filter `stories.test.t
 Run:
 
 ```bash
-node scripts/changelog/cli.mjs
+node scripts/changelog/cli.ts
 ```
 
 Expected: the four usage lines on stderr, exit code 2.
@@ -3007,7 +3007,7 @@ Expected: the four usage lines on stderr, exit code 2.
 Run:
 
 ```bash
-node scripts/changelog/cli.mjs push 0.34.0
+node scripts/changelog/cli.ts push 0.34.0
 ```
 
 Expected: `v0.34.0: changelog/0.34.0.md does not exist`, exit code 1, and nothing changed on GitHub. (The file does not exist yet, so the draft check is not reached.)
@@ -3018,8 +3018,8 @@ Expected: `v0.34.0: changelog/0.34.0.md does not exist`, exit code 1, and nothin
 
 **Files:**
 - Create: `changelog/<version>.md` × 48 (written by the generator, not by hand)
-- Create: `scripts/changelog/files.test.mjs`
-- Modify: `scripts/ci-route.mjs`, `scripts/ci-route.test.mjs`, `.github/CLAUDE.md`
+- Create: `scripts/changelog/files.test.ts`
+- Modify: `scripts/ci-route.ts`, `scripts/ci-route.test.ts`, `.github/CLAUDE.md`
 
 **Needs the owner.** `OPENROUTER_API_KEY` must be in the environment of the shell that runs these. Do not ask for the key's value, and do not write it anywhere. If it is not set, stop and ask the owner to set it in his own terminal and run the commands there, or to start a session that has it.
 
@@ -3030,12 +3030,12 @@ If the owner would rather merge without the backfill, skip this task whole: Task
 Run:
 
 ```bash
-node scripts/changelog/cli.mjs tag v0.43.0 --force
+node scripts/changelog/cli.ts tag v0.43.0 --force
 ```
 
 Expected: `0.43.0: 16 entries in v0.42.0..v0.43.0` or close to it (the release PR is skipped), a token line, some `left out` lines, and `changelog/0.43.0.md` on stdout.
 
-If OpenRouter refuses the request, read its message: it names the parameter. `scripts/changelog/openrouter.mjs`'s `requestBody` is the only place the request is shaped, and `openrouter.test.mjs` pins it — change both together.
+If OpenRouter refuses the request, read its message: it names the parameter. `scripts/changelog/openrouter.ts`'s `requestBody` is the only place the request is shaped, and `openrouter.test.ts` pins it — change both together.
 
 Then read `changelog/0.43.0.md` against `gh pr view <n>` for every pull request it cites and every one it left out. It is acceptable when:
 - no item says something its pull requests do not;
@@ -3043,17 +3043,17 @@ Then read `changelog/0.43.0.md` against `gh pr view <n>` for every pull request 
 - the 14 feature lines of release-please's 0.43.0 have become one item per change;
 - no developer's word (`light`, `host`, `core`, `phase 7`) is in the text.
 
-If it is not, the fix is in `scripts/changelog/prompt.mjs`'s `instructions()`. Change it, run this step again, and stop after three rounds to show the owner what is still wrong.
+If it is not, the fix is in `scripts/changelog/prompt.ts`'s `instructions()`. Change it, run this step again, and stop after three rounds to show the owner what is still wrong.
 
 - [ ] **Step 2: Every release**
 
 Run:
 
 ```bash
-node scripts/changelog/cli.mjs backfill
+node scripts/changelog/cli.ts backfill
 ```
 
-Expected: 47 more files (0.43.0 exists), a few minutes, exit 0. On exit 1 the failed tags are listed; run each again with `node scripts/changelog/cli.mjs tag <tag> --force`. A tag that fails three times is reported to the owner with its problems, not forced through.
+Expected: 47 more files (0.43.0 exists), a few minutes, exit 0. On exit 1 the failed tags are listed; run each again with `node scripts/changelog/cli.ts tag <tag> --force`. A tag that fails three times is reported to the owner with its problems, not forced through.
 
 - [ ] **Step 3: Read what was written**
 
@@ -3067,13 +3067,13 @@ Read all 48 files once. Check five of them against their pull requests as in Ste
 
 - [ ] **Step 4: Run the reader over every file**
 
-Create `scripts/changelog/files.test.mjs`:
+Create `scripts/changelog/files.test.ts`:
 
 ```js
 // Every file in `changelog/` is one the generator could have written: the app's reader finds
-// nothing in it but the headings and the lists `notes.mjs` renders, or the one maintenance line.
+// nothing in it but the headings and the lists `notes.ts` renders, or the one maintenance line.
 import { describe, expect, it } from "vitest";
-import { MAINTENANCE } from "./notes.mjs";
+import { MAINTENANCE } from "./notes.ts";
 
 const FILES = import.meta.glob("/changelog/*.md", { query: "?raw", import: "default", eager: true });
 const HEADINGS = ["### Highlights", "### New", "### Changed", "### Fixed"];
@@ -3104,40 +3104,40 @@ describe("changelog/", () => {
 
 - [ ] **Step 5: Route the files to the job that now reads them**
 
-`*.md` is on the router's prose arm, which runs no job, and that arm's rule is that no test reads one. `files.test.mjs` now does, through a glob the router's census cannot see, so the route is added by hand.
+`*.md` is on the router's prose arm, which runs no job, and that arm's rule is that no test reads one. `files.test.ts` now does, through a glob the router's census cannot see, so the route is added by hand.
 
-In `scripts/ci-route.mjs`, insert directly **above** the comment that starts `// Affects no job. Nothing here is compiled, linted or tested`:
+In `scripts/ci-route.ts`, insert directly **above** the comment that starts `// Affects no job. Nothing here is compiled, linted or tested`:
 
 ```js
   // The release notes, one file a release (`changelog/0.43.0.md`). `frontend`, because
-  // `scripts/changelog/files.test.mjs` reads every one and holds it to the shape the generator
+  // `scripts/changelog/files.test.ts` reads every one and holds it to the shape the generator
   // writes — and a correction to a published note is a pull request that changes nothing else.
-  // It reads them through `import.meta.glob`, which `ci-route.test.mjs`'s census does not see,
+  // It reads them through `import.meta.glob`, which `ci-route.test.ts`'s census does not see,
   // so this arm is here by hand. **Above the prose arm**, whose `*.md` would take them.
   { match: ["changelog/*"], jobs: ["frontend"] },
 
 ```
 
-In `scripts/ci-route.test.mjs`, in the `describe("the arms", …)` table, add this row directly after the `[".release-please-manifest.json", T, F, F, F, F, F, F],` row:
+In `scripts/ci-route.test.ts`, in the `describe("the arms", …)` table, add this row directly after the `[".release-please-manifest.json", T, F, F, F, F, F, F],` row:
 
 ```js
-    // Read by `scripts/changelog/files.test.mjs`, through a glob: above the prose arm's `*.md`.
+    // Read by `scripts/changelog/files.test.ts`, through a glob: above the prose arm's `*.md`.
     ["changelog/0.43.0.md", T, F, F, F, F, F, F],
 ```
 
 In `.github/CLAUDE.md`, in the **Path routing (`changes` job)** list, add this line directly after the line that starts `  - `scripts/android-release/*` routes to`:
 
 ```markdown
-  - `changelog/*` routes to `frontend` (must sit above the prose arm's `*.md`): `scripts/changelog/files.test.mjs` reads every release's notes.
+  - `changelog/*` routes to `frontend` (must sit above the prose arm's `*.md`): `scripts/changelog/files.test.ts` reads every release's notes.
 ```
 
 - [ ] **Step 6: Run the three suites this task touched**
 
 ```bash
-pnpm exec vitest run scripts/changelog/files.test.mjs scripts/ci-route.test.mjs scripts/claude-md.test.mjs
+pnpm exec vitest run scripts/changelog/files.test.ts scripts/ci-route.test.ts scripts/claude-md.test.ts
 ```
 
-Expected: PASS, with one `files.test.mjs` case for each of the 48 files.
+Expected: PASS, with one `files.test.ts` case for each of the 48 files.
 
 ---
 
@@ -3164,7 +3164,7 @@ Expected: the files in this plan's File Structure, `package.json`, `.gitignore`,
 - [ ] **Step 3: Commit**
 
 ```bash
-git add scripts/changelog changelog .github/workflows/release.yml .github/CLAUDE.md scripts/release-rule.test.mjs scripts/ci-route.mjs scripts/ci-route.test.mjs packages/ui/lib/releaseNotes.ts packages/ui/lib/releaseNotes.test.ts packages/ui/features/settings/ReleaseNotes.tsx packages/ui/features/settings/UpdatePanel.stories.tsx packages/fake/fixtures.ts package.json .gitignore docs/reference/ci-and-releases.md docs/reference/in-app-updates.md docs/agent/WORKFLOW.md
+git add scripts/changelog changelog .github/workflows/release.yml .github/CLAUDE.md scripts/release-rule.test.ts scripts/ci-route.ts scripts/ci-route.test.ts packages/ui/lib/releaseNotes.ts packages/ui/lib/releaseNotes.test.ts packages/ui/features/settings/ReleaseNotes.tsx packages/ui/features/settings/UpdatePanel.stories.tsx packages/fake/fixtures.ts package.json .gitignore docs/reference/ci-and-releases.md docs/reference/in-app-updates.md docs/agent/WORKFLOW.md
 ```
 
 Write the message to a file with the Write tool (a heredoc is refused on this machine), then `git commit -F <that file>`:
@@ -3218,7 +3218,7 @@ The two new jobs and `publish`'s step run only on `main`. With no `OPENROUTER_AP
 ## After merging — the owner's
 
 1. `docs/reference/ci-and-releases.md`, *What only the owner can do*, step 5: the `changelog` environment and its key.
-2. Say when the 46 published release bodies may be rewritten (`node scripts/changelog/cli.mjs push --all`).
+2. Say when the 46 published release bodies may be rewritten (`node scripts/changelog/cli.ts push --all`).
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 ```
@@ -3248,7 +3248,7 @@ Expected: the run is green, and the coming version's file is among the names. Re
 - [ ] **Step 3: The release bodies.** Only when the owner says so:
 
 ```bash
-node scripts/changelog/cli.mjs push --all
+node scripts/changelog/cli.ts push --all
 ```
 
 Expected: 46 lines `vX.Y.Z: the release body is changelog/X.Y.Z.md`, two lines `a draft, left alone` (v0.5.0, v0.34.0), and the folder the old bodies were kept in. Then, in the desktop app, **Check now** in Settings → Updates and open a past release.

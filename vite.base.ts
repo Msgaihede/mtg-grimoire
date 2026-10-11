@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import { defineConfig } from "vite";
+import type { UserConfig } from "vite";
 // Ships one format of the icon fonts instead of five — worth ~5 MB of the bundle. Both the
 // rewrite and its `id` filter live in the shared UI so the test suite covers them; see
 // `packages/ui/lib/iconFont.ts` for why, and `iconFont.test.ts` for the guarantee that it
@@ -13,7 +13,7 @@ import { WATCH_IGNORED } from "./vite.watch.ts";
 // in place as the second argument of the two `new URL` calls below, it makes each of them an
 // asset reference to a page's build: Vite rewrites the path into an address on the dev server,
 // and Vitest then swaps the base for `self.location`. The suite's jsdom is a page to both, so
-// imported by `scripts/vite-base.test.mjs` the repository came out as an address under
+// imported by `scripts/vite-base.test.ts` the repository came out as an address under
 // `http://localhost:3000/` and `fileURLToPath` threw before an assertion ran (2026-10-08).
 // Vite's own `@vite-ignore` mark stops the first rewrite and not the second, which reads no
 // marks. Neither recognises a name. Loaded as a config, this file is bundled by Vite's loader,
@@ -25,12 +25,16 @@ export const REPO = fileURLToPath(new URL("./", HERE));
 /** What `@/*` means, as `tsconfig.base.json`'s `paths` and `components.json`'s aliases say. */
 export const UI = fileURLToPath(new URL("./packages/ui", HERE));
 
-// @ts-expect-error process is a nodejs global
-const host = process.env.TAURI_DEV_HOST;
+// Read Node's environment without adding its ambient globals to the webview programs.
+const host = (
+  globalThis as typeof globalThis & {
+    process: { env: Record<string, string | undefined> };
+  }
+).process.env.TAURI_DEV_HOST;
 
 // What the three apps' configs and `vitest.config.ts` are merged over. It sets no `root`: each
 // app's config names its own folder, and Vitest's is the repository.
-export default defineConfig({
+export default {
   plugins: [woff2IconFonts(), react(), tailwindcss()],
 
   resolve: {
@@ -77,7 +81,7 @@ export default defineConfig({
     //    2026-10-08, the share viewer's server still answered 200 for a shared file with this
     //    line taken out. Each app has a `package.json` of its own since 2026-10-08, and
     //    `pnpm-workspace.yaml` at the root is what Vite's default now finds.
-    //    `scripts/vite-base.test.mjs` holds the line.
+    //    `scripts/vite-base.test.ts` holds the line.
     fs: { allow: [REPO] },
   },
-});
+} satisfies UserConfig;

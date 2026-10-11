@@ -49,7 +49,7 @@ Related: the `running-the-app` skill (locks and ports), [live-ui-verification.md
   No lock; `web:dev` serves it on port 5176, and **`web:preview` serves the build under the
   hosting's own headers** — the local server to drive under the shipped policy; `web:smoke`
   serves under it too since 2026-10-04, and fails on a refusal.
-  **`web:wasm` refuses an engine module over its ceiling** (8 000 000 B; `scripts/build-wasm.mjs`
+  **`web:wasm` refuses an engine module over its ceiling** (8 000 000 B; `scripts/build-wasm.ts`
   has why, and how to raise it): the card scanner's OCR runtime linked into the engine is three
   megabytes nothing else would notice. **A full `web:wasm` empties `dist-wasm/`**, the scanner's
   files with it — run `scanner:assets --web` after it, not before.

@@ -4,7 +4,7 @@
  * **This is a reader for two known shapes, not a markdown parser**, and the narrow name is the
  * honest one. A release body is one of:
  *
- * - **the generator's** (`scripts/changelog/notes.mjs`: a release whose release PR carried its
+ * - **the generator's** (`scripts/changelog/notes.ts`: a release whose release PR carried its
  *   `changelog/<version>.md`, and an older one once its backfilled notes are pushed):
  *   `### Highlights`, `### New`,
  *   `### Changed`, `### Fixed`, bullets that open with a bold lead or a bold area and close
@@ -65,7 +65,7 @@ const COMMIT_TRAILER = /\s*\(\[[0-9a-f]{6,40}\]\(https:\/\/github\.com\/\S*?\/co
 /**
  * The pull requests a generated bullet came from: `(#860)`, `(#854, #856)`.
  *
- * `scripts/changelog/notes.mjs` closes an item with them, and GitHub links each one in a release
+ * `scripts/changelog/notes.ts` closes an item with them, and GitHub links each one in a release
  * body by itself. Here they are the commit trailer's case again — a reader of a desktop
  * changelog can do nothing with a number — so they go the same way.
  *

@@ -329,7 +329,7 @@ keeps `endFits` true and pins the panel to the corner it grows from.
 
 ## The live pass — `tauri dev`, debug build, 2026-09-03
 
-Windows 1920×1080 then 1024×768 (the narrowest the app allows). Driven over `scripts/cdp.mjs` plus
+Windows 1920×1080 then 1024×768 (the narrowest the app allows). Driven over `scripts/cdp.ts` plus
 raw CDP where that harness could not reach.
 
 1. **`F1` reaches the page in WebView2 and opens the panel.** This was the design's biggest open
@@ -378,7 +378,7 @@ raw CDP where that harness could not reach.
 
 ## Two things for whoever drives this next
 
-**`cdp.mjs` cannot press `F1` or `Ctrl+<digit>`.** Its `key` command knows twelve named keys
+**`cdp.ts` cannot press `F1` or `Ctrl+<digit>`.** Its `key` command knows twelve named keys
 (`Escape`, `Enter`, `Tab`, the four arrows, `Home`, `End`, `Delete`, `F10`, `ContextMenu`) and its
 `press` command knows two (`Enter`, `Space`). No function key but `F10`, and no digits at all. Both
 new bindings therefore need a raw `Input.dispatchKeyEvent` over the CDP session rather than the

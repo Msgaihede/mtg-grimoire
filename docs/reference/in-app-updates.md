@@ -69,7 +69,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `changelog/<version>.md` exists** (built 2026-10-11; no release has been published that way
   yet — [ci-and-releases.md](ci-and-releases.md), *Release notes are written from pull
   requests*). `release.yml`'s `publish` sets it from `changelog/<version>.md`; the releases
-  published before that get theirs from backfilled files, by `cli.mjs push --all`, when the owner
+  published before that get theirs from backfilled files, by `cli.ts push --all`, when the owner
   says. So the reader has **two known shapes**: the generator's — `### Highlights`, `### New`,
   `### Changed`, `### Fixed`,
   bullets opening with a bold lead or a bold area and closing with `(#860)` — and

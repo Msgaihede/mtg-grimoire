@@ -45,7 +45,7 @@ const NOW = Date.UTC(2026, 9, 4, 12);
 
 describe("the keys the web host writes outside its database", () => {
   it("are these three, by name", () => {
-    // Read by a later build of this app out of the same browser, and by `web-smoke.mjs`: a
+    // Read by a later build of this app out of the same browser, and by `web-smoke.ts`: a
     // renamed key is a browser asked twice, or a clearing nobody is told about.
     expect([PERSIST_KEY, HELD_KEY, CLEARED_KEY]).toEqual([
       "grimoire.storage.persist",

@@ -13,12 +13,12 @@
 ## Global Constraints
 
 - **Play only.** No APK and no bundle is uploaded to a GitHub release. `android-sign` holds `contents: read`.
-- **A signing secret never sits in a build leg.** `android-sign` runs no `npm`, no cargo, no Gradle: a checkout, an artifact download, one `bash scripts/android-release/sign-bundle.sh …`, an artifact upload. `scripts/release-rule.test.mjs` lists every command it may run, to the letter.
+- **A signing secret never sits in a build leg.** `android-sign` runs no `npm`, no cargo, no Gradle: a checkout, an artifact download, one `bash scripts/android-release/sign-bundle.sh …`, an artifact upload. `scripts/release-rule.test.ts` lists every command it may run, to the letter.
 - **The Gradle project learns no key.** `gen/android/app/build.gradle.kts` keeps `signingConfig = signingConfigs.getByName("debug")`. No `keystore.properties`, no `signingConfigs { }` block.
 - **Secret names and alias are unchanged:** `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_PASSWORD`; alias `mtg-grimoire`; pin `mobile/src-tauri/release-signer.sha256` (one line, 64 lower-case hex).
 - **arm64 only:** `--target aarch64`.
 - **Artifact names:** the build's `android-aab-debug-signed` (14 days); the signed `play-upload-bundle` (30 days), file `mtg-grimoire-<version>-android.aab`.
-- **Every third-party action stays pinned by SHA** with its tag in a comment; every checkout keeps `persist-credentials: false` (`scripts/actions-pinned.test.mjs`).
+- **Every third-party action stays pinned by SHA** with its tag in a comment; every checkout keeps `persist-credentials: false` (`scripts/actions-pinned.test.ts`).
 - **In any non-comment line of `android-sign`, never write** the word `secrets` except as `${{ secrets.NAME }}`, and never the bare words `npx npm pnpm yarn bun deno node cargo rustc gradle python pip curl wget bash sh pwsh docker gh make` outside the one listed command — the fence reads them as commands. Comment lines (`#`) are exempt.
 - **No agent makes a key, sets a secret, or changes a repository setting.** Those are the owner's (spec §7).
 - **One commit for this whole plan** (`feat(android): …`), made in the last task. No intermediate commits: release-please writes the changelog from commits.
@@ -28,7 +28,7 @@
 
 ## Deviation from the spec
 
-Spec §4 says `release.yml` runs `tauri android build --aab`. This plan runs **`--apk --aab` in both workflows**, because `release-rule.test.mjs` holds a release's build command equal to the one every pull request ran ("a command that differs is one no pull request has run"), and `ci.yml` still needs the APK for its size report and its installable artifact. The release's APK is built and left in its job; nothing uploads it.
+Spec §4 says `release.yml` runs `tauri android build --aab`. This plan runs **`--apk --aab` in both workflows**, because `release-rule.test.ts` holds a release's build command equal to the one every pull request ran ("a command that differs is one no pull request has run"), and `ci.yml` still needs the APK for its size report and its installable artifact. The release's APK is built and left in its job; nothing uploads it.
 
 ## Review Focus
 
@@ -51,8 +51,8 @@ Not covered by any test, and worth a reviewer's eye: a re-run of `android-sign` 
 | `scripts/android-sign.sh` | delete | The APK signer, which existed for the GitHub APK |
 | `.github/workflows/ci.yml` | modify | `android` job: build both, check the version, run the proof |
 | `.github/workflows/release.yml` | modify | `android`: hand on the bundle; `android-sign`: sign it, upload an artifact |
-| `scripts/ci-route.mjs` | modify | Route `scripts/android-release/*` to `frontend`, `rust`, `android` |
-| `scripts/release-rule.test.mjs`, `scripts/ci-route.test.mjs`, `mobile/host.test.ts` | modify | The fences, rewritten for the bundle |
+| `scripts/ci-route.ts` | modify | Route `scripts/android-release/*` to `frontend`, `rust`, `android` |
+| `scripts/release-rule.test.ts`, `scripts/ci-route.test.ts`, `mobile/host.test.ts` | modify | The fences, rewritten for the bundle |
 | `.gitignore` | modify | Ignore `*.aab` |
 | `.github/CLAUDE.md`, `mobile/CLAUDE.md`, `CLAUDE.md`, `docs/reference/ci-and-releases.md` | modify | Say what is now true |
 
@@ -473,7 +473,7 @@ echo "android-sign proof: passed — one signing, three refusals, the input unto
 #
 # **The properties file and not the bundle**, because a bundle's manifest is a protocol buffer
 # that only `bundletool` reads, and neither build leg has it. The file is what Gradle was handed
-# for this build; `scripts/release-rule.test.mjs` holds the Gradle project to reading it.
+# for this build; `scripts/release-rule.test.ts` holds the Gradle project to reading it.
 set -euo pipefail
 
 VERSION=${1:?usage: check-version.sh <x.y.z> [<tauri.properties>]}
@@ -574,17 +574,17 @@ and append to that block's comment the sentence: `And a signed bundle, should th
 ### Task 2: The fences, rewritten for a bundle (they fail until Task 3)
 
 **Files:**
-- Modify: `scripts/release-rule.test.mjs`
-- Modify: `scripts/ci-route.test.mjs`
+- Modify: `scripts/release-rule.test.ts`
+- Modify: `scripts/ci-route.test.ts`
 - Modify: `mobile/host.test.ts`
 
 **Interfaces:**
 - Consumes: the three script paths from Task 1.
 - Produces: the exact strings Task 3's workflows must contain.
 
-- [ ] **Step 1: `scripts/release-rule.test.mjs` — imports and the secrets table**
+- [ ] **Step 1: `scripts/release-rule.test.ts` — imports and the secrets table**
 
-After `import syncPull from "./web-sync-pull.mjs?raw";` add:
+After `import syncPull from "./web-sync-pull.ts?raw";` add:
 
 ```js
 import signProof from "./android-release/proof.sh?raw";
@@ -602,7 +602,7 @@ Replace the comment above `SIGNER_PIN`:
 /** The committed fingerprint of the upload certificate every release's bundle is signed with. */
 ```
 
-- [ ] **Step 2: `scripts/release-rule.test.mjs` — what `android-sign` may run**
+- [ ] **Step 2: `scripts/release-rule.test.ts` — what `android-sign` may run**
 
 In the `it.each([...])("%s builds nothing, and runs only what is listed here", …)` table, replace the whole `android-sign` entry with:
 
@@ -614,7 +614,7 @@ In the `it.each([...])("%s builds nothing, and runs only what is listed here", �
     ],
 ```
 
-- [ ] **Step 3: `scripts/release-rule.test.mjs` — the pin test's name**
+- [ ] **Step 3: `scripts/release-rule.test.ts` — the pin test's name**
 
 Rename `it("attaches no APK without the committed fingerprint, and holds the key to it", …)` to:
 
@@ -624,7 +624,7 @@ Rename `it("attaches no APK without the committed fingerprint, and holds the key
 
 Its body is unchanged.
 
-- [ ] **Step 4: `scripts/release-rule.test.mjs` — replace the "attaches the APK" test**
+- [ ] **Step 4: `scripts/release-rule.test.ts` — replace the "attaches the APK" test**
 
 Replace the whole `it("attaches the APK the signing script wrote, under the release's name", …)` test with:
 
@@ -658,7 +658,7 @@ Replace the whole `it("attaches the APK the signing script wrote, under the rele
   });
 ```
 
-- [ ] **Step 5: `scripts/release-rule.test.mjs` — the build commands and the proof**
+- [ ] **Step 5: `scripts/release-rule.test.ts` — the build commands and the proof**
 
 In `it("builds the APK and the web app as `ci.yml` does", …)`, rename it and replace its first list and its last assertion:
 
@@ -686,7 +686,7 @@ In `it("builds the APK and the web app as `ci.yml` does", …)`, rename it and r
   });
 ```
 
-- [ ] **Step 6: `scripts/release-rule.test.mjs` — who names an Android key**
+- [ ] **Step 6: `scripts/release-rule.test.ts` — who names an Android key**
 
 In `it("names neither of the other two Workers, and no Cloudflare secret anywhere else", …)`, `ci.yml` no longer names the Android variables (the proof script mints its own). Replace from `const cloudflare =` to the end of the test:
 
@@ -701,7 +701,7 @@ In `it("names neither of the other two Workers, and no Cloudflare secret anywher
   });
 ```
 
-- [ ] **Step 7: `scripts/ci-route.test.mjs`**
+- [ ] **Step 7: `scripts/ci-route.test.ts`**
 
 In the routing table, replace the row `["scripts/android-sign.sh", T, T, F, F, F, T, F],` and the comment above it with:
 
@@ -760,16 +760,16 @@ The assertions under both comments are unchanged.
 
 - [ ] **Step 9: Run the three fences and see them fail on the workflows**
 
-Run: `npx vitest run scripts/release-rule.test.mjs scripts/ci-route.test.mjs mobile/host.test.ts`
+Run: `npx vitest run scripts/release-rule.test.ts scripts/ci-route.test.ts mobile/host.test.ts`
 
-Expected: FAIL. `host.test.ts` passes (its script exists). `release-rule.test.mjs` fails in the `android-sign` tests (the workflow still names `android-sign.sh` and `gh release upload`) and `ci-route.test.mjs` fails on `scripts/android-release/*` having no arm. If a test fails for another reason, stop and read it before going on.
+Expected: FAIL. `host.test.ts` passes (its script exists). `release-rule.test.ts` fails in the `android-sign` tests (the workflow still names `android-sign.sh` and `gh release upload`) and `ci-route.test.ts` fails on `scripts/android-release/*` having no arm. If a test fails for another reason, stop and read it before going on.
 
 ---
 
 ### Task 3: The workflows and the router
 
 **Files:**
-- Modify: `scripts/ci-route.mjs` (the `scripts/android-sign.sh` arm)
+- Modify: `scripts/ci-route.ts` (the `scripts/android-sign.sh` arm)
 - Modify: `.github/workflows/ci.yml` (job `android`: from `- name: Build the APK` to its `upload-artifact`; and the job's header comment)
 - Modify: `.github/workflows/release.yml` (job `android` from `- name: Build the APK` to its end; job `android-sign` whole)
 
@@ -777,7 +777,7 @@ Expected: FAIL. `host.test.ts` passes (its script exists). `release-rule.test.mj
 - Consumes: Task 1's three commands; Task 2's exact strings.
 - Produces: artifact `play-upload-bundle` holding `mtg-grimoire-<version>-android.aab`.
 
-- [ ] **Step 1: `scripts/ci-route.mjs`**
+- [ ] **Step 1: `scripts/ci-route.ts`**
 
 Replace the arm `{ match: ["scripts/android-sign.sh"], jobs: ["frontend", "rust", "android"] },` and the comment above it with:
 
@@ -786,7 +786,7 @@ Replace the arm `{ match: ["scripts/android-sign.sh"], jobs: ["frontend", "rust"
   // `check-version.sh`). `release.yml`'s `android-sign` job signs a release's bundle with the
   // upload key, and **`android` runs the same script here first, on throwaway keys** — the only
   // run it gets before a release. `rust` because every arm that sets `android` sets `rust`;
-  // `frontend` because `mobile/host.test.ts` and `scripts/release-rule.test.mjs` read two of
+  // `frontend` because `mobile/host.test.ts` and `scripts/release-rule.test.ts` read two of
   // them as text. Above `scripts/*`, which would lint them and run nothing.
   { match: ["scripts/android-release/*"], jobs: ["frontend", "rust", "android"] },
 ```
@@ -860,7 +860,7 @@ Replace everything from the comment above `- name: Build the APK` down to and in
           if-no-files-found: error
 ```
 
-If the first run answers that `--apk` and `--aab` cannot be given together, remove both flags from that one line **in both workflows and in `release-rule.test.mjs`** — with neither, the CLI builds both — and say so in the pull request.
+If the first run answers that `--apk` and `--aab` cannot be given together, remove both flags from that one line **in both workflows and in `release-rule.test.ts`** — with neither, the CLI builds both — and say so in the pull request.
 
 In the job's header comment (the block that begins `# **The light app's Android host, built into an APK**`), replace the paragraph that begins `# **A release build, signed with the runner's debug key**` with:
 
@@ -938,7 +938,7 @@ Replace the whole job, comment included, with:
   # job above built, and re-signs it with the JDK's own `jarsigner`
   # (`scripts/android-release/sign-bundle.sh`, which `ci.yml`'s `android` job proves on
   # throwaway keys in every pull request that can have changed the bundle).
-  # `scripts/release-rule.test.mjs` holds the rule.
+  # `scripts/release-rule.test.ts` holds the rule.
   #
   # **The signed bundle goes to Google Play, by the owner's hand, and nowhere else** (decided
   # 2026-10-07: Play is the only place the Android app is published). So this job attaches
@@ -1083,7 +1083,7 @@ In `release.yml`'s file-header comment, replace the sentence `The two jobs that 
 
 - [ ] **Step 5: Run the three fences and see them pass**
 
-Run: `npx vitest run scripts/release-rule.test.mjs scripts/ci-route.test.mjs mobile/host.test.ts scripts/actions-pinned.test.mjs scripts/toolchain.test.mjs scripts/workflow-scripts.test.mjs`
+Run: `npx vitest run scripts/release-rule.test.ts scripts/ci-route.test.ts mobile/host.test.ts scripts/actions-pinned.test.ts scripts/toolchain.test.ts scripts/workflow-scripts.test.ts`
 
 Expected: PASS, every file. The usual first failure is `runs only what is listed here` naming an extra line: a non-comment line in `android-sign` that contains one of the words in Global Constraints. Reword the line; do not add it to the list.
 
@@ -1097,7 +1097,7 @@ Expected: PASS, every file. The usual first failure is `runs only what is listed
 - Modify: `CLAUDE.md` (line 5)
 - Modify: `docs/reference/ci-and-releases.md` (the release-rule table and bullets; *What only the owner can do*; the artifacts bullet)
 
-`.github/CLAUDE.md` and `mobile/CLAUDE.md` are under a 200-line budget that CI enforces (`node scripts/check-claude-md.mjs`). These edits replace lines; they add none.
+`.github/CLAUDE.md` and `mobile/CLAUDE.md` are under a 200-line budget that CI enforces (`node scripts/check-claude-md.ts`). These edits replace lines; they add none.
 
 - [ ] **Step 1: `.github/CLAUDE.md`**
 
@@ -1223,7 +1223,7 @@ In the bullet beginning `- Artifacts per release:`, replace `— and, once the s
 
 - [ ] **Step 7: Check the budgets**
 
-Run: `node scripts/check-claude-md.mjs`
+Run: `node scripts/check-claude-md.ts`
 
 Expected: exit 0 — every `CLAUDE.md` at or under 200 lines.
 
@@ -1246,7 +1246,7 @@ Expected: exit 0. Never start a second `verify` while one runs — concurrent ru
 - [ ] **Step 3: Commit**
 
 ```bash
-git add -A scripts/android-release scripts/android-sign.sh scripts/ci-route.mjs scripts/ci-route.test.mjs scripts/release-rule.test.mjs mobile/host.test.ts .github/workflows/ci.yml .github/workflows/release.yml .gitignore .github/CLAUDE.md mobile/CLAUDE.md CLAUDE.md docs/reference/ci-and-releases.md docs/superpowers/specs/2026-10-07-google-play-release-design.md docs/superpowers/plans/2026-10-07-google-play-a-bundle-pipeline.md
+git add -A scripts/android-release scripts/android-sign.sh scripts/ci-route.ts scripts/ci-route.test.ts scripts/release-rule.test.ts mobile/host.test.ts .github/workflows/ci.yml .github/workflows/release.yml .gitignore .github/CLAUDE.md mobile/CLAUDE.md CLAUDE.md docs/reference/ci-and-releases.md docs/superpowers/specs/2026-10-07-google-play-release-design.md docs/superpowers/plans/2026-10-07-google-play-a-bundle-pipeline.md
 git commit -m "$(cat <<'EOF'
 feat(android): build and sign an app bundle for Google Play
 
@@ -1285,7 +1285,7 @@ fixed or knowingly left. Where the two disagree, the code and this list are righ
 - merge order is A, then B, then C; B and C merge main and resolve the shared files (mobile/host.test.ts, mobile/CLAUDE.md, docs/reference/light-app.md) when their turn comes — costs a small manual merge.
 - Tasks 2 and 3 are one dispatch and one review — Task 2 alone leaves the fences red by design, so it is not a reviewable deliverable — costs one larger diff to review.
 - **Task 1.** both Important findings contradict the plan's verbatim script text and are right — IN==OUT refusal deleted its input; the proof's "nothing left behind" assertions could not fail — the scripts are fixed and the plan's copy of them is superseded by the code — costs nothing if wrong beyond a fix round.
-- the review's Minors 1-4 (stale comments in release.yml at ~548/~692/~706, build.gradle.kts:45, ci-route.test.mjs's comment; the bundle row breaking the CI summary table) are folded into Task 4's dispatch — Task 4 is the "say what is now true" task and they are comments this change made untrue — costs a wider Task 4 diff.
+- the review's Minors 1-4 (stale comments in release.yml at ~548/~692/~706, build.gradle.kts:45, ci-route.test.ts's comment; the bundle row breaking the CI summary table) are folded into Task 4's dispatch — Task 4 is the "say what is now true" task and they are comments this change made untrue — costs a wider Task 4 diff.
 - **Task 4.** "three refusals" was true when the plan was written and stopped being true at Task 1's fix round (the IN==OUT case) — the documents follow the code, four — costs nothing.
 - **Task 4.** the five Minors (publish comment vs no-key case; two "APK" in live prose; "three things changed" over four items; the summary table's heading) join fix round 1 — each is an untrue word in a file this task owns — costs a slightly wider re-review.
 - one fix wave takes all four Importants and the reviewer's Minors that are one-line truths or free hardening (stale doc sentences; the re-run note; "distributed through" not "published on"; "one command"; "no other job"; the runbook's zip and keytool-name notes; ::error:: in die; check-version's comment; java/jarsigner/keytool in the fence's word list; retention fenced; proof's exportcert || fail; unset the base64 after decoding; claim 4) — costs a wider fix diff, re-reviewed once.

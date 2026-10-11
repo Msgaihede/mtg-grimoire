@@ -6,7 +6,7 @@
 
 **Architecture:** Nothing in this plan changes a layout. Tasks 1–3 add three things the app does not have today — a shared statement of the widths each target promises, a shell that is as tall as the *visible* viewport rather than the large one, and a `coarse:` variant beside the 145 `motion-reduce:` variants already in the tree. Task 4 measures what breaks. Tasks 5–8 build option stories on the **real** components at a phone width, behind Storybook, and are deleted in Task 9 once the decision is taken. The durable output of 5–9 is a decision record, not a diff.
 
-**Tech Stack:** React 19, TypeScript 6.0.x, Tailwind v4 (`@theme`/`@custom-variant` in `src/index.css`), Vitest, Storybook 10.5.7, `scripts/cdp.mjs`.
+**Tech Stack:** React 19, TypeScript 6.0.x, Tailwind v4 (`@theme`/`@custom-variant` in `src/index.css`), Vitest, Storybook 10.5.7, `scripts/cdp.ts`.
 
 **Spec:** [`docs/superpowers/specs/2026-08-27-cross-platform-design.md`](../specs/2026-08-27-cross-platform-design.md) §6.1 and §6.4, and [the parity matrix](../specs/2026-08-27-cross-platform-parity-matrix.md) §7.
 
@@ -80,8 +80,8 @@ Measured 2026-08-28 in this worktree at `8c924bb`, by reading the source. **Ever
 
 9a runs in Phase 5, after the web and Android targets exist. It does not depend on them, and every measurement below can be taken today.
 
-- **`scripts/cdp.mjs size <w> <h>`** drives the shipped WebView2 at a phone width. **Two traps, both in the script's own comments:** it hardcodes `mobile: false`, so it emulates a narrow *desktop* and never a mobile viewport's URL-bar behaviour or its pointer; and WebView2 **ignores `clearDeviceMetricsOverride`**, so the only way back is an explicit `size 1280 800`.
-- **`scripts/cdp.mjs media <feature> <value> "<expression>"`** overrides a media feature — but the override **belongs to the socket and every invocation is its own socket**, so the expression must ride in the same command. Chromium's emulated-media allowlist is not `matchMedia`'s: `prefers-reduced-motion` is on it and **`pointer` is very likely not**. Task 3 finds out rather than assuming.
+- **`scripts/cdp.ts size <w> <h>`** drives the shipped WebView2 at a phone width. **Two traps, both in the script's own comments:** it hardcodes `mobile: false`, so it emulates a narrow *desktop* and never a mobile viewport's URL-bar behaviour or its pointer; and WebView2 **ignores `clearDeviceMetricsOverride`**, so the only way back is an explicit `size 1280 800`.
+- **`scripts/cdp.ts media <feature> <value> "<expression>"`** overrides a media feature — but the override **belongs to the socket and every invocation is its own socket**, so the expression must ride in the same command. Chromium's emulated-media allowlist is not `matchMedia`'s: `prefers-reduced-motion` is on it and **`pointer` is very likely not**. Task 3 finds out rather than assuming.
 - **A real phone against Storybook.** `adb reverse tcp:6006 tcp:6006` makes the dev machine's Storybook `localhost:6006` on the device — a secure context, no HTTPS setup, `adb` only. Spec §9 proves this shape for this repo on a OnePlus 12. **This is the only instrument where `pointer: coarse`, the safe area and the URL bar are real rather than emulated**, and it needs nothing from Phase 2 because Storybook runs entirely on the fake.
 
 ---
@@ -357,10 +357,10 @@ grep -o -- "--safe-t:[^;]*" dist/assets/*.css
 ```
 Expected: a rule for each. **If `.h-dvh` is absent the utility did not survive the build** — stop and report rather than shipping a class that does nothing.
 
-Then take the desktop reading. Follow the `running-the-app` skill for the lock, start the app, and in **one** `cdp.mjs eval` (a rect and a viewport width taken minutes apart can be at two different sizes):
+Then take the desktop reading. Follow the `running-the-app` skill for the lock, start the app, and in **one** `cdp.ts eval` (a rect and a viewport width taken minutes apart can be at two different sizes):
 
 ```
-node scripts/cdp.mjs eval "(() => { const r = document.querySelector('#root > div').getBoundingClientRect(); return { h: r.height, inner: window.innerHeight, client: document.documentElement.clientHeight }; })()"
+node scripts/cdp.ts eval "(() => { const r = document.querySelector('#root > div').getBoundingClientRect(); return { h: r.height, inner: window.innerHeight, client: document.documentElement.clientHeight }; })()"
 ```
 Expected: the shell's height equals `clientHeight`, unchanged from before this task.
 
@@ -707,7 +707,7 @@ const phone = (Story: () => ReactElement) => (
 - **D2 — a bottom sheet.** The search column becomes a sheet from the bottom edge at ~40% height with the deck visible above it; a card is dragged up out of the sheet into a pile. *The only option that keeps cross-column drag on a phone*, and the only one that spends what 3a and 3b bought. Costs a surface type this app does not have — and `src/CLAUDE.md`'s rule that a consulted surface is a `Dialog` and a worked-out-of surface earns a place in the layout has to be **extended** here rather than broken: a sheet is the second kind, on a window with no width to give it.
 - **D3 — `Deck | Find`, one at a time.** A segmented control at the top of the editor; each pane takes the whole width. No cross-surface drag at all. *The simplest and the most predictable*, and it gives up the most.
 
-**Measure, do not assume, before writing the round up:** drive the shipped editor at `cdp.mjs size 390 844` with a multi-category deck and read the three views' actual widths and any horizontal overflow. `size` hardcodes `mobile: false` and **cannot be cleared in WebView2** — put the window back with an explicit `size 1280 800`. An overhang in the editor becomes a horizontal scrollbar across the whole builder, which is the one thing the desktop floor forbids, and it arrives with nothing on screen naming the culprit.
+**Measure, do not assume, before writing the round up:** drive the shipped editor at `cdp.ts size 390 844` with a multi-category deck and read the three views' actual widths and any horizontal overflow. `size` hardcodes `mobile: false` and **cannot be cleared in WebView2** — put the window back with an explicit `size 1280 800`. An overhang in the editor becomes a horizontal scrollbar across the whole builder, which is the one thing the desktop floor forbids, and it arrives with nothing on screen naming the culprit.
 
 ---
 

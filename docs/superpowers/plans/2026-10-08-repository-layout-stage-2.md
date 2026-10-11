@@ -26,8 +26,8 @@ Every mechanism below was run in a throwaway checkout at `59d735fa` (2026-10-08)
 | Can a Vite config import another package by name? | It loads, until the file has anything Node cannot strip: an `enum` behind a package name failed the config's load, and the same file by relative path built. Vite bundles what a config reaches by path and leaves a package name to Node. |
 | Can the hosting Worker be bundled with nothing installed but wrangler? | Not by package name alone (`Could not resolve "@grimoire/ui/lib/core/web/assets"`). A wrangler `alias` for the exact module bundles it; an alias for the package folder does not. |
 | Is the pinned pnpm's hash right? | `pnpm@11.5.0+sha512.dbfcc4f8…a8eb1` installs from a cold Corepack cache; one digit changed is refused. |
-| Does the suite pass on the finished shape? | Yes: 14,628 tests in three shards, none failed, with one file not loading — `release-rule.test.mjs`, which imported the lockfile that moved. With Task 7's code the `root` project then passed 373 of 373, and went red each of the three ways Task 7 Step 6 breaks it. |
-| Do the fences this plan adds refuse what they should? | `scripts/workspace.test.mjs` failed on an undeclared import, on `@/` outside the UI and on a path into another package, and passed restored. Both import-graph fences failed on a package-name weld. The Worker's test failed with the alias line removed. ESLint flagged the same three imports and nothing in the clean tree. |
+| Does the suite pass on the finished shape? | Yes: 14,628 tests in three shards, none failed, with one file not loading — `release-rule.test.ts`, which imported the lockfile that moved. With Task 7's code the `root` project then passed 373 of 373, and went red each of the three ways Task 7 Step 6 breaks it. |
+| Do the fences this plan adds refuse what they should? | `scripts/workspace.test.ts` failed on an undeclared import, on `@/` outside the UI and on a path into another package, and passed restored. Both import-graph fences failed on a package-name weld. The Worker's test failed with the alias line removed. ESLint flagged the same three imports and nothing in the clean tree. |
 | What does `tauri-action` v1.0.0 run with a pnpm lockfile? | `pnpm tauri build …` when the root manifest has `@tauri-apps/cli` and a `pnpm-lock.yaml` is found (read from its `src/runner.ts` at the pinned commit). With no CLI in the root manifest it installs a global one with npm. |
 
 **Known differences, to be found again in Task 9 and not "fixed":**
@@ -40,7 +40,7 @@ Every mechanism below was run in a throwaway checkout at `59d735fa` (2026-10-08)
 Task 8 writes these into the spec's §6 as a dated amendment, the way stage 1 did.
 
 1. **`@grimoire/desktop` also depends on `@grimoire/fake`**, for its two test files. pnpm's layout found it.
-2. **`@grimoire/light` does not depend on `@grimoire/app-worker`.** Its one reach into that package is from `vite.config.ts`, and rule 4 is wider than written: **a file Node loads itself imports by relative path** — a Vite, Vitest or Storybook config and everything under `scripts/`. The measurement is in the table above; and `scripts/web-deploy-probe.mjs` runs in a job that installs nothing.
+2. **`@grimoire/light` does not depend on `@grimoire/app-worker`.** Its one reach into that package is from `vite.config.ts`, and rule 4 is wider than written: **a file Node loads itself imports by relative path** — a Vite, Vitest or Storybook config and everything under `scripts/`. The measurement is in the table above; and `scripts/web-deploy-probe.ts` runs in a job that installs nothing.
 3. **The three Workers keep the `tsconfig.json` they have** and do not extend `tsconfig.base.json`: their options differ on purpose.
 4. **The hosting Worker's one cross-package import gets a wrangler `alias`**, because `web-deploy` bundles it with no workspace links.
 5. **A stylesheet goes on naming another stylesheet by path.** `@import` and `@source` lines are not rewritten: Tailwind resolves a `@source` against the file it found it in, and that file reached through a `node_modules` link was not tried.
@@ -51,7 +51,7 @@ Task 8 writes these into the spec's §6 as a dated amendment, the way stage 1 di
 
 - **Behaviour-preserving.** No schema rung, no user-visible change, no dependency added, removed or bumped. `prosemirror-view` is *declared* where it is imported, at the range `@tiptap/pm` already brings it in by.
 - **Nothing is deployed.** No `wrangler deploy` without `--dry-run`. The release pull request is not merged, and auto-merge is not enabled.
-- **The two jobs that hold a secret get no pnpm.** `android-sign` is not edited. `web-deploy` changes in two lines, both listed in Task 7. `scripts/release-rule.test.mjs` is changed only as Task 7 lists; an assertion there is never loosened to make something pass.
+- **The two jobs that hold a secret get no pnpm.** `android-sign` is not edited. `web-deploy` changes in two lines, both listed in Task 7. `scripts/release-rule.test.ts` is changed only as Task 7 lists; an assertion there is never loosened to make something pass.
 - **One commit lands.** Tasks end in a `wip(workspace):` checkpoint commit on this branch; Task 10 squashes them into one `chore:` commit before anything is pushed.
 - **All work happens in this worktree**, `D:\Code\mtg-grimoire\.claude\worktrees\repo-structure-cleanup-66d570`, on `claude/pnpm-workspace`. No subagent takes a worktree of its own: an isolated one starts from `main`.
 - **A subagent never runs `git add`, `git commit` or `git stash`.** The index is shared; the controller commits.
@@ -62,18 +62,18 @@ Task 8 writes these into the spec's §6 as a dated amendment, the way stage 1 di
 - **Never walk the tree by folder once pnpm has installed.** `packages/ui/node_modules/@grimoire/fake` leads to `packages/fake/node_modules/@grimoire/ui` and back; `Get-ChildItem -Recurse` does not return. List files with `git ls-files`.
 - **`git ls-files` and `git grep` do not see a file that is not yet tracked.** A file a task creates is checked by its own path.
 - **Bash's `/tmp` is not Node's.** A file a shell writes for Node to read goes in `<scratch>`.
-- **Not touched:** `docs/superpowers/**` except the spec's amendment and this plan; `CHANGELOG.md`; `Cargo.lock`; the *contents* of the deploy tool's `package-lock.json` (it moves, byte for byte); `.design-sync/**` except its two tsconfig files; `infrastructure/*/migrations/**` and `schema.sql`; `scripts/core-step-*.mjs`.
+- **Not touched:** `docs/superpowers/**` except the spec's amendment and this plan; `CHANGELOG.md`; `Cargo.lock`; the *contents* of the deploy tool's `package-lock.json` (it moves, byte for byte); `.design-sync/**` except its two tsconfig files; `infrastructure/*/migrations/**` and `schema.sql`; `scripts/core-step-*.ts`.
 - **How a command is spelled from here on:** `pnpm <name>` at the root, with arguments after it and no `--`; `pnpm -w run <name>` where the working folder is an app's (the Tauri configs, Gradle); `pnpm exec <binary>` for a tool's own CLI; `pnpm install --frozen-lockfile` in CI.
-- **`<scratch>`** is a folder outside the repository. In the planning session it is `C:\Users\Markus\AppData\Local\Temp\claude\D--Code-mtg-grimoire--claude-worktrees-repo-structure-cleanup-66d570\ba6ad799-535b-4b63-a3d2-9bb84e0e1273\scratchpad`, which holds `workspace-manifests.mjs`, `workspace-imports.mjs`, `workspace-commands.mjs`, `lock-set.mjs`, `layout-builds.mjs` and `workspace.test.mjs`. If it is gone, write the first four and the last from Appendices A to E, and `layout-builds.mjs` from stage 1's plan, Task 0 Step 2.
-- **`CLAUDE.md` files stay under 200 lines** (`node scripts/check-claude-md.mjs`).
+- **`<scratch>`** is a folder outside the repository. In the planning session it is `C:\Users\Markus\AppData\Local\Temp\claude\D--Code-mtg-grimoire--claude-worktrees-repo-structure-cleanup-66d570\ba6ad799-535b-4b63-a3d2-9bb84e0e1273\scratchpad`, which holds `workspace-manifests.mjs`, `workspace-imports.mjs`, `workspace-commands.mjs`, `lock-set.mjs`, `layout-builds.mjs` and `workspace.test.ts`. If it is gone, write the first four and the last from Appendices A to E, and `layout-builds.mjs` from stage 1's plan, Task 0 Step 2.
+- **`CLAUDE.md` files stay under 200 lines** (`node scripts/check-claude-md.ts`).
 
 ## Review Focus
 
-1. **A flag after `--` that the script never sees as a flag.** `pnpm test:run -- --shard=1/3` hands Vitest `--shard=1/3` as a file filter: each of CI's three shards would run nothing or everything, and `pnpm scanner:assets -- --web` would fetch the desktop's files. Pinned by a new assertion in `scripts/workflow-scripts.test.mjs` that no workflow, script or Tauri config follows a script's name with ` -- ` (Task 7).
+1. **A flag after `--` that the script never sees as a flag.** `pnpm test:run -- --shard=1/3` hands Vitest `--shard=1/3` as a file filter: each of CI's three shards would run nothing or everything, and `pnpm scanner:assets -- --web` would fetch the desktop's files. Pinned by a new assertion in `scripts/workflow-scripts.test.ts` that no workflow, script or Tauri config follows a script's name with ` -- ` (Task 7).
 2. **An import-graph fence that stops at the package name.** `apps/light/phone/fence.test.ts` and `apps/share/SharePage.test.tsx` follow `@/` and relative specifiers; after the rewrite the apps say `@grimoire/ui/…`, which both read as a package to skip. Both have floors that turn that red, which is how it is caught; each is taught the name and then broken once by a package-name import to see it refuse (Task 2).
 3. **The fake that no longer answers for the images module.** Both of the fake's hosts alias `@/lib/images` to the fake's file. Three files outside the shared UI import that module and will say `@grimoire/ui/lib/images`, which the alias does not match: the light app over the fake, and every story, would load the real module beside the fake one. Pinned by a fifth alias rule and an assertion on it in `packages/fake/images.test.ts` (Task 2), and by the Storybook comparison (Task 9).
 4. **A release whose web deploy cannot bundle.** `web-deploy` checks out, installs wrangler and nothing else, and bundles `infrastructure/app-worker`. A package name there resolves only where pnpm has linked it. Every pull request's CI has the links; the release does not. Pinned by `hosting.test.ts` holding the import to the alias (Task 6) and by a dry-run bundle with the links taken away (Task 9).
-5. **An import that resolves everywhere and is declared nowhere it should be.** Node looks in every folder above a file, so a name the root declares resolves from any package, in CI too, and a nested worktree reaches the main checkout's tree. pnpm's strictness never fires. Pinned by `scripts/workspace.test.mjs` (Task 4), broken once each way.
+5. **An import that resolves everywhere and is declared nowhere it should be.** Node looks in every folder above a file, so a name the root declares resolves from any package, in CI too, and a nested worktree reaches the main checkout's tree. pnpm's strictness never fires. Pinned by `scripts/workspace.test.ts` (Task 4), broken once each way.
 
 ## File structure
 
@@ -85,7 +85,7 @@ Task 8 writes these into the spec's §6 as a dated amendment, the way stage 1 di
 | `tsconfig.base.json` | The webview programs' compiler options; the root `tsconfig.json`, renamed and without its `include`. |
 | `packages/ui/tsconfig.json`, `packages/fake/tsconfig.json`, `apps/desktop/tsconfig.json`, `apps/light/tsconfig.json`, `apps/share/tsconfig.json` | One program per webview package. |
 | `apps/light/phone/wallItem.ts` | The fixture builder that made the fake depend on an app. |
-| `scripts/workspace.test.mjs` | The import rules and "a package declares what it imports". |
+| `scripts/workspace.test.ts` | The import rules and "a package declares what it imports". |
 
 | Moved | To |
 | --- | --- |
@@ -305,7 +305,7 @@ Add three comment blocks to it by hand, above `packages:`, `catalog:` and `allow
 # The workspace: the shared UI and the fake, the three apps, and the three Workers.
 # `infrastructure/wrangler` is not here and must never be: it is the deploy tool, npm's, with a
 # lockfile of its own, and a glob such as `infrastructure/*` would take it in
-# (`scripts/release-rule.test.mjs` holds this list).
+# (`scripts/release-rule.test.ts` holds this list).
 ```
 
 ```yaml
@@ -717,7 +717,7 @@ In `tsconfig.base.json`:
 
 ```jsonc
     /* `@/` is the shared UI's own alias, and only a file inside `packages/ui` may write it
-       (`scripts/workspace.test.mjs`). It is declared here, not in that package's config, because
+       (`scripts/workspace.test.ts`). It is declared here, not in that package's config, because
        every program that reaches a UI module compiles that module's source, `@/` imports and
        all. No `baseUrl`: deprecated in TS 6, and `paths` resolve from the file that declares
        them — this one, whichever config extends it. */
@@ -900,7 +900,7 @@ Replace the `include: [ … ],` property with `projects: [ … ],`. **Every comm
       //
       // One project per package, named for it since 2026-10-08, so `vitest run --project light`
       // is that package's tests. The suite is still one program: one root, one environment, one
-      // setup file. `scripts/ci-route.test.mjs` mirrors these globs.
+      // setup file. `scripts/ci-route.test.ts` mirrors these globs.
       projects: [
         // The shared UI. No `*.stories.tsx` is ever collected as a **test file** — …
         project("ui", ["packages/ui/**/*.test.{ts,tsx}"]),
@@ -922,8 +922,8 @@ Replace the `include: [ … ],` property with `projects: [ … ],`. **Every comm
         //
         // The workbench's own folder. Nothing in it is a test since the fake moved out, …
         //
-        // CI's own router, `scripts/ci-route.mjs`, and the fences beside it: …
-        project("root", [".storybook/**/*.test.ts", "scripts/**/*.test.mjs"]),
+        // CI's own router, `scripts/ci-route.ts`, and the fences beside it: …
+        project("root", [".storybook/**/*.test.ts", "scripts/**/*.test.ts"]),
       ],
 ```
 
@@ -967,23 +967,23 @@ git commit -m "wip(workspace): a TypeScript program and a Vitest project per pac
 ### Task 4: The fences for the rules
 
 **Files:**
-- Create: `scripts/workspace.test.mjs`
-- Modify: `eslint.config.js`, `scripts/vite-base.test.mjs`, `packages/ui/lib/dndManager.test.ts`
+- Create: `scripts/workspace.test.ts`
+- Modify: `eslint.config.js`, `scripts/vite-base.test.ts`, `packages/ui/lib/dndManager.test.ts`
 
 **Interfaces:**
 - Consumes: the eight manifests (Task 1), the rewritten imports (Task 2).
-- Produces: nothing another task calls. `scripts/workspace.test.mjs` is the test Review Focus 5 names.
+- Produces: nothing another task calls. `scripts/workspace.test.ts` is the test Review Focus 5 names.
 
 - [ ] **Step 1: Write the failing test**
 
-Copy `<scratch>/workspace.test.mjs` to `scripts/workspace.test.mjs` (Appendix E is its source). Then, to see it fail before it passes, take one declaration away:
+Copy `<scratch>/workspace.test.ts` to `scripts/workspace.test.ts` (Appendix E is its source). Then, to see it fail before it passes, take one declaration away:
 
 ```powershell
 Set-Location "D:\Code\mtg-grimoire\.claude\worktrees\repo-structure-cleanup-66d570"
-Copy-Item "<scratch>\workspace.test.mjs" scripts\workspace.test.mjs
+Copy-Item "<scratch>\workspace.test.ts" scripts\workspace.test.ts
 $ui = Get-Content packages/ui/package.json -Raw
 [IO.File]::WriteAllText("$PWD\packages\ui\package.json", ($ui -replace '\s*"prosemirror-view": "[^"]+",', ''), [Text.UTF8Encoding]::new($false))
-pnpm exec vitest run scripts/workspace.test.mjs
+pnpm exec vitest run scripts/workspace.test.ts
 ```
 
 Expected: FAIL, `is declared in that package's own manifest`, with `/packages/ui/features/decks/NoteEditor.tsx → prosemirror-view` — the import npm's hoisting carried for months.
@@ -993,7 +993,7 @@ Expected: FAIL, `is declared in that package's own manifest`, with `/packages/ui
 ```powershell
 [IO.File]::WriteAllText("$PWD\packages\ui\package.json", $ui, [Text.UTF8Encoding]::new($false))
 git diff --stat -- packages/ui/package.json
-pnpm exec vitest run scripts/workspace.test.mjs
+pnpm exec vitest run scripts/workspace.test.ts
 ```
 
 Expected: no diff; `Tests  8 passed (8)`. It takes about 25 s, nearly all of it reading the tree.
@@ -1003,7 +1003,7 @@ Expected: no diff; `Tests  8 passed (8)`. It takes about 25 s, nearly all of it 
 ```powershell
 $app = Get-Content apps/light/LightApp.tsx -Raw
 [IO.File]::WriteAllText("$PWD\apps\light\LightApp.tsx", "import { cn as a } from ""@/lib/utils"";`nimport { cn as b } from ""../../packages/ui/lib/utils"";`nexport const keep = [a, b];`n$app", [Text.UTF8Encoding]::new($false))
-pnpm exec vitest run scripts/workspace.test.mjs
+pnpm exec vitest run scripts/workspace.test.ts
 ```
 
 Expected: two failures, `/apps/light/LightApp.tsx → @/lib/utils` under "uses `@/` only inside the shared UI" and `/apps/light/LightApp.tsx → ../../packages/ui/lib/utils` under "names another package's module by the package, not by a path". Leave the file broken for Step 5.
@@ -1014,7 +1014,7 @@ In `eslint.config.js`, add three blocks as the last entries of the `tseslint.con
 
 ```js
   // The workspace's import rules, where an editor shows them (2026-10-08). The fence is
-  // `scripts/workspace.test.mjs`: it also reads `vi.mock`, `import()` and a stylesheet, and it
+  // `scripts/workspace.test.ts`: it also reads `vi.mock`, `import()` and a stylesheet, and it
   // holds the rule this cannot — that a package declares what it imports.
   //
   // The patterns are written without a backslash on purpose: `[.]` is a dot in a regular
@@ -1076,14 +1076,14 @@ pnpm exec eslint apps/light/LightApp.tsx
 [IO.File]::WriteAllText("$PWD\apps\light\LightApp.tsx", $app, [Text.UTF8Encoding]::new($false))
 git diff --stat -- apps/light/LightApp.tsx
 pnpm exec eslint . --max-warnings 0
-pnpm exec vitest run scripts/workspace.test.mjs
+pnpm exec vitest run scripts/workspace.test.ts
 ```
 
 Expected: two `no-restricted-imports` errors on lines 1 and 2; after the restore the file's diff is what it was (its rewritten imports); `eslint .` exits 0; the test passes 8 of 8.
 
 - [ ] **Step 6: Two tests that read the root manifest for what it no longer says**
 
-`scripts/vite-base.test.mjs` — the folder that holds a `package.json` is no longer only the repository:
+`scripts/vite-base.test.ts` — the folder that holds a `package.json` is no longer only the repository:
 
 ```js
   it("takes the repository to be the folder that holds the workspace file and the shared UI", () => {
@@ -1126,7 +1126,7 @@ In the file's header comment, replace "and it stops being so the day an app has 
 ```
 
 ```powershell
-pnpm exec vitest run scripts/vite-base.test.mjs packages/ui/lib/dndManager.test.ts
+pnpm exec vitest run scripts/vite-base.test.ts packages/ui/lib/dndManager.test.ts
 pnpm exec tsc -p packages/ui
 ```
 
@@ -1135,7 +1135,7 @@ Expected: both files pass; `tsc` exits 0.
 - [ ] **Step 7: Checkpoint** (controller)
 
 ```powershell
-git add -A scripts/workspace.test.mjs scripts/vite-base.test.mjs eslint.config.js packages/ui/lib/dndManager.test.ts
+git add -A scripts/workspace.test.ts scripts/vite-base.test.ts eslint.config.js packages/ui/lib/dndManager.test.ts
 git commit -m "wip(workspace): the import rules, held"
 ```
 
@@ -1144,7 +1144,7 @@ git commit -m "wip(workspace): the import rules, held"
 ### Task 5: What runs a command outside CI
 
 **Files:**
-- Modify: `apps/desktop/src-tauri/tauri.conf.json`, `apps/desktop/src-tauri/tauri.light.conf.json`, `apps/light/src-tauri/tauri.conf.json`, `apps/light/src-tauri/gen/android/buildSrc/src/main/java/com/mtggrimoire/app/kotlin/BuildTask.kt`, `apps/light/host.test.ts`, `scripts/web-smoke/sync-harness.mjs`, `.claude/hooks/worktree-deps.sh`, `.claude/hooks/merge-main.sh`, `.claude/skills/running-the-app/SKILL.md`, `.claude/skills/running-the-app/storybook.md`, `.claude/skills/worktree-setup/SKILL.md`
+- Modify: `apps/desktop/src-tauri/tauri.conf.json`, `apps/desktop/src-tauri/tauri.light.conf.json`, `apps/light/src-tauri/tauri.conf.json`, `apps/light/src-tauri/gen/android/buildSrc/src/main/java/com/mtggrimoire/app/kotlin/BuildTask.kt`, `apps/light/host.test.ts`, `scripts/web-smoke/sync-harness.ts`, `.claude/hooks/worktree-deps.sh`, `.claude/hooks/merge-main.sh`, `.claude/skills/running-the-app/SKILL.md`, `.claude/skills/running-the-app/storybook.md`, `.claude/skills/worktree-setup/SKILL.md`
 
 **Interfaces:**
 - Consumes: the root scripts `dev`, `build`, `mobile:serve`, `mobile:build`, `tauri:light` (unchanged names); the deploy tool's folder from Task 1.
@@ -1210,7 +1210,7 @@ Expected: PASS. No Gradle build runs on this machine in this plan; CI's `android
 
 - [ ] **Step 3: Where the sync smoke finds wrangler**
 
-In `scripts/web-smoke/sync-harness.mjs`, `wranglerScript`:
+In `scripts/web-smoke/sync-harness.ts`, `wranglerScript`:
 
 ```js
 /** `wrangler.js`, or a sentence saying how to provide one. */
@@ -1335,7 +1335,7 @@ before any test, build or app command**, or nothing resolves and `pnpm verify` n
 
 **A worktree resolves more than it declares.** Node looks for a package in every folder above
 a file, and a worktree sits under the main checkout: an import no manifest here declares can
-resolve from `D:\Code\mtg-grimoire\node_modules` and fail in CI. `scripts/workspace.test.mjs`
+resolve from `D:\Code\mtg-grimoire\node_modules` and fail in CI. `scripts/workspace.test.ts`
 is what holds "a package declares what it imports"; nothing that runs the code can.
 ```
 
@@ -1344,7 +1344,7 @@ is what holds "a package declares what it imports"; nothing that runs the code c
 - In the table "What is and is not shared", the `node_modules` row stays; add under the table: "pnpm's store (`D:\.pnpm-store`) is shared by every checkout on the drive: a worktree's `node_modules` is links into it, and an install is seconds."
 
 ```powershell
-node scripts/check-claude-md.mjs
+node scripts/check-claude-md.ts
 ```
 
 Expected: exit 0.
@@ -1352,7 +1352,7 @@ Expected: exit 0.
 - [ ] **Step 6: Checkpoint** (controller)
 
 ```powershell
-git add -A apps/desktop/src-tauri/tauri.conf.json apps/desktop/src-tauri/tauri.light.conf.json apps/light/src-tauri/tauri.conf.json apps/light/src-tauri/gen/android/buildSrc apps/light/host.test.ts scripts/web-smoke/sync-harness.mjs .claude/hooks .claude/skills
+git add -A apps/desktop/src-tauri/tauri.conf.json apps/desktop/src-tauri/tauri.light.conf.json apps/light/src-tauri/tauri.conf.json apps/light/src-tauri/gen/android/buildSrc apps/light/host.test.ts scripts/web-smoke/sync-harness.ts .claude/hooks .claude/skills
 git commit -m "wip(workspace): the Tauri hooks, Gradle, the session hook and the skills"
 ```
 
@@ -1509,7 +1509,7 @@ git commit -m "wip(workspace): the hosting Worker's import, as a path wrangler c
 
 **Files:**
 - Modify: `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `.github/workflows/android-emulator.yml`
-- Modify: `scripts/workflow-scripts.test.mjs`, `scripts/release-rule.test.mjs`, `scripts/toolchain.test.mjs`, `scripts/ci-route.mjs`, `scripts/ci-route.test.mjs`
+- Modify: `scripts/workflow-scripts.test.ts`, `scripts/release-rule.test.ts`, `scripts/toolchain.test.ts`, `scripts/ci-route.ts`, `scripts/ci-route.test.ts`
 
 **Interfaces:**
 - Consumes: every root script name (unchanged); `infrastructure/wrangler` (Task 1); the Worker's alias (Task 6); `pnpm -w run …` in the Tauri configs (Task 5).
@@ -1517,7 +1517,7 @@ git commit -m "wip(workspace): the hosting Worker's import, as a path wrangler c
 
 The tests are changed first, each seen red against the workflows as they are, and then the workflows.
 
-- [ ] **Step 1: `scripts/workflow-scripts.test.mjs` — a script is run by pnpm**
+- [ ] **Step 1: `scripts/workflow-scripts.test.ts` — a script is run by pnpm**
 
 Replace the header comment's first sentence, `runsOf`, `CALLERS`, and the first two `describe` blocks with:
 
@@ -1566,7 +1566,7 @@ describe("every script that is run", () => {
   });
 
   // npm strips a `--` before a script's arguments; pnpm hands it to the script. Vitest then reads
-  // `--shard=1/3` as a file to look for, and `scanner-assets.mjs` never sees `--web`.
+  // `--shard=1/3` as a file to look for, and `scanner-assets.ts` never sees `--web`.
   it.each(CALLERS)("%s puts no `--` between a script and its arguments", (_path, src) => {
     expect(src).not.toMatch(/\bpnpm (?:(?:-w|--workspace-root) )?(?:run )?[\w:.-]+ -- /);
   });
@@ -1606,12 +1606,12 @@ The `web-deploy` job's `run: node ../wrangler/…/wrangler.js deploy` holds neit
 
 ```powershell
 Set-Location "D:\Code\mtg-grimoire\.claude\worktrees\repo-structure-cleanup-66d570"
-pnpm exec vitest run scripts/workflow-scripts.test.mjs
+pnpm exec vitest run scripts/workflow-scripts.test.ts
 ```
 
 Expected: FAIL — "sees the calls it is about" finds no `pnpm` call in `ci.yml`, and the npm rule lists every `npm ci` and `npm run` line.
 
-- [ ] **Step 2: `scripts/toolchain.test.mjs` — pnpm from the pinned action, before Node**
+- [ ] **Step 2: `scripts/toolchain.test.ts` — pnpm from the pinned action, before Node**
 
 Add inside the workflows' `describe`, after "takes Node from .nvmrc":
 
@@ -1655,7 +1655,7 @@ describe("pnpm", () => {
 
 If the file's names for the workflow map and its entries differ from `WORKFLOWS` and `entries`, use the file's.
 
-- [ ] **Step 3: `scripts/release-rule.test.mjs` — every change, and no other**
+- [ ] **Step 3: `scripts/release-rule.test.ts` — every change, and no other**
 
 **(a) Imports.** Delete `import packageLock from "../package-lock.json?raw";`. Replace the two `appWorker…` imports with:
 
@@ -1808,7 +1808,7 @@ The same five respellings in the three `at(…)` ordering lines below them and i
 
 **(k) Prose.** In the comment above `RUNS_SOMETHING`, "its CLI is only ever reached through `npx`, `npm` or `cargo`" becomes "through `pnpm`, `npx` or `cargo`". In the comment above the secret-holding list, "a second `npx`, a `node -e`, an `npm run`" stays: those are still lines that are not on it. The parser's self-test near the end of the file (`run: npm ci --ignore-scripts`, `x=$(npx --yes left-pad)`) is a sample and stays.
 
-- [ ] **Step 4: `scripts/ci-route.mjs` and its rows**
+- [ ] **Step 4: `scripts/ci-route.ts` and its rows**
 
 The arm for the root manifest and lockfile, with its comment:
 
@@ -1821,12 +1821,12 @@ The arm for the root manifest and lockfile, with its comment:
 and, immediately above the `infrastructure/app-worker/*` arm:
 
 ```js
-  // The deploy tool: `release-rule.test.mjs` reads its manifest and lockfile (`frontend`), and
+  // The deploy tool: `release-rule.test.ts` reads its manifest and lockfile (`frontend`), and
   // the `web` job installs from them for the sync smoke. No job in this gate deploys with it.
   { match: ["infrastructure/wrangler/*"], jobs: ["frontend", "web"] },
 ```
 
-In `scripts/ci-route.test.mjs`, the rows (`T`/`F` in the file's column order: frontend, rust, core, powershell, storybook, android, web):
+In `scripts/ci-route.test.ts`, the rows (`T`/`F` in the file's column order: frontend, rust, core, powershell, storybook, android, web):
 
 | Was | Is |
 | --- | --- |
@@ -1838,7 +1838,7 @@ The row `["infrastructure/app-worker/package.json", T, F, F, F, F, F, T],` stays
 
 ```js
     // The Worker's workspace manifest, and — in a folder of its own since 2026-10-08 — the deploy
-    // tool's manifest and lockfile (step 6.6): `release-rule.test.mjs` reads all three, and no
+    // tool's manifest and lockfile (step 6.6): `release-rule.test.ts` reads all three, and no
     // job in this gate installs the tool to deploy — `release.yml`'s `web-deploy` does.
 ```
 
@@ -1933,7 +1933,7 @@ Every other line that runs something (line numbers at `59d735fa`):
 | Where | Is |
 | --- | --- |
 | `release.yml`, above `- run: pnpm install --frozen-lockfile` in `build` | `# tauri-action does NOT install frontend dependencies. It DOES run` / `# beforeBuildCommand (`pnpm -w run build`), so do not run that here as well.` |
-| `release.yml`, above `tauri-apps/tauri-action` | The first sentence becomes: "The action runs `pnpm tauri build` from the repository root — it finds `pnpm-lock.yaml`, and `@tauri-apps/cli` in the root manifest — which `package.json` sends to `apps/desktop` (`scripts/release-rule.test.mjs` holds that script's text and that dependency)." |
+| `release.yml`, above `tauri-apps/tauri-action` | The first sentence becomes: "The action runs `pnpm tauri build` from the repository root — it finds `pnpm-lock.yaml`, and `@tauri-apps/cli` in the root manifest — which `package.json` sends to `apps/desktop` (`scripts/release-rule.test.ts` holds that script's text and that dependency)." |
 | every build leg's install | One line above it, once per workflow: `# pnpm runs no dependency's install script unless `pnpm-workspace.yaml` names it (`allowBuilds`).` |
 
 - [ ] **Step 6: See the fences pass, and break two once**
@@ -1942,23 +1942,23 @@ Every other line that runs something (line numbers at `59d735fa`):
 pnpm exec vitest run --project root
 ```
 
-Expected: `Test Files  12 passed (12)` and, on `59d735fa`, `Tests  373 passed (373)` — `workspace`, `workflow-scripts`, `release-rule`, `toolchain`, `ci-route`, `actions-pinned`, `vite-base` and the rest. `actions-pinned.test.mjs` needs no change: the new action is written the way it requires. If "is a plain semantic version…" fails naming `/package-lock.json`, Task 1 Step 6 left npm's lockfile behind.
+Expected: `Test Files  12 passed (12)` and, on `59d735fa`, `Tests  373 passed (373)` — `workspace`, `workflow-scripts`, `release-rule`, `toolchain`, `ci-route`, `actions-pinned`, `vite-base` and the rest. `actions-pinned.test.ts` needs no change: the new action is written the way it requires. If "is a plain semantic version…" fails naming `/package-lock.json`, Task 1 Step 6 left npm's lockfile behind.
 
 Then the two the spec names, and Review Focus 1, each broken once:
 
 ```powershell
-$release = Get-Content .github/workflows/release.yml -Raw; $route = Get-Content scripts/ci-route.mjs -Raw; $ci = Get-Content .github/workflows/ci.yml -Raw
+$release = Get-Content .github/workflows/release.yml -Raw; $route = Get-Content scripts/ci-route.ts -Raw; $ci = Get-Content .github/workflows/ci.yml -Raw
 $enc = [Text.UTF8Encoding]::new($false)
 [IO.File]::WriteAllText("$PWD\.github\workflows\release.yml", $release.Replace("run: node ../wrangler/node_modules/wrangler/bin/wrangler.js deploy", "run: npx wrangler deploy"), $enc)
-pnpm exec vitest run scripts/release-rule.test.mjs scripts/workflow-scripts.test.mjs
+pnpm exec vitest run scripts/release-rule.test.ts scripts/workflow-scripts.test.ts
 [IO.File]::WriteAllText("$PWD\.github\workflows\release.yml", $release, $enc)
-[IO.File]::WriteAllText("$PWD\scripts\ci-route.mjs", $route.Replace('{ match: ["infrastructure/wrangler/*"], jobs: ["frontend", "web"] }', '{ match: ["infrastructure/wrangler/*"], jobs: ["web"] }'), $enc)
-pnpm exec vitest run scripts/ci-route.test.mjs
-[IO.File]::WriteAllText("$PWD\scripts\ci-route.mjs", $route, $enc)
+[IO.File]::WriteAllText("$PWD\scripts\ci-route.ts", $route.Replace('{ match: ["infrastructure/wrangler/*"], jobs: ["frontend", "web"] }', '{ match: ["infrastructure/wrangler/*"], jobs: ["web"] }'), $enc)
+pnpm exec vitest run scripts/ci-route.test.ts
+[IO.File]::WriteAllText("$PWD\scripts\ci-route.ts", $route, $enc)
 [IO.File]::WriteAllText("$PWD\.github\workflows\ci.yml", $ci.Replace("run: pnpm test:run --shard=", "run: pnpm test:run -- --shard="), $enc)
-pnpm exec vitest run scripts/workflow-scripts.test.mjs
+pnpm exec vitest run scripts/workflow-scripts.test.ts
 [IO.File]::WriteAllText("$PWD\.github\workflows\ci.yml", $ci, $enc)
-git diff --stat -- .github/workflows scripts/ci-route.mjs
+git diff --stat -- .github/workflows scripts/ci-route.ts
 pnpm exec vitest run --project root
 ```
 
@@ -2076,7 +2076,7 @@ Every package is private and at `0.0.0`; release-please bumps the root's version
 There is no build step between packages and no `exports` map: a consumer compiles the source of
 the package it imports.
 
-**The import rules** (`scripts/workspace.test.mjs` holds them; `eslint.config.js` shows the first
+**The import rules** (`scripts/workspace.test.ts` holds them; `eslint.config.js` shows the first
 two in an editor):
 
 1. A module in another package is imported by the package's name: `@grimoire/ui/lib/ipc`.
@@ -2110,20 +2110,20 @@ and in the old-to-new table, two rows: `tsconfig.json` → `tsconfig.base.json` 
 - **`CLAUDE.md`** (the root's). The commands are respelled by Step 1. In "Primary Commands", `cargo test --workspace`'s line is untouched. In "Global Rules" add one bullet, and check the file is still under 200 lines:
 
 ```markdown
-- **Imports cross a package by its name**: `@grimoire/ui/…`, `@grimoire/fake/…`. `@/` is the shared UI's own alias and is written only inside `packages/ui`. A package declares what its files import, in its own `package.json`. `scripts/workspace.test.mjs` holds all three; see [`docs/reference/repository-layout.md`](docs/reference/repository-layout.md).
+- **Imports cross a package by its name**: `@grimoire/ui/…`, `@grimoire/fake/…`. `@/` is the shared UI's own alias and is written only inside `packages/ui`. A package declares what its files import, in its own `package.json`. `scripts/workspace.test.ts` holds all three; see [`docs/reference/repository-layout.md`](docs/reference/repository-layout.md).
 ```
 
   In "Area-Specific Guides" nothing moves. In "IPC Type Mirroring" nothing moves.
 - **`docs/agent/CODE_STYLE.md`**: where it describes the `@/` alias, add the four import rules in two sentences and the pointer to `repository-layout.md`.
 - **`docs/agent/RUNNING_AND_VERIFYING.md`**: beside the command catalog, three lines — arguments follow a script's name with no `--`; `pnpm exec vitest run --project <name>` runs one package's tests; `pnpm install` after a merge that changes a manifest or `pnpm-lock.yaml`.
-- **`.github/CLAUDE.md`**: the install is `pnpm/action-setup` (pinned) and `pnpm install --frozen-lockfile`; the two secret-holding jobs have no pnpm; the deploy tool is `infrastructure/wrangler`; `scripts/workflow-scripts.test.mjs` now reads `pnpm <name>` and refuses a `--`.
+- **`.github/CLAUDE.md`**: the install is `pnpm/action-setup` (pinned) and `pnpm install --frozen-lockfile`; the two secret-holding jobs have no pnpm; the deploy tool is `infrastructure/wrangler`; `scripts/workflow-scripts.test.ts` now reads `pnpm <name>` and refuses a `--`.
 - **`docs/reference/ci-and-releases.md`**: the same four facts where it describes the jobs, the deploy job's two lines as Task 7 wrote them, and the release build's runner (`pnpm tauri build`, and why the root keeps `@tauri-apps/cli`).
 - **`apps/light/CLAUDE.md`**, §3 "The Phone Import Fence": the list of what `apps/light/phone/` never imports is spelled as a phone file would write it — `@grimoire/ui/lib/store`, `@grimoire/ui/App`, `@grimoire/ui/components/{AppShell,TitleBar,Ribbon}`, `@grimoire/ui/boot/*`, `@grimoire/ui/lib/window`, or `@tauri-apps/*` (except via `@grimoire/ui/lib/core`). Elsewhere in that file a `@/lib/x` that names a module of the shared UI as the UI knows it is left.
 - **`packages/ui/CLAUDE.md`**: one line — `@/` is this package's alias and only this package's; other packages reach these modules as `@grimoire/ui/…`.
 - **`.storybook/CLAUDE.md`**: "`aliases.ts` aliases four modules" keeps the four and adds "the images module under both of its names (`@/lib/images` and `@grimoire/ui/lib/images`)".
 
 ```powershell
-node scripts/check-claude-md.mjs
+node scripts/check-claude-md.ts
 ```
 
 Expected: exit 0.
@@ -2134,7 +2134,7 @@ Expected: exit 0.
 git grep -n -E "root .tsconfig\.json|tsconfig\.json.s .paths|root program|the app's program" -- ":!docs/superpowers" ":!CHANGELOG.md"
 ```
 
-For each line, make the sentence true: the options and `paths` are `tsconfig.base.json`'s; a program is its package's `tsconfig.json`. `infrastructure/relay/tsconfig.json`'s "rather than a wider `include` in the root `tsconfig.json`" becomes "rather than a place in a webview package's program". `scripts/golden.mjs`'s "`tsconfig.json`'s `"@/*": ["./packages/ui/*"]`" becomes `tsconfig.base.json`'s. Options are not changed, only comments.
+For each line, make the sentence true: the options and `paths` are `tsconfig.base.json`'s; a program is its package's `tsconfig.json`. `infrastructure/relay/tsconfig.json`'s "rather than a wider `include` in the root `tsconfig.json`" becomes "rather than a place in a webview package's program". `scripts/golden.ts`'s "`tsconfig.json`'s `"@/*": ["./packages/ui/*"]`" becomes `tsconfig.base.json`'s. Options are not changed, only comments.
 
 - [ ] **Step 7: The spec's amendment**
 
@@ -2149,7 +2149,7 @@ differently from the paragraphs above; the plan
 - `@grimoire/light` does not depend on `@grimoire/app-worker`. Rule 4 is wider than written: a
   file Node loads itself — a Vite, Vitest or Storybook config, and everything under `scripts/` —
   imports by relative path. Vite bundles what a config reaches by path and leaves a package name
-  to Node, which could not run an `enum`; and `scripts/web-deploy-probe.mjs` runs in a job that
+  to Node, which could not run an `enum`; and `scripts/web-deploy-probe.ts` runs in a job that
   installs nothing.
 - The three Workers keep the `tsconfig.json` they had and do not extend `tsconfig.base.json`.
 - The hosting Worker's one import from the shared UI is also a wrangler `alias`: `web-deploy`
@@ -2158,7 +2158,7 @@ differently from the paragraphs above; the plan
 - `.design-sync/` was left as written except for two lines of configuration.
 - `npm run x -- --flag` became `pnpm x --flag`: pnpm hands a `--` to the script.
 
-And one rule the design did not state, held by `scripts/workspace.test.mjs`: a package declares
+And one rule the design did not state, held by `scripts/workspace.test.ts`: a package declares
 what its files import. pnpm's layout does not enforce it — Node finds a package the root declares
 from any folder beneath it.
 ```
@@ -2211,14 +2211,14 @@ Expected: `553 files, <more than N> tests, 0 failed`, and the comparison lists *
 
 | File | Why it differs |
 | --- | --- |
-| `scripts/workspace.test.mjs` | new: 8 |
+| `scripts/workspace.test.ts` | new: 8 |
 | `infrastructure/app-worker/src/hosting.test.ts` | +2 (Task 6) |
 | `packages/fake/images.test.ts` | +1 (Task 2) |
-| `scripts/vite-base.test.mjs` | +1 (Task 4) |
-| `scripts/workflow-scripts.test.mjs` | three rules for each caller where there was one, three Tauri configs as callers, and the hooks' case |
-| `scripts/toolchain.test.mjs` | +1 for each workflow, +2 |
-| `scripts/release-rule.test.mjs` | +2 (`never sees pnpm`, for two jobs) |
-| `scripts/ci-route.test.mjs` | +4 rows |
+| `scripts/vite-base.test.ts` | +1 (Task 4) |
+| `scripts/workflow-scripts.test.ts` | three rules for each caller where there was one, three Tauri configs as callers, and the hooks' case |
+| `scripts/toolchain.test.ts` | +1 for each workflow, +2 |
+| `scripts/release-rule.test.ts` | +2 (`never sees pnpm`, for two jobs) |
+| `scripts/ci-route.test.ts` | +4 rows |
 
 Any other file in the list, a file with fewer tests, or a file gone is a glob that moved or a test that stopped being collected: stop. `Compare-Object` prints nothing — the Rust counts did not move.
 
@@ -2602,7 +2602,7 @@ const SKIP = [
   /(^|\/)package-lock\.json$/, /^pnpm-lock\.yaml$/, /(^|\/)package\.json$/,
   /^infrastructure\/wrangler\//, // the deploy tool: npm's, on purpose
   /^\.github\/workflows\//, /^\.github\/actions\//, // each line is a decision
-  /^scripts\/.*\.test\.mjs$/, /^apps\/light\/host\.test\.ts$/, // fences that pin a spelling
+  /^scripts\/.*\.test\.ts$/, /^apps\/light\/host\.test\.ts$/, // fences that pin a spelling
   /^apps\/light\/src-tauri\/gen\//, /tauri(\.[\w-]+)?\.conf\.json$/,
   /^\.claude\/hooks\//,
   /^infrastructure\/[^/]+\/(migrations\/|schema\.sql$)/, // applied to a database as written
@@ -2685,7 +2685,7 @@ if (process.argv[2] === "--diff") {
 }
 ```
 
-## Appendix E: `scripts/workspace.test.mjs`
+## Appendix E: `scripts/workspace.test.ts`
 
 The one of the five that is committed. It passed 8 of 8 in the planning session's checkout, and failed as Task 4 describes when broken each of the three ways.
 
@@ -2700,7 +2700,7 @@ The one of the five that is committed. It passed 8 of 8 in the planning session'
 //      everything under `scripts/`. Vite bundles what its config reaches by path and leaves a
 //      package name to Node, which runs another package's TypeScript only as far as it can strip
 //      the types (measured 2026-10-08: an `enum` behind a package name failed the config's load,
-//      and the same file by path built). And `scripts/web-deploy-probe.mjs` runs in a job that
+//      and the same file by path built). And `scripts/web-deploy-probe.ts` runs in a job that
 //      installs nothing, where no workspace link exists.
 //
 // And the rule pnpm's layout cannot hold by itself: **a package declares what its files import.**
@@ -2731,7 +2731,7 @@ const CODE = import.meta.glob(
     "/apps/**/*.{ts,tsx}",
     "/infrastructure/**/*.ts",
     "/.storybook/**/*.{ts,tsx}",
-    "/scripts/**/*.mjs",
+    "/scripts/**/*.ts",
     "/*.{ts,js}",
     "!/apps/*/src-tauri/**",
     "!/apps/*/dist*/**",
@@ -2940,7 +2940,7 @@ describe("the rule's own guards", () => {
       "/packages/fake/images.ts": `export * from "../ui/lib/images";`,
       "/packages/fake/db.ts": `import { v } from "../ui/lib/v";`,
       "/apps/light/vite.config.ts": `import { a } from "../../packages/fake/aliases.ts";`,
-      "/scripts/probe.mjs": `import { h } from "../infrastructure/app-worker/src/headers.ts";`,
+      "/scripts/probe.ts": `import { h } from "../infrastructure/app-worker/src/headers.ts";`,
     };
     expect(breachesIn(tree, { "/apps/light/mobile.css": `@import "../../packages/ui/index.css";\n@import "a-css-package";` })).toEqual({
       undeclared: [

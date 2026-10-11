@@ -602,11 +602,11 @@ Three traps, all measured:
 
 ## Driving it
 
-`scripts/cdp.mjs`. CLAUDE.md's "Verifying UI in the real app" is the command vocabulary
+`scripts/cdp.ts`. CLAUDE.md's "Verifying UI in the real app" is the command vocabulary
 and the trap list; this skill does not repeat it.
 
-**Run cdp.mjs through the PowerShell tool.** Bash refuses
-`node scripts/cdp.mjs eval "<expr>"` as unverifiable. Wrap the JS in double quotes with
+**Run cdp.ts through the PowerShell tool.** Bash refuses
+`node scripts/cdp.ts eval "<expr>"` as unverifiable. Wrap the JS in double quotes with
 single quotes inside — a nested `\"` in a CSS selector reaches the page unescaped — and
 avoid `$`, which PowerShell interpolates before node sees it.
 

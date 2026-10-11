@@ -340,7 +340,7 @@ rusqlite = { version = "0.40", features = ["hooks"] }
 # its VFSes "No COOP/COEP requirements", and that was tested rather than quoted.
 sqlite-wasm-vfs = "0.2"
 # Pinned to the patch, because `wasm-bindgen-cli` must match the crate EXACTLY and a
-# mismatch is a runtime failure with an unhelpful message. `scripts/build-wasm.mjs`
+# mismatch is a runtime failure with an unhelpful message. `scripts/build-wasm.ts`
 # re-checks the pair before every build.
 wasm-bindgen = "=0.2.127"
 wasm-bindgen-futures = "0.4"
@@ -2608,7 +2608,7 @@ let glue: Glue | undefined;
 /**
  * Loaded by URL rather than imported, and `@vite-ignore` is what keeps it that way.
  *
- * `web/public/wasm/` is written by `scripts/build-wasm.mjs` and is **gitignored**. A static
+ * `web/public/wasm/` is written by `scripts/build-wasm.ts` and is **gitignored**. A static
  * import would put it in the module graph, and then `vite build` for the *desktop* bundle
  * would fail on a machine that has never run the wasm build — for a branch the desktop build
  * folds away as dead code anyway.
@@ -3306,7 +3306,7 @@ restart against the same 532.8 MB file, and it must never gate an ingest."
 ### Task 9: The wasm build, the web bundle, and the CI job that gates them
 
 **Files:**
-- Create: `scripts/build-wasm.mjs`
+- Create: `scripts/build-wasm.ts`
 - Create: `vite.web.config.ts`
 - Modify: `package.json` — three scripts
 - Modify: `.gitignore` — two generated directories
@@ -3329,7 +3329,7 @@ restart against the same 532.8 MB file, and it must never gate an ingest."
 
 - [ ] **Step 1: Write the build script**
 
-Create `scripts/build-wasm.mjs`:
+Create `scripts/build-wasm.ts`:
 
 ```js
 #!/usr/bin/env node
@@ -3459,7 +3459,7 @@ import base from "./vite.config";
  * than a second project: the only thing that differs at the entry point is `__CORE__`, and
  * the branch it selects folds away in each bundle.
  *
- * `publicDir` points at a directory that is **generated in full** — `scripts/build-wasm.mjs`
+ * `publicDir` points at a directory that is **generated in full** — `scripts/build-wasm.ts`
  * writes the wasm module there and copies the favicon in beside it. That is what keeps a
  * 2 MB wasm module out of the desktop bundle, and therefore out of the portable exe, on a
  * machine where someone has run the wasm build.
@@ -3488,7 +3488,7 @@ export default mergeConfig(
 Add to `package.json`'s `scripts`:
 
 ```json
-    "build:wasm": "node scripts/build-wasm.mjs",
+    "build:wasm": "node scripts/build-wasm.ts",
     "web:dev": "vite --config vite.web.config.ts",
     "web:build": "tsc && vite build --config vite.web.config.ts",
 ```
@@ -3497,7 +3497,7 @@ Add to `.gitignore`, after the `dist/` line:
 
 ```
 # The web target's bundle, and the directory it is served from. `web/public/` is generated in
-# FULL by `scripts/build-wasm.mjs` - the wasm module, its glue, and a copy of the favicon -
+# FULL by `scripts/build-wasm.ts` - the wasm module, its glue, and a copy of the favicon -
 # which is what keeps a 2 MB wasm module out of the desktop bundle and therefore out of the
 # portable exe.
 dist-web/
@@ -3541,7 +3541,7 @@ In `.github/workflows/ci.yml`:
               # The wasm build's own inputs, and nothing else's. Above `scripts/*` and
               # `src/*` because both of those match more broadly and would run the wrong
               # jobs first.
-              scripts/build-wasm.mjs|vite.web.config.ts)
+              scripts/build-wasm.ts|vite.web.config.ts)
                 frontend=true
                 wasm=true
                 ;;
@@ -3622,7 +3622,7 @@ Add `| wasm | \`$wasm\` |` to the step summary table, and `echo "wasm=$wasm" >> 
           key: wasm
 
       # Pinned, and `--locked`. The CLI must match the `wasm-bindgen` crate EXACTLY;
-      # `scripts/build-wasm.mjs` re-checks that pair and refuses if they have drifted.
+      # `scripts/build-wasm.ts` re-checks that pair and refuses if they have drifted.
       - name: Install wasm-bindgen-cli
         run: cargo install wasm-bindgen-cli --version 0.2.127 --locked
 
@@ -3667,7 +3667,7 @@ routes to neither build job, so nothing goes red when that list rots.
 
 Three mutations, all local — no push needed.
 
-1. In `scripts/build-wasm.mjs`, change `PINNED` to `"0.2.126"`. Run `npm run build:wasm`.
+1. In `scripts/build-wasm.ts`, change `PINNED` to `"0.2.126"`. Run `npm run build:wasm`.
    Expected: it refuses **before** running cargo, naming both versions and the
    `cargo install … --force` line. Revert.
 2. Temporarily rename `clang` out of PATH (`PATH=/usr/bin npm run build:wasm` on Linux, or
@@ -3687,7 +3687,7 @@ broken web target, which is the same shape as `cargo fmt` and `clippy` already b
 
 ```bash
 npm run verify > /tmp/verify.log 2>&1; grep -E "Test Files|Tests |test result" /tmp/verify.log
-git add scripts/build-wasm.mjs vite.web.config.ts package.json package-lock.json .gitignore .github/
+git add scripts/build-wasm.ts vite.web.config.ts package.json package-lock.json .gitignore .github/
 git commit -m "chore(ci): build the wasm core, and gate it
 
 clang is now a permanent build requirement - sqlite-wasm-rs compiles SQLite's C amalgamation
@@ -3725,11 +3725,11 @@ ignores."
 
 > **Spec §9 fixes the method**: headless Chrome over CDP against the dev server. The spike's
 > `serve.mjs` + `drive.mjs` proved the shape, and this repo already owns the better tool —
-> `scripts/cdp.mjs` reads `CDP_PORT` from the environment, so it drives a browser on 9333
+> `scripts/cdp.ts` reads `CDP_PORT` from the environment, so it drives a browser on 9333
 > exactly as it drives the app's WebView2 on 9222.
 
 > **Traps that have each cost a session, and all of them apply here.** DevTools steals the
-> page target — `cdp.mjs` takes the first `type: page`, so put `location.href` in every
+> page target — `cdp.ts` takes the first `type: page`, so put `location.href` in every
 > payload or drive by URL. Clicking and reading in one `eval` answers about the frame before
 > React re-rendered; split it in two. A cold pointer makes `click` a no-op that still prints
 > "clicked"; `hover --rest 200` first. Every binding inside an `eval` needs an IIFE — the
@@ -3763,11 +3763,11 @@ Then, in a third:
 
 ```powershell
 $env:CDP_PORT = "9333"
-node scripts/cdp.mjs eval "(() => ({ href: location.href, root: document.getElementById('root')?.childElementCount }))()"
+node scripts/cdp.ts eval "(() => ({ href: location.href, root: document.getElementById('root')?.childElementCount }))()"
 ```
 
 Expected: `href` is `http://localhost:5173/` and `root` is at least 1. If `root` is 0 the
-page rendered nothing — read the console (`node scripts/cdp.mjs console out.jsonl`) before
+page rendered nothing — read the console (`node scripts/cdp.ts console out.jsonl`) before
 anything else, because a wasm trap surfaces there and nowhere in the DOM.
 
 - [ ] **Step 2: Measure the first run**
@@ -3775,15 +3775,15 @@ anything else, because a wasm trap surfaces there and nowhere in the DOM.
 Press the first-run button and time the ingest from inside the page:
 
 ```powershell
-node scripts/cdp.mjs hover "button" --rest 200
-node scripts/cdp.mjs text "Build it now"
-node scripts/cdp.mjs eval "(() => { globalThis.__t0 = performance.now(); return 'armed'; })()"
+node scripts/cdp.ts hover "button" --rest 200
+node scripts/cdp.ts text "Build it now"
+node scripts/cdp.ts eval "(() => { globalThis.__t0 = performance.now(); return 'armed'; })()"
 ```
 
 Poll until the app renders, then take the wall clock:
 
 ```powershell
-node scripts/cdp.mjs eval "(() => ({ href: location.href, elapsed: Math.round(performance.now() - globalThis.__t0), body: document.body.innerText.slice(0, 120) }))()"
+node scripts/cdp.ts eval "(() => ({ href: location.href, elapsed: Math.round(performance.now() - globalThis.__t0), body: document.body.innerText.slice(0, 120) }))()"
 ```
 
 Record, in `docs/reference/web-target.md`:
@@ -3791,7 +3791,7 @@ Record, in `docs/reference/web-target.md`:
 | Figure | Where it comes from |
 | --- | --- |
 | wall clock for the first run | the `elapsed` above |
-| rows inserted / skipped | the `corpus-done` message, read from `cdp.mjs console` |
+| rows inserted / skipped | the `corpus-done` message, read from `cdp.ts console` |
 | resulting database size | `PRAGMA page_count * page_size`, through a routed `sync_status` follow-up or a temporary console log |
 | the wasm module's byte size | `ls -la web/public/wasm` |
 | the journal SQLite chose | the `opened` message's `journal` — **expected `delete`** |
@@ -3807,13 +3807,13 @@ Spec §8 sets the web budget at **no interaction over 250 ms at p95**, and names
 browse as "the one number not yet taken in wasm" — 131.8 ms end-to-end on desktop today.
 
 ```powershell
-node scripts/cdp.mjs eval "(async () => { const { core } = await import('/src/lib/core/index.ts'); const t = performance.now(); const r = await core.call('search_cards', { req: {} }); return { href: location.href, ms: Math.round(performance.now() - t), total: r.total }; })()"
+node scripts/cdp.ts eval "(async () => { const { core } = await import('/src/lib/core/index.ts'); const t = performance.now(); const r = await core.call('search_cards', { req: {} }); return { href: location.href, ms: Math.round(performance.now() - t), total: r.total }; })()"
 ```
 
 and the facet pass, which rides the in-memory index rather than SQLite:
 
 ```powershell
-node scripts/cdp.mjs eval "(async () => { const { core } = await import('/src/lib/core/index.ts'); const t = performance.now(); const f = await core.call('facet_cards', { req: {} }); return { href: location.href, ms: Math.round(performance.now() - t), ready: f.ready }; })()"
+node scripts/cdp.ts eval "(async () => { const { core } = await import('/src/lib/core/index.ts'); const t = performance.now(); const f = await core.call('facet_cards', { req: {} }); return { href: location.href, ms: Math.round(performance.now() - t), ready: f.ready }; })()"
 ```
 
 Take **five** of each and record the median and the worst, not one sample. Then re-run both
@@ -3829,7 +3829,7 @@ with `{ req: { text: "dragon" } }`.
 Open a second tab at the same URL and read both:
 
 ```powershell
-node scripts/cdp.mjs eval "(() => { globalThis.open('http://localhost:5173/', '_blank'); return 'opened'; })()"
+node scripts/cdp.ts eval "(() => { globalThis.open('http://localhost:5173/', '_blank'); return 'opened'; })()"
 ```
 
 Then list the targets (`curl http://127.0.0.1:9333/json/list`) and drive the *second* one.
@@ -3842,7 +3842,7 @@ Record two things:
    but did not isolate whether it comes from `install_opfs_pool` or from `open_pooled`.
    `Opened::from_open_error` handles both by matching the error *name*, so the guard is
    correct either way — but the answer belongs in the doc, because the next person to touch
-   that path will want it. Read it from `cdp.mjs console`.
+   that path will want it. Read it from `cdp.ts console`.
 
 Then close the second tab, reload the first, and confirm it still opens: a guard that leaves
 the pool wedged after a refused second tab is worse than no guard.
@@ -3853,7 +3853,7 @@ The one feed whose browser behaviour genuinely differs — `fetch` has already g
 and `feed::frame::Decoder` has to notice from the bytes.
 
 ```powershell
-node scripts/cdp.mjs eval "(async () => { const w = new Worker('/src/workers/db.ts', { type: 'module' }); return 'not this way'; })()"
+node scripts/cdp.ts eval "(async () => { const w = new Worker('/src/workers/db.ts', { type: 'module' }); return 'not this way'; })()"
 ```
 
 That is **not** how to do it — the Worker is already running and owns the connection. Instead,

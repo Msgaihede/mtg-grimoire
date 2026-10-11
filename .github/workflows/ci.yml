@@ -22,14 +22,14 @@ permissions:
 # checkout says `persist-credentials: false` — nothing here runs `git` against the remote after
 # checking out (`changes` diffs history it already fetched), so the token has no reason to stay in
 # `.git/config` for later steps to read. `release.yml` says why both matter; Dependabot keeps the
-# SHAs current and `scripts/actions-pinned.test.mjs` fails on a floating tag or a kept token.
+# SHAs current and `scripts/actions-pinned.test.ts` fails on a floating tag or a kept token.
 jobs:
-  # Which jobs this change can possibly have broken. The decision is `scripts/ci-route.mjs`,
+  # Which jobs this change can possibly have broken. The decision is `scripts/ci-route.ts`,
   # where every arm carries its reason; this job only finds the changed paths and hands them
   # over. **The two halves do read each other's files** — frontend tests read `apps/desktop/src-tauri/` and
   # `crates/` sources as text, Rust tests read `packages/ui/lib/userTables.json`,
   # `packages/ui/lib/syncedTables.json` and the transfer golden — so a crossing routes to both, and
-  # `scripts/ci-route.test.mjs` derives that census from the sources and fails when a crossing
+  # `scripts/ci-route.test.ts` derives that census from the sources and fails when a crossing
   # routes to only one side.
   #
   # Deliberately NOT a workflow-level `paths:` filter: that skips the whole workflow,
@@ -62,7 +62,7 @@ jobs:
           node-version-file: .nvmrc
 
       - name: Verify CLAUDE.md line budgets (<= 200 lines)
-        run: node scripts/check-claude-md.mjs
+        run: node scripts/check-claude-md.ts
 
       - name: Classify the changed paths
         id: classify
@@ -81,7 +81,7 @@ jobs:
             || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ] \
             || ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
             echo "No usable base commit ('$BASE_SHA') — running every job."
-            flags=$(node scripts/ci-route.mjs --all)
+            flags=$(node scripts/ci-route.ts --all)
           else
             # `--no-renames` is load-bearing: with rename detection on (the default since
             # git 2.9) a file moved out of `packages/ui/` into `apps/desktop/src-tauri/` is reported as the
@@ -92,7 +92,7 @@ jobs:
             files=$(git diff --name-only --no-renames "$BASE_SHA" HEAD)
             echo "Changed files vs $BASE_SHA:"
             echo "$files" | sed 's/^/  /'
-            flags=$(printf '%s\n' "$files" | node scripts/ci-route.mjs)
+            flags=$(printf '%s\n' "$files" | node scripts/ci-route.ts)
           fi
 
           # Every output a job's `if:` reads must be printed, and printed as a boolean. A
@@ -101,7 +101,7 @@ jobs:
           # nothing. Fail here instead.
           for job in frontend rust core powershell storybook android web; do
             grep -Eqx "$job=(true|false)" <<< "$flags" \
-              || { echo "ci-route.mjs printed no '$job=true|false' line:" >&2; echo "$flags" >&2; exit 1; }
+              || { echo "ci-route.ts printed no '$job=true|false' line:" >&2; echo "$flags" >&2; exit 1; }
           done
 
           echo "$flags" >> "$GITHUB_OUTPUT"
@@ -635,7 +635,7 @@ jobs:
   # around the module into `apps/light/dist-web/`, serves that on `localhost` and has a headless Chrome
   # load it — the first job here in which the engine runs anywhere but the runner's own triple.
   #
-  # **What it proves is the smoke script's to say** (`scripts/web-smoke.mjs`): the module
+  # **What it proves is the smoke script's to say** (`scripts/web-smoke.ts`): the module
   # instantiates in a Worker and the engine opens its database there. It runs no test suite in
   # the browser, downloads no corpus, and is one Chrome on Linux — the engine's tests are still
   # `rust`'s, natively, and a phone's browser is still a phone's. **No measured figure in this
@@ -658,7 +658,7 @@ jobs:
           persist-credentials: false
 
       # `core`'s step, guard and all — see there for what the failure looks like without it.
-      # `scripts/build-wasm.mjs` finds the compiler as `clang` on `PATH`, which is where this
+      # `scripts/build-wasm.ts` finds the compiler as `clang` on `PATH`, which is where this
       # puts it.
       - name: Install clang
         run: |
@@ -702,7 +702,7 @@ jobs:
       #
       # **Exactly one entry, or the step stops**: a lockfile resolving the crate twice has no
       # single CLI that fits, and guessing which one the web host links is the mismatch again.
-      # `scripts/build-wasm.mjs` reads the same lockfile for itself and refuses a CLI that
+      # `scripts/build-wasm.ts` reads the same lockfile for itself and refuses a CLI that
       # differs, so this parse and that one disagreeing is a red step and not a quiet skew.
       #
       # **Compiled from crates.io, not downloaded**: `cargo install --locked` builds the CLI
@@ -747,7 +747,7 @@ jobs:
       # **The scanner's module, the same way** (phase 7, step 7.5): `crates/grimoire-scan` is
       # the browser's card scanner, a module of its own in a Worker of its own, and its
       # `#[wasm_bindgen]` shell is gated to this target as the web host's is. **With the flag
-      # it ships with and in the build tree it ships from** — `scripts/build-wasm.mjs` has
+      # it ships with and in the build tree it ships from** — `scripts/build-wasm.ts` has
       # both, and why: `simd128` is this module's alone, and a tree of its own is what keeps a
       # build with the flag and a build without from throwing each other's artifacts away.
       # `-p` and nothing beside it, so the features are this crate's graph's — `card-scanner`
@@ -853,7 +853,7 @@ jobs:
       # **The scanner's own module, in a real browser** (step 7.5): the same bundle on the
       # desktop face, a camera that is a file showing one real card, and the run from the
       # offer's Download to the card filed in the collection — then offline, a staged fault, and
-      # the Worker gone when the Scanner is left (`scripts/web-scanner-smoke.mjs` has the
+      # the Worker gone when the Scanner is left (`scripts/web-scanner-smoke.ts` has the
       # eleven checks). Under the shipped policy, so a second Worker the policy refuses is red
       # here, and again on the phone face at 360px in a profile of its own. **One request
       # leaves the runner that the first smoke's rule would forbid**: the card's picture,
@@ -875,7 +875,7 @@ jobs:
         run: pnpm web:scanner-smoke
 
       # **Live sync, two browsers and the relay's own code** (phase 6, step 6.3):
-      # `scripts/web-sync-smoke.mjs` starts `infrastructure/relay/` under workerd (`wrangler dev --local`, a
+      # `scripts/web-sync-smoke.ts` starts `infrastructure/relay/` under workerd (`wrangler dev --local`, a
       # local D1, a throwaway signing key handed over with `--var`), opens the same bundle in two
       # Chrome profiles that resolve the relay's real name to it, and walks a claim, a pairing and
       # a write on each device arriving on the other with nothing pressed — under the shipped

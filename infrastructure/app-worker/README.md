@@ -241,7 +241,7 @@ Headless Chrome 154.0.8037.95 on Windows 11, 2026-10-04, over `pnpm web:build` o
 8,623,589 bytes, taken from the phase's working tree that day (3.07 MB gzipped by Vite's
 report).
 
-- **A first run, under the policy.** A scratch copy of `scripts/web-smoke.mjs` that serves
+- **A first run, under the policy.** A scratch copy of `scripts/web-smoke.ts` that serves
   `apps/light/dist-web/` through `headersFor` and listens for violations on the page and in the Worker —
   the repository's script does neither. All nine of its checks passed: the engine compiled and
   opened its database, the card sync asked `api.scryfall.com` and followed the descriptor to
@@ -387,7 +387,7 @@ and the three hosts ship from one tag ([ci-and-releases.md](../../docs/reference
   lockfile with no script run, and runs **`node ../wrangler/node_modules/wrangler/bin/wrangler.js deploy`** from here with a
   token from the `release` environment, which only `main` may use. It then asks the real
   address three things: the document answers 200, its policy is the built `_headers` line, and
-  the document is the bundle's (`scripts/web-deploy-probe.mjs` — probe 1 below, and the
+  the document is the bundle's (`scripts/web-deploy-probe.ts` — probe 1 below, and the
   document check beside the table). It runs after the desktop builds and the APK and before
   the release is published, and it refuses a tag older than the newest published release — a
   re-run of an old release's job must not put an old bundle back. **It deploys this Worker and
@@ -520,7 +520,7 @@ each time.** The fourth is what production serves, and is the last bullet.
   …\grimoire-web-smoke-…\first_party_sets.db-journal`, a temp profile Chrome had not let go
   of, with the walk's own lines not printed; **the second run passed all twelve lines in
   63.3 s** (the harness has since stopped failing a run over a profile it cannot remove:
-  `scripts/web-smoke/harness.mjs`'s `discard`); `web:deploy-guard` exit 0 (59 on both
+  `scripts/web-smoke/harness.ts`'s `discard`); `web:deploy-guard` exit 0 (59 on both
   sides, v0.40.0); `wrangler dev --local` with probes 1–11 and 14–19 each answering as the
   table says (the module's brotli transfer 2 025 348 B locally); `deploy --dry-run` (48 files
   read); the deploy (12 files uploaded, 31 already there).
@@ -649,7 +649,7 @@ from yet is a header on no request. So:
    files (`200`, `Cache-Control: no-cache`, the manifest `application/json`),
    `/wasm/<id>/scanner/grimoire_scan_bg.wasm` (`application/wasm`, a year and immutable) and
    `/assets/scanWorker-<hash>.js` (`no-cache`, carrying the policy — a Worker runs under its
-   own script's). After a deploy, `scripts/web-deploy-probe.mjs` asks the first of these itself: the
+   own script's). After a deploy, `scripts/web-deploy-probe.ts` asks the first of these itself: the
    manifest the address serves must be the bundle's, byte for byte, and for the bundle format
    this tree's scanner reads — a web app deployed without its scanner's files is red there. The
    preview applies the policy by this repository's own reading of `_headers`. **And
@@ -1076,5 +1076,5 @@ pnpm exec tsc -p infrastructure/app-worker/tsconfig.json
 ```
 
 `infrastructure/app-worker/src/**/*.test.ts` is a glob in `vitest.config.ts`; a directory that list does not name
-is collected by nothing. `scripts/ci-route.mjs` routes this directory to `frontend`, which runs
+is collected by nothing. `scripts/ci-route.ts` routes this directory to `frontend`, which runs
 all of the above, and to `web`, whose build copies `_headers` and loads `src/headers.ts`.

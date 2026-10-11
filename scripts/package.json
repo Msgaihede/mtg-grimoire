@@ -1,0 +1,16 @@
+{
+  "name": "@grimoire/scripts",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:",
+    "@types/chai": "^5.2.3",
+    "@types/node": "^22.20.5",
+    "devtools-protocol": "^0.0.1716261",
+    "jsqr": "catalog:",
+    "prettier": "^3.9.6",
+    "typescript": "~6.0.3",
+    "vitest": "catalog:"
+  }
+}

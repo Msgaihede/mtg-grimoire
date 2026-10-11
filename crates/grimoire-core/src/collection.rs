@@ -9104,7 +9104,7 @@ mod tests {
 
 /// **The test scaffolding this module's tests share with the ones `src-tauri` still holds** —
 /// behind the `testing` feature, which no build ships. At the foot of the file, below
-/// `mod tests`, because `scripts/coverage-rust.mjs` counts everything from the first column-0
+/// `mod tests`, because `scripts/coverage-rust.ts` counts everything from the first column-0
 /// `#[cfg(test)]` down as test code.
 #[cfg(any(test, feature = "testing"))]
 pub mod fixtures {

@@ -21,15 +21,15 @@
 - **Never `cargo fmt --all`** and never `cargo fmt` inside `crates/card-scanner`.
 - **Never run Prettier over the tree.** Format a file you wrote by matching its neighbours.
 - **`git reset`, `git switch -c`, redirects and heredocs go through the PowerShell tool**; Bash refuses them here. Start every PowerShell call with `Set-Location` to the worktree.
-- **Not touched, ever:** `docs/superpowers/**`, `CHANGELOG.md`, `Cargo.lock` (cargo may rewrite it; a hand never does), `package-lock.json`, `scripts/core-step-*.mjs`.
+- **Not touched, ever:** `docs/superpowers/**`, `CHANGELOG.md`, `Cargo.lock` (cargo may rewrite it; a hand never does), `package-lock.json`, `scripts/core-step-*.ts`.
 - **`<scratch>`** below is a folder outside the repository. In the planning session it is `C:\Users\Markus\AppData\Local\Temp\claude\D--Code-mtg-grimoire--claude-worktrees-repo-structure-cleanup-66d570\ba6ad799-535b-4b63-a3d2-9bb84e0e1273\scratchpad`, which already holds `layout-move.mjs` and a `census-before.json` taken at `54605405`. If that folder is gone, write `layout-move.mjs` from Appendix A.
-- **`CLAUDE.md` files stay under 200 lines** (`node scripts/check-claude-md.mjs`).
+- **`CLAUDE.md` files stay under 200 lines** (`node scripts/check-claude-md.ts`).
 
 ## Review Focus
 
-1. **The dev server refuses the shared UI.** With each app's Vite `root` set to its own folder, `packages/ui` is outside it, and Vite answers 403 for a file outside `server.fs.allow`. A build and Vitest never see it; `tauri dev` shows a blank window. Pinned by `scripts/vite-base.test.mjs` (Task 3) and the live pass (Task 7).
+1. **The dev server refuses the shared UI.** With each app's Vite `root` set to its own folder, `packages/ui` is outside it, and Vite answers 403 for a file outside `server.fs.allow`. A build and Vitest never see it; `tauri dev` shows a blank window. Pinned by `scripts/vite-base.test.ts` (Task 3) and the live pass (Task 7).
 2. **A sweep that matches fewer files and still passes.** Thirteen tests glob `src/**`; six files leave it. Pinned by the census comparison (Task 4), which must print `every sweep matches what it matched`.
-3. **A workflow that names a folder that is gone.** `release.yml` cannot run before a release. Pinned by a new assertion in `scripts/workflow-scripts.test.mjs` that every `working-directory:` exists (Task 5).
+3. **A workflow that names a folder that is gone.** `release.yml` cannot run before a release. Pinned by a new assertion in `scripts/workflow-scripts.test.ts` that every `working-directory:` exists (Task 5).
 4. **Tailwind stops scanning a folder**, and a class used only there emits no CSS. The fake's files were scanned because they sat inside `.storybook/`; they no longer do. Pinned by the CSS comparison (Task 7).
 5. **A checkout that takes this commit and keeps `src-tauri/target`** opens an empty collection, because the app's data sits beside its executable. No test can hold it; the skill, the docs and the pull request body say so (Task 6, Task 8).
 
@@ -40,7 +40,7 @@
 | `vite.base.ts` | What the three apps' Vite configs and Vitest share: plugins, the `@` alias, the watch list, `fs.allow`. |
 | `vitest.config.ts` | The test settings that lived in `vite.config.ts`. |
 | `apps/desktop/src/desktop.css` | The desktop's stylesheet: the shared one plus its own Tailwind sources. |
-| `scripts/vite-base.test.mjs` | Fence for Review Focus 1. |
+| `scripts/vite-base.test.ts` | Fence for Review Focus 1. |
 | `docs/reference/repository-layout.md` | The layout and the old-to-new table. |
 
 | Rewritten | Why |
@@ -239,7 +239,7 @@ Expected: about 1,757 renames. A count far below that means git read moves as de
 ### Task 2: Cargo
 
 **Files:**
-- Modify: `Cargo.toml`, `apps/desktop/src-tauri/Cargo.toml`, `apps/light/src-tauri/Cargo.toml`, `crates/grimoire-core/Cargo.toml`, `crates/grimoire-web/Cargo.toml`, `crates/grimoire-scan/Cargo.toml`, `release-please-config.json`, `.gitignore`, `apps/desktop/src-tauri/src/desktop.rs` (the version test near line 1420), `scripts/release-rule.test.mjs`
+- Modify: `Cargo.toml`, `apps/desktop/src-tauri/Cargo.toml`, `apps/light/src-tauri/Cargo.toml`, `crates/grimoire-core/Cargo.toml`, `crates/grimoire-web/Cargo.toml`, `crates/grimoire-scan/Cargo.toml`, `release-please-config.json`, `.gitignore`, `apps/desktop/src-tauri/src/desktop.rs` (the version test near line 1420), `scripts/release-rule.test.ts`
 - Rewrite: `.cargo/config.toml` (`target-dir = "target"`; see Step 3's amendment)
 
 **Interfaces:**
@@ -325,7 +325,7 @@ The list of strings the config must contain becomes:
 
 and the assertion message above it, which says the two manifests "must carry the same version", says instead that both inherit `[workspace.package]`'s version in the root `Cargo.toml`. Update the comment `the release tooling is told about both manifests` to `about the workspace's version`.
 
-- [ ] **Step 6: The JavaScript fence** (`scripts/release-rule.test.mjs`)
+- [ ] **Step 6: The JavaScript fence** (`scripts/release-rule.test.ts`)
 
 In the `CRATES` table, `dir: "src-tauri"` becomes `dir: "apps/desktop/src-tauri"` (the script already re-pathed the light host's). Replace the test `"$name wears it, in its manifest and in the lockfile"` with:
 
@@ -384,7 +384,7 @@ foreach ($d in "apps\desktop\dist","apps\light\dist-mobile") {
 cargo check --workspace --locked
 ```
 
-Expected: the target directory ends in `\target`; five packages, each `0.42.0 2021 AGPL-3.0-or-later`; `cargo check` finishes. It runs both hosts' `tauri-build`, which is the first proof that Tauri accepts a version inherited from the workspace (the CLI's is `tauri dev` in Task 7). **If `tauri-build` refuses the manifest, stop and tell the controller**: the spec has the owner decide. `scripts/release-rule.test.mjs` is run in Task 5, once Vitest has a config again. `--locked` failing means `Cargo.lock` wants a change: run once without it, and confirm `git diff --stat Cargo.lock` is empty or explain it.
+Expected: the target directory ends in `\target`; five packages, each `0.42.0 2021 AGPL-3.0-or-later`; `cargo check` finishes. It runs both hosts' `tauri-build`, which is the first proof that Tauri accepts a version inherited from the workspace (the CLI's is `tauri dev` in Task 7). **If `tauri-build` refuses the manifest, stop and tell the controller**: the spec has the owner decide. `scripts/release-rule.test.ts` is run in Task 5, once Vitest has a config again. `--locked` failing means `Cargo.lock` wants a change: run once without it, and confirm `git diff --stat Cargo.lock` is empty or explain it.
 
 - [ ] **Step 9: Checkpoint** (controller)
 
@@ -397,13 +397,13 @@ git add -A; git commit -m "wip(layout): cargo"
 ### Task 3: Vite, Tailwind, TypeScript and the npm scripts
 
 **Files:**
-- Create: `vite.base.ts`, `vitest.config.ts`, `apps/desktop/src/desktop.css`, `scripts/vite-base.test.mjs`
+- Create: `vite.base.ts`, `vitest.config.ts`, `apps/desktop/src/desktop.css`, `scripts/vite-base.test.ts`
 - Modify: `apps/desktop/vite.config.ts`, `apps/light/vite.config.ts`, `apps/light/vite.sw.ts`, `apps/share/vite.config.ts`, `vite.watch.ts`, `apps/desktop/src/main.tsx`, `apps/light/index.html`, `apps/share/index.html`, `packages/ui/index.css`, `.storybook/preview.css`, `tsconfig.json`, `.storybook/tsconfig.json`, `infrastructure/{relay,share-worker,app-worker}/tsconfig.json`, `packages/ui/tsconfig.web-worker.json`, `packages/ui/tsconfig.web-sw.json`, `packages/ui/components.json`, `eslint.config.js`, `.storybook/main.ts`, `package.json`, the two `tauri.conf.json`s if a check below says so
 
 **Interfaces:**
 - Produces: `vite.base.ts` default-exports a Vite config and exports `REPO: string` (the repository root, with a trailing separator) and `UI: string` (`<REPO>packages/ui`). Vitest's root is the repository root. Each app's Vite root is its own folder.
 
-- [ ] **Step 1: Write the failing fence**, `scripts/vite-base.test.mjs`
+- [ ] **Step 1: Write the failing fence**, `scripts/vite-base.test.ts`
 
 ```js
 // What every Vite program in the repository shares, held where a build cannot see it break:
@@ -431,7 +431,7 @@ describe("vite.base.ts", () => {
 });
 ```
 
-Run `npx vitest run scripts/vite-base.test.mjs`. Expected: FAIL, `vite.base.ts` does not exist. (Vitest still reads its settings from nowhere at this point, so the run may fail earlier on a missing config; either failure is the red.)
+Run `npx vitest run scripts/vite-base.test.ts`. Expected: FAIL, `vite.base.ts` does not exist. (Vitest still reads its settings from nowhere at this point, so the run may fail earlier on a missing config; either failure is the red.)
 
 - [ ] **Step 2: `vite.base.ts`** — today's `apps/desktop/vite.config.ts` without its `test` block
 
@@ -490,7 +490,7 @@ export default defineConfig({
       ignored: WATCH_IGNORED,
     },
     // 4. The shared UI is outside every app's root. Without this the dev server answers 403 for
-    //    each of its files and the window is blank; a build never asks. `scripts/vite-base.test.mjs`.
+    //    each of its files and the window is blank; a build never asks. `scripts/vite-base.test.ts`.
     fs: { allow: [REPO] },
   },
 });
@@ -543,7 +543,7 @@ export default mergeConfig(
         "infrastructure/relay/src/**/*.test.ts",
         "infrastructure/share-worker/src/**/*.test.ts",
         "infrastructure/app-worker/src/**/*.test.ts",
-        "scripts/**/*.test.mjs",
+        "scripts/**/*.test.ts",
       ],
       css: true,
       coverage: {
@@ -722,7 +722,7 @@ Every other script is unchanged. `test` and `test:run` find `vitest.config.ts` a
 - [ ] **Step 11: Check**
 
 ```powershell
-npx vitest run scripts/vite-base.test.mjs
+npx vitest run scripts/vite-base.test.ts
 npm run build
 npx vite build --config apps/light/vite.config.ts
 npm run web:build
@@ -759,7 +759,7 @@ Checkpoint (controller): `git add -A; git commit -m "wip(layout): vite, tailwind
 ### Task 4: Sweeps, and what the script could not decide
 
 **Files:**
-- Modify: twelve of the thirteen test files the census names (the thirteenth, `scripts/ci-route.test.mjs`, is Task 5's); `infrastructure/app-worker/src/hosting.test.ts`; `scripts/web-smoke/sync-harness.mjs`, `scripts/web-sync-smoke.mjs`, `scripts/phone-scanner-smoke.mjs`, `scripts/pairing-scan-smoke.mjs`; `packages/ui/features/share/readOnly.test.ts`
+- Modify: twelve of the thirteen test files the census names (the thirteenth, `scripts/ci-route.test.ts`, is Task 5's); `infrastructure/app-worker/src/hosting.test.ts`; `scripts/web-smoke/sync-harness.ts`, `scripts/web-sync-smoke.ts`, `scripts/phone-scanner-smoke.ts`, `scripts/pairing-scan-smoke.ts`; `packages/ui/features/share/readOnly.test.ts`
 
 **Interfaces:**
 - Consumes: Task 3's Vitest root (the repository) and globs.
@@ -771,7 +771,7 @@ node "<scratch>\layout-move.mjs" . --census "<scratch>\census-after.json"
 node "<scratch>\layout-move.mjs" . --census-diff "<scratch>\census-before.json" "<scratch>\census-after.json"
 ```
 
-Expected: `13 sweeps differ`. Twelve lost the six files now in `apps/desktop/src/`; `scripts/ci-route.test.mjs` also lost the eight `packages/fake/*.test.ts`.
+Expected: `13 sweeps differ`. Twelve lost the six files now in `apps/desktop/src/`; `scripts/ci-route.test.ts` also lost the eight `packages/fake/*.test.ts`.
 
 - [ ] **Step 2: Give each sweep the desktop's folder**
 
@@ -799,7 +799,7 @@ node "<scratch>\layout-move.mjs" . --census "<scratch>\census-after.json"
 node "<scratch>\layout-move.mjs" . --census-diff "<scratch>\census-before.json" "<scratch>\census-after.json"
 ```
 
-Expected: `1 sweeps differ`, and the one is `scripts/ci-route.test.mjs`, which Task 5 closes.
+Expected: `1 sweeps differ`, and the one is `scripts/ci-route.test.ts`, which Task 5 closes.
 
 - [ ] **Step 4: The literals the script left**
 
@@ -807,8 +807,8 @@ Expected: `1 sweeps differ`, and the one is `scripts/ci-route.test.mjs`, which T
 | --- | --- | --- |
 | `infrastructure/app-worker/src/hosting.test.ts` | the expected `assets.directory`, `"../dist-web"` | `"../../apps/light/dist-web"` |
 | same | `"!/app-worker/.wrangler/**"`, `"!/app-worker/node_modules/**"` | `"!/infrastructure/app-worker/…"` |
-| `scripts/web-smoke/sync-harness.mjs` | `relay/.wrangler/…` (three) | `infrastructure/relay/.wrangler/…` |
-| same, and `scripts/web-sync-smoke.mjs` | `app-worker/node_modules/wrangler/…` | `infrastructure/app-worker/node_modules/wrangler/…` |
+| `scripts/web-smoke/sync-harness.ts` | `relay/.wrangler/…` (three) | `infrastructure/relay/.wrangler/…` |
+| same, and `scripts/web-sync-smoke.ts` | `app-worker/node_modules/wrangler/…` | `infrastructure/app-worker/node_modules/wrangler/…` |
 | `packages/ui/features/share/readOnly.test.ts` | `from.startsWith("share/")` | read the test: if `from` is a root-relative module path it is `"apps/share/"`; if it is a path inside the feature folder it stays |
 
 The two phone smoke scripts open the light app's dev server by URL. With the root at `apps/light`, the page that was `/mobile/index.html` is `/index.html`, and the script rewrote those literals to `/apps/light/index.html`. Set each back to the path under the new root, and re-read any other `/apps/light/…` URL in them the same way.
@@ -832,7 +832,7 @@ npx vitest run --shard=3/4
 npx vitest run --shard=4/4
 ```
 
-Expected: the file counts are equal plus one (`scripts/vite-base.test.mjs`); the test counts are equal plus three. Four shards, because one long run is killed at about ten minutes. Failures in `scripts/ci-route.test.mjs`, `release-rule`, `workflow-scripts`, `toolchain` and `actions-pinned` are Task 5's; report them and fix nothing there. Every other failure is this task's.
+Expected: the file counts are equal plus one (`scripts/vite-base.test.ts`); the test counts are equal plus three. Four shards, because one long run is killed at about ten minutes. Failures in `scripts/ci-route.test.ts`, `release-rule`, `workflow-scripts`, `toolchain` and `actions-pinned` are Task 5's; report them and fix nothing there. Every other failure is this task's.
 
 Checkpoint (controller): `git add -A; git commit -m "wip(layout): sweeps and leftovers"`.
 
@@ -841,9 +841,9 @@ Checkpoint (controller): `git add -A; git commit -m "wip(layout): sweeps and lef
 ### Task 5: CI and its fences
 
 **Files:**
-- Modify: `scripts/ci-route.mjs`, `scripts/ci-route.test.mjs`, `.github/workflows/ci.yml`, `release.yml`, `android-emulator.yml`, `scanner-bundle.yml`, `scripts/release-rule.test.mjs` (the deploy pins), `scripts/workflow-scripts.test.mjs`, `.github/CLAUDE.md`, `apps/light/src-tauri/gen/android/buildSrc/src/main/java/com/mtggrimoire/app/kotlin/BuildTask.kt` (its comment), `apps/light/host.test.ts` if it quotes that comment
+- Modify: `scripts/ci-route.ts`, `scripts/ci-route.test.ts`, `.github/workflows/ci.yml`, `release.yml`, `android-emulator.yml`, `scanner-bundle.yml`, `scripts/release-rule.test.ts` (the deploy pins), `scripts/workflow-scripts.test.ts`, `.github/CLAUDE.md`, `apps/light/src-tauri/gen/android/buildSrc/src/main/java/com/mtggrimoire/app/kotlin/BuildTask.kt` (its comment), `apps/light/host.test.ts` if it quotes that comment
 
-- [ ] **Step 1: Write the failing fence** — a new `describe` at the foot of `scripts/workflow-scripts.test.mjs`
+- [ ] **Step 1: Write the failing fence** — a new `describe` at the foot of `scripts/workflow-scripts.test.ts`
 
 ```js
 // `release.yml` runs on a release and nowhere else, so a step that names a folder a move took
@@ -865,7 +865,7 @@ describe("the folders a workflow steps into", () => {
 });
 ```
 
-with `import { existsSync } from "node:fs";` and `import { fileURLToPath } from "node:url";` added to the file's imports if it lacks them. Run `npx vitest run scripts/workflow-scripts.test.mjs`. Expected: FAIL, listing `mobile` and `app-worker`.
+with `import { existsSync } from "node:fs";` and `import { fileURLToPath } from "node:url";` added to the file's imports if it lacks them. Run `npx vitest run scripts/workflow-scripts.test.ts`. Expected: FAIL, listing `mobile` and `app-worker`.
 
 - [ ] **Step 2: The workflows**
 
@@ -888,11 +888,11 @@ git grep -nE "(^|[^/\w-])(dist|dist-mobile|dist-web|dist-share)/" -- .github
 
 Expected: no output from the first. Every line of the second names `apps/…/dist…` or is a comment that is still true.
 
-- [ ] **Step 3: The deploy pins** (`scripts/release-rule.test.mjs`)
+- [ ] **Step 3: The deploy pins** (`scripts/release-rule.test.ts`)
 
 The two expectations `toMatch(/^ {8}working-directory: app-worker$/m)` become `…working-directory: infrastructure\/app-worker$/m`, and the test title `"runs wrangler once: `web-deploy`, the lockfile's, from app-worker/"` names `infrastructure/app-worker/`. The pinned step name `Install wrangler from app-worker's lockfile` stays as the workflow spells it. No command in the allowed list changes.
 
-- [ ] **Step 4: The router** (`scripts/ci-route.mjs`)
+- [ ] **Step 4: The router** (`scripts/ci-route.ts`)
 
 **First match wins**, so a file that moved under a folder with an arm of its own must have its arm above that folder's. After the script, fix the order and add the arms the new files need, so that the list contains, in this relative order:
 
@@ -918,17 +918,17 @@ The two expectations `toMatch(/^ {8}working-directory: app-worker$/m)` become `�
 - [ ] **Step 5: The router's test, and the Android comment**
 
 ```powershell
-npx vitest run scripts/ci-route.test.mjs scripts/release-rule.test.mjs scripts/workflow-scripts.test.mjs scripts/toolchain.test.mjs scripts/actions-pinned.test.mjs
+npx vitest run scripts/ci-route.test.ts scripts/release-rule.test.ts scripts/workflow-scripts.test.ts scripts/toolchain.test.ts scripts/actions-pinned.test.ts
 ```
 
-First, in `scripts/ci-route.test.mjs`: beside the frontend test globs add `/apps/desktop/src/**/*.test.{ts,tsx}` and `/packages/fake/**/*.test.ts`, which the move took out from under `/packages/ui/**` and `/.storybook/**`; and the router input `"public/favicon.svg"` becomes `"apps/desktop/public/favicon.svg"`. Then:
+First, in `scripts/ci-route.test.ts`: beside the frontend test globs add `/apps/desktop/src/**/*.test.{ts,tsx}` and `/packages/fake/**/*.test.ts`, which the move took out from under `/packages/ui/**` and `/.storybook/**`; and the router input `"public/favicon.svg"` becomes `"apps/desktop/public/favicon.svg"`. Then:
 
 ```powershell
 node "<scratch>\layout-move.mjs" . --census "<scratch>\census-after.json"
 node "<scratch>\layout-move.mjs" . --census-diff "<scratch>\census-before.json" "<scratch>\census-after.json"
 ```
 
-Expected: `every sweep matches what it matched`, and the five test files PASS. `ci-route.test.mjs` derives what each job reads from the sources; where it fails, it is naming a file a job reads that no arm routes to that job, and the fix is an arm, not an exemption. Its example inputs were re-pathed by the script; where an example asserted the old root-file routing of `vite.mobile.config.ts`, it now asserts `apps/light/vite.config.ts`.
+Expected: `every sweep matches what it matched`, and the five test files PASS. `ci-route.test.ts` derives what each job reads from the sources; where it fails, it is naming a file a job reads that no arm routes to that job, and the fix is an arm, not an exemption. Its example inputs were re-pathed by the script; where an example asserted the old root-file routing of `vite.mobile.config.ts`, it now asserts `apps/light/vite.config.ts`.
 
 `BuildTask.kt`'s hand-edit comment says the script is `cd mobile && tauri`; it is `cd apps/light && tauri`. `rootDirRel` and the arguments are unchanged: the Gradle project still sits three folders below its host. If `apps/light/host.test.ts` quotes the comment, quote the new one.
 
@@ -938,15 +938,15 @@ Expected: `every sweep matches what it matched`, and the five test files PASS. `
 $yml = (Resolve-Path .github\workflows\release.yml).Path
 $good = [IO.File]::ReadAllText($yml)
 [IO.File]::WriteAllText($yml, $good.Replace("working-directory: infrastructure/app-worker", "working-directory: app-worker"))
-npx vitest run scripts/release-rule.test.mjs scripts/workflow-scripts.test.mjs
+npx vitest run scripts/release-rule.test.ts scripts/workflow-scripts.test.ts
 [IO.File]::WriteAllText($yml, $good)
 ```
 
-Expected: both files FAIL while the line is wrong. **Never restore with `git checkout`**: this task's edits to the file are not committed yet, and a checkout would discard them. Then, the same way — keep the text, break it, run, write it back — delete the `apps/light/vite.config.ts` arm from `ci-route.mjs`, run `npx vitest run scripts/ci-route.test.mjs` and expect FAIL. A fence that stays green when its property is broken is reported, not left.
+Expected: both files FAIL while the line is wrong. **Never restore with `git checkout`**: this task's edits to the file are not committed yet, and a checkout would discard them. Then, the same way — keep the text, break it, run, write it back — delete the `apps/light/vite.config.ts` arm from `ci-route.ts`, run `npx vitest run scripts/ci-route.test.ts` and expect FAIL. A fence that stays green when its property is broken is reported, not left.
 
 - [ ] **Step 7: `.github/CLAUDE.md`**
 
-Re-path every arm it lists to match Step 4, the `Swatinem/rust-cache` line (`". -> target"`, cargo's default), the stub line (`apps/desktop/dist/index.html`), and `wrangler … from infrastructure/app-worker/package-lock.json`. `node scripts/check-claude-md.mjs` must pass.
+Re-path every arm it lists to match Step 4, the `Swatinem/rust-cache` line (`". -> target"`, cargo's default), the stub line (`apps/desktop/dist/index.html`), and `wrangler … from infrastructure/app-worker/package-lock.json`. `node scripts/check-claude-md.ts` must pass.
 
 Checkpoint (controller): `git add -A; git commit -m "wip(layout): ci and its fences"`.
 
@@ -1044,8 +1044,8 @@ Read and correct each of these, wherever the docs, the skills and the READMEs sa
 - [ ] **Step 5: Check**
 
 ```powershell
-node scripts/check-claude-md.mjs
-npx vitest run scripts/claude-md.test.mjs
+node scripts/check-claude-md.ts
+npx vitest run scripts/claude-md.test.ts
 node "<scratch>\layout-move.mjs" . --stale
 ```
 
@@ -1126,7 +1126,7 @@ $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
 npm run tauri dev
 ```
 
-If the first number is not `0` or a mirror root is set, delete those rows **in the copy** before launching: the copy is the owner's device otherwise. Then, with the window up: the collection shows the cards it had; a card's picture loads; the deck list opens; `node scripts/cdp.mjs eval "document.querySelectorAll('link[rel=stylesheet],style').length"` answers non-zero. Release the lock afterwards. Tell the owner beforehand that a window will open.
+If the first number is not `0` or a mirror root is set, delete those rows **in the copy** before launching: the copy is the owner's device otherwise. Then, with the window up: the collection shows the cards it had; a card's picture loads; the deck list opens; `node scripts/cdp.ts eval "document.querySelectorAll('link[rel=stylesheet],style').length"` answers non-zero. Release the lock afterwards. Tell the owner beforehand that a window will open.
 
 - [ ] **Step 6: The light app, and Storybook**
 
@@ -1287,7 +1287,7 @@ const HAND = new Set([
 const FROZEN = [
   /^docs\/superpowers\//, /^CHANGELOG\.md$/, /^LICENSE$/, /(^|\/)Cargo\.lock$/,
   /(^|\/)package-lock\.json$/, /^\.release-please-manifest\.json$/,
-  /^scripts\/core-step-[^/]*\.mjs$/, /\/__golden__\//, /^scripts\/web-smoke\/[^/]*\.(jsonl|json)$/,
+  /^scripts\/core-step-[^/]*\.ts$/, /\/__golden__\//, /^scripts\/web-smoke\/[^/]*\.(jsonl|json)$/,
 ];
 const BINARY = /\.(png|ico|icns|jpe?g|webp|gif|woff2?|ttf|otf|eot|jar|keystore|jks|rten|bin|pdf|zip|wasm|db)$/i;
 

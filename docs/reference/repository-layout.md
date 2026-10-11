@@ -47,7 +47,7 @@ Every package is private and at `0.0.0`; release-please bumps the root's version
 There is no build step between packages and no `exports` map: a consumer compiles the source of
 the package it imports.
 
-**The import rules** (`scripts/workspace.test.mjs` holds them; `eslint.config.js` shows the first
+**The import rules** (`scripts/workspace.test.ts` holds them; `eslint.config.js` shows the first
 two in an editor):
 
 1. A module in another package is imported by the package's name: `@grimoire/ui/lib/ipc`.

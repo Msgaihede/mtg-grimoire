@@ -30,7 +30,7 @@
 | Wave | Task | Owns (no other task edits these) |
 | --- | --- | --- |
 | 1 | T1 Crate: filters, modes, Exact tiers, decision | `crates/card-scanner/src/{filters.rs,resolve.rs,reference.rs,track.rs,session.rs,ocr.rs,lib.rs}`, `crates/card-scanner/src/bin/{live.html,serve.rs}` |
-| 1 | T2 Shipping: builder `--bulk`, workflow, release step, assets script, build.rs cfg | `crates/card-scanner/src/bin/build_hashes.rs`, `crates/card-scanner/Cargo.toml`, `.github/workflows/{scanner-bundle.yml,release.yml}`, `scripts/scanner-assets.mjs`, `package.json` (scripts only), `src-tauri/build.rs`, `src-tauri/scanner-assets/README.md`, `.gitignore` |
+| 1 | T2 Shipping: builder `--bulk`, workflow, release step, assets script, build.rs cfg | `crates/card-scanner/src/bin/build_hashes.rs`, `crates/card-scanner/Cargo.toml`, `.github/workflows/{scanner-bundle.yml,release.yml}`, `scripts/scanner-assets.ts`, `package.json` (scripts only), `src-tauri/build.rs`, `src-tauri/scanner-assets/README.md`, `.gitignore` |
 | 1 | T3 App commands + IPC types + fixtures + Storybook fake | `src-tauri/src/scanner.rs`, `src-tauri/src/lib.rs` (command registration only), `src/lib/ipc.ts` (scanner section only), `src/lib/ipc.test.ts` (mirror rows only), `src/features/scanner/{types.ts,fixtures.ts}`, `.storybook/fake/db.ts` (scanner handlers only), `.storybook/CLAUDE.md` (only if a fault is added) |
 | 1 | T4 Tray model + reader-facing components | new files under `src/features/scanner/reader/` |
 | 2 | T5 ScannerPage integration + Tiers panel | `src/features/scanner/{ScannerPage.tsx,ScannerPage.test.tsx,ScannerPage.stories.tsx,useScanLoop.ts,useScanLoop.test.ts,ScannerPanels.tsx,verdictText.ts,verdictText.test.ts,useScannerPrefs.ts,useTray.ts}` (+ tests), `src/features/scanner/panels/TiersPanel.tsx`, `src/lib/store.ts` (`PrintingsRequest.pick` only), `src/features/card/AllPrintingsDialog.tsx` (the `pick` branch only) |
@@ -280,7 +280,7 @@ git commit -m "feat(scanner): set and date filters through every tier, Fast and 
 
 **Files:**
 - Modify: `crates/card-scanner/src/bin/build_hashes.rs` (`--bulk`), `crates/card-scanner/Cargo.toml` (only if `--bulk` needs a feature change), `.github/workflows/release.yml`, `src-tauri/build.rs`, `package.json` (one script), `.gitignore`
-- Create: `.github/workflows/scanner-bundle.yml`, `scripts/scanner-assets.mjs`, `src-tauri/scanner-assets/README.md`
+- Create: `.github/workflows/scanner-bundle.yml`, `scripts/scanner-assets.ts`, `src-tauri/scanner-assets/README.md`
 
 **Interfaces:**
 - Consumes: nothing from T1.
@@ -349,7 +349,7 @@ src-tauri/scanner-assets/*
 !src-tauri/scanner-assets/README.md
 ```
 
-- [ ] **Step 4: `scripts/scanner-assets.mjs` and the npm script**
+- [ ] **Step 4: `scripts/scanner-assets.ts` and the npm script**
 
 Node ESM, no dependencies:
 - Read `FORMAT_VERSION` from `crates/card-scanner/src/index.rs` with the regex `/pub const FORMAT_VERSION: u8 = (\d+);/` (confirm the declaration's exact spelling first and match it; fail loudly if it is not found).
@@ -358,7 +358,7 @@ Node ESM, no dependencies:
 - Skip a file that is already present with the same size as the `content-length`.
 - Exit non-zero on any failure.
 
-`package.json` → `"scanner:assets": "node scripts/scanner-assets.mjs"`. Confirm the repository slug with `gh repo view --json nameWithOwner --jq .nameWithOwner` before hard-coding it.
+`package.json` → `"scanner:assets": "node scripts/scanner-assets.ts"`. Confirm the repository slug with `gh repo view --json nameWithOwner --jq .nameWithOwner` before hard-coding it.
 
 - [ ] **Step 5: `.github/workflows/scanner-bundle.yml`**
 
@@ -445,7 +445,7 @@ On the build job, immediately after `npm ci` and before `tauri-apps/tauri-action
 - [ ] **Step 7: Commit**
 
 ```bash
-git add crates/card-scanner/src/bin/build_hashes.rs .github/workflows/scanner-bundle.yml .github/workflows/release.yml scripts/scanner-assets.mjs package.json src-tauri/build.rs src-tauri/scanner-assets/README.md .gitignore
+git add crates/card-scanner/src/bin/build_hashes.rs .github/workflows/scanner-bundle.yml .github/workflows/release.yml scripts/scanner-assets.ts package.json src-tauri/build.rs src-tauri/scanner-assets/README.md .gitignore
 git commit -m "ci(scanner): build the hash bundle weekly, publish it with the models, and embed all three in release builds"
 ```
 

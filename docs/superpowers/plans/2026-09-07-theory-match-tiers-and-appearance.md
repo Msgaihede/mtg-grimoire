@@ -2364,7 +2364,7 @@ tiers` and siblings.
 - [ ] **Step 6: Drive the real window**
 
 Take the app lock through `.claude/skills/running-the-app/lock.ps1`, run `npm run tauri dev`, and
-drive it over `scripts/cdp.mjs` from **PowerShell** (Bash refuses `cdp.mjs eval` in a worktree as
+drive it over `scripts/cdp.ts` from **PowerShell** (Bash refuses `cdp.ts eval` in a worktree as
 unverifiable). `docs/reference/live-ui-verification.md` is the contract. Confirm, on a real deck
 with a theory list:
 

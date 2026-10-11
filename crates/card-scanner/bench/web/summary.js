@@ -1,6 +1,6 @@
 // What a bench run comes to, from its per-frame records — the one summariser for both hosts.
 //
-// The page imports it for a run in a browser, and `scripts/scanner-bench.mjs` imports it for
+// The page imports it for a run in a browser, and `scripts/scanner-bench.ts` imports it for
 // the native runner's output (`scanner-bench-native <dir>` prints records and no summary). One piece
 // of code, so a native figure and a browser figure were reduced the same way.
 //

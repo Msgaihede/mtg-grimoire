@@ -617,6 +617,6 @@ and 2/3, 3/3, then `npm run build`, `npx eslint . --max-warnings 0`, `npx tsc --
 
 - [ ] **Step 4: Drive the real window.** Create a folder, file a card into it by drag and by `Move to → folder`, check the card menu's nested targets, delete a folder holding cards and confirm they surface at the root. Per `live-ui-verification.md`.
 
-Harness notes from PR 1's pass: the collection page is a **div/grid table** — query `[role=row]` and `[role=gridcell]`, not `tbody tr`. `cdp.mjs` has no right-click: a synthetic `MouseEvent('contextmenu', {bubbles, clientX, clientY, button: 2})` on `[data-grid-index]` opens the card menu, and submenus need `pointerenter` + `mouseover` + `focus()` + `click()` together. Take the app lock first, and **release it when done**.
+Harness notes from PR 1's pass: the collection page is a **div/grid table** — query `[role=row]` and `[role=gridcell]`, not `tbody tr`. `cdp.ts` has no right-click: a synthetic `MouseEvent('contextmenu', {bubbles, clientX, clientY, button: 2})` on `[data-grid-index]` opens the card menu, and submenus need `pointerenter` + `mouseover` + `focus()` + `click()` together. Take the app lock first, and **release it when done**.
 
 - [ ] **Step 5: Ship.** `auto-pr`, PR body carrying **`Closes #215`** and `Refs #209`. Write `docs/reference/collection-folders.md` and add its row to the root `CLAUDE.md` reference table — PR 1 deliberately left that row out because the page did not exist yet.

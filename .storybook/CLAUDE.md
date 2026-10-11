@@ -100,7 +100,7 @@ The fake lives in `packages/fake/` (it was `.storybook/fake/` until 2026-10-08);
   - Virtualized lists require container dimension stubs to render rows; tests should assert the presence of specific elements rather than counting rendered items.
 - **Verification Boundary**:
   - Passing Storybook story tests does not guarantee identical behavior in the production Tauri WebView2 container.
-  - True drag-and-drop mechanics (OLE drop targets) and custom protocol handling (`mtgimg://`) must be verified in the running app via CDP (`scripts/cdp.mjs`).
+  - True drag-and-drop mechanics (OLE drop targets) and custom protocol handling (`mtgimg://`) must be verified in the running app via CDP (`scripts/cdp.ts`).
 
 ## Further Reference
 

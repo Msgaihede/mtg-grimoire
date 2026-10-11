@@ -1,7 +1,7 @@
 # Keeps the SHA-pinned actions current. Every third-party `uses:` in this repository is a full
 # commit SHA with the tag it was on in a trailing comment (`@<sha> # v7.0.1`), because a tag is
 # whatever its owner last pushed; Dependabot moves the SHA and the comment together, in a pull
-# request that runs CI like any other. `scripts/actions-pinned.test.mjs` holds the pins, and
+# request that runs CI like any other. `scripts/actions-pinned.test.ts` holds the pins, and
 # holds this file to covering both places they live.
 #
 # GitHub Actions only. pnpm and cargo are not here: their versions move through lockfiles that a

@@ -93,10 +93,10 @@ The clock, and nothing else. `SystemTime::now()` panics on `wasm32-unknown-unkno
 
 - [x] `package.json`: `lint:rust` and `verify` over the workspace; the card-scanner run keeps its target
 - [x] `ci.yml`: the `rust` job from the root over `--workspace`; a `core` job compiling the crate for the two other targets; `core` in every list a gated job belongs in
-- [x] `scripts/ci-route.mjs` and its test: `core` in `JOBS`; arms for the workspace's own files and for `crates/grimoire-core/`
+- [x] `scripts/ci-route.ts` and its test: `core` in `JOBS`; arms for the workspace's own files and for `crates/grimoire-core/`
 - [x] `release.yml`, `scanner-bundle.yml`: the cache's `workspaces`, the scanner's `--target-dir`
 - [x] `release-please-config.json`: the lockfile's path
-- [x] `scripts/coverage-rust.mjs`: both members
+- [x] `scripts/coverage-rust.ts`: both members
 
 ### Task 5 — the record
 

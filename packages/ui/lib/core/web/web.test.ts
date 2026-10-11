@@ -171,7 +171,7 @@ describe("the web core's Worker", () => {
     const { core, worker } = harness();
     void status(core);
     worker.say({ kind: "opened", opened: READY, existed: true });
-    // `web-smoke.mjs` reads this line off a real browser's console; the words are its contract.
+    // `web-smoke.ts` reads this line off a real browser's console; the words are its contract.
     expect(said).toHaveBeenCalledWith(
       "MTG Grimoire: database open in OPFS — journal delete, corpus journal delete, schema 59",
     );

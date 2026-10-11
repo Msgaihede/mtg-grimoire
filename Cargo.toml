@@ -56,7 +56,7 @@ resolver = "2"
 # the `wasm` profile below. ⚠️ **It is only that crate alone when it is built alone**:
 # `cargo build -p grimoire-scan` resolves the features of its own graph, while any build that
 # names the workspace unifies them with the engine's, which asks the scanner for `corpus` and
-# with it SQLite. `scripts/build-wasm.mjs` builds it with `-p`, in a build tree of its own.
+# with it SQLite. `scripts/build-wasm.ts` builds it with `-p`, in a build tree of its own.
 members = ["apps/desktop/src-tauri", "crates/grimoire-core", "apps/light/src-tauri", "crates/grimoire-web", "crates/grimoire-scan"]
 exclude = ["crates/card-scanner"]
 
@@ -119,7 +119,7 @@ opt-level = 3
 [profile.dev.package.rten-vecmath]
 opt-level = 3
 
-# **The web host's module** — `node scripts/build-wasm.mjs`, which builds `grimoire-web` for
+# **The web host's module** — `node scripts/build-wasm.ts`, which builds `grimoire-web` for
 # `wasm32-unknown-unknown` with `--profile wasm`. A profile of its own, inheriting `release`,
 # so that nothing here reaches the desktop's or the APK's build: **`[profile.release]` is
 # deliberately not written in this file**, and a change to it for the browser's sake would
@@ -178,7 +178,7 @@ opt-level = 3
 #
 # **Two modules are built with this profile since step 7.5 (2026-10-07)**, and the second is
 # where the scanner runs: `crates/grimoire-scan`, the crate alone in a Worker of its own, with
-# `-C target-feature=+simd128` from `scripts/build-wasm.mjs`'s environment and never from here
+# `-C target-feature=+simd128` from `scripts/build-wasm.ts`'s environment and never from here
 # or from `.cargo/config.toml` — the engine's module has to load in a browser without it.
 # Measured that day, no `wasm-opt`, names stripped: **the scanner's module is 4 473 528 B,
 # 985 315 B through brotli at quality 11**. **The engine's went from 6 871 580 B to
