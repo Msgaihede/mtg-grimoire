@@ -218,10 +218,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   developed on — CI ran 22 until this change) feeds every `setup-node`, and `package.json`'s
   `engines` floor is `>=22.18`, the newest any script here needs (`scripts/golden.mjs`).
 - **The workspace is installed with pnpm, and the jobs that hold a secret install none**
-  (2026-10-08; four jobs since 2026-10-11, where it was `android-sign` and `web-deploy`). Every job that installs runs `pnpm/action-setup` (pinned by SHA, the version
+  (2026-10-08; five jobs since 2026-10-11, where it was `android-sign` and `web-deploy`). Every job that installs runs `pnpm/action-setup` (pinned by SHA, the version
   taken from `package.json`'s `packageManager`), then `actions/setup-node` with `cache: pnpm`,
   then `pnpm install --frozen-lockfile`; `scripts/toolchain.test.mjs` holds pnpm's step directly
-  above Node's, once for every install. `android-sign`, `relay-deploy`, `share-deploy` and `web-deploy` have no pnpm step at all,
+  above Node's, once for every install. `android-sign`, `relay-deploy`, `share-deploy`, `web-deploy` and `play-upload` have no pnpm step at all,
   for the reason they have no cargo (*The release rule*, below). The deploy tool is
   `infrastructure/wrangler`, a folder the workspace does not list, installed with
   `npm ci --ignore-scripts` — by the deploy jobs in that folder (`working-directory`), by the `web`
@@ -234,7 +234,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `package.json`'s `packageManager` names npm; it names pnpm, so the job cached nothing before
   the key and caches nothing with it, and the key keeps that so if the field or the action's
   default moves. `scripts/release-rule.test.mjs` holds the step whole, and still refuses the
-  word `cache` anywhere else in the secret-holding jobs (two then, four since 2026-10-11). **The release build's runner is `pnpm tauri
+  word `cache` anywhere else in the secret-holding jobs (two then, five since 2026-10-11). **The release build's runner is `pnpm tauri
   build`**: `tauri-action` finds `pnpm-lock.yaml` at the root and runs the root's `tauri` script,
   which goes to
   `apps/desktop`; that is why the root keeps `@tauri-apps/cli` in its manifest
@@ -271,7 +271,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     checkout without `persist-credentials: false`, a write grant above `jobs:`, a Dependabot
     config that stops watching either directory. (It also fenced the update-signing secret to one
     step of a `sign` job until that job was removed on 2026-09-29, below; **since 2026-10-04
-    `scripts/release-rule.test.mjs` fences the two jobs that hold a secret now** *(four since 2026-10-11)* — *The release
+    `scripts/release-rule.test.mjs` fences the two jobs that hold a secret now** *(five since 2026-10-11)* — *The release
     rule*, below.) Comments are stripped
     before any of it is read, since these files explain themselves in prose that names both.
 - **Every `pnpm <name>` a workflow asks for is a script `package.json` has**
@@ -552,8 +552,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   update to install. Until this step release-please bumped all four crates and both
   `tauri.conf.json`s from one tag and **the tag built only the desktop**: the APK was a 14-day
   CI artifact under a runner's debug key, and the web app was deployed by hand from whatever
-  `main` was. Now `release.yml` is ten jobs (seven until 2026-10-11, when `share`,
-  `relay-deploy` and `share-deploy` joined), every one after the first gated on
+  `main` was. Now `release.yml` is eleven jobs on a release (seven until 2026-10-11, when `share`,
+  `relay-deploy`, `share-deploy` and `play-upload` joined; two more run between releases), every one after the first gated on
   `release_created` and on nothing looser — no `always()`, no `continue-on-error`, so a job
   runs only when every job it needs succeeded:
 
@@ -563,20 +563,21 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
                   ├─ web ────────────────────────────────┤
                   └─ share ──────────────────────────────┤
                                                          ▼
-          relay-deploy → share-deploy → web-deploy → publish
+          relay-deploy → share-deploy → web-deploy → play-upload → publish
   ```
 
   | Job | Needs | Holds a secret | What it does |
   | --- | --- | --- | --- |
   | `build` | `release-please` | no | The desktop matrix, unchanged |
   | `android` | `release-please` | no | `ci.yml`'s `android` job, step for step: the arm64 APK and bundle at the tag, **debug-signed**, held to the tag's version (`scripts/android-release/check-version.sh`); the bundle handed on as the artifact `android-aab-debug-signed` (14 days) |
-  | `android-sign` | `release-please`, `android` | `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_PASSWORD` | Re-signs that bundle with the owner's upload key (`scripts/android-release/sign-bundle.sh`), held to the committed fingerprint, and leaves `mtg-grimoire-<version>-android.aab` as the artifact `play-upload-bundle` (30 days). Attaches nothing to the draft; `contents: read` |
+  | `android-sign` | `release-please`, `android` | `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_PASSWORD` | Re-signs that bundle with the owner's upload key (`scripts/android-release/sign-bundle.sh`), held to the committed fingerprint, and leaves `mtg-grimoire-<version>-android.aab` as the artifact `play-upload-bundle` (30 days); its output `signed` tells `play-upload` whether it did. Attaches nothing to the draft; `contents: read` |
   | `web` | `release-please` | no | `ci.yml`'s `web` job less its lint and size report: clang, the wasm target, the lockfile's `wasm-bindgen` CLI, `web:wasm`, `web:build`, `web:smoke`; `apps/light/dist-web/` handed on as the artifact `web-bundle` (14 days) |
   | `share` | `release-please` | no | The share viewer: `pnpm share:build`, a check that `apps/share/dist-share/assets/share.js` is there and not empty; `apps/share/dist-share/` handed on as the artifact `share-bundle` (14 days). `ci.yml`'s `frontend` runs the same build |
   | `relay-deploy` | `release-please`, `build`, `android-sign`, `web`, `share` | `CLOUDFLARE_INFRA_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | The token alone decides whether it runs. Refuses a tag older than the newest published release; `npm ci --ignore-scripts` in `infrastructure/wrangler/`; then, from `infrastructure/relay/`, `wrangler d1 migrations apply mtg-grimoire-relay --remote` and `wrangler deploy`; then `scripts/relay-deploy-probe.mjs` against the relay's address |
   | `share-deploy` | `release-please`, `share`, `relay-deploy` | `CLOUDFLARE_INFRA_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | The same, from `infrastructure/share-worker/`, with the `share-bundle` downloaded into `apps/share/dist-share/` first (its bookkeeping table is `d1_migrations_share`); then `scripts/share-deploy-probe.mjs` |
   | `web-deploy` | `release-please`, `build`, `android-sign`, `web`, `share-deploy` | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | Refuses a tag older than the newest published release; `npm ci --ignore-scripts` in `infrastructure/wrangler/`, then `node ../wrangler/node_modules/wrangler/bin/wrangler.js deploy` from `infrastructure/app-worker/`; then `scripts/web-deploy-probe.mjs` against `https://mtg-grimoire.app` |
-  | `publish` | `release-please`, `build`, `android-sign`, `relay-deploy`, `share-deploy`, `web-deploy` | no | Flips the draft to published |
+  | `play-upload` (`android (upload to Play)`) | `release-please`, `android-sign`, `web-deploy` | `PLAY_SERVICE_ACCOUNT_JSON` | Asks whether the account is set and `android-sign` signed a bundle; either missing → uploads nothing, says which, green. Otherwise downloads `play-upload-bundle` and runs `node scripts/android-release/play-upload.mjs "aab-in/mtg-grimoire-$VERSION-android.aab" <versionCode>` — no install, no build — which puts it on the `internal` track. `contents: read` |
+  | `publish` | `release-please`, `build`, `android-sign`, `relay-deploy`, `share-deploy`, `web-deploy`, `play-upload` | no | Flips the draft to published |
 
   - **Since 2026-10-07 the Android host goes to Google Play, and only there** (the owner's
     decision; `docs/superpowers/specs/2026-10-07-google-play-release-design.md`). What follows
@@ -596,7 +597,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     *produces* all three hosts and `publish` still waits for `android-sign`, but the Android
     one reaches phones when the owner has uploaded the bundle and Play has reviewed it — hours
     to days behind the desktop and the web app, during which a phone holds a newer op exactly
-    as any older build does. The version is held in the build leg now
+    as any older build does. *(Since 2026-10-11 `play-upload` puts the bundle on the
+    internal track itself; promotion past it is still the owner's.)* The version is held in the build leg now
     (`check-version.sh` reads the generated `tauri.properties`), because a bundle's manifest is
     a protocol buffer only `bundletool` reads. **Measured while this was written** (JDK 25,
     Git Bash, a fake bundle): the proof's one signing and five refusals; and that, with the
@@ -610,7 +612,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   - **A secret sits in a job that builds nothing.** This is the rule the removed `sign` job
     left behind (below), kept: a build leg runs every npm lifecycle script, every cargo build
     script and every Gradle plugin, and any of them can read a file or an environment. So
-    `android-sign`, `relay-deploy`, `share-deploy` and `web-deploy` run no root `pnpm install --frozen-lockfile`, no cargo and no Gradle — a checkout,
+    `android-sign`, `relay-deploy`, `share-deploy`, `web-deploy` and `play-upload` run no root `pnpm install --frozen-lockfile`, no cargo and no Gradle — a checkout,
     an artifact download, and one tool each. **That is why the APK is re-signed rather than
     signed by Gradle**, which is what Tauri's signing guide describes (a `keystore.properties`
     Gradle reads): Gradle signs inside the build, so the keystore and its passwords would be on
@@ -624,7 +626,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     this repository that asks for it — a branch's edited copy of a workflow, run by a push,
     reads it. An environment's is handed only to a job that names the environment, and only
     from a branch the environment allows: `main`, once the owner has restricted it (below).
-    All four say `environment: release` (two until 2026-10-11), no other job does, and **`on:` is a push to `main`
+    All five say `environment: release` (two until 2026-10-11), no other job does, and **`on:` is a push to `main`
     and nothing else** — no `workflow_dispatch`, no `pull_request`. ⚠️ **GitHub creates an
     environment a job names the first time it runs, with no rule on it.** So the first release
     after this merged made `release` empty and open; the owner's first command restricts it,
@@ -756,20 +758,20 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     relay behaviour still needs the relay's first.
   - **`scripts/release-rule.test.mjs` is the fence**, and every line of this list was checked
     by breaking `release.yml` that way and seeing a test go red (23 mutations, 2026-10-04;
-    seven more for the Worker jobs, 2026-10-11, below): the seven jobs *(ten since 2026-10-11)*
+    seven more for the Worker jobs, 2026-10-11, below): the seven jobs *(eleven on a release since 2026-10-11, thirteen with the changelog jobs)*
     and what each needs; that no job's `if:` is looser than `release_created`;
     that **`on:` is a push to `main` and nothing else**; that **every appearance of the word
     `secrets`, in any case and any form, is exactly `secrets.NAME` with a name that job may
     read** — so `secrets.lower_case`, `secrets['X']` and `toJSON(secrets)` are red anywhere,
     and so is an honest spelling in a build leg — and that each job reads all of its list and
     no more; that no job names a secret or an `env:` above its steps; that `environment:
-    release` is on those jobs and no other *(two jobs until 2026-10-11, four since)*; that **everything a secret-holding job can run
+    release` is on those jobs and no other *(two jobs until 2026-10-11, five since)*; that **everything a secret-holding job can run
     is on a list, to the letter** — `android-sign`: the signing script and nothing else (it
     uploads its artifact with an action, not a command); `web-deploy`: the `gh api` read, `npm ci --ignore-scripts`, `node ../wrangler/node_modules/wrangler/bin/wrangler.js
     deploy`, the probe — so a second `npx`, a `node -e` or an `npm run` is a line not
     on it *(until 2026-10-11 the list held only lines naming a program the test knew, so a
     `./tools/sign`, a `perl -e` or a `sudo` was no line at all; since then it is every line of
-    every `run:` in the secret-holding jobs — four since the same day — and every `shell:` is
+    every `run:` in the secret-holding jobs — five since the same day — and every `shell:` is
     `bash`: a `- run: ./tools/x`, gated or not, in any of them is red)*; that the asking step is handed flags and never values,
     and every step after it is gated on its answer; that the signing step is held to the
     fingerprint and `present=true` is
@@ -877,7 +879,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     for `web-deploy`, so asking for both would fail every release until the new token existed.
     (`scripts/release-rule.test.mjs`: *asks for the token alone, and does nothing without it*.)
   - **The D1 design.** `schema.sql` of each Worker is the **frozen baseline**: the shape
-    production is taken to hold, pinned by SHA-256 in `scripts/d1-migrations.test.mjs`, and it cannot be
+    production holds (compared with it on 2026-10-11, and it matched), pinned by SHA-256 in `scripts/d1-migrations.test.mjs`, and it cannot be
     re-run (the relay's has four plain `ALTER TABLE … ADD COLUMN`). `infrastructure/relay/migrations/`
     and `infrastructure/share-worker/migrations/` are wrangler's **tracked folders and start
     empty** (each holds a `README.md` of the rules and nothing else), so the first run finds
@@ -1028,16 +1030,161 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 
     The seventh is why that test's first version was wrong: it set aside any step that named
     `GITHUB_TOKEN`, which hid a step holding the token beside it. The clause was dropped.
-  - **Why the fence is held to the letter.** Every `run:` line of the four secret-holding jobs
+  - **Why the fence is held to the letter.** Every `run:` line of the five secret-holding jobs
     is in `RUNS` in `scripts/release-rule.test.mjs`, and the fence reads the workflow with its
     comments stripped, so a comment may say what it likes and a line may not change.
+  - **The bundle goes to Google Play's internal track from the release (2026-10-11, piece B;
+    the design is the same spec's §6).** `play-upload` (`android (upload to Play)` on the run
+    page) is the last job before `publish`, behind all three deploys, because Play takes a
+    `versionCode` once and nothing after it can be taken back. It runs
+    `scripts/android-release/play-upload.mjs`, which needs no install: Node's `crypto` signs the
+    service account's JWT and `fetch` does the rest. **Seven requests** (six until the final
+    review, 2026-10-11, added the fourth): a token (scope
+    `androidpublisher`), a new edit of `com.mtggrimoire.app`, the bundles Play holds, the
+    tracks and what each holds, the
+    upload, the `internal` track set to that `versionCode` with status `completed`, and the
+    commit. Nothing reaches a tester before the commit, and an edit never committed expires by
+    itself.
+    - **Why a script and not an upload action.** An action would run its own dependency tree in
+      the one step that holds the key. Every line the job runs is on the fence's list, and the
+      key reaches the script's step and no other (the fence holds that step whole, every line
+      of it).
+    - **A re-run is safe, and an older release's is refused.** If Play already holds the
+      `versionCode` the script discards its
+      edit, says so and ends green: a re-run of the job, or a bundle uploaded by hand, is not an
+      error. **If Play holds a higher `versionCode` — as a bundle, or on any track — the script
+      discards its edit, uploads nothing and ends red** (the final review, 2026-10-11): a
+      release that never reached Play, its job run again after the next release uploaded,
+      would otherwise put the older build on the internal track over the newer one. The
+      discard itself is best effort; an edit that is never committed expires.
+      If Play reads **another** `versionCode` out of the bundle than the release's, it
+      stops before touching a track. A refusal is printed as the step, the status and Google's
+      own words, never the request, with a hint for six it knows: a refused key
+      (`invalid_grant`), an app Play still treats as a draft, changes waiting for review, a
+      `versionCode` Play has used somewhere the bundle list does not show, a missing
+      permission, and an app Play does not know for the account. A 401 or a 403 reads as a
+      missing permission by its status only at the token and at the edit; later it takes
+      Google's wording.
+    - **What a failure says** (the final review, 2026-10-11). No answer at all — a dropped
+      connection, a deadline (30 s a request, 10 minutes for the upload, 2 for the commit) —
+      names its step: `No answer from Google while trying to commit the edit: …`. A success
+      that is not what was asked for (not JSON, no token in it, no edit id) is named and never
+      quoted. No request follows a redirect. And the summary's last line depends on what
+      happened: the bundle is offered for upload by hand after most failures, not after an
+      older release, a `versionCode` mismatch or a `versionCode` Play has used, and after a
+      commit that got no answer or a 5xx it says the commit may have landed and to re-run the
+      job first.
+    - **What it does without a value.** No `PLAY_SERVICE_ACCOUNT_JSON`, or `android-sign` signed
+      no bundle (its output `signed`): nothing uploaded, the summary says which, green. A failure
+      in it leaves all three Workers deployed and the release a draft.
+    - **The script's test runs under the suite's default jsdom environment, not Node's.** The
+      per-file Node directive is honoured by Vitest, but the shared setup file
+      (`packages/ui/test-setup.ts`) touches `document` at its top level and the file fails with
+      `ReferenceError: document is not defined` before any test. `Response` there is Node's and
+      `AbortSignal.timeout` exists in jsdom's, so the 18 tests it had then pass unchanged (135 since the final review); on a runner
+      the script uses Node's own. (Vitest scans the whole file for the directive, so even a
+      comment that spells it selects Node.)
+    - **What the script printed run by hand** (Windows, with the variable set through PowerShell's `$env:`, 2026-10-11;
+      each ends before any request, nothing was sent to Google, and no key exists):
+
+      ```
+      $ node scripts/android-release/play-upload.mjs
+      usage: node scripts/android-release/play-upload.mjs <bundle.aab> <versionCode>
+      exit 2
+
+      $ PLAY_SERVICE_ACCOUNT_JSON='oops' node scripts/android-release/play-upload.mjs package.json 43001
+      ### Google Play — the upload failed
+
+      PLAY_SERVICE_ACCOUNT_JSON is not JSON
+
+      The signed bundle is this run's artifact `play-upload-bundle`; it can be uploaded by hand.
+      exit 1
+
+      $ PLAY_SERVICE_ACCOUNT_JSON='' node scripts/android-release/play-upload.mjs package.json 43001
+      ### Google Play — the upload failed
+
+      PLAY_SERVICE_ACCOUNT_JSON is not set
+
+      The signed bundle is this run's artifact `play-upload-bundle`; it can be uploaded by hand.
+      exit 1
+      ```
+
+      `oops` appears nowhere in the output.
+    - **The fence, by mutation** (2026-10-11). The finished `release.yml` was copied first; each
+      mutation was one exact-string replace, `pnpm exec vitest run scripts/release-rule.test.mjs`
+      run, and the file restored and compared by SHA-256 (equal every time). Every mutation
+      turned red the test named; the others are the fence being redundant:
+
+      | # | Mutation in `release.yml` | Red tests |
+      | --- | --- | --- |
+      | 1 | `- run: npx some-upload-tool` with an `if:` added to `play-upload` | `play-upload builds nothing, and runs only what is listed here`; `asks for the account and the signed bundle…` |
+      | 2 | `&& [ "$SIGNED" = true ]` removed from the asking step | `asks for the account and the signed bundle…`; `play-upload builds nothing…` |
+      | 3 | `PLAY_SERVICE_ACCOUNT_JSON` added to the download step's `env:` | `asks for the account and the signed bundle…` (two holders, one expected) |
+      | 4 | `play-upload`'s `needs` cut to `[release-please, android-sign]` | `has the thirteen jobs, chained as the rule needs` |
+      | 5 | the bundle's name in `play-upload` changed to `mtg-grimoire-$VERSION.aab` | `uploads the bundle android-sign signed…`; `play-upload builds nothing…` |
+      | 6 | `play-upload` taken out of `publish`'s `needs` | `has the thirteen jobs, chained as the rule needs` |
+      | 7 | the key and `timeout-minutes` moved from the script's step to the download step (after a review) | `asks for the account and the signed bundle…` (the holder has no `run:`) |
+      | 8 | `path: aab-in` deleted from the download step (after the same review) | `asks for the account and the signed bundle…` |
+      | 9 | the download step's `name:` changed to `play-upload-bundle-signed` (same) | `asks for the account and the signed bundle…`; `uploads the bundle android-sign signed…` |
+
+      Rows 7 to 9 are why the first version was not enough: **the review found the fence held
+      neither `play-upload`'s download step nor the tie between the key and the script's step.**
+      Both are held now (the download step whole, and its artifact's name line-anchored on both
+      sides), and `android-sign`'s summary names the job as the run page shows it and says what
+      to do when that job did not run.
+
+      **The final review found four more that stayed green**, each an edit beside the key's
+      `run:` and none inside it. The script's step is held whole now, line for line, and the
+      three steps after the asking one are held in order (Node, the download, the script). The
+      same method, 2026-10-11, every restore equal by SHA-256:
+
+      | # | Mutation in `release.yml` | Red test |
+      | --- | --- | --- |
+      | 10 | `NODE_OPTIONS: --import ./tools/extra.mjs` added to the script step's `env:` | `asks for the account and the signed bundle…` (twelve lines, eleven expected) |
+      | 11 | the step's `VERSION` read from `needs.release-please.outputs.tag_name` | the same test |
+      | 12 | `working-directory: tools` added to the step | the same test |
+      | 13 | the script's step moved above the download | the same test (the second step after the asking one is not the download) |
+      | 14 | the step's `timeout-minutes` set back to 15 | the same test |
+    - **Not proved, and only a real release settles it**: that Play accepts a `completed`
+      release on the internal track for this app through the API, and that the service
+      account's permission (*Release apps to testing tracks*) is enough. Nor that Play's
+      answers have the shapes and the wording the script reads — the list of tracks, the words
+      of each refusal it has a hint for: none was taken from a call. **The script has never
+      spoken to Google.**
+      Its test stages Google in memory: `upload` is handed its `send`, so no request there
+      crosses a socket. Once, by hand (the final review, 2026-10-11, Windows, Node 24.16.0),
+      it was run over Node's real `fetch` against a `node:http` stand-in on 127.0.0.1 with a
+      throwaway RSA key made in the same scratch script — no real key, no real address. What
+      arrived on the wire, the credential headers shown as present or absent and never by value:
+
+      ```
+      == the seven requests
+         POST /token | content-type: application/x-www-form-urlencoded | content-length: 699 | authorization: absent | body: 699 bytes
+         POST /androidpublisher/v3/applications/com.mtggrimoire.app/edits | content-type: - | content-length: 0 | authorization: present | body: 0 bytes
+         GET /androidpublisher/v3/applications/com.mtggrimoire.app/edits/e1/bundles | content-type: - | content-length: - | authorization: present | body: 0 bytes
+         GET /androidpublisher/v3/applications/com.mtggrimoire.app/edits/e1/tracks | content-type: - | content-length: - | authorization: present | body: 0 bytes
+         POST /upload/androidpublisher/v3/applications/com.mtggrimoire.app/edits/e1/bundles?uploadType=media | content-type: application/octet-stream | content-length: 300000 | authorization: present | body: 300000 bytes
+         PUT /androidpublisher/v3/applications/com.mtggrimoire.app/edits/e1/tracks/internal | content-type: application/json | content-length: 81 | authorization: present | body: 81 bytes
+         POST /androidpublisher/v3/applications/com.mtggrimoire.app/edits/e1:commit | content-type: - | content-length: 0 | authorization: present | body: 0 bytes
+         > resolved {"uploaded":true,"versionCode":43001}
+      ```
+
+      Four more runs in the same pass, each ending as the test says it does: a `versionCode`
+      already there (four requests, the last the `DELETE`, green); a higher one on a track (five
+      requests, `Play already holds versionCode 44000, newer than this release's 43001. Nothing
+      was uploaded.`, and no line about uploading by hand); the token request answered 307
+      (one request, nothing sent to the new address, `No answer from Google while trying to get
+      a token: fetch failed`); and the commit's connection dropped (`No answer from Google
+      while trying to commit the edit: fetch failed (UND_ERR_SOCKET)`, then the line that the
+      commit may have landed). A refusal on the first release is named in the job's log and summary, and
+      the bundle is then uploaded by hand from the run's artifact.
 - **Release notes are written from pull requests, between releases** (2026-10-11;
   `docs/superpowers/specs/2026-10-11-generated-release-notes-design.md`). release-please builds
   its notes from commit subjects and reads a merge twice — 0.43.0 lists fourteen features and six
   are repeats — so what a user reads is written by `scripts/changelog/` instead: every pull
   request since the last tag, title and description, in one request to Claude Haiku 5.5 through
   OpenRouter at medium reasoning effort. The model answers JSON; code checks it and writes the
-  markdown. **`release.yml` is twelve jobs with these** (ten on a release, since the same day), and the two new ones are the only ones
+  markdown. **`release.yml` is thirteen jobs with these** (eleven on a release, once `play-upload` joined the same day), and the two new ones are the only ones
   that run when a push cut *no* release:
 
   | Job | Needs | Holds a secret | What it does |
@@ -1135,7 +1282,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     there to close; and the jobs read the environment's, so it would also do nothing. An
     environment's value set before step 0 is, for that while, in an environment any branch may
     use. **An approval rule is optional** (*Required reviewers* on the environment): it would
-    hold each of the four jobs for a click on every release, which for one maintainer buys a
+    hold each of the five jobs for a click on every release, which for one maintainer buys a
     pause and not a second pair of eyes.
   - ⚠️ **Back the keystore and its password up, somewhere that is not this repository and not
     only this machine.** GitHub never gives a secret back. **A lost upload key is an
@@ -1156,10 +1303,35 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   - **The Console side** — creating the app, Play App Signing with a Google-generated key, the
     first upload registering the upload key — is in
     `docs/superpowers/specs/2026-10-07-google-play-release-design.md` §7.
-  - **After every release, the bundle is uploaded by hand**: the run's summary names the
-    artifact (`play-upload-bundle`) and its versionCode. Play Console → *Test and release* →
-    the track → *Create new release* → upload → roll out. Until then phones stay a version
-    behind. (Uploading from this workflow is a later change, with its own design.)
+  - **The Play service account (`PLAY_SERVICE_ACCOUNT_JSON`).** So that `play-upload` can put
+    each release's bundle on the internal track. **Step 0 above comes first**: the `release`
+    environment restricted to `main` before this key is put in it, or a workflow on any branch
+    can read it.
+    1. In a Google Cloud project, enable the *Google Play Android Developer API*.
+    2. Create a service account there, with no cloud role, and a **JSON key** for it.
+    3. Play Console → *Users and permissions* → *Invite new users* → the service account's
+       address → *App permissions* → MTG Grimoire → **Release apps to testing tracks**, and
+       nothing above it. It cannot release to production with that. A new permission can take
+       a while to take effect, so a run soon after it is granted may be refused for it; the job
+       can be re-run.
+    4. Store the key **as one line**, then delete `key.json`:
+       `jq -c . key.json | gh secret set PLAY_SERVICE_ACCOUNT_JSON --env release --repo Msgaihede/mtg-grimoire`
+       or, in PowerShell without `jq`,
+       `(Get-Content -Raw key.json | ConvertFrom-Json | ConvertTo-Json -Compress) | gh secret set PLAY_SERVICE_ACCOUNT_JSON --env release --repo Msgaihede/mtg-grimoire`.
+       Google downloads the key pretty-printed, and **GitHub masks each line of a multi-line
+       secret separately**, so a key set as it came would turn every `{` and `}` in that
+       job's log into `***`.
+
+    **If the key leaks**: delete that key under the service account in Google Cloud (*IAM &
+    Admin* → *Service accounts* → the account → *Keys*), make a new one and set it as in step 4.
+
+    **Not verified**: nothing has been uploaded with it. Until it is set, `play-upload` ends
+    green saying it uploaded nothing, and the bundle is uploaded by hand as before — the run's
+    artifact `play-upload-bundle`, Play Console → *Test and release* → the track → *Create new
+    release*. Until a bundle is on a track, phones stay a version behind.
+  - **Promotion is by hand, after every release**: the build lands on the internal track.
+    Closed testing and production are Play Console's → *Test and release* → *Promote release*.
+    Until then phones outside the internal testers stay a version behind.
   - **The Cloudflare API token (the web app's, `CLOUDFLARE_API_TOKEN`).** Dashboard → *Manage Account* → *Account API Tokens* →
     *Create Token* → a custom token, limited to this one account. `wrangler deploy` here
     uploads one existing Worker's script and static assets and re-states its Custom Domain, so
@@ -1187,10 +1359,23 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     **Not verified**: no deploy has been made with such a token. If the first run fails on a
     permission, its log names it. Until it is set the two jobs end green having deployed
     nothing, and each says so in the run's summary.
-  - **Before the first release with it: is `schema.sql` what production holds?** The baseline
-    is frozen on the claim that it is. Compare `sqlite_master` of the live database with one
-    built from `infrastructure/relay/schema.sql` and `infrastructure/share-worker/schema.sql`
-    — a read, by the owner or at his word.
+  - **Is `schema.sql` what production holds? Compared 2026-10-11: it is.** The baseline is
+    frozen on the claim that it is, so an agent compared it at the owner's word. One read of
+    the live database's `sqlite_master` (`SELECT type, name, tbl_name, sql … ORDER BY type,
+    name`, through the Cloudflare API's D1 query endpoint), nothing written, beside a database
+    built in memory from `infrastructure/relay/schema.sql` then
+    `infrastructure/share-worker/schema.sql`; the `sql` columns compared with comments stripped
+    and whitespace collapsed. **The six tables** (`claim_codes`, `entitlements`,
+    `group_devices`, `group_keys`, `pairing_rendezvous`, `shares`) have the same columns, in the
+    same order, with the same types, `NOT NULL`s, primary keys and `CHECK`s — `entitlements`
+    ends `…, checked_at, group_epoch, group_auth, refresh_device, reconciled_at` on both.
+    **The six named indexes** (`entitlements_external`, `entitlements_group`,
+    `entitlements_reconcile`, `group_keys_by_group`, `shares_folder`, `shares_group`) have the
+    same columns, uniqueness and `WHERE`, and the automatic primary-key indexes are the same.
+    The only table only in production is `_cf_KV`, which D1 keeps for itself. The only
+    differences are SQL comments (one has since been reworded in the file) and spacing.
+    `d1_migrations` and `d1_migrations_share` are **not there yet**: no release has run with
+    the infra token. So a database built from the two files is the database production holds.
   - **A release cut before a value existed is not repaired by adding it.** Its web app is
     deployed by hand from the tag (the runbook). Its bundle is the next release's: a re-run of
     `android-sign` runs the commit it ran before, which holds no fingerprint.
@@ -1264,7 +1449,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   tauri-action, rust-cache and every npm and cargo build script, any of which can read a secret
   in the same job. **Update signing has not come back; the rule has been used twice since**
   (2026-10-04): `android-sign` and `web-deploy` are each a job of their own for it — *The
-  release rule*, above — and `relay-deploy` and `share-deploy` since 2026-10-11. And what happened to v0.34.0 is why those **skip and say so**
+  release rule*, above — and `relay-deploy`, `share-deploy` and `play-upload` since 2026-10-11. And what happened to v0.34.0 is why those **skip and say so**
   when their values are not set, where `sign` failed: a release held up by a key nobody had
   made was one day's lesson already.
 - **release-please needs "Allow GitHub Actions to create and approve pull requests"**

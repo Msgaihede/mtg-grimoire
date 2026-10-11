@@ -200,6 +200,7 @@ Only the owner signs in, creates, accepts, sets a secret or submits. In order:
   `release` environment that builds nothing and pushes the signed bundle to the internal track
   through the Play Developer API with a service account, promotion staying the owner's click. It
   gets its own short design then, because it cannot be exercised before the app exists.
+  Done 2026-10-11 — `docs/superpowers/specs/2026-10-11-release-deploys-everything-design.md`, §6.
 
 ## 9. Risks the owner is accepting
 

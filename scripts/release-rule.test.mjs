@@ -335,6 +335,7 @@ const MAY_READ = {
   "relay-deploy": [...INFRA_SECRETS, "GITHUB_TOKEN"],
   "share-deploy": [...INFRA_SECRETS, "GITHUB_TOKEN"],
   "web-deploy": [...CLOUDFLARE_SECRETS, "GITHUB_TOKEN"],
+  "play-upload": ["PLAY_SERVICE_ACCOUNT_JSON"],
   publish: ["GITHUB_TOKEN"],
   "changelog-write": ["GITHUB_TOKEN", "OPENROUTER_API_KEY"],
   "changelog-commit": ["GITHUB_TOKEN"],
@@ -383,8 +384,8 @@ const refuseOlder = (what) => [
   "fi",
 ];
 /**
- * **Every line the five jobs that hold a secret run** (`android-sign`, `relay-deploy`,
- * `share-deploy` and `web-deploy` on a release; `changelog-write` between releases), step by
+ * **Every line the six jobs that hold a secret run** (`android-sign`, `relay-deploy`,
+ * `share-deploy`, `web-deploy` and `play-upload` on a release; `changelog-write` between releases), step by
  * step, as `runsOf` reads them: the whole of each `run:`, its summary's wording too. A line
  * changed in one of those steps is changed here in the same commit, and a line added to any of
  * them, whatever it starts, is a line this list does not have.
@@ -444,10 +445,12 @@ const RUNS = {
       'IFS=. read -r major minor patch <<< "$VERSION"',
       "{",
       "echo",
-      'echo "**Upload \\`$aab\\` to Play Console** — it is this run\'s artifact \\`play-upload-bundle\\`."',
-      'echo "*Test and release* → the track → *Create new release*. Its versionCode is $((major * 1000000 + minor * 1000 + patch))."',
+      'echo "**Signed \\`$aab\\`** — this run\'s artifact \\`play-upload-bundle\\`, versionCode $((major * 1000000 + minor * 1000 + patch))."',
+      'echo "The job *android (upload to Play)* puts it on Play\'s internal track once the deploys are through."',
+      'echo "If that job did not run, or says it uploaded nothing, upload it by hand:"',
+      'echo "Play Console → *Test and release* → the track → *Create new release*."',
       "echo",
-      'echo "Until it is uploaded and Play has reviewed it, phones stay on the previous version:"',
+      'echo "Until it is on a track and Play has reviewed it, phones stay on the previous version:"',
       'echo "\\`docs/reference/ci-and-releases.md\\`, *What only the owner can do*."',
       '} >> "$GITHUB_STEP_SUMMARY"',
     ],
@@ -554,6 +557,36 @@ const RUNS = {
     // Ask the host
     ["node scripts/web-deploy-probe.mjs apps/light/dist-web"],
   ],
+  "play-upload": [
+    // Is there an account to upload with, and a bundle to upload
+    [
+      "set -euo pipefail",
+      'if [ "$HAS_ACCOUNT" = true ] && [ "$SIGNED" = true ]; then',
+      'echo "present=true" >> "$GITHUB_OUTPUT"',
+      "exit 0",
+      "fi",
+      'echo "present=false" >> "$GITHUB_OUTPUT"',
+      "{",
+      'echo "### Google Play — nothing uploaded"',
+      "echo",
+      'if [ "$SIGNED" != true ]; then',
+      'echo "This release signed no bundle (the summary of \\`android (sign for Play)\\` says why), so there is nothing to upload."',
+      "else",
+      'echo "The \\`release\\` environment holds no \\`PLAY_SERVICE_ACCOUNT_JSON\\`, so the signed bundle was not uploaded."',
+      'echo "It is this run\'s artifact \\`play-upload-bundle\\`: upload it by hand in Play Console."',
+      "fi",
+      "echo",
+      'echo "Phones stay on the previous version until a bundle is on a track."',
+      'echo "\\`docs/reference/ci-and-releases.md\\`, *What only the owner can do*, has the steps."',
+      '} >> "$GITHUB_STEP_SUMMARY"',
+    ],
+    // Upload the bundle to the internal track
+    [
+      "set -euo pipefail",
+      'IFS=. read -r major minor patch <<< "$VERSION"',
+      'node scripts/android-release/play-upload.mjs "aab-in/mtg-grimoire-$VERSION-android.aab" "$((major * 1000000 + minor * 1000 + patch))"',
+    ],
+  ],
   "changelog-write": [
     // Is there a key to write with
     [
@@ -581,7 +614,7 @@ const RUNS = {
 describe("release.yml", () => {
   const jobs = jobsOf(releaseYml);
 
-  it("has the twelve jobs, chained as the rule needs", () => {
+  it("has the thirteen jobs, chained as the rule needs", () => {
     expect(Object.keys(jobs)).toEqual([
       "release-please",
       "build",
@@ -592,6 +625,7 @@ describe("release.yml", () => {
       "relay-deploy",
       "share-deploy",
       "web-deploy",
+      "play-upload",
       "publish",
       "changelog-write",
       "changelog-commit",
@@ -620,6 +654,9 @@ describe("release.yml", () => {
       "web",
       "share-deploy",
     ]);
+    // The one step of a release that cannot be taken back — Play takes a versionCode once —
+    // so it goes after every deploy, when only the flip of the draft is left.
+    expect(needsOf(jobs["play-upload"])).toEqual(["release-please", "android-sign", "web-deploy"]);
     expect(needsOf(jobs.publish)).toEqual([
       "release-please",
       "build",
@@ -627,6 +664,7 @@ describe("release.yml", () => {
       "relay-deploy",
       "share-deploy",
       "web-deploy",
+      "play-upload",
     ]);
   });
 
@@ -675,7 +713,7 @@ describe("release.yml", () => {
     expect(secretRefs(top)).toEqual([]);
   });
 
-  it("gives each secret to the jobs that hold it (`android-sign`, `relay-deploy`, `share-deploy`, `web-deploy`), alone", () => {
+  it("gives each secret to the jobs that hold it (`android-sign`, `relay-deploy`, `share-deploy`, `web-deploy`, `play-upload`), alone", () => {
     for (const [name, job] of Object.entries(jobs)) {
       const refs = secretRefs(job);
       // Every appearance of the word is the one honest spelling…
@@ -703,7 +741,7 @@ describe("release.yml", () => {
   // **An environment's values, not the repository's.** A repository secret is handed to any
   // workflow on any branch of this repository; an environment's only to a job that names it,
   // from a branch the environment allows.
-  it("takes what it holds from an environment, in those five jobs and no other", () => {
+  it("takes what it holds from an environment, in those six jobs and no other", () => {
     const environments = Object.entries(jobs)
       .map(([name, job]) => [name, job.split("\n").filter((line) => /^\s*environment:/.test(line))])
       .filter(([, lines]) => lines.length > 0);
@@ -712,6 +750,7 @@ describe("release.yml", () => {
       ["relay-deploy", ["    environment: release"]],
       ["share-deploy", ["    environment: release"]],
       ["web-deploy", ["    environment: release"]],
+      ["play-upload", ["    environment: release"]],
       // An environment of its own: it runs on every push to `main` and sends pull request text
       // to another service, and the signing key and the deploy token are not within its reach.
       ["changelog-write", ["    environment: changelog"]],
@@ -726,6 +765,7 @@ describe("release.yml", () => {
     "relay-deploy",
     "share-deploy",
     "web-deploy",
+    "play-upload",
     "changelog-write",
     "changelog-commit",
   ])("%s has a deadline", (name) => {
@@ -743,6 +783,7 @@ describe("release.yml", () => {
     ["relay-deploy", ["actions/checkout", "actions/setup-node"]],
     ["share-deploy", ["actions/checkout", "actions/download-artifact", "actions/setup-node"]],
     ["web-deploy", ["actions/checkout", "actions/download-artifact", "actions/setup-node"]],
+    ["play-upload", ["actions/checkout", "actions/download-artifact", "actions/setup-node"]],
     ["changelog-write", ["actions/checkout", "actions/setup-node", "actions/upload-artifact"]],
   ])("%s builds nothing, and runs only what is listed here", (name, actions) => {
     expect([...jobs[name].matchAll(/uses: ([\w./-]+)@/g)].map((m) => m[1]).sort()).toEqual(actions);
@@ -769,22 +810,25 @@ describe("release.yml", () => {
   // cached with or without the key; the key is what keeps that true if the field or the action's
   // default moves. **The step is held whole**: a `cache:` or a `cache-dependency-path:` beside
   // it is a line that is not here.
-  it.each(Object.keys(DEPLOYS))("%s sets Node up with caching off by name, and with nothing else", (name) => {
-    const node = stepsOf(jobs[name]).filter((step) => /^uses: actions\/setup-node@/.test(step));
-    expect(node).toHaveLength(1);
-    expect(node[0].trimEnd().split("\n").slice(1)).toEqual([
-      "        if: steps.token.outputs.present == 'true'",
-      "        with:",
-      "          node-version-file: .nvmrc",
-      "          package-manager-cache: false",
-    ]);
-  });
+  it.each([...Object.keys(DEPLOYS).map((name) => [name, "token"]), ["play-upload", "account"]])(
+    "%s sets Node up with caching off by name, and with nothing else",
+    (name, id) => {
+      const node = stepsOf(jobs[name]).filter((step) => /^uses: actions\/setup-node@/.test(step));
+      expect(node).toHaveLength(1);
+      expect(node[0].trimEnd().split("\n").slice(1)).toEqual([
+        `        if: steps.${id}.outputs.present == 'true'`,
+        "        with:",
+        "          node-version-file: .nvmrc",
+        "          package-manager-cache: false",
+      ]);
+    },
+  );
 
   it("runs no Node in `android-sign`, so there is no step of it to hold there", () => {
     expect(jobs["android-sign"]).not.toMatch(/setup-node/);
   });
 
-  // The workspace is pnpm's; the four jobs that hold a secret are not part of it. None sets
+  // The workspace is pnpm's; the five jobs that hold a secret on a release are not part of it. None sets
   // pnpm up, installs with it or runs it: what they run is the list above, to the letter.
   // `jobsOf` has already dropped comment lines, so this reads what the job runs.
   it.each([
@@ -792,6 +836,7 @@ describe("release.yml", () => {
     "relay-deploy",
     "share-deploy",
     "web-deploy",
+    "play-upload",
     "changelog-write",
     "changelog-commit",
   ])("%s never sees pnpm", (name) => {
@@ -910,6 +955,85 @@ describe("release.yml", () => {
     );
   });
 
+  // **Uploads only what was signed, with a key that is set.** A service account with no signed
+  // bundle is a release that had no upload key or no fingerprint: `android-sign` already said
+  // so, and this job must not go looking for an artifact that was never made.
+  it("asks for the account and the signed bundle, and does nothing without both", () => {
+    const [checkout, ask, ...rest] = stepsOf(jobs["play-upload"]);
+    expect(checkout).toMatch(/^uses: actions\/checkout@/);
+    expect(checkout).not.toMatch(/^ {8}(?:if|env):/m);
+    expect(ask).toMatch(/^ {8}id: account$/m);
+    // Told whether the key is set, never what it is.
+    expect(ask.match(/secrets\.[A-Z0-9_]+/g)).toEqual(["secrets.PLAY_SERVICE_ACCOUNT_JSON"]);
+    expect(ask).toContain("HAS_ACCOUNT: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}");
+    expect(ask).toContain("SIGNED: ${{ needs.android-sign.outputs.signed }}");
+    const lines = runsOf(ask)[0];
+    expect(lines[1]).toBe('if [ "$HAS_ACCOUNT" = true ] && [ "$SIGNED" = true ]; then');
+    expect(lines.filter((line) => line.includes("present=true"))).toHaveLength(1);
+    // Neither absence is a failure: the job ends green and says which it was.
+    expect(lines).not.toContain("exit 1");
+    expect(ask).toMatch(/>> "\$GITHUB_STEP_SUMMARY"/);
+    expect(rest).toHaveLength(3);
+    for (const step of rest) {
+      expect(step).toMatch(/^ {8}if: steps\.account\.outputs\.present == 'true'$/m);
+    }
+    // **Three steps after the asking one, in this order, and nothing else**: Node, the bundle,
+    // then the script. The script's step above the download is a step that runs with the key
+    // and no bundle to read; a fourth step is one nothing here has looked at.
+    const [node, download, script] = rest;
+    expect(node).toMatch(/^uses: actions\/setup-node@/);
+    expect(download).toMatch(/^uses: actions\/download-artifact@/);
+    expect(script).toMatch(/^name: Upload the bundle to the internal track$/m);
+    // The key reaches one step: the script's.
+    const holding = rest.filter((step) => secretsOf(step).length > 0);
+    expect(holding).toEqual([script]);
+    // …and it is the step that runs the script, nothing else.
+    expect(runsOf(script)).toEqual([RUNS["play-upload"][1]]);
+    // The download step is held whole, as the Node step is: it holds no key and no extra key.
+    expect(download.trimEnd().split("\n").slice(1)).toEqual([
+      "        if: steps.account.outputs.present == 'true'",
+      "        with:",
+      "          name: play-upload-bundle",
+      "          path: aab-in",
+    ]);
+    // **And the step that holds the key is held whole, every line of it.** `RUNS` holds what
+    // its `run:` runs; this holds what stands beside it, which runs things too: a
+    // `NODE_OPTIONS: --import ./x.mjs` in `env:` is code run with the key and no `run:` line
+    // changed, a `working-directory:` is another file under the same path, and a `VERSION` read
+    // from anywhere but release-please's own `version` output is another bundle and another
+    // versionCode. The deadline is the script's own deadlines and a margin; the job's is above it.
+    expect(script.trimEnd().split("\n")).toEqual([
+      "name: Upload the bundle to the internal track",
+      "        if: steps.account.outputs.present == 'true'",
+      "        shell: bash",
+      "        timeout-minutes: 20",
+      "        env:",
+      "          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}",
+      "          VERSION: ${{ needs.release-please.outputs.version }}",
+      "        run: |",
+      ...RUNS["play-upload"][1].map((line) => `          ${line}`),
+    ]);
+    expect(RUNS["play-upload"][1]).toHaveLength(3);
+  });
+
+  it("uploads the bundle `android-sign` signed, under the name and the versionCode it gave it", () => {
+    const sign = jobs["android-sign"];
+    const play = jobs["play-upload"];
+    // One artifact, one file name, on both sides.
+    // Line-anchored, so `play-upload-bundle-signed` on either side is a different artifact.
+    expect(stepsOf(sign).at(-1)).toMatch(/^ {10}name: play-upload-bundle$/m);
+    expect(play).toMatch(/^ {10}name: play-upload-bundle$/m);
+    expect(sign).toContain('aab="mtg-grimoire-$VERSION-android.aab"');
+    expect(play).toContain('"aab-in/mtg-grimoire-$VERSION-android.aab"');
+    // And one arithmetic: Tauri's, which `versionCode` above computes and the summary prints.
+    const arithmetic = "$((major * 1000000 + minor * 1000 + patch))";
+    expect(sign).toContain(arithmetic);
+    expect(play).toContain(arithmetic);
+    // It can write nothing to the repository or the release.
+    expect(play).not.toMatch(/gh release|GITHUB_TOKEN|GH_TOKEN|contents: write/);
+    expect(play).toMatch(/^ {4}permissions:\n {6}contents: read\n {4}steps:$/m);
+  });
+
   // "Signed by the keystore in the settings" is not "signed by the key the last release was".
   it("signs no bundle without the committed fingerprint, and holds the key to it", () => {
     const [, ask, , sign] = stepsOf(jobs["android-sign"]);
@@ -927,7 +1051,7 @@ describe("release.yml", () => {
     expect(sign.indexOf("umask 077")).toBeLessThan(sign.indexOf("base64 --decode"));
   });
 
-  it("hands the signed bundle to the owner as an artifact, and puts nothing on the release", () => {
+  it("hands the signed bundle to `play-upload` as an artifact, and puts nothing on the release", () => {
     const sign = jobs["android-sign"];
     expect(sign).toContain('aab="mtg-grimoire-$VERSION-android.aab"');
     expect(sign).toMatch(
@@ -944,15 +1068,19 @@ describe("release.yml", () => {
     expect(jobs.android).toContain('cp "$aab" aab-out/mtg-grimoire-light-arm64.aab');
     expect(jobs.android).toContain("path: aab-out/mtg-grimoire-light-arm64.aab");
     expect(sign).toContain("path: aab-in");
-    // …and what it signed leaves as an artifact, which the owner uploads to Play Console.
+    // …and what it signed leaves as an artifact, which `play-upload` puts on Play's internal track.
     const upload = stepsOf(sign).at(-1);
     expect(upload).toMatch(/^uses: actions\/upload-artifact@/);
     expect(upload).toContain("name: play-upload-bundle");
     expect(upload).toContain("path: ${{ env.SIGNED_AAB }}");
     expect(upload).toContain("if-no-files-found: error");
-    // Retention is stated in the documents: thirty days for the bundle the owner uploads,
+    // Retention is stated in the documents: thirty days for the bundle `play-upload` takes,
     // fourteen for the debug-signed build a sign job re-runs from.
     expect(upload).toContain("retention-days: 30");
+    // And it says whether it signed one, which is what `play-upload` asks first.
+    expect(sign).toMatch(
+      /^ {4}outputs:\n {6}signed: \$\{\{ steps\.key\.outputs\.present \}\}$/m,
+    );
     expect(
       stepsOf(jobs.android).find((s) => s.includes("name: android-aab-debug-signed")),
     ).toContain("retention-days: 14");
@@ -1342,7 +1470,7 @@ describe("deploys, across every workflow", () => {
         line: "      - name: Pair two browsers through the local relay",
       },
     ]);
-    const held = lines.filter(({ line }) => /CLOUDFLARE_|ANDROID_KEY/.test(line));
+    const held = lines.filter(({ line }) => /CLOUDFLARE_|ANDROID_KEY|PLAY_SERVICE/.test(line));
     // The throwaway key `ci.yml` proves the signing on is minted inside
     // `scripts/android-release/proof.sh`, so no workflow but the release names either.
     expect([...new Set(held.map(({ path }) => path))].sort()).toEqual([
