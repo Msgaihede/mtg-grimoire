@@ -4442,6 +4442,34 @@ describe("ipcError", () => {
 });
 
 /**
+ * **One shape out of `invoke`, whatever shape went in** (issue #557). Tauri refuses with the
+ * command's `Err(String)`, the fake core with an `Error`, and a transport fault with whatever it
+ * likes — so a caller that branched on one of them was right on some hosts and wrong on the rest.
+ * Every wrapper now rejects with the sentence as a plain string; each case here is one host's
+ * shape going in.
+ */
+describe("a rejected ipc call", () => {
+  beforeEach(() => invoke.mockReset());
+
+  it("keeps a Rust refusal's string as it is", async () => {
+    invoke.mockRejectedValueOnce("sync already running");
+    await expect(ipc.syncStatus()).rejects.toBe("sync already running");
+  });
+
+  it("turns an Error into its message", async () => {
+    invoke.mockRejectedValueOnce(new Error("window closed"));
+    await expect(ipc.syncStatus()).rejects.toBe("window closed");
+  });
+
+  it("turns anything else into a sentence rather than an object", async () => {
+    invoke.mockRejectedValueOnce({ code: 42 });
+    const rejection = await ipc.syncStatus().catch((e: unknown) => e);
+    expect(typeof rejection).toBe("string");
+    expect(rejection).toContain('{"code":42}');
+  });
+});
+
+/**
  * The four clears take **no arguments at all**, so the only half of the contract that can drift
  * is the command name — and a name Rust does not register is a runtime rejection with no type
  * error anywhere. These are irreversible commands reached from one button each, so "it silently
