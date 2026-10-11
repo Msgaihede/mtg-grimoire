@@ -1951,7 +1951,7 @@ describe("the light edition", () => {
       .getAllByRole("button")
       .map((b) => b.textContent);
 
-  it("draws six destinations and nothing else", () => {
+  it("draws seven destinations and nothing else", () => {
     renderLight();
     expect(railButtons()).toEqual([
       "Search",
@@ -1959,6 +1959,7 @@ describe("the light edition", () => {
       "Collection",
       "Wishlist",
       "Scanner",
+      "Trade",
       "Settings",
       "Collapse",
     ]);

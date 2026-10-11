@@ -279,6 +279,9 @@ function folderLine(p: Record<string, unknown>, cabinet: Cabinet): ActivityLine 
  */
 function importLine(p: Record<string, unknown>, cabinet: Cabinet): ActivityLine {
   const rows = numberField(p.rows);
+  if (fromTrade(p)) {
+    return { text: `Received ${counted(numberField(p.cards), "card")} in a trade`, detail: null };
+  }
   return {
     text: `Imported ${counted(numberField(p.cards), "card")} into ${cabinet.place}`,
     detail: rows > 0 ? `across ${counted(rows, "row")}` : null,
@@ -321,10 +324,31 @@ function bulkAddLine(p: Record<string, unknown>, cabinet: Cabinet): ActivityLine
  * no `folder` key — keeps its detail empty, since the sentence already says everything went.
  */
 function clearLine(p: Record<string, unknown>, cabinet: Cabinet): ActivityLine {
+  if (fromTrade(p)) {
+    return {
+      text: `Took ${counted(numberField(p.cards), "card")} off ${cabinet.place} after a trade`,
+      detail: null,
+    };
+  }
   return {
     text: `Cleared ${counted(numberField(p.cards), "card")} from ${cabinet.place}`,
     detail: folderClause("in", p.folder),
   };
+}
+
+/**
+ * Whether a bulk row was written by **Finish trade** rather than by the press its kind is named
+ * for.
+ *
+ * A finished trade takes the cards the reader gave out of the collection, adds the ones they
+ * received and tidies the wishlist — three runs, each one row. The `activity` table's CHECK
+ * admits eight kinds and no ninth, so those rows borrow `remove`, `import` and `clear`, and
+ * carry `trade: true` so the feed does not tell a reader they imported a file or cleared a list
+ * when what they did was shake hands. A step about a single card writes that card's ordinary row
+ * and no flag: *Removed Ragavan* is true as it stands.
+ */
+function fromTrade(p: Record<string, unknown>): boolean {
+  return p.trade === true;
 }
 
 /**
@@ -481,7 +505,12 @@ function collectionLine(entry: ActivityEntry): ActivityLine {
       // never read as this.
       const entries = bulkEntries(entry, p);
       if (entries > 0) {
-        return { text: `Removed ${counted(entries, "card")}`, detail: copiesClause(entry) };
+        return {
+          text: fromTrade(p)
+            ? `Traded away ${counted(entries, "card")}`
+            : `Removed ${counted(entries, "card")}`,
+          detail: copiesClause(entry),
+        };
       }
       const n = copies(entry);
       return {

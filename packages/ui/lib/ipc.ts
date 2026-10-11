@@ -23,6 +23,8 @@
  * `FormatSpecRow`/`PipCost`/`DeckPipCosts`/
  * `BracketCardRow`/`DeckBracketRead`/`DeckValue`   — `crates/grimoire-core/src/deck.rs`
  * `ActivityEntry`                                — `crates/grimoire-core/src/activity.rs`
+ * `TradeCreate`/`TradeLineInput`/`TradeLineChange`/`TradeFinishOptions`/`TradeLine`/
+ * `Trade`/`TradeSummaryLine`/`TradeSummary`/`TradeOutcome` — `crates/grimoire-core/src/trade.rs`
  * `HomeWidget`/`HomeLayout`                      — `crates/grimoire-core/src/home.rs`
  * `StickyNoteRow`                                — `crates/grimoire-core/src/sticky_notes.rs`
  * `CardFilters`, flattened into both list queries — `crates/grimoire-core/src/filters.rs`
@@ -180,7 +182,7 @@
  *
  * **This file is the barrel since 2026-10-11 (issue #557); the mirror itself is in `./ipc/`, one
  * file per domain** — cards, collection, wishlist, decks, transfer, home, tags, combos, scanner,
- * share, sync, prefs and the app, with the transport in `./ipc/invoke.ts`. It was one 11,000-line
+ * share, trade, sync, prefs and the app, with the transport in `./ipc/invoke.ts`. It was one 11,000-line
  * file, three quarters of it comment, and every feature branch edited it.
  *
  * **Everything outside `packages/ui/lib/ipc*` imports `@/lib/ipc`, never a domain file** — that
@@ -205,6 +207,7 @@ export type * from "./ipc/tags";
 export type * from "./ipc/combos";
 export type * from "./ipc/scanner";
 export type * from "./ipc/share";
+export type * from "./ipc/trade";
 export type * from "./ipc/sync";
 export type * from "./ipc/prefs";
 export type * from "./ipc/app";
@@ -220,6 +223,7 @@ import { tagCommands } from "./ipc/tags";
 import { comboCommands } from "./ipc/combos";
 import { scannerCommands } from "./ipc/scanner";
 import { shareCommands } from "./ipc/share";
+import { tradeCommands } from "./ipc/trade";
 import { syncCommands } from "./ipc/sync";
 import { prefCommands } from "./ipc/prefs";
 import { appCommands } from "./ipc/app";
@@ -240,6 +244,7 @@ export const ipc = {
   ...comboCommands,
   ...scannerCommands,
   ...shareCommands,
+  ...tradeCommands,
   ...syncCommands,
   ...prefCommands,
   ...appCommands,

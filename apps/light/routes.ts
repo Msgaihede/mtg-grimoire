@@ -3,10 +3,10 @@ import { isLightView, LIGHT_START, type LightView } from "@grimoire/ui/lib/editi
 /**
  * Where the reader is, as the URL says it.
  *
- * `/search`, `/decks`, `/decks/12`, `/collection`, `/wishlist`, `/scanner`, `/settings`,
- * `?folder=<id>` on the deck gallery, and `?card=<id>` over any of them. Pure, and the one place the two faces agree on a spelling: the
- * phone face reads and writes it through its router, and the desktop face through one adapter
- * that maps it onto the store.
+ * `/search`, `/decks`, `/decks/12`, `/collection`, `/wishlist`, `/scanner`, `/trade`,
+ * `/trade/5`, `/settings`, `?folder=<id>` on the deck gallery, and `?card=<id>` over any of them.
+ * Pure, and the one place the two faces agree on a spelling: the phone face reads and writes it
+ * through its router, and the desktop face through one adapter that maps it onto the store.
  */
 export interface Place {
   view: LightView;
@@ -27,14 +27,26 @@ export interface Place {
    * other filter state.
    */
   folderId?: number | null;
+  /**
+   * The open trade — `/trade/5`, a deck's own spelling one view over — and only ever present
+   * while `view` is `"trade"`.
+   *
+   * **A place, for {@link Place.folderId}'s reason**: Back leaves a trade for the list of them, a
+   * reload reopens the one the reader was building, and a trade is a thing worth a link.
+   * **Optional, and absent rather than `null` on the list**, again as the folder is: every place
+   * spelled before trades were in the grammar is still a whole place, and `parsePlace` answers
+   * the same three fields it always did for every URL that names no trade. The desktop face
+   * keeps its open trade in the page, so a crossing drops this too.
+   */
+  tradeId?: number | null;
 }
 
 /** A positive integer and nothing else — `Number("12abc")` is `NaN`, but `Number("1.5")` is not. */
 const DECK_ID = /^[1-9]\d*$/;
 
 /**
- * A path segment or a parameter as a row id — a deck's or a folder's — or `null` for anything
- * that is not one.
+ * A path segment or a parameter as a row id — a deck's, a folder's or a trade's — or `null` for
+ * anything that is not one.
  *
  * **The pattern is not enough on its own**: twenty nines are all digits and parse to `1e20`,
  * which is no deck's id, which {@link placeHref} would spell back as a different number than the
@@ -57,12 +69,20 @@ export function parsePlace(pathname: string, search: string): Place {
   const place: Place = { view, deckId, cardId: card !== null && card.length > 0 ? card : null };
   // A folder only on the gallery itself: under an open deck it would name a drawer nothing draws.
   const folderId = view === "decks" && deckId === null ? idOf(params.get("folder") ?? "") : null;
-  return folderId === null ? place : { ...place, folderId };
+  if (folderId !== null) return { ...place, folderId };
+  // A trade only under Trade, as a deck only under Decks: `/search/5` opens nothing.
+  const tradeId = view === "trade" ? idOf(tail) : null;
+  return tradeId === null ? place : { ...place, tradeId };
 }
 
 export function placeHref(place: Place): string {
+  const trade = place.tradeId ?? null;
   const path =
-    place.view === "decks" && place.deckId !== null ? `/decks/${place.deckId}` : `/${place.view}`;
+    place.view === "decks" && place.deckId !== null
+      ? `/decks/${place.deckId}`
+      : place.view === "trade" && trade !== null
+        ? `/trade/${trade}`
+        : `/${place.view}`;
   const query: string[] = [];
   const folder = place.folderId ?? null;
   if (place.view === "decks" && place.deckId === null && folder !== null) {

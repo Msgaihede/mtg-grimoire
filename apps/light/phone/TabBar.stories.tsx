@@ -3,7 +3,7 @@ import { expect, within } from "storybook/test";
 import { TabBar } from "./TabBar";
 
 /**
- * The phone face's five destinations, at a phone's width.
+ * The phone face's six destinations, at a phone's width.
  *
  * **Each tab is a real link**, so a press in the canvas would move the workbench's own frame to
  * `/decks`. The decorator swallows it in the capture phase: the router takes only a click nothing
@@ -46,7 +46,7 @@ export const OnSearch: Story = {
       within(bar)
         .getAllByRole("link")
         .map((tab) => tab.textContent),
-    ).toEqual(["Search", "Decks", "Collection", "Wishlist", "Scanner"]);
+    ).toEqual(["Search", "Decks", "Collection", "Wishlist", "Scanner", "Trade"]);
     await expect(within(bar).getByRole("link", { name: "Search" })).toHaveAttribute(
       "aria-current",
       "page",

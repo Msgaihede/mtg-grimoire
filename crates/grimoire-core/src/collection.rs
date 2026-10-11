@@ -385,7 +385,11 @@ fn folder_named(conn: &Connection, folder_id: Option<i64>, kinds: &[&str]) -> Re
 ///
 /// The default set — [`add_entry`]'s door, and the whole of the paragraph above. A `deck` or
 /// `removed` folder named here is a stale client or a bug.
-const READER_FOLDERS: &[&str] = &[USER_KIND];
+///
+/// `pub(crate)` for [`crate::trade::finish_trade`], which files a run of received cards through
+/// [`add_entry_filed`] with this fence — the reader's own add, made once per line with one feed
+/// row for the run.
+pub(crate) const READER_FOLDERS: &[&str] = &[USER_KIND];
 
 /// …and what a **deck-driven write** may file into, which is the reader's drawers plus the group
 /// of the deck that same press answers for.

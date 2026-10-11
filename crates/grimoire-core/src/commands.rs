@@ -1135,6 +1135,30 @@ commands! {
         run_tag_search(conn, &text, &namespace, limit)
     };
 
+    // trade — every write is the trade tables' own but the finish, which takes copies out of
+    // the collection and adds them to it, and so is `owned`.
+    read trade_list in trade() = |conn| list_trades(conn);
+    read trade_get in trade(id: i64) = |conn| get_trade(conn, id);
+    write trade_create in trade(trade: TradeCreate) = |conn| create_trade(conn, &trade);
+    write trade_rename in trade(id: i64, name: String) = |conn| rename_trade(conn, id, &name);
+    write trade_set_rate in trade(id: i64, side: String, rate: i64) = |conn| {
+        set_trade_rate(conn, id, &side, rate)
+    };
+    write trade_add_lines in trade(id: i64, side: String, lines: Vec<TradeLineInput>) = |conn| {
+        add_trade_lines(conn, id, &side, &lines)
+    };
+    write trade_update_line in trade(line_id: i64, change: TradeLineChange) = |conn| {
+        update_trade_line(conn, line_id, &change)
+    };
+    write trade_remove_line in trade(line_id: i64) = |conn| remove_trade_line(conn, line_id);
+    owned trade_finish in trade(id: i64, options: TradeFinishOptions) = |conn| {
+        finish_trade(conn, id, &options)
+    };
+    write trade_archive in trade(id: i64) = |conn| archive_trade(conn, id);
+    write trade_reopen in trade(id: i64) = |conn| reopen_trade(conn, id);
+    write trade_duplicate in trade(id: i64) = |conn| duplicate_trade(conn, id);
+    write trade_delete in trade(id: i64) = |conn| delete_trade(conn, id);
+
     // upcoming_sets
     read upcoming_sets in upcoming_sets(days: i64) = |conn| upcoming_sets_for(conn, days);
 

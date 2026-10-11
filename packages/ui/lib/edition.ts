@@ -7,6 +7,11 @@ import type { ViewId } from "./store";
  *
  * `satisfies` rather than an annotation: the tuple's literal members are what {@link LightView}
  * is derived from, and a view removed from `ViewId` is a compile error here.
+ *
+ * **`trade` sits where `NAV` has it** — after Scanner, before Settings — because both readers of
+ * this list filter `NAV` by it: the desktop face's rail and the phone's tab bar draw the rail's
+ * order whatever this one says, and `edition.test.ts` holds the two equal so the list never reads
+ * as an order nothing draws.
  */
 export const LIGHT_VIEWS = [
   "search",
@@ -14,6 +19,7 @@ export const LIGHT_VIEWS = [
   "collection",
   "wishlist",
   "scanner",
+  "trade",
   "settings",
 ] as const satisfies readonly ViewId[];
 

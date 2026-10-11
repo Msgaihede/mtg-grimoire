@@ -227,6 +227,11 @@ pub mod sync_engine;
 /// [`sync_engine::wire`] seals every batch with the first of them.
 pub mod sync_pair;
 pub mod tags;
+/// **Trades** — `grimoire-core`'s module, and the thirteen wrappers over it. Twelve go
+/// through the read connection or [`sync::with_write`]; the finish takes copies out of the
+/// collection and puts copies into it, so it is the one through
+/// [`collection_source::with_write_owned`].
+pub mod trade;
 /// **The Rust half of an export, and the second implementation the golden fence exists for.**
 /// `packages/ui/features/transfer/export/` is the first; this one is here because the mirror thread
 /// cannot ask the page to render a file. Pure formatting: `&[Card]` and two enums in, a `String`

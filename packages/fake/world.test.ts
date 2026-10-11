@@ -603,6 +603,7 @@ describe("the seeded rows agree with the cards they name", () => {
     shared: true,
     waiting: true,
     tokenPlan: true,
+    trades: true,
   } satisfies Record<SeedName, true>) as SeedName[];
 
   it.each(names)("%s denormalises set, collector and language faithfully", (name) => {

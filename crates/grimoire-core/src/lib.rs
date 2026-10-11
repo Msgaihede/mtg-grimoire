@@ -193,6 +193,10 @@ pub mod sync_pair;
 /// bindings, the tag search over both, and the reader's mute list. They share Scryfall's
 /// client, its pacing gate and its lockout.
 pub mod tags;
+/// **Trades** — two sides of cards priced in the trade's own marketplace, and the one write
+/// that carries a finished trade into the collection and the wishlist. User schema v63; neither
+/// of its tables syncs.
+pub mod trade;
 pub mod upcoming_sets;
 pub mod value_history;
 pub mod wishlist;

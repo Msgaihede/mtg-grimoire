@@ -20,8 +20,8 @@ use crate::{
     export, home, images, import, index, listview, markcolors, marketplace, marketplace_feed,
     mirror, nav, new_printings, paths, price_history, recent_cards, reset, scanner, schema,
     scryfall, search, searchopen, set_completion, share, shelffolds, stackhide, startup, startview,
-    sticky_notes, sync, sync_engine, sync_pair, tags, upcoming_sets, update, value_history, window,
-    wishlist, wishlist_folders, wishlist_optimize, zoom,
+    sticky_notes, sync, sync_engine, sync_pair, tags, trade, upcoming_sets, update, value_history,
+    window, wishlist, wishlist_folders, wishlist_optimize, zoom,
 };
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -628,6 +628,22 @@ pub fn run() {
             sticky_notes::sticky_note_update,
             sticky_notes::sticky_note_delete,
             sticky_notes::sticky_note_reorder,
+            // The Trade page's thirteen (user schema v63): two reads on the read-only
+            // connection and eleven writes, of which only `trade_finish` reaches the
+            // collection and the wishlist — so it alone goes through `with_write_owned`.
+            trade::trade_list,
+            trade::trade_get,
+            trade::trade_create,
+            trade::trade_rename,
+            trade::trade_set_rate,
+            trade::trade_add_lines,
+            trade::trade_update_line,
+            trade::trade_remove_line,
+            trade::trade_finish,
+            trade::trade_archive,
+            trade::trade_reopen,
+            trade::trade_duplicate,
+            trade::trade_delete,
             // The Recently viewed widget: the read is infallible by signature, and the write is
             // the card modal's, which ignores a BUSY — a missed entry costs one tile.
             recent_cards::recent_cards,

@@ -82,10 +82,11 @@ export const NAV: readonly NavEntry[] = [
   // Before Settings so Settings stays the last row. **`Camera` and not `ScanLine`** (main,
   // 985b872e): that glyph drew a barcode scanner, and this view is a camera pointed at a card.
   { id: "scanner", label: "Scanner", Icon: Camera },
-  // **Two destinations that are a rail entry and a sentence, and nothing else yet.** They are in
-  // the column ahead of their pages on purpose: the rail is where a reader finds out what this app
-  // intends to be, and `WorkInProgress` says so in one line rather than leaving a row that looks
-  // finished and does nothing. They sit here for Scanner's reason — Settings stays the last row —
+  // **Trade is a page now; Playtesting is still a rail entry and a sentence, and nothing else.**
+  // Both went into the column ahead of their pages on purpose: the rail is where a reader finds
+  // out what this app intends to be, and `WorkInProgress` says so in one line rather than leaving
+  // a row that looks finished and does nothing. They sit here for Scanner's reason — Settings
+  // stays the last row —
   // so the chords after them moved again, and moved a second time when Home arrived at the head:
   // Playtesting reads `Ctrl+9` now, and the keyboard doc has the whole record of why an insertion
   // anywhere but the end renumbers.

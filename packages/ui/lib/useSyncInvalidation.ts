@@ -37,6 +37,7 @@ export const SYNC_INVALIDATED = [
   ["card"],
   ["sets"],
   ["decks"],
+  ["trade"],
   ["scanner", "status"],
 ];
 

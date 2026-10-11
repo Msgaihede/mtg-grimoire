@@ -467,7 +467,15 @@ pub(crate) fn record_copies(
 /// `card_id` is `Option<String>` on the table — NULL is the any-printing wish — and an equality
 /// against `Some(card_id)` refuses it, which is the same narrowing [`wishes`] makes by writing
 /// `w.card_id = ?1` rather than a `coalesce`.
-fn take_wish(tx: &Connection, wish_id: i64, card_id: &str, quantity: i64) -> Result<i64, String> {
+///
+/// `pub(crate)` for [`crate::trade::finish_trade`], which takes received cards off the wishes
+/// for them with this body rather than a second spelling of the delete-at-zero rule.
+pub(crate) fn take_wish(
+    tx: &Connection,
+    wish_id: i64,
+    card_id: &str,
+    quantity: i64,
+) -> Result<i64, String> {
     // [`CARD_WISH_SQL`]'s test asked of one row: the wish names this printing, or its oracle card
     // is this printing's. Printing and finish are the reader's call now, so neither is checked.
     let row: Option<(bool, i64)> = tx

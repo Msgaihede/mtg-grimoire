@@ -22,9 +22,9 @@ const tabs = () =>
     .map((b) => b.textContent);
 
 describe("the phone shell", () => {
-  it("draws five tabs, in the rail's order", () => {
+  it("draws six tabs, in the rail's order", () => {
     renderPhone(<PhoneFace />);
-    expect(tabs()).toEqual(["Search", "Decks", "Collection", "Wishlist", "Scanner"]);
+    expect(tabs()).toEqual(["Search", "Decks", "Collection", "Wishlist", "Scanner", "Trade"]);
   });
 
   it("opens on Search and says so in the title", () => {
@@ -72,7 +72,7 @@ describe("the phone shell", () => {
 describe("the shell's destinations are links", () => {
   it("points each tab, and the Settings control, at its own place's URL", () => {
     renderPhone(<PhoneFace />);
-    const views = ["search", "decks", "collection", "wishlist", "scanner"] as const;
+    const views = ["search", "decks", "collection", "wishlist", "scanner", "trade"] as const;
     expect(
       within(tabBar())
         .getAllByRole("link")
