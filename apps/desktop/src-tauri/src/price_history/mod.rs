@@ -15,7 +15,8 @@ use std::sync::Arc;
 ///
 /// `marketplace` is taken as the enum, whose own `Deserialize` never fails — an id this build does
 /// not know is TCGplayer, as on every list query — and as an `Option`, so a caller that sends none
-/// gets the same default rather than a refusal.
+/// gets the same default rather than a refusal. `scope` is absent for a widget measuring
+/// everything the reader owns, and the folders and cards it was narrowed to otherwise.
 #[tauri::command]
 pub async fn price_movers(
     state: tauri::State<'_, Arc<AppState>>,
@@ -23,19 +24,38 @@ pub async fn price_movers(
     direction: String,
     marketplace: Option<Marketplace>,
     limit: i64,
+    scope: Option<PriceMoverScope>,
 ) -> Result<PriceMovers, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        movers(
+        movers_in(
             &crate::sync::lock_db_read(&state),
             &window,
             &direction,
             marketplace.unwrap_or_default(),
             limit,
+            scope.as_ref(),
         )
     })
     .await
     .map_err(|e| format!("price movers could not be read: {e}"))?
+}
+
+/// Replace the device's price watch list — the cards the Price movers widgets are narrowed to,
+/// which the next snapshot remembers a price for whether or not they are owned. Through
+/// `with_write`, so a sync holding the connection answers `BUSY`; the page sends the list again
+/// with its next layout change.
+#[tauri::command]
+pub async fn set_price_watch(
+    state: tauri::State<'_, Arc<AppState>>,
+    card_ids: Vec<String>,
+) -> Result<(), String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::sync::with_write(&state, |conn| set_watched(conn, &card_ids))
+    })
+    .await
+    .map_err(|e| format!("the cards to follow could not be remembered: {e}"))?
 }
 
 /// A mover's detail: one printing's kept history at one marketplace, and its live price.

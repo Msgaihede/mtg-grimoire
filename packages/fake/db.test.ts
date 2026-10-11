@@ -12836,7 +12836,10 @@ describe("the busy fault", () => {
     // `_duplicate` and `_delete`, every one of which reaches `refuseIfBusy` first; the two reads,
     // `trade_list` and `trade_get`, sit in `readHandlers`. Read from `left` on this tree, never
     // added to. Count again after a merge.
-    expect(names).toHaveLength(138);
+    // 138 → 139 on 2026-10-11 with `set_price_watch` (issue #906), a plain `sync::with_write`
+    // `app_meta` write; the movers' read, `price_movers`, sits in `readHandlers`. Read from `left`
+    // on this tree. Count again after a merge.
+    expect(names).toHaveLength(139);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

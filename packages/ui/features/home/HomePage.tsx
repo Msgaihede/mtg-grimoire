@@ -131,7 +131,7 @@ import { DecksWidget, DecksWidgetSettings } from "./widgets/DecksWidget";
 import { DeckTodosWidget, DeckTodosWidgetSettings } from "./widgets/DeckTodosWidget";
 import { FoldersWidget, FoldersWidgetSettings } from "./widgets/FoldersWidget";
 import { NewPrintingsWidget, NewPrintingsWidgetSettings } from "./widgets/NewPrintingsWidget";
-import { PriceMoversWidget } from "./widgets/PriceMoversWidget";
+import { PriceMoversWidget, PriceMoversWidgetSettings } from "./widgets/PriceMoversWidget";
 import { RecentCardsWidget } from "./widgets/RecentCardsWidget";
 import { SetCompletionWidget } from "./widgets/SetCompletionWidget";
 import { StickyNotesWidget } from "./widgets/StickyNotesWidget";
@@ -285,6 +285,9 @@ function renderExtraSettings(widget: HomeWidget, onConfig: ConfigPatch): ReactNo
       return <DeckTodosWidgetSettings widget={widget} onConfig={onConfig} />;
     case "wishlistSavings":
       return <WishlistSavingsWidgetSettings widget={widget} onConfig={onConfig} />;
+    // The folders and cards behind `Chosen` (issue #906).
+    case "priceMovers":
+      return <PriceMoversWidgetSettings widget={widget} onConfig={onConfig} />;
     default:
       return undefined;
   }

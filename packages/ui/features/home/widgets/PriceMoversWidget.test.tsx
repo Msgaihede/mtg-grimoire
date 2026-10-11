@@ -6,9 +6,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /** The one read, in front of an intact mirror — `RecentCardsWidget.test.tsx`'s note. */
 const priceMovers = vi.hoisted(() => vi.fn());
+const collectionFolderList = vi.hoisted(() => vi.fn());
+const wishlistFolderList = vi.hoisted(() => vi.fn());
+const searchCards = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/ipc")>();
-  return { ...actual, ipc: { ...actual.ipc, priceMovers } };
+  return {
+    ...actual,
+    ipc: { ...actual.ipc, priceMovers, collectionFolderList, wishlistFolderList, searchCards },
+  };
 });
 
 import type {
@@ -24,10 +30,15 @@ import { MARKETPLACE_FEEDS_KEY, MARKETPLACE_KEY } from "@/lib/useMarketplace";
 import { makeFit, type WidgetFit } from "../fit";
 import { priceMoversKey } from "../keys";
 import {
+  CHOSEN_GONE,
+  CHOSEN_NO_HISTORY,
   emptySentence,
+  MAX_CHOSEN_CARDS,
   NO_HISTORY,
+  NOTHING_CHOSEN,
   PRICE_MOVERS_READ,
   PriceMoversWidget,
+  PriceMoversWidgetSettings,
   signedMoney,
 } from "./PriceMoversWidget";
 
@@ -118,6 +129,9 @@ function seed(
 beforeEach(() => {
   useAppStore.setState(useAppStore.getInitialState());
   priceMovers.mockReset().mockResolvedValue(answer());
+  collectionFolderList.mockReset().mockResolvedValue([]);
+  wishlistFolderList.mockReset().mockResolvedValue([]);
+  searchCards.mockReset().mockResolvedValue({ items: [], total: 0 });
   qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   qc.setQueryData(MARKETPLACE_KEY, "tcgplayer");
   qc.setQueryData(MARKETPLACE_FEEDS_KEY, []);
@@ -161,6 +175,20 @@ describe("emptySentence", () => {
 
   it("has nothing to say about a list with movers in it", () => {
     expect(emptySentence(answer(), "7d", "both")).toBeNull();
+  });
+
+  /**
+   * Under `Chosen` the day count is the table's and says nothing about the chosen cards, so a
+   * window with no baseline for them is *no history for your cards* rather than *only N days*.
+   */
+  it("speaks of what the reader chose under a scope", () => {
+    expect(emptySentence(answer({ movers: [], since: null, days: 90 }), "7d", "both", true)).toBe(
+      CHOSEN_NO_HISTORY,
+    );
+    expect(emptySentence(answer({ movers: [] }), "7d", "up", true)).toBe(
+      "Nothing you chose went up over the last seven days.",
+    );
+    expect(emptySentence(answer({ movers: [], days: 1 }), "7d", "both", true)).toBe(NO_HISTORY);
   });
 });
 
@@ -301,5 +329,152 @@ describe("pressing a mover", () => {
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.getByText("Black Lotus")).toBeInTheDocument();
     expect(useAppStore.getState().priceHistory).toBeNull();
+  });
+});
+
+/** A collection folder as the list answers it — only the fields the tree reads matter here. */
+function collectionFolder(id: number, parentId: number | null = null) {
+  return {
+    id,
+    parentId,
+    name: `Folder ${id}`,
+    kind: "user",
+    deckId: null,
+    sortOrder: id,
+    locked: false,
+    createdAt: 0,
+    updatedAt: 0,
+  };
+}
+
+describe("a widget narrowed to what the reader chose (issue #906)", () => {
+  const bolt = { id: "bolt", name: "Lightning Bolt", setCode: "m21", collectorNumber: "161" };
+
+  it("asks nothing and says so when nothing is chosen", async () => {
+    draw({ scope: "chosen" });
+    expect(await screen.findByText(NOTHING_CHOSEN)).toBeInTheDocument();
+    expect(priceMovers).not.toHaveBeenCalled();
+  });
+
+  it("asks about the chosen cards without reading either folder tree", async () => {
+    draw({ scope: "chosen", cards: [bolt] });
+    await screen.findByText("Black Lotus");
+    expect(priceMovers).toHaveBeenCalledWith("7d", "both", "tcgplayer", PRICE_MOVERS_READ, {
+      collectionFolders: [],
+      wishlistFolders: [],
+      cards: ["bolt"],
+    });
+    expect(collectionFolderList).not.toHaveBeenCalled();
+    expect(wishlistFolderList).not.toHaveBeenCalled();
+  });
+
+  it("expands a chosen folder into the folders filed inside it, the root standing alone", async () => {
+    collectionFolderList.mockResolvedValue([
+      collectionFolder(7),
+      collectionFolder(8, 7),
+      collectionFolder(9),
+    ]);
+    draw({ scope: "chosen", collectionFolderIds: [7, 0], wishlistFolderIds: [0] });
+    await screen.findByText("Black Lotus");
+    expect(priceMovers).toHaveBeenCalledWith("7d", "both", "tcgplayer", PRICE_MOVERS_READ, {
+      collectionFolders: [0, 7, 8],
+      wishlistFolders: [0],
+      cards: [],
+    });
+    expect(wishlistFolderList).not.toHaveBeenCalled();
+  });
+
+  it("never measures in place of folders that are gone", async () => {
+    draw({ scope: "chosen", collectionFolderIds: [42] });
+    expect(await screen.findByText(CHOSEN_GONE)).toBeInTheDocument();
+    expect(priceMovers).not.toHaveBeenCalled();
+  });
+
+  it("keeps the four-argument read for everything owned, with choices set aside", async () => {
+    draw({ scope: "owned", cards: [bolt] });
+    await screen.findByText("Black Lotus");
+    expect(priceMovers).toHaveBeenCalledWith("7d", "both", "tcgplayer", PRICE_MOVERS_READ);
+  });
+
+  it("says the chosen cards have no history yet in their own words", async () => {
+    priceMovers.mockResolvedValue(answer({ movers: [], since: null, days: 60 }));
+    draw({ scope: "chosen", cards: [bolt] });
+    expect(await screen.findByText(CHOSEN_NO_HISTORY)).toBeInTheDocument();
+  });
+});
+
+describe("PriceMoversWidgetSettings", () => {
+  function settings(config: unknown) {
+    const onConfig = vi.fn();
+    const widget: HomeWidget = {
+      id: "priceMovers",
+      kind: "priceMovers",
+      x: 0,
+      y: 0,
+      w: 2,
+      h: 3,
+      config,
+    };
+    render(<PriceMoversWidgetSettings widget={widget} onConfig={onConfig} />, { wrapper });
+    return onConfig;
+  }
+
+  it("points at the Chosen option rather than drawing lists that change nothing", () => {
+    settings(null);
+    expect(
+      screen.getByText(
+        "Choose Chosen under Which cards to pick the folders and cards this widget follows.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText("Cards")).toBeNull();
+  });
+
+  it("offers both cabinets and adds a card found by search, owned or not", async () => {
+    const user = userEvent.setup();
+    searchCards.mockResolvedValue({
+      items: [{ id: "bolt", name: "Lightning Bolt", setCode: "m21", collectorNumber: "161" }],
+      total: 1,
+    });
+    const onConfig = settings({ scope: "chosen" });
+
+    expect(screen.getByLabelText("Collection folders")).toBeInTheDocument();
+    expect(screen.getByLabelText("Wishlist folders")).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Cards"), "bolt");
+    await user.click(await screen.findByRole("button", { name: "Add Lightning Bolt · M21 #161" }));
+    expect(onConfig).toHaveBeenLastCalledWith({
+      cards: [{ id: "bolt", name: "Lightning Bolt", setCode: "m21", collectorNumber: "161" }],
+    });
+    expect(searchCards).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "bolt", marketplace: "tcgplayer", offset: 0 }),
+    );
+  });
+
+  it("stops offering cards at the most one widget follows", () => {
+    const many = Array.from({ length: MAX_CHOSEN_CARDS }, (_, n) => ({
+      id: `c${n}`,
+      name: `Card ${n}`,
+      setCode: "lea",
+      collectorNumber: String(n),
+    }));
+    settings({ scope: "chosen", cards: many });
+    expect(screen.getByLabelText("Cards")).toBeDisabled();
+    expect(
+      screen.getByText(
+        `This widget follows ${MAX_CHOSEN_CARDS} cards, its most. Remove one to add another.`,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("lists the chosen cards with a way to take each one off", async () => {
+    const user = userEvent.setup();
+    const ring = { id: "ring", name: "Sol Ring", setCode: "lea", collectorNumber: "270" };
+    const bolt = { id: "bolt", name: "Lightning Bolt", setCode: "m21", collectorNumber: "161" };
+    const onConfig = settings({ scope: "chosen", cards: [ring, bolt] });
+
+    const list = screen.getByRole("list", { name: "Chosen cards" });
+    expect(within(list).getByText("Sol Ring · LEA #270")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Remove Sol Ring · LEA #270" }));
+    expect(onConfig).toHaveBeenLastCalledWith({ cards: [bolt] });
   });
 });

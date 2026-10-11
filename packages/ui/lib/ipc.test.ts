@@ -3386,9 +3386,34 @@ describe("ipc argument names match the Rust command signatures", () => {
       marketplace: "manapool",
       limit: 12,
     });
-    for (const param of ["window", "direction", "marketplace", "limit"]) {
+    for (const param of ["window", "direction", "marketplace", "limit", "scope"]) {
       declares(priceHistoryRs, "price_movers", param);
     }
+
+    // **The scope (issue #906) is a fifth argument and only when given**: an unscoped read stays
+    // the exact four-key request it always was, and a scoped one carries the struct under `scope`
+    // — `#[serde(default)]` on every field, so the struct's own names are pinned by the walk.
+    const scope = { collectionFolders: [0, 7], wishlistFolders: [3], cards: ["bolt-lea"] };
+    await ipc.priceMovers("7d", "both", "tcgplayer", 100, scope);
+    expect(invoke).toHaveBeenLastCalledWith("price_movers", {
+      window: "7d",
+      direction: "both",
+      marketplace: "tcgplayer",
+      limit: 100,
+      scope,
+    });
+    expect(Object.keys(invoke.mock.calls[invoke.mock.calls.length - 2][1] as object)).not.toContain(
+      "scope",
+    );
+
+    // The watch list the snapshots read — `record_recent_card`'s trap: the ids must reach
+    // `card_ids`, and a wrapper that sent `ids` would be refused at the door.
+    invoke.mockResolvedValue(undefined);
+    await ipc.setPriceWatch(["bolt-lea", "ring-lea"]);
+    expect(invoke).toHaveBeenLastCalledWith("set_price_watch", {
+      cardIds: ["bolt-lea", "ring-lea"],
+    });
+    declares(priceHistoryRs, "set_price_watch", "card_ids");
 
     // The movers popup's read (issue #515) — `record_recent_card`'s trap and `price_movers`' at
     // once: the card id must reach `card_id`, and `finish` and `marketplace` are bare strings side
@@ -5947,6 +5972,10 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["StickyNote", stickyNotesRs, "StickyNoteRow"],
     ["PriceMover", priceHistoryRs, "PriceMover"],
     ["PriceMovers", priceHistoryRs, "PriceMovers"],
+    // **What the widget is narrowed to** (issue #906) — the request's side, and the quiet kind at
+    // its quietest: every field is `#[serde(default)]`, so a renamed `wishlistFolders` is not a
+    // refusal but an empty list, and a widget narrowed to a wishlist folder answers nothing moved.
+    ["PriceMoverScope", priceHistoryRs, "PriceMoverScope"],
     // **The movers popup's two** (issue #515), nested for `PriceMovers`' reason: a field renamed
     // inside `PricePoint` leaves `PriceHistory` agreeing while every point of the line reads
     // `undefined`. Both are the quiet kind. A renamed `day` or `price` gives the chart `NaN`s and

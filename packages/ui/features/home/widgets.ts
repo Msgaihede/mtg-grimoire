@@ -315,9 +315,15 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
     ],
     toggles: [{ key: "times", label: "Show times" }],
   },
+  /**
+   * `scope` narrows the widget to chosen collection folders, wishlist folders and cards (issue
+   * #906) — the checklists behind `Chosen` are `PriceMoversWidgetSettings`, under the rows. Last
+   * of the three picks so the row sits directly above the lists it opens.
+   */
   priceMovers: {
     label: "Price movers",
-    description: "Largest collection price increases and decreases.",
+    description:
+      "Largest price increases and decreases in your collection, or in the folders and cards you choose.",
     def: [2, 3],
     min: [2, 2],
     max: [4, 6],
@@ -338,6 +344,14 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
           { id: "both", label: "Both" },
           { id: "up", label: "Gainers" },
           { id: "down", label: "Losers" },
+        ],
+      },
+      {
+        key: "scope",
+        label: "Which cards",
+        options: [
+          { id: "owned", label: "Everything you own" },
+          { id: "chosen", label: "Chosen" },
         ],
       },
     ],

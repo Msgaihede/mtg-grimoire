@@ -94,6 +94,7 @@ import type { Finish } from "@/lib/finish";
 import type {
   DeckCompletionCompare,
   PriceMoverDirection,
+  PriceMoverScope,
   PriceMoverWindow,
   ValueSplit,
 } from "@/lib/ipc";
@@ -193,14 +194,28 @@ export const setCompletionKey: QueryKey = ["collection", "setCompletion"];
  * which printings are *owned*, and `invalidatePricedQueries` sweeps the same root when a feed lands,
  * which is also the moment a new price snapshot is taken. **Every segment after the root is part of
  * the question** — the window picks the baseline, the direction filters, the marketplace decides
- * every number, and the limit cuts the list — so each one has to be able to re-issue the read.
+ * every number, the limit cuts the list, and the scope (issue #906; `null` for every owned
+ * printing) names the printings — so each one has to be able to re-issue the read. The scope's
+ * lists arrive sorted, so ticking the same folders in another order is the same key. A scoped
+ * widget reading wishlist folders is still under `["collection"]`: a wish added there shows on the
+ * next read rather than at once, which a list of price *moves* can afford.
  */
 export const priceMoversKey = (
   range: PriceMoverWindow,
   direction: PriceMoverDirection,
   marketplace: MarketplaceId,
   limit: number,
-): QueryKey => ["collection", "priceMovers", range, direction, marketplace, limit];
+  scope: PriceMoverScope | null = null,
+): QueryKey => [
+  "collection",
+  "priceMovers",
+  range,
+  direction,
+  marketplace,
+  limit,
+  // Absent rather than `null` for every owned printing, so that key is the one it always was.
+  ...(scope === null ? [] : [scope]),
+];
 
 /**
  * One printing's price over time — `ipc.priceHistory`, the movers popup's read.

@@ -1,8 +1,9 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ipc, type HomeLayout } from "@/lib/ipc";
 import { copy, parseLayout, toStored } from "./layout";
 import { DEFAULT_LAYOUT } from "./widgets";
+import { priceWatchOf } from "./priceMoversScope";
 
 /**
  * Where the home page's layout document is kept for the life of the window.
@@ -150,6 +151,8 @@ export function useHomeLayout(): {
     [queryClient, startWrite],
   );
 
+  usePriceWatch(query.data);
+
   const reset = useCallback(() => {
     // Through `update` rather than beside it, so Reset is optimistic, unrolled-back and stored on
     // exactly the terms every other change to this page is.
@@ -166,4 +169,39 @@ export function useHomeLayout(): {
     update,
     reset,
   };
+}
+
+/**
+ * Keep the device's price watch list the cards the page's Price movers widgets name (issue #906).
+ *
+ * **Rust never reads a widget's config** — `widgets.ts`' rule — so the snapshot that remembers a
+ * price for a card the reader does not own is told which cards through `set_price_watch`, a
+ * derived index of this document. Sent whenever the set changes, the stored layout's first answer
+ * included, so a list a refused write (a `BUSY` under a sync) left stale, or a layout another build
+ * wrote, is put right on the next launch. `set_price_watch` writes nothing for a list it already
+ * holds.
+ *
+ * **Nothing is sent until there is something to say**: a page that has never named a card sends
+ * nothing at all, so no launch pays a write for a feature the reader has not used. Once a list has
+ * been sent this session, emptying it is sent too. A refusal is swallowed — `record_recent_card`'s
+ * reading: the cost is a day of history, and the next change sends the list again.
+ */
+const WATCH_REFUSED = "\u0000refused";
+
+function usePriceWatch(layout: HomeLayout | undefined): void {
+  const sent = useRef<string | null>(null);
+  const watch = layout === undefined ? null : priceWatchOf(layout);
+  const key = watch === null ? null : watch.join("\n");
+  useEffect(() => {
+    if (watch === null || key === null || key === sent.current) return;
+    if (sent.current === null && watch.length === 0) return;
+    sent.current = key;
+    ipc.setPriceWatch(watch).catch(() => {
+      // A key no list spells, so the next change is sent whatever it is — an emptied list too.
+      sent.current = WATCH_REFUSED;
+    });
+    // `key` is `watch` spelled as a string, so the effect runs when the set changes and not on
+    // every render's fresh array.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
 }

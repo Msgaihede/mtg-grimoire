@@ -295,6 +295,16 @@ function collectionKind(folder: CollectionFolder): {
   };
 }
 
+/**
+ * A collection folder's row in a settings picker — its name, and the app's own two saying which
+ * they are: `Burn (deck)`, `Recently removed (removed cards)`. The Price movers widget's checklist
+ * draws its rows with this too, so one folder is one row in both pickers —
+ * {@link wishlistFolderOption}'s rule one cabinet over.
+ */
+export function collectionFolderOption(folder: CollectionFolder): string {
+  return collectionKind(folder).option;
+}
+
 /** App-owned folders by name, the id breaking a tie — `shelves.ts`' `byName`, which is module-
  *  private there: nobody arranged these, so a `sort_order` on one is not an order anybody chose. */
 function byName<F extends FolderLike>(a: FolderNode<F>, b: FolderNode<F>) {
@@ -727,7 +737,7 @@ export function FoldersWidgetSettings({ widget, onConfig }: WidgetSettingsProps)
           // at a deck's group where a *destination* picker may not.
           options={collection.folders.map((each) => ({
             value: String(each.id),
-            label: collectionKind(each).option,
+            label: collectionFolderOption(each),
           }))}
           selected={config.collectionFolderIds}
           onToggle={(value) => toggle("collectionFolderIds", value)}

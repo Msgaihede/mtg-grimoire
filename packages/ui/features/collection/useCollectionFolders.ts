@@ -26,10 +26,13 @@ const NONE: readonly CollectionFolder[] = [];
  * from one cache entry, so the collection page — which mounts both, through its folder cards and
  * through the card menu on its own rows — still asks the backend for the list exactly once.
  */
-export function useCollectionFolderList() {
+export function useCollectionFolderList({ enabled = true }: { enabled?: boolean } = {}) {
   const query = useQuery({
     queryKey: ["collection", "folders"],
     queryFn: () => ipc.collectionFolderList(),
+    // Off for a reader who only sometimes needs the folders — the Price movers widget reads them
+    // only once its reader narrows it to chosen folders. `useWishlistFolderList`'s switch.
+    enabled,
   });
 
   return {
