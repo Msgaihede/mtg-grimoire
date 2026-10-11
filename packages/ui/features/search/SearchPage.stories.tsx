@@ -203,7 +203,7 @@ export const CollapsedPrintings: Story = {
     );
 
     await userEvent.click(canvas.getByRole("button", { name: /^Show filters/ }));
-    await userEvent.click(canvas.getByRole("button", { name: "All printings" }));
+    await userEvent.click(canvas.getByRole("button", { name: "Show all printings" }));
 
     // Two rows now, and neither claims to stand for more than itself.
     await waitFor(async () => {
@@ -429,7 +429,7 @@ export const Large: Story = {
     await expect(await canvas.findByText("687 cards")).toBeInTheDocument();
 
     await userEvent.click(canvas.getByRole("button", { name: /^Show filters/ }));
-    await userEvent.click(canvas.getByRole("button", { name: "All printings" }));
+    await userEvent.click(canvas.getByRole("button", { name: "Show all printings" }));
 
     await expect(await canvas.findByText("5,000+ cards")).toBeInTheDocument();
     // The lie the `+` exists to prevent, asserted as absent.
@@ -463,7 +463,7 @@ export const CappedTotal: Story = {
     );
 
     await userEvent.click(canvas.getByRole("button", { name: /^Show filters/ }));
-    await userEvent.click(canvas.getByRole("button", { name: "All printings" }));
+    await userEvent.click(canvas.getByRole("button", { name: "Show all printings" }));
 
     await canvas.findByText("5,000+ cards");
     const table = canvas.getByRole("table", { name: "Search results" });
@@ -490,7 +490,7 @@ export const NarrowedToAnExactCount: Story = {
     await canvas.findByText("687 cards");
     // Over printings, because that is where the cap lives — see {@link CappedTotal}.
     await userEvent.click(canvas.getByRole("button", { name: /^Show filters/ }));
-    await userEvent.click(canvas.getByRole("button", { name: "All printings" }));
+    await userEvent.click(canvas.getByRole("button", { name: "Show all printings" }));
     await canvas.findByText("5,000+ cards");
 
     await userEvent.type(canvas.getByRole("searchbox", { name: "Search cards" }), "Ancient");

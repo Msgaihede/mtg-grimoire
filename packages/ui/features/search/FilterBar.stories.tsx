@@ -1017,3 +1017,29 @@ export const StatedFilters: Story = {
     ).toBeInTheDocument();
   },
 };
+
+/**
+ * **`Show all printings` beside Filters**, on a row wide enough to hold it (issue #911).
+ *
+ * 1200px of row, inside the two-line band `printingsOnBar` opens from 1040: the switch is the
+ * first line's, just ahead of Filters, and the tray leaves its `Printings` cell out rather than
+ * drawing the switch a second time. Narrow this box under 1040 — or into the one-line layout's
+ * 1500–1623, where the fold spends its room — and it goes back into the tray.
+ */
+export const PrintingsBesideFilters: Story = {
+  args: { width: "w-[1200px]" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // Found before the tray opens, so it is on the bar; the observer reports a frame after
+    // the first paint, so it is waited for rather than read.
+    const chip = await canvas.findByRole("button", { name: "Show all printings" });
+    await expect(chip).toHaveAttribute("aria-pressed", "false");
+    await expect(chip.nextElementSibling).toBe(
+      canvas.getByRole("button", { name: /^Show filters/ }),
+    );
+
+    await openTray(canvas);
+    await expect(canvas.getAllByRole("button", { name: "Show all printings" })).toHaveLength(1);
+    await expect(canvas.queryByText("Printings")).toBeNull();
+  },
+};
