@@ -1219,6 +1219,31 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     developer's record. Nothing reads it.
   - **Not yet run anywhere**: the two jobs and `publish`'s step run only on `main`. The first
     push after this merges is their first run, and the first release after it is the step's.
+- **A published release is announced on Discord** (2026-10-11). `release.yml` is fourteen jobs
+  with `announce`, which needs `release-please` and `publish` and which nothing needs:
+
+  | Job | Needs | Holds a secret | What it does |
+  | --- | --- | --- | --- |
+  | `announce` | `release-please`, `publish` | `DISCORD_WEBHOOK_URL` (`environment: discord`) | Installs nothing. Reads the release's body as published (`gh release view`, the run's token), then `node scripts/changelog/discord.mjs notes.md` posts it. `contents: read` |
+
+  - **What is posted is the body as published**: the generated `changelog/<version>.md`, or
+    release-please's notes when `publish` kept those. The first message opens with
+    `## MTG Grimoire <version> is released` and the release's address.
+  - **Discord takes 2000 characters a message** (`content`), so the script cuts the text between
+    paragraphs, then lines, then words — through a word only when one is longer than a message —
+    and joins each heading to the list under it first, so no message ends on a heading. Every
+    message is awaited (`?wait=true`), so they arrive in order and a refusal is an error; a 429
+    is waited out as Discord asks, five tries. Measured on `changelog/`: 0.44.0 is three
+    messages, the longest (0.18.0) six.
+  - **Nothing in it can ping or unfold**: `allowed_mentions: { parse: [] }` and the
+    `SUPPRESS_EMBEDS` flag. A webhook address that is not `https://discord.com/api/webhooks/…`
+    (or `discordapp.com`, `ptb.`, `canary.`) is refused without being printed.
+  - **An announcement never holds a release up**: it runs after the flip, so a failure turns a
+    run red whose release is already published. **It is not idempotent** — a re-run of the job
+    posts again, and a failure part-way leaves the messages already posted (the log says how
+    many).
+  - **No webhook → nothing posted**, the summary says so, green.
+  - **Not yet run anywhere**: the first release after this merges is its first run.
 - **What only the owner can do.** No agent makes a key, sets a secret, creates a token or
   changes a setting of the repository. Until these are done every release ends green with a
   summary saying what it did not ship. PowerShell, **in a folder outside the repository** that
@@ -1278,9 +1303,21 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   #    re-running the last Release run's `changelog (write)` job. Give this environment no
   #    required reviewers and no wait timer: its job runs on every push, in the `release`
   #    concurrency group, and a run waiting on a click would stand in front of a real release.
+
+  # 6. The Discord webhook, in an environment of its own: `discord`, usable from `main` alone,
+  #    restricted BEFORE the address is put in it. The address is made in Discord: the channel's
+  #    Edit Channel → Integrations → Webhooks → New Webhook → Copy Webhook URL. Name and avatar
+  #    are the webhook's own; the workflow sets neither.
+  gh api -X PUT repos/Msgaihede/mtg-grimoire/environments/discord -F "deployment_branch_policy[protected_branches]=false" -F "deployment_branch_policy[custom_branch_policies]=true"
+  gh api -X POST repos/Msgaihede/mtg-grimoire/environments/discord/deployment-branch-policies -f name=main -f type=branch
+  #    Check it: this prints `main` and nothing else.
+  gh api repos/Msgaihede/mtg-grimoire/environments/discord/deployment-branch-policies --jq ".branch_policies[].name"
+  gh secret set DISCORD_WEBHOOK_URL --env discord --repo Msgaihede/mtg-grimoire
+  #    The next release is announced. To announce the last one, re-run its Release run's
+  #    `announce (Discord)` job.
   ```
 
-  - ⚠️ **`--env release` on every one of steps 3 and 4 (`--env changelog` in step 5), and the
+  - ⚠️ **`--env release` on every one of steps 3 and 4 (`--env changelog` in step 5, `--env discord` in step 6), and the
     environment restricted first.** A value set without it is a
     repository secret, which any branch's workflow can read — the hole the environment is
     there to close; and the jobs read the environment's, so it would also do nothing. An
