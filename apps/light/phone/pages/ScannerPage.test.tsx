@@ -59,7 +59,9 @@ import type {
   ScannerVerdict,
 } from "@grimoire/ui/lib/ipc";
 import type { FakeParams } from "@grimoire/fake/world";
+import type { TrayDestination } from "@grimoire/ui/features/scanner/useTrayDestination";
 import { PhoneFace } from "../PhoneApp";
+import { ScannerPage } from "./ScannerPage";
 import { installLayout, renderPhone } from "../testing";
 
 /**
@@ -238,7 +240,10 @@ function mount({
   prefs,
   tray,
   over,
+  destination,
 }: {
+  /** The page alone, filing into this — as the Trade page's sheet mounts it — and not the face. */
+  destination?: TrayDestination;
   fake?: FakeParams;
   /** What `scanner_prefs` answers, over the crate's defaults. */
   prefs?: Partial<ScannerPrefs>;
@@ -254,7 +259,8 @@ function mount({
     holds: 0,
     resets: 0,
   };
-  const view = renderPhone(<PhoneFace />, {
+  const page = destination === undefined ? <PhoneFace /> : <ScannerPage destination={destination} />;
+  const view = renderPhone(page, {
     path: "/scanner",
     fake,
     commands: (own) => {
@@ -984,6 +990,31 @@ describe("sending a scan from the Scanner page", () => {
     }
     // As many pictures as stops: each one drew a frame of its own.
     expect(drawn.size).toBe(pictures);
+  });
+
+  /**
+   * **No press over a trade** (the owner's decision, 2026-10-11): the Trade page mounts this page
+   * in a sheet of its own, filing into one side of a trade, and *Send scan…* is the Scanner tab's.
+   * A live camera and a running scanner — everything the tab needs to draw the press — and none.
+   */
+  it("draws no Send scan… where the page is mounted over a trade", async () => {
+    camera();
+    restoreVideo = shimVideo();
+    const cards = pile(0, "looking");
+    mount({
+      over: () => ({ scanner_frame: cards.frame }),
+      destination: {
+        title: "Scanned for their side",
+        name: "their side",
+        commit: () => Promise.resolve(),
+      },
+    });
+    await waitFor(() => expect(cards.sent.length).toBeGreaterThan(2), SETTLE);
+    expect(
+      await screen.findByRole("button", { name: "Reset evidence" }, SETTLE),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop scanning" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
   });
 
   /**

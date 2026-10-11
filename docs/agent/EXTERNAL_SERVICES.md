@@ -341,8 +341,8 @@ Object could close.
 **What is stored says nothing of who sent it** — no device, group or account id, no address, and
 the Worker's logging is off (`observability.enabled: false`) so Cloudflare keeps no request line
 either. The privacy policy (`apps/light/public/privacy.html`, *Sending a scan*) says exactly
-that, and Google Play's Data safety form has to say *Photos* — and perhaps *Videos*, which is
-the owner's reading to make ([docs/play/README.md](../play/README.md)) — **the owner's to change in the Console before the
+that, and Google Play's Data safety form has to say *Photos* and *Videos*, both (the owner's
+decision, 2026-10-11; [docs/play/README.md](../play/README.md)) — **the owner's to change in the Console before the
 Android release that carries Send**. A browser sends too, so the Worker answers the web app's
 origin by name (`APP_ORIGINS`, its `src/cors.ts`) and the hosting policy's `connect-src` names
 its host: one fact in two deploys, **this Worker's first**.

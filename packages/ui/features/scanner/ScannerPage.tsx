@@ -234,10 +234,10 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
    * nothing to send and no press is drawn: the stopped sentence over the picture already says
    * what would bring one back.
    *
-   * **And only in the Scanner view itself.** Mounted over a trade (`destination`) this page is
-   * already inside a dialog, and its reader is in the middle of something else — *Create deck…*
-   * is not drawn there for the same reason. A second dialog opened from inside that one has not
-   * been seen in a window, so the press is not offered where it would open one.
+   * **And only in the Scanner view itself — never over a trade** (the owner's decision,
+   * 2026-10-11). Mounted with a `destination` this page is already inside a dialog, and its
+   * reader is in the middle of something else; *Create deck…* is not drawn there for the same
+   * reason.
    *
    * **The filters it says are the ones in force** (`inForce`), not the ones the bar is drawing:
    * `prefs.filters` moves the moment the reader changes it, before the session has taken the

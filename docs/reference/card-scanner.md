@@ -4329,6 +4329,11 @@ and filters the label names, that is the scan again. It is the whole run or noth
 layer — the page opens no dialog on fewer than five frames, the engine refuses a run that short
 before any request, and the inbox has no shape a single picture fits.
 
+**It is the Scanner view's own, and never offered over a trade** (the owner's decision,
+2026-10-11): the Trade page mounts this same page inside a dialog — a sheet, on a phone — to
+file scans into one side of a trade, and there the press is not drawn, as *Create deck…* is
+not. Both pages hold that with a test.
+
 **It is the only thing here that sends a picture off the device, and it takes two presses.** The
 first freezes the run and opens a dialog on it; nothing has been sent. The reader looks through
 the pictures, chooses **the exact printing** and **its finish** by hand, and the second press
@@ -4511,8 +4516,6 @@ of its two bindings — and by nothing that crosses a real network. What only re
 - **The edge**: that the bucket binding takes a write, that a browser's pre-flight is answered
   as the suite answers it, and whether 500 waiting runs is a ceiling a real week ever meets.
   `infrastructure/scan-worker/README.md` has the deploy and the four probes.
-- **Inside a trade.** The Trade page mounts the scanner in a dialog of its own, and Send is not
-  offered there: a second dialog opened from inside that one has not been seen in a window.
 
 ## On the phone face
 

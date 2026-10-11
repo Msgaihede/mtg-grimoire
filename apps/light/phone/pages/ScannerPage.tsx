@@ -244,8 +244,9 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   // **A run, never one picture**: the frames are the pump's own (`loop.recent`), so the press
   // grabs nothing. **Offered only while there can be one** — a camera live and recognition
   // running: stopped, the pump has let its frames go and is sending none, and no press is drawn.
-  // **And only on the Scanner tab itself**: over a trade (`destination`) this page is already a
-  // sheet, and a second one opened from inside it has not been seen on a phone.
+  // **And only on the Scanner tab itself — never over a trade** (the owner's decision,
+  // 2026-10-11): with a `destination` this page is already a sheet, and its reader is in the
+  // middle of something else.
   // **The filters it says are the ones in force** (`inForce`), not the ones the sheet is drawing:
   // `prefs.filters` moves before the session has taken a change, and goes back if it is refused.
   const sendable = destination === undefined && camera.kind === "live" && scanning;
