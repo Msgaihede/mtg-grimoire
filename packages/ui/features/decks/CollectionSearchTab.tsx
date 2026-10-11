@@ -542,6 +542,8 @@ export function CollectionSearchTab({
           // the column, and a picked set is a fact about a particular list of cards. Switching
           // tabs puts the other tab's set down, which is right — the rows are different rows.
           selectionScope="deck-collection"
+          // The reader's own cards, so Ctrl+A is owed all of them — `CardGrid`'s `SELECT_ALL_LIMIT`.
+          selectAllLimit={Infinity}
           baseTileWidth={TILE_BASE}
           // **A tile's key, not a card id** — `CardGrid` compares this against `card.key ?? card.id`
           // and every tile here carries a key, so the pane's card id alone would match nothing and

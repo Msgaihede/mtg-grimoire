@@ -51,6 +51,7 @@ export type WidgetKind =
   | "setCompletion"
   | "priceMovers"
   | "newPrintings"
+  | "changeNotes"
   | "stickyNotes"
   | "deckTodos"
   | "deckCompletion"
@@ -522,6 +523,36 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
       { key: "basics", label: "Basic lands", dflt: false },
     ],
     chip: "window",
+  },
+  /**
+   * What the newest releases changed, from the notes this build carries (issue #905). **Directly
+   * after `newPrintings`** — the other card about what is new — and before round two's four, which
+   * `widgets.test.ts` pins as the catalogue's end.
+   *
+   * `releases` counts whole releases rather than lines: a release body is the unit the version
+   * history draws, and a card cut mid-release would hide which version a line belongs to. One is
+   * the default, which is the widget's name. `highlights` starts off, `WidgetToggle.dflt`'s reason:
+   * the full notes are the card's subject, and the short version is something a reader asks for.
+   * Not in {@link DEFAULT_LAYOUT}, for every catalogue-only kind's reason.
+   */
+  changeNotes: {
+    label: "Latest change notes",
+    description: "What changed in the latest releases of MTG Grimoire.",
+    def: [3, 3],
+    min: [2, 2],
+    max: [6, 8],
+    picks: [
+      {
+        key: "releases",
+        label: "Releases to show",
+        options: [
+          { id: 1, label: "Latest" },
+          { id: 3, label: "Last 3" },
+          { id: 5, label: "Last 5" },
+        ],
+      },
+    ],
+    toggles: [{ key: "highlights", label: "Highlights only", dflt: false }],
   },
   /**
    * **Round two (2026-09-26), the catalogue's last four rows** — `valueHistory` landed the same

@@ -30,6 +30,17 @@ Validation is executed entirely in TypeScript:
 
 ---
 
+## The Bands Row: Description, Notes, To-do (issues #685, #912)
+
+Below `PriceStrip`, the editor draws one intrinsic grid (`repeat(auto-fit, minmax(min(100%, NOTES_TODOS_COLUMN), 1fr))`, `NOTES_TODOS_COLUMN = 28rem`) holding up to three bands, in this order:
+
+1. **Description** (`DeckDescriptionPanel.tsx`) — `decks.description`, read-only (it is written in Deck settings). Mounted only when `shownDescription(row.description)` is non-null, so a blank or whitespace description takes no column. **Open on arrival**; its disclosure is local editor state with no `decks.*_open` column, so every deck opens with its description showing.
+2. **Notes** (`DeckNotesPanel.tsx`), then 3. **To-do** (`DeckTodosPanel.tsx`).
+
+The row folds by its own width, never a viewport breakpoint and never `@container` (the bands mount dialogs, and a container box would trap their `fixed` scrims): three tracks from **1392px** of row, two from **920px**, one below. The description used to be the gallery cover's tooltip (#840); #912 moved it here, and the cover's hint is the artist credit alone again. The phone face draws it as a `Description` section ahead of `Notes` in `DeckRail`, under the same blank rule.
+
+---
+
 ## The Notes Band (`deck_notes`)
 
 The Notes band (`DeckNotesPanel.tsx`) renders markdown notes attached to decks and specific cards:

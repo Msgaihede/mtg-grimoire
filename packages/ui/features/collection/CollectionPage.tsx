@@ -27,6 +27,7 @@ import type { MenuItem } from "@/components/menu/types";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import { QuantityStepper } from "@/components/QuantityStepper";
+import { ViewAllToggle } from "@/components/ViewAllToggle";
 import { buildCardMenu, type CardMenuDeps, type CardMenuTarget } from "@/features/card/cardMenu";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
@@ -42,6 +43,7 @@ import {
 } from "@/features/search/FilterBar";
 import { FilterQuickBar } from "@/features/search/FilterQuickBar";
 import { ShelfLabel } from "@/features/shelves/ShelfLabel";
+import { ShelfPlace } from "@/features/shelves/ShelfPlace";
 import { FOLD_PAUSED_REASON, ShelfToolbar } from "@/features/shelves/ShelfToolbar";
 import { useFoldAnchor } from "@/features/shelves/useFoldAnchor";
 import { useFoldOnFolderDrag } from "@/features/shelves/useFoldOnFolderDrag";
@@ -225,20 +227,40 @@ function tileLocked(tile: CollectionTile, lockedIds: ReadonlySet<number>): boole
  * **The line must stay one line** — `CardGrid` positions its rows from `CAPTION_HEIGHT`, a budget
  * rather than a minimum — so the printing truncates and the glyph is `shrink-0` beside it.
  */
-const lockedCaption = (lockedIds: ReadonlySet<number>) => (tile: CollectionTile) => {
-  const printing = `${tile.setCode.toUpperCase()} · ${tile.collectorNumber}`;
-  if (!tileLocked(tile, lockedIds)) return printing;
-  return (
-    <span className="flex min-w-0 items-center gap-[calc(0.375rem*var(--mark-scale,1))]">
-      <span className="min-w-0 truncate">{printing}</span>
-      <Lock
-        role="img"
-        aria-label="Locked"
-        className="size-[calc(0.75rem*var(--mark-scale,1))] shrink-0 text-dim"
-      />
-    </span>
-  );
-};
+const lockedCaption =
+  (
+    lockedIds: ReadonlySet<number>,
+    /**
+     * The shelf a tile is on, on the `View all` wall only (issue #907) — which draws no headings,
+     * so the chin names the drawer before the printing ({@link ShelfPlace}). Absent on the
+     * shelves, where the heading above already says it; and a tile whose shelf the census does not
+     * know yet (`undefined`) keeps the plain line rather than guessing.
+     */
+    placeOf?: (tile: CollectionTile) => Shelf | undefined,
+  ) =>
+  (tile: CollectionTile) => {
+    const printing = `${tile.setCode.toUpperCase()} · ${tile.collectorNumber}`;
+    const place = placeOf?.(tile);
+    // The place is a row of its own that truncates inside itself, so it stands in the line as it
+    // is; the bare printing is wrapped to truncate beside the lock.
+    const line =
+      place === undefined ? (
+        <span className="min-w-0 truncate">{printing}</span>
+      ) : (
+        <ShelfPlace shelf={place}>{printing}</ShelfPlace>
+      );
+    if (!tileLocked(tile, lockedIds)) return place === undefined ? printing : line;
+    return (
+      <span className="flex min-w-0 items-center gap-[calc(0.375rem*var(--mark-scale,1))]">
+        {line}
+        <Lock
+          role="img"
+          aria-label="Locked"
+          className="size-[calc(0.75rem*var(--mark-scale,1))] shrink-0 text-dim"
+        />
+      </span>
+    );
+  };
 
 /**
  * The card a right-click on an **entry** is about.
@@ -400,6 +422,9 @@ const TABLE_FLOOR = 680;
 const NO_TILES: readonly CollectionTile[] = [];
 const NO_ROWS: readonly CollectionRow[] = [];
 
+/** The `View all` toggle's accessible name — its visible words plus what they are all of. */
+const VIEW_ALL_NAME = "View all cards";
+
 /**
  * **The wall, memoised** (issue #557). `CardGrid` is the search page's component and draws every
  * tile it is handed on every render it gets, so a keystroke in this page's filter box — state on
@@ -431,6 +456,8 @@ export function CollectionPage() {
   // level nothing has cached arrives (`useCollection`'s `shown`). Everything drawn reads the
   // first; the page's navigation — the two hand-offs below and Escape's step up — reads the second.
   const { query, figures, rows, total, marketplace, folderId, requestedFolderId } = collection;
+  // **`View all`** (issue #907) in the same two tenses: the wall drawn, and the toggle pressed.
+  const { viewAll, requestedViewAll, setViewAll } = collection;
   const view = useAppStore((s) => s.collectionView);
   const selectedCardId = useAppStore((s) => s.selectedCardId);
   /**
@@ -499,7 +526,10 @@ export function CollectionPage() {
   // Against the level asked for, never the one on screen: that one trails a render-phase write
   // by a round trip, so comparing with it would write the same level again every pass until React
   // gave up.
-  if (pendingHere !== null && requestedFolderId !== pendingHere) {
+  //
+  // `|| requestedViewAll`: a drawer named while the flat wall is up is still a drawer to open, even
+  // the one asked underneath it — and opening it leaves the flat wall, which is what ends the write.
+  if (pendingHere !== null && (requestedFolderId !== pendingHere || requestedViewAll)) {
     if (folders.folders.some((folder) => folder.id === pendingHere)) {
       collection.openFolder(pendingHere);
     }
@@ -540,7 +570,15 @@ export function CollectionPage() {
     level: number;
     ids: readonly number[];
   } | null>(null);
-  if (requestedFolderId !== null && !folders.query.isPending && pendingHere === null) {
+  //
+  // **Not while `View all` is up**: the wall stands in no folder then, and walking the one asked
+  // underneath would turn the flat wall off under the reader. Turned off, the walk runs at once.
+  if (
+    requestedFolderId !== null &&
+    !requestedViewAll &&
+    !folders.query.isPending &&
+    pendingHere === null
+  ) {
     if (folders.folders.some((folder) => folder.id === requestedFolderId)) {
       const ids = trailOf(folders.folders, requestedFolderId).map((folder) => folder.id);
       if (levelTrail?.level !== requestedFolderId || !sameIds(levelTrail.ids, ids)) {
@@ -1356,8 +1394,20 @@ export function CollectionPage() {
   useDismissOnEscape({
     layer: "navigation",
     onDismiss: () => collection.openFolder(parentFolderId),
-    enabled: requestedFolderId !== null,
+    enabled: requestedFolderId !== null && !requestedViewAll,
   });
+  /**
+   * **…and on the `View all` wall the floor is leaving it** (issue #907), back to the folder still
+   * asked underneath — the deck gallery's rung, for its reason: the flat wall is a place the reader
+   * went, so "back" is out of it, and only out of it. The caret goes to the toggle, which stays on
+   * screen either way, because the tile it was on may not exist on the shelves.
+   */
+  const viewAllRef = useRef<HTMLButtonElement>(null);
+  const leaveViewAll = useCallback(() => {
+    setViewAll(false);
+    viewAllRef.current?.focus();
+  }, [setViewAll]);
+  useDismissOnEscape({ layer: "navigation", onDismiss: leaveViewAll, enabled: requestedViewAll });
 
   const open = useCallback((next: NonNullable<Panel>, opener: HTMLElement | null) => {
     openerRef.current = opener;
@@ -2204,7 +2254,8 @@ export function CollectionPage() {
   /** The layout at one column — the table's rows, and the one place "does the wall draw anything"
    *  is answered for both views, since the rows other than tiles do not depend on the width. */
   const tableLayout = useMemo(() => layoutShelves(sections, 1), [sections]);
-  const wallDrawn = tableLayout.rows.length > 0;
+  // The `View all` wall draws no shelves, so it draws something exactly when it has a card.
+  const wallDrawn = viewAll ? !empty : tableLayout.rows.length > 0;
 
   /** Where a copy let go on a shelf goes — `canFile` / `fileCard`, the one card policy on this page,
    *  handed to every heading, empty box and the sticky bar. */
@@ -2423,7 +2474,27 @@ export function CollectionPage() {
     }),
     [tableLayout, rowsOf, complete, headingFor, renderLabel, renderEmpty, renderSticky, revealShelfId],
   );
-  const caption = useMemo(() => lockedCaption(lockedIds), [lockedIds]);
+  /**
+   * Every shelf at the root by id — what a `View all` tile's chin and a flat table row name their
+   * drawer from (issue #907). The hook's shelves are the root's on that wall, so every folder of
+   * every kind is in here, Not sorted under `0`.
+   */
+  const shelfById = useMemo(
+    () => new Map(builtShelves.map((shelf) => [shelf.id, shelf])),
+    [builtShelves],
+  );
+  const shelfOfRow = useCallback(
+    (row: CollectionRow) => shelfById.get(row.folderId ?? UNFILED_SHELF),
+    [shelfById],
+  );
+  const caption = useMemo(
+    () =>
+      lockedCaption(
+        lockedIds,
+        viewAll ? (tile) => shelfById.get(tile.folderId ?? UNFILED_SHELF) : undefined,
+      ),
+    [lockedIds, viewAll, shelfById],
+  );
   /**
    * The wall's other three slots, held still for the memoised wall (issue #557) — each is argued
    * at its prop below, and was an arrow written there until a fresh one per render was what made a
@@ -2786,19 +2857,35 @@ export function CollectionPage() {
                   Clear…
                 </button>
               )}
-              <ShelfToolbar
-                onAddFolder={canMakeFolder ? () => openNewFolder(folderId) : undefined}
-                // Held while filtering, the chevron's rule: every shelf is drawn open then, so a
-                // press would store folds the reader cannot see. `foldPaused` says so on both
-                // buttons; the guards below are the page's own half, kept behind it.
-                foldPaused={filtering ? FOLD_PAUSED_REASON : undefined}
-                onExpandAll={() => {
-                  if (!filtering) setMany(foldAll(builtShelves, false));
-                }}
-                onCollapseAll={() => {
-                  if (!filtering) setMany(foldAll(builtShelves, true));
-                }}
-              />
+              {/* **`View all`** (issue #907) — every card on one wall, no shelves, in the reader's
+                  sort; each tile's chin names the drawer it is in. The deck gallery's toggle and its
+                  rules: drawn wherever there is a cabinet to leave out — any folder at all, a deck's
+                  group included, since its copies are on a shelf of their own — and kept while it is
+                  on, so a reader is never left in the flat view with its switch gone. */}
+              {(collection.shelfFolders.length > 0 || requestedViewAll) && (
+                <ViewAllToggle
+                  ref={viewAllRef}
+                  pressed={requestedViewAll}
+                  name={VIEW_ALL_NAME}
+                  onToggle={() => setViewAll(!requestedViewAll)}
+                />
+              )}
+              {/* Not on the flat wall: every one of these is about shelves, and it draws none. */}
+              {!viewAll && (
+                <ShelfToolbar
+                  onAddFolder={canMakeFolder ? () => openNewFolder(folderId) : undefined}
+                  // Held while filtering, the chevron's rule: every shelf is drawn open then, so a
+                  // press would store folds the reader cannot see. `foldPaused` says so on both
+                  // buttons; the guards below are the page's own half, kept behind it.
+                  foldPaused={filtering ? FOLD_PAUSED_REASON : undefined}
+                  onExpandAll={() => {
+                    if (!filtering) setMany(foldAll(builtShelves, false));
+                  }}
+                  onCollapseAll={() => {
+                    if (!filtering) setMany(foldAll(builtShelves, true));
+                  }}
+                />
+              )}
             </div>
           </div>
 
@@ -2898,7 +2985,9 @@ export function CollectionPage() {
                 rows={tiles}
                 // **Shelves** (spec §3.1): one section per shelf, each drawn under its heading, the
                 // app's own under Decks — `rows` is still what the selection and the walk run over.
-                sections={gridSections}
+                // **None on the `View all` wall** (issue #907): one flat run of tiles in the reader's
+                // sort, each naming its drawer on its chin ({@link caption}).
+                sections={viewAll ? undefined : gridSections}
                 label="Your collection"
                 listKey={collection.scrollKey}
                 // **This wall grows and `main` scrolls it — the page is one long page.** The search
@@ -2930,6 +3019,8 @@ export function CollectionPage() {
                 dragRecord={tileDrag}
                 // Ctrl and Shift build a set of tiles (issue #214).
                 selectionScope="collection"
+                // Ctrl+A is owed the whole collection, however long — `SELECT_ALL_LIMIT`.
+                selectAllLimit={Infinity}
                 // **The ring follows the *tile*, so `selectedId` is a composite.** Two tiles here
                 // carry one card id, and the pane's `selectedCardId` alone would ring both of a
                 // printing the reader opened one of. Built through {@link tileKeyOf} rather than
@@ -3032,7 +3123,9 @@ export function CollectionPage() {
                   rowMenu={rowMenu}
                   rowMenuKey={rowMenuKey}
                   marketplace={marketplace}
-                  shelves={tableShelves}
+                  // Flat on the `View all` wall, with a `Folder` column saying what the bands would.
+                  shelves={viewAll ? undefined : tableShelves}
+                  folderOf={viewAll ? shelfOfRow : undefined}
                 />
                 {/* The one thing about this table a reader cannot see: **the stepper is the
                     removal**. Since schema v24 a row taken to zero is deleted rather than kept

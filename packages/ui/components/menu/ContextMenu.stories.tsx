@@ -347,8 +347,14 @@ function deckDeps(act: Act): DeckMenuDeps {
   return {
     setOpenDeckId: (id) => act(`open:${id}`),
     startRename: (deck) => act(`rename:${deck.id}`),
-    openSettings: (id) => act(`settings:${id}`),
+    openSettings: (id, focus) =>
+      act(focus === undefined ? `settings:${id}` : `settings:${id}:${focus}`),
     moveToFolder: (id, folderId) => act(`file:${id}:${folderId ?? "root"}`),
+    tagsInUse: [
+      { tag: "Budget", count: 3 },
+      { tag: "Meme", count: 1 },
+    ],
+    setTags: (id, tags) => act(`tags:${id}:${tags.join(",")}`),
     duplicate: (id) => act(`duplicate:${id}`),
     // The confirmation, never the delete: `DeckMenuDeps` carries no `remove` at all, so this
     // menu structurally cannot reach the irreversible write.
@@ -886,6 +892,31 @@ export const MoveDeckToFolder: Story = {
 
     await userEvent.click(root);
     await expect(args.act).toHaveBeenCalledWith(`file:${DECK.id}:root`);
+  },
+};
+
+/**
+ * **Add tag** and **Remove tag** (issue #914) — the deck's own tags, without opening anything.
+ *
+ * Add offers the tags other decks wear and this one does not; a tag no deck wears yet is
+ * **New tag…**, which opens Deck settings with the caret in its Tags field. Every press sends the
+ * whole list, `deck_update({ tags })`'s rule.
+ */
+export const TagDeck: Story = {
+  args: {
+    label: "Kenrith Two-Drops",
+    build: (act) => buildDeckMenu({ ...DECK, tags: ["Meme"] }, deckDeps(act)),
+  },
+  play: async ({ args, canvasElement }) => {
+    const canvas = within(canvasElement);
+    const add = await canvas.findByRole("menuitem", { name: "Add tag" });
+    await waitFor(async () => await expect(add).toBeVisible(), { timeout: FRAME_WAIT });
+
+    await userEvent.click(add);
+    // `Meme` is on this deck already, so only `Budget` is offered.
+    await expect(canvas.queryByRole("menuitem", { name: "Meme" })).not.toBeInTheDocument();
+    await userEvent.click(await canvas.findByRole("menuitem", { name: "Budget" }));
+    await expect(args.act).toHaveBeenCalledWith(`tags:${DECK.id}:Meme,Budget`);
   },
 };
 

@@ -8,6 +8,7 @@ import {
 } from "react";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { useTooltip } from "@/components/tooltip/useTooltip";
+import { ShelfPlace } from "@/features/shelves/ShelfPlace";
 import { hasBackFace } from "@/features/card/printings";
 import { dragData } from "@/features/decks/dnd";
 import { CardGrid, type GridCard, type GridSections } from "@/features/search/CardGrid";
@@ -124,6 +125,25 @@ const caption = (tile: WishTile) => (
     <ElsewhereMark count={tile.wish.elsewhere} />
   </span>
 );
+
+/**
+ * **The caption on the `View all` wall** (issue #907): the folder the wish is filed in, then the
+ * line above — {@link ShelfPlace}, where why the place comes first and the printing gives way is
+ * argued. The wall draws no headings there, so the chin is the one place left to say the folder. A
+ * wish whose shelf the census does not know yet keeps the plain line rather than guessing.
+ */
+const placedCaption =
+  (folderOf: (row: WishRow) => Shelf | undefined) =>
+  (tile: WishTile): ReactNode => {
+    const place = folderOf(tile.wish);
+    if (place === undefined) return caption(tile);
+    return (
+      <span className="flex min-w-0 items-center gap-[calc(0.375rem*var(--mark-scale,1))]">
+        <ShelfPlace shelf={place}>{wallPrinting(tile.wish)}</ShelfPlace>
+        <ElsewhereMark count={tile.wish.elsewhere} />
+      </span>
+    );
+  };
 
 
 /**
@@ -258,6 +278,7 @@ export const WishlistGrid = memo(function WishlistGrid({
   folders,
   nodes,
   shelves,
+  folderOf,
   readOnly,
   onNeedNextPage,
   onSetQuantity,
@@ -290,6 +311,12 @@ export const WishlistGrid = memo(function WishlistGrid({
    * `rows` as one flat wall, which is what every test of the tiles themselves renders.
    */
   shelves?: WishShelves;
+  /**
+   * The shelf a wish is filed on — given on the `View all` wall alone (issue #907), where `shelves`
+   * is absent and no heading says which folder a tile is in, so its chin does
+   * ({@link placedCaption}). Held still by the caller. Absent: the plain caption.
+   */
+  folderOf?: (row: WishRow) => Shelf | undefined;
   onNeedNextPage: () => void;
   /**
    * How many copies this wish is for — reached from **two** controls on one tile since issue
@@ -383,6 +410,10 @@ export const WishlistGrid = memo(function WishlistGrid({
           renderSticky: shelves.renderSticky,
           revealShelfId: shelves.revealShelfId ?? null,
         };
+  const tileCaption = useMemo(
+    () => (folderOf === undefined ? caption : placedCaption(folderOf)),
+    [folderOf],
+  );
   const asOf = pricesAsOf(marketplace);
   const currency = marketplace.currency;
   return (
@@ -413,6 +444,8 @@ export const WishlistGrid = memo(function WishlistGrid({
       // mark, so it contributes no card payload to a group — `CardGrid`'s `dragRest` reads that
       // back through `readDragData` rather than inventing one.
       selectionScope="wishlist"
+      // Ctrl+A is owed the whole wishlist, however long — `CardGrid`'s `SELECT_ALL_LIMIT`.
+      selectAllLimit={Infinity}
       selectedId={selectedCardId}
       onSelect={selectCard}
       // The same arrow-key walk the other two page-walls take, on the same terms: `selectedId`
@@ -420,7 +453,7 @@ export const WishlistGrid = memo(function WishlistGrid({
       // rather than only an outline.
       arrowNav
       onNeedNextPage={onNeedNextPage}
-      caption={caption}
+      caption={tileCaption}
       finish={tileFinish}
       // **What one copy costs**, at the printing and the finish this wish is *for* — the same
       // statement the chin makes on every other wall in the app, which is the whole reason it is

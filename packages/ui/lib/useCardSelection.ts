@@ -18,13 +18,21 @@
  * during render is what React's lint refuses and what would loop here, since the write is a
  * re-render. Reading the pruned value directly is what makes that safe to defer: the drag, the
  * mark and the menu never see the stale keys even for the one commit before the effect runs.
+ *
+ * ## The one set that grows instead
+ *
+ * Ctrl+A ({@link CardSelectionApi.selectAll}) asks for *everything on this list*, and every wall
+ * pages — so that set is settled the other way round: against the same order, on the same render,
+ * but to the **whole** of it. A page that lands after the press is picked as it is drawn. See
+ * `multiSelect.ts`'s `Selection.allOf`.
  */
 import { useCallback, useEffect, useMemo } from "react";
 import {
   dragsWholeSelection,
   EMPTY_SELECTION,
-  pruneSelection,
   readModifiers,
+  selectEverything,
+  settleSelection,
   type Selection,
 } from "./multiSelect";
 import { useAppStore } from "./store";
@@ -88,6 +96,20 @@ export interface CardSelectionApi {
   dragsAll: (key: string) => boolean;
   /** Throw the set away — Escape, and a surface that has finished with it. */
   clear: () => void;
+  /**
+   * Pick everything on the surface, and go on picking as the list grows — Ctrl+A.
+   *
+   * Nothing is written for a surface with nothing on it. Any later press ends it, exactly as a
+   * press ends any other set.
+   */
+  selectAll: () => void;
+  /**
+   * Whether the set is "all of this list" rather than a list of presses.
+   *
+   * A paged wall reads it to know the reader is owed the rows it has not fetched yet; nothing else
+   * needs to tell the two kinds of set apart, because {@link keys} is the answer for both.
+   */
+  all: boolean;
 }
 
 /**
@@ -97,20 +119,32 @@ export interface CardSelectionApi {
  * on one wall invisible to every other. `order` is the keys the surface is drawing, in reading
  * order; it is read for Shift ranges and for pruning, so a caller must hold it still (a `useMemo`
  * over the rows it already has) rather than rebuilding it per render.
+ *
+ * `list` is the identity of the list those keys are a part of — a wall's `listKey` — and is what a
+ * Ctrl+A is *about*: the same string while pages of one search arrive, a different one when the
+ * filter moves. A surface that is always drawn in full has one list for its whole life and passes
+ * nothing.
  */
-export function useCardSelection(scope: string, order: readonly string[]): CardSelectionApi {
+export function useCardSelection(
+  scope: string,
+  order: readonly string[],
+  list = "",
+): CardSelectionApi {
   const held = useAppStore((s) => s.cardSelection);
   const pickCard = useAppStore((s) => s.pickCard);
   const setCardSelection = useAppStore((s) => s.setCardSelection);
 
-  /** The set as this surface may act on it: empty unless the store's is ours, then pruned. */
+  /**
+   * The set as this surface may act on it: empty unless the store's is ours, then pruned — or,
+   * for a set that is all of this list, grown to the order as it stands.
+   */
   const mine: Selection = useMemo(() => {
     if (held === null || held.scope !== scope) return EMPTY_SELECTION;
-    return pruneSelection(held, order);
-  }, [held, scope, order]);
+    return settleSelection(held, order, list);
+  }, [held, scope, order, list]);
 
   // The correction, one commit behind what the caller already sees. `held === mine` is the
-  // identity `pruneSelection` promises when nothing went missing, so the ordinary render writes
+  // identity `settleSelection` promises when nothing moved, so the ordinary render writes
   // nothing at all and this effect is a no-op with no dependency on what it would write.
   useEffect(() => {
     if (held === null || held.scope !== scope) return;
@@ -119,7 +153,10 @@ export function useCardSelection(scope: string, order: readonly string[]): CardS
   }, [held, mine, scope, setCardSelection]);
 
   const keys = mine.keys;
-  const selected = useCallback((key: string) => keys.includes(key), [keys]);
+  // A `Set`, because Ctrl+A makes this as long as the list: a wall asks it once per drawn tile and
+  // once per row for its menu, and `includes` there is the list squared.
+  const keySet = useMemo(() => new Set(keys), [keys]);
+  const selected = useCallback((key: string) => keySet.has(key), [keySet]);
 
   const pick = useCallback(
     (key: string, event: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) => {
@@ -147,5 +184,19 @@ export function useCardSelection(scope: string, order: readonly string[]): CardS
     if (keys.length > 0) setCardSelection(null);
   }, [keys.length, setCardSelection]);
 
-  return { selected, keys, count: keys.length, pick, dragsAll, clear };
+  const selectAll = useCallback(() => {
+    const whole = selectEverything(mine, order, list);
+    if (whole !== mine) setCardSelection({ scope, ...whole });
+  }, [mine, order, list, scope, setCardSelection]);
+
+  return {
+    selected,
+    keys,
+    count: keys.length,
+    pick,
+    dragsAll,
+    clear,
+    selectAll,
+    all: mine.allOf !== undefined,
+  };
 }

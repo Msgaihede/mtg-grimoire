@@ -45,7 +45,7 @@ drill-down: the list query asks for that folder's *direct* members and nothing b
 | # | Decision | Chosen over |
 | --- | --- | --- |
 | 1 | **Shelves**: the wall shows every card at and below the current level, one shelf per folder, in tree order | a folder-tree rail over a flattened wall (B); folders as openable piles (C) |
-| 2 | **Flatten is removed.** Shelves is the only way either wall is drawn | keeping Flatten as a "no headings" mode, off by default |
+| 2 | **Flatten is removed.** Shelves is the only way either wall is drawn — *amended 2026-10-11 by issue #907: a `View all` toggle on the path row lays every card on one flat wall, off on every launch, each tile's chin naming its folder (`docs/reference/collection-folders.md`)* | keeping Flatten as a "no headings" mode, off by default |
 | 3 | Cards in no folder come **first**, under a heading reading **Not sorted** | last, after the folders |
 | 4 | While any search or filter is active, **collapse is ignored**: every shelf with a match is open, shelves with none are hidden, headings read "3 of 42" | respecting collapse and showing a match count on the shut heading |
 | 5 | Collapse is remembered **on this device only**, per window | a synced column on the folder row |

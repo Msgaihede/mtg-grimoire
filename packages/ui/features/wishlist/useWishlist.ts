@@ -61,6 +61,8 @@ const levelSegment = (level: number | null): string => (level === null ? "root" 
  */
 interface ShownLevel {
   levelId: number | null;
+  /** Whether the frame is the `View all` wall — a level of its own as far as holding goes. */
+  viewAll: boolean;
   pages: InfiniteData<WishlistPage, unknown> | undefined;
   counts: ShelfCount[] | undefined;
   /** Whether a filter was on, and the folds, as the frame's answers were asked for. */
@@ -283,6 +285,15 @@ export function useWishlist({
   // reads once as it renders and spends, so what arrives through it is a press made a moment ago
   // on another page rather than a memory.
   const [folderId, setFolderId] = useState<number | null>(null);
+  /**
+   * **`View all` — every wish on one wall, no shelves** (issue #907): `useCollection`'s state of the
+   * same name, for its reasons. The folder asked stays underneath and comes back when it is turned
+   * off; while it is on, everything is read from the root, which covers every wish, and the list
+   * is asked `flatten`ed with no `shelves` — here an absent `folderId` is the root's loose wishes,
+   * so `flatten` is what says "every folder" — in the reader's sort alone.
+   */
+  const [viewAll, setViewAllState] = useState(false);
+  const level = viewAll ? null : folderId;
   const [debouncedText, setDebouncedText] = useState("");
 
   useEffect(() => {
@@ -353,8 +364,8 @@ export function useWishlist({
       needsReview,
     }) > 0;
   const shelves = useMemo(
-    () => buildShelves({ folders: shelfFolders, levelId: folderId, folds, filtering }),
-    [shelfFolders, folderId, folds, filtering],
+    () => buildShelves({ folders: shelfFolders, levelId: level, folds, filtering }),
+    [shelfFolders, level, folds, filtering],
   );
   /** What the list fetches: the open shelves, in the order they are drawn — which is the list's
    *  first `ORDER BY` term, so the rows arrive in wall order. */
@@ -426,23 +437,30 @@ export function useWishlist({
     // Two marketplaces are two answers to the same wishlist.
     marketplace.id,
   ];
-  const scopeKey = [...filterKey, levelSegment(folderId)];
+  const scopeKey = [...filterKey, levelSegment(level)];
   const sortKey = sort.map((t) => `${t.key}:${t.dir}`).join(",");
   /**
    * The list's **identity** — the level, the filters and the sort, and deliberately not the
    * shelves it fetched. It is what {@link queryKeyString} publishes and the scroll reset follows,
    * and folding a shelf changes what is fetched without making it another list.
    */
-  const listIdentity = ["wishlist", "list", ...scopeKey, sortKey];
+  //
+  // `View all` is a list of its own, so it has a segment — appended only while it is on, so every
+  // other list's identity reads exactly as it always has.
+  const listIdentity = viewAll
+    ? ["wishlist", "list", ...scopeKey, sortKey, "all"]
+    : ["wishlist", "list", ...scopeKey, sortKey];
   // `["wishlist", …]`, so every write to *this* list refreshes it.
-  const listKey = [...listIdentity, fetchIds.join(",")];
+  const listKey = [...listIdentity, viewAll ? "all" : fetchIds.join(",")];
 
   const query = useInfiniteQuery({
     queryKey: listKey,
     queryFn: ({ pageParam }) =>
       ipc.wishlistList({
         ...scope,
-        shelves: fetchIds,
+        // The open shelves in wall order — or, on the `View all` wall, every wish wherever it is
+        // filed, in the reader's sort alone.
+        ...(viewAll ? { flatten: true } : { shelves: fetchIds }),
         // Absent rather than `[]` when nothing is sorted, so an untouched table produces
         // exactly the payload it always did.
         sort: sort.length > 0 ? sort : undefined,
@@ -509,7 +527,8 @@ export function useWishlist({
   if (
     answered &&
     (shown === null ||
-      shown.levelId !== folderId ||
+      shown.levelId !== level ||
+      shown.viewAll !== viewAll ||
       shown.pages !== query.data ||
       shown.counts !== countsQuery.data ||
       shown.filtering !== filtering ||
@@ -518,7 +537,8 @@ export function useWishlist({
       shown.countsKey !== countsKeyString)
   ) {
     setShown({
-      levelId: folderId,
+      levelId: level,
+      viewAll,
       pages: query.data,
       counts: countsQuery.data,
       filtering,
@@ -528,8 +548,13 @@ export function useWishlist({
       countsKey: countsKeyString,
     });
   }
-  const held = !answered && shown !== null && shown.levelId !== folderId ? shown : null;
-  const levelId = held === null ? folderId : held.levelId;
+  // Turning `View all` on or off is a level change for this rule, as it is on the collection.
+  const held =
+    !answered && shown !== null && (shown.levelId !== level || shown.viewAll !== viewAll)
+      ? shown
+      : null;
+  const levelId = held === null ? level : held.levelId;
+  const drawnViewAll = held === null ? viewAll : held.viewAll;
   const drawnFiltering = held === null ? filtering : held.filtering;
   const drawnFolds = held === null ? folds : held.folds;
   // The held wall is laid out from the frame's filtering and folds, never the current ones — a
@@ -568,7 +593,13 @@ export function useWishlist({
       ),
     [],
   );
-  const openFolder = useCallback((id: number | null) => setFolderId(id), []);
+  // Opening a folder leaves `View all`: a folder is a place to stand, and the flat wall stands
+  // nowhere.
+  const openFolder = useCallback((id: number | null) => {
+    setViewAllState(false);
+    setFolderId(id);
+  }, []);
+  const setViewAll = useCallback((on: boolean) => setViewAllState(on), []);
 
   return {
     text,
@@ -734,8 +765,15 @@ export function useWishlist({
     levelHeld: held !== null,
     /** Open a folder, or `null` for the root. This hook only tracks where the reader now
      *  stands — it does not own the write that files a wish there, or the one that creates a
-     *  folder; both live on the page, beside the headings. */
+     *  folder; both live on the page, beside the headings. It also leaves `View all`. */
     openFolder,
+    /** Whether the wall **as drawn** is the `View all` one — every wish, no shelves (issue #907).
+     *  Trails {@link requestedViewAll} while a level change is held, like `folderId`. */
+    viewAll: drawnViewAll,
+    /** Whether `View all` is **asked for** — the toggle's pressed state, and Escape's. */
+    requestedViewAll: viewAll,
+    /** Turn `View all` on or off. Off goes back to the folder still asked underneath. */
+    setViewAll,
     /**
      * The shelves at and below the **drawn** level, in tree order, shut ones included —
      * `buildShelves`' answer, which the page draws from and re-asks with the folder being added

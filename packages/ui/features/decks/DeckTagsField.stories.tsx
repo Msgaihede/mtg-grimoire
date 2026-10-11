@@ -61,6 +61,9 @@ const meta = {
           "box takes the last chip off; Escape closes the list, then clears the box, and only " +
           "then belongs to the dialog around it. Looking away adds a half-typed tag rather than " +
           "dropping it — the settings dialog's rule for every text field it holds.\n\n" +
+          "**The order is the reader's** (issue #913): drag a chip by its word onto another to " +
+          "put it there, or press ← and → on the word. The deck tile draws the tags in this " +
+          "order, so the first ones are what a narrow tile still shows.\n\n" +
           "The field is controlled and reports the **whole new list** on each act, never a " +
           "no-op: a blank and a repeat report nothing.",
       },
@@ -167,5 +170,26 @@ export const NothingToSuggest: Story = {
     await expect(canvas.queryByRole("listbox")).toBeNull();
     await expect(box).toHaveAttribute("aria-expanded", "false");
     await expect(args.onChange).toHaveBeenCalledWith(["First"]);
+  },
+};
+
+/**
+ * **Putting the tags in order.** A chip is dragged by its word and let go on another to take its
+ * place; from the keyboard, ← and → on the word move it one place, and the caret stays on it. The
+ * deck tile draws the tags in this order. With a single tag there is nothing to move and the word
+ * is plain text.
+ */
+export const Reorder: Story = {
+  args: { tags: ["Budget", "Meme", "No Gamechangers"] },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+    const word = canvas.getByRole("button", { name: "Move No Gamechangers, 3 of 3" });
+    word.focus();
+
+    await userEvent.keyboard("{ArrowLeft}{ArrowLeft}");
+    await expect(args.onChange).toHaveBeenLastCalledWith(["No Gamechangers", "Budget", "Meme"]);
+    await expect(
+      canvas.getByRole("button", { name: "Move No Gamechangers, 1 of 3" }),
+    ).toHaveFocus();
   },
 };

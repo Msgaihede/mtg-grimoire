@@ -2638,6 +2638,45 @@ pass and a re-check on 2026-09-26, and two more re-checks on 2026-09-27, all on 
 What they measured is in [the live record](#folder-shelves--four-passes-2026-09-26-and-2026-09-27),
 and what each finding changed is in the subsections above. None of them measured the query's cost,
 which is the harness's figures above and nothing else.
+### `View all` — the flat wall, back as a toggle rather than a mode (issue #907, 2026-10-11)
+
+**The path row's `View all` lays every card the reader owns on one wall with no shelves**, the deck
+gallery's toggle of the same name (issue #750) one page over — and it is the same component,
+`packages/ui/components/ViewAllToggle.tsx`, which `DecksPage` now draws too. A toggle with
+`aria-pressed`, named `View all cards`; drawn wherever any folder exists (a deck's group counts,
+since its copies are on a shelf of their own) and kept while it is on.
+
+**It is not Flatten restored, and the difference is the reason it could come back** ([Flatten was
+deleted, not hidden](#flatten-was-deleted-not-hidden)):
+
+- **The root still draws shelves.** View all is off on every launch, is not remembered across a page
+  switch (it is `useCollection`'s `useState`, beside the level), and never decides what a level is.
+- **A tile is still one folder's** (decision 11, `tileKeyOf(cardId, finish, folderId)`): the same
+  printing in two drawers is two tiles, each naming its own drawer, so no control on this wall
+  reaches copies in a drawer the tile does not name — the "second set of answers" Flatten was deleted
+  over does not arise.
+- **The drawer is said on the tile.** With no heading above it, each chin reads the shelf's glyph and
+  name before the printing (`features/shelves/ShelfPlace.tsx`; the whole path is its tooltip, and the
+  printing gives way first on a narrow tile). The table gains a `Folder` column (`shelfColumn`) in
+  place of the bands, after the name — the six-column table everywhere else.
+
+**The wire.** The list is asked with **no `shelves`** — absent `shelves`, `folderId` and `rootOnly`
+is every folder (`collection::scope`'s `(None, None, false)` arm) — so the reader's sort runs across
+the whole collection rather than within each shelf. Nothing in Rust changed. The figures and the
+shelf counts are the root's, which already cover everything, and are cache hits when the root was on
+screen; the list key and the scroll key gain an `all` segment only while the toggle is on, so every
+other key reads as it always did. The shelves the hook publishes are the root's, which is the map a
+chin names its drawer from.
+
+**Navigation.** The folder the reader stood in stays asked underneath (`requestedFolderId`), and
+turning the toggle off goes back to it; opening any folder — a hand-off from the home page included —
+turns it off. Escape on the flat wall leaves it (its own `"navigation"` rung, the folder-up rung off
+meanwhile) and hands the caret to the toggle. Turning it on or off is a level change for the hold
+(`ShownLevel.viewAll`): the old wall is drawn whole until the new list has answered. The level-deleted
+walk waits while the toggle is on, so a drawer deleted elsewhere does not turn the flat wall off under
+the reader. Add folder, Expand all and Collapse all are not drawn on the flat wall — every one of them
+is about shelves, and it draws none.
+
 ## The page, and the drag payload's own key
 
 **History (2026-09-26):** the folder cards are headings now and wear the same two marks —

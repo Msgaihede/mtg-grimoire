@@ -301,6 +301,32 @@ export const EverythingFiled: Story = {
 };
 
 /**
+ * **`View all`** (issue #907): the same everything-filed cabinet, with the path row's toggle
+ * pressed — every card on one wall in the reader's sort, no headings, and each tile's chin naming
+ * the drawer it is in before its printing. Pressing it again goes back to the shelves.
+ */
+export const ViewAll: Story = {
+  args: { view: "grid" },
+  render: (args) => (
+    <Staged key={args.view} view={args.view} stageKey="view-all" stage={fileEverything} />
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() => headingNamed(canvas, "Binder"), SETTLED);
+    const toggle = canvas.getByRole("button", { name: "View all cards" });
+
+    await userEvent.click(toggle);
+
+    await expect(toggle).toHaveAttribute("aria-pressed", "true");
+    await waitFor(async () => {
+      await expect(canvas.queryByRole("button", { name: /^(Collapse|Expand) Binder$/ })).toBeNull();
+    }, SETTLED);
+    // The drawer is said on the tile now, since no heading says it.
+    await expect((await canvas.findAllByText("Binder", {}, SETTLED)).length).toBeGreaterThan(0);
+  },
+};
+
+/**
  * **Past the three-level indent cap** (spec §3.3). Five folders under `Trade binder`, one copy at
  * the bottom, and the page opened on `Binder` — **opening a folder resets the indentation**, so its
  * sub-folders start at the left again. A heading past the third level keeps the third level's

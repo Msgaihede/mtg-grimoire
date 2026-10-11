@@ -54,8 +54,10 @@ import type { Shelf } from "@/lib/shelves";
 import { useAppStore } from "@/lib/store";
 import { NO_SELECTION, suppressRangeSelection, useCardSelection } from "@/lib/useCardSelection";
 import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
+import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { nextGridIndex, nextShelfTileIndex } from "./gridNav";
+import { registerSelectAll } from "./selectAllSurface";
 import { needsNextPage } from "./useCardSearch";
 
 /**
@@ -267,6 +269,28 @@ const CARET_SELECTOR = "button";
  */
 const FIELD_SELECTOR = "input, textarea, select, [contenteditable=''], [contenteditable='true']";
 
+/**
+ * How many tiles a wall will fetch **unasked** to make good on a Ctrl+A — issue #910.
+ *
+ * Every wall pages, so "select all" on one is owed rows it has not fetched: the wall goes on asking
+ * for the next page until the list is whole. On a catalogue search the list can be the whole
+ * database — 117 k printings — and fetching that fifty at a time is over two thousand round
+ * trips for one keypress, to pick a set nobody could act on.
+ *
+ * **1 000, and what sets it is what a set is *for*.** Everything a catalogue wall's menu does with
+ * a picked set — add to the collection, to the wishlist, to a deck — is one write per card
+ * (`features/card/cardMenu.tsx`), so the limit is also the largest batch of those one keypress can
+ * arm. A thousand is past any one set's card list and past any `all the goblins`; it is twenty
+ * round trips to fetch. Past the limit nothing is fetched ahead, and the set goes on growing with
+ * whatever the reader scrolls to — every tile drawn is still picked. **A batched write for those
+ * menu rows is what would let this rise**, to the 5 000 the search's own caption counts to.
+ *
+ * A wall over the reader's **own** list passes `Infinity` instead (`selectAllLimit`): a collection
+ * is as long as it is, half of one moved to a folder is the worse failure, and the collection's
+ * own bulk writes — a move, a removal — are already one command for the whole set.
+ */
+export const SELECT_ALL_LIMIT = 1000;
+
 /** What can take the caret in a wall's row — the first one of these in the first drawn row is
  *  where Top hands the caret when its scroll takes the sticky bar away. */
 const FIRST_CONTROL = "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])";
@@ -425,6 +449,7 @@ export function CardGrid<T extends GridCard>({
   dragRecord,
   arrowNav = false,
   selectionScope,
+  selectAllLimit = SELECT_ALL_LIMIT,
   baseTileWidth = TILE_BASE_WIDTH,
   grow = false,
   sections,
@@ -887,8 +912,20 @@ export function CardGrid<T extends GridCard>({
    * whose rows carry no `key` they are printing ids and a caller passes a name and nothing else.
    * A wall that splits one printing into several tiles picks each of them separately, which is the
    * point of that fallback rather than an exception to it.
+   *
+   * **It is also what puts the wall up for Ctrl+A** (issue #910), which picks every tile the list
+   * holds — the pages not fetched yet included, up to {@link selectAllLimit}.
    */
   selectionScope?: string;
+  /**
+   * How many tiles this wall fetches ahead of the reader to finish a Ctrl+A —
+   * {@link SELECT_ALL_LIMIT} unless the wall says otherwise, and that constant carries the argument.
+   *
+   * **`Infinity` on a wall over the reader's own list** — the collection, the wishlist, the deck
+   * editor's collection tab. Those lists end, and a Ctrl+A that stopped short of the end would
+   * hand `Move to folder` a part of a collection drawn as the whole of it.
+   */
+  selectAllLimit?: number;
   /**
    * How wide a tile is here at 100%, overriding {@link TILE_BASE_WIDTH}.
    *
@@ -1486,7 +1523,49 @@ export function CardGrid<T extends GridCard>({
     [shelfTiles, rows],
   );
   const selectionOrder = useMemo(() => drawn.map((card) => tileKey(card)), [drawn]);
-  const picked = useCardSelection(selectionScope ?? NO_SELECTION, selectionOrder);
+  // `listKey` is what a Ctrl+A is *about*: the same list while its pages arrive, a different one
+  // when the filter moves — see `Selection.allOf`.
+  const picked = useCardSelection(selectionScope ?? NO_SELECTION, selectionOrder, listKey);
+
+  /**
+   * **Ctrl+A picks every tile on this wall** — issue #910.
+   *
+   * The chord is `window`'s rather than this box's `onKeyDown`, because a reader presses it with
+   * the caret anywhere on the page; `selectAllSurface.ts` hears it and decides which wall it is
+   * for when two are drawn. All this does is put the wall up, for as long as it has a scope.
+   *
+   * **The pick is read through a ref**, so the registration is made once: `selectAll` closes over
+   * the order, which is a new array on every page that lands, and a wall that left the register
+   * and rejoined it per page would be a wall briefly not there to be chosen.
+   */
+  const selectAllRef = useRef(picked.selectAll);
+  useEffect(() => {
+    selectAllRef.current = picked.selectAll;
+  }, [picked.selectAll]);
+  useEffect(() => {
+    if (selectionScope === undefined) return;
+    return registerSelectAll({
+      element: () => wallRef.current,
+      selectAll: () => selectAllRef.current(),
+    });
+  }, [selectionScope]);
+
+  /**
+   * **Escape puts a picked set down** — and it arrived with Ctrl+A (issue #910) because that chord
+   * is what made it owed: one keypress can now ring a thousand tiles and start a walk through the
+   * list, and until this the only ways out were a click on a tile, which opens it, or changing the
+   * filter.
+   *
+   * `"outer"`, so it is one rung above the page: a dialog, a popup or a menu still takes its own
+   * press first, and a deck or a folder closes on the *next* one rather than on this one. Armed
+   * only while there is a set to put down — more than one tile, or a Ctrl+A that has picked the
+   * only tile there is — so a wall with a card merely open leaves Escape alone, as it always has.
+   */
+  useDismissOnEscape({
+    layer: "outer",
+    onDismiss: picked.clear,
+    enabled: selectionScope !== undefined && (picked.all || picked.count > 1),
+  });
 
   const select = useCallback(
     (card: T, event?: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) => {
@@ -1686,6 +1765,27 @@ export function CardGrid<T extends GridCard>({
     const frontierRow = rowOfTile(layout, Math.min(frontier, layout.totalTiles - 1));
     if (frontierRow >= 0 && lastRenderedRow >= frontierRow) onNeedNextPage();
   }, [shelved, lastRenderedRow, onNeedNextPage]);
+
+  /**
+   * **A wall told to select everything fetches everything** — issue #910.
+   *
+   * What is loaded is a scroll position, not the list: without this a Ctrl+A on a 3 000-card
+   * collection picks the hundred rows the reader happened to have on screen, and draws them as all
+   * of it. So while the set is "all of this list" the wall asks for the next page as each one
+   * lands, flat or shelved alike, and `useCardSelection` picks every tile as it is drawn.
+   *
+   * Keyed on `drawn` itself rather than its length: a page whose rows all fold into tiles already
+   * drawn moves the array and not the count, and the walk must not stop there. Whether there *is*
+   * a next page, and whether one is already in flight, stay the caller's guard, as they are for
+   * the two rules above — so this ends by the caller ceasing to answer, with nothing to count to.
+   *
+   * It stops ahead of the reader at {@link selectAllLimit}; the paging rules above go on working
+   * past it, and what they fetch is picked too.
+   */
+  useEffect(() => {
+    if (!picked.all || drawn.length >= selectAllLimit) return;
+    onNeedNextPage();
+  }, [picked.all, drawn, selectAllLimit, onNeedNextPage]);
 
   /**
    * **Bring the shelf a page names into view** — `GridSections.revealShelfId`, set when **Add

@@ -1,7 +1,7 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { UserEvent } from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MANA_VALUES } from "@/components/FilterChips";
 import { CONDITION_LABEL, CONDITION_NOT_SET } from "@/lib/conditions";
 import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID, TooltipProvider } from "@/components/tooltip/TooltipProvider";
@@ -10,7 +10,7 @@ import type { TagChip } from "@/features/tags/tagFilters";
 import type { SortSpec } from "@/lib/sort";
 import { openDropdown, pickOption } from "@/test-dropdown";
 import type { TagToken } from "./queryLanguage";
-import { FilterBar, StatedFiltersLine } from "./FilterBar";
+import { FilterBar, printingsOnBar, StatedFiltersLine } from "./FilterBar";
 import { ANY_CARD, FORMATS } from "./useCardSearch";
 
 const search = (over: Record<string, unknown> = {}) =>
@@ -1483,7 +1483,7 @@ describe("FilterBar, its tray", () => {
     expect(screen.queryByRole("button", { name: /^Owned\b/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /^Rare cards\b/ })).toBeNull();
     expect(screen.queryByLabelText("Lowest price")).toBeNull();
-    expect(screen.queryByRole("button", { name: "All printings" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Show all printings" })).toBeNull();
 
     const toggle = await openTray();
 
@@ -1493,7 +1493,7 @@ describe("FilterBar, its tray", () => {
     expect(screen.getByRole("button", { name: /^Owned\b/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Rare cards\b/ })).toBeInTheDocument();
     expect(screen.getByLabelText("Lowest price")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "All printings" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show all printings" })).toBeInTheDocument();
     // The panel is the button's, said in the markup rather than only in the layout — an
     // `aria-controls` pointing at nothing is a promise to assistive tech that is not kept.
     expect(document.getElementById(toggle.getAttribute("aria-controls")!)).toBeInTheDocument();
@@ -2621,5 +2621,113 @@ describe("StatedFiltersLine", () => {
   it("draws nothing while nothing is filtered", () => {
     const { container } = render(<StatedFiltersLine search={search()} />);
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+/**
+ * **`Show all printings` beside Filters on a wide bar, in the tray on a narrow one** (issue #911).
+ *
+ * jsdom lays nothing out and its observer never reports, so the row's width is reported here by
+ * hand to the observer watching the row — the wiring and the one-control rule are what is pinned.
+ * Which widths have *room* is a measurement, made in Chromium and written down on
+ * {@link printingsOnBar}; the edges below pin that the bands are the ones it states.
+ */
+describe("FilterBar, the printings switch", () => {
+  let watchers: { callback: ResizeObserverCallback; observed: Element[] }[] = [];
+
+  beforeEach(() => {
+    watchers = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        private readonly self: (typeof watchers)[number];
+        constructor(callback: ResizeObserverCallback) {
+          this.self = { callback, observed: [] };
+          watchers.push(this.self);
+        }
+        observe(el: Element) {
+          this.self.observed.push(el);
+        }
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** Report the row — the box the search field is laid out in — as `width` px wide. */
+  function rowIs(width: number): void {
+    const row = screen.getByPlaceholderText("Search cards…").parentElement!;
+    const watcher = watchers.find((w) => w.observed.includes(row));
+    expect(watcher).toBeDefined();
+    act(() => {
+      watcher!.callback([{ contentRect: { width } } as ResizeObserverEntry], {} as ResizeObserver);
+    });
+  }
+
+  const showAll = () => screen.queryAllByRole("button", { name: "Show all printings" });
+
+  it("opens on two lines from 1040, closes at the one-line fold, and opens again at 1624", () => {
+    expect(printingsOnBar(0)).toBe(false);
+    expect(printingsOnBar(1039)).toBe(false);
+    expect(printingsOnBar(1040)).toBe(true);
+    expect(printingsOnBar(1499)).toBe(true);
+    expect(printingsOnBar(1500)).toBe(false);
+    expect(printingsOnBar(1623)).toBe(false);
+    expect(printingsOnBar(1624)).toBe(true);
+  });
+
+  it("rides the bar beside Filters on a wide row, and the tray leaves its cell out", async () => {
+    const toggleAllPrintings = vi.fn();
+    render(<FilterBar search={search({ toggleAllPrintings })} />);
+    rowIs(1200);
+
+    // On the bar with the tray shut — and the very next control is Filters.
+    const [chip] = showAll();
+    expect(chip).toHaveAttribute("aria-pressed", "false");
+    expect(chip.nextElementSibling).toBe(screen.getByRole("button", { name: /^Show filters/ }));
+
+    // **Once, with the tray open too**: the cell is not drawn a second time under the bar.
+    await openTray();
+    expect(showAll()).toHaveLength(1);
+    expect(screen.queryByText("Printings")).toBeNull();
+
+    await userEvent.click(showAll()[0]);
+    expect(toggleAllPrintings).toHaveBeenCalledOnce();
+  });
+
+  it("says it is on, on the bar as in the tray", () => {
+    render(<FilterBar search={search({ allPrintings: true })} />);
+    rowIs(1700);
+    expect(showAll()[0]).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it.each([0, 900, 1550])("waits in the tray on a %ipx row", async (width) => {
+    render(<FilterBar search={search()} />);
+    if (width > 0) rowIs(width);
+
+    expect(showAll()).toHaveLength(0);
+    await openTray();
+    expect(showAll()).toHaveLength(1);
+    expect(screen.getByText("Printings")).toBeInTheDocument();
+  });
+
+  it("moves back into the tray when the row narrows, without being drawn twice", async () => {
+    render(<FilterBar search={search()} />);
+    rowIs(1200);
+    await openTray();
+    expect(screen.queryByText("Printings")).toBeNull();
+
+    rowIs(800);
+    expect(showAll()).toHaveLength(1);
+    expect(screen.getByText("Printings")).toBeInTheDocument();
+  });
+
+  it("is drawn nowhere on a surface that cannot fold its rows", async () => {
+    render(<FilterBar search={search({ toggleAllPrintings: undefined })} />);
+    rowIs(1700);
+    await openTray();
+    expect(showAll()).toHaveLength(0);
   });
 });

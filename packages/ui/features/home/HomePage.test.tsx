@@ -82,6 +82,7 @@ vi.mock("./widgets/WishlistSavingsWidget", () => ({
   WishlistSavingsWidgetSettings: stubs.settings,
 }));
 vi.mock("./widgets/ComingSoonWidget", () => ({ ComingSoonWidget: stubs.body }));
+vi.mock("./widgets/ChangeNotesWidget", () => ({ ChangeNotesWidget: stubs.body }));
 
 /**
  * **A settings stub that says something**, as `DecksWidget`'s above does for the pin checklist.
@@ -310,6 +311,29 @@ describe("HomePage", () => {
     const dialog = await screen.findByRole("dialog", { name: "Widget catalogue" });
     expect(within(dialog).getByRole("button", { name: "Add To-dos" })).toBeInTheDocument();
     expect(handed.get("preview-deckTodos")).toEqual(
+      expect.objectContaining({ still: true, editing: false }),
+    );
+  });
+
+  /**
+   * **Latest change notes (issue #905), through the body switch and into the catalogue** — a
+   * forgotten `case` is not a type error, so the placeholder's sentence is asserted absent beside
+   * the body present, and the catalogue offers it previewed still.
+   */
+  it("draws the change notes body through the switch, and offers it", async () => {
+    const user = userEvent.setup();
+    mount(layoutOf(widget({ id: "cn", kind: "changeNotes", x: 0, y: 0, w: 3, h: 3 })));
+
+    expect(screen.getByText("Body of cn")).toBeInTheDocument();
+    expect(screen.queryByText(/needs a newer version/)).toBeNull();
+
+    await customize(user);
+    await user.click(screen.getByRole("button", { name: "Add widget" }));
+    const dialog = await screen.findByRole("dialog", { name: "Widget catalogue" });
+    expect(
+      within(dialog).getByRole("button", { name: "Add Latest change notes" }),
+    ).toBeInTheDocument();
+    expect(handed.get("preview-changeNotes")).toEqual(
       expect.objectContaining({ still: true, editing: false }),
     );
   });

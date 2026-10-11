@@ -22,7 +22,7 @@ For global repo workflow, style, and testing conventions, refer to:
 
 - **Single media query**: Face selection occurs solely in `useFace.ts` (`matchMedia(DESKTOP_FLOOR_PX)`). Components in `packages/ui/` never make top-level face decisions.
 - **Lazy loading**: Each face is an independent lazy chunk; a phone never loads desktop deck editor chunks, and desktop viewports never load mobile sheets.
-- **Crossing behavior**: Dragging across 1024px unmounts the previous face and mounts the new one. Both faces share a single `queryClient` (`@/lib/query`), so cached card and collection data persist. Active navigation place and open card survive; local uncontrolled text inputs and filter sheet states reset.
+- **Crossing behavior**: Dragging across 1024px unmounts the previous face and mounts the new one. Both faces share a single `queryClient` (`@/lib/query`), so cached card and collection data persist. Active navigation place, open card and the card search's filters (`rememberAs: "search"`, shared with the desktop face's Search page) survive; local uncontrolled text inputs and filter sheet states reset.
 - **Phone layout breakpoints**: Under the phone face, the bottom tab bar transitions to a side rail at ≥ 600px (`TabBar.tsx`) for landscape phones and small tablets.
 - **Failure boundary**: `FaceBoundary` isolates render crashes to the active face, presenting a reload option without blanking the host shell.
 

@@ -719,6 +719,18 @@ both views reading the `all` sentence. The final review then took out `statusOf`
 which nothing could reach once the box said it (W-M8), and re-check 2 (2026-09-27, debug build) read
 both answers again with that branch gone.
 
+### `View all` (issue #907, 2026-10-11)
+
+The path row's `View all wishes` toggle lays every wish on one wall with no shelves — the
+collection's toggle, whose record is
+[collection-folders.md's `View all`](collection-folders.md#view-all--the-flat-wall-back-as-a-toggle-rather-than-a-mode-issue-907-2026-10-11):
+the chin names each wish's folder before its printing, the table gains a `Folder` column, Escape
+leaves it, and the folder stood in stays underneath. **One difference is the wire's**: here an
+absent `folderId` is the root's loose wishes (`w.folder_id IS ?` bound to NULL), so the flat list is
+asked `flatten: true` with no `shelves` — the field this section says the wire kept. A wish in a
+managed folder is read-only on the flat wall exactly as on its shelf (`readOnly` is per row), and its
+chin wears the heading's `Layers` glyph.
+
 ## What a wish costs, and which printing it is drawn as
 
 Two changes, both 2026-08-26, both in `crates/grimoire-core/src/wishlist.rs`, and the second one dragged

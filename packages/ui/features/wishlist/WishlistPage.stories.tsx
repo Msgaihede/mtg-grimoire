@@ -374,6 +374,31 @@ export const EverythingFiled: Story = {
 };
 
 /**
+ * **`View all`** (issue #907): the same everything-filed wishlist, with the path row's toggle
+ * pressed — every wish on one wall in the reader's sort, no headings, and each tile's chin naming
+ * the folder it is in before its printing. Pressing it again goes back to the shelves.
+ */
+export const ViewAll: Story = {
+  render: (args) => (
+    <Staged key={args.view} view={args.view} stageKey="view-all" stage={fileEverything} />
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() => headingNamed(canvas, "Ordered"));
+    const toggle = canvas.getByRole("button", { name: "View all wishes" });
+
+    await userEvent.click(toggle);
+
+    await expect(toggle).toHaveAttribute("aria-pressed", "true");
+    await waitFor(async () => {
+      await expect(canvas.queryByRole("button", { name: /^(Collapse|Expand) Ordered$/ })).toBeNull();
+    });
+    // The folder is said on the tile now, since no heading says it.
+    await expect((await canvas.findAllByText("Ordered")).length).toBeGreaterThan(0);
+  },
+};
+
+/**
  * **Past the three-level indent cap** (spec §3.3). Six folders under `Someday`, one wish at the
  * bottom, and the page opened on `Lands` — **opening a folder resets the indentation**, so its
  * sub-folders start at the left again. The heading five levels down keeps the third level's indent

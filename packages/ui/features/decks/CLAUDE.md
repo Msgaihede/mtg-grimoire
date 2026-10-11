@@ -80,14 +80,17 @@ Normalized via `deckKind.ts` (`regular`, `theory`, `virtual`):
 - **Undocked bar (`UndockedBar.tsx`)**: Floating bottom controls hosting view mode toggles, zoom steppers, card search dock toggle, and bulk selection actions.
 - **Quick Add (`QuickAdd.tsx`)**: High-speed keyboard card entry supporting instant search, quantity increments, and category targeting without leaving the keyboard (Enter commits, Escape reverts).
 - **Tokens & Emblems (`DeckTokensPanel`)**: Dedicated token management (`deck_token_printings`), supporting three modes (`managed`, `collection`, `hidden`).
-- **Notes & To-dos**:
+- **Description, Notes & To-dos** (one row below the price strip: three columns when wide, two, then one — an intrinsic `auto-fit` grid over `NOTES_TODOS_COLUMN`, never `@container`):
+  - Description band (`DeckDescriptionPanel.tsx`, issue #912): `decks.description`, read-only, first in the row. Not mounted when blank (`shownDescription`), so it takes no column. Open on arrival; the disclosure is editor state, not a deck column. The gallery cover's hint is the artist credit only.
   - Notes band: Titled multi-document rich text notes (`deck_notes`) with Markdown/ProseMirror formatting.
   - `NoteEditor.tsx` (both bands' editor) passes `injectCSS: false`: Tiptap's default appends a runtime stylesheet the shipped CSP refuses. Its header has what that sheet carried and why no rule replaced it.
   - To-do band: Structured deck checklists (`deck_todo_lists`) supporting item completion and ordering.
 - **Keyboard focus handling**: Floating toolbars automatically avoid intercepting typing gestures while text inputs or note editors have active focus.
 - **Deck tags (`deckTags.ts`, `DeckTagsField.tsx`)**: The reader's free text about a whole deck (`decks.tags`, user schema v62) — not Scryfall tags and not deck labels ([DOMAIN_VOCABULARY.md](../../../../docs/agent/DOMAIN_VOCABULARY.md)).
-  - Edited in Deck settings only; `DeckSettingsForm` draws the field when a host passes `tagsInUse`, so the create dialog draws none.
+  - Typed in Deck settings; `DeckSettingsForm` draws the field when a host passes `tagsInUse`, so the create dialog draws none.
+  - The gallery tile's right-click menu (`deckMenu.tsx`, issue #914) has **Add tag ▸** (the tags other decks wear, then **New tag…**, which opens Deck settings with the caret in the Tags field — `DeckSettingsDialog`'s `focus="tags"`) and **Remove tag ▸** (greyed on a deck with none). Plain `submenu`s: `DecksPage` hands over `tagsInUse(decks.decks)`, so a right-click reads nothing.
   - A tag write sends the whole list (`deckUpdate({ tags })`, `[]` clears). `DeckSettingsDialog` holds the list it last sent until the row catches up, so a second tag is built on the first.
+  - The order is the reader's (issue #913): a chip is dragged by its word onto another (`tagDrag.ts`, its own drag mark) or moved with ←/→ on the word, and the write is the whole list from `movedTag` — no reorder command.
   - Suggestions are `tagsInUse(deck_list)` — there is no table of tags. Compare two tags with `tagKey`/`hasTag`, which fold capitals exactly as Rust's `clean_tags` does.
   - `DeckTile` draws them in one row on the art: above the badge and bracket marks, or on the art's bottom edge when the deck has neither. Outside the tile's `<button>`, like the marks.
 
