@@ -8335,3 +8335,28 @@ a group that already has it.
   `openExternal`.
 - **`docs/play/`** holds the listing's text, the Console's answers and the two rendered
   graphics. The screenshots are taken on a phone.
+
+## 14. Settings' Updates entry — the version and the notes the build carries (2026-10-11)
+
+- **The light edition draws `Updates` again, without the updater.** `LIGHT_SETTINGS` gained
+  `updates`, and `Edition.updater` (true only in the full edition) decides what is drawn under it:
+  the desktop's `UpdatePanel` drives `update_*`, which no light host has, so the light edition
+  draws `packages/ui/features/settings/VersionPanel.tsx` — the mark and the version
+  (`AppVersion.tsx`, shared with `UpdatePanel`), the day it was released, and the desktop's own
+  `VersionHistory`. Both faces draw it: the desktop face's `SettingsPage` and the phone's row.
+  The entry is first on both, so the desktop face lands on it, as the full edition does.
+- **Everything comes from the build, and no host is asked.** `vite.base.ts` defines
+  `import.meta.env.VITE_APP_VERSION` (the root `package.json`, which release-please bumps with
+  every host's version) and `VITE_RELEASE_DATES` (`CHANGELOG.md`'s headings, read by
+  `packages/ui/lib/releaseDates.ts`); `packages/ui/lib/bundledReleases.ts` globs
+  `changelog/<version>.md` — each release's GitHub body, `release.yml`'s `publish` — up to the
+  running version. No network, no CSP source, no command, and the same on Android and the web.
+- **The notes are a chunk of their own** (`useBundledHistory`, a query over an `import()`), about
+  a quarter of a megabyte of text before compression, fetched the first time a reader opens the
+  panel (measured 2026-10-11: 150 KB, 46 KB gzipped). The desktop build emits the chunk as well,
+  since its `SettingsPage` holds both panels, and never fetches it. On the web it is a build file
+  like any other, so the service worker precaches it. The phone's import fence
+  (`phone/fence.test.ts`) reads a glob of `.md` as text, as it reads one of pictures: Markdown
+  imports no module.
+- **A release published without its notes file has no row** — `publish` keeps release-please's
+  body on GitHub when `changelog/<version>.md` is missing, and the build has nothing to draw.

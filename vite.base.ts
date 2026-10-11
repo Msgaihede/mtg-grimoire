@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
@@ -7,6 +8,7 @@ import type { UserConfig } from "vite";
 // `packages/ui/lib/iconFont.ts` for why, and `iconFont.test.ts` for the guarantee that it
 // leaves every glyph class alone.
 import { woff2IconFonts } from "./packages/ui/lib/iconFont.ts";
+import { releaseDates } from "./packages/ui/lib/releaseDates.ts";
 import { WATCH_IGNORED } from "./vite.watch.ts";
 
 // **This file's own address, held in a name — and that is what lets the file be tested.** Written
@@ -32,10 +34,28 @@ const host = (
   }
 ).process.env.TAURI_DEV_HOST;
 
+/**
+ * The build's own version and every release's day, for the light edition's Updates panel
+ * (`packages/ui/lib/appVersion.ts`). A light host has no updater to ask its version of, so the
+ * page is told at build time: the root manifest's version is the one release-please bumps with
+ * every host's, and the days are its log's headings (`releaseDates.ts` has why from there).
+ */
+const VERSION: string = JSON.parse(readFileSync(`${REPO}package.json`, "utf8")).version;
+const RELEASE_DATES = releaseDates(readFileSync(`${REPO}CHANGELOG.md`, "utf8"));
+
 // What the three apps' configs and `vitest.config.ts` are merged over. It sets no `root`: each
 // app's config names its own folder, and Vitest's is the repository.
 export default {
   plugins: [woff2IconFonts(), react(), tailwindcss()],
+
+  // Replaced in every program built over this file — the three apps, Vitest and Storybook — so the
+  // page that reads them never meets them undefined.
+  define: {
+    "import.meta.env.VITE_APP_VERSION": JSON.stringify(VERSION),
+    // A string of JSON, parsed by the page: Vitest hands an `import.meta.env` key over as a
+    // string, so an object defined here arrives there as `[object Object]`.
+    "import.meta.env.VITE_RELEASE_DATES": JSON.stringify(JSON.stringify(RELEASE_DATES)),
+  },
 
   resolve: {
     alias: { "@": UI },

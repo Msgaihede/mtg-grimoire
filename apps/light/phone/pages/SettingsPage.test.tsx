@@ -7,6 +7,7 @@ vi.mock("@tauri-apps/api/event", () => import("@grimoire/fake/event"));
 vi.mock("@tauri-apps/api/window", () => import("@grimoire/fake/window"));
 
 import { registerCommands } from "@grimoire/fake/core";
+import { APP_VERSION } from "@grimoire/ui/lib/appVersion";
 import type { ErrorEntry } from "@grimoire/ui/lib/ipc";
 import { PhoneFace } from "../PhoneApp";
 import { renderPhone } from "../testing";
@@ -22,6 +23,7 @@ describe("Settings on the phone", () => {
     renderPhone(<PhoneFace />, { path: "/settings" });
     const rows = within(list()).getAllByRole("button");
     expect(rows.map((row) => row.textContent)).toEqual([
+      "Updates",
       "Card data",
       "Sync",
       "Tags",
@@ -30,8 +32,7 @@ describe("Settings on the phone", () => {
       "Errors",
     ]);
     for (const row of rows) expect(row).toHaveAttribute("aria-expanded", "false");
-    // Nothing the light edition leaves out, and no placeholder sentence where the page was.
-    expect(screen.queryByRole("button", { name: "Updates" })).toBeNull();
+    // No placeholder sentence where the page was.
     expect(screen.queryByText(/arrive in a later phase/)).toBeNull();
   });
 
@@ -60,6 +61,21 @@ describe("Settings on the phone", () => {
 
     await userEvent.click(group("Card data"));
     expect(screen.queryByRole("region", { name: "Prices" })).toBeNull();
+  });
+
+  it("draws the version and the release notes the build carries under Updates", async () => {
+    renderPhone(<PhoneFace />, { path: "/settings" });
+    await userEvent.click(group("Updates"));
+
+    const panel = await screen.findByRole("region", { name: "Updates" });
+    expect(within(panel).getByText(APP_VERSION)).toBeInTheDocument();
+    // The desktop's updater is not here: nothing to check, download or restart.
+    expect(within(panel).queryByRole("button", { name: "Check now" })).toBeNull();
+
+    // The history arrives as a chunk of its own, every row closed until it is pressed.
+    const [newest] = await within(panel).findAllByRole("button", { expanded: false }, SETTLE);
+    await userEvent.click(newest!);
+    expect(newest).toHaveAttribute("aria-expanded", "true");
   });
 
   it("links to the privacy policy under the last group", async () => {

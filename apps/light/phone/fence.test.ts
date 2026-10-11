@@ -392,7 +392,10 @@ const inRepo = (spec: string): boolean =>
  * with a dot"**: `./Tile.stories` has a dot too, and is exactly the import the walk should say
  * it could not follow.
  */
-const ASSET_EXTENSION = /\.(?:css|json|svg|png|jpe?g|webp|woff2?)$/i;
+// `md` is text and nothing else: the light edition's release notes are a glob of
+// `changelog/*.md` read as strings (`packages/ui/lib/bundledReleases.ts`), and no Markdown file
+// can import a module.
+const ASSET_EXTENSION = /\.(?:css|json|md|svg|png|jpe?g|webp|woff2?)$/i;
 const isAsset = (spec: string): boolean => spec.includes("?") || ASSET_EXTENSION.test(spec);
 
 /** A specifier as a key of `files`, or `null` for one this walk cannot follow. */
@@ -468,7 +471,7 @@ function walk(files: Sources, entries: readonly string[]): Walk {
     }
     for (const opaque of opaqueImportsOf(source)) refused.push(`${trailTo(file)} → ${opaque}`);
     for (const pattern of globsOf(source)) {
-      // A glob of pictures or stylesheets is no more a module than one of them is.
+      // A glob of pictures, stylesheets or text is no more a module than one of them is.
       if (ASSET_EXTENSION.test(pattern)) continue;
       const matcher = globToRegExp(stemOf(file, pattern));
       const targets = Object.keys(files).filter((path) => matcher.test(path));
@@ -681,6 +684,7 @@ describe("the phone face's import graph", () => {
         `${VIA} → import.meta.glob("./pages/*.tsx")`,
       ]);
       expect(withTabBar(`const icons = import.meta.glob("./icons/*.svg");`).blind).toEqual([]);
+      expect(withTabBar(`const notes = import.meta.glob("../changelog/*.md");`).blind).toEqual([]);
     });
   });
 
