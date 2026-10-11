@@ -1037,3 +1037,45 @@ export const Zoomed: Story = {
     await expect(tile).toHaveStyle({ "--mark-scale": "1.5", "--control-scale": "1.275" });
   },
 };
+
+/**
+ * **The reader's own tags, in a row over the art's marks** (issue #834, user schema v61).
+ *
+ * A tag is free text about a whole deck — `Budget`, `No Gamechangers`, `Meme` — typed in Deck
+ * settings and drawn here. It is not one of Scryfall's Tagger tags, which describe a card, and
+ * not a deck label, which marks one card inside a deck.
+ *
+ * `Kenrith Two-Drops` is the Commander deck and wears a bracket pill, so its tags sit **above**
+ * the pill; `Modern Goodstuff` wears no mark at all, so its row sits on the art's bottom edge
+ * **in their place**. Both rows are packed to the right, over the corner the bracket uses.
+ *
+ * **Neutral, in the reading face and in the reader's own capitals** — where the badge and the
+ * bracket are gold, mono and upper case. Those two are what the app says about a deck; a tag is
+ * what the reader said, and the same dress would make it read as a third thing the app had
+ * worked out.
+ *
+ * The row is one line: tags that do not fit are clipped whole rather than cut mid-word, and the
+ * full list is in Deck settings. It is a list outside the tile's button, so the tile is still
+ * named for its deck — the play pins both.
+ */
+export const Tagged: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const wall = await canvas.findByRole("list", { name: "Your decks" });
+
+    const tagsOn = (deck: string) => {
+      const tile = within(wall).getByText(deck).closest("li")!;
+      const row = within(tile).getByRole("list", { name: "Tags" });
+      return within(row)
+        .getAllByRole("listitem")
+        .map((tag) => tag.textContent);
+    };
+    // The seed's two live root decks, in the order each reader "added" them.
+    await expect(tagsOn("Modern Goodstuff")).toEqual(["Budget", "Only removal"]);
+    await expect(tagsOn("Kenrith Two-Drops")).toEqual(["Gimmick", "No Gamechangers", "Budget"]);
+
+    // Still named for its deck: a tag inside the button would be read as part of the name.
+    const tile = canvas.getByRole("button", { name: /^Kenrith Two-Drops/ });
+    await expect(tile).not.toHaveTextContent("Gimmick");
+  },
+};

@@ -15,6 +15,7 @@
 import { plural } from "@/lib/counts";
 import { finishLabel } from "@/lib/finish";
 import type { DeckAuditEntry, DeckAuditKind } from "@/lib/ipc";
+import { hasTag } from "./deckTags";
 import { TOKENS_HEADING } from "./deckTokens";
 import { listName } from "./listNames";
 import { managedWishlistHistoryLabel } from "./managedWishlist";
@@ -73,6 +74,13 @@ function flag(value: unknown): boolean {
   if (typeof value === "number") return value !== 0;
   if (typeof value === "string") return value === "true" || value === "1" || value === "yes";
   return false;
+}
+
+/** A payload field read as a list of tags — the strings of an array, and nothing for anything
+ *  else. One of the defensive readers above: a `tags` row from a build that recorded some other
+ *  shape words itself as a deck with no tags on that side rather than throwing. */
+function tagList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
 }
 
 /** A payload field read as a nested object — the shape an `import` row uses to keep its own
@@ -1042,6 +1050,33 @@ function deckLine(p: Record<string, unknown>): AuditLine {
         default:
           return { text: `Changed where the deck's ${TOKENS_HEADING} are tracked`, detail: null };
       }
+    // The deck's own tags (`decks.tags`, user schema v61, issue #834). `deck.rs` records the two
+    // whole lists under **`tags`**, and `xGroup`'s paragraph applies: the `default` arm below
+    // never fails, so only `auditText.test.ts` holds the spelling.
+    //
+    // **The sentence is the difference, because the lists are not what happened.** A reader
+    // added one tag or took one off; "Tagged the deck Budget" says so, where two lists printed
+    // side by side would leave them to spot it. Both at once is one write only from somewhere
+    // other than the Tags field — an undo, a peer's edit — and gets the plain line with the old
+    // list under it. Compared as `deckTags.ts` compares, so a tag whose capitals changed reads
+    // as neither added nor removed and lands on that same plain line.
+    case "tags": {
+      const before = tagList(p.from);
+      const after = tagList(p.to);
+      const added = after.filter((tag) => !hasTag(before, tag));
+      const removed = before.filter((tag) => !hasTag(after, tag));
+      if (added.length > 0 && removed.length === 0)
+        return { text: `Tagged the deck ${added.join(", ")}`, detail: null };
+      if (removed.length > 0 && added.length === 0)
+        return {
+          text: `Removed the ${removed.length === 1 ? "tag" : "tags"} ${removed.join(", ")}`,
+          detail: null,
+        };
+      return {
+        text: "Changed the deck's tags",
+        detail: before.length > 0 ? `was ${before.join(", ")}` : null,
+      };
+    }
     // Every token write since user schema v52 — one row per command pressed. See
     // {@link tokenLine}: they are `deck` rows rather than a tenth kind for the notes' reason.
     case "token":

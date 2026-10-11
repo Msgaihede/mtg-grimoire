@@ -58,6 +58,7 @@ const ATRAXA: DeckRow = {
   todosOpen: false,
   defaultCategoryId: 0,
   bracket: 0,
+  tags: [],
 };
 
 /** Three folders, one of them inside another: `Budget` is what `Commander` may not be moved

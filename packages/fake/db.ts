@@ -812,6 +812,26 @@ export interface FakeDeck {
    * a mismatch reportable at all.
    */
   bracket?: number;
+  /**
+   * `decks.tags` (user schema v61, issue #834): the reader's own **deck tags** — free text like
+   * `Budget` or `No Gamechangers`, in the order they were added. Not a Scryfall Tagger tag and
+   * not a deck label ({@link FakeDeckLabel}); the deck-level sibling of the collection's
+   * free-text `tags`, and one JSON array in one column on the crate's side.
+   *
+   * **Optional for {@link separateXGroup}'s reason** — `NOT NULL DEFAULT '[]'`, so a seed that
+   * says nothing is a deck wearing none, and {@link toDeckRow} resolves the absence to `[]`.
+   * Held here as {@link cleanTags} leaves it, parsed, because nothing in this fake reads the
+   * column as text.
+   *
+   * **The one column on this row that is not a scalar**, which is the whole of what it costs:
+   * every spread of a deck — a duplicate, an undo snapshot — would share the list rather than
+   * copy it. So the list is only ever **replaced**, never pushed onto, and {@link copyDeck} is
+   * what a copy of the row goes through.
+   *
+   * **An answer about the deck, like {@link bracket} above it**: `deck_update` records it as
+   * `tags` and `deck_undo::DECK_FIELDS` names the column, and `duplicate_deck` carries it.
+   */
+  tags?: string[];
   updatedAt: number;
 }
 
@@ -7821,6 +7841,11 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     // because the crate's reads are positional; here it is last for the same reason read as a
     // habit rather than a requirement.
     bracket: d.bracket ?? AUTO_BRACKET,
+    // v61's deck tags, `?? []` for `tags TEXT NOT NULL DEFAULT '[]'` — a deck that predates the
+    // column wears none. **A copy, never the stored list**: this is the one field of the row a
+    // caller could change in place, and a story that sorted the answer it was handed must not
+    // have reordered the deck's own tags behind the next read.
+    tags: [...(d.tags ?? [])],
   };
 }
 
@@ -14046,6 +14071,40 @@ function validTokenMode(mode: string): TokenMode {
   throw refuse(BAD_TOKEN_MODE);
 }
 
+/**
+ * `deck::clean_tags` — a deck's tags as `decks.tags` stores them (user schema v61, issue #834).
+ *
+ * Each tag is trimmed with its inner runs of whitespace closed to one space; an empty one is
+ * dropped; and one that repeats an earlier tag **whatever its capitals** is dropped too, so the
+ * first spelling wins and the order is the reader's. **Nothing is refused and nothing is
+ * shortened** — unlike {@link validTokenMode} above there is no vocabulary to hold a free-text
+ * tag to, so this tidies where its neighbours fence.
+ *
+ * A **new** list every time, which is the other half of its job: what `deck_update` stores is
+ * never the array the caller still holds.
+ */
+function cleanTags(tags: readonly string[]): string[] {
+  const kept: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of tags) {
+    const tag = raw.trim().split(/\s+/).join(" ");
+    const key = tag.toLowerCase();
+    if (tag === "" || seen.has(key)) continue;
+    seen.add(key);
+    kept.push(tag);
+  }
+  return kept;
+}
+
+/**
+ * One `decks` row copied out: the spread, and a list of its own for {@link FakeDeck.tags} — the
+ * one column a spread would share rather than copy. The key stays absent on a row that never
+ * had it, so a copy of a seed written before the column is still that seed.
+ */
+function copyDeck(deck: FakeDeck): FakeDeck {
+  return deck.tags === undefined ? { ...deck } : { ...deck, tags: [...deck.tags] };
+}
+
 /* ------------------------------------------------------------- token writes (v52) ---- */
 
 /** One entry as a write carries it — `deck_undo::TokenEntryRow`, less nothing. */
@@ -19243,6 +19302,10 @@ export function writeHandlers(db: FakeDb) {
         // `token_rail_index INTEGER NOT NULL DEFAULT -1`: where that pile would go is *last*,
         // and `DeckInput` does not ask this either.
         tokenRailIndex: -1,
+        // `tags TEXT NOT NULL DEFAULT '[]'` (user schema v61, issue #834): a deck being born
+        // wears no deck tags, and `DeckInput` does not ask — they are put on afterwards, through
+        // `deck_update`.
+        tags: [],
         updatedAt: stamp(db),
       };
       db.decks.push(row);
@@ -19286,7 +19349,9 @@ export function writeHandlers(db: FakeDb) {
      * `coalesce(?n, column)`, so absent means "leave it" and there is no field that *clears*
      * one: `description: ""` writes an empty string rather than a NULL, `coverCardId` cannot be
      * unset, and `folderId` can file a deck but never un-file one — {@link deck_set_folder} is
-     * the command that reaches the root.
+     * the command that reaches the root. **`tags` is the one text column that can be emptied
+     * from here** (user schema v61): its cleared state is a value, `[]`, and the list a patch
+     * names replaces the deck's whole list rather than adding to it.
      *
      * **Two things happen beside the columns.** Sending `coverCardId` sets `coverKind` back to
      * `card_art`, which is how a deck showing an uploaded picture returns to card art without
@@ -19330,6 +19395,10 @@ export function writeHandlers(db: FakeDb) {
       // `managed_wishlist::valid_mode`, strict — four words since v57, `tokens` no longer one.
       const managedWishlist =
         patch.managedWishlist === undefined ? undefined : validManagedMode(patch.managedWishlist);
+      // `deck::clean_tags` (user schema v61, issue #834) — tidied rather than validated, since it
+      // refuses nothing. **`[]` is a value here and survives this line**: an absent key leaves the
+      // deck's tags alone, and an empty list takes them all off.
+      const tags = patch.tags === undefined ? undefined : cleanTags(patch.tags);
       // **The deck's default pile is one deck setting and names a live pile** (user schema v53).
       // Deck settings offers the live list's piles, and the Theory tab resolves the setting by
       // that pile's *name* among its own — so a theory id stored here would be a setting the
@@ -19531,6 +19600,23 @@ export function writeHandlers(db: FakeDb) {
       // `0`, so a deck that has never been asked and a deck put back to Auto are one state.
       const bracketWas = before.bracket ?? AUTO_BRACKET;
       if (bracket !== undefined && bracket !== bracketWas) field("bracket", bracketWas, bracket);
+      // v61's deck tags, under `deck.rs`'s word `"tags"` — one row carrying **both whole lists**,
+      // because the patch replaces the list rather than adding to it and a reader of the drawer
+      // wants what the deck wore before and after, not a diff to reassemble. `?? []` on the `from`
+      // side for {@link FakeDeck.tags}' reason: an absent column is the DDL's `'[]'`.
+      //
+      // **Compared as the cleaned list against the stored one, element by element and case and
+      // all**: a Save that sends the same tags back writes nothing, while `budget` over `Budget`
+      // or the same two tags in the other order is a change the reader made. The comparison is
+      // case-sensitive where {@link cleanTags}' dedupe is not, and that is not a slip — the dedupe
+      // asks whether two tags are one tag, this asks whether the column moved.
+      const tagsWas = before.tags ?? [];
+      if (
+        tags !== undefined &&
+        (tags.length !== tagsWas.length || tags.some((tag, i) => tag !== tagsWas[i]))
+      ) {
+        field("tags", tagsWas, tags);
+      }
       if (patch.folderId !== undefined && patch.folderId !== before.folderId) {
         recordFiled(db, deck.id, patch.folderId);
       }
@@ -19703,6 +19789,11 @@ export function writeHandlers(db: FakeDb) {
       // truthiness test would read it as no change at all. The validated local rather than
       // `patch.bracket`, so a refused number can never reach the row.
       deck.bracket = bracket ?? deck.bracket;
+      // `coalesce(?n, tags)`, and **`[]` is a value here** for `bracket`'s reason one line up —
+      // which is what lets this key clear its column where `description` cannot. The cleaned
+      // local and never `patch.tags`: the list is **replaced** by one {@link cleanTags} made, so
+      // the row holds neither the caller's array nor the one an undo snapshot is still holding.
+      deck.tags = tags ?? deck.tags;
       deck.updatedAt = stamp(db);
       // **The deck's managed wishlist follows the five columns it is made of** — the crate's
       // `mw_deck_upd` trigger watches `name`, `theory_enabled`, `virtual_only`,
@@ -19885,7 +19976,11 @@ export function writeHandlers(db: FakeDb) {
       refuseIfBusy(db);
       const source = requireDeck(db, args.id);
       const copy: FakeDeck = {
-        ...source,
+        // {@link copyDeck} rather than a bare `...source`, for the one column a spread would
+        // share: `duplicate_deck` names `tags` (user schema v61), so a copy of a `Meme` deck is a
+        // `Meme` deck — wearing **its own list**, or taking a tag off the copy would be taking it
+        // off the original.
+        ...copyDeck(source),
         id: nextId(db.decks),
         name: `${source.name} (copy)`,
         archived: false,
@@ -25182,7 +25277,9 @@ function deckState(db: FakeDb, deckId: number): FakeDeckState | null {
   // the only way to ask which of them are this deck's.
   const noteIds = new Set(db.deckNotes.filter((n) => n.deckId === deckId).map((n) => n.id));
   return {
-    deck: { ...deck },
+    // {@link copyDeck}, so the step holds the deck's tags (user schema v61) as a list of its own
+    // — every other column on the row is a scalar the spread already copied.
+    deck: copyDeck(deck),
     cards: db.deckCards.filter((c) => c.deckId === deckId).map((c) => ({ ...c })),
     categories: db.deckCategories.filter((c) => c.deckId === deckId).map((c) => ({ ...c })),
     // **Every label, not this deck's** — since schema v21 there is no such thing, and a label
@@ -25207,8 +25304,12 @@ function restoreDeck(db: FakeDb, deckId: number, state: FakeDeckState): void {
     // `deck_todo_lists` that {@link deckState} never records, so no undo touches them: a to-do
     // write files no step of its own, and restoring a snapshot's copy would let a Ctrl+Z on a
     // rename quietly take back every to-do typed since, which the crate cannot do.
+    //
+    // **`tags` is put back with the rest**, which is `DECK_FIELDS` naming the column since user
+    // schema v61 — and through {@link copyDeck}, so the row and the step it came from do not
+    // share one list: the same step is read again on a redo, and again after that.
     const { todosOpen } = db.decks[at];
-    db.decks[at] = { ...state.deck, todosOpen };
+    db.decks[at] = { ...copyDeck(state.deck), todosOpen };
   }
   db.deckCards = [
     ...db.deckCards.filter((c) => c.deckId !== deckId),

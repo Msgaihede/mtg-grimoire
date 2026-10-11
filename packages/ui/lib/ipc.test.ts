@@ -1135,6 +1135,17 @@ describe("ipc argument names match the Rust command signatures", () => {
     await ipc.deckUpdate(4, { todosOpen: true });
     expect(invoke).toHaveBeenCalledWith("deck_update", { id: 4, patch: { todosOpen: true } });
 
+    // The deck's own tags (user schema v61, issue #834): the whole list under `tags`, and an
+    // empty one sent as an empty array — the key that says "no tags", where an absent key says
+    // "leave them". A wrapper that dropped an empty list would make the last tag irremovable.
+    await ipc.deckUpdate(4, { tags: ["Budget", "Meme"] });
+    expect(invoke).toHaveBeenCalledWith("deck_update", {
+      id: 4,
+      patch: { tags: ["Budget", "Meme"] },
+    });
+    await ipc.deckUpdate(4, { tags: [] });
+    expect(invoke).toHaveBeenCalledWith("deck_update", { id: 4, patch: { tags: [] } });
+
     invoke.mockResolvedValue(undefined);
     await ipc.deckDelete(4);
     expect(invoke).toHaveBeenCalledWith("deck_delete", { id: 4 });

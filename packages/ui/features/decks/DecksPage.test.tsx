@@ -147,6 +147,7 @@ const BURN: DeckRow = {
   todosOpen: false,
   defaultCategoryId: 0,
   bracket: 0,
+  tags: [],
 };
 
 /** No cover, so no art and — the plan's ruling — no credit line at all. */
@@ -1103,6 +1104,92 @@ describe("DecksPage", () => {
       const said = within(zoo).getByText("White");
       expect(zoo.textContent?.indexOf("Zoo")).toBeLessThan(zoo.textContent?.indexOf("White") ?? -1);
       expect(said.className).toContain("sr-only");
+    });
+
+    /**
+     * **The reader's own tags, in a row on the art** (`decks.tags`, user schema v61, issue #834).
+     *
+     * Three facts, and the third is the one a tile can lose without anything else going red: the
+     * tags are drawn in the reader's order, a deck with none draws no row at all, and the row is
+     * **outside** the tile's button — the badge's rule, for its reason. Inside it, the tile would
+     * be named `Altar … No Gamechangers Budget`, and a deck called *Budget* could not be told
+     * from a deck tagged it.
+     */
+    it("draws a deck's tags on its tile, in order, and leaves the tile named for its deck", async () => {
+      deckList.mockResolvedValue([{ ...ALTAR, tags: ["No Gamechangers", "Budget"] }, ZOO]);
+
+      wrap(<DecksPage />);
+      await waitFor(() => expect(wallIds()).toEqual([11, 12]));
+
+      const altar = await screen.findByRole("button", { name: /^Altar/ });
+      const row = within(altar.closest("li")!).getByRole("list", { name: "Tags" });
+      expect(within(row).getAllByRole("listitem").map((tag) => tag.textContent)).toEqual([
+        "No Gamechangers",
+        "Budget",
+      ]);
+      expect(altar).not.toContainElement(row);
+      expect(altar).not.toHaveTextContent("Budget");
+
+      const zoo = (await tileFor("Zoo")).closest("li")!;
+      expect(within(zoo).queryByRole("list", { name: "Tags" })).not.toBeInTheDocument();
+    });
+
+    /**
+     * **Above the marks where there are marks, and in their place where there are none** — the
+     * issue's own wording. Altar is a Commander deck and wears a bracket pill; Zoo is a Modern
+     * list read against the binder and wears nothing, so its row sits on the art's bottom edge
+     * rather than a mark's height above an empty one.
+     *
+     * `classList.contains` and never a substring match on `className`: the two offsets share
+     * most of their spelling, and jsdom has no layout to measure the difference with.
+     */
+    it("sits the tag row over the marks, and on the art's edge when there are none", async () => {
+      deckList.mockResolvedValue([
+        { ...ALTAR, tags: ["Budget"] },
+        { ...ZOO, tags: ["Meme"] },
+      ]);
+
+      wrap(<DecksPage />);
+      await waitFor(() => expect(wallIds()).toEqual([11, 12]));
+
+      const commander = (await tileFor("Altar")).closest("li")!;
+      const modern = (await tileFor("Zoo")).closest("li")!;
+      // The pill has to be there for the first half to mean anything.
+      expect(await within(commander).findByText("Bracket 3")).toBeInTheDocument();
+
+      const raised = "bottom-[calc(1.625rem*var(--mark-scale,1)_+_2px)]";
+      const onTheEdge = "bottom-[calc(0.375rem*var(--mark-scale,1))]";
+      const over = within(commander).getByRole("list", { name: "Tags" });
+      const alone = within(modern).getByRole("list", { name: "Tags" });
+      expect(over.classList.contains(raised)).toBe(true);
+      expect(over.classList.contains(onTheEdge)).toBe(false);
+      expect(alone.classList.contains(onTheEdge)).toBe(true);
+      expect(alone.classList.contains(raised)).toBe(false);
+    });
+
+    /**
+     * **The row is placed by the pill that is coming, not by the pill that has come.** A
+     * Commander deck left on Auto has no label until `deck_bracket_reads` answers; placed by the
+     * label alone, its tags would be drawn on the art's edge and then lifted a mark's height when
+     * the estimate landed — a row moving under the reader's eye every time the gallery opens.
+     *
+     * The read never answers here, so the pill never arrives: the row has to be raised anyway.
+     */
+    it("holds the tag row clear of a bracket pill that has not arrived yet", async () => {
+      deckBracketReads.mockReturnValue(new Promise(() => {}));
+      deckList.mockResolvedValue([{ ...ALTAR, bracket: 0, tags: ["Budget"] }, ZOO]);
+
+      wrap(<DecksPage />);
+      await waitFor(() => expect(wallIds()).toEqual([11, 12]));
+
+      const commander = (await tileFor("Altar")).closest("li")!;
+      const row = within(commander).getByRole("list", { name: "Tags" });
+      expect(within(commander).queryByText(/Bracket/)).not.toBeInTheDocument();
+      await waitFor(() =>
+        expect(
+          row.classList.contains("bottom-[calc(1.625rem*var(--mark-scale,1)_+_2px)]"),
+        ).toBe(true),
+      );
     });
 
     /** …and it asks about exactly the ones that do, whichever wall they are on. The ids are

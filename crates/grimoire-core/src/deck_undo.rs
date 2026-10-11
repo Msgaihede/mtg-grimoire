@@ -204,6 +204,11 @@ const DECK_FIELDS: &[&str] = &[
     // would put a settings press back and leave the pile shown or hidden where the press put
     // it. It replaced `token_stack`, which was a view setting and never on this list.
     "token_mode",
+    // User schema v61's deck tags (issue #834) — the reader's own words about the deck, written
+    // by an ordinary `deck_update` with a history row, so on the list for `game_key`'s reason. A
+    // step carries the column's JSON text as it stood, never a parsed list: what Ctrl+Z puts back
+    // is byte for byte what the press replaced, spelling and order included.
+    "tags",
     "last_variant",
     "last_group_by",
     "last_sort_by",

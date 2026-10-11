@@ -548,6 +548,56 @@ describe("auditSentence", () => {
     ).toEqual({ text: "Moved the deck to the top level", detail: null });
   });
 
+  /**
+   * The deck's own tags (`decks.tags`, user schema v61, issue #834). `deck.rs` records both
+   * whole lists under `tags`; the sentence is the *difference*, because one tag added or one
+   * taken off is what the reader did.
+   *
+   * **The field name is the fence.** The `default` arm answers anything it does not know with
+   * *Changed the deck*, which is true of every edit — so a respelling on either side goes
+   * unnoticed everywhere but here.
+   */
+  it("says which tag a deck gained or lost, rather than printing two lists", () => {
+    const deck = (payload: Record<string, unknown>) =>
+      auditSentence(entry("deck", payload, { cardId: null, cardName: null }));
+
+    expect(deck({ field: "tags", from: [], to: ["Budget"] })).toEqual({
+      text: "Tagged the deck Budget",
+      detail: null,
+    });
+    expect(deck({ field: "tags", from: ["Budget"], to: ["Budget", "Meme", "Gimmick"] })).toEqual({
+      text: "Tagged the deck Meme, Gimmick",
+      detail: null,
+    });
+    expect(deck({ field: "tags", from: ["Budget", "Meme"], to: ["Meme"] })).toEqual({
+      text: "Removed the tag Budget",
+      detail: null,
+    });
+    expect(deck({ field: "tags", from: ["Budget", "Meme"], to: [] })).toEqual({
+      text: "Removed the tags Budget, Meme",
+      detail: null,
+    });
+    // Both at once — an undo, or a peer's edit — is the plain line, with what it replaced.
+    expect(deck({ field: "tags", from: ["Budget"], to: ["Meme"] })).toEqual({
+      text: "Changed the deck's tags",
+      detail: "was Budget",
+    });
+    // A tag whose capitals changed was neither added nor removed, and a reorder is neither too.
+    expect(deck({ field: "tags", from: ["meme"], to: ["Meme"] }).text).toBe(
+      "Changed the deck's tags",
+    );
+    expect(deck({ field: "tags", from: ["A", "B"], to: ["B", "A"] }).text).toBe(
+      "Changed the deck's tags",
+    );
+    // A payload from a build that recorded some other shape words itself and throws nothing.
+    expect(deck({ field: "tags", from: "Budget", to: null })).toEqual({
+      text: "Changed the deck's tags",
+      detail: null,
+    });
+    // The plausible-but-wrong spelling falls to the default, which is what makes it visible.
+    expect(deck({ field: "deckTags", from: [], to: ["Budget"] }).text).toBe("Changed the deck");
+  });
+
   it("says which field of the deck changed", () => {
     const deck = (payload: Record<string, unknown>) =>
       auditSentence(entry("deck", payload, { cardId: null, cardName: null }));

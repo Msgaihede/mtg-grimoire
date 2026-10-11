@@ -26,10 +26,13 @@ const deckPullPlan = vi.hoisted(() => vi.fn());
 const deckPullFromCollection = vi.hoisted(() => vi.fn());
 /** The plan's piles — the one read this dialog makes about the theory list, for its total. */
 const deckCategoryList = vi.hoisted(() => vi.fn());
+/** Every deck — read for one thing, the tags the Tags field suggests. */
+const deckList = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
     deckGet,
+    deckList,
     deckUpdate,
     deckSetFolder,
     deckFolderList,
@@ -76,6 +79,7 @@ const BURN: DeckRow = {
   todosOpen: false,
   defaultCategoryId: 0,
   bracket: 0,
+  tags: [],
   tokenMode: "managed",
   tokenRailIndex: -1,
 };
@@ -244,6 +248,8 @@ beforeEach(() => {
   deckPullFromCollection.mockResolvedValue({ copies: 3, cards: 1 });
   // Read only for a deck with a plan, so every case without one never reaches it.
   deckCategoryList.mockResolvedValue(PLAN);
+  // No other deck, so no suggestions: the case about them asks for a gallery by name.
+  deckList.mockResolvedValue([BURN]);
 });
 
 /**
@@ -1387,6 +1393,195 @@ describe("DeckSettingsDialog", () => {
     expect(clears).toHaveLength(1);
     expect(clears[0]).toBeEnabled();
     expect(clears[0]).not.toHaveAccessibleName(/theory/i);
+  });
+
+  /**
+   * The deck's own tags (`decks.tags`, user schema v61, issue #834). The field's behaviour is
+   * `DeckTagsField.test.tsx`'s; what only this host can say is **which write each act is** and
+   * where the suggestions come from.
+   */
+  describe("tags", () => {
+    /** The chips on screen, in order. */
+    const chips = () => {
+      const list = screen.queryByRole("list", { name: "Tags on this deck" });
+      if (list === null) return [];
+      return within(list)
+        .getAllByRole("listitem")
+        .map((chip) => chip.firstElementChild?.textContent ?? "");
+    };
+
+    it("draws the deck's tags, and writes the whole list when one is added", async () => {
+      deckGet.mockResolvedValue(detail({ tags: ["Budget"] }));
+      open();
+      await loaded();
+      expect(chips()).toEqual(["Budget"]);
+
+      await userEvent.type(screen.getByRole("combobox", { name: "Tags" }), "Meme{Enter}");
+
+      expect(deckUpdate).toHaveBeenCalledExactlyOnceWith(4, { tags: ["Budget", "Meme"] });
+    });
+
+    /**
+     * **`[]` and never an absent key.** Absent is "leave it" on this patch, so a host that sent
+     * nothing for the last chip would report success and leave the tag on the deck.
+     */
+    it("sends an empty list when the last tag is taken off", async () => {
+      deckGet.mockResolvedValue(detail({ tags: ["Budget"] }));
+      open();
+      await loaded();
+
+      await userEvent.click(screen.getByRole("button", { name: "Remove the Budget tag" }));
+
+      expect(deckUpdate).toHaveBeenCalledExactlyOnceWith(4, { tags: [] });
+    });
+
+    /**
+     * **The second write is built on the first one sent, not on the last row read.** The first
+     * write is held open here — never answered — which is the beat a fast second Enter falls
+     * in: the row still says the deck has no tags. Built on the row, the second patch would be
+     * `["Meme"]` alone and would take `Budget` back off the deck.
+     */
+    it("builds a second tag on the first while the first write is still out", async () => {
+      deckUpdate.mockReturnValue(new Promise(() => {}));
+      open();
+      await loaded();
+      const box = screen.getByRole("combobox", { name: "Tags" });
+
+      await userEvent.type(box, "Budget{Enter}Meme{Enter}");
+
+      expect(deckUpdate).toHaveBeenNthCalledWith(1, 4, { tags: ["Budget"] });
+      expect(deckUpdate).toHaveBeenLastCalledWith(4, { tags: ["Budget", "Meme"] });
+      expect(chips()).toEqual(["Budget", "Meme"]);
+    });
+
+    /**
+     * **The sequence that lost a tag in a live pass** (Storybook, 2026-10-11): three tags typed
+     * briskly, and the middle one gone.
+     *
+     * Write one lands and its refetch answers while write two is still in flight — so the row
+     * that arrives carries the first tag and **not** the second. A held list that let go as soon
+     * as the row changed dropped the second chip there, and the third tag was then built on a
+     * list without it. The held list has to outlast every read that began before the *newest*
+     * write settled; this stages exactly that read and types the third tag after it.
+     */
+    it("keeps a tag whose write is still out when an earlier write's refetch lands", async () => {
+      let landFirst!: (row: DeckRow) => void;
+      deckUpdate
+        .mockReturnValueOnce(new Promise<DeckRow>((resolve) => (landFirst = resolve)))
+        .mockReturnValue(new Promise(() => {}));
+      open();
+      await loaded();
+      const box = screen.getByRole("combobox", { name: "Tags" });
+      await userEvent.type(box, "Budget{Enter}Meme{Enter}");
+
+      // The refetch behind write one: the deck as it stands between the two writes. It carries
+      // a description of its own for one reason — so the test can see that this row has been
+      // *drawn*. The chips cannot say so, since the held list is what is standing over them,
+      // and an assertion made before the row landed would pass against the defect.
+      deckGet.mockResolvedValue(detail({ tags: ["Budget"], description: "Read between writes." }));
+      landFirst({ ...BURN, tags: ["Budget"] });
+      await waitFor(() =>
+        expect(screen.getByLabelText("Description")).toHaveValue("Read between writes."),
+      );
+
+      expect(chips()).toEqual(["Budget", "Meme"]);
+
+      await userEvent.type(box, "Gimmick{Enter}");
+
+      expect(deckUpdate).toHaveBeenLastCalledWith(4, { tags: ["Budget", "Meme", "Gimmick"] });
+    });
+
+    /**
+     * And the other end of the hold: once the newest write has settled and the deck has been
+     * read again, the **row** is what the chips draw — here a row that says something the dialog
+     * never sent, which is an undo or a peer's edit arriving while the dialog is open.
+     */
+    it("draws the row again once the newest write has settled and the deck is re-read", async () => {
+      open();
+      await loaded();
+      await userEvent.type(screen.getByRole("combobox", { name: "Tags" }), "Budget{Enter}");
+      await waitFor(() => expect(chips()).toEqual(["Budget"]));
+
+      // A later read, with the clock moved on so it is unambiguously after the settle.
+      deckGet.mockResolvedValue(detail({ tags: ["From elsewhere"] }));
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      await userEvent.type(screen.getByLabelText("Name"), "!{Enter}");
+
+      await waitFor(() => expect(chips()).toEqual(["From elsewhere"]));
+    });
+
+    /**
+     * **A different setting changed while a tag write is still out must not strand the hold.**
+     * `mutate`'s per-call callbacks fire for an observer's *latest* call only, and the held list
+     * is let go by exactly those callbacks. On the dialog's shared `deck.update` observer a
+     * rename sent before the tag write answered would orphan them: `settledAt` stays `null`, the
+     * chips draw the sent list for the rest of the session, and nothing arriving later — an undo,
+     * a peer's edit — is ever shown. The tags write through a mutation of their own for this.
+     *
+     * Staged as: a tag write held open, a rename sent and answered, then the tag write answered
+     * and — a clock tick later — a read that says something the dialog never sent.
+     */
+    it("lets the row speak again after a tag write that another write overtook", async () => {
+      let landTags!: (row: DeckRow) => void;
+      deckUpdate.mockImplementation((_id: number, patch: Record<string, unknown>) =>
+        "tags" in patch
+          ? new Promise<DeckRow>((resolve) => (landTags = resolve))
+          : Promise.resolve({ ...BURN, ...patch }),
+      );
+      open();
+      await loaded();
+      await userEvent.type(screen.getByRole("combobox", { name: "Tags" }), "Budget{Enter}");
+      // The overtaking write: a rename, sent and answered while the tag write is still out.
+      await userEvent.type(screen.getByLabelText("Name"), "!{Enter}");
+      await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { name: "Burn!" }));
+      expect(chips()).toEqual(["Budget"]);
+
+      landTags({ ...BURN, tags: ["Budget"] });
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      deckGet.mockResolvedValue(detail({ tags: ["From elsewhere"] }));
+      await userEvent.type(screen.getByLabelText("Description"), "!");
+      await userEvent.tab();
+
+      await waitFor(() => expect(chips()).toEqual(["From elsewhere"]));
+    });
+
+    /** The held list is a promise about a write; a refused write is a promise withdrawn, and the
+     *  chips go back to what the deck actually has. */
+    it("lets go of a tag whose write was refused, and says why", async () => {
+      deckUpdate.mockRejectedValue("Database is busy.");
+      open();
+      await loaded();
+
+      await userEvent.type(screen.getByRole("combobox", { name: "Tags" }), "Budget{Enter}");
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "Couldn't save that change — Database is busy.",
+      );
+      await waitFor(() => expect(chips()).toEqual([]));
+    });
+
+    /**
+     * The suggestions are read off `deck_list` — the gallery's own answer — and there is no list
+     * of tags anywhere else. Two decks spell one tag two ways here, which is what the count is
+     * for: one row, not two.
+     */
+    it("suggests the tags other decks wear, once each, and not this deck's own", async () => {
+      deckGet.mockResolvedValue(detail({ tags: ["Budget"] }));
+      deckList.mockResolvedValue([
+        { ...BURN, tags: ["Budget"] },
+        { ...BURN, id: 5, name: "Zoo", tags: ["Budget", "Meme"] },
+        { ...BURN, id: 6, name: "Tron", tags: ["meme", "No Gamechangers"], archived: true },
+      ]);
+      open();
+      await loaded();
+
+      await userEvent.click(screen.getByRole("combobox", { name: "Tags" }));
+
+      const rows = within(
+        await screen.findByRole("listbox", { name: "Tags on other decks" }),
+      ).getAllByRole("option");
+      expect(rows.map((row) => row.textContent)).toEqual(["Meme2 decks", "No Gamechangers1 deck"]);
+    });
   });
 });
 
