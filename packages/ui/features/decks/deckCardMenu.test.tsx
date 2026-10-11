@@ -174,6 +174,29 @@ const has = (items: MenuItem[], label: string | RegExp) =>
   );
 
 describe("buildDeckCardMenu", () => {
+  /** Issue #844: "Flip card" on the views that draw the card's picture, for a card that has a
+   *  back — and on neither a Table/Text view nor a one-sided card. */
+  describe("Flip card", () => {
+    const delver = () => bolt({ name: "Delver of Secrets", layout: "transform" });
+
+    it("leads the menu on a picture view, for a two-sided card", () => {
+      expect(labels(buildDeckCardMenu(delver(), deps({ flips: true })))[0]).toBe("Flip card");
+    });
+
+    it("is absent on a view that draws no picture", () => {
+      expect(labels(buildDeckCardMenu(delver(), deps()))).not.toContain("Flip card");
+      expect(labels(buildDeckCardMenu(delver(), deps({ flips: false })))).not.toContain(
+        "Flip card",
+      );
+    });
+
+    it("is absent for a one-sided card and for an orphan", () => {
+      expect(labels(buildDeckCardMenu(bolt(), deps({ flips: true })))).not.toContain("Flip card");
+      const orphan = bolt({ layout: "transform", needsReview: "missing" });
+      expect(labels(buildDeckCardMenu(orphan, deps({ flips: true })))).not.toContain("Flip card");
+    });
+  });
+
   /** The deck's rows are an *addition*: a card in a deck is still a card, so everything every
    *  other card surface offers is here and in the same order. */
   it("keeps the card menu's own rows in front of the deck's", () => {

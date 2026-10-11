@@ -1957,6 +1957,12 @@ export interface WishRow {
    * no-art frame with the name.
    */
   artCardId: string | null;
+  /**
+   * The layout of the printing {@link WishRow.artCardId} names — what the wall reads to decide
+   * whether a tile turns over (issue #844). Off the same join, so it is the layout of the
+   * picture on screen; `null` exactly where `artCardId` is.
+   */
+  layout: string | null;
   quantity: number;
   preferredFinish: string | null;
   /** The cheapest way to satisfy this wish, per copy, at the marketplace the query named: the

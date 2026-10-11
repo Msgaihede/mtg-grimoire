@@ -3,6 +3,7 @@ import { Plus } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import { useTooltip } from "@/components/tooltip/useTooltip";
+import { rowHasBackFace } from "@/features/card/printings";
 import { CardGrid } from "@/features/search/CardGrid";
 import { FilterBar, type TrayCell } from "@/features/search/FilterBar";
 import type { FormatFilterOption } from "@/features/search/useCardSearch";
@@ -564,6 +565,8 @@ export function CollectionSearchTab({
           // The copies behind the art, in the corner the collection page's own wall marks them in.
           // No `wishlisted`: this wall shows what is owned and has no opinion about what is wanted.
           badge={(tile) => <OwnedBadge owned={tile.copies} />}
+          // A two-sided card turns over from its tile, as on every other wall (issue #844).
+          flips={rowHasBackFace}
           action={(tile) => (
             <AddButton
               tile={tile}

@@ -53,6 +53,9 @@ export interface CopyTile extends GridCard {
    *  line is the Land pin and the fallback under the card's Oracle tags, which the tab reads for
    *  the wall (`useWallOracleTags`) — no list row carries a slug list. */
   typeLine: string | null;
+  /** The printing's layout, which says whether the tile turns over (issue #844). `null` for an
+   *  orphan, which has no picture to turn. */
+  layout: string | null;
   /** Which oracle card this is, for the context menu's "View all printings". `null` for an
    *  orphan — a printing that has left `cards` — exactly as the row carries it. */
   oracleId: string | null;
@@ -209,6 +212,7 @@ export function foldCopies(
       rarity: first.rarity ?? null,
       copies: entries.reduce((n, e) => n + held(e.row), 0),
       typeLine: first.typeLine ?? null,
+      layout: first.layout ?? null,
       oracleId: first.oracleId ?? null,
       // Every entry in this group is the same finish now, so there is nothing to disagree about
       // — the old `finishes.size === 1 ? … : null` was the question the key change answers.
