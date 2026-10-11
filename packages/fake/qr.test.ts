@@ -39,7 +39,7 @@ describe("the relay address an invite is drawn against", () => {
    * **`RELAY_BASE` is a hand copy of a Rust constant, and this is what holds the two equal.**
    * The fake cannot import `entitlement::RELAY_BASE`, so it spells the address again — and the
    * day the relay moves, every story's QR code would go on pointing at the old one, and the
-   * 162-byte, 53-module figures below would be about an invite the app no longer draws. Read as
+   * 141-byte, 49-module figures below would be about an invite the app no longer draws. Read as
    * text, the way `parity.test.ts` reads `desktop.rs`: there is no other way across.
    */
   it("is the one the crate compiles in", () => {
@@ -51,12 +51,13 @@ describe("the relay address an invite is drawn against", () => {
 });
 
 describe("the fake's QR encoder", () => {
-  it("draws the invite as the 53-module symbol the crate measured for it", () => {
-    // 162 bytes, the figure `sync_pair::invite::qr_payload` records.
-    expect(new TextEncoder().encode(INVITE)).toHaveLength(162);
+  it("draws the invite as the 49-module symbol the crate holds it under", () => {
+    // 141 bytes, the figure `sync_pair::invite::qr_payload` records — and 49 modules is the
+    // most the crate's own encoder draws one at (`the_invite_is_drawn_at_49_modules_or_fewer`).
+    expect(new TextEncoder().encode(INVITE)).toHaveLength(141);
     const matrix = qrMatrix(INVITE);
-    expect(matrix.width).toBe(53);
-    expect(matrix.modules).toHaveLength(53 * 53);
+    expect(matrix.width).toBe(49);
+    expect(matrix.modules).toHaveLength(49 * 49);
   });
 
   it("draws a symbol the app's own decoder reads back, character for character", () => {
@@ -64,14 +65,14 @@ describe("the fake's QR encoder", () => {
   });
 
   it("reads back at the size a 360px phone draws it: four pixels a module", () => {
-    // 268px less the picture's padding, over 53 modules and their quiet zone, is 4.26px each.
+    // 268px less the picture's padding, over 49 modules and their quiet zone, is 4.56px each.
     expect(decode(qrMatrix(INVITE), 4)).toBe(INVITE);
     expect(decode(qrMatrix(INVITE), 3)).toBe(INVITE);
   });
 
   it("pads a shorter text into the same symbol, and reads that back too", () => {
     const matrix = qrMatrix("https://example.test/pair#SHORT");
-    expect(matrix.width).toBe(53);
+    expect(matrix.width).toBe(49);
     expect(decode(matrix)).toBe("https://example.test/pair#SHORT");
   });
 

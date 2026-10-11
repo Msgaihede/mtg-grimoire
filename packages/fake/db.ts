@@ -25651,12 +25651,12 @@ function fakeSas(seedText: string): string {
  * without that, the relay moving would leave every story's QR code pointing at the old address
  * with nothing red.
  */
-export const RELAY_BASE = "https://mtg-grimoire-relay.denmark-east.workers.dev";
+export const RELAY_BASE = "https://relay.mtg-grimoire.app";
 
 /**
  * The invite as a QR code: **the real symbol of a fake invite** — `invite::qr_payload`'s URL
  * (the relay's `/pair` page, the un-hyphenated code in the fragment), encoded as the crate
- * encodes it: 162 bytes, version 9 at level M, 53×53.
+ * encodes it: 141 bytes, version 8 at level M, 49×49.
  *
  * **It was a 21×21 picture of a QR code until 2026-10-04**, drawn with three finder patterns and
  * noise between them, because all a story checked was the layout around it. `qr.ts` has why that

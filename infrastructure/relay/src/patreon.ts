@@ -94,22 +94,40 @@ export function required(value: string | undefined, name: string): string {
   return value;
 }
 
-/** `{RELAY_BASE}/oauth/patreon/callback` — see `REDIRECT_PATH` for why it is exact. */
-export function redirectUri(env: Env): string {
-  return `${required(env.RELAY_BASE, "RELAY_BASE")}${REDIRECT_PATH}`;
+/**
+ * The redirect URI the reader's app named, read off the address their callback arrived at — see
+ * `REDIRECT_PATH` for why it is exact.
+ *
+ * **Two addresses since 2026-10-11, and the callback says which.** A build cut since then names
+ * `{RELAY_BASE}/oauth/patreon/callback`; every build through 0.44.0 names the `workers.dev`
+ * address it was compiled with, `RELAY_BASE_LEGACY`, and both are registered on the Patreon
+ * client. Patreon sends the browser to the URI the authorize request carried, so the origin this
+ * request arrived at *is* that URI's, and the exchange has to repeat it: the other one fails with
+ * `invalid_grant`.
+ *
+ * **Two known strings and never the request's own.** An origin that is not the legacy address
+ * answers `RELAY_BASE` — a `Host` this Worker does not own is never sent to Patreon as a URI of
+ * ours, whatever route or preview address the request came in by.
+ */
+export function redirectUri(env: Env, request: Request): string {
+  const current = required(env.RELAY_BASE, "RELAY_BASE");
+  const legacy = required(env.RELAY_BASE_LEGACY, "RELAY_BASE_LEGACY");
+  const arrived = new URL(request.url).origin;
+  return `${arrived === legacy ? legacy : current}${REDIRECT_PATH}`;
 }
 
 /**
  * Trade the authorization code the reader's browser carried for a token pair.
  *
  * `redirect_uri` is sent again here even though the code already encodes which one was used —
- * that repetition is the OAuth spec's, and Patreon enforces it.
+ * that repetition is the OAuth spec's, and Patreon enforces it. `request` is the callback, which
+ * is what says which of the two it was ({@link redirectUri}).
  */
-export function exchangeCode(code: string, env: Env): Promise<PatreonTokens> {
+export function exchangeCode(code: string, env: Env, request: Request): Promise<PatreonTokens> {
   return postToken(env, {
     grant_type: "authorization_code",
     code,
-    redirect_uri: redirectUri(env),
+    redirect_uri: redirectUri(env, request),
   });
 }
 

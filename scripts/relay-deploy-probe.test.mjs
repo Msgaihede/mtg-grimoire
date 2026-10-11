@@ -7,8 +7,9 @@ import { describe, expect, it } from "vitest";
 import worker from "../infrastructure/relay/src/index.ts";
 import { fakeEnvOver, fakeTables } from "../infrastructure/relay/src/fakeD1.ts";
 import relayWrangler from "../infrastructure/relay/wrangler.jsonc?raw";
+import entitlementRs from "../crates/grimoire-core/src/sync_engine/entitlement.rs?raw";
 import { askAll } from "./deploy-probe.mjs";
-import { APP, PROBES, RELAY } from "./relay-deploy-probe.mjs";
+import { APP, LEGACY, LEGACY_PROBES, PROBES, RELAY, askBoth } from "./relay-deploy-probe.mjs";
 
 const limiter = { limit: () => Promise.resolve({ success: true }) };
 const env = {
@@ -19,6 +20,7 @@ const env = {
     pairing_rendezvous: [],
   }),
   RELAY_BASE: RELAY,
+  RELAY_BASE_LEGACY: LEGACY,
   RELAY_HMAC_KEY: "test-signing-key",
   PATREON_WEBHOOK_SECRET: "test-webhook-secret",
   PATREON_CLIENT_ID: "client",
@@ -30,6 +32,14 @@ const env = {
   APP_ORIGINS: APP,
 };
 
+/**
+ * The config as a value: its comment lines out — a setting named in prose is not a setting —
+ * and its trailing commas out. Every comment in it stands on a line of its own.
+ */
+const config = JSON.parse(
+  relayWrangler.replace(/^\s*\/\/.*$/gm, "").replace(/,(\s*[}\]])/g, "$1"),
+);
+
 describe("the relay's probes", () => {
   it.each(PROBES.map((probe) => [probe.name, probe]))("%s", async (_name, probe) => {
     expect(await askAll(RELAY, [probe], (request) => worker.fetch(request, env))).toEqual([]);
@@ -40,12 +50,76 @@ describe("the relay's probes", () => {
     expect(relayWrangler).toContain(`"APP_ORIGINS": "${APP}"`);
   });
 
+  // The address is a Custom Domain since 2026-10-11, and the config is what gives it: a route
+  // for another host would deploy, exit 0, and leave the probe asking an address nothing
+  // answers at — or, worse, one an earlier deploy still does.
+  it("ask the address the config's one route gives the Worker", () => {
+    expect(config.routes).toEqual([{ pattern: new URL(RELAY).host, custom_domain: true }]);
+    expect(config.vars.RELAY_BASE).toBe(RELAY);
+  });
+
+  // ⚠️ **The pair the config's own comment calls byte for byte, and nothing held until
+  // 2026-10-11.** A build names `{RELAY_BASE}/oauth/patreon/callback` from the Rust constant
+  // and the relay repeats it from its var: one character apart and every new build's Connect
+  // Patreon fails as `invalid_grant`, with every suite green. `share::publish` has held its own
+  // pair this way since the share Worker's first deploy.
+  it("ask the address every build is compiled with", () => {
+    const rust = /pub const RELAY_BASE: &str = "([^"]+)";/.exec(entitlementRs)?.[1];
+    expect(rust, "no `pub const RELAY_BASE` found in entitlement.rs").toBeDefined();
+    expect(config.vars.RELAY_BASE).toBe(rust);
+  });
+
   // A `name` changed in the config deploys a new Worker at another address: `wrangler deploy`
-  // exits 0 and the probe goes on passing against the old one.
-  it("ask the address the Worker's name gives it, on the account's subdomain", () => {
-    const name = /"name":\s*"([^"]+)"/.exec(relayWrangler)?.[1];
-    expect(name).toBe("mtg-grimoire-relay");
-    expect(RELAY).toBe(`https://${name}.denmark-east.workers.dev`);
+  // exits 0 and the old address goes on answering with the previous Worker.
+  it("ask, second, the address the Worker's name gives it on the account's subdomain", () => {
+    expect(config.name).toBe("mtg-grimoire-relay");
+    expect(LEGACY).toBe(`https://${config.name}.denmark-east.workers.dev`);
+    expect(config.vars.RELAY_BASE_LEGACY).toBe(LEGACY);
+  });
+
+  // ⚠️ The line every installed build depends on. wrangler infers `workers_dev: false` from a
+  // config that has `routes`, so *removing* this line is what turns the old address off — and
+  // `false` written out does the same. Either way the deploy succeeds.
+  it("keep the `workers.dev` address on, in so many words", () => {
+    expect(config.workers_dev).toBe(true);
+    // Unstated, wrangler leaves the Worker's Preview URL setting as it is.
+    expect(config).not.toHaveProperty("preview_urls");
+  });
+
+  it("ask the old address something this Worker answers there, at no limiter's cost", async () => {
+    expect(LEGACY_PROBES).toHaveLength(1);
+    expect(LEGACY_PROBES[0].method).toBe("OPTIONS");
+    expect(await askAll(LEGACY, LEGACY_PROBES, (request) => worker.fetch(request, env))).toEqual([]);
+  });
+
+  it("report an old address that has stopped answering, by name", async () => {
+    // What a deploy without `workers_dev: true` leaves behind: Cloudflare's own 404 at the
+    // `workers.dev` name, and the Worker answering as ever at its Custom Domain.
+    const send = (request) =>
+      new URL(request.url).origin === LEGACY
+        ? Promise.resolve(new Response("not found", { status: 404 }))
+        : worker.fetch(request, env);
+
+    const wrong = await askBoth(RELAY, send);
+
+    expect(wrong).toHaveLength(1);
+    expect(wrong[0]).toContain(LEGACY);
+    expect(wrong[0]).toContain("answered 404, not 204");
+  });
+
+  it("ask the old address only when asked of the relay's own", async () => {
+    const asked = [];
+    const send = (request) => {
+      asked.push(new URL(request.url).origin);
+      return worker.fetch(request, env);
+    };
+
+    expect(await askBoth("https://staging.example", send)).toEqual([]);
+    expect(new Set(asked)).toEqual(new Set(["https://staging.example"]));
+
+    asked.length = 0;
+    expect(await askBoth(RELAY, send)).toEqual([]);
+    expect(asked.filter((origin) => origin === LEGACY)).toHaveLength(LEGACY_PROBES.length);
   });
 
   it("are named apart, and pair each origin probe with a control", () => {

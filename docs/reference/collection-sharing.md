@@ -30,7 +30,15 @@ measured against a fake or a local `wrangler dev`, never against the deployed Wo
 
 ## What is deployed, and what no publish has proved
 
-**The Worker is live at `https://mtg-grimoire-share.denmark-east.workers.dev`**, first deployed
+**Since 2026-10-11 the Worker's address is `https://share.mtg-grimoire.app`** — a Custom Domain on
+the web app's zone, `SHARE_BASE` in the config and in every build cut since. Its `workers.dev`
+address still answers and is meant to, indefinitely: every release through 0.44.0 publishes to
+it, and a link minted before the move names it. A build that publishes to the old address is
+handed a link at the new one, and opens it — no client checks a link's host — and a page names
+its snapshot by a relative path, so each link fetches from the address it was opened at. Ask the
+host whether the new name is attached before believing this; the record below is of the old one.
+
+**The Worker went live at `https://mtg-grimoire-share.denmark-east.workers.dev`**, first deployed
 2026-10-01 at 20:10 UTC (version `e32f3155`) from this branch at `e3198a44` — `main` at `2b845048`
 plus a docs commit, so `infrastructure/share-worker/`, `apps/share/` and `packages/ui/` were `main`'s. That address is
 **`share::publish::SHARE_BASE`** and the `SHARE_BASE` var in `infrastructure/share-worker/wrangler.jsonc`: one
@@ -714,9 +722,12 @@ binder in every Discord it was ever pasted into is most of what withdrawing it w
   R2 read, nothing breaks — so this is a `curl -I` after the first deploy and not a document to
   argue with.
 
-**A custom domain would fix two things at once** and is deferred, not rejected: nobody wants to
+**A custom domain would fix two things at once** and was deferred, not rejected: nobody wants to
 paste a `*.workers.dev` link into a Discord, and a domain would let R2 serve the blob with no
-Worker request at all. **The clean fix for the ceiling is the $5/month Workers Paid plan**, which
+Worker request at all. **The first is done since 2026-10-11** — links are minted at
+`share.mtg-grimoire.app` — **and the second is not**: the blob is still served by the Worker, at
+both addresses, and whether `caches.default` now does anything at the Custom Domain is the same
+`curl -I` as above, not yet asked. **The clean fix for the ceiling is the $5/month Workers Paid plan**, which
 is a business decision rather than an engineering one.
 
 ---

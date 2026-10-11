@@ -6,7 +6,9 @@
  * gate and not for these five, which each read D1 before anything can refuse them. A limit here
  * refuses the caller before that read. It does **not** keep the request off the account's
  * 100,000-a-day budget: the Worker has already been invoked to ask the question, and only a rule
- * in front of the Worker could spare that — which needs a zone, and `workers.dev` has none.
+ * in front of the Worker could spare that — which needs a zone. `relay.mtg-grimoire.app` has one
+ * since 2026-10-11, with no rule on it; `workers.dev`, which still answers for every build cut
+ * before that day, has none, so a rule would cover one of this Worker's two addresses.
  *
  * **Three bindings because a binding carries one limit**, and the routes fall into three sizes of
  * honest use: a Connect press, a token mint or a rotation, and the two reads a device makes on

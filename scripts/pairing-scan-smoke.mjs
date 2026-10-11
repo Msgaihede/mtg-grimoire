@@ -360,7 +360,7 @@ async function run() {
       theme: getComputedStyle(document.body).backgroundColor,
     };
   })()`);
-  if (drawn.modules !== 53) fail(`the invite is drawn as ${drawn.modules} modules, not 53`);
+  if (drawn.modules !== 49) fail(`the invite is drawn as ${drawn.modules} modules, not 49`);
   if (drawn.ground !== "rgb(255, 255, 255)") fail(`the QR's ground is ${drawn.ground}, not white`);
   if (!drawn.insideItsStep) fail("the QR stands outside the step it is drawn in");
   if (!drawn.whollyInView) fail("the QR is not wholly on screen at 360px");

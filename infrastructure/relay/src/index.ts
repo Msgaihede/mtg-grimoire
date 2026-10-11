@@ -75,9 +75,15 @@ export interface Env extends Limiters, CorsEnv {
   /**
    * This Worker's own public address, and it must equal `entitlement::RELAY_BASE` in the Rust
    * byte for byte — the redirect URI is derived from it on both sides and Patreon compares
-   * redirect URIs exactly.
+   * redirect URIs exactly. `https://relay.mtg-grimoire.app` since 2026-10-11.
    */
   RELAY_BASE: string;
+
+  /**
+   * The `workers.dev` address every build through 0.44.0 was compiled with, which still answers.
+   * Read in one place: `patreon.ts`'s `redirectUri`, for a callback that arrived there.
+   */
+  RELAY_BASE_LEGACY: string;
 
   /** Public, and on the wire of every authorize request. `wrangler.jsonc` carries both. */
   PATREON_CLIENT_ID: string;

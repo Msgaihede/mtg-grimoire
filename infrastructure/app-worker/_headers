@@ -34,9 +34,12 @@
 #                  cards.scryfall.io            image_uri.rs   IMAGE_HOST
 #                  json.commanderspellbook.com  combos.rs      FEED_URL
 #                  api.cardkingdom.com          marketplace_feed.rs, Card Kingdom's pricelist
-#                  mtg-grimoire-relay.denmark-east.workers.dev
-#                                               sync_engine/entitlement.rs  RELAY_BASE — the sync
-#                                               relay, which answers this origin by name: its CORS
+#                  relay.mtg-grimoire.app       sync_engine/entitlement.rs  RELAY_BASE — the sync
+#                                               relay, at its own name on this zone since
+#                                               2026-10-11. NOT its `workers.dev` address as well:
+#                                               that one still answers, for the builds compiled
+#                                               with it, and this page's engine asks only the
+#                                               constant. It answers this origin by name: its CORS
 #                                               allow-list (`infrastructure/relay/src/cors.ts`, `APP_ORIGINS`) and
 #                                               this entry are one fact written in two deploys, and
 #                                               THE RELAY'S GOES FIRST (README, "The steps, in
@@ -75,7 +78,7 @@
 # preload list. No `Cross-Origin-Opener-Policy` or `-Embedder-Policy`: the OPFS pool needs neither
 # (the August spike ran it both ways), and `require-corp` would refuse every card picture.
 /*
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self' https://api.scryfall.com https://data.scryfall.io https://cards.scryfall.io https://json.commanderspellbook.com https://api.cardkingdom.com https://mtg-grimoire-relay.denmark-east.workers.dev wss://mtg-grimoire-relay.denmark-east.workers.dev; manifest-src 'self'; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self' https://api.scryfall.com https://data.scryfall.io https://cards.scryfall.io https://json.commanderspellbook.com https://api.cardkingdom.com https://relay.mtg-grimoire.app wss://relay.mtg-grimoire.app; manifest-src 'self'; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'none'
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
   Cache-Control: no-cache

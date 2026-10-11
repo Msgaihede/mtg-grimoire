@@ -88,8 +88,16 @@ use std::time::Duration;
 
 /// The relay's address. **Real, and committed to a public repository on purpose.**
 ///
-/// A `workers.dev` route is `<worker>.<subdomain>.workers.dev`: `mtg-grimoire-relay` is the worker
-/// name in `infrastructure/relay/wrangler.jsonc`, `denmark-east` is the account's subdomain. Markus approved
+/// **`relay.mtg-grimoire.app` since 2026-10-11**: a Custom Domain of the Worker
+/// `mtg-grimoire-relay`, on the zone whose apex is the web app's origin
+/// (`infrastructure/relay/wrangler.jsonc`, `routes`). Every build through 0.44.0 was compiled with
+/// the Worker's `workers.dev` address, `https://mtg-grimoire-relay.denmark-east.workers.dev`,
+/// **which still answers and is meant to, indefinitely** — it is the same Worker over the same
+/// database, so a build that asks either address pairs and syncs with one that asks the other.
+/// The one thing the address itself decides is the OAuth redirect URI ([`authorize_url`]): the
+/// relay repeats whichever of the two a reader's callback arrived at, and Patreon holds both.
+///
+/// Markus approved
 /// committing it, and that approval rests on the design rather than softening it — **an API base
 /// is public the way every application's is.** It is on the wire of every request that uses it and
 /// it ships inside the binary whatever this tree says, so withholding it would have hidden it from
@@ -100,7 +108,8 @@ use std::time::Duration;
 /// ⚠️ **This comment said "what is not on that host yet is this design's Worker" — no auth gate,
 /// no `/claim`, no `/token` — and it was false; corrected 2026-08-30.** It was one of five files
 /// that agreed the hosted relay was undeployed, and the agreement read as corroboration because
-/// nobody had asked the host. Probed that day: `/claim` and `/token` answer **405** to a GET and
+/// nobody had asked the host. Probed that day, at the `workers.dev` address, the only one there
+/// was until 2026-10-11: `/claim` and `/token` answer **405** to a GET and
 /// **400** to an empty POST body, `/oauth/patreon/callback` **400**, `/g/{group}/pull` **401**
 /// from the bearer gate, `/g/{group}/rotate` **401** to a POST, and `/g/{group}/keys` **401** to a
 /// GET carrying a well-formed bearer — while `/g/{group}/bogus` is still **404**, so those 401s
@@ -115,7 +124,7 @@ use std::time::Duration;
 /// `device`, on either build. The last deploy was 2026-09-28, from `main` at `1512ea68`.
 /// `docs/reference/hosted-relay-deploy.md`'s step 0 is how to check any of this against the host
 /// rather than against this comment, and it exists because this comment was wrong.
-pub const RELAY_BASE: &str = "https://mtg-grimoire-relay.denmark-east.workers.dev";
+pub const RELAY_BASE: &str = "https://relay.mtg-grimoire.app";
 
 /// The OAuth client id, real since `a0eb0c6` (committed 2026-08-30, against the verification
 /// recorded below, which was taken the day before) and public by the same argument as [`RELAY_BASE`]:

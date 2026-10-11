@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readIdentity, readMember, required, verifyWebhook } from "./patreon";
+import { readIdentity, readMember, redirectUri, required, verifyWebhook } from "./patreon";
 
 /**
  * The pure half of `patreon.ts`. The three `fetch` wrappers are deliberately not here — they
@@ -164,6 +164,51 @@ describe("verifyWebhook", () => {
     // This is the one path in the design where failing open destroys data: an unverified
     // `members:pledge:delete` deletes a reader's relay log.
     expect(verifyWebhook(WEBHOOK_BODY, signature, WEBHOOK_SECRET)).toBe(false);
+  });
+});
+
+/**
+ * The relay has two addresses since 2026-10-11 and Patreon holds a redirect URI for each. Which
+ * one a reader's app named is not in the callback's query — it is the address the callback
+ * arrived at — and the exchange fails with `invalid_grant` on the other.
+ */
+describe("redirectUri", () => {
+  const env = {
+    RELAY_BASE: "https://relay.example",
+    RELAY_BASE_LEGACY: "https://old-relay.example",
+  } as never;
+  const at = (url: string) => new Request(url);
+
+  it("repeats the current address for a callback that arrived there", () => {
+    expect(redirectUri(env, at("https://relay.example/oauth/patreon/callback?code=x"))).toBe(
+      "https://relay.example/oauth/patreon/callback",
+    );
+  });
+
+  it("repeats the legacy address for a callback that arrived there", () => {
+    // Every build through 0.44.0. Answering it with the current address is the failure this
+    // function exists to prevent: Connect Patreon stops working for every installed app on the
+    // day the relay's own address moves.
+    expect(redirectUri(env, at("https://old-relay.example/oauth/patreon/callback?code=x"))).toBe(
+      "https://old-relay.example/oauth/patreon/callback",
+    );
+  });
+
+  it.each([
+    ["https://evil.example/oauth/patreon/callback"],
+    // An origin is a scheme, a host and a port: each of these is the legacy host and not the
+    // legacy address.
+    ["http://old-relay.example/oauth/patreon/callback"],
+    ["https://old-relay.example:8443/oauth/patreon/callback"],
+    ["https://old-relay.example.evil.example/oauth/patreon/callback"],
+  ])("never sends Patreon an address that is not one of the two: %s", (url) => {
+    expect(redirectUri(env, at(url))).toBe("https://relay.example/oauth/patreon/callback");
+  });
+
+  it.each([["RELAY_BASE"], ["RELAY_BASE_LEGACY"]])("names %s when it is unset", (name) => {
+    const unset = { RELAY_BASE: "https://relay.example", RELAY_BASE_LEGACY: "https://old.example" };
+    delete (unset as Record<string, string>)[name];
+    expect(() => redirectUri(unset as never, at("https://relay.example/"))).toThrow(name);
   });
 });
 
