@@ -7055,8 +7055,9 @@ cut since, and nothing below has met a real key, a real token or a real tag.
   would sign happily and every phone would uninstall. No file, no APK; another key or an
   Android debug certificate is refused before anything is signed.
 - **`web-deploy` deploys `infrastructure/app-worker/` and asks the address whether it serves that bundle**
-  (`scripts/web-deploy-probe.mjs`: 200, the built policy, the built document). It is the only
-  job that deploys anything and this is the only Worker — so **merging the release PR is a
+  (`scripts/web-deploy-probe.mjs`: 200, the built policy, the built document). It was the only
+  job that deployed anything, and this the only Worker, until 2026-10-11 (`relay-deploy` and
+  `share-deploy` joined it, and it goes after them) — so **merging the release PR is a
   deploy**. `wrangler` is pinned by a lockfile, `infrastructure/wrangler/package-lock.json`: installed with
   `npm ci --ignore-scripts` in a step that holds nothing, run by path from `infrastructure/app-worker/`. It goes
   last, because a deploy is live the moment it returns, and it refuses a tag older than the

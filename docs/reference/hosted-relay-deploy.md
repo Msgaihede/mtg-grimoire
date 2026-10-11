@@ -1,5 +1,14 @@
 # Deploying the hosted relay — the runbook, and what only a deploy can settle
 
+> **Since 2026-10-11 a release runs this deploy**: `release.yml`'s `relay-deploy`, at the tag,
+> applies any pending D1 migration, runs `wrangler deploy` from `infrastructure/relay/` and
+> probes the live address (the owner's decision; [ci-and-releases.md](ci-and-releases.md),
+> *A release deploys everything*). **This page remains the record of every deploy before it and
+> the runbook for a deploy between releases**, which is still by hand and asked for. Step 0's
+> probes are what `scripts/relay-deploy-probe.mjs` asks. The migration files named below
+> moved to `infrastructure/relay/applied-by-hand/` the same day: they were applied by hand,
+> and `infrastructure/relay/migrations/` is now the folder a release applies.
+
 ⚠️ **This file opened with "nothing here has been run" until 2026-08-30, and by the end of that
 day two of its three halves had been.** What follows is the record of which, because the whole
 value of this page is that it distinguishes them.
@@ -480,6 +489,11 @@ the streamed answer and compaction by length are what every existing device is s
    ```
    ⚠️ **That command is for an empty database only. On any other, use the migration below.**
 
+   **Since 2026-10-11 a new schema change is a file in `infrastructure/relay/migrations/`**
+   (`NNNN_what-it-does.sql`, additive), **applied by the release** — `wrangler d1 migrations
+   apply` in `relay-deploy`, before the deploy — and not by a `d1 execute`. `schema.sql` is the
+   frozen baseline and the files below are history.
+
    `wrangler d1 execute --file` is **atomic**: one failing statement rolls back every statement
    in the file. `schema.sql` ends with two `ALTER TABLE ... ADD COLUMN`, D1 has no
    `ADD COLUMN IF NOT EXISTS`, and a duplicate column is an error — so on a database that already
@@ -495,9 +509,9 @@ the streamed answer and compaction by length are what every existing device is s
    **To bring an existing database forward**, which is every database that is not brand new:
    ```
    npx wrangler d1 execute mtg-grimoire-relay --remote \
-     --file=./migrations/2026-08-30-group-keys.sql
+     --file=./applied-by-hand/2026-08-30-group-keys.sql
    npx wrangler d1 execute mtg-grimoire-relay --remote \
-     --file=./migrations/2026-08-30-group-devices.sql
+     --file=./applied-by-hand/2026-08-30-group-devices.sql
    npx wrangler d1 execute mtg-grimoire-relay --remote \
      --command "ALTER TABLE entitlements ADD COLUMN group_epoch INTEGER"
    npx wrangler d1 execute mtg-grimoire-relay --remote \
@@ -515,7 +529,7 @@ the streamed answer and compaction by length are what every existing device is s
    `ALTER` is its own invocation so a `duplicate column name` — the correct answer on a database
    that already has it — costs nothing else.
 
-   ⚠️ **`reconciled_at` and its index (`infrastructure/relay/migrations/2026-09-28-reconciled-at.sql`) go in
+   ⚠️ **`reconciled_at` and its index (`infrastructure/relay/applied-by-hand/2026-09-28-reconciled-at.sql`) go in
    BEFORE the deploy that ships the budgeted `reconcile`, as two `--command`s in that order** — the
    index names the column — and never as `--file`, which on a database the `ALTER` has already
    reached would roll the index back with the duplicate-column error. **A Worker without the column
@@ -543,7 +557,7 @@ the streamed answer and compaction by length are what every existing device is s
    `/token`, `/rotate` and `/keys` answer normally. **The first pull after the deploy is the check**;
    see item 12 below.
 
-   ⚠️ **`refresh_device` (`infrastructure/relay/migrations/2026-09-26-refresh-device.sql`) must be applied BEFORE
+   ⚠️ **`refresh_device` (`infrastructure/relay/applied-by-hand/2026-09-26-refresh-device.sql`) must be applied BEFORE
    the deploy that reads it**, and a Worker without it fails quietly rather than loudly:
    `/claim`'s binding `UPDATE` throws, is caught as if it were the unique violation, and answers a
    misleading **409** *after* the claim code is spent; `/rotate` records the new epoch and then
@@ -561,7 +575,7 @@ the streamed answer and compaction by length are what every existing device is s
    `entitlement::refused_secret` answers silently by minting through the group door — the reason
    the app release comes first.
 
-   ⚠️ **`infrastructure/relay/migrations/2026-08-31-pairing-rendezvous.sql` is run as its own `--command`, never
+   ⚠️ **`infrastructure/relay/applied-by-hand/2026-08-31-pairing-rendezvous.sql` is run as its own `--command`, never
    through `--file`, even though the checked-in file holds only this one statement.** The file
    exists for the same reason the other two do — a readable record of the SQL — but this step's own
    opening paragraph is the reason not to point `--file` at it: an atomic multi-statement execute is

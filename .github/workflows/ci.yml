@@ -161,6 +161,13 @@ jobs:
         if: ${{ !matrix.shard }}
         run: pnpm build
 
+      # The viewer the share Worker serves (`apps/share/dist-share`). `pnpm build` type-checks
+      # it and bundles nothing; a release's `share` job runs this same command, and its bundle
+      # is deployed minutes later — so a pull request that breaks it is red here first.
+      - name: Build the share viewer
+        if: ${{ !matrix.shard }}
+        run: pnpm share:build
+
       - name: Lint
         if: ${{ !matrix.shard }}
         run: pnpm lint

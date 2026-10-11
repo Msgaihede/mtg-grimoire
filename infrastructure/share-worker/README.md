@@ -12,7 +12,7 @@ is the design; everything below is what a deploy needs.
 ## Why it is not a route on the relay
 
 **Blast radius.** Sync is a paid feature people depend on; sharing is new and will churn, and
-every deploy here is done by hand by one person. One Worker carrying both means a bad share
+every deploy here was done by hand by one person until 2026-10-11 (a release's `share-deploy` does them since). One Worker carrying both means a bad share
 deploy is a sync outage. The two share **a D1 database** and **the `RELAY_HMAC_KEY` secret** and
 nothing else — no service binding, and only two of the relay's modules are imported
 (`src/token.ts` for `verify`, and `src/fakeD1.ts` in the tests).
@@ -185,7 +185,7 @@ not a retention rule invented here: a revived membership wants the snapshot back
 ## Deploying
 
 ⚠️ **No agent may run `wrangler deploy`, `wrangler d1 execute --remote` or `wrangler secret put`.**
-Those are the repo owner's. `wrangler dev --local` is the only wrangler command an agent may run.
+Those are the repo owner's, or a release's: since 2026-10-11 `release.yml`'s `share-deploy` runs this deploy at a tag. `wrangler dev --local` is the only wrangler command an agent may run.
 
 **Step 0 is to ask the host rather than a document**, for the reason `infrastructure/relay/README.md` opens with:
 that file has been wrong twice about what was deployed, in the same week, and the only sentence
@@ -208,6 +208,10 @@ curl -s -w " %{http_code}\n" "$S/g/abc/bogus"
 bearer. It answered **500** for the five minutes between the deploy and step 3, and **401**
 since. The third is its control — no bearer is 401 either way.
 
+**The five `curl`s are what `scripts/share-deploy-probe.mjs` asks** of the address after a release's
+deploy (the second against the bundle, byte for byte), so a release holds the Worker to the same
+answers a deploy by hand reads.
+
 **Every step below has been run except step 5's `curl`s**: the bucket exists, the table and both
 indexes were read back from `sqlite_master`, the secret is set, and `SHARE_BASE` went into both
 files before that first deploy — the address is the Worker's name and the account's subdomain —
@@ -223,7 +227,9 @@ thing that can show the two Workers hold the same key.
    `npx wrangler d1 execute mtg-grimoire-relay --remote --file=./schema.sql`.
    ⚠️ On a database that already holds part of it, run **one statement per `--command`**:
    `--file` is atomic and a duplicate object takes the whole file down, which is the failure that
-   left a deployed Worker 500ing on 2026-08-30.
+   left a deployed Worker 500ing on 2026-08-30. **Since 2026-10-11 `schema.sql` is the frozen
+   baseline**: a new change is a file in `migrations/`, applied by the release's `share-deploy`
+   before it deploys (bookkept in `d1_migrations_share`), and not by a `d1 execute`.
 3. **Set the one secret**: `npx wrangler secret put RELAY_HMAC_KEY`, with the **same value** the
    relay holds. A different one means every publish is a 401 and nothing else says why.
 4. **Build the viewer** so `apps/share/dist-share/` exists. ⚠️ `wrangler.jsonc` declares an `assets`

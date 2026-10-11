@@ -395,7 +395,8 @@ export const ARMS = [
   //     two browsers through it. A relay that no longer answers a page is red there and nowhere
   //     else — every other test of it is a mock on one side or the other.
   // **Not `core`**: the engine compiles nothing from this tree. **Not `storybook`**: nor does a
-  // story. Its README is prose, by the arm above every tree's. No job deploys it.
+  // story. Its README is prose, by the arm above every tree's. No job of `ci.yml` deploys it
+  // (since 2026-10-11 `release.yml`'s `relay-deploy` does, at a tag).
   { match: ["infrastructure/relay/*"], jobs: ["frontend", "rust", "web"] },
 
   // **The light app's web host** (phase 5, step 5.1): `grimoire-web`, a workspace member, so
