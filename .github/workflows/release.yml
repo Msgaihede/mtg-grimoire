@@ -31,8 +31,12 @@ permissions: {}
 #                   ├─ web ────────────────────────────────┤
 #                   └─ share ──────────────────────────────┤
 #                                                          ▼
-#   relay-deploy ── share-deploy ── scan-deploy ── web-deploy ── play-upload ── publish
+#   relay-deploy ── share-deploy ── scan-deploy ── web-deploy ── play-upload ── publish ── announce
 #                              (publish also needs build and android-sign)
+#
+# **Once it is published, the release is announced** (2026-10-11): `announce` posts its version,
+# address and notes to a Discord webhook, from an environment of its own (`discord`). Nothing
+# waits for it.
 #
 # **And between releases, the notes** (2026-10-11): on a push that cut no release,
 # `changelog-write` and `changelog-commit` write the coming release's notes from its pull requests
@@ -1316,6 +1320,87 @@ jobs:
         run: |
           gh release edit "${{ needs.release-please.outputs.tag_name }}" \
             --draft=false --repo "${{ github.repository }}"
+
+  # **The release, announced on Discord, once it is published**: its version, its address and
+  # its notes, as the release's body has them — the generated `changelog/<version>.md`, or
+  # release-please's when `publish` kept those. `scripts/changelog/discord.mjs` cuts the text to
+  # Discord's 2000 characters a message and posts the pieces in order; nothing in them can ping
+  # anyone or unfold a link.
+  #
+  # **After `publish`, and nothing needs it**: an announcement never holds a release up, and a
+  # failure here turns a run red whose release is already out. A re-run posts it again.
+  #
+  # **The webhook, in an environment of its own** (`discord`), for `changelog-write`'s reason:
+  # the address is a credential to post in the channel, and the signing key and the deploy
+  # tokens are not within this job's reach, nor it within theirs. It reaches one step, which
+  # runs one file with no dependency; the step before it reads the body with the run's token and
+  # never sees the webhook. **With no webhook it posts nothing and ends green**, saying so.
+  announce:
+    name: announce (Discord)
+    needs: [release-please, publish]
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: discord
+    # Reads the checkout and the published release. What it changes is the Discord channel.
+    permissions:
+      contents: read
+    steps:
+      # The script. Nothing is installed.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Told whether it is set, never what it is — as in `android-sign`.
+      - name: Is there a webhook to post to
+        id: hook
+        shell: bash
+        env:
+          HAS_HOOK: ${{ secrets.DISCORD_WEBHOOK_URL != '' }}
+        run: |
+          set -euo pipefail
+          if [ "$HAS_HOOK" = true ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "present=false" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Discord — not announced"
+            echo
+            echo "The \`discord\` environment holds no \`DISCORD_WEBHOOK_URL\`, so this release was not announced."
+            echo
+            echo "\`docs/reference/ci-and-releases.md\`, *What only the owner can do*, has the commands."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # For the one file Node runs here. No cache, as in the deploy jobs.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: steps.hook.outputs.present == 'true'
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      # The body as published, which `publish` has just set. The run's token, not the webhook.
+      - name: Read the published notes
+        if: steps.hook.outputs.present == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --repo "$REPO" --json body --jq .body > notes.md
+
+      # The only step the webhook reaches.
+      - name: Post the release to Discord
+        if: steps.hook.outputs.present == 'true'
+        shell: bash
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+          VERSION: ${{ needs.release-please.outputs.version }}
+        run: node scripts/changelog/discord.mjs notes.md
 
   # **The coming release's notes, written from its pull requests** (2026-10-11,
   # docs/superpowers/specs/2026-10-11-generated-release-notes-design.md). release-please builds
