@@ -217,14 +217,14 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   not an exact `x.y.z`. **Node is pinned the same way**: `.nvmrc` (24, the version the app is
   developed on — CI ran 22 until this change) feeds every `setup-node`, and `package.json`'s
   `engines` floor is `>=22.18`, the newest any script here needs (`scripts/golden.mjs`).
-- **The workspace is installed with pnpm, and the two jobs that hold a secret install none**
-  (2026-10-08). Every job that installs runs `pnpm/action-setup` (pinned by SHA, the version
+- **The workspace is installed with pnpm, and the jobs that hold a secret install none**
+  (2026-10-08; four jobs since 2026-10-11, where it was `android-sign` and `web-deploy`). Every job that installs runs `pnpm/action-setup` (pinned by SHA, the version
   taken from `package.json`'s `packageManager`), then `actions/setup-node` with `cache: pnpm`,
   then `pnpm install --frozen-lockfile`; `scripts/toolchain.test.mjs` holds pnpm's step directly
-  above Node's, once for every install. `android-sign` and `web-deploy` have no pnpm step at all,
+  above Node's, once for every install. `android-sign`, `relay-deploy`, `share-deploy` and `web-deploy` have no pnpm step at all,
   for the reason they have no cargo (*The release rule*, below). The deploy tool is
   `infrastructure/wrangler`, a folder the workspace does not list, installed with
-  `npm ci --ignore-scripts` — by `web-deploy` in that folder (`working-directory`), by the `web`
+  `npm ci --ignore-scripts` — by the deploy jobs in that folder (`working-directory`), by the `web`
   job with `--prefix infrastructure/wrangler`. **`web-deploy` changed in two lines and no more**:
   that install, and the deploy, now `node ../wrangler/node_modules/wrangler/bin/wrangler.js
   deploy` from `infrastructure/app-worker`, a path where it was `npx --no-install wrangler`.
@@ -234,7 +234,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `package.json`'s `packageManager` names npm; it names pnpm, so the job cached nothing before
   the key and caches nothing with it, and the key keeps that so if the field or the action's
   default moves. `scripts/release-rule.test.mjs` holds the step whole, and still refuses the
-  word `cache` anywhere else in the two jobs. **The release build's runner is `pnpm tauri
+  word `cache` anywhere else in the secret-holding jobs (two then, four since 2026-10-11). **The release build's runner is `pnpm tauri
   build`**: `tauri-action` finds `pnpm-lock.yaml` at the root and runs the root's `tauri` script,
   which goes to
   `apps/desktop`; that is why the root keeps `@tauri-apps/cli` in its manifest
@@ -264,14 +264,14 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     `release-please` keeps `contents`/`issues`/`pull-requests: write`; `build` and `publish` get
     `contents: write` alone — and from 2026-10-04 to 2026-10-07 so did `android-sign`, which
     uploaded the APK; since 2026-10-07 it uploads nothing to the release and gets
-    `contents: read`, with `android`, `web` and `web-deploy`: a deploy to Cloudflare needs
-    nothing of GitHub's.
+    `contents: read`, with `android`, `web`, `share`, `relay-deploy`, `share-deploy` and
+    `web-deploy`: a deploy to Cloudflare needs nothing of GitHub's.
   - **`scripts/actions-pinned.test.mjs` is the fence**: it globs every workflow and composite
     action and fails on a `uses:` that is neither local nor a SHA with a version comment, a
     checkout without `persist-credentials: false`, a write grant above `jobs:`, a Dependabot
     config that stops watching either directory. (It also fenced the update-signing secret to one
     step of a `sign` job until that job was removed on 2026-09-29, below; **since 2026-10-04
-    `scripts/release-rule.test.mjs` fences the two jobs that hold a secret now** — *The release
+    `scripts/release-rule.test.mjs` fences the two jobs that hold a secret now** *(four since 2026-10-11)* — *The release
     rule*, below.) Comments are stripped
     before any of it is read, since these files explain themselves in prose that names both.
 - **Every `pnpm <name>` a workflow asks for is a script `package.json` has**
@@ -552,14 +552,18 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   update to install. Until this step release-please bumped all four crates and both
   `tauri.conf.json`s from one tag and **the tag built only the desktop**: the APK was a 14-day
   CI artifact under a runner's debug key, and the web app was deployed by hand from whatever
-  `main` was. Now `release.yml` is seven jobs, every one after the first gated on
+  `main` was. Now `release.yml` is ten jobs (seven until 2026-10-11, when `share`,
+  `relay-deploy` and `share-deploy` joined), every one after the first gated on
   `release_created` and on nothing looser — no `always()`, no `continue-on-error`, so a job
   runs only when every job it needs succeeded:
 
   ```
-  release-please ─┬─ build (windows, linux) ─────────────┬─ web-deploy ── publish
+  release-please ─┬─ build (windows, linux) ─────────────┐
                   ├─ android ── android-sign ────────────┤
-                  └─ web ────────────────────────────────┘
+                  ├─ web ────────────────────────────────┤
+                  └─ share ──────────────────────────────┤
+                                                         ▼
+          relay-deploy → share-deploy → web-deploy → publish
   ```
 
   | Job | Needs | Holds a secret | What it does |
@@ -568,8 +572,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   | `android` | `release-please` | no | `ci.yml`'s `android` job, step for step: the arm64 APK and bundle at the tag, **debug-signed**, held to the tag's version (`scripts/android-release/check-version.sh`); the bundle handed on as the artifact `android-aab-debug-signed` (14 days) |
   | `android-sign` | `release-please`, `android` | `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_PASSWORD` | Re-signs that bundle with the owner's upload key (`scripts/android-release/sign-bundle.sh`), held to the committed fingerprint, and leaves `mtg-grimoire-<version>-android.aab` as the artifact `play-upload-bundle` (30 days). Attaches nothing to the draft; `contents: read` |
   | `web` | `release-please` | no | `ci.yml`'s `web` job less its lint and size report: clang, the wasm target, the lockfile's `wasm-bindgen` CLI, `web:wasm`, `web:build`, `web:smoke`; `apps/light/dist-web/` handed on as the artifact `web-bundle` (14 days) |
-  | `web-deploy` | `release-please`, `build`, `android-sign`, `web` | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | Refuses a tag older than the newest published release; `npm ci --ignore-scripts` in `infrastructure/wrangler/`, then `node ../wrangler/node_modules/wrangler/bin/wrangler.js deploy` from `infrastructure/app-worker/`; then `scripts/web-deploy-probe.mjs` against `https://mtg-grimoire.app` |
-  | `publish` | `release-please`, `build`, `android-sign`, `web-deploy` | no | Flips the draft to published |
+  | `share` | `release-please` | no | The share viewer: `pnpm share:build`, a check that `apps/share/dist-share/assets/share.js` is there and not empty; `apps/share/dist-share/` handed on as the artifact `share-bundle` (14 days). `ci.yml`'s `frontend` runs the same build |
+  | `relay-deploy` | `release-please`, `build`, `android-sign`, `web`, `share` | `CLOUDFLARE_INFRA_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | The token alone decides whether it runs. Refuses a tag older than the newest published release; `npm ci --ignore-scripts` in `infrastructure/wrangler/`; then, from `infrastructure/relay/`, `wrangler d1 migrations apply mtg-grimoire-relay --remote` and `wrangler deploy`; then `scripts/relay-deploy-probe.mjs` against the relay's address |
+  | `share-deploy` | `release-please`, `share`, `relay-deploy` | `CLOUDFLARE_INFRA_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | The same, from `infrastructure/share-worker/`, with the `share-bundle` downloaded into `apps/share/dist-share/` first (its bookkeeping table is `d1_migrations_share`); then `scripts/share-deploy-probe.mjs` |
+  | `web-deploy` | `release-please`, `build`, `android-sign`, `web`, `share-deploy` | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | Refuses a tag older than the newest published release; `npm ci --ignore-scripts` in `infrastructure/wrangler/`, then `node ../wrangler/node_modules/wrangler/bin/wrangler.js deploy` from `infrastructure/app-worker/`; then `scripts/web-deploy-probe.mjs` against `https://mtg-grimoire.app` |
+  | `publish` | `release-please`, `build`, `android-sign`, `relay-deploy`, `share-deploy`, `web-deploy` | no | Flips the draft to published |
 
   - **Since 2026-10-07 the Android host goes to Google Play, and only there** (the owner's
     decision; `docs/superpowers/specs/2026-10-07-google-play-release-design.md`). What follows
@@ -603,7 +610,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   - **A secret sits in a job that builds nothing.** This is the rule the removed `sign` job
     left behind (below), kept: a build leg runs every npm lifecycle script, every cargo build
     script and every Gradle plugin, and any of them can read a file or an environment. So
-    `android-sign` and `web-deploy` run no root `pnpm install --frozen-lockfile`, no cargo and no Gradle — a checkout,
+    `android-sign`, `relay-deploy`, `share-deploy` and `web-deploy` run no root `pnpm install --frozen-lockfile`, no cargo and no Gradle — a checkout,
     an artifact download, and one tool each. **That is why the APK is re-signed rather than
     signed by Gradle**, which is what Tauri's signing guide describes (a `keystore.properties`
     Gradle reads): Gradle signs inside the build, so the keystore and its passwords would be on
@@ -612,12 +619,12 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     under `apps/light/`. **For the deploy token the blast radius is wider than its job**: unless it
     was scoped down (*What only the owner can do*), a token that can deploy this Worker can
     deploy over the relay on the same account.
-  - **The two jobs take what they hold from the `release` environment, never from the
+  - **The jobs take what they hold from the `release` environment, never from the
     repository's own secrets.** A repository secret is handed to any workflow on any branch of
     this repository that asks for it — a branch's edited copy of a workflow, run by a push,
     reads it. An environment's is handed only to a job that names the environment, and only
     from a branch the environment allows: `main`, once the owner has restricted it (below).
-    Both jobs say `environment: release`, no other job does, and **`on:` is a push to `main`
+    All four say `environment: release` (two until 2026-10-11), no other job does, and **`on:` is a push to `main`
     and nothing else** — no `workflow_dispatch`, no `pull_request`. ⚠️ **GitHub creates an
     environment a job names the first time it runs, with no rule on it.** So the first release
     after this merged made `release` empty and open; the owner's first command restricts it,
@@ -625,7 +632,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   - **No value is in a step that does not use it.** Each job's first step after the checkout
     asks whether its values are set — a job's `if:` cannot — and it is handed `true` or
     `false` (`${{ secrets.X != '' }}`), never the value. Nothing sits in a job-level `env:`.
-    The key reaches one step and the token one step. **The alias is a plain word in the
+    The key reaches one step and the token one step (the Workers' token, two: the migrations
+    and the deploy). **The alias is a plain word in the
     workflow** (`mtg-grimoire`): it is no secret, and as one GitHub would mask every
     `mtg-grimoire` in that job's log, the bundle's own name among them.
   - *(Until 2026-10-07, for the APK.)* **`scripts/android-sign.sh` refuses to hand back an APK it cannot vouch for.** It signs with
@@ -659,13 +667,15 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     ends green** — so a release is not blocked on a key the owner has not made yet. Every step
     after the asking one is gated on its answer. **It never attaches the debug-signed build.**
     **Some of a job's values and not all is a failure**, naming the ones missing: that is a
-    mistake in the settings, and a skip would hide it. With no token the summary also says
+    mistake in the settings, and a skip would hide it. **For `relay-deploy` and `share-deploy`
+    the token alone decides**: an account id with no token ends green, and a token with no
+    account id fails. With no token the summary also says
     what is left: the address serves the previous deploy until somebody deploys the tag by
     hand.
   - **`android` and `web` run whether or not the secrets exist.** A tag the APK cannot be built
     from, or whose web build fails its first run in a browser, is a release that would ship two
     hosts and not the third — a red run, not a skip.
-  - **`publish` waits for all three, and `web-deploy` goes last.** A failure anywhere leaves
+  - **`publish` waits for all three, and `web-deploy` goes last of the deploys.** A failure anywhere leaves
     the release a draft. The deploy is live the moment `wrangler` returns and the release is a
     draft until `publish`, so the deploy waits for the desktop builds and the bundle: nothing but
     its own probe and the flip of the draft can fail after it.
@@ -695,9 +705,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     probe 1, read with `infrastructure/app-worker/src/headers.ts`); and the document is the bundle's
     `index.html` byte for byte — the one that says *this* build is being served, since the
     first two pass on yesterday's deploy whenever the policy did not move.
-  - **This is the only job that deploys anything, and it deploys one Worker.** The relay holds
-    secrets and a D1 with real entitlements, the share Worker a D1 and R2 of its own, and their
-    deploys stay by hand. The account id is kept out of the tree: it is in no file here.
+  - **This job deploys one Worker, the web app's** *(until 2026-10-11 it was the only job that
+    deployed anything: the relay holds secrets and a D1 with real entitlements, the share Worker
+    a D1 and R2 of its own, and their deploys stayed by hand; `relay-deploy` and `share-deploy`
+    deploy them now, below)*. The account id is kept out of the tree: it is in no file here.
   - **`wrangler` is pinned by a lockfile, and nothing it brings runs before the token's step.**
     The first version of this job ran `npx --yes wrangler@4.146.0 deploy`, which pinned one
     package of ninety-one: the other ninety came through floating ranges, resolved on the day
@@ -733,33 +744,42 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     `repos/…/releases/latest` with the run's own token and **refuses a tag older than the
     newest published release** (`sort -V`). On a first run that release is the previous one,
     which is older; on a re-run after its own publish it is itself.
-  - **The order with the relay is the owner's to keep.** The web app asks the relay from a
-    page, and the relay answers only an origin and a protocol it knows. **A release whose web
-    build needs new relay behaviour needs the relay deployed first, by hand, before the release
-    PR is merged** — merging is what deploys the web app, and the job asks the relay nothing.
+  - **The order with the relay is the release's to keep, since 2026-10-11 — once
+    `CLOUDFLARE_INFRA_API_TOKEN` is in the `release` environment.** The web app asks
+    the relay from a page, and the relay answers only an origin and a protocol it knows.
+    *(Until then: a release whose web build needed new relay behaviour needed the relay
+    deployed first, by hand, before the release PR was merged, because the job asked the relay
+    nothing.)* `relay-deploy` now goes first and `web-deploy` needs it, through `share-deploy`;
+    **without the token those two end green having deployed nothing and `web-deploy` still
+    deploys the web app, so until it is set the earlier rule holds.**
+    A **deploy between releases** is still by hand, and a web deploy whose build needs new
+    relay behaviour still needs the relay's first.
   - **`scripts/release-rule.test.mjs` is the fence**, and every line of this list was checked
-    by breaking `release.yml` that way and seeing a test go red (23 mutations, 2026-10-04):
-    the seven jobs and what each needs; that no job's `if:` is looser than `release_created`;
+    by breaking `release.yml` that way and seeing a test go red (23 mutations, 2026-10-04;
+    seven more for the Worker jobs, 2026-10-11, below): the seven jobs *(ten since 2026-10-11)*
+    and what each needs; that no job's `if:` is looser than `release_created`;
     that **`on:` is a push to `main` and nothing else**; that **every appearance of the word
     `secrets`, in any case and any form, is exactly `secrets.NAME` with a name that job may
     read** — so `secrets.lower_case`, `secrets['X']` and `toJSON(secrets)` are red anywhere,
     and so is an honest spelling in a build leg — and that each job reads all of its list and
     no more; that no job names a secret or an `env:` above its steps; that `environment:
-    release` is on those two jobs and no other; that **everything a secret-holding job can run
+    release` is on those jobs and no other *(two jobs until 2026-10-11, four since)*; that **everything a secret-holding job can run
     is on a list, to the letter** — `android-sign`: the signing script and nothing else (it
     uploads its artifact with an action, not a command); `web-deploy`: the `gh api` read, `npm ci --ignore-scripts`, `node ../wrangler/node_modules/wrangler/bin/wrangler.js
     deploy`, the probe — so a second `npx`, a `node -e` or an `npm run` is a line not
     on it *(until 2026-10-11 the list held only lines naming a program the test knew, so a
     `./tools/sign`, a `perl -e` or a `sudo` was no line at all; since then it is every line of
-    every `run:` in the two jobs, and every `shell:` is `bash` — a `- run: ./tools/x`, gated
-    or not, in either job is red)*; that the asking step is handed flags and never values,
+    every `run:` in the secret-holding jobs — four since the same day — and every `shell:` is
+    `bash`: a `- run: ./tools/x`, gated or not, in any of them is red)*; that the asking step is handed flags and never values,
     and every step after it is gated on its answer; that the signing step is held to the
     fingerprint and `present=true` is
     said only with the file there; that **`wrangler` appears once in all the workflows**, as
-    that line, after an install step with nothing in its environment; that
+    that line, after an install step with nothing in its environment *(five times since
+    2026-10-11: two `d1 migrations apply --remote` and three `deploy`, each in its own job and
+    its own folder)*; that
     `infrastructure/wrangler/package.json` holds one exact dependency and `infrastructure/wrangler/package-lock.json`
     an integrity hash for every package, and that `infrastructure/app-worker/package.json` is the Worker's
-    workspace manifest and names no `wrangler`; that no workflow names the relay or the share Worker; that no 32-hex
+    workspace manifest and names no `wrangler`; that no workflow names the relay or the share Worker *(true until 2026-10-11, when the two jobs of theirs went in)*; that no 32-hex
     account id is in the file; that each new job has a deadline; and that the two build legs
     run the commands `ci.yml` runs.
   - **The Android `versionCode` rises with every release.** Nothing types it: with no
@@ -834,6 +854,183 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     release**: the environment handing its values to a job on `main`; the artifact hand-off
     between jobs; `jarsigner` on the runner's JDK 21 against a real bundle under the release
     key; and Play Console accepting the result.
+- **A release deploys everything (2026-10-11).** The owner's decision; the design is
+  `docs/superpowers/specs/2026-10-11-release-deploys-everything-design.md`. **It reverses**
+  2026-10-04's *the relay and the share Worker are deployed by no job* and *this is the only job
+  that deploys anything*: `relay-deploy`, `share-deploy` and `web-deploy` each put one Worker
+  on its address at the tag, and merging the release PR is a deploy of all three. A deploy
+  between releases is still by hand, asked for each time, and `pnpm web:deploy-guard` first.
+  - **The order, and why.** Nothing goes live until every host has built at the tag
+    (`build`, `android-sign`, `web`, `share`). The relay goes first because a page that asks a
+    relay without its half fails every request; the share Worker follows it because it verifies
+    the tokens the relay mints; the web app is third. A run that stops midway leaves the Workers
+    it reached ahead of the release — the state every by-hand relay deploy has left — and the
+    relay already has to serve older builds.
+  - **What the older-tag refusal sees.** Each of the three jobs compares its tag with the
+    newest *published* release. A re-run of an older run's deploy job while a newer release is
+    still a failed draft is therefore not refused — as `web-deploy`'s has been since
+    2026-10-04, and now the relay's and the share Worker's are too.
+  - **The token alone decides whether `relay-deploy` and `share-deploy` run.** None: they apply
+    nothing, deploy nothing, say so in the run's summary and end green. A token and no
+    `CLOUDFLARE_ACCOUNT_ID`: they fail. `web-deploy` asks for both values and fails on one
+    without the other; these two do not, because the account id is already in the environment
+    for `web-deploy`, so asking for both would fail every release until the new token existed.
+    (`scripts/release-rule.test.mjs`: *asks for the token alone, and does nothing without it*.)
+  - **The D1 design.** `schema.sql` of each Worker is the **frozen baseline**: the shape
+    production is taken to hold, pinned by SHA-256 in `scripts/d1-migrations.test.mjs`, and it cannot be
+    re-run (the relay's has four plain `ALTER TABLE … ADD COLUMN`). `infrastructure/relay/migrations/`
+    and `infrastructure/share-worker/migrations/` are wrangler's **tracked folders and start
+    empty** (each holds a `README.md` of the rules and nothing else), so the first run finds
+    nothing to apply and the owner runs no baseline step; the five relay files applied by hand
+    live in `infrastructure/relay/applied-by-hand/` as history. A new migration is
+    `NNNN_what-it-does.sql`, additive, applied once in name order, **before** the deploy.
+    **Two bookkeeping tables in one database**: `d1_migrations` (the relay's) and
+    `d1_migrations_share` (the share Worker's), so neither list shadows the other's.
+    ⚠️ **The first release run with the infra token creates both tables in the production D1**,
+    even though no migration is pending: `wrangler d1 migrations apply` makes its bookkeeping
+    table before it looks for work. A write to the live database, harmless, by design.
+    **Not measured**: the local runs below did not look for the table, and nobody has run
+    this against production.
+  - **What wrangler 4.146.0 did with a tracked folder** (2026-10-11, Windows 11, `--local`,
+    from `infrastructure/relay/`, `CI=true`). **The first attempt failed and was not the
+    folder's doing**: with an absolute `--persist-to` in the scratchpad, wrangler wrote the
+    database path as `./C:\Users\Markus\…\d1-empty\v3\d1` and answered `X [ERROR] internal
+    error; reference = 2i6bg8jcinn79qv2lbb6889a`, exit 1 — the quirk
+    `scripts/web-smoke/sync-harness.mjs` already documents. CI passes no `--persist-to`; the
+    runs below use a relative one. **Empty folder** (only `README.md` in it):
+
+    ```
+    node ../wrangler/node_modules/wrangler/bin/wrangler.js d1 migrations apply mtg-grimoire-relay --local --persist-to .wrangler/d1-empty
+     ⛅️ wrangler 4.146.0 (update available 4.149.0)
+    ───────────────────────────────────────────────
+    Resource location: local
+
+    Use --remote if you want to access the remote instance.
+
+    ✅ No migrations to apply!
+    exit 0
+    ```
+
+    **One file** (`migrations/0001_probe.sql`, `CREATE TABLE probe (x INTEGER);`), the same
+    command twice:
+
+    ```
+    --- run 1
+     ⛅️ wrangler 4.146.0 (update available 4.149.0)
+    ───────────────────────────────────────────────
+    Resource location: local
+
+    Use --remote if you want to access the remote instance.
+
+    Migrations to be applied:
+    ┌────────────────┐
+    │ name           │
+    ├────────────────┤
+    │ 0001_probe.sql │
+    └────────────────┘
+    ? About to apply 1 migration(s)
+    Your database may not be available to serve requests during the migration, continue?
+    🤖 Using fallback value in non-interactive context: yes
+    🌀 Executing on local database mtg-grimoire-relay (5e0381b0-d2aa-4861-a725-26ca18ae00ef) from .wrangler\d1-empty\v3\d1:
+    🌀 To execute on your remote database, add a --remote flag to your wrangler command.
+    🚣 2 commands executed successfully.
+    ┌────────────────┬────────┐
+    │ name           │ status │
+    ├────────────────┼────────┤
+    │ 0001_probe.sql │ ✅     │
+    └────────────────┴────────┘
+    exit 0
+    --- run 2
+     ⛅️ wrangler 4.146.0 (update available 4.149.0)
+    ───────────────────────────────────────────────
+    Resource location: local
+
+    Use --remote if you want to access the remote instance.
+
+    ✅ No migrations to apply!
+    exit 0
+    ```
+
+    So an empty folder is a clean exit 0, a file is applied once, and under `CI=true` the
+    confirmation prompt answers yes by itself. The probe file and `.wrangler/` were deleted
+    afterwards.
+  - **What the relay's probe printed against `wrangler dev --local`** (2026-10-11, port 8799,
+    `PROBE_ATTEMPTS=1`, the local address only — never the real relay). The local database has
+    no tables, so exactly the three probes that read D1 fail and the other seven pass:
+
+    ```
+    node scripts/relay-deploy-probe.mjs http://127.0.0.1:8799
+    attempt 1 of 1: the key store reads D1 for a credential it does not know: answered 500, not 401 — the router is live and the `group_keys` table is missing; the refresh door, with a device, refuses the secret: answered 500, not 401; the pairing rendezvous has its table: answered 500, not 404 — the route is live and the `pairing_rendezvous` table is missing
+    ### http://127.0.0.1:8799 does not answer as this relay
+
+    After 1 attempts:
+
+    - the key store reads D1 for a credential it does not know: answered 500, not 401 — the router is live and the `group_keys` table is missing
+    - the refresh door, with a device, refuses the secret: answered 500, not 401
+    - the pairing rendezvous has its table: answered 500, not 404 — the route is live and the `pairing_rendezvous` table is missing
+    exit 1
+    ```
+
+    The probe's tests run its ten probes against the router over a fake D1, all ten green.
+    **It proves the relay is up and routing, not which
+    version is live** — no credential-free probe can tell one version from the next, so that
+    rests on `wrangler deploy` exiting zero.
+  - **What `wrangler deploy --dry-run` printed for the share Worker and the relay**
+    (2026-10-11, wrangler 4.146.0, Windows 11; nothing remote). The share Worker, after `pnpm share:build`, with the
+    workspace link to the relay present:
+
+    ```
+     wrangler 4.146.0 (update available 4.149.0)
+    Read 22 files from the assets directory …\apps\share\dist-share
+    Total Upload: 22.94 KiB / gzip: 7.55 KiB
+    Your Worker has access to the following bindings:
+    env.DB (mtg-grimoire-relay)                                      D1 Database
+    env.SHARES (mtg-grimoire-shares)                                 R2 Bucket
+    env.ASSETS                                                       Assets
+    env.SHARE_BASE ("https://mtg-grimoire-share.denmark-ea...")      Environment Variable
+
+    --dry-run: exiting now.
+    exit 0
+    ```
+
+    **With `node_modules/@grimoire/relay` (the symlink a job does not have) renamed away** the
+    output was identical — the same bindings and 22 assets, exit 0, `index.js` 23,495 bytes in
+    both — so wrangler resolved `@grimoire/relay/src/token` through the `alias` added to
+    `infrastructure/share-worker/wrangler.jsonc`. The link was restored afterwards. The
+    relay, as recorded:
+
+    ```
+    Total Upload: 86.27 KiB / gzip: 25.52 KiB
+    Your Worker has access to the following bindings:
+    env.GROUP (Group) Durable Object; env.DB (mtg-grimoire-relay) D1 Database;
+    env.RL_CLAIM (10 requests/60s), env.RL_MINT (30 requests/60s), env.RL_READ (240 requests/60s) Rate Limit;
+    env.RELAY_BASE, env.PATREON_CLIENT_ID, env.PATREON_CAMPAIGN_ID, env.APP_ORIGINS  Environment Variable
+
+    --dry-run: exiting now.
+    exit 0
+    ```
+
+    (`index.js` 88,338 bytes.) **Not proved**: the same on Linux with a token, which is what the first release is.
+  - **The fence, by mutation** (2026-10-11). A copy of the finished `release.yml` was kept; one
+    mutation was applied, `pnpm exec vitest run scripts/release-rule.test.mjs` run, and the file
+    restored and compared by SHA-256 (identical every time). Every mutation turned red the test
+    named for it; the other red tests are the fence being redundant, not wrong:
+
+    | # | Mutation in `release.yml` | Red tests |
+    | --- | --- | --- |
+    | 1 | `- run: ./tools/x` with an `if:` added to `relay-deploy` | `relay-deploy builds nothing, and runs only what is listed here` |
+    | 2 | `share-deploy`'s asking step: the two `if` blocks swapped | `share-deploy builds nothing, and runs only what is listed here`; `share-deploy asks for the token alone, and does nothing without it` |
+    | 3 | `relay-deploy`'s `Deploy the Worker` moved above the migrations step | `relay-deploy builds nothing…`; `applies the migrations, deploys and asks the host, in that order…`; `runs wrangler five times…` |
+    | 4 | `share-deploy`'s deploy run from `infrastructure/relay` | `runs wrangler five times, in the three deploy jobs…`; `deploys each Worker from its own job, and holds no Cloudflare secret anywhere else` |
+    | 5 | A `wrangler.js --remote d1 execute` step added to `web-deploy` | `web-deploy builds nothing, and runs only what is listed here`; `runs wrangler five times…`; `commits no account id: every deploy reads it from a secret` |
+    | 6 | `share-deploy` taken out of `web-deploy`'s `needs` | `has the ten jobs, chained as the rule needs` |
+    | 7 | `CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_INFRA_API_TOKEN }}` added to the `env:` of `relay-deploy`'s refusal step (after a review) | `relay-deploy asks for the token alone, and does nothing without it` — `expected [ …(3) ] to have a length of 2 but got 3` |
+
+    The seventh is why that test's first version was wrong: it set aside any step that named
+    `GITHUB_TOKEN`, which hid a step holding the token beside it. The clause was dropped.
+  - **Why the fence is held to the letter.** Every `run:` line of the four secret-holding jobs
+    is in `RUNS` in `scripts/release-rule.test.mjs`, and the fence reads the workflow with its
+    comments stripped, so a comment may say what it likes and a line may not change.
 - **What only the owner can do.** No agent makes a key, sets a secret, creates a token or
   changes a setting of the repository. Until these are done every release ends green with a
   summary saying what it did not ship. PowerShell, **in a folder outside the repository** that
@@ -887,7 +1084,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     there to close; and the jobs read the environment's, so it would also do nothing. An
     environment's value set before step 0 is, for that while, in an environment any branch may
     use. **An approval rule is optional** (*Required reviewers* on the environment): it would
-    hold each of the two jobs for a click on every release, which for one maintainer buys a
+    hold each of the four jobs for a click on every release, which for one maintainer buys a
     pause and not a second pair of eyes.
   - ⚠️ **Back the keystore and its password up, somewhere that is not this repository and not
     only this machine.** GitHub never gives a secret back. **A lost upload key is an
@@ -912,7 +1109,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     artifact (`play-upload-bundle`) and its versionCode. Play Console → *Test and release* →
     the track → *Create new release* → upload → roll out. Until then phones stay a version
     behind. (Uploading from this workflow is a later change, with its own design.)
-  - **The Cloudflare API token.** Dashboard → *Manage Account* → *Account API Tokens* →
+  - **The Cloudflare API token (the web app's, `CLOUDFLARE_API_TOKEN`).** Dashboard → *Manage Account* → *Account API Tokens* →
     *Create Token* → a custom token, limited to this one account. `wrangler deploy` here
     uploads one existing Worker's script and static assets and re-states its Custom Domain, so
     by Cloudflare's own table (`developers.cloudflare.com/workers/authorization/workers/`, read
@@ -929,6 +1126,20 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     leaves out and is not an error. If the first run fails on a permission, its log names it.
   - **`CLOUDFLARE_ACCOUNT_ID`** is the 32-hex id on the dashboard's Workers overview, and what
     `node ../wrangler/node_modules/wrangler/bin/wrangler.js whoami` prints from `infrastructure/app-worker/`.
+  - **The Workers' deploy token (`CLOUDFLARE_INFRA_API_TOKEN`).** A second custom token on the
+    one account, for `relay-deploy` and `share-deploy`: **Account → Workers Scripts → Edit**,
+    **Account → D1 → Edit**, **Account → Workers R2 Storage → Edit**. No zone permission — both
+    Workers are on `workers.dev`. ⚠️ **It can write the database that holds every entitlement
+    and deploy over any Worker on the account**, the web app's included; what bounds it is the
+    `release` environment's restriction to `main` (step 0).
+    `gh secret set CLOUDFLARE_INFRA_API_TOKEN --env release --repo Msgaihede/mtg-grimoire`.
+    **Not verified**: no deploy has been made with such a token. If the first run fails on a
+    permission, its log names it. Until it is set the two jobs end green having deployed
+    nothing, and each says so in the run's summary.
+  - **Before the first release with it: is `schema.sql` what production holds?** The baseline
+    is frozen on the claim that it is. Compare `sqlite_master` of the live database with one
+    built from `infrastructure/relay/schema.sql` and `infrastructure/share-worker/schema.sql`
+    — a read, by the owner or at his word.
   - **A release cut before a value existed is not repaired by adding it.** Its web app is
     deployed by hand from the tag (the runbook). Its bundle is the next release's: a re-run of
     `android-sign` runs the commit it ran before, which holds no fingerprint.
@@ -1002,7 +1213,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   tauri-action, rust-cache and every npm and cargo build script, any of which can read a secret
   in the same job. **Update signing has not come back; the rule has been used twice since**
   (2026-10-04): `android-sign` and `web-deploy` are each a job of their own for it — *The
-  release rule*, above. And what happened to v0.34.0 is why those two **skip and say so**
+  release rule*, above — and `relay-deploy` and `share-deploy` since 2026-10-11. And what happened to v0.34.0 is why those **skip and say so**
   when their values are not set, where `sign` failed: a release held up by a key nobody had
   made was one day's lesson already.
 - **release-please needs "Allow GitHub Actions to create and approve pull requests"**

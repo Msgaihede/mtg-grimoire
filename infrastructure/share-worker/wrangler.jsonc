@@ -2,6 +2,14 @@
   "$schema": "../wrangler/node_modules/wrangler/config-schema.json",
   "name": "mtg-grimoire-share",
   "main": "src/index.ts",
+  // The script's one import of another package's module, as a path wrangler follows with
+  // nothing installed. `release.yml`'s `share-deploy` checks the repository out and installs
+  // wrangler from `infrastructure/wrangler`'s lockfile — no pnpm, so no `node_modules` link for
+  // `@grimoire/relay` — and without this line the bundle stops at "Could not resolve". An exact
+  // module, not the package: wrangler matches an alias against the whole specifier
+  // (`infrastructure/app-worker/wrangler.jsonc`, measured 2026-10-08). `scripts/share-worker-alias.test.mjs`
+  // holds the pair, and holds the module it points at to importing nothing.
+  "alias": { "@grimoire/relay/src/token": "../relay/src/token.ts" },
   // The relay's date, deliberately rather than today's: this Worker runs beside it on the same
   // account and there is no behaviour here that wants a newer runtime. One fewer variable
   // between two deploys that have to agree about a token format.
@@ -16,13 +24,17 @@
   // data is separate: the daily lapse pass reads `entitlements` to darken a link, and re-deciding
   // a membership here would give one account two opinions about when it ended.
   //
-  // `infrastructure/share-worker/schema.sql` adds the one table this Worker owns, applied with
-  // `npx wrangler d1 execute mtg-grimoire-relay --remote --file=./schema.sql`.
+  // `infrastructure/share-worker/schema.sql` adds the one table this Worker owns — the baseline;
+  // `migrations/` holds what a release applies after it.
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "mtg-grimoire-relay",
       "database_id": "5e0381b0-d2aa-4861-a725-26ca18ae00ef",
+      // This Worker's own list on the relay's database, in a table of its own so the two lists
+      // cannot shadow each other — `migrations/README.md`.
+      "migrations_dir": "migrations",
+      "migrations_table": "d1_migrations_share",
     },
   ],
 
@@ -44,11 +56,11 @@
   // over; KV allows 1,000, the limit `infrastructure/relay/wrangler.jsonc` already rejected KV for. R2 is 10 GB
   // stored, 1 M writes and 10 M reads a month, egress free.
   //
-  // ⚠️ **The bucket does not exist yet and enabling R2 is a dashboard action only Markus can
-  // take** — spec §14 open item 2, and *ask the host, never a document*. Creating it is
-  // `npx wrangler r2 bucket create mtg-grimoire-shares`, and the deploy fails naming this binding
-  // until it has been. The binding is declared here rather than in the task that first writes to
-  // it so that the deploy question is asked once.
+  // **The bucket has existed since 2026-10-01**, when the Worker was first deployed — this
+  // comment said it did not exist yet until 2026-10-11, and *ask the host, never a document*.
+  // Creating it was `npx wrangler r2 bucket create mtg-grimoire-shares`, a dashboard action only
+  // Markus could take, and a deploy fails naming this binding if it is ever missing. The binding was declared here
+  // rather than in the task that first wrote to it so that the deploy question was asked once.
   "r2_buckets": [
     {
       "binding": "SHARES",
@@ -68,11 +80,13 @@
   // not), and `/g/*` is the gated API. Everything else tries the assets first and falls through
   // to the Worker's own 404 when no file matches.
   //
-  // ⚠️ **`../../apps/share/dist-share` does not exist yet — Task 9's Vite build writes it** — and
-  // `wrangler deploy` fails naming this directory until it does. The binding is declared here
-  // rather than in that task so the deploy question is asked once, exactly as the R2 bucket above
-  // is. `infrastructure/share-worker/src/page.ts` points at `/assets/share.js` by a **fixed** name, so that
-  // build has to pin its entry file name rather than content-hashing it.
+  // **`../../apps/share/dist-share` is written by `pnpm share:build` (Task 9's Vite build), and has
+  // been deployed since 2026-10-01** — this comment said it did not exist yet until 2026-10-11.
+  // `release.yml`'s `share` job builds the directory at a tag, and `wrangler deploy` fails naming
+  // it when it is missing. The binding was declared here rather than in that task so the deploy
+  // question was asked once, exactly as the R2 bucket above. `infrastructure/share-worker/src/page.ts`
+  // points at `/assets/share.js` by a **fixed** name, so that build has to pin its entry file
+  // name rather than content-hashing it.
   "assets": {
     "directory": "../../apps/share/dist-share",
     "binding": "ASSETS",

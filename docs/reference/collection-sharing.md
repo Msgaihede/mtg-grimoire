@@ -494,7 +494,7 @@ removed device's leftover token could still publish and withdraw. `infrastructur
 rule and what it leaves open; the relay has to be deployed first.
 
 **The reason is blast radius rather than tidiness.** Sync is a paid feature people depend on;
-sharing is new and will churn, and every deploy is done by hand by one person. One Worker carrying
+sharing is new and will churn, and every deploy was done by hand by one person until 2026-10-11 (a release's `share-deploy` does them since). One Worker carrying
 both means a bad share deploy is a sync outage.
 
 `infrastructure/share-worker/README.md` is the operational page — the routes, the deploy steps, the testing

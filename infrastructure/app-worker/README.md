@@ -34,7 +34,7 @@ deploy's own record, with what it has not proved.
 ## Why it is not a route on either of the other two
 
 **Blast radius**, the reason `infrastructure/share-worker/` gives for itself. Sync is a paid feature people
-depend on, the relay's deploys are done by hand by one person, and a deploy of a *page* happens
+depend on, the relay's deploys were done by hand by one person (a release's `relay-deploy` does them since 2026-10-11, once its token is set), and a deploy of a *page* happens
 far more often than a deploy of the relay — at every release, by a job, since 2026-10-04
 (*Deploying*). One Worker carrying both makes a bad build of the app a
 sync outage.
@@ -390,14 +390,17 @@ and the three hosts ship from one tag ([ci-and-releases.md](../../docs/reference
   the document is the bundle's (`scripts/web-deploy-probe.mjs` — probe 1 below, and the
   document check beside the table). It runs after the desktop builds and the APK and before
   the release is published, and it refuses a tag older than the newest published release — a
-  re-run of an old release's job must not put an old bundle back. **It is the only job in this
-  repository that deploys anything, and this is the only Worker it deploys — so merging the
+  re-run of an old release's job must not put an old bundle back. **It deploys this Worker and
+  no other — it was the only job in this repository that deployed anything until 2026-10-11,
+  and is now the last of three, behind the relay's and the share Worker's — so merging the
   release PR is a deploy.** Without `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` in that
   environment it deploys nothing and says so in the run's summary — and then this address
   serves the previous deploy until somebody follows the steps below from the tag. ⚠️ **The job does not do step 5,
   asks the relay nothing, and runs three of step 0's questions, not its twenty probes**: a release whose
-  web build needs new relay behaviour needs **the relay deployed first, by hand, before the
-  release PR is merged**, and the full table is still somebody's to run after a release that
+  web build needs new relay behaviour needed **the relay deployed first, by hand, before the
+  release PR was merged** — until 2026-10-11, when `relay-deploy` began to go first in the same
+  release, **once `CLOUDFLARE_INFRA_API_TOKEN` is set in the `release` environment; until it is,
+  `relay-deploy` deploys nothing, `web-deploy` still deploys, and that rule holds** — and the full table is still somebody's to run after a release that
   changed `_headers`, `wrangler.jsonc` or the script. **No release has run it yet.**
 - **Between releases, by hand** — the rest of this section. Step 6 of *The steps, in order* is
   the rule's guard for this way: `pnpm web:deploy-guard`.

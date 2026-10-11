@@ -179,6 +179,14 @@ export async function startRelay(pageOrigin) {
   };
   // `schema.sql` is for a database that has never been migrated, which this one is.
   d1("--file", "infrastructure/relay/schema.sql");
+  // Then every tracked migration, in name order: what a release's `relay-deploy` applies to
+  // production after that baseline. Through the same `d1 execute` — this database is thrown
+  // away, so wrangler's own bookkeeping of what ran is not wanted here.
+  for (const file of readdirSync(join(ROOT, "infrastructure/relay/migrations"))
+    .filter((name) => name.endsWith(".sql"))
+    .sort()) {
+    d1("--file", `infrastructure/relay/migrations/${file}`);
+  }
   const now = Date.now();
   // Two memberships, a claim code each: the group a run syncs through, and one a device can
   // found for itself.

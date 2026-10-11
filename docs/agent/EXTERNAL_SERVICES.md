@@ -143,7 +143,7 @@ it, the same day from `main` at `2b845048`, carried issue #548's `dev` claim on 
 relay mints. ⚠️ **This sentence named `1512ea68` and #541 until that day, and was two
 deploys behind**: issue #546's half went out on 2026-09-28 at 19:57 UTC, nobody wrote it down, and
 step 0's sixth probe found it live three days later. The next deploy is an **update** with a D1 that holds real entitlements, not a
-first landing. **What the tree holds past that deploy, since 2026-10-04, is what a browser needs
+first landing. **Since 2026-10-11 a release deploys it** — `release.yml`'s `relay-deploy`, at the tag, after applying any pending D1 migration (`infrastructure/relay/migrations/`), before the share Worker and the web app — **once `CLOUDFLARE_INFRA_API_TOKEN` is set in the `release` environment; until then the job ends green having deployed nothing, `web-deploy` still deploys, and the relay is deployed by hand, before the release PR is merged.** A deploy between releases is still by hand and asked for. **What the tree holds past that deploy, since 2026-10-04, is what a browser needs
 and a native client never did** — an allow-list of origins a page may ask from (`APP_ORIGINS`,
 `infrastructure/relay/src/cors.ts`), the pre-flight answered ahead of every limiter and every Durable Object, and
 `/ws` taking its bearer from the socket's sub-protocol, which is the only place a browser can put
@@ -208,7 +208,10 @@ placeholder until the deploy, so **every release before the one that carries it 
 press in words rather than publishing**. Its one secret is the relay's own `RELAY_HMAC_KEY`, the
 same value on both Workers; ask the host before you believe any of this or its opposite.
 [collection-sharing.md](../reference/collection-sharing.md) is the record, and lists what only a
-real publish can settle.
+real publish can settle. **Since 2026-10-11 a release deploys it** — `release.yml`'s `share-deploy`,
+at the tag, after the relay's: it applies any pending migration of its own
+(`infrastructure/share-worker/migrations/`, bookkept in `d1_migrations_share`, in the relay's database),
+then deploys the Worker with the viewer `share` built — **once `CLOUDFLARE_INFRA_API_TOKEN` is set in the `release` environment; until then the job ends green having deployed nothing, and this Worker is deployed by hand, when asked.** A deploy between releases is still by hand and asked for.
 
 ## The scanner's files, from this repository's GitHub release
 
@@ -282,8 +285,8 @@ pulls in pages. The one before it was 2026-10-04 at 23:19:22 UTC, from `2bbd4446
 paragraph said *not deployed* until that day. No agent may deploy it unasked: each of
 those was run by an agent because Markus asked for it, and **the ask is per deploy** — except
 that for the light app's phase 6 he asked once for the phase's deploys, the relay's and this
-Worker's (2026-10-04), and for nothing after it. **One job deploys it, and it is the only job
-that deploys anything** (decided 2026-10-04): `release.yml`'s `web-deploy`, at a release tag,
+Worker's (2026-10-04), and for nothing after it. **A job deploys it** (decided 2026-10-04; since 2026-10-11
+the third of three, behind the relay's and the share Worker's): `release.yml`'s `web-deploy`, at a release tag,
 once the values it needs exist in the `release` environment — the three hosts ship from one
 tag, because a web app ahead of the last release sends paired desktops ops they must hold
 ([ci-and-releases.md](../reference/ci-and-releases.md), *The release rule*). **So merging the
@@ -292,7 +295,7 @@ release PR is a deploy of this Worker.** The tool is `wrangler` at the version
 script run, by the job and by hand alike. Between releases a deploy is still by hand and still
 asked for, and **`pnpm web:deploy-guard` is run first**: it refuses a tree whose user schema
 is not the last release's, or whose last release is still a draft — and it cannot see a wire
-change that is not a schema rung. The relay and the share Worker are deployed by no job.
+change that is not a schema rung. The relay and the share Worker are deployed by the same release, ahead of it, once `CLOUDFLARE_INFRA_API_TOKEN` is set in the `release` environment; until then this job still deploys and a release that needs new relay behaviour needs the relay deployed by hand before the release PR is merged.
 [`infrastructure/app-worker/README.md`](../../infrastructure/app-worker/README.md) is the runbook, with every probe in it answered
 at the real address that day. **Who has run it**: headless Chrome 154, driven and measured; the
 owner's Firefox and the owner's phone, a sentence each. What nobody has seen — Safari, an
