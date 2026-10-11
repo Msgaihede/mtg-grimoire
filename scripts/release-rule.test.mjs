@@ -336,8 +336,16 @@ const MAY_READ = {
   "share-deploy": [...INFRA_SECRETS, "GITHUB_TOKEN"],
   "web-deploy": [...CLOUDFLARE_SECRETS, "GITHUB_TOKEN"],
   publish: ["GITHUB_TOKEN"],
+  "changelog-write": ["GITHUB_TOKEN", "OPENROUTER_API_KEY"],
+  "changelog-commit": ["GITHUB_TOKEN"],
 };
 const ON_A_RELEASE = "    if: needs.release-please.outputs.release_created == 'true'";
+/**
+ * The two jobs that write the coming release's notes run on the *other* answer, to the letter:
+ * a push that cut no release, which is when the release PR is open to carry the file.
+ */
+const BETWEEN_RELEASES = "    if: needs.release-please.outputs.release_created != 'true'";
+const CHANGELOG_JOBS = ["changelog-write", "changelog-commit"];
 /** The committed fingerprint of the upload certificate every release's bundle is signed with. */
 const SIGNER_PIN = "apps/light/src-tauri/release-signer.sha256";
 /** The first step of a job that deploys with the infra token: the token alone decides. */
@@ -375,11 +383,11 @@ const refuseOlder = (what) => [
   "fi",
 ];
 /**
- * **Every line the four jobs that hold a secret run** (`android-sign`, `relay-deploy`,
- * `share-deploy`, `web-deploy`), step by step, as `runsOf` reads them: the whole of each
- * `run:`, its summary's wording too. A line changed in one of those steps is changed here in
- * the same commit, and a line added to any of the four, whatever it starts, is a line this list
- * does not have.
+ * **Every line the five jobs that hold a secret run** (`android-sign`, `relay-deploy`,
+ * `share-deploy` and `web-deploy` on a release; `changelog-write` between releases), step by
+ * step, as `runsOf` reads them: the whole of each `run:`, its summary's wording too. A line
+ * changed in one of those steps is changed here in the same commit, and a line added to any of
+ * them, whatever it starts, is a line this list does not have.
  */
 const RUNS = {
   "android-sign": [
@@ -546,12 +554,34 @@ const RUNS = {
     // Ask the host
     ["node scripts/web-deploy-probe.mjs apps/light/dist-web"],
   ],
+  "changelog-write": [
+    // Is there a key to write with
+    [
+      "set -euo pipefail",
+      'if [ "$HAS_KEY" = true ]; then',
+      'echo "present=true" >> "$GITHUB_OUTPUT"',
+      "exit 0",
+      "fi",
+      'echo "present=false" >> "$GITHUB_OUTPUT"',
+      "{",
+      'echo "### Release notes — not written"',
+      "echo",
+      'echo "The \\`changelog\\` environment holds no \\`OPENROUTER_API_KEY\\`, so no notes were written for the"',
+      'echo "coming release. A release merged without its \\`changelog/<version>.md\\` is published with"',
+      'echo "the notes release-please wrote."',
+      "echo",
+      'echo "\\`docs/reference/ci-and-releases.md\\`, *What only the owner can do*, has the commands."',
+      '} >> "$GITHUB_STEP_SUMMARY"',
+    ],
+    // Write the notes for the coming release
+    ["node scripts/changelog/cli.mjs next"],
+  ],
 };
 
 describe("release.yml", () => {
   const jobs = jobsOf(releaseYml);
 
-  it("has the ten jobs, chained as the rule needs", () => {
+  it("has the twelve jobs, chained as the rule needs", () => {
     expect(Object.keys(jobs)).toEqual([
       "release-please",
       "build",
@@ -563,6 +593,8 @@ describe("release.yml", () => {
       "share-deploy",
       "web-deploy",
       "publish",
+      "changelog-write",
+      "changelog-commit",
     ]);
     expect(needsOf(jobs.build)).toEqual(["release-please"]);
     expect(needsOf(jobs.android)).toEqual(["release-please"]);
@@ -598,6 +630,17 @@ describe("release.yml", () => {
     ]);
   });
 
+  // The notes are written between releases, by two jobs nothing waits for: a failure there turns
+  // that run red and holds no release up.
+  it("writes the notes in two jobs that nothing else needs", () => {
+    expect(needsOf(jobs["changelog-write"])).toEqual(["release-please"]);
+    expect(needsOf(jobs["changelog-commit"])).toEqual(["release-please", "changelog-write"]);
+    for (const [name, job] of Object.entries(jobs)) {
+      if (CHANGELOG_JOBS.includes(name)) continue;
+      expect(needsOf(job).filter((need) => CHANGELOG_JOBS.includes(need)), name).toEqual([]);
+    }
+  });
+
   it("builds the desktop through the root's `tauri` script", () => {
     // `tauri-action` runs `pnpm tauri build` from the repository root: it finds `pnpm-lock.yaml`
     // and, in this manifest, `@tauri-apps/cli` (read at v1.0.0, `src/runner.ts`). So a release
@@ -614,7 +657,9 @@ describe("release.yml", () => {
     for (const [name, job] of Object.entries(jobs)) {
       if (name === "release-please") continue;
       const conditions = job.split("\n").filter((line) => /^ {4}if:/.test(line));
-      expect(conditions, name).toEqual([ON_A_RELEASE]);
+      expect(conditions, name).toEqual([
+        CHANGELOG_JOBS.includes(name) ? BETWEEN_RELEASES : ON_A_RELEASE,
+      ]);
     }
     expect(code(releaseYml)).not.toMatch(/always\(\)|failure\(\)|cancelled\(\)|continue-on-error/);
   });
@@ -658,7 +703,7 @@ describe("release.yml", () => {
   // **An environment's values, not the repository's.** A repository secret is handed to any
   // workflow on any branch of this repository; an environment's only to a job that names it,
   // from a branch the environment allows.
-  it("takes what it holds from the `release` environment, in those four jobs and no other", () => {
+  it("takes what it holds from an environment, in those five jobs and no other", () => {
     const environments = Object.entries(jobs)
       .map(([name, job]) => [name, job.split("\n").filter((line) => /^\s*environment:/.test(line))])
       .filter(([, lines]) => lines.length > 0);
@@ -667,10 +712,23 @@ describe("release.yml", () => {
       ["relay-deploy", ["    environment: release"]],
       ["share-deploy", ["    environment: release"]],
       ["web-deploy", ["    environment: release"]],
+      // An environment of its own: it runs on every push to `main` and sends pull request text
+      // to another service, and the signing key and the deploy token are not within its reach.
+      ["changelog-write", ["    environment: changelog"]],
     ]);
   });
 
-  it.each(["android", "android-sign", "web", "share", "relay-deploy", "share-deploy", "web-deploy"])("%s has a deadline", (name) => {
+  it.each([
+    "android",
+    "android-sign",
+    "web",
+    "share",
+    "relay-deploy",
+    "share-deploy",
+    "web-deploy",
+    "changelog-write",
+    "changelog-commit",
+  ])("%s has a deadline", (name) => {
     expect(jobs[name]).toMatch(/^ {4}timeout-minutes: \d+$/m);
   });
 
@@ -685,6 +743,7 @@ describe("release.yml", () => {
     ["relay-deploy", ["actions/checkout", "actions/setup-node"]],
     ["share-deploy", ["actions/checkout", "actions/download-artifact", "actions/setup-node"]],
     ["web-deploy", ["actions/checkout", "actions/download-artifact", "actions/setup-node"]],
+    ["changelog-write", ["actions/checkout", "actions/setup-node", "actions/upload-artifact"]],
   ])("%s builds nothing, and runs only what is listed here", (name, actions) => {
     expect([...jobs[name].matchAll(/uses: ([\w./-]+)@/g)].map((m) => m[1]).sort()).toEqual(actions);
     const runs = runsOf(jobs[name]);
@@ -728,7 +787,14 @@ describe("release.yml", () => {
   // The workspace is pnpm's; the four jobs that hold a secret are not part of it. None sets
   // pnpm up, installs with it or runs it: what they run is the list above, to the letter.
   // `jobsOf` has already dropped comment lines, so this reads what the job runs.
-  it.each(["android-sign", "relay-deploy", "share-deploy", "web-deploy"])("%s never sees pnpm", (name) => {
+  it.each([
+    "android-sign",
+    "relay-deploy",
+    "share-deploy",
+    "web-deploy",
+    "changelog-write",
+    "changelog-commit",
+  ])("%s never sees pnpm", (name) => {
     expect(code(jobs[name])).not.toMatch(/pnp[mx]|corepack/);
   });
 
@@ -974,6 +1040,73 @@ describe("release.yml", () => {
     );
     expect(refusal).toMatch(/if \[ "\$newest" != "\$TAG" \]; then[\s\S]*exit 1/);
     expect(refusal).toMatch(/^ {8}if: steps\.token\.outputs\.present == 'true'$/m);
+  });
+
+  // One job has the key and can write nothing; the other writes and has no key.
+  it("keeps the key and the write apart in the two changelog jobs", () => {
+    const write = jobs["changelog-write"];
+    const commit = jobs["changelog-commit"];
+    expect(write).toMatch(
+      /^ {4}permissions:\n {6}contents: read\n {6}pull-requests: read\n {4}outputs:$/m,
+    );
+    // No permission of the key's job is a write. (Its step `id: write` sits two levels deeper.)
+    expect(write).not.toMatch(/^ {6}[a-z-]+: write$/m);
+    expect(commit).toMatch(/^ {4}permissions:\n {6}contents: write\n {4}steps:$/m);
+    expect(commit).not.toMatch(/environment:|OPENROUTER|actions\/checkout|setup-node/);
+    // What the second puts on the release branch is the first's artifact, by name…
+    expect(write).toContain("name: release-notes");
+    expect(commit).toContain("name: release-notes");
+    // …through the contents API, onto release-please's branch and nowhere else.
+    expect(commit).toContain('args=(-X PUT "repos/$REPO/contents/$file" -f "branch=$BRANCH")');
+    expect(commit).toContain("BRANCH: release-please--branches--main--components--mtg-grimoire");
+    expect(commit).not.toMatch(/gh release|git push/);
+    // The blob to replace is read from a *successful* answer only. `gh api` prints a 404's JSON
+    // to stdout and exits 1, so `$(…) || true` would send that text as the file's `sha` and
+    // fail the first commit of every release's notes.
+    expect(commit).toContain(
+      'if found=$(gh api "repos/$REPO/contents/$file?ref=$BRANCH" --jq .sha 2>/dev/null); then sha=$found; fi',
+    );
+    expect(commit).not.toMatch(/\|\| true/);
+  });
+
+  it("asks whether the key is set before `changelog-write` does anything with it", () => {
+    const [checkout, ask, ...rest] = stepsOf(jobs["changelog-write"]);
+    expect(checkout).toMatch(/^uses: actions\/checkout@/);
+    // The range is the last tag to this commit, so the checkout is all of history.
+    expect(checkout).toMatch(/^ {10}fetch-depth: 0$/m);
+    expect(checkout).not.toMatch(/^ {8}(?:if|env):/m);
+    expect(ask).toMatch(/^ {8}id: key$/m);
+    // **Told whether it is set, never what it is.**
+    expect(ask.match(/secrets\.[A-Z0-9_]+/g)).toEqual(["secrets.OPENROUTER_API_KEY"]);
+    expect(ask).toContain("HAS_KEY: ${{ secrets.OPENROUTER_API_KEY != '' }}");
+    expect(ask).toContain('echo "present=true" >> "$GITHUB_OUTPUT"');
+    expect(ask).toContain('echo "present=false" >> "$GITHUB_OUTPUT"');
+    expect(ask).toMatch(/>> "\$GITHUB_STEP_SUMMARY"/);
+    expect(rest).toHaveLength(3);
+    for (const step of rest) {
+      expect(step).toMatch(
+        /^ {8}if: steps\.key\.outputs\.present == 'true'(?: && steps\.write\.outputs\.version != '')?$/m,
+      );
+    }
+    // The key itself reaches exactly one step, and that step runs one file.
+    expect(rest.filter((step) => secretsOf(step).length > 0)).toHaveLength(1);
+    expect(rest[1]).toMatch(/^ {8}run: node scripts\/changelog\/cli\.mjs next$/m);
+    expect(secretsOf(rest[1])).toEqual(["OPENROUTER_API_KEY"]);
+  });
+
+  // No model is asked anything on a release: the body is the file the release PR merged.
+  it("publishes the notes the tag holds, and release-please's when it holds none", () => {
+    const [notes, flip] = stepsOf(jobs.publish);
+    expect(stepsOf(jobs.publish)).toHaveLength(2);
+    expect(notes).toContain('file="changelog/$VERSION.md"');
+    expect(notes).toContain("SHA: ${{ github.sha }}");
+    expect(notes).toContain('"repos/$REPO/contents/$file?ref=$SHA" > notes.md');
+    expect(notes).toContain('gh release edit "$TAG" --notes-file notes.md --repo "$REPO"');
+    // **Notes never hold a release up**: nothing in the step can end it non-zero.
+    expect(notes).not.toMatch(/set -e|exit 1|--draft/);
+    expect(notes).toMatch(/^ {10}else$/m);
+    expect(flip).toMatch(/--draft=false/);
+    expect(code(releaseYml)).not.toMatch(/openrouter\.ai/);
   });
 
   it("publishes last, and nothing else flips the draft", () => {

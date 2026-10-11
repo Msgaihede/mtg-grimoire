@@ -42,7 +42,7 @@ export function ReleaseNotes({ notes, className }: { notes: string; className?: 
 
 function BlockView({ block }: { block: Block }) {
   if (block.kind === "heading") {
-    // One drawn weight for all three depths. release-please emits `###` and nothing else, and
+    // One drawn weight for all three depths. Both shapes of body emit `###` and nothing else, and
     // a body that reaches for `#` is asking for emphasis rather than for an outline — three
     // sizes inside a 12px block would be a type scale nobody chose.
     return (

@@ -16,12 +16,30 @@ vi.mock("@/lib/shelfLayout", async (importOriginal) => {
   return { ...actual, layoutShelves: vi.fn(actual.layoutShelves) };
 });
 import { layoutShelves } from "@/lib/shelfLayout";
+/**
+ * The stepper, **unchanged** — wrapped only so a case can count how often one is drawn (issue
+ * #557). Every table row and every steppable tile draws one, so a count that does not move across
+ * a keystroke is a wall whose rows did not render again. Every other case draws the real control
+ * through the wrapper and cannot tell the difference.
+ */
+const stepperRenders = vi.hoisted(() => ({ count: 0 }));
+vi.mock("@/components/QuantityStepper", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/QuantityStepper")>();
+  const { createElement } = await import("react");
+  return {
+    ...actual,
+    QuantityStepper: (props: ComponentProps<typeof actual.QuantityStepper>) => {
+      stepperRenders.count += 1;
+      return createElement(actual.QuantityStepper, props);
+    },
+  };
+});
 import { dndManager } from "@/lib/dndManager";
 import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import userEvent from "@testing-library/user-event";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ReactElement } from "react";
+import type { ComponentProps, ReactElement } from "react";
 import {
   TOOLTIP_OPEN_MS,
   TOOLTIP_PANEL_ID,
@@ -362,6 +380,7 @@ const BURN: DeckRow = {
   todosOpen: false,
   defaultCategoryId: 0,
   bracket: 0,
+  tags: [],
 };
 
 /** Two drawers, one inside the other — flat rows, because the tree is the page's to build from
@@ -2520,8 +2539,8 @@ describe("CollectionPage", () => {
     await screen.findByText("Lightning Bolt");
 
     await user.click(screen.getByRole("button", { name: "Import cards" }));
-    const dialog = await screen.findByRole("dialog", { name: "Import a decklist" });
-    await user.click(within(dialog).getByLabelText("Decklist"));
+    const dialog = await screen.findByRole("dialog", { name: "Import cards" });
+    await user.click(within(dialog).getByLabelText("Card list"));
     await user.paste("1 Sol Ring");
     await user.click(within(dialog).getByRole("button", { name: "Preview" }));
 
@@ -2566,12 +2585,14 @@ describe("CollectionPage", () => {
           },
         ],
         "add",
+        // Not sorted: the header's Import at the root.
+        null,
       ),
     );
     // The dialog closes on its own report — `onDone` — the same precedent `DeckEditor` and
     // `DecksPage` set for their own import dialogs.
     await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Import a decklist" })).not.toBeInTheDocument(),
+      expect(screen.queryByRole("dialog", { name: "Import cards" })).not.toBeInTheDocument(),
     );
   });
 
@@ -3560,6 +3581,38 @@ describe("the collection's shelves", () => {
 
       expect(screen.getByRole("searchbox", { name: "Search your collection" })).toHaveValue("b");
       expect(vi.mocked(layoutShelves).mock.calls.length).toBe(laid);
+    },
+  );
+
+  /**
+   * **And a keystroke draws no row again** (issue #557) — the same rule one level further down.
+   * The filter box's text is the page's state, so a key re-renders the page before the debounce
+   * has asked anything; what must not follow it is the wall. The list components are memoised and
+   * every prop the page hands them is held still across a render that changes no data, so the
+   * table's rows and the wall's tiles — counted here by the stepper each one draws — are left
+   * exactly as they were.
+   *
+   * `fireEvent.change` and nothing awaited before the count, the case above's reason: once the
+   * real 300ms debounce fires the list is asked again under the new filter, and redrawing what it
+   * answers is the legitimate render this case is not about.
+   */
+  it.each(["grid", "table"] as const)(
+    "draws no %s row again on a keystroke in the filter box",
+    async (view) => {
+      useAppStore.setState({ collectionView: view });
+      collectionFolderList.mockResolvedValue([BINDER]);
+      wrap(<CollectionPage />);
+      await findHeading("Trade binder");
+      await screen.findAllByRole("spinbutton", { name: /Lightning Bolt/ });
+      const drawn = stepperRenders.count;
+      expect(drawn).toBeGreaterThan(0);
+
+      fireEvent.change(screen.getByRole("searchbox", { name: "Search your collection" }), {
+        target: { value: "b" },
+      });
+
+      expect(screen.getByRole("searchbox", { name: "Search your collection" })).toHaveValue("b");
+      expect(stepperRenders.count).toBe(drawn);
     },
   );
 
@@ -4762,6 +4815,82 @@ describe("exporting a folder from its heading", () => {
       }),
     );
     expect(collectionFolderSetLocked).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * **Importing into a folder** (issue #872). The header's `Import cards` opens the step's
+ * `Import into` on the drawer the reader is standing in, and on Not sorted at the root; a heading's
+ * `⋯` and its right-click offer `Import…`, which opens on that drawer. Either way the press sends
+ * the folder to `collection_import_commit`, which files the whole file into it.
+ */
+describe("importing into a folder", () => {
+  /** Paste one line and reach the collection's step, in the dialog the press opened. */
+  async function previewOne(user: ReturnType<typeof userEvent.setup>): Promise<HTMLElement> {
+    const dialog = await screen.findByRole("dialog", { name: "Import cards" });
+    await user.click(within(dialog).getByLabelText("Card list"));
+    await user.paste("1 Sol Ring");
+    await user.click(within(dialog).getByRole("button", { name: "Preview" }));
+    await within(dialog).findByRole("button", { name: "Import into" });
+    return dialog;
+  }
+
+  it.each(["Manage", "right-click"] as const)(
+    "imports into a folder from its heading's %s menu",
+    async (entryPoint) => {
+      collectionFolderList.mockResolvedValue([BINDER, FOILS, SEALED]);
+      const user = userEvent.setup();
+      wrap(<CollectionPage />);
+      await findHeading("Sealed");
+
+      if (entryPoint === "Manage") await shelfMenu(user, "Sealed");
+      else rightClick(heading("Sealed"));
+      await user.click(await screen.findByRole("menuitem", { name: "Import…" }));
+
+      const dialog = await previewOne(user);
+      expect(within(dialog).getByRole("button", { name: "Import into" })).toHaveTextContent(
+        "Sealed",
+      );
+      expect(within(dialog).getByText("1 card will be added to Sealed.")).toBeInTheDocument();
+      // The page stays where it was: the menu names a drawer, it does not walk into it.
+      expect(standingIn()).toBeNull();
+      await user.click(within(dialog).getByRole("button", { name: "Import" }));
+
+      await waitFor(() => expect(collectionImportCommit).toHaveBeenCalled());
+      expect(collectionImportCommit.mock.calls[0][1]).toBe("add");
+      expect(collectionImportCommit.mock.calls[0][2]).toBe(SEALED.id);
+    },
+  );
+
+  it("opens the header's import on the folder the reader is standing in", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, FOILS]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await openShelf(user, "Trade binder");
+    await waitFor(() => expect(standingIn()).toBe(BINDER.id));
+
+    await user.click(screen.getByRole("button", { name: "Import cards" }));
+    const dialog = await previewOne(user);
+    expect(within(dialog).getByRole("button", { name: "Import into" })).toHaveTextContent(
+      "Trade binder",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Import" }));
+
+    await waitFor(() => expect(collectionImportCommit).toHaveBeenCalled());
+    expect(collectionImportCommit.mock.calls[0][2]).toBe(BINDER.id);
+  });
+
+  it("opens the header's import on Not sorted at the root", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, FOILS]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await findHeading("Trade binder");
+
+    await user.click(screen.getByRole("button", { name: "Import cards" }));
+    const dialog = await previewOne(user);
+    expect(within(dialog).getByRole("button", { name: "Import into" })).toHaveTextContent(
+      "Not sorted",
+    );
   });
 });
 

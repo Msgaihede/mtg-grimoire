@@ -5,6 +5,7 @@ import type {
   ReactNode,
 } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import { rowHasBackFace } from "@/features/card/printings";
 import { CardGrid } from "@/features/search/CardGrid";
 import { FilterBar, type FilterLabels } from "@/features/search/FilterBar";
 import { summaryOf } from "@/features/search/SearchPage";
@@ -119,16 +120,19 @@ export interface CardSearchBodyProps {
   /** The tile's one control: `Add to <pile>` on the deck, `AddToCollectionButton` on the other
    *  two. */
   action?: (card: CardSummary) => ReactNode;
-  /** What a tile offers on a right-click — the page's own card menu, already built. */
+  /** What a tile offers on a right-click — the page's own card menu, already built. `flip` is
+   *  the wall's word that this tile turns over (issue #844); see `CardGrid`'s `cardMenu`. */
   cardMenu?: (
     card: CardSummary,
     picked: readonly CardSummary[],
+    flip: boolean,
   ) => ((e: ReactMouseEvent) => void) | undefined;
   /** The same menu from the keyboard. Its own slot rather than something derived from the one
    *  above, because a keypress has no coordinates; see `CardGrid`'s `cardMenuKey`. */
   cardMenuKey?: (
     card: CardSummary,
     picked: readonly CardSummary[],
+    flip: boolean,
   ) => ((e: ReactKeyboardEvent) => void) | undefined;
   /** Which tile is open in the card surface, so the wall can mark it. */
   selectedId: string | null;
@@ -296,6 +300,8 @@ export function CardSearchBody({
           // where a right-click lands.
           cardMenu={cardMenu}
           cardMenuKey={cardMenuKey}
+          // A two-sided card turns over from its tile, as on the search page's wall (issue #844).
+          flips={rowHasBackFace}
           badge={badge}
           action={action}
           onNeedNextPage={() => {

@@ -21,6 +21,7 @@ const importPickFile = vi.hoisted(() => vi.fn());
 const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
 const collectionImportCommit = vi.hoisted(() => vi.fn());
 const collectionFolderList = vi.hoisted(() => vi.fn());
+const collectionFolderCreate = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -32,10 +33,12 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     oracleTagsForPrintings,
     collectionImportCommit,
     collectionFolderList,
+    collectionFolderCreate,
   },
 }));
 
-import { NO_DECK_GROUP, useImport } from "./useImport";
+import type { BinderGroup } from "./destinations/binders";
+import { NO_DECK_GROUP, importBinderGroups, useImport } from "./useImport";
 
 /**
  * The cabinet as `collection_folder_list` answers it: unfiltered by kind, so a **deck** group
@@ -87,6 +90,7 @@ const MADE: DeckRow = {
   todosOpen: false,
   defaultCategoryId: 0,
   bracket: 0,
+  tags: [],
   updatedAt: 1_800_000_000,
 };
 
@@ -143,6 +147,11 @@ beforeEach(() => {
   oracleTagsForPrintings.mockReset().mockResolvedValue([]);
   collectionImportCommit.mockReset().mockResolvedValue(OWNED);
   collectionFolderList.mockReset().mockResolvedValue(FOLDERS);
+  collectionFolderCreate
+    .mockReset()
+    .mockImplementation((parentId: number | null, name: string) =>
+      Promise.resolve({ id: 100, parentId, name, kind: "user", deckId: null, sortOrder: 9 }),
+    );
 });
 
 /** `useDeck.test.ts`'s helper and its reasoning — a `staleTime: 30_000` cache is *fresh*, so
@@ -377,9 +386,7 @@ describe("useImport", () => {
       }),
     ).rejects.toBe("That deck is gone.");
 
-    await waitFor(() =>
-      expect(client.getQueryState(["decks", "list"])?.isInvalidated).toBe(true),
-    );
+    await waitFor(() => expect(client.getQueryState(["decks", "list"])?.isInvalidated).toBe(true));
   });
 });
 
@@ -448,9 +455,9 @@ describe("the Oracle tags a resolve reads", () => {
     importResolve.mockRejectedValue("The card database is busy finishing a sync.");
     const { result } = renderHook(() => useImport(), { wrapper });
 
-    await expect(
-      result.current.resolve.mutateAsync(LINES),
-    ).rejects.toBe("The card database is busy finishing a sync.");
+    await expect(result.current.resolve.mutateAsync(LINES)).rejects.toBe(
+      "The card database is busy finishing a sync.",
+    );
     expect(oracleTagsForPrintings).not.toHaveBeenCalled();
   });
 });
@@ -611,7 +618,12 @@ describe("the collection half of a deck import", () => {
   it("does not read the folder list when the box is unticked", async () => {
     const { result } = renderHook(() => useImport(), { wrapper });
 
-    await result.current.commit.mutateAsync({ deckId: 4, variant: "live", mode: "merge", items: ITEMS });
+    await result.current.commit.mutateAsync({
+      deckId: 4,
+      variant: "live",
+      mode: "merge",
+      items: ITEMS,
+    });
 
     expect(collectionFolderList).not.toHaveBeenCalled();
   });
@@ -720,5 +732,112 @@ describe("the roots a ticked box fires", () => {
     });
 
     await waitFor(() => expect(staleRoots(client)).toEqual(["decks"]));
+  });
+});
+
+/**
+ * A ManaBox export, binder by binder (issue #873) — the write `planBinderImport`'s groups feed.
+ * What each group becomes is the planner's suite's question; this one is about where the copies
+ * are filed and what a refusal part-way says.
+ */
+describe("importBinderGroups", () => {
+  const folder = (name: string | null, cardId = "p1"): BinderGroup => ({
+    name,
+    target: "folder",
+    collectionItems: [{ ...COPIES[0], cardId }],
+    deckItems: [],
+    totalCards: 1,
+  });
+  const deck = (name: string): BinderGroup => ({
+    name,
+    target: "deck",
+    collectionItems: COPIES,
+    deckItems: ITEMS,
+    totalCards: 1,
+  });
+
+  it("files a binder into the reader's own top-level folder of that name, whatever its case", async () => {
+    const result = await importBinderGroups([folder("  BINDER ")]);
+    expect(collectionFolderCreate).not.toHaveBeenCalled();
+    expect(collectionImportCommit).toHaveBeenCalledWith(
+      [expect.objectContaining({ cardId: "p1" })],
+      "add",
+      5,
+    );
+    expect(result).toMatchObject({ folders: 1, foldersCreated: 0, copies: 1 });
+  });
+
+  /** A deck's group is named after its deck — `Selvala` here — and is never a binder's folder:
+   *  copies filed there would sit in a deck that does not play them. */
+  it("makes a top-level folder when only a deck's group, or a nested folder, has the name", async () => {
+    collectionFolderList.mockResolvedValue([
+      ...FOLDERS,
+      { id: 6, parentId: 5, name: "Trade", kind: "user", deckId: null, sortOrder: 0 },
+    ]);
+    await importBinderGroups([folder("Selvala"), folder("Trade")]);
+    expect(collectionFolderCreate.mock.calls).toEqual([
+      [null, "Selvala"],
+      [null, "Trade"],
+    ]);
+  });
+
+  it("makes one folder for two spellings of its name", async () => {
+    const result = await importBinderGroups([folder("Bulk"), folder("bulk", "p2")]);
+    expect(collectionFolderCreate).toHaveBeenCalledTimes(1);
+    expect(collectionImportCommit.mock.calls.map((call) => call[2])).toEqual([100, 100]);
+    expect(result).toMatchObject({ folders: 2, foldersCreated: 1, copies: 2 });
+  });
+
+  it("leaves the cards that name no binder at the root", async () => {
+    await importBinderGroups([folder(null)]);
+    expect(collectionImportCommit).toHaveBeenCalledWith(expect.any(Array), "add", null);
+    // Nothing to look up, so the census is never read.
+    expect(collectionFolderList).not.toHaveBeenCalled();
+  });
+
+  it("makes a deck in the unspecified format and files its copies in the deck's group", async () => {
+    const result = await importBinderGroups([deck("Selvala")]);
+    expect(deckCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "Selvala", formatKey: "unspecified" }),
+    );
+    expect(deckImportCommit).toHaveBeenCalledWith(12, "live", "merge", ITEMS);
+    // Deck 12's group, `78` — never deck 4's `77`, and never the root.
+    expect(collectionImportCommit).toHaveBeenCalledWith(COPIES, "add", 78);
+    expect(result.decks).toEqual([MADE]);
+  });
+
+  it("stops at the first refusal and names what had already landed", async () => {
+    collectionImportCommit.mockResolvedValueOnce(OWNED).mockRejectedValueOnce("database is locked");
+    await expect(
+      importBinderGroups([folder("Binder"), folder("Bulk"), folder("Rares")]),
+    ).rejects.toThrow("Stopped at “Bulk”: database is locked. Already imported: “Binder”.");
+    expect(collectionImportCommit).toHaveBeenCalledTimes(2);
+  });
+
+  it("deletes a deck whose list was refused, and says the deck's name", async () => {
+    deckImportCommit.mockRejectedValueOnce("That format is gone.");
+    await expect(importBinderGroups([deck("Selvala")])).rejects.toThrow(
+      "Stopped at “Selvala”: That format is gone.",
+    );
+    expect(deckDelete).toHaveBeenCalledWith(12);
+    expect(collectionImportCommit).not.toHaveBeenCalled();
+  });
+
+  it("keeps a deck whose copies were refused, and says so", async () => {
+    collectionImportCommit.mockRejectedValueOnce("database is locked");
+    await expect(importBinderGroups([deck("Selvala")])).rejects.toThrow(
+      "the deck “Selvala” was made, but its cards couldn't be added to your collection",
+    );
+    expect(deckDelete).not.toHaveBeenCalled();
+  });
+
+  it("marks every owned root stale, landed or not", async () => {
+    seedOwned(client);
+    collectionImportCommit.mockRejectedValueOnce("database is locked");
+    const { result } = renderHook(() => useImport(), { wrapper });
+    await expect(result.current.importBinders.mutateAsync([folder("Binder")])).rejects.toThrow();
+    await waitFor(() =>
+      expect(staleRoots(client)).toEqual(["cards", "collection", "decks", "wishlist"]),
+    );
   });
 });

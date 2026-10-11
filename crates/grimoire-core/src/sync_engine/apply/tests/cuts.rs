@@ -6,8 +6,9 @@
 //! any of the six shapes the first six tests are: a decision resting on `gone` was taken on the
 //! first pull and never taken back when the second brought the parent back.
 //!
-//! The last section pins what is **not** closed here: with three devices, last-writer-wins and
-//! add-wins still turn on arrival order (issue #842).
+//! The last section is the same claim with a third device (issue #842): two devices each write a
+//! row and a third hears them on two pulls, in either order. It pinned the defect until `apply`
+//! remembered what other devices wrote (`apply::heard`), and holds the fix now.
 
 use super::*;
 
@@ -696,7 +697,7 @@ fn a_card_moved_into_a_deleted_pile_comes_back_with_it() {
 }
 
 // ---------------------------------------------------------------------------------------
-// What is not closed here: three devices (issue #842)
+// Three devices (issue #842)
 // ---------------------------------------------------------------------------------------
 
 /// Three devices and one copy all three hold, in `F1`. `a` and `c` each write it, `c` with the
@@ -737,7 +738,23 @@ fn three_devices(
     }
     apply(&a, &from_c).unwrap();
     apply(&c, &from_a).unwrap();
+    assert_eq!(skips(&b), Vec::new(), "{order}: b skipped a write");
     (picture(&a), picture(&b), picture(&c))
+}
+
+/// The claim of this section: however `b` hears the two writes, it ends as `a` and `c` do — and
+/// `a` and `c`, which each hold one of them in their own log, end on `want`.
+fn every_order_ends_as_the_writers_do(
+    write_a: &dyn Fn(&Connection),
+    write_c: &dyn Fn(&Connection),
+    want: &str,
+) {
+    for order in ["one answer", "older first", "newer first"] {
+        let (a, b, c) = three_devices(order, write_a, write_c);
+        assert_eq!(a, c, "{order}: the two writers disagree");
+        assert_eq!(the_copy(&a), want, "{order}: the writers");
+        assert_eq!(b, a, "{order}: the device that wrote neither");
+    }
 }
 
 fn the_copy(picture: &[String]) -> String {
@@ -747,45 +764,31 @@ fn the_copy(picture: &[String]) -> String {
         .unwrap_or_else(|| "no copy".to_owned())
 }
 
-/// ⚠ **Two other devices edit one field, and the device that wrote neither keeps whichever it
-/// heard last** — issue #842, pinned so that whoever closes it meets this test.
-///
-/// `apply` folds what it is handed with this device's *own* log, and keeps no stamp for anything
-/// another device wrote. So `a`'s older edit, arriving on a pull after `c`'s newer one, has
-/// nothing to lose to on `b` — while `a` and `c`, each holding its own edit in its own log, both
-/// settle on `c`'s. The relay hands rows over in the order they were pushed, not in clock order:
-/// `a` only has to have been offline when it wrote.
-///
-/// **What makes it red**: the day `apply` remembers the stamp that won a field — the last
-/// assertion says the difference is still there, and goes with it.
+/// **Two other devices edit one field, and the device that wrote neither keeps the newer
+/// edit, in whichever order it heard them.** Until issue #842 it kept whichever it heard last:
+/// `apply` folded what it was handed with this device's *own* log alone, so `a`'s older edit,
+/// arriving on a pull after `c`'s newer one, had nothing to lose to on `b`. The relay hands rows
+/// over in the order they were pushed, not in clock order: `a` only had to have been offline when
+/// it wrote. What `b` remembers of `c`'s edit (`heard`) is what it loses to now.
 #[test]
-fn an_older_edit_from_a_third_device_still_beats_a_newer_one_applied_before_it() {
+fn an_older_edit_from_a_third_device_loses_to_a_newer_one_applied_before_it() {
     let edit = |who: &'static str| {
         move |conn: &Connection| {
             conn.execute("UPDATE collection_entries SET notes = ?1", [who])
                 .unwrap();
         }
     };
-    for order in ["one answer", "older first"] {
-        let (a, b, c) = three_devices(order, &edit("older"), &edit("newer"));
-        assert_eq!((&b, &c), (&a, &a), "{order}");
-        assert_eq!(the_copy(&b), "copy: c1 x1 in F1 notes=newer", "{order}");
-    }
-    let (a, b, c) = three_devices("newer first", &edit("older"), &edit("newer"));
-    assert_eq!(a, c);
-    assert_eq!(the_copy(&a), "copy: c1 x1 in F1 notes=newer");
-    assert_eq!(
-        the_copy(&b),
-        "copy: c1 x1 in F1 notes=older",
-        "the device that wrote neither edit ended on the newer one: issue #842 is closed, and \
-         this assertion with it"
+    every_order_ends_as_the_writers_do(
+        &edit("older"),
+        &edit("newer"),
+        "copy: c1 x1 in F1 notes=newer",
     );
 }
 
-/// ⚠ **...and the same of a placement**: `a` moves the copy to the root, `c` later into `F2`,
-/// and `b`, hearing `c` first, leaves it at the root. Issue #842.
+/// **...and the same of a placement**: `a` moves the copy to the root, `c` later into `F2`, and
+/// `b` ends in `F2` — where, hearing `c` first, it used to leave it at the root.
 #[test]
-fn an_older_move_from_a_third_device_still_beats_a_newer_one_applied_before_it() {
+fn an_older_move_from_a_third_device_loses_to_a_newer_one_applied_before_it() {
     let to_the_root = |conn: &Connection| {
         conn.execute("UPDATE collection_entries SET folder_id = NULL", [])
             .unwrap();
@@ -798,30 +801,17 @@ fn an_older_move_from_a_third_device_still_beats_a_newer_one_applied_before_it()
         )
         .unwrap();
     };
-    for order in ["one answer", "older first"] {
-        let (a, b, c) = three_devices(order, &to_the_root, &into_f2);
-        assert_eq!((&b, &c), (&a, &a), "{order}");
-        assert_eq!(the_copy(&b), "copy: c1 x1 in F2 notes=-", "{order}");
-    }
-    let (a, b, c) = three_devices("newer first", &to_the_root, &into_f2);
-    assert_eq!(a, c);
-    assert_eq!(the_copy(&a), "copy: c1 x1 in F2 notes=-");
-    assert_eq!(
-        the_copy(&b),
-        "copy: c1 x1 in (root) notes=-",
-        "the device that made neither move ended on the newer one: issue #842 is closed, and \
-         this assertion with it"
-    );
+    every_order_ends_as_the_writers_do(&to_the_root, &into_f2, "copy: c1 x1 in F2 notes=-");
 }
 
-/// ⚠ **...and of add-wins**: `a` deletes the copy and `c` edits it later, so the row survives —
-/// on `a` and `c`, and on `b` only where both arrive in one answer. Heard apart, in either
-/// order, `b` loses it: the delete first, and the sparse edit cannot rebuild the row (skipped,
-/// with an `error_log` row); the edit first, and the older delete finds nothing on `b` to lose
-/// to. sync.md's *Add-wins needs this device's own history* records the first of the two.
-/// Issue #842.
+/// **...and of add-wins**: `a` deletes the copy and `c` edits it later, so the row survives — on
+/// `a` and `c`, and now on `b` in every order. Heard apart it used to be lost both ways: the
+/// delete first, and the sparse edit could not rebuild the row (skipped, with an `error_log` row);
+/// the edit first, and the older delete found nothing on `b` to lose to. The row is rebuilt from
+/// what `b` heard of it before the delete and kept when the delete took it (`heard::keep`); the
+/// edit finds the remembered stamp to lose to the other way round.
 #[test]
-fn a_row_one_device_deleted_and_another_edited_later_is_still_lost_on_a_third() {
+fn a_row_one_device_deleted_and_another_edited_later_is_kept_on_a_third() {
     let delete = |conn: &Connection| {
         conn.execute("DELETE FROM collection_entries", []).unwrap();
     };
@@ -829,20 +819,67 @@ fn a_row_one_device_deleted_and_another_edited_later_is_still_lost_on_a_third() 
         conn.execute("UPDATE collection_entries SET notes = 'kept'", [])
             .unwrap();
     };
-    let (a, b, c) = three_devices("one answer", &delete, &edit);
-    assert_eq!((&b, &c), (&a, &a));
-    assert_eq!(the_copy(&b), "copy: c1 x1 in F1 notes=kept");
+    every_order_ends_as_the_writers_do(&delete, &edit, "copy: c1 x1 in F1 notes=kept");
+}
 
-    for order in ["older first", "newer first"] {
-        let (a, b, c) = three_devices(order, &delete, &edit);
-        assert_eq!(a, c, "{order}");
-        assert_eq!(the_copy(&a), "copy: c1 x1 in F1 notes=kept", "{order}");
-        assert_eq!(
-            the_copy(&b),
-            "no copy",
-            "{order}: the device that wrote neither kept the row: issue #842 is closed, and \
-             this assertion with it"
+/// ...and the other way round, which never diverged and must not start to: `a` edits, `c`
+/// deletes later, and the row is gone everywhere — the remembered delete outranks the older edit
+/// that arrives after it, and is not rebuilt by it.
+#[test]
+fn a_row_one_device_edited_and_another_deleted_later_is_gone_on_a_third() {
+    let edit = |conn: &Connection| {
+        conn.execute("UPDATE collection_entries SET notes = 'edited'", [])
+            .unwrap();
+    };
+    let delete = |conn: &Connection| {
+        conn.execute("DELETE FROM collection_entries", []).unwrap();
+    };
+    every_order_ends_as_the_writers_do(&edit, &delete, "no copy");
+}
+
+/// **A row rebuilt by a third device's later write comes back with every copy anyone added.**
+/// `a` deletes the copy and `c` adds one to it later: add-wins keeps it, and the count is the
+/// copy the delete took plus `c`'s — on `b` as well, which rebuilds it from the count it kept
+/// when the delete took it (`Memory::keep`'s whole counters) plus the `+1`, where folding only its
+/// own log it could rebuild nothing at all.
+#[test]
+fn a_row_brought_back_by_a_third_devices_later_add_keeps_its_count() {
+    let delete = |conn: &Connection| {
+        conn.execute("DELETE FROM collection_entries", []).unwrap();
+    };
+    let add = |conn: &Connection| {
+        conn.execute("UPDATE collection_entries SET quantity = quantity + 1", [])
+            .unwrap();
+    };
+    every_order_ends_as_the_writers_do(&delete, &add, "copy: c1 x2 in F1 notes=-");
+}
+
+/// **The cycle-break cuts the same folder on the device that made neither move.** `a` files `F1`
+/// under `F2` and `c`, later, `F2` under `F1`: each writer breaks the loop at `c`'s later move
+/// and puts `F2` back at the top. `b`, hearing `c`'s move first, used to meet the loop on the
+/// second pull with only `a`'s move in the page and nothing of `c`'s in its own log — so it cut
+/// `F1` instead. It weighs what it remembers of `c`'s move now.
+#[test]
+fn a_loop_two_other_devices_made_is_cut_where_they_cut_it() {
+    let move_under = |child: &'static str, parent: &'static str| {
+        move |conn: &Connection| {
+            conn.execute(
+                "UPDATE collection_folders
+                    SET parent_id = (SELECT id FROM collection_folders WHERE name = ?2)
+                  WHERE name = ?1",
+                [child, parent],
+            )
+            .unwrap();
+        }
+    };
+    for order in ["one answer", "older first", "newer first"] {
+        let (a, b, c) = three_devices(order, &move_under("F1", "F2"), &move_under("F2", "F1"));
+        assert_eq!(a, c, "{order}: the two writers disagree");
+        assert!(
+            unnamed(&a).contains(&"binder: F1 in F2".to_owned()),
+            "{order}: the later move is the one cut: {a:?}"
         );
+        assert_eq!(b, a, "{order}: the device that made neither move");
     }
 }
 

@@ -185,6 +185,11 @@ export default tseslint.config(
                 "`@/` is the shared UI's own alias. Outside packages/ui, name the module by its package: `@grimoire/ui/…`.",
             },
             {
+              group: ["@grimoire/ui/lib/ipc/*"],
+              message:
+                "Import the IPC mirror as `@grimoire/ui/lib/ipc`, never a domain file under it: that module is the seam every suite mocks.",
+            },
+            {
               regex: "^([.][.]/)+(packages|apps|infrastructure)/[^?]*$",
               message:
                 "Name another package's module by the package (`@grimoire/ui/…`, `@grimoire/fake/…`), not by a path.",
@@ -196,6 +201,32 @@ export default tseslint.config(
   },
   {
     files: ["packages/ui/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              regex: "^([.][.]/)+(fake|packages|apps|infrastructure)/[^?]*$",
+              message: "Name another package's module by the package (`@grimoire/fake/…`), not by a path.",
+            },
+            // **The IPC mirror is one module to everything but itself** (issue #557): `ipc.ts` is
+            // the barrel over `lib/ipc/*`, and `vi.mock("@/lib/ipc", …)` is the seam 140-odd
+            // suites replace. A page that imported a wrapper from a domain file would go around
+            // every one of those mocks and call the real transport in a test.
+            {
+              regex: "^(@/lib/ipc/|([.]{1,2}/)+(lib/)?ipc/)[^?]*$",
+              message:
+                "Import the IPC mirror as `@/lib/ipc`, never a domain file under it: that module is the seam every suite mocks.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  // The barrel, its domains and the fence that reads them are the mirror's own files.
+  {
+    files: ["packages/ui/lib/ipc.ts", "packages/ui/lib/ipc/**/*.ts", "packages/ui/lib/ipc.test.ts"],
     rules: {
       "no-restricted-imports": [
         "error",

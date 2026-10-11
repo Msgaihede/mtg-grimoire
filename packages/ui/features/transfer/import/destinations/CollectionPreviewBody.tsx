@@ -22,27 +22,41 @@
  * number — doubled every copy the reader had filed in a folder. What a `set` does depends on what
  * the reader already holds, which only the database knows, so the sentence is drawn from
  * `ipc.collectionImportPreview`: the same write, run without writing.
+ *
+ * **Which folder the file lands in is the third question, asked first** (issue #872). A file
+ * says nothing about a reader's filing, so the step asks: `Import into` opens on whatever the
+ * host named — the drawer the reader is standing in, or the one whose menu they pressed — and on
+ * Not sorted otherwise, and offers every drawer the reader made plus a new one named on the spot.
+ * A host that hands no `folders` draws no selector and lands every row at the root, which is the
+ * light app's phone face: it has no folder tree to choose from.
  */
-import { useMemo, useState, type JSX } from "react";
+import { useId, useMemo, useRef, useState, type JSX } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import type { DropdownOption } from "@/components/Dropdown/types";
 import { offerUndo } from "@/lib/bulkUndo";
 import { CONDITIONS, CONDITION_LABEL, type Condition } from "@/lib/conditions";
 import { count, plural, verb } from "@/lib/counts";
+import { FOCUS } from "@/lib/focus";
+import { buildFolderTree, flattenFolders, trailOf } from "@/lib/folderTree";
 import {
   ipc,
   ipcError,
+  type CollectionFolder,
   type DeckFinish,
   type ImportCommitOutcome,
   type TransferImportMode,
 } from "@/lib/ipc";
 import { languageName } from "@/lib/languages";
+import { cn } from "@/lib/utils";
 import type { DestinationPreviewProps, ImportDestination, ImportModeOption } from "../destination";
 import type { ImportDefaults } from "../../prefs";
 import { CommitBar, useImportCommit } from "../shared/CommitBar";
 import { ModeRadios } from "../shared/ModeRadios";
 import { ImportProblems } from "../shared/Problems";
+import { useImport } from "../useImport";
+import { BinderSort, binderDoneMessage } from "./BinderSort";
+import { hasBinders, planBinderImport } from "./binders";
 import { planCollectionImport, type CollectionPlan } from "./collection";
 import { ProblemList } from "./DeckPreviewBody";
 
@@ -68,6 +82,44 @@ export const COLLECTION_MODES: readonly ImportModeOption[] = [
 ];
 
 /**
+ * The same two modes **when the file is going into a folder**, where `set` means something
+ * narrower. Filed into a folder, `walk_import` writes the file's number into *that folder's* row
+ * and counts nothing filed anywhere else — so "including copies in folders" would be the root's
+ * rule told over a press that does not follow it.
+ */
+export const FOLDER_MODES: readonly ImportModeOption[] = [
+  COLLECTION_MODES[0],
+  {
+    key: "set",
+    label: "Set these quantities",
+    hint: "Replaces the quantities in this folder with the file's. Copies elsewhere stay.",
+  },
+];
+
+/** The selector's value for Not sorted — the root, `folderId: null`. */
+const NOT_SORTED = "";
+/** The selector's value for a folder the press will make. Never a number, so never an id. */
+const NEW_FOLDER = "new";
+
+/**
+ * Where the file can be filed — handed in, because the folder list is the face's to read and the
+ * phone face has none.
+ */
+export interface ImportFolderProps {
+  /**
+   * Every folder the collection has, flat — `collection_folder_list`'s answer. Only the reader's
+   * own (`kind: "user"`) are offered: a deck's group asserts the deck holds the copies and
+   * `Recently removed` would be cardboard arriving already discarded.
+   *
+   * **Absent draws no selector**, and every row lands at the root exactly as it always has.
+   */
+  folders?: readonly CollectionFolder[];
+  /** The folder the selector opens on. `null` or absent is Not sorted, and so is an id naming no
+   *  folder of the reader's own — rather than a selector showing a value it cannot offer. */
+  initialFolderId?: number | null;
+}
+
+/**
  * The two fallbacks this step draws, and where a change to them is remembered — handed in, because
  * where they live is the face's question: `useAppStore` on the desktop (`./CollectionPreview`), a
  * store of the phone face's own in the light app. Either way they outlive the step, so a reader
@@ -85,11 +137,15 @@ export interface ImportDefaultsProps {
 export function CollectionPreviewBody({
   list,
   resolved,
+  tags,
   onDone,
   onBack,
   defaults,
   setDefaults,
-}: DestinationPreviewProps & ImportDefaultsProps): JSX.Element {
+  folders,
+  initialFolderId = null,
+}: DestinationPreviewProps & ImportDefaultsProps & ImportFolderProps): JSX.Element {
+  const id = useId();
   const [mode, setMode] = useState("add");
 
   const plan = useMemo(
@@ -97,18 +153,79 @@ export function CollectionPreviewBody({
     [list, resolved, defaults],
   );
 
+  // A ManaBox export names the binder every row is in (issue #873), and is then offered sorted:
+  // folders and decks by binder, rather than the whole file into one place. `binderPlan` is
+  // `null` for every file that names none — which is every file but that one — and the step below
+  // is then exactly the step it always was. Planned over the same `resolved` rows and the same
+  // defaults as `plan`, so the copies the list promises are the copies the groups write.
+  const binderPlan = useMemo(
+    () => (hasBinders(list) ? planBinderImport(list, resolved, tags, defaults) : null),
+    [list, resolved, tags, defaults],
+  );
+  const [byBinder, setByBinder] = useState(true);
+  const sorting = binderPlan !== null && byBinder;
+  const { importBinders } = useImport();
+
+  /**
+   * The reader's own drawers, top to bottom in the order the wall draws them, each labelled with
+   * its whole path — a closed trigger reading `Rares` cannot say which binder's.
+   */
+  const drawers = useMemo(() => {
+    const own = (folders ?? []).filter((folder) => folder.kind === "user");
+    return flattenFolders(buildFolderTree(own, [])).map((node) => ({
+      id: node.folder.id,
+      name: node.folder.name,
+      path: trailOf(own, node.folder.id)
+        .map((folder) => folder.name)
+        .join(" / "),
+    }));
+  }, [folders]);
+
+  const [target, setTarget] = useState(() =>
+    drawers.some((drawer) => drawer.id === initialFolderId) ? String(initialFolderId) : NOT_SORTED,
+  );
+  const [newName, setNewName] = useState("");
+  const making = target === NEW_FOLDER;
+  /** The folder the selector names, or `null` for Not sorted and for one not made yet. */
+  const chosenId = target === NOT_SORTED || making ? null : Number(target);
+  const chosen = drawers.find((drawer) => drawer.id === chosenId);
+  const intoFolder = making || chosenId !== null;
+  /** Where the sentences say the cards are going. */
+  const where = making
+    ? newName.trim() === ""
+      ? "a new folder"
+      : `a new folder, ${newName.trim()}`
+    : (chosen?.name ?? "your collection");
+
+  /**
+   * The folder this press made, by the name it was made under — so a commit refused after the
+   * folder landed and pressed again files into that folder rather than making a second one beside
+   * it. A changed name is a different folder, and makes one.
+   */
+  const made = useRef<{ name: string; id: number } | null>(null);
+  const folderForCommit = async (): Promise<number | null> => {
+    if (!making) return chosenId;
+    const name = newName.trim();
+    if (made.current?.name === name) return made.current.id;
+    const folder = await ipc.collectionFolderCreate(null, name);
+    made.current = { name, id: folder.id };
+    return folder.id;
+  };
+
   // The same four keys `CollectionPage`'s own writes invalidate on a stepper press
   // (`settle`/`settleFailure`) — `["collection"]` covers both the list and the summary a bulk
   // import moves the same as a single row does, and the other three are what else reads "what
   // is owned": the wishlist's owned-progress, the search wall's owned badges, and every open
-  // deck. That last one is a real move even though this import lands `folder_id: None` and so
-  // touches no deck's group: since schema v25 a theory list's spare column counts exactly the
-  // copies that are in no group, and a 300-row import into the root is 300 of them. It moves
-  // ownership at least as much as one stepper press, so it earns the same invalidation set
-  // rather than a narrower one of its own.
+  // deck. That last one is a real move even though this import files into no deck's group: since
+  // schema v25 a theory list's spare column counts exactly the copies that are in no group, and a
+  // 300-row import into the root or a drawer is 300 of them. It moves ownership at least as much
+  // as one stepper press, so it earns the same invalidation set rather than a narrower one of its
+  // own. `["collection"]` also covers the folder list a new folder has just joined — on a refusal
+  // too, which is `useImportCommit`'s, since the folder may have landed before the import failed.
   const commit = useImportCommit(
     [["collection"], ["wishlist"], ["cards", "search"], ["decks"]],
-    () => ipc.collectionImportCommit(plan.items, mode as TransferImportMode),
+    async () =>
+      ipc.collectionImportCommit(plan.items, mode as TransferImportMode, await folderForCommit()),
   );
 
   // **The items are in the key as one string**, memoised with the plan: TanStack hashes a key on
@@ -118,13 +235,21 @@ export function CollectionPreviewBody({
   // second window's — invalidates it: the dry run is a fact about the rows as they stand.
   const itemsKey = useMemo(() => JSON.stringify(plan.items), [plan.items]);
   const dryRun = useQuery({
-    queryKey: ["collection", "importPreview", mode, itemsKey],
-    queryFn: () => ipc.collectionImportPreview(plan.items, mode as TransferImportMode),
+    queryKey: ["collection", "importPreview", mode, chosenId, itemsKey],
+    queryFn: () => ipc.collectionImportPreview(plan.items, mode as TransferImportMode, chosenId),
     // `add` needs no count — its sentence is the file's own total — and neither does an empty
     // plan. **Off while the write is in flight and after it lands**: the commit invalidates
     // `["collection"]`, and a dry run refetched over the rows it has just written would redraw
-    // the sentence as "nothing changes" in the frame before the dialog closes.
-    enabled: mode === "set" && plan.items.length > 0 && !commit.isPending && !commit.isSuccess,
+    // the sentence as "nothing changes" in the frame before the dialog closes. **And off for a
+    // folder not made yet**: there is no id to ask about and nothing to ask — an empty folder set
+    // to the file's numbers is the file added, which is the sentence `add` draws.
+    enabled:
+      !sorting &&
+      mode === "set" &&
+      !making &&
+      plan.items.length > 0 &&
+      !commit.isPending &&
+      !commit.isSuccess,
     // A refused dry run is said once and the reader can still press Import; retrying it three
     // times with backoff would hold "Counting…" on screen for seconds to say the same thing.
     retry: false,
@@ -132,11 +257,25 @@ export function CollectionPreviewBody({
 
   const runImport = () => {
     if (plan.items.length === 0) return;
+    if (sorting) {
+      // No undo offer: the press is one write per binder, each with a ticket of its own, and
+      // offering the last of them would take back one folder and say it took back the file.
+      // A deck it made is undone the way any deck is — deleting it sends its copies to
+      // `Recently removed`.
+      importBinders.mutate(binderPlan.groups, {
+        onSuccess: (result) => onDone(binderDoneMessage(result)),
+      });
+      return;
+    }
     commit.mutate(undefined, {
       onSuccess: (outcome) => {
         // `?? null`: an outcome from a build (or a test double) that predates the ticket carries
         // no `undoId` at all, and `offerUndo` offers anything that is not `null`.
-        offerUndo("collection", outcome.undoId ?? null, undoLabel(mode, plan));
+        offerUndo(
+          "collection",
+          outcome.undoId ?? null,
+          undoLabel(mode, plan, intoFolder ? where : null),
+        );
         onDone(doneMessage(outcome));
       },
     });
@@ -169,14 +308,53 @@ export function CollectionPreviewBody({
       className="flex min-h-0 flex-1 flex-col"
     >
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
-        {mode === "set" ? (
-          <SetSummary
-            cardCount={plan.items.length}
-            outcome={dryRun.data}
-            error={dryRun.error}
-          />
+        {/* First, because the sentence under it names its answer. Not while sorting by binder:
+            the binders say where every card goes, so a single destination would be a question
+            the press does not ask. */}
+        {folders !== undefined && !sorting && (
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            {/* `Default condition`'s labelling, below, for its reason. */}
+            <label id="collection-import-folder-label" htmlFor="collection-import-folder">
+              Import into
+            </label>
+            <Dropdown
+              id="collection-import-folder"
+              labelledBy="collection-import-folder-label"
+              size="sm"
+              value={target}
+              onChange={setTarget}
+              options={[
+                // What the wall calls the root's shelf, so what the selector calls it.
+                { value: NOT_SORTED, label: "Not sorted" },
+                // Exempt from `sortOptions`: the order is the tree's, which is the wall's.
+                ...drawers.map((drawer) => ({ value: String(drawer.id), label: drawer.path })),
+                { value: NEW_FOLDER, label: "New folder…" },
+              ]}
+              className="bg-surface"
+            />
+            {making && (
+              <input
+                aria-label="New folder name"
+                placeholder="Folder name"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                className={cn(
+                  "h-7 min-w-0 flex-1 rounded-md border border-border bg-surface px-2 text-sm",
+                  "focus:border-accent focus:outline-none",
+                  FOCUS,
+                )}
+              />
+            )}
+          </div>
+        )}
+
+        {/* A sorted press is always `add`, whatever the hidden radios last said. */}
+        {!sorting && mode === "set" && !making ? (
+          <SetSummary cardCount={plan.items.length} outcome={dryRun.data} error={dryRun.error} />
         ) : (
-          <p className="text-sm">{cards(plan.totalCards)} will be added to your collection.</p>
+          <p className="text-sm">
+            {cards(plan.totalCards)} will be added to {sorting ? "your collection" : where}.
+          </p>
         )}
 
         {/* The two facts a text list cannot carry, said before the reader commits rather than
@@ -223,14 +401,36 @@ export function CollectionPreviewBody({
           </div>
         </div>
 
-        <ModeRadios
-          modes={COLLECTION_MODES}
-          value={mode}
-          onChange={setMode}
-          label="How to apply this file"
-        />
+        {binderPlan !== null && (
+          <BinderSort
+            plan={binderPlan}
+            checked={byBinder}
+            onChange={setByBinder}
+            id={`${id}-binders`}
+          />
+        )}
 
-        <CollectionProblems plan={plan} />
+        {/* No radios while sorting: the sorted press is always `add`. A `set` counts every
+            folder's copies toward the file's number, so run once per binder it would have each
+            group rewrite what the others had just written — `importBinderGroups` says so too. */}
+        {!sorting && (
+          <ModeRadios
+            modes={intoFolder ? FOLDER_MODES : COLLECTION_MODES}
+            value={mode}
+            onChange={setMode}
+            label="How to apply this file"
+          />
+        )}
+
+        {/* While sorting, the merges listed are the binders' own: the whole-file plan merges
+            copies across binders, which the sorted press never does. */}
+        <CollectionProblems
+          plan={
+            sorting
+              ? { ...plan, folded: binderPlan.folded, droppedPrices: binderPlan.droppedPrices }
+              : plan
+          }
+        />
 
         <ImportProblems
           unmatched={plan.unmatched}
@@ -242,16 +442,21 @@ export function CollectionPreviewBody({
       <CommitBar
         label="Import"
         pendingLabel="Importing…"
-        pending={commit.isPending}
-        disabled={plan.items.length === 0}
-        message={
-          commit.error === null ? "" : `Couldn't import the list — ${ipcError(commit.error)}`
-        }
-        failed={commit.error !== null}
+        pending={sorting ? importBinders.isPending : commit.isPending}
+        // A new folder with no name is not a folder yet: the backend would refuse it in words, and
+        // a button whose only outcome is that sentence teaches nothing its greying does not.
+        disabled={plan.items.length === 0 || (!sorting && making && newName.trim() === "")}
+        message={commitMessage(sorting ? importBinders.error : commit.error)}
+        failed={(sorting ? importBinders.error : commit.error) !== null}
         onBack={onBack}
       />
     </form>
   );
+}
+
+/** The commit bar's sentence for whichever press the step is making — empty until one fails. */
+function commitMessage(error: Error | null): string {
+  return error === null ? "" : `Couldn't import the list — ${ipcError(error)}`;
 }
 
 /**
@@ -280,9 +485,7 @@ function SetSummary({
     return (
       <div className="space-y-1">
         <p className="text-sm">Updates quantities for {cards(cardCount)}.</p>
-        <p className="text-xs text-dim">
-          Couldn&apos;t preview changes — {ipcError(error)}
-        </p>
+        <p className="text-xs text-dim">Couldn&apos;t preview changes — {ipcError(error)}</p>
       </div>
     );
   }
@@ -343,10 +546,10 @@ function leftInFoldersSentence(n: number): string {
  * cards, a `set` rewrote quantities, and a reader deciding whether to press Undo needs to know
  * which one they would be taking back.
  */
-function undoLabel(mode: string, plan: CollectionPlan): string {
+function undoLabel(mode: string, plan: CollectionPlan, folder: string | null): string {
   return mode === "set"
-    ? `Set quantities from a file of ${cards(plan.items.length)}.`
-    : `Imported ${cards(plan.totalCards)} into your collection.`;
+    ? `Set quantities${folder === null ? "" : ` in ${folder}`} from a file of ${cards(plan.items.length)}.`
+    : `Imported ${cards(plan.totalCards)} into ${folder ?? "your collection"}.`;
 }
 
 /** What `onDone` reports. `removed` only when a `set` removed something — an `add` never does,
@@ -391,9 +594,7 @@ function CollectionProblems({ plan }: { plan: CollectionPlan }): JSX.Element {
       {plan.unknownLanguages.length > 0 && (
         <ProblemList
           caption={`${plural(plan.unknownLanguages.length, "line")} had an unknown language and ${verb(plan.unknownLanguages.length, "was", "were")} matched without it`}
-          lines={plan.unknownLanguages.map(
-            (u) => `line ${u.lineNumber} · ${u.name} — "${u.said}"`,
-          )}
+          lines={plan.unknownLanguages.map((u) => `line ${u.lineNumber} · ${u.name} — "${u.said}"`)}
         />
       )}
 
@@ -416,9 +617,7 @@ function CollectionProblems({ plan }: { plan: CollectionPlan }): JSX.Element {
       {plan.unreadablePrices.length > 0 && (
         <ProblemList
           caption={`${plural(plan.unreadablePrices.length, "line")} had an unreadable purchase price, and will be added without one`}
-          lines={plan.unreadablePrices.map(
-            (u) => `line ${u.lineNumber} · ${u.name} — "${u.said}"`,
-          )}
+          lines={plan.unreadablePrices.map((u) => `line ${u.lineNumber} · ${u.name} — "${u.said}"`)}
         />
       )}
 

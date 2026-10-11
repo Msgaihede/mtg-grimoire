@@ -67,7 +67,7 @@ pub async fn deck_import_commit(
 /// that read a file itself would need one — and since 2026-09-28 Rust opening the *dialog* is
 /// why the page cannot name one either (issue #545): this used to be reachable as
 /// `import_read_file(path)` with any path a script cared to send, which made it a read of any
-/// text file up to 1 MB on the machine, handed straight back to the page.
+/// text file up to 8 MB on the machine, handed straight back to the page.
 ///
 /// Two decisions, and each is a thing that would be wrong the other way:
 ///
@@ -107,7 +107,7 @@ fn open_failed(e: String) -> String {
 /// [`crate::file_dialog::did_not_open`]'s — "The file picker could not be opened — …" — and a
 /// file that would not read is [`read_import_file`]'s: missing, refused, over the cap. The page
 /// draws either under one frame that is true of both, and the sentence says which it was, so
-/// "that file is over 1 MB" is never worded as a broken picker or the other way round.
+/// "that file is over 8 MB" is never worded as a broken picker or the other way round.
 ///
 /// **The one command in this module that takes no state**: it touches no database, so it needs
 /// neither connection and cannot be refused as [`crate::db::BUSY`]. What comes back is
@@ -125,8 +125,8 @@ fn open_failed(e: String) -> String {
 pub async fn import_pick_file(window: tauri::WebviewWindow) -> Result<Option<ImportFile>, String> {
     let dialog = move || {
         crate::file_dialog::modal_to(&window)
-            .set_title("Choose a decklist")
-            .add_filter("Decklist", &DECKLIST_EXTENSIONS)
+            .set_title("Choose a card list")
+            .add_filter("Card list", &DECKLIST_EXTENSIONS)
             .blocking_pick_file()
     };
     let Some(path) = crate::file_dialog::show(crate::file_dialog::FILE_PICKER, dialog).await?
@@ -191,7 +191,7 @@ mod tests {
 
         let refused = read_file(&path).unwrap_err();
 
-        assert!(refused.contains("at most 1 MB"), "{refused}");
+        assert!(refused.contains("at most 8 MB"), "{refused}");
         assert!(
             refused.contains("That file is over"),
             "it says the cap was passed, which is all a bounded read can know: {refused}"

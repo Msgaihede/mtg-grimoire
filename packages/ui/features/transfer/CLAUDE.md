@@ -14,7 +14,7 @@ For global repo workflow, style, and testing conventions, refer to:
 Pure TypeScript logic processes strings. Operating system I/O and file pickers are handled strictly by the host backend; **no absolute filesystem paths ever leak to the webview**.
 
 - **File picking (`chooseDecklist`)**: Calls `import_pick_file`. Opens the native dialog in Rust and returns `{ text, encoding }` (or `null` on cancel).
-  - Enforces a 1 MB file size cap (`MAX_IMPORT_BYTES`), shared with clipboard paste.
+  - Enforces an 8 MiB file size cap (`MAX_IMPORT_BYTES`; 1 MB until issue #873, which a whole ManaBox collection export exceeds), shared with clipboard paste.
   - Non-lossy encoding fallback: Handles UTF-8 BOM, UTF-16 LE/BE, standard UTF-8, and Windows-1252 (with `LEGACY_ENCODING_NOTICE` displayed).
 - **File saving (`saveExport`)**: Calls `export_save_file` with suggested filename and text content; Rust prompts the native save dialog and writes the file.
 - **Store-free multi-face design**: Mobile and light web faces reuse transfer logic without accessing desktop app stores:
@@ -44,7 +44,9 @@ Importing maps raw text or CSV to database entries across two UI steps: text ent
   - Right-clicking a pile heading imports directly into that category via `forcedCategoryName`.
 - **Destination planner (`destinations/deck.ts`)**: Pure TypeScript planner without React or IPC dependencies. Resolves Oracle tag slugs in a single batch query (`oracleTagsForPrintings`) during the `resolve` mutation to prevent preview flicker.
 - **Single-transaction commits**: Imports never run per-line mutations. `deck_import_commit` commits the entire list in one database transaction.
+- **Collection folder target (`Import into`)**: The collection's step files the whole file into one folder — Not sorted, a user folder, or a new top-level one made at the press — via `collection_import_commit`'s `folderId`. The desktop binds it with `collectionDestinationInto({ folderId })` (memoised on the id); the phone face passes no `folders` and draws no selector. See [import-export.md](../../../../docs/reference/import-export.md#importing-into-a-folder).
 - **Replace mode and virtual decks**: Replacing a live deck list releases owned copies to `Recently removed`. Virtual decks have no physical collection links and never release cardboard or prompt to add cards to collection.
+- **ManaBox binders (`destinations/binders.ts`, issue #873)**: A CSV with `Binder Name`/`Binder Type` is offered sorted on the collection step — `deck` binders become new `unspecified`-format decks, cards filed by the auto-sort (`autoCategoryFor`, piles created as `'auto'`), with their copies in the deck's group, every other kind a top-level `user` folder (found case-insensitively or made), rows with no binder the root. Planned with the existing planners over re-indexed sub-lists; written by `useImport`'s `importBinderGroups` as one existing commit per group, always `add`, stopping at the first refusal and naming what landed. The binder pair is `ParsedLine.binder`, never a registry field.
 
 ---
 

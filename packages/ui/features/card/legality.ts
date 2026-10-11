@@ -80,17 +80,17 @@ export interface LegalityRow {
  * ## Why this is not read from `format_specs`
  *
  * That table is the obvious answer and it was written that way first: `schema::migrate` seeds all
- * 25 rows with a `display_name` beside every other rule those formats are judged by, and
+ * 26 rows with a `display_name` beside every other rule those formats are judged by, and
  * `has_legality_data` is literally the column saying which of them appear in this blob. Two
  * things sent it back.
  *
- * **The workbench answers twelve of the twenty-five.** `packages/fake/db.ts`'s
+ * **The workbench answers thirteen of the twenty-six.** `packages/fake/db.ts`'s
  * `format_specs_list` is served from `validation/fixtures.ts`, deliberately — that file is
  * already a hand-copied mirror of the seed and a second mirror is a second place for a cell to
- * drift — and it carries the 12 rows the deck engine's tests need (its own doc says so, measured
- * 2026-08-09). A grid drawing every format through it would therefore show about half its rows as
- * **slugs** in Storybook: `standardbrawl`, `predh`, `oldschool`. That is a page every reader of it
- * would file as a bug, and it would be right to.
+ * drift — and it carries the 13 rows the deck engine's tests need (its own doc says so: 12
+ * measured 2026-08-09, and `unspecified` since). A grid drawing every format through it would
+ * therefore show about half its rows as **slugs** in Storybook: `standardbrawl`, `predh`,
+ * `oldschool`. That is a page every reader of it would file as a bug, and it would be right to.
  *
  * **And it is a query.** `format_specs` is `staleTime: Infinity` but it is still a read that has
  * not landed on the render a popup opens, so the grid would either flash slugs for a frame or

@@ -3830,8 +3830,9 @@ virtualised wall is enough to settle where the panel mounts, and root-mounting i
 that traps nothing as well as on one that traps both, so nothing here moves. What it is not is a
 licence to anchor a hint inside a deck table row: the placement is the hook's, not the caller's.)
 A panel whose DOM node lives outside the whole tree, at `LAYER.tooltip`
-(`z-47` since 2026-09-03, above every dialog rung because a hint can be shown over the deck
-editor's dialogs — and over a nested overlay, which is what moved it off 46 — below
+(`z-48` since 2026-10-11, above every dialog rung because a hint can be shown over the deck
+editor's dialogs — and over a nested overlay, which is what moved it off 46, and over a context
+menu opened from inside a dialog (`LAYER.menuOverDialog`, issue #846), which moved it off 47 — below
 `gate`'s 50 because `SyncProgress` covers the window and a hint floating over it would describe
 something the reader cannot see), needs neither raised further nor clipped by an
 `overflow-hidden` scroller. `PrintingPreview` was what paying the alternative cost: it
@@ -4109,7 +4110,8 @@ one survives a rebuild and reads as a failed change. Three steps, none of which 
    shows the bytes it will actually paint. Composite them over a light ground — over a dark one
    the old tile and the new mark are nearly the same picture, which is the whole reason this
    shipped.
-2. **Read `target/debug/build/mtg-grimoire-*/out/resource.rc`.** `tauri-build` writes it,
+2. **Read `target/debug/build/mtg-grimoire-*/out/resource.rc`** (in an agent worktree,
+   `target/cache/debug/build/…`: the build cache has its own folder there). `tauri-build` writes it,
    and the `32512 ICON "…"` line names the absolute path it embedded — `32512` is
    `IDI_APPLICATION`, the icon the shell reads off the exe.
 3. **Search the sibling `resource.lib` for the literal PNG bytes** of a new entry and of the one it
@@ -6732,6 +6734,18 @@ exact at every stop the ladder has; a measured one would answer a frame late.
   a second string built in the tile: the page owns the words, the tile owns the type. `null` draws
   nothing — never `Bracket ?`, never a skeleton, never a dash — which is exactly what the caption
   segment did before it.
+- **The reader's deck tags are a third thing in that overlay, and deliberately not a third mark**
+  (issue #834, user schema v62). They are a `<ul aria-label="Tags">` in the same box, one row
+  packed to the right: **above** the two marks when the deck wears either, and on the art's
+  bottom edge **in their place** when it wears neither. `TILE_TAG` takes `TILE_MARK`'s box and
+  scale and not its face — neutral border and ink, the reading face, the reader's own capitals —
+  because gold mono capitals are how the tile spells what the *app* says about a deck. The row is
+  exactly one tag tall with `flex-wrap-reverse` and `overflow-hidden`, so tags that do not fit are
+  clipped whole instead of cut through a word; nothing counts the hidden ones, and the full list
+  is in Deck settings. Measured in Storybook at 100% (Chromium, 2026-10-11): the row is 18px
+  tall, 4px above the pill and 6px in from the art's edge either way, and three surplus tags
+  wrapped to a second line that the box clipped whole. Not yet measured in the shipped WebView2
+  window, nor at the zoom ladder's two ends.
 
 ### The 20px that three objects now share
 

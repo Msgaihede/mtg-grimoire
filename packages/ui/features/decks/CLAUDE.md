@@ -24,6 +24,7 @@ Pure TypeScript engine analyzing deck rules:
   - Two validation entry points:
     - `validateDeck`: Evaluates the whole deck (deck size floors/ceilings, copy limits, overall legality).
     - `validateForMarks`: Evaluates individual cards rendered in views to render rule-break marks on card tiles. Inactive piles are evaluated for mark warnings but excluded from deck totals.
+    - Both return `[]` when `spec.validates` is false — the `unspecified` format (corpus schema 7), for decks whose format nobody has chosen yet (the ManaBox import). Read the cell, never the key; surfaces say **Not checked**, never "No issues".
   - `singleton.ts`: Evaluates exceptions derived from oracle text rules (e.g. Relentless Rats, Seven Dwarves), never static card name lists.
   - `commanders.ts` & `companions.ts`: Enforces eligibility, partner combinations (Partner, Friends Forever, Choose a Background), color identity rules, and companion deck constraints.
   - `bracket.ts` (`estimateBracket`): Advisory Commander power floor calculation (ranks 2–4). Returns `BASE_FLOOR = 2`; never returns 1 or 5 (which represent player intent). Does not invalidate decks.
@@ -84,6 +85,29 @@ Normalized via `deckKind.ts` (`regular`, `theory`, `virtual`):
   - `NoteEditor.tsx` (both bands' editor) passes `injectCSS: false`: Tiptap's default appends a runtime stylesheet the shipped CSP refuses. Its header has what that sheet carried and why no rule replaced it.
   - To-do band: Structured deck checklists (`deck_todo_lists`) supporting item completion and ordering.
 - **Keyboard focus handling**: Floating toolbars automatically avoid intercepting typing gestures while text inputs or note editors have active focus.
+- **Deck tags (`deckTags.ts`, `DeckTagsField.tsx`)**: The reader's free text about a whole deck (`decks.tags`, user schema v62) — not Scryfall tags and not deck labels ([DOMAIN_VOCABULARY.md](../../../../docs/agent/DOMAIN_VOCABULARY.md)).
+  - Edited in Deck settings only; `DeckSettingsForm` draws the field when a host passes `tagsInUse`, so the create dialog draws none.
+  - A tag write sends the whole list (`deckUpdate({ tags })`, `[]` clears). `DeckSettingsDialog` holds the list it last sent until the row catches up, so a second tag is built on the first.
+  - Suggestions are `tagsInUse(deck_list)` — there is no table of tags. Compare two tags with `tagKey`/`hasTag`, which fold capitals exactly as Rust's `clean_tags` does.
+  - `DeckTile` draws them in one row on the art: above the badge and bracket marks, or on the art's bottom edge when the deck has neither. Outside the tile's `<button>`, like the marks.
+
+---
+
+## 5a. The Editor's Seams & Re-render Scope (issue #557)
+
+`DeckEditor.tsx` is still the one entry (`<DeckEditor key={openDeckId} deckId={openDeckId} />`, plus the re-exports its tests import), split along the seams it already had:
+
+| File | Owns |
+| --- | --- |
+| `DeckEditor.tsx` | Which deck and which list (variant + its restore), every read and write, the `Layer` slot, the menus, the banners, the bands below the desk. |
+| `DeckDesk.tsx` | How the deck is *looked at*: view, group-by, sort, the filter box and label chips — and what derives from them (`shown`, `groups`, selection order, card walk, `actions`, `viewProps`). Draws the toolbar, the undocked bar and the desk row; the editor's parts arrive as slots (`header`, `tools`, `notices`, `dock`). |
+| `DeckEditorHeader.tsx` | The header's first line (back, name, Theory/Actual, Compare, transfer pair, actions) and its width constants. |
+| `DeckEditorLayers.tsx` | The `Layer` union, `layerMatches`, and every overlay, mounted as a fragment at the editor's top level. |
+| `useDeckDrops.ts` / `useDeckKeyboard.ts` | Every write a drop makes (plus the caret hand-off); the undo/redo and Delete bindings on `window`. |
+
+- **State lives where it is drawn.** The filter is `DeckDesk`'s, so a keystroke never re-renders the editor, the header, the ledger, the docked search wall, or the stats/tokens/notes/to-do bands. Do not lift desk state back into the editor; hand the desk a stable callback instead. `DeckDesk.test.tsx` measures this with render-counting probes.
+- **Memo only holds on stable props.** The four views, `CardStack`, each view's per-pile component, `DeckLedger`, `DeckNotesPanel`, `DeckTodosPanel` and `DeckEditorHeader` are `React.memo`. Callbacks handed down are `useCallback` over `mutate`/`mutateAsync` (stable) — never over a whole mutation object (fresh every render) — or read through a ref.
+- **Per-pile memo compares rows, not arrays** (`views/sameDrawn.ts`): a filter rebuilds every `CardGroup`, but a pile whose row objects are the same in the same order is not redrawn. Never make that comparator deep — a re-read replaces rows precisely when a price or count may have moved.
 
 ---
 

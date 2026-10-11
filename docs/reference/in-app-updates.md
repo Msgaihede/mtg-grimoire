@@ -59,12 +59,24 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   panel's argument — *"half-rendered markdown reads worse than none"* — instead of abandoning
   it: the worst case is exactly what the `<pre>` used to give. A dependency was not an option
   either way, since the shipped CSP is `script-src 'self'` and there is no
-  `dangerouslySetInnerHTML` anywhere in `packages/ui/`. Three display decisions live there and nowhere
+  `dangerouslySetInnerHTML` anywhere in `packages/ui/`. Three display decisions for that shape live there and nowhere
   else: the leading version heading is dropped (the row above already says the version and the
   date), the commit trailer is stripped, and identical bullets collapse — release-please writes
   one message twice when it lands on two branches, which is what v0.9.1's changelog shows.
   Only an `https:` link becomes an anchor; anything else keeps its words and loses its link,
   the webview's end of the fence `update_open_release_page` already applies in Rust.
+- **A release's body is written from its pull requests, not by release-please, once its
+  `changelog/<version>.md` exists** (built 2026-10-11; no release has been published that way
+  yet — [ci-and-releases.md](ci-and-releases.md), *Release notes are written from pull
+  requests*). `release.yml`'s `publish` sets it from `changelog/<version>.md`; the releases
+  published before that get theirs from backfilled files, by `cli.mjs push --all`, when the owner
+  says. So the reader has **two known shapes**: the generator's — `### Highlights`, `### New`,
+  `### Changed`, `### Fixed`,
+  bullets opening with a bold lead or a bold area and closing with `(#860)` — and
+  release-please's, which an install's cache can hold until its next check. One rule was added
+  for the first and nothing was taken away for the second: **the pull request references closing
+  a bullet are dropped**, for the commit trailer's reason, and only there — `see (#12) for why`
+  keeps its words. A release that fell back to release-please's notes draws as it always did.
 - Asset selection is a **suffix** match (`-windows-x64-portable.zip`, `_x64-setup.exe`), never
   a literal name — v0.2.0's assets still carry the app's former product name. `content_type`
   is `application/zip` on **all five**, the `.exe`, `.msi` and `.deb` included, so it

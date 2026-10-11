@@ -100,7 +100,7 @@ const meta = {
           "load. Format **names** are this module's own — `FORMAT_LABEL` names the nine that " +
           "are not their key with a capital letter, and the rule handles the rest. Not " +
           "`format_specs`, and the reason is visible on this very page: the fake serves that " +
-          "table from `validation/fixtures.ts`, which carries 12 of the 25 seeded rows, so a " +
+          "table from `validation/fixtures.ts`, which carries 13 of the 26 seeded rows, so a " +
           "grid drawing 23 formats through it would show eleven **slugs** here.\n\n" +
           "**No footer.** The mockup's *Commander Game Changer* and *Canadian Highlander: 3 " +
           "points* lines are both out of scope (spec §3.1): `CardDetail` carries no " +

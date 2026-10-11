@@ -20,8 +20,13 @@ has the binding rules for that area (the index is in the root file).
   `apps/desktop/src-tauri/src/<module>/mod.rs`, which re-exports the core's module of that name with a glob.
   So `crate::deck::…` in `apps/desktop/src-tauri` is the core's `deck` unless that file defines the item.
 - **The wire between the two is mirrored by hand.** `packages/ui/lib/ipc.ts` is the TypeScript
-  mirror of the Rust structs the commands return, and `packages/ui/lib/ipc.test.ts` reads the Rust
-  source text and fails on drift. The light app's Android host (`apps/light/src-tauri`) and the web
+  mirror of the Rust structs the commands return — since 2026-10-11 a barrel over one file per
+  domain in `packages/ui/lib/ipc/` (cards, collection, wishlist, decks, transfer, home, tags,
+  combos, scanner, share, sync, prefs, app; the transport in `invoke.ts`), behind the same `ipc`
+  object — and `packages/ui/lib/ipc.test.ts` reads the Rust
+  source text and fails on drift. **Every** `export interface` there is held to the Rust struct of
+  its name (or the one its `renamed` entry names) field for field, or sits on `unmirrored` with
+  a one-line reason — a new interface on neither fails by name (issue #557). The light app's Android host (`apps/light/src-tauri`) and the web
   host (`crates/grimoire-web`) link the same core, so they answer the same mirror.
 - Where each folder sits, and where it was before 2026-10-08:
   [repository-layout.md](../reference/repository-layout.md).

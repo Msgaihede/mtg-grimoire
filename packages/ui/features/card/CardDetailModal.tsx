@@ -66,6 +66,7 @@ import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { RECENT_CARDS_ROOT } from "@/features/home/keys";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import { Dialog, type DialogFlanks } from "@/components/Dialog";
+import { useContextMenu } from "@/components/menu/useContextMenu";
 import { DEFAULT_VARIANT, useDeck } from "@/features/decks/useDeck";
 import { useDeckFolders } from "@/features/decks/useDeckFolders";
 import { useDecks } from "@/features/decks/useDecks";
@@ -98,7 +99,7 @@ import { refreshCardSearches } from "@/lib/searchMarks";
 import { ACTION, ACTION_PRIMARY } from "./actionButtons";
 import { copyFinish, copyOption, finishRefusal } from "./copyEdit";
 import { ownsArrowKeys } from "./arrowKeys";
-import { useOptionalAddCardToDeck } from "./cardMenu";
+import { buildCardMenu, useOptionalAddCardToDeck, type CardMenuDeps } from "./cardMenu";
 import { cardDetailKey } from "./cardDetailKey";
 import { cardHoldingsKey, cardPrintingsKey } from "./cardKeys";
 import { useHoldingsFreshness } from "./useHoldingsFreshness";
@@ -1501,6 +1502,29 @@ function Body({
   const target = card === null ? null : cardTarget(card);
 
   /**
+   * The card menu on the picture — issue #846, and the card pane's right-click carried into the
+   * modal that replaced it.
+   *
+   * **`printingsDeck` is the modal's own deck slot**, so the menu's `View all printings` opens the
+   * same wall the `onViewAll` button below does: with a deck row behind the modal a press in there
+   * swaps that row's printing rather than browsing. The finish is {@link railFinish}, the one the
+   * reader is looking at, so `Add to → Collection` records the copy on screen.
+   *
+   * The menu is drawn over this modal's scrim because `ContextMenu` reads its opener: one inside a
+   * `role="dialog"` takes `LAYER.menuOverDialog`. Until that rung existed, wiring this would have
+   * opened a menu behind the scrim, which is why the pane's right-click did not survive the move.
+   */
+  const { menu } = useContextMenu();
+  const menuDeps = useMemo<CardMenuDeps>(
+    () => ({ ...deps, printingsDeck: scope.deck }),
+    [deps, scope.deck],
+  );
+  const artMenu =
+    target === null
+      ? undefined
+      : menu(() => buildCardMenu({ ...target, finish: railFinish ?? undefined }, menuDeps));
+
+  /**
    * The rail's surface-specific entries.
    *
    * **`Set as commander` is deliberately not among them.** Spec §7 lists it beside `Set deck
@@ -1523,17 +1547,14 @@ function Body({
   /**
    * `Add to deck`'s decks — **a `Dropdown` inside the panel, and never the card menu's picker.**
    *
-   * `packages/ui/CLAUDE.md` states the reason as a rule with a shipped failure behind it: *a menu opened
-   * from inside a `LAYER.overlay` dialog paints behind that dialog's scrim.* The context menu is
-   * mounted at the app root at `LAYER.popup` and this modal's scrim is at `LAYER.overlay`, two
-   * rungs above it and neither inside the other — the numbers are `layers.ts`'s and are
-   * deliberately not repeated here, because `layers.test.ts` sweeps `packages/ui/` for a spelled z-index
-   * and reads a doc comment as markup. So `menuClick` here would open a picker that is invisible
-   * and unreachable,
-   * with **nothing going red**, because jsdom has no opinion about a z-index. A `Dropdown` is
-   * rendered *inside* the panel, so its `fixed` panel is a descendant of the scrim's own stacking
-   * context and paints above it whatever number it carries. That is also why the printing,
-   * category and label pickers one column over work.
+   * It was forced when it was written: the context menu is mounted at the app root, and until
+   * issue #846 it was drawn at `LAYER.popup` whatever opened it — below this modal's scrim, so
+   * `menuClick` here would have opened a picker that was invisible and unreachable, with **nothing
+   * going red**, because jsdom has no opinion about a z-index. The menu now takes
+   * `LAYER.menuOverDialog` when its opener is inside a dialog, which is what lets the picture's
+   * right-click work. The `Dropdown` stays because it is a control of the panel's own action row
+   * — rendered *inside* the panel, so it paints above the scrim on no rung's say-so, exactly as
+   * the printing, category and label pickers one column over do.
    *
    * **What it costs against the menu's picker is the folder tree and the Theory/Live question.**
    * The tree becomes a dim second fact per row, and the variant is `DEFAULT_VARIANT` — which is
@@ -1763,6 +1784,7 @@ function Body({
                 // A navigation, so the modal goes with it: `setActiveView` clears the open card
                 // on its way to Search, which is what closes this panel (issue #503).
                 onShowSet={showSetInSearch}
+                onContextMenu={artMenu}
               />
             </div>
 

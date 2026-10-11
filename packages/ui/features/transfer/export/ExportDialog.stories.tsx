@@ -239,6 +239,7 @@ function wishRow(card: ReturnType<typeof printing>, over: Partial<WishRow> = {})
   return {
     id: 1,
     legalities: card.legalities,
+    layout: card.layout ?? null,
     oracleId: card.oracleId,
     cardId: card.id,
     // The root of the wishlist. Nothing an export draws reads it — a decklist has no notion of

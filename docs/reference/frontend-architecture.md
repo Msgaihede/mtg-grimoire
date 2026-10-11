@@ -25,7 +25,7 @@ Right-click context menus are owned by a single root provider:
 
 1. **Root-Level Mounting**:
    - `ContextMenuProvider` wraps the app in `App.tsx` and renders the menu container as a **direct sibling of `AppShell`**.
-   - Menus are assigned `LAYER.popup` z-index.
+   - Menus are assigned `LAYER.popup` z-index over a view, and `LAYER.menuOverDialog` when the element they were opened from is inside a `role="dialog"` (`menuLayer` in `ContextMenu.tsx`). A root-mounted menu is a sibling of every dialog's scrim, so at `popup` a menu opened from the card detail modal painted behind it (issue #846).
 2. **Escaping Stacking Contexts**:
    - CSS properties such as `transform`, `filter`, `perspective`, and `contain` create new CSS stacking contexts.
    - Mounting menus inside nested component trees causes their `z-index` to be trapped within the local stacking context, resulting in menus being clipped by overflow containers or rendered behind dialog scrims.
@@ -38,6 +38,10 @@ Right-click context menus are owned by a single root provider:
 ## IPC Mirroring & Text Verification
 
 - **Mirror Maintenance**: TypeScript interfaces in `packages/ui/lib/ipc.ts` mirror Rust DTOs by hand.
+- **One module, thirteen files** (issue #557, 2026-10-11): `ipc.ts` is a barrel. The interfaces and wrappers live in `packages/ui/lib/ipc/<domain>.ts`, each domain exporting a `<domain>Commands` object that the barrel spreads into `ipc`; the transport (`invoke`, `asciiJson`, `ipcError`) is `ipc/invoke.ts`. The barrel re-exports every type with `export type *` and values by name, so a commands object never reaches a page except as part of `ipc`.
+  - Everything outside the mirror imports `@/lib/ipc` — the seam `vi.mock("@/lib/ipc", …)` replaces in 140-odd suites. ESLint refuses `@/lib/ipc/*` and a relative path into the folder.
+  - `ipc.test.ts` reads the barrel and every domain file (a glob) as one text, and fails on a method two domains both define (a spread would keep the last silently) and on a domain the barrel does not re-export.
+  - A new command goes in its domain's object; a new domain is a file in `ipc/`, one `export type *` line and one spread in the barrel.
 - **Verification Fence (`ipc.test.ts`)**:
   - `ipc.test.ts` uses Vite's `?raw` import to load Rust `.rs` files as text.
   - It parses struct definitions and compares field names and casing against the TypeScript mirror to catch drift at test time before runtime serialization errors occur.
@@ -71,3 +75,22 @@ When running the light app (`apps/light/`):
 3. **Routing Model**:
    - Phone Face: Driven by a lightweight, zero-dependency History API router in `apps/light/phone/router.ts` (`usePlace`, `navigate`, `back`).
    - Desktop Face: Driven by the Zustand application store adapted to URL query parameters via `useDesktopPlace.ts`.
+
+---
+
+## IPC Rejections Have One Shape
+
+Hosts used to disagree about what a refused command rejects with: Tauri hands back the Rust command's `Err(String)`, the web host's Worker and the Android table a string too, the fake core an `Error`, and a transport fault whatever it likes. `DeckHistoryDialog` read `error instanceof Error && error.message`, which passed under the fake and on the shipped desktop always replaced the real Rust sentence with a generic one (issue #557).
+
+- `invoke` in `ipc.ts` now runs every rejection through `ipcError`, so an `ipc.*` wrapper **always rejects with a plain string** — the contract the crates already keep, a value the scanner and the light app compare to their sentence constants with `===`, and one that renders as a React child where an `Error` would throw.
+- Render an IPC failure with `ipcError(e)`; it still handles the other shapes, for what does not come through `invoke` (a direct `core.call`, a file read, a `fetch`).
+
+---
+
+## Route-Level Code Splitting
+
+`App.tsx` imports the five everyday views (Home, Search, Collection, Wishlist, Decks) statically and loads the six occasional ones — Scanner, Settings, Tags, Trade, Playtesting, Shared — with `React.lazy`, under one `Suspense` with no fallback around `ActiveView` (inside the shell, so the rail and title bar never blank).
+
+- Measured on 2026-10-11 with `vite build --config apps/desktop/vite.config.ts`: the JavaScript the first page loads (the entry plus its `modulepreload`s) went from 1,966 KiB (591 KiB gzipped) in one file to 1,671 KiB (503 KiB gzipped). `jsQR` is now only in the Settings chunk.
+- The light app splits one level higher too: `LightApp.tsx` loads each face as its own chunk, and the desktop face it loads is this `App`.
+- `App.test.tsx` reads `App.tsx` as text and fails on a static import of any of the six.

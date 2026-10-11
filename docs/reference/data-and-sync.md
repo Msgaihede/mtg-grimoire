@@ -14,7 +14,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `grep -c '^\s*("[a-z_]*", Side::User),'` and the same with `Side::Corpus` over
   `schema.rs` (`crates/grimoire-core/src/` since 2026-10-02) — re-run 2026-09-27 at v54: **32**
   and **25**, and again 2026-10-07 at v60: **34** and **25** (v59's `deck_todo_lists` and v60's
-  `sync_orphans`); **a bare `grep -c 'Side::User'`
+  `sync_orphans`), and 2026-10-11 at v61: **35** and **25** (`sync_heard`); **a bare `grep -c 'Side::User'`
   over-counts** — 37 against 32 at v54 and 39 against 34 at v60, because `mod tests` matches the
   enum by name five more
   times (this said four until v52's stray-table test began asking the registry). Count them,
@@ -550,14 +550,16 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   sentences from here, and says why — `CORPUS_SCHEMA_VERSION` on the rebuildable one, which stood
   at **1** from the split until it grew its first rung on 2026-09-08: **corpus schema
   2**, four prose columns on `combos`, described in
-  [commander-brackets.md](commander-brackets.md). (That sentence said "first and only" and three
+  [commander-brackets.md](commander-brackets.md). (That sentence said "first and only" and five
   more have landed since, all gated on the table's *shape* for the reason
   `schema::migrate_corpus` gives: **corpus schema 3** is `cards.produced_mana` (2026-09-10),
   **corpus schema 4** is `sets.printed_size` (2026-09-15), Scryfall's printed-run denominator,
   written only by the `/sets` fetch — which `sync::sets_need_fetch` now also asks for when the
   table holds rows and not one size, so the column fills at the next sync rather than at the next
-  bulk rotation — and **corpus schema 5** is `cards.type_mask` (2026-09-22), the rung with its
-  own paragraph below.) This page names that rung rather than parking
+  bulk rotation — **corpus schema 5** is `cards.type_mask` (2026-09-22), the rung with its
+  own paragraph below, **corpus schema 6** is `cards.keywords` (2026-09-22), and **corpus
+  schema 7** is `format_specs.validates` with the `unspecified` row it exists for (2026-10-11),
+  described in [decks-storage.md](decks-storage.md).) This page names that rung rather than parking
   the head number beside it, for the reason the next two sentences give about the other half of
   the pair — and note the two scales are **deliberately incomparable**, so nothing may subtract
   one from the other: a user version says what has been done to rows that exist nowhere else, a
@@ -1383,6 +1385,49 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   ⚠️ **The rung moves `USER_SCHEMA_VERSION`, and sync stamps every op with it** — so, like every
   rung, a v59 peer holds a v60 device's ops until it updates, and `pnpm web:deploy-guard`
   refuses a by-hand web deploy from a tree at 60 until a release carries it.
+  **v61 adds `sync_heard`, one row per synced row another device has written — what this device
+  remembers of those writes** (2026-10-11, issue #842). `sync_engine::apply` decided
+  last-writer-wins and add-wins by folding a page with this device's *own* op log, and kept no
+  stamp for anything another device wrote, so with three devices the second of two pulls won
+  whatever its stamp: an older note, an older move and an older delete each beat a newer op heard
+  first, on the one device that wrote neither ([sync.md](sync.md), *…and every other device's,
+  remembered*). **One table, `WITHOUT ROWID`, no index** — `(tbl TEXT NOT NULL, uid TEXT NOT
+  NULL, memory TEXT NOT NULL, PRIMARY KEY (tbl, uid))`. `(tbl, uid)` is the row by the uid it
+  wears, one memory to a row; `memory` is JSON whose shape is `merge::Memory`'s and is spelled
+  nowhere in `schema.rs`, `sync_orphans`' `state` exactly. `apply` asks by row, and its one walk —
+  the cycle-break's, over a folder table's memories — asks by the key's `tbl` prefix, so the key is
+  the only index it needs; the figure in `the_user_schema_is_byte_identical_to_what_the_ladder_builds`
+  went **92 → 93** (35 tables, 55 indexes, 3 autoindexes). **What it costs** is the issue's own
+  estimate: a row for every row a peer has written, about the size of that row — each distinct
+  stamp stored once and named by index, so an insert's twenty fields share one: measured **596
+  bytes** for a copy and **204** for a binder (debug, a 32-character device id), where a stamp
+  spelled beside every field was most of the row. What the peer's own `sync_ops` already holds of
+  it, once, folded rather than per op. On
+  `sync_orphans`' footing everywhere else: not synced, written and read by `sync_engine::apply`
+  alone by hand with no trigger, drawn by no window, `changes::WRITTEN_BY_THE_APP` (the ninth
+  `WITHOUT ROWID` user table), the mirror's decided-about list, `packages/ui/lib/userTables.json`,
+  `TABLE_KEYS` as `sync_heard: []`, `archive::replace` clearing it beside `sync_orphans`, and
+  **`UNDO_V61` at the head of every rewind chain, ahead of `UNDO_V60`**. **The rung creates it
+  empty and backfills nothing**: the ops applied before the upgrade were consumed and the
+  watermark passed them, so a row's memory starts with the first op applied to it after the climb.
+  **v62 adds `decks.tags TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags))`** (2026-10-11,
+  [issue #834](https://github.com/Msgaihede/mtg-grimoire/issues/834)) — the reader's own free-text
+  tags for a deck, a JSON array of strings, `collection_entries.tags`' declaration word for word.
+  **A column and not a table**, v58's argument without v59's reversal waiting behind it: a tag is a
+  word, so there is no row for a uid to name and no table of tags at all. **On the `decks` capture
+  spec as one field**, so last-writer-wins takes the whole list — two devices tagging one deck
+  while apart keep the later one — and the `CHECK` is `json_valid` and nothing narrower, so no
+  shape a newer build sends is refused at apply; `deck::read_tags` reads what it can. With a
+  history row (`tags`, both lists), a place on `deck_undo::DECK_FIELDS` and a seat in
+  `duplicate_deck`, v57's rules. One `ADD COLUMN`, no index, **no trigger off** (it writes no row),
+  so neither figure at the top of this page moves. It owes **`UNDO_V62`** at the head of every
+  chain, ahead of `UNDO_V61` — the same `grep -c` over `'{UNDO_V62}'` counts them (34 on the day:
+  the thirty-two that carried `UNDO_V61` and the two rung tests' own rewinds) — which drops the three
+  `decks` capture triggers before the column for `UNDO_V56`'s reason. One fixture moved with it:
+  `a_rewind_from_v59_lands_on_v58s_exact_shape` reads head's `decks` tail as `todos_open` **and**
+  `tags`. [decks-storage.md](decks-storage.md)'s *Deck tags* has the read, the tidy and the
+  history row. Like every rung it moves `USER_SCHEMA_VERSION`: a v61 peer holds a v62 device's ops
+  until it updates.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every

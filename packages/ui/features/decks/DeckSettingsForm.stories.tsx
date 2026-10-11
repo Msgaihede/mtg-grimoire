@@ -9,10 +9,12 @@ import type { DeckCoverPickerProps } from "./DeckCoverPicker";
 // cannot describe a kind in words the app does not use.
 import { DECK_KIND_HINT, deckKindPatch, type DeckKind } from "./deckKind";
 import { DeckSettingsForm, folderPaths, type DeckSettingsValue } from "./DeckSettingsForm";
+import { tagsInUse } from "./deckTags";
 import { DEFAULT_FORMAT } from "./FormatSelect";
 import { MANAGED_WISHLIST_HINT, MANAGED_WISHLIST_TOKENS_HINT } from "./managedWishlist";
 import { useDeck } from "./useDeck";
 import { useDeckFolders } from "./useDeckFolders";
+import { useDecks } from "./useDecks";
 import { pickerFormats, useFormatSpecs } from "./useFormatSpecs";
 
 /**
@@ -138,7 +140,14 @@ function Body({
     // `AUTO_CATEGORY` for a deck that does not exist — the column's own `DEFAULT 0`, and the
     // only answer a deck with no categories could honestly give.
     defaultCategoryId: row?.defaultCategoryId ?? AUTO_CATEGORY,
+    // `[]` for a deck that does not exist — the column's own `DEFAULT '[]'` (user schema v62).
+    tags: row?.tags ?? [],
   }));
+  // What the Tags field suggests: every tag a seeded deck wears. Read here because the form
+  // mounts no query — and only handed over for a deck that exists, which is what keeps the
+  // field off **New deck** below.
+  const everyDeck = useDecks();
+  const inUse = useMemo(() => tagsInUse(everyDeck.decks), [everyDeck.decks]);
   /**
    * The cover, and **the artist goes with the card rather than surviving it**.
    *
@@ -201,6 +210,7 @@ function Body({
         }}
         categories={categories}
         canSetTheoryMarks={canSetTheoryMarks}
+        tagsInUse={row === null ? undefined : inUse}
         cover={coverProps}
         idPrefix={id}
       />

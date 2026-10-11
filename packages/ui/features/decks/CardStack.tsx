@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { motion, useReducedMotion, type Transition } from "motion/react";
 import { CardChin } from "@/components/CardChin";
 import { useMenuOpener } from "@/components/menu/useContextMenu";
 import { useTooltip } from "@/components/tooltip/useTooltip";
+import { useShownFace } from "@/features/card/shownFace";
 import {
   cardScaleVars,
   CHIN_HEIGHT,
@@ -34,12 +35,14 @@ import {
   DeckCardControls,
   revealedWhenOpen,
   SELECTED_CARD,
+  turnsOver,
   useDeckCardDrag,
   type DeckCardActions,
 } from "./cardControl";
 import { deckCardSlot } from "./dnd";
 import { theoryMatchMark, type TheoryMark, type TheoryPlan } from "./theoryMatch";
 import { ruleBreak, violationsFor } from "./violations";
+import { sameDrawnProps } from "./views/sameDrawn";
 import type { ValidationIssue } from "./validation/types";
 
 /**
@@ -716,8 +719,16 @@ const NONE_LANDED: ReadonlyMap<number, number> = new Map();
  * open card, and two would push the tail of the pile twice as far over whatever is below it.
  * And **still no dependency of {@link stackHeight}** on any of it: the height is the count and
  * the zoom, so a picked card costs the layout nothing it did not already cost on hover.
+ *
+ * ## Memoised, and on its rows rather than on its array (issue #557)
+ *
+ * A keystroke in the deck's filter box rebuilds every pile's `cards` array, including the piles it
+ * took nothing from, and this is the component that draws a face per card — so it is the one a
+ * keystroke was costing most. `sameDrawnProps` compares that array by its rows, which `buildGroups`
+ * never copies: a pile whose rows are the same objects in the same order is not drawn again. A
+ * re-read of the deck replaces the rows and is drawn as ever. `views/sameDrawn.ts` has the rule.
  */
-export function CardStack({
+export const CardStack = memo(function CardStack({
   cards,
   label,
   currency,
@@ -811,7 +822,7 @@ export function CardStack({
       ))}
     </ul>
   );
-}
+}, sameDrawnProps);
 
 /**
  * One card in the stack: **the whole card**, with the app's marks over it.
@@ -923,6 +934,9 @@ function StackedCard({
   // any other pile. The virtual one is the deck's and cannot be read off the row, which is why
   // it arrives as a prop — see `deckCardShort`.
   const short = deckCardShort(card, tracksCollection);
+  // The side the reader turned this card to — issue #844's flip button under the stepper and the
+  // card menu's row, both of which write `shownFace` for a card {@link turnsOver} admits.
+  const shownFace = useShownFace(turnsOver(card) ? card.cardId : null);
 
   return (
     // Collapsed, pulled up over its neighbour; open, standing 8px clear of it. The margin is
@@ -1020,6 +1034,7 @@ function StackedCard({
         <DeckCardFace
           card={card}
           width={stackCardWidth(zoom)}
+          face={shownFace}
           ruleBreakText={ruleBreakText}
           theoryMark={theoryMark}
           noted={noted}

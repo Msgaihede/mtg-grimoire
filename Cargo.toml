@@ -16,7 +16,10 @@
 # says `target`. The file restates cargo's default on purpose: a nested worktree with no file of
 # its own reads the main checkout's, and builds into that tree — `.cargo/config.toml` has the
 # argument. A debug build keeps `data/` beside its executable, so a checkout's dev database is
-# `target/debug/data`.
+# `target/debug/data`. **An agent worktree keeps what cargo can rebuild apart from that, in
+# `target/cache`** (2026-10-11): `.claude/hooks/worktree-cargo.toml` is a cargo config for the
+# worktrees alone, with the measurements, and it also turns their incremental cache off and
+# trims their debug info. Nothing in it reaches this manifest's profiles in any other checkout.
 #
 # **`crates/card-scanner` is excluded on purpose**, and the `exclude` is not optional: a path
 # dependency that lives under the workspace root becomes a member automatically. It stays a

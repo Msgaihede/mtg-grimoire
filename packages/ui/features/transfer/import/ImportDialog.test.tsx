@@ -166,6 +166,7 @@ const DECK: DeckRow = {
   todosOpen: false,
   defaultCategoryId: 0,
   bracket: 0,
+  tags: [],
   updatedAt: 1_800_000_000,
 };
 
@@ -335,13 +336,13 @@ function wrap(ui: ReactElement) {
  * element's first painted frame carries its `initial`, so `toBeVisible` is false for the whole
  * of a newly opened overlay until the next frame, `MotionGlobalConfig.skipAnimations` and all.
  */
-const panel = () => screen.findByRole("dialog", { name: "Import a decklist" });
+const panel = () => screen.findByRole("dialog", { name: "Import cards" });
 
 /** Paste a list and cross to the preview, which is where every claim below but the first two
  *  lives. `paste` rather than `type`: a 105-line list typed a character at a time is a minute
  *  of test, and the box is a plain controlled textarea either way. */
 async function preview(list: string) {
-  const box = await screen.findByLabelText("Decklist");
+  const box = await screen.findByLabelText("Card list");
   await userEvent.click(box);
   await userEvent.paste(list);
   await userEvent.click(screen.getByRole("button", { name: "Preview" }));
@@ -405,7 +406,7 @@ describe("the import dialog", () => {
     const go = screen.getByRole("button", { name: "Preview" });
     expect(go).toBeDisabled();
 
-    await userEvent.click(await screen.findByLabelText("Decklist"));
+    await userEvent.click(await screen.findByLabelText("Card list"));
     await userEvent.paste("1 Sol Ring");
     await waitFor(() => expect(go).toBeEnabled());
     expect(importResolve).not.toHaveBeenCalled();
@@ -717,7 +718,7 @@ describe("the import dialog", () => {
     wrap(<Harness />);
     await panel();
 
-    await userEvent.click(await screen.findByLabelText("Decklist"));
+    await userEvent.click(await screen.findByLabelText("Card list"));
     await userEvent.paste(ARENA_LIST);
     await userEvent.click(screen.getByRole("button", { name: "Preview" }));
     // Prefilled rather than typed, and still the reader's to overwrite.
@@ -870,7 +871,7 @@ describe("the import dialog", () => {
     );
     // Still open, and Back still holds what was pasted: the retry is one press, not a retype.
     await userEvent.click(screen.getByRole("button", { name: "Back" }));
-    expect(await screen.findByLabelText("Decklist")).toHaveValue("1 Sol Ring");
+    expect(await screen.findByLabelText("Card list")).toHaveValue("1 Sol Ring");
     expect(onImported).not.toHaveBeenCalled();
   });
 
@@ -916,7 +917,7 @@ describe("the import dialog", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Back" }));
 
-    expect(await screen.findByLabelText("Decklist")).toHaveValue("1 Sol Ring");
+    expect(await screen.findByLabelText("Card list")).toHaveValue("1 Sol Ring");
     await userEvent.click(screen.getByRole("button", { name: "Preview" }));
 
     // The mode is the destination's, so it is back at the one that cannot clear anything.
@@ -930,7 +931,7 @@ describe("the import dialog", () => {
     wrap(<Harness />);
     await panel();
 
-    await userEvent.click(await screen.findByLabelText("Decklist"));
+    await userEvent.click(await screen.findByLabelText("Card list"));
     await userEvent.paste(ARENA_LIST);
     await userEvent.click(screen.getByRole("button", { name: "Preview" }));
 
@@ -997,7 +998,7 @@ describe("the import dialog", () => {
     await userEvent.keyboard("{Escape}");
 
     expect(onDismiss).toHaveBeenCalledTimes(1);
-    await waitFor(() => expect(screen.queryByLabelText("Decklist")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByLabelText("Card list")).not.toBeInTheDocument());
     expect(screen.getByTestId("trigger")).toHaveFocus();
   });
 
@@ -1015,7 +1016,7 @@ describe("the import dialog", () => {
 
     await waitFor(() => expect(importPickFile).toHaveBeenCalledWith());
     await waitFor(() =>
-      expect(screen.getByLabelText("Decklist")).toHaveValue("4 Lightning Bolt\n2 Sol Ring"),
+      expect(screen.getByLabelText("Card list")).toHaveValue("4 Lightning Bolt\n2 Sol Ring"),
     );
     // A UTF-8 file was read as what it said it was, so there is nothing to say about it.
     expect(screen.queryByText(LEGACY_ENCODING_NOTICE)).not.toBeInTheDocument();
@@ -1033,7 +1034,7 @@ describe("the import dialog", () => {
     await waitFor(() => expect(importPickFile).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByRole("button", { name: "Choose file…" })).toBeEnabled());
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Decklist")).toHaveValue("");
+    expect(screen.getByLabelText("Card list")).toHaveValue("");
   });
 
   /**
@@ -1046,7 +1047,7 @@ describe("the import dialog", () => {
   it.each([
     [
       "the file",
-      "That file is over 1 MB. A decklist is text; this reads at most 1 MB.",
+      "That file is over 8 MB. An import is text; this reads at most 8 MB.",
     ],
     ["the picker", "The file picker could not be opened — task 7 panicked"],
   ])("shows %s refusing, in the backend's words, beside the button", async (_, refusal) => {
@@ -1057,9 +1058,9 @@ describe("the import dialog", () => {
     await userEvent.click(screen.getByRole("button", { name: "Choose file…" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      `Couldn't read a decklist from a file — ${refusal}`,
+      `Couldn't read a card list from a file — ${refusal}`,
     );
-    expect(screen.getByLabelText("Decklist")).toHaveValue("");
+    expect(screen.getByLabelText("Card list")).toHaveValue("");
   });
 
   /**
@@ -1085,7 +1086,7 @@ describe("the import dialog", () => {
     );
     expect(notice).not.toHaveAttribute("role");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    const box = screen.getByLabelText("Decklist");
+    const box = screen.getByLabelText("Card list");
     expect(box).toHaveValue("1 Séance");
     // It describes the box it is about, so a screen reader landing there hears it too.
     expect(box).toHaveAccessibleDescription(LEGACY_ENCODING_NOTICE);
@@ -1116,13 +1117,13 @@ describe("the import dialog", () => {
     await waitFor(() => expect(importPickFile).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(choose).toBeEnabled());
     expect(screen.getByText(LEGACY_ENCODING_NOTICE)).toBeInTheDocument();
-    expect(screen.getByLabelText("Decklist")).toHaveValue("1 Séance");
+    expect(screen.getByLabelText("Card list")).toHaveValue("1 Séance");
 
     importPickFile.mockResolvedValue({ text: "4 Lightning Bolt", encoding: "utf-8" });
     await waitFor(() => expect(choose).toBeEnabled());
     await userEvent.click(choose);
 
-    await waitFor(() => expect(screen.getByLabelText("Decklist")).toHaveValue("4 Lightning Bolt"));
+    await waitFor(() => expect(screen.getByLabelText("Card list")).toHaveValue("4 Lightning Bolt"));
     expect(screen.queryByText(LEGACY_ENCODING_NOTICE)).not.toBeInTheDocument();
   });
 
@@ -1237,6 +1238,7 @@ describe("the import dialog", () => {
       expect(collectionImportCommit).toHaveBeenCalledWith(
         expect.arrayContaining([expect.objectContaining({ condition: "LP", finish: "foil" })]),
         "add",
+        null,
       ),
     );
   });

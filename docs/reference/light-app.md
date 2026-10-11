@@ -2250,6 +2250,8 @@ at the next launch, which a page-held fold could never do.
 - `WishlistPage` → **`useWishEntryWrites.ts`**: the stepper, the removal, the filing and back to any
   printing, plus `setPrinting` (the modal's repoint, which keeps its own copy because it closes
   itself on the answer).
+- Since issue #557 the two hooks above share their optimistic patch, snapshot and restore through
+  **`lib/useOptimisticEntries.ts`**; their exported shapes are unchanged, so nothing here moved.
 - `EditCopy`'s save and the card modal's `Edit` writes → **`useCopyWrites.ts`**; `useCardMenuDeps`'
   two adds → **`card/useCardAdds.ts`**; `UndoNotice`'s behaviour → **`useBulkUndoAction`** in the
   same file. `AllPrintingsDialog`'s own copy of the printing write is left where it is.
@@ -2408,7 +2410,7 @@ viewport — nothing scrolls the document.
 
 | What | 1100 × 600 | 1280 × 650 | 1024 × 700 | 1024 × 560 |
 | --- | --- | --- | --- | --- |
-| A deck's *Import a decklist* | 540 tall, its body scrolls (400 of 451) | 585, scrolls (445 / 451) | 591, fits | 504, scrolls (364 / 451) |
+| A deck's *Import cards* | 540 tall, its body scrolls (400 of 451) | 585, scrolls (445 / 451) | 591, fits | 504, scrolls (364 / 451) |
 | Export (a deck's, the collection's) | 363 / 411, fit | fit | fit | fit |
 | The card modal's middle column | fits, 3 columns | fits, 3 columns | **0px tall** | **0px tall** |
 
@@ -2542,7 +2544,9 @@ to tell the page what it is.
 **What was built.**
 
 - **`apps/light/src-tauri`, a second Tauri project and the workspace's third member** (`grimoire-light`,
-  library `grimoire_light_lib`, crate types `staticlib`/`cdylib`/`rlib`). It holds almost nothing:
+  library `grimoire_light_lib`, crate types `cdylib`/`rlib` — Tauri's template also lists
+  `staticlib`, which is iOS's and was dropped on 2026-10-11: on a desktop it linked a 2.1 GB
+  `.lib` into every workspace build). It holds almost nothing:
   the mobile entry point (`run`, `#[cfg_attr(mobile, tauri::mobile_entry_point)]`), **one command,
   `core_call(name, args, body)`**, which forwards to `grimoire_core::dispatch`, the startup gate
   the page waits on, and the `mtgimg` protocol. No plugin. `core:default` is its one capability.
@@ -7279,7 +7283,8 @@ under *What is still owed* in [sync.md](sync.md), with its fixture in
 - ~~**a copy filed into a binder that was deleted on the receiver**, whose sender later brings
   the binder back, is kept on one device and not the other.~~ **Fixed 2026-10-07** (issue #841);
   what the same experiments found beside it — with three devices, an older edit arriving in a
-  later pull beats a newer one — is issue #842 and still owed.
+  later pull beats a newer one — is issue #842, **fixed 2026-10-11** by user schema v61's
+  memory of what other devices wrote (`sync_heard`; [sync.md](sync.md)).
 
 ## 11. The scanner on a light install — phase 7, a step at a time
 

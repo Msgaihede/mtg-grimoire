@@ -98,6 +98,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import { DecksPage } from "./DecksPage";
+import { coverHint } from "./DeckTile";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { TOOLTIP_OPEN_MS, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { FOLDER_DROP_LINE_ATTR } from "@/components/FolderDropLine";
@@ -146,6 +147,7 @@ const BURN: DeckRow = {
   todosOpen: false,
   defaultCategoryId: 0,
   bracket: 0,
+  tags: [],
 };
 
 /** No cover, so no art and — the plan's ruling — no credit line at all. */
@@ -566,6 +568,57 @@ describe("DecksPage", () => {
 
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
     expect(screen.queryByText(/null/i)).not.toBeInTheDocument();
+  });
+
+  /**
+   * **The reader's description leads the bubble, and the credit stays under it** (issue #840).
+   *
+   * The issue asked for the description *instead of* the artist; Scryfall's art-crop rule (see
+   * the case above) is why it is *before* the artist instead. Both halves are asserted, and in
+   * order: a build that swapped the credit out would fail the second, and a build that appended
+   * the description after the credit would fail the third.
+   */
+  it("leads the cover's hint with the description and keeps the credit under it", async () => {
+    deckList.mockResolvedValue([
+      { ...BURN, description: "  Bolt the face.\nThen bolt it again.  " },
+    ]);
+    wrapWithTips(<DecksPage />);
+
+    const tile = (await tileFor("Burn")).closest("li")!;
+    // Nowhere on the tile itself: the description is a hover away, like the credit.
+    expect(within(tile).queryByText(/Bolt the face/)).not.toBeInTheDocument();
+
+    const panel = await hintOn(tile.querySelector("img")!.parentElement!);
+    expect(panel).toHaveTextContent("Bolt the face. Then bolt it again.");
+    expect(panel).toHaveTextContent("Art by Rebecca Guay");
+    expect(panel.textContent!.indexOf("Bolt")).toBeLessThan(panel.textContent!.indexOf("Art by"));
+  });
+
+  /**
+   * A coverless deck has no picture to credit, but it still has the reader's words — so its
+   * frame, which bound nothing before, now binds the description alone.
+   */
+  it("shows the description on a coverless frame, with no credit", async () => {
+    deckList.mockResolvedValue([{ ...DRAFT, description: "Whatever the pod brings." }]);
+    wrapWithTips(<DecksPage />);
+
+    const tile = (await tileFor("Sunday draft")).closest("li")!;
+    const panel = await hintOn(within(tile).getByText("No cover").parentElement!);
+    expect(panel).toHaveTextContent("Whatever the pod brings.");
+    expect(panel).not.toHaveTextContent(/Art by/);
+  });
+
+  /**
+   * The edges, without a clock: a description of whitespace is no description, so the hint is
+   * the plain credit it always was — and a deck with neither binds nothing, which is the
+   * coverless case above.
+   */
+  it("treats a blank description as none", () => {
+    expect(coverHint({ description: "  \n ", coverArtist: "Rebecca Guay" })).toBe(
+      "Art by Rebecca Guay",
+    );
+    expect(coverHint({ description: "   ", coverArtist: null })).toBeNull();
+    expect(coverHint({ description: null, coverArtist: null })).toBeNull();
   });
 
   /**
@@ -1053,6 +1106,92 @@ describe("DecksPage", () => {
       expect(said.className).toContain("sr-only");
     });
 
+    /**
+     * **The reader's own tags, in a row on the art** (`decks.tags`, user schema v62, issue #834).
+     *
+     * Three facts, and the third is the one a tile can lose without anything else going red: the
+     * tags are drawn in the reader's order, a deck with none draws no row at all, and the row is
+     * **outside** the tile's button — the badge's rule, for its reason. Inside it, the tile would
+     * be named `Altar … No Gamechangers Budget`, and a deck called *Budget* could not be told
+     * from a deck tagged it.
+     */
+    it("draws a deck's tags on its tile, in order, and leaves the tile named for its deck", async () => {
+      deckList.mockResolvedValue([{ ...ALTAR, tags: ["No Gamechangers", "Budget"] }, ZOO]);
+
+      wrap(<DecksPage />);
+      await waitFor(() => expect(wallIds()).toEqual([11, 12]));
+
+      const altar = await screen.findByRole("button", { name: /^Altar/ });
+      const row = within(altar.closest("li")!).getByRole("list", { name: "Tags" });
+      expect(within(row).getAllByRole("listitem").map((tag) => tag.textContent)).toEqual([
+        "No Gamechangers",
+        "Budget",
+      ]);
+      expect(altar).not.toContainElement(row);
+      expect(altar).not.toHaveTextContent("Budget");
+
+      const zoo = (await tileFor("Zoo")).closest("li")!;
+      expect(within(zoo).queryByRole("list", { name: "Tags" })).not.toBeInTheDocument();
+    });
+
+    /**
+     * **Above the marks where there are marks, and in their place where there are none** — the
+     * issue's own wording. Altar is a Commander deck and wears a bracket pill; Zoo is a Modern
+     * list read against the binder and wears nothing, so its row sits on the art's bottom edge
+     * rather than a mark's height above an empty one.
+     *
+     * `classList.contains` and never a substring match on `className`: the two offsets share
+     * most of their spelling, and jsdom has no layout to measure the difference with.
+     */
+    it("sits the tag row over the marks, and on the art's edge when there are none", async () => {
+      deckList.mockResolvedValue([
+        { ...ALTAR, tags: ["Budget"] },
+        { ...ZOO, tags: ["Meme"] },
+      ]);
+
+      wrap(<DecksPage />);
+      await waitFor(() => expect(wallIds()).toEqual([11, 12]));
+
+      const commander = (await tileFor("Altar")).closest("li")!;
+      const modern = (await tileFor("Zoo")).closest("li")!;
+      // The pill has to be there for the first half to mean anything.
+      expect(await within(commander).findByText("Bracket 3")).toBeInTheDocument();
+
+      const raised = "bottom-[calc(1.625rem*var(--mark-scale,1)_+_2px)]";
+      const onTheEdge = "bottom-[calc(0.375rem*var(--mark-scale,1))]";
+      const over = within(commander).getByRole("list", { name: "Tags" });
+      const alone = within(modern).getByRole("list", { name: "Tags" });
+      expect(over.classList.contains(raised)).toBe(true);
+      expect(over.classList.contains(onTheEdge)).toBe(false);
+      expect(alone.classList.contains(onTheEdge)).toBe(true);
+      expect(alone.classList.contains(raised)).toBe(false);
+    });
+
+    /**
+     * **The row is placed by the pill that is coming, not by the pill that has come.** A
+     * Commander deck left on Auto has no label until `deck_bracket_reads` answers; placed by the
+     * label alone, its tags would be drawn on the art's edge and then lifted a mark's height when
+     * the estimate landed — a row moving under the reader's eye every time the gallery opens.
+     *
+     * The read never answers here, so the pill never arrives: the row has to be raised anyway.
+     */
+    it("holds the tag row clear of a bracket pill that has not arrived yet", async () => {
+      deckBracketReads.mockReturnValue(new Promise(() => {}));
+      deckList.mockResolvedValue([{ ...ALTAR, bracket: 0, tags: ["Budget"] }, ZOO]);
+
+      wrap(<DecksPage />);
+      await waitFor(() => expect(wallIds()).toEqual([11, 12]));
+
+      const commander = (await tileFor("Altar")).closest("li")!;
+      const row = within(commander).getByRole("list", { name: "Tags" });
+      expect(within(commander).queryByText(/Bracket/)).not.toBeInTheDocument();
+      await waitFor(() =>
+        expect(
+          row.classList.contains("bottom-[calc(1.625rem*var(--mark-scale,1)_+_2px)]"),
+        ).toBe(true),
+      );
+    });
+
     /** …and it asks about exactly the ones that do, whichever wall they are on. The ids are
      *  sorted and de-duplicated before they enter the query key, so the argument is `[12]` rather
      *  than whatever order `deck_list` answered in. */
@@ -1174,7 +1313,7 @@ describe("DecksPage", () => {
     // preview step, beside the tally its format changes — so the list has to be read before
     // there is a select to look at. What the claim is about is unchanged: the answer this
     // screen resolved reaches both surfaces that make a deck.
-    await userEvent.click(await screen.findByLabelText("Decklist"));
+    await userEvent.click(await screen.findByLabelText("Card list"));
     await userEvent.paste("1 Sol Ring");
     await userEvent.click(screen.getByRole("button", { name: "Preview" }));
 
@@ -1229,7 +1368,7 @@ describe("DecksPage", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Import deck" }));
 
-    expect(await screen.findByRole("dialog", { name: "Import a decklist" })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "Import cards" })).toBeInTheDocument();
     // The gallery has no deck open, so there is nothing to merge into and no choice to offer.
     expect(screen.queryByLabelText(/^Merge/)).not.toBeInTheDocument();
   });
@@ -1248,7 +1387,7 @@ describe("DecksPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Import deck" }));
 
     await waitFor(() => expect(screen.getAllByRole("dialog")).toHaveLength(1));
-    expect(screen.getByRole("dialog", { name: "Import a decklist" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Import cards" })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "New deck" }));
 
@@ -1263,7 +1402,7 @@ describe("DecksPage", () => {
     await screen.findByRole("list", { name: "Your decks" });
     await userEvent.click(screen.getByRole("button", { name: "Import deck" }));
 
-    await userEvent.click(await screen.findByLabelText("Decklist"));
+    await userEvent.click(await screen.findByLabelText("Card list"));
     await userEvent.paste("1 Sol Ring");
     await userEvent.click(screen.getByRole("button", { name: "Preview" }));
     // The name is the destination's question and is asked on its own step.

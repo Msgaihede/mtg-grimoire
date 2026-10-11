@@ -15,6 +15,8 @@ import { defaultRangeExtractor, useVirtualizer, type Range } from "@tanstack/rea
 import { CardArt } from "@/components/CardArt";
 import { CardChin } from "@/components/CardChin";
 import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
+import { FlipFaceButton } from "@/features/card/FlipFaceButton";
+import { useShownFace } from "@/features/card/shownFace";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import {
   cardDraggable,
@@ -111,6 +113,15 @@ export interface GridCard {
  * about the *printing*. Six of the seven walls pass no `key` at all and are untouched.
  */
 const tileKey = <T extends GridCard>(card: T): string => card.key ?? card.id;
+
+/**
+ * Whether a tile turns over — the caller's {@link CardGrid} `flips`, for a tile that has a
+ * printing at all. A row with no printing (`id === ""`, a wish whose card has left the database)
+ * draws the no-art frame, and there is nothing to turn whatever its layout says. One function
+ * because the button, the picture and the menu's third argument must agree.
+ */
+const turnsOver = <T extends GridCard>(card: T, flips?: (card: T) => boolean): boolean =>
+  card.id !== "" && (flips?.(card) ?? false);
 
 /**
  * How wide a tile is at 100%, in px — **the width itself, not a floor** (changed 2026-08-14).
@@ -404,6 +415,7 @@ export function CardGrid<T extends GridCard>({
   gameChanger,
   action,
   column,
+  flips,
   caption,
   money,
   cardMenu,
@@ -655,6 +667,25 @@ export function CardGrid<T extends GridCard>({
    */
   column?: (card: T) => ReactNode;
   /**
+   * Whether a tile's card has a back to turn to — issue #844, the flip that does not need the
+   * card modal. `hasBackFace` (`@/features/card/printings`) on the row's layout is the answer
+   * every caller gives.
+   *
+   * **A yes draws two things.** The picture follows `features/card/shownFace` — face 1 once the
+   * reader has turned the printing over, here or anywhere else it is drawn — and a flip button
+   * stands at the foot of the {@link column}, directly **under the quantity controls** where a
+   * wall has them, and alone in that same right-hand margin where it does not (the search's and
+   * the tags' walls, whose one control is the {@link action} strip). It is the column's box, so it
+   * reveals with the column, on hover or focus, and costs the wall no height.
+   *
+   * **The right-click half is the caller's**: a wall knows nothing about menus beyond where a
+   * handler goes ({@link cardMenu}), so a surface passing this sets `flip` on its menu target too.
+   *
+   * Absent means no tile turns, which is what a wall whose rows carry no layout must draw. Hold it
+   * still (module scope, or a `useCallback`) — see {@link dragPayload}.
+   */
+  flips?: (card: T) => boolean;
+  /**
    * What the chin says about the printing, replacing the `SET · number` it says by default.
    *
    * **The wishlist's wall is why this exists, and it is a correctness slot rather than a
@@ -703,8 +734,18 @@ export function CardGrid<T extends GridCard>({
    * whose menu acts on several cards has them in hand — and only when the right-clicked card is
    * one of them, which is what makes a right-click outside the set about the card under the
    * pointer. Empty for every ordinary press, and a caller that takes one argument is unchanged.
+   *
+   * **The third argument is whether this tile turns over** — {@link flips}' answer for it (issue
+   * #844), handed to the builder so it can set `flip` on its menu target and offer "Flip card".
+   * Here rather than recomputed at the surface because a surface's builder is usually shared
+   * with a list layout of the same rows, which draws no picture: the wall is the one that knows
+   * it is drawing one.
    */
-  cardMenu?: (card: T, picked: readonly T[]) => ((e: ReactMouseEvent) => void) | undefined;
+  cardMenu?: (
+    card: T,
+    picked: readonly T[],
+    flip: boolean,
+  ) => ((e: ReactMouseEvent) => void) | undefined;
   /**
    * The same menu, from the keyboard — `menuKey`'s handler, for Shift+F10 and the ContextMenu
    * key.
@@ -720,7 +761,11 @@ export function CardGrid<T extends GridCard>({
    * the tile holds the caret. The primitive decides which presses count and leaves a text field
    * alone.
    */
-  cardMenuKey?: (card: T, picked: readonly T[]) => ((e: ReactKeyboardEvent) => void) | undefined;
+  cardMenuKey?: (
+    card: T,
+    picked: readonly T[],
+    flip: boolean,
+  ) => ((e: ReactKeyboardEvent) => void) | undefined;
   /**
    * Each drawn tile's root element, as it mounts — the seam a caller needs to make tiles
    * draggable, since a drag library is handed elements and this wall builds its own.
@@ -1546,12 +1591,14 @@ export function CardGrid<T extends GridCard>({
     [drawn, picked],
   );
   const tileMenu = useCallback(
-    (card: T) => cardMenu?.(card, picked.selected(tileKey(card)) ? pickedRows : []),
-    [cardMenu, picked, pickedRows],
+    (card: T) =>
+      cardMenu?.(card, picked.selected(tileKey(card)) ? pickedRows : [], turnsOver(card, flips)),
+    [cardMenu, picked, pickedRows, flips],
   );
   const tileMenuKey = useCallback(
-    (card: T) => cardMenuKey?.(card, picked.selected(tileKey(card)) ? pickedRows : []),
-    [cardMenuKey, picked, pickedRows],
+    (card: T) =>
+      cardMenuKey?.(card, picked.selected(tileKey(card)) ? pickedRows : [], turnsOver(card, flips)),
+    [cardMenuKey, picked, pickedRows, flips],
   );
 
   const virtualRows = virtualizer.getVirtualItems();
@@ -2117,6 +2164,7 @@ export function CardGrid<T extends GridCard>({
       gameChanger={gameChanger}
       action={action}
       column={column}
+      flips={flips}
       caption={caption}
       money={money}
       cardMenu={tileMenu}
@@ -2337,6 +2385,7 @@ function Tile<T extends GridCard>({
   gameChanger,
   action,
   column,
+  flips,
   caption,
   money,
   cardMenu,
@@ -2398,6 +2447,7 @@ function Tile<T extends GridCard>({
   gameChanger?: (card: T) => boolean;
   action?: (card: T) => ReactNode;
   column?: (card: T) => ReactNode;
+  flips?: (card: T) => boolean;
   caption?: (card: T) => ReactNode;
   money?: (card: T) => ReactNode;
   cardMenu?: (card: T) => ((e: ReactMouseEvent) => void) | undefined;
@@ -2418,6 +2468,9 @@ function Tile<T extends GridCard>({
   const tileFinish = finish?.(card) ?? null;
   const tileTreatments = treatment?.(card) ?? [];
   const crowned = gameChanger?.(card) ?? false;
+  const turnable = turnsOver(card, flips);
+  const face = useShownFace(turnable ? card.id : null);
+  const controls = column?.(card);
   /**
    * What the chin says about the printing — **branched here rather than passed as four loose
    * props**, because `CardChin`'s own prop is a union with exactly two arms and that is the point
@@ -2678,6 +2731,7 @@ function Tile<T extends GridCard>({
             // frame with its name, which is what `CardArt` draws for an orphan everywhere else.
             cardId={card.id || null}
             name={card.name}
+            face={face}
             // **No `selected` here, deliberately.** The gold ring is drawn on the tile's root, so
             // it goes round the art *and* the chin as one object — see the root's `className`.
             // Passing it here as well would draw a second ring 28px above the first one's foot.
@@ -2856,7 +2910,7 @@ function Tile<T extends GridCard>({
             {action(card)}
           </span>
         )}
-        {column && (
+        {(controls != null || turnable) && (
           // **Up the right-hand side, over the art** — the deck stack's position for a card's
           // stepper, and the whole of what issue #348 asked for: one control in one place across
           // the deck editor and the two walls.
@@ -2896,7 +2950,12 @@ function Tile<T extends GridCard>({
           // moment the pointer left the tile.
           <span
             className={cn(
-              "pointer-events-none absolute inset-x-0 flex justify-end",
+              // A column since issue #844: whatever the caller stood here, then the flip button
+              // under it. The gutter is the wishlist's own between its stepper and its pencil, so
+              // three controls in one margin keep one rhythm; right-aligned, so a lone flip button
+              // on a wall with no stepper stands where a stepper would.
+              "pointer-events-none absolute inset-x-0 flex flex-col items-end",
+              "gap-[calc(0.25rem*var(--control-scale,1))]",
               // The top-right corner is the finish chip and the game-changer crown (`CardArt`),
               // laid out entirely on `--mark-scale` — inset 4px and 16px tall at 1×. 24px on that
               // **same** variable is what clears them at every stop of the ladder rather than at
@@ -2915,7 +2974,8 @@ function Tile<T extends GridCard>({
               REVEAL_ON_HOVER,
             )}
           >
-            {column(card)}
+            {controls}
+            {turnable && <FlipFaceButton cardId={card.id} name={card.name} />}
           </span>
         )}
       </div>

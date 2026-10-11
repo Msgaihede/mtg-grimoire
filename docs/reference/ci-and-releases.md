@@ -1031,6 +1031,43 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   - **Why the fence is held to the letter.** Every `run:` line of the four secret-holding jobs
     is in `RUNS` in `scripts/release-rule.test.mjs`, and the fence reads the workflow with its
     comments stripped, so a comment may say what it likes and a line may not change.
+- **Release notes are written from pull requests, between releases** (2026-10-11;
+  `docs/superpowers/specs/2026-10-11-generated-release-notes-design.md`). release-please builds
+  its notes from commit subjects and reads a merge twice — 0.43.0 lists fourteen features and six
+  are repeats — so what a user reads is written by `scripts/changelog/` instead: every pull
+  request since the last tag, title and description, in one request to Claude Haiku 5.5 through
+  OpenRouter at medium reasoning effort. The model answers JSON; code checks it and writes the
+  markdown. **`release.yml` is twelve jobs with these** (ten on a release, since the same day), and the two new ones are the only ones
+  that run when a push cut *no* release:
+
+  | Job | Needs | Holds a secret | What it does |
+  | --- | --- | --- | --- |
+  | `changelog-write` | `release-please` | `OPENROUTER_API_KEY` (`environment: changelog`) | Installs nothing. `node scripts/changelog/cli.mjs next`: the released version from `main`'s manifest, the coming one from the release branch's; the entries of `v<released>..HEAD`; the notes as the artifact `release-notes` (14 days). `contents: read` |
+  | `changelog-commit` | `release-please`, `changelog-write` | no | Puts that file on release-please's branch as `changelog/<version>.md` through the contents API, as `docs(changelog): notes for <version> from <commit>`. No checkout; `contents: write` |
+
+  - **Nothing needs either job.** A failure there is a red run on that push and holds no release
+    up; a release merged without the file is published with release-please's notes.
+  - **The checks** (`scripts/changelog/notes.mjs`): every entry is cited by an item or listed as
+    left out; no reference is to something that was not sent; no text carries a link or a URL,
+    and each is one line; at most five highlights; every area is from the list. A failed answer
+    is sent back once with what failed, and a second failure writes nothing. They hold the answer
+    to its pull requests, **not to the truth** — the owner's read of the file on the release PR
+    is that gate.
+  - **The file is written again whenever `main` moves**: release-please rebuilds its branch and
+    the notes are generated from the full set. A hand edit lasts only if it is the last thing
+    before the merge. A correction that should last is made to the pull request's description.
+  - **`publish` sets the release body from the file** at the run's commit, before it flips the
+    draft, and no model is called on a release. Missing, empty or unreadable → release-please's
+    notes stay, the summary says so, and the release is published.
+  - **A published note is corrected in its file**, by pull request, then
+    `node scripts/changelog/cli.mjs push <version>`, which keeps the body it replaces in a folder
+    outside the repository and refuses a draft. `changelog/` holds a file for every release since
+    0.2.0, written by the same generator; `push --all` is what puts those on the releases
+    published before this, and it is run on the owner's word.
+  - **`CHANGELOG.md` is still release-please's**, commit subjects and repeats and all, as the
+    developer's record. Nothing reads it.
+  - **Not yet run anywhere**: the two jobs and `publish`'s step run only on `main`. The first
+    push after this merges is their first run, and the first release after it is the step's.
 - **What only the owner can do.** No agent makes a key, sets a secret, creates a token or
   changes a setting of the repository. Until these are done every release ends green with a
   summary saying what it did not ship. PowerShell, **in a folder outside the repository** that
@@ -1077,9 +1114,23 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   # 4. The Cloudflare token and the account id (below), each pasted at a hidden prompt.
   gh secret set CLOUDFLARE_API_TOKEN --env release --repo Msgaihede/mtg-grimoire
   gh secret set CLOUDFLARE_ACCOUNT_ID --env release --repo Msgaihede/mtg-grimoire
+
+  # 5. The release notes' key, in an environment of its own: `changelog`, usable from `main`
+  #    alone, restricted BEFORE the key is put in it. An OpenRouter key with a spend limit
+  #    (openrouter.ai → Settings → Keys); a release's notes cost a fraction of a cent.
+  gh api -X PUT repos/Msgaihede/mtg-grimoire/environments/changelog -F "deployment_branch_policy[protected_branches]=false" -F "deployment_branch_policy[custom_branch_policies]=true"
+  gh api -X POST repos/Msgaihede/mtg-grimoire/environments/changelog/deployment-branch-policies -f name=main -f type=branch
+  #    Check it: this prints `main` and nothing else.
+  gh api repos/Msgaihede/mtg-grimoire/environments/changelog/deployment-branch-policies --jq ".branch_policies[].name"
+  gh secret set OPENROUTER_API_KEY --env changelog --repo Msgaihede/mtg-grimoire
+  #    The release PR that is open gets its notes on the next push to `main` — or at once, by
+  #    re-running the last Release run's `changelog (write)` job. Give this environment no
+  #    required reviewers and no wait timer: its job runs on every push, in the `release`
+  #    concurrency group, and a run waiting on a click would stand in front of a real release.
   ```
 
-  - ⚠️ **`--env release` on every one, and step 0 first.** A value set without it is a
+  - ⚠️ **`--env release` on every one of steps 3 and 4 (`--env changelog` in step 5), and the
+    environment restricted first.** A value set without it is a
     repository secret, which any branch's workflow can read — the hole the environment is
     there to close; and the jobs read the environment's, so it would also do nothing. An
     environment's value set before step 0 is, for that while, in an environment any branch may

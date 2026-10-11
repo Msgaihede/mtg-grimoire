@@ -136,7 +136,7 @@ export function ImportDialog({
   return (
     <Dialog
       open={open}
-      title="Import a decklist"
+      title="Import cards"
       subtitle={destination?.Subtitle === undefined ? subtitle : <destination.Subtitle />}
       closeLabel="Close"
       // `max-w-2xl` written as the width it is (42rem), because the shell already carries
@@ -213,10 +213,10 @@ function ImportBody({
   /** **One frame, true of both failures, and the backend's sentence says which it was** — "The
    *  file picker could not be opened — …" or `import.rs`'s own about the file. The picker and the
    *  read used to be two calls so the page could frame each; a frame naming either one would put
-   *  "that file is over 1 MB" behind a broken picker or the reverse, which is what the two calls
+   *  "that file is over 8 MB" behind a broken picker or the reverse, which is what the two calls
    *  were for. */
   const fileFailure = readFile.isError
-    ? `Couldn't read a decklist from a file — ${ipcError(readFile.error)}`
+    ? `Couldn't read a card list from a file — ${ipcError(readFile.error)}`
     : null;
 
   if (step === "preview" && resolved !== null && destination !== undefined) {
@@ -266,7 +266,7 @@ function ImportBody({
         <div>
           <div className="mb-1 flex items-baseline gap-3">
             <label htmlFor={`${id}-list`} className="flex-1 text-xs text-dim">
-              Decklist
+              Card list
             </label>
             <button
               type="button"

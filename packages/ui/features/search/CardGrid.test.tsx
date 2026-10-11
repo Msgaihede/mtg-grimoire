@@ -36,6 +36,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import { CardGrid, columnsFor, sideGutterFor, tileWidthFor } from "./CardGrid";
+import { resetShownFaces } from "@/features/card/shownFace";
 import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
@@ -2306,9 +2307,11 @@ describe("the chin and the tile key", () => {
     expect(column.classList.contains("absolute")).toBe(true);
 
     // Spans the tile and right-aligns, so a 288px panel anchored `left-0` opens from the tile's
-    // own left edge rather than 135px into it.
+    // own left edge rather than 135px into it. A column since issue #844 — the flip button stands
+    // under whatever the caller put here — so the right alignment is the cross axis's.
     expect(column.classList.contains("inset-x-0")).toBe(true);
-    expect(column.classList.contains("justify-end")).toBe(true);
+    expect(column.classList.contains("flex-col")).toBe(true);
+    expect(column.classList.contains("items-end")).toBe(true);
 
     // The wrapper never takes events — a tile-wide band that did would swallow the press that
     // opens the card.
@@ -2319,5 +2322,86 @@ describe("the chin and the tile key", () => {
     // The strip's arrangement is the one this must *not* have: an ungated `[&>*]` escape would
     // put the invisible stepper back under the pointer on a touch screen.
     expect(column.classList.contains("[&>*]:pointer-events-auto")).toBe(false);
+  });
+});
+
+/**
+ * Issue #844 — turning a two-sided card over from its tile, without the card modal.
+ *
+ * `flips` is the caller's word that a tile has a back; the wall draws the flip button at the foot
+ * of the right-hand column (under the quantity controls where there are any), turns the art to
+ * face 1 when it is pressed, and hands the menu builder the same answer as its third argument.
+ */
+describe("flipping a tile", () => {
+  const base = {
+    onNeedNextPage: vi.fn(),
+    listKey: "k",
+    zoomSection: "search" as const,
+  };
+  const dfc = { ...card("dfc", "Delver of Secrets"), layout: "transform" };
+  const plain = card("aaa", "Lightning Bolt");
+  const flips = (c: CardSummary) => c.layout === "transform";
+  const artSrc = (name: string) =>
+    screen.getByRole("button", { name }).querySelector("img")?.getAttribute("src") ?? "";
+
+  beforeEach(() => resetShownFaces());
+
+  it("draws the button under the column's controls, on a two-sided card only", () => {
+    render(
+      <CardGrid
+        rows={[dfc, plain]}
+        onSelect={vi.fn()}
+        column={(c) => <button type="button">{`Step ${c.name}`}</button>}
+        flips={flips}
+        {...base}
+      />,
+    );
+
+    const flip = screen.getByRole("button", { name: "Flip Delver of Secrets" });
+    // The same column as the caller's control, and after it — "under the quantity controls".
+    const step = screen.getByRole("button", { name: "Step Delver of Secrets" });
+    expect(flip.parentElement).toBe(step.parentElement);
+    expect(step.compareDocumentPosition(flip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Marked out of the drag, as every control on a draggable tile must be.
+    expect(flip).toHaveAttribute("data-no-drag");
+    // A one-sided card gets no button at all, rather than a greyed one.
+    expect(screen.queryByRole("button", { name: "Flip Lightning Bolt" })).toBeNull();
+  });
+
+  it("stands the button alone in the column on a wall with no column controls", () => {
+    render(<CardGrid rows={[dfc]} onSelect={vi.fn()} flips={flips} {...base} />);
+    const flip = screen.getByRole("button", { name: "Flip Delver of Secrets" });
+    expect(flip.parentElement!.classList.contains("absolute")).toBe(true);
+  });
+
+  it("turns the art to its back and back again", async () => {
+    const user = userEvent.setup();
+    render(<CardGrid rows={[dfc]} onSelect={vi.fn()} flips={flips} {...base} />);
+    const flip = screen.getByRole("button", { name: "Flip Delver of Secrets" });
+
+    expect(artSrc("Delver of Secrets")).toMatch(/\/dfc\/0$/);
+    expect(flip).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(flip);
+    expect(artSrc("Delver of Secrets")).toMatch(/\/dfc\/1$/);
+    expect(flip).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(flip);
+    expect(artSrc("Delver of Secrets")).toMatch(/\/dfc\/0$/);
+  });
+
+  it("hands the menu builder whether the right-clicked tile turns over", () => {
+    const cardMenu = vi.fn(() => undefined);
+    render(
+      <CardGrid
+        rows={[dfc, plain]}
+        onSelect={vi.fn()}
+        flips={flips}
+        cardMenu={cardMenu}
+        {...base}
+      />,
+    );
+    expect(cardMenu).toHaveBeenCalledWith(dfc, [], true);
+    expect(cardMenu).toHaveBeenCalledWith(plain, [], false);
   });
 });

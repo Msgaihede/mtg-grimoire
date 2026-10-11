@@ -6,6 +6,7 @@ import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import type { MenuAction, MenuItem, MenuSubmenu } from "@/components/menu/types";
 import { copyText } from "@/lib/clipboard";
+import { resetShownFaces, showsBack } from "./shownFace";
 import { openExternal } from "@/lib/externalLinks";
 import {
   ipc,
@@ -267,6 +268,46 @@ beforeEach(() => {
 });
 
 describe("buildCardMenu", () => {
+  /**
+   * Issue #844: "Flip card" is offered where the surface says the right-clicked picture turns
+   * over, first and ruled off, and nowhere else — a table row has no picture to turn.
+   */
+  describe("Flip card", () => {
+    beforeEach(() => resetShownFaces());
+
+    it("is absent unless the surface set `flip` on the target", () => {
+      expect(labels(buildCardMenu(BOLT, deps()))).not.toContain("Flip card");
+      expect(labels(buildCardMenu({ ...BOLT, flip: false }, deps()))).not.toContain("Flip card");
+    });
+
+    it("leads the menu, ruled off from the copy rows", () => {
+      const items = buildCardMenu({ ...BOLT, flip: true }, deps());
+      expect(items[0]).toMatchObject({ kind: "action", id: "flip", label: "Flip card" });
+      expect(items[1]).toMatchObject({ kind: "separator" });
+      expect(labels(items)[1]).toBe("Copy card name");
+    });
+
+    it("turns the printing over, and back", () => {
+      const flip = () =>
+        (
+          find(buildCardMenu({ ...BOLT, flip: true }, deps()), "Flip card") as MenuAction
+        ).onSelect();
+      expect(showsBack("bolt-lea")).toBe(false);
+      flip();
+      expect(showsBack("bolt-lea")).toBe(true);
+      flip();
+      expect(showsBack("bolt-lea")).toBe(false);
+    });
+
+    it("turns only the right-clicked card, never the picked set", () => {
+      const other: CardMenuTarget = { ...BOLT, cardId: "other", name: "Other" };
+      const items = buildCardMenu({ ...BOLT, flip: true }, deps({ picked: [BOLT, other] }));
+      (find(items, "Flip card") as MenuAction).onSelect();
+      expect(showsBack("bolt-lea")).toBe(true);
+      expect(showsBack("other")).toBe(false);
+    });
+  });
+
   it("copies the printed name", async () => {
     const items = buildCardMenu(BOLT, deps());
     (find(items, "Copy card name") as MenuAction).onSelect();
@@ -1077,6 +1118,7 @@ const deck = (over: Partial<DeckRow> & { id: number; name: string }): DeckRow =>
   todosOpen: false,
   defaultCategoryId: 0,
   bracket: 0,
+  tags: [],
   ...over,
 });
 

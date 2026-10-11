@@ -55,11 +55,16 @@
 //! leaves the row: the op log is also this device's memory of what it did, and a device that
 //! pruned it would lose every argument it could have made for keeping a row.
 //!
-//! What it does **not** cover is a third device: B has no local ops for a row C edited, so
-//! A's tombstone and C's edit only meet if they arrive in one batch. The relay hands them over
-//! in hybrid-logical-clock order, so the common case orders itself; the residual is a sparse
-//! edit arriving after a tombstone, which cannot rebuild the row it edits and is **skipped** as
-//! a row this database cannot build — the next section's table.
+//! **And every other device's ops, remembered** ([`heard`], `sync_heard`, user schema v61 —
+//! issue #842). This device's own log alone did not cover a third device: B had no ops of its
+//! own for a row A and C both wrote, so their two writes met only if they arrived in one batch,
+//! and the relay hands rows over in the order they were *pushed*. Heard on two pulls, the second
+//! won whatever its stamp — an older note, an older move, an older delete — and a sparse edit
+//! arriving after a tombstone could not rebuild the row it edits and was skipped. So every group
+//! this module writes is folded into a memory of its row — the stamp and value that won each
+//! field and placement, the latest alive and dead stamps, the counters — and the second fold
+//! starts from that memory ([`fold_with_history`]); a row a delete here takes is **kept** first,
+//! so a later edit from a third device can build it again ([`heard::keep`]).
 //!
 //! # A deferral says why, and only what can still apply holds its device
 //!
@@ -131,7 +136,7 @@
 use crate::sync_engine::capture::{self, Absent, Parent, Spec};
 use crate::sync_engine::emission;
 use crate::sync_engine::hlc::Hlc;
-use crate::sync_engine::merge::{fold, Horizon, Kind, Op, Resolved};
+use crate::sync_engine::merge::{fold, fold_remembering, Horizon, Kind, Op, Resolved};
 use rusqlite::types::Value as Sql;
 use rusqlite::{Connection, OptionalExtension};
 use std::collections::{BTreeMap, BTreeSet};
@@ -1283,10 +1288,12 @@ fn run_groups<'a>(
             });
             continue;
         }
-        if let Outcome::Deferred(_) =
-            write_group(conn, g, report, &mut soft, deleted, &placed, Attempt::First)?
-        {
-            failed.push(g);
+        // **Every group written is remembered** ([`heard`]), so that an older op of a third
+        // device arriving on a later pull meets it (issue #842). Inside the pass's savepoint, like
+        // the write: a round rolled back forgets it again.
+        match write_group(conn, g, report, &mut soft, deleted, &placed, Attempt::First)? {
+            Outcome::Written => heard::record(conn, g)?,
+            Outcome::Deferred(_) => failed.push(g),
         }
     }
     // Retry passes, because a batch can carry a child before its parent even when one device's
@@ -1310,6 +1317,7 @@ fn run_groups<'a>(
                 conn, failed[i], report, &mut soft, deleted, &placed, attempt,
             )? {
                 Outcome::Written => {
+                    heard::record(conn, failed[i])?;
                     last[i] = None;
                     progressed = true;
                 }
@@ -1545,9 +1553,7 @@ fn cascade_onto_the_row_here(
 ) -> Result<bool, String> {
     let meta = shape.meta;
     let uid = &g.ops[0].uid;
-    let mut all: Vec<Op> = g.ops.iter().map(|o| (*o).clone()).collect();
-    all.extend(local_history(conn, meta.table, std::slice::from_ref(uid))?);
-    let combined = fold(&all);
+    let combined = fold_with_history(conn, meta.table, std::slice::from_ref(uid), &g.ops)?;
     let placed = g.resolved.parents.get(p.key).map(|(_, at)| at);
     let stands = combined.parents.get(p.key).map(|(_, at)| at);
     if placed.is_none() || placed != stands {
@@ -2037,6 +2043,8 @@ struct Found {
 fn adopt_uid(conn: &Connection, meta: &Meta, found: &Found) -> Result<(), Why> {
     let unbuildable = |e: rusqlite::Error| Why::Unbuildable(e.to_string());
     if let (Some(absorbed), Some(survivor)) = (&found.absorbed, &found.uid) {
+        // What was heard under the absorbed name is the survivor's now ([`heard`]).
+        heard::renamed(conn, meta.table, absorbed, survivor).map_err(Why::Unbuildable)?;
         return emission::retire(conn, meta.table, absorbed, survivor).map_err(unbuildable);
     }
     let Some((from, to)) = &found.rename else {
@@ -2062,9 +2070,42 @@ fn adopt_uid(conn: &Connection, meta: &Meta, found: &Found) -> Result<(), Why> {
         [to, from],
     )
     .map_err(unbuildable)?;
-    // Whatever the ledger of orphans has folded into this row follows it to its new name.
+    // Whatever the ledger of orphans has folded into this row follows it to its new name, and so
+    // does what was heard of it.
     orphans::renamed(conn, meta.table, from, to).map_err(Why::Unbuildable)?;
+    heard::renamed(conn, meta.table, from, to).map_err(Why::Unbuildable)?;
     emission::retire(conn, meta.table, from, to).map_err(unbuildable)
+}
+
+/// **Everything this device knows of a row besides the page**, folded under the page's ops:
+/// its own ops out of `sync_ops`, and what it remembers of every other device's
+/// ([`heard`], issue #842). The second fold of the module doc, and every fold that decides
+/// last-writer-wins or add-wins against history goes through here.
+///
+/// Where the memory kept the row whole when an apply deleted it
+/// ([`crate::sync_engine::merge::Memory::keep`]), this device's own deltas up to that moment are
+/// inside its counters already, and are left out here — the fields and the stamps of those ops
+/// still count.
+fn fold_with_history(
+    conn: &Connection,
+    table: &str,
+    uids: &[String],
+    incoming: &[&Op],
+) -> Result<Resolved, String> {
+    let mut memory = heard::recall(conn, table, uids)?;
+    // A claim's emitter is not judged against its own earlier writes
+    // ([`crate::sync_engine::merge::Memory::without`]).
+    for op in incoming.iter().filter(|op| op.baseline) {
+        memory = memory.without(&op.at.device);
+    }
+    let mut all: Vec<Op> = incoming.iter().map(|o| (*o).clone()).collect();
+    for mut op in local_history(conn, table, uids)? {
+        if memory.holds_own(&op.at) {
+            op.counters.clear();
+        }
+        all.push(op);
+    }
+    Ok(fold_remembering(&memory, &all))
 }
 
 /// This device's own ops for a row, out of `sync_ops`.
@@ -2294,9 +2335,7 @@ fn write_group<'a>(
     }
     uids.sort();
     uids.dedup();
-    let mut all: Vec<Op> = g.ops.iter().map(|o| (*o).clone()).collect();
-    all.extend(local_history(conn, meta.table, &uids)?);
-    let combined = fold(&all);
+    let combined = fold_with_history(conn, meta.table, &uids, &g.ops)?;
 
     // **The ledger is told only where the placement under the gone parent is the one that
     // stands** — the moot arm's question, asked of the `SET NULL` arm: where this device moved
@@ -2388,8 +2427,12 @@ fn write_group<'a>(
                 rollback()?;
                 return Ok(Outcome::Deferred(Why::DecidedOnRetry));
             }
+            // **What this device held of the row is kept before it goes** ([`heard::keep`]): a
+            // third device's later edit wins add-wins over this delete, and its sparse op cannot
+            // describe the row it brings back (issue #842).
             let done = doomed
                 .and_then(|d| rehome::rehome(conn, &d))
+                .and_then(|()| heard::keep(conn, spec, uid))
                 .and_then(|()| {
                     conn.execute(
                         &format!("DELETE FROM {} WHERE sync_uid = ?1", meta.table),
@@ -3128,9 +3171,8 @@ fn fold_onto_the_holder(
         uids.push(wears);
     }
     let survivor = rehome::fold_into_the_holder(conn, meta.table, holder, id, uid).ok()??;
-    let mut all: Vec<Op> = g.ops.iter().map(|o| (*o).clone()).collect();
-    all.extend(local_history(conn, meta.table, &uids).ok()?);
-    update_row(conn, meta, spec, g, &fold(&all), parents, &survivor).ok()
+    let combined = fold_with_history(conn, meta.table, &uids, &g.ops).ok()?;
+    update_row(conn, meta, spec, g, &combined, parents, &survivor).ok()
 }
 
 /// The first message wins — [`crate::reconcile`]'s stated rule for this column.
@@ -3254,6 +3296,15 @@ fn break_cycles(conn: &Connection, meta: &Meta, groups: &[Group]) -> Result<usiz
             }
         }
     }
+    // ...and every other device's this one remembers ([`heard`]): a loop can be closed by two
+    // moves from two other devices heard on two pulls, and the page then holds only one of them
+    // (issue #842).
+    for (uid, at) in heard::moves(conn, meta.table, "parent")? {
+        let e = moved.entry(uid).or_insert_with(|| at.clone());
+        if at > *e {
+            *e = at;
+        }
+    }
     for g in groups.iter().filter(|g| g.table == meta.table) {
         if let Some((_, at)) = g.resolved.parents.get("parent") {
             let e = moved
@@ -3370,6 +3421,7 @@ fn advance_watermarks(
 }
 
 mod claims;
+mod heard;
 mod orphans;
 mod rehome;
 

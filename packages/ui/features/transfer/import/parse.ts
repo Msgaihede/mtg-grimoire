@@ -151,6 +151,29 @@ const THIRD_PARTY_CSV_HEADERS: readonly (readonly [string, TransferFieldId, numb
 ];
 
 /**
+ * ManaBox's two binder columns (issue #873) — where its reader had each card filed, by name and by
+ * kind. Matched by {@link normalizeHeader}, like every other header.
+ *
+ * **Outside {@link HEADER_TO_FIELD} on purpose**: that map names registry fields, and a field there
+ * is one the export writer owes a column for (see {@link ParsedLine.binder}). These two are read
+ * into `ParsedLine.binder` and nowhere else, and they never count toward the two known columns
+ * {@link csvHeaderOf} asks for — a file is recognised by its card columns, and ManaBox's are
+ * already in {@link THIRD_PARTY_CSV_HEADERS}.
+ */
+const BINDER_NAME_HEADER = "binder name";
+const BINDER_TYPE_HEADER = "binder type";
+
+/** The binder columns' positions in a header row, `undefined` for one the file does not have. A
+ *  repeated header reads its leftmost copy, which is {@link columnsOf}'s rule for equals. */
+function binderColumnsOf(header: readonly string[]): { name?: number; type?: number } {
+  const at = (wanted: string): number | undefined => {
+    const index = header.findIndex((cell) => normalizeHeader(cell) === wanted);
+    return index === -1 ? undefined : index;
+  };
+  return { name: at(BINDER_NAME_HEADER), type: at(BINDER_TYPE_HEADER) };
+}
+
+/**
  * A CSV header maps to field ids by `csvHeader`, case- and space-insensitively.
  *
  * Built from the registry rather than written out, so a field added there is readable back
@@ -277,18 +300,22 @@ export interface CsvShape {
   hasQuantity: boolean;
 }
 
-/** The {@link CsvShape} of a file whose header has been read. */
+/** The {@link CsvShape} of a file whose header has been read. `alsoRead` is the columns read
+ *  outside the registry — ManaBox's binder pair ({@link binderColumnsOf}) — which name no field
+ *  and so would otherwise be listed as unread when they are the reason the file sorts. */
 function shapeOf(
   header: readonly string[],
   mapped: readonly (HeaderCell | null)[],
   at: ReadonlyMap<TransferFieldId, number>,
   hint: { column: number; isName: boolean } | null,
   delimiter: CsvDelimiter,
+  alsoRead: ReadonlySet<number> = new Set(),
 ): CsvShape {
   const ignored: string[] = [];
   header.forEach((raw, index) => {
     const name = raw.trim();
     if (name === "" || ignored.includes(name)) return;
+    if (alsoRead.has(index)) return;
     const cell = mapped[index];
     const read =
       cell !== null &&
@@ -325,7 +352,10 @@ const FOIL_WORDS = /^(?:foil|yes|y|true|1|x)$/;
  * every row's finish before anything is written.
  */
 function csvFinish(raw: string): DeckFinish {
-  const word = raw.trim().toLowerCase().replace(/[\s_]+/g, " ");
+  const word = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, " ");
   if (NOT_FOIL.test(word)) return null;
   if (word.includes("etched")) return "etched";
   if (FOIL_WORDS.test(word) || word.includes("foil")) return "foil";
@@ -469,6 +499,38 @@ export interface ParsedLine {
   /** Every column a CSV named that this app recognises, verbatim. `{}` for every other format —
    *  a decklist line has no channel for a condition or a purchase price. */
   extra: Partial<Record<TransferFieldId, string>>;
+  /**
+   * Where the file had this card filed — ManaBox's `Binder Name` and `Binder Type` (issue #873).
+   * Absent or `null` on every line of every other format, and on a ManaBox row whose name cell
+   * is blank.
+   *
+   * **Not a field of the registry, and so not in {@link extra}**, deliberately: `extra` is keyed
+   * by `TransferFieldId`, and a field there is one the *writer* can emit too — `fields.ts`, its
+   * golden files and the Rust mirror's field map would all owe it a column. A binder is a fact
+   * about where a reader's *other app* kept the card, read on the way in and never written back
+   * out; this app's own word for the same fact is the folder a row is filed in.
+   *
+   * Optional rather than required so every hand-built `ParsedLine` in the suite and the
+   * workbench is still one.
+   */
+  binder?: Binder | null;
+}
+
+/**
+ * A ManaBox binder, as the export names it — the grouping the collection importer can file a
+ * file's rows by (`destinations/binders.ts`).
+ */
+export interface Binder {
+  /** Verbatim apart from the trim — the reader's own word for the drawer, capitals and all. */
+  name: string;
+  /**
+   * ManaBox's own kind word, lowercased and trimmed: `binder` and `deck` in every real export
+   * read so far, and `list` in ManaBox's own vocabulary. `""` when the file has no `Binder Type`
+   * column. **Kept as the word rather than narrowed to a union**, because what each word becomes
+   * is the importer's decision — a parser that dropped `list` into `binder` here would be a
+   * second place that decision lives.
+   */
+  type: string;
 }
 
 /** A line that named nothing this could import, kept so the preview can show it. */
@@ -875,6 +937,17 @@ function parseCsvGrid(
   const issues: ParseIssue[] = [];
   const at = columnsOf(header);
   const hint = setHintColumn(at);
+  // ManaBox's binder pair (issue #873). **The type is read only beside a name**: a kind with no
+  // drawer to be the kind of says nothing a row can be filed by, so a lone `Binder Type` column
+  // stays in the preview's "Not read" line rather than being quietly swallowed.
+  const binders = binderColumnsOf(records[0].cells);
+  const binderRead = new Set<number>(
+    binders.name === undefined
+      ? []
+      : binders.type === undefined
+        ? [binders.name]
+        : [binders.name, binders.type],
+  );
 
   for (let r = 1; r < records.length; r += 1) {
     const row = records[r].cells;
@@ -937,6 +1010,7 @@ function parseCsvGrid(
       labelName: cell("label") === "" ? null : cell("label"),
       labelColor: csvLabelColor(cell("labelColor")),
       extra,
+      binder: binderOf(row, binders),
     });
   }
   // `ParsedList` carries five fields, not two. `totalCards` is copies rather than rows,
@@ -947,8 +1021,23 @@ function parseCsvGrid(
     issues,
     totalCards: lines.reduce((n, l) => n + l.quantity, 0),
     suggestedName: null,
-    csv: shapeOf(records[0].cells, header, at, hint, delimiter),
+    csv: shapeOf(records[0].cells, header, at, hint, delimiter, binderRead),
   };
+}
+
+/**
+ * One row's binder, or `null` when the file has no `Binder Name` column or this row's cell is
+ * blank — a blank is the row saying it is filed nowhere, which the importer reads as the root.
+ */
+function binderOf(
+  row: readonly string[],
+  columns: { name?: number; type?: number },
+): Binder | null {
+  if (columns.name === undefined) return null;
+  const name = (row[columns.name] ?? "").trim();
+  if (name === "") return null;
+  const type = columns.type === undefined ? "" : (row[columns.type] ?? "").trim().toLowerCase();
+  return { name, type };
 }
 
 /**

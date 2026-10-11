@@ -37,6 +37,8 @@ import {
 } from "react";
 import { useDndDropTarget, useDndTargetRef } from "@/lib/dndTarget";
 import { QuantityStepper } from "@/components/QuantityStepper";
+import { FlipFaceButton } from "@/features/card/FlipFaceButton";
+import { hasBackFace } from "@/features/card/printings";
 import { FINISH_LABEL, playedFinish } from "@/lib/finish";
 import { finishTreatments, treatmentName } from "@/lib/treatment";
 import type { ImageVariant } from "@/lib/images";
@@ -1014,10 +1016,16 @@ export function DeckCardControls({
   className?: string;
 }) {
   const setQuantity = actions?.setQuantity;
-  if (!setQuantity) return null;
   const column = layout === "card-column";
+  // **Under the stepper, on the two views that draw the card's picture** — issue #844. Only the
+  // column is drawn over art; a table cell and a text line have no picture to turn, so `row`
+  // never grows one. Not fenced on `setQuantity` either: turning a card over reads the deck
+  // rather than writing it, so a surface that may not step a card may still look at its back.
+  const flip =
+    column && turnsOver(card) ? <FlipFaceButton cardId={card.cardId} name={card.name} /> : null;
+  if (!setQuantity && flip === null) return null;
 
-  const stepper = (
+  const stepper = setQuantity && (
     <QuantityStepper
       size={column ? "card" : "xs"}
       orientation={column ? "vertical" : "horizontal"}
@@ -1052,8 +1060,20 @@ export function DeckCardControls({
       )}
     >
       {stepper}
+      {flip}
     </span>
   );
+}
+
+/**
+ * Whether a deck card has a back the Stacks and Grid faces can turn to — the gate on the flip
+ * button under the stepper and on the card menu's "Flip card" row (issue #844).
+ *
+ * `hasBackFace` on the row's layout, and a card that `needsReview` never: an orphan's printing has
+ * left the card database, its face draws the no-picture frame, and there is nothing to turn.
+ */
+export function turnsOver(card: Pick<DeckCard, "layout" | "needsReview">): boolean {
+  return card.needsReview === null && hasBackFace(card.layout);
 }
 
 /**

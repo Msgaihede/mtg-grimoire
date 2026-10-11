@@ -139,11 +139,9 @@ export const LAYER = {
    * which are two questions; borrowing one as evidence for the other is how a z-index comes to
    * be justified by a keyboard protocol.
    *
-   * **A context menu is not a counter-example**, and it is the one worth naming since the app
-   * grew them: `ContextMenu` draws at {@link LAYER.popup}, below this rung, so a menu is a thing
-   * that opens over a *view* rather than over one of these. A right-clickable surface placed
-   * inside a scrimmed dialog would be the real overlap — the menu would paint behind the scrim —
-   * and there is none today.
+   * **A context menu is the one surface that opens over both**, and it has a rung of its own for
+   * it: `ContextMenu` draws at {@link LAYER.popup} when it was opened from a view and at
+   * {@link LAYER.menuOverDialog} when it was opened from inside one of these — see that entry.
    *
    * This read "categories drawer, history drawer" until 2026-08-14, when the editor's right-hand
    * drawers became centred modals on one shell (`Dialog`) and the categories one split into
@@ -181,6 +179,26 @@ export const LAYER = {
    */
   overlayStacked: "z-46",
   /**
+   * The context menu, when the element it was opened from is inside a dialog — the card detail
+   * modal's picture (issue #846) and the printings wall's tiles.
+   *
+   * **The menu is mounted once, at the app root, beside every dialog rather than inside one**
+   * (`ContextMenu.tsx` says why), so a scrim and the menu are `fixed` siblings in the root
+   * stacking context with nothing but a number between them. At {@link LAYER.popup} a menu
+   * opened from a dialog painted *behind* that dialog's scrim — invisible, unreachable, and with
+   * nothing going red, because jsdom has no opinion about a z-index. That is what issue #846 was.
+   *
+   * **A second rung rather than raising {@link LAYER.popup}**, and the reason is
+   * {@link LAYER.dragTray}'s: a drag can start while a menu over a *view* is open, and the tray
+   * is the drop target the pointer is being carried to, so a menu over a view must stay under it.
+   * Over a dialog there is no tray and no quick bar to lose to — both are drawn by views.
+   *
+   * Above {@link LAYER.overlayStacked}, because a rung is a claim about the highest thing the
+   * surface can be asked to cover and the printings wall is a stacked dialog. Below
+   * {@link LAYER.tooltip}, which a hint over a menu row must still clear, and so below `gate`.
+   */
+  menuOverDialog: "z-47",
+  /**
    * The app's one tooltip, over anything a view or a dialog draws.
    *
    * **Above every dialog rung because a hint is shown over the deck editor's dialogs** — a
@@ -194,11 +212,14 @@ export const LAYER = {
    * written above: the argument names *a dialog*, so this has to clear the highest number a
    * dialog is drawn at, whatever that number becomes. A control inside a nested overlay is a
    * control inside a modal, and its hint is exactly the one the old number would have lost.
+   * It moved again, to `z-48`, on 2026-10-11 for the same reason one rung up: a menu opened from
+   * a dialog ({@link LAYER.menuOverDialog}) is drawn over it, and a hint over a menu row is a
+   * hint over a dialog.
    *
    * One rung and one panel — the provider holds at most one open tooltip, so there is no second
    * one for a number to order against.
    */
-  tooltip: "z-47",
+  tooltip: "z-48",
   /**
    * `SyncProgress`'s full-window takeover, over everything the *app* draws.
    *

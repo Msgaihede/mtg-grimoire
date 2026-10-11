@@ -554,8 +554,9 @@ them rather than defaulting them.
 **The fold key is every grain term the importer can vary, and the two it omits it omits for a
 reason.** `lang` is a function of `cardId` — `add_entry` copies it, `set_code` and
 `collector_number` off `cards` at write time and never takes them from the file — so two items
-sharing a `cardId` can never disagree about it. `folder_id` is always the root, because an imported
-file says nothing about this reader's filing. Neither can separate two items that the other nine
+sharing a `cardId` can never disagree about it. `folder_id` is one folder for the whole file — the
+root, or the one the step's `Import into` names (issue #872) — because an imported file says
+nothing about this reader's filing. Neither can separate two items that the other nine
 terms fold together, which is what makes leaving them out exact rather than a second narrow key.
 
 **What it was, until the collection's folders shipped.** The honest description was worse than
@@ -643,7 +644,7 @@ one per surface plus the deck's "start a new one":
 | --- | --- | --- | --- |
 | `deck` (existing) | `merge` / `replace` | `deck_id, variant, category_id, card_id, coalesce(finish,'')` (`schema::DECK_CARD_GRAIN`) | `replace` clears one **variant** first, named before it does; the mode radio says how many cards that would cost, and on a `live` list a note under the radios says where the cardboard goes — since 2026-09-01 (issue #336) the commit calls `deck::release_live_copies` before that clear, so every copy the deck's group held lands in `Recently removed` instead of being stranded under a deck that no longer lists it. Since 2026-08-23 it also draws the optional ["Add cards to collection" box](#the-deck-arms-add-cards-to-collection-box), which makes the press two writes. **A [Virtual deck](#a-virtual-deck-moves-two-sentences-and-takes-one-control-away) names no variant, gets no note, and is offered no "Add cards to collection" box** |
 | `newDeck` | `merge` only | same grain, on the deck just created | No mode radios at all — there is nothing to replace one line after `deck_create`, and `merge` is the mode that cannot clear anything if that ever stops being true. Draws the same "Add cards to collection" box, from the **same** exported `OwnCopies` rather than a second one written here |
-| `collection` | `add` / `set` | Every term of the storage grain (`schema::COLLECTION_GRAIN` — `card_id, finish, condition, lang, altered, signed, proxy, misprint, coalesce(serial_number,''), coalesce(grading,''), coalesce(folder_id, 0)`) the importer can vary, so nine of the eleven. `lang` follows `cardId` and `folder_id` is always the root. It was `cardId, finish, condition` alone until 2026-08-23 — see the fold section above for what that cost | No `replace`: the deck's version would empty a multi-thousand-row collection from a 40-line paste with the file that caused it looking ordinary. **A root `set` treats the file's number as the total at that grain across every folder** (issue #555): it counts the copies filed elsewhere — deck groups and `Recently removed` included — and writes the root row `max(0, file − elsewhere)`, never touching a folder's row, and reports any surplus as `leftInFolders`. It used to write the file's number into a second root row beside the filed copies, doubling them |
+| `collection` | `add` / `set` | Every term of the storage grain (`schema::COLLECTION_GRAIN` — `card_id, finish, condition, lang, altered, signed, proxy, misprint, coalesce(serial_number,''), coalesce(grading,''), coalesce(folder_id, 0)`) the importer can vary, so nine of the eleven. `lang` follows `cardId` and `folder_id` is one folder for the whole file (`Import into`, issue #872). It was `cardId, finish, condition` alone until 2026-08-23 — see the fold section above for what that cost | No `replace`: the deck's version would empty a multi-thousand-row collection from a 40-line paste with the file that caused it looking ordinary. **A root `set` treats the file's number as the total at that grain across every folder** (issue #555): it counts the copies filed elsewhere — deck groups and `Recently removed` included — and writes the root row `max(0, file − elsewhere)`, never touching a folder's row, and reports any surplus as `leftInFolders`. It used to write the file's number into a second root row beside the filed copies, doubling them |
 | `wishlist` | `add` / `set` | `oracleId, cardId, finish` (`destinations/wishlist.ts`) — the storage grain is `coalesce(oracle_id,''), coalesce(card_id,''), coalesce(preferred_finish,''), coalesce(folder_id,0)` (`schema::WISHLIST_GRAIN`) | `wishlist_set_quantity(id, 0)` **deletes** the wish — a wish for nothing is not a wish (`CHECK (quantity > 0)`) — but an import can never reach it: `parse.ts` refuses a quantity below 1 before a plan is even built (`csvQuantity` for a CSV row, the per-line reader's own zero check for every other — grep `A count of zero is not an import`), so `set` through this dialog never carries a 0 |
 
 **Every one of the four commits in one transaction for the whole file** — `deck_import_commit`,
@@ -763,10 +764,11 @@ Four rules the pair holds, each with a reason that is not obvious:
   a refetch answering what is already on screen is cheaper than a collection left wrong for the
   30 s `packages/ui/lib/query.ts` caches.
 
-**The copies land in the deck's own group, and a plain collection import still lands at the
-root.** `collection_import_commit` is `(items, mode, folderId)` since 2026-08-23 — `folderId`
-defaults to `null`, which is the root and is what the collection's own import step sends, because
-a file says nothing about a reader's filing. The deck arms are the one caller that names a folder:
+**The copies land in the deck's own group, and a plain collection import lands where the reader
+said.** `collection_import_commit` is `(items, mode, folderId)` since 2026-08-23 — `folderId`
+defaults to `null`, which is the root, because a file says nothing about a reader's filing. Since
+issue #872 the collection's own step asks (see [Importing into a folder](#importing-into-a-folder)
+below). The deck arms are the other caller that names a folder:
 `useImport` reads the deck's `kind: "deck"` group out of `collection_folder_list` **at press
 time** — a query would be `undefined` while it loaded, and `importIntoNewDeck`'s deck did not
 exist a statement earlier — and sends it, so the decklist and the group agree the moment the
@@ -819,6 +821,92 @@ instead (`WishlistPlanItem`'s doc). A plain `1 Sol Ring` becomes a wish for the 
 — and `1 Sol Ring (LTC) 285` becomes a wish for that printing. **Measured live** below: three
 un-pinned plain-text lines committed as three rows with `card_id IS NULL` and a populated
 `oracle_id`, both in the database and in the wishlist table's own "Any printing" caption.
+
+## A ManaBox collection, sorted by binder — issue #873, 2026-10-11
+
+ManaBox exports a whole collection as one CSV and says, on every row, which **binder** the copy
+is in — `Binder Name`, and `Binder Type` beside it (`binder` or `deck` in the issue's excerpt;
+ManaBox's own vocabulary also has `list`). Read as a plain collection import, that file landed
+every copy at the root, and the reader re-filed every card into drawers they had already made
+once. **The collection step now offers to sort it**: a box, ticked, that only appears when a line
+names a binder.
+
+| Binder Type | Becomes | Where the copies go |
+| --- | --- | --- |
+| `deck` | a **new deck** of that name, format `unspecified`, its cards in the **auto-sort's piles** | the deck's own group — owned, as the new-deck arm's "Add cards to collection" box files them |
+| anything else (`binder`, `list`, blank) | the **top-level `user` folder** of that name, made if missing | that folder |
+| no binder name on the row | — | the root, as an unsorted import |
+
+**Read on the way in, never written.** `parse.ts` reads the pair into `ParsedLine.binder`, not
+into `extra`: `extra` is keyed by registry field, and a registry field is one the writer, its
+golden files and the Rust mirror's field map would all owe a column. The two headers are matched
+by `normalizeHeader` outside `HEADER_TO_FIELD`, never count toward `csvHeaderOf`'s two known
+columns, and are left off the "Not read" line once read. A `Binder Type` with no `Binder Name`
+beside it names no drawer and stays on that line. ManaBox's `Added` column is the day the row
+entered ManaBox — Archidekt's `Date Added` again — and stays unread for that one's reason.
+
+**No planner of its own.** `destinations/binders.ts`' `planBinderImport` cuts one sub-list per
+binder out of the dialog's `ParsedList` — re-indexing the resolver's rows, because
+`ImportResolveRow.index` is a position in the list that was sent — and plans each with
+`planCollectionImport`, and a deck's list with `buildImportPlan` beside it. A card lands in the
+same pile and at the same grain whichever door it came through. **A deck's piles are the
+auto-sort's**: ManaBox names no category, so every line falls through `categoryFor` to
+`autoCategoryFor` — the card's Oracle tags (read once for the whole file by the dialog's resolve),
+then its type line — and `deck_import_commit` find-or-creates each pile as an `'auto'` category,
+exactly as a card added by hand would be filed. Groups are keyed on kind and exact
+name; a group none of whose rows matched is dropped, and its rows are still on the preview's
+unmatched list.
+
+**The format is `unspecified` because the export does not say.** A ManaBox deck carries no format
+and no command zone, so the deck is created in the one format whose `format_specs.validates` cell
+is `0` — judged by no rule until the reader picks one, rather than accused of being a 100-card
+Commander deck with no commander.
+
+**The write is a sequence of the writes that already shipped**, `useImport.ts`'s
+`importBinderGroups`: per group, `collection_import_commit` into the folder (or the root), or
+`createDeckFromList` — `deck_create` then `deck_import_commit`, the deck deleted again if the list
+is refused — then `collection_import_commit` into the deck's group. **Always `add`**: `set` is
+collection-wide, so run once per binder it would have each group rewrite the others'; the mode
+radios are hidden while the box is ticked. Folders are matched **case-insensitively, trimmed, at
+the top level, among `user` folders only** — a deck's group is never a binder's folder, since
+copies filed there would sit in a deck that does not play them — and the press's one
+`collection_folder_list` read is extended as it makes folders, so `Bulk` and `bulk` make one.
+
+**What that costs is a press that can stop part-way, and it stops loudly**: the first refusal
+ends it, and the sentence names the binder it stopped at and every binder that had already landed.
+A deck whose *copies* were refused stays — its list landed and is the deck that was asked for —
+and says so. **No undo is offered**: each group's commit carries its own ticket, and offering the
+last would take back one folder while saying it took back the file. A single command doing the
+whole file in one transaction is the stronger shape and is not what shipped; the per-group
+commands each carry fences (the folder kinds, the deck rollback, the eleven-term merge) that a new
+command would have had to restate.
+
+### Measured against a whole real export — 2026-10-11
+
+`import/manabox.test.ts` runs the parser and both planners over a **real, unedited** ManaBox
+collection export, `import/__fixtures__/manabox-collection.csv` (kept byte for byte, CRLF and all,
+by a `-text` line in `.gitattributes`): **9,583 rows, 30,656 copies, 1.76 MB**, five binders and
+four 100-card decks, six condition words (`near_mint`, `excellent`, `light_played`, `good`,
+`played`, `poor`) and five languages (`en`, `de`, `fr`, `zh_CN`, `ja`). Every row parses, every
+grade, language and price reads, and parsing plus both plans takes about a quarter of a second
+under Vitest. It found the two things the hand-written fixtures could not:
+
+- **The file was over the import cap.** `MAX_IMPORT_BYTES` (`import.rs`) and its browser copy
+  `MAX_DECKLIST_BYTES` were one megabyte — "two orders of magnitude past any real decklist" — and
+  refused this file before a line was read. Both are **8 MiB** now (~45,000 such rows), and the
+  refusal names one figure twice instead of a decimal division that agreed with `at most 1 MB` by
+  rounding.
+- **The preview's merge list was the whole file's**: 382 lines "merged into an earlier line",
+  among them copies in one binder merged into a copy in another — a merge the sorted press never
+  makes. `BinderPlan.folded` / `droppedPrices` are the binders' own (118 here), and the preview
+  lists those while the box is ticked.
+
+The test does not resolve: each row is matched to a printing keyed on its own set and collector
+number, which is the answer a corpus holding every card would give.
+
+**The binder sort and `Import into` (issue #872) share the step.** While the box is ticked the
+folder selector is hidden with the mode radios — the binders name every row's destination, so a
+single one would be a question the press does not ask — and unticking it brings both back.
 
 ## What a `set` will do, said before the press — issue #555
 
@@ -903,6 +991,29 @@ including collapsed and locked folders. It ignores the page's search and filter 
 the selected marketplace, and never offers the whole-collection toggle. Its separate sweep keeps
 a previous collection export's "everything" choice from widening the folder export; loading,
 failure, Retry, Copy and Save as… retain the existing dialog's guards.
+
+### Importing into a folder
+
+The collection's import step opens with **Import into** (issue #872): `Not sorted` (the root), every
+folder the reader made — by full path, in the wall's tree order — and `New folder…`. Deck groups and
+`Recently removed` are never offered (`DECK_WRITE_FOLDERS` would accept a deck group, but a file
+saying *this deck holds these copies* is the deck arm's to say, not a collection import's).
+
+- **Where it opens is the entry point's.** The header's `Import cards` opens on the folder the
+  reader is standing in — opened from its heading's arrow — and on Not sorted at the root or inside
+  a shelf the app owns. A folder heading's `⋯` and right-click carry **Import…** above Export…,
+  which opens on that folder and hands the caret back to the `⋯` on Escape. Live on a locked folder:
+  a lock refuses a delete and holds copies back from decks; adding to it disturbs nothing.
+- **The whole file goes into that one folder**, its subfolders untouched — `folderId` on
+  `collection_import_commit`, and on `collection_import_preview` so a `set` dry run counts the same
+  rows the press writes. A folder's `set` writes the file's number into that folder's rows and
+  counts nothing filed elsewhere, unlike the root's (above), so its radio says so (`FOLDER_MODES`).
+- **New folder…** asks for a name in the step and makes a top-level folder at the press, then
+  imports into it. Import is greyed while the name is empty. A refused import after the folder
+  landed keeps the folder, and pressing again reuses it rather than making a second one under the
+  same name.
+- **The phone face draws no selector** — `CollectionPreviewBody`'s `folders` is absent there, and
+  every row lands at the root as before.
 
 **Archidekt's pile names are rewritten on the way out**, because the format has no way to say `,`
 `{` `}` `[` `]` inside a bracket: `,` → `;`, `{`/`[` → `<`, `}`/`]` → `>`, in the heading and the
@@ -1168,3 +1279,9 @@ imports that same component rather than drawing a second), and `useImport.ts` (`
 from the other side of the app and the two had drifted to two different invalidations. Where those
 copies end up is
 [collection-folders.md](collection-folders.md)'s subject, not this page's.
+
+The ManaBox binder sort (issue #873) is `import/parse.ts` (`Binder`, `binderColumnsOf`,
+`binderOf`), `destinations/binders.ts` (`planBinderImport`, `hasBinders`),
+`destinations/BinderSort.tsx` (the box, the per-binder list and the closing sentence),
+`destinations/CollectionPreviewBody.tsx` (where the box replaces the mode radios) and
+`useImport.ts` (`importBinders`, `importBinderGroups`, `createDeckFromList`).

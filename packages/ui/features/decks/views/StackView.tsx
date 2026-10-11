@@ -2,7 +2,13 @@
  * The deck as stacks of cards in columns — the default view, and the one the redesign is
  * built around.
  */
-import { useCallback, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useRef,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { EyeOff, GripVertical } from "lucide-react";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { keepCaretForCard } from "@/lib/caretWalk";
@@ -31,6 +37,7 @@ import type { TheoryPlan } from "../theoryMatch";
 import type { ValidationIssue } from "../validation/types";
 import { isBeside, RAIL_ATTR, splitRail } from "./columns";
 import { GroupHeader } from "./GroupHeader";
+import { sameDrawnProps } from "./sameDrawn";
 import { nextStackPosition, type StackPosition } from "./stackNav";
 import { hasTokenPile, TokenStackPile, type TokenPile } from "./TokenPile";
 import {
@@ -303,7 +310,14 @@ export const COMMAND_ATTR = "data-deck-command";
  */
 export const HIDDEN_STACK_ATTR = "data-stack-hidden";
 
-export function StackView({
+/**
+ * The deck as stacks. **Memoised (issue #557)** on React's own shallow comparison: `DeckDesk` hands
+ * every view one memoised bag of props, so a render of the editor that changed nothing the desk
+ * draws — a dialog opening, a write settling, the bar coming down — no longer redraws the desk.
+ * A filter keystroke still reaches it, because `groups` is the filter's answer; what keeps that
+ * keystroke cheap is one floor down, in `StackGroup` and `CardStack`.
+ */
+export const StackView = memo(function StackView({
   groups,
   marketplace,
   tracksCollection,
@@ -506,8 +520,23 @@ export function StackView({
   // or a read-only host does not — and a move is stored as `tokenRail.tsx`' index: the last slot
   // as `-1`, so a pile switched on later lands above the tokens rather than under them. Not
   // memoised, and nothing needs it to be: every drop target reads its callback through a ref.
+  //
+  //
+  // **Held still since issue #557 all the same, for a reason the drop targets do not have.** Every
+  // railed `StackGroup` is handed this as `onTokenMove`, and that pile is memoised on its props
+  // (`sameDrawnProps`): a fresh function here per render would be a changed prop on every pile of
+  // the rail, so a keystroke in the deck's filter would draw the Sideboard again for nothing. **A
+  // ref and not a `useCallback` over `rail.length`**, because the React Compiler's lint cannot
+  // prove a length read off `splitRail`'s answer is not mutated later in this render and refuses
+  // the memo; the ref is the drop targets' own arrangement, and a drop always lands after the
+  // commit that wrote it.
   const moveTokens = drawsTokens ? tokenPile.moveTo : undefined;
-  const moveTokensTo = (slot: number) => moveTokens?.(storedRailIndex(slot, rail.length));
+  const moveTokensNow = (slot: number) => moveTokens?.(storedRailIndex(slot, rail.length));
+  const moveTokensRef = useRef(moveTokensNow);
+  useEffect(() => {
+    moveTokensRef.current = moveTokensNow;
+  });
+  const moveTokensTo = useCallback((slot: number) => moveTokensRef.current(slot), []);
   // **Every card the arrows walk, in the order they are drawn** — the command zone, then the
   // flow, then the rail, each pile's cards in the order it already holds them. It is the same
   // `splitRail` answer the view is drawn from and deliberately not a second derivation of it: a
@@ -547,11 +576,17 @@ export function StackView({
    *
    * It costs the pane nothing it needs. Escape still closes it, and the caret it would have
    * handed back is where the reader already is.
+   *
+   * **A `useCallback` since issue #557**: it reaches every pile as `onSelect`, and every pile is
+   * memoised on its props, so a new function per render of this view would draw every pile again.
    */
-  const selectCard = (card: DeckCard) => {
-    keepCaretForCard(card.cardId);
-    onSelect?.(card);
-  };
+  const selectCard = useCallback(
+    (card: DeckCard) => {
+      keepCaretForCard(card.cardId);
+      onSelect?.(card);
+    },
+    [onSelect],
+  );
 
   /**
    * The arrows, for the whole view — **left and right, one card at a time, through the whole
@@ -923,7 +958,7 @@ export function StackView({
       )}
     </div>
   );
-}
+});
 
 /** The category ids of one run, in the order it is drawn — a derived heading has none to move. */
 function categoryIdsOf(groups: readonly CardGroup[]): number[] {
@@ -1098,8 +1133,14 @@ function CommandZone({
  * A component of its own rather than markup inside the `map` above, because a drop target is a
  * hook and a hook cannot be called per item of a list. The same shape the other three views
  * take, for the same reason.
+ *
+ * **Memoised on `sameDrawnProps` (issue #557)**, so a pile the deck's filter took nothing from is
+ * not drawn again when the filter rebuilds every group: its `group` and its `reorderIds` arrive as
+ * new objects holding the same rows and ids, which that comparator reads as the same pile. Every
+ * other prop is held still upstream for it — `selectCard` and `moveTokensTo` above, and the
+ * editor's `actions` — and a prop that is not held still simply costs the memo, never the pile.
  */
-function StackGroup({
+const StackGroup = memo(function StackGroup({
   group,
   marketplace,
   violations,
@@ -1361,11 +1402,7 @@ function StackGroup({
             }
             trailing={
               hidden && onShow !== undefined && group.categoryId !== null ? (
-                <ShowStackButton
-                  categoryId={group.categoryId}
-                  name={group.name}
-                  onShow={onShow}
-                />
+                <ShowStackButton categoryId={group.categoryId} name={group.name} onShow={onShow} />
               ) : undefined
             }
           />
@@ -1411,7 +1448,7 @@ function StackGroup({
       </div>
     </section>
   );
-}
+}, sameDrawnProps);
 
 /**
  * The eye at the far end of a hidden stack's heading (issue #618) — **the state, drawn, and the

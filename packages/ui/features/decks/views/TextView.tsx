@@ -5,6 +5,7 @@
  * this deck" rather than "what does this card do". No art at all — a line is a quantity, a
  * name, its marks and its cost, which is exactly what a player reads off a printed list.
  */
+import { memo } from "react";
 import { Crown } from "lucide-react";
 import { ManaText } from "@/components/ManaText";
 import { useTooltip } from "@/components/tooltip/useTooltip";
@@ -41,6 +42,7 @@ import { ruleBreak, violationsFor } from "../violations";
 import type { ValidationIssue } from "../validation/types";
 import { packColumns, RAIL_ATTR, splitRail } from "./columns";
 import { GroupHeader } from "./GroupHeader";
+import { sameDrawnProps } from "./sameDrawn";
 import { hasTokenPile, TokenTextPile, type TokenPile } from "./TokenPile";
 import { TOKEN_ITEM, tokenRailSlot, withTokenPile } from "./tokenRail";
 
@@ -91,7 +93,9 @@ export function groupHeight(group: CardGroup): number {
   return HEADER_HEIGHT + Math.max(1, group.cards.length) * ROW_HEIGHT + GROUP_GAP;
 }
 
-export function TextView({
+/** The deck as a decklist. Memoised for `StackView`'s reason (issue #557): a render of the editor
+ *  that changed nothing this view is handed does not redraw the list. */
+export const TextView = memo(function TextView({
   groups,
   marketplace,
   tracksCollection,
@@ -257,10 +261,7 @@ export function TextView({
           It carries no `content-start`: the outer `items-start` never stretches this box, so it
           is exactly as tall as the lines inside it and an `align-content` here would have no
           free space to work in. The root above is where that rule bites. */}
-      <div
-        style={{ minWidth: COLUMN_WIDTH }}
-        className="flex flex-1 flex-wrap items-start gap-6"
-      >
+      <div style={{ minWidth: COLUMN_WIDTH }} className="flex flex-1 flex-wrap items-start gap-6">
         {columns.map((column, index) => (
           <div
             key={index}
@@ -342,11 +343,12 @@ export function TextView({
       )}
     </div>
   );
-}
+});
 
 /** One pile as a heading and its lines, and a place a dragged card can be let go —
- *  `StackView`'s `StackGroup`, for its reason. */
-function TextGroup({
+ *  `StackView`'s `StackGroup`, for its reason, and memoised on `sameDrawnProps` for its reason
+ *  too: a pile the deck's filter took nothing from is not drawn again (issue #557). */
+const TextGroup = memo(function TextGroup({
   group,
   marketplace,
   violations,
@@ -423,7 +425,7 @@ function TextGroup({
       )}
     </section>
   );
-}
+}, sameDrawnProps);
 
 /**
  * One card as one line.
@@ -573,9 +575,7 @@ function TextRow({
         {/* Decoration, like the two marks either side of it — this line is a button with an
             explicit `aria-label`, so the word is `deckCardName`'s. `TableView` is the one view
             that says it in text, because a cell is not swallowed by a label. */}
-        {theoryMark !== null && (
-          <TheoryMatchBadge mark={theoryMark} />
-        )}
+        {theoryMark !== null && <TheoryMatchBadge mark={theoryMark} />}
         {card.labelName !== null && <LabelDot name={card.labelName} color={card.labelColor} />}
         {/* Beside the dot, and separating from it by **shape** rather than by colour — a stroked
             glyph against an 8px filled square. The label colours are spoken for by labels and

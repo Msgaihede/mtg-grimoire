@@ -323,6 +323,22 @@ export function MenuRows({ items }: { items: MenuItem[] }) {
 }
 
 /**
+ * Which rung the panel takes: {@link LAYER.menuOverDialog} when it was opened from inside a
+ * dialog, {@link LAYER.popup} otherwise.
+ *
+ * **The panel is a root-mounted sibling of every dialog, so a dialog's scrim is the one thing
+ * that can cover it.** At `popup` a right-click inside the card detail modal opened a menu that
+ * was drawn, focused and listening — and invisible behind the scrim (issue #846). Over a view the
+ * menu keeps `popup`, so the deck editor's drag tray still covers it; see `layers.ts`.
+ *
+ * `[role="dialog"]` is the test because it is what `Dialog` renders and what every modal in the
+ * app is built on; a menu with no opener (none today) is a menu over a view.
+ */
+export function menuLayer(opener: HTMLElement | null): string {
+  return opener?.closest('[role="dialog"]') ? LAYER.menuOverDialog : LAYER.popup;
+}
+
+/**
  * The menu itself: one panel at the pointer, and whatever cascade the reader opens out of it.
  *
  * ## Why it is mounted where it is
@@ -763,6 +779,11 @@ export function ContextMenu({
     }, SUBMENU_HOVER_MS);
   };
 
+  // Read off the opener rather than asked of the caller: every surface opens this through the
+  // same `useContextMenu`, and one that forgot to say "I am inside a dialog" would paint its menu
+  // behind the scrim with nothing going red — issue #846. `menuLayer`'s doc has the rest.
+  const layer = menuLayer(opener);
+
   return (
     <motion.div
       ref={panelRef}
@@ -794,7 +815,7 @@ export function ContextMenu({
         // Pinned by the corner nearest the pointer and grown from that same corner. A popup that
         // grows from the middle of itself reads as unrelated to what produced it.
         placement.origin,
-        LAYER.popup,
+        layer,
         PANEL_CLASS,
         !present && "pointer-events-none",
       )}
