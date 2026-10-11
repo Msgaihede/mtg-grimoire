@@ -7,7 +7,7 @@ import type { ViewId } from "./store";
  *
  * **A capability, not the edition.** A page never reads the edition (`lib/edition.ts`); what one
  * may ask is whether the place a press of its own would go exists here, and not why. `AppShell`
- * provides the answer from its edition — the light app draws six destinations, so a way into a
+ * provides the answer from its edition — the light app draws seven destinations, so a way into a
  * shared binder has nowhere to land there — and no provider at all is every view, which is what
  * the desktop app, a story and a test get.
  *

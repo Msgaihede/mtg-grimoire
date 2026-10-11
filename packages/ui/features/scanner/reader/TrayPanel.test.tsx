@@ -779,3 +779,96 @@ describe("TrayPanel's grid", () => {
     expect(flashes[0].closest("li")).toHaveTextContent("Honored Hierarch");
   });
 });
+
+describe("TrayPanel filing somewhere that is not the collection", () => {
+  const destination = { title: "Scanned for their side", name: "their side" };
+
+  it("heads the tray and names its press with the destination's words", async () => {
+    const onCommit = vi.fn();
+    wrap(<TrayPanel {...props({ destination, onCommit })} />);
+    expect(screen.getByRole("region", { name: "Scanned for their side" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Scanned for their side, 2 copies" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /to collection/ })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Add 2 to their side" }));
+    expect(onCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("still says how many cards it leaves for want of a finish", () => {
+    const unknown: ScannerTrayRow = { ...older, finish: "unknown" };
+    wrap(<TrayPanel {...props({ destination, rows: [newer, unknown] })} />);
+    expect(
+      screen.getByRole("button", { name: "Add 1 to their side · 1 needs a finish" }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps both of Add's refusals", async () => {
+    const onCommit = vi.fn();
+    const waiting = rowFromDecision(ambiguous, { finish: "nonfoil" }, 3, "waiting");
+    const { unmount } = wrap(
+      <TrayPanel {...props({ destination, onCommit, rows: [waiting, newer] })} />,
+    );
+    const unpicked = screen.getByRole("button", { name: "Add 2 to their side" });
+    expect(unpicked).toHaveAttribute("aria-disabled", "true");
+    await userEvent.click(unpicked);
+    unmount();
+    wrap(
+      <TrayPanel
+        {...props({ destination, onCommit, rows: [{ ...older, finish: "unknown" }] })}
+      />,
+    );
+    const unfinished = screen.getByRole("button", {
+      name: "Add 0 to their side · 1 needs a finish",
+    });
+    expect(unfinished).toHaveAttribute("aria-disabled", "true");
+    await userEvent.click(unfinished);
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("draws no folder to file into, and asks for no folder list", async () => {
+    collectionFolderList.mockClear();
+    wrap(<TrayPanel {...props({ destination })} />);
+    // The price read has answered, so the folder read would have gone out by now too.
+    await screen.findAllByText("Not priced at TCGplayer");
+    expect(screen.queryByRole("button", { name: /^Folder:/ })).not.toBeInTheDocument();
+    expect(collectionFolderList).not.toHaveBeenCalled();
+    // The page leaves the deck's press out with it.
+    expect(screen.queryByRole("button", { name: "Create deck…" })).not.toBeInTheDocument();
+  });
+
+  it("draws the destination's summary where the folder stood, handed the rows on screen", () => {
+    const summary = vi.fn((rows: readonly ScannerTrayRow[]) => (
+      <p>Scanned so far: {rows.length} rows</p>
+    ));
+    wrap(<TrayPanel {...props({ destination: { ...destination, summary } })} />);
+    const footer = screen.getByRole("button", { name: "Add 2 to their side" }).closest("footer");
+    expect(footer).toHaveTextContent("Scanned so far: 2 rows");
+    expect(summary).toHaveBeenLastCalledWith([newer, older]);
+  });
+
+  it("prices the rows at the destination's marketplace, not the reader's", async () => {
+    printingPrices.mockClear();
+    printingPrices.mockResolvedValueOnce([
+      { cardId: newer.cardId, finishPrices: { nonfoil: 2.5, foil: null, etched: null } },
+    ]);
+    wrap(
+      <TrayPanel
+        {...props({ rows: [newer], destination: { ...destination, marketplace: "cardmarket" } })}
+      />,
+    );
+    // Cardmarket quotes in euros, and the figure is written as one.
+    expect(await screen.findByText(/2[.,]50/)).toHaveTextContent("€");
+    expect(printingPrices).toHaveBeenLastCalledWith([newer.cardId], "cardmarket");
+  });
+
+  it("says its notice under the heading, and nothing where there is none", () => {
+    const { unmount } = wrap(
+      <TrayPanel {...props({ destination, notice: "3 cards were already in the tray." })} />,
+    );
+    expect(screen.getByRole("note")).toHaveTextContent("3 cards were already in the tray.");
+    unmount();
+    wrap(<TrayPanel {...props({ destination, notice: null })} />);
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  });
+});

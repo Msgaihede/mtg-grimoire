@@ -133,6 +133,11 @@ it("stops listening when it unmounts", () => {
  * synced table's worth. What joined them is `["cards"]` and `["card"]` (a wish, a copy and a deck
  * card move `wishlisted`, the owned tri-state and the holdings), the four tag roots a mute
  * reaches, and the sticky notes' own.
+ *
+ * `["trade"]` joined with the Trade page, and through the same two tables as `["card"]`: a trade
+ * line says how many copies the collection could give and whether its card is wished for, so a
+ * copy or a wish written on another device has changed what an open trade should say. The trade
+ * tables themselves do not sync.
  */
 it("invalidates exactly the known roots", () => {
   expect(DEVICE_SYNC_INVALIDATED).toEqual([
@@ -141,6 +146,7 @@ it("invalidates exactly the known roots", () => {
     ["decks"],
     ["cards"],
     ["card"],
+    ["trade"],
     ["sync"],
     ["tags-muted"],
     ["tag-search"],

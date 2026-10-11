@@ -311,3 +311,42 @@ export const SwitchToList: Story = {
     ).toBeInTheDocument();
   },
 };
+
+/**
+ * The tray filing somewhere that is not the collection — a side of a trade, which is what the
+ * trade's scanner dialog hands it (`Trade/Scan dialog` draws the whole surface).
+ *
+ * The heading and the press take the destination's words, the destination's own summary stands
+ * where the folder picker did, and the page leaves *Create deck…* out. The line under the heading
+ * is the page's: the tray is one stored row, so cards scanned before this surface opened are in
+ * the list, and it says so rather than letting Add surprise anyone.
+ */
+export const OntoADestination: Story = {
+  args: {
+    rows: [NEEDS_A_FINISH_ROW, ...TRAY_ROWS.filter((row) => row.choices.length === 0)],
+    layout: "grid",
+    onCreateDeck: undefined,
+    destination: {
+      title: "Scanned for their side",
+      name: "their side",
+      summary: (rows) => (
+        <p className="min-w-0 flex-1 text-[13px] text-dim">Scanned so far: {rows.length} rows</p>
+      ),
+    },
+    notice:
+      "5 cards were already in the scanner's tray. They are in this list and go onto their side with the rest. Remove any that do not belong, or use Clear all… to empty the list.",
+  },
+  parameters: { trayWidth: THIRD_WIDTH },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+    const tray = canvas.getByRole("region", { name: "Scanned for their side" });
+    await expect(within(tray).getByRole("note")).toHaveTextContent(/already in the scanner's tray/);
+    await expect(within(tray).queryByRole("button", { name: /^Folder:/ })).toBeNull();
+    await expect(within(tray).queryByRole("button", { name: "Create deck…" })).toBeNull();
+    await expect(within(tray).getByText("Scanned so far: 4 rows")).toBeInTheDocument();
+    await userEvent.click(
+      within(tray).getByRole("button", { name: "Add 5 to their side · 1 needs a finish" }),
+    );
+    await expect(args.onCommit).toHaveBeenCalledTimes(1);
+  },
+};

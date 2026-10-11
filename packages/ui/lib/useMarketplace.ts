@@ -147,6 +147,7 @@ function invalidatePricedQueries(queryClient: QueryClient): void {
   void queryClient.invalidateQueries({ queryKey: ["collection"] });
   void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
   void queryClient.invalidateQueries({ queryKey: ["decks"] });
+  void queryClient.invalidateQueries({ queryKey: ["trade"] });
 }
 
 /**

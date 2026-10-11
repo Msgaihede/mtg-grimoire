@@ -34,7 +34,7 @@ import {
   type ScannerTrayFinish,
   type ScannerTrayRow,
 } from "@grimoire/ui/lib/ipc";
-import type { Currency } from "@grimoire/ui/lib/marketplace";
+import type { Currency, MarketplaceId } from "@grimoire/ui/lib/marketplace";
 import { DURATION, PRESS, seconds, TRANSITION } from "@grimoire/ui/lib/motion";
 import { formatPrice } from "@grimoire/ui/lib/prices";
 import { useMarketplace } from "@grimoire/ui/lib/useMarketplace";
@@ -132,19 +132,27 @@ export function Tray({
   rows,
   onRows,
   flashKey,
+  title = "Scanned cards",
+  marketplace,
 }: {
   rows: readonly ScannerTrayRow[];
   /** An edit, as a function of the rows — never the rows this render drew. */
   onRows: (update: (rows: ScannerTrayRow[]) => ScannerTrayRow[]) => void;
   /** The row just added or bumped, for the wash. */
   flashKey: string | null;
+  /** What heads the tray. A tray filing somewhere other than the collection says where
+   *  (`TrayDestination.title`); the Scanner page's own leaves it alone. */
+  title?: string;
+  /** Whose prices the rows are quoted at — a destination's, where it has one. Absent is the
+   *  reader's own marketplace. */
+  marketplace?: MarketplaceId;
 }) {
   const titleId = useId();
   const listRef = useRef<HTMLUListElement>(null);
   const copies = totalCopies(rows);
   const waiting = unresolvedCount(rows);
   const deciding = rows.some(needsDecision);
-  const { priceOf, currency, marketplaceLabel } = useTrayPrices(rows);
+  const { priceOf, currency, marketplaceLabel } = useTrayPrices(rows, marketplace);
 
   const [asking, setAsking] = useState<Asking>(null);
   // Looked up in the rows on screen, so a row a commit took — or the reader removed — while its
@@ -226,10 +234,10 @@ export function Tray({
         {/* The name is spelled, not computed: the title and its count are two elements a gap
             apart, which the name algorithm fuses into `Scanned cards3`. */}
         <h2
-          aria-label={`Scanned cards, ${plural(copies, "copy", "copies")}`}
+          aria-label={`${title}, ${plural(copies, "copy", "copies")}`}
           className="flex items-baseline gap-2 font-heading text-lg leading-none"
         >
-          <span id={titleId}>Scanned cards</span>
+          <span id={titleId}>{title}</span>
           <span aria-hidden="true" className="font-mono text-sm tabular-nums text-dim">
             {copies}
           </span>

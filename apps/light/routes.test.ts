@@ -85,6 +85,45 @@ describe("parsePlace", () => {
   ])("ignores %s%s (%s)", (path, search) => {
     expect("folderId" in parsePlace(path, search)).toBe(false);
   });
+
+  it("reads an open trade, and a card over it", () => {
+    expect(parsePlace("/trade/5", "")).toEqual({
+      view: "trade",
+      deckId: null,
+      cardId: null,
+      tradeId: 5,
+    });
+    expect(parsePlace("/trade/5", "?card=abc")).toEqual({
+      view: "trade",
+      deckId: null,
+      cardId: "abc",
+      tradeId: 5,
+    });
+  });
+
+  it("answers no trade field at all where the URL names none", () => {
+    // The folder's rule: every place spelled before trades were a place is still whole.
+    expect("tradeId" in parsePlace("/trade", "")).toBe(false);
+    expect("tradeId" in parsePlace("/decks/5", "")).toBe(false);
+  });
+
+  it.each([
+    ["/trade/abc", "a word"],
+    ["/trade/0", "zero"],
+    ["/trade/-2", "a negative number"],
+    ["/trade/1.5", "a fraction"],
+    ["/trade/99999999999999999999", "a number too large to be an id"],
+    ["/search/5", "a trade under a destination that is not Trade"],
+  ])("opens no trade for %s (%s)", (path) => {
+    const place = parsePlace(path, "");
+    expect("tradeId" in place).toBe(false);
+    // A deck's id is still only a deck's: `/trade/5` opens no deck.
+    expect(place.deckId).toBeNull();
+  });
+
+  it("opens no deck for a trade's id", () => {
+    expect(parsePlace("/trade/5", "").deckId).toBeNull();
+  });
 });
 
 describe("placeHref", () => {
@@ -97,10 +136,21 @@ describe("placeHref", () => {
       "/decks/7?card=x",
       "/decks?folder=3",
       "/decks?folder=3&card=x",
+      "/trade",
+      "/trade/5",
+      "/trade/5?card=x",
     ]) {
       const [path, search = ""] = href.split("?");
       expect(placeHref(parsePlace(path, search && `?${search}`))).toBe(href);
     }
+  });
+
+  it("spells a trade only under Trade", () => {
+    expect(placeHref({ view: "trade", deckId: null, cardId: null, tradeId: 5 })).toBe("/trade/5");
+    expect(placeHref({ view: "trade", deckId: null, cardId: null, tradeId: null })).toBe("/trade");
+    expect(placeHref({ view: "trade", deckId: null, cardId: null })).toBe("/trade");
+    // As a folder is spelled only on the gallery: an id carried onto another view names nothing.
+    expect(placeHref({ view: "decks", deckId: null, cardId: null, tradeId: 5 })).toBe("/decks");
   });
 
   it("spells a folder only on the gallery", () => {

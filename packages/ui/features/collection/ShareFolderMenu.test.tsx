@@ -638,7 +638,7 @@ describe("opening somebody else's share", () => {
 /* ------------------------------------------------------ a window with no shared view ---------- */
 
 /**
- * The light app draws six destinations and the shared binder is not one: its shell answers
+ * The light app draws seven destinations and the shared binder is not one: its shell answers
  * `useReaches("shared")` with false. The Open half goes there, so it is not drawn — a press that
  * answered would land on a view the light app cannot stand on.
  */

@@ -328,6 +328,11 @@ export function needsFinishCount(rows: readonly ScannerTrayRow[]): number {
   return totalCopies(rows.filter((row) => !isKnownFinish(row.finish)));
 }
 
+/** Why nothing can be filed yet, as the press's own refusal: `waiting` rows have no printing. */
+function stillWaiting(waiting: number): string {
+  return `${waiting} scanned ${waiting === 1 ? "card is" : "cards are"} still waiting for a printing to be picked.`;
+}
+
 /**
  * The tray as `collection_import_commit`'s lines.
  *
@@ -347,11 +352,7 @@ export function importItems(
   condition: Condition,
 ): CollectionImportItem[] {
   const waiting = unresolvedCount(rows);
-  if (waiting > 0) {
-    throw new Error(
-      `${waiting} scanned ${waiting === 1 ? "card is" : "cards are"} still waiting for a printing to be picked.`,
-    );
-  }
+  if (waiting > 0) throw new Error(stillWaiting(waiting));
   return rows.map((row) => {
     if (!isKnownFinish(row.finish)) {
       throw new Error(`${row.name} has no finish yet. Pick one before adding it.`);
@@ -397,9 +398,12 @@ export function deckRefusal(rows: readonly ScannerTrayRow[]): string | null {
  * behind for want of a finish. **One string, never a second element**: the name is computed from
  * the button's content and a span beside the count would fuse into `collection· 2` (`packages/ui/CLAUDE.md`,
  * the `Missing2` rule).
+ *
+ * `where` is the destination as the end of that sentence — `collection` unless the tray is filing
+ * somewhere else (`useTrayDestination.ts`), where it is that place's own name: `their side`.
  */
-export function addLabel(ready: number, needsFinish: number): string {
-  const add = `Add ${ready} to collection`;
+export function addLabel(ready: number, needsFinish: number, where = "collection"): string {
+  const add = `Add ${ready} to ${where}`;
   if (needsFinish === 0) return add;
   return `${add} · ${needsFinish} ${needsFinish === 1 ? "needs" : "need"} a finish`;
 }
@@ -423,9 +427,21 @@ export function commitPlan(
   rows: readonly ScannerTrayRow[],
   condition: Condition,
 ): { items: CollectionImportItem[]; taken: ScannerTrayRow[] } {
+  const taken = takenRows(rows);
+  return { items: importItems(taken, condition), taken };
+}
+
+/**
+ * **Which rows one press of Add takes, wherever it files them** — {@link commitPlan}'s two
+ * refusals and its split, without the collection's lines. A destination that is not the collection
+ * (`useTrayDestination.ts`) has no condition to file under and writes lines of its own, and it must
+ * still be refused for the same two reasons in the same order, in the same words.
+ */
+export function takenRows(rows: readonly ScannerTrayRow[]): ScannerTrayRow[] {
   // The whole tray first, so an unresolved row of unknown finish still stops the press.
-  if (unresolvedCount(rows) > 0) importItems(rows, condition);
+  const waiting = unresolvedCount(rows);
+  if (waiting > 0) throw new Error(stillWaiting(waiting));
   const taken = readyRows(rows);
   if (rows.length > 0 && taken.length === 0) throw new Error(NO_FINISHED_ROWS);
-  return { items: importItems(taken, condition), taken };
+  return taken;
 }

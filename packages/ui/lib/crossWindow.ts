@@ -162,10 +162,13 @@ export const TABLE_KEYS: Readonly<Record<string, readonly QueryKey[]>> = {
   // owes the two whole card roots on top (`useDataReset`'s `COLLECTION_ROOTS`) — the facets'
   // owned tri-state is under `["cards"]`, and every printing's count and the holdings under
   // `["card"]`.
-  collection_entries: [...OWNED_WRITE_KEYS, ["cards"], ["card"], ...REVIEWED],
+  // `["trade"]` because a trade line says how many copies the collection could give.
+  collection_entries: [...OWNED_WRITE_KEYS, ["cards"], ["card"], ["trade"], ...REVIEWED],
   // A folder write moves no quantity but does move the effective lock, which the deck builder's
   // search counts by — `useCollectionFolders` settles all three roots for that reason.
-  collection_folders: [["collection"], ["cards", "search"], ["decks"], ...REVIEWED],
+  // `["trade"]` too: a trade line names the decks its copies sit in, and a folder's lock decides
+  // whether a binder's copies count as ones a finish may take.
+  collection_folders: [["collection"], ["cards", "search"], ["decks"], ["trade"], ...REVIEWED],
   // **Nothing, and it cannot be `["share"]`.** `share_list` is a read that *writes*: it reconciles
   // against the relay and upserts every row it hears of on each call (`share/cache.rs`), so an
   // entry reaching the list turns a mounted collection page into a refetch loop across windows —
@@ -221,10 +224,15 @@ export const TABLE_KEYS: Readonly<Record<string, readonly QueryKey[]>> = {
   // which the update hook never sees, so Rust marks it by hand from that command and from *Leave
   // group* (`changes::MARKED_BY_COMMAND`).
   sync_state: [SYNC_KEY],
+  // A trade and its lines (user schema v63), read under the one `["trade"]` root by
+  // `features/trade/useTrades`. Neither table syncs between devices.
+  trade_lines: [["trade"]],
+  trades: [["trade"]],
   // Every search row and every printing draws `wishlisted` (`["cards"]`, `["card"]` — the
   // *Clear wishlist* roots), and a deck's missing plan lists the wishes each shortfall could take
   // down — *Send missing to wishlist* settles `["decks"]` for it.
-  wishlist_entries: [["wishlist"], ["cards"], ["card"], ["decks"], ...REVIEWED],
+  // And `["trade"]`: a line on the other side is marked when its card is on the wishlist.
+  wishlist_entries: [["wishlist"], ["cards"], ["card"], ["decks"], ["trade"], ...REVIEWED],
   wishlist_folders: [["wishlist"], ...REVIEWED],
 };
 

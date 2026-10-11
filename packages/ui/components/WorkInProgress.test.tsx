@@ -2,7 +2,6 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { WorkInProgress } from "@/components/WorkInProgress";
 import { PlaytestingPage } from "@/features/playtesting/PlaytestingPage";
-import { TradePage } from "@/features/trade/TradePage";
 
 describe("the work-in-progress placeholder", () => {
   /**
@@ -16,24 +15,24 @@ describe("the work-in-progress placeholder", () => {
    * that it is *found* cannot tell the two apart, which is the whole thing being pinned.
    */
   it("names itself for a screen reader and paints only the sentence", () => {
-    render(<WorkInProgress view="Trade" />);
+    render(<WorkInProgress view="Playtesting" />);
 
-    expect(screen.getByRole("heading", { level: 2, name: "Trade" })).toHaveClass("sr-only");
+    expect(screen.getByRole("heading", { level: 2, name: "Playtesting" })).toHaveClass("sr-only");
     expect(screen.getByText("Work in progress")).toBeInTheDocument();
   });
 
   /**
-   * Each page passes its own word, which is the one thing the shared component cannot supply.
+   * The page passes its own word, which is the one thing the shared component cannot supply.
    *
-   * Written out as the words a reader would say rather than read off `NAV`, per the rule that an
-   * assertion must not read its own constant — a test that looked the labels up would pass over
+   * Written out as the word a reader would say rather than read off `NAV`, per the rule that an
+   * assertion must not read its own constant — a test that looked the label up would pass over
    * a page handed the wrong one.
+   *
+   * **One page, where this used to name two.** Trade was the other placeholder until it grew a
+   * page of its own (`features/trade/TradePage.test.tsx` is where that one is tested now), so
+   * Playtesting is the view this component still stands in for.
    */
-  it("takes each page's own name", () => {
-    const { unmount } = render(<TradePage />);
-    expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent("Trade");
-    unmount();
-
+  it("takes the page's own name", () => {
     render(<PlaytestingPage />);
     expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent("Playtesting");
   });

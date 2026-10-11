@@ -289,6 +289,17 @@ import type {
   TokenPrinting,
   TokenSource,
   TheorySlot,
+  Trade,
+  TradeCreate,
+  TradeFinishOptions,
+  TradeLine,
+  TradeLineChange,
+  TradeLineInput,
+  TradeOutcome,
+  TradeSide,
+  TradeSource,
+  TradeStatus,
+  TradeSummary,
   TransferImportMode,
   UpdateAsset,
   UpdateStatus,
@@ -336,6 +347,10 @@ import {
   isTokenPrinting,
   tokenSubtitle,
 } from "@grimoire/ui/features/decks/deckTokens";
+// The band a side's percentage lives in, borrowed for the reason the token rules above are: the
+// slider that offers a rate and the write that refuses one have to mean the same three numbers,
+// and a second spelling here would let a story save a percentage the page cannot draw.
+import { RATE_DEFAULT, RATE_MAX, RATE_MIN, RATE_STEP } from "@grimoire/ui/features/trade/trade";
 import {
   DEFAULT_MARKETPLACE,
   FEED_MARKETPLACES,
@@ -1764,6 +1779,97 @@ export interface FakePairing {
   pending: FakePending | null;
 }
 
+/**
+ * One row of `trades`: two piles of cards the reader is weighing against each other, and what
+ * became of them.
+ *
+ * **Local to the device.** The table is a user table and not a synced one, so there is no
+ * `sync_uid` here and no row of it ever crosses a relay.
+ *
+ * `marketplace` is chosen when the trade is made and never moves afterwards, which is why it is
+ * the narrowed {@link MarketplaceId} where {@link FakeDb.marketplace} is a bare string: that row
+ * is a setting some other build may have written, and this column is only ever written by
+ * `trade_create`, which refuses a word it does not know. **Every price a trade quotes is that
+ * marketplace's**, whatever the reader has switched the rest of the app to since.
+ *
+ * `status` is what decides whether {@link FakeTradeLine.unitPrice} is read at all — see there.
+ */
+export interface FakeTrade {
+  id: number;
+  /** Never blank: a trade made without a name is `Trade {id}`, written at creation. */
+  name: string;
+  marketplace: MarketplaceId;
+  /** Percent of market price for each side, {@link RATE_MIN} to {@link RATE_MAX} in steps of
+   *  {@link RATE_STEP}. A fact the page multiplies by; nothing here applies it. */
+  rateMine: number;
+  rateTheirs: number;
+  status: TradeStatus;
+  /**
+   * Set by the first finish and **never cleared**, a reopen included — it is the one thing a
+   * reopened trade remembers about having been finished, and what makes the dialog open with
+   * every step off the second time. A duplicate starts at `false`: its cards have moved nowhere.
+   */
+  finishedBefore: boolean;
+  /** What the last finish moved, in copies. `null` until one has run; kept through a reopen. */
+  outcome: FakeTradeOutcome | null;
+  /** Unix seconds. The list is ordered on it, newest first. */
+  createdAt: number;
+  /** When it was finished or archived, and `null` while it is open. */
+  closedAt: number | null;
+}
+
+/**
+ * `trades.outcome` as the column holds it: `TradeOutcome`, with the one key that arrived after
+ * the column did left optional. **A stored outcome outlives the build that wrote it** — the crate
+ * reads the JSON through `#[serde(default)]` — so a world may hold one from before a finish could
+ * take a deck's copy, and `trade_get` answers it with a zero.
+ */
+export type FakeTradeOutcome = Omit<TradeOutcome, "removedFromDecks"> & {
+  removedFromDecks?: number;
+};
+
+/**
+ * One row of `trade_lines`: one printing in one finish on one side of one trade.
+ *
+ * **`(tradeId, side, cardId, finish)` is the grain** — an add or an edit that lands on a line
+ * the side already holds raises that line rather than making a second, so no side ever lists one
+ * piece of cardboard twice.
+ *
+ * `name`, `setCode` and `collectorNumber` are copied off the printing when the line is written
+ * and again when it is repointed, {@link FakeEntry}'s three denormalised columns and for their
+ * reason: a line outlives its printing, and a trade that lost a row because a sync dropped a card
+ * would be a balance that changed with nobody touching it. A read prefers the card's own and
+ * falls back on these.
+ */
+export interface FakeTradeLine {
+  id: number;
+  tradeId: number;
+  side: TradeSide;
+  cardId: string;
+  name: string;
+  setCode: string;
+  collectorNumber: string;
+  finish: FakeEntry["finish"];
+  /** Always at least one: a line is removed, never emptied. */
+  quantity: number;
+  /** Where it was added from. A label and nothing more — `owned` is counted off the collection
+   *  whatever this says. */
+  source: TradeSource;
+  /** The order a side is drawn in, with `id` as the tiebreak. An ordering and never an index:
+   *  a removed line leaves a hole nothing renumbers. */
+  position: number;
+  /**
+   * The 100% price this line **closed with**, in the trade's marketplace — written by
+   * `trade_finish` and `trade_archive`, cleared by `trade_reopen`, and read only while the trade
+   * is not open. An open trade's price is live and this column is ignored.
+   *
+   * `null` therefore means two things and the trade's status says which: on an open trade,
+   * nothing has been frozen; on a closed one, the marketplace quoted no price on the day, which
+   * is a fact worth keeping rather than a gap to fill from today's.
+   */
+  unitPrice: number | null;
+}
+
 export interface FakeDb {
   cards: FakeCard[];
   collectionEntries: FakeEntry[];
@@ -2302,6 +2408,14 @@ export interface FakeDb {
    * that is what a link in a chat window is, and viewing needs no membership at all.
    */
   relayShares: FakeRelayShare[];
+  /**
+   * `trades` — every trade the reader has open or has put away, and **empty in every world but
+   * the `trades` seed**: a trade is something a reader started, so no collection implies one.
+   */
+  trades: FakeTrade[];
+  /** `trade_lines` — keyed to the **trade**, so a row here is found through
+   *  {@link FakeDb.trades} and goes when its trade does. */
+  tradeLines: FakeTradeLine[];
   fault: Fault | null;
 }
 
@@ -3536,6 +3650,10 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // publishing needs a membership and a press, and the `starter` reader has made neither.
     shares: [],
     relayShares: [],
+    // No trades, which is the Trade page's first-run state and what `starter` stands in too: the
+    // `trades` seed is the one world that has some.
+    trades: [],
+    tradeLines: [],
     fault: null,
     ...init,
   };
@@ -13255,6 +13373,43 @@ export function readHandlers(db: FakeDb) {
 
     /** The same, answering how many images were **queued** — zero, since nothing was. */
     prewarm_collection: () => 0,
+
+    /**
+     * `trade::list_trades` — every trade, **newest first**, each with the little of its lines a
+     * balance is stated from.
+     *
+     * A side, a quantity and a unit price per line and nothing else: the list's whole job is one
+     * sentence per trade (*You owe $22.70*), and `tradeMoney` draws it from exactly those three.
+     * The price is the one {@link toTradeLine} answers — live for an open trade, the figure it
+     * closed with for one that is not — so the list and the opened trade cannot disagree.
+     *
+     * It takes no marketplace, unlike every other priced read here: each trade carries its own.
+     */
+    trade_list: (): TradeSummary[] =>
+      [...db.trades]
+        .sort((a, b) => b.createdAt - a.createdAt || b.id - a.id)
+        .map((trade) => ({
+          id: trade.id,
+          name: trade.name,
+          marketplace: trade.marketplace,
+          rateMine: trade.rateMine,
+          rateTheirs: trade.rateTheirs,
+          status: trade.status,
+          createdAt: trade.createdAt,
+          closedAt: trade.closedAt,
+          lines: linesOfTrade(db, trade.id).map((line) => ({
+            side: line.side,
+            quantity: line.quantity,
+            unitPrice: tradeLinePrice(db, trade, line),
+          })),
+        })),
+
+    /** `trade::get_trade` — one trade whole, or **`null`** for an id nothing answers to: a trade
+     *  deleted in another window is a state the page draws, not an error it reports. */
+    trade_get: (args: { id: number }): Trade | null => {
+      const trade = db.trades.find((t) => t.id === args.id);
+      return trade ? toTrade(db, trade) : null;
+    },
   } satisfies Record<string, CommandHandler>;
 }
 
@@ -23963,7 +24118,887 @@ export function writeHandlers(db: FakeDb) {
       if (held.state === "pending") throw refuse(SHARE_NOT_READY);
       return toShareSnapshot(db, held);
     },
+
+    /**
+     * `trade::create_trade` — a new open trade with nothing on either side, answering its id.
+     *
+     * **Both fields are optional and each has a default that is a fact rather than a guess.** A
+     * name left out, or sent blank, is `Trade {id}` — the trade's own id, so the name a reader
+     * never chose still tells two of them apart. A marketplace left out is the reader's current
+     * one, read off the same row `get_marketplace` reads; one that is *sent* and not known is
+     * refused rather than folded to the default, because a trade keeps its marketplace for good
+     * and one that silently changed currency is the worse failure.
+     *
+     * **Always one of the four that quote a price** — {@link tradeMarketplace} says why a reader
+     * on Card trader gets a TCGplayer trade.
+     *
+     * Both sides start at {@link RATE_DEFAULT}.
+     *
+     * **No undo step, here or on any of the ten writes below, and {@link NO_UNDO_STEP} does not
+     * list them.** {@link journalled} files a step only where a write names a deck, and a trade
+     * names none — `sticky_note_delete`'s position exactly. A trade is saved as it is edited and
+     * there is no Ctrl+Z on the page to spend.
+     */
+    trade_create: (args: { trade: TradeCreate }): number => {
+      refuseIfBusy(db);
+      const marketplace = tradeMarketplace(db, args.trade.marketplace);
+      const id = nextId(db.trades);
+      db.trades.push({
+        id,
+        name: nonblank(args.trade.name) ?? `Trade ${id}`,
+        marketplace,
+        rateMine: RATE_DEFAULT,
+        rateTheirs: RATE_DEFAULT,
+        status: "open",
+        finishedBefore: false,
+        outcome: null,
+        createdAt: tradeStamp(db),
+        closedAt: null,
+      });
+      return id;
+    },
+
+    /** `trade::rename_trade`. Trimmed, and **a blank name is the one the trade would have been
+     *  made with**, `Trade {id}`: clearing the field is how a reader asks for the default back,
+     *  and a trade with no name at all is a row in the list nobody can press. */
+    trade_rename: (args: { id: number; name: string }): void => {
+      refuseIfBusy(db);
+      const trade = openTrade(db, args.id);
+      trade.name = nonblank(args.name) ?? `Trade ${trade.id}`;
+    },
+
+    /** `trade::set_trade_rate` — one side's percentage of market price. Out of the band or off
+     *  the step is **refused rather than snapped**: the page's slider snaps, so a figure off the
+     *  grid is a caller that did not, and rounding it here would store a number nobody chose. */
+    trade_set_rate: (args: { id: number; side: TradeSide; rate: number }): void => {
+      refuseIfBusy(db);
+      const trade = openTrade(db, args.id);
+      const side = tradeSide(args.side);
+      const rate = tradeRate(args.rate);
+      if (side === "mine") trade.rateMine = rate;
+      else trade.rateTheirs = rate;
+    },
+
+    /**
+     * `trade::add_trade_lines` — cards onto one side, **folding** onto the line that already
+     * holds a printing in that finish.
+     *
+     * One command for one card and for a scanner tray of forty, and **all or nothing** either
+     * way — the crate's one savepoint, stood in for here by checking every line before the first
+     * is written. A scan that put eleven cards on and dropped the twelfth would be a list the
+     * reader has to audit. An empty list is a press that had nothing to add and changes nothing.
+     *
+     * A fold raises the quantity and leaves the standing line's `source` alone: it says where the
+     * line first came from. Two inputs naming one printing and finish fold the same way, because
+     * the second finds the first. A new line goes to the end of the trade.
+     *
+     * **{@link TRADE_MAX_QUANTITY} bounds the line and not the input alone**: a quantity that
+     * fits is still refused when the line it would raise cannot take it, and that refusal takes
+     * the batch back with it like any other.
+     *
+     * ⚠️ **The finish is checked as a word and not against the printing's own list**, where
+     * {@link writeHandlers.trade_update_line} does check. A line arrives from the collection or
+     * the scanner in the finish a real copy is in, and the collection can hold a finish
+     * `cards.finishes` does not list — an import says what it says. A fake that refused one here
+     * would refuse an add the app makes.
+     */
+    trade_add_lines: (args: { id: number; side: TradeSide; lines: TradeLineInput[] }): void => {
+      refuseIfBusy(db);
+      const trade = openTrade(db, args.id);
+      const side = tradeSide(args.side);
+      // Each line's checks in the crate's order, so two mistakes on one line earn the same
+      // sentence on both sides of the wire.
+      //
+      // The fold's sum is the last of them, and it is checked in this pass rather than at the
+      // write: the crate refuses it inside its savepoint, and here a line that got this far
+      // must not be the one that throws once the first has landed. `raised` is what each
+      // printing and finish will hold after the inputs so far — the standing line's copies and
+      // every earlier input's — which is what the crate's later input finds in the table.
+      const raised = new Map<string, number>();
+      const checked = args.lines.map((input) => {
+        const finish = tradeFinish(input.finish);
+        const source = tradeSource(input.source);
+        const quantity = tradeCopies(input.quantity);
+        const card = cardById(db, input.cardId);
+        if (!card) throw refuse(TRADE_NO_SUCH_CARD);
+        const grain = JSON.stringify([card.id, finish]);
+        const held =
+          raised.get(grain) ?? tradeTwin(db, trade.id, side, card.id, finish, null)?.quantity;
+        raised.set(grain, held === undefined ? quantity : tradeFolded(held, quantity));
+        return { card, finish, quantity, source };
+      });
+      for (const input of checked) {
+        const standing = tradeTwin(db, trade.id, side, input.card.id, input.finish, null);
+        if (standing) {
+          standing.quantity += input.quantity;
+          continue;
+        }
+        db.tradeLines.push({
+          id: nextId(db.tradeLines),
+          tradeId: trade.id,
+          side,
+          cardId: input.card.id,
+          name: input.card.name,
+          setCode: input.card.setCode,
+          collectorNumber: input.card.collectorNumber,
+          finish: input.finish,
+          quantity: input.quantity,
+          source: input.source,
+          position: nextTradePosition(db, trade.id),
+          unitPrice: null,
+        });
+      }
+    },
+
+    /**
+     * `trade::update_trade_line` — a line's printing, finish, quantity or side. A field left out
+     * is left alone.
+     *
+     * The crate's five rules, **in the order it applies them** — which is also the order two
+     * mistakes in one edit are refused in:
+     *
+     * 1. **The printing.** A new one must be in the card database, and the line takes its name,
+     *    set and number. **The finish follows it**: kept where the new printing comes in it, and
+     *    otherwise the new printing's **first listed** finish — a foil line repointed at a
+     *    printing that only exists nonfoil becomes a nonfoil line rather than a line for an
+     *    object nobody can hand over. Naming the printing the line already has is no change.
+     * 2. **The finish**, when one is named: refused ({@link TRADE_FINISH_NOT_SOLD}) unless the
+     *    line's printing — the new one, if rule 1 changed it — comes in it. A printing that has
+     *    left the corpus comes in nothing. **Naming the finish the line already has is not
+     *    checked at all**, so an edit that only steps a quantity still lands on a line the
+     *    collection supplied in an unlisted finish.
+     * 3. **The quantity**: below one is refused, never read as a removal, and so is more than
+     *    {@link TRADE_MAX_QUANTITY}. `trade_remove_line` is the door out, and an edit that
+     *    deleted would make a mistyped `0` destructive.
+     * 4. **The side**: a line moved across goes to the end of the trade.
+     * 5. **The fold.** If the side now holds another line for that printing and finish, the two
+     *    become one — `collection_update`'s rule one table over, and for its reason. **The edited
+     *    line survives**, with both quantities and in the place rules 1–4 left it, and the other
+     *    is deleted: the caller is holding the edited line's id. Two lines that add up past
+     *    {@link TRADE_MAX_QUANTITY} are refused rather than folded, whether or not the edit
+     *    named a quantity.
+     *
+     * A refusal at any rule writes nothing, which is why the rules run over a copy.
+     */
+    trade_update_line: (args: { lineId: number; change: TradeLineChange }): void => {
+      refuseIfBusy(db);
+      const line = db.tradeLines.find((l) => l.id === args.lineId);
+      if (!line) throw refuse(TRADE_LINE_GONE);
+      const trade = openTrade(db, line.tradeId);
+      const change = args.change;
+      const next = { ...line };
+
+      const askedCard = nonblank(change.cardId);
+      let repointed: FakeCard | null = null;
+      if (askedCard !== null && askedCard !== line.cardId) {
+        const card = cardById(db, askedCard);
+        if (!card) throw refuse(TRADE_NO_SUCH_CARD);
+        const sold = parseFinishes(card.finishes);
+        if (sold.length > 0 && !sold.includes(next.finish)) next.finish = sold[0];
+        next.cardId = card.id;
+        next.name = card.name;
+        next.setCode = card.setCode;
+        next.collectorNumber = card.collectorNumber;
+        repointed = card;
+      }
+
+      if (change.finish != null) {
+        const finish = tradeFinish(change.finish);
+        if (finish !== next.finish) {
+          const card = repointed ?? cardById(db, next.cardId);
+          if (!parseFinishes(card?.finishes ?? null).includes(finish)) {
+            throw refuse(TRADE_FINISH_NOT_SOLD);
+          }
+          next.finish = finish;
+        }
+      }
+
+      if (change.quantity != null) next.quantity = tradeCopies(change.quantity);
+
+      if (change.side != null) {
+        const side = tradeSide(change.side);
+        if (side !== next.side) {
+          next.side = side;
+          next.position = nextTradePosition(db, trade.id);
+        }
+      }
+
+      const twin = tradeTwin(db, trade.id, next.side, next.cardId, next.finish, line.id);
+      if (twin) {
+        next.quantity = tradeFolded(next.quantity, twin.quantity);
+        db.tradeLines = db.tradeLines.filter((l) => l.id !== twin.id);
+      }
+      Object.assign(line, next);
+    },
+
+    /**
+     * `trade::remove_trade_line` — one line off an open trade.
+     *
+     * **A line that is already gone is a success**, `collection_remove`'s rule: the caller with a
+     * stale id is a list still holding a row something else removed, and it already has what it
+     * asked for. A line on a **closed** trade is still refused — that one is there, and may not
+     * be touched.
+     *
+     * The survivors are not renumbered: {@link FakeTradeLine.position} is an ordering, and a
+     * hole in it orders nothing wrongly.
+     */
+    trade_remove_line: (args: { lineId: number }): void => {
+      refuseIfBusy(db);
+      const line = db.tradeLines.find((l) => l.id === args.lineId);
+      if (!line) return;
+      openTrade(db, line.tradeId);
+      db.tradeLines = db.tradeLines.filter((l) => l.id !== line.id);
+    },
+
+    /**
+     * `trade::finish_trade` — run the steps the reader ticked, freeze the prices and file the
+     * trade as finished, **in one savepoint**. Answers what **this** finish did, in copies.
+     *
+     * The four steps, in the crate's order:
+     *
+     * 1. **`removeGiven`** (`take_given`) — each line on the reader's side comes out of the
+     *    collection, as far as the collection holds it: `min(quantity, owned + ownedInDecks)`
+     *    copies of that printing and finish, off the rows {@link tradeableRows} lists, in its
+     *    order — every copy outside a deck first (plain before graded, signed, altered,
+     *    misprinted or serial-numbered), a deck's copies only for what is still owed after
+     *    those, and never a proxy. A line asking for more than is there takes what is there and
+     *    leaves the rest alone, and a line the copies outside cover leaves every deck as it was
+     *    — the dialog said both before it was pressed. A row taken to nothing is deleted,
+     *    `collection_set_quantity`'s rule; one that keeps copies has its tradelist **spent** —
+     *    down by the copies taken, to nothing and no further — which is not that write's clamp.
+     *    **A deck's copy is taken the way any other is, and the deck is not told**: that is
+     *    {@link removeEntry} on such a row, which has no deck fence either. The deck keeps the
+     *    card on its list, with no history row, and reads it as not owned.
+     * 2. **`addReceived`** (`add_received`) — each line on their side goes into the collection
+     *    through {@link addEntry}, in `folderId` (`null` is the root), so it folds onto a row
+     *    already there and is refused for a folder that is gone or is the app's own.
+     * 3. **`unwishReceived`** (`unwish_received`) — each line on their side takes up to its
+     *    quantity off the wishes for that **card**, in {@link tradeWishes}' order. A deck's
+     *    managed wishlist is never spent: the deck rewrites it once the copies arrive.
+     * 4. **`wishGiven`** (`wish_given`) — each line on the reader's side becomes a wish pinned to
+     *    that printing and finish, at the root, through {@link fileWish}: the wishlist's quiet
+     *    door, because the crate's is `add_wish_silent`.
+     *
+     * Given cards leave before received ones arrive, and received cards come off the wishlist
+     * before given ones go on it — so a card on both sides of a trade is settled the way it
+     * would be by hand, and no step takes back what a later one put down.
+     *
+     * **A line whose printing has left the corpus is skipped by the two steps that add a row**,
+     * not refused: the collection cannot record a printing it cannot name, the outcome counts
+     * what was actually added, and refusing would leave a trade that can never be finished with
+     * that box ticked. The two steps that take copies away need no card and skip nothing.
+     *
+     * **A refusal anywhere leaves everything where it was** — the snapshot and restore below is
+     * this fake's stand-in for the savepoint, `collection_import_commit`'s arrangement. So a
+     * finish that named a deleted folder has taken nothing out of the collection either.
+     *
+     * # What is kept on the trade
+     *
+     * `finishedBefore` is set and never cleared. **`outcome` is every finish's work added
+     * together**, not the last one's: a trade finished, reopened to fix a line and finished again
+     * with the boxes off has still had cards taken out of the collection, and the archive's
+     * sentence about it must not turn into *nothing changed*. The command's answer is this press
+     * alone.
+     *
+     * **An empty trade can be finished**, and answers five zeroes.
+     *
+     * # Two things the crate does that this does not
+     *
+     * It writes one `activity` row per step that moved something — and no write in this fake
+     * records to that table, the collection's and the wishlist's own included, so the home
+     * feed's stories read a seeded past either way. And **no bulk-undo ticket is filed**, on
+     * either side of the wire: `TradeOutcome` has no `undoId` to carry one, and reopening is the
+     * way back — which undoes none of this.
+     */
+    trade_finish: (args: { id: number; options: TradeFinishOptions }): TradeOutcome => {
+      refuseIfBusy(db);
+      const trade = openTrade(db, args.id);
+      const options = args.options;
+      const lines = linesOfTrade(db, trade.id);
+      const mine = lines.filter((l) => l.side === "mine");
+      const theirs = lines.filter((l) => l.side === "theirs");
+      const known = (l: FakeTradeLine) => cardById(db, l.cardId) !== null;
+      const done: TradeOutcome = {
+        removedFromCollection: 0,
+        removedFromDecks: 0,
+        addedToCollection: 0,
+        removedFromWishlist: 0,
+        addedToWishlist: 0,
+      };
+
+      const entriesBefore = db.collectionEntries.map((e) => ({ ...e }));
+      const wishesBefore = db.wishlistEntries.map((w) => ({ ...w }));
+      try {
+        if (options.removeGiven) {
+          for (const line of mine) {
+            let left = line.quantity;
+            for (const row of tradeableRows(db, line.cardId, line.finish)) {
+              if (left === 0) break;
+              const take = Math.min(left, row.quantity);
+              left -= take;
+              done.removedFromCollection += take;
+              if (tradeStanding(db, row) === 1) done.removedFromDecks += take;
+              if (take >= row.quantity) {
+                db.collectionEntries = db.collectionEntries.filter((e) => e.id !== row.id);
+                continue;
+              }
+              row.quantity -= take;
+              // **Spent, not clamped** — this write's own rule, and deliberately not
+              // `collection_set_quantity`'s `min(tradelist, quantity)`: the copies that left in
+              // a trade are the ones the tradelist was promising, so it falls by the copies
+              // taken and stops at nothing. A clamp would leave a row of four with two for trade
+              // that gave two holding both kept copies still on offer. The inner `min` is the
+              // column's standing promise, kept against a row that arrived already breaking it.
+              row.tradelistQuantity = Math.max(
+                0,
+                Math.min(row.tradelistQuantity - take, row.quantity),
+              );
+              row.updatedAt = stamp(db);
+            }
+          }
+        }
+        if (options.addReceived) {
+          for (const line of theirs.filter(known)) {
+            addEntry(db, {
+              cardId: line.cardId,
+              finish: line.finish,
+              quantity: line.quantity,
+              folderId: options.folderId,
+            });
+            done.addedToCollection += line.quantity;
+          }
+        }
+        if (options.unwishReceived) {
+          for (const line of theirs) {
+            let left = line.quantity;
+            for (const wish of tradeWishes(db, line.cardId, line.finish)) {
+              if (left === 0) break;
+              const take = Math.min(left, wish.quantity);
+              left -= take;
+              done.removedFromWishlist += take;
+              // `wishlist_entries` carries `CHECK (quantity > 0)`: a wish taken to nothing has no
+              // zero row to leave behind.
+              if (take >= wish.quantity) {
+                db.wishlistEntries = db.wishlistEntries.filter((w) => w.id !== wish.id);
+                continue;
+              }
+              wish.quantity -= take;
+              wish.updatedAt = stamp(db);
+            }
+          }
+        }
+        if (options.wishGiven) {
+          for (const line of mine.filter(known)) {
+            fileWish(db, {
+              cardId: line.cardId,
+              quantity: line.quantity,
+              preferredFinish: line.finish,
+            });
+            done.addedToWishlist += line.quantity;
+          }
+        }
+      } catch (refusal) {
+        db.collectionEntries = entriesBefore;
+        db.wishlistEntries = wishesBefore;
+        throw refusal;
+      }
+
+      // Read through `tradeOutcome`, as the crate reads the column through serde: an outcome
+      // stored before a finish could reach a deck is added to as one that took none from one.
+      const before = trade.outcome === null ? null : tradeOutcome(trade.outcome);
+      closeTrade(db, trade, "finished");
+      trade.finishedBefore = true;
+      trade.outcome =
+        before === null
+          ? { ...done }
+          : {
+              removedFromCollection: before.removedFromCollection + done.removedFromCollection,
+              removedFromDecks: before.removedFromDecks + done.removedFromDecks,
+              addedToCollection: before.addedToCollection + done.addedToCollection,
+              removedFromWishlist: before.removedFromWishlist + done.removedFromWishlist,
+              addedToWishlist: before.addedToWishlist + done.addedToWishlist,
+            };
+      return done;
+    },
+
+    /** `trade::archive_trade` — freeze the prices and put the trade away. **The collection and
+     *  the wishlist are not touched**, and neither is `finishedBefore` or `outcome`: a trade
+     *  that was finished once, reopened and then archived still says what that finish did. */
+    trade_archive: (args: { id: number }): void => {
+      refuseIfBusy(db);
+      closeTrade(db, openTrade(db, args.id), "archived");
+    },
+
+    /**
+     * `trade::reopen_trade` — back to open, on live prices.
+     *
+     * **Nothing a finish did is undone**: the cards stay where the finish put them, and
+     * `finishedBefore` and `outcome` stay as the record of it. What goes is the frozen price on
+     * every line and the closing time, and nothing else.
+     *
+     * One of the three writes a closed trade does not refuse. A trade that is already open is a
+     * success with nothing to do: the press that reaches here twice has what it asked for.
+     */
+    trade_reopen: (args: { id: number }): void => {
+      refuseIfBusy(db);
+      const trade = requireTrade(db, args.id);
+      if (trade.status === "open") return;
+      trade.status = "open";
+      trade.closedAt = null;
+      for (const line of db.tradeLines) if (line.tradeId === trade.id) line.unitPrice = null;
+    },
+
+    /**
+     * `trade::duplicate_trade` — any trade, open or not, copied into a new **open** one,
+     * answering the copy's id.
+     *
+     * The same lines in the same order, the same marketplace and percentages, named
+     * `{name} copy`. **None of what makes the original a closed trade comes across**: no frozen
+     * price, no closing time, no outcome and `finishedBefore` at `false` — the copy has never
+     * been finished, so its dialog opens with the first-pass defaults. The source is not touched.
+     */
+    trade_duplicate: (args: { id: number }): number => {
+      refuseIfBusy(db);
+      const source = requireTrade(db, args.id);
+      const id = nextId(db.trades);
+      db.trades.push({
+        ...source,
+        id,
+        name: `${source.name} copy`,
+        status: "open",
+        finishedBefore: false,
+        outcome: null,
+        createdAt: tradeStamp(db),
+        closedAt: null,
+      });
+      for (const line of linesOfTrade(db, source.id)) {
+        db.tradeLines.push({ ...line, id: nextId(db.tradeLines), tradeId: id, unitPrice: null });
+      }
+      return id;
+    },
+
+    /** `trade::delete_trade` — the trade and its lines, whatever its status. A trade that is
+     *  already gone is a success, {@link writeHandlers.trade_remove_line}'s rule. */
+    trade_delete: (args: { id: number }): void => {
+      refuseIfBusy(db);
+      db.tradeLines = db.tradeLines.filter((l) => l.tradeId !== args.id);
+      db.trades = db.trades.filter((t) => t.id !== args.id);
+    },
   } satisfies Record<string, CommandHandler>;
+}
+
+/* ------------------------------------------------------------------ trades ------------ */
+
+/** `trade::GONE`, verbatim — a write naming a trade deleted here or in another window. */
+const TRADE_GONE = "that trade is not there any more";
+/**
+ * `trade::NOT_OPEN`, verbatim — what every edit says about a trade that was finished or archived.
+ *
+ * A closed trade is a record: its prices are the ones it closed with, and an edit would leave a
+ * line quoted at a figure that was never its own. Only `trade_reopen`, `trade_duplicate` and
+ * `trade_delete` do not ask.
+ */
+const TRADE_NOT_OPEN = "that trade is no longer open";
+/** `trade::LINE_GONE`, verbatim — an **edit** to a line that has been removed.
+ *  {@link writeHandlers.trade_remove_line} does not say it: a removal that finds nothing already
+ *  has what it wanted. */
+const TRADE_LINE_GONE = "that line is not on the trade any more";
+/** `trade::NO_SUCH_CARD`, verbatim. Not {@link requireCard}'s sentence, which names the id: this
+ *  is the crate's own, and a list of forty scanned lines has no use for one id. */
+const TRADE_NO_SUCH_CARD = "no card with that id is in the card database";
+/** `trade::NO_COPIES`, verbatim. */
+const TRADE_NO_COPIES = "a trade line needs a quantity of at least one";
+/**
+ * `trade::MAX_QUANTITY` — the most copies one line can hold, and the ceiling `QuantityStepper`
+ * already has, so a figure above it is a caller that did not go through one.
+ *
+ * In the crate it is what keeps the column an integer: SQLite answers an overflowing
+ * `quantity + ?` with a REAL, and one such row makes both trade reads unreadable. Nothing here
+ * can overflow that way, and the rule is kept all the same — a story that stepped a line to
+ * 10,000 would be showing a state the app refuses.
+ */
+const TRADE_MAX_QUANTITY = 9999;
+/** `trade::TOO_MANY`, verbatim — more than {@link TRADE_MAX_QUANTITY} copies asked of one line,
+ *  outright or by a fold that would add two lines up past it. */
+const TRADE_TOO_MANY = "a trade line holds at most 9999 copies";
+/** `trade::FINISH_NOT_SOLD`, verbatim — a finish the printing was never made in, which is also
+ *  the answer for a printing that has left the corpus: its list of finishes went with it. */
+const TRADE_FINISH_NOT_SOLD = "that printing does not come in that finish";
+
+const TRADE_SIDES: readonly TradeSide[] = ["mine", "theirs"];
+const TRADE_SOURCES: readonly TradeSource[] = ["collection", "search", "scan"];
+
+/** `trade::valid_side`. */
+function tradeSide(side: string): TradeSide {
+  const found = TRADE_SIDES.find((s) => s === side);
+  if (found) return found;
+  throw refuse(`\`${side}\` is not a side of a trade`);
+}
+
+/** `trade::valid_finish` — a word this app knows. **Its own sentence, not
+ *  {@link validFinish}'s**, because the crate's is its own too. Whether the *printing* comes in
+ *  it is a second question only {@link writeHandlers.trade_update_line} asks. */
+function tradeFinish(finish: string): FakeEntry["finish"] {
+  const found = FINISHES.find((f) => f === finish);
+  if (found) return found;
+  throw refuse(`\`${finish}\` is not a finish this app knows`);
+}
+
+/** `trade::valid_source`. */
+function tradeSource(source: string): TradeSource {
+  const found = TRADE_SOURCES.find((s) => s === source);
+  if (found) return found;
+  throw refuse(`\`${source}\` is not somewhere a trade line can come from`);
+}
+
+/** `trade::valid_copies` — a quantity a line can be asked to hold: at least one copy and at most
+ *  {@link TRADE_MAX_QUANTITY}. `!(n >= 1)` rather than `n < 1`, so a `NaN` is no quantity too. */
+function tradeCopies(quantity: number): number {
+  if (!(quantity >= 1)) throw refuse(TRADE_NO_COPIES);
+  if (quantity > TRADE_MAX_QUANTITY) throw refuse(TRADE_TOO_MANY);
+  return quantity;
+}
+
+/** `trade::folded` — two quantities as one line's, which is what a fold leaves, or
+ *  {@link TRADE_TOO_MANY}. `held` is a stored line's and is not trusted to be in range. */
+function tradeFolded(held: number, more: number): number {
+  const sum = held + more;
+  if (!(sum <= TRADE_MAX_QUANTITY)) throw refuse(TRADE_TOO_MANY);
+  return sum;
+}
+
+/** `trade::set_trade_rate`'s check: in the band and on the step. A fraction is refused in the
+ *  same words — the crate's argument is an `i64`, so one never reaches its check at all. */
+function tradeRate(rate: number): number {
+  const fits =
+    Number.isInteger(rate) && rate >= RATE_MIN && rate <= RATE_MAX && rate % RATE_STEP === 0;
+  if (fits) return rate;
+  throw refuse(`a side's percentage is ${RATE_MIN} to ${RATE_MAX} in steps of ${RATE_STEP}`);
+}
+
+/**
+ * `trade::marketplace_for` — the marketplace a new trade is priced in: the one asked for, or the
+ * reader's current one.
+ *
+ * **Always one of the four that quote a price.** Card trader is a marketplace the setting knows
+ * and no feed serves — every priced read already answers TCGplayer's figures for it — so a trade
+ * made under it is stored as the marketplace its figures actually are, and the page's *prices
+ * from …* line names the right one. An id this build has never heard of is refused rather than
+ * read as the default.
+ */
+function tradeMarketplace(db: FakeDb, asked: string | null | undefined): MarketplaceId {
+  const sent = nonblank(asked);
+  if (sent !== null && !isMarketplaceId(sent)) {
+    throw refuse(`\`${sent}\` is not a marketplace this app knows`);
+  }
+  const id = sent ?? marketplaceOf(db.marketplace);
+  return MARKETPLACES[id].priced ? id : DEFAULT_MARKETPLACE;
+}
+
+function requireTrade(db: FakeDb, id: number): FakeTrade {
+  const trade = db.trades.find((t) => t.id === id);
+  if (!trade) throw refuse(TRADE_GONE);
+  return trade;
+}
+
+/** `trade::open_trade` — {@link requireTrade}, and open: the fence every edit runs first. Gone
+ *  before closed, because a trade that is not there cannot be in any state. */
+function openTrade(db: FakeDb, id: number): FakeTrade {
+  const trade = requireTrade(db, id);
+  if (trade.status !== "open") throw refuse(TRADE_NOT_OPEN);
+  return trade;
+}
+
+/** A trade's lines in the order they are read in: `position`, then `id`. Both sides together —
+ *  the page splits them, and a side's own order is this one filtered. */
+function linesOfTrade(db: FakeDb, tradeId: number): FakeTradeLine[] {
+  return db.tradeLines
+    .filter((l) => l.tradeId === tradeId)
+    .sort((a, b) => a.position - b.position || a.id - b.id);
+}
+
+/** `trade::next_position` — after every line the trade has, **on either side**, and 0 for its
+ *  first. So a line carried across lands below everything already there. */
+function nextTradePosition(db: FakeDb, tradeId: number): number {
+  return db.tradeLines
+    .filter((l) => l.tradeId === tradeId)
+    .reduce((n, l) => Math.max(n, l.position + 1), 0);
+}
+
+/** `trade::twin` — the line a side already holds for a printing and finish, other than
+ *  `except`. The first in the trade's order, should a hand-made world hold two. */
+function tradeTwin(
+  db: FakeDb,
+  tradeId: number,
+  side: TradeSide,
+  cardId: string,
+  finish: FakeEntry["finish"],
+  except: number | null,
+): FakeTradeLine | undefined {
+  return linesOfTrade(db, tradeId).find(
+    (l) => l.id !== except && l.side === side && l.cardId === cardId && l.finish === finish,
+  );
+}
+
+/**
+ * {@link stamp} for a trade's two clocks — `created_at` and `closed_at`, the crate's
+ * `unixepoch()`.
+ *
+ * {@link stickyStamp}'s shape and its reason: the list is ordered on `createdAt`, so a trade made
+ * in a story has to land above every trade the seed laid down, and `stamp` alone reads none of
+ * them. One past the newest instant either clock holds, and never below `stamp`'s own answer.
+ */
+function tradeStamp(db: FakeDb): number {
+  return db.trades.reduce(
+    (n, t) => Math.max(n, t.createdAt + 1, (t.closedAt ?? 0) + 1),
+    stamp(db),
+  );
+}
+
+/**
+ * `trade::unit_price_sql` — what one copy of a line costs at 100%, in the trade's own
+ * marketplace.
+ *
+ * **Live while the trade is open and the figure it closed with once it is not** — the one branch
+ * the whole feature's price rule is. {@link finishPriceAt} is the collection's figure for a
+ * printing in a finish (`price_expr`, on both sides of the wire), so a card picked from the
+ * collection is quoted on the trade at exactly what the collection row beside it said. A printing
+ * that has left the corpus has no live price, which is what it freezes as too.
+ */
+function tradeLinePrice(db: FakeDb, trade: FakeTrade, line: FakeTradeLine): number | null {
+  if (trade.status !== "open") return line.unitPrice;
+  return finishPriceAt(db, cardById(db, line.cardId), line.finish, trade.marketplace);
+}
+
+/** `trade::freeze_prices` and the close — copy every line's live price into the line and file
+ *  the trade under `status`, which is what a finish and an archive share. The price is read
+ *  before the status moves, while {@link tradeLinePrice} still answers the live one: the number
+ *  frozen is the number that was on screen. */
+function closeTrade(db: FakeDb, trade: FakeTrade, status: "finished" | "archived"): void {
+  for (const line of db.tradeLines) {
+    if (line.tradeId === trade.id) line.unitPrice = tradeLinePrice(db, trade, line);
+  }
+  trade.closedAt = tradeStamp(db);
+  trade.status = status;
+}
+
+/**
+ * `trade::standing` — where a collection row stands for a trade: `0` **outside any deck** (at
+ * the root, or in a drawer of the reader's own that is not set aside), `1` **in a deck's group**,
+ * and `null` for a row a trade neither counts nor takes.
+ *
+ * **A deck's copies can be traded, second and marked.** They were out of reach until 2026-10-11,
+ * and on a collection whose cards are mostly sleeved that left a trade almost nothing to offer.
+ * So they are counted apart (`TradeLine.ownedInDecks`), taken only once the others have run out
+ * ({@link tradeableRows}) and reported apart (`TradeOutcome.removedFromDecks`) — which is what
+ * lets every surface that shows one say, in the destructive colour, which deck it leaves short.
+ *
+ * **A locked drawer still holds its copies back, and a lock is never asked of a deck's group**
+ * (a drawer inside a locked one is locked too): a deck's copies are guarded by the warning
+ * instead. **`Recently removed` is `null`** — what waits there has left the collection.
+ * **Stricter than {@link ownedSpare}**, which counts that last one: a plan may lean on a copy in
+ * the holding area, a trade may not hand it over.
+ *
+ * **And never a proxy.** A proxy is a stand-in for the card and not the card: it is not what was
+ * agreed across the table, so it is neither counted as owned nor handed over.
+ */
+function tradeStanding(db: FakeDb, e: FakeEntry): 0 | 1 | null {
+  if (e.proxy) return null;
+  if (e.folderId === null) return 0;
+  const kind = collectionFolderById(db, e.folderId)?.kind;
+  if (kind === COLLECTION_DECK_KIND) return 1;
+  if (kind !== COLLECTION_USER_KIND) return null;
+  return collectionFolderLocked(db, e.folderId) ? null : 0;
+}
+
+/**
+ * `trade::tradeable` — every collection row a trade may take a line's copies from, **in the
+ * order it takes them**.
+ *
+ * **One spelling for the count and the take.** `TradeLine.owned`, `.ownedInDecks` and
+ * `.deckNames` are what the dialog promises ({@link tradeHeld}) and step 1 is what the press
+ * does, and both read this function — so the numbers on screen and the copies taken cannot come
+ * apart, and neither can the order the decks are named in and the order they are emptied in.
+ *
+ * # The order
+ *
+ * **Every copy outside a deck before any copy in one** ({@link tradeStanding}). A deck's copy is
+ * the one whose leaving costs something the trade never mentioned, so it goes last — after a
+ * signed copy in a binder, too.
+ *
+ * **Then plain copies before special ones** ({@link tradeCopyIsSpecial}). A line names a printing
+ * and a finish and nothing more, so a trade giving one foil Bolt must not delete the reader's
+ * signed one — with its purchase price and its notes, and with no undo — while three plain foil
+ * Bolts sit beside it. A special copy still goes once the plain ones have run out.
+ *
+ * Then root rows first, then folders in the order the reader arranged them, oldest row first
+ * within each: a copy nobody filed is the one whose leaving disturbs no decision. A deck's group
+ * is a folder like any other here; every group is made at `sortOrder` 0, so among decks it is the
+ * oldest row that goes first.
+ */
+function tradeableRows(db: FakeDb, cardId: string, finish: FakeEntry["finish"]): FakeEntry[] {
+  const order = (e: FakeEntry): number =>
+    e.folderId === null ? -1 : (collectionFolderById(db, e.folderId)?.sortOrder ?? 0);
+  const standing = (e: FakeEntry): number => tradeStanding(db, e) ?? 0;
+  return db.collectionEntries
+    .filter(
+      (e) =>
+        e.cardId === cardId &&
+        e.finish === finish &&
+        e.quantity > 0 &&
+        tradeStanding(db, e) !== null,
+    )
+    .sort(
+      (a, b) =>
+        standing(a) - standing(b) ||
+        Number(tradeCopyIsSpecial(a)) - Number(tradeCopyIsSpecial(b)) ||
+        Number(a.folderId !== null) - Number(b.folderId !== null) ||
+        order(a) - order(b) ||
+        a.id - b.id,
+    );
+}
+
+/**
+ * `trade::held` — what a line says about the collection: {@link tradeableRows}' copies added up
+ * either side of the deck line, and the decks named.
+ *
+ * **A deck is named by its group's name**, which is the deck's own: `deck_update` renames the
+ * group with the deck, and it is the name the collection's cabinet draws. In the order a finish
+ * would take from them and each name once — by name, because a name is all the page is given.
+ */
+function tradeHeld(
+  db: FakeDb,
+  cardId: string,
+  finish: FakeEntry["finish"],
+): Pick<TradeLine, "owned" | "ownedInDecks" | "deckNames"> {
+  const held = { owned: 0, ownedInDecks: 0, deckNames: [] as string[] };
+  for (const row of tradeableRows(db, cardId, finish)) {
+    if (tradeStanding(db, row) !== 1) {
+      held.owned += row.quantity;
+      continue;
+    }
+    held.ownedInDecks += row.quantity;
+    const name = row.folderId === null ? undefined : collectionFolderById(db, row.folderId)?.name;
+    if (name !== undefined && !held.deckNames.includes(name)) held.deckNames.push(name);
+  }
+  return held;
+}
+
+/**
+ * `trade::SPECIAL` — whether a collection row is a copy unlike the others of its printing and
+ * finish: **graded, signed, altered, a misprint, or carrying a serial number**, the five terms of
+ * {@link collectionGrain} that say something about one physical object.
+ *
+ * `?? ""` on the two text columns, as the grain reads them: `""` and `null` are both "none".
+ * Condition, language and what the row cost are not here — a played copy is still an ordinary
+ * one.
+ */
+function tradeCopyIsSpecial(e: FakeEntry): boolean {
+  const named = (text: string | null): boolean => (text ?? "") !== "";
+  return e.altered || e.signed || e.misprint || named(e.serialNumber) || named(e.grading);
+}
+
+/**
+ * `trade::wish_for`, and `unwish_received`'s order — the wishes a received line can be taken off,
+ * **in the order they are spent**, and what `TradeLine.wished` adds up.
+ *
+ * Every wish for the **card**: one naming this printing, or one whose oracle card is this
+ * printing's — so a wish pinned to another printing counts, an any-printing wish counts, and a
+ * printing that has left the corpus still finds the wishes naming it by id
+ * ({@link wishIsForCard}). **Never one in a deck's managed wishlist**, which is the deck's.
+ *
+ * The wish for this exact printing first, then one whose finish these copies satisfy, then the
+ * root before the reader's folders in their own order, oldest row last of all —
+ * {@link quickAddWishes}' pre-pick order, walked instead of offered, because a trade of eight
+ * cards cannot ask eight questions.
+ *
+ * **Spelled here rather than borrowed from that function**, though the two agree on every world
+ * a seed builds: it reads the copies' finish through {@link entryFinish}, which turns a `nonfoil`
+ * asked of a foil-only printing into `foil`, and the crate's trade compares the line's own word.
+ */
+function tradeWishes(db: FakeDb, cardId: string, finish: FakeEntry["finish"]): FakeWish[] {
+  const folder = (w: FakeWish) => (w.folderId === null ? undefined : wishFolderById(db, w.folderId));
+  const rank = (w: FakeWish): number[] => [
+    Number(w.cardId !== cardId),
+    Number(w.preferredFinish !== null && w.preferredFinish !== finish),
+    Number(w.folderId !== null),
+    folder(w)?.sortOrder ?? 0,
+    w.id,
+  ];
+  return db.wishlistEntries
+    .filter((w) => wishIsForCard(db, w, cardId) && (folder(w)?.managedDeckId ?? null) === null)
+    .sort((a, b) => {
+      const ra = rank(a);
+      const rb = rank(b);
+      for (let i = 0; i < ra.length; i += 1) if (ra[i] !== rb[i]) return ra[i] - rb[i];
+      return 0;
+    });
+}
+
+/**
+ * `trade::TradeLine` — a stored line with every fact the page draws conclusions from.
+ *
+ * The card half is the crate's `LEFT JOIN cards`: the name, set and number are the card's own
+ * where the corpus still holds the printing and the line's remembered ones where it does not,
+ * and everything else about a lost printing is `null`. The line is still listed, still counted,
+ * and has no price. `finishPrices` is **always today's**, on a closed trade too: it is the finish
+ * control's hint about what a change would cost, never a record.
+ */
+function toTradeLine(db: FakeDb, trade: FakeTrade, line: FakeTradeLine): TradeLine {
+  const card = cardById(db, line.cardId);
+  return {
+    id: line.id,
+    side: line.side,
+    cardId: line.cardId,
+    oracleId: card?.oracleId ?? null,
+    name: card?.name ?? line.name,
+    setCode: card?.setCode ?? line.setCode,
+    setName: card?.setName ?? null,
+    collectorNumber: card?.collectorNumber ?? line.collectorNumber,
+    rarity: card?.rarity ?? null,
+    layout: card?.layout ?? null,
+    finishes: card?.finishes ?? null,
+    finish: line.finish,
+    quantity: line.quantity,
+    source: line.source,
+    unitPrice: tradeLinePrice(db, trade, line),
+    finishPrices: finishPricesAt(db, card, trade.marketplace),
+    ...tradeHeld(db, line.cardId, line.finish),
+    wished: tradeWishes(db, line.cardId, line.finish).reduce((n, w) => n + w.quantity, 0),
+  };
+}
+
+/**
+ * A stored outcome as the wire carries it — `TradeOutcome`'s `#[serde(default)]`. One written
+ * before a finish could reach a deck has no `removedFromDecks`, and reads as none: no finish
+ * could take a deck's copy then.
+ */
+function tradeOutcome(stored: FakeTradeOutcome): TradeOutcome {
+  return {
+    removedFromCollection: stored.removedFromCollection,
+    removedFromDecks: stored.removedFromDecks ?? 0,
+    addedToCollection: stored.addedToCollection,
+    removedFromWishlist: stored.removedFromWishlist,
+    addedToWishlist: stored.addedToWishlist,
+  };
+}
+
+function toTrade(db: FakeDb, trade: FakeTrade): Trade {
+  return {
+    id: trade.id,
+    name: trade.name,
+    marketplace: trade.marketplace,
+    rateMine: trade.rateMine,
+    rateTheirs: trade.rateTheirs,
+    status: trade.status,
+    finishedBefore: trade.finishedBefore,
+    // A copy: the stored outcome is a row's column, and a caller that edited the answer must
+    // not have edited the trade.
+    outcome: trade.outcome === null ? null : tradeOutcome(trade.outcome),
+    createdAt: trade.createdAt,
+    closedAt: trade.closedAt,
+    lines: linesOfTrade(db, trade.id).map((line) => toTradeLine(db, trade, line)),
+  };
 }
 
 /* ------------------------------------------------------------------ sharing ----------- */
