@@ -1957,6 +1957,12 @@ export interface WishRow {
    * no-art frame with the name.
    */
   artCardId: string | null;
+  /**
+   * The layout of the printing {@link WishRow.artCardId} names — what the wall reads to decide
+   * whether a tile turns over (issue #844). Off the same join, so it is the layout of the
+   * picture on screen; `null` exactly where `artCardId` is.
+   */
+  layout: string | null;
   quantity: number;
   preferredFinish: string | null;
   /** The cheapest way to satisfy this wish, per copy, at the marketplace the query named: the
@@ -3738,6 +3744,21 @@ export interface DeckPatch {
    * on the deck header that nobody chose.
    */
   bracket?: number;
+  /**
+   * The deck's whole tag list, in the reader's order — see {@link DeckRow.tags}; `decks.tags`,
+   * user schema v62 (issue #834).
+   *
+   * **The list replaces, it does not merge**, and that is what lets this key clear the column
+   * where most keys on this patch cannot: absent still means "leave it", and `[]` is a value —
+   * "no tags" — where a `null` would be read as unchanged.
+   *
+   * Rust tidies what it is handed and the row it answers with is the list as stored: each tag is
+   * trimmed with its inner runs of whitespace closed to one space, empty ones are dropped, and a
+   * tag that repeats an earlier one whatever its capitals is dropped too, so the first spelling
+   * wins. Nothing is refused. It writes a history row (`field: "tags"`, both lists) and an undo
+   * step, and only when the tidied list differs from the stored one.
+   */
+  tags?: string[];
 }
 
 /**
@@ -4236,6 +4257,25 @@ export interface DeckRow {
    * anybody has read at all.
    */
   bracket: number;
+  /**
+   * The reader's own tags for this deck, in the order they added them — `decks.tags TEXT NOT
+   * NULL DEFAULT '[]'`, user schema v62 (issue #834), and `[]` on every deck that predates it.
+   *
+   * **A deck tag is free text and nothing else**: `No Gamechangers`, `Meme`, `Budget`. It is not
+   * one of Scryfall's Tagger tags (`otag:` / `atag:`, which describe a *card*) and not a deck
+   * **label** (`deck_labels`, the coloured mark on one card in one deck) —
+   * `docs/agent/DOMAIN_VOCABULARY.md` has the whole set. Its nearest relative is the collection's
+   * free-text `tags` column, and it is stored the same way, a JSON array in one column, so it
+   * syncs with the rest of the row. It arrives here already parsed.
+   *
+   * **There is no table of tags.** The suggestions the tag field offers are the tags decks
+   * currently wear, read off {@link ipc.deckList} by `deckTags.ts`' `tagsInUse` — so a tag no
+   * deck wears any more is simply gone, with nothing to tidy up.
+   *
+   * {@link ipc.deckDuplicate} carries it, for {@link bracket}'s reason: a copy of a `Meme` deck
+   * is a `Meme` deck.
+   */
+  tags: string[];
 }
 
 /**
@@ -5460,10 +5500,18 @@ export interface FormatSpec {
    * of the one comma-joined cell `format_specs.games` stores.
    *
    * **Never empty**: a spec naming no platform would be a format no filtered picker could ever
-   * offer, and the seed writes all 25 rows. It is the only input `pickerFormats`' game filter
+   * offer, and the seeds write every row. It is the only input `pickerFormats`' game filter
    * reads, and it is a *fact* — which formats a picker then offers is the conclusion.
    */
   games: Game[];
+  /**
+   * Whether the validation engine judges a deck in this format **at all** (corpus schema 7).
+   * `false` on one row, `unspecified` — a deck whose format nobody has chosen yet, which the
+   * ManaBox import creates — and `validateDeck`/`validateForMarks` return no issues for it.
+   * A cell rather than a key the engine knows, by the engine's own rule; `casual` is not this,
+   * since it still holds a commander zone and a companion to their rules.
+   */
+  validates: boolean;
 }
 
 /**
@@ -9981,7 +10029,7 @@ export const ipc = {
    * The webview is granted no `dialog:` and no `fs:` permission.
    *
    * **Two failures, and the rejection says which**: the file picker could not be opened, or the
-   * file would not read (missing, refused, over 1 MB). Frame it with words true of both.
+   * file would not read (missing, refused, over 8 MB). Frame it with words true of both.
    *
    * **Never refused for its bytes** (issue #555): valid UTF-8 is read as such, a UTF-16
    * byte-order mark is honoured, and anything else is decoded as Windows-1252 — Excel's CSV on a

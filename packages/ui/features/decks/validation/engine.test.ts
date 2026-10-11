@@ -428,6 +428,63 @@ describe("marks on the piles the reader switched off", () => {
   });
 });
 
+/**
+ * Corpus schema 7's `validates` cell: a format that judges nothing — `unspecified`, a deck whose
+ * format nobody has chosen yet (the ManaBox import creates them). Read from the cell and never
+ * the key, so the test builds the deck that breaks every rule the engine has and asks both entry
+ * points. `casual` is the control, and the reason a cell was needed at all: the loosest *judged*
+ * row still holds a commander zone and a companion to their rules, so this deck is not clean there.
+ */
+describe("a format that judges nothing", () => {
+  function everyRuleBroken(): CardFacts[] {
+    const banned = JSON.stringify({ modern: "banned", commander: "banned", vintage: "banned" });
+    return [
+      // A commander zone of three, in formats with no commander zone.
+      commander(),
+      card({ name: "Sol Ring", categoryKind: "commander", legalities: banned }),
+      card({ name: "Black Lotus", categoryKind: "commander", legalities: "not json" }),
+      // Banned everywhere, nine copies, and a mana value no ceiling allows.
+      card({ name: "Lightning Bolt", quantity: 9, legalities: banned, cmc: 12 }),
+      // A companion that is not one.
+      card({ name: "Grizzly Bears", categoryKind: "companion" }),
+      // An orphan, and a parked card outside every identity with an unreadable blob.
+      card({
+        name: "Ancient Tomb",
+        needsReview: "This printing is not in the card database.",
+        oracleId: null,
+        typeLine: null,
+        oracleText: null,
+        legalities: null,
+        cmc: null,
+      }),
+      card({
+        name: "Deadly Rollick",
+        categoryKind: "maybe",
+        categoryActive: false,
+        colorIdentity: "BG",
+        legalities: "not json",
+      }),
+      islands(3),
+    ];
+  }
+
+  it("returns no issues from either entry point, whatever the deck", () => {
+    const unspecified = spec("unspecified");
+    expect(unspecified.validates).toBe(false);
+
+    expect(validateDeck(everyRuleBroken(), unspecified)).toEqual([]);
+    expect(validateForMarks(everyRuleBroken(), unspecified)).toEqual([]);
+  });
+
+  it("is the cell and not the key: the same rows under casual still break its rules", () => {
+    expect(validateDeck(everyRuleBroken(), spec("casual"))).not.toEqual([]);
+    // And a judged row with the cell turned off judges nothing — no key is consulted.
+    const modern: FormatSpec = { ...spec("modern"), validates: false };
+    expect(validateDeck(everyRuleBroken(), modern)).toEqual([]);
+    expect(validateForMarks(everyRuleBroken(), modern)).toEqual([]);
+  });
+});
+
 describe("copy limits", () => {
   /** CR 100.4a: the sideboard's copies count toward the same four. */
   it("counts main and side together", () => {

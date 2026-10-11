@@ -50,16 +50,16 @@ describe("readDecklistFile", () => {
     });
   });
 
-  it("refuses a file over the megabyte in import.rs's own words, without reading it", async () => {
+  it("refuses a file over the cap in import.rs's own words, without reading it", async () => {
     const file = new File(["x".repeat(MAX_DECKLIST_BYTES + 1)], "huge.txt");
     const read = vi.spyOn(file, "arrayBuffer");
     await expect(readDecklistFile(file)).rejects.toThrow(
-      "That file is over 1 MB. A decklist is text; this reads at most 1 MB.",
+      "That file is over 8 MB. An import is text; this reads at most 8 MB.",
     );
     expect(read).not.toHaveBeenCalled();
   });
 
-  it("reads a file of exactly the megabyte", async () => {
+  it("reads a file of exactly the cap", async () => {
     const file = new File(["x".repeat(MAX_DECKLIST_BYTES)], "edge.txt");
     await expect(readDecklistFile(file)).resolves.toMatchObject({ encoding: "utf-8" });
   });

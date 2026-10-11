@@ -844,6 +844,13 @@ function starterWishes(): FakeWish[] {
  * gallery sorts `archived` last then `updated_at DESC`, so the order here is the order a
  * reader sees; and `stamp` measures a write from the newest row in the store, so keeping the
  * seeds under the base leaves the first edit of any story at `CLOCK_BASE + 1`.
+ *
+ * **Three of the four wear deck tags** (user schema v62, issue #834) — the three at the root,
+ * which is the wall the gallery opens on: two on deck 1, three on deck 2, one on the archived
+ * deck 3. `Budget` is on both live ones, so the tag field's suggestions — the tags decks
+ * currently wear, with no table behind them — have a tag two decks share and four only one
+ * does. Deck 4 wears none, and neither does any deck another seed pushes: an untagged deck is
+ * the state every deck is in on the first launch of the build that added the column.
  */
 const HOUR = 3_600;
 const DAY = 86_400;
@@ -912,6 +919,8 @@ function starterDecks(): FakeDeck[] {
       // Counterspell row reads owned 2 of 4 and the Ragavan row 1 of 4. Those three copies are
       // unavailable to every other deck — the whole of what exclusivity means since schema v25.
       archived: false,
+      // Two deck tags, and `Budget` is the one deck 2 wears as well.
+      tags: ["Budget", "Only removal"],
       updatedAt: CLOCK_BASE - HOUR,
     }),
     deck({
@@ -936,6 +945,9 @@ function starterDecks(): FakeDeck[] {
       // Carries one to-do list — see {@link starterDeckTodoLists}. The band stays shut
       // (`todosOpen` absent reads `false`), which is what every editor story written before the
       // band existed was drawn against.
+      // Three deck tags, the most any seeded deck wears and on the Commander deck a tile draws
+      // at the root — in the order a reader added them, which is not the alphabet's.
+      tags: ["Gimmick", "No Gamechangers", "Budget"],
       updatedAt: CLOCK_BASE - DAY,
     }),
     deck({
@@ -955,6 +967,9 @@ function starterDecks(): FakeDeck[] {
       // opens it. Both lists are seeded outright rather than left to a toggle, which is what
       // keeps that true whatever the switch does.
       theoryEnabled: true,
+      // One deck tag, and no other deck wears it — so `Meme` is on offer only because an
+      // archived deck still has it, which is what "the tags decks currently wear" means.
+      tags: ["Meme"],
       updatedAt: CLOCK_BASE - 30 * DAY,
     }),
     {

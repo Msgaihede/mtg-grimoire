@@ -1,5 +1,5 @@
 import { useId, useMemo, useState, type ReactNode } from "react";
-import { CircleCheck, Plus, TriangleAlert } from "lucide-react";
+import { CircleCheck, CircleDashed, Plus, TriangleAlert } from "lucide-react";
 import { BracketAdvisory, useBracketReading } from "@grimoire/ui/features/decks/DeckBracket";
 import { deckStats } from "@grimoire/ui/features/decks/DeckStats";
 import {
@@ -216,12 +216,21 @@ function CheckSection({
       title="Check"
       summary={
         <span className="inline-flex items-center gap-1">
-          {issues.length === 0 ? (
+          {/* A format that judges nothing (`validates` false — `unspecified`) is not a clean
+              deck: the editor's chip says "Not checked" in grey, and so does this. */}
+          {!spec.validates ? (
+            <CircleDashed aria-hidden className="size-3 shrink-0" />
+          ) : issues.length === 0 ? (
             <CircleCheck aria-hidden className="size-3 shrink-0 text-ok" />
           ) : (
             <TriangleAlert aria-hidden className="size-3 shrink-0 text-destructive" />
           )}
-          {issues.length === 0 ? "No issues" : plural(issues.length, "issue")} · {spec.displayName}
+          {!spec.validates
+            ? "Not checked"
+            : issues.length === 0
+              ? "No issues"
+              : plural(issues.length, "issue")}{" "}
+          · {spec.displayName}
         </span>
       }
     >

@@ -11,6 +11,7 @@ import { VirtualTable, type TableColumn } from "@/components/table/VirtualTable"
 import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
+import { rowHasBackFace } from "@/features/card/printings";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import type { DragPayload } from "@/features/decks/dnd";
@@ -514,16 +515,24 @@ function Results({ search }: { search: CardSearch }) {
   /** One row's or one tile's handler. The item list is a **thunk** inside `menu`, so a wall of
    *  forty pays for nothing until a reader actually right-clicks one of them. */
   const cardMenu = useCallback(
-    (card: CardSummary, picked: readonly CardSummary[] = []) =>
-      menu(() => buildCardMenu(cardTarget(card), { ...menuDeps, picked: picked.map(cardTarget) })),
+    (card: CardSummary, picked: readonly CardSummary[] = [], flip = false) =>
+      menu(() =>
+        buildCardMenu(
+          { ...cardTarget(card), flip },
+          { ...menuDeps, picked: picked.map(cardTarget) },
+        ),
+      ),
     [menu, menuDeps],
   );
   /** The same menu on Shift+F10 and the ContextMenu key. Wired everywhere `cardMenu` is, because
    *  a menu only a mouse can open is a menu half this app's readers do not have. */
   const cardMenuKey = useCallback(
-    (card: CardSummary, picked: readonly CardSummary[] = []) =>
+    (card: CardSummary, picked: readonly CardSummary[] = [], flip = false) =>
       menuKey(() =>
-        buildCardMenu(cardTarget(card), { ...menuDeps, picked: picked.map(cardTarget) }),
+        buildCardMenu(
+          { ...cardTarget(card), flip },
+          { ...menuDeps, picked: picked.map(cardTarget) },
+        ),
       ),
     [menuKey, menuDeps],
   );
@@ -700,6 +709,10 @@ function Results({ search }: { search: CardSearch }) {
             // figure.
             money={(card) => priceRange(card.priceLow, card.priceHigh, currency)}
             // The whole tile is the target: the art, its two corner marks and the caption.
+            // A two-sided card turns over from its tile — the flip button under the column and
+            // the menu's "Flip card" (issue #844). The table layout passes neither, so it offers
+            // neither.
+            flips={rowHasBackFace}
             cardMenu={cardMenu}
             cardMenuKey={cardMenuKey}
             // The tile's one control, built from the row it is about: the popup offers the

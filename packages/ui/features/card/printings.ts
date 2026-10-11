@@ -494,6 +494,32 @@ export function faceCount(layout: string, faces: number): number {
 }
 
 /**
+ * Whether a printing has a second physical side to turn to — the gate on a tile's flip button
+ * and the card menu's "Flip card" row (issue #844).
+ *
+ * {@link faceCount}'s layout half alone, because the rows the walls and the deck views draw carry
+ * a `layout` and no parsed `card_faces`: a search row and a collection row have no face list at
+ * all. What the missing half guarded against is cheap here rather than broken — the image
+ * protocol answers face 1 of a card with no back with a card-back placeholder (`cardImageUrl`),
+ * so a two-sided layout whose blob arrived short shows a card back rather than an error, and the
+ * same press turns it face up again.
+ *
+ * `null` is a row whose printing has left the card database, which has no picture to turn.
+ */
+export function hasBackFace(layout: string | null | undefined): boolean {
+  return layout != null && TWO_SIDED.has(layout);
+}
+
+/**
+ * {@link hasBackFace} for any row that carries its layout — a search row, a collection row, a
+ * printing. Module-level so a wall can pass it as `CardGrid`'s `flips` without a fresh arrow per
+ * render, which that slot asks for.
+ */
+export function rowHasBackFace(row: { layout: string | null }): boolean {
+  return hasBackFace(row.layout);
+}
+
+/**
  * One printings row as a card menu's target — **the one adapter in the app that reads two
  * objects.**
  *

@@ -473,7 +473,7 @@ describe("the seeds", () => {
   });
 
   it("every seeded deck names a format the fake backend will accept", () => {
-    // `deck_create`/`deck_update` validate against `SPECS`' 12 rows, not `format_specs`' 25.
+    // `deck_create`/`deck_update` validate against `SPECS`' 13 rows, not `format_specs`' 26.
     // A seeded deck in one of the other 13 formats would list and open and then refuse the
     // first rename.
     for (const deck of seed("starter").decks) {

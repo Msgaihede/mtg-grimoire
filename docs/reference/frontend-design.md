@@ -6734,6 +6734,18 @@ exact at every stop the ladder has; a measured one would answer a frame late.
   a second string built in the tile: the page owns the words, the tile owns the type. `null` draws
   nothing — never `Bracket ?`, never a skeleton, never a dash — which is exactly what the caption
   segment did before it.
+- **The reader's deck tags are a third thing in that overlay, and deliberately not a third mark**
+  (issue #834, user schema v62). They are a `<ul aria-label="Tags">` in the same box, one row
+  packed to the right: **above** the two marks when the deck wears either, and on the art's
+  bottom edge **in their place** when it wears neither. `TILE_TAG` takes `TILE_MARK`'s box and
+  scale and not its face — neutral border and ink, the reading face, the reader's own capitals —
+  because gold mono capitals are how the tile spells what the *app* says about a deck. The row is
+  exactly one tag tall with `flex-wrap-reverse` and `overflow-hidden`, so tags that do not fit are
+  clipped whole instead of cut through a word; nothing counts the hidden ones, and the full list
+  is in Deck settings. Measured in Storybook at 100% (Chromium, 2026-10-11): the row is 18px
+  tall, 4px above the pill and 6px in from the art's edge either way, and three surplus tags
+  wrapped to a second line that the box clipped whole. Not yet measured in the shipped WebView2
+  window, nor at the zoom ladder's two ends.
 
 ### The 20px that three objects now share
 

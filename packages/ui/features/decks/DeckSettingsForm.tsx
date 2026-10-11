@@ -25,6 +25,8 @@ import {
   deckKindPatch,
   type DeckKind,
 } from "./deckKind";
+import type { TagInUse } from "./deckTags";
+import { DeckTagsField } from "./DeckTagsField";
 import { CAPTION, FIELD } from "./formFields";
 // The **vocabulary**, not the control. `FormatSelect.tsx`'s `GameSelect` draws these same four
 // rows for the import dialog and is deliberately not reused here, exactly as its `FormatSelect`
@@ -116,6 +118,15 @@ export interface DeckSettingsValue {
    * sends nothing, which is exactly what a deck with no categories yet can honestly answer.
    */
   defaultCategoryId: number;
+  /**
+   * The deck's own tags, in the reader's order — `decks.tags`, user schema v62 (issue #834).
+   * Free text about the whole deck; `deckTags.ts` has what they are and are not.
+   *
+   * Required on the value for {@link defaultCategoryId}'s reason, though only a host that can
+   * write them draws the field ({@link DeckSettingsFormProps.tagsInUse}): the create draft holds
+   * `[]`, the column's default, and sends nothing.
+   */
+  tags: readonly string[];
   // **No `tokenMode` since 2026-09-27** (managed tokens spec §3.9). `decks.token_mode` stays in
   // the schema, on the `decks` capture spec and on `deck_undo::DECK_FIELDS`, and nothing reads
   // it: with every token at 0 until the reader counts it, the pile draws only what they use and
@@ -228,6 +239,19 @@ export interface DeckSettingsFormProps {
    * draft holds `true` for all three and sends none of them.
    */
   canSetTheoryMarks?: boolean;
+  /**
+   * Every tag some deck already wears, for the Tags field to suggest — `deckTags.ts`'
+   * `tagsInUse` over the gallery's own `deck_list`, computed by the host because this form
+   * mounts no query.
+   *
+   * **Absent is a host with no deck yet, and then no Tags field is drawn at all** —
+   * {@link DeckSettingsFormProps.categories}' rule reaching a third field. `DeckInput` carries no
+   * tags, so a tag typed inside "New deck" would be an answer nothing could write down; the field
+   * is one press away in Deck settings on the deck that opens the moment Create is pressed. An
+   * empty list is a different thing and draws the field: a reader's first tag has nothing to be
+   * suggested from.
+   */
+  tagsInUse?: readonly TagInUse[];
   cover: DeckCoverPickerProps;
   idPrefix: string;
 }
@@ -253,6 +277,7 @@ export interface DeckSettingsFormProps {
  * | --- | --- | --- |
  * | Name, Description | every keystroke | on blur — and Enter blurs the name field, unless a host took Enter for {@link DeckSettingsFormProps.onSubmit} |
  * | Game, Format, Deck kind, the switches, the managed wishlist, Folder, the cover | on the one act that settles them | never |
+ * | Tags | on each tag added or removed, with the whole new list | never — `DeckTagsField` holds the half-typed word and adds it itself on blur |
  *
  * A select, a switch and a tile all finish in a single act, so there is nothing for a second
  * callback to add. A text field does not, which is the whole reason the pair exists.
@@ -284,6 +309,7 @@ export function DeckSettingsForm({
   categories,
   // Absent is a host that cannot write the answer, which is the create dialog — see the prop.
   canSetTheoryMarks = false,
+  tagsInUse,
   cover,
   idPrefix,
 }: DeckSettingsFormProps): JSX.Element {
@@ -308,6 +334,17 @@ export function DeckSettingsForm({
           formats={formats}
           id={idPrefix}
         />
+        {/* Under the description, with the other words the tile prints: both are what a reader
+            sees on the wall before opening the deck. Drawn only for a host that can write the
+            answer — see {@link DeckSettingsFormProps.tagsInUse}. */}
+        {tagsInUse !== undefined && (
+          <DeckTagsField
+            tags={value.tags}
+            inUse={tagsInUse}
+            onChange={(tags) => onChange({ tags })}
+            id={idPrefix}
+          />
+        )}
 
         <div className="space-y-2.5 border-t border-border pt-3.5">
           {categories !== undefined && (

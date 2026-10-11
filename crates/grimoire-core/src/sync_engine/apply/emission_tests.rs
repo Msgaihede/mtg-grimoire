@@ -802,12 +802,85 @@ fn a_rebroadcast_takes_back_nothing_this_device_did_since() {
             "taken {take_first}"
         );
     }
-    assert_eq!(delete_meanwhile(true), (0, 0, 0));
-    assert_eq!(
-        delete_meanwhile(false),
-        (0, 1, 0),
-        "owed (design §11): a third device's delete and an active claim resurrect the row here only"
+    // Both cuts agree since issue #842: a third device's delete applied here is remembered, so
+    // a rebroadcast claim no longer resurrects the row on this device alone — `(0, 1, 0)` before.
+    for take_first in [true, false] {
+        assert_eq!(
+            delete_meanwhile(take_first),
+            (0, 0, 0),
+            "taken {take_first}"
+        );
+    }
+}
+
+/// A row `b` made before the group existed — described to `a` and `c` by `b`'s claim alone, and
+/// by no op anywhere — that `a` deletes and `c` edits later; `b` hears the two on two pulls in
+/// `order`. Answers `(rows, copies, note)` on `a`, `b` and `c`.
+fn made_before_the_group(older_first: bool) -> [(i64, i64, String); 3] {
+    let (a, b, c) = (paired("dev-a"), paired("dev-b"), paired("dev-c"));
+    let (mut ma, mut mc) = (0, 0);
+    b.execute("DELETE FROM sync_group", []).unwrap();
+    real_stash(&b, "bolt", 2);
+    b.execute(
+        "INSERT INTO sync_group (id, group_id, epoch, group_key, joined_at)
+         VALUES (1, 'g', 0, x'02', 0)",
+        [],
+    )
+    .unwrap();
+    assert!(
+        outbox(&b).is_empty(),
+        "a write before the group was captured"
     );
+    let claims = whole(&b, "dev-b");
+    apply(&a, &claims).unwrap();
+    apply(&c, &claims).unwrap();
+
+    a.execute("DELETE FROM collection_entries", []).unwrap();
+    let delete = since(&a, &mut ma);
+    c.execute("UPDATE sync_clock SET ms = ms + 60000", [])
+        .unwrap();
+    c.execute("UPDATE collection_entries SET notes = 'kept'", [])
+        .unwrap();
+    let edit = since(&c, &mut mc);
+    if older_first {
+        apply(&b, &delete).unwrap();
+        apply(&b, &edit).unwrap();
+    } else {
+        apply(&b, &edit).unwrap();
+        apply(&b, &delete).unwrap();
+    }
+    apply(&a, &edit).unwrap();
+    apply(&c, &delete).unwrap();
+    assert_eq!(
+        skips(&b),
+        Vec::new(),
+        "older first {older_first}: b skipped a write"
+    );
+    [&a, &b, &c].map(|conn| (rows(conn, "bolt"), copies(conn, "bolt"), note(conn, "bolt")))
+}
+
+/// **Issue #842's add-wins half, on a row no op describes.** `b` made the copy before the group
+/// existed, so the other two know it from `b`'s claim and `b` from its table alone. `a` deletes
+/// it and `c` edits it later: add-wins keeps it on `a` (rebuilt from what it heard of `b`'s claim)
+/// and on `c`. On `b`, hearing the delete first, the row is gone, and `c`'s sparse edit says
+/// nothing of the printing it is — so `b` keeps what it held when the delete took the row
+/// (`heard::keep`) and builds it from that, both copies and all. Without it the edit was skipped
+/// with an `error_log` row and `b` held nothing.
+#[test]
+fn a_row_made_before_the_group_and_deleted_here_is_rebuilt_by_a_third_devices_later_edit() {
+    for older_first in [true, false] {
+        let [a, b, c] = made_before_the_group(older_first);
+        let want = (1, 2, "kept".to_owned());
+        assert_eq!(
+            (&a, &c),
+            (&want, &want),
+            "older first {older_first}: the writers"
+        );
+        assert_eq!(
+            b, want,
+            "older first {older_first}: the device that made the row"
+        );
+    }
 }
 
 fn leave_edit_repair(clock_ahead: bool) -> (i64, String) {
@@ -1854,8 +1927,12 @@ fn a_horizon_whose_claims_did_not_land_is_not_spent() {
     assert_eq!(copies(&b, "opt"), 2, "the step's claim was skipped as seen");
 }
 
-/// `597d19d6`: a claim is never let through for a row the page itself deletes
-/// — owed (design §11).
+/// `597d19d6`: a claim is never let through for a row the page itself deletes.
+///
+/// It read "owed (design §11)" until issue #842: a third device's delete applied here was
+/// remembered nowhere, so the claim resurrected the row on this device alone — `(1, 3)` here and
+/// nothing on the claim's own device or the deleter's. The delete is remembered now (`heard`),
+/// the claim loses to it here as its emitter's step lost to it there, and all three hold nothing.
 #[test]
 fn a_claim_is_not_let_through_for_a_row_the_page_deletes() {
     let (a, b, d) = (paired("dev-a"), paired("dev-b"), paired("dev-d"));
@@ -1873,16 +1950,21 @@ fn a_claim_is_not_let_through_for_a_row_the_page_deletes() {
     step(&a, "bolt", 1, SECOND);
     let mut page = since(&a, &mut ma);
     page.extend(whole(&a, "dev-a"));
-    page.extend(deletion);
+    let from_a = page.clone();
+    page.extend(deletion.clone());
     apply(&b, &page).unwrap();
+    apply(&a, &deletion).unwrap();
+    apply(&d, &from_a).unwrap();
     assert_eq!(
-        qty(&b),
-        (1, 3),
-        "owed (design §11): a third device's delete and an active claim resurrect the row here only"
+        (qty(&a), qty(&b), qty(&d)),
+        ((0, 0), (0, 0), (0, 0)),
+        "the claim, the deleter and this device agree"
     );
 }
 
-/// `597d19d6`: nor for a row a delete took on an earlier page — owed (design §11).
+/// `597d19d6`: nor for a row a delete took on an earlier page — the shape issue #842 closed:
+/// split across two pulls, the delete was forgotten by the second, and the claim built the row
+/// here only.
 #[test]
 fn a_claim_is_not_let_through_for_a_row_deleted_before_its_page() {
     let (a, b, d) = (paired("dev-a"), paired("dev-b"), paired("dev-d"));
@@ -1900,10 +1982,12 @@ fn a_claim_is_not_let_through_for_a_row_deleted_before_its_page() {
     let mut page = since(&a, &mut ma);
     page.extend(whole(&a, "dev-a"));
     apply(&b, &page).unwrap();
+    apply(&a, &since(&d, &mut 0)).unwrap();
+    apply(&d, &page).unwrap();
     assert_eq!(
-        qty(&b),
-        (1, 3),
-        "owed (design §11): a third device's delete and an active claim resurrect the row here only"
+        (qty(&a), qty(&b), qty(&d)),
+        ((0, 0), (0, 0), (0, 0)),
+        "the claim, the deleter and this device agree"
     );
 }
 

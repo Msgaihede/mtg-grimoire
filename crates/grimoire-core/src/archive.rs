@@ -192,6 +192,7 @@ fn replace(conn: &Connection, snapshot: &Snapshot) -> Result<(), String> {
          DELETE FROM main.sync_peers;
          DELETE FROM main.sync_gone;
          DELETE FROM main.sync_orphans;
+         DELETE FROM main.sync_heard;
          DELETE FROM main.sync_state;
          INSERT INTO main.sync_state (key,value) VALUES ('applying','1');",
     )
@@ -200,6 +201,8 @@ fn replace(conn: &Connection, snapshot: &Snapshot) -> Result<(), String> {
     // the discarded database — which rows an apply placed while their parent was gone, by uids
     // the restored rows may carry too — but only the tombstones have a trigger to refill them
     // while the user tables below are emptied. Nothing writes an orphan record but `apply`.
+    // `sync_heard` goes with it on the same footing (user schema v61): what an apply remembered of
+    // other devices' writes to the discarded rows, and nothing but `apply` writes it either.
     // Deleting the group first makes capture's cross join empty before the first user delete.
     // Identity and clock stay local: neither is imported nor reused from another machine.
     for table in tables() {

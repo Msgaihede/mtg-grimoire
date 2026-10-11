@@ -3,6 +3,7 @@ import { motion, useReducedMotion, type Transition } from "motion/react";
 import { CardChin } from "@/components/CardChin";
 import { useMenuOpener } from "@/components/menu/useContextMenu";
 import { useTooltip } from "@/components/tooltip/useTooltip";
+import { useShownFace } from "@/features/card/shownFace";
 import {
   cardScaleVars,
   CHIN_HEIGHT,
@@ -34,6 +35,7 @@ import {
   DeckCardControls,
   revealedWhenOpen,
   SELECTED_CARD,
+  turnsOver,
   useDeckCardDrag,
   type DeckCardActions,
 } from "./cardControl";
@@ -923,6 +925,9 @@ function StackedCard({
   // any other pile. The virtual one is the deck's and cannot be read off the row, which is why
   // it arrives as a prop — see `deckCardShort`.
   const short = deckCardShort(card, tracksCollection);
+  // The side the reader turned this card to — issue #844's flip button under the stepper and the
+  // card menu's row, both of which write `shownFace` for a card {@link turnsOver} admits.
+  const shownFace = useShownFace(turnsOver(card) ? card.cardId : null);
 
   return (
     // Collapsed, pulled up over its neighbour; open, standing 8px clear of it. The margin is
@@ -1020,6 +1025,7 @@ function StackedCard({
         <DeckCardFace
           card={card}
           width={stackCardWidth(zoom)}
+          face={shownFace}
           ruleBreakText={ruleBreakText}
           theoryMark={theoryMark}
           noted={noted}

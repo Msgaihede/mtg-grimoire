@@ -31,6 +31,7 @@ const COMMANDER: FormatSpec = {
   maxManaValue: null,
   allowsCompanion: true,
   sortOrder: 12,
+  validates: true,
 };
 
 /** The pseudo-format with no legality data — `hasLegalityData: false` is a real cell. */

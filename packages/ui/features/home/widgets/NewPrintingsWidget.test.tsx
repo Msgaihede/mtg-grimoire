@@ -168,6 +168,7 @@ function deckRow(over: Partial<DeckRow> & { id: number; name: string }): DeckRow
     separateXGroup: false,
     defaultCategoryId: 0,
     bracket: 0,
+    tags: [],
     tokensOpen: false,
     tokenMode: "managed",
     tokenRailIndex: -1,

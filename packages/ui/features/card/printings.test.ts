@@ -4,6 +4,8 @@ import {
   buildPrintingGroups,
   cheapestPrice,
   faceCount,
+  hasBackFace,
+  rowHasBackFace,
   groupByIllustration,
   isPrintingGroupBy,
   legalityChips,
@@ -335,5 +337,28 @@ describe("faceCount", () => {
   it("needs both faces present, not just a layout that usually has them", () => {
     expect(faceCount("transform", 1)).toBe(1);
     expect(faceCount("transform", 0)).toBe(1);
+  });
+});
+
+/** Issue #844's gate on a tile's flip button and the menu's "Flip card": the layout half of
+ *  `faceCount`, because the rows the walls draw carry a layout and no face list. */
+describe("hasBackFace", () => {
+  it("is true for the layouts printed on two physical sides", () => {
+    for (const layout of ["transform", "modal_dfc", "double_faced_token", "reversible_card"]) {
+      expect(hasBackFace(layout)).toBe(true);
+    }
+  });
+
+  it("is false for two faces printed on one side, and for one-sided cards", () => {
+    for (const layout of ["normal", "split", "adventure", "flip", "meld", "planar"]) {
+      expect(hasBackFace(layout)).toBe(false);
+    }
+  });
+
+  it("is false for an orphan whose layout is gone", () => {
+    expect(hasBackFace(null)).toBe(false);
+    expect(hasBackFace(undefined)).toBe(false);
+    expect(rowHasBackFace({ layout: null })).toBe(false);
+    expect(rowHasBackFace({ layout: "modal_dfc" })).toBe(true);
   });
 });

@@ -21,7 +21,7 @@
 //!
 //! **`update_hook` has two blind spots, and a command marks by hand for each.**
 //!
-//! * **`WITHOUT ROWID` tables.** Eight user tables are, and the hook never fires for them. Their
+//! * **`WITHOUT ROWID` tables.** Nine user tables are, and the hook never fires for them. Their
 //!   write sites take a bare `&Connection` in modules that have no business with this mask, so the
 //!   mark is made by the *command* that a reader's press reaches, after its write — see
 //!   [`MARKED_BY_COMMAND`] and [`WRITTEN_BY_THE_APP`], and the test that holds `sqlite_master` to
@@ -81,8 +81,17 @@ pub const MARKED_BY_COMMAND: &[&str] =
 /// writes it by hand while applying another device's ops — what it did with a row whose parent
 /// was gone — and reads it back when that parent returns; there is no trigger, and no window
 /// draws a row of it.
-pub const WRITTEN_BY_THE_APP: &[&str] =
-    &["price_snapshots", "sync_gone", "sync_orphans", "sync_peers"];
+///
+/// **`sync_heard` is here on the same plain footing** (user schema v61): `sync_engine::apply`
+/// writes it by hand — what it remembers of other devices' writes to each row — and reads it back
+/// on every later apply. No press, no trigger, no window.
+pub const WRITTEN_BY_THE_APP: &[&str] = &[
+    "price_snapshots",
+    "sync_gone",
+    "sync_heard",
+    "sync_orphans",
+    "sync_peers",
+];
 
 /// One bit per user table, and the bell the commit hook rings.
 pub struct Changes {
@@ -479,7 +488,7 @@ mod tests {
     }
 
     /// `update_hook` cannot see these, so each one is a decision — marked by the command that
-    /// writes it, or written only by the app. A ninth goes red here until somebody decides.
+    /// writes it, or written only by the app. A tenth goes red here until somebody decides.
     #[test]
     fn every_without_rowid_user_table_has_been_decided_about() {
         let conn = crate::schema::memory_pair();

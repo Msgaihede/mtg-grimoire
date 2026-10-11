@@ -238,6 +238,10 @@ fn adopt_lower(
             own.map(|own| (own, moved_uid))
         }
     };
+    // What was heard of the two rows is the survivor's now.
+    if let Some((uid, into)) = &retired {
+        super::heard::renamed(conn, table, uid, into)?;
+    }
     match retired {
         Some((uid, into)) => emission::retire(conn, table, &uid, &into).map_err(|e| e.to_string()),
         None => Ok(()),

@@ -19,10 +19,10 @@
  * could summon and nothing about the paths.
  *
  * **The picker failing and the file failing are still two sentences**, which is what the two
- * steps used to buy: "that file is over 1 MB" must never arrive worded as a broken picker, nor
+ * steps used to buy: "that file is over 8 MB" must never arrive worded as a broken picker, nor
  * the other way round. Rust says which in the rejection itself — "The file picker could not be
- * opened — …" against `import.rs`'s "That file could not be opened — …" or its 1 MB refusal — so
- * a caller frames either with words that are true of both. The 1 MB cap is `import.rs`'s, and so
+ * opened — …" against `import.rs`'s "That file could not be opened — …" or its 8 MB refusal — so
+ * a caller frames either with words that are true of both. The 8 MB cap is `import.rs`'s, and so
  * is the decode (issue #555): a byte-order mark is honoured, valid UTF-8 is UTF-8, and anything
  * else is read as Windows-1252 rather than lossily — so an `é` in Excel's Western European "CSV"
  * is an `é` and not `U+FFFD`. The read answers **which** of those it took, because the last one is

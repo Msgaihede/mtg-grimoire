@@ -3302,6 +3302,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           // printings — which the modal is and a deck card is not, so the row stays live here on
           // every card including the one the pane happens to be open on.
           card: { ...cardMenuDeps, printingsDeck: deckSlotOf(card) },
+          // "Flip card" on the two views that draw the card's picture (issue #844). Table and
+          // Text draw none, so the row would turn a card nobody can see.
+          flips: view === "stacks" || view === "grid",
           categories,
           cards: deck.cards,
           spec,
@@ -3408,6 +3411,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       addNote,
       openNote,
       pickedCards,
+      view,
     ],
   );
 
@@ -3549,22 +3553,25 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * which is what a reader who is not editing this row asked for.
    */
   const panelCardBuild = useCallback(
-    (card: CardSummary, picked: readonly CardSummary[] = []) => () =>
-      buildCardMenu(searchCardTarget(card), {
-        ...cardMenuDeps,
-        picked: picked.map(searchCardTarget),
-      }),
+    (card: CardSummary, picked: readonly CardSummary[] = [], flip = false) => () =>
+      // `flip` is the wall's: the tile turns over (issue #844), so the menu offers "Flip card".
+      buildCardMenu(
+        { ...searchCardTarget(card), flip },
+        { ...cardMenuDeps, picked: picked.map(searchCardTarget) },
+      ),
     [cardMenuDeps],
   );
   const panelCardMenu = useCallback(
-    (card: CardSummary, picked: readonly CardSummary[] = []) => menu(panelCardBuild(card, picked)),
+    (card: CardSummary, picked: readonly CardSummary[] = [], flip = false) =>
+      menu(panelCardBuild(card, picked, flip)),
     [menu, panelCardBuild],
   );
   /** The keyboard's own door to the same rows. `CardGrid` takes it in a slot of its own because
    *  a keypress has no coordinates — the panel is anchored at the tile's corner rather than at a
    *  pointer that was never there. */
   const panelCardMenuKey = useCallback(
-    (card: CardSummary, picked: readonly CardSummary[] = []) => menuKey(panelCardBuild(card, picked)),
+    (card: CardSummary, picked: readonly CardSummary[] = [], flip = false) =>
+      menuKey(panelCardBuild(card, picked, flip)),
     [menuKey, panelCardBuild],
   );
 

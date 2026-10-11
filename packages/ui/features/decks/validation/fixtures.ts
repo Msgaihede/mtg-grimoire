@@ -8,7 +8,9 @@
  *
  * **The `SPECS` table is a mirror, not a source.** Its authority is Task 2's Rust test
  * (`format_specs_is_seeded_with_all_25_formats_and_the_load_bearing_cells`), which checks
- * every load-bearing cell of all 25 rows against the research doc. These rows are copied
+ * every load-bearing cell of all 25 judged rows against the research doc — and, for the 26th,
+ * `unspecified`, corpus schema 7's `the_unspecified_format_row_carries_the_cells_that_turn_
+ * validation_off`. These rows are copied
  * cell-for-cell from the seed so the engine can be exercised without a database — and so
  * that a test failing here is about the engine, never about a number.
  *
@@ -38,6 +40,7 @@ export const SPECS: Record<string, FormatSpec> = {
     allowsCompanion: true,
     sortOrder: 7,
     games: ["paper", "mtgo"],
+    validates: true,
   },
   vintage: {
     key: "vintage",
@@ -57,6 +60,7 @@ export const SPECS: Record<string, FormatSpec> = {
     allowsCompanion: true,
     sortOrder: 10,
     games: ["paper", "mtgo"],
+    validates: true,
   },
   // The one seeded format that forbids companions outright, and the reason is the cell next
   // to it: no sideboard, so no sideboard slot for one to sit in (research doc).
@@ -78,6 +82,7 @@ export const SPECS: Record<string, FormatSpec> = {
     allowsCompanion: false,
     sortOrder: 5,
     games: ["arena"],
+    validates: true,
   },
   commander: {
     key: "commander",
@@ -97,6 +102,7 @@ export const SPECS: Record<string, FormatSpec> = {
     allowsCompanion: true,
     sortOrder: 12,
     games: ["paper"],
+    validates: true,
   },
   oathbreaker: {
     key: "oathbreaker",
@@ -116,6 +122,7 @@ export const SPECS: Record<string, FormatSpec> = {
     allowsCompanion: true,
     sortOrder: 13,
     games: ["paper"],
+    validates: true,
   },
   brawl: {
     key: "brawl",
@@ -135,6 +142,7 @@ export const SPECS: Record<string, FormatSpec> = {
     allowsCompanion: true,
     sortOrder: 15,
     games: ["arena"],
+    validates: true,
   },
   paupercommander: {
     key: "paupercommander",
@@ -154,6 +162,7 @@ export const SPECS: Record<string, FormatSpec> = {
     allowsCompanion: true,
     sortOrder: 18,
     games: ["paper"],
+    validates: true,
   },
   duel: {
     key: "duel",
@@ -174,6 +183,7 @@ export const SPECS: Record<string, FormatSpec> = {
     allowsCompanion: true,
     sortOrder: 19,
     games: ["paper"],
+    validates: true,
   },
   oldschool: {
     key: "oldschool",
@@ -193,6 +203,7 @@ export const SPECS: Record<string, FormatSpec> = {
     allowsCompanion: true,
     sortOrder: 20,
     games: ["paper"],
+    validates: true,
   },
   tlr: {
     key: "tlr",
@@ -212,6 +223,7 @@ export const SPECS: Record<string, FormatSpec> = {
     allowsCompanion: true,
     sortOrder: 23,
     games: ["paper"],
+    validates: true,
   },
   casual: {
     key: "casual",
@@ -231,6 +243,7 @@ export const SPECS: Record<string, FormatSpec> = {
     allowsCompanion: true,
     sortOrder: 24,
     games: ["paper", "arena", "mtgo"],
+    validates: true,
   },
   limited: {
     key: "limited",
@@ -250,6 +263,30 @@ export const SPECS: Record<string, FormatSpec> = {
     allowsCompanion: true,
     sortOrder: 25,
     games: ["paper", "arena", "mtgo"],
+    validates: true,
+  },
+  // Corpus schema 7's row: a deck whose format nobody has chosen yet. `casual`'s cells, so
+  // nothing reading one of them could draw a failure, and `validates: false`, which is the one
+  // cell the engine reads before any other and the whole of why this format judges nothing.
+  unspecified: {
+    key: "unspecified",
+    displayName: "Unspecified",
+    enabledInPicker: true,
+    deckMin: 0,
+    deckMax: null,
+    maxCopies: null,
+    sideboardMax: null,
+    singleton: false,
+    requiresCommander: false,
+    commanderRule: null,
+    life: 20,
+    restrictedSemantic: "max_one",
+    hasLegalityData: false,
+    maxManaValue: null,
+    allowsCompanion: true,
+    sortOrder: 26,
+    games: ["paper", "arena", "mtgo"],
+    validates: false,
   },
 };
 

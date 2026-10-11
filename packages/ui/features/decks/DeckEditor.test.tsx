@@ -422,6 +422,7 @@ const DECK: DeckRow = {
   // `useState` in this component with a select in the docked search panel until 2026-08-15.
   defaultCategoryId: 0,
   bracket: 0,
+  tags: [],
 };
 
 /** One row of what `deck_notes` answers — the Notes band's read, and the source of the per-card
