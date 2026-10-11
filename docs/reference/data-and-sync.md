@@ -14,7 +14,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `grep -c '^\s*("[a-z_]*", Side::User),'` and the same with `Side::Corpus` over
   `schema.rs` (`crates/grimoire-core/src/` since 2026-10-02) — re-run 2026-09-27 at v54: **32**
   and **25**, and again 2026-10-07 at v60: **34** and **25** (v59's `deck_todo_lists` and v60's
-  `sync_orphans`); **a bare `grep -c 'Side::User'`
+  `sync_orphans`), and 2026-10-11 at v61: **35** and **25** (`sync_heard`); **a bare `grep -c 'Side::User'`
   over-counts** — 37 against 32 at v54 and 39 against 34 at v60, because `mod tests` matches the
   enum by name five more
   times (this said four until v52's stray-table test began asking the registry). Count them,
@@ -1383,6 +1383,31 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   ⚠️ **The rung moves `USER_SCHEMA_VERSION`, and sync stamps every op with it** — so, like every
   rung, a v59 peer holds a v60 device's ops until it updates, and `pnpm web:deploy-guard`
   refuses a by-hand web deploy from a tree at 60 until a release carries it.
+  **v61 adds `sync_heard`, one row per synced row another device has written — what this device
+  remembers of those writes** (2026-10-11, issue #842). `sync_engine::apply` decided
+  last-writer-wins and add-wins by folding a page with this device's *own* op log, and kept no
+  stamp for anything another device wrote, so with three devices the second of two pulls won
+  whatever its stamp: an older note, an older move and an older delete each beat a newer op heard
+  first, on the one device that wrote neither ([sync.md](sync.md), *…and every other device's,
+  remembered*). **One table, `WITHOUT ROWID`, no index** — `(tbl TEXT NOT NULL, uid TEXT NOT
+  NULL, memory TEXT NOT NULL, PRIMARY KEY (tbl, uid))`. `(tbl, uid)` is the row by the uid it
+  wears, one memory to a row; `memory` is JSON whose shape is `merge::Memory`'s and is spelled
+  nowhere in `schema.rs`, `sync_orphans`' `state` exactly. `apply` asks by row, and its one walk —
+  the cycle-break's, over a folder table's memories — asks by the key's `tbl` prefix, so the key is
+  the only index it needs; the figure in `the_user_schema_is_byte_identical_to_what_the_ladder_builds`
+  went **92 → 93** (35 tables, 55 indexes, 3 autoindexes). **What it costs** is the issue's own
+  estimate: a row for every row a peer has written, about the size of that row — each distinct
+  stamp stored once and named by index, so an insert's twenty fields share one: measured **596
+  bytes** for a copy and **204** for a binder (debug, a 32-character device id), where a stamp
+  spelled beside every field was most of the row. What the peer's own `sync_ops` already holds of
+  it, once, folded rather than per op. On
+  `sync_orphans`' footing everywhere else: not synced, written and read by `sync_engine::apply`
+  alone by hand with no trigger, drawn by no window, `changes::WRITTEN_BY_THE_APP` (the ninth
+  `WITHOUT ROWID` user table), the mirror's decided-about list, `packages/ui/lib/userTables.json`,
+  `TABLE_KEYS` as `sync_heard: []`, `archive::replace` clearing it beside `sync_orphans`, and
+  **`UNDO_V61` at the head of every rewind chain, ahead of `UNDO_V60`**. **The rung creates it
+  empty and backfills nothing**: the ops applied before the upgrade were consumed and the
+  watermark passed them, so a row's memory starts with the first op applied to it after the climb.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every

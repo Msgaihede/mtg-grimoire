@@ -69,7 +69,10 @@
 //!
 //! - **It records only decisions resting on [`gone`]**, so a folder a peer really deleted — the
 //!   delete arm — and which a *third* device's later edit brings back returns empty on a device
-//!   that re-homed its own copies out of it. That needs three devices and is issue #842's.
+//!   that re-homed its own copies out of it. That needs three devices. Issue #842 gave `apply` a
+//!   memory of what other devices wrote ([`super::heard`]), which brings the folder back on that
+//!   device too, but not of what the delete arm's re-homing did, so the folder still returns
+//!   empty there.
 //! - **A delete addressed to the uid a merged row wears is read one way, and the other is as
 //!   likely.** The sender deleting that name may mean its own row alone, or — if it has since
 //!   heard of the delete and folded the pair itself — the one row both became. Nothing on the
@@ -525,9 +528,7 @@ pub(super) fn folded_with_history(
     uid: &str,
     g: &Group,
 ) -> Result<Resolved, String> {
-    let mut all: Vec<Op> = g.ops.iter().map(|o| (*o).clone()).collect();
-    all.extend(local_history(conn, table, &[uid.to_owned()])?);
-    Ok(fold(&all))
+    fold_with_history(conn, table, &[uid.to_owned()], &g.ops)
 }
 
 /// Whether a counter that is not a row at zero has reached it — the row would have gone.

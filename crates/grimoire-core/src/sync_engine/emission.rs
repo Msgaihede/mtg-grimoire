@@ -477,6 +477,13 @@ pub fn retired(conn: &Connection, table: &str, uid: &str) -> rusqlite::Result<bo
         .query_row([format!("{RETIRED}{table}/{uid}")], |r| r.get(0))
 }
 
+/// The row `uid` of `table` was merged into ([`retire`]), by the uid it wore then — `None` for a
+/// uid never retired. One caller, `apply`'s memory of what other devices wrote (issue #842): an op
+/// for a merged-away uid is a fact about the survivor, and remembered under its name.
+pub fn survivor(conn: &Connection, table: &str, uid: &str) -> rusqlite::Result<Option<String>> {
+    get(conn, &format!("{RETIRED}{table}/{uid}"))
+}
+
 /// Close the gap once every device on this group's roster that this one holds a watermark for
 /// has a `taken@` mark again (§7). The roster and not `sync_peers` alone: a watermark outlives
 /// its group, and a peer of an old group never emits here again.

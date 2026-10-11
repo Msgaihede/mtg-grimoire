@@ -211,6 +211,7 @@ export const TABLE_KEYS: Readonly<Record<string, readonly QueryKey[]>> = {
   sync_devices: [SYNC_KEY],
   sync_gone: [],
   sync_group: [SYNC_KEY],
+  sync_heard: [],
   sync_identity: [SYNC_KEY],
   sync_ops: [],
   sync_orphans: [],

@@ -1177,6 +1177,11 @@ mod tests {
                 // is not a decision either.
                 "sync_gone",
                 "sync_group",
+                // What an apply remembers of other devices' writes to each row (user schema v61),
+                // on `sync_orphans`' grounds below: it describes the conversation, the row it is
+                // about is drawn from a table the mirror already watches, and `WITHOUT ROWID`
+                // besides.
+                "sync_heard",
                 "sync_identity",
                 "sync_meta",
                 // Sync's other three (user schema v29). The op log is DERIVED from the very
