@@ -78,9 +78,9 @@ describe("every workflow", () => {
   });
 
   // Guards the count above: a workflow that stopped installing would pass a comparison of zeros.
-  it("finds the eight installs", () => {
+  it("finds the nine installs", () => {
     expect(installsOf(WORKFLOWS["/.github/workflows/ci.yml"])).toBe(4);
-    expect(installsOf(WORKFLOWS["/.github/workflows/release.yml"])).toBe(3);
+    expect(installsOf(WORKFLOWS["/.github/workflows/release.yml"])).toBe(4);
     expect(installsOf(WORKFLOWS["/.github/workflows/android-emulator.yml"])).toBe(1);
   });
 

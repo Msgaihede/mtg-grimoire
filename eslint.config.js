@@ -114,6 +114,13 @@ export default tseslint.config(
         // Asked and answered: `web-deploy-probe.mjs` gives each `fetch` a deadline, and
         // `AbortSignal.timeout` is the only way to hand `fetch` one.
         AbortSignal: "readonly",
+        // Asked and answered: a post-deploy probe is a `Request` (`deploy-probe.mjs`), so that
+        // the same object is what `fetch` sends to the host at a release and what a test hands
+        // to the Worker's own `fetch` in a pull request. Its tests read one back (`URL`) and
+        // answer it (`Response`).
+        Request: "readonly",
+        Response: "readonly",
+        URL: "readonly",
       },
     },
   },

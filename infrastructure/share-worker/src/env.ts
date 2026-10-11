@@ -6,7 +6,8 @@ import { TOKEN_TTL_MS, verify, type Claims } from "@grimoire/relay/src/token";
  *
  * **This is a second Worker beside the relay rather than a route on it, and the reason is blast
  * radius** (spec §5.1). Sync is a paid feature people depend on; sharing is new and will churn,
- * and every deploy here is done by hand by one person. One Worker carrying both means a bad
+ * and every deploy here was done by hand by one person until 2026-10-11 (a release's
+ * `share-deploy` does them since). One Worker carrying both means a bad
  * share deploy is a sync outage. The two share a D1 database and the `RELAY_HMAC_KEY` secret and
  * nothing else — no service binding, no shared module beyond the two files `tsconfig` names.
  *

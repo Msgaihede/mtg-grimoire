@@ -892,7 +892,10 @@ an object rather than quietly:
 
 Four steps, in order, and the first two are why `npx wrangler deploy` alone is not enough. The full
 runbook, with the probes that say which of them are already done, is
-[hosted-relay-deploy.md](../../docs/reference/hosted-relay-deploy.md).
+[hosted-relay-deploy.md](../../docs/reference/hosted-relay-deploy.md). **Since 2026-10-11 a release
+runs this deploy**: `release.yml`'s `relay-deploy` applies any pending migration, deploys, and
+probes the live address (`scripts/relay-deploy-probe.mjs`). The steps below are the by-hand
+deploy between releases, which is still asked for.
 
 1. `npx wrangler d1 create mtg-grimoire-relay`, then put the id it prints into
    `wrangler.jsonc`'s `d1_databases[0].database_id`. **Already done** — the committed value is a
@@ -901,14 +904,16 @@ runbook, with the probes that say which of them are already done, is
    produce a real id, and a plausible-looking uuid invented here would be a value that gets copied
    into documentation and deployed against.
 2. **The schema. `--file=./schema.sql` is for an empty database only** — on any other, run the
-   migrations in `migrations/` instead:
+   migrations in `applied-by-hand/` instead (the history of what was applied by hand; **since
+   2026-10-11 a new schema change is a file in `migrations/`**, applied by the release's
+   `relay-deploy` before it deploys, and not by a `d1 execute`):
    ```
    # empty database only
    npx wrangler d1 execute mtg-grimoire-relay --remote --file=./schema.sql
 
    # every other database
-   npx wrangler d1 execute mtg-grimoire-relay --remote --file=./migrations/2026-08-30-group-keys.sql
-   npx wrangler d1 execute mtg-grimoire-relay --remote --file=./migrations/2026-08-30-group-devices.sql
+   npx wrangler d1 execute mtg-grimoire-relay --remote --file=./applied-by-hand/2026-08-30-group-keys.sql
+   npx wrangler d1 execute mtg-grimoire-relay --remote --file=./applied-by-hand/2026-08-30-group-devices.sql
    npx wrangler d1 execute mtg-grimoire-relay --remote --command "ALTER TABLE entitlements ADD COLUMN group_epoch INTEGER"
    npx wrangler d1 execute mtg-grimoire-relay --remote --command "ALTER TABLE entitlements ADD COLUMN group_auth TEXT"
    npx wrangler d1 execute mtg-grimoire-relay --remote --command "CREATE TABLE IF NOT EXISTS pairing_rendezvous (rv TEXT NOT NULL, slot TEXT NOT NULL CHECK (slot IN ('offer', 'join')), blob TEXT NOT NULL, expires_at INTEGER NOT NULL, PRIMARY KEY (rv, slot))"
@@ -916,7 +921,7 @@ runbook, with the probes that say which of them are already done, is
    npx wrangler d1 execute mtg-grimoire-relay --remote --command "ALTER TABLE entitlements ADD COLUMN reconciled_at INTEGER"
    npx wrangler d1 execute mtg-grimoire-relay --remote --command "CREATE INDEX IF NOT EXISTS entitlements_reconcile ON entitlements (reconciled_at, subject) WHERE status <> 'dead'"
    ```
-   The last two are `migrations/2026-09-28-reconciled-at.sql`, in that order — the index names the
+   The last two are `applied-by-hand/2026-09-28-reconciled-at.sql`, in that order — the index names the
    column — and **before the deploy that ships the budgeted `reconcile`**. Check the column landed
    with `--command "SELECT reconciled_at FROM entitlements LIMIT 0"`: empty is the pass, `no such
    column` means the `ALTER` did not run. **A Worker without the column fails quietly**: nothing a

@@ -16,8 +16,8 @@
       "new_sqlite_classes": ["Group"],
     },
   ],
-  // The entitlement store — `infrastructure/relay/schema.sql` is its shape, applied with
-  // `npx wrangler d1 execute mtg-grimoire-relay --remote --file=./schema.sql`.
+  // The entitlement store — `infrastructure/relay/schema.sql` is its shape, the baseline;
+  // `migrations/` holds what a release applies after it.
   //
   // **`database_id` is real and the database exists** — this comment called it a placeholder
   // until 2026-08-30, and `infrastructure/relay/README.md` step 1 said the committed value was `<set on create>`.
@@ -34,6 +34,11 @@
       "binding": "DB",
       "database_name": "mtg-grimoire-relay",
       "database_id": "5e0381b0-d2aa-4861-a725-26ca18ae00ef",
+      // What `release.yml`'s `relay-deploy` applies before it deploys: every `.sql` file in
+      // `migrations/` the table does not name yet, once, in name order. `schema.sql` is the
+      // baseline those files start from — `migrations/README.md` has the rules.
+      "migrations_dir": "migrations",
+      "migrations_table": "d1_migrations",
     },
   ],
   // The webhook is primary and this is the backstop: a webhook Patreon failed to deliver would

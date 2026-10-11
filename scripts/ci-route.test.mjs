@@ -289,6 +289,9 @@ describe("the arms", () => {
     ["infrastructure/relay/src/ticket.ts", T, T, F, F, F, F, T],
     ["infrastructure/relay/wrangler.jsonc", T, T, F, F, F, F, T],
     ["infrastructure/relay/schema.sql", T, T, F, F, F, F, T],
+    // A tracked migration: the sync smoke applies it (`web`), and `d1-migrations.test.mjs`
+    // replays it (`frontend`).
+    ["infrastructure/relay/migrations/0001_add-a-column.sql", T, T, F, F, F, F, T],
     ["infrastructure/relay/README.md", F, F, F, F, F, F, F],
     // The web app's hosting: checked and tested by `frontend`, copied into `apps/light/dist-web/` by `web`.
     // Out of the fail-safe the share Worker still falls to — no Rust source reads it.
