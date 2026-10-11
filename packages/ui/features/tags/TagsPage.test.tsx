@@ -691,7 +691,7 @@ describe("coming back to the page", () => {
     await screen.findByRole("button", { name: /^Landscape, art tag, included/ });
     await user.type(screen.getByPlaceholderText(/search tags/i), "landsca");
     await user.click(screen.getByRole("button", { name: /^Show filters/ }));
-    await user.click(screen.getByRole("button", { name: "All printings" }));
+    await user.click(screen.getByRole("button", { name: "Show all printings" }));
     await waitFor(() => expect(lastRequest().collapse).toBe(true));
     first.unmount();
     searchCards.mockClear();
