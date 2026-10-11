@@ -98,7 +98,8 @@ export const YourSide: Story = {
     const canvas = within(canvasElement);
     const panel = await canvas.findByRole("region", { name: "You give" });
     await expect(panel).toHaveTextContent("6 cards");
-    await expect(within(panel).getAllByText("from your collection")).toHaveLength(4);
+    // Each with the collection's count of its printing and finish (issue #935).
+    await expect(within(panel).getAllByText(/^from your collection · \d+ owned$/)).toHaveLength(4);
     await expect(within(panel).getByRole("button", { name: "Collection" })).toHaveAttribute(
       "aria-pressed",
       "true",
@@ -167,12 +168,14 @@ export const TheirSide: Story = {
     const panel = await canvas.findByRole("region", { name: "They give" });
     await expect(panel).toHaveTextContent("5 cards");
     await expect(within(panel).getAllByText("on your wishlist")).toHaveLength(2);
-    await expect(within(panel).queryByText("from your collection")).not.toBeInTheDocument();
+    await expect(within(panel).queryByText(/from your collection/)).not.toBeInTheDocument();
     await expect(within(panel).getByRole("combobox")).toHaveAttribute(
       "placeholder",
       "Add any card…",
     );
-    await expect(within(panel).queryByRole("button", { name: "All cards" })).not.toBeInTheDocument();
+    await expect(
+      within(panel).queryByRole("button", { name: "All cards" }),
+    ).not.toBeInTheDocument();
 
     // The camera hands the page the side it belongs to and the button to give the caret back to.
     const camera = within(panel).getByRole("button", { name: "Scan cards onto their side" });

@@ -4,7 +4,7 @@ import { ArrowLeft, ArrowRight, Layers, Trash2, TriangleAlert } from "lucide-rea
 import { ToggleChip } from "@grimoire/ui/components/FilterChips";
 import { RarityGem } from "@grimoire/ui/components/RarityGem";
 import { cardPrintingsKey } from "@grimoire/ui/features/card/cardKeys";
-import { lineMoney, rateOf } from "@grimoire/ui/features/trade/trade";
+import { holdingOf, lineMoney, rateOf } from "@grimoire/ui/features/trade/trade";
 import { givenMark, printingLine, sideWords } from "@grimoire/ui/features/trade/tradeWords";
 import { FINISH_LABEL, parseFinishes } from "@grimoire/ui/lib/finish";
 import { ipc, ipcError } from "@grimoire/ui/lib/ipc";
@@ -27,11 +27,11 @@ type Page = "main" | "printing";
  * does, *from your collection* is not said beside it. The sheet is only ever open on an open
  * trade, which is what `givenMark` is told.
  */
-function sideLabel(line: TradeLine): string {
+function sideLabel(line: TradeLine, trade: Trade): string {
   const side = capital(sideWords(line.side));
   // A line the reader picked out of their collection is one a finish can take back out of it;
   // a card they are being given that they have wished for is the reason for the trade.
-  const mark = givenMark(line, true);
+  const mark = givenMark(holdingOf(line, trade.lines), true);
   if (mark?.place === "collection") return `${side} · ${mark.words}`;
   if (line.side === "theirs" && line.wished > 0) return `${side} · on your wishlist`;
   return side;
@@ -96,7 +96,7 @@ export function EditLineSheet({
     <ActionSheet
       open={open}
       title={line?.name ?? "Card"}
-      subtitle={line === null ? undefined : sideLabel(line)}
+      subtitle={line === null ? undefined : sideLabel(line, trade)}
       closeLabel="Close card"
       onClose={onClose}
       onDismiss={onDismiss}
@@ -168,7 +168,7 @@ function MainPage({
   const rated = rate !== 100 && figures.total !== null;
   const finishes = parseFinishes(line.finishes);
   const toTheirs = line.side === "mine";
-  const mark = givenMark(line, true);
+  const mark = givenMark(holdingOf(line, trade.lines), true);
   const fromDeck = mark?.place === "deck" ? mark.words : null;
 
   return (

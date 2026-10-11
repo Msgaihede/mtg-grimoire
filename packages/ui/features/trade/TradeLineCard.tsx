@@ -18,7 +18,7 @@ import { PRESS } from "@/lib/motion";
 import { formatPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
-import { RATE_DEFAULT, fromCents, isOpen, lineMoney, rateOf } from "./trade";
+import { RATE_DEFAULT, fromCents, holdingOf, isOpen, lineMoney, rateOf } from "./trade";
 import { FIGURE, REFUSAL, TRADE_BARE_BUTTON } from "./tradeControls";
 import { givenMark, printingLabel, printingLine, tradeCurrency } from "./tradeWords";
 import { useTradeWrites } from "./useTrades";
@@ -41,6 +41,12 @@ import { useTradeWrites } from "./useTrades";
  * side only: it is the promise that a finish can take the card back out. *on your wishlist* is
  * the other side's — a card they are giving that the reader has been wanting — and it reads
  * `wished`, the live count, rather than anything recorded when the line was added.
+ *
+ * While the trade is open the collection's mark carries the count — `from your collection · 3
+ * owned`, every copy of that printing and finish the collection holds — because it is where `+`
+ * stops (issue #935): a press past it puts the extra copies on a line of their own on this side,
+ * without the mark, since those are cards the reader does not have. Two such lines are read with
+ * `holdingOf`, so the second claims only what the first leaves.
  *
  * **A line that would reach into a deck wears neither gold nor those words.** While the trade is
  * open and the line asks for more copies than the collection holds outside the reader's decks,
@@ -80,7 +86,7 @@ export function TradeLineCard({ trade, line }: { trade: Trade; line: TradeLine }
   const rate = rateOf(trade, line.side);
   const money = lineMoney(line, rate);
   const editable = isOpen(trade.status);
-  const mark = givenMark(line, editable);
+  const mark = givenMark(holdingOf(line, trade.lines), editable);
   const price = (cents: number | null) => formatPrice(fromCents(cents), currency);
 
   const change = (what: string, next: TradeLineChange) => {
