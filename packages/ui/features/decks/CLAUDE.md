@@ -88,6 +88,7 @@ Normalized via `deckKind.ts` (`regular`, `theory`, `virtual`):
 - **Deck tags (`deckTags.ts`, `DeckTagsField.tsx`)**: The reader's free text about a whole deck (`decks.tags`, user schema v62) — not Scryfall tags and not deck labels ([DOMAIN_VOCABULARY.md](../../../../docs/agent/DOMAIN_VOCABULARY.md)).
   - Edited in Deck settings only; `DeckSettingsForm` draws the field when a host passes `tagsInUse`, so the create dialog draws none.
   - A tag write sends the whole list (`deckUpdate({ tags })`, `[]` clears). `DeckSettingsDialog` holds the list it last sent until the row catches up, so a second tag is built on the first.
+  - The order is the reader's (issue #913): a chip is dragged by its word onto another (`tagDrag.ts`, its own drag mark) or moved with ←/→ on the word, and the write is the whole list from `movedTag` — no reorder command.
   - Suggestions are `tagsInUse(deck_list)` — there is no table of tags. Compare two tags with `tagKey`/`hasTag`, which fold capitals exactly as Rust's `clean_tags` does.
   - `DeckTile` draws them in one row on the art: above the badge and bracket marks, or on the art's bottom edge when the deck has neither. Outside the tile's `<button>`, like the marks.
 

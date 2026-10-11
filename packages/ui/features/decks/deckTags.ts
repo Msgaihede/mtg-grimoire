@@ -77,6 +77,29 @@ export function withoutTag(tags: readonly string[], tag: string): string[] {
   return tags.filter((t) => tagKey(t) !== key);
 }
 
+/**
+ * The list with one tag moved to another position, or `null` when nothing moves — the chip
+ * reorder's write (issue #913).
+ *
+ * The order is the reader's: Rust's `clean_tags` keeps it, `decks.tags` stores it, and
+ * `DeckTile` draws the row in it — so the first tags are the ones a narrow tile still shows.
+ *
+ * `null` for {@link withTag}'s reason, so `DeckTagsField`'s "never a no-op" holds for a drag let
+ * go where it started and for an arrow pressed at either end. Matched as {@link hasTag} matches,
+ * and a position off either end is clamped rather than refused.
+ */
+export function movedTag(tags: readonly string[], tag: string, to: number): string[] | null {
+  const key = tagKey(tag);
+  const from = tags.findIndex((t) => tagKey(t) === key);
+  if (from < 0) return null;
+  const target = Math.max(0, Math.min(tags.length - 1, to));
+  if (from === target) return null;
+  const next = [...tags];
+  const [moved] = next.splice(from, 1);
+  next.splice(target, 0, moved);
+  return next;
+}
+
 /** One tag some deck wears, and how many decks wear it. */
 export interface TagInUse {
   tag: string;
