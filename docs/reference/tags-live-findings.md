@@ -65,7 +65,7 @@ It was. **Verdict: keep it. No cap and no "Show all" row.**
 | jump to the end (`scrollTop = scrollHeight`) | **7 ms** |
 
 **How each of those was taken, because two of them would mean different things otherwise.** The
-`tag_children` figure is `ipc.tagChildren` awaited from a `cdp.mjs eval` — **through the app**, so
+`tag_children` figure is `ipc.tagChildren` awaited from a `cdp.ts eval` — **through the app**, so
 it includes the IPC round trip and the debug build's own cost, and it is not a SQL figure. The
 scroll figure is **`scrollTop` written once per `requestAnimationFrame` and the rAF deltas
 measured**, not a real wheel: it drives style, layout and paint for a 4,142-row list and is the
@@ -223,10 +223,10 @@ cloud` with no inline children and every tag appearing exactly once.
 All of it, and each of these was driven rather than reasoned about:
 
 - **Right-click a tile** → the five-row card menu, inside the viewport, no page overflow.
-  **Escape closes it** (`cdp.mjs key`; the first read after was pre-flush and said otherwise —
+  **Escape closes it** (`cdp.ts key`; the first read after was pre-flush and said otherwise —
   the documented trap, not a defect).
 - **Shift+F10 on a focused tile** → the same five rows, anchored at the trigger's bottom-left,
-  focus moved into the menu. This needed `cdp.mjs` to learn two keys; see below.
+  focus moved into the menu. This needed `cdp.ts` to learn two keys; see below.
 - **Add to → Deck** writes: the deck went 0 → 1 cards.
 - **Click a tile** → the card detail surface (Formats, Printings). It was the docked pane on the
   day this was driven; since 2026-09-03 it is `CardDetailModal`, a centred dialog, and the two
@@ -266,7 +266,7 @@ the recovery story was that Settings had nothing in it, which is fixed above.
 
 ## Two things this pass changed about the harness
 
-- **`cdp.mjs key` learned `F10` and `ContextMenu`, and `--shift` now applies to `key`.** Without
+- **`cdp.ts key` learned `F10` and `ContextMenu`, and `--shift` now applies to `key`.** Without
   them the keyboard route into a context menu could not be driven at all — the handler reads
   `e.shiftKey` off the browser's own modifier state, so a synthetic `dispatchEvent` proves
   nothing, and "a menu only a mouse can open is a menu half the readers do not have" would have

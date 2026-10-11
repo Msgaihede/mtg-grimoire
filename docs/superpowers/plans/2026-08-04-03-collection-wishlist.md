@@ -6189,7 +6189,7 @@ The remaining carryover folds, the documentation that makes the new invariants f
 - **Also modified, for the folds the ledger deferred here** (see the carryover file's §3):
   `src-tauri/src/{schema,maintenance,filters,collection,wishlist,card,images,search}.rs`,
   `src/features/card/CardDetailPane.tsx`, `src/features/collection/AddToCollection.tsx`,
-  `src/components/AppShell.tsx`, `eslint.config.js`, and `scripts/cdp.mjs` (new — the CDP
+  `src/components/AppShell.tsx`, `eslint.config.js`, and `scripts/cdp.ts` (new — the CDP
   verification flow, checked in rather than described, after four sessions rebuilt it)
 
 - [x] **Step 1: The `store_failures` consumer** — the counter has incremented since Plan 2 with nothing reading it. `sync::SyncStatus` gains `image_store_failures: u64` (read from `state.images.store_failures()`, which needs no database and so is always answered), `ipc.ts` mirrors it, and `Ribbon` appends one clause to the status line's tooltip when it is non-zero: *"N card images could not be saved to the cache — the data folder may be read-only or full."* Pin the new field in `dto_json_uses_the_camel_case_names_the_frontend_expects`.
@@ -6288,7 +6288,7 @@ Run against the real database and record the numbers in this file. Every line is
 | 17 | Console | 0 CSP violations, 0 errors, 0 React warnings (the tile restructure is the one to watch) |
 
 **Smoke result (2026-08-05)** — live `npm run tauri dev`, WebView2 driven over CDP with the
-now-checked-in `scripts/cdp.mjs`, Windows 11, 1280×800 then 1024×800. The database was a
+now-checked-in `scripts/cdp.ts`, Windows 11, 1280×800 then 1024×800. The database was a
 genuine Plan-2 artefact: schema v4, `auto_vacuum = NONE`, `raw` still TEXT, **2.02 GB**,
 0 collection rows, 0 wishlist rows. Every row seeded or added was deleted afterwards.
 Full detail in `docs/superpowers/notes/plan-3-carryover.md`.

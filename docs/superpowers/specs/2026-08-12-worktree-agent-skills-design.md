@@ -128,7 +128,7 @@ for a project skill covering app launch before falling back to its own patterns,
   frontend-only edit does not reach the binary and the build still exits 0; `Stop-Process`
   before rebuilding or the link fails with `Access is denied. (os error 5)`; launch under
   `$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"`.
-- Drive `scripts/cdp.mjs` through **PowerShell**; wrap the JS in double quotes with single
+- Drive `scripts/cdp.ts` through **PowerShell**; wrap the JS in double quotes with single
   quotes inside, and avoid `$`.
 - **Release: stop the process, then delete the lock.** Both, always.
 

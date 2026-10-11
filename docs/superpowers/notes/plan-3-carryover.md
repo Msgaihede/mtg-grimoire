@@ -9,7 +9,7 @@ reason. Plan 4 should read the MUST-DO list at the bottom before it plans anythi
 ## 1. The live smoke — what was measured
 
 `npm run tauri dev` with `--remote-debugging-port=9222`, driven over CDP with the newly
-checked-in `scripts/cdp.mjs`. The database was a genuine Plan-2 artefact: schema v4,
+checked-in `scripts/cdp.ts`. The database was a genuine Plan-2 artefact: schema v4,
 `auto_vacuum = NONE`, `raw` still TEXT, 2.02 GB, 0 collection rows, 0 wishlist rows. Every
 row seeded or added during the smoke was deleted afterwards; `data/` is back to empty.
 
@@ -221,7 +221,7 @@ still `errors.scryfall.com/soon.jpg` in every slot. A query for
 | The oracle_id false belief | Corrected in six places: `card.rs` (doc + test doc), `schema.rs` (module header + the `wishlist_entries.oracle_id` comment), `ipc.ts`, `CardDetailPane.tsx` (the printings-query gate), `AddToCollection.tsx` (prop + the disabled "Any printing" chip) and its test. Every gate stays — the column *is* nullable — but each now says it fences a type, not a card. |
 | `store_failures` consumer | `SyncStatus.imageStoreFailures` (`u64`, never `Option` — it is an atomic, so the full disk that makes the rest unreadable cannot take it away), mirrored in `ipc.ts`, appended to the ribbon's tooltip when non-zero. Verified live on the wire. |
 | `useDismissOnEscape` doc | The "does not generalise to two inner peers" paragraph. |
-| CDP flow | **Checked in** as `scripts/cdp.mjs` rather than described — four sessions had rebuilt it from scratch. CLAUDE.md gains a "Verifying UI in the real app" section pointing at it. |
+| CDP flow | **Checked in** as `scripts/cdp.ts` rather than described — four sessions had rebuilt it from scratch. CLAUDE.md gains a "Verifying UI in the real app" section pointing at it. |
 | CLAUDE.md | Image-cache rules, a new **Hard rules — user data** section (grain, zero-keeps, finish-aware fulfillment, `needs_review` semantics, per-finish pricing, oracle_id), the three `Data & sync` amendments, and every measured figure the smoke corrected. |
 
 ---
@@ -261,7 +261,7 @@ still `errors.scryfall.com/soon.jpg` in every slot. A query for
 5. **Any write to `collection_entries` goes through `add_entry`/`update_entry`.** They are
    the only paths with grading canonicalization and the tradelist clamp; a direct `INSERT`
    reintroduces identity forks.
-6. **Verify in the running app, with `scripts/cdp.mjs`.** Every UI task in Plans 2 and 3
+6. **Verify in the running app, with `scripts/cdp.ts`.** Every UI task in Plans 2 and 3
    found something the suite could not.
 
 ## Final-review addendum (post-wave, 2026-08-05)

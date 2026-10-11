@@ -41,7 +41,7 @@ that says which step stopped it.
 - **No CI job builds the share viewer.** `pnpm build` type-checks `apps/share`; nothing runs
   `pnpm share:build`, which writes the `apps/share/dist-share` the share Worker's deploy uploads.
 - **Pull request 874 is open** and tightens the fence this design extends
-  (`scripts/release-rule.test.mjs`: every executed line of a secret-holding job is listed). This
+  (`scripts/release-rule.test.ts`: every executed line of a secret-holding job is listed). This
   work builds on it and lands after it.
 
 ## 4. The job graph
@@ -116,7 +116,7 @@ before a tag is.
 4. `wrangler d1 migrations apply mtg-grimoire-relay --remote`, from `infrastructure/relay`.
 5. `wrangler deploy`, from `infrastructure/relay`. The Durable Object's own migrations are in
    `wrangler.jsonc` and go with it, as they do by hand.
-6. `node scripts/relay-deploy-probe.mjs`: the runbook's step-0 probes that need no credential,
+6. `node scripts/relay-deploy-probe.ts`: the runbook's step-0 probes that need no credential,
    each held to the answer this tree's router gives.
 
 **What the probe proves, and what it does not.** It proves the relay is up and routing after the
@@ -142,7 +142,7 @@ prints goes into the summary.
   deployed code is the previous release's on the new schema.
 - **The share Worker gets the same**, with its own folder and its own table
   (`d1_migrations_share`) on the same database, so neither Worker's list can shadow the other's.
-- **Local databases follow**: `scripts/web-smoke/sync-harness.mjs` applies `schema.sql` and then
+- **Local databases follow**: `scripts/web-smoke/sync-harness.ts` applies `schema.sql` and then
   the tracked migrations, and a relay test builds a database the same way with `node:sqlite`, so
   a migration that does not apply to the baseline fails in a pull request.
 
@@ -150,7 +150,7 @@ prints goes into the summary.
 
 Download `share-bundle` into `apps/share/dist-share`, check it arrived whole, apply the share
 Worker's migrations, `wrangler deploy` from `infrastructure/share-worker`, then
-`node scripts/share-deploy-probe.mjs`: the README's five probes, and `/assets/share.js` byte for
+`node scripts/share-deploy-probe.ts`: the README's five probes, and `/assets/share.js` byte for
 byte against the bundle — the one that says this build is what the address serves.
 
 `infrastructure/share-worker/wrangler.jsonc` gains
@@ -159,10 +159,10 @@ and holds that module to importing nothing.
 
 ### 5.6 The fence and the documents
 
-- `scripts/release-rule.test.mjs`: the new graph; which job may read which value; every
+- `scripts/release-rule.test.ts`: the new graph; which job may read which value; every
   `wrangler` line in any workflow (one becomes five: two `d1 migrations apply`, three `deploy`);
   every executed line of the two new jobs.
-- `scripts/ci-route.mjs` and its test: routes for the new probe scripts and for `apps/share`.
+- `scripts/ci-route.ts` and its test: routes for the new probe scripts and for `apps/share`.
 - The rule is rewritten wherever it is written: root `CLAUDE.md`, `.github/CLAUDE.md`,
   `docs/agent/EXTERNAL_SERVICES.md`, `docs/reference/ci-and-releases.md`,
   `docs/reference/hosted-relay-deploy.md`, the two Workers' READMEs and the comments in the
@@ -179,10 +179,10 @@ and holds that module to importing nothing.
    new output of that job). No key: upload nothing, say the bundle is the artifact to upload by
    hand, end green. A key and no signed bundle: say so, end green.
 2. Download `play-upload-bundle`.
-3. `node scripts/android-release/play-upload.mjs <bundle> <versionCode>` — the only step the key
+3. `node scripts/android-release/play-upload.ts <bundle> <versionCode>` — the only step the key
    reaches. Nothing is installed.
 
-### 6.2 `scripts/android-release/play-upload.mjs`
+### 6.2 `scripts/android-release/play-upload.ts`
 
 No dependency: Node's `crypto` signs the service account's JWT, and `fetch` does the rest.
 
@@ -206,13 +206,13 @@ Play will not send for review by itself.
 that holds the key. The rule for these jobs is that every line they run is on a list.
 
 **Tests.** The script's steps take the two base addresses as arguments, and
-`play-upload.test.mjs` runs them against a local `node:http` stand-in for Google with a
+`play-upload.test.ts` runs them against a local `node:http` stand-in for Google with a
 throwaway RSA key: the JWT verifies, the order of calls is the one above, an already-present
 `versionCode` uploads nothing, and each refusal is reported by name.
 
 ### 6.3 The fence and the documents
 
-`scripts/release-rule.test.mjs` gains the job, its one value and its lines. The Play spec's §8
+`scripts/release-rule.test.ts` gains the job, its one value and its lines. The Play spec's §8
 ("Uploading to Play from CI") and `ci-and-releases.md`'s "the bundle is uploaded by hand" point
 here.
 
@@ -267,7 +267,7 @@ Found while piece A was built, and not as the sections above say.
 - **The token alone decides** whether `relay-deploy` and `share-deploy` run (§4 already says so).
   The fence holds it: *asks for the token alone, and does nothing without it*.
 - **The sync smoke applies the tracked migrations through `d1 execute --local --file`**, its
-  existing helper in `scripts/web-smoke/sync-harness.mjs`, and not through
+  existing helper in `scripts/web-smoke/sync-harness.ts`, and not through
   `d1 migrations apply`. That adds no wrangler subcommand to what CI may start: the list stays at
   `d1 execute --local` and `dev --local`, and the release's five `wrangler` lines are the only
   other wrangler a workflow runs.
@@ -281,7 +281,7 @@ Found while piece A was built, and not as the sections above say.
   that the router answers ahead of the rate limiter and that spend none of its budget. The test
   now counts the requests that do spend it: three an attempt, under the 30 a minute `RL_MINT`
   allows.
-- **`scripts/toolchain.test.mjs` went from three `pnpm install`s in `release.yml` to four**, because
+- **`scripts/toolchain.test.ts` went from three `pnpm install`s in `release.yml` to four**, because
   `share` is a real fourth install. The plan had not listed that file.
 - **The fence's check that the token reaches two steps and no third was written with a clause that
   hid any step naming `GITHUB_TOKEN`.** A review caught it, a mutation proved it (the token added

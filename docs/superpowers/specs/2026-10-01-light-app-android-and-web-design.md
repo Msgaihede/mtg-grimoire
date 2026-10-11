@@ -385,7 +385,7 @@ Each step is its own PR. **The light UI waits for none of them** (§9).
    an announced day**: it will touch every open branch, and a branch that merges `main` afterwards
    re-runs the script rather than resolving the move by hand.
    **Built 2026-10-02: forty-nine modules, about 105 000 lines, in one run of
-   `scripts/core-step-4.mjs`** — and "no leaf modules" measured: eighteen of them name none of the
+   `scripts/core-step-4.ts`** — and "no leaf modules" measured: eighteen of them name none of the
    others, and the other thirty-one are one knot around `deck`. `with_write` and
    `prepare_database` came with them. **Three things on the list did not move**, each because it
    names step-5 code and nothing was hoisted to free it: `reconcile` (`scryfall::Migration`),
@@ -454,7 +454,7 @@ it. [Its plan](../plans/2026-10-03-light-app-core-step-7-scanner.md) has the res
   manifest. **With the workspace they are owed once**: they moved to the root `Cargo.toml`, and
   a host that joins the workspace inherits them.
 - **Text fences that read Rust by path.** `ipc.test.ts` imports about 48 `.rs` files with `?raw`;
-  `fake/parity.test.ts` reads `desktop.rs`; `coverage-rust.mjs` hardcodes `src-tauri/src`; seven
+  `fake/parity.test.ts` reads `desktop.rs`; `coverage-rust.ts` hardcodes `src-tauri/src`; seven
   Rust tests reach into `../../src/lib/*.json` and `../../../relay/src/*.ts` by relative path. Each
   moves with its module, in the same PR.
 
@@ -1177,9 +1177,9 @@ Settings list. Any Rust beyond the one window edit.
 
 | Target | How |
 | --- | --- |
-| Desktop | `scripts/cdp.mjs` against the Tauri window — [the existing contract](../../reference/live-ui-verification.md) |
+| Desktop | `scripts/cdp.ts` against the Tauri window — [the existing contract](../../reference/live-ui-verification.md) |
 | The light app over the fake | A browser at a phone viewport and at a desktop one, driven over CDP |
-| The light app over the real core | `scripts/cdp.mjs` against the `mobile:tauri` window |
+| The light app over the real core | `scripts/cdp.ts` against the `mobile:tauri` window |
 | Web host | Headless Chrome over CDP against the built app; a real phone over `adb reverse`, which makes the dev server `localhost` and therefore a secure context |
 | Android host | The device over `adb` and logcat |
 

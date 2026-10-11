@@ -977,7 +977,7 @@ Nothing above demonstrates the feature. Spec §19:
   Adopt the **`mtg-grimoire`** pid, not npm's.
 - [ ] Phone: `npx tauri android build --debug --target aarch64`, `adb install -r`,
   `adb forward tcp:9333 localabstract:webview_devtools_remote_<pid>`, then
-  `CDP_PORT=9333 node scripts/cdp.mjs …`. Wake the phone first — a dozing one reports
+  `CDP_PORT=9333 node scripts/cdp.ts …`. Wake the phone first — a dozing one reports
   `innerWidth: 0`.
 - [ ] Press Sync on the desktop, then on the phone.
 - [ ] **The phone's collection must read 275**, and its decks, folders and wishes must match the

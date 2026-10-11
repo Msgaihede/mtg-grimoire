@@ -124,23 +124,23 @@ Each carries traps that have cost a session. `tauri dev` above is the default; r
 
 ## Driving it
 
-`scripts/cdp.mjs`, through the **PowerShell tool** — Bash refuses
-`node scripts/cdp.mjs eval "<expr>"` as unverifiable. Wrap the JS in double quotes with
+`scripts/cdp.ts`, through the **PowerShell tool** — Bash refuses
+`node scripts/cdp.ts eval "<expr>"` as unverifiable. Wrap the JS in double quotes with
 single quotes inside (a nested `\"` in a CSS selector reaches the page unescaped) and
 avoid `$`, which PowerShell interpolates before node sees it.
 `docs/reference/live-ui-verification.md` is the command vocabulary and the trap list;
 this skill does not repeat it.
 
-`CDP_PORT` overrides 9222 (`scripts/cdp.mjs`'s `PORT` constant, at the top of the file) —
-it points `cdp.mjs` at a different debugger on an app that is already running. **It does
+`CDP_PORT` overrides 9222 (`scripts/cdp.ts`'s `PORT` constant, at the top of the file) —
+it points `cdp.ts` at a different debugger on an app that is already running. **It does
 not make a second app possible**: the guard keys on the `com.mtggrimoire.app` identifier,
 not on a port. One app, one lock, whatever port you drive it on.
 
 **One app is not one window.** Ctrl+Shift+N and a relaunch each open another window in the
 same process, so `/json/list` can hold several page targets that share a URL and a title.
-`node scripts/cdp.mjs pages` lists them and `CDP_PAGE` picks one — **by target id for
+`node scripts/cdp.ts pages` lists them and `CDP_PAGE` picks one — **by target id for
 anything multi-step**, because the list may reorder by activity and an index can name a
-different window between two commands. With two open and no `CDP_PAGE`, `cdp.mjs` warns on
+different window between two commands. With two open and no `CDP_PAGE`, `cdp.ts` warns on
 stderr and drives page 0.
 
 ## You are not done until you have released

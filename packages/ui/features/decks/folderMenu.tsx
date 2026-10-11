@@ -33,7 +33,7 @@ import { folderDescendants } from "./folders";
 import { useDeckFolders } from "./useDeckFolders";
 
 /**
- * How a destination row says which folder it is — for a test, and for a `cdp.mjs --probe`.
+ * How a destination row says which folder it is — for a test, and for a `cdp.ts --probe`.
  *
  * **The menu's own row attribute, because the row is the menu's own row.** These were
  * hand-rolled buttons carrying a `data-destination-folder-id` of their own until 2026-08-14 —
@@ -54,7 +54,7 @@ export const FOLDER_DESTINATION_ATTR = ROW_ATTR;
  * Which folder a destination row is, as the row's own id — `root` for the top level, which is a
  * real offer and not a folder.
  *
- * Exported so that a test and a `cdp.mjs --probe` compose the id rather than re-spelling it;
+ * Exported so that a test and a `cdp.ts --probe` compose the id rather than re-spelling it;
  * paired with {@link FOLDER_DESTINATION_ATTR}, which says where to read it.
  */
 export const folderDestinationRowId = (folderId: number | null): string =>

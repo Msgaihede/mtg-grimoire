@@ -10,7 +10,7 @@
  * 21-module picture stands at 9px a module in a box where the real invite stands at 4.3, so it
  * answered "is this big enough" for a symbol nobody ships, and it could be pointed at no camera
  * at all. With a real symbol the same story is the thing a phone is held up to, and a headless
- * browser's fake camera can be fed the panel's own drawing (`scripts/pairing-scan-smoke.mjs`).
+ * browser's fake camera can be fed the panel's own drawing (`scripts/pairing-scan-smoke.ts`).
  *
  * **One version, on purpose.** The crate asks its `qrcode` dependency for the smallest symbol
  * that fits and gets version 9 for every invite, because every invite is the same length. A

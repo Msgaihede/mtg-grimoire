@@ -34,7 +34,7 @@ import {
  *    compiled here against the app's own stylesheet and its declaration read back.
  *
  * What neither can say is a pixel: jsdom applies no media query. The sizes were measured in a
- * browser under a touch pointer, and `scripts/pairing-scan-smoke.mjs` takes two of them again.
+ * browser under a touch pointer, and `scripts/pairing-scan-smoke.ts` takes two of them again.
  */
 
 const classesOf = (recipe: string): string[] => recipe.split(" ");

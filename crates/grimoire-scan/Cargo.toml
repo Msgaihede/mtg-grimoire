@@ -2,7 +2,7 @@
 name = "grimoire-scan"
 # **The app's version**, as every workspace member's is: inherited from `[workspace.package]`
 # in the root manifest, which is the one release-please writes (`release-please-config.json`), and
-# `scripts/release-rule.test.mjs` goes red when a member's parts from the app's. The module ships
+# `scripts/release-rule.test.ts` goes red when a member's parts from the app's. The module ships
 # beside the web host's, from the same tag.
 version.workspace = true
 description = "MTG Grimoire, light: the card scanner as a module of its own, for a browser's Worker"
@@ -23,19 +23,19 @@ publish = false
 # and the labels this module needs arrive as bytes the engine encoded
 # (`card_scanner::labels`, `grimoire_web`'s `scanner_labels`). No `grimoire-core`, no `tokio`,
 # no `reqwest` — nothing here fetches, stores or waits. `cargo tree -p grimoire-scan` is the
-# check, and what `scripts/build-wasm.mjs` builds is `-p grimoire-scan` alone, so the features
+# check, and what `scripts/build-wasm.ts` builds is `-p grimoire-scan` alone, so the features
 # the engine turns on for the same crate elsewhere in the workspace do not reach it.
 #
 # **A workspace member, where the frame bench beside the crate is not.** A member shares the
 # root lockfile — so its `wasm-bindgen` is the engine's by construction, the one CLI version
-# `scripts/build-wasm.mjs` checks fits both modules — and the root's `wasm` profile, and
+# `scripts/build-wasm.ts` checks fits both modules — and the root's `wasm` profile, and
 # `cargo test --workspace`, `clippy --workspace` and `cargo fmt -p grimoire-scan` reach it on a
 # desktop. The bench stays outside for its `--release` native runner and its feature switch.
 #
 # **Built with `-C target-feature=+simd128`, in a build tree of its own** — the flag is the
 # difference between a title read at 0.3 s and at 0.9–1.6 s (`rten`'s WASM kernels are compiled
 # only under it), and a tree of its own is how the flag never reaches the engine's artifacts.
-# `scripts/build-wasm.mjs` has both.
+# `scripts/build-wasm.ts` has both.
 #
 # **It builds natively as nearly nothing, on purpose**, as the web host does: only the
 # `#[wasm_bindgen]` shell (`src/glue.rs`) is gated to the target, so everything with a decision
@@ -53,7 +53,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [target.'cfg(target_family = "wasm")'.dependencies]
-# The root lockfile's, which is the version of the CLI `scripts/build-wasm.mjs` insists on.
+# The root lockfile's, which is the version of the CLI `scripts/build-wasm.ts` insists on.
 wasm-bindgen = "0.2"
 
 [dev-dependencies]

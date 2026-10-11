@@ -13,7 +13,7 @@
 //! - **`start()`** — the clock and the panic hook. Run as the module is instantiated; calling
 //!   it again changes nothing.
 //!
-//! Built by `node scripts/build-wasm.mjs` into `dist-wasm/scanner/` (`wasm-bindgen --target
+//! Built by `node scripts/build-wasm.ts` into `dist-wasm/scanner/` (`wasm-bindgen --target
 //! web`: `grimoire_scan.js` and `grimoire_scan_bg.wasm`), with `simd128`.
 //!
 //! | Module | Compiled for | Holds |

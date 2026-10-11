@@ -12,11 +12,11 @@
 
 ## Global Constraints
 
-- **Piece A is merged first.** This plan edits `release.yml` and `scripts/release-rule.test.mjs` as piece A leaves them (ten jobs, `DEPLOYS`, `RUNS`). Start from a branch off `main` that contains it; if `git grep -n "relay-deploy:" .github/workflows/release.yml` finds nothing, stop.
+- **Piece A is merged first.** This plan edits `release.yml` and `scripts/release-rule.test.ts` as piece A leaves them (ten jobs, `DEPLOYS`, `RUNS`). Start from a branch off `main` that contains it; if `git grep -n "relay-deploy:" .github/workflows/release.yml` finds nothing, stop.
 - **One commit for the whole piece**, `feat:`. No task commits; Task 4 does.
 - **`pnpm verify` runs once, in Task 4.** While building, run only the single test file a step names.
 - **No agent uploads anything to Play, creates a service account or sets a secret.** The script is run by hand only against the test's stand-in.
-- **A secret-holding job builds nothing:** no pnpm, no cargo, no Gradle, no cache, `shell: bash` only, nothing installed. The one program the key reaches is `node scripts/android-release/play-upload.mjs`.
+- **A secret-holding job builds nothing:** no pnpm, no cargo, no Gradle, no cache, `shell: bash` only, nothing installed. The one program the key reaches is `node scripts/android-release/play-upload.ts`.
 - **Exact values:** package `com.mtggrimoire.app`; track `internal`; release status `completed`; secret `PLAY_SERVICE_ACCOUNT_JSON`; artifact `play-upload-bundle`; bundle file `mtg-grimoire-<version>-android.aab`; `versionCode` = major × 1,000,000 + minor × 1,000 + patch.
 - **Action pins** are the ones `release.yml` already uses (`actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1`, `actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0`, `actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1`); `persist-credentials: false` on the checkout.
 - **The key is never printed.** No error message, log line or summary carries any part of `PLAY_SERVICE_ACCOUNT_JSON` or of the token made from it.
@@ -35,18 +35,18 @@
 
 | File | Responsibility |
 | --- | --- |
-| `scripts/android-release/play-upload.mjs` | The conversation with Google: token, edit, list, upload, track, commit; and `main`. |
-| `scripts/android-release/play-upload.test.mjs` | That conversation against a stand-in, a throwaway RSA key, and each refusal. |
+| `scripts/android-release/play-upload.ts` | The conversation with Google: token, edit, list, upload, track, commit; and `main`. |
+| `scripts/android-release/play-upload.test.ts` | That conversation against a stand-in, a throwaway RSA key, and each refusal. |
 | `.github/workflows/release.yml` | `android-sign` says whether it signed; job `play-upload`; `publish` waits for it. |
-| `scripts/release-rule.test.mjs` | The fence, extended to eleven jobs. |
+| `scripts/release-rule.test.ts` | The fence, extended to eleven jobs. |
 
 ---
 
 ### Task 1: The upload script
 
 **Files:**
-- Create: `scripts/android-release/play-upload.mjs`
-- Test: `scripts/android-release/play-upload.test.mjs`
+- Create: `scripts/android-release/play-upload.ts`
+- Test: `scripts/android-release/play-upload.test.ts`
 
 **Interfaces:**
 - Produces:
@@ -56,11 +56,11 @@
   - `class Refused extends Error` with `step: string`, `status: number`, `body: string`
   - `hintFor(refusal: Refused): string | null`
   - `upload({ account, bundle: Uint8Array, versionCode: number, hosts?, send?, nowSeconds? }): Promise<{ uploaded: boolean, versionCode: number }>`
-- CLI: `node scripts/android-release/play-upload.mjs <bundle.aab> <versionCode>`, reading `PLAY_SERVICE_ACCOUNT_JSON`. Exit 0 uploaded or already there, 1 refused, 2 usage. Task 2's job runs exactly this.
+- CLI: `node scripts/android-release/play-upload.ts <bundle.aab> <versionCode>`, reading `PLAY_SERVICE_ACCOUNT_JSON`. Exit 0 uploaded or already there, 1 refused, 2 usage. Task 2's job runs exactly this.
 
 - [ ] **Step 1: Write the failing test**
 
-Create `scripts/android-release/play-upload.test.mjs`:
+Create `scripts/android-release/play-upload.test.ts`:
 
 ```js
 // @vitest-environment node
@@ -79,7 +79,7 @@ import {
   Refused,
   TRACK,
   upload,
-} from "./play-upload.mjs";
+} from "./play-upload.ts";
 
 const { publicKey, privateKey } = generateKeyPairSync("rsa", {
   modulusLength: 2048,
@@ -297,18 +297,18 @@ describe("hintFor", () => {
 
 - [ ] **Step 2: Run it and see it fail**
 
-Run: `pnpm exec vitest run scripts/android-release/play-upload.test.mjs`
-Expected: FAIL — `Failed to resolve import "./play-upload.mjs"`.
+Run: `pnpm exec vitest run scripts/android-release/play-upload.test.ts`
+Expected: FAIL — `Failed to resolve import "./play-upload.ts"`.
 
 - [ ] **Step 3: Write the script**
 
-Create `scripts/android-release/play-upload.mjs`:
+Create `scripts/android-release/play-upload.ts`:
 
 ```js
 // Put a release's signed bundle on Google Play's internal track — `release.yml`'s
 // `play-upload`, the last thing before `publish`.
 //
-//   PLAY_SERVICE_ACCOUNT_JSON=… node scripts/android-release/play-upload.mjs <bundle.aab> <versionCode>
+//   PLAY_SERVICE_ACCOUNT_JSON=… node scripts/android-release/play-upload.ts <bundle.aab> <versionCode>
 //
 // One conversation with the Play Developer API (v3), six requests:
 //
@@ -330,7 +330,7 @@ Create `scripts/android-release/play-upload.mjs`:
 // upload action would run its own dependency tree in that step.
 //
 // **The key is never printed**: a refusal is reported as the step, the status and Google's
-// answer — never the request. `play-upload.test.mjs` holds the conversation and each refusal.
+// answer — never the request. `play-upload.test.ts` holds the conversation and each refusal.
 import { createSign } from "node:crypto";
 import { appendFileSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -496,7 +496,7 @@ async function main() {
   const [path, code] = process.argv.slice(2);
   const versionCode = Number(code);
   if (!path || !Number.isSafeInteger(versionCode) || versionCode <= 0) {
-    console.error("usage: node scripts/android-release/play-upload.mjs <bundle.aab> <versionCode>");
+    console.error("usage: node scripts/android-release/play-upload.ts <bundle.aab> <versionCode>");
     process.exitCode = 2;
     return;
   }
@@ -538,7 +538,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 
 - [ ] **Step 4: Run it and see it pass**
 
-Run: `pnpm exec vitest run scripts/android-release/play-upload.test.mjs`
+Run: `pnpm exec vitest run scripts/android-release/play-upload.test.ts`
 Expected: PASS, 18 tests.
 
 If the first line's `// @vitest-environment node` is not honoured (the symptom: `call.signal` is not an `AbortSignal`, or `Response` is undefined), do not weaken the assertions: read `vitest.config.ts` for how another file selects its environment and use that.
@@ -546,19 +546,19 @@ If the first line's `// @vitest-environment node` is not honoured (the symptom: 
 - [ ] **Step 5: Run `main` by hand, with no network and no real key**
 
 ```bash
-node scripts/android-release/play-upload.mjs; echo "exit $?"
-PLAY_SERVICE_ACCOUNT_JSON='oops' node scripts/android-release/play-upload.mjs package.json 43001; echo "exit $?"
-PLAY_SERVICE_ACCOUNT_JSON='' node scripts/android-release/play-upload.mjs package.json 43001; echo "exit $?"
+node scripts/android-release/play-upload.ts; echo "exit $?"
+PLAY_SERVICE_ACCOUNT_JSON='oops' node scripts/android-release/play-upload.ts package.json 43001; echo "exit $?"
+PLAY_SERVICE_ACCOUNT_JSON='' node scripts/android-release/play-upload.ts package.json 43001; echo "exit $?"
 ```
 
 Expected: `exit 2` with the usage line; `exit 1` with `PLAY_SERVICE_ACCOUNT_JSON is not JSON` under `### Google Play — the upload failed`, and **the word `oops` nowhere in the output**; `exit 1` with `PLAY_SERVICE_ACCOUNT_JSON is not set`. None of the three makes a request. Keep the output for Task 3.
 
 - [ ] **Step 6: Declare the one new global, and lint the two files**
 
-`eslint.config.js` keeps a hand-written list of globals for `scripts/**/*.mjs`, and a name that is not on it fails `pnpm verify` at lint (`no-undef`) — which no focused Vitest run shows. Piece A added `Request`, `Response` and `URL`; this script also uses `URLSearchParams`. In that block, after `URL: "readonly",`, add:
+`eslint.config.js` keeps a hand-written list of globals for `scripts/**/*.ts`, and a name that is not on it fails `pnpm verify` at lint (`no-undef`) — which no focused Vitest run shows. Piece A added `Request`, `Response` and `URL`; this script also uses `URLSearchParams`. In that block, after `URL: "readonly",`, add:
 
 ```js
-        // Asked and answered: `play-upload.mjs` posts the token request as a form, which is
+        // Asked and answered: `play-upload.ts` posts the token request as a form, which is
         // what Google's token endpoint takes.
         URLSearchParams: "readonly",
 ```
@@ -568,13 +568,13 @@ Expected: exit 0, no output. Any other `no-undef` it reports is a global to add 
 
 - [ ] **Step 7: Route the new files in the CI router's table**
 
-In `scripts/ci-route.test.mjs`, under the row for `scripts/android-release/StripSignature.java`, add:
+In `scripts/ci-route.test.ts`, under the row for `scripts/android-release/StripSignature.java`, add:
 
 ```js
-    ["scripts/android-release/play-upload.mjs", T, T, F, F, F, T, F],
+    ["scripts/android-release/play-upload.ts", T, T, F, F, F, T, F],
 ```
 
-Run: `pnpm exec vitest run scripts/ci-route.test.mjs`
+Run: `pnpm exec vitest run scripts/ci-route.test.ts`
 Expected: PASS (the arm `scripts/android-release/*` already routes it).
 
 ---
@@ -583,15 +583,15 @@ Expected: PASS (the arm `scripts/android-release/*` already routes it).
 
 **Files:**
 - Modify: `.github/workflows/release.yml` (`android-sign`: `outputs`, and the signed summary's wording; new job `play-upload` between `web-deploy` and `publish`; `publish`'s `needs`; the header diagram)
-- Modify: `scripts/release-rule.test.mjs`
+- Modify: `scripts/release-rule.test.ts`
 
 **Interfaces:**
-- Consumes: `node scripts/android-release/play-upload.mjs <bundle.aab> <versionCode>` (Task 1); `android-sign`'s step id `key` with output `present`; the artifact `play-upload-bundle` holding `mtg-grimoire-<version>-android.aab`.
+- Consumes: `node scripts/android-release/play-upload.ts <bundle.aab> <versionCode>` (Task 1); `android-sign`'s step id `key` with output `present`; the artifact `play-upload-bundle` holding `mtg-grimoire-<version>-android.aab`.
 - Produces: `android-sign`'s job output `signed`; job `play-upload` with step id `account`.
 
 - [ ] **Step 1: Extend the fence first**
 
-All edits are in `scripts/release-rule.test.mjs`.
+All edits are in `scripts/release-rule.test.ts`.
 
 **(a)** In `MAY_READ`, between `"web-deploy"` and `publish`, add:
 
@@ -643,7 +643,7 @@ All edits are in `scripts/release-rule.test.mjs`.
     [
       "set -euo pipefail",
       'IFS=. read -r major minor patch <<< "$VERSION"',
-      'node scripts/android-release/play-upload.mjs "aab-in/mtg-grimoire-$VERSION-android.aab" "$((major * 1000000 + minor * 1000 + patch))"',
+      'node scripts/android-release/play-upload.ts "aab-in/mtg-grimoire-$VERSION-android.aab" "$((major * 1000000 + minor * 1000 + patch))"',
     ],
   ],
 ```
@@ -751,7 +751,7 @@ and add `"play-upload"` to the end of `publish`'s expected `needs`.
 
 - [ ] **Step 2: Run the fence and see it fail**
 
-Run: `pnpm exec vitest run scripts/release-rule.test.mjs`
+Run: `pnpm exec vitest run scripts/release-rule.test.ts`
 Expected: FAIL — `has the eleven jobs…`, and `android-sign builds nothing, and runs only what is listed here` (the summary's old wording).
 
 - [ ] **Step 3: `android-sign` says whether it signed**
@@ -806,9 +806,9 @@ Insert after `web-deploy`'s last step (`Ask the host`) and before the comment bl
   #
   # **The service account's key, in a job of its own**, for `android-sign`'s reason: this job
   # runs no build and installs nothing. The one program the key reaches is
-  # `scripts/android-release/play-upload.mjs` — Node's own `crypto` and `fetch`, no dependency,
+  # `scripts/android-release/play-upload.ts` — Node's own `crypto` and `fetch`, no dependency,
   # which is why this is a script and not an upload action with a tree of its own.
-  # `scripts/release-rule.test.mjs` holds every line.
+  # `scripts/release-rule.test.ts` holds every line.
   #
   # **With no account, or no signed bundle, it uploads nothing and ends green**, saying which
   # in the summary. **A re-run is safe**: when Play already holds this `versionCode` the script
@@ -884,7 +884,7 @@ Insert after `web-deploy`'s last step (`Ask the host`) and before the comment bl
         run: |
           set -euo pipefail
           IFS=. read -r major minor patch <<< "$VERSION"
-          node scripts/android-release/play-upload.mjs "aab-in/mtg-grimoire-$VERSION-android.aab" "$((major * 1000000 + minor * 1000 + patch))"
+          node scripts/android-release/play-upload.ts "aab-in/mtg-grimoire-$VERSION-android.aab" "$((major * 1000000 + minor * 1000 + patch))"
 ```
 
 Then: change `publish`'s `needs` to `[release-please, build, android-sign, relay-deploy, share-deploy, web-deploy, play-upload]`; in its comment block add the sentence ``play-upload` ends green with the bundle on the internal track, already there, or with nothing to upload it with.``; in the header diagram change the chain's last line to
@@ -897,12 +897,12 @@ and `The four jobs that hold a secret — …` to `The five jobs that hold a sec
 
 - [ ] **Step 5: Run the fence and its neighbours, and see them pass**
 
-Run: `pnpm exec vitest run scripts/release-rule.test.mjs scripts/actions-pinned.test.mjs scripts/toolchain.test.mjs scripts/workflow-scripts.test.mjs`
+Run: `pnpm exec vitest run scripts/release-rule.test.ts scripts/actions-pinned.test.ts scripts/toolchain.test.ts scripts/workflow-scripts.test.ts`
 Expected: PASS, all four files.
 
 - [ ] **Step 6: Prove the fence bites**
 
-Keep a copy (`cp .github/workflows/release.yml "$SCRATCH/release.yml"`), and for each row make the change, run `pnpm exec vitest run scripts/release-rule.test.mjs`, expect the named test red, restore the copy and `cmp` it.
+Keep a copy (`cp .github/workflows/release.yml "$SCRATCH/release.yml"`), and for each row make the change, run `pnpm exec vitest run scripts/release-rule.test.ts`, expect the named test red, restore the copy and `cmp` it.
 
 | Mutation in `release.yml` | Test that must go red |
 | --- | --- |
@@ -938,12 +938,12 @@ In the opening paragraph's `distributed through Google Play` — no change.
 
 - [ ] **Step 3: `.github/CLAUDE.md`**
 
-- In **The release rule**, replace the `android-sign` sub-bullet's `which the owner uploads to Play Console` with `which `play-upload` puts on Play's internal track (`scripts/android-release/play-upload.mjs`: Node's `crypto` and `fetch`, no dependency; a `versionCode` Play already holds ends green). Promotion past the internal track is the owner's.`
+- In **The release rule**, replace the `android-sign` sub-bullet's `which the owner uploads to Play Console` with `which `play-upload` puts on Play's internal track (`scripts/android-release/play-upload.ts`: Node's `crypto` and `fetch`, no dependency; a `versionCode` Play already holds ends green). Promotion past the internal track is the owner's.`
 - `publish needs …`: add `play-upload`.
 - **Secrets live in jobs that build nothing…**: add `play-upload` to the list of jobs and `PLAY_SERVICE_ACCOUNT_JSON` to what is asked for; say it also needs `android-sign` to have signed.
 - Under **Assets & artifacts**, `The Android bundle is a workflow artifact, never a release asset.` stays.
 
-Then `node scripts/check-claude-md.mjs`.
+Then `node scripts/check-claude-md.ts`.
 
 - [ ] **Step 4: `docs/reference/ci-and-releases.md`**
 
@@ -1002,7 +1002,7 @@ feat: a release uploads the Android bundle to Google Play
 `release.yml` gains `play-upload`, the last job before `publish`: it puts the bundle
 `android-sign` signed on Play's internal track through the Play Developer API.
 
-- `scripts/android-release/play-upload.mjs` is the whole conversation, with no
+- `scripts/android-release/play-upload.ts` is the whole conversation, with no
   dependency: a JWT signed with node:crypto, then fetch. A versionCode Play already
   holds ends green, so a re-run is safe.
 - A new secret in the `release` environment, `PLAY_SERVICE_ACCOUNT_JSON`. Without it,

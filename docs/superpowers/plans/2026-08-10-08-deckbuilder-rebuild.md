@@ -1025,7 +1025,7 @@ variants, a deactivated user category, a tagged card and a violation.
 
 ### Task 20: Live pass, docs and verify
 
-- [ ] Drive the real window over CDP (`scripts/cdp.mjs`): the stack hover (`hover --rest --probe`,
+- [ ] Drive the real window over CDP (`scripts/cdp.ts`): the stack hover (`hover --rest --probe`,
       probing `transitionProperty`), a drag between categories (remembering
       `"dragDropEnabled": false` is load-bearing and the config is compiled in), the four views, the
       audit drawer, the theory switch, a cover upload.

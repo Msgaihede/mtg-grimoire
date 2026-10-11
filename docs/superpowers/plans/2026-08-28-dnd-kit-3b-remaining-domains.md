@@ -1187,7 +1187,7 @@ npm run test -- src/features/decks/views/views.test.tsx src/features/decks/Categ
 ```
 Then write the two tests that pin it, if they are not already there: **ArrowRight on a focused
 grip moves the pile one place and nothing else happens**, and **Space on a focused grip does not
-leave `dndManager.dragOperation.status` non-idle**. Use `cdp.mjs key`-shaped realism in jsdom by
+leave `dndManager.dragOperation.status` non-idle**. Use `cdp.ts key`-shaped realism in jsdom by
 pressing with `user.keyboard` on a genuinely focused element — a synthetic `dispatchEvent`
 collapses the capture ladder into registration order and would report a false pass.
 
@@ -2317,7 +2317,7 @@ running; check for another worktree's `tauri`/`cargo`/`rustc` before claiming it
 
 - [ ] **Step 2: Drive the four gestures the suite can only approximate**
 
-Use `scripts/cdp.mjs` per [the contract](../../reference/live-ui-verification.md). **`cdp.mjs drag`
+Use `scripts/cdp.ts` per [the contract](../../reference/live-ui-verification.md). **`cdp.ts drag`
 cannot drive any of these** — it waits on `Input.dragIntercepted`, which only fires for a native
 HTML5 drag, and there are none left in the app. `pull` is a real press/move/release and is the one
 to reach for; it is absent from that script's own usage string.
@@ -2334,7 +2334,7 @@ to reach for; it is absent from that script's own usage string.
 4. **A pile moved past its neighbours by its grip**, and a **deck filed into a folder** — the two
    payloads Tasks 2 and 3 migrated, which have never been drivable in the live window at all.
 
-Two traps that have each cost a session: **`cdp.mjs click` needs a `hover --rest 200` first** —
+Two traps that have each cost a session: **`cdp.ts click` needs a `hover --rest 200` first** —
 a cold pointer makes the next action a no-op that still prints success — and **clicking and
 reading in one `eval` answers about the frame before React re-rendered**, so split every drop and
 its assertion into two calls.

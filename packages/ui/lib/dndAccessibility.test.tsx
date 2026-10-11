@@ -42,7 +42,7 @@ import { GridView } from "@/features/decks/views/GridView";
  * uses to pick the element it would listen on. Reading it back off a rendered surface answers the
  * question those two ask, rather than the question a source sweep can answer.
  *
- * **Driven in the shipped window on the same day**, `tauri dev` over `scripts/cdp.mjs`, against a
+ * **Driven in the shipped window on the same day**, `tauri dev` over `scripts/cdp.ts`, against a
  * copy of the real database: the live manager's `sensors` is `[PointerSensor]`, its `plugins` does
  * not include `Accessibility`, and a real in-flight drag adds nothing to a source but the library's
  * own `data-dnd-dragging` and `popover`. `docs/reference/frontend-design.md` has that pass in full,

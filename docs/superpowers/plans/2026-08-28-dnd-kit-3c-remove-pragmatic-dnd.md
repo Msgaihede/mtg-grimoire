@@ -545,7 +545,7 @@ in Step 4 and re-run. That is the difference between measuring and confirming.
 jsdom answers "is this element focusable" from the DOM; a browser answers it from the DOM *and*
 the layout, and a screen reader answers a different question again. Take the app lock, start the
 app (`running-the-app` skill — **only one app runs across every worktree and the collision is
-silent**), and over `scripts/cdp.mjs`:
+silent**), and over `scripts/cdp.ts`:
 
 1. Tab through the collection's folder wall and record every stop, in order.
 2. Tab to a category grip, press ArrowRight, and confirm the pile moves and the grip keeps the
@@ -558,7 +558,7 @@ silent**), and over `scripts/cdp.mjs`:
    `role="button" tabindex="0" aria-roledescription="draggable" aria-grabbed="false"` 3a recorded
    *with* the plugin.
 
-Two traps: **`cdp.mjs click` needs a `hover --rest 200` first**, and **clicking and reading in one
+Two traps: **`cdp.ts click` needs a `hover --rest 200` first**, and **clicking and reading in one
 `eval` answers about the frame before React re-rendered.**
 
 - [ ] **Step 5: Write the measurement down**

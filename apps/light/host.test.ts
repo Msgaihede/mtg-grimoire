@@ -14,7 +14,7 @@ import manifestJson from "./public/light.webmanifest?raw";
 import lightMark from "./public/mtg-grimoire-mark.svg?raw";
 import masterMark from "../../logos/svg/mtg-grimoire-mark.svg?raw";
 import lightDocument from "./index.html?raw";
-import iconScript from "../../scripts/light-icons.mjs?raw";
+import iconScript from "../../scripts/light-icons.ts?raw";
 import buildTask from "./src-tauri/gen/android/buildSrc/src/main/java/com/mtggrimoire/app/kotlin/BuildTask.kt?raw";
 import packageJson from "../../package.json?raw";
 import lightConf from "./src-tauri/tauri.conf.json?raw";
@@ -247,7 +247,7 @@ describe("the light app's web manifest", () => {
   });
 
   it("draws the maskable icons on the manifest's ground", () => {
-    // The PNGs are rendered and committed (`scripts/light-icons.mjs`), so the colour under the
+    // The PNGs are rendered and committed (`scripts/light-icons.ts`), so the colour under the
     // mark is that script's constant. Held here so a ground that moves is rendered again.
     expect(iconScript).toContain(`const GROUND = "${manifest.background_color}";`);
     expect(manifest.background_color).toMatch(/^#[0-9A-F]{6}$/);
@@ -387,7 +387,7 @@ describe("the light host's configuration", () => {
 /**
  * **The launcher's icon is the app's own mark.** `tauri android init` writes Tauri's logo into
  * every `mipmap-*` and Android's stock robot into `drawable*`, and the app shipped to a phone
- * that way until 2026-10-07. `scripts/light-icons.mjs` renders these from the master mark and
+ * that way until 2026-10-07. `scripts/light-icons.ts` renders these from the master mark and
  * they are committed; a regeneration puts the stock art back, and this is what goes red.
  */
 describe("the Android launcher icon", () => {

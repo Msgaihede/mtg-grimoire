@@ -16,7 +16,7 @@
 //!
 //! **The source is this repository's own GitHub release**, `scanner-bundle-v<FORMAT_VERSION>`
 //! ([`release_url`]), which `.github/workflows/scanner-bundle.yml` publishes weekly and
-//! `scripts/scanner-assets.mjs` downloads for a release build — one place, two readers. The tag
+//! `scripts/scanner-assets.ts` downloads for a release build — one place, two readers. The tag
 //! carries the bundle's format version, so a build only ever fetches a bundle it can read.
 //! **HTTPS on every hop, and the host and the path are constants.** GitHub answers a release
 //! download with a redirect to its asset host, and the client follows it — `reqwest`'s default
@@ -90,7 +90,7 @@ use crate::state::State;
 pub const RELEASES: &str = "https://github.com/Msgaihede/mtg-grimoire/releases/download";
 
 /// The release a build fetches from: `scanner-bundle-v<FORMAT_VERSION>`, the tag
-/// `scanner-bundle.yml` publishes to and `scripts/scanner-assets.mjs` reads.
+/// `scanner-bundle.yml` publishes to and `scripts/scanner-assets.ts` reads.
 pub fn release_url() -> String {
     format!("{RELEASES}/scanner-bundle-v{FORMAT_VERSION}")
 }

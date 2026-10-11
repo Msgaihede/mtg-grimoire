@@ -8,7 +8,7 @@
 //!   a command the core's table does not have is refused here in the table's own words;
 //! - **`listen(handler)`** — the engine's events, handed to the Worker's script.
 //!
-//! Built with `node scripts/build-wasm.mjs` into `dist-wasm/` (`wasm-bindgen --target web`:
+//! Built with `node scripts/build-wasm.ts` into `dist-wasm/` (`wasm-bindgen --target web`:
 //! `grimoire_web.js` and `grimoire_web_bg.wasm`).
 //!
 //! | Module | Compiled for | Holds |

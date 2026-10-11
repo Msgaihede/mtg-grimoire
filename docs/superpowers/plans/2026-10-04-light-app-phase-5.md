@@ -30,7 +30,7 @@ seams); the record of each step is [light-app.md](../../reference/light-app.md) 
 - **Round one's web host is in git history and worked end to end** — removed on 2026-09-27 for
   its faces, not its engine. Read it before writing the same thing again, and port, never
   restore: `git show 95de1a59^:<path>` for `src-tauri/src/web/{glue,net,wire}.rs`,
-  `src-tauri/src/db.rs` (`install_opfs_pool`, `open_pooled_pair`), `scripts/build-wasm.mjs`,
+  `src-tauri/src/db.rs` (`install_opfs_pool`, `open_pooled_pair`), `scripts/build-wasm.ts`,
   `src/workers/{db,protocol}.ts`, `src/lib/core/browser.ts`, `src/pwa/*` (the service worker, the
   update bar, persistence, the image ledger) and `src/web/*` (the boot, the corpus build, the
   second tab). Its 4 729-line `route.rs` is what `grimoire_core::dispatch` replaced.
@@ -74,7 +74,7 @@ seams); the record of each step is [light-app.md](../../reference/light-app.md) 
   and every table command run that way natively so a lock taken twice fails a test instead of
   trapping a Worker. The DB Worker, its protocol and the third `Core`; the module instantiated
   once, whatever StrictMode does; the startup gate answered by the Worker; a second tab told so
-  in a sentence with a Reload. `scripts/build-wasm.mjs`, `npm run web:build` into `dist-web/`, and
+  in a sentence with a Reload. `scripts/build-wasm.ts`, `npm run web:build` into `dist-web/`, and
   a CI `web` job that builds both and opens the database in a headless browser.
 - [x] **5.2 — the first run** (#806, merged 2026-10-04). The launch's downloads without a temp file: the card sync, both
   tagger feeds, the combos and the Card Kingdom list, each streamed into its sink; CORS and the

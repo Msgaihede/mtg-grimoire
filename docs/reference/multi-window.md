@@ -520,7 +520,7 @@ build and this OS, **not reproducible by hiding the window**; it is not proven i
 
 ## 8. Driving two windows
 
-`scripts/cdp.mjs` picked the first `page` in `/json/list`, and every window has the same URL and the
+`scripts/cdp.ts` picked the first `page` in `/json/list`, and every window has the same URL and the
 same title — so with two open it drove an arbitrary one. It has a `pages` command that lists targets
 (index, id, title, url), a `CDP_PAGE` override taking an index **or a target id**, and a stderr
 warning naming the page it chose when it had to choose. **Pin a multi-step pass to a target id, not

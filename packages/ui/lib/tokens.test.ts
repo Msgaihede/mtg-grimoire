@@ -305,7 +305,7 @@ describe("an editor's stylesheet", () => {
    * carried and why nothing had to replace it.
    *
    * So an editor built with the option left on is green in every suite and every story, and
-   * wrong only in a shipped window. `scripts/web-smoke.mjs` opens a note under the hosting
+   * wrong only in a shipped window. `scripts/web-smoke.ts` opens a note under the hosting
    * policy and hears it, but `pnpm verify` does not run that — this does.
    *
    * Tests are skipped: `NoteEditor.test.tsx` builds bare editors by the dozen to drive commands,

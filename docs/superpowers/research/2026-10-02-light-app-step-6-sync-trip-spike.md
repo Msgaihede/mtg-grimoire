@@ -19,7 +19,7 @@ The write connection's mutex is taken, a runtime is built on a blocking thread, 
 that takes `conn: &Connection` runs to its end — its HTTP requests included — with the lock held.
 A browser has one thread, no `block_on`, and a lock held across an `await` there is a deadlock.
 
-**The census** (`node scripts/core-step-6-census.mjs .`, over `src-tauri/src`): of 197 functions in the eight
+**The census** (`node scripts/core-step-6-census.ts .`, over `src-tauri/src`): of 197 functions in the eight
 files this step moves, 56 are `async`, and **31 take a connection and hold it across at least one
 `.await` — 56 awaits between them.** (Counted before the prototype below; with its three functions
 restated the same script reads 28 and 51, and the step is done when it reads none.)
@@ -306,7 +306,7 @@ restatement itself turned up that the three-function prototype had not.
   through the lane itself would be a thread waiting for a connection it already has. And
   `impl Store for Connection` is a test build's only: shipped code that passed a function the
   connection it holds would be the whole-operation lock again, with no lane.
-- **The census is a test.** `scripts/core-step-6-census.test.mjs` holds the eight files at no
+- **The census is a test.** `scripts/core-step-6-census.test.ts` holds the eight files at no
   function that takes a connection and awaits with it, and none that blocks a thread on a future.
   It reads a connection or a transaction however the parameter is spelled, and the methods of an
   `impl`; run over `main`'s eight files it reads 31 held, 56 awaits and 10 `block_on` callers.

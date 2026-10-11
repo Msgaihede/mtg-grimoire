@@ -13,7 +13,7 @@
 #
 # **The properties file and not the bundle**, because a bundle's manifest is a protocol buffer
 # that only `bundletool` reads, and neither build leg has it. The file is what Gradle was handed
-# for this build; `scripts/release-rule.test.mjs` holds the Gradle project's `versionCode`
+# for this build; `scripts/release-rule.test.ts` holds the Gradle project's `versionCode`
 # line to reading it.
 set -euo pipefail
 

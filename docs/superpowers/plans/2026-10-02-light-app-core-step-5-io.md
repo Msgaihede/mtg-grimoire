@@ -14,7 +14,7 @@ Everything measured here was measured on Windows on 2026-10-02, on this branch's
 
 ## What was read before any code
 
-`scripts/lib/rs-items.mjs` cut every file still in `src-tauri/src` into its items, and each item was read for what it names of the machine. Among the modules this step is about:
+`scripts/lib/rs-items.ts` cut every file still in `src-tauri/src` into its items, and each item was read for what it names of the machine. Among the modules this step is about:
 
 | Names | Where |
 | --- | --- |
@@ -51,7 +51,7 @@ Steps 2, 3 and 4 each declined to lift a small piece of a later step's code into
 
 `scryfall::USER_AGENT` is `concat!("MTGGrimoire/", env!("CARGO_PKG_VERSION"), …)`, and `env!` reads the package that compiles it. Moved as it stands, every request this app makes — to Scryfall, to both price feeds, to Commander Spellbook, to the relay, to GitHub for an update — would have announced `MTGGrimoire/0.0.0`, which is exactly the inaccurate `User-Agent` Scryfall's API rules forbid.
 
-So `crates/grimoire-core/Cargo.toml` carries the app's version, **0.39.0**, and stays in step with it three ways: `release-please-config.json`'s `extra-files` gains the core's manifest and its `Cargo.lock` entry; `desktop.rs`'s `the_core_wears_the_apps_version` asserts the `User-Agent` names `src-tauri`'s own version and that the config still lists both manifests; and `scripts/ci-route.mjs` routes that config to `rust`, since a Rust test now reads it.
+So `crates/grimoire-core/Cargo.toml` carries the app's version, **0.39.0**, and stays in step with it three ways: `release-please-config.json`'s `extra-files` gains the core's manifest and its `Cargo.lock` entry; `desktop.rs`'s `the_core_wears_the_apps_version` asserts the `User-Agent` names `src-tauri`'s own version and that the config still lists both manifests; and `scripts/ci-route.ts` routes that config to `rust`, since a Rust test now reads it.
 
 The alternative was a `user_agent` argument to `Client::new`: 62 call sites, most of them tests, and eight clients elsewhere in `src-tauri` that borrow the constant.
 
@@ -132,7 +132,7 @@ Pacing, retry, the 429 lockout and the size checks stay in `scryfall::Client` �
 - [x] `npm run build`, `npm run lint`, `npm run test:run`.
 - [x] An existing database upgraded by `main`'s binary and by this branch's, compared row for row.
 - [x] `tauri dev` (the `app` lock): a real card sync against Scryfall — the check, the download with its progress, the ingest, the migration log — and an image fetch.
-- [x] A fresh reviewer over the diff. **No behaviour change found; four things fixed**: the fence's cut (it stopped at a file's first `#[cfg(test)]`, which in four files gates one item far above the tests — about 3 500 shipped lines unread), the same cut in `scripts/coverage-rust.mjs`, an assertion that depended on directory order, and the shapes the rule walked past (`pub(crate) use std::{…}`, a glob, `path.is_file()`, `std::net`, `std::process`, `std::env`). And the browser arms' docs: CORS is unmeasured, a browser's `Tick` is the wall clock, `setTimeout` rounds up now.
+- [x] A fresh reviewer over the diff. **No behaviour change found; four things fixed**: the fence's cut (it stopped at a file's first `#[cfg(test)]`, which in four files gates one item far above the tests — about 3 500 shipped lines unread), the same cut in `scripts/coverage-rust.ts`, an assertion that depended on directory order, and the shapes the rule walked past (`pub(crate) use std::{…}`, a glob, `path.is_file()`, `std::net`, `std::process`, `std::env`). And the browser arms' docs: CORS is unmeasured, a browser's `Tick` is the wall clock, `setTimeout` rounds up now.
 
 ### Task 6 — the record, and ship
 
@@ -165,7 +165,7 @@ So this part is a move with a rewrite inside it, and the rewrite is small and re
 ### Tasks
 
 - [x] `platform/spawn.rs`, with its tests: work answered from another thread; a panic that is lost and says so; a background job joined.
-- [x] `scripts/core-step-5b.mjs`: `sync.rs` and the three index files split item by item (`scripts/lib/rs-items.mjs`), every rewrite an exact replacement that must match the number of times it says; `with_write_owned` and two tests home; `ipc.test.ts`'s `?raw` import of `facets.rs` as both halves. `--dry` first.
+- [x] `scripts/core-step-5b.ts`: `sync.rs` and the three index files split item by item (`scripts/lib/rs-items.ts`), every rewrite an exact replacement that must match the number of times it says; `with_write_owned` and two tests home; `ipc.test.ts`'s `?raw` import of `facets.rs` as both halves. `--dry` first.
 - [x] By hand, in the same commit: `hooks.rs` (`corpus_replaced`), `state.rs` (three fields, the sixth argument, `corpus_replaced()`, a test), `schema.rs` (`build_pair`), both module maps, `desktop.rs` (`init_state`, `sync_run`, the startup sync, `spawn_build`), `mirror/watch.rs` (the observer and its test), and the six other tests that build an `AppState`.
 - [x] From a clean tree, the script and the hand edits reproduce the committed tree: the same diff, hashed.
 - [x] Item by item, old against new: of `sync.rs`'s 78 items and tests, 56 identical and 21 changed — each on the replacement list — and one gone (`note_mirror_after_swap`).
@@ -185,7 +185,7 @@ Read on this branch's tree over part 5b's (#769), 2026-10-02.
 
 ### What was read first
 
-Eight files, 17 023 lines, cut into items by `scripts/lib/rs-items.mjs` and each item read for what it names of the machine:
+Eight files, 17 023 lines, cut into items by `scripts/lib/rs-items.ts` and each item read for what it names of the machine:
 
 | File | Lines | Items that name the desktop | What else it reaches |
 | --- | --- | --- | --- |
@@ -214,7 +214,7 @@ Every `refresh` already takes its progress as a callback, "for `ingest`'s reason
 ### Tasks
 
 - [x] `platform::clock::Wall`; `platform::files::{rename, set_modified, listing}` and `aio::{read, create_dir_all, rename}`; tests for each — a stamp written and read back, a listing that tells a file from a folder, a rename that replaces.
-- [x] `scripts/core-step-5c.mjs`: the eight files split item by item, every rewrite an exact replacement; the homecomings; `ipc.test.ts`'s `?raw` imports as both halves. `--dry` first. No git state.
+- [x] `scripts/core-step-5c.ts`: the eight files split item by item, every rewrite an exact replacement; the homecomings; `ipc.test.ts`'s `?raw` imports as both halves. `--dry` first. No git state.
 - [x] By hand: `state.rs` (`images`, the seventh argument), both module maps, `desktop.rs` (the cache built, the feeds started, the upkeep thread), the fence's pinned list, `Cargo.toml`.
 - [x] The cache's tests onto `Wall` and `Tick`; the feeds' tests onto a core `State`.
 - [x] One test per feed that the sink receives its progress, and one that a finished price refresh tells an observer once.

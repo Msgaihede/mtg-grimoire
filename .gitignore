@@ -133,6 +133,6 @@ apps/desktop/src-tauri/scanner-assets/*
 /dist-mobile/
 /dist-share/
 
-# `node scripts/changelog/cli.mjs next` leaves the coming release's notes here for the job that
+# `node scripts/changelog/cli.ts next` leaves the coming release's notes here for the job that
 # commits them to the release branch. The kept copy is `changelog/<version>.md`.
 /release-notes/

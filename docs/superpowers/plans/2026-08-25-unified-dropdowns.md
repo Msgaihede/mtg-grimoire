@@ -1486,7 +1486,7 @@ For each of the three stories, open the dropdown and record, in one evaluation e
 })();
 ```
 
-Wrap it in an IIFE — `cdp.mjs eval` shares one scope, so a top-level `const` outlives its command
+Wrap it in an IIFE — `cdp.ts eval` shares one scope, so a top-level `const` outlives its command
 and the next call fails with "already been declared".
 
 **Expected:** `panel.l` within 1px of `trigger.l`; `gapFromTrigger` of 4 below or −4 above; `panel.b`
@@ -2012,7 +2012,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 Read `.claude/skills/running-the-app/SKILL.md` and claim the app lock. Under `tauri dev` the database
 is `src-tauri/target/debug/data/mtg.db`. `docs/reference/live-ui-verification.md` is the harness
-contract — it documents traps that have each cost a session, including that `cdp.mjs` takes the
+contract — it documents traps that have each cost a session, including that `cdp.ts` takes the
 first `type: page` target, so **put `location.href` in every payload** or DevTools answers instead of
 the app.
 
@@ -2032,7 +2032,7 @@ Five checks, and each has a number to write down:
 5. **The set picker, unchanged.** ~1 050 sets, the 100-row page, the footer's "Show 50 more", the
    tick column, and Escape handing the caret back.
 
-Two mechanics worth having in hand: `cdp.mjs click` needs a `hover --rest 200` first or a cold
+Two mechanics worth having in hand: `cdp.ts click` needs a `hover --rest 200` first or a cold
 pointer makes it a silent no-op, and **clicking and reading in one `eval` answers about the frame
 before React re-rendered** — split them into two.
 

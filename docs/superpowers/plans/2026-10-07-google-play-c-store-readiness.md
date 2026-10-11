@@ -4,9 +4,9 @@
 
 **Goal:** The Android app wears its own launcher icon, a privacy policy is served at `https://mtg-grimoire.app/privacy` and linked from Settings, and everything Play Console asks for is written down ready to paste.
 
-**Architecture:** `scripts/light-icons.mjs` already renders the web icons from the one master mark; it grows the Android launcher set, the store's 512px icon and the feature graphic. The privacy policy is two static files in `mobile/public/`, which every light build copies to its root; the service worker learns that a place whose `.html` it precached is that file and not the app. Settings draws one link on both faces. The listing text and the Console's answers live in `docs/play/`.
+**Architecture:** `scripts/light-icons.ts` already renders the web icons from the one master mark; it grows the Android launcher set, the store's 512px icon and the feature graphic. The privacy policy is two static files in `mobile/public/`, which every light build copies to its root; the service worker learns that a place whose `.html` it precached is that file and not the app. Settings draws one link on both faces. The listing text and the Console's answers live in `docs/play/`.
 
-**Tech Stack:** Node + headless Chromium over CDP (`light-icons.mjs`), static HTML/CSS under a strict CSP, the web host's service worker (`src/lib/core/web/sw/shell.ts`), React 19, Vitest, the web smoke run (`scripts/web-smoke.mjs`).
+**Tech Stack:** Node + headless Chromium over CDP (`light-icons.ts`), static HTML/CSS under a strict CSP, the web host's service worker (`src/lib/core/web/sw/shell.ts`), React 19, Vitest, the web smoke run (`scripts/web-smoke.ts`).
 
 **Spec:** `docs/superpowers/specs/2026-10-07-google-play-release-design.md` §6 (and §7 for where each piece is used). Read it before starting.
 
@@ -42,7 +42,7 @@ Spec §6 says the screenshots are "rendered from the phone face by a script". Th
 1. **Someone who has the web app installed taps the privacy link.** Their browser's service worker owns every navigation on the origin; they must get the policy, not the app. → Task 2's `shell.test.ts` cases and the smoke run's eighteenth check.
 2. **A reader offline** opens the policy from the installed web app. It is precached, so it should open. → the same `shell` route (cache first).
 3. **A new host is added to the app's network policy** and nobody updates the privacy page. → Task 2's fence over `connect-src`.
-4. **A launcher that masks icons to a circle or a squircle** must not clip the book's clasp or ribbon. → `light-icons.mjs` measures the foreground's furthest painted pixel against the 66dp circle and fails the render (Task 1).
+4. **A launcher that masks icons to a circle or a squircle** must not clip the book's clasp or ribbon. → `light-icons.ts` measures the foreground's furthest painted pixel against the 66dp circle and fails the render (Task 1).
 5. **A `tauri android init` re-run** puts the stock Tauri icons and the stock Android vectors back. → Task 1's `host.test.ts` fence on sizes and on the stock files' absence.
 
 Not covered by any test: **Cloudflare answering `/privacy` with `privacy.html`**. It is that host's default (`html_handling: auto-trailing-slash`) and no local server emulates it; Task 2 Step 9 measures it under `wrangler dev`, and `docs/play/README.md`'s order (Task 5) has the owner ask the live address after the deploy.
@@ -51,7 +51,7 @@ Not covered by any test: **Cloudflare answering `/privacy` with `privacy.html`**
 
 | File | Change | Responsibility |
 | --- | --- | --- |
-| `scripts/light-icons.mjs` | modify | Also render the Android launcher set, the store icon and the feature graphic |
+| `scripts/light-icons.ts` | modify | Also render the Android launcher set, the store icon and the feature graphic |
 | `mobile/src-tauri/gen/android/app/src/main/res/mipmap-*/ic_launcher.png`, `…/ic_launcher_foreground.png` | regenerate | The mark, at each density |
 | `…/res/mipmap-anydpi-v26/ic_launcher.xml` | create | The adaptive icon: ground behind, mark in front |
 | `…/res/mipmap-*/ic_launcher_round.png`, `…/res/drawable/ic_launcher_background.xml`, `…/res/drawable-v24/ic_launcher_foreground.xml` | delete | Stock Tauri and stock Android art nothing references |
@@ -59,7 +59,7 @@ Not covered by any test: **Cloudflare answering `/privacy` with `privacy.html`**
 | `mobile/public/privacy.html`, `mobile/public/privacy.css` | create | The policy |
 | `src/lib/core/web/sw/shell.ts` (+ `shell.test.ts`) | modify | A navigation to a place whose `.html` was precached is that file |
 | `app-worker/src/hosting.test.ts`, `app-worker/README.md` | modify | The host's policy holds for the new files; the README's "no other HTML file" stops being true |
-| `scripts/web-smoke.mjs` | modify | An eighteenth check: the policy opens as itself |
+| `scripts/web-smoke.ts` | modify | An eighteenth check: the policy opens as itself |
 | `src/lib/externalLinks.ts` | modify | `PRIVACY_URL` |
 | `src/features/settings/PrivacyLink.tsx` (+ test) | create | The one link, drawn by both settings pages |
 | `src/features/settings/SettingsPage.tsx`, `mobile/phone/pages/SettingsPage.tsx` | modify | Draw it |
@@ -72,7 +72,7 @@ Not covered by any test: **Cloudflare answering `/privacy` with `privacy.html`**
 ### Task 1: The launcher icon, the store icon and the feature graphic
 
 **Files:**
-- Modify: `scripts/light-icons.mjs`
+- Modify: `scripts/light-icons.ts`
 - Regenerate: `mobile/src-tauri/gen/android/app/src/main/res/mipmap-{mdpi,hdpi,xhdpi,xxhdpi,xxxhdpi}/ic_launcher.png` and `ic_launcher_foreground.png`
 - Create: `mobile/src-tauri/gen/android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml`
 - Delete: the five `ic_launcher_round.png`; `res/drawable/ic_launcher_background.xml`; `res/drawable-v24/ic_launcher_foreground.xml`
@@ -81,7 +81,7 @@ Not covered by any test: **Cloudflare answering `/privacy` with `privacy.html`**
 
 **Interfaces:**
 - Consumes: `logos/svg/mtg-grimoire-mark.svg` (a 64-unit mark with one `scale(...)`), `GROUND = "#0C0D12"`.
-- Produces: `node scripts/light-icons.mjs` writes, besides the four web icons, ten launcher PNGs, the adaptive XML, and the two store graphics.
+- Produces: `node scripts/light-icons.ts` writes, besides the four web icons, ten launcher PNGs, the adaptive XML, and the two store graphics.
 
 - [ ] **Step 1: Write the failing fence in `mobile/host.test.ts`**
 
@@ -116,7 +116,7 @@ Append a `describe`:
 /**
  * **The launcher's icon is the app's own mark.** `tauri android init` writes Tauri's logo into
  * every `mipmap-*` and Android's stock robot into `drawable*`, and the app shipped to a phone
- * that way until 2026-10-07. `scripts/light-icons.mjs` renders these from the master mark and
+ * that way until 2026-10-07. `scripts/light-icons.ts` renders these from the master mark and
  * they are committed; a regeneration puts the stock art back, and this is what goes red.
  */
 describe("the Android launcher icon", () => {
@@ -171,7 +171,7 @@ Run: `npx vitest run mobile/host.test.ts -t "launcher icon"`
 
 Expected: FAIL at import — `mipmap-anydpi-v26/ic_launcher.xml` does not exist.
 
-- [ ] **Step 3: Teach `scripts/light-icons.mjs` the Android set**
+- [ ] **Step 3: Teach `scripts/light-icons.ts` the Android set**
 
 Replace the header comment's last paragraph but one (the one beginning `// The renderer is a browser`) so its last sentence reads:
 
@@ -274,7 +274,7 @@ const ICONS = [
  */
 const ADAPTIVE_XML = `<?xml version="1.0" encoding="utf-8"?>
 <!--
-  WRITTEN BY scripts/light-icons.mjs — the launcher's icon on every phone this app installs on
+  WRITTEN BY scripts/light-icons.ts — the launcher's icon on every phone this app installs on
   (minSdk 26). The ground is the app's own (\`values/colors.xml\`); the mark is rendered from
   \`logos/svg/mtg-grimoire-mark.svg\` inside the 66dp circle a launcher keeps whole.
   \`tauri android init\` does not write this file and overwrites the pictures beside it:
@@ -400,7 +400,7 @@ Remove the line `await mkdir(OUT, { recursive: true });` near the top of `main`:
 
 - [ ] **Step 4: Render, and restore what must not move**
 
-Run, from the repository root: `node scripts/light-icons.mjs`
+Run, from the repository root: `node scripts/light-icons.ts`
 
 Expected: two `ok  … reaches …% — inside the …% circle` lines (the maskable mark near 37.5%, the launcher's foreground under 30.6%), sixteen `ok  <file>` lines, and the adaptive-icon line. If the foreground line fails, lower `ADAPTIVE_SCALE` by 0.01 and render again; put the measured figure in Step 7's README line.
 
@@ -460,7 +460,7 @@ Expected: PASS.
 - Create: `mobile/public/privacy.html`, `mobile/public/privacy.css`
 - Modify: `src/lib/core/web/sw/shell.ts` (`routeFor`), `src/lib/core/web/sw/shell.test.ts`
 - Modify: `app-worker/src/hosting.test.ts` (the `UNHASHED` sample), `app-worker/README.md`
-- Modify: `scripts/web-smoke.mjs`
+- Modify: `scripts/web-smoke.ts`
 - Modify: `mobile/host.test.ts`
 
 **Interfaces:**
@@ -823,7 +823,7 @@ Expected: PASS — only the `/*` rule matches the three, so each carries the pol
 
 - [ ] **Step 8: The smoke run's eighteenth check**
 
-In `scripts/web-smoke.mjs`, in the header comment, change `asks seventeen things` to `asks eighteen things`, and insert between items 14 and 15 a new item, renumbering 15–17 to 16–18 (and `the seventeenth check's card file` further down to `the eighteenth check's`):
+In `scripts/web-smoke.ts`, in the header comment, change `asks seventeen things` to `asks eighteen things`, and insert between items 14 and 15 a new item, renumbering 15–17 to 16–18 (and `the seventeenth check's card file` further down to `the eighteenth check's`):
 
 ```js
 //  15. the privacy policy opens as itself — `/privacy`, in a tab the service worker controls,
@@ -864,7 +864,7 @@ Then build and run it (this needs the wasm toolchain the `web` job uses; if this
 
 Run: `npm run web:wasm && npm run web:build && npm run web:smoke`
 
-Expected: every existing `ok` line, plus `ok  /privacy is the policy — …`, and exit 0. If `openPage` waits for something only the app has, read its source in `scripts/web-smoke/harness.mjs` and open the tab the way the run's other non-app probes do; the four assertions are what matter.
+Expected: every existing `ok` line, plus `ok  /privacy is the policy — …`, and exit 0. If `openPage` waits for something only the app has, read its source in `scripts/web-smoke/harness.ts` and open the tab the way the run's other non-app probes do; the four assertions are what matter.
 
 - [ ] **Step 9: Measure what Cloudflare does with `/privacy`, locally**
 
@@ -1183,7 +1183,7 @@ required wording and is not to be edited.
 | Feature graphic | 1024×500, no alpha | `docs/play/feature-graphic-1024x500.jpg` |
 | Phone screenshots | 2–8, each side 320–3840px, 16:9 or 9:16 | taken on a phone — below |
 
-Both graphics are rendered by `node scripts/light-icons.mjs` from `logos/svg/mtg-grimoire-mark.svg`.
+Both graphics are rendered by `node scripts/light-icons.ts` from `logos/svg/mtg-grimoire-mark.svg`.
 
 **Screenshots.** Taken on a phone from the internal-testing install, because Play requires them
 to show the app as it is. Five, in this order:
@@ -1318,7 +1318,7 @@ The listing text, the content-rating answer and the data-safety table are his to
 In §5, **Android Host**, replace the bullet beginning `- \`gen/android/\` configuration is pinned and validated by \`host.test.ts\`` with:
 
 ```markdown
-- `gen/android/` configuration is pinned and validated by `host.test.ts` (backup disabled, camera optional, `cache/exports/` FileProvider, and the launcher's icon). The icon is rendered from the master mark by `node scripts/light-icons.mjs` and committed; never run `tauri android init` or `tauri icon` over `gen/android` — both put stock art back.
+- `gen/android/` configuration is pinned and validated by `host.test.ts` (backup disabled, camera optional, `cache/exports/` FileProvider, and the launcher's icon). The icon is rendered from the master mark by `node scripts/light-icons.ts` and committed; never run `tauri android init` or `tauri icon` over `gen/android` — both put stock art back.
 ```
 
 In §5, **Web Worker Host**, add after the *Service Worker handles shell precaching* bullet:
@@ -1336,7 +1336,7 @@ Append at the end of the file (number it after the file's last section):
 
 - **The launcher's icon was Tauri's logo.** `tauri android init` writes it into every
   `mipmap-*`, with Android's stock robot in `drawable*`, and nothing had replaced it — the app
-  ran on a phone under another project's mark from 2026-10-04. `scripts/light-icons.mjs` now
+  ran on a phone under another project's mark from 2026-10-04. `scripts/light-icons.ts` now
   renders the launcher's set from `logos/svg/mtg-grimoire-mark.svg`: an adaptive icon
   (`mipmap-anydpi-v26/ic_launcher.xml`) whose foreground is the mark at scale 0.55 on a
   transparent 108dp layer over `@color/ground`, and the 48dp icon no phone this app installs on
@@ -1373,11 +1373,11 @@ Expected: exit 0.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add -A scripts/light-icons.mjs mobile/src-tauri/gen/android/app/src/main/res docs/play mobile/public/privacy.html mobile/public/privacy.css src/lib/core/web/sw/shell.ts src/lib/core/web/sw/shell.test.ts app-worker/src/hosting.test.ts app-worker/README.md scripts/web-smoke.mjs src/lib/externalLinks.ts src/features/settings/PrivacyLink.tsx src/features/settings/PrivacyLink.test.tsx src/features/settings/SettingsPage.tsx mobile/phone/pages/SettingsPage.tsx mobile/phone/pages/SettingsPage.test.tsx mobile/host.test.ts logos/README.md mobile/CLAUDE.md docs/reference/light-app.md docs/superpowers/plans/2026-10-07-google-play-c-store-readiness.md
+git add -A scripts/light-icons.ts mobile/src-tauri/gen/android/app/src/main/res docs/play mobile/public/privacy.html mobile/public/privacy.css src/lib/core/web/sw/shell.ts src/lib/core/web/sw/shell.test.ts app-worker/src/hosting.test.ts app-worker/README.md scripts/web-smoke.ts src/lib/externalLinks.ts src/features/settings/PrivacyLink.tsx src/features/settings/PrivacyLink.test.tsx src/features/settings/SettingsPage.tsx mobile/phone/pages/SettingsPage.tsx mobile/phone/pages/SettingsPage.test.tsx mobile/host.test.ts logos/README.md mobile/CLAUDE.md docs/reference/light-app.md docs/superpowers/plans/2026-10-07-google-play-c-store-readiness.md
 git commit -m "$(cat <<'EOF'
 feat(android): the app's own launcher icon, and a privacy policy
 
-The Android launcher drew Tauri's stock logo. light-icons.mjs now renders an
+The Android launcher drew Tauri's stock logo. light-icons.ts now renders an
 adaptive icon from the master mark, measured against the circle a launcher
 keeps whole, and the stock art is gone.
 

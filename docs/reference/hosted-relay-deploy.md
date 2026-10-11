@@ -5,7 +5,7 @@
 > probes the live address (the owner's decision; [ci-and-releases.md](ci-and-releases.md),
 > *A release deploys everything*). **This page remains the record of every deploy before it and
 > the runbook for a deploy between releases**, which is still by hand and asked for. Step 0's
-> probes are what `scripts/relay-deploy-probe.mjs` asks. The migration files named below
+> probes are what `scripts/relay-deploy-probe.ts` asks. The migration files named below
 > moved to `infrastructure/relay/applied-by-hand/` the same day: they were applied by hand,
 > and `infrastructure/relay/migrations/` is now the folder a release applies.
 

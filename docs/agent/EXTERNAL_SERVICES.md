@@ -78,7 +78,7 @@ phone, a developer's build — is **offered** them: `scanner_assets` says which 
 they cost, and only a reader's press on that offer calls `scanner_assets_fetch`, which downloads
 them from `https://github.com/Msgaihede/mtg-grimoire/releases/download/scanner-bundle-v<FORMAT_VERSION>/`
 — the prerelease `.github/workflows/scanner-bundle.yml` publishes weekly and
-`scripts/scanner-assets.mjs` already reads at build time. **Optional in the price feeds' sense**:
+`scripts/scanner-assets.ts` already reads at build time. **Optional in the price feeds' sense**:
 nothing is fetched until the reader asks, and without them the scanner detects a card and names
 nothing rather than failing. GitHub answers with a redirect to its asset host
 (`release-assets.githubusercontent.com` when asked on 2026-10-07), which the client follows; an
@@ -224,7 +224,7 @@ which are owed and what they cost, and only a reader's press on that offer calls
 `scanner_assets_fetch`, which downloads them from
 `https://github.com/Msgaihede/mtg-grimoire/releases/download/scanner-bundle-v<FORMAT_VERSION>/`
 — the prerelease `.github/workflows/scanner-bundle.yml` publishes weekly and
-`scripts/scanner-assets.mjs` already reads at build time. **Optional in the price feeds' sense**:
+`scripts/scanner-assets.ts` already reads at build time. **Optional in the price feeds' sense**:
 nothing is fetched until the reader asks, and without them the scanner detects a card and names
 nothing rather than failing.
 

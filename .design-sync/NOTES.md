@@ -139,7 +139,7 @@ shows them, so the fake grew a third mode (`packages/fake/images.ts`):
   `not_found` for the card id. The same path without the `?` stamp still answered 200 from the
   CDN's cache, so the script retries once without the stamp on a 404 only, and says so in a
   `note` line. When that cached copy goes too the script fails loudly, and the fix is
-  regenerating the fixture (`scripts/gen-storybook-cards.mjs`), not another retry. `live` mode
+  regenerating the fixture (`scripts/gen-storybook-cards.ts`), not another retry. `live` mode
   draws that crop broken today.
 - **The reference storybook draws the same art, or grading breaks for every card-bearing
   component.** `buildCmd` runs `.design-sync/build-reference.mjs`, which builds `sb-reference`

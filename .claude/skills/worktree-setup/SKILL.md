@@ -22,7 +22,7 @@ and `pnpm verify` never reaches `cargo test` — failures that are not yours.
 
 **A worktree resolves more than it declares.** Node looks for a package in every folder above
 a file, and a worktree sits under the main checkout: an import no manifest here declares can
-resolve from `D:\Code\mtg-grimoire\node_modules` and fail in CI. `scripts/workspace.test.mjs`
+resolve from `D:\Code\mtg-grimoire\node_modules` and fail in CI. `scripts/workspace.test.ts`
 is what holds "a package declares what it imports"; nothing that runs the code can.
 
 ## When the branch is wrong
@@ -85,7 +85,7 @@ executables and `data/`.
 - **Never give two checkouts one build tree** (`CARGO_TARGET_DIR`, a shared `build-dir`). The
   second checkout's build prints `Fresh` and runs the first one's code.
 - **`--target-dir` moves only what a build finishes.** A run that needs a build tree of its own
-  sets `CARGO_BUILD_BUILD_DIR` as well, as `scripts/build-wasm.mjs` does.
+  sets `CARGO_BUILD_BUILD_DIR` as well, as `scripts/build-wasm.ts` does.
 - **A tree the hook calls dead** — `src-tauri/target`, or `target/debug/deps` and its three
   neighbours — predates the layout or the cache. No build reads it and nothing else deletes it:
   the app hands a worktree's folder to the next session with it still inside.

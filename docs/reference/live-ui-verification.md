@@ -14,7 +14,7 @@ pnpm tauri dev
 **Take the `app` lock first.** Only one app runs across every worktree and a second exits
 with code 0, no window and no stderr — the `running-the-app` skill owns that protocol.
 
-Then from another shell, `scripts/cdp.mjs` (no dependencies, Node's built-in WebSocket):
+Then from another shell, `scripts/cdp.ts` (no dependencies, Node's built-in WebSocket):
 `pages` ·
 `eval` · `click <css>` · `text <visible text>` · `key Escape` · `press Enter [css]` · `type` ·
 `drag <source css> <target css>` · `pull <css> <dx> [dy]` ·
@@ -202,7 +202,7 @@ index-<hash>.js` — and then cargo sees no Rust source change, skips the crate,
   2026-08-12: a second worktree's app started while this one was mid-pass, this one died with
   **exit code 0xffffffff and no panic, no stderr and nothing in the console recording**, and the
   relaunch then exited **0** (single-instance) while `/json/list` went on answering — from the
-  *other* worktree's window. Every `cdp.mjs` command kept working and was driving somebody else's
+  *other* worktree's window. Every `cdp.ts` command kept working and was driving somebody else's
   branch. **Since 2026-09-20 it is worse in one specific way**: that relaunch still exits 0, and
   the running app now answers it by **opening another window** — so the other worktree gains a
   window showing *its* frontend, `pages` grows a line, and the thing that looks most like "my app

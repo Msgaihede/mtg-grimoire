@@ -49,7 +49,7 @@ futures-util = "0.3"
 
 # ── The browser ───────────────────────────────────────────────────────────────────────────────
 [target.'cfg(target_family = "wasm")'.dependencies]
-# ⚠️ **`scripts/build-wasm.mjs` refuses to build when the `wasm-bindgen` CLI is not exactly the
+# ⚠️ **`scripts/build-wasm.ts` refuses to build when the `wasm-bindgen` CLI is not exactly the
 # version `Cargo.lock` resolves here.** Two different things can go wrong with a mismatched pair,
 # and the script's own header has both: a CLI on a different bindgen **schema** refuses the
 # module itself, in words; a CLI on the same schema and another version is let through by that

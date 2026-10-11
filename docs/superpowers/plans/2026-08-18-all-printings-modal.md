@@ -1643,7 +1643,7 @@ With the app running, time `card_printings` for Forest at `limit: 1000` against 
 
 - [ ] **Step 4: Drive the shipped window**
 
-Per `docs/reference/live-ui-verification.md`, over CDP from PowerShell (Bash refuses `cdp.mjs` eval in a worktree), wrapping every binding in an IIFE and splitting click-then-read across two evals — a click and a count in one eval answers about the frame before React re-rendered:
+Per `docs/reference/live-ui-verification.md`, over CDP from PowerShell (Bash refuses `cdp.ts` eval in a worktree), wrapping every binding in an IIFE and splitting click-then-read across two evals — a click and a count in one eval answers about the frame before React re-rendered:
 
 1. From the **Collection**, right-click a card → View all printings. Assert the modal is up and the collection is still behind it (`activeView` unchanged, the collection's rows still in the DOM).
 2. Type in the filter box; assert the count line changes and the wall narrows.

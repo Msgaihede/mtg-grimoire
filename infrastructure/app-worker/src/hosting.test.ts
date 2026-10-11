@@ -203,7 +203,7 @@ const TEST_ONLY_FILES = (() => {
 
 /**
  * What one file ships, by the crate's own rule (`crates/grimoire-core/CLAUDE.md`, and the cut
- * `scripts/coverage-rust.mjs` makes): everything above its first column-0 `#[cfg(test)]` **that
+ * `scripts/coverage-rust.ts` makes): everything above its first column-0 `#[cfg(test)]` **that
  * gates a module**. A gate over one item higher up is not the cut. Comment lines are dropped —
  * a `///` naming a documentation page is prose, not an address anything asks.
  */

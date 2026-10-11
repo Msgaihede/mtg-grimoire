@@ -97,7 +97,7 @@ export default tseslint.config(
   // fetch, the camera-less drive), and `eslint .` reaches them — found 2026-09-08 as 27
   // `no-undef` errors the first time `pnpm verify` ran with the crate in the tree.
   {
-    files: ["scripts/**/*.mjs", "crates/*/scripts/**/*.mjs"],
+    files: ["crates/*/scripts/**/*.mjs"],
     languageOptions: {
       globals: {
         process: "readonly",
@@ -107,21 +107,21 @@ export default tseslint.config(
         Buffer: "readonly",
         // Asked and answered: a real drag is a *paced* gesture. Chromium starts one from a
         // press and a few moves spread over time, and dispatched back to back they arrive as
-        // a click. `cdp.mjs drag` sleeps between moves for that reason and no other.
+        // a click. `cdp.ts drag` sleeps between moves for that reason and no other.
         setTimeout: "readonly",
         // `drive-frames.mjs` times each round trip; Node 22 has it as a global.
         performance: "readonly",
-        // Asked and answered: `web-deploy-probe.mjs` gives each `fetch` a deadline, and
+        // Asked and answered: `web-deploy-probe.ts` gives each `fetch` a deadline, and
         // `AbortSignal.timeout` is the only way to hand `fetch` one.
         AbortSignal: "readonly",
-        // Asked and answered: a post-deploy probe is a `Request` (`deploy-probe.mjs`), so that
+        // Asked and answered: a post-deploy probe is a `Request` (`deploy-probe.ts`), so that
         // the same object is what `fetch` sends to the host at a release and what a test hands
         // to the Worker's own `fetch` in a pull request. Its tests read one back (`URL`) and
         // answer it (`Response`).
         Request: "readonly",
         Response: "readonly",
         URL: "readonly",
-        // Asked and answered: `play-upload.mjs` posts the token request as a form, which is
+        // Asked and answered: `play-upload.ts` posts the token request as a form, which is
         // what Google's token endpoint takes.
         URLSearchParams: "readonly",
       },
@@ -130,7 +130,7 @@ export default tseslint.config(
   // The frame bench's page, its Worker and their shared summariser: three plain scripts a
   // browser loads as they are, with no bundler and no `tsc` over them — so `no-undef` is live
   // and the browser's names are listed, by hand, as Node's are above. `summary.js` is imported
-  // by `scripts/scanner-bench.mjs` too and uses none of them.
+  // by `scripts/scanner-bench.ts` too and uses none of them.
   {
     files: ["crates/card-scanner/bench/web/*.js"],
     languageOptions: {
@@ -150,9 +150,8 @@ export default tseslint.config(
       },
     },
   },
-  // No Node-globals block accompanies this, unlike the `scripts` block above, and the
-  // asymmetry is deliberate: that one covers `.mjs`, where `no-undef` is live, while
-  // `.storybook` is all TypeScript and typescript-eslint's `eslint-recommended` turns
+  // No Node-globals block accompanies this: `.storybook` and the root's `scripts/` are
+  // TypeScript, and typescript-eslint's `eslint-recommended` turns
   // `no-undef` off for TS files — the compiler already answers that question better.
   // Verified with `eslint --print-config .storybook/main.ts`: `no-undef` is `[0]`, so such a
   // block would declare globals to a rule that never runs.
@@ -170,13 +169,18 @@ export default tseslint.config(
     },
   },
   // The workspace's import rules, where an editor shows them (2026-10-08). The fence is
-  // `scripts/workspace.test.mjs`: it also reads `vi.mock`, `import()` and a stylesheet, and it
+  // `scripts/workspace.test.ts`: it also reads `vi.mock`, `import()` and a stylesheet, and it
   // holds the rule this cannot — that a package declares what it imports.
   //
   // The patterns are written without a backslash on purpose: `[.]` is a dot in a regular
   // expression and nothing in a JavaScript string.
   {
-    files: ["apps/**/*.{ts,tsx}", "packages/fake/**/*.ts", "infrastructure/**/*.ts", ".storybook/**/*.{ts,tsx}"],
+    files: [
+      "apps/**/*.{ts,tsx}",
+      "packages/fake/**/*.ts",
+      "infrastructure/**/*.ts",
+      ".storybook/**/*.{ts,tsx}",
+    ],
     rules: {
       "no-restricted-imports": [
         "error",
@@ -211,7 +215,8 @@ export default tseslint.config(
           patterns: [
             {
               regex: "^([.][.]/)+(fake|packages|apps|infrastructure)/[^?]*$",
-              message: "Name another package's module by the package (`@grimoire/fake/…`), not by a path.",
+              message:
+                "Name another package's module by the package (`@grimoire/fake/…`), not by a path.",
             },
             // **The IPC mirror is one module to everything but itself** (issue #557): `ipc.ts` is
             // the barrel over `lib/ipc/*`, and `vi.mock("@/lib/ipc", …)` is the seam 140-odd
@@ -237,7 +242,8 @@ export default tseslint.config(
           patterns: [
             {
               regex: "^([.][.]/)+(fake|packages|apps|infrastructure)/[^?]*$",
-              message: "Name another package's module by the package (`@grimoire/fake/…`), not by a path.",
+              message:
+                "Name another package's module by the package (`@grimoire/fake/…`), not by a path.",
             },
           ],
         },

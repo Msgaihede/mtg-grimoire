@@ -10,7 +10,7 @@
 //
 // **Dependency-free on purpose, and nothing here assumes a desktop**: a phone opens the same
 // page over `adb reverse`, and the numbers it shows as text are the ones
-// `scripts/scanner-bench.mjs` reads out of a headless Chrome as JSON
+// `scripts/scanner-bench.ts` reads out of a headless Chrome as JSON
 // (`window.__scannerBench`). Everything it needs is a module Worker and WebAssembly.
 //
 // **The frames are posted from here, transferred.** A page that scans owns the camera, so the

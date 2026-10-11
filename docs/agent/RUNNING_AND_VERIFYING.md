@@ -13,7 +13,7 @@ Related: the `running-the-app` skill (locks and ports), [live-ui-verification.md
   one app runs across every worktree. See the `running-the-app` skill.
 - `pnpm tauri:fast dev` / `pnpm cargo:fast <command>` — the same dev build made faster by a
   second toolchain: a dated nightly with rustc's parallel front end and `rust-lld`
-  (`scripts/rust-fast.mjs` hands cargo `.cargo/fast.toml`, which has every measurement). On the
+  (`scripts/rust-fast.ts` hands cargo `.cargo/fast.toml`, which has every measurement). On the
   desktop app, debug, 2026-10-11: a rebuild after an edit in the core 11 s against 16 s, in the
   host 6.4 s against 8.4 s, a cold build 108 s against 136 s — **nearly all of it the newer
   compiler**, which 1.99.0 did not have, so it is a thing to measure again and likely delete
@@ -67,7 +67,7 @@ Related: the `running-the-app` skill (locks and ports), [live-ui-verification.md
   No lock; `web:dev` serves it on port 5176, and **`web:preview` serves the build under the
   hosting's own headers** — the local server to drive under the shipped policy; `web:smoke`
   serves under it too since 2026-10-04, and fails on a refusal.
-  **`web:wasm` refuses an engine module over its ceiling** (8 000 000 B; `scripts/build-wasm.mjs`
+  **`web:wasm` refuses an engine module over its ceiling** (8 000 000 B; `scripts/build-wasm.ts`
   has why, and how to raise it): the card scanner's OCR runtime linked into the engine is three
   megabytes nothing else would notice. **A full `web:wasm` empties `dist-wasm/`**, the scanner's
   files with it — run `scanner:assets --web` after it, not before.

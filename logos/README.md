@@ -55,7 +55,7 @@ render if it passes. It also writes the store's two graphics to `docs/play/`. `t
 and `tauri icon` both overwrite the launcher's pictures with stock art; `apps/light/host.test.ts` goes
 red when they do.
 
-**Made by `node scripts/light-icons.mjs`**, from `svg/mtg-grimoire-mark.svg` alone: it derives the
+**Made by `node scripts/light-icons.ts`**, from `svg/mtg-grimoire-mark.svg` alone: it derives the
 maskable drawing from the mark rather than reading a third SVG, renders each size in headless
 Chromium over the DevTools protocol (no image library is a dependency of this repo), and fails if
 the maskable mark reaches past the safe zone. Run it again after editing the mark and commit what

@@ -34,7 +34,7 @@ The Rust side needs a one-time `cargo install cargo-llvm-cov` plus
 the instrumented rebuild is a full cold `cargo build` of the crate and its dependency tree, which
 is minutes, against `cargo test`'s seconds on a warm target directory.
 
-`node scripts/coverage-rust.mjs --report-only` re-prints the table from the last LCOV without
+`node scripts/coverage-rust.ts --report-only` re-prints the table from the last LCOV without
 re-running anything.
 
 **Since 2026-10-02 the script measures both members of the cargo workspace, and no figure on
@@ -100,7 +100,7 @@ because its table and the LCOV writer do not agree on what a countable line is. 
 with either; they are different metrics with the same name. **Quote one source or the other, and
 never subtract across them.**
 
-So `scripts/coverage-rust.mjs` reads the LCOV export back and splits each file at its first
+So `scripts/coverage-rust.ts` reads the LCOV export back and splits each file at its first
 column-0 `#[cfg(test)]` **that gates a module**, counting only `DA:` records above it. (Until
 2026-10-02 it cut at the first `#[cfg(test)]` of any kind, and eleven files carry one — a
 test-only `use`, a helper — far above their tests: everything below it was dropped from the
