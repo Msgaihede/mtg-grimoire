@@ -231,7 +231,8 @@ describe("a deck", () => {
 
     // The command zones head the column, the deck's piles follow in its own order with the ones
     // played beside it last, and then the rail in the desktop's order down the page. Deck 2
-    // keeps no notes, and the Notes section is drawn anyway — `New note` is where one starts.
+    // keeps no notes, and the Notes section is drawn anyway — `New note` is where one starts. It
+    // does keep a description, which is drawn ahead of the notes (issue #912).
     expect(regions()).toEqual([
       "Commander",
       "Companion",
@@ -242,6 +243,7 @@ describe("a deck", () => {
       "Bracket",
       "Tokens",
       "Mana curve",
+      "Description",
       "Notes",
       "To-do lists",
     ]);
@@ -262,6 +264,12 @@ describe("a deck", () => {
     expect(names.indexOf("Ramp")).toBeLessThan(names.indexOf("Sideboard"));
     expect(names.indexOf("Notes")).toBeGreaterThan(names.indexOf("Check"));
     expect(names.indexOf("To-do lists")).toBe(names.indexOf("Notes") + 1);
+    expect(names.indexOf("Description")).toBe(names.indexOf("Notes") - 1);
+
+    // The deck's own description, read-only, in the reader's words.
+    expect(screen.getByRole("region", { name: "Description" })).toHaveTextContent(
+      "The plan beside the deck: a theory list, a pile switched off, two labels.",
+    );
 
     // A deck note: its title, its prose, and the two presses that write it.
     const notes = screen.getByRole("region", { name: "Notes" });

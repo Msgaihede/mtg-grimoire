@@ -98,7 +98,6 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import { DecksPage } from "./DecksPage";
-import { coverHint } from "./DeckTile";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { TOOLTIP_OPEN_MS, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { FOLDER_DROP_LINE_ATTR } from "@/components/FolderDropLine";
@@ -543,6 +542,23 @@ describe("DecksPage", () => {
   });
 
   /**
+   * **The credit is all the cover says — the description is the editor's** (issue #912). Issue
+   * #840 led this bubble with the deck's description; #912 took it out again and drew it as a
+   * band beside the notes and to-do lists in the deck editor. A deck with a description still
+   * hovers to the plain credit, and the words appear nowhere on the tile.
+   */
+  it("keeps the deck's description out of the cover's hint", async () => {
+    deckList.mockResolvedValue([{ ...BURN, description: "Bolt the face." }]);
+    wrapWithTips(<DecksPage />);
+
+    const tile = (await tileFor("Burn")).closest("li")!;
+    const panel = await hintOn(tile.querySelector("img")!.parentElement!);
+    expect(panel).toHaveTextContent("Art by Rebecca Guay");
+    expect(panel).not.toHaveTextContent(/Bolt the face/);
+    expect(screen.queryByText(/Bolt the face/)).not.toBeInTheDocument();
+  });
+
+  /**
    * The other half of the same field: a cover with nobody to credit is not drawn, so there is no
    * picture to hover — **and the empty frame binds no hint either.** `useTooltip` refuses falsy
    * content outright, which is what the deleted line's `deck.coverArtist && …` guard used to do,
@@ -568,57 +584,6 @@ describe("DecksPage", () => {
 
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
     expect(screen.queryByText(/null/i)).not.toBeInTheDocument();
-  });
-
-  /**
-   * **The reader's description leads the bubble, and the credit stays under it** (issue #840).
-   *
-   * The issue asked for the description *instead of* the artist; Scryfall's art-crop rule (see
-   * the case above) is why it is *before* the artist instead. Both halves are asserted, and in
-   * order: a build that swapped the credit out would fail the second, and a build that appended
-   * the description after the credit would fail the third.
-   */
-  it("leads the cover's hint with the description and keeps the credit under it", async () => {
-    deckList.mockResolvedValue([
-      { ...BURN, description: "  Bolt the face.\nThen bolt it again.  " },
-    ]);
-    wrapWithTips(<DecksPage />);
-
-    const tile = (await tileFor("Burn")).closest("li")!;
-    // Nowhere on the tile itself: the description is a hover away, like the credit.
-    expect(within(tile).queryByText(/Bolt the face/)).not.toBeInTheDocument();
-
-    const panel = await hintOn(tile.querySelector("img")!.parentElement!);
-    expect(panel).toHaveTextContent("Bolt the face. Then bolt it again.");
-    expect(panel).toHaveTextContent("Art by Rebecca Guay");
-    expect(panel.textContent!.indexOf("Bolt")).toBeLessThan(panel.textContent!.indexOf("Art by"));
-  });
-
-  /**
-   * A coverless deck has no picture to credit, but it still has the reader's words — so its
-   * frame, which bound nothing before, now binds the description alone.
-   */
-  it("shows the description on a coverless frame, with no credit", async () => {
-    deckList.mockResolvedValue([{ ...DRAFT, description: "Whatever the pod brings." }]);
-    wrapWithTips(<DecksPage />);
-
-    const tile = (await tileFor("Sunday draft")).closest("li")!;
-    const panel = await hintOn(within(tile).getByText("No cover").parentElement!);
-    expect(panel).toHaveTextContent("Whatever the pod brings.");
-    expect(panel).not.toHaveTextContent(/Art by/);
-  });
-
-  /**
-   * The edges, without a clock: a description of whitespace is no description, so the hint is
-   * the plain credit it always was — and a deck with neither binds nothing, which is the
-   * coverless case above.
-   */
-  it("treats a blank description as none", () => {
-    expect(coverHint({ description: "  \n ", coverArtist: "Rebecca Guay" })).toBe(
-      "Art by Rebecca Guay",
-    );
-    expect(coverHint({ description: "   ", coverArtist: null })).toBeNull();
-    expect(coverHint({ description: null, coverArtist: null })).toBeNull();
   });
 
   /**
