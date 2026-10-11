@@ -157,7 +157,7 @@ describe("the registry golden", () => {
     }
     expect(fieldsGolden.available).toEqual(available);
     expect(fieldsGolden.default).toEqual(byDefault);
-    expect(Object.keys(available)).toHaveLength(EXPORT_FORMATS.length * 3);
+    expect(Object.keys(available)).toHaveLength(EXPORT_FORMATS.length * 4);
   });
 });
 

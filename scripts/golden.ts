@@ -117,7 +117,7 @@ for (const [scenario, { surface, cards }] of Object.entries(corpus.scenarios)) {
  * So the field lists themselves are committed, in the same shape and read by the same two
  * suites: for every (format, surface) pair, what `availableFields` and `defaultFields` answer.
  * `SURFACE_FIELDS` is written out beside them because it is the one table whose whole content
- * is not recoverable from the 21 intersections — a field no format offers would drop out of
+ * is not recoverable from the 28 intersections — a field no format offers would drop out of
  * every one of them.
  */
 writeFileSync(

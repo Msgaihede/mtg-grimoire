@@ -53,6 +53,18 @@
       "rarity",
       "typeLine",
       "unitPrice"
+    ],
+    "trade": [
+      "quantity",
+      "name",
+      "setCode",
+      "collectorNumber",
+      "finish",
+      "lang",
+      "setName",
+      "rarity",
+      "typeLine",
+      "unitPrice"
     ]
   },
   "available": {
@@ -71,6 +83,11 @@
       "name",
       "finish"
     ],
+    "plain.trade": [
+      "quantity",
+      "name",
+      "finish"
+    ],
     "mtgo.deck": [
       "quantity",
       "name"
@@ -80,6 +97,10 @@
       "name"
     ],
     "mtgo.wishlist": [
+      "quantity",
+      "name"
+    ],
+    "mtgo.trade": [
       "quantity",
       "name"
     ],
@@ -101,6 +122,12 @@
       "setCode",
       "collectorNumber"
     ],
+    "arena.trade": [
+      "quantity",
+      "name",
+      "setCode",
+      "collectorNumber"
+    ],
     "moxfield.deck": [
       "quantity",
       "name",
@@ -116,6 +143,13 @@
       "finish"
     ],
     "moxfield.wishlist": [
+      "quantity",
+      "name",
+      "setCode",
+      "collectorNumber",
+      "finish"
+    ],
+    "moxfield.trade": [
       "quantity",
       "name",
       "setCode",
@@ -145,6 +179,13 @@
       "collectorNumber",
       "finish"
     ],
+    "archidekt.trade": [
+      "quantity",
+      "name",
+      "setCode",
+      "collectorNumber",
+      "finish"
+    ],
     "tcgplayer.deck": [
       "quantity",
       "name",
@@ -158,6 +199,12 @@
       "collectorNumber"
     ],
     "tcgplayer.wishlist": [
+      "quantity",
+      "name",
+      "setCode",
+      "collectorNumber"
+    ],
+    "tcgplayer.trade": [
       "quantity",
       "name",
       "setCode",
@@ -215,6 +262,18 @@
       "rarity",
       "typeLine",
       "unitPrice"
+    ],
+    "csv.trade": [
+      "quantity",
+      "name",
+      "setCode",
+      "collectorNumber",
+      "finish",
+      "lang",
+      "setName",
+      "rarity",
+      "typeLine",
+      "unitPrice"
     ]
   },
   "default": {
@@ -233,6 +292,11 @@
       "name",
       "finish"
     ],
+    "plain.trade": [
+      "quantity",
+      "name",
+      "finish"
+    ],
     "mtgo.deck": [
       "quantity",
       "name"
@@ -242,6 +306,10 @@
       "name"
     ],
     "mtgo.wishlist": [
+      "quantity",
+      "name"
+    ],
+    "mtgo.trade": [
       "quantity",
       "name"
     ],
@@ -263,6 +331,12 @@
       "setCode",
       "collectorNumber"
     ],
+    "arena.trade": [
+      "quantity",
+      "name",
+      "setCode",
+      "collectorNumber"
+    ],
     "moxfield.deck": [
       "quantity",
       "name",
@@ -278,6 +352,13 @@
       "finish"
     ],
     "moxfield.wishlist": [
+      "quantity",
+      "name",
+      "setCode",
+      "collectorNumber",
+      "finish"
+    ],
+    "moxfield.trade": [
       "quantity",
       "name",
       "setCode",
@@ -307,6 +388,13 @@
       "collectorNumber",
       "finish"
     ],
+    "archidekt.trade": [
+      "quantity",
+      "name",
+      "setCode",
+      "collectorNumber",
+      "finish"
+    ],
     "tcgplayer.deck": [
       "quantity",
       "name",
@@ -320,6 +408,12 @@
       "collectorNumber"
     ],
     "tcgplayer.wishlist": [
+      "quantity",
+      "name",
+      "setCode",
+      "collectorNumber"
+    ],
+    "tcgplayer.trade": [
       "quantity",
       "name",
       "setCode",
@@ -342,6 +436,13 @@
       "condition"
     ],
     "csv.wishlist": [
+      "quantity",
+      "name",
+      "setCode",
+      "collectorNumber",
+      "finish"
+    ],
+    "csv.trade": [
       "quantity",
       "name",
       "setCode",

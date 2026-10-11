@@ -17,11 +17,15 @@ function Side({
   tradeId,
   side,
   onScan,
+  onImport,
+  onExport,
   stage,
 }: {
   tradeId: number;
   side: TradeSide;
   onScan: (side: TradeSide, opener: HTMLElement) => void;
+  onImport: (side: TradeSide, opener: HTMLElement) => void;
+  onExport: (side: TradeSide, opener: HTMLElement) => void;
   stage?: () => Promise<unknown>;
 }) {
   const staged = useQuery({
@@ -33,14 +37,22 @@ function Side({
     staleTime: Infinity,
   });
   const trade = useTrade(staged.isSuccess ? tradeId : null);
-  return trade.data ? <TradeSidePanel trade={trade.data} side={side} onScan={onScan} /> : null;
+  return trade.data ? (
+    <TradeSidePanel
+      trade={trade.data}
+      side={side}
+      onScan={onScan}
+      onImport={onImport}
+      onExport={onExport}
+    />
+  ) : null;
 }
 
 const meta = {
   title: "Trade/SidePanel",
   component: Side,
   tags: ["autodocs"],
-  args: { tradeId: 5, side: "mine", onScan: fn() },
+  args: { tradeId: 5, side: "mine", onScan: fn(), onImport: fn(), onExport: fn() },
   argTypes: { stage: { control: false } },
   decorators: [
     // Half of the page's two-column grid at the design's width, and a height that makes the
@@ -166,6 +178,14 @@ export const TheirSide: Story = {
     const camera = within(panel).getByRole("button", { name: "Scan cards onto their side" });
     await userEvent.click(camera);
     await expect(args.onScan).toHaveBeenCalledWith("theirs", camera);
+
+    // Its own transfer pair (issue #903), which hands the page the side and the button the same way.
+    const importButton = within(panel).getByRole("button", { name: "Import cards to their side" });
+    await userEvent.click(importButton);
+    await expect(args.onImport).toHaveBeenCalledWith("theirs", importButton);
+    const exportButton = within(panel).getByRole("button", { name: "Export their side" });
+    await userEvent.click(exportButton);
+    await expect(args.onExport).toHaveBeenCalledWith("theirs", exportButton);
   },
 };
 
@@ -218,15 +238,22 @@ export const Rated: Story = {
   },
 };
 
-/** A side of a finished trade: no add row, no controls, and the percentage as plain text. */
+/**
+ * A side of a finished trade: no add row, no controls on the lines, and the percentage as plain
+ * text. **Export is the one button left** — a closed trade is still a list somebody may want in a
+ * file, and nothing may be put on it, so its pair has no Import.
+ */
 export const Closed: Story = {
   args: { tradeId: 2 },
-  play: async ({ canvasElement }) => {
+  play: async ({ args, canvasElement }) => {
     const canvas = within(canvasElement);
     const panel = await canvas.findByRole("region", { name: "You gave" });
     await expect(panel).toHaveTextContent("3 cards");
     await expect(panel).toHaveTextContent("100% of market");
     await expect(within(panel).queryByRole("combobox")).not.toBeInTheDocument();
-    await expect(within(panel).queryByRole("button")).not.toBeInTheDocument();
+    const exportButton = within(panel).getByRole("button", { name: "Export your side" });
+    await expect(within(panel).getAllByRole("button")).toEqual([exportButton]);
+    await userEvent.click(exportButton);
+    await expect(args.onExport).toHaveBeenCalledWith("mine", exportButton);
   },
 };

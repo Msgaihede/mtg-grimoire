@@ -27,7 +27,7 @@ import type { ParsedList } from "./parse";
  * and `CommitBar` cost less than one leaked type parameter.
  */
 export interface ImportDestination {
-  key: "deck" | "newDeck" | "collection" | "wishlist";
+  key: "deck" | "newDeck" | "collection" | "wishlist" | "trade";
   /** The destination radio's word, under the `Import into` legend. */
   label: string;
   /**

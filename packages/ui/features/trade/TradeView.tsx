@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type JSX } from "react";
+import { useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Archive,
@@ -14,13 +14,18 @@ import {
 import type { MenuItem } from "@/components/menu/types";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { useTooltip } from "@/components/tooltip/useTooltip";
+import { exportFileName } from "@/features/decks/deckExport";
 import { ConfirmDialog } from "@/features/settings/ConfirmDialog";
+import { ExportDialog } from "@/features/transfer/export/ExportDialog";
+import { tradeDestination } from "@/features/transfer/import/destinations/TradePreview";
+import { ImportDialog } from "@/features/transfer/import/ImportDialog";
+import { fromTradeLine } from "@/features/transfer/TransferCard";
 import { ipcError } from "@/lib/ipc";
 import type { Trade, TradeSide, TradeSummary } from "@/lib/ipc";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { FinishTradeDialog } from "./FinishTradeDialog";
-import { isOpen, isSettled, tradeMoney } from "./trade";
+import { isOpen, isSettled, linesOf, tradeMoney } from "./trade";
 import { TradeBalance } from "./TradeBalance";
 import {
   REFUSAL,
@@ -31,7 +36,7 @@ import {
 } from "./tradeControls";
 import { TradeScanDialog } from "./TradeScanDialog";
 import { TradeSidePanel } from "./TradeSidePanel";
-import { closedBanner, headerLine, sideHeading, tradeCurrency } from "./tradeWords";
+import { closedBanner, headerLine, sideHeading, sideWords, tradeCurrency } from "./tradeWords";
 import { TRADE_LIST_KEY, tradeKey, useTradeWrites } from "./useTrades";
 
 /**
@@ -61,6 +66,14 @@ import { TRADE_LIST_KEY, tradeKey, useTradeWrites } from "./useTrades";
  * **A trade that was just made lands the same way, from the other end** (`land`): the press that
  * made it — Create trade in a dialog that has closed, Duplicate on a trade that is no longer the
  * one drawn — has nothing left to hand the caret back to, so the new trade takes it as it mounts.
+ *
+ * ## A side in and out of a file
+ *
+ * Each side's Import and Export (issue #903) open the app's own two dialogs, mounted here for the
+ * scanner's reason. Export reads the side straight off the trade it was handed — a trade is one
+ * read, so there is nothing to sweep — and answers on every status, a finished or archived trade
+ * included. Import is the open trade's alone, onto the one side it was pressed on, and every way
+ * out of either hands the caret back to the button that opened it.
  */
 export function TradeView({
   trade,
@@ -90,6 +103,8 @@ export function TradeView({
   const renameRef = useRef<HTMLButtonElement>(null);
   /** The camera button the scanner was opened from: there are two, one a side. */
   const scanOpener = useRef<HTMLElement | null>(null);
+  /** The Import or Export button a transfer dialog was opened from — four of them, two a side. */
+  const transferOpener = useRef<HTMLElement | null>(null);
 
   const [renaming, setRenaming] = useState(false);
   const [finishing, setFinishing] = useState(false);
@@ -97,6 +112,10 @@ export function TradeView({
   const [scanOpen, setScanOpen] = useState(false);
   /** Kept apart from `scanOpen` so the dialog's fade-out still knows which side it was on. */
   const [scanSide, setScanSide] = useState<TradeSide>("mine");
+  /** Which transfer dialog is up. The side is kept apart for `scanSide`'s reason: the dialog's
+   *  fade-out still has to say which side it was about. */
+  const [transfer, setTransfer] = useState<"import" | "export" | null>(null);
+  const [transferSide, setTransferSide] = useState<TradeSide>("mine");
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
 
@@ -152,6 +171,27 @@ export function TradeView({
 
   const duplicate = () =>
     run("duplicate the trade", () => writes.duplicate(trade.id).then(onSelect));
+
+  const openTransfer = (kind: "import" | "export", side: TradeSide, opener: HTMLElement) => {
+    transferOpener.current = opener;
+    setTransferSide(side);
+    setTransfer(kind);
+  };
+  const closeTransfer = () => setTransfer(null);
+  const dismissTransfer = () => {
+    setTransfer(null);
+    transferOpener.current?.focus();
+  };
+  // Identity only — `tradeDestination`'s rule: a new destination remounts the step under the
+  // reader, so it changes with the trade and the side and with nothing a read can move.
+  const importInto = useMemo(
+    () => [tradeDestination({ tradeId: trade.id, side: transferSide })],
+    [trade.id, transferSide],
+  );
+  const exported = useMemo(
+    () => linesOf(trade.lines, transferSide).map(fromTradeLine),
+    [trade.lines, transferSide],
+  );
 
   const openScan = (side: TradeSide, opener: HTMLElement) => {
     scanOpener.current = opener;
@@ -287,14 +327,26 @@ export function TradeView({
       )}
 
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_1.5rem_minmax(0,1fr)] grid-rows-[minmax(0,1fr)]">
-        <TradeSidePanel trade={trade} side="mine" onScan={openScan} />
+        <TradeSidePanel
+          trade={trade}
+          side="mine"
+          onScan={openScan}
+          onImport={(at, opener) => openTransfer("import", at, opener)}
+          onExport={(at, opener) => openTransfer("export", at, opener)}
+        />
         <div aria-hidden="true" className="relative grid place-items-center">
           <span className="absolute inset-y-0 left-1/2 w-px bg-border" />
           <span className="relative grid size-6 place-items-center rounded-full border border-border bg-bg text-dim">
             <ArrowLeftRight className="size-3" />
           </span>
         </div>
-        <TradeSidePanel trade={trade} side="theirs" onScan={openScan} />
+        <TradeSidePanel
+          trade={trade}
+          side="theirs"
+          onScan={openScan}
+          onImport={(at, opener) => openTransfer("import", at, opener)}
+          onExport={(at, opener) => openTransfer("export", at, opener)}
+        />
       </div>
 
       <TradeBalance
@@ -347,8 +399,28 @@ export function TradeView({
               scanOpener.current?.focus();
             }}
           />
+          {/* One destination, so no radios: the side the reader pressed Import on. The message
+              is discarded, the wishlist's precedent — the cards are on the side behind it. */}
+          <ImportDialog
+            destinations={importInto}
+            subtitle={`Onto ${sideWords(transferSide)} of “${trade.name}”`}
+            open={transfer === "import"}
+            onDismiss={dismissTransfer}
+            onClose={closeTransfer}
+            onDone={dismissTransfer}
+          />
         </>
       )}
+
+      <ExportDialog
+        open={transfer === "export"}
+        subject={`${trade.name} — ${sideHeading(transferSide, trade.status)}`}
+        surface="trade"
+        cards={exported}
+        suggestedFileName={exportFileName(trade.name, sideHeading(transferSide, trade.status))}
+        onDismiss={dismissTransfer}
+        onClose={closeTransfer}
+      />
 
       <ConfirmDialog
         open={deleting}
