@@ -4776,8 +4776,8 @@ describe("exporting a folder from its heading", () => {
 describe("importing into a folder", () => {
   /** Paste one line and reach the collection's step, in the dialog the press opened. */
   async function previewOne(user: ReturnType<typeof userEvent.setup>): Promise<HTMLElement> {
-    const dialog = await screen.findByRole("dialog", { name: "Import a decklist" });
-    await user.click(within(dialog).getByLabelText("Decklist"));
+    const dialog = await screen.findByRole("dialog", { name: "Import cards" });
+    await user.click(within(dialog).getByLabelText("Card list"));
     await user.paste("1 Sol Ring");
     await user.click(within(dialog).getByRole("button", { name: "Preview" }));
     await within(dialog).findByRole("button", { name: "Import into" });
