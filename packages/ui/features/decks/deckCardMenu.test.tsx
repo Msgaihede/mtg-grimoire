@@ -332,6 +332,59 @@ describe("buildDeckCardMenu", () => {
     });
   });
 
+  /** **Set as deck image** — the right-clicked printing's art becomes the deck's cover. */
+  describe("the deck image row", () => {
+    const coverRow = (items: MenuItem[]) =>
+      items.find((i): i is MenuAction => i.kind === "action" && i.id === "set-cover");
+
+    it("points the deck's cover at the printing that was right-clicked", () => {
+      const set = vi.fn();
+      const card = bolt();
+      const row = coverRow(buildDeckCardMenu(card, deps({ cover: { cardId: null, set } })));
+
+      expect(row?.label).toBe("Set as deck image");
+      expect(row?.disabled).toBeUndefined();
+      row?.onSelect();
+      expect(set).toHaveBeenCalledWith(card);
+    });
+
+    it("greys, silently, on the printing that already is the cover", () => {
+      const set = vi.fn();
+      const card = bolt();
+      const row = coverRow(buildDeckCardMenu(card, deps({ cover: { cardId: card.cardId, set } })));
+
+      expect(row?.disabled).toBe(true);
+      expect(row?.reason).toBeUndefined();
+      row?.onSelect();
+      expect(set).not.toHaveBeenCalled();
+    });
+
+    it("stays about the one card under a picked set", () => {
+      const set = vi.fn();
+      const card = bolt();
+      const other = bolt({ cardId: "other", categoryId: card.categoryId });
+      const row = coverRow(
+        buildDeckCardMenu(card, deps({ cover: { cardId: null, set }, picked: [card, other] })),
+      );
+
+      expect(row?.label).toBe("Set as deck image");
+      row?.onSelect();
+      expect(set).toHaveBeenCalledTimes(1);
+      expect(set).toHaveBeenCalledWith(card);
+    });
+
+    it("sits in the Set as group, under the finish row", () => {
+      const items = shape(
+        buildDeckCardMenu(bolt(), deps({ cover: { cardId: null, set: vi.fn() } })),
+      );
+      expect(items.indexOf("set-cover")).toBe(items.indexOf("finish") + 1);
+    });
+
+    it("is absent where the surface wired no cover write", () => {
+      expect(coverRow(buildDeckCardMenu(bolt(), deps()))).toBeUndefined();
+    });
+  });
+
   /**
    * **`Remove card` sits below a rule of its own**, and the rule is the point: everything above
    * it says where this card goes or what it is called, and this one takes the cardboard out. A

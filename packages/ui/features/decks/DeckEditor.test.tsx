@@ -5971,6 +5971,21 @@ describe("DeckEditor — a card's menu", () => {
   });
 
   /**
+   * **Set as deck image** points the deck's cover at the printing that was right-clicked — the
+   * same `deckUpdate({ coverCardId })` the settings dialog's cover picker sends.
+   */
+  it("sets the deck's image from a card's menu", async () => {
+    await open();
+    await rightClickCard("Lightning Bolt");
+
+    await userEvent.click(screen.getByRole("menuitem", { name: "Set as deck image" }));
+
+    await waitFor(() =>
+      expect(deckUpdate).toHaveBeenCalledWith(4, { coverCardId: "c-Lightning Bolt" }),
+    );
+  });
+
+  /**
    * **Add to actual, from the plan** (issue #592). The write names the pile the card is in *now*
    * and the list it goes into, and Rust finds the pile there — so the editor never guesses at a
    * list it is not drawing. The plan's Bolt is filed in the Sideboard, which is what tells its
