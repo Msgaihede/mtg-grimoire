@@ -35,8 +35,10 @@ the web app's zone, `SHARE_BASE` in the config and in every build cut since. Its
 address still answers and is meant to, indefinitely: every release through 0.44.0 publishes to
 it, and a link minted before the move names it. A build that publishes to the old address is
 handed a link at the new one, and opens it — no client checks a link's host — and a page names
-its snapshot by a relative path, so each link fetches from the address it was opened at. Ask the
-host whether the new name is attached before believing this; the record below is of the old one.
+its snapshot by a relative path, so each link fetches from the address it was opened at. The new
+name was attached on 2026-10-11 at about 16:50 UTC, ahead of any deploy of this config, and answered
+the README's four probes and served the same `/assets/share.js` as the old one; the record below is
+of the old one.
 
 **The Worker went live at `https://mtg-grimoire-share.denmark-east.workers.dev`**, first deployed
 2026-10-01 at 20:10 UTC (version `e32f3155`) from this branch at `e3198a44` — `main` at `2b845048`

@@ -26,9 +26,10 @@ construction).
 > the share Worker's deploy token needs from that release on, Zone → Workers Routes → Edit on the
 > zone ([ci-and-releases.md](../reference/ci-and-releases.md)). Neither has been exercised: no
 > build has named the new URI to Patreon, and no deploy has stated a Custom Domain with that token. **Every probe and deploy recorded below
-> with an earlier date was at a `workers.dev` address**; whether the new names are attached yet
-> is the host's to say. [The design](../superpowers/specs/2026-10-11-workers-on-mtg-grimoire-app-design.md)
+> with an earlier date was at a `workers.dev` address**; the new names answer since that day, below. [The design](../superpowers/specs/2026-10-11-workers-on-mtg-grimoire-app-design.md)
 > has the rollout.
+>
+> **Both names were attached on 2026-10-11 at about 16:50 UTC**, by an agent at the owner's ask, through the Cloudflare API (`PUT /accounts/{id}/workers/domains`) — no deploy, no code, and `workers.dev` left on for both Workers. Asked straight after: `scripts/relay-deploy-probe.ts` passed its ten at `https://relay.mtg-grimoire.app` and its one at the old address, on the first attempt; the share Worker's four probes passed at `https://share.mtg-grimoire.app` and at the old address, and `/assets/share.js` was the same 510,300 bytes at both. **What answers there is still the build of the 0.44.0 release**, whose relay knows one redirect URI: until the next release deploys this tree, a Patreon callback that arrived at the new address would be exchanged with the old URI and refused — and no build names the new address yet.
 
 ## Contents
 

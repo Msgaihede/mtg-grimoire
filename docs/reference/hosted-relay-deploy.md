@@ -21,6 +21,8 @@
 > pre-flight, so a deploy that turned the old address off leaves its release a draft. The first
 > deploy of this config needs **Zone → Workers Routes → Edit** on `mtg-grimoire.app` in its token,
 > and **Patreon holds two redirect URIs** — step 3.
+>
+> **Both names were attached on 2026-10-11 at about 16:50 UTC**, by an agent at the owner's ask, through the Cloudflare API (`PUT /accounts/{id}/workers/domains`) — no deploy, no code, and `workers.dev` left on for both Workers. Asked straight after: `scripts/relay-deploy-probe.ts` passed its ten at `https://relay.mtg-grimoire.app` and its one at the old address, on the first attempt; the share Worker's four probes passed at `https://share.mtg-grimoire.app` and at the old address, and `/assets/share.js` was the same 510,300 bytes at both. **What answers there is still the build of the 0.44.0 release**, whose relay knows one redirect URI: until the next release deploys this tree, a Patreon callback that arrived at the new address would be exchanged with the old URI and refused — and no build names the new address yet.
 
 ⚠️ **This file opened with "nothing here has been run" until 2026-08-30, and by the end of that
 day two of its three halves had been.** What follows is the record of which, because the whole

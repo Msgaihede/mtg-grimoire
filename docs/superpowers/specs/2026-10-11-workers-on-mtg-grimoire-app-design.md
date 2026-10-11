@@ -2,7 +2,8 @@
 
 **Date:** 2026-10-11 · **Status:** approved by the owner the same day; the code is in the pull
 request that carries this file. Of the rollout (§5), steps 1 and 2 are done by the owner's word
-the same day; nothing has been attached or deployed
+the same day, and step 3 was done at his ask at about 16:50 UTC: both names are attached and
+answered their probes. Nothing has been deployed
 
 ## 1. Goal
 

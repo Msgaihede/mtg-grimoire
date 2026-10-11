@@ -17,7 +17,7 @@ wrangler infers `false` beside a route; `RELAY_BASE_LEGACY`). The two differ in 
 OAuth redirect URI, which the relay repeats from whichever address a reader's callback arrived at
 (`patreon.ts`, `redirectUri`) — both are registered on the Patreon client. **Every probe in this
 file dated before 2026-10-11 was asked of the `workers.dev` address**, the only one there was;
-ask the host whether the new one is attached before believing this paragraph. What a reader supplies instead is a **membership**: they connect Patreon once, paste a
+the new one was attached on 2026-10-11 at about 16:50 UTC, ahead of any deploy of this config, and answered step 0's probes as the old one does ([hosted-relay-deploy.md](../../docs/reference/hosted-relay-deploy.md)). What a reader supplies instead is a **membership**: they connect Patreon once, paste a
 claim code, and the app trades it for a pair of tokens.
 
 **What is deployed at that address today is the whole entitlement Worker, key distribution
