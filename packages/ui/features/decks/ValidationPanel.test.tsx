@@ -214,6 +214,29 @@ describe("ValidationPanel", () => {
   });
 
   /**
+   * **A format that judges nothing is not a clean deck** (corpus schema 7's `validates` cell).
+   * The engine answers `unspecified` with an empty list, and "No issues" under a green check
+   * would be a verdict about rules nobody chose — so the chip says it was not checked, in grey,
+   * and the panel says why rather than "passes every rule". `threeIssues()` is the deck that
+   * proves it: three findings under Modern, none of them spoken here.
+   */
+  it("says a deck in a format that judges nothing was not checked, rather than clean", async () => {
+    const { container } = render(<Harness cards={threeIssues()} format={spec("unspecified")} />);
+    const chip = screen.getByRole("button", { name: "Not checked · Unspecified" });
+
+    expect(chip).toHaveTextContent("Not checked");
+    const glyph = container.querySelector("[aria-haspopup=dialog] svg")!.getAttribute("class");
+    expect(glyph).not.toContain("text-ok");
+    expect(glyph).not.toContain("text-destructive");
+
+    await userEvent.click(chip);
+    const panel = screen.getByRole("dialog");
+    expect(within(panel).getByText(/not checked against any rules/)).toBeInTheDocument();
+    expect(within(panel).queryByText(/passes every/)).not.toBeInTheDocument();
+    expect(within(panel).queryAllByRole("listitem")).toEqual([]);
+  });
+
+  /**
    * The `"inner"` rung of the Escape stack: the press is consumed here — so the card pane
    * behind the editor keeps its own — and the caret goes back to the chip that opened this.
    */

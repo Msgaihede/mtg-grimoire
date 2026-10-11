@@ -71,7 +71,7 @@
  *    to raise it, and a wall clock in a fixture seeded at a fixed instant would sometimes lower
  *    it instead. The consequence is that these timestamps are ordering and nothing else — no
  *    story may render one as a date, and nothing does.
- * 8. **A deck's format is validated against `SPECS`' 12 rows**, not `format_specs`' 25
+ * 8. **A deck's format is validated against `SPECS`' 13 rows**, not `format_specs`' 26
  *    ({@link validFormat}). So `deck_create`/`deck_update` refuse 13 formats the app accepts —
  *    `premodern` among them — which is simplification 2's shape applied to a write: a narrower
  *    table gives a narrower answer.
@@ -11729,8 +11729,9 @@ export function readHandlers(db: FakeDb) {
      *
      * **`SPECS` and no second copy**: `validation/fixtures.ts` is already a hand-copied mirror of
      * `schema.rs`'s `FORMAT_SPECS_SEED`, and a second mirror is a second place for a cell to
-     * drift. It carries **12** of the 25 seeded rows (measured 2026-08-09) — the formats the
-     * engine tests need — so a picker in a story offers 12 formats and not 24.
+     * drift. It carries **13** of the 26 seeded rows (12 measured 2026-08-09, and `unspecified`
+     * since corpus schema 7) — the formats the engine tests need — so a picker in a story offers
+     * 13 formats and not 25.
      */
     format_specs_list: () => Object.values(SPECS).sort((a, b) => a.sortOrder - b.sortOrder),
 
@@ -14519,7 +14520,7 @@ function refuseIfNotesUnreadable(db: FakeDb, message: string): void {
 /**
  * `deck::valid_format`, over {@link SPECS} rather than the `format_specs` table.
  *
- * **A narrower table, so a narrower answer**: `validation/fixtures.ts` carries 12 of the 25 seeded rows
+ * **A narrower table, so a narrower answer**: `validation/fixtures.ts` carries 13 of the 26 seeded rows
  * (the read's `format_specs_list` says so), and this refuses the other 13 — `premodern` is a
  * format the app knows and a story cannot make a deck in. Blank is the DDL's own default and
  * is not checked against the table at all, exactly as the Rust returns early for it.

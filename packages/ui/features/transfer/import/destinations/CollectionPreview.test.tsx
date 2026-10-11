@@ -21,6 +21,8 @@ const collectionImportPreview = vi.hoisted(() => vi.fn());
 const collectionImportCommit = vi.hoisted(() => vi.fn());
 const collectionFolderList = vi.hoisted(() => vi.fn());
 const collectionFolderCreate = vi.hoisted(() => vi.fn());
+const deckCreate = vi.hoisted(() => vi.fn());
+const deckImportCommit = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/ipc")>();
   return {
@@ -31,6 +33,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => {
       collectionImportCommit,
       collectionFolderList,
       collectionFolderCreate,
+      deckCreate,
+      deckImportCommit,
     },
   };
 });
@@ -117,8 +121,7 @@ const FOLDERS = [BINDER, FOILS, SEALED, DECK_GROUP];
 /** The radio's name is its label alone — `ModeRadios` makes the hint its description. */
 const setRadio = () => screen.getByRole("radio", { name: "Set these quantities" });
 
-const CAPTION =
-  "1 line had an unreadable purchase price, and will be added without one";
+const CAPTION = "1 line had an unreadable purchase price, and will be added without one";
 
 beforeEach(() => {
   collectionImportPreview.mockReset().mockResolvedValue(outcome());
@@ -199,12 +202,12 @@ describe("CollectionPreview under set", () => {
     await user.click(setRadio());
 
     expect(
-      await screen.findByText("Updates quantities for 1 card: 1 changed — 3 fewer copies than now."),
+      await screen.findByText(
+        "Updates quantities for 1 card: 1 changed — 3 fewer copies than now.",
+      ),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(
-        "7 copies in folders exceed the file's count and will stay.",
-      ),
+      screen.getByText("7 copies in folders exceed the file's count and will stay."),
     ).toBeInTheDocument();
   });
 
@@ -279,9 +282,7 @@ describe("CollectionPreview's own warnings", () => {
       screen.getByText("line 2 · Lightning Bolt — the file says Japanese; added as English"),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(
-        "1 line had an unknown language and was matched without it",
-      ),
+      screen.getByText("1 line had an unknown language and was matched without it"),
     ).toBeInTheDocument();
     expect(screen.getByText(`line 3 · Sol Ring — "Klingon"`)).toBeInTheDocument();
   });
@@ -290,9 +291,7 @@ describe("CollectionPreview's own warnings", () => {
     mount("Quantity,Name\n1,Lightning Bolt\n1,Sol Ring\n2,Lightning Bolt\n");
 
     expect(
-      screen.getByText(
-        "1 line duplicated an earlier line and was merged into it",
-      ),
+      screen.getByText("1 line duplicated an earlier line and was merged into it"),
     ).toBeInTheDocument();
     expect(screen.getByText("line 4 → line 2 · Lightning Bolt")).toBeInTheDocument();
     // The merge is a count the reader can check against the file: three lines, four copies.
@@ -314,9 +313,7 @@ describe("CollectionPreview's own warnings", () => {
       screen.getByText(`line 3 → line 2 · Lightning Bolt — "3" in EUR, kept in USD`),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(
-        "1 line had an invalid tradelist quantity, and will be added without one",
-      ),
+      screen.getByText("1 line had an invalid tradelist quantity, and will be added without one"),
     ).toBeInTheDocument();
     expect(screen.getByText(`line 4 · Sol Ring — "2.5"`)).toBeInTheDocument();
   });
@@ -491,5 +488,83 @@ describe("CollectionPreview's Import into", () => {
     await waitFor(() => expect(onDone).toHaveBeenCalled());
     expect(collectionFolderCreate).toHaveBeenCalledTimes(1);
     expect(collectionImportCommit.mock.calls.map((call) => call[2])).toEqual([11, 11]);
+  });
+});
+
+/** A ManaBox export's two binder columns over two rows — a binder and a deck (issue #873). */
+const MANABOX = [
+  "Binder Name,Binder Type,Name,Quantity",
+  "Value Binder,binder,Sol Ring,2",
+  "Selvala,deck,Lightning Bolt,1",
+  "",
+].join("\n");
+
+/** The group `deck_create` makes for deck 7 — the one {@link deckCreate} answers below. */
+const SELVALA_GROUP = folder({ id: 40, name: "Selvala", kind: "deck", deckId: 7 });
+
+describe("CollectionPreview, over a file that names its binders", () => {
+  beforeEach(() => {
+    collectionFolderCreate.mockImplementation((parentId: number | null, name: string) =>
+      Promise.resolve(folder({ id: 50, name, parentId })),
+    );
+    deckCreate.mockReset().mockResolvedValue({ id: 7, name: "Selvala" });
+    deckImportCommit
+      .mockReset()
+      .mockResolvedValue({ added: 1, removed: 0, categoriesCreated: 1, labelsCreated: 0 });
+  });
+
+  it("offers to sort it, ticked, and lists where each binder goes", () => {
+    mount(MANABOX, { folders: FOLDERS });
+
+    expect(
+      screen.getByRole("checkbox", { name: "Sort into folders and decks by binder" }),
+    ).toBeChecked();
+    expect(screen.getByText(/It has 1 folder and 1 deck\./)).toBeInTheDocument();
+    const list = screen.getByRole("list", { name: "Where each binder goes" });
+    expect(list).toHaveTextContent("Value Binder");
+    expect(list).toHaveTextContent("folder · 2 cards");
+    expect(list).toHaveTextContent("new deck · 1 card");
+    // The binders say where every card goes, so there is no one destination and no mode.
+    expect(screen.queryByText("Import into")).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Set these quantities" })).toBeNull();
+  });
+
+  it("files each binder on Import and reports what it made", async () => {
+    const user = userEvent.setup();
+    const { onDone } = mount(MANABOX, { folders: [SELVALA_GROUP] });
+
+    await user.click(screen.getByRole("button", { name: "Import" }));
+
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(collectionFolderCreate).toHaveBeenCalledWith(null, "Value Binder");
+    expect(deckCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "Selvala", formatKey: "unspecified" }),
+    );
+    expect(collectionImportCommit.mock.calls.map((call) => call[2])).toEqual([50, 40]);
+    expect(onDone).toHaveBeenCalledWith("3 cards imported into 1 folder (1 new) and 1 new deck.");
+    // One ticket per binder, so none is offered for the press as a whole.
+    expect(useBulkUndo.getState().offers.collection).toBeNull();
+  });
+
+  it("is the plain collection step again once unticked", async () => {
+    const user = userEvent.setup();
+    const { onDone } = mount(MANABOX, { folders: FOLDERS });
+
+    await user.click(
+      screen.getByRole("checkbox", { name: "Sort into folders and decks by binder" }),
+    );
+    expect(setRadio()).toBeInTheDocument();
+    expect(screen.getByText("Import into")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Import" }));
+
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(collectionImportCommit).toHaveBeenCalledTimes(1);
+    expect(collectionImportCommit.mock.calls[0][2]).toBeNull();
+    expect(deckCreate).not.toHaveBeenCalled();
+  });
+
+  it("never offers the sort for a file that names no binder", () => {
+    mount("Quantity,Name\n1,Sol Ring\n");
+    expect(screen.queryByRole("checkbox", { name: /by binder/ })).toBeNull();
   });
 });

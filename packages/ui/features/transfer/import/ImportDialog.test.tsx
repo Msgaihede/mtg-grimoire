@@ -1046,7 +1046,7 @@ describe("the import dialog", () => {
   it.each([
     [
       "the file",
-      "That file is over 1 MB. A decklist is text; this reads at most 1 MB.",
+      "That file is over 8 MB. An import is text; this reads at most 8 MB.",
     ],
     ["the picker", "The file picker could not be opened — task 7 panicked"],
   ])("shows %s refusing, in the backend's words, beside the button", async (_, refusal) => {

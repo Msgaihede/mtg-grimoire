@@ -667,6 +667,26 @@ pub const USER_SCHEMA_VERSION: i64 = 61;
 /// and rebuild, because what is behind it is a download. Sharing a scale would invite somebody
 /// to subtract them.
 ///
+/// **7 (2026-10-11) is `format_specs.validates` and the `unspecified` row it exists for** — a
+/// format for a deck whose format nobody has chosen yet (the ManaBox CSV import creates them,
+/// and the reader picks the real one later), under which the TS engine judges **nothing**. The
+/// engine's rule is that every rule is read from a cell and a new format is a row, never an
+/// `if (format === …)`; and `casual`'s row is not "no rules" — it still holds a commander zone
+/// to its eligibility and a companion to its condition. So "do not validate" needed a cell of
+/// its own: `validates INTEGER NOT NULL DEFAULT 1`, which every existing row keeps through the
+/// default, and one seeded row that sets it to 0 ([`UNSPECIFIED_FORMAT_SEED`]).
+///
+/// **Two gates and two statements, both asked of the shape and never of this number** for the
+/// paragraph at the foot of this doc: the `ALTER` fires when `format_specs` lacks the column
+/// ([`validates_is_owed`]), and the seed when the table has no `unspecified` row
+/// ([`unspecified_format_is_owed`]). A missing `format_specs` owes both nothing, schema 3's
+/// rule. **Neither [`FORMAT_SPECS_SEED`] nor [`FORMAT_SPECS_SEED_V5`] names the column**: the
+/// frozen single-file ladder replays both on every fresh install long before this rung exists
+/// on that file, and a statement naming `validates` there would fail on new machines only —
+/// [`CARDS_COLUMNS`]' trap, one table over. A future correction that re-runs the head seed over
+/// a corpus that has the column is unharmed by not naming it: `INSERT OR REPLACE` writes a whole
+/// new row, so each of the 25 it names takes the default, 1 — the right answer for every one.
+///
 /// **6 (2026-09-22) is `cards.keywords`** — the card's **keyword abilities**, which is the one
 /// term in the search box's query language with no column behind it and the one that cannot be
 /// faked from oracle text. Measured against Scryfall the same day: `kw:flying` answers 3,318 and
@@ -762,7 +782,7 @@ pub const USER_SCHEMA_VERSION: i64 = 61;
 /// on an INSERT naming four columns the table does not have. [`migrate_corpus`] therefore asks
 /// the *shape*; this number is the record of what the shape is, and the thing a future rung
 /// will still want to have moved.
-pub const CORPUS_SCHEMA_VERSION: i64 = 6;
+pub const CORPUS_SCHEMA_VERSION: i64 = 7;
 
 /// Which of the two files a table lives in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1673,6 +1693,35 @@ const FORMAT_SPECS_SEED: &str = "INSERT OR REPLACE INTO format_specs
     ('tlr',             'Tiny Leaders: Reborn', 1, 50,  50,   1,    10,   1, 1, 'tlr',         20, 'banned_as_commander', 1, 3,    1, 23, 'paper'),
     ('casual',          'Casual',               1, 0,   NULL, NULL, NULL, 0, 0, NULL,          20, 'max_one',             0, NULL, 1, 24, 'paper,arena,mtgo'),
     ('limited',         'Limited',              1, 40,  NULL, NULL, NULL, 0, 0, NULL,          20, 'max_one',             0, NULL, 1, 25, 'paper,arena,mtgo');";
+
+/// The 26th format, `unspecified` — corpus schema 7's row, and **the one statement that names
+/// `validates`**.
+///
+/// A deck in this format has not had a format chosen for it: the ManaBox CSV import creates
+/// such decks, because a ManaBox export says which cards are in a binder and nothing about what
+/// they are for, and the reader picks the real format afterwards. It is in the picker so a new
+/// deck can be started that way too. **It is not the default** — `deck::DEFAULT_FORMAT` stays
+/// `casual`, because a reader who starts a deck by hand has made no claim that it is unjudgeable.
+///
+/// **`validates = 0` is the whole of what makes it different**, and it is a cell rather than a
+/// key the engine knows, for the engine's own rule (`validation/engine.ts`: every rule is read
+/// from data). The other cells are `casual`'s, deliberately the loosest the table can say, so a
+/// consumer that reads them without asking `validates` first — a size bar, a copy count — draws
+/// nothing a deck could fail: no minimum, no maximum, no copy cap, no sideboard cap, no
+/// commander, no legality pool (`has_legality_data = 0`, which also makes the pool check a
+/// no-op on its own), and every platform, `games`' fail-open answer.
+///
+/// **A constant of its own rather than a 26th line of [`FORMAT_SPECS_SEED`]**, because that
+/// constant is replayed by the frozen ladder's v18 and v20 steps on every fresh install, before
+/// this column exists on that file — a line naming `validates` there fails on new machines only.
+/// Schema-qualified through [`on_schema`] for [`add_produced_mana`]'s reason; the head seed is
+/// not, and does not need to be, because only one side has the table — but this one is asked
+/// for by a rung, and every rung on this side names its file.
+const UNSPECIFIED_FORMAT_SEED: &str = "INSERT OR REPLACE INTO {schema}.format_specs
+    (key, display_name, enabled_in_picker, deck_min, deck_max, max_copies, sideboard_max,
+     singleton, requires_commander, commander_rule, life, restricted_semantic,
+     has_legality_data, max_mana_value, allows_companion, sort_order, games, validates) VALUES
+    ('unspecified',     'Unspecified',          1, 0,   NULL, NULL, NULL, 0, 0, NULL,          20, 'max_one',             0, NULL, 1, 26, 'paper,arena,mtgo', 0);";
 
 /// Bring `conn` up to the current schema version. Idempotent: tracked by
 /// `PRAGMA user_version`, so a rerun on an up-to-date database changes nothing.
@@ -4915,6 +4964,9 @@ CREATE TABLE {schema}.image_cache (
 -- create_corpus_schema both run. One literal, so a climbed corpus and a built one cannot end
 -- up shaped differently.
 
+-- `validates` (corpus schema 7) sits on the tail line after `games`, written exactly as the
+-- rung's ALTER leaves it in sqlite_master, so a built corpus and a climbed one store one text.
+-- 0 means the TS engine judges no deck in the format at all — the `unspecified` row.
 CREATE TABLE {schema}.format_specs (
                 key TEXT PRIMARY KEY,
                 display_name TEXT NOT NULL,
@@ -4942,7 +4994,7 @@ CREATE TABLE {schema}.format_specs (
                 -- from sideboard_max — it is its own fact.
                 allows_companion INTEGER NOT NULL DEFAULT 1,
                 sort_order INTEGER NOT NULL
-             , games TEXT NOT NULL DEFAULT 'paper,arena,mtgo');
+             , games TEXT NOT NULL DEFAULT 'paper,arena,mtgo', validates INTEGER NOT NULL DEFAULT 1);
 
 CREATE TABLE {schema}.marketplace_prices (
                 -- One of `crate::marketplace::MARKETPLACE_IDS`, and always a feed-backed one:
@@ -5264,7 +5316,10 @@ pub fn create_corpus_schema(conn: &Connection, schema: &str) -> rusqlite::Result
     // Unqualified, and correct unqualified: `format_specs` exists in exactly one attached
     // database and DML resolves into it — the same reason no command changed. It is also
     // the literal the v20 rung runs, so a rebuilt corpus and a migrated one seed identically.
-    conn.execute_batch(FORMAT_SPECS_SEED)
+    conn.execute_batch(FORMAT_SPECS_SEED)?;
+    // And corpus schema 7's row, by the very statement its rung runs — the same "one literal,
+    // two paths" as the line above. The column it names is in [`CORPUS_SCHEMA_SQL`] already.
+    seed_unspecified_format(conn, schema)
 }
 
 pub fn create_fts(conn: &Connection) -> rusqlite::Result<()> {
@@ -8050,7 +8105,8 @@ pub fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
 /// cards already exists` and stops the launch rather than quietly doing nothing. Anything else
 /// is a file with a shape, and the only things these rungs have to say about one are that the
 /// combo feed's three tables may be a version behind, that `cards` may be missing
-/// `produced_mana`, `type_mask` or `keywords`, and that `sets` may be missing `printed_size`.
+/// `produced_mana`, `type_mask` or `keywords`, that `sets` may be missing `printed_size`, and
+/// that `format_specs` may be missing `validates` or the `unspecified` row it exists for.
 ///
 /// **Every rung is gated on the shape and not on `v < CORPUS_SCHEMA_VERSION`, and that is the
 /// trap worth writing down.** `crate::split`'s `finish` stamps [`CORPUS_SCHEMA_VERSION`] — head,
@@ -8146,6 +8202,22 @@ pub fn migrate_corpus(conn: &Connection) -> rusqlite::Result<()> {
         // EXISTS` is a no-op. It earns its place on the 5→6 path, where nothing else builds it.
         if keywords_are_owed(conn, CORPUS)? {
             add_keywords(conn, CORPUS)?;
+        }
+        // Corpus schema 7, the shape gate a fifth time and the first over `format_specs` — the
+        // one corpus table no feed rebuilds, so nothing but this rung will ever put the column
+        // or the row on a corpus that predates them. A version gate's symptom here is quieter
+        // than the four above and worse for it: no ingest fails; `list_format_specs` raises
+        // `no such column: validates` and the deck editor loses every format at once.
+        //
+        // **The column first and the row second, and in that order on purpose**: the seed names
+        // `validates`, so on a corpus owed both it can only run once the `ALTER` has. Two gates
+        // rather than one because the two debts are separable — the column alone is what a
+        // file reads like if anything ever re-seeds the table wholesale.
+        if validates_is_owed(conn, CORPUS)? {
+            add_validates(conn, CORPUS)?;
+        }
+        if unspecified_format_is_owed(conn, CORPUS)? {
+            seed_unspecified_format(conn, CORPUS)?;
         }
     }
     if v < CORPUS_SCHEMA_VERSION {
@@ -8414,6 +8486,81 @@ fn add_keywords(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
         "ALTER TABLE {schema}.cards ADD COLUMN keywords TEXT;
          CREATE INDEX IF NOT EXISTS {schema}.idx_cards_artist ON cards(artist);",
     ))
+}
+
+/// `format_specs`' column names in `schema`, in ordinal order — empty when the table is not
+/// there, which is what `PRAGMA table_info` answers for a missing table rather than an error.
+fn format_spec_column_names(conn: &Connection, schema: &str) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(&format!("PRAGMA {schema}.table_info(format_specs)"))?;
+    let names = stmt.query_map([], |r| r.get::<_, String>(1))?;
+    names.collect()
+}
+
+/// Whether corpus schema 7's `ALTER` is owed on `format_specs` in `schema` —
+/// [`produced_mana_is_owed`]'s idiom over the one corpus table no feed produces.
+///
+/// **The column name and never `sqlite_master`'s text** — the idiom of the four rungs before it.
+/// The name is what `list_format_specs` reads and an `ALTER` adds; the text is a spelling, and
+/// a probe on it would be one edit to [`CORPUS_SCHEMA_SQL`] away from re-issuing the `ALTER`.
+///
+/// ⚠️ **A `format_specs` that is not there at all owes nothing.** `ALTER TABLE … ADD COLUMN` on
+/// a missing table raises inside [`migrate_corpus`], one of the two things allowed to stop a
+/// launch. A corpus with no format rules is a damaged file rather than an old one — every path
+/// that builds a corpus seeds the table — and repairing it is a rebuild's job, not this rung's.
+fn validates_is_owed(conn: &Connection, schema: &str) -> rusqlite::Result<bool> {
+    let names = format_spec_column_names(conn, schema)?;
+    Ok(!names.is_empty() && !names.iter().any(|n| n == "validates"))
+}
+
+/// Corpus schema 7, first statement: give `format_specs` its `validates` column.
+///
+/// `NOT NULL DEFAULT 1`, so **every row that exists keeps being judged** with no backfill: the
+/// 25 rows the ladder seeded are all formats with rules, and the default is their answer. The
+/// one row that says 0 is written by [`seed_unspecified_format`], next.
+///
+/// Schema-qualified through [`on_schema`] for [`add_produced_mana`]'s reason — a bare `ALTER
+/// TABLE format_specs` means `main`. The column definition is spelled exactly as
+/// [`CORPUS_SCHEMA_SQL`]'s tail carries it, because SQLite splices this text into the stored
+/// `CREATE TABLE` verbatim and `the_corpus_schema_is_byte_identical_to_what_the_ladder_builds`
+/// compares the two.
+fn add_validates(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
+    conn.execute_batch(&on_schema(
+        schema,
+        "ALTER TABLE {schema}.format_specs ADD COLUMN validates INTEGER NOT NULL DEFAULT 1;",
+    ))
+}
+
+/// Whether corpus schema 7's row is owed: `format_specs` is there and has no `unspecified`.
+///
+/// **Gated, rather than an `INSERT OR IGNORE` run on every launch, and the choice was weighed.**
+/// The unconditional form is idempotent too and would cost one indexed probe, the same as this.
+/// What decides it is that the gate keeps the rung's shape: a launch over a corpus at head
+/// writes nothing, and a reader of [`migrate_corpus`] sees five debts asked and paid in one
+/// idiom rather than four rungs and a statement that runs regardless. An unconditional
+/// `INSERT OR REPLACE` — the other option — was refused outright: `REPLACE` is a delete and an
+/// insert, so every launch on every host would open with a write to the corpus (an OPFS write
+/// on the web host) to restate a row nothing changed.
+///
+/// A missing table owes nothing — [`validates_is_owed`]'s reason — and the table is asked
+/// about first because the row probe would raise `no such table` on one.
+fn unspecified_format_is_owed(conn: &Connection, schema: &str) -> rusqlite::Result<bool> {
+    if format_spec_column_names(conn, schema)?.is_empty() {
+        return Ok(false);
+    }
+    let present: bool = conn.query_row(
+        &format!("SELECT EXISTS (SELECT 1 FROM {schema}.format_specs WHERE key = 'unspecified')"),
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(!present)
+}
+
+/// Corpus schema 7, second statement: seed [`UNSPECIFIED_FORMAT_SEED`] into `schema`.
+///
+/// Also what [`create_corpus_schema`] runs, so a built corpus and a climbed one get the row from
+/// one literal. It names `validates`, so on the climb it runs after [`add_validates`].
+fn seed_unspecified_format(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
+    conn.execute_batch(&on_schema(schema, UNSPECIFIED_FORMAT_SEED))
 }
 
 /// Corpus schema 2: drop the combo feed's tables and build them again from head.
@@ -9401,6 +9548,11 @@ pub(crate) mod tests {
         // literal does on the other, and the rung's own `CREATE INDEX IF NOT EXISTS` is then a
         // no-op here — which is the same shape it has on a live 4→6 upgrade.
         add_keywords(&ladder, "main").unwrap();
+        // Corpus schema 7's, both statements. Take the `ALTER` away and `format_specs` goes red
+        // here — the literal's tail is spelled to match what SQLite splices into the stored text
+        // — and take the seed away and the row count at the foot of this test does.
+        add_validates(&ladder, "main").unwrap();
+        seed_unspecified_format(&ladder, "main").unwrap();
         let want = dump(&ladder, "main");
 
         let pair = memory_pair();
@@ -17097,6 +17249,9 @@ pub(crate) mod tests {
         let n: i64 = conn
             .query_row("SELECT count(*) FROM format_specs", [], |r| r.get(0))
             .unwrap();
+        // 25 and not 26, correctly: this is the frozen ladder alone, and `unspecified` is corpus
+        // schema 7's row, which [`migrate_corpus`] adds after the split
+        // (`the_unspecified_format_row_carries_the_cells_that_turn_validation_off`).
         assert_eq!(n, 25, "23 legality keys + casual + limited");
 
         // Scryfall's 23 legality keys in the order it emits them (research doc), then the
@@ -21625,6 +21780,266 @@ pub(crate) mod tests {
             vec!["dragon".to_owned()],
             "a prefix must not reach an ingested row, and must still reach an un-ingested one"
         );
+    }
+
+    // ---- corpus schema 7: a format that judges nothing -------------------------------
+
+    /// Whether the corpus's `format_specs` carries `column`.
+    fn corpus_format_specs_has(conn: &Connection, column: &str) -> bool {
+        format_spec_column_names(conn, CORPUS)
+            .unwrap()
+            .iter()
+            .any(|n| n == column)
+    }
+
+    /// Whether the corpus's `format_specs` has the `unspecified` row.
+    fn corpus_has_unspecified(conn: &Connection) -> bool {
+        conn.query_row(
+            &format!(
+                "SELECT EXISTS (SELECT 1 FROM {CORPUS}.format_specs WHERE key = 'unspecified')"
+            ),
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// A pair whose corpus wears **head's version stamp over a `format_specs` with neither the
+    /// column nor the row** — the state every converted database and every fresh install is in
+    /// on the day corpus schema 7 ships, because `crate::split`'s `finish` stamps head onto
+    /// whatever the frozen ladder built, and that ladder seeds 25 rows into a table with no
+    /// `validates`.
+    ///
+    /// `DROP COLUMN` is available here for [`corpus_missing_keywords`]' reason: no index names
+    /// the column, and it is neither a key nor `UNIQUE`. The row goes first because nothing
+    /// may hold a value in a column that is about to be dropped and still be the fixture.
+    fn corpus_missing_validates() -> Connection {
+        let conn = memory_pair();
+        conn.execute_batch(&format!(
+            "DELETE FROM {CORPUS}.format_specs WHERE key = 'unspecified';
+             ALTER TABLE {CORPUS}.format_specs DROP COLUMN validates;
+             PRAGMA {CORPUS}.user_version = {CORPUS_SCHEMA_VERSION};"
+        ))
+        .unwrap();
+        conn
+    }
+
+    /// **The population a version gate would miss**, for `validates`: head's number over the
+    /// old shape. The failure it would buy is quieter than corpus schema 3's and worse — no
+    /// ingest fails; `list_format_specs` raises `no such column: validates` and the deck editor
+    /// has no formats at all.
+    #[test]
+    fn a_corpus_stamped_at_head_with_no_validates_still_gets_the_column_and_the_row() {
+        let conn = corpus_missing_validates();
+        let version: i64 = conn
+            .query_row(&format!("PRAGMA {CORPUS}.user_version"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, CORPUS_SCHEMA_VERSION);
+        assert!(
+            !corpus_format_specs_has(&conn, "validates") && !corpus_has_unspecified(&conn),
+            "the fixture must start without either or it tests nothing"
+        );
+
+        migrate_corpus(&conn).unwrap();
+
+        assert!(
+            corpus_format_specs_has(&conn, "validates"),
+            "the number said head and the shape did not"
+        );
+        assert!(
+            corpus_has_unspecified(&conn),
+            "and the row the column exists for"
+        );
+        let judged: i64 = conn
+            .query_row(
+                &format!("SELECT count(*) FROM {CORPUS}.format_specs WHERE validates = 1"),
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            judged, 25,
+            "every format that existed before the rung is still judged, through the default"
+        );
+    }
+
+    /// The two gates are separable, and the second fires alone: a corpus that has the column
+    /// and lost the row — what a wholesale re-seed of the table would leave — gets the row back
+    /// without the `ALTER` running a second time, which would raise `duplicate column name`.
+    #[test]
+    fn a_corpus_with_the_column_and_no_row_gets_only_the_row() {
+        let conn = memory_pair();
+        conn.execute_batch(&format!(
+            "DELETE FROM {CORPUS}.format_specs WHERE key = 'unspecified';"
+        ))
+        .unwrap();
+        assert!(!validates_is_owed(&conn, CORPUS).unwrap());
+        assert!(unspecified_format_is_owed(&conn, CORPUS).unwrap());
+
+        migrate_corpus(&conn).expect("the column is there, so only the seed may run");
+
+        assert!(corpus_has_unspecified(&conn));
+    }
+
+    /// The row's cells, which are the whole of the feature: `validates` 0 is what the TS engine
+    /// reads to judge nothing, and the rest are `casual`'s so a consumer that reads a cell
+    /// without asking `validates` first still draws nothing a deck could fail.
+    ///
+    /// Asked of both paths — a built corpus and a climbed one — because they get the row from
+    /// one literal, and this is what would notice the day they stopped doing so.
+    #[test]
+    fn the_unspecified_format_row_carries_the_cells_that_turn_validation_off() {
+        let built = memory_pair();
+        let climbed = corpus_missing_validates();
+        migrate_corpus(&climbed).unwrap();
+
+        for conn in [&built, &climbed] {
+            // Read as text so NULL stays visible, the way the 25-format test reads its cells:
+            // NULL is a rule here (no maximum, no cap), and a 0 that should be a NULL is a
+            // different format.
+            let cell = |column: &str| -> Option<String> {
+                conn.query_row(
+                    &format!(
+                        "SELECT CAST({column} AS TEXT) FROM {CORPUS}.format_specs
+                          WHERE key = 'unspecified'"
+                    ),
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap()
+            };
+            let int = |column: &str| cell(column).map(|v| v.parse::<i64>().unwrap());
+            assert_eq!(
+                int("validates"),
+                Some(0),
+                "the one cell the engine reads to judge nothing"
+            );
+            assert_eq!(
+                int("has_legality_data"),
+                Some(0),
+                "no card pool: a deck nobody has placed has none"
+            );
+            assert_eq!(
+                int("enabled_in_picker"),
+                Some(1),
+                "a new deck can be started this way too"
+            );
+            assert_eq!(
+                [
+                    int("deck_min"),
+                    int("deck_max"),
+                    int("max_copies"),
+                    int("sideboard_max"),
+                    int("requires_commander"),
+                ],
+                [Some(0), None, None, None, Some(0)],
+                "casual's loosest cells, so nothing reading them can draw a failure"
+            );
+            let sort = int("sort_order").unwrap();
+            let games = cell("games").unwrap();
+            assert_eq!(
+                games, "paper,arena,mtgo",
+                "every platform: games' fail-open answer"
+            );
+            for game in games.split(',') {
+                assert!(
+                    GAMES.contains(&game),
+                    "`{game}` is not a Scryfall game word"
+                );
+            }
+            let last: i64 = conn
+                .query_row(
+                    &format!("SELECT max(sort_order) FROM {CORPUS}.format_specs"),
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                sort, last,
+                "last in the picker, after the two pseudo-formats"
+            );
+            let n: i64 = conn
+                .query_row(
+                    &format!("SELECT count(*) FROM {CORPUS}.format_specs WHERE validates = 0"),
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "`unspecified` is the only format that judges nothing");
+        }
+    }
+
+    /// The counterweight: a corpus already carrying both is left alone, and a second launch
+    /// after the climb changes nothing. `ALTER TABLE … ADD COLUMN` has no `IF NOT EXISTS`, so
+    /// an ungated second pass raises `duplicate column name` and **stops the launch** on every
+    /// database that is already correct.
+    #[test]
+    fn a_fresh_corpus_owes_neither_half_and_a_second_migrate_changes_nothing() {
+        let conn = memory_pair();
+        assert!(!validates_is_owed(&conn, CORPUS).unwrap());
+        assert!(!unspecified_format_is_owed(&conn, CORPUS).unwrap());
+        migrate_corpus(&conn).unwrap();
+        migrate_corpus(&conn).unwrap();
+
+        let climbed = corpus_missing_validates();
+        migrate_corpus(&climbed).unwrap();
+        migrate_corpus(&climbed).unwrap();
+
+        for c in [&conn, &climbed] {
+            let n: i64 = c
+                .query_row(
+                    &format!("SELECT count(*) FROM {CORPUS}.format_specs"),
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 26, "25 judged formats and `unspecified`, once each");
+        }
+    }
+
+    /// ⚠️ **Both statements are schema-qualified**, `the_keywords_rung_lands_on_the_corpus_and_
+    /// not_on_the_user_file`'s claim for this rung. The decoy on the user side is what lets the
+    /// two spellings disagree: with a `format_specs` on each side an unqualified `ALTER` or
+    /// `INSERT` lands on `main` and the qualified form cannot. In the field `user.db` has no
+    /// such table, which is what would make the mistake silent.
+    #[test]
+    fn the_validates_rung_lands_on_the_corpus_and_not_on_the_user_file() {
+        let conn = corpus_missing_validates();
+        conn.execute_batch("CREATE TABLE main.format_specs (key TEXT PRIMARY KEY);")
+            .unwrap();
+
+        add_validates(&conn, CORPUS).unwrap();
+        seed_unspecified_format(&conn, CORPUS).unwrap();
+
+        assert!(corpus_format_specs_has(&conn, "validates"));
+        assert!(corpus_has_unspecified(&conn));
+        let user_side = format_spec_column_names(&conn, "main").unwrap();
+        assert_eq!(
+            user_side,
+            vec!["key".to_owned()],
+            "an unqualified ALTER puts the corpus's column in the reader's own file, silently"
+        );
+        let user_rows: i64 = conn
+            .query_row("SELECT count(*) FROM main.format_specs", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            user_rows, 0,
+            "and an unqualified seed puts the row there too"
+        );
+    }
+
+    /// And a corpus with no `format_specs` at all owes nothing rather than dying — the debt
+    /// this rung repairs is *a table missing a column or a row*, never *a missing table*, and
+    /// the row probe would raise `no such table` if it were asked first.
+    #[test]
+    fn a_corpus_with_no_format_specs_owes_the_validates_rung_nothing() {
+        let conn = memory_pair();
+        conn.execute_batch(&format!("DROP TABLE {CORPUS}.format_specs;"))
+            .unwrap();
+
+        assert!(!validates_is_owed(&conn, CORPUS).unwrap());
+        assert!(!unspecified_format_is_owed(&conn, CORPUS).unwrap());
+        migrate_corpus(&conn).expect("a launch must not die over a repair it cannot carry out");
     }
 
     /// And it takes an interrupted ingest's staging pair with it, so nothing shaped like

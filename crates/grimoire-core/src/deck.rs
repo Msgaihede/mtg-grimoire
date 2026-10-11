@@ -5450,6 +5450,16 @@ pub struct FormatSpecRow {
     /// would take its format out of every filtered picker with nothing on screen saying why,
     /// which is what `a_format_spec_games_cell_holds_only_scryfall_game_words` exists to catch.
     pub games: Vec<String>,
+    /// Whether the TS engine judges a deck in this format **at all** — corpus schema 7.
+    ///
+    /// `false` on one row, `unspecified`: a deck whose format nobody has chosen yet (the ManaBox
+    /// CSV import creates them), where any verdict would be about rules the reader never picked.
+    /// A cell rather than a key the engine recognises, because the engine's rule is that every
+    /// rule is read from data — and `casual`'s row is not this: it still holds a commander zone
+    /// to eligibility and a companion to its condition. Rust supplies the fact; the engine
+    /// returning no issues for it, and the panel saying "not checked" rather than "legal", are
+    /// TypeScript's conclusions.
+    pub validates: bool,
 }
 
 /// One deck card and every fact about it, as one row.
@@ -6331,7 +6341,7 @@ pub fn list_format_specs(conn: &Connection) -> Result<Vec<FormatSpecRow>, String
             "SELECT key, display_name, enabled_in_picker, deck_min, deck_max, max_copies,
                     sideboard_max, singleton, requires_commander, commander_rule, life,
                     restricted_semantic, has_legality_data, max_mana_value, allows_companion,
-                    sort_order, games
+                    sort_order, games, validates
                FROM format_specs ORDER BY sort_order",
         )
         .map_err(|e| e.to_string())?;
@@ -6364,6 +6374,7 @@ pub fn list_format_specs(conn: &Connection) -> Result<Vec<FormatSpecRow>, String
                     .filter(|g| !g.is_empty())
                     .map(str::to_owned)
                     .collect(),
+                validates: r.get(17)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -14978,7 +14989,8 @@ mod tests {
 
         let specs = list_format_specs(&conn).unwrap();
 
-        assert_eq!(specs.len(), 25);
+        // 25 judged formats and `unspecified`, corpus schema 7's row.
+        assert_eq!(specs.len(), 26);
         assert_eq!(specs[0].key, "standard", "sort_order, not alphabetical");
         let spec = |key: &str| specs.iter().find(|s| s.key == key).unwrap();
         let edh = spec("commander");
@@ -15045,6 +15057,26 @@ mod tests {
                 s.key
             );
         }
+
+        // `validates` rides the read, and it is false on exactly one row. `casual` is the
+        // control: the loosest *judged* format, which still holds a commander zone and a
+        // companion to their rules, and is therefore not the same thing as judging nothing.
+        let unspecified = spec("unspecified");
+        assert!(
+            !unspecified.validates,
+            "the format that turns validation off"
+        );
+        assert!(unspecified.enabled_in_picker && !unspecified.has_legality_data);
+        assert_eq!(
+            specs.last().unwrap().key,
+            "unspecified",
+            "last in the picker"
+        );
+        assert!(spec("casual").validates);
+        assert_eq!(specs.iter().filter(|s| !s.validates).count(), 1);
+        // And it is a key `valid_format` accepts, because the importer creates decks in it.
+        let deck = create_deck(&conn, &input("Binder", "unspecified")).unwrap();
+        assert_eq!(deck.format_key, "unspecified");
     }
 
     /// A deck carries a platform, it survives the round trip, and it is refused by name.
@@ -15214,7 +15246,9 @@ mod tests {
                 "maxManaValue": null, "allowsCompanion": true, "sortOrder": 12,
                 // An **array**, not the comma-joined string the column holds: the split is
                 // `list_format_specs`' and this is what pins that it happens before the wire.
-                "games": ["paper"]
+                "games": ["paper"],
+                // Corpus schema 7: a JSON boolean, which is what `FormatSpec.validates` mirrors.
+                "validates": true
             })
         );
 

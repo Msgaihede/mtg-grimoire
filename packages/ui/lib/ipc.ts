@@ -5466,10 +5466,18 @@ export interface FormatSpec {
    * of the one comma-joined cell `format_specs.games` stores.
    *
    * **Never empty**: a spec naming no platform would be a format no filtered picker could ever
-   * offer, and the seed writes all 25 rows. It is the only input `pickerFormats`' game filter
+   * offer, and the seeds write every row. It is the only input `pickerFormats`' game filter
    * reads, and it is a *fact* — which formats a picker then offers is the conclusion.
    */
   games: Game[];
+  /**
+   * Whether the validation engine judges a deck in this format **at all** (corpus schema 7).
+   * `false` on one row, `unspecified` — a deck whose format nobody has chosen yet, which the
+   * ManaBox import creates — and `validateDeck`/`validateForMarks` return no issues for it.
+   * A cell rather than a key the engine knows, by the engine's own rule; `casual` is not this,
+   * since it still holds a commander zone and a companion to their rules.
+   */
+  validates: boolean;
 }
 
 /**
@@ -9987,7 +9995,7 @@ export const ipc = {
    * The webview is granted no `dialog:` and no `fs:` permission.
    *
    * **Two failures, and the rejection says which**: the file picker could not be opened, or the
-   * file would not read (missing, refused, over 1 MB). Frame it with words true of both.
+   * file would not read (missing, refused, over 8 MB). Frame it with words true of both.
    *
    * **Never refused for its bytes** (issue #555): valid UTF-8 is read as such, a UTF-16
    * byte-order mark is honoured, and anything else is decoded as Windows-1252 — Excel's CSV on a

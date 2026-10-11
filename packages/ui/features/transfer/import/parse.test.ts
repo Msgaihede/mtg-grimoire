@@ -412,7 +412,9 @@ describe("parseDecklist", () => {
       ["Swords to Plowshares", "deck", "Removal (cheap)"],
     ]);
     // And on the first line of the file, where the bracket was already required.
-    const first = parseDecklist("Removal (cheap)\n1x Swords to Plowshares (ice) 54 [Removal (cheap)]");
+    const first = parseDecklist(
+      "Removal (cheap)\n1x Swords to Plowshares (ice) 54 [Removal (cheap)]",
+    );
     expect(first.lines.map((l) => l.name)).toEqual(["Swords to Plowshares"]);
   });
 
@@ -767,6 +769,19 @@ const MANABOX_EXPORT = `Name,Set code,Set name,Collector number,Foil,Rarity,Quan
 Brazen Borrower // Petty Theft,ELD,Throne of Eldraine,39,normal,mythic,1,46299,c2089ec9-0665-448f-bfe9-d181de127814,1.5,false,false,near_mint,en,USD
 `;
 
+/**
+ * A ManaBox **collection** export, which says which binder every row is in (issue #873) — the
+ * header and rows verbatim from the issue's excerpt, which was pasted out of a spreadsheet and so
+ * arrived tab-separated. One binder, one deck, and a row whose binder cell is blank.
+ */
+const MANABOX_BINDERS = [
+  "Binder Name\tBinder Type\tName\tSet code\tSet name\tCollector number\tFoil\tRarity\tQuantity\tManaBox ID\tScryfall ID\tPurchase price\tMisprint\tAltered\tSigned\tCondition\tLanguage\tProxy\tPurchase price currency\tAdded",
+  "Value Binder\tbinder\tFellwar Stone\tDRK\tThe Dark\t102\tnormal\tuncommon\t3\t40401\tdc47e322-f8b8-4685-b035-fda0cc433e6b\t21.16\tFALSE\tFALSE\tFALSE\tnear_mint\ten\tFALSE\tUSD\t2026-06-04T21:46:56.902Z",
+  "Yuna\tdeck\tSol Ring\t3ED\tRevised Edition\t274\tnormal\tuncommon\t1\t41151\t803fd65f-4ca6-4fe4-abc2-72aa32ebb3a5\t26.79\tFALSE\tFALSE\tFALSE\tnear_mint\ten\tFALSE\tUSD\t2026-07-06T04:54:57.532Z",
+  "\t\tEerie Interlude\tSOI\tShadows over Innistrad\t16\tfoil\trare\t1\t8980\tdcbab6e4-d317-4e73-a6ff-bed49aa6b70b\t13.96\tFALSE\tFALSE\tFALSE\tnear_mint\ten\tFALSE\tUSD\t2026-06-04T21:46:56.905Z",
+  "",
+].join("\n");
+
 /** TCGplayer's `Name` is the product's title; 111 of the real export's 1,010 rows carry a
  *  treatment in it, and `Simple Name` beside it is the card. */
 const TCGPLAYER_EXPORT = `Quantity,Name,Simple Name,Set,Card Number,Set Code,Printing,Condition,Language,Rarity,Product ID,SKU
@@ -879,6 +894,47 @@ describe("a CSV another app wrote", () => {
     });
     expect(list.lines[1].finish).toBeNull();
     expect(list.csv?.ignoredColumns).toEqual(["Set name", "Rarity", "ManaBox ID", "Scryfall ID"]);
+    // No binder columns, so no line names a binder — the collection step's sort never offers.
+    expect(list.lines.every((l) => (l.binder ?? null) === null)).toBe(true);
+  });
+
+  it("reads the binder each row of a ManaBox collection export is in (issue #873)", () => {
+    const list = parseDecklist(MANABOX_BINDERS);
+    expect(list.csv?.delimiter).toBe("\t");
+    expect(list.lines.map((l) => [l.name, l.quantity, l.setCode, l.finish, l.binder])).toEqual([
+      ["Fellwar Stone", 3, "DRK", null, { name: "Value Binder", type: "binder" }],
+      ["Sol Ring", 1, "3ED", null, { name: "Yuna", type: "deck" }],
+      // A blank binder cell is a row filed nowhere, which is the root — not a binder named "".
+      ["Eerie Interlude", 1, "SOI", "foil", null],
+    ]);
+    // The binder pair is read, so it is not in the "Not read" line. `Added` is ManaBox's date
+    // the row entered ManaBox — Archidekt's `Date Added` again, deliberately not `Acquired`.
+    expect(list.csv?.ignoredColumns).toEqual([
+      "Set name",
+      "Rarity",
+      "ManaBox ID",
+      "Scryfall ID",
+      "Added",
+    ]);
+  });
+
+  it("lowercases a binder's kind and keeps its name's capitals", () => {
+    const list = parseDecklist(
+      "Name,Quantity,Binder Name,Binder Type\nSol Ring,1, My Deck , Deck \n",
+    );
+    expect(list.lines[0].binder).toEqual({ name: "My Deck", type: "deck" });
+  });
+
+  it("reads a binder name with no kind column as a binder of no kind", () => {
+    const list = parseDecklist("Name,Quantity,Binder Name\nSol Ring,1,Trade\n");
+    expect(list.lines[0].binder).toEqual({ name: "Trade", type: "" });
+    expect(list.csv?.ignoredColumns).toEqual([]);
+  });
+
+  it("leaves a lone binder kind column unread, since it names no drawer", () => {
+    const list = parseDecklist("Name,Quantity,Binder Type\nSol Ring,1,deck\n");
+    expect(list.lines[0].binder).toBeNull();
+    expect(list.csv?.ignoredColumns).toEqual(["Binder Type"]);
   });
 
   /** The two places `SPECIFIC` outranks this app's own spelling: TCGplayer's `Set` is a set's
@@ -974,7 +1030,10 @@ describe("a CSV's finish column", () => {
   it("reads Foil, Printing and Premium columns by the same words", () => {
     for (const header of ["Foil", "Printing", "Premium"]) {
       const list = parseDecklist(`Quantity,Name,${header}\n1,Sol Ring,Yes\n1,Shock,Normal\n`);
-      expect(list.lines.map((l) => l.finish), header).toEqual(["foil", null]);
+      expect(
+        list.lines.map((l) => l.finish),
+        header,
+      ).toEqual(["foil", null]);
     }
   });
 });

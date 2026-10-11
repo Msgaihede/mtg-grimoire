@@ -24,6 +24,7 @@ Pure TypeScript engine analyzing deck rules:
   - Two validation entry points:
     - `validateDeck`: Evaluates the whole deck (deck size floors/ceilings, copy limits, overall legality).
     - `validateForMarks`: Evaluates individual cards rendered in views to render rule-break marks on card tiles. Inactive piles are evaluated for mark warnings but excluded from deck totals.
+    - Both return `[]` when `spec.validates` is false — the `unspecified` format (corpus schema 7), for decks whose format nobody has chosen yet (the ManaBox import). Read the cell, never the key; surfaces say **Not checked**, never "No issues".
   - `singleton.ts`: Evaluates exceptions derived from oracle text rules (e.g. Relentless Rats, Seven Dwarves), never static card name lists.
   - `commanders.ts` & `companions.ts`: Enforces eligibility, partner combinations (Partner, Friends Forever, Choose a Background), color identity rules, and companion deck constraints.
   - `bracket.ts` (`estimateBracket`): Advisory Commander power floor calculation (ranks 2–4). Returns `BASE_FLOOR = 2`; never returns 1 or 5 (which represent player intent). Does not invalidate decks.
