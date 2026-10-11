@@ -2520,8 +2520,8 @@ describe("CollectionPage", () => {
     await screen.findByText("Lightning Bolt");
 
     await user.click(screen.getByRole("button", { name: "Import cards" }));
-    const dialog = await screen.findByRole("dialog", { name: "Import a decklist" });
-    await user.click(within(dialog).getByLabelText("Decklist"));
+    const dialog = await screen.findByRole("dialog", { name: "Import cards" });
+    await user.click(within(dialog).getByLabelText("Card list"));
     await user.paste("1 Sol Ring");
     await user.click(within(dialog).getByRole("button", { name: "Preview" }));
 
@@ -2571,7 +2571,7 @@ describe("CollectionPage", () => {
     // The dialog closes on its own report — `onDone` — the same precedent `DeckEditor` and
     // `DecksPage` set for their own import dialogs.
     await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Import a decklist" })).not.toBeInTheDocument(),
+      expect(screen.queryByRole("dialog", { name: "Import cards" })).not.toBeInTheDocument(),
     );
   });
 

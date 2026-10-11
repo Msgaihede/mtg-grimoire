@@ -966,14 +966,14 @@ it("closes the import dialog on the first Escape and the card on the second", as
   await userEvent.click(trigger);
   // `findBy`, not `getBy`: the panel is a `motion` element and its first painted frame carries
   // its `initial`, so everything inside it is invisible for one commit after the press.
-  expect(await screen.findByRole("dialog", { name: "Import a decklist" })).toBeInTheDocument();
+  expect(await screen.findByRole("dialog", { name: "Import cards" })).toBeInTheDocument();
 
   await userEvent.keyboard("{Escape}");
 
   // And `waitFor` on the way out for the mirror-image reason: the panel outlives the flag by
   // the length of its exit.
   await waitFor(() =>
-    expect(screen.queryByRole("dialog", { name: "Import a decklist" })).not.toBeInTheDocument(),
+    expect(screen.queryByRole("dialog", { name: "Import cards" })).not.toBeInTheDocument(),
   );
   expect(screen.getByRole("dialog", { name: /lightning bolt/i })).toBeInTheDocument();
   expect(trigger).toHaveFocus();
