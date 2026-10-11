@@ -239,6 +239,17 @@ export function auditSentence(
       // that way everywhere it shows one.
       const from = text(p.fromSet)?.toUpperCase() ?? null;
       const to = text(p.toSet)?.toUpperCase() ?? null;
+      // `deck_split_printing` (issue #934) writes this kind too, with the count it moved: part
+      // of a row onto another printing is the swap's act, and a third sentence.
+      if (typeof p.split === "number") {
+        return {
+          text: `Split ${plural(p.split, "copy", "copies")} of ${name} to a new printing`,
+          detail: line(
+            from && to ? `${from} → ${to}` : to,
+            flag(p.folded) ? "merged into one row" : null,
+          ),
+        };
+      }
       return {
         text: `Swapped printing of ${name}`,
         // The fold is the half that must be said: two rows became one, and a list that

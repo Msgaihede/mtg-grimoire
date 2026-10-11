@@ -560,6 +560,18 @@ commands! {
             finish.as_deref(),
         )
     };
+    write deck_split_printing in deck(deck_id: i64, from_card_id: String, to_card_id: String, category_id: i64, variant: String, finish: Option<String>, quantity: i64) = |conn| {
+        split_printing(
+            conn,
+            deck_id,
+            &from_card_id,
+            &to_card_id,
+            category_id,
+            &variant,
+            finish.as_deref(),
+            quantity,
+        )
+    };
     write deck_set_card_finish in deck(deck_id: i64, card_id: String, category_id: i64, variant: String, from_finish: Option<String>, to_finish: Option<String>) = |conn| {
         set_card_finish(
             conn,

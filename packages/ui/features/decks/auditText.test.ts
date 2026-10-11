@@ -400,6 +400,20 @@ describe("auditSentence", () => {
     });
   });
 
+  /** Issue #934: a split records a `swap` with the count it moved, and says it as a split. */
+  it("says a split as a split, with the copies it moved", () => {
+    expect(
+      auditSentence(
+        entry("swap", { category: "Ramp", fromSet: "cmm", toSet: "3ed", split: 2, folded: false }),
+      ),
+    ).toEqual({ text: "Split 2 copies of Sol Ring to a new printing", detail: "CMM → 3ED" });
+    expect(
+      auditSentence(
+        entry("swap", { category: "Ramp", fromSet: "cmm", toSet: "3ed", split: 1, folded: true }),
+      ).text,
+    ).toBe("Split 1 copy of Sol Ring to a new printing");
+  });
+
   /**
    * **The other write that records a `swap`, and it must not borrow that one's sentence.**
    *

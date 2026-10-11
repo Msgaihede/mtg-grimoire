@@ -3841,6 +3841,33 @@ export const deckCommands = {
       finish,
     }),
   /**
+   * Split **some** of a deck row's copies onto another printing of the same card — the deck card
+   * menu's `Split to new printing` (issue #934). {@link ipc.deckSwapPrinting} for part of a row:
+   * `quantity` copies land on `toCardId` in the same pile, variant and finish, folding into a row
+   * already there, and the rest stay. One write, so one history row and one Ctrl+Z.
+   *
+   * Refused in words for everything the swap refuses, and for a `quantity` below one or at or
+   * above the row's own — a split leaves a row behind, and moving every copy is the swap.
+   */
+  deckSplitPrinting: (
+    deckId: number,
+    fromCardId: string,
+    toCardId: string,
+    categoryId: number,
+    variant: DeckVariant,
+    finish: DeckFinish,
+    quantity: number,
+  ) =>
+    invoke<SwapResult>("deck_split_printing", {
+      deckId,
+      fromCardId,
+      toCardId,
+      categoryId,
+      variant,
+      finish,
+      quantity,
+    }),
+  /**
    * Change **which object** a deck row plays — the regular copy, the foil or the etched one.
    *
    * `deckSwapPrinting` one axis over, and the same shape for the same reason: the deck plays a

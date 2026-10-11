@@ -8910,6 +8910,52 @@ describe("the deck grain (deck, variant, category, card)", () => {
     expect(db.deckCards).toHaveLength(0);
   });
 
+  /** Issue #934, the crate's `a_split_*` tests one side over. */
+  it("splits part of a row onto another printing and leaves the rest, label and all", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 7, deckId: 1, cardId: BOLT_A.id, categoryKind: "main", quantity: 4, labelId: 3 }),
+      ],
+    });
+    const w = writeHandlers(db);
+    const split = { deckId: 1, fromCardId: BOLT_A.id, toCardId: BOLT_B.id, ...MAIN };
+    expect(() => w.deck_split_printing({ ...split, quantity: 0 })).toThrow(/at least one copy/);
+    expect(() => w.deck_split_printing({ ...split, quantity: 4 })).toThrow(/leave at least one/);
+    expect(() => w.deck_split_printing({ ...split, toCardId: BOLT_A.id, quantity: 1 })).toThrow(
+      /already this printing/,
+    );
+    expect(w.deck_split_printing({ ...split, quantity: 3 })).toEqual({
+      folded: false,
+      quantity: 3,
+    });
+    expect(db.deckCards).toHaveLength(2);
+    expect(db.deckCards[0]).toMatchObject({ id: 7, cardId: BOLT_A.id, labelId: 3, quantity: 1 });
+    expect(db.deckCards[1]).toMatchObject({ cardId: BOLT_B.id, labelId: 3, quantity: 3 });
+  });
+
+  it("folds a split onto a printing the category already holds, and says so", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, cardId: BOLT_A.id, categoryKind: "main", quantity: 3 }),
+        deckCard({ id: 2, deckId: 1, cardId: BOLT_B.id, categoryKind: "main", quantity: 1 }),
+      ],
+    });
+    const result = writeHandlers(db).deck_split_printing({
+      deckId: 1,
+      fromCardId: BOLT_A.id,
+      toCardId: BOLT_B.id,
+      ...MAIN,
+      quantity: 2,
+    });
+    expect(result).toEqual({ folded: true, quantity: 3 });
+    expect(db.deckCards.map((dc) => [dc.cardId, dc.quantity])).toEqual([
+      [BOLT_A.id, 1],
+      [BOLT_B.id, 3],
+    ]);
+  });
+
   it("folds a swap onto a printing the category already holds, and says so", () => {
     const db = makeDeckDb({
       decks: [deck({ id: 1 })],
@@ -12839,7 +12885,9 @@ describe("the busy fault", () => {
     // 138 → 139 on 2026-10-11 with `set_price_watch` (issue #906), a plain `sync::with_write`
     // `app_meta` write; the movers' read, `price_movers`, sits in `readHandlers`. Read from `left`
     // on this tree. Count again after a merge.
-    expect(names).toHaveLength(139);
+    // 139 → 140 on 2026-10-11 with `deck_split_printing` (issue #934), the swap's plain
+    // `sync::with_write` deck write for part of a row. Count again after a merge.
+    expect(names).toHaveLength(140);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

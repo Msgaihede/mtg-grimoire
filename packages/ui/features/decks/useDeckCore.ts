@@ -1180,6 +1180,46 @@ export function useDeckCore(
   });
 
   /**
+   * Split some of a deck card's copies onto another printing of the same card — the deck card
+   * menu's `Split to new printing`, pressed on `AllPrintingsDialog`'s wall (issue #934).
+   *
+   * {@link swapPrinting} for part of a row, with one difference that matters here: **no
+   * re-anchor**. The row keeps its printing and its address — only its count drops — so a card
+   * open on it is still open on the row the deck plays. The copies that left land on a row the
+   * reader did not open.
+   *
+   * `["decks"]` on a refusal too, for the swap's reason: the press is made from a modal mounted
+   * outside this editor, through its own observer.
+   */
+  const splitPrinting = useMutation({
+    mutationFn: ({
+      fromCardId,
+      toCardId,
+      categoryId,
+      finish,
+      quantity,
+    }: {
+      fromCardId: string;
+      toCardId: string;
+      categoryId: number;
+      finish: DeckFinish;
+      /** How many copies move onto `toCardId` — at least one, and fewer than the row holds. */
+      quantity: number;
+    }) =>
+      ipc.deckSplitPrinting(
+        opened(id),
+        fromCardId,
+        toCardId,
+        categoryId,
+        variant,
+        finish,
+        quantity,
+      ),
+    onSuccess: invalidate,
+    onError: invalidate,
+  });
+
+  /**
    * Everything this deck is short of, onto the wishlist. Answers how many wishes were
    * touched.
    *
@@ -1426,6 +1466,7 @@ export function useDeckCore(
     moveCard,
     refileCard,
     swapPrinting,
+    splitPrinting,
     setCardFinish,
     setLabel,
     missingToWishlist,

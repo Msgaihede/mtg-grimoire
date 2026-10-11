@@ -497,6 +497,39 @@ pub async fn deck_swap_printing(
     .map_err(unfinished)?
 }
 
+/// The deck card menu's `Split to new printing` (issue #934): some of a row's copies onto
+/// another printing, in one write.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn deck_split_printing(
+    state: tauri::State<'_, Arc<AppState>>,
+    deck_id: i64,
+    from_card_id: String,
+    to_card_id: String,
+    category_id: i64,
+    variant: String,
+    finish: Option<String>,
+    quantity: i64,
+) -> Result<SwapResult, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        with_write(&state, |c| {
+            split_printing(
+                c,
+                deck_id,
+                &from_card_id,
+                &to_card_id,
+                category_id,
+                &variant,
+                finish.as_deref(),
+                quantity,
+            )
+        })
+    })
+    .await
+    .map_err(unfinished)?
+}
+
 /// The deck card menu's `Set as foil` and the card pane's own button. `fromFinish` is the row
 /// being addressed and `toFinish` what it should become — both `null` for the regular copy,
 /// which is the only spelling of it that reaches the column.

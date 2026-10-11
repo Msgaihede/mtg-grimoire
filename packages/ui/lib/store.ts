@@ -1158,6 +1158,18 @@ export interface PrintingsRequest {
    * is not.
    */
   trade?: TradePrintingsTarget;
+  /**
+   * **Split, rather than swap** — issue #934, and only ever set by the deck card menu's
+   * `Split to new printing`. Present, a press on a tile moves the number of copies the modal's
+   * own field holds onto that printing and leaves the rest of the `deck` row where it is;
+   * `held` is that row's quantity, which bounds the field at `held − 1` (a split leaves a row
+   * behind — moving every copy is the swap).
+   *
+   * **Optional, for `pick`'s reason**: one construction site, and a `CardWalkStop` carries none,
+   * so a step inside the wall drops it — a split asked of row A must not be made of row B after
+   * arrowing to it. The press after a step is the plain swap the walk has always offered.
+   */
+  split?: { held: number };
 }
 
 /**

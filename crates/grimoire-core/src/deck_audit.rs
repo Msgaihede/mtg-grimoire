@@ -727,6 +727,19 @@ mod tests {
                 }),
             ),
             (
+                "deck_split_printing",
+                1,
+                Box::new(|| {
+                    crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 2)
+                        .unwrap();
+                    clear(&conn);
+                    crate::deck::split_printing(
+                        &conn, id, "bolt-lea", "bolt-m10", main, "live", None, 1,
+                    )
+                    .unwrap();
+                }),
+            ),
+            (
                 "deck_card_set_label",
                 1,
                 Box::new(|| {

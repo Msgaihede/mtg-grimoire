@@ -12,6 +12,7 @@ import {
   buildDeckCardMenu,
   deckCardLabelRows,
   deckCardNoteRows,
+  SPLIT_ONE_COPY,
   type DeckCardMenuDeps,
 } from "./deckCardMenu";
 import { card, spec } from "./validation/fixtures";
@@ -382,6 +383,69 @@ describe("buildDeckCardMenu", () => {
 
     it("is absent where the surface wired no cover write", () => {
       expect(coverRow(buildDeckCardMenu(bolt(), deps()))).toBeUndefined();
+    });
+  });
+
+  /** **Split to new printing…** (issue #934) — some of a row's copies onto another printing. */
+  describe("the split row", () => {
+    const splitRow = (items: MenuItem[]) =>
+      items.find((i): i is MenuAction => i.kind === "action" && i.id === "split-printing");
+
+    it("opens the split on the right-clicked row when it holds more than one copy", () => {
+      const split = vi.fn();
+      const card = bolt({ quantity: 4 });
+      const row = splitRow(buildDeckCardMenu(card, deps({ split })));
+
+      expect(row?.label).toBe("Split to new printing…");
+      expect(row?.disabled).toBeUndefined();
+      row?.onSelect();
+      expect(split).toHaveBeenCalledWith(card);
+    });
+
+    it("stays visible but greyed, with a reason, on a row of one", () => {
+      const split = vi.fn();
+      const row = splitRow(buildDeckCardMenu(bolt({ quantity: 1 }), deps({ split })));
+
+      expect(row?.disabled).toBe(true);
+      expect(row?.reason).toBe(SPLIT_ONE_COPY);
+      row?.onSelect();
+      expect(split).not.toHaveBeenCalled();
+    });
+
+    it("greys, silently, on a printing the card database has lost", () => {
+      const split = vi.fn();
+      const row = splitRow(
+        buildDeckCardMenu(bolt({ quantity: 3, oracleId: null }), deps({ split })),
+      );
+
+      expect(row?.disabled).toBe(true);
+      expect(row?.reason).toBeUndefined();
+    });
+
+    it("stays about the one card under a picked set", () => {
+      const split = vi.fn();
+      const card = bolt({ quantity: 2 });
+      const other = bolt({ cardId: "other", categoryId: card.categoryId, quantity: 3 });
+      const row = splitRow(buildDeckCardMenu(card, deps({ split, picked: [card, other] })));
+
+      expect(row?.label).toBe("Split to new printing…");
+      row?.onSelect();
+      expect(split).toHaveBeenCalledTimes(1);
+      expect(split).toHaveBeenCalledWith(card);
+    });
+
+    it("sits in the Set as group, under the deck image row", () => {
+      const items = shape(
+        buildDeckCardMenu(
+          bolt({ quantity: 2 }),
+          deps({ split: vi.fn(), cover: { cardId: null, set: vi.fn() } }),
+        ),
+      );
+      expect(items.indexOf("split-printing")).toBe(items.indexOf("set-cover") + 1);
+    });
+
+    it("is absent where the surface wired no split", () => {
+      expect(splitRow(buildDeckCardMenu(bolt({ quantity: 2 }), deps()))).toBeUndefined();
     });
   });
 

@@ -511,6 +511,7 @@ pub fn run() {
             deck::deck_clear,
             deck::deck_move_card,
             deck::deck_swap_printing,
+            deck::deck_split_printing,
             deck::deck_set_card_finish,
             deck::deck_missing_to_wishlist,
             import::import_resolve,
