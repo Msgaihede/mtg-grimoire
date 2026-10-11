@@ -4336,6 +4336,41 @@ describe("the wall at the root", () => {
     );
   });
 
+  /**
+   * **Ctrl+A picks what is drawn, and a fold does not add to it later** — issue #938. A shut
+   * folder's cards are not on the wall at the press, and opening it afterwards must not sweep them
+   * into a set the reader made without seeing them.
+   */
+  it("keeps a shut folder's cards out of a Ctrl+A, before and after it is opened", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionFolderList.mockResolvedValue([BINDER, FOILS, SEALED]);
+    collectionList.mockResolvedValue(
+      page([
+        { ...BOLT, folderId: 9, folderName: "Foils" },
+        { ...BOLT, id: 8, folderId: 4, folderName: "Sealed" },
+      ]),
+    );
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await findHeading("Foils");
+    await user.click(
+      within(heading("Trade binder")).getByRole("button", { name: "Collapse Trade binder" }),
+    );
+    await waitFor(() => expect(queryHeading("Foils")).toBeNull());
+
+    await user.keyboard("{Control>}a{/Control}");
+
+    await waitFor(() => expect(useAppStore.getState().cardSelection?.keys).toEqual(["c1:foil@4"]));
+
+    await user.click(
+      within(heading("Trade binder")).getByRole("button", { name: "Expand Trade binder" }),
+    );
+    await findHeading("Foils");
+    expect(await screen.findAllByRole("button", { name: "Lightning Bolt" })).toHaveLength(2);
+    await waitFor(() => expect(useAppStore.getState().cardSelection?.allOf).toBeUndefined());
+    expect(useAppStore.getState().cardSelection?.keys).toEqual(["c1:foil@4"]);
+  });
+
   /** Collapse all folds the app's own shelves too — to their default, which is shut. */
   it("folds every shelf on Collapse all, the app's own included", async () => {
     collectionFolderList.mockResolvedValue([BINDER, DECK_GROUP]);

@@ -18,6 +18,7 @@ import {
 } from "@/components/FilterChips";
 import type { MenuItem } from "@/components/menu/types";
 import { usePublishCardWalk } from "@/features/card/cardWalk";
+import { registerSelectAll } from "@/features/search/selectAllSurface";
 import { FOCUS } from "@/lib/focus";
 import type { DeckCard, DeckVariant } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
@@ -650,6 +651,44 @@ export function DeckDesk({
     (card: DeckCard, event: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) =>
       pickRef.current(deckCardSlot(card.categoryId, card.cardId, card.finish), event),
     [],
+  );
+
+  /**
+   * **Ctrl+A widens the picked set to its stacks** — issue #938.
+   *
+   * Every card of each stack that holds a picked card, and nothing at all when nothing is picked —
+   * so `Ctrl+A`, `Delete` cannot empty a deck from a standing start; `multiSelect.ts`'s
+   * `selectStacks` is the rule and argues it. A stack is a group as the
+   * view on screen draws it, so under a derived grouping (type, colour, …) it is that group and not
+   * the category behind it. **A stack hidden in Stacks view is not on the desk** (issue #618), so a
+   * press never reaches into one.
+   *
+   * The chord is `selectAllSurface.ts`'s, which already chooses between this desk and a wall in the
+   * docked search column: a press inside the column is the column's, anywhere else on the desk is
+   * this. Read through a ref, `CardGrid`'s arrangement, so the registration is made once.
+   */
+  const selectStacks = picked.selectStacks;
+  const selectAllRef = useRef(() => {});
+  useEffect(() => {
+    selectAllRef.current = () =>
+      selectStacks(
+        groups
+          .filter(
+            (group) =>
+              view !== "stacks" || group.categoryId === null || !hiddenStacks.has(group.categoryId),
+          )
+          .map((group) =>
+            group.cards.map((card) => deckCardSlot(card.categoryId, card.cardId, card.finish)),
+          ),
+      );
+  }, [selectStacks, groups, view, hiddenStacks]);
+  useEffect(
+    () =>
+      registerSelectAll({
+        element: () => deskRef.current,
+        selectAll: () => selectAllRef.current(),
+      }),
+    [deskRef],
   );
 
   /**
