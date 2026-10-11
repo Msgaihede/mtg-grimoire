@@ -845,7 +845,7 @@ function starterWishes(): FakeWish[] {
  * reader sees; and `stamp` measures a write from the newest row in the store, so keeping the
  * seeds under the base leaves the first edit of any story at `CLOCK_BASE + 1`.
  *
- * **Three of the four wear deck tags** (user schema v61, issue #834) — the three at the root,
+ * **Three of the four wear deck tags** (user schema v62, issue #834) — the three at the root,
  * which is the wall the gallery opens on: two on deck 1, three on deck 2, one on the archived
  * deck 3. `Budget` is on both live ones, so the tag field's suggestions — the tags decks
  * currently wear, with no table behind them — have a tag two decks share and four only one

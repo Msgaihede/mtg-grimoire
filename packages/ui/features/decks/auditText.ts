@@ -1050,7 +1050,7 @@ function deckLine(p: Record<string, unknown>): AuditLine {
         default:
           return { text: `Changed where the deck's ${TOKENS_HEADING} are tracked`, detail: null };
       }
-    // The deck's own tags (`decks.tags`, user schema v61, issue #834). `deck.rs` records the two
+    // The deck's own tags (`decks.tags`, user schema v62, issue #834). `deck.rs` records the two
     // whole lists under **`tags`**, and `xGroup`'s paragraph applies: the `default` arm below
     // never fails, so only `auditText.test.ts` holds the spelling.
     //

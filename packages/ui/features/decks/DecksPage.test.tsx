@@ -1107,7 +1107,7 @@ describe("DecksPage", () => {
     });
 
     /**
-     * **The reader's own tags, in a row on the art** (`decks.tags`, user schema v61, issue #834).
+     * **The reader's own tags, in a row on the art** (`decks.tags`, user schema v62, issue #834).
      *
      * Three facts, and the third is the one a tile can lose without anything else going red: the
      * tags are drawn in the reader's order, a deck with none draws no row at all, and the row is

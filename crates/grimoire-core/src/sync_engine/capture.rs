@@ -539,7 +539,7 @@ pub const TABLES: [Spec; 18] = [
             // safely for an old peer — `0`, a shut band — and adding was the safe direction,
             // `theory_mark_*`'s note above: a v57 device neither names nor reads the key.
             "todos_open",
-            // The reader's own tags for the deck (user schema v61, issue #834) — a JSON array of
+            // The reader's own tags for the deck (user schema v62, issue #834) — a JSON array of
             // strings in one column, `collection_entries.tags`' shape on the spec at the top of
             // this list, and it travels for `bracket`'s reason: `Meme` is an answer about the
             // deck. **One field, so last-writer-wins takes the whole list**: two devices tagging
@@ -1575,7 +1575,7 @@ mod tests {
         );
     }
 
-    /// **A deck's tags travel** (user schema v61, issue #834) — the reader's own words about the
+    /// **A deck's tags travel** (user schema v62, issue #834) — the reader's own words about the
     /// deck, and a tag that stayed behind would leave `Meme` on one device and an untagged deck
     /// on the next, with nothing on screen saying why. As the column's JSON text, the way
     /// `collection_entries.tags` goes out, and an emptied list is an op too: taking the last tag

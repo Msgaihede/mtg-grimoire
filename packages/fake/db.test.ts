@@ -10242,7 +10242,7 @@ describe("the deck row itself", () => {
   });
 
   /**
-   * `decks.tags` (user schema v61, issue #834): the reader's own **deck tags** — free text, and
+   * `decks.tags` (user schema v62, issue #834): the reader's own **deck tags** — free text, and
    * neither a Scryfall Tagger tag nor a deck label. `NOT NULL DEFAULT '[]'`, so a seed that never
    * says and a deck made here both answer `[]`, on every read that carries the row.
    *

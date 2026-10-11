@@ -119,7 +119,7 @@ export interface DeckSettingsValue {
    */
   defaultCategoryId: number;
   /**
-   * The deck's own tags, in the reader's order — `decks.tags`, user schema v61 (issue #834).
+   * The deck's own tags, in the reader's order — `decks.tags`, user schema v62 (issue #834).
    * Free text about the whole deck; `deckTags.ts` has what they are and are not.
    *
    * Required on the value for {@link defaultCategoryId}'s reason, though only a host that can

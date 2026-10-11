@@ -3740,7 +3740,7 @@ export interface DeckPatch {
   bracket?: number;
   /**
    * The deck's whole tag list, in the reader's order — see {@link DeckRow.tags}; `decks.tags`,
-   * user schema v61 (issue #834).
+   * user schema v62 (issue #834).
    *
    * **The list replaces, it does not merge**, and that is what lets this key clear the column
    * where most keys on this patch cannot: absent still means "leave it", and `[]` is a value —
@@ -4253,7 +4253,7 @@ export interface DeckRow {
   bracket: number;
   /**
    * The reader's own tags for this deck, in the order they added them — `decks.tags TEXT NOT
-   * NULL DEFAULT '[]'`, user schema v61 (issue #834), and `[]` on every deck that predates it.
+   * NULL DEFAULT '[]'`, user schema v62 (issue #834), and `[]` on every deck that predates it.
    *
    * **A deck tag is free text and nothing else**: `No Gamechangers`, `Meme`, `Budget`. It is not
    * one of Scryfall's Tagger tags (`otag:` / `atag:`, which describe a *card*) and not a deck

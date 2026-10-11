@@ -549,7 +549,7 @@ describe("auditSentence", () => {
   });
 
   /**
-   * The deck's own tags (`decks.tags`, user schema v61, issue #834). `deck.rs` records both
+   * The deck's own tags (`decks.tags`, user schema v62, issue #834). `deck.rs` records both
    * whole lists under `tags`; the sentence is the *difference*, because one tag added or one
    * taken off is what the reader did.
    *

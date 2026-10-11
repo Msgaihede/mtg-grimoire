@@ -1,5 +1,5 @@
 /**
- * A deck's own tags — the reader's free text for one deck, `decks.tags` at user schema v61
+ * A deck's own tags — the reader's free text for one deck, `decks.tags` at user schema v62
  * (issue #834): `No Gamechangers`, `Meme`, `Budget`.
  *
  * **Not a Scryfall tag and not a deck label.** `docs/agent/DOMAIN_VOCABULARY.md` has the whole

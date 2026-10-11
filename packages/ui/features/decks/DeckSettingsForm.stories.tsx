@@ -140,7 +140,7 @@ function Body({
     // `AUTO_CATEGORY` for a deck that does not exist — the column's own `DEFAULT 0`, and the
     // only answer a deck with no categories could honestly give.
     defaultCategoryId: row?.defaultCategoryId ?? AUTO_CATEGORY,
-    // `[]` for a deck that does not exist — the column's own `DEFAULT '[]'` (user schema v61).
+    // `[]` for a deck that does not exist — the column's own `DEFAULT '[]'` (user schema v62).
     tags: row?.tags ?? [],
   }));
   // What the Tags field suggests: every tag a seeded deck wears. Read here because the form

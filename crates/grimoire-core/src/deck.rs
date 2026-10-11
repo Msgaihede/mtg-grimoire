@@ -791,7 +791,7 @@ pub struct DeckPatch {
     /// elsewhere* — [`VIRTUAL_HOLDS_NOTHING`] is what every collection and wishlist command says
     /// when it is pointed at one of these decks.
     pub virtual_only: Option<bool>,
-    /// The deck's whole **deck tag** list, in the reader's order — user schema v61, issue #834.
+    /// The deck's whole **deck tag** list, in the reader's order — user schema v62, issue #834.
     /// See [`DeckRow::tags`] for what a deck tag is and is not.
     ///
     /// **The list replaces, it never merges — which is what lets this field clear its column
@@ -1116,7 +1116,7 @@ pub struct DeckRow {
     /// rule reads are supplied separately.
     pub bracket: i64,
     /// The reader's own **deck tags**, in the order they added them — `decks.tags`, user schema
-    /// v61 (issue #834), `DEFAULT '[]'`, so every deck that predates the rung wears none.
+    /// v62 (issue #834), `DEFAULT '[]'`, so every deck that predates the rung wears none.
     ///
     /// **Free text and nothing else**: `No Gamechangers`, `Meme`, `Budget`. Not a Scryfall Tagger
     /// tag, which describes a *card*, and not a deck **label** (`deck_labels`, the mark on one
@@ -1138,7 +1138,7 @@ pub struct DeckRow {
 }
 
 /// One deck's tags as a reader would have typed them carefully — [`update_deck`]'s whole say
-/// over [`DeckPatch::tags`] (user schema v61, issue #834).
+/// over [`DeckPatch::tags`] (user schema v62, issue #834).
 ///
 /// Each tag has its ends trimmed and its inner runs of whitespace closed to one space, so a
 /// pasted `"No   Gamechangers "` is the tag the reader meant; a tag with nothing left is dropped;
@@ -1596,7 +1596,7 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
         // the Notes band where the reader pressed To-do, both fields still holding a `0` or a
         // `1`. The checklist beside it in the table is deliberately not read at all.
         todos_open: r.get(32)?,
-        // 33, at the end of the named list, same rule — user schema v61's deck tags. A `TEXT`
+        // 33, at the end of the named list, same rule — user schema v62's deck tags. A `TEXT`
         // like the words at 13 to 15, 18, 27 and 28, and a crossed index here is the quiet kind:
         // `read_tags` answers *no tags* for any text that is not a JSON array, so a variant or a
         // mode read by mistake would draw an untagged deck rather than fail.
@@ -2305,7 +2305,7 @@ struct DeckBefore {
     token_mode: String,
     /// User schema v57's managed-wishlist tokens switch, for the history row.
     managed_wishlist_tokens: bool,
-    /// User schema v61's deck tags, for the history row — through [`read_tags`], so the `from`
+    /// User schema v62's deck tags, for the history row — through [`read_tags`], so the `from`
     /// side is the list the reader was looking at.
     tags: Vec<String>,
 }
@@ -2506,7 +2506,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                     // 19, at the end, same rule — a `bool` over an `INTEGER` like the eight
                     // above it, so a crossed index records the wrong switch moving.
                     managed_wishlist_tokens: r.get(19)?,
-                    // 20, at the end, same rule — user schema v61's deck tags, read as
+                    // 20, at the end, same rule — user schema v62's deck tags, read as
                     // `deck_row` reads them. TEXT like eight of the columns above it, and
                     // `read_tags` answers an empty list for any of them: a crossed index would
                     // record every first tag as added to a deck that had none.
@@ -2646,7 +2646,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 -- are `deck_todo_lists` rows since v59, and `deck_todos` is their only writer.
                 todos_open = coalesce(?26, todos_open),
                 -- `?27`, the next number at the **end**, same rule one rung later. User schema
-                -- v61's deck tags, and the **tidied** binding, `bracket`'s note: `clean_tags` ran
+                -- v62's deck tags, and the **tidied** binding, `bracket`'s note: `clean_tags` ran
                 -- above and this is its answer as JSON text. The one hole here whose value can
                 -- *empty* its column — `[]` is text, so `coalesce` writes it — where a NULL in
                 -- any of the others, this one included, is still leave-it.
@@ -3075,7 +3075,7 @@ struct DeckResolved<'a> {
     /// The cardboard half of the deck's kind, through [`deck_kind`] — see
     /// [`Self::theory_enabled`], whose every word this shares.
     virtual_only: Option<bool>,
-    /// Through [`clean_tags`] — user schema v61's deck tags as they were written. `name`'s kind
+    /// Through [`clean_tags`] — user schema v62's deck tags as they were written. `name`'s kind
     /// of field rather than the pair's: what was typed and what was stored can differ, by a
     /// stray space or a repeated tag, and the history compares the second.
     tags: Option<&'a [String]>,
@@ -3326,7 +3326,7 @@ fn record_deck_edit(
         field("tokenMode", json!(before.token_mode), json!(to))?;
     }
     // `tags` — one word, so `xGroup`'s camelCase rule has nothing to do — and **both lists
-    // whole**, as JSON arrays of strings: user schema v61's deck tags (issue #834). A list rather
+    // whole**, as JSON arrays of strings: user schema v62's deck tags (issue #834). A list rather
     // than "added Meme", because the patch replaces the list and the row says what the press did;
     // which tags came and went is a difference `auditText.ts` can draw from the two sides, and a
     // reorder, which adds and removes nothing, is still a change this records.
@@ -3798,7 +3798,7 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
             // happened to have open, left behind for the other three disclosures' reason. The
             // copy starts with no list and the band shut.
             //
-            // **User schema v61's `tags` is copied** (issue #834), `bracket`'s kind and the
+            // **User schema v62's `tags` is copied** (issue #834), `bracket`'s kind and the
             // opposite of the line above: a deck tag is an answer about the deck — a copy of a
             // `Meme` deck is a `Meme` deck — where a to-do is a job, and a job copied is a job
             // owed twice. The stored text travels as it is, never through `read_tags` and back,
@@ -10734,7 +10734,7 @@ mod tests {
                 // be `undefined` — which `tokenRail.tsx` reads as *last*, so the pile would snap
                 // back on every open with no type error anywhere.
                 "tokenRailIndex": 2,
-                // User schema v61, and **an array, not the column's JSON text**: `ipc.ts` types
+                // User schema v62, and **an array, not the column's JSON text**: `ipc.ts` types
                 // this key `string[]`, and the one string `collection_entries.tags` travels as
                 // would be iterated a character at a time. One word, so no casing to get wrong.
                 "tags": ["No Gamechangers", "Meme"]
@@ -10816,7 +10816,7 @@ mod tests {
         // User schema v58. The To-do band's disclosure sends this, and a misspelled key would be
         // read as an omitted one — a band that opens and forgets it was opened.
         assert_eq!(patch.todos_open, Some(true));
-        // User schema v61. **The empty list, because it is the one payload that must not read as
+        // User schema v62. **The empty list, because it is the one payload that must not read as
         // absent**: the tag field sends `[]` when the reader removes their last tag, and a `None`
         // here would be *leave it* — a tag that cannot be taken off.
         assert_eq!(patch.tags, Some(Vec::new()));
@@ -12201,7 +12201,7 @@ mod tests {
         );
     }
 
-    /// **What a tidy tag list is** (user schema v61, issue #834): ends trimmed, inner runs of
+    /// **What a tidy tag list is** (user schema v62, issue #834): ends trimmed, inner runs of
     /// whitespace closed to one space, empties dropped, and a repeat dropped whatever its
     /// capitals with the first spelling kept — the reader's order otherwise, and nothing refused.
     #[test]
@@ -12281,7 +12281,7 @@ mod tests {
             .is_err());
     }
 
-    /// A deck's **tags**, end to end (user schema v61, issue #834): none on a new deck, a patch
+    /// A deck's **tags**, end to end (user schema v62, issue #834): none on a new deck, a patch
     /// writes the tidied list, an absent field leaves it, **the change is a history row carrying
     /// both lists and one Ctrl+Z puts it back**, a copy keeps them, and `Some(vec![])` really
     /// clears — a value, where every other way of saying nothing on this patch is *leave it*.

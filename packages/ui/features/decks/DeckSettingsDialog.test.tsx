@@ -1396,7 +1396,7 @@ describe("DeckSettingsDialog", () => {
   });
 
   /**
-   * The deck's own tags (`decks.tags`, user schema v61, issue #834). The field's behaviour is
+   * The deck's own tags (`decks.tags`, user schema v62, issue #834). The field's behaviour is
    * `DeckTagsField.test.tsx`'s; what only this host can say is **which write each act is** and
    * where the suggestions come from.
    */

@@ -1383,7 +1383,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   ⚠️ **The rung moves `USER_SCHEMA_VERSION`, and sync stamps every op with it** — so, like every
   rung, a v59 peer holds a v60 device's ops until it updates, and `pnpm web:deploy-guard`
   refuses a by-hand web deploy from a tree at 60 until a release carries it.
-  **v61 adds `decks.tags TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags))`** (2026-10-11,
+  **v62 adds `decks.tags TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags))`** (2026-10-11,
   [issue #834](https://github.com/Msgaihede/mtg-grimoire/issues/834)) — the reader's own free-text
   tags for a deck, a JSON array of strings, `collection_entries.tags`' declaration word for word.
   **A column and not a table**, v58's argument without v59's reversal waiting behind it: a tag is a
@@ -1393,13 +1393,13 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   shape a newer build sends is refused at apply; `deck::read_tags` reads what it can. With a
   history row (`tags`, both lists), a place on `deck_undo::DECK_FIELDS` and a seat in
   `duplicate_deck`, v57's rules. One `ADD COLUMN`, no index, **no trigger off** (it writes no row),
-  so neither figure at the top of this page moves. It owes **`UNDO_V61`** at the head of every
-  chain, ahead of `UNDO_V60` — the same `grep -c` over `'{UNDO_V61}'` counts them (33 on the day:
+  so neither figure at the top of this page moves. It owes **`UNDO_V62`** at the head of every
+  chain, ahead of `UNDO_V60` — the same `grep -c` over `'{UNDO_V62}'` counts them (33 on the day:
   the thirty-one that carried `UNDO_V60` and the two rung tests' own rewinds) — which drops the three
   `decks` capture triggers before the column for `UNDO_V56`'s reason. One fixture moved with it:
   `a_rewind_from_v59_lands_on_v58s_exact_shape` reads head's `decks` tail as `todos_open` **and**
   `tags`. [decks-storage.md](decks-storage.md)'s *Deck tags* has the read, the tidy and the
-  history row. Like every rung it moves `USER_SCHEMA_VERSION`: a v60 peer holds a v61 device's ops
+  history row. Like every rung it moves `USER_SCHEMA_VERSION`: a v60 peer holds a v62 device's ops
   until it updates.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks

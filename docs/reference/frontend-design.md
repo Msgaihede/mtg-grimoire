@@ -6734,7 +6734,7 @@ exact at every stop the ladder has; a measured one would answer a frame late.
   nothing — never `Bracket ?`, never a skeleton, never a dash — which is exactly what the caption
   segment did before it.
 - **The reader's deck tags are a third thing in that overlay, and deliberately not a third mark**
-  (issue #834, user schema v61). They are a `<ul aria-label="Tags">` in the same box, one row
+  (issue #834, user schema v62). They are a `<ul aria-label="Tags">` in the same box, one row
   packed to the right: **above** the two marks when the deck wears either, and on the art's
   bottom edge **in their place** when it wears neither. `TILE_TAG` takes `TILE_MARK`'s box and
   scale and not its face — neutral border and ink, the reading face, the reader's own capitals —

@@ -4657,7 +4657,7 @@ v52's captured launch pass:
 
 `UNDO_V59` sits at the front of every rewind chain — directly behind v60's `UNDO_V60` since
 2026-10-07, which drops `sync_orphans` ([data-and-sync.md](data-and-sync.md)), and since
-2026-10-11 behind v61's `UNDO_V61` too, which drops `decks.tags` (*Deck tags*, below) and leads
+2026-10-11 behind v62's `UNDO_V62` too, which drops `decks.tags` (*Deck tags*, below) and leads
 them now —
 and lands on v58's exact shape: it drops the
 table and both indexes, drops the `decks` triggers, and adds `todos` back as v58's `ALTER TABLE`
@@ -4804,7 +4804,7 @@ v58 needed no entry, because the list was a column of `decks`. A table does: `de
 
 ## Deck tags: free text on the deck, in `decks.tags`
 
-User schema **v61** (2026-10-11, [issue #834](https://github.com/Msgaihede/mtg-grimoire/issues/834))
+User schema **v62** (2026-10-11, [issue #834](https://github.com/Msgaihede/mtg-grimoire/issues/834))
 is `decks.tags TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags))` — the reader's own tags for a
 deck (`Meme`, `Budget`, `No Gamechangers`) as a JSON array of strings, `collection_entries.tags`'
 declaration word for word. **Not a Scryfall Tagger tag and not a deck label** (`deck_labels`);
@@ -4842,5 +4842,5 @@ command: it rides `DeckRow` and `DeckPatch`.
 - **The rung is one `ADD COLUMN`** with the `CHECK` on it (v52's `token_mode` is the precedent),
   takes no capture trigger off because it writes no row, and adds no index.
   `deck_tags_round_trip_tidy_audit_and_undo` (`deck.rs`) and
-  `v61_gives_every_deck_an_empty_tag_list_behind_a_json_check` (`schema.rs`) are the fences;
-  [data-and-sync.md](data-and-sync.md)'s v61 paragraph has the rewind.
+  `v62_gives_every_deck_an_empty_tag_list_behind_a_json_check` (`schema.rs`) are the fences;
+  [data-and-sync.md](data-and-sync.md)'s v62 paragraph has the rewind.

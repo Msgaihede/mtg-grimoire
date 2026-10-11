@@ -1039,7 +1039,7 @@ export const Zoomed: Story = {
 };
 
 /**
- * **The reader's own tags, in a row over the art's marks** (issue #834, user schema v61).
+ * **The reader's own tags, in a row over the art's marks** (issue #834, user schema v62).
  *
  * A tag is free text about a whole deck — `Budget`, `No Gamechangers`, `Meme` — typed in Deck
  * settings and drawn here. It is not one of Scryfall's Tagger tags, which describe a card, and

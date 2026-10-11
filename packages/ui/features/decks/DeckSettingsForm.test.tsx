@@ -962,7 +962,7 @@ describe("folderPaths", () => {
 });
 
 /**
- * The deck's own tags (`decks.tags`, user schema v61, issue #834). `DeckTagsField.test.tsx` has
+ * The deck's own tags (`decks.tags`, user schema v62, issue #834). `DeckTagsField.test.tsx` has
  * the field; what belongs here is the form's half — which host draws it, and what leaves through
  * which callback.
  */
