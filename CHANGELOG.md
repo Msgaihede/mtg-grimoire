@@ -30,6 +30,43 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.46.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.45.0...v0.46.0) (2026-10-11)
+
+
+### Features
+
+* **collection,wishlist:** View all — every card on one flat wall, its folder on the chin ([84604b6](https://github.com/Msgaihede/mtg-grimoire/commit/84604b6c718bf754b295d0f6f1a8554a26d71910))
+* **collection,wishlist:** View all — every card on one flat wall, its folder on the chin ([e415c06](https://github.com/Msgaihede/mtg-grimoire/commit/e415c06bc610f02ee930bd7fb70b01a4084287ed)), closes [#907](https://github.com/Msgaihede/mtg-grimoire/issues/907)
+* **decks:** add and remove deck tags from the gallery's right-click menu ([6cf5f08](https://github.com/Msgaihede/mtg-grimoire/commit/6cf5f086310c2459d2f427525d943769cab78e5d))
+* **decks:** add and remove deck tags from the gallery's right-click menu ([9c355d9](https://github.com/Msgaihede/mtg-grimoire/commit/9c355d99b2e7c754a0e7c627f73a198bc81ae9f6)), closes [#914](https://github.com/Msgaihede/mtg-grimoire/issues/914)
+* **decks:** reorder deck tags by drag and drop in deck settings ([d0d66f1](https://github.com/Msgaihede/mtg-grimoire/commit/d0d66f1d0230687d73c50cdcb9d79263d4f08501))
+* **decks:** reorder deck tags by drag and drop in deck settings ([eca0440](https://github.com/Msgaihede/mtg-grimoire/commit/eca0440d81e6f641f876e6d04106b1d76f8afc53)), closes [#913](https://github.com/Msgaihede/mtg-grimoire/issues/913)
+* **decks:** show the deck's description beside its notes and to-dos ([c68ebdd](https://github.com/Msgaihede/mtg-grimoire/commit/c68ebdd01bd4c378252438fbfb8fc0e1b85187e0))
+* **decks:** show the deck's description beside its notes and to-dos ([102086a](https://github.com/Msgaihede/mtg-grimoire/commit/102086af0019eee2f33399f8e5494a3e7a7f3783)), closes [#912](https://github.com/Msgaihede/mtg-grimoire/issues/912)
+* **home:** a Latest change notes widget in the dashboard catalogue ([5beee67](https://github.com/Msgaihede/mtg-grimoire/commit/5beee67204099c7ab7a85bff165e14bf86d47777))
+* **home:** a Latest change notes widget in the dashboard catalogue ([#905](https://github.com/Msgaihede/mtg-grimoire/issues/905)) ([2284ab4](https://github.com/Msgaihede/mtg-grimoire/commit/2284ab4b68d8a2cf4b69a5137600c67e41008c28))
+* remember Search and Tags filters when returning to the page ([9661c1f](https://github.com/Msgaihede/mtg-grimoire/commit/9661c1f54c7d5492623deb48e8f91d83ea4394f1))
+* remember Search and Tags filters when returning to the page ([8c7ec41](https://github.com/Msgaihede/mtg-grimoire/commit/8c7ec4184db698a7356b5b1770d9009eade0f868)), closes [#908](https://github.com/Msgaihede/mtg-grimoire/issues/908)
+* scope the Price movers widget to chosen folders and cards ([beea7ab](https://github.com/Msgaihede/mtg-grimoire/commit/beea7aba9a9386fa39656e810f437872a3ca5666))
+* scope the Price movers widget to chosen folders and cards ([#906](https://github.com/Msgaihede/mtg-grimoire/issues/906)) ([7ee32d3](https://github.com/Msgaihede/mtg-grimoire/commit/7ee32d382b2e0a2787f10d844f3d0702184e3c1b))
+* **search:** show all printings beside Filters on a wide bar ([1080d2a](https://github.com/Msgaihede/mtg-grimoire/commit/1080d2a4805bebccabce1058a66edd64c04047eb))
+* **search:** show all printings beside Filters on a wide bar ([fde3023](https://github.com/Msgaihede/mtg-grimoire/commit/fde3023f565e6ad16b6981b1bd56cd955cb61614)), closes [#911](https://github.com/Msgaihede/mtg-grimoire/issues/911)
+* **search:** support Scryfall's full search syntax ([c2c5d9a](https://github.com/Msgaihede/mtg-grimoire/commit/c2c5d9aa42b099f46a9414759a9f179b555d576e))
+* **search:** support Scryfall's full search syntax ([#909](https://github.com/Msgaihede/mtg-grimoire/issues/909)) ([42b56fc](https://github.com/Msgaihede/mtg-grimoire/commit/42b56fccdbd9f0995f2d293ceeca124ad323b4b6))
+* select every filtered card with Ctrl+A ([#910](https://github.com/Msgaihede/mtg-grimoire/issues/910)) ([#925](https://github.com/Msgaihede/mtg-grimoire/issues/925)) ([95e99cf](https://github.com/Msgaihede/mtg-grimoire/commit/95e99cf07045f640c45626397259d7e4aeb22c39))
+* show hidden deck tags behind an … pill and a hover on the tag row ([3307e20](https://github.com/Msgaihede/mtg-grimoire/commit/3307e207ef807dcb8b9d6be10b5c50442cc38a17))
+* show hidden deck tags behind an … pill and a hover on the tag row ([80cefc1](https://github.com/Msgaihede/mtg-grimoire/commit/80cefc1d8ea71494044c31e6a62ad1a85bff3a65)), closes [#901](https://github.com/Msgaihede/mtg-grimoire/issues/901)
+* **trade:** import and export each side of a trade ([d6f1d56](https://github.com/Msgaihede/mtg-grimoire/commit/d6f1d566e83441ea2c295ca3a6096f90ea58c2a1))
+* **trade:** import and export each side of a trade ([970dd82](https://github.com/Msgaihede/mtg-grimoire/commit/970dd827397a2942ef14b111795a6542ddc2302c)), closes [#903](https://github.com/Msgaihede/mtg-grimoire/issues/903)
+* **trade:** open all printings from a trade line's art ([457724e](https://github.com/Msgaihede/mtg-grimoire/commit/457724eac4ba32eb472254d0fd0e0485dcb326b7))
+* **trade:** open all printings from a trade line's art ([41c04b0](https://github.com/Msgaihede/mtg-grimoire/commit/41c04b070641cf8a272396919ab8d23a5527c303)), closes [#902](https://github.com/Msgaihede/mtg-grimoire/issues/902)
+
+
+### Bug Fixes
+
+* press "Show all printings" in the Tags page's remembered-filters test ([3dd749a](https://github.com/Msgaihede/mtg-grimoire/commit/3dd749a27991ef4cc7f111b06fb5089e31e7908b))
+* press "Show all printings" in the Tags page's remembered-filters test ([140d154](https://github.com/Msgaihede/mtg-grimoire/commit/140d154afc26dc3fa8df1cbb3f38d9b02f286bce))
+
 ## [0.45.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.44.0...v0.45.0) (2026-10-11)
 
 
