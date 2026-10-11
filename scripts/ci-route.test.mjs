@@ -260,6 +260,7 @@ describe("the arms", () => {
     ["scripts/android-release/proof.sh", T, T, F, F, F, T, F],
     ["scripts/android-release/check-version.sh", T, T, F, F, F, T, F],
     ["scripts/android-release/StripSignature.java", T, T, F, F, F, T, F],
+    ["scripts/android-release/play-upload.mjs", T, T, F, F, F, T, F],
     ["scripts/web-deploy-guard.mjs", T, F, F, F, F, F, F],
     ["scripts/web-deploy-probe.mjs", T, F, F, F, F, F, F],
     // The web host: a workspace member `rust` tests, and the crate `web` compiles for a browser.
