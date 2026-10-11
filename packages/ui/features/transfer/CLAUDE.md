@@ -44,6 +44,7 @@ Importing maps raw text or CSV to database entries across two UI steps: text ent
   - Right-clicking a pile heading imports directly into that category via `forcedCategoryName`.
 - **Destination planner (`destinations/deck.ts`)**: Pure TypeScript planner without React or IPC dependencies. Resolves Oracle tag slugs in a single batch query (`oracleTagsForPrintings`) during the `resolve` mutation to prevent preview flicker.
 - **Single-transaction commits**: Imports never run per-line mutations. `deck_import_commit` commits the entire list in one database transaction.
+- **Collection folder target (`Import into`)**: The collection's step files the whole file into one folder — Not sorted, a user folder, or a new top-level one made at the press — via `collection_import_commit`'s `folderId`. The desktop binds it with `collectionDestinationInto({ folderId })` (memoised on the id); the phone face passes no `folders` and draws no selector. See [import-export.md](../../../../docs/reference/import-export.md#importing-into-a-folder).
 - **Replace mode and virtual decks**: Replacing a live deck list releases owned copies to `Recently removed`. Virtual decks have no physical collection links and never release cardboard or prompt to add cards to collection.
 
 ---

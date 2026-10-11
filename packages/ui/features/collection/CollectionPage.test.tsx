@@ -2520,8 +2520,8 @@ describe("CollectionPage", () => {
     await screen.findByText("Lightning Bolt");
 
     await user.click(screen.getByRole("button", { name: "Import cards" }));
-    const dialog = await screen.findByRole("dialog", { name: "Import a decklist" });
-    await user.click(within(dialog).getByLabelText("Decklist"));
+    const dialog = await screen.findByRole("dialog", { name: "Import cards" });
+    await user.click(within(dialog).getByLabelText("Card list"));
     await user.paste("1 Sol Ring");
     await user.click(within(dialog).getByRole("button", { name: "Preview" }));
 
@@ -2566,12 +2566,14 @@ describe("CollectionPage", () => {
           },
         ],
         "add",
+        // Not sorted: the header's Import at the root.
+        null,
       ),
     );
     // The dialog closes on its own report — `onDone` — the same precedent `DeckEditor` and
     // `DecksPage` set for their own import dialogs.
     await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Import a decklist" })).not.toBeInTheDocument(),
+      expect(screen.queryByRole("dialog", { name: "Import cards" })).not.toBeInTheDocument(),
     );
   });
 
@@ -4762,6 +4764,82 @@ describe("exporting a folder from its heading", () => {
       }),
     );
     expect(collectionFolderSetLocked).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * **Importing into a folder** (issue #872). The header's `Import cards` opens the step's
+ * `Import into` on the drawer the reader is standing in, and on Not sorted at the root; a heading's
+ * `⋯` and its right-click offer `Import…`, which opens on that drawer. Either way the press sends
+ * the folder to `collection_import_commit`, which files the whole file into it.
+ */
+describe("importing into a folder", () => {
+  /** Paste one line and reach the collection's step, in the dialog the press opened. */
+  async function previewOne(user: ReturnType<typeof userEvent.setup>): Promise<HTMLElement> {
+    const dialog = await screen.findByRole("dialog", { name: "Import a decklist" });
+    await user.click(within(dialog).getByLabelText("Decklist"));
+    await user.paste("1 Sol Ring");
+    await user.click(within(dialog).getByRole("button", { name: "Preview" }));
+    await within(dialog).findByRole("button", { name: "Import into" });
+    return dialog;
+  }
+
+  it.each(["Manage", "right-click"] as const)(
+    "imports into a folder from its heading's %s menu",
+    async (entryPoint) => {
+      collectionFolderList.mockResolvedValue([BINDER, FOILS, SEALED]);
+      const user = userEvent.setup();
+      wrap(<CollectionPage />);
+      await findHeading("Sealed");
+
+      if (entryPoint === "Manage") await shelfMenu(user, "Sealed");
+      else rightClick(heading("Sealed"));
+      await user.click(await screen.findByRole("menuitem", { name: "Import…" }));
+
+      const dialog = await previewOne(user);
+      expect(within(dialog).getByRole("button", { name: "Import into" })).toHaveTextContent(
+        "Sealed",
+      );
+      expect(within(dialog).getByText("1 card will be added to Sealed.")).toBeInTheDocument();
+      // The page stays where it was: the menu names a drawer, it does not walk into it.
+      expect(standingIn()).toBeNull();
+      await user.click(within(dialog).getByRole("button", { name: "Import" }));
+
+      await waitFor(() => expect(collectionImportCommit).toHaveBeenCalled());
+      expect(collectionImportCommit.mock.calls[0][1]).toBe("add");
+      expect(collectionImportCommit.mock.calls[0][2]).toBe(SEALED.id);
+    },
+  );
+
+  it("opens the header's import on the folder the reader is standing in", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, FOILS]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await openShelf(user, "Trade binder");
+    await waitFor(() => expect(standingIn()).toBe(BINDER.id));
+
+    await user.click(screen.getByRole("button", { name: "Import cards" }));
+    const dialog = await previewOne(user);
+    expect(within(dialog).getByRole("button", { name: "Import into" })).toHaveTextContent(
+      "Trade binder",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Import" }));
+
+    await waitFor(() => expect(collectionImportCommit).toHaveBeenCalled());
+    expect(collectionImportCommit.mock.calls[0][2]).toBe(BINDER.id);
+  });
+
+  it("opens the header's import on Not sorted at the root", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, FOILS]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await findHeading("Trade binder");
+
+    await user.click(screen.getByRole("button", { name: "Import cards" }));
+    const dialog = await previewOne(user);
+    expect(within(dialog).getByRole("button", { name: "Import into" })).toHaveTextContent(
+      "Not sorted",
+    );
   });
 });
 

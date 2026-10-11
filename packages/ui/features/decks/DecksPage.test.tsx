@@ -98,6 +98,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import { DecksPage } from "./DecksPage";
+import { coverHint } from "./DeckTile";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { TOOLTIP_OPEN_MS, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { FOLDER_DROP_LINE_ATTR } from "@/components/FolderDropLine";
@@ -566,6 +567,57 @@ describe("DecksPage", () => {
 
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
     expect(screen.queryByText(/null/i)).not.toBeInTheDocument();
+  });
+
+  /**
+   * **The reader's description leads the bubble, and the credit stays under it** (issue #840).
+   *
+   * The issue asked for the description *instead of* the artist; Scryfall's art-crop rule (see
+   * the case above) is why it is *before* the artist instead. Both halves are asserted, and in
+   * order: a build that swapped the credit out would fail the second, and a build that appended
+   * the description after the credit would fail the third.
+   */
+  it("leads the cover's hint with the description and keeps the credit under it", async () => {
+    deckList.mockResolvedValue([
+      { ...BURN, description: "  Bolt the face.\nThen bolt it again.  " },
+    ]);
+    wrapWithTips(<DecksPage />);
+
+    const tile = (await tileFor("Burn")).closest("li")!;
+    // Nowhere on the tile itself: the description is a hover away, like the credit.
+    expect(within(tile).queryByText(/Bolt the face/)).not.toBeInTheDocument();
+
+    const panel = await hintOn(tile.querySelector("img")!.parentElement!);
+    expect(panel).toHaveTextContent("Bolt the face. Then bolt it again.");
+    expect(panel).toHaveTextContent("Art by Rebecca Guay");
+    expect(panel.textContent!.indexOf("Bolt")).toBeLessThan(panel.textContent!.indexOf("Art by"));
+  });
+
+  /**
+   * A coverless deck has no picture to credit, but it still has the reader's words — so its
+   * frame, which bound nothing before, now binds the description alone.
+   */
+  it("shows the description on a coverless frame, with no credit", async () => {
+    deckList.mockResolvedValue([{ ...DRAFT, description: "Whatever the pod brings." }]);
+    wrapWithTips(<DecksPage />);
+
+    const tile = (await tileFor("Sunday draft")).closest("li")!;
+    const panel = await hintOn(within(tile).getByText("No cover").parentElement!);
+    expect(panel).toHaveTextContent("Whatever the pod brings.");
+    expect(panel).not.toHaveTextContent(/Art by/);
+  });
+
+  /**
+   * The edges, without a clock: a description of whitespace is no description, so the hint is
+   * the plain credit it always was — and a deck with neither binds nothing, which is the
+   * coverless case above.
+   */
+  it("treats a blank description as none", () => {
+    expect(coverHint({ description: "  \n ", coverArtist: "Rebecca Guay" })).toBe(
+      "Art by Rebecca Guay",
+    );
+    expect(coverHint({ description: "   ", coverArtist: null })).toBeNull();
+    expect(coverHint({ description: null, coverArtist: null })).toBeNull();
   });
 
   /**
@@ -1174,7 +1226,7 @@ describe("DecksPage", () => {
     // preview step, beside the tally its format changes — so the list has to be read before
     // there is a select to look at. What the claim is about is unchanged: the answer this
     // screen resolved reaches both surfaces that make a deck.
-    await userEvent.click(await screen.findByLabelText("Decklist"));
+    await userEvent.click(await screen.findByLabelText("Card list"));
     await userEvent.paste("1 Sol Ring");
     await userEvent.click(screen.getByRole("button", { name: "Preview" }));
 
@@ -1229,7 +1281,7 @@ describe("DecksPage", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Import deck" }));
 
-    expect(await screen.findByRole("dialog", { name: "Import a decklist" })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "Import cards" })).toBeInTheDocument();
     // The gallery has no deck open, so there is nothing to merge into and no choice to offer.
     expect(screen.queryByLabelText(/^Merge/)).not.toBeInTheDocument();
   });
@@ -1248,7 +1300,7 @@ describe("DecksPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Import deck" }));
 
     await waitFor(() => expect(screen.getAllByRole("dialog")).toHaveLength(1));
-    expect(screen.getByRole("dialog", { name: "Import a decklist" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Import cards" })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "New deck" }));
 
@@ -1263,7 +1315,7 @@ describe("DecksPage", () => {
     await screen.findByRole("list", { name: "Your decks" });
     await userEvent.click(screen.getByRole("button", { name: "Import deck" }));
 
-    await userEvent.click(await screen.findByLabelText("Decklist"));
+    await userEvent.click(await screen.findByLabelText("Card list"));
     await userEvent.paste("1 Sol Ring");
     await userEvent.click(screen.getByRole("button", { name: "Preview" }));
     // The name is the destination's question and is asked on its own step.

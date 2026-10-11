@@ -13,7 +13,7 @@
  * reading it out of `DecksPage.tsx` would have been an import back into the file this was lifted
  * out of — erased at runtime, and a cycle to a reader and to `import/no-cycle` all the same.
  */
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import {
   Archive,
   ArchiveRestore,
@@ -889,6 +889,10 @@ export function DeckTile({
  * where a reader who wants to know who painted it points, rather than under a different element
  * of the tile.
  *
+ * **Since 2026-10-11 the credit shares the bubble with the deck's description, and comes second**
+ * (issue #840) — {@link coverHint} carries the reasoning. It is still in the bubble on every
+ * covered tile, so nothing above changes.
+ *
  * **Always shown, never `whenClipped`.** That option opens a tooltip only when the anchor's own
  * text is genuinely cut off, which is exactly right for a truncating cell repeating itself and
  * exactly wrong here: there is no text in this frame to clip, so a `whenClipped` binding would
@@ -910,10 +914,9 @@ function Cover({ deck }: { deck: DeckRow }) {
 
   return (
     <span
-      // `null` binds nothing — `useTooltip` refuses falsy content — so a deck with no artist to
-      // credit is a frame with no hint, which is the same silence {@link coverUrl} answers with
-      // for the picture itself. The two cannot come apart: they are one test on one field.
-      {...tip(deck.coverArtist && `Art by ${deck.coverArtist}`)}
+      // `null` binds nothing — `useTooltip` refuses falsy content — so a deck with neither a
+      // description nor an artist to credit is a frame with no hint. See {@link coverHint}.
+      {...tip(coverHint(deck))}
       className={cn(
         "grid w-full place-items-center overflow-hidden bg-surface",
         // The join rather than a decoration: a rounded corner over a square band is a picture
@@ -952,6 +955,38 @@ function Cover({ deck }: { deck: DeckRow }) {
           {!chosen ? "No cover" : image.retrying ? "Retrying…" : "No image"}
         </span>
       )}
+    </span>
+  );
+}
+
+/**
+ * What the cover says on hover: the reader's own description of the deck, then the illustrator.
+ *
+ * **The description leads since 2026-10-11** (issue #840). A wall of art crops says what a deck
+ * looks like and nothing about what it is *for*, and the words the reader wrote in the deck's
+ * settings were reachable only by opening it. The bubble was already on the picture and already
+ * the one place a reader rests the pointer to ask "what is this?", so it answers with their own
+ * sentence.
+ *
+ * **The credit stays, under it and dimmed, and that is Scryfall's rule rather than a choice** —
+ * see {@link Cover}: the gallery draws `art` crops and no full card image, so the artist has to
+ * stay reachable here. Leading with the description and keeping the credit as a footer is the
+ * one arrangement that answers the issue without breaking the policy. A deck with no
+ * description says exactly what it said before — `Art by …` as plain text — and a coverless
+ * deck with a description says only the description, since there is no picture to credit.
+ *
+ * **Trimmed, so a description of whitespace is no description**, and clamped to eight lines:
+ * the field is a free textarea and a pasted primer would otherwise fill the window. The panel's
+ * own `whitespace-pre-line` keeps the reader's line breaks.
+ */
+export function coverHint(deck: Pick<DeckRow, "description" | "coverArtist">): ReactNode {
+  const description = deck.description?.trim();
+  const credit = deck.coverArtist ? `Art by ${deck.coverArtist}` : null;
+  if (!description) return credit;
+  return (
+    <span className="flex flex-col gap-1">
+      <span className="line-clamp-8 break-words">{description}</span>
+      {credit && <span className="text-dim">{credit}</span>}
     </span>
   );
 }

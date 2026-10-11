@@ -49,7 +49,7 @@
     ]
   },
   "enabledPlugins": {
-    "openrouter@openrouter": false,
+    "openrouter@openrouter": true,
     "typesafe@typesafe-ai": false
   },
   "skillOverrides": {

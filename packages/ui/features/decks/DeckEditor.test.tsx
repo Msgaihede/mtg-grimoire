@@ -3672,7 +3672,7 @@ describe("DeckEditor", () => {
    * in the prose.
    */
   it.each([
-    ["Import cards", "Import a decklist"],
+    ["Import cards", "Import cards"],
     ["Export deck", 'Export "Burn"'],
     ["Categories", "Categories"],
     ["Labels", "Labels"],
@@ -4151,7 +4151,7 @@ describe("DeckEditor", () => {
    * it, and the three are what catch a trap that wraps once and then leaks.
    */
   it.each([
-    ["Import cards", "Import a decklist", null],
+    ["Import cards", "Import cards", null],
     ["Export deck", 'Export "Burn"', null],
     ["Categories", "Categories", null],
     ["Labels", "Labels", null],
@@ -4328,7 +4328,7 @@ describe("DeckEditor", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Import cards" }));
 
-    const dialog = await screen.findByRole("dialog", { name: "Import a decklist" });
+    const dialog = await screen.findByRole("dialog", { name: "Import cards" });
     // Into *this* deck, so the choice the gallery's entry point cannot offer is here.
     expect(within(dialog).getByText(/Into Burn · Actual/)).toBeInTheDocument();
   });
@@ -4379,7 +4379,7 @@ describe("DeckEditor", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Theory" }));
     await userEvent.click(screen.getByRole("button", { name: "Import cards" }));
-    await userEvent.click(await screen.findByLabelText("Decklist"));
+    await userEvent.click(await screen.findByLabelText("Card list"));
     await userEvent.paste("1 Sol Ring");
     await userEvent.click(screen.getByRole("button", { name: "Preview" }));
 
@@ -4431,10 +4431,10 @@ describe("DeckEditor", () => {
     window.addEventListener("keydown", listen);
 
     await userEvent.click(screen.getByRole("button", { name: "Import cards" }));
-    await screen.findByRole("dialog", { name: "Import a decklist" });
+    await screen.findByRole("dialog", { name: "Import cards" });
     await userEvent.keyboard("{Escape}");
     await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Import a decklist" })).not.toBeInTheDocument(),
+      expect(screen.queryByRole("dialog", { name: "Import cards" })).not.toBeInTheDocument(),
     );
     // The deck is still open behind it: the dialog took that press and nothing else did.
     expect(useAppStore.getState().openDeckId).toBe(4);
