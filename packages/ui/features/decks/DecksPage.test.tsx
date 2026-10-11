@@ -1571,7 +1571,7 @@ describe("DecksPage", () => {
   });
 
   /**
-   * The menu's other five rows, and the one that must not write.
+   * The menu's other seven rows, and the one that must not write.
    *
    * The rows themselves are `deckMenu.test.tsx`'s; what is asserted here is the **wiring** — that
    * this screen's callbacks are what the menu was built with, which is the half a pure builder's
@@ -1586,6 +1586,8 @@ describe("DecksPage", () => {
       "Open deck",
       "Rename…",
       "Move to",
+      "Add tag",
+      "Remove tag",
       "Deck settings…",
       "Duplicate",
       "Delete…",
@@ -1607,6 +1609,54 @@ describe("DecksPage", () => {
     await userEvent.click(await screen.findByRole("menuitem", { name: "Rename…" }));
 
     expect(await screen.findByLabelText("Rename Burn")).toHaveValue("Burn");
+  });
+
+  /**
+   * **Add tag and Remove tag write the whole list through `deck_update`** (issue #914) — and
+   * what Add offers is read off the wall's own `deck_list`, so the right-click reads nothing.
+   */
+  it("tags a deck from the menu with a tag another deck wears, and takes one off", async () => {
+    deckList.mockResolvedValue([
+      { ...BURN, tags: ["Meme"] },
+      { ...DRAFT, tags: ["Budget", "Meme"] },
+    ]);
+    wrap(<DecksPage />);
+
+    await rightClick(await tileFor("Burn"));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Add tag" }));
+    // `Meme` is on Burn already, so `Budget` is the one offer.
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Budget" }));
+    expect(deckUpdate).toHaveBeenCalledWith(BURN.id, { tags: ["Meme", "Budget"] });
+
+    await rightClick(await tileFor("Burn"));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Remove tag" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Meme" }));
+    // The last tag off is `[]`, which `deck_update` reads as "no tags" and not as "leave it".
+    expect(deckUpdate).toHaveBeenLastCalledWith(BURN.id, { tags: [] });
+  });
+
+  /** A tag no deck wears yet is typed where tags are typed: Deck settings, opened with the caret
+   *  already in its Tags field — and only from this row. */
+  it("opens Deck settings on the Tags field from Add tag → New tag…", async () => {
+    wrap(<DecksPage />);
+
+    await rightClick(await tileFor("Burn"));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Add tag" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "New tag…" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Deck settings" });
+    const field = await within(dialog).findByRole("combobox", { name: "Tags" });
+    await waitFor(() => expect(document.activeElement).toBe(field));
+    expect(useAppStore.getState().openDeckId).toBeNull();
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    // The plain row leaves the caret on the panel, `Dialog`'s own rule.
+    await rightClick(await tileFor("Burn"));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Deck settings…" }));
+    const again = await screen.findByRole("dialog", { name: "Deck settings" });
+    await within(again).findByRole("combobox", { name: "Tags" });
+    expect(document.activeElement).not.toBe(within(again).getByRole("combobox", { name: "Tags" }));
   });
 
   /**
@@ -2941,6 +2991,8 @@ describe("the menus' keyboard route", () => {
       "Open deck",
       "Rename…",
       "Move to",
+      "Add tag",
+      "Remove tag",
       "Deck settings…",
       "Duplicate",
       "Delete…",

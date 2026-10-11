@@ -87,7 +87,8 @@ Normalized via `deckKind.ts` (`regular`, `theory`, `virtual`):
   - To-do band: Structured deck checklists (`deck_todo_lists`) supporting item completion and ordering.
 - **Keyboard focus handling**: Floating toolbars automatically avoid intercepting typing gestures while text inputs or note editors have active focus.
 - **Deck tags (`deckTags.ts`, `DeckTagsField.tsx`)**: The reader's free text about a whole deck (`decks.tags`, user schema v62) — not Scryfall tags and not deck labels ([DOMAIN_VOCABULARY.md](../../../../docs/agent/DOMAIN_VOCABULARY.md)).
-  - Edited in Deck settings only; `DeckSettingsForm` draws the field when a host passes `tagsInUse`, so the create dialog draws none.
+  - Typed in Deck settings; `DeckSettingsForm` draws the field when a host passes `tagsInUse`, so the create dialog draws none.
+  - The gallery tile's right-click menu (`deckMenu.tsx`, issue #914) has **Add tag ▸** (the tags other decks wear, then **New tag…**, which opens Deck settings with the caret in the Tags field — `DeckSettingsDialog`'s `focus="tags"`) and **Remove tag ▸** (greyed on a deck with none). Plain `submenu`s: `DecksPage` hands over `tagsInUse(decks.decks)`, so a right-click reads nothing.
   - A tag write sends the whole list (`deckUpdate({ tags })`, `[]` clears). `DeckSettingsDialog` holds the list it last sent until the row catches up, so a second tag is built on the first.
   - The order is the reader's (issue #913): a chip is dragged by its word onto another (`tagDrag.ts`, its own drag mark) or moved with ←/→ on the word, and the write is the whole list from `movedTag` — no reorder command.
   - Suggestions are `tagsInUse(deck_list)` — there is no table of tags. Compare two tags with `tagKey`/`hasTag`, which fold capitals exactly as Rust's `clean_tags` does.
