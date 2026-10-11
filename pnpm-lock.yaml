@@ -507,6 +507,9 @@ importers:
       "@cloudflare/workers-types":
         specifier: "catalog:"
         version: 5.20260828.1
+      "@tauri-apps/cli":
+        specifier: ^2
+        version: 2.11.4
       "@types/chai":
         specifier: ^5.2.3
         version: 5.2.3

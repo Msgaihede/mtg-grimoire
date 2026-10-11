@@ -2096,6 +2096,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     setNoteRequest({ kind: "open", noteId: note.id });
   }, []);
 
+  /** **Set as deck image** — the card menu's cover row, over `updateDeck` (stable). A refusal
+   *  lands in the banner every other `deck.update` write already speaks through. The menu reads
+   *  the cover id rather than `row`, so a write to any other field does not rebuild it. */
+  const coverCardId = row === null ? undefined : row.coverCardId;
+  const setCoverFrom = useCallback(
+    (card: DeckCard) => updateDeck({ coverCardId: card.cardId }),
+    [updateDeck],
+  );
+
   /**
    * One deck card's right-click, **built here and handed to the four views as one function**.
    *
@@ -2199,6 +2208,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           // structurally fine on any card; the guard is on the half that would write.
           addNote: card.oracleId === null ? undefined : addNote,
           openNote,
+          // **Set as deck image** — the same write the settings dialog's cover picker makes, on
+          // the printing this row plays. `undefined` only before the deck row has loaded, when no
+          // card is drawn to right-click.
+          cover: coverCardId === undefined ? undefined : { cardId: coverCardId, set: setCoverFrom },
           // **Only when this card is in the set** — `dragsWholeSelection`'s rule for a press
           // instead of a drag. A right-click on a card the reader has not picked is about that
           // card, so `[]` goes over and the menu is the singular one it has always been.
@@ -2242,6 +2255,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       notes.notes,
       addNote,
       openNote,
+      coverCardId,
+      setCoverFrom,
       pickedCards,
     ],
   );

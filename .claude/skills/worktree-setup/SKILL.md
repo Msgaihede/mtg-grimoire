@@ -71,8 +71,9 @@ agent's work may be on it. Prefer a temporary WIP commit. If you must stash, use
 
 ## The build cache is `target/cache`, and it is disposable
 
-Worktrees build with settings the main checkout does not have: no incremental cache, line-only
-debug info, and everything cargo can rebuild under `target/cache`. They come from
+Worktrees build with settings the main checkout does not have: no incremental cache, and
+everything cargo can rebuild under `target/cache`. (Line-only debug info is every checkout's
+since 2026-10-11 — the root `Cargo.toml`'s dev profile.) They come from
 `.claude/worktrees/.cargo/config.toml`, which the hook copies from
 `.claude/hooks/worktree-cargo.toml` — the reasons are in that file. `target/debug` keeps the
 executables and `data/`.

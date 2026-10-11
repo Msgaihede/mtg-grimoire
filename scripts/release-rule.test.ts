@@ -354,6 +354,7 @@ const MAY_READ: Record<string, string[]> = {
   "web-deploy": [...CLOUDFLARE_SECRETS, "GITHUB_TOKEN"],
   "play-upload": ["PLAY_SERVICE_ACCOUNT_JSON"],
   publish: ["GITHUB_TOKEN"],
+  announce: ["DISCORD_WEBHOOK_URL", "GITHUB_TOKEN"],
   "changelog-write": ["GITHUB_TOKEN", "OPENROUTER_API_KEY"],
   "changelog-commit": ["GITHUB_TOKEN"],
 };
@@ -401,8 +402,8 @@ const refuseOlder = (what: string) => [
   "fi",
 ];
 /**
- * **Every line the six jobs that hold a secret run** (`android-sign`, `relay-deploy`,
- * `share-deploy`, `web-deploy` and `play-upload` on a release; `changelog-write` between releases), step by
+ * **Every line the seven jobs that hold a secret run** (`android-sign`, `relay-deploy`,
+ * `share-deploy`, `web-deploy`, `play-upload` and `announce` on a release; `changelog-write` between releases), step by
  * step, as `runsOf` reads them: the whole of each `run:`, its summary's wording too. A line
  * changed in one of those steps is changed here in the same commit, and a line added to any of
  * them, whatever it starts, is a line this list does not have.
@@ -604,6 +605,31 @@ const RUNS: Record<string, string[][]> = {
       'node scripts/android-release/play-upload.ts "aab-in/mtg-grimoire-$VERSION-android.aab" "$((major * 1000000 + minor * 1000 + patch))"',
     ],
   ],
+  announce: [
+    // Is there a webhook to post to
+    [
+      "set -euo pipefail",
+      'if [ "$HAS_HOOK" = true ]; then',
+      'echo "present=true" >> "$GITHUB_OUTPUT"',
+      "exit 0",
+      "fi",
+      'echo "present=false" >> "$GITHUB_OUTPUT"',
+      "{",
+      'echo "### Discord — not announced"',
+      "echo",
+      'echo "The \\`discord\\` environment holds no \\`DISCORD_WEBHOOK_URL\\`, so this release was not announced."',
+      "echo",
+      'echo "\\`docs/reference/ci-and-releases.md\\`, *What only the owner can do*, has the commands."',
+      '} >> "$GITHUB_STEP_SUMMARY"',
+    ],
+    // Read the published notes
+    [
+      "set -euo pipefail",
+      'gh release view "$TAG" --repo "$REPO" --json body --jq .body > notes.md',
+    ],
+    // Post the release to Discord
+    ["node scripts/changelog/discord.ts notes.md"],
+  ],
   "changelog-write": [
     // Is there a key to write with
     [
@@ -631,7 +657,7 @@ const RUNS: Record<string, string[][]> = {
 describe("release.yml", () => {
   const jobs = jobsOf(releaseYml);
 
-  it("has the thirteen jobs, chained as the rule needs", () => {
+  it("has the fourteen jobs, chained as the rule needs", () => {
     expect(Object.keys(jobs)).toEqual([
       "release-please",
       "build",
@@ -644,6 +670,7 @@ describe("release.yml", () => {
       "web-deploy",
       "play-upload",
       "publish",
+      "announce",
       "changelog-write",
       "changelog-commit",
     ]);
@@ -683,6 +710,11 @@ describe("release.yml", () => {
       "web-deploy",
       "play-upload",
     ]);
+    // The announcement, once the release is out — and nothing waits for it.
+    expect(needsOf(jobs.announce)).toEqual(["release-please", "publish"]);
+    for (const [name, job] of Object.entries(jobs)) {
+      expect(needsOf(job), name).not.toContain("announce");
+    }
   });
 
   // The notes are written between releases, by two jobs nothing waits for: a failure there turns
@@ -761,7 +793,7 @@ describe("release.yml", () => {
   // **An environment's values, not the repository's.** A repository secret is handed to any
   // workflow on any branch of this repository; an environment's only to a job that names it,
   // from a branch the environment allows.
-  it("takes what it holds from an environment, in those six jobs and no other", () => {
+  it("takes what it holds from an environment, in those seven jobs and no other", () => {
     const environments = Object.entries(jobs)
       .map(([name, job]) => [name, job.split("\n").filter((line) => /^\s*environment:/.test(line))])
       .filter(([, lines]) => lines.length > 0);
@@ -771,6 +803,8 @@ describe("release.yml", () => {
       ["share-deploy", ["    environment: release"]],
       ["web-deploy", ["    environment: release"]],
       ["play-upload", ["    environment: release"]],
+      // The webhook, apart from the release's keys and tokens: a credential to post in a channel.
+      ["announce", ["    environment: discord"]],
       // An environment of its own: it runs on every push to `main` and sends pull request text
       // to another service, and the signing key and the deploy token are not within its reach.
       ["changelog-write", ["    environment: changelog"]],
@@ -786,6 +820,7 @@ describe("release.yml", () => {
     "share-deploy",
     "web-deploy",
     "play-upload",
+    "announce",
     "changelog-write",
     "changelog-commit",
   ])("%s has a deadline", (name) => {
@@ -804,6 +839,7 @@ describe("release.yml", () => {
     ["share-deploy", ["actions/checkout", "actions/download-artifact", "actions/setup-node"]],
     ["web-deploy", ["actions/checkout", "actions/download-artifact", "actions/setup-node"]],
     ["play-upload", ["actions/checkout", "actions/download-artifact", "actions/setup-node"]],
+    ["announce", ["actions/checkout", "actions/setup-node"]],
     ["changelog-write", ["actions/checkout", "actions/setup-node", "actions/upload-artifact"]],
   ])("%s builds nothing, and runs only what is listed here", (name, actions) => {
     expect([...jobs[name].matchAll(/uses: ([\w./-]+)@/g)].map((m) => m[1]).sort()).toEqual(actions);
@@ -830,19 +866,20 @@ describe("release.yml", () => {
   // cached with or without the key; the key is what keeps that true if the field or the action's
   // default moves. **The step is held whole**: a `cache:` or a `cache-dependency-path:` beside
   // it is a line that is not here.
-  it.each([...Object.keys(DEPLOYS).map((name) => [name, "token"]), ["play-upload", "account"]])(
-    "%s sets Node up with caching off by name, and with nothing else",
-    (name, id) => {
-      const node = stepsOf(jobs[name]).filter((step) => /^uses: actions\/setup-node@/.test(step));
-      expect(node).toHaveLength(1);
-      expect(node[0].trimEnd().split("\n").slice(1)).toEqual([
-        `        if: steps.${id}.outputs.present == 'true'`,
-        "        with:",
-        "          node-version-file: .nvmrc",
-        "          package-manager-cache: false",
-      ]);
-    },
-  );
+  it.each([
+    ...Object.keys(DEPLOYS).map((name) => [name, "token"]),
+    ["play-upload", "account"],
+    ["announce", "hook"],
+  ])("%s sets Node up with caching off by name, and with nothing else", (name, id) => {
+    const node = stepsOf(jobs[name]).filter((step) => /^uses: actions\/setup-node@/.test(step));
+    expect(node).toHaveLength(1);
+    expect(node[0].trimEnd().split("\n").slice(1)).toEqual([
+      `        if: steps.${id}.outputs.present == 'true'`,
+      "        with:",
+      "          node-version-file: .nvmrc",
+      "          package-manager-cache: false",
+    ]);
+  });
 
   it("runs no Node in `android-sign`, so there is no step of it to hold there", () => {
     expect(jobs["android-sign"]).not.toMatch(/setup-node/);
@@ -1263,6 +1300,30 @@ describe("release.yml", () => {
     expect(notes).toMatch(/^ {10}else$/m);
     expect(flip).toMatch(/--draft=false/);
     expect(code(releaseYml)).not.toMatch(/openrouter\.ai/);
+  });
+
+  it("asks whether the webhook is set, and hands it to one step that runs one file", () => {
+    const [checkout, ask, ...rest] = stepsOf(jobs.announce);
+    expect(checkout).toMatch(/^uses: actions\/checkout@/);
+    expect(checkout).not.toMatch(/^ {8}(?:if|env):/m);
+    expect(ask).toMatch(/^ {8}id: hook$/m);
+    // **Told whether it is set, never what it is.**
+    expect(ask.match(/secrets\.[A-Z0-9_]+/g)).toEqual(["secrets.DISCORD_WEBHOOK_URL"]);
+    expect(ask).toContain("HAS_HOOK: ${{ secrets.DISCORD_WEBHOOK_URL != '' }}");
+    expect(rest).toHaveLength(3);
+    for (const step of rest) {
+      expect(step).toMatch(/^ {8}if: steps\.hook\.outputs\.present == 'true'$/m);
+    }
+    const [, read, post] = rest;
+    // The body is read with the run's token, by a step that never sees the webhook…
+    expect(secretsOf(read)).toEqual([]);
+    expect(read).toContain("GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}");
+    // …and the webhook reaches the one step that posts, and nothing else there.
+    expect(secretsOf(post)).toEqual(["DISCORD_WEBHOOK_URL"]);
+    expect(post).not.toMatch(/GITHUB_TOKEN/);
+    expect(post).toMatch(/^ {8}run: node scripts\/changelog\/discord\.ts notes\.md$/m);
+    // It reads, and writes nothing here: what it changes is the channel.
+    expect(jobs.announce).toMatch(/^ {4}permissions:\n {6}contents: read\n {4}steps:$/m);
   });
 
   it("publishes last, and nothing else flips the draft", () => {

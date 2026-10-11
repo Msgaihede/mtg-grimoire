@@ -5,6 +5,7 @@
   "type": "module",
   "devDependencies": {
     "@cloudflare/workers-types": "catalog:",
+    "@tauri-apps/cli": "^2",
     "@types/chai": "^5.2.3",
     "@types/node": "^22.20.5",
     "devtools-protocol": "^0.0.1716261",
