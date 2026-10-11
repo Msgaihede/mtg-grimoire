@@ -414,6 +414,33 @@ export const IntoCollection: Story = {
 };
 
 /**
+ * Into a folder made on the spot — `Import into`'s last row (issue #872). The step asks for the
+ * name in place, and Import stays greyed until there is one: a folder with no name is not a folder
+ * yet. The press makes a top-level folder and files the whole file into it.
+ */
+export const IntoANewFolder: Story = {
+  render: () => <SingleDestinationDialog destination={collectionDestination} />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await userEvent.click(await canvas.findByLabelText("Decklist"));
+    await userEvent.paste("1 Sol Ring\n2 Lightning Bolt");
+    await userEvent.click(canvas.getByRole("button", { name: "Preview" }));
+
+    await expect(await canvas.findByRole("button", { name: "Import into" })).toHaveTextContent(
+      "Not sorted",
+    );
+    await pickOption(userEvent.setup(), "Import into", "New folder…");
+    await expect(canvas.getByRole("button", { name: "Import" })).toBeDisabled();
+    await userEvent.type(canvas.getByRole("textbox", { name: "New folder name" }), "Box 3");
+    await expect(
+      canvas.getByText("3 cards will be added to a new folder, Box 3."),
+    ).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "Import" })).toBeEnabled();
+  },
+};
+
+/**
  * Into the reader's own wishlist — `WishlistPage`'s `Import` button, over
  * `wishlistDestination`. **No condition question at all**: a wish is a card the reader does not
  * own yet, so recording a grade for cardboard nobody has is a question this destination has
