@@ -47,6 +47,9 @@
  *   in invented sets: the world the home page's To review and Coming soon widgets are storied in.
  *   See {@link waitingSeed}, including why it carries no scanner tray; how many of each it holds is
  *   pinned in `db.test.ts` and `world.test.ts` rather than written here.
+ * * **`trades`** — `starter` with five trades: two open, two finished and one archived without
+ *   finishing, and the only world the Trade page has anything to list in. See {@link tradesSeed}
+ *   for what it adds to the collection and the wishlist so the open one's lines are true.
  *
  * **Every seed builds its rows fresh on every call**, and that is load-bearing rather than
  * tidy: the writes in `db.ts` mutate row objects in place (`existing.quantity += …`), so a
@@ -96,6 +99,8 @@ import type {
   FakeDeckTokenPrinting,
   FakeEntry,
   FakeRelayShare,
+  FakeTrade,
+  FakeTradeLine,
   FakeWish,
   FakeWishlistFolder,
 } from "./db";
@@ -119,7 +124,8 @@ export type SeedName =
   | "paired"
   | "shared"
   | "waiting"
-  | "tokenPlan";
+  | "tokenPlan"
+  | "trades";
 
 /* ------------------------------------------------------------------ row builders ------- */
 
@@ -3259,6 +3265,220 @@ function tokenPlanSeed(): FakeDb {
   return db;
 }
 
+/**
+ * A fixed instant in 2026, as unix seconds — what a trade's two clocks are seeded with.
+ *
+ * **A date and never an offset from now**, which is the opposite of {@link daysAgo} and for the
+ * opposite reason: the trades list prints `Opened 2 Oct`, an absolute day, so a moving clock would
+ * make every story's caption a function of when it was opened. **Noon UTC unless a row says
+ * otherwise**, so the day printed is the same one in every timezone a reader is likely to be in.
+ */
+function on(month: number, day: number, hour = 12): number {
+  return Date.UTC(2026, month - 1, day, hour) / 1000;
+}
+
+/**
+ * `starter` with five trades in it — every state the Trade page's list and its open trade have
+ * to draw, and the only world that holds any.
+ *
+ * | id | name | status | shape |
+ * | --- | --- | --- | --- |
+ * | 5 | `Trade 5` | open | the design's own trade: four lines for four, 6 copies for 5 |
+ * | 4 | `Trade 4` | open | 2 for 1, and nothing on the reader's side is owned |
+ * | 3 | `Store night swaps` | finished | 4 for 6, and even to the cent |
+ * | 2 | `Trade 2` | finished | 3 for 3, with an outcome that used three of the four steps |
+ * | 1 | `Trade 1` | archived | 1 for 2, put away without finishing |
+ *
+ * **Trade 5 is live and the three closed trades are frozen**, which is the feature's whole price
+ * rule staged in one list. Trade 5's eight lines are priced by the corpus at TCGplayer and add up
+ * to **64.39 against 87.09** — *You owe them $22.70*, which is the figure the design draws.
+ * Trade 4 is live too: 6.43 against 0.33. The closed ones carry the prices they closed with, and
+ * two of those deliberately differ from what the corpus says today (Trade 1's Lightning Bolt and
+ * Trade 2's Bruna), so a list that priced a closed trade live would state a different balance.
+ *
+ * **Names tell the two ways a trade gets one apart**: four are the default `Trade {id}` and one
+ * is a name somebody typed. Created in id order, so newest-first is 5 down to 1.
+ *
+ * # What it adds to the collection and the wishlist, and the one thing it takes away
+ *
+ * Trade 5's four lines on the reader's side are all marked `collection`, so the copies have to
+ * really be there. `starter` holds a Ragavan and two Counterspells — **in deck 1's group**, which
+ * a finish takes from last — so this seed lays its own beside them: a nonfoil Ragavan and two
+ * etched Counterspells at the root, a foil Swords to Plowshares filed in `Binder` (the folder arm
+ * of a finish's removal, where the other three are the root arm), and **three** Boros Charms
+ * against a line of two, so one finish leaves a row standing with a copy in it.
+ *
+ * **`starter`'s Ragavan is the one deck copy a line on the reader's side names**, and it costs
+ * this seed no row: nonfoil, in `Modern Goodstuff`'s group, so Trade 5's Ragavan line reads
+ * `owned: 1` beside `ownedInDecks: 1` under that deck's name. The line asks for one and the loose
+ * copy covers it, so a default finish takes nothing from the deck and the line reads
+ * `ownedInDecks: 1` afterwards too; stepping the line to two is what reaches into the deck. The
+ * two Counterspells there are nonfoil against an etched line and count for nothing. Trade 5's Sol
+ * Ring line carries the same fact on **their** side — the LP copy in `Kenrith Two-Drops` — where
+ * it means nothing: a finish takes only what the reader gives.
+ *
+ * **Trades 2 and 3 store an outcome with no `removedFromDecks`**, which is what a finish from
+ * before 2026-10-11 left in the column. `trade_get` answers both with a zero.
+ *
+ * Two wishes arrive, for the two cards the design marks *on your wishlist*: an Urza's Saga at the
+ * root and a Tarmogoyf filed in `Ordered`. `starter` already wishes for an Urza's Saga — in deck
+ * 4's **managed** folder, which a trade neither counts nor spends, so that one changes nothing.
+ *
+ * ⚠️ **And `starter`'s two Sol Ring wishes are not in this world.** `wished` counts the *card*, in
+ * any printing, so the any-printing Sol Ring at the root and the pinned one in `Ordered` would
+ * both mark Trade 5's Sol Ring line and make the Finish dialog read *3 of them are on it* where
+ * the design reads two. They are the only rows of `starter` this seed leaves out, and nothing
+ * else about that world moves: every id it hands out is still the id it was.
+ */
+function tradesSeed(): FakeDb {
+  const db = starterSeed();
+
+  const solRing = printing("c21", "263");
+  db.wishlistEntries = db.wishlistEntries.filter(
+    (w) => w.oracleId !== solRing.oracleId || w.folderId === MANAGED_TESTBED_FOLDER,
+  );
+
+  const nextEntry = idsAfter(db.collectionEntries);
+  db.collectionEntries.push(
+    entry(nextEntry(), printing("mh2", "138"), "nonfoil", "NM", 1),
+    entry(nextEntry(), printing("mh2", "267"), "etched", "NM", 2),
+    // `Binder` — a drawer of the reader's own, not set aside.
+    entry(nextEntry(), printing("ema", "32"), "foil", "LP", 1, { folderId: 1 }),
+    entry(nextEntry(), printing("gtc", "148"), "nonfoil", "NM", 3),
+  );
+  const nextWish = idsAfter(db.wishlistEntries);
+  db.wishlistEntries.push(
+    pinnedWish(nextWish(), printing("mh2", "259"), 1),
+    // `Ordered` — a folder the reader made, so a trade counts it where it skips the managed one.
+    pinnedWish(nextWish(), printing("fut", "153"), 1, { folderId: 1 }),
+  );
+
+  const trade = (
+    id: number,
+    name: string,
+    status: FakeTrade["status"],
+    createdAt: number,
+    closedAt: number | null,
+    over: Partial<FakeTrade> = {},
+  ): FakeTrade => ({
+    id,
+    name,
+    marketplace: "tcgplayer",
+    rateMine: 100,
+    rateTheirs: 100,
+    status,
+    finishedBefore: status === "finished",
+    outcome: null,
+    createdAt,
+    closedAt,
+    ...over,
+  });
+  db.trades = [
+    trade(1, "Trade 1", "archived", on(8, 22), on(8, 23)),
+    trade(2, "Trade 2", "finished", on(9, 5), on(9, 6), {
+      // Three of the four steps: the cards given came out, the cards received went in, and one
+      // of those was on the wishlist. Nothing was wished back.
+      outcome: {
+        removedFromCollection: 3,
+        addedToCollection: 3,
+        removedFromWishlist: 1,
+        addedToWishlist: 0,
+      },
+    }),
+    // Opened and finished across one evening at the shop — an hour either side of noon UTC, so
+    // both land on the 19th wherever the story is opened.
+    trade(3, "Store night swaps", "finished", on(9, 19, 11), on(9, 19, 13), {
+      outcome: {
+        removedFromCollection: 4,
+        addedToCollection: 6,
+        removedFromWishlist: 0,
+        addedToWishlist: 0,
+      },
+    }),
+    trade(4, "Trade 4", "open", on(9, 28), null),
+    trade(5, "Trade 5", "open", on(10, 2), null),
+  ];
+
+  const nextLine = ids();
+  const positions = new Map<number, number>();
+  /** One line. `frozen` is the price a **closed** trade's line closed with; an open trade's
+   *  lines say nothing and are priced live. Positions run in the order written, per trade. */
+  const line = (
+    tradeId: number,
+    side: FakeTradeLine["side"],
+    card: FakeCard,
+    finish: FakeTradeLine["finish"],
+    quantity: number,
+    source: FakeTradeLine["source"],
+    frozen: number | null = null,
+  ): FakeTradeLine => {
+    const position = positions.get(tradeId) ?? 0;
+    positions.set(tradeId, position + 1);
+    return {
+      id: nextLine(),
+      tradeId,
+      side,
+      cardId: card.id,
+      // Copied off the printing, as `trade_add_lines` copies them — {@link entry}'s rule: a row
+      // that disagrees with its own card is a state the app cannot produce.
+      name: card.name,
+      setCode: card.setCode,
+      collectorNumber: card.collectorNumber,
+      finish,
+      quantity,
+      source,
+      position,
+      unitPrice: frozen,
+    };
+  };
+  db.tradeLines = [
+    // --- Trade 1: archived, never finished. 26.78 against 30.53 — *You owe $3.75*, and still
+    // owed, because nothing was ever handed over. The Bolt closed at 2.15; it is 2.50 today.
+    line(1, "mine", printing("nph", "57"), "foil", 1, "collection", 26.78),
+    line(1, "theirs", printing("znr", "90"), "nonfoil", 1, "search", 28.38),
+    line(1, "theirs", printing("2x2", "117"), "nonfoil", 1, "search", 2.15),
+
+    // --- Trade 2: finished. 7.18 against 4.83 — *They owed you $2.35*. Bruna closed at 4.17
+    // and is 3.77 today.
+    line(2, "mine", printing("iko", "226"), "nonfoil", 1, "collection", 2.66),
+    line(2, "mine", printing("eld", "303"), "foil", 2, "collection", 2.26),
+    line(2, "theirs", printing("eld", "115"), "nonfoil", 2, "scan", 0.33),
+    line(2, "theirs", printing("emn", "15"), "nonfoil", 1, "search", 4.17),
+
+    // --- Trade 3: finished, and even — 14.60 a side, four copies for six.
+    line(3, "mine", printing("gtc", "215"), "foil", 2, "collection", 3.5),
+    line(3, "mine", printing("dom", "168"), "foil", 2, "collection", 3.8),
+    line(3, "theirs", printing("unf", "239"), "nonfoil", 3, "scan", 1),
+    line(3, "theirs", printing("ema", "32"), "foil", 1, "scan", 4),
+    line(3, "theirs", printing("nph", "57"), "nonfoil", 1, "search", 3.95),
+    line(3, "theirs", printing("emn", "15"), "nonfoil", 1, "search", 3.65),
+
+    // --- Trade 4: open and live. 6.43 against 0.33 — *They owe you $6.10*. Neither card on the
+    // reader's side is in the collection, so the Finish dialog's first step has nothing to take.
+    line(4, "mine", printing("emn", "15"), "nonfoil", 1, "search"),
+    line(4, "mine", printing("iko", "226"), "nonfoil", 1, "search"),
+    line(4, "theirs", printing("dom", "168"), "nonfoil", 1, "scan"),
+
+    // --- Trade 5: the design's own. 64.39 against 87.09.
+    line(5, "mine", printing("mh2", "138"), "nonfoil", 1, "collection"),
+    line(5, "mine", printing("mh2", "267"), "etched", 2, "collection"),
+    line(5, "mine", printing("ema", "32"), "foil", 1, "collection"),
+    line(5, "mine", printing("gtc", "148"), "nonfoil", 2, "collection"),
+    line(5, "theirs", printing("sta", "105"), "foil", 1, "scan"),
+    line(5, "theirs", printing("mh2", "259"), "nonfoil", 1, "search"),
+    line(5, "theirs", printing("fut", "153"), "nonfoil", 1, "search"),
+    line(5, "theirs", printing("c21", "263"), "nonfoil", 2, "scan"),
+  ];
+  return db;
+}
+
+/** {@link ids}, continuing from the rows a world already holds — what a seed built on top of
+ *  another hands its own rows, and what `nextId` would hand the first write of a story. */
+function idsAfter(rows: readonly { id: number }[]): () => number {
+  let n = rows.reduce((max, row) => Math.max(max, row.id), 0);
+  return () => (n += 1);
+}
+
 /* ------------------------------------------------------------------ the switch --------- */
 
 /**
@@ -3289,6 +3509,8 @@ export function seed(name: SeedName): FakeDb {
       return waitingSeed();
     case "tokenPlan":
       return tokenPlanSeed();
+    case "trades":
+      return tradesSeed();
     default:
       return starterSeed();
   }

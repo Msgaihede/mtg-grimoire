@@ -1,6 +1,6 @@
 # apps/light — the light app
 
-A second app surface sharing the core `packages/ui/` components and Rust engine: card search, decks, collection, wishlist, and scanner, targeting Android and web browsers (see [the light-app spec](../../docs/superpowers/specs/2026-10-01-light-app-android-and-web-design.md), [frontend-architecture.md](../../docs/reference/frontend-architecture.md), [grimoire-web.md](../../docs/reference/grimoire-web.md), and [light-app.md](../../docs/reference/light-app.md)).
+A second app surface sharing the core `packages/ui/` components and Rust engine: card search, decks, collection, wishlist, scanner, and trade, targeting Android and web browsers (see [the light-app spec](../../docs/superpowers/specs/2026-10-01-light-app-android-and-web-design.md), [frontend-architecture.md](../../docs/reference/frontend-architecture.md), [grimoire-web.md](../../docs/reference/grimoire-web.md), and [light-app.md](../../docs/reference/light-app.md)).
 
 "Light" refers to the menu and presentation face, never the underlying data. It executes the same commands against the same SQLite databases (`user.db` and `corpus.db`).
 
@@ -63,7 +63,7 @@ The Android app and the Web app share identical client-side code; the phone face
 
 ## 4. URL-Driven Navigation & History Model
 
-Navigation grammar is standardized in `routes.ts`: views, decks, `?folder=<id>` (phone only), and `?card=<id>`.
+Navigation grammar is standardized in `routes.ts`: views, decks, `?folder=<id>` (phone only), `/trade/<id>` (phone only), and `?card=<id>`.
 
 - **Phone Router** (`phone/router.ts`): Hand-written over the HTML5 History API (`usePlace`, `navigate`, `back`, `linkTo`).
 - **Semantic links**: Navigation controls must render semantic anchor tags (`<a {...linkTo(place)}>`), preserving standard browser middle-click and tab behaviors.
@@ -146,3 +146,17 @@ The desktop reader's parts in the phone's idioms ([card-scanner.md](../../docs/r
 - **The two-column arrangement asks the viewport (720px)**, not a container: the page's sheets are mounted inside it, and a container is the containing block for a `fixed` scrim. Not the rail's 600: there the tray's column was 288px and its controls under the floor.
 - **_Send scan…_ is the shared feature, mounted bare** (`packages/ui/features/scanner/submit/`: `useScanSubmit`, `SubmitScanDialog`): `MatchLine`'s 44px icon press, offered only while a camera is live and recognition is running, freezes the last couple of seconds of frames the pump sent (`useScanLoop`'s `recent()`) and opens the one dialog both faces draw — those pictures behind a slider, the exact printing, its finish — and only its Send calls `scanner_submit`, the one command that sends a picture off the device. **A scan is the whole run or nothing, never one picture**: a press with fewer than five frames says so over the picture and opens no dialog, and the page never grabs a still to send in their place. Its controls take a finger's size from the shared `coarse:` recipes, so nothing is floored from the page. Change the shared feature, never a copy; its words are `submit/submitText.ts`'s, and what it says is sent has to stay true to the privacy policy.
 - **`scanner/ScannerDataSlot.tsx` is where the scanner's missing data is offered**: it draws the shared `packages/ui/features/scanner/ScannerAssets.tsx` — the offer with its measured size, a Download at a finger's size, the bar, a failure with a Retry — from what `scanner_assets` answers, and nothing at all (no element) where nothing is owed. The page hands it `onLoaded`: `resync()` and `loop.clearReads()`, for the engine's new session. Change the shared component, not the page.
+
+---
+
+## 8. The Trade Page (`phone/pages/TradePage.tsx`, `phone/trade/`)
+
+The desktop Trade page's parts in the phone's idioms ([the trade-builder spec](../../docs/superpowers/specs/2026-10-11-trade-builder-design.md)).
+
+- **Everything that decides is `packages/ui/features/trade`'s, imported** — the arithmetic (`trade.ts`, integer cents), both reads and every write (`useTrades.ts`), the sentences both faces say (`tradeWords.ts`), the add field's rows (`useTradeCandidates.ts`) and `BalanceBar`. Never add, round or compare a price here, and never word a sentence the desktop page also says.
+- **A trade is a place**: `/trade` is the list and `/trade/5` one trade (`Place.tradeId`, optional and absent on the list, as `folderId` is). A row and the way back are links; a deleted trade's entry is *replaced* by the list.
+- **Two columns at every width, asked of nothing**: the sheets are mounted inside the page, and a container would be the containing block for their `fixed` scrims.
+- **Every edit is a sheet, and every write is made as it is pressed** — a trade has no Save. The one exception is a side's percentage: the figures follow the slider and the trade is written once, when the reader lets go or leaves the sheet.
+- **A trade's money is its own marketplace's** (`tradeCurrency(trade)`), and so are the printings its edit sheet lists — never `useMarketplace()`'s.
+- **A refusal is words**: in the foot of the sheet that is up, or above the totals with none up. A closed trade offers no edit to refuse — its lines are text, not presses — and the one row it cannot do (Rename) stays drawn and says why.
+- **`trade/TradeScan.tsx` is the Scanner page over a trade**: it shares the Scanner tab's one tray and the scanner's lease (§7), and mounts the scanner only while it is open — the trade page mounts the sheet always and hands it `open`.

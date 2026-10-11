@@ -219,7 +219,7 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
 
   /**
    * Whether this window has the shared view the *Open* half goes to — the shell's answer, through
-   * `useReaches`, and false only in the light app, which draws six destinations and not this
+   * `useReaches`, and false only in the light app, which draws seven destinations and not this
    * one. **Hidden there rather than refused on the press**: a link that answered would land on a
    * view the light app cannot stand on, and a share link is a web page a browser opens anyway.
    */

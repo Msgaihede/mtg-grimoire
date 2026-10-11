@@ -9,6 +9,7 @@ import {
   readyRows,
   totalCopies,
 } from "@grimoire/ui/features/scanner/reader/tray";
+import type { TrayDestinationFace } from "@grimoire/ui/features/scanner/useTrayDestination";
 import { FOCUS } from "@grimoire/ui/lib/focus";
 import { buildFolderTree, flattenFolders } from "@grimoire/ui/lib/folderTree";
 import type { CollectionFolder, ScannerTrayRow } from "@grimoire/ui/lib/ipc";
@@ -59,6 +60,12 @@ export function destinationName(
  *
  * A refused commit puts the backend's own sentence above the two rows, as an alert; a commit that
  * went through is the page's receipt line.
+ *
+ * **With a `destination`** — the tray filing onto a side of a trade rather than into the
+ * collection (`useTrayDestination.ts`) — the folder's press gives its place to the destination's
+ * own summary, Add and the two pending lines take its words, and `⋯` holds *Clear all…* alone: a
+ * folder and a deck are both questions about the collection. Absent, the footer is the Scanner
+ * page's, as it was.
  */
 export function TrayFooter({
   rows,
@@ -71,6 +78,7 @@ export function TrayFooter({
   commitError,
   onCreateDeck,
   onClearAll,
+  destination,
 }: {
   rows: readonly ScannerTrayRow[];
   /** Every collection folder, every kind — the reader's own are picked out here. */
@@ -87,6 +95,9 @@ export function TrayFooter({
   onCreateDeck: (opener: HTMLElement) => void;
   /** *Clear all…* — a request, never the clear itself: the page asks first. */
   onClearAll: (opener: HTMLElement) => void;
+  /** Where the tray files when that is not the collection. `folders`, `folderId`, `onFolder` and
+   *  `onCreateDeck` are then unread. */
+  destination?: TrayDestinationFace;
 }) {
   const [sheet, setSheet] = useState<"folder" | "more" | null>(null);
   const reasonId = useId();
@@ -104,6 +115,8 @@ export function TrayFooter({
   // While the list is still loading a named folder has no name yet, and one the list never
   // answered for has none at all: the collection's word would be a wrong answer either way.
   const name = destinationName(mine, folderId) ?? (foldersPending ? "…" : UNREAD_FOLDER);
+  // What a row of the `⋯` sheet says while the press is out.
+  const adding = `Adding to ${destination?.name ?? "your collection"}…`;
 
   return (
     <footer className="flex shrink-0 flex-col gap-2 border-t border-border bg-surface px-4 py-2">
@@ -117,23 +130,30 @@ export function TrayFooter({
       )}
 
       <div className="flex items-center gap-2">
-        <button
-          ref={folderRef}
-          type="button"
-          // Named outright: the icon, the name and the chevron are three elements a gap apart.
-          aria-label={`Folder: ${name}`}
-          aria-haspopup="dialog"
-          onClick={() => setSheet("folder")}
-          className={cn(
-            "inline-flex h-11 min-w-0 flex-1 items-center gap-2 rounded-md border border-border px-3 text-sm",
-            PRESS,
-            FOCUS,
-          )}
-        >
-          <Folder aria-hidden className="size-4 shrink-0 text-dim" />
-          <span className="min-w-0 flex-1 truncate text-left">{name}</span>
-          <ChevronRight aria-hidden className="size-4 shrink-0 text-dim" />
-        </button>
+        {destination === undefined ? (
+          <button
+            ref={folderRef}
+            type="button"
+            // Named outright: the icon, the name and the chevron are three elements a gap apart.
+            aria-label={`Folder: ${name}`}
+            aria-haspopup="dialog"
+            onClick={() => setSheet("folder")}
+            className={cn(
+              "inline-flex h-11 min-w-0 flex-1 items-center gap-2 rounded-md border border-border px-3 text-sm",
+              PRESS,
+              FOCUS,
+            )}
+          >
+            <Folder aria-hidden className="size-4 shrink-0 text-dim" />
+            <span className="min-w-0 flex-1 truncate text-left">{name}</span>
+            <ChevronRight aria-hidden className="size-4 shrink-0 text-dim" />
+          </button>
+        ) : (
+          // The folder's place, so `⋯` stays at the right end whether or not there is a summary.
+          <div className="flex min-h-11 min-w-0 flex-1 items-center">
+            {destination.summary?.(rows)}
+          </div>
+        )}
         <button
           type="button"
           ref={moreRef}
@@ -176,7 +196,7 @@ export function TrayFooter({
         )}
         {/* One label in both states: the name a reader pressed is the name the pending control
             keeps, and `aria-busy` is what says the write is under way. */}
-        {addLabel(ready, needsFinish)}
+        {addLabel(ready, needsFinish, destination?.name)}
       </button>
       {/* The reason while there is one; nothing while the write is in flight, where the spinner
           already says what is happening. */}
@@ -236,28 +256,24 @@ export function TrayFooter({
         }}
       >
         <ul>
-          <SheetRow
-            label="Create deck…"
-            Icon={Layers}
-            reason={committing ? "Adding to your collection…" : deckRefusal(rows)}
-            onPress={() => {
-              setSheet(null);
-              if (moreRef.current !== null) onCreateDeck(moreRef.current);
-            }}
-          />
+          {destination === undefined && (
+            <SheetRow
+              label="Create deck…"
+              Icon={Layers}
+              reason={committing ? adding : deckRefusal(rows)}
+              onPress={() => {
+                setSheet(null);
+                if (moreRef.current !== null) onCreateDeck(moreRef.current);
+              }}
+            />
+          )}
           <SheetRow
             label="Clear all…"
             Icon={Trash2}
             destructive
             // Nothing to clear, or a commit about to file these very rows — a card waiting on a
             // printing or a finish can still be thrown away.
-            reason={
-              committing
-                ? "Adding to your collection…"
-                : rows.length === 0
-                  ? EMPTY_REASON
-                  : null
-            }
+            reason={committing ? adding : rows.length === 0 ? EMPTY_REASON : null}
             onPress={() => {
               setSheet(null);
               if (moreRef.current !== null) onClearAll(moreRef.current);

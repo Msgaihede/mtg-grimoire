@@ -155,6 +155,13 @@ pub fn surface_of(table: &str) -> Option<Dirty> {
         // answer is no". `every_table_in_the_schema_has_been_decided_about` is the fence, and
         // it would have gone green either way — which is exactly why the arm is here.
         "sticky_notes" => None,
+        // **`None`, and said for `sticky_notes`' reason** (user schema v63). A trade is
+        // neither a deck nor the collection, and the trade builder spec's §6 keeps it out of
+        // the mirror by name: no mirrored file has a section that could quote one. What a
+        // *finish* does to the collection and the wishlist reaches the mirror anyway, through
+        // the `collection_entries` and `wishlist_entries` arms above — the rows it writes
+        // are those tables', and the hook reports them as it reports any other write.
+        "trades" | "trade_lines" => None,
         _ => None,
     }
 }
@@ -1201,6 +1208,14 @@ mod tests {
                 "sync_orphans",
                 "sync_peers",
                 "sync_state",
+                // The Trade page's two (user schema v63). A trade describes an exchange, not
+                // anything the reader holds: no mirrored file quotes one, and the spec's §6
+                // says the mirror does not write them. Both are rowid tables the hook can see,
+                // so this is a decision and not a blind spot — `surface_of` says `None` for
+                // them in an arm of its own. The cards a finish moves are mirrored as the
+                // collection and wishlist rows they become.
+                "trade_lines",
+                "trades",
             ],
             "a table added to the schema has to be decided about here"
         );

@@ -5,7 +5,7 @@ import { cn } from "@grimoire/ui/lib/utils";
 import { linkTo } from "./router";
 
 /**
- * The five destinations a thumb reaches for. Settings is the top bar's.
+ * The six destinations a thumb reaches for. Settings is the top bar's.
  *
  * **The words and the glyphs are the desktop rail's**, read out of `NAV` rather than written
  * again — one word per view, in both apps, is what that module exists to keep.
@@ -51,9 +51,10 @@ export function TabBar({ view }: { view: LightView }) {
           {...linkTo({ view: id, deckId: null, cardId: null })}
           aria-current={id === view ? "page" : undefined}
           className={cn(
-            // 52px: over the 44px touch floor in both directions at five tabs on 360px. In the
-            // rail each tab is a share of the column between that floor and 64px — a phone on
-            // its side at 360 tall has 310px under the header, and five 64px rows are 320.
+            // 52px: over the 44px touch floor in both directions at six tabs on 360px, where each
+            // is 60px wide. In the rail each tab is a share of the column between that floor and
+            // 64px — a phone on its side at 360 tall has 310px under the header, less the rail's
+            // own 8px: six rows of 50, where six at 64 would be 384.
             "flex h-13 min-w-0 flex-1 flex-col items-center justify-center gap-0.5 text-xs",
             "min-[600px]:h-auto min-[600px]:max-h-16 min-[600px]:min-h-11",
             id === view ? "text-accent" : "text-dim",

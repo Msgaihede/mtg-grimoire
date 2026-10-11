@@ -122,6 +122,7 @@ import { importItems } from "./reader/tray";
 import { ScannerPage } from "./ScannerPage";
 import { SCAN_TOO_SHORT } from "./submit/submitText";
 import { SCANNER_ELSEWHERE_POLL_MS } from "./useScannerElsewhere";
+import type { TrayDestination } from "./useTrayDestination";
 
 function mount() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -1764,5 +1765,190 @@ describe("ScannerPage with another window holding the scanner", () => {
     );
     expect(screen.queryByText(/No reference bundle/)).not.toBeInTheDocument();
     expect(screen.queryByText(/No OCR models/)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * **The same view, filing somewhere that is not the collection** — what the trade's scanner dialog
+ * mounts. The hook's own suite (`useTrayDestination.test.ts`) holds the subtraction's cases and
+ * the dialog's holds the trade's write; this is the page between them.
+ */
+describe("ScannerPage with a destination", () => {
+  /** A destination whose write the test settles itself. */
+  function destinationOf() {
+    const settle: { resolve: () => void; reject: (reason: unknown) => void }[] = [];
+    const commit = vi.fn<TrayDestination["commit"]>(
+      () => new Promise<void>((resolve, reject) => settle.push({ resolve, reject })),
+    );
+    const onCommitted = vi.fn();
+    const destination: TrayDestination = {
+      title: "Scanned for their side",
+      name: "their side",
+      commit,
+      onCommitted,
+    };
+    return { destination, commit, onCommitted, settle };
+  }
+
+  function mountOver(destination: TrayDestination) {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return render(
+      <QueryClientProvider client={qc}>
+        <ScannerPage destination={destination} />
+      </QueryClientProvider>,
+    );
+  }
+
+  const theirTray = () => screen.getByRole("region", { name: "Scanned for their side" });
+
+  it("hands the ready rows to the destination on its own press, then takes exactly those out, keeping a card scanned meanwhile", async () => {
+    const restore = shimVideo();
+    opens();
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+    const rows = TRAY_ROWS.slice(1); // 3 + 1 + 1 copies
+    vi.mocked(ipc.scannerTray).mockResolvedValue(rows);
+    let land!: (v: ScannerVerdict) => void;
+    vi.mocked(ipc.scannerFrame)
+      .mockResolvedValueOnce(VERDICTS.voting)
+      .mockImplementationOnce(() => new Promise((resolve) => (land = resolve)))
+      .mockImplementation(() => new Promise(() => {}));
+    const { destination, commit, onCommitted, settle } = destinationOf();
+    const user = userEvent.setup();
+    try {
+      mountOver(destination);
+      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(2));
+      // A live camera and a running scanner — where the Scanner view draws *Send scan…*. Over a
+      // trade it is not offered: this page is already inside a dialog, and that press opens one.
+      expect(await screen.findByRole("button", { name: "Reset evidence" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
+      await user.click(
+        await within(theirTray()).findByRole("button", { name: "Add 5 to their side" }),
+      );
+      await waitFor(() => expect(commit).toHaveBeenCalledTimes(1));
+      expect(commit.mock.calls[0][0]).toEqual(rows);
+      // The collection's commit is not this press's, in either spelling.
+      expect(ipc.scannerTrayCommit).not.toHaveBeenCalled();
+      expect(ipc.collectionImportCommit).not.toHaveBeenCalled();
+      // The destination first: every row is still in the tray while its write is out.
+      expect(within(theirTray()).getAllByRole("listitem")).toHaveLength(rows.length);
+
+      land(VERDICTS.decided);
+      await waitFor(() =>
+        expect(within(theirTray()).getAllByRole("listitem")).toHaveLength(rows.length + 1),
+      );
+      settle[0].resolve();
+
+      await waitFor(() => expect(within(theirTray()).getAllByRole("listitem")).toHaveLength(1));
+      expect(within(theirTray()).getByText("Storm of Saruman")).toBeInTheDocument();
+      expect(onCommitted).toHaveBeenCalledWith(1);
+      // What is stored is the tray without the rows that went — the card the press never saw.
+      await waitFor(
+        () =>
+          expect(vi.mocked(ipc.setScannerTray).mock.lastCall?.[0]).toEqual([
+            expect.objectContaining({ cardId: "storm-of-saruman-ltr-72" }),
+          ]),
+        { timeout: 2000 },
+      );
+    } finally {
+      restore();
+    }
+  });
+
+  it("leaves the row that needs a finish, and says how many on the press", async () => {
+    refused();
+    const known = TRAY_ROWS.slice(1);
+    vi.mocked(ipc.scannerTray).mockResolvedValue([NEEDS_A_FINISH_ROW, ...known]);
+    const { destination, commit, settle } = destinationOf();
+    const user = userEvent.setup();
+    mountOver(destination);
+    await user.click(
+      await screen.findByRole("button", { name: "Add 5 to their side · 1 needs a finish" }),
+    );
+    await waitFor(() => expect(commit).toHaveBeenCalledTimes(1));
+    expect(commit.mock.calls[0][0]).toEqual(known);
+    settle[0].resolve();
+    await waitFor(() => expect(within(theirTray()).getAllByRole("listitem")).toHaveLength(1));
+    await waitFor(
+      () => expect(ipc.setScannerTray).toHaveBeenLastCalledWith([NEEDS_A_FINISH_ROW]),
+      { timeout: 2000 },
+    );
+  });
+
+  it("keeps every row and shows the sentence when the destination refuses", async () => {
+    refused();
+    const rows = TRAY_ROWS.slice(1);
+    vi.mocked(ipc.scannerTray).mockResolvedValue(rows);
+    const { destination, commit, onCommitted, settle } = destinationOf();
+    const user = userEvent.setup();
+    mountOver(destination);
+    const add = await screen.findByRole("button", { name: "Add 5 to their side" });
+    await user.click(add);
+    await waitFor(() => expect(commit).toHaveBeenCalledTimes(1));
+    expect(add).toHaveAttribute("aria-busy", "true");
+    settle[0].reject("This trade is finished. Reopen it to change it.");
+
+    expect(await within(theirTray()).findByRole("alert")).toHaveTextContent(
+      "This trade is finished. Reopen it to change it.",
+    );
+    expect(within(theirTray()).getAllByRole("listitem")).toHaveLength(rows.length);
+    expect(add).not.toHaveAttribute("aria-busy");
+    expect(onCommitted).not.toHaveBeenCalled();
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(ipc.setScannerTray).not.toHaveBeenCalled();
+  });
+
+  it("draws no folder, no deck press and no Developer switch — and none of the developer panels a stored switch would bring", async () => {
+    refused();
+    storedPrefs({ developer: true });
+    vi.mocked(ipc.scannerTray).mockResolvedValue(TRAY_ROWS.slice(1));
+    const { destination } = destinationOf();
+    mountOver(destination);
+    await within(await screen.findByRole("region", { name: "Scanned for their side" })).findByText(
+      "Urza's Saga",
+    );
+    expect(screen.queryByRole("button", { name: /^Folder:/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Create deck…" })).toBeNull();
+    expect(screen.queryByRole("switch", { name: "Developer" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Match" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Tiers" })).toBeNull();
+    // The rest of the bar is the scanner's own.
+    expect(screen.getByRole("group", { name: "Scan mode" })).toBeInTheDocument();
+  });
+
+  it("asks the engine for no previews, whatever the stored Developer switch says", async () => {
+    const restore = shimVideo();
+    opens();
+    storedPrefs({ developer: true });
+    paced();
+    const { destination } = destinationOf();
+    try {
+      mountOver(destination);
+      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalled());
+      const sent = vi.mocked(ipc.scannerFrame).mock.calls[0]?.[1];
+      expect(sent?.previews).toBe(false);
+    } finally {
+      restore();
+    }
+  });
+
+  it("says what the tray already held, and words the clear for the destination", async () => {
+    refused();
+    vi.mocked(ipc.scannerTray).mockResolvedValue(TRAY_ROWS.slice(1));
+    const { destination } = destinationOf();
+    const user = userEvent.setup();
+    mountOver(destination);
+    const region = await screen.findByRole("region", { name: "Scanned for their side" });
+    expect(await within(region).findByRole("note")).toHaveTextContent(
+      /^5 cards were already in the scanner's tray\./,
+    );
+    await user.click(within(region).getByRole("button", { name: "Clear all…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Clear the tray" });
+    expect(dialog).toHaveTextContent(
+      "5 scanned copies will leave the tray without being added to their side.",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Clear tray" }));
+    // The rows it warned about have gone, and the warning with them.
+    await waitFor(() => expect(within(region).queryByRole("note")).toBeNull());
+    expect(within(region).getByText("Cards you scan appear here.")).toBeInTheDocument();
   });
 });

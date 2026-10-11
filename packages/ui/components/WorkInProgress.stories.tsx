@@ -6,7 +6,7 @@ const meta = {
   title: "Primitives/WorkInProgress",
   component: WorkInProgress,
   tags: ["autodocs"],
-  args: { view: "Trade" },
+  args: { view: "Playtesting" },
   decorators: [
     // The shell's content area is a filled box the page stretches inside, and the whole of what
     // this component decides is where its one line sits in that box. A story with no height would
@@ -21,11 +21,11 @@ const meta = {
     docs: {
       description: {
         component:
-          "A destination that is in the rail before it is a page — **Trade** and " +
-          "**Playtesting** as they ship today.\n\n" +
+          "A destination that is in the rail before it is a page — **Playtesting** as it " +
+          "ships today, and **Trade** until it grew a page of its own.\n\n" +
           "**One component rather than one per placeholder.** Two views drawing one sentence " +
           "two ways is a drift nothing goes red for, and the sentence is the whole of what " +
-          "either of them says. What each caller supplies is its own word, because that word " +
+          "a placeholder says. What each caller supplies is its own word, because that word " +
           "is the heading a screen reader lands on.\n\n" +
           "**The `<h2>` is `sr-only`, exactly as every real page's is.** The ribbon draws the " +
           "view's name as the window's `<h1>`, so a visible second copy would be the name twice " +
@@ -39,13 +39,12 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-export const Trade: Story = {
+export const Playtesting: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(canvas.getByRole("heading", { level: 2, name: "Trade" })).toHaveClass("sr-only");
+    await expect(canvas.getByRole("heading", { level: 2, name: "Playtesting" })).toHaveClass(
+      "sr-only",
+    );
     await expect(canvas.getByText("Work in progress")).toBeVisible();
   },
 };
-
-/** The longer of the two words, which is the one worth looking at against the rail's label. */
-export const Playtesting: Story = { args: { view: "Playtesting" } };

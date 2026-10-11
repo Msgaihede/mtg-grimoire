@@ -122,10 +122,13 @@ it("stops listening when it unmounts", async () => {
  * scanner's card names are read out of `cards`, its status is asked once and kept, and a
  * Scanner opened before a first run's sync landed went on saying it had no names.
  *
+ * `["trade"]` is the eighth: an open trade prices every line from `cards` at read time, so a sync
+ * that brings new prices has changed what a trade left open says both sides are worth.
+ *
  * `["formatSpecs"]` is **not** here and must not be: the table is seeded by a migration and
  * a sync cannot touch it.
  */
-it("invalidates exactly the seven known roots", () => {
+it("invalidates exactly the eight known roots", () => {
   expect(SYNC_INVALIDATED).toEqual([
     ["cards"],
     ["collection"],
@@ -133,6 +136,7 @@ it("invalidates exactly the seven known roots", () => {
     ["card"],
     ["sets"],
     ["decks"],
+    ["trade"],
     ["scanner", "status"],
   ]);
 });

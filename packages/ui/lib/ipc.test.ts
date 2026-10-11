@@ -17,6 +17,7 @@ import changesRs from "../../../apps/desktop/src-tauri/src/changes.rs?raw";
 import bulkUndoRsCore from "../../../crates/grimoire-core/src/bulk_undo.rs?raw";
 import bulkUndoRsDesktop from "../../../apps/desktop/src-tauri/src/bulk_undo/mod.rs?raw";
 import collectionRsCore from "../../../crates/grimoire-core/src/collection.rs?raw";
+import commandsRs from "../../../crates/grimoire-core/src/commands.rs?raw";
 import collectionRsDesktop from "../../../apps/desktop/src-tauri/src/collection/mod.rs?raw";
 import collectionFoldersRsCore from "../../../crates/grimoire-core/src/collection_folders.rs?raw";
 import collectionFoldersRsDesktop from "../../../apps/desktop/src-tauri/src/collection_folders/mod.rs?raw";
@@ -87,6 +88,8 @@ import syncClientRs from "../../../crates/grimoire-core/src/sync_engine/client.r
 import syncCommandsRsCore from "../../../crates/grimoire-core/src/sync_engine/commands.rs?raw";
 import syncCommandsRsDesktop from "../../../apps/desktop/src-tauri/src/sync_engine/commands/mod.rs?raw";
 import syncLiveRs from "../../../crates/grimoire-core/src/sync_engine/live.rs?raw";
+import tradeRsCore from "../../../crates/grimoire-core/src/trade.rs?raw";
+import tradeRsDesktop from "../../../apps/desktop/src-tauri/src/trade/mod.rs?raw";
 import upcomingSetsRsCore from "../../../crates/grimoire-core/src/upcoming_sets.rs?raw";
 import upcomingSetsRsDesktop from "../../../apps/desktop/src-tauri/src/upcoming_sets/mod.rs?raw";
 import valueHistoryRsCore from "../../../crates/grimoire-core/src/value_history.rs?raw";
@@ -129,6 +132,7 @@ import {
   SCANNER_NOT_IN_A_BROWSER_YET,
   SCANNER_OPEN_ELSEWHERE,
 } from "@/features/scanner/verdictText";
+import { RATE_MAX, RATE_MIN, RATE_STEP } from "@/features/trade/trade";
 import {
   AUTO_BRACKET,
   ipc,
@@ -205,6 +209,7 @@ const stackhideRs = stackhideRsCore + "\n" + stackhideRsDesktop;
 const startviewRs = startviewRsCore + "\n" + startviewRsDesktop;
 const stickyNotesRs = stickyNotesRsCore + "\n" + stickyNotesRsDesktop;
 const syncCommandsRs = syncCommandsRsCore + "\n" + syncCommandsRsDesktop;
+const tradeRs = tradeRsCore + "\n" + tradeRsDesktop;
 const upcomingSetsRs = upcomingSetsRsCore + "\n" + upcomingSetsRsDesktop;
 const valueHistoryRs = valueHistoryRsCore + "\n" + valueHistoryRsDesktop;
 const wishlistFoldersRs = wishlistFoldersRsCore + "\n" + wishlistFoldersRsDesktop;
@@ -3619,6 +3624,192 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
+   * **The trade builder's thirteen** (user schema v63, issue #363), pinned on the day they were
+   * written — one case, because they are one page's worth of commands.
+   *
+   * **`trade_update_line` and `trade_remove_line` are the two worth the case.** Every other
+   * command here names a *trade* and sends `id`; these two name a *line* and send `lineId`,
+   * which Tauri hands to a parameter spelled `line_id`. A wrapper copied from the row above
+   * sends `{ id }`, type-checks perfectly and is refused at run time — and the symptom is a
+   * quantity stepper that does nothing.
+   *
+   * `trade_list` takes **no arguments at all**, `sticky_notes`' trap: an argument object sent to
+   * a command that declares only the managed state is a deserialisation error and not a type
+   * error.
+   *
+   * **The parameters are compared both ways, and read off the crate whatever `rustfmt` did to
+   * them.** `commandParams` above wants one parameter per line, and half of these wrappers fit
+   * on one — so this case reads the parenthesised list itself. Equality rather than containment,
+   * because both directions fail at run time: a key the command does not declare is dropped, and
+   * a parameter `ipc.ts` never sends is a missing required key.
+   */
+  it("sends every trade command under the name and arguments its command declares", async () => {
+    // A pass must never be able to mean "the crate was never read".
+    expect(tradeRsCore.length, "trade.rs was not read").toBeGreaterThan(1_000);
+    expect(tradeRsDesktop.length, "trade/mod.rs was not read").toBeGreaterThan(1_000);
+
+    invoke.mockResolvedValue([]);
+    expect(await ipc.tradeList()).toEqual([]);
+    expect(invoke).toHaveBeenLastCalledWith("trade_list");
+
+    invoke.mockResolvedValue(null);
+    expect(await ipc.tradeGet(4)).toBeNull();
+    expect(invoke).toHaveBeenLastCalledWith("trade_get", { id: 4 });
+
+    invoke.mockResolvedValue(4);
+    expect(await ipc.tradeCreate({ name: "Store night", marketplace: "cardmarket" })).toBe(4);
+    expect(invoke).toHaveBeenLastCalledWith("trade_create", {
+      trade: { name: "Store night", marketplace: "cardmarket" },
+    });
+    // Both fields are optional, and an empty object is what New trade sends when neither is
+    // filled in — still under `trade`, never spread.
+    await ipc.tradeCreate({});
+    expect(invoke).toHaveBeenLastCalledWith("trade_create", { trade: {} });
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.tradeRename(4, "Friday");
+    expect(invoke).toHaveBeenLastCalledWith("trade_rename", { id: 4, name: "Friday" });
+
+    await ipc.tradeSetRate(4, "theirs", 80);
+    expect(invoke).toHaveBeenLastCalledWith("trade_set_rate", { id: 4, side: "theirs", rate: 80 });
+
+    const line = { cardId: "bolt-lea", finish: "foil", quantity: 2, source: "scan" } as const;
+    await ipc.tradeAddLines(4, "mine", [line]);
+    expect(invoke).toHaveBeenLastCalledWith("trade_add_lines", {
+      id: 4,
+      side: "mine",
+      lines: [line],
+    });
+
+    // The change is nested, not spread: `side` and `quantity` are fields of the change and
+    // `lineId` is the command's own argument.
+    await ipc.tradeUpdateLine(9, { quantity: 3, side: "theirs" });
+    expect(invoke).toHaveBeenLastCalledWith("trade_update_line", {
+      lineId: 9,
+      change: { quantity: 3, side: "theirs" },
+    });
+
+    await ipc.tradeRemoveLine(9);
+    expect(invoke).toHaveBeenLastCalledWith("trade_remove_line", { lineId: 9 });
+
+    const options = {
+      removeGiven: true,
+      addReceived: true,
+      folderId: null,
+      unwishReceived: true,
+      wishGiven: false,
+    };
+    const outcome = {
+      removedFromCollection: 2,
+      removedFromDecks: 1,
+      addedToCollection: 1,
+      removedFromWishlist: 1,
+      addedToWishlist: 0,
+    };
+    invoke.mockResolvedValue(outcome);
+    expect(await ipc.tradeFinish(4, options)).toEqual(outcome);
+    expect(invoke).toHaveBeenLastCalledWith("trade_finish", { id: 4, options });
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.tradeArchive(4);
+    expect(invoke).toHaveBeenLastCalledWith("trade_archive", { id: 4 });
+    await ipc.tradeReopen(4);
+    expect(invoke).toHaveBeenLastCalledWith("trade_reopen", { id: 4 });
+    invoke.mockResolvedValue(5);
+    expect(await ipc.tradeDuplicate(4)).toBe(5);
+    expect(invoke).toHaveBeenLastCalledWith("trade_duplicate", { id: 4 });
+    invoke.mockResolvedValue(undefined);
+    await ipc.tradeDelete(4);
+    expect(invoke).toHaveBeenLastCalledWith("trade_delete", { id: 4 });
+
+    /** A wrapper's parameter names, in order, however `rustfmt` laid the list out. No type here
+     *  holds a parenthesis, so the first `)` closes the list; and `tauri::State` is not a name,
+     *  because a name is followed by one colon and preceded by none. */
+    const wrapperParams = (command: string): string[] => {
+      const marker = `pub async fn ${command}(`;
+      const start = tradeRsDesktop.indexOf(marker);
+      expect(start, `\`${command}\` has no wrapper in trade/mod.rs`).toBeGreaterThan(-1);
+      const open = start + marker.length;
+      const list = tradeRsDesktop.slice(open, tradeRsDesktop.indexOf(")", open));
+      return [...list.matchAll(/(?<![:\w])(\w+)\s*:(?!:)/g)].map((m) => m[1] ?? "");
+    };
+
+    const commands = [
+      "trade_list",
+      "trade_get",
+      "trade_create",
+      "trade_rename",
+      "trade_set_rate",
+      "trade_add_lines",
+      "trade_update_line",
+      "trade_remove_line",
+      "trade_finish",
+      "trade_archive",
+      "trade_reopen",
+      "trade_duplicate",
+      "trade_delete",
+    ];
+    for (const command of commands) {
+      // What `ipc.ts` sends is read out of `ipc.ts`, so this cannot pass by agreeing with a
+      // list written down here. `trade_list` sends nothing, and `payloadKeys` answers `[]` for
+      // a call with no argument object.
+      const sent = payloadKeys(ipcSource, command).map(snake);
+      const declared = wrapperParams(command);
+      expect(declared[0], `\`${command}\` does not take the managed state first`).toBe("state");
+      expect(declared.slice(1), `the arguments of \`${command}\``).toEqual(sent);
+      expect(desktopRs, `\`${command}\` is not registered`).toContain(`trade::${command},`);
+      // And the table the Android and web hosts dispatch through spells the same name.
+      expect(commandsRs, `\`${command}\` is not in the core's table`).toMatch(
+        new RegExp(`^\\s*(?:read|write|owned) ${command} in trade\\(`, "m"),
+      );
+    }
+    // The parsers are the thing under suspicion, so two of their answers are written down: a
+    // pass above must not be able to mean "both found nothing".
+    expect(payloadKeys(ipcSource, "trade_update_line")).toEqual(["lineId", "change"]);
+    expect(wrapperParams("trade_finish")).toEqual(["state", "id", "options"]);
+    expect(wrapperParams("trade_list")).toEqual(["state"]);
+  });
+
+  /**
+   * **The trade builder's three vocabularies and its percentage grid**, which both sides spell
+   * and neither reads off the other. `trade_lines.side`, `.source` and `trades.status` are
+   * CHECKed columns, so a word this file's union has and the crate's array has not is a refused
+   * write; the grid is `set_trade_rate`'s refusal against `trade.ts`'s slider, and a slider that
+   * can reach a figure the command refuses is a control that fails on its last notch.
+   */
+  it("spells a trade's sides, statuses, sources and rates as trade.rs does", () => {
+    const quoted = (text: string): string[] =>
+      [...text.matchAll(/"([^"]+)"/g)].map((word) => word[1] ?? "");
+    const rustWords = (name: string): string[] => {
+      const m = new RegExp(`pub const ${name}: \\[&str; (\\d+)\\] = \\[([^\\]]*)\\];`).exec(
+        tradeRsCore,
+      );
+      expect(m, `trade.rs no longer declares \`${name}\``).not.toBeNull();
+      const words = quoted((m as RegExpExecArray)[2] ?? "");
+      // The `N` in `[&str; N]` is a third statement of the same fact.
+      expect(words).toHaveLength(Number((m as RegExpExecArray)[1]));
+      return words;
+    };
+    const tsWords = (name: string): string[] => {
+      const m = new RegExp(`export type ${name} = ([^;]+);`).exec(ipcSource);
+      expect(m, `ipc.ts no longer declares \`${name}\``).not.toBeNull();
+      return quoted((m as RegExpExecArray)[1] ?? "");
+    };
+    expect(tsWords("TradeSide")).toEqual(rustWords("SIDES"));
+    expect(tsWords("TradeStatus")).toEqual(rustWords("STATUSES"));
+    expect(tsWords("TradeSource")).toEqual(rustWords("SOURCES"));
+
+    const rustNumber = (name: string): number => {
+      const m = new RegExp(`pub const ${name}: i64 = (\\d+);`).exec(tradeRsCore);
+      expect(m, `trade.rs no longer declares \`${name}\``).not.toBeNull();
+      return Number((m as RegExpExecArray)[1]);
+    };
+    expect(rustNumber("RATE_MIN")).toBe(RATE_MIN);
+    expect(rustNumber("RATE_MAX")).toBe(RATE_MAX);
+    expect(rustNumber("RATE_STEP")).toBe(RATE_STEP);
+  });
+
+  /**
    * **The deck to-do lists' five** (user schema v59, issue #688), pinned on the day they were
    * written — one case, because they are one band's and one widget's worth of commands. They
    * replaced #672's three (`deck_todos`, `deck_todos_set` and a `deck_todo_lists` that took no
@@ -5451,6 +5642,24 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // `colors` typed as an array rather than the concatenated letters `cards.colors` actually
     // stores would be caught here too, by name parity alone.
     ["DeckTokenRow", deckTokensRs, "DeckTokenRow"],
+    // **The trade builder's two wide ones** (user schema v63, issue #363): a line with the facts
+    // the page draws conclusions from, and the trade around it. The other seven are on
+    // `plainMirrors` below, for the field floor.
+    //
+    // Every drift is the quiet kind. A renamed `unitPrice` is `undefined`, which is not `null`,
+    // so a line's value is `NaN` and the balance with it. A renamed `owned` reads `undefined`
+    // and the Finish dialog promises to take `NaN` copies; a renamed `wished` is falsy, so no
+    // line is ever marked *on your wishlist*. And a renamed `finishedBefore` is falsy too, so a
+    // reopened trade's dialog opens with every box on and a second finish does the collection
+    // and wishlist steps twice.
+    //
+    // **`ownedInDecks` and `deckNames` are the two a drift costs most** (2026-10-11, when a
+    // finish became able to take a deck's copies). A renamed `ownedInDecks` reads `undefined`,
+    // every `> 0` beside it takes the other branch, and the red section that says a card is
+    // leaving a deck is never drawn — while the finish still takes the copy. `TradeOutcome`'s
+    // `removedFromDecks` is on `plainMirrors` below for the same reason, one sentence later.
+    ["TradeLine", tradeRs, "TradeLine"],
+    ["Trade", tradeRs, "Trade"],
   ];
 
   it.each(mirrors)(
@@ -5974,6 +6183,27 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // status that does not say must not grey a working row) — so a browser would offer Mana
     // Pool again and draw a window of em dashes, with nothing red anywhere but here.
     ["MarketplaceFeedStatus", marketplaceFeedRs, "FeedStatus"],
+    // **The trade builder's other seven** (user schema v63, issue #363) — the list's row and the
+    // line inside it, what a finish answers, and the four shapes the app **sends**.
+    //
+    // The sent ones are where a drift is loudest and least visible at once: all four structs are
+    // `#[serde(default)]`, so a renamed field is not a parse error — it is the default.
+    // `TradeFinishOptions.removeGiven` renamed leaves the box ticked on screen and the step off
+    // in the crate, so a finished trade reports nothing taken out of a collection that still
+    // holds every card; `TradeLineInput.cardId` renamed sends an empty id and every add is
+    // refused as a printing the database does not have; and `TradeLineChange.quantity` renamed
+    // is *leave it alone*, so the stepper answers success and the line never moves.
+    //
+    // `TradeSummaryLine` is **nested** in `TradeSummary`, `DeckNoteCard`'s reason: a field
+    // renamed one level down leaves the outer row agreeing while every balance in the trades
+    // list reads `NaN`.
+    ["TradeSummary", tradeRs, "TradeSummary"],
+    ["TradeSummaryLine", tradeRs, "TradeSummaryLine"],
+    ["TradeOutcome", tradeRs, "TradeOutcome"],
+    ["TradeFinishOptions", tradeRs, "TradeFinishOptions"],
+    ["TradeLineInput", tradeRs, "TradeLineInput"],
+    ["TradeLineChange", tradeRs, "TradeLineChange"],
+    ["TradeCreate", tradeRs, "TradeCreate"],
   ];
 
   it.each(plainMirrors)(

@@ -33,6 +33,7 @@ import { useScannerPrefs } from "./useScannerPrefs";
 import { useScannerStatus } from "./useScannerStatus";
 import { useTray } from "./useTray";
 import { useTrayCommit, useTrayFolder } from "./useTrayCommit";
+import { useTrayDestination, type TrayDestination } from "./useTrayDestination";
 import { useTrayLanding } from "./useTrayLanding";
 import { useScannedDeck } from "./useScannedDeck";
 import { useWindowParked } from "./useWindowParked";
@@ -57,8 +58,17 @@ import { SCANNER_OPEN_ELSEWHERE, SCANNER_OPENS_HERE_LATER } from "./verdictText"
  * the stream and the pump; `ScanBar`, `TrayPanel` and `ScannerPanels` are pure and take what
  * they draw as props, so each is tested from fixtures and storied without a camera, and a change
  * to a panel never touches the loop.
+ *
+ * **`destination` is the same view filing somewhere else** — a side of a trade, from the dialog
+ * that mounts this over the Trade page (`TrayDestination`). Absent, which is the Scanner view,
+ * nothing below is any different from before the prop. With one: Add hands the ready rows to the
+ * destination and wears its words, the folder and *Create deck…* are not drawn, and neither are
+ * the developer panels or their switch — they are the Scanner view's, and a stored switch flipped
+ * from inside a dialog would be found on by a reader who never saw a panel. Everything else is
+ * the scanner as it stands, **the tray included**: it is one stored row, so cards already in it
+ * are in this list too, and the tray says so.
  */
-export function ScannerPage(): JSX.Element {
+export function ScannerPage({ destination }: { destination?: TrayDestination }): JSX.Element {
   const elsewhere = useScannerElsewhere();
   if (elsewhere.data === true) return <ElsewhereSentence />;
   if (elsewhere.isPending) {
@@ -68,7 +78,7 @@ export function ScannerPage(): JSX.Element {
       </section>
     );
   }
-  return <LiveScanner />;
+  return <LiveScanner destination={destination} />;
 }
 
 function ElsewhereSentence() {
@@ -81,9 +91,12 @@ function ElsewhereSentence() {
   );
 }
 
-function LiveScanner() {
+function LiveScanner({ destination }: { destination: TrayDestination | undefined }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const { prefs, update, filterError, loaded, unavailable, resync } = useScannerPrefs();
+  // The developer panels are the Scanner view's own; a destination's host draws none of them, and
+  // asks the engine for none of the previews they alone show.
+  const developer = destination === undefined && prefs.developer;
   // Session-only: a deliberate Stop survives minimize/restore, but a new visit starts as before.
   const [scanning, setScanning] = useState(true);
   // **A minimized window stands down** (issue #556): the pump pauses at once, and the camera and
@@ -113,8 +126,8 @@ function LiveScanner() {
   // `previews` is the Developer switch's too: the rectified preview and its hash cost a JPEG
   // encode a frame, and nothing but the developer panels draws them.
   const frameOptions = useMemo(
-    () => frameOptionsOf(options, prefs.mode, prefs.developer),
-    [options, prefs.mode, prefs.developer],
+    () => frameOptionsOf(options, prefs.mode, developer),
+    [options, prefs.mode, developer],
   );
   // Asked once a session, and again when a download of the scanner's files lands —
   // `useScannerStatus` says why nothing else asks, and `ScannerAssets`, below, is that download.
@@ -220,8 +233,13 @@ function LiveScanner() {
    * the pump has let its frames go (a run never spans a Stop) and is sending none, so there is
    * nothing to send and no press is drawn: the stopped sentence over the picture already says
    * what would bring one back.
+   *
+   * **And only in the Scanner view itself.** Mounted over a trade (`destination`) this page is
+   * already inside a dialog, and its reader is in the middle of something else — *Create deck…*
+   * is not drawn there for the same reason. A second dialog opened from inside that one has not
+   * been seen in a window, so the press is not offered where it would open one.
    */
-  const sendable = camera.kind === "live" && scanning;
+  const sendable = destination === undefined && camera.kind === "live" && scanning;
   const submit = useScanSubmit({
     recent: loop.recent,
     verdict: loop.verdict,
@@ -243,7 +261,10 @@ function LiveScanner() {
     folderId: prefs.folderId,
     folderList,
   });
-  const onCommit = () => void commit();
+  // The same press for a destination that is not the collection: its own write first, then the
+  // tray's subtraction (`useTrayDestination`). Both hooks are called; one of them acts.
+  const handOff = useTrayDestination({ tray, destination });
+  const onCommit = () => void (destination === undefined ? commit() : handOff.commit());
 
   /**
    * *Clear all…*: the rows the reader was asked about, while the question is up, and the button
@@ -291,7 +312,7 @@ function LiveScanner() {
   // card in it. It is not said while recognition is stopped, where the line is the stopped
   // sentence's: the press is not drawn there, and the hook drops its sentence with the press.
   const detectorSentence =
-    prefs.developer && loop.verdict?.ok === false && submit.error === null
+    developer && loop.verdict?.ok === false && submit.error === null
       ? (loop.verdict.error ?? "")
       : (loop.error ?? resetError ?? submit.error ?? "");
 
@@ -326,8 +347,9 @@ function LiveScanner() {
           onFinish={(finish) => update({ finish })}
           condition={prefs.condition}
           onCondition={(condition) => update({ condition })}
-          developer={prefs.developer}
-          onDeveloper={(developer) => update({ developer })}
+          developer={developer}
+          onDeveloper={(on) => update({ developer: on })}
+          developerSwitch={destination === undefined}
           cameras={cameras}
           // The camera that opened; while a switch is starting, the one asked for — so the trigger
           // does not read `Default` for the moment between two cameras.
@@ -425,14 +447,14 @@ function LiveScanner() {
               in a column of their own beside it. */}
           <div
             className={
-              prefs.developer
+              developer
                 ? "relative flex w-[25rem] shrink-0 flex-col gap-4 overflow-auto @min-[88rem]/scan:w-auto @min-[88rem]/scan:flex-[1_1_22.25rem] @min-[88rem]/scan:flex-row @min-[88rem]/scan:overflow-visible"
                 : "flex w-[25rem] shrink-0 flex-col @min-[88rem]/scan:w-auto @min-[88rem]/scan:flex-[1_1_0%]"
             }
           >
             <div
               className={
-                prefs.developer
+                developer
                   ? "flex max-h-[70vh] shrink-0 flex-col @min-[88rem]/scan:max-h-none @min-[88rem]/scan:min-h-0 @min-[88rem]/scan:min-w-0 @min-[88rem]/scan:flex-1"
                   : "flex min-h-0 flex-1 flex-col"
               }
@@ -443,13 +465,21 @@ function LiveScanner() {
                 folderId={folderId}
                 onFolder={(id) => update({ folderId: id })}
                 onCommit={onCommit}
-                onCreateDeck={(opener) => {
-                  deckOpener.current = opener;
-                  scannedDeck.reset();
-                  setDeckRows([...tray.latest()]);
-                }}
-                committing={committing}
-                commitError={commitError}
+                // A deck is made from the collection's side of the scanner; a destination's
+                // host is in the middle of something else.
+                onCreateDeck={
+                  destination === undefined
+                    ? (opener) => {
+                        deckOpener.current = opener;
+                        scannedDeck.reset();
+                        setDeckRows([...tray.latest()]);
+                      }
+                    : undefined
+                }
+                committing={destination === undefined ? committing : handOff.committing}
+                commitError={destination === undefined ? commitError : handOff.error}
+                destination={destination}
+                notice={handOff.notice}
                 onMorePrintings={onMorePrintings}
                 flashKey={flashKey}
                 layout={trayLayoutOf(prefs.trayLayout)}
@@ -457,7 +487,7 @@ function LiveScanner() {
                 onClearAll={onClearAll}
               />
             </div>
-            {prefs.developer && (
+            {developer && (
               <div className="flex flex-col gap-4 @min-[88rem]/scan:min-h-0 @min-[88rem]/scan:w-[21.25rem] @min-[88rem]/scan:shrink-0 @min-[88rem]/scan:overflow-y-auto">
                 <ScannerPanels
                   status={statusData}
@@ -500,7 +530,7 @@ function LiveScanner() {
         onClose={() => setClearing(null)}
       >
         {plural(clearCopies, "scanned copy", "scanned copies")} will leave the tray without being
-        added to your collection. Cards you scan while this is open stay.
+        added to {destination?.name ?? "your collection"}. Cards you scan while this is open stay.
       </ConfirmDialog>
       <CreateDeckDialog
         open={deckRows !== null}

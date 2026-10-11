@@ -42,6 +42,7 @@ The fake lives in `packages/fake/` (it was `.storybook/fake/` until 2026-10-08);
   - `paired`: Simulates a multi-device sync pairing with active group key material and device roster.
   - `shared`: A published read-only collection share snapshot and incoming friend share view.
   - `waiting`: Pre-release cards dated past `CLOCK_BASE` for the Home page's Coming Soon widget.
+  - `trades`: `starter` plus five trades (two open, two finished, one archived unfinished) and the collection and wishlist rows that make Trade 5's marks true. `starter` itself holds no trades.
   - `tokenPlan`: Managed token configurations and wishlist settlements (`All` mode with tokens on).
 - **Faults (refusals and edge conditions)**:
   - Configured per story via `parameters: { fake: { fault: "<fault-name>" } }`.

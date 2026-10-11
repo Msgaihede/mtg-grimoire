@@ -23,12 +23,20 @@ describe("the two editions", () => {
     for (const { id } of NAV) expect(editionHas(FULL_EDITION, id)).toBe(true);
   });
 
-  it("gives the light edition six destinations, in the rail's own order", () => {
+  it("gives the light edition seven destinations, in the rail's own order", () => {
     // The rail filters `NAV`, so a list written in another order would be a list the rail
     // silently re-sorts — and the phone's tab bar reads this one directly.
     const railOrder = NAV.filter((n) => editionHas(LIGHT_EDITION, n.id)).map((n) => n.id);
     expect(railOrder).toEqual([...LIGHT_VIEWS]);
-    expect(railOrder).toEqual(["search", "decks", "collection", "wishlist", "scanner", "settings"]);
+    expect(railOrder).toEqual([
+      "search",
+      "decks",
+      "collection",
+      "wishlist",
+      "scanner",
+      "trade",
+      "settings",
+    ]);
   });
 
   it("keeps the caption for the full edition only", () => {

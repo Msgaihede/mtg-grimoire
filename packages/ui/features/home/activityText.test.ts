@@ -184,6 +184,29 @@ describe("activityLine — the collection's eight", () => {
   });
 
   /**
+   * **Finish trade borrows three kinds and flags them** (issue #363). The table's CHECK has no
+   * kind for a trade, so the three runs a finish makes are stored as a bulk `remove`, an
+   * `import` and a `clear` carrying `trade: true` — and none of them may read as the press its
+   * kind is named for: nobody imported a file, and nobody cleared their wishlist.
+   */
+  it("says a finished trade's three runs as a trade, not as the kinds they borrow", () => {
+    // A run names no card: that is what makes it a bulk row at all (`bulkEntries`).
+    const run = { cardId: null, cardName: null };
+    expect(entryLine("collection", "remove", { entries: 4, trade: true }, -6, run)).toEqual({
+      text: "Traded away 4 cards",
+      detail: "6 copies",
+    });
+    expect(entryLine("collection", "import", { cards: 5, rows: 4, trade: true }, 5)).toEqual({
+      text: "Received 5 cards in a trade",
+      detail: null,
+    });
+    expect(entryLine("wishlist", "clear", { cards: 2, trade: true }, -2)).toEqual({
+      text: "Took 2 cards off your wishlist after a trade",
+      detail: null,
+    });
+  });
+
+  /**
    * **`Recently removed`'s clear names the folder** (issue #506) — `collection_folders::
    * clear_removed` writes the whole-binder clear's kind and `cards` key plus `folder`, the
    * wishlist drawer clear's shape, so it reads as the same act at a smaller grain rather than as

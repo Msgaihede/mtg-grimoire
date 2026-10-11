@@ -24,6 +24,10 @@ import { useScannerPrefs } from "@grimoire/ui/features/scanner/useScannerPrefs";
 import { useScannerStatus } from "@grimoire/ui/features/scanner/useScannerStatus";
 import { useTray } from "@grimoire/ui/features/scanner/useTray";
 import { useTrayCommit, useTrayFolder } from "@grimoire/ui/features/scanner/useTrayCommit";
+import {
+  useTrayDestination,
+  type TrayDestination,
+} from "@grimoire/ui/features/scanner/useTrayDestination";
 import { useTrayLanding } from "@grimoire/ui/features/scanner/useTrayLanding";
 import {
   SCANNER_OPEN_ELSEWHERE,
@@ -53,8 +57,14 @@ import { CREATE_DECK_FLOOR } from "./parts";
  * *before* the camera is asked for — the live page's own hooks open it as they mount. Nothing is
  * drawn, and no camera opened, until that one question has answered; a failed ask reads as "free",
  * because the live page's heartbeat is the real gate.
+ *
+ * **`destination` is this page filing somewhere else** — a side of a trade, from the sheet that
+ * mounts it over the Trade page (`TrayDestination`). Absent, which is the Scanner tab, nothing
+ * below differs from before the prop. With one, Add hands the ready rows to the destination and
+ * wears its words, and the folder and *Create deck…* are not drawn. The tray is the same stored
+ * row, so cards already in it are in the list, and a line above the tray says so.
  */
-export function ScannerPage() {
+export function ScannerPage({ destination }: { destination?: TrayDestination }) {
   const elsewhere = useScannerElsewhere();
   if (elsewhere.data === true) {
     return (
@@ -65,7 +75,7 @@ export function ScannerPage() {
     );
   }
   if (elsewhere.isPending) return <div className="min-h-0 flex-1" />;
-  return <LiveScanner />;
+  return <LiveScanner destination={destination} />;
 }
 
 /**
@@ -121,7 +131,7 @@ export function ScannerPage() {
  * with the sentence, since one changed there would be drawn and never taken. The tray still
  * reads, edits and files: those are rows, and a page has the rows.
  */
-function LiveScanner() {
+function LiveScanner({ destination }: { destination: TrayDestination | undefined }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const { prefs, update, filterError, loaded, unavailable, resync } = useScannerPrefs();
   // Session-only, the desktop's: a deliberate Stop survives the page being hidden and shown.
@@ -168,6 +178,9 @@ function LiveScanner() {
     folderId: prefs.folderId,
     folderList,
   });
+  // The same press for a destination that is not the collection: its own write first, then the
+  // tray's subtraction (`useTrayDestination`). Both hooks are called; one of them acts.
+  const handOff = useTrayDestination({ tray, destination });
 
   /**
    * What the last Add did, as the phone's other writes report: one line at the foot of the page.
@@ -179,6 +192,13 @@ function LiveScanner() {
   const receipt = useListReceipt();
   const bulk = useBulkUndoAction("collection");
   const onCommit = () => {
+    if (destination !== undefined) {
+      // No `Undo`: the destination is its host's to edit, and the cards are on it to take off.
+      receipt.track(handOff.commit(), (copies) =>
+        copies === null ? null : `Added ${plural(copies, "card")} to ${destination.name}.`,
+      );
+      return;
+    }
     receipt.track(
       commit(),
       (filed) => {
@@ -224,7 +244,9 @@ function LiveScanner() {
   // **A run, never one picture**: the frames are the pump's own (`loop.recent`), so the press
   // grabs nothing. **Offered only while there can be one** — a camera live and recognition
   // running: stopped, the pump has let its frames go and is sending none, and no press is drawn.
-  const sendable = camera.kind === "live" && scanning;
+  // **And only on the Scanner tab itself**: over a trade (`destination`) this page is already a
+  // sheet, and a second one opened from inside it has not been seen on a phone.
+  const sendable = destination === undefined && camera.kind === "live" && scanning;
   const submit = useScanSubmit({
     recent: loop.recent,
     verdict: loop.verdict,
@@ -305,10 +327,23 @@ function LiveScanner() {
             )}
           </div>
           <div className="px-4 pb-3 min-[720px]:min-h-0 min-[720px]:overflow-y-auto min-[720px]:border-l min-[720px]:border-border min-[720px]:pt-2">
+            {/* A destination's warning that the tray was not empty when this opened — above the
+                rows it is about. A note, not an alert: nothing has gone wrong, and it is there
+                from the first paint. */}
+            {handOff.notice !== null && (
+              <p
+                role="note"
+                className="mb-2 rounded-md border border-accent/40 bg-accent/10 px-3 py-2 text-xs leading-snug"
+              >
+                {handOff.notice}
+              </p>
+            )}
             <Tray
               rows={tray.rows}
               onRows={(change) => tray.setRows(change(tray.latest()))}
               flashKey={flashKey}
+              title={destination?.title}
+              marketplace={destination?.marketplace}
             />
           </div>
         </div>
@@ -325,8 +360,9 @@ function LiveScanner() {
               if (id !== prefs.folderId) update({ folderId: id });
             }}
             onCommit={onCommit}
-            committing={committing}
-            commitError={commitError}
+            committing={destination === undefined ? committing : handOff.committing}
+            commitError={destination === undefined ? commitError : handOff.error}
+            destination={destination}
             onCreateDeck={(opener) => {
               deckOpener.current = opener;
               scannedDeck.reset();
@@ -388,8 +424,8 @@ function LiveScanner() {
         onClose={() => setClearing(null)}
       >
         {plural(clearing === null ? 0 : totalCopies(clearing), "scanned copy", "scanned copies")}{" "}
-        will leave the tray without being added to your collection. Cards you scan while this is
-        open stay.
+        will leave the tray without being added to {destination?.name ?? "your collection"}. Cards
+        you scan while this is open stay.
       </ConfirmDialog>
 
       {/* The shared dialog, mounted bare: its controls take a finger's size from the shared

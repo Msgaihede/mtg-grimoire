@@ -17,6 +17,7 @@ import { DecksPage } from "./pages/DecksPage";
 import { ScannerPage } from "./pages/ScannerPage";
 import { SearchPage } from "./pages/SearchPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { TradePage } from "./pages/TradePage";
 import { WishlistPage } from "./pages/WishlistPage";
 import { adoptOverlay, navigate, usePlace } from "./router";
 import { Shell } from "./Shell";
@@ -38,7 +39,7 @@ const openCard = (place: Place) => (item: WallItem) => {
 /**
  * The page for a place.
  *
- * A `switch` over `LightView` with no `default`: a seventh view added to the edition is then a
+ * A `switch` over `LightView` with no `default`: an eighth view added to the edition is then a
  * compile error here rather than a blank page.
  */
 function Pages({
@@ -75,6 +76,10 @@ function Pages({
       return <WishlistPage onOpen={onOpen} />;
     case "scanner":
       return <ScannerPage />;
+    case "trade":
+      // The list, or the trade the URL names: `/trade/5` is a place, so a reload and Back both
+      // know where the reader was (`routes.ts`).
+      return <TradePage tradeId={place.tradeId ?? null} />;
     case "settings":
       return <SettingsPage />;
   }
