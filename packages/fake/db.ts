@@ -24455,6 +24455,18 @@ export function writeHandlers(db: FakeDb) {
       db.tradeLines = db.tradeLines.filter((l) => l.id !== line.id);
     },
 
+    /** `trade::swap_trade_sides` — every line of an open trade onto the other side, whole: its
+     *  printing, finish, quantity and place in the order. The percentages stay with their sides,
+     *  and nothing folds, because each side hands the other a set that already held one line a
+     *  printing and finish. */
+    trade_swap_sides: (args: { id: number }): void => {
+      refuseIfBusy(db);
+      const trade = openTrade(db, args.id);
+      for (const line of db.tradeLines) {
+        if (line.tradeId === trade.id) line.side = line.side === "mine" ? "theirs" : "mine";
+      }
+    },
+
     /**
      * `trade::finish_trade` — run the steps the reader ticked, freeze the prices and file the
      * trade as finished, **in one savepoint**. Answers what **this** finish did, in copies.

@@ -1164,6 +1164,7 @@ commands! {
         update_trade_line(conn, line_id, &change)
     };
     write trade_remove_line in trade(line_id: i64) = |conn| remove_trade_line(conn, line_id);
+    write trade_swap_sides in trade(id: i64) = |conn| swap_trade_sides(conn, id);
     owned trade_finish in trade(id: i64, options: TradeFinishOptions) = |conn| {
         finish_trade(conn, id, &options)
     };

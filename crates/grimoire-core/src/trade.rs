@@ -2,7 +2,7 @@
 //! and the wishlist when one is finished. User schema v63,
 //! [issue #363](https://github.com/Msgaihede/mtg-grimoire/issues/363).
 //!
-//! [`crate::sticky_notes`]' file shape: pure functions over a [`Connection`], the thirteen
+//! [`crate::sticky_notes`]' file shape: pure functions over a [`Connection`], the fourteen
 //! commands' bodies and nothing of a window. The wrappers are the desktop host's
 //! (`apps/desktop/src-tauri/src/trade/mod.rs`) and the table's (`crate::commands`).
 //!
@@ -1148,6 +1148,28 @@ pub fn remove_trade_line(conn: &Connection, line_id: i64) -> Result<(), String> 
     open_trade(conn, line.trade_id)?;
     conn.execute("DELETE FROM trade_lines WHERE id = ?1", params![line_id])
         .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Put every line of an open trade on the other side: what the reader gave is what they are
+/// given, and the other way round (issue #936).
+///
+/// **The lines move and nothing else does.** Each keeps its printing, finish, quantity, source
+/// and place in the trade's order, and the percentages stay with the sides they were set on —
+/// a rate describes a side of the table, not the cards that happen to be on it.
+///
+/// **Nothing folds**: each side already holds one line per printing and finish, and a swap
+/// hands each side the other's set whole, so no two lines can meet. One statement, so the swap
+/// is all or nothing without a savepoint of its own.
+pub fn swap_trade_sides(conn: &Connection, id: i64) -> Result<(), String> {
+    open_trade(conn, id)?;
+    conn.execute(
+        "UPDATE trade_lines
+            SET side = CASE side WHEN ?2 THEN ?3 ELSE ?2 END
+          WHERE trade_id = ?1",
+        params![id, MINE, THEIRS],
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -2366,6 +2388,68 @@ mod tests {
         assert_eq!(line_id(&conn, id, MINE, "goyf", "nonfoil"), theirs);
     }
 
+    /// A swap puts every line on the other side whole — the same printing, finish, quantity and
+    /// place — leaves the percentages where they were, and needs the trade open and there.
+    #[test]
+    fn swapping_sides_moves_every_line_across_and_nothing_else() {
+        let conn = seeded();
+        let id = new_trade(&conn);
+        put(&conn, id, MINE, "bolt", "foil", 2);
+        put(&conn, id, THEIRS, "goyf", "nonfoil", 1);
+        put(&conn, id, MINE, "charm", "foil", 3);
+        // The same printing and finish on both sides: a swap must not fold them.
+        put(&conn, id, THEIRS, "bolt", "foil", 4);
+        set_trade_rate(&conn, id, MINE, 80).unwrap();
+        let before = trade(&conn, id);
+
+        swap_trade_sides(&conn, id).unwrap();
+        let after = trade(&conn, id);
+        assert_eq!(
+            side(&conn, id, MINE),
+            [
+                ("goyf".to_owned(), "nonfoil".to_owned(), 1),
+                ("bolt".to_owned(), "foil".to_owned(), 4),
+            ]
+        );
+        assert_eq!(
+            side(&conn, id, THEIRS),
+            [
+                ("bolt".to_owned(), "foil".to_owned(), 2),
+                ("charm".to_owned(), "foil".to_owned(), 3),
+            ]
+        );
+        assert_eq!(
+            after.lines.iter().map(|l| l.id).collect::<Vec<_>>(),
+            before.lines.iter().map(|l| l.id).collect::<Vec<_>>(),
+            "the same lines, in the same order"
+        );
+        assert_eq!((after.rate_mine, after.rate_theirs), (80, 100));
+
+        swap_trade_sides(&conn, id).unwrap();
+        assert_eq!(
+            trade(&conn, id)
+                .lines
+                .iter()
+                .map(|l| (l.id, l.side.clone()))
+                .collect::<Vec<_>>(),
+            before
+                .lines
+                .iter()
+                .map(|l| (l.id, l.side.clone()))
+                .collect::<Vec<_>>(),
+            "twice is where it started"
+        );
+
+        let empty = new_trade(&conn);
+        swap_trade_sides(&conn, empty).unwrap();
+        assert!(trade(&conn, empty).lines.is_empty());
+
+        archive_trade(&conn, id).unwrap();
+        assert_eq!(swap_trade_sides(&conn, id).unwrap_err(), NOT_OPEN);
+        delete_trade(&conn, id).unwrap();
+        assert_eq!(swap_trade_sides(&conn, id).unwrap_err(), GONE);
+    }
+
     /// 50 to 150 in steps of 5, per side, and nothing is rounded into range.
     #[test]
     fn a_rate_is_fifty_to_one_fifty_in_fives_on_one_side() {
@@ -3404,6 +3488,7 @@ mod tests {
             remove_trade_line(&conn, line).unwrap_err(),
             finish_trade(&conn, id, &ALL).unwrap_err(),
             archive_trade(&conn, id).unwrap_err(),
+            swap_trade_sides(&conn, id).unwrap_err(),
         ];
         for refusal in refusals {
             assert_eq!(refusal, NOT_OPEN);

@@ -27,7 +27,7 @@ import { openDropdown, pickOption } from "@/test-dropdown";
  * `useTrades`' `write` invalidates the whole `["trade"]` root when a write settles, so every
  * assertion made after a write is made against a *second read*. A `mockResolvedValue` fixture
  * would answer that read with the trade as it was before the press — and a quantity step would
- * look like it stepped back. So the thirteen commands below read and write one array, the way the
+ * look like it stepped back. So the fourteen commands below read and write one array, the way the
  * real ones read and write two tables, and what a test asserts after a press is what a reader
  * would see after it.
  *
@@ -45,6 +45,7 @@ const ipcMock = vi.hoisted(() => ({
   tradeAddLines: vi.fn(),
   tradeUpdateLine: vi.fn(),
   tradeRemoveLine: vi.fn(),
+  tradeSwapSides: vi.fn(),
   tradeFinish: vi.fn(),
   tradeArchive: vi.fn(),
   tradeReopen: vi.fn(),
@@ -371,6 +372,11 @@ beforeEach(() => {
   });
   m.tradeRemoveLine.mockReset().mockImplementation(async (lineId: number) => {
     changeLine(lineId, () => null);
+  });
+  m.tradeSwapSides.mockReset().mockImplementation(async (id: number) => {
+    change(id, (t) => ({
+      lines: t.lines.map((l) => ({ ...l, side: l.side === "mine" ? "theirs" : "mine" })),
+    }));
   });
   m.tradeFinish.mockReset().mockImplementation(async (id: number) => {
     const outcome = {
@@ -1222,6 +1228,56 @@ describe("an open trade", () => {
 
     expect(ipcMock.tradeDuplicate).toHaveBeenCalledExactlyOnceWith(5);
     await tradeSection("Trade 5 copy");
+  });
+
+  it("swaps every card onto the other side from the arrows between the panels", async () => {
+    const user = userEvent.setup();
+    backend.trades = [canvasTrade()];
+    wrap(<TradePage />);
+    const section = await tradeSection("Trade 5");
+    expect(lineOf(side(section, "You give"), "Ragavan, Nimble Pilferer")).toBeDefined();
+
+    await user.click(within(section).getByRole("button", { name: "Swap sides" }));
+
+    expect(ipcMock.tradeSwapSides).toHaveBeenCalledExactlyOnceWith(5);
+    await waitFor(() =>
+      expect(lineOf(side(section, "They give"), "Ragavan, Nimble Pilferer")).toBeDefined(),
+    );
+    expect(lineOf(side(section, "You give"), "Lightning Bolt")).toBeDefined();
+    expect(lineOf(side(section, "You give"), "Ragavan, Nimble Pilferer")).toBeUndefined();
+  });
+
+  it("says why a swap was refused, under the name", async () => {
+    const user = userEvent.setup();
+    backend.trades = [canvasTrade()];
+    wrap(<TradePage />);
+    const section = await tradeSection("Trade 5");
+    ipcMock.tradeSwapSides.mockRejectedValueOnce("that trade is no longer open");
+
+    await user.click(within(section).getByRole("button", { name: "Swap sides" }));
+
+    expect(await within(section).findByRole("alert")).toHaveTextContent(
+      "Couldn't swap the sides — that trade is no longer open",
+    );
+    expect(lineOf(side(section, "You give"), "Ragavan, Nimble Pilferer")).toBeDefined();
+  });
+
+  it("offers no swap on a trade with no cards, nor on one that is closed", async () => {
+    const user = userEvent.setup();
+    backend.trades = [
+      trade({ id: 4 }),
+      { ...canvasTrade(), status: "archived", closedAt: day(10, 4) },
+    ];
+    wrap(<TradePage />);
+    const empty = await tradeSection("Trade 4");
+    const swap = within(empty).getByRole("button", { name: "Swap sides" });
+    expect(swap).toHaveAttribute("aria-disabled", "true");
+    await user.click(swap);
+    expect(ipcMock.tradeSwapSides).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: /Trade 5/ }));
+    const closed = await tradeSection("Trade 5");
+    expect(within(closed).queryByRole("button", { name: "Swap sides" })).not.toBeInTheDocument();
   });
 
   it("archives, and the same page stops being editable", async () => {

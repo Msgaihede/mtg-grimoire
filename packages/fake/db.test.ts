@@ -12839,7 +12839,9 @@ describe("the busy fault", () => {
     // 138 → 139 on 2026-10-11 with `set_price_watch` (issue #906), a plain `sync::with_write`
     // `app_meta` write; the movers' read, `price_movers`, sits in `readHandlers`. Read from `left`
     // on this tree. Count again after a merge.
-    expect(names).toHaveLength(139);
+    // 139 → 140 on 2026-10-11 with `trade_swap_sides` (issue #936), a plain `sync::with_write`
+    // that reaches `refuseIfBusy` first. Count again after a merge.
+    expect(names).toHaveLength(140);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -22222,7 +22224,7 @@ describe("shelves", () => {
 });
 
 /**
- * The trade builder's thirteen commands, held to the rules the crate's own tests hold `trade.rs`
+ * The trade builder's fourteen commands, held to the rules the crate's own tests hold `trade.rs`
  * to — the folds, the refusals, which price a line quotes and what a finish really moves.
  *
  * Every refusal below is matched on a **word of its meaning** rather than on the whole sentence.
@@ -22618,6 +22620,28 @@ describe("trades", () => {
     // A line that is already gone is a success: the caller has what it asked for.
     w.trade_remove_line({ lineId: 99 });
     expect(get().lines).toHaveLength(3);
+  });
+
+  it("swaps every line onto the other side, and leaves the percentages where they were", () => {
+    const { w, id, get, add } = trading();
+    add("mine", RAGAVAN, "nonfoil", 2);
+    add("theirs", CHARM, "nonfoil");
+    // One printing and finish on both sides: the swap must not fold them.
+    add("theirs", RAGAVAN, "nonfoil", 3);
+    w.trade_set_rate({ id, side: "mine", rate: 80 });
+    const before = get().lines;
+
+    w.trade_swap_sides({ id });
+    const after = get();
+    expect(after.lines.map((l) => [l.id, l.side, l.quantity])).toEqual(
+      before.map((l) => [l.id, l.side === "mine" ? "theirs" : "mine", l.quantity]),
+    );
+    expect(after).toMatchObject({ rateMine: 80, rateTheirs: 100 });
+
+    w.trade_archive({ id });
+    expect(() => w.trade_swap_sides({ id })).toThrow(/no longer open/);
+    w.trade_delete({ id });
+    expect(() => w.trade_swap_sides({ id })).toThrow(/not there/);
   });
 
   it("holds a side's percentage to 50–150 in steps of 5", () => {

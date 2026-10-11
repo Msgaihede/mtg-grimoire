@@ -169,6 +169,8 @@ export const tradeCommands = {
   tradeUpdateLine: (lineId: number, change: TradeLineChange) =>
     invoke<void>("trade_update_line", { lineId, change }),
   tradeRemoveLine: (lineId: number) => invoke<void>("trade_remove_line", { lineId }),
+  /** Every line onto the other side, in one write. The percentages stay where they were. */
+  tradeSwapSides: (id: number) => invoke<void>("trade_swap_sides", { id }),
   /** Runs the chosen collection and wishlist steps, freezes the prices and files the trade as
    *  finished, in one transaction. */
   tradeFinish: (id: number, options: TradeFinishOptions) =>
