@@ -3,6 +3,7 @@ import { cleanup } from "@testing-library/react";
 import { frame, frameData, MotionGlobalConfig } from "motion/react";
 import { afterAll, afterEach } from "vitest";
 import { resetBulkUndo } from "@/lib/bulkUndo";
+import { resetViewMemory } from "@/lib/viewMemory";
 
 /**
  * Every `motion` animation lands on its final value in one frame, for the whole suite.
@@ -84,6 +85,10 @@ afterEach(cleanup);
 // test's offer would otherwise be the next test's Undo button — `store-state-leaks-between-tests`
 // read forward. Tests that assert on offers still reset it themselves before they start.
 afterEach(resetBulkUndo);
+
+// `@/lib/viewMemory` is the same kind of module state (issue #908): a search page a test left
+// narrowed would otherwise open narrowed in the next test that mounts it.
+afterEach(resetViewMemory);
 
 /**
  * **A file that scrolled a virtualised list waits out the scroll's trailing timer before its

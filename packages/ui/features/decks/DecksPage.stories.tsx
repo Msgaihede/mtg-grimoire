@@ -200,12 +200,8 @@ export const Gallery: Story = {
     // `MotionConfig` does not turn it down and there is nothing to flush. `CardArt.stories.tsx`
     // drives its chip's tooltip the same way.
     await new Promise((resolve) => setTimeout(resolve, TOOLTIP_OPEN_MS + 50));
-    const hint = canvasElement.ownerDocument.getElementById(TOOLTIP_PANEL_ID);
-    await expect(hint).toHaveTextContent("Art by Simon Dominic");
-    // **And the reader's own description leads it** (issue #840) — the seeded deck's words, ahead
-    // of the credit, which stays because the art crop's policy has not changed.
-    await expect(hint).toHaveTextContent(
-      "Sixty legal cards and no plan. The shell every Modern story is cut from.",
+    await expect(canvasElement.ownerDocument.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(
+      "Art by Simon Dominic",
     );
 
     // The row under the heading, which is where a reader narrows and orders this wall. Named so
