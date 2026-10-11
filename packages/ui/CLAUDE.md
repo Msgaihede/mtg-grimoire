@@ -22,7 +22,7 @@ For global repo workflow, style, and testing conventions, refer to:
 
 ## 1. IPC & Backend Boundary
 
-- **Hand-written wire mirror**: `packages/ui/lib/ipc.ts` mirrors Rust structs. Checked by `ipc.test.ts`, which parses Rust source files to ensure struct and parameter parity.
+- **Hand-written wire mirror**: `packages/ui/lib/ipc.ts` mirrors Rust structs. Checked by `ipc.test.ts`, which parses Rust source files to ensure struct and parameter parity. Its walk covers **every** `export interface`: a new one needs a Rust struct of its name, a `renamed` entry, or an `unmirrored` entry with a reason — otherwise the suite fails naming it.
 - **IPC dispatch (`Core.call`)**: Abstraction layer below `@/lib/core` routing calls to desktop Tauri invoke, Android `core_call`, or WebAssembly Worker dispatch.
 - **ASCII JSON headers**: Serializing JSON for IPC headers (e.g. scanner frames) must use `asciiJson` (escapes non-ASCII) to satisfy header byte constraints.
 - **One rejection shape**: every `ipc.*` wrapper rejects with the backend's sentence as a plain `string` on every host (`invoke` runs the rejection through `ipcError`). Never branch on `instanceof Error` for an IPC failure; render it with `ipcError(e)`.
