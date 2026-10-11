@@ -64,7 +64,7 @@
  * arrangement and it is what lets the workbench stand this band up in the six states that matter
  * — including a refused read, which no seed can produce and no fault reaches.
  */
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type JSX } from "react";
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type JSX } from "react";
 import { ChevronRight, Plus } from "lucide-react";
 import { plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
@@ -177,8 +177,7 @@ export interface DeckNotesPanelProps {
  * answer the database is about to give.
  */
 export type DeckNoteRequest =
-  | { kind: "add"; card: Pick<DeckNoteCard, "oracleId" | "name"> }
-  | { kind: "open"; noteId: number };
+  { kind: "add"; card: Pick<DeckNoteCard, "oracleId" | "name"> } | { kind: "open"; noteId: number };
 
 /**
  * The band, wired.
@@ -191,8 +190,12 @@ export type DeckNoteRequest =
  * **One query and no second one**, which is what {@link DeckNotesPanelProps.cards} is for: the
  * deck's own cards arrive as a prop rather than through a second `useDeck`, because a second
  * observer mounting on a stale query is a second `deck_get`.
+ *
+ * **Memoised (issue #557)**: every prop the editor hands it is held still there — the deck id, the
+ * rows, the open flag, a stable toggle and a stable hand-back — so the band is drawn again for a
+ * change to the notebook or to the deck's rows, and not for every render of the desk above it.
  */
-export function DeckNotesPanel({
+export const DeckNotesPanel = memo(function DeckNotesPanel({
   deckId,
   cards,
   open,
@@ -314,7 +317,7 @@ export function DeckNotesPanel({
       onReorder={reorderNotes}
     />
   );
-}
+});
 
 export interface NotesBandProps {
   open: boolean;

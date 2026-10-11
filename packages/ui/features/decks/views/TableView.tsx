@@ -24,7 +24,7 @@
  * caller to be able to promise; the search, the collection and the wishlist draw this same
  * table over 100k rows and pass nothing.
  */
-import { useCallback, useMemo } from "react";
+import { memo, useCallback, useMemo } from "react";
 import { Crown } from "lucide-react";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import { ManaText } from "@/components/ManaText";
@@ -121,7 +121,9 @@ type Row =
  */
 const RENAME_HEIGHT = 48;
 
-export function TableView({
+/** The deck as a table. Memoised for `StackView`'s reason (issue #557): a render of the editor
+ *  that changed nothing this view is handed does not redraw every row. */
+export const TableView = memo(function TableView({
   groups,
   marketplace,
   tracksCollection,
@@ -603,7 +605,7 @@ export function TableView({
       {hasTokenPile(tokenPile) && <TokenTablePile pile={tokenPile} />}
     </div>
   );
-}
+});
 
 /**
  * One row of the table, as a component — which is what lets it be a drag source and a drop

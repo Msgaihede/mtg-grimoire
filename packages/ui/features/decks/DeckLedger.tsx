@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from "react";
+import { memo, useMemo, type ReactNode } from "react";
 import { Crown } from "lucide-react";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { count, plural } from "@/lib/counts";
@@ -57,8 +57,12 @@ import { deckStats } from "./DeckStats";
  * is what says so; the other four are arithmetic over the rows and are true of every kind of deck.
  * (Six `<dt>`s and five, counting the `Format` term, which is not a figure and is drawn as one —
  * that is the count `DeckLedger.test.tsx` asserts the hairlines against.)
+ *
+ * **Memoised (issue #557).** The editor draws this line on every one of its renders, and nearly
+ * none of them change a figure on it; the editor holds every prop still for it — the rows, the two
+ * counts, a stable toggle, and the check and bracket elements built in a `useMemo` of their own.
  */
-export function DeckLedger({
+export const DeckLedger = memo(function DeckLedger({
   cards,
   marketplace,
   formatName,
@@ -222,10 +226,7 @@ export function DeckLedger({
           only when there is an abbreviation on screen to expand — `Lands` needs no gloss. */}
       <div
         className="flex shrink-0 items-baseline gap-1.5"
-        {...tip(
-          mdfc > 0 &&
-            `Lands by type, plus ${plural(mdfc, "MDFC")} with a land back face.`,
-        )}
+        {...tip(mdfc > 0 && `Lands by type, plus ${plural(mdfc, "MDFC")} with a land back face.`)}
       >
         <dt className="text-[0.6875rem] text-dim">Lands</dt>
         <dd className="font-mono text-[0.8125rem] tabular-nums">
@@ -249,7 +250,10 @@ export function DeckLedger({
 
       {/* An em dash rather than a zero for a deck of nothing but lands: an average of no numbers
           is not 0, which is the same distinction `deckStats` draws in the field itself. */}
-      <div className="flex shrink-0 items-baseline gap-1.5" {...tip("Average mana value of nonland cards, counting each copy.")}>
+      <div
+        className="flex shrink-0 items-baseline gap-1.5"
+        {...tip("Average mana value of nonland cards, counting each copy.")}
+      >
         <dt className="text-[0.6875rem] text-dim">Avg. mana</dt>
         <dd className="font-mono text-[0.8125rem] tabular-nums">
           {stats.averageManaValue === null ? "—" : stats.averageManaValue.toFixed(2)}
@@ -397,7 +401,7 @@ export function DeckLedger({
       </div>
     </dl>
   );
-}
+});
 
 /** `1 game changer`, `6 game changers`. */
 function gameChangerWords(n: number): string {

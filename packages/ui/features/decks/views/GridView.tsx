@@ -4,7 +4,7 @@
  * The stack's opposite. A stack is for reading *down* a category; this is for seeing a whole
  * deck at once — which is what you want the moment before you cut something.
  */
-import { useRef } from "react";
+import { memo, useRef } from "react";
 import { CardChin } from "@/components/CardChin";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { atLeast, cardScaleVars, scaled } from "@/lib/cardZoom";
@@ -47,6 +47,7 @@ import { ruleBreak, violationsFor } from "../violations";
 import type { ValidationIssue } from "../validation/types";
 import { splitRail } from "./columns";
 import { GroupHeader } from "./GroupHeader";
+import { sameDrawnProps } from "./sameDrawn";
 import { hasTokenPile, TokenGridPile, type TokenPile } from "./TokenPile";
 import { TOKEN_ITEM, tokenRailSlot, withTokenPile } from "./tokenRail";
 
@@ -72,7 +73,9 @@ import { TOKEN_ITEM, tokenRailSlot, withTokenPile } from "./tokenRail";
 const TILE_WIDTH = 150;
 const TILE_GAP = 10;
 
-export function GridView({
+/** The deck as a wall of tiles. Memoised for `StackView`'s reason (issue #557): a render of the
+ *  editor that changed nothing this view is handed does not redraw the wall. */
+export const GridView = memo(function GridView({
   groups,
   marketplace,
   tracksCollection,
@@ -256,11 +259,12 @@ export function GridView({
       )}
     </div>
   );
-}
+});
 
 /** One pile as a heading and its wall, and a place a dragged card can be let go —
- *  `StackView`'s `StackGroup`, for its reason. */
-function GridGroup({
+ *  `StackView`'s `StackGroup`, for its reason, and memoised on `sameDrawnProps` for its reason
+ *  too: a pile the deck's filter took nothing from is not drawn again (issue #557). */
+const GridGroup = memo(function GridGroup({
   group,
   marketplace,
   violations,
@@ -375,7 +379,7 @@ function GridGroup({
       )}
     </section>
   );
-}
+}, sameDrawnProps);
 
 /**
  * One card as a 150px tile — 150px at 1×, and {@link TILE_WIDTH} scaled at every other stop:
