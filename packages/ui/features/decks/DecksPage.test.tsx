@@ -99,7 +99,11 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 
 import { DecksPage } from "./DecksPage";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
-import { TOOLTIP_OPEN_MS, TooltipProvider } from "@/components/tooltip/TooltipProvider";
+import {
+  TOOLTIP_OPEN_MS,
+  TOOLTIP_PANEL_ID,
+  TooltipProvider,
+} from "@/components/tooltip/TooltipProvider";
 import { FOLDER_DROP_LINE_ATTR } from "@/components/FolderDropLine";
 import { DEFAULT_SECTION_ZOOMS, DEFAULT_ZOOM, ZOOM_SECTIONS } from "@/lib/cardZoom";
 import { useAppStore } from "@/lib/store";
@@ -1155,6 +1159,93 @@ describe("DecksPage", () => {
           row.classList.contains("bottom-[calc(1.625rem*var(--mark-scale,1)_+_2px)]"),
         ).toBe(true),
       );
+    });
+
+    /**
+     * **A row that cannot draw every tag says so, and hands the whole list to a hover** (issue
+     * #901). jsdom has no layout, so the row is given one: 100px wide, every tag 60px — room
+     * for one, so Altar's second tag wraps off the line. The tile has to answer with the `…`
+     * pill made visible, room kept clear for it at the row's end, and a hover on the row whose
+     * panel lists **every** tag, the hidden one included.
+     *
+     * Zoo's one tag fits the same row, and the half that is easy to break is that it stays
+     * exactly as it was: no pill shown, no hover over the cover's own.
+     *
+     * The hover is a box **inside the button** — the row itself is `pointer-events-none`, and a
+     * press on the strip still has to be a press on the deck — so it is asserted to be there.
+     */
+    it("marks an overflowing tag row with a pill and lists every tag on hover", async () => {
+      const rect = vi
+        .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+        .mockImplementation(function (this: HTMLElement) {
+          const width = this.matches("ul[aria-label='Tags']")
+            ? 100
+            : this.matches("[data-tag]")
+              ? 60
+              : this.matches("ul[aria-label='Tags'] > li[aria-hidden]")
+                ? 16
+                : 0;
+          return {
+            width,
+            height: 0,
+            top: 0,
+            left: 0,
+            right: width,
+            bottom: 0,
+            x: 0,
+            y: 0,
+          } as DOMRect;
+        });
+      try {
+        deckList.mockResolvedValue([
+          { ...ALTAR, tags: ["No Gamechangers", "Budget"] },
+          { ...ZOO, tags: ["Meme"] },
+        ]);
+
+        wrapWithTips(<DecksPage />);
+        await waitFor(() => expect(wallIds()).toEqual([11, 12]));
+
+        const altar = await tileFor("Altar");
+        const row = within(altar.closest("li")!).getByRole("list", { name: "Tags" });
+        const pill = row.querySelector<HTMLElement>("li[aria-hidden]")!;
+        await waitFor(() => expect(pill.classList.contains("invisible")).toBe(false));
+        expect(pill).toHaveTextContent("…");
+        // The pill's 16px and the row's gap, which jsdom reads as none.
+        expect(row.style.paddingRight).toBe("16px");
+        // Still every tag in the list a screen reader hears, and still not the pill.
+        expect(
+          within(row)
+            .getAllByRole("listitem")
+            .map((tag) => tag.textContent),
+        ).toEqual(["No Gamechangers", "Budget"]);
+
+        const hover = altar.querySelector<HTMLElement>("[data-tag-hover]")!;
+        expect(altar).toContainElement(hover);
+        expect(hover).toBeEmptyDOMElement();
+        // A picture of the list rather than a description — the row already says every tag to
+        // a screen reader — so the panel is out of the accessibility tree and read by its id.
+        fireEvent.pointerEnter(hover);
+        const panel = await waitFor(
+          () => {
+            const found = document.getElementById(TOOLTIP_PANEL_ID);
+            expect(found).not.toBeNull();
+            return found!;
+          },
+          { timeout: 2_000 },
+        );
+        expect([...panel.querySelectorAll("li")].map((tag) => tag.textContent)).toEqual([
+          "No Gamechangers",
+          "Budget",
+        ]);
+
+        const zoo = await tileFor("Zoo");
+        const fits = within(zoo.closest("li")!).getByRole("list", { name: "Tags" });
+        expect(fits.querySelector("li[aria-hidden]")!.classList.contains("invisible")).toBe(true);
+        expect(fits.style.paddingRight).toBe("");
+        expect(zoo.querySelector("[data-tag-hover]")).toBeNull();
+      } finally {
+        rect.mockRestore();
+      }
     });
 
     /** …and it asks about exactly the ones that do, whichever wall they are on. The ids are

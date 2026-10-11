@@ -35,6 +35,7 @@ import { buildDeckMenu, type DeckMenuDeps } from "./deckMenu";
 import { deckColorsLabel } from "./deckPips";
 import { deckDraggable, MoveToFolder, type FolderNode } from "./FolderTree";
 import type { Panel } from "./panels";
+import { useTagOverflow } from "./tagRow";
 import type { Decks } from "./useDecks";
 import { ANY_GAME, gameLabel } from "./useFormatSpecs";
 
@@ -141,6 +142,41 @@ const TILE_TAG = cn(
   "text-[calc(0.6rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
   "text-text",
 );
+
+/**
+ * One tag in the hover over an overflowing tag row (issue #901) — {@link TILE_TAG}'s felt, border
+ * and ink, so the list reads as the row it completes, and none of its clipping.
+ *
+ * **It wraps where the row's pill truncates**: this is the one place the reader asked to see a
+ * tag whole, so a tag wider than the panel breaks onto a second line rather than losing its end
+ * again. Unscaled, because the panel is drawn at the app root and never inside a tile — there is
+ * no `--mark-scale` to read, and the hover is sized for reading rather than for the art.
+ */
+const TIP_TAG = cn(
+  "min-w-0 max-w-full break-words rounded-sm border border-border bg-bg/70",
+  "px-1.5 text-xs leading-5 text-text",
+);
+
+/**
+ * Where the tag row sits on the art, shared by the row and by the hover over it (issue #901) so
+ * the two cannot come to cover different strips of the picture.
+ *
+ * The offset from the bottom is the marks' inset, plus a mark (its line and its two hairlines,
+ * which are the one thing here that does not scale), plus a quarter-rem of air — written as one
+ * `calc` so the gap between the two rows scales with the marks instead of growing as they do.
+ */
+function tagRowBox(edgeTaken: boolean): string {
+  return cn(
+    "absolute inset-x-[calc(0.375rem*var(--mark-scale,1))]",
+    // `_+_` spells the spaces CSS wants round a `+` in `calc()`. Tailwind adds them to the tight
+    // spelling too (`DeckTile.test.ts` compiles both), so this is the readable form rather than
+    // the only working one.
+    "h-[calc(1rem*var(--mark-scale,1)_+_2px)]",
+    edgeTaken
+      ? "bottom-[calc(1.625rem*var(--mark-scale,1)_+_2px)]"
+      : "bottom-[calc(0.375rem*var(--mark-scale,1))]",
+  );
+}
 
 /**
  * One deck: its cover art, what colours it is, its name, what it is and how big it is.
@@ -310,6 +346,9 @@ export function DeckTile({
   /** Whether that edge is taken *or about to be* — what decides where the tag row sits, so it
    *  does not move when a bracket that was always coming arrives. See {@link bracketExpected}. */
   const edgeTaken = hasMarks || bracketExpected;
+  /** Whether the tag row has tags it cannot draw — and if so, the room its `…` pill takes. */
+  const { rowRef, moreRef, reserve } = useTagOverflow(deck.tags.join("\n"));
+  const tagsHidden = reserve !== null && deck.tags.length > 0;
   const confirming = panel?.kind === "deleteDeck" && panel.deckId === deck.id;
   const choosingFolder = panel?.kind === "moveDeck" && panel.deckId === deck.id;
   const renaming = panel?.kind === "renameDeck" && panel.deckId === deck.id;
@@ -525,6 +564,47 @@ export function DeckTile({
             reader is scanning, and the full string is a hover away on any surface that needs
             it. */}
         <span className={cn(CAPTION_LINE, renaming && "sr-only")}>{caption}</span>
+        {/* The hover over a tag row that cannot draw every tag (issue #901): the whole list, as
+            pills, on the strip the row occupies.
+
+            **Inside the button, and empty, and that is what lets it be hovered at all.** The
+            row itself is drawn in the marks' overlay below, which is `pointer-events-none` so a
+            corner of the picture is never a dead spot — so a tooltip bound there could never
+            open. Giving the row its pointer back would make it one: a press on a tag would
+            open nothing, a right-click would be a menu opened from a `<ul>` that cannot take
+            the caret back, and neither could be forwarded without a second copy of the tile's
+            own handlers. A box in the button gets the hover and leaves every press where it
+            was — the click opens the deck, the right-click is the tile's menu, the drag files
+            it — because the button is what the pointer is over.
+
+            `aria-hidden` and holding no text, so the button's name is still the deck's alone;
+            a screen reader already hears every tag in the row's list, clipped or not, which is
+            also why the hover describes nothing. Mounted only while something is hidden: a row
+            that draws every tag has nothing to add, and the cover's own hint should answer
+            there. Absolute against the `<li>`, inside an art-sized box like the overlay's, so
+            {@link tagRowBox} lands it on the row exactly. */}
+        {tagsHidden && (
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 top-0"
+            style={{ aspectRatio: ART_ASPECT }}
+          >
+            <span
+              data-tag-hover=""
+              className={cn(tagRowBox(edgeTaken), "pointer-events-auto")}
+              {...tip(
+                <ul className="flex flex-wrap gap-1 py-0.5">
+                  {deck.tags.map((tag) => (
+                    <li key={tag} className={TIP_TAG}>
+                      {tag}
+                    </li>
+                  ))}
+                </ul>,
+                { describes: false },
+              )}
+            />
+          </span>
+        )}
       </button>
 
       {/* Renaming a deck, **on the line the name occupies**.
@@ -643,40 +723,43 @@ export function DeckTile({
               and stacks any overflow *above* it, where the box — exactly one tag tall — clips
               it. So a deck with more tags than the tile is wide shows the first few entire
               rather than the last one cut through the middle of a word; a single tag wider than
-              the tile truncates instead (`TILE_TAG`). Nothing counts the hidden ones: a `+2`
-              would need the row measured, and the whole list is in Deck settings, which is
-              where a tag is added in the first place.
+              the tile truncates instead (`TILE_TAG`).
+
+              **And it says when it has dropped one** (issue #901). The row is measured
+              (`useTagOverflow`), and when the tags want more than the line an `…` pill stands at
+              its end, with its own width kept clear as `padding-right` so the tags wrap off
+              before it rather than under it; the whole list is a hover on the row (the box in
+              the button above says why the hover is not here). The pill is always mounted — its
+              width has to be known before it is shown — and `aria-hidden`, because the list
+              already holds every tag for a screen reader and `…` is not one of them.
 
               **Packed to the right**, over the bracket, which is where the issue drew it and
               the corner the tile already uses for "how to think about this deck". The row is as
               wide as the art less the marks' own inset, so a long list runs back toward the
-              badge's corner before it wraps.
-
-              The offset from the bottom is the marks' inset, plus a mark (its line and its two
-              hairlines, which are the one thing here that does not scale), plus a quarter-rem
-              of air — written as one `calc` so the gap between the two rows scales with the
-              marks instead of growing as they do. */}
+              badge's corner before it wraps. Its place is {@link tagRowBox}. */}
           {deck.tags.length > 0 && (
             <ul
+              ref={rowRef}
               aria-label="Tags"
               className={cn(
-                "absolute inset-x-[calc(0.375rem*var(--mark-scale,1))]",
+                tagRowBox(edgeTaken),
                 "flex flex-wrap-reverse content-start justify-end overflow-hidden",
                 "gap-[calc(0.25rem*var(--mark-scale,1))]",
-                // `_+_` spells the spaces CSS wants round a `+` in `calc()`. Tailwind adds them
-                // to the tight spelling too (`DeckTile.test.ts` compiles both), so this is the
-                // readable form rather than the only working one.
-                "h-[calc(1rem*var(--mark-scale,1)_+_2px)]",
-                edgeTaken
-                  ? "bottom-[calc(1.625rem*var(--mark-scale,1)_+_2px)]"
-                  : "bottom-[calc(0.375rem*var(--mark-scale,1))]",
               )}
+              style={tagsHidden ? { paddingRight: reserve } : undefined}
             >
               {deck.tags.map((tag) => (
-                <li key={tag} className={TILE_TAG}>
+                <li key={tag} data-tag="" className={TILE_TAG}>
                   {tag}
                 </li>
               ))}
+              <li
+                ref={moreRef}
+                aria-hidden="true"
+                className={cn(TILE_TAG, "absolute right-0 bottom-0", !tagsHidden && "invisible")}
+              >
+                …
+              </li>
             </ul>
           )}
           {/* What kind of deck this is — that it keeps a plan, or that it keeps no cardboard.
