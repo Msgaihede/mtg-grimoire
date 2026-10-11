@@ -59,7 +59,7 @@ The resolution, binding on Tasks 2 and 3: **enforced foreign keys exist only bet
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
 ```
 
-**`npm run verify` must be green before every commit** (build + lint + Vitest + `cargo test`). `npm run lint` runs with `--max-warnings 0`. UI tasks verify in the running app over CDP (`scripts/cdp.mjs`) — every UI task in Plans 2–3 found something the suite could not.
+**`npm run verify` must be green before every commit** (build + lint + Vitest + `cargo test`). `npm run lint` runs with `--max-warnings 0`. UI tasks verify in the running app over CDP (`scripts/cdp.ts`) — every UI task in Plans 2–3 found something the suite could not.
 
 ## File Structure
 
@@ -1550,7 +1550,7 @@ feat: live deck stats and the validation panel with bracket advisory
 
 ### Task 16: The live smoke, CLAUDE.md, and the carryover
 
-The plan's Task 14-of-Plan-3 equivalent: drive the real app over CDP (`scripts/cdp.mjs`), fix what only the running window can show, write the invariants into CLAUDE.md, and hand Plan 5 its carryover. Seed and clean fixtures with `node:sqlite` against `src-tauri/target/debug/data/mtg.db` while the app holds it; delete every seeded row afterwards.
+The plan's Task 14-of-Plan-3 equivalent: drive the real app over CDP (`scripts/cdp.ts`), fix what only the running window can show, write the invariants into CLAUDE.md, and hand Plan 5 its carryover. Seed and clean fixtures with `node:sqlite` against `src-tauri/target/debug/data/mtg.db` while the app holds it; delete every seeded row afterwards.
 
 **Files:**
 - Modify: `CLAUDE.md`, whatever the smoke indicts
@@ -1588,7 +1588,7 @@ Every item from `docs/superpowers/notes/plan-3-carryover.md` addressed to Plan 4
 | MUST-DO 3 / natural companion: deck cards join `prewarm_collection`'s UNION | **Task 4** (one UNION arm + the extended test; still `grid`-only per the constant's own doc — the wishlist-only-user asymmetry closes with it). |
 | MUST-DO 4: read CLAUDE.md's user-data hard rules first | Global Constraints reproduces the load-bearing ones (grain, zero-keeps vs zero-removes, per-finish pricing, `needs_review` is a sentence) and Task 16 extends the file. |
 | MUST-DO 5: every collection write goes through `add_entry`/`update_entry` | The allocator writes `deck_allocations` only — restated in Global Constraints and enforced by Task 5's "never touches the collection" test. |
-| MUST-DO 6: verify in the running app with `scripts/cdp.mjs` | Tasks 11–15 each carry a CDP step; **Task 16** is the full smoke. |
+| MUST-DO 6: verify in the running app with `scripts/cdp.ts` | Tasks 11–15 each carry a CDP step; **Task 16** is the full smoke. |
 | Parked fold 1: `useSyncInvalidation.test.ts` asserts against its own constant | **Task 1** (the literal five-key assertion; **Task 7** grows it to six with `["decks"]`). |
 | Parked fold 2: ingest-then-`/sets`-failure never invalidates the swapped corpus | **Task 1** (invalidate on `error` after an `ingesting` phase — the frontend already sees the whole story in the phases). |
 | Parked fold 3: four stale `116,568` doc copies; `MAX_MIGRATION_PAGES` at 8/10 | **Task 1** (date-stamped sweep to 116,590; cap 10 → 20 with the release-build `eprintln!` rationale). |

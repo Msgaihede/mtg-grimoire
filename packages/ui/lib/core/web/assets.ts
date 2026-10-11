@@ -4,7 +4,7 @@
  * Here rather than in that config because a Vite config is type-checked and tested by nothing
  * (`vite.base.ts` keeps `iconFont.ts` under `packages/ui/` for the same reason).
  *
- * `scripts/build-wasm.mjs` writes the files to `dist-wasm/` at the repository root, which is
+ * `scripts/build-wasm.ts` writes the files to `dist-wasm/` at the repository root, which is
  * ignored: no build but the web app's ever needs them.
  */
 
@@ -34,7 +34,7 @@ export function wasmUrls(origin: string, build: string): { glue: string; wasm: s
 }
 
 /**
- * **The scanner's own module**, which `scripts/build-wasm.mjs` writes into a folder of
+ * **The scanner's own module**, which `scripts/build-wasm.ts` writes into a folder of
  * `dist-wasm/` beside the engine's two files: wasm-bindgen's glue and the module, built with
  * `simd128` and loaded by a Worker of its own (`scanWorker.ts`).
  *

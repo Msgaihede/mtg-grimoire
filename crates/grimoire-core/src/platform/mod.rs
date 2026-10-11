@@ -47,7 +47,7 @@
 //! made of them is `docs/reference/light-app.md`'s to record. **[`socket`]'s browser arm was the
 //! last to run**, on 2026-10-04 with [`spawn`]'s `on_a_worker` and [`timer`]'s `interval` under
 //! it: live sync's loop in headless Chrome 154, against the relay's own code under workerd
-//! (`scripts/web-sync-smoke.mjs`, and that file's §10.3). Chrome is the one browser any of
+//! (`scripts/web-sync-smoke.ts`, and that file's §10.3). Chrome is the one browser any of
 //! these arms has run in.
 
 pub mod alone;

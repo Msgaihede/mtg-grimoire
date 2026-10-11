@@ -311,7 +311,7 @@ are not measured for this.
 2. Click a header; shift-click a second. Arrows, ordinal badges, and rows in the new order.
 3. The keyboard path, **counting activations** rather than checking that one happened —
    `CLAUDE.md` records a stepper that moved by two under a single reported press. Shift+Enter
-   needs `Input.dispatchKeyEvent` to carry the modifier, so `scripts/cdp.mjs` may need a
+   needs `Input.dispatchKeyEvent` to carry the modifier, so `scripts/cdp.ts` may need a
    small extension; if it does, that extension is part of this work.
 4. The console recorder attached across the whole pass, reading `Log.entryAdded` **and**
    `Runtime.consoleAPICalled`.

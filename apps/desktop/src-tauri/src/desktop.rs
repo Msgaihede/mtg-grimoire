@@ -311,7 +311,7 @@ pub fn run() {
     //
     // It opens a WebSocket server inside this process; `@hypothesi/tauri-mcp-server` in
     // `.mcp.json` is the client that dials it. That is what lets an agent drive the real
-    // window — read the DOM, invoke commands, watch IPC go past — the way `scripts/cdp.mjs`
+    // window — read the DOM, invoke commands, watch IPC go past — the way `scripts/cdp.ts`
     // drives the page over CDP. The two are complementary, not rivals: CDP sees the webview,
     // this sees the webview *and* the Rust side of every `invoke`.
     //
@@ -1437,7 +1437,7 @@ mod tests {
     /// the core and the desktop stay on that one inherited version: its first assertion can only
     /// fail if a literal version returns to a manifest, and its second that the config still
     /// names the bump. It never reads `Cargo.lock`; a lockfile that disagrees with the manifests
-    /// is caught by `--locked` and by `scripts/release-rule.test.mjs`.
+    /// is caught by `--locked` and by `scripts/release-rule.test.ts`.
     #[test]
     fn the_core_wears_the_apps_version() {
         let expected = concat!("MTGGrimoire/", env!("CARGO_PKG_VERSION"), " (");

@@ -79,7 +79,7 @@ phone, a developer's build — is **offered** them: `scanner_assets` says which 
 they cost, and only a reader's press on that offer calls `scanner_assets_fetch`, which downloads
 them from `https://github.com/Msgaihede/mtg-grimoire/releases/download/scanner-bundle-v<FORMAT_VERSION>/`
 — the prerelease `.github/workflows/scanner-bundle.yml` publishes weekly and
-`scripts/scanner-assets.mjs` already reads at build time. **Optional in the price feeds' sense**:
+`scripts/scanner-assets.ts` already reads at build time. **Optional in the price feeds' sense**:
 nothing is fetched until the reader asks, and without them the scanner detects a card and names
 nothing rather than failing. GitHub answers with a redirect to its asset host
 (`release-assets.githubusercontent.com` when asked on 2026-10-07), which the client follows; an
@@ -225,7 +225,7 @@ which are owed and what they cost, and only a reader's press on that offer calls
 `scanner_assets_fetch`, which downloads them from
 `https://github.com/Msgaihede/mtg-grimoire/releases/download/scanner-bundle-v<FORMAT_VERSION>/`
 — the prerelease `.github/workflows/scanner-bundle.yml` publishes weekly and
-`scripts/scanner-assets.mjs` already reads at build time. **Optional in the price feeds' sense**:
+`scripts/scanner-assets.ts` already reads at build time. **Optional in the price feeds' sense**:
 nothing is fetched until the reader asks, and without them the scanner detects a card and names
 nothing rather than failing.
 
@@ -349,7 +349,7 @@ its host: one fact in two deploys, **this Worker's first**.
 
 **A release deploys it** (`release.yml`'s `scan-deploy`; the owner's decision, 2026-10-11):
 behind the share Worker and ahead of the web app, with the relay's deploy token, then seven
-probes of the live address, none of which stores anything (`scripts/scan-deploy-probe.mjs`).
+probes of the live address, none of which stores anything (`scripts/scan-deploy-probe.ts`).
 The bucket (`mtg-grimoire-scans`) was the owner's to create, and by his word exists since that
 day. Between releases a deploy is by hand and asked for, as for every Worker, and no agent may
 unasked. **As this is written no release has run that job**, so until one does — or the owner

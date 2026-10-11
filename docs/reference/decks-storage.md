@@ -2056,7 +2056,7 @@ clientWidth` — so the tenth bar fitted the 250px content box with no overflow,
   overlapped 285px by its successor, which is later in DOM order and therefore paints over it,
   so the only hittable part of a closed card already _is_ its 34px reveal strip.
   `LAYER.raisedOnHover`/`raisedOnFocus` are **gone**, and `data-stack-open` exists so a test or a
-  `cdp.mjs --probe` can _count_ open cards, which the CSS lift was observable from neither.
+  `cdp.ts --probe` can _count_ open cards, which the CSS lift was observable from neither.
   **The margin is no longer a Tailwind literal either**: `motion` writes it as an inline style,
   so the constants are the only place these numbers live, and the note about spelling them out
   for the source scanner no longer applies.

@@ -417,7 +417,7 @@ export const RestrictedMaxOne: Story = {
  * the Duel Commander deck below — **legal**, and therefore silent about the one thing this story
  * was meant to show.
  *
- * Closing this needs a corpus regeneration (`scripts/gen-storybook-cards.mjs`) that deliberately
+ * Closing this needs a corpus regeneration (`scripts/gen-storybook-cards.ts`) that deliberately
  * picks up a duel-restricted printing — a change to a fixture many other files read. **The list
  * is not written down here**, because it is a fact about a tree and it has already drifted twice
  * (the deck rebuild retired `ZoneColumn`; `PrintingPreview` went with the docked card pane on

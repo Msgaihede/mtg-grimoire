@@ -64,7 +64,7 @@
 | `src/lib/ipc.ts` | `sort?: SortSpec<…>` on all three queries; per-view key unions. |
 | `src-tauri/src/search.rs`, `src-tauri/src/collection.rs`, `src-tauri/src/wishlist.rs` | Whitelists; `sort: Option<Vec<SortTerm>>`. |
 | `src-tauri/src/lib.rs` | `mod sorting;` |
-| `scripts/cdp.mjs` | `--shift` on `click`, `text` and `press`. |
+| `scripts/cdp.ts` | `--shift` on `click`, `text` and `press`. |
 | `CLAUDE.md` | The layering rule and the measured sort figures. |
 
 ---
@@ -2620,9 +2620,9 @@ The suite cannot see paint order, and this whole plan started with a bug that on
 order shows.
 
 **Files:**
-- Modify: `scripts/cdp.mjs` (`click`, `text`, `press`), `CLAUDE.md`
+- Modify: `scripts/cdp.ts` (`click`, `text`, `press`), `CLAUDE.md`
 
-- [ ] **Step 1: Teach `cdp.mjs` to hold Shift**
+- [ ] **Step 1: Teach `cdp.ts` to hold Shift**
 
 Chromium's modifier bitmask is Alt 1, Ctrl 2, Meta 4, **Shift 8**. Add a `--shift` flag to
 `click`, `text` and `press`.
@@ -2680,7 +2680,7 @@ Read `innerWidth`/`innerHeight` before touching `size`, and end the run with an 
 In its own shell, and leave it attached:
 
 ```bash
-node scripts/cdp.mjs console "C:\...\scratchpad\sort-pass.jsonl"
+node scripts/cdp.ts console "C:\...\scratchpad\sort-pass.jsonl"
 ```
 
 A `Log` entry whose `?t=` stamp is frozen at attach time is retained history, not a live
@@ -2689,10 +2689,10 @@ fault.
 - [ ] **Step 4: The bug, with a picture**
 
 ```bash
-node scripts/cdp.mjs eval "document.querySelector('[aria-label=\"Search cards…\"]') && 1"
-node scripts/cdp.mjs text "Any set"
-node scripts/cdp.mjs shot "C:\...\scratchpad\set-picker-over-header.png"
-node scripts/cdp.mjs eval "(() => { const p = document.querySelector('[role=listbox]').closest('div[class*=absolute]').getBoundingClientRect(); const h = document.querySelector('[role=table] [role=row]').getBoundingClientRect(); const y = Math.max(p.top, h.top) + 2; const x = h.left + h.width / 2; return document.elementFromPoint(x, y)?.closest('[role=listbox],[role=row]')?.getAttribute('role'); })()"
+node scripts/cdp.ts eval "document.querySelector('[aria-label=\"Search cards…\"]') && 1"
+node scripts/cdp.ts text "Any set"
+node scripts/cdp.ts shot "C:\...\scratchpad\set-picker-over-header.png"
+node scripts/cdp.ts eval "(() => { const p = document.querySelector('[role=listbox]').closest('div[class*=absolute]').getBoundingClientRect(); const h = document.querySelector('[role=table] [role=row]').getBoundingClientRect(); const y = Math.max(p.top, h.top) + 2; const x = h.left + h.width / 2; return document.elementFromPoint(x, y)?.closest('[role=listbox],[role=row]')?.getAttribute('role'); })()"
 ```
 
 Expected: the screenshot shows the picker whole, with no grey band across it, and the
@@ -2702,11 +2702,11 @@ painted there. Before this plan it answered `row`.
 - [ ] **Step 5: Sorting, by hand**
 
 ```bash
-node scripts/cdp.mjs click "[role=table] [role=row]:first-child button[title^='Sort by Price']"
-node scripts/cdp.mjs eval "[...document.querySelectorAll('[role=row]')].slice(1,4).map(r => r.children[4].textContent)"
-node scripts/cdp.mjs click "[role=table] [role=row]:first-child button[title^='Sort by Rarity']" --shift
-node scripts/cdp.mjs eval "[...document.querySelectorAll('[role=row]:first-child [role=columnheader]')].map(h => [h.textContent.trim(), h.getAttribute('aria-sort')])"
-node scripts/cdp.mjs shot "C:\...\scratchpad\two-key-sort.png"
+node scripts/cdp.ts click "[role=table] [role=row]:first-child button[title^='Sort by Price']"
+node scripts/cdp.ts eval "[...document.querySelectorAll('[role=row]')].slice(1,4).map(r => r.children[4].textContent)"
+node scripts/cdp.ts click "[role=table] [role=row]:first-child button[title^='Sort by Rarity']" --shift
+node scripts/cdp.ts eval "[...document.querySelectorAll('[role=row]:first-child [role=columnheader]')].map(h => [h.textContent.trim(), h.getAttribute('aria-sort')])"
+node scripts/cdp.ts shot "C:\...\scratchpad\two-key-sort.png"
 ```
 
 Expected: prices descend; after the shifted press, two columns report a non-`none`
@@ -2717,11 +2717,11 @@ Expected: prices descend; after the shifted press, two columns report a non-`non
 `CLAUDE.md` records a deck stepper that moved 2 → 4 under one reported press. Count.
 
 ```bash
-node scripts/cdp.mjs eval "window.__sorts = 0; document.addEventListener('click', (e) => { if (e.target.closest('[role=columnheader] button')) window.__sorts++; }, true); 'armed'"
-node scripts/cdp.mjs press Enter "[role=table] [role=row]:first-child button[title^='Sort by Name']"
-node scripts/cdp.mjs eval "window.__sorts"
-node scripts/cdp.mjs press Enter "[role=table] [role=row]:first-child button[title^='Sort by Price']" --shift
-node scripts/cdp.mjs eval "[window.__sorts, [...document.querySelectorAll('[role=columnheader][aria-sort]:not([aria-sort=none])')].length]"
+node scripts/cdp.ts eval "window.__sorts = 0; document.addEventListener('click', (e) => { if (e.target.closest('[role=columnheader] button')) window.__sorts++; }, true); 'armed'"
+node scripts/cdp.ts press Enter "[role=table] [role=row]:first-child button[title^='Sort by Name']"
+node scripts/cdp.ts eval "window.__sorts"
+node scripts/cdp.ts press Enter "[role=table] [role=row]:first-child button[title^='Sort by Price']" --shift
+node scripts/cdp.ts eval "[window.__sorts, [...document.querySelectorAll('[role=columnheader][aria-sort]:not([aria-sort=none])')].length]"
 ```
 
 Expected: `1` after the first press, then `[2, 2]` — two presses, two sorted columns. A `2`
@@ -2735,7 +2735,7 @@ Repeat Steps 5–6 against the Collection and Wishlist views. Then, in one sessi
 features-only override:
 
 ```bash
-node scripts/cdp.mjs media prefers-reduced-motion reduce "(() => { const b = document.querySelector('[role=columnheader] button'); return getComputedStyle(b).transitionDuration; })()"
+node scripts/cdp.ts media prefers-reduced-motion reduce "(() => { const b = document.querySelector('[role=columnheader] button'); return getComputedStyle(b).transitionDuration; })()"
 ```
 
 Expected: `0s`.
@@ -2783,10 +2783,10 @@ And to **Data & sync**, with the Step 1 numbers filled in:
 
 ```bash
 npm run verify
-git add scripts/cdp.mjs CLAUDE.md
+git add scripts/cdp.ts CLAUDE.md
 git commit -m "test(table): drive the sortable headers in the real window
 
-cdp.mjs learns --shift, because a multi-key sort is built with one held
+cdp.ts learns --shift, because a multi-key sort is built with one held
 down and a dispatchEvent out of eval proves nothing about what the page
 hears. Records what the live pass measured, and the layering rule that
 started it.

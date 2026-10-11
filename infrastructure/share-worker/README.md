@@ -208,7 +208,7 @@ curl -s -w " %{http_code}\n" "$S/g/abc/bogus"
 bearer. It answered **500** for the five minutes between the deploy and step 3, and **401**
 since. The third is its control — no bearer is 401 either way.
 
-**The five `curl`s are what `scripts/share-deploy-probe.mjs` asks** of the address after a release's
+**The five `curl`s are what `scripts/share-deploy-probe.ts` asks** of the address after a release's
 deploy (the second against the bundle, byte for byte), so a release holds the Worker to the same
 answers a deploy by hand reads.
 

@@ -142,7 +142,7 @@ function lightEntry(): Plugin {
 const FAKE_UNBUNDLED = ["@tauri-apps/plugin-clipboard-manager", "@tauri-apps/plugin-opener"];
 
 /**
- * Where `pnpm web:wasm` (`scripts/build-wasm.mjs`) writes the engine: wasm-bindgen's glue and
+ * Where `pnpm web:wasm` (`scripts/build-wasm.ts`) writes the engine: wasm-bindgen's glue and
  * the module, and whatever the glue imports beside itself. Ignored, and read by the web mode
  * alone. At the repository root, as `target/` is — it is a cargo build's output, not this app's
  * — and resolved against this file rather than the working directory.
@@ -162,7 +162,7 @@ interface Built {
 
 /**
  * The folder of `dist-wasm/` the scanner's three files and their manifest are fetched into —
- * `scripts/scanner-assets.mjs --web`. Beside the two modules because everything said of that
+ * `scripts/scanner-assets.ts --web`. Beside the two modules because everything said of that
  * folder is true of these: ignored, written by a script of its own, and no build's but this one.
  */
 const SCANNER_ASSETS_DIR = SCANNER_ASSETS_PREFIX.slice(1);
@@ -179,7 +179,7 @@ function builtFiles(): { engine: Built[]; scanner: Built[]; assets: Built[] } {
     : (readdirSync(ENGINE_DIR, { recursive: true }) as string[])
         .map((name) => name.replaceAll("\\", "/"))
         // wasm-bindgen writes declarations beside the glue; nothing loads them. A download
-        // still on its way is a `.part` (`scripts/scanner-assets.mjs`).
+        // still on its way is a `.part` (`scripts/scanner-assets.ts`).
         .filter(
           (name) =>
             !name.endsWith(".d.ts") &&
@@ -208,7 +208,7 @@ const SCANNER_MISSING =
   `The card scanner's module has not been built: dist-wasm/ has no ${SCANNER_GLUE_FILE} and ` +
   `${SCANNER_WASM_FILE}. Run \`pnpm web:wasm\` first.`;
 
-/** `card_scanner::index::FORMAT_VERSION`, read from the crate as `scripts/scanner-assets.mjs` reads it. */
+/** `card_scanner::index::FORMAT_VERSION`, read from the crate as `scripts/scanner-assets.ts` reads it. */
 function scannerFormat(): number {
   const source = readFileSync(
     fileURLToPath(new URL("../../crates/card-scanner/src/index.rs", import.meta.url)),
@@ -344,7 +344,7 @@ function webEngine(
 
 /**
  * **The card scanner's three files, served and shipped** — the bundle of card hashes and the
- * two OCR models, with the manifest that says what each is (`scripts/scanner-assets.mjs --web`
+ * two OCR models, with the manifest that says what each is (`scripts/scanner-assets.ts --web`
  * fetches them into `dist-wasm/scanner-assets/`).
  *
  * A browser gets them from the app's own origin: the release they are published on sends no

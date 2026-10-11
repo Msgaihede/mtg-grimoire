@@ -664,7 +664,7 @@ it("offers Any card", () => {
 - [ ] **Step 2:** `npx tsc --noEmit` — fix cross-task type seams (the `TokenPile` interface, `GroupHeading`, `DeckCardFaceFacts`, `DeckTokenView` fields).
 - [ ] **Step 3:** Delete `TokenCountPill.tsx`; update the docs above; re-count any number a doc states.
 - [ ] **Step 4:** `npm run verify` (never piped through `tail` — memory `verify-exit-code-lies-through-a-pipe`), then `cd src-tauri; cargo fmt --check; cargo clippy --all-targets -- -D warnings` (verify runs neither). Fix, repeat until green.
-- [ ] **Step 5: Live pass** (`running-the-app` skill: take the `app` lock; copy the whole `src-tauri/target/debug/data` from the main checkout with the app stopped — memory `mtg-grimoire-worktree-live-testing`). On a Commander deck with `tokenStack` on and a Sideboard + Maybeboard, over `scripts/cdp.mjs` (PowerShell), at 0.5×, 1× and 2× `cardZoom.deck`:
+- [ ] **Step 5: Live pass** (`running-the-app` skill: take the `app` lock; copy the whole `src-tauri/target/debug/data` from the main checkout with the app stopped — memory `mtg-grimoire-worktree-live-testing`). On a Commander deck with `tokenStack` on and a Sideboard + Maybeboard, over `scripts/cdp.ts` (PowerShell), at 0.5×, 1× and 2× `cardZoom.deck`:
   - every stacked heading is one row at 1× and 2×; at 0.5× nothing overflows its column (`scrollWidth === clientWidth` on each `[data-deck-stack]` and the rail);
   - the token card and a deck card measured in the **same frame**: equal width, equal face height, equal chin height;
   - drag the token pile's heading onto the Sideboard — it lands above it; reload; it is still there; Ctrl+Z puts it back, Ctrl+Shift+Z moves it again; the history dialog reads *Moved Tokens & Emblems*;

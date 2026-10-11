@@ -39,7 +39,7 @@
 
 # Part 6a — restate in place
 
-Branch `claude/light-app-core-step-6a`. Done when `node scripts/core-step-6-census.mjs .` counts no function holding a connection across an `.await`, and no `with_write` + `block_on` pair is left in `sync_engine/` or `sync_pair/`.
+Branch `claude/light-app-core-step-6a`. Done when `node scripts/core-step-6-census.ts .` counts no function holding a connection across an `.await`, and no `with_write` + `block_on` pair is left in `sync_engine/` or `sync_pair/`.
 
 ### Task 1: `Store` and the lane, in the core
 
@@ -163,7 +163,7 @@ impl State {
 
 - [x] `live::trip` and `push_now` take `lane()`; `sync_now` and the claim take `lane_for_press()`; each records its failure in a stretch of its own after the trip.
 - [x] `share`: `on_the_write_connection` takes the lane, then the connection, and hands `lane.in_hand(conn)` down as `tokens`, which `publish`, `refresh`, `revoke` and `list` take beside `conn`.
-- [x] `node scripts/core-step-6-census.mjs .` reads `held: 0, blocking: 0`, and `scripts/core-step-6-census.test.mjs` holds the eight files there.
+- [x] `node scripts/core-step-6-census.ts .` reads `held: 0, blocking: 0`, and `scripts/core-step-6-census.test.ts` holds the eight files there.
 - [x] Commit: `refactor(sync): every sync operation takes the lane`.
 
 ### Task 7: verify, record, ship
@@ -191,7 +191,7 @@ Branch `claude/light-app-core-step-6b`, from 6a's branch, with `main` merged in 
 
 ### Task 9: the move, by script
 
-**Files:** `scripts/core-step-6b.mjs`; the eight files; both module maps; `crates/grimoire-core/src/state.rs` (`State.pairing`); `src-tauri/src/sync/mod.rs` and the four places that build an `AppState`; both manifests; `src/lib/ipc.test.ts`; `scripts/core-step-6-census.mjs`; `crates/grimoire-core/src/platform/fence.rs`
+**Files:** `scripts/core-step-6b.ts`; the eight files; both module maps; `crates/grimoire-core/src/state.rs` (`State.pairing`); `src-tauri/src/sync/mod.rs` and the four places that build an `AppState`; both manifests; `src/lib/ipc.test.ts`; `scripts/core-step-6-census.ts`; `crates/grimoire-core/src/platform/fence.rs`
 
 - [x] **Whole moves** (`git mv`): `sync_engine/{client.rs, client/tests.rs, entitlement.rs, wire.rs, schedule.rs}`, `sync_pair/{identity.rs, pairing.rs}`. **Split**: `sync_engine/commands.rs` — its reads to the core, its wrappers to `src-tauri/src/sync_engine/commands/mod.rs`; `pairing.rs`'s wrappers to `src-tauri/src/sync_pair/pairing/mod.rs`, each over a glob re-export.
 - [x] **Rewritten as it moves** (rule 15): every `reqwest` call onto `platform::http`, with `REQUEST_DEADLINE` — **120 s** for the client, whose pull is unpaged, **30 s** for the entitlement; `kind_of(&http::Error)`; `.status()` a `u16`; `include_str!` one directory deeper; `mint_name` onto `platform::device::name()`; pairing's `now_ms` onto `platform::clock` (23 test sites). **Nothing a request sends changed** — the modules' own `httpmock` tests moved unedited.

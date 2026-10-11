@@ -25,7 +25,7 @@ const V0_9_1 = `## [0.9.1](https://github.com/Msgaihede/mtg-grimoire/compare/v0.
 `;
 
 /**
- * One release body in the generator's shape — what `scripts/changelog/notes.mjs` renders, and
+ * One release body in the generator's shape — what `scripts/changelog/notes.ts` renders, and
  * what a release publishes when its release PR carried its `changelog/<version>.md`.
  */
 const GENERATED = `### Highlights

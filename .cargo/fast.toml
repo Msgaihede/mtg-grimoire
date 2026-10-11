@@ -1,5 +1,5 @@
 # The fast dev build's settings. **No cargo command reads this file by itself** — cargo looks for
-# `config.toml` in this folder and nothing else — and `scripts/rust-fast.mjs` is what hands it
+# `config.toml` in this folder and nothing else — and `scripts/rust-fast.ts` is what hands it
 # over, with `--config` and the nightly toolchain it names: `pnpm tauri:fast dev`,
 # `pnpm cargo:fast <any dev-profile command>`. That script says why it is opt-in and what it
 # refuses; this file says what each setting bought, and what was measured and left out.

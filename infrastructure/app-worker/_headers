@@ -140,7 +140,7 @@
 # --- The card scanner's three files -------------------------------------------------------------
 #
 # `scanner-assets/card-hashes.bin`, the two `.rten` models and `manifest.json`
-# (`scripts/scanner-assets.mjs --web` fetches them; the web build copies them in). STABLE NAMES
+# (`scripts/scanner-assets.ts --web` fetches them; the web build copies them in). STABLE NAMES
 # WHOSE BYTES CHANGE: the bundle of card hashes is rebuilt with every set and shipped again at
 # each release under the name it always had. So they are revalidated and never kept by the HTTP
 # cache — the default's value, restated so that loosening `/*` cannot take this with it. The page

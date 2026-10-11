@@ -2747,7 +2747,7 @@ Follow the `running-the-app` skill. Only one app runs across every worktree and 
 is silent — a second one exits with code 0, no window and no stderr.
 
 - [ ] **Step 6: Drive it over CDP** — `docs/reference/live-ui-verification.md` is the contract.
-      Use **PowerShell**, not Bash: the Bash tool refuses `cdp.mjs` eval in a worktree as
+      Use **PowerShell**, not Bash: the Bash tool refuses `cdp.ts` eval in a worktree as
       unverifiable. Avoid nested quotes and `$`.
 
 Six things, each of which only a live pass can answer:

@@ -2471,15 +2471,15 @@ $dir = Join-Path $env:TEMP "grimoire-pwa-profile"
 Start-Process "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" `
   -ArgumentList "--headless=new","--remote-debugging-port=9333","--disable-sync","--user-data-dir=$dir","http://localhost:4173/"
 $env:CDP_PORT = "9333"
-node scripts/cdp.mjs eval "location.href"
+node scripts/cdp.ts eval "location.href"
 ```
 
-`cdp.mjs` takes the first `type: page` target. **Put `location.href` in every payload below** — a stray target answers about the wrong DOM and reads exactly like the feature being broken.
+`cdp.ts` takes the first `type: page` target. **Put `location.href` in every payload below** — a stray target answers about the wrong DOM and reads exactly like the feature being broken.
 
 - [ ] **Step 2: Prove the worker installs, controls the page, and does not isolate it**
 
 ```powershell
-node scripts/cdp.mjs eval "(async()=>{const r=await navigator.serviceWorker.ready;return JSON.stringify({href:location.href,scope:r.scope,active:!!r.active,controlled:!!navigator.serviceWorker.controller,isolated:crossOriginIsolated});})()"
+node scripts/cdp.ts eval "(async()=>{const r=await navigator.serviceWorker.ready;return JSON.stringify({href:location.href,scope:r.scope,active:!!r.active,controlled:!!navigator.serviceWorker.controller,isolated:crossOriginIsolated});})()"
 ```
 Expected: `scope` is `http://localhost:4173/`, `active` and `controlled` true, and **`isolated: false`**.
 
@@ -2488,14 +2488,14 @@ Expected: `scope` is `http://localhost:4173/`, `active` and `controlled` true, a
 - [ ] **Step 3: Prove the shell works offline**
 
 ```powershell
-node scripts/cdp.mjs eval "(async()=>{const c=await caches.keys();return JSON.stringify({href:location.href,caches:c});})()"
+node scripts/cdp.ts eval "(async()=>{const c=await caches.keys();return JSON.stringify({href:location.href,caches:c});})()"
 ```
 Expected: one `grimoire-shell-<id>` cache. Then take the network away — stop the preview server — and navigate again:
 
 ```powershell
 Stop-Process -Name node -ErrorAction SilentlyContinue   # the preview server
-node scripts/cdp.mjs eval "location.reload()"
-node scripts/cdp.mjs eval "JSON.stringify({href:location.href,root:document.getElementById('root')?.childElementCount})"
+node scripts/cdp.ts eval "location.reload()"
+node scripts/cdp.ts eval "JSON.stringify({href:location.href,root:document.getElementById('root')?.childElementCount})"
 ```
 Expected: `root` is greater than 0. **A blank window is `childElementCount: 0`**, which is the tell — a screenshot of a dark page cannot tell "loaded" from "did not".
 
@@ -2505,13 +2505,13 @@ Expected: `root` is greater than 0. **A blank window is `childElementCount: 0`**
 
 Restart the preview server. Then, with the tab still open:
 
-1. Note the running build: `node scripts/cdp.mjs eval "(async()=>{const r=await navigator.serviceWorker.ready;const ch=new MessageChannel();const p=new Promise(res=>ch.port1.onmessage=e=>res(e.data));r.active.postMessage({type:'VERSION'},[ch.port2]);return JSON.stringify(await p);})()"` — records build **A**.
+1. Note the running build: `node scripts/cdp.ts eval "(async()=>{const r=await navigator.serviceWorker.ready;const ch=new MessageChannel();const p=new Promise(res=>ch.port1.onmessage=e=>res(e.data));r.active.postMessage({type:'VERSION'},[ch.port2]);return JSON.stringify(await p);})()"` — records build **A**.
 2. Change one source file (`src/App.tsx`, a comment is enough) and run `npm run build:web` again. The build id must differ; Task 2 Step 7 already proved an *unchanged* tree does not.
-3. Ask the page to check: `node scripts/cdp.mjs eval "(async()=>{const r=await navigator.serviceWorker.ready;await r.update();return JSON.stringify({href:location.href,waiting:!!r.waiting});})()"`.
+3. Ask the page to check: `node scripts/cdp.ts eval "(async()=>{const r=await navigator.serviceWorker.ready;await r.update();return JSON.stringify({href:location.href,waiting:!!r.waiting});})()"`.
    Expected: `waiting: true`. **Poll it** — the new worker has to finish installing, which means precaching the whole shell.
-4. **The bar is on screen**: `node scripts/cdp.mjs eval "JSON.stringify({href:location.href,bar:document.body.innerText.includes('A new version is ready')})"` → `true`.
+4. **The bar is on screen**: `node scripts/cdp.ts eval "JSON.stringify({href:location.href,bar:document.body.innerText.includes('A new version is ready')})"` → `true`.
 5. **A reader who ignores it keeps their build.** Reload without pressing, then read the version again: it must still be **A**. This is the half of §5.4 that is easiest to lose and impossible to see in a unit test — a browser leaves the waiting worker waiting across a reload, and if this reads **B** something is calling `skipWaiting` that should not be.
-6. **Press it.** `node scripts/cdp.mjs hover "button" --rest 200` then `node scripts/cdp.mjs text "Reload to update"`. A cold pointer makes `click` a no-op that still prints "clicked", so the hover is not optional.
+6. **Press it.** `node scripts/cdp.ts hover "button" --rest 200` then `node scripts/cdp.ts text "Reload to update"`. A cold pointer makes `click` a no-op that still prints "clicked", so the hover is not optional.
 7. Read the version again: **B**, and `document.getElementById('root').childElementCount > 0`. One reload, not a loop — watch for 10 s and confirm the page is not cycling.
 
 - [ ] **Step 5: The evicted corpus, forced**
@@ -2519,7 +2519,7 @@ Restart the preview server. Then, with the tab still open:
 With the app loaded, delete the OPFS database from under it and reload:
 
 ```powershell
-node scripts/cdp.mjs eval "(async()=>{const root=await navigator.storage.getDirectory();const names=[];for await (const [n] of root.entries()) names.push(n);return JSON.stringify({href:location.href,names});})()"
+node scripts/cdp.ts eval "(async()=>{const root=await navigator.storage.getDirectory();const names=[];for await (const [n] of root.entries()) names.push(n);return JSON.stringify({href:location.href,names});})()"
 ```
 Then remove what PR 4's `opfs-sahpool` uses (the directory name is in PR 4's VFS config — read it, do not guess), reload, and confirm the app shows **"Your card data was cleared"** with a working Retry — not a stack trace, not a blank page, and not "Setting up your collection".
 
@@ -2560,7 +2560,7 @@ sits on one page beside the spike's A/B."
 
 **Spec coverage.** §5.4 in full — manifest and install (Tasks 1, 4), the service worker (Task 2), the update flow exactly as written (Task 3, verified end to end in Task 8), `persist()` requested once the corpus is built and its answer recorded rather than trusted (Tasks 4, 5), "shell loaded, corpus gone" opening the corpus before assuming it and offering a rebuild (Task 5), the 256 MB / 1 GB image cache (Task 6), and the service worker not re-attaching COOP/COEP — said in the plan, pinned by a source sweep in Task 2, and read off a running browser in Task 8. §5.3's mobile-data prompt is Task 7.
 
-**What was checked against the repo rather than assumed.** `vite.config.ts` is a `vitest/config` `defineConfig` with a plugin array, a `resolve.alias` and a `test` block — `mergeConfig` composes with it. `tsconfig.json`'s `lib` is `ES2020, ES2022.Error, DOM, DOM.Iterable` with `types: []` and `include: ["src"]`, which is why the service worker needs a second program and why nothing under `src/` may import `node:fs`. `tsconfig.node.json` carries the TS6305 warning that decided `composite: false`. ESLint runs `tseslint.configs.recommended` — not the type-checked variant — so `src/pwa/sw.ts` needs no project entry and `no-undef` is off for TS files. `src/lib/layers.test.ts:8` gives the `query: "?raw"` glob shape the source sweeps use. `navigator.storage.persist()`, `persisted()` and `estimate()` are in `lib.dom.d.ts`; `NetworkInformation` and `BeforeInstallPromptEvent` are **not**, which is why both are declared locally. `logos/png/mark-256.png` and `mark-512.png` are tracked. `SyncProgress` already gates on `cardCount === 0` with a documented `null` rule and already offers the rebuild. `ipc.syncStatus`/`syncRun` are `src/lib/ipc.ts:4807-4808`. `scripts/cdp.mjs` reads `CDP_PORT`, so it drives a browser as well as the Tauri window.
+**What was checked against the repo rather than assumed.** `vite.config.ts` is a `vitest/config` `defineConfig` with a plugin array, a `resolve.alias` and a `test` block — `mergeConfig` composes with it. `tsconfig.json`'s `lib` is `ES2020, ES2022.Error, DOM, DOM.Iterable` with `types: []` and `include: ["src"]`, which is why the service worker needs a second program and why nothing under `src/` may import `node:fs`. `tsconfig.node.json` carries the TS6305 warning that decided `composite: false`. ESLint runs `tseslint.configs.recommended` — not the type-checked variant — so `src/pwa/sw.ts` needs no project entry and `no-undef` is off for TS files. `src/lib/layers.test.ts:8` gives the `query: "?raw"` glob shape the source sweeps use. `navigator.storage.persist()`, `persisted()` and `estimate()` are in `lib.dom.d.ts`; `NetworkInformation` and `BeforeInstallPromptEvent` are **not**, which is why both are declared locally. `logos/png/mark-256.png` and `mark-512.png` are tracked. `SyncProgress` already gates on `cardCount === 0` with a documented `null` rule and already offers the rebuild. `ipc.syncStatus`/`syncRun` are `src/lib/ipc.ts:4807-4808`. `scripts/cdp.ts` reads `CDP_PORT`, so it drives a browser as well as the Tauri window.
 
 **Measured live for this plan, 2026-08-28.** A HEAD on `json.commanderspellbook.com/variants.json.gz` answers `Content-Length: 27558428`, `Content-Encoding: gzip`, `Accept-Ranges: bytes`. A HEAD on `api.cardkingdom.com/api/v2/pricelist` answers 200 with `Content-Type: text/html` and **no `Content-Length`** — which is why Task 7 refuses to size that feed instead of reprinting the 66 787 283 B the price research measured in August.
 

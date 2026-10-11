@@ -121,7 +121,7 @@ driven in the Claude desktop app's built-in Chromium pane with its viewport emul
 ### 2.2 In the Tauri window, over the real core
 
 **`pnpm mobile:tauri` — a debug build, under the `app` lock, WebView2 driven over CDP on 9222
-(`scripts/cdp.mjs`), the frame measured with Win32.** The database was a copy of the main
+(`scripts/cdp.ts`), the frame measured with Win32.** The database was a copy of the main
 checkout's dev `data/` folder, so the corpus, the decks and the picture cache are real. The desk
 is one 2560 × 1392 work area at 100% scale.
 
@@ -156,7 +156,7 @@ ladder's top rung on this desk), `http://localhost:1420/` with no path written, 
 caption drawn, the rail's rows Home, Search, Tagger, Decks, Collection, Wishlist, Scanner, Trade,
 Playtesting, Settings, and the app open on **Home**. That is ten rows, and it is all of them:
 the eleventh the spec counts is Shared, which the rail draws only while a shared binder is open.
-**The plan's `Ctrl+1` goes Home check was not driven** — `cdp.mjs key` has no digit — so the
+**The plan's `Ctrl+1` goes Home check was not driven** — `cdp.ts key` has no digit — so the
 chord guard's desktop half rests on `AppShell.test.tsx`.
 
 ### 2.3 The suites
@@ -477,7 +477,7 @@ says never to exclude `.claude`.
 
 - **`release.yml` has not run under the workspace.** `tauri-action`'s lookup was read at the
   pinned SHA and honours `build.target-dir`; the first release is still the first proof.
-- **`scripts/coverage-rust.mjs` was rewritten for two members and not run against cargo.**
+- **`scripts/coverage-rust.ts` was rewritten for two members and not run against cargo.**
 - **Moving `target/` to the root** is deleting `.cargo/config.toml` and sweeping what names the
   folder — on an announced day, since every checkout rebuilds and its dev database moves.
 - **The fence sweeps test code too**, and `index/mod.rs`'s tests time themselves with
@@ -631,7 +631,7 @@ row above is a debug build answering, not a timing.
   `schema::fixtures` in the core, and the two chains left in `apps/desktop/src-tauri/src/schema/mod.rs` —
   the v59 conversion test's, which goes red by itself, and
   `migrate_the_real_database_to_v29`'s, which is `#[ignore]`d and does not.
-- **`scripts/coverage-rust.mjs` was not run**, again. It splits a file at its first column-0
+- **`scripts/coverage-rust.ts` was not run**, again. It splits a file at its first column-0
   `#[cfg(test)]`; `schema::memory_pair` carried one and now carries
   `any(test, feature = "testing")`, so the staging functions below it count as shipped code for
   the first time, and `scratch.rs` does too.
@@ -777,7 +777,7 @@ the copy is in no sync group, so live sync stays off, and what holds the wake is
   `state.changes` after a hooked write.
 - **`EventSink` and `WriteObserver` are `Send + Sync`**, so a browser's sink cannot hold a
   `JsValue`. Phase 5 meets that first.
-- `scripts/coverage-rust.mjs` was not run, and neither was the card-scanner suite locally.
+- `scripts/coverage-rust.ts` was not run, and neither was the card-scanner suite locally.
 
 ### 6.4 Step 4 — the domain cluster (2026-10-02)
 
@@ -793,7 +793,7 @@ measured that day on Windows 11, debug builds, on the branch's own tree over `ma
 the home page's reads, the view-state modules, `maintenance`, `reset`, and the sync engine's
 `apply` and `baseline`.
 
-**It was read before it was moved.** `scripts/lib/rs-items.mjs` cuts a rustfmt-formatted file into
+**It was read before it was moved.** `scripts/lib/rs-items.ts` cuts a rustfmt-formatted file into
 its top-level items by tracking comments, literals and bracket depth, and every item of every file
 in `apps/desktop/src-tauri/src` was read for what it names. Two things came out of that:
 
@@ -906,11 +906,11 @@ a closure parameter never spells its type.
   this module's path, and a function only by a call. **Too wide is silent and too narrow is a
   compile error**, so the sweep leans narrow.
 
-**The script**, `scripts/core-step-4.mjs`: 49 modules in one run, `cargo fmt` at the end, and a
+**The script**, `scripts/core-step-4.ts`: 49 modules in one run, `cargo fmt` at the end, and a
 second run changes nothing — a module whose file is gone from `apps/desktop/src-tauri/src` is skipped and
 each one-off step checks whether it has been done. `--dry` prints what would stay, move and widen
 without writing. The splitter rejoins every Rust file in both crates byte for byte, which
-`scripts/lib/rs-items.test.mjs` holds on every run. Git records 51 renames.
+`scripts/lib/rs-items.test.ts` holds on every run. Git records 51 renames.
 
 - **It was right about the cut on its first run and wrong about three smaller things**, each
   found by the compiler and fixed in the script rather than in its output: a constant used only
@@ -1028,7 +1028,7 @@ answering, not a timing.
   connection while a caller's closure runs; on a host with one connection, a closure that asked
   for `lock_db_read` would take a lock its own thread holds. No wrapper does — a write closure is
   handed the connection — but nothing checks it. Phase 5's.
-- `scripts/coverage-rust.mjs` was not run, and neither was the card-scanner suite locally:
+- `scripts/coverage-rust.ts` was not run, and neither was the card-scanner suite locally:
   nothing under `crates/card-scanner` changed, and CI's `rust` job runs it.
 
 ### 6.5 Step 5, first part — `platform`'s request, timer and files, and the Scryfall client over them (2026-10-02)
@@ -1149,7 +1149,7 @@ compared equal — and four things that were wrong anyway.
   test-only `use` at `wishlist.rs:22`, a `thread_local!` in `sync_engine/apply.rs`, a helper in
   `bulk_undo.rs`, a constant in `apply/rehome.rs`. Everything below each was unread. The cut is
   a gate over a *module* now, and the rule's own tests carry both shapes.
-- **`scripts/coverage-rust.mjs` made the same cut, and had since it was written** — eleven files
+- **`scripts/coverage-rust.ts` made the same cut, and had since it was written** — eleven files
   across both crates, the whole of `wishlist.rs` among them, counted as test code. Fixed the
   same way; the figure below is from after it.
 - **An assertion that depended on the order a directory is read in.** By name on NTFS, by
@@ -1361,7 +1361,7 @@ renames into place and bounds its own concurrency.
 | `reset::clear_cache`, `deck::bracket_reads`, `sync::status` | in three `mod.rs` remainders | home | one of `reset`'s tests |
 
 `crates/grimoire-core/src` went from 157 318 lines to 175 393 and `apps/desktop/src-tauri/src` from 66 801
-to 49 414. `scripts/core-step-5c.mjs` made the move: 30 files written, 8 removed, every
+to 49 414. `scripts/core-step-5c.ts` made the move: 30 files written, 8 removed, every
 rewrite an exact replacement that has to match the number of times it says.
 
 **`platform/` grew three things, each with its first caller:**
@@ -1531,7 +1531,7 @@ the core is small and is there because the lane is a field of `State`: `state::S
 | `share`'s publisher | the connection for the whole publish | the lane, then the connection; its token asked through the connection in hand |
 
 **Thirty-one functions held a connection across an `.await`, fifty-six awaits between them;
-none does.** `scripts/core-step-6-census.mjs` counts, and its test holds the eight files at
+none does.** `scripts/core-step-6-census.ts` counts, and its test holds the eight files at
 none, and at no `block_on`. The compiler holds the rule itself: each entry point's future is
 handed to `fn sendable<T: Send>(_: T)` by a function that is never called, and a `MutexGuard`
 across an `.await` is not `Send`. `clippy::await_holding_lock` refuses the same everywhere,
@@ -1597,7 +1597,7 @@ launch pass or a file. What a launch does is unchanged.
 Measured on Windows 11, debug builds, on the branch's own tree over `main` at `dfce2194` (6a's
 merge).
 
-**Moved by `scripts/core-step-6b.mjs`**, the I/O step's scripts with another list:
+**Moved by `scripts/core-step-6b.ts`**, the I/O step's scripts with another list:
 `sync_engine::{client, entitlement, wire, schedule}` and `sync_pair::{identity, pairing}` whole,
 every test of theirs with them, and `sync_engine::commands` split — the sync panel's reads to the
 core, the wrappers to `apps/desktop/src-tauri/src/sync_engine/commands/mod.rs` over a glob re-export, as
@@ -1678,8 +1678,8 @@ phase 7. The field reverses the desktop's documented choice — the scanner's st
 `app.manage`d beside `AppState` because it is optional and shares nothing but the data directory
 — because the command table that comes next reaches everything through one handle.
 
-**Moved by `scripts/core-step-7.mjs`**, the 6b script's shape with a split inside the tests module
-as well (`rs-items.mjs`'s `inner`):
+**Moved by `scripts/core-step-7.ts`**, the 6b script's shape with a split inside the tests module
+as well (`rs-items.ts`'s `inner`):
 
 | | Now |
 | --- | --- |
@@ -1762,7 +1762,7 @@ command — kind, name, the module whose items its body names, the arguments, th
 absent `Option` read as `None`), runs the body as its kind says, and answers JSON. **88 reads**:
 the survey's 89 less the two that start a picture fetch (`prefetch_images`, `prewarm_collection`
 — tasks, not reads) and plus `card_holdings`, which a word in its doc comment had excluded. They
-were drafted from the wrappers by `scripts/core-command-table.mjs` — each body is its wrapper's,
+were drafted from the wrappers by `scripts/core-command-table.ts` — each body is its wrapper's,
 the connection renamed — and five were written by hand: `marketplace_feed_status` (a block),
 `error_log_list` (in `desktop.rs`, calling `errors`), and three whose inline `mod commands`
 renamed what it imported.
@@ -3262,7 +3262,7 @@ no `wrangler`.
   is the word `dev` and it serves `dist-wasm/` uncached. A directory and not a query, because
   the glue finds what it imports beside itself by its own URL. A `web` build whose engine is
   not there **fails**, with the sentence that says what to run.
-- **`scripts/build-wasm.mjs`** (`pnpm web:wasm`): `cargo build -p grimoire-web --lib` for
+- **`scripts/build-wasm.ts`** (`pnpm web:wasm`): `cargo build -p grimoire-web --lib` for
   the target under **a profile of its own, `wasm`** — it inherits `release` and adds fat LTO,
   one codegen unit and `panic = "abort"`, and `[profile.release]` is deliberately not written,
   so nothing here reaches the desktop's or the APK's build — then `wasm-bindgen --target web`
@@ -3270,7 +3270,7 @@ no `wrangler`.
   that fail without naming themselves: the CLI is exactly the version `Cargo.lock` resolves,
   clang 18 or newer is reachable (it looks in the LLVM installer's folder on Windows), and
   every function the Worker imports is exported.
-- **`scripts/web-smoke.mjs`** (`pnpm web:smoke`): serves `apps/light/dist-web/` on `localhost`, opens
+- **`scripts/web-smoke.ts`** (`pnpm web:smoke`): serves `apps/light/dist-web/` on `localhost`, opens
   it in headless Chromium over the DevTools protocol with no dependency, and asks five things —
   the app got past its gate and said which journal it got; the database is in OPFS; a read came
   back through the engine; a reload opens the database a second time, heard as a second console
@@ -3293,7 +3293,7 @@ no `wrangler`.
 
 **Measured, 2026-10-04, on Windows 11.**
 
-- **The module** (`node scripts/build-wasm.mjs`: profile `wasm`, name section stripped, no
+- **The module** (`node scripts/build-wasm.ts`: profile `wasm`, name section stripped, no
   `wasm-opt`): `grimoire_web_bg.wasm` is **8 548 543 B**, **2 982 372 B** through `gzip -9`; the
   glue `grimoire_web.js` is 60 568 B. The build took 221.8 s cold on this machine and 142.3 s
   warm. With the function names kept (`--names`) the root `Cargo.toml` records 10 146 090 B.
@@ -3587,7 +3587,7 @@ shapes*; the host's are [`crates/grimoire-web/CLAUDE.md`](../../crates/grimoire-
   a name in a loop, and a throw left to climb would take the event from every handler behind
   it.
 
-**What was built — the smoke run.** `scripts/web-smoke.mjs` is an **offline first run** now,
+**What was built — the smoke run.** `scripts/web-smoke.ts` is an **offline first run** now,
 and no request leaves the machine.
 
 - **One browser-level `Fetch.enable`** pauses the Worker's requests. Measured on the way
@@ -3607,7 +3607,7 @@ and no request leaves the machine.
   anything, and a forced check that asks for the listing and no card file; a second tab told
   and offered a reload; and no request that would cost a pre-flight or that went to a host
   with no fixture. **So §9.1's caveat is closed**: the reload check is "it kept the cards".
-- **`scripts/ci-route.mjs` routes `scripts/web-smoke/*` to `web`** (and `frontend`), beside the
+- **`scripts/ci-route.ts` routes `scripts/web-smoke/*` to `web`** (and `frontend`), beside the
   script itself: a fixture changed is a first run changed.
 
 **Measured, 2026-10-04, offline: the smoke run.** Windows 11, headless Chrome 154.0.8037.95.
@@ -4013,7 +4013,7 @@ writes staging…* and *The command table*; the picture cache's are
   request there fails the run, as a request to any host without a fixture does.
 - **A browser-level `Fetch.enable` pauses a service worker's fetches too** (confirmed,
   Chrome 154), so §9.2's one enable still covers every request.
-- **`scripts/ci-route.mjs` routes `apps/light/vite.sw.ts` to `frontend` and `web`**, named rather than
+- **`scripts/ci-route.ts` routes `apps/light/vite.sw.ts` to `frontend` and `web`**, named rather than
   left to the fail-safe, which would run the Rust matrix for a service worker.
 
 **Measured, 2026-10-04, offline: the smoke run.** Windows 11, headless Chrome 154.0.8037.95.
@@ -4293,7 +4293,7 @@ finished and moved to where only the light builds copy it; and phase 1's two his
 - **Raster icons at 192 and 512 in two drawings**: the transparent mark, for the reason the
   desktop's icon is the mark ([`logos/README.md`](../../logos/README.md)), and a **maskable**
   one on the ground to every edge. One purpose to a file.
-- **`node scripts/light-icons.mjs` made them**, from `logos/svg/mtg-grimoire-mark.svg` alone:
+- **`node scripts/light-icons.ts` made them**, from `logos/svg/mtg-grimoire-mark.svg` alone:
   it derives the maskable drawing rather than reading a third SVG, renders each size in
   headless Chromium over the DevTools protocol — no image library is a dependency — and
   **measures the furthest painted pixel**, failing a mark that leaves the safe zone. At
@@ -4685,7 +4685,7 @@ sent rather than matching the file's text — two rules that each look right can
   stayed green on a sixth feed). A census of every `https://` literal in the code the three
   crates **ship** — `grimoire-core`, `grimoire-web` and `card-scanner`'s library, each file read
   above its first column-0 `#[cfg(test)]` that gates a module, which is the crate's own rule and
-  `scripts/coverage-rust.mjs`'s cut; files a parent declares behind a test gate left out;
+  `scripts/coverage-rust.ts`'s cut; files a parent declares behind a test gate left out;
   comment lines dropped. Each host has to be in `connect-src` or on a short list of hosts a
   browser's engine never *asks*, with the reason beside it: Mana Pool (unreachable, and refused
   before any request), the relay (until phase 6), Patreon's authorize page (an address the page
@@ -4781,7 +4781,7 @@ from the wrong place and called every run red.
   drawn**, **a service worker** (built since, in step 5.3, and driven with no policy — §9.3;
   the two have not been driven together in a browser), **the real hosts** rather than
   fixtures, **any browser but one Chrome**, and any phone.
-- ~~**`scripts/web-smoke.mjs` runs with no policy.** CI's `web` job therefore proves the build
+- ~~**`scripts/web-smoke.ts` runs with no policy.** CI's `web` job therefore proves the build
   and not the build as served. What it would take: serve through `headersFor`, answer a miss
   and `/_headers` with a 404, and listen for violations in the Worker as well as on the page.~~
   **Closed in the step's second half (§9.6)**: the smoke's server answers as the host is read
@@ -5903,9 +5903,9 @@ and `hosting.test.ts` derives the second from `RELAY_BASE` by `ws_origin`'s rule
 rule out of `socket.rs`, and holds `connect-src` to it: every source `https://`, that one
 `wss://` and no other, in no other directive.
 
-**The walk** (`pnpm web:sync-smoke`, `scripts/web-sync-smoke.mjs`, written in the first
+**The walk** (`pnpm web:sync-smoke`, `scripts/web-sync-smoke.ts`, written in the first
 smoke's harness — the server, the browser and the two fences, which are a module of their own
-now, `scripts/web-smoke/harness.mjs`, so that neither run has to ask whether it is the script
+now, `scripts/web-smoke/harness.ts`, so that neither run has to ask whether it is the script
 Node started; the first cut asked, by comparing two spellings of a path, and a run that
 answered *no* would have checked nothing and exited 0):
 
@@ -6218,7 +6218,7 @@ none was measured under a finger. `controls.test.ts` pins each utility in its co
 compiles it against `packages/ui/index.css`; the panel's and the dialog's suites pin them on the rendered
 boxes.
 
-**The scanner, with a camera** — `pnpm mobile:scan-smoke` (`scripts/pairing-scan-smoke.mjs`),
+**The scanner, with a camera** — `pnpm mobile:scan-smoke` (`scripts/pairing-scan-smoke.ts`),
 against `mobile:dev`. A headless Chromium launched with
 `--headless=new --remote-debugging-port=0 --user-data-dir=<temp> --use-fake-device-for-media-stream
 --use-fake-ui-for-media-stream --use-file-for-fake-video-capture=<invite.y4m>` takes a file for a
@@ -6282,19 +6282,19 @@ with one linear memory. **Measured, and nothing is changed by this step**: the m
 script, the engine and the relay are as they were, and what the figures ask for is a relay
 deploy, so it is written down below as a design and not built.
 
-**The run** — `pnpm web:sync-pull --ops <n>` (`scripts/web-sync-pull.mjs`), a sibling of
+**The run** — `pnpm web:sync-pull --ops <n>` (`scripts/web-sync-pull.ts`), a sibling of
 the sync smoke on its harness: the relay's own code under workerd (`wrangler dev --local`
 4.146.0, workerd 1.20261001.1), two headless Chrome 154.0.8037.95 profiles on Windows 11 (Ryzen
 9 5900X, 32 GB), everything on loopback, the built app under the hosting's headers, the engine
 at 6 836 569 B. A sibling and not a mode of the walk, because it shares the walk's relay,
 devices, claim and pairing and none of its shape; those four are a module of their own now,
-`scripts/web-smoke/sync-harness.mjs`, beside the harness both smokes are written in, and the
+`scripts/web-smoke/sync-harness.ts`, beside the harness both smokes are written in, and the
 walk reads as it did. Nothing runs the measurement but a person; it fails by name when the two
 devices do not end up with the same rows — **row for row**: each device's whole list read
 through `collection_list`, each row reduced to what an import line set, the lines sorted, and
 the SHA-256 of both compared. (The first record of this step compared a count and a sum of
 copies and called it the rows; every run in the relay-heap rows below, and every run since,
-compares the digest.) `release-rule.test.mjs` counts wrangler's subcommands across the files
+compares the digest.) `release-rule.test.ts` counts wrangler's subcommands across the files
 of the run — `d1 execute --local` and `dev --local`, both in the harness — holds each file to
 its relative imports by name, so the list is the whole of the run, pins the one PowerShell
 pipeline the measurement starts to the three cmdlets it is, and holds all of them to none of
@@ -7055,7 +7055,7 @@ cut since, and nothing below has met a real key, a real token or a real tag.
   would sign happily and every phone would uninstall. No file, no APK; another key or an
   Android debug certificate is refused before anything is signed.
 - **`web-deploy` deploys `infrastructure/app-worker/` and asks the address whether it serves that bundle**
-  (`scripts/web-deploy-probe.mjs`: 200, the built policy, the built document). It was the only
+  (`scripts/web-deploy-probe.ts`: 200, the built policy, the built document). It was the only
   job that deployed anything, and this the only Worker, until 2026-10-11 (`relay-deploy` and
   `share-deploy` joined it, and it goes after them) — so **merging the release PR is a
   deploy**. `wrangler` is pinned by a lockfile, `infrastructure/wrangler/package-lock.json`: installed with
@@ -7067,7 +7067,7 @@ cut since, and nothing below has met a real key, a real token or a real tag.
 **The two jobs that hold a value take it from a `release` environment**, which the owner
 restricts to `main` — a repository secret is readable from any branch's workflow. Without its
 values a job ships nothing, says so in the run's summary and ends green; some and not all is a
-failure; a debug-signed APK is never attached. `scripts/release-rule.test.mjs` holds the graph,
+failure; a debug-signed APK is never attached. `scripts/release-rule.test.ts` holds the graph,
 the trigger, every spelling of `secrets` and which job may read which, and the exact list of
 commands those two jobs may run — each checked by breaking the workflow that way, 23 mutations.
 
@@ -7214,7 +7214,7 @@ already there).
 …\grimoire-web-smoke-…\first_party_sets.db-journal` — a temp profile Chrome had not let go
 of — and the walk's own lines were not printed. **The second run passed all twelve lines in
 63.3 s.** A walk that passed must not report FAILED for a file Windows still holds:
-`scripts/web-smoke/harness.mjs` now tries the removal for longer, and names a directory it
+`scripts/web-smoke/harness.ts` now tries the removal for longer, and names a directory it
 has to leave behind in one line without failing the run.
 
 **All twenty probes at 02:29:46 UTC, against the real address**, each as the first deploy's:
@@ -7839,7 +7839,7 @@ commit, on both faces. Two halves, one Rust and one TypeScript, and a review of 
 `card-scanner` with `ocr` and without `corpus`, six `#[wasm_bindgen]` exports over one session,
 and nothing of the engine. A member rather than a package beside the crate, for the lockfile —
 one `wasm-bindgen` for both of the web host's modules — and it is only the crate alone when it
-is built alone: `scripts/build-wasm.mjs` builds it with `-p grimoire-scan`, with
+is built alone: `scripts/build-wasm.ts` builds it with `-p grimoire-scan`, with
 `-C target-feature=+simd128` in that one run's environment and a build tree of its own, and
 reads each module's `target_features` back, refusing a scanner module that does not name
 `simd128` and an engine module that does. 4 472 762 B as this step leaves it, 1 166 235 B
@@ -7877,7 +7877,7 @@ closes it at compile time** — the work is a closure, and the page's arm never 
 and the module is 7 030 970 B with it (7 040 098 B after step 7.4's review round and this
 step's own; the 137 kB over the old figure is step 7.3's code for the prefs, the tray and a
 frame's parse — and 7 291 289 B once `main`'s #855 was merged under it, a sync fix that is
-251 kB of the engine's own). **And `scripts/build-wasm.mjs` now refuses an engine module over
+251 kB of the engine's own). **And `scripts/build-wasm.ts` now refuses an engine module over
 8 000 000 B**, with the reason and the way to raise it written beside the number: a tenth of
 headroom for growth like that, and two megabytes short of where the runtime put the module,
 so the three megabytes cannot come back unseen. `Cargo.toml`'s rule ("no command in the table reaches its session")
@@ -8000,7 +8000,7 @@ fixes, and these were taken — each with a test that goes red when the fix is b
   then trusted by digest. A browser that cannot hash keeps nothing.
 - **Nothing fenced the new CI and release steps.** The release rule's test holds the asset
   fetch, the `required` build and their order in both workflows; the post-deploy probe asks the
-  address for the scanner's manifest; `scanner-assets.mjs` holds the models to the pinned
+  address for the scanner's manifest; `scanner-assets.ts` holds the models to the pinned
   digests and reuses a file by its digest, never its length; the smoke's one outside request is
   tried three times, under the app's `User-Agent`, and cached between CI runs.
 - In the Rust: `scanner_labels`' three attempts reasoned from two schema moves where a launch
@@ -8067,7 +8067,7 @@ the `decision_seq` the loop takes as its baseline (§11), so over the fake a cam
 It is a script now (`packages/fake/scannerScript.ts`): a pile of five cards, thirteen frames a
 card, 110 ms a frame, and in Exact a last card that is three reprints it cannot split.
 
-**Driven** — `pnpm mobile:scanner-smoke` (`scripts/phone-scanner-smoke.mjs`), headless Chrome
+**Driven** — `pnpm mobile:scanner-smoke` (`scripts/phone-scanner-smoke.ts`), headless Chrome
 154 with `--use-fake-device-for-media-stream` under a touch pointer and the dark scheme, over
 `mobile:dev`. The fake, not the engine.
 
@@ -8279,7 +8279,7 @@ a group that already has it.
 
 - **The launcher's icon was Tauri's logo.** `tauri android init` writes it into every
   `mipmap-*`, with Android's stock robot in `drawable*`, and nothing had replaced it — the app
-  ran on a phone under another project's mark from 2026-10-04. `scripts/light-icons.mjs` now
+  ran on a phone under another project's mark from 2026-10-04. `scripts/light-icons.ts` now
   renders the launcher's set from `logos/svg/mtg-grimoire-mark.svg`: an adaptive icon
   (`mipmap-anydpi-v26/ic_launcher.xml`) whose foreground is the mark at scale 0.55 on a
   transparent 108dp layer over `@color/ground`, and the 48dp icon no phone this app installs on

@@ -12,9 +12,9 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
   - Acts as an aggregator requiring success or deliberate skip across all job dependencies:
     `changes`, `frontend`, `rust`, `core`, `powershell`, `storybook`, `android`, and `web`.
   - `enforce_admins` is `false`: a red PR cannot merge, but direct administrative pushes to `main` remain possible.
-- **CLAUDE.md line budget check**: The `changes` job runs `node scripts/check-claude-md.mjs` before classification, failing CI immediately if any `CLAUDE.md` in the repository grows beyond 200 lines.
+- **CLAUDE.md line budget check**: The `changes` job runs `node scripts/check-claude-md.ts` before classification, failing CI immediately if any `CLAUDE.md` in the repository grows beyond 200 lines.
 - **Path routing (`changes` job)**:
-  - Uses `git diff --name-only --no-renames` (`fetch-depth: 0`) and pipes changed paths to `scripts/ci-route.mjs`.
+  - Uses `git diff --name-only --no-renames` (`fetch-depth: 0`) and pipes changed paths to `scripts/ci-route.ts`.
   - Evaluated using strict `case` semantics: **first match wins**, and `*` crosses `/`.
   - `apps/desktop/src-tauri/**` routes to `frontend` and `rust` (frontend tests inspect Rust files as text).
   - `crates/grimoire-core/**` routes to `frontend`, `rust`, and `core` (must stay above `crates/*`).
@@ -25,22 +25,22 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
   - Root `vite.base.ts`, `vite.watch.ts`, `vitest.config.ts`, `tsconfig*.json` and `infrastructure/*/tsconfig.json` route to `frontend`, `storybook`, and `web`.
   - `package.json`, `pnpm-lock.yaml` and `pnpm-workspace.yaml` route to the page-side jobs; `infrastructure/app-worker/**` and `infrastructure/wrangler/**` (the deploy tool's manifest and lockfile) route to `frontend` and `web`; `infrastructure/scan-worker/**` (the scan inbox, which no build uses; `release.yml`'s `scan-deploy` deploys it) to `frontend` alone.
   - `scripts/android-release/*` routes to `frontend`, `rust`, and `android` (must sit above `scripts/*`); `.release-please-manifest.json` routes to `frontend`.
-  - `changelog/*` routes to `frontend` (must sit above the prose arm's `*.md`): `scripts/changelog/files.test.mjs` reads every release's notes.
+  - `changelog/*` routes to `frontend` (must sit above the prose arm's `*.md`): `scripts/changelog/files.test.ts` reads every release's notes.
   - `*.ps1`/`*.psm1`/`*.psd1` routes to `powershell` (must sit above `apps/desktop/src-tauri/*` and `scripts/*`).
   - Unrecognised paths fall through to a fail-safe that runs all build jobs (`frontend`, `rust`, `core`, `storybook`, `web`).
-  - **Fence test**: `scripts/ci-route.test.mjs` verifies that every file read across jobs is properly routed.
+  - **Fence test**: `scripts/ci-route.test.ts` verifies that every file read across jobs is properly routed.
 - **Three routing traps to prevent**:
   1. Never use workflow-level `paths:` filters; they skip the entire workflow and leave required status checks pending indefinitely.
   2. Always pass `--no-renames` to git diff; default rename detection only reports destination paths, which would wrongly skip jobs when files move.
   3. `ci-ok` must explicitly assert `needs.changes.result == 'success'`. Because skipped build jobs count as passes, a crashed router would otherwise pass `ci-ok` having run nothing.
 - **Adding a new CI job**:
-  - A new job gated on changes must be added to five places: `ci-route.mjs`'s `JOBS`, the classify step's output check,
+  - A new job gated on changes must be added to five places: `ci-route.ts`'s `JOBS`, the classify step's output check,
     `changes.outputs`, `ci-ok`'s `needs` array, and `ci-ok`'s success-or-skipped evaluation loop.
 - **Concurrency control**:
   - Pull request runs cancel in-progress runs when new commits arrive (`cancel-in-progress: true`).
   - Pushes to `main` use dedicated concurrency groups so history is never cancelled mid-route.
 - **Job specifics**:
-  - **Install**: every job that installs does `pnpm/action-setup` (pinned by SHA, version from `package.json`'s `packageManager`), then `actions/setup-node` with `cache: pnpm`, then `pnpm install --frozen-lockfile`; `scripts/toolchain.test.mjs` holds pnpm's step directly above Node's.
+  - **Install**: every job that installs does `pnpm/action-setup` (pinned by SHA, version from `package.json`'s `packageManager`), then `actions/setup-node` with `cache: pnpm`, then `pnpm install --frozen-lockfile`; `scripts/toolchain.test.ts` holds pnpm's step directly above Node's.
   - **`frontend`**: Matrix of 5 legs: 1 leg for `pnpm build`, `pnpm share:build` and `pnpm lint`; 4 parallel shards for `pnpm test:run --shard=N/4`.
   - **`storybook`**: Runs `pnpm build-storybook`. Gates `.storybook/DesignSystem.mdx` and `preview.css`.
   - **`rust`**: Windows and Linux matrix. Writes a stub `apps/desktop/dist/index.html` (and `apps/light/dist-mobile/index.html`) so `tauri-build` compiles on fresh checkouts.
@@ -67,14 +67,14 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
 - **Pinned toolchains**:
   - Rust is pinned via `rust-toolchain.toml` and installed via `./.github/actions/rust-toolchain`. Moving the pin requires a deliberate commit.
   - Node is pinned via `.nvmrc` across all `actions/setup-node` invocations (`node-version-file: .nvmrc`).
-  - **Fence**: `scripts/toolchain.test.mjs` fails if any workflow uses an unpinned toolchain or direct action.
+  - **Fence**: `scripts/toolchain.test.ts` fails if any workflow uses an unpinned toolchain or direct action.
 - **SHA-pinned actions**:
   - All third-party GitHub actions must use full 40-character commit SHAs with trailing version tags (`@<sha> # vX.Y.Z`).
   - Dependabot updates action SHAs weekly via grouped pull requests over `/` and `/.github/actions/*`.
   - `persist-credentials: false` is required on all checkouts to prevent leaking tokens.
   - Workflows must declare `permissions: {}` top-level and grant minimal required permissions per job.
-  - **Fence**: `scripts/actions-pinned.test.mjs` enforces action SHA pinning and permissions.
-- **Scripts a workflow runs must exist**: `scripts/workflow-scripts.test.mjs` fails if a workflow, composite action, Tauri hook or package script calls a `pnpm <name>` that `package.json` lacks. It reads only `pnpm <name>`, `pnpm run <name>` and the `-w` forms, refuses a `--` on a pnpm line, and refuses any npm, npx, pnpx or corepack line but the deploy tool's `npm ci --ignore-scripts`.
+  - **Fence**: `scripts/actions-pinned.test.ts` enforces action SHA pinning and permissions.
+- **Scripts a workflow runs must exist**: `scripts/workflow-scripts.test.ts` fails if a workflow, composite action, Tauri hook or package script calls a `pnpm <name>` that `package.json` lacks. It reads only `pnpm <name>`, `pnpm run <name>` and the `-w` forms, refuses a `--` on a pnpm line, and refuses any npm, npx, pnpx or corepack line but the deploy tool's `npm ci --ignore-scripts`.
 
 ## `release.yml` — Automated Releases
 
@@ -82,12 +82,12 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
 - **The release rule — the three hosts ship from one tag**: one core means one user schema per commit, sync stamps every op with the sender's,
   and an older build holds a newer op until it updates. A host that ships ahead strands the others, so:
   - `build` (desktop matrix), `android` (the APK and the bundle, as `ci.yml` builds them), `web` (`web:wasm`, `web:build`, `web:smoke`) and `share` (`pnpm share:build`, the share viewer) all build at the tag and hold no secret.
-  - `android-sign` re-signs the bundle with the owner's **upload key** (`scripts/android-release/sign-bundle.sh`, `jarsigner`) and leaves `mtg-grimoire-<version>-android.aab` as the artifact `play-upload-bundle`, which `play-upload` puts on Play's internal track (`scripts/android-release/play-upload.mjs`: Node's `crypto` and `fetch`, no dependency; seven requests; a `versionCode` Play already holds ends green, and a release older than what Play holds, as a bundle or on a track, is refused, red). Promotion past the internal track is the owner's. Nothing Android is attached to the release.
+  - `android-sign` re-signs the bundle with the owner's **upload key** (`scripts/android-release/sign-bundle.sh`, `jarsigner`) and leaves `mtg-grimoire-<version>-android.aab` as the artifact `play-upload-bundle`, which `play-upload` puts on Play's internal track (`scripts/android-release/play-upload.ts`: Node's `crypto` and `fetch`, no dependency; seven requests; a `versionCode` Play already holds ends green, and a release older than what Play holds, as a bundle or on a track, is refused, red). Promotion past the internal track is the owner's. Nothing Android is attached to the release.
     The key is held to the committed fingerprint `apps/light/src-tauri/release-signer.sha256`: no file, no bundle; another key, a debug certificate or an archive that is not a bundle is refused.
-  - `relay-deploy`, then `share-deploy`, run `wrangler d1 migrations apply mtg-grimoire-relay --remote` and `wrangler deploy` from their Worker's folder (`infrastructure/relay`, `infrastructure/share-worker`), then a probe of the live address (`scripts/relay-deploy-probe.mjs`, `scripts/share-deploy-probe.mjs`). `share-deploy` uploads the viewer `share` built. Migrations are numbered files in each Worker's `migrations/`; `schema.sql` is the frozen baseline (`scripts/d1-migrations.test.mjs`).
-  - `scan-deploy` (the scan inbox, `infrastructure/scan-worker`) needs `release-please` and `share-deploy`: the same token, no database so no migration, `wrangler deploy` from its folder, then `scripts/scan-deploy-probe.mjs` — seven requests, none of which reaches the bucket. It goes ahead of `web-deploy` because the page's policy names its host and its Send waits on its CORS answer. Its bucket (`mtg-grimoire-scans`) is the owner's to have created.
+  - `relay-deploy`, then `share-deploy`, run `wrangler d1 migrations apply mtg-grimoire-relay --remote` and `wrangler deploy` from their Worker's folder (`infrastructure/relay`, `infrastructure/share-worker`), then a probe of the live address (`scripts/relay-deploy-probe.ts`, `scripts/share-deploy-probe.ts`). `share-deploy` uploads the viewer `share` built. Migrations are numbered files in each Worker's `migrations/`; `schema.sql` is the frozen baseline (`scripts/d1-migrations.test.ts`).
+  - `scan-deploy` (the scan inbox, `infrastructure/scan-worker`) needs `release-please` and `share-deploy`: the same token, no database so no migration, `wrangler deploy` from its folder, then `scripts/scan-deploy-probe.ts` — seven requests, none of which reaches the bucket. It goes ahead of `web-deploy` because the page's policy names its host and its Send waits on its CORS answer. Its bucket (`mtg-grimoire-scans`) is the owner's to have created.
   - `web-deploy` installs `wrangler` from `infrastructure/wrangler/package-lock.json` (`npm ci --ignore-scripts` in that folder, no secret in that step), runs `node ../wrangler/node_modules/wrangler/bin/wrangler.js deploy` from `infrastructure/app-worker` (a path, so nothing is resolved; the Worker's `wrangler.jsonc` `alias` stands in for the workspace link to `@grimoire/ui`),
-    then `scripts/web-deploy-probe.mjs` against the origin (the document, its policy, and the card scanner's manifest). It needs `build`, `android-sign`, `web`, `share-deploy` and `scan-deploy` — the last of four deploys, each live at once — and refuses a tag older than the newest published release.
+    then `scripts/web-deploy-probe.ts` against the origin (the document, its policy, and the card scanner's manifest). It needs `build`, `android-sign`, `web`, `share-deploy` and `scan-deploy` — the last of four deploys, each live at once — and refuses a tag older than the newest published release.
   - `play-upload` (`android (upload to Play)` on the run page) needs `release-please`, `android-sign` and `web-deploy`: the last thing before `publish`, behind all four deploys, because Play takes a `versionCode` once. No account, or no bundle signed → nothing uploaded, said in the summary, green.
   - `publish` needs `build`, `android-sign`, `relay-deploy`, `share-deploy`, `scan-deploy`, `web-deploy` and `play-upload`; any failure leaves the release a draft. A failure in `play-upload` leaves all four Workers deployed.
 - **Secrets live in jobs that build nothing, and in the `release` environment**: `android-sign`, `relay-deploy`, `share-deploy`, `scan-deploy`, `web-deploy` and `play-upload` run no pnpm (no `pnpm/action-setup`, no install), no cargo and no Gradle (the deploy tool is `infrastructure/wrangler`, npm's), restore no cache (each deploy job's and `play-upload`'s Node step says `package-manager-cache: false`; the fence refuses the word `cache` anywhere else in them), and are the only jobs with `environment: release`
@@ -97,14 +97,14 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
   `play-upload` asks for `PLAY_SERVICE_ACCOUNT_JSON` and also needs `android-sign` to have signed a bundle (its `signed` output): either missing → upload nothing, say which, end green. The key reaches one step, the script's, which the fence holds whole, line for line, and is stored as single-line JSON.
 - **Four jobs deploy four Workers**, in order: `relay-deploy`, `share-deploy`, `scan-deploy`, `web-deploy`. Six `wrangler` lines in all workflows — two `d1 migrations apply --remote`, four `deploy` — and the fence lists them. Merging the release PR is therefore a deploy of everything — once `CLOUDFLARE_INFRA_API_TOKEN` is set in the `release` environment; until then the first three end green having deployed nothing, and `web-deploy` deploys alone.
 - **Release notes are written between releases, from pull requests** (2026-10-11): two jobs run on a push that cut **no** release (`release_created != 'true'`), and nothing `needs` them.
-  - `changelog-write` (`environment: changelog`, `OPENROUTER_API_KEY`) installs nothing and runs `node scripts/changelog/cli.mjs next`: every pull request since the last tag, one request to Claude Haiku 5.5 through OpenRouter, the answer checked and rendered by code. No key, no release branch, or the released version still on it → nothing written, green.
+  - `changelog-write` (`environment: changelog`, `OPENROUTER_API_KEY`) installs nothing and runs `node scripts/changelog/cli.ts next`: every pull request since the last tag, one request to Claude Haiku 5.5 through OpenRouter, the answer checked and rendered by code. No key, no release branch, or the released version still on it → nothing written, green.
   - `changelog-commit` (`contents: write`, no key, no checkout) puts the file on the release branch as `changelog/<version>.md` through the contents API. The file is written again whenever `main` moves.
   - `publish` sets the release body from `changelog/<version>.md` at the run's commit before it flips the draft. A missing file keeps release-please's notes and still publishes. **No model is called on a release.**
-  - A lasting correction goes in the pull request's description. A published note is corrected in its file, then `node scripts/changelog/cli.mjs push <version>`. `CHANGELOG.md` stays release-please's raw log.
+  - A lasting correction goes in the pull request's description. A published note is corrected in its file, then `node scripts/changelog/cli.ts push <version>`. `CHANGELOG.md` stays release-please's raw log.
 - **The release is announced on Discord once it is published** (2026-10-11): `announce` needs `release-please` and `publish`, and nothing needs it — a failure turns a run red whose release is already out, and a re-run posts again.
-  - `environment: discord`, `DISCORD_WEBHOOK_URL`, `contents: read`; installs nothing. One step reads the published body (`gh release view`, the run's token, never the webhook); the next, the only one the webhook reaches, runs `node scripts/changelog/discord.mjs notes.md`. No webhook → nothing posted, said in the summary, green.
+  - `environment: discord`, `DISCORD_WEBHOOK_URL`, `contents: read`; installs nothing. One step reads the published body (`gh release view`, the run's token, never the webhook); the next, the only one the webhook reaches, runs `node scripts/changelog/discord.ts notes.md`. No webhook → nothing posted, said in the summary, green.
   - The script posts a header (version, release address) and the notes, cut to Discord's 2000 characters a message — between paragraphs, then lines, then words, a heading kept with its list — in order, each awaited (`?wait=true`), a 429 waited out. `allowed_mentions` parses nothing and `SUPPRESS_EMBEDS` is set; it refuses a webhook that is not Discord's.
-- **Fence**: `scripts/release-rule.test.mjs` holds the job graph, the trigger, every spelling of `secrets` and which job may read which, every line a secret-holding job runs (`RUNS`: each `run:`, to the letter, and `shell: bash`),
+- **Fence**: `scripts/release-rule.test.ts` holds the job graph, the trigger, every spelling of `secrets` and which job may read which, every line a secret-holding job runs (`RUNS`: each `run:`, to the letter, and `shell: bash`),
   the environment, the six `wrangler` lines and their lockfile, one version across every manifest and `release-please-config.json`, and an Android `versionCode` that rises with the version.
   A line added to or changed in any `run:` of the seven secret-holding release jobs (`announce` with them) or of `changelog-write` — a summary's wording included — is made in `RUNS` in the same commit.
 - **Between releases**: `pnpm web:deploy-guard` refuses a by-hand web deploy from a tree whose `USER_SCHEMA_VERSION` differs from the last tag's, or whose last release is still a draft.
@@ -113,7 +113,7 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
   - Versions are automated via Conventional Commits; never bump versions manually.
   - `release-please-config.json` tracks `package.json`, `Cargo.lock` (`@.name.value`, one selector per workspace member), the root `Cargo.toml`'s `[workspace.package]` version (the members inherit it), and the two Tauri hosts' `tauri.conf.json` files.
   - The `Cargo.lock` selector must read `@.name.value`, never `@.name`, to prevent silent non-matches in release-please.
-  - Host tests (`the_core_wears_the_apps_version`, `the_host_wears_the_cores_version`) and `scripts/release-rule.test.mjs` (all five crates, both `tauri.conf.json`s) verify version alignment.
+  - Host tests (`the_core_wears_the_apps_version`, `the_host_wears_the_cores_version`) and `scripts/release-rule.test.ts` (all five crates, both `tauri.conf.json`s) verify version alignment.
   - With `bump-minor-pre-major` enabled, breaking changes on `0.x` bump the minor version; releasing 1.0.0 requires a `Release-As: 1.0.0` commit footer.
 - **Assets & artifacts**:
   - Each build leg downloads the scanner hash bundle via `pnpm scanner:assets` (published by `scanner-bundle.yml`).

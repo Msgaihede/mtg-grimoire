@@ -29,7 +29,7 @@
 //! thread, and `#[tokio::test]` is how an async test runs at all — none of which a browser will
 //! ever be asked to do. So that sweep stops at a file's first column-0 `#[cfg(test)]` **that
 //! gates a module** — `mod tests {`, `mod tests;`, a `fixtures` module above one — which is
-//! the cut `scripts/coverage-rust.mjs` makes, and skips a file its parent declares behind a
+//! the cut `scripts/coverage-rust.ts` makes, and skips a file its parent declares behind a
 //! test gate. It reads `src/` and nothing else: an integration test under `tests/` is a test.
 //!
 //! **The cut has to be a module's gate and not the first gate in the file**: four files here
@@ -57,7 +57,7 @@
 //! only reason it can spell the things it looks for.
 //!
 //! **Everything below is one `#[cfg(test)]` module, at column 0**, rather than the file being
-//! gated where `platform/mod.rs` declares it: `scripts/coverage-rust.mjs` splits each file at
+//! gated where `platform/mod.rs` declares it: `scripts/coverage-rust.ts` splits each file at
 //! that attribute to keep test code out of the shipped-code figure, and gated from outside this
 //! whole file would have counted as shipped.
 

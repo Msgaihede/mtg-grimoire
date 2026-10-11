@@ -50,10 +50,10 @@ draws it; and every release from 0.2.0 to 0.43.0 has a file and a release body i
   `pull_request` run in `action_required`. A second bot commit on that branch is the same event.
 - **Nothing in CI can push to `main`.** `ci-ok` is required there and the workflow token is not
   an administrator's. A generated file reaches `main` by riding the release PR.
-- **`release.yml` is fenced.** `scripts/release-rule.test.mjs` holds the seven jobs and their
+- **`release.yml` is fenced.** `scripts/release-rule.test.ts` holds the seven jobs and their
   `needs`, one `if:` for every job after `release-please`, which job may read which secret, the
   two jobs that name an environment, and every line a secret-holding job runs.
-  `scripts/workflow-scripts.test.mjs` refuses any `npm` line but the deploy tool's.
+  `scripts/workflow-scripts.test.ts` refuses any `npm` line but the deploy tool's.
 - **Release PR 877 (0.44.0) is open.** It is the first release this design writes notes for.
 - **Two releases are drafts and stay drafts**: v0.5.0 and v0.34.0. `in-app-updates.md` records
   why v0.34.0 must never be published.
@@ -111,12 +111,12 @@ backfill. Five modules and a command line:
 
 | File | Does |
 | --- | --- |
-| `collect.mjs` | Turns a commit range into the list of entries the model reads. |
-| `prompt.mjs` | Builds the instructions and the input from those entries. |
-| `openrouter.mjs` | One request, with a timeout and retries. |
-| `notes.mjs` | The JSON schema, the checks, and the markdown renderer. |
-| `generate.mjs` | Asks, checks, and asks once more on a failed check (added while planning). |
-| `cli.mjs` | `next`, `tag`, `backfill`, `push` — §6 and §8. |
+| `collect.ts` | Turns a commit range into the list of entries the model reads. |
+| `prompt.ts` | Builds the instructions and the input from those entries. |
+| `openrouter.ts` | One request, with a timeout and retries. |
+| `notes.ts` | The JSON schema, the checks, and the markdown renderer. |
+| `generate.ts` | Asks, checks, and asks once more on a failed check (added while planning). |
+| `cli.ts` | `next`, `tag`, `backfill`, `push` — §6 and §8. |
 
 `git`, the GitHub API and OpenRouter are passed in as functions, so each module is tested with
 fakes and no test reaches the network.
@@ -204,7 +204,7 @@ release-please ─┬─ (on a release)  build, android, android-sign, web, web-
 - `environment: changelog`, `contents: read` and `pull-requests: read`, a ten-minute deadline
 - Reads two secrets: `OPENROUTER_API_KEY` and `GITHUB_TOKEN`.
 - **Installs nothing.** A checkout with full history, Node from `.nvmrc`, and
-  `node scripts/changelog/cli.mjs next`. No pnpm, no cache.
+  `node scripts/changelog/cli.ts next`. No pnpm, no cache.
 - `next` reads the released version from `main`'s `.release-please-manifest.json` and the coming
   one from the release branch's copy. **With no release branch, or the same version on both, it
   does nothing and ends green.**
@@ -257,12 +257,12 @@ No model is called on a release. The text published is the text that was merged.
 
 Two steps, the second only on the owner's word.
 
-1. **Files.** `node scripts/changelog/cli.mjs backfill` runs the generator over every `v*` tag
+1. **Files.** `node scripts/changelog/cli.ts backfill` runs the generator over every `v*` tag
    that has no file yet, oldest first, and writes `changelog/<version>.md` — 48 files, 0.2.0 to
-   0.43.0, both drafts included. It can be stopped and started again. `cli.mjs tag v0.41.0
+   0.43.0, both drafts included. It can be stopped and started again. `cli.ts tag v0.41.0
    --force` writes one again. The files land in this feature's pull request. The whole run is
    expected to cost well under one dollar.
-2. **Release bodies.** `node scripts/changelog/cli.mjs push <version>…` sets a published
+2. **Release bodies.** `node scripts/changelog/cli.ts push <version>…` sets a published
    release's body from its file. For the backfill it is run over the 46 published releases;
    v0.5.0 and v0.34.0 are refused because they are drafts. Each release's current body is saved
    to a local folder first, and is in `CHANGELOG.md` besides.
@@ -272,11 +272,11 @@ push that version.
 
 ## 9. Fences and tests
 
-- **`scripts/changelog/*.test.mjs`** — the two subject forms and what is not one; a number that
+- **`scripts/changelog/*.test.ts`** — the two subject forms and what is not one; a number that
   is an issue; a release PR skipped; the cut at 6,000 characters; each of the four checks, with
   an answer that breaks it; the retry; the rendering of every section, of an empty section and
   of a maintenance release.
-- **`scripts/release-rule.test.mjs`** — nine jobs. The seven keep `ON_A_RELEASE`; the two new
+- **`scripts/release-rule.test.ts`** — nine jobs. The seven keep `ON_A_RELEASE`; the two new
   ones carry the opposite condition, to the letter; nothing needs them. `MAY_READ` gains
   `changelog-write` (`OPENROUTER_API_KEY`, `GITHUB_TOKEN`) and `changelog-commit`
   (`GITHUB_TOKEN`). Three jobs name an environment, and `changelog-write` names `changelog`.

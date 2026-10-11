@@ -4475,7 +4475,7 @@ of the two ways it happens:
 taken, a runtime built on a blocking thread, and an `async fn` holding `conn` through every
 request it made. Thirty-one functions in `client.rs`, `entitlement.rs` and `pairing.rs` held a
 connection across an `.await`, fifty-six awaits between them
-(`node scripts/core-step-6-census.mjs .`; it reads none now, and a vitest test holds it there).
+(`node scripts/core-step-6-census.ts .`; it reads none now, and a vitest test holds it there).
 [The spike](../superpowers/research/2026-10-02-light-app-step-6-sync-trip-spike.md) is the full
 record and [the plan](../superpowers/plans/2026-10-02-light-app-core-step-6-sync.md) the step;
 this is what is true of the code.
@@ -4615,7 +4615,7 @@ the real relay.**
 ### Moved to the core
 
 **The same day, the code above left `src-tauri`** (the light app's step 6, second part, by
-`scripts/core-step-6b.mjs`): `sync_engine::{client, entitlement, wire, schedule, commands}` and
+`scripts/core-step-6b.ts`): `sync_engine::{client, entitlement, wire, schedule, commands}` and
 `sync_pair::{identity, pairing}` are files under `crates/grimoire-core/src/`, re-exported in
 `src-tauri` at the paths they always had. What stayed that day is `sync_engine::live` — the
 socket, its timers and the two events it emits through a window ("The connection manager, too",
@@ -5087,7 +5087,7 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   rather than from an argument, so this specific trap can no longer be reproduced by calling a
   command directly. The lesson survives it: a malformed blob anywhere in this ceremony reports at
   the *next* step rather than at the one that produced it.
-- **`cdp.mjs eval` right after launch can find the page mid-load**, where
+- **`cdp.ts eval` right after launch can find the page mid-load**, where
   `window.__TAURI_INTERNALS__` is still `undefined`. That reads as the bridge being broken; it is
   a race, and `document.readyState` tells them apart.
 

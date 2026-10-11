@@ -1137,7 +1137,7 @@ The fake's only two-language card is Lightning Bolt's Japanese `sta 105`, releas
 outside the longest window the command answers (365 days from `CLOCK_BASE`, 2026-08-09) — so
 `langs: []` and `langs: ["en"]` return identical rows and an `EveryLanguage` story could not fail.
 The rule is proven in `packages/fake/db.test.ts` and in the widget's own suite instead. The fix is
-a `scripts/gen-storybook-cards.mjs` selection change, deliberately not made mid-branch: that corpus
+a `scripts/gen-storybook-cards.ts` selection change, deliberately not made mid-branch: that corpus
 is generated wholesale and adding rows moves counts across `db.test.ts` and other files' plays.
 The same corpus yields at most **two** rows — one at 90 days, two at 365 — which is why the story
 set is `Default`, `Band`, `Tall`, `NoDecks`, `NothingReprinted` and `Chosen` rather than the

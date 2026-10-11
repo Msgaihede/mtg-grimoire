@@ -1438,7 +1438,7 @@ npm run tauri dev
 4. The pane's button reading `Set as foil` in the editor and `View as foil` in Search.
 5. Ctrl+Z after a finish change putting the row back **foil**.
 
-Use `scripts/cdp.mjs` through **PowerShell** (Bash refuses `cdp.mjs eval` in a worktree as
+Use `scripts/cdp.ts` through **PowerShell** (Bash refuses `cdp.ts eval` in a worktree as
 unverifiable), avoid nested quotes and `$`, wrap every binding in an IIFE (the eval scope is
 shared, so a top-level `const` collides with the next command), and **split click-then-read into
 two evals** — one eval answers about the frame before React re-rendered, so a working control reads

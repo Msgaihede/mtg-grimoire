@@ -17,7 +17,7 @@
 //! For each of *no readers* and — when the models are there — *readers*, it loads a session
 //! once and feeds the first `--frames` frames `--runs` times in Fast and in Exact, resetting
 //! between runs. **What it prints is one JSON object of per-frame records and no summary**:
-//! `node scripts/scanner-bench.mjs --summarise <file>` reduces it with the same script the
+//! `node scripts/scanner-bench.ts --summarise <file>` reduces it with the same script the
 //! browser page uses, so the two are summarised by one piece of code.
 //!
 //! **Files by path, plain stdout, no network, no argument parser** — so the same source is what

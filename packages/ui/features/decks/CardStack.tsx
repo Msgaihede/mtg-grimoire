@@ -317,7 +317,7 @@ export const STACK_CLOSE_DELAY_MS = 180;
  * The lift used to be CSS `:hover`, which nothing outside a real browser can observe and
  * which `userEvent.hover` does not engage — so no test and no story could say which card was
  * up. It is state now, and this is the one honest question to ask about it: from a test, and
- * from `scripts/cdp.mjs --probe` in the shipped window, where the alternative is reading a
+ * from `scripts/cdp.ts --probe` in the shipped window, where the alternative is reading a
  * margin mid-tween. `DECK_CARD_ATTR` and `DECK_GROUP_ATTR` are the same idea one floor down.
  */
 export const STACK_OPEN_ATTR = "data-stack-open";

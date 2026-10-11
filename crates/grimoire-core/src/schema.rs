@@ -23935,7 +23935,7 @@ pub(crate) mod tests {
 /// the domain step** — the launch, the token conversion, the bracket fence. The eight still there
 /// drive `split`, which only the desktop has, or the tag search, which the I/O step moves.
 ///
-/// **At the foot of the file on purpose.** `scripts/coverage-rust.mjs` counts everything from
+/// **At the foot of the file on purpose.** `scripts/coverage-rust.ts` counts everything from
 /// the first column-0 `#[cfg(test)]` down as test code, and this is test code.
 #[cfg(any(test, feature = "testing"))]
 pub mod fixtures {

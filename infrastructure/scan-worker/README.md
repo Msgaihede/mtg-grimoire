@@ -262,7 +262,7 @@ holds the name to the engine's line.
 and stores nothing; from the repository's root:
 
 ```
-node scripts/scan-deploy-probe.mjs
+node scripts/scan-deploy-probe.ts
 ```
 
 Its seven requests, and what a deployed Worker answers:
@@ -277,7 +277,7 @@ Its seven requests, and what a deployed Worker answers:
 | `OPTIONS /scan` from another origin | `405`, with no origin allowed |
 | `GET /runs/x.bin` | `404`, `not found` — nothing is served back |
 
-`scripts/scan-deploy-probe.test.mjs` asks the same seven of this tree's code, over a bucket that
+`scripts/scan-deploy-probe.test.ts` asks the same seven of this tree's code, over a bucket that
 throws if it is touched. **None of them stores anything**, so none shows that the bucket's
 binding takes a write: send one real scan from the app and read it back out of the bucket
 (*Reading the inbox*, above).

@@ -423,7 +423,7 @@ cd src-tauri && cargo fmt --all --check && cargo clippy --all-targets -- -D warn
 
 - [ ] **Step 4: Drive the real window**
 
-`npm run tauri dev`, take the app lock per the `running-the-app` skill, and confirm: the Settings page has no deck-driven row and no gap where it was; the Collection page's Actions column shows its delete button; `Add to → Collection` is not greyed; the collection import destination is offered. Per `live-ui-verification.md` — and note `cdp.mjs click` is a no-op on a cold pointer, so `hover --rest 200` first.
+`npm run tauri dev`, take the app lock per the `running-the-app` skill, and confirm: the Settings page has no deck-driven row and no gap where it was; the Collection page's Actions column shows its delete button; `Add to → Collection` is not greyed; the collection import destination is offered. Per `live-ui-verification.md` — and note `cdp.ts click` is a no-op on a cold pointer, so `hover --rest 200` first.
 
 - [ ] **Step 5: Ship**
 

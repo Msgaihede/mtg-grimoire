@@ -54,9 +54,9 @@
 
 ### Task 2: the move, by script
 
-**Files:** `scripts/core-step-7.mjs`; `src-tauri/src/scanner.rs` → `crates/grimoire-core/src/scanner.rs` + `src-tauri/src/scanner/mod.rs`; by hand: `crates/grimoire-core/src/{lib,state}.rs`, both manifests, `src-tauri/src/desktop.rs`, `scripts/ci-route{,.test}.mjs`, `src/lib/ipc.test.ts`
+**Files:** `scripts/core-step-7.ts`; `src-tauri/src/scanner.rs` → `crates/grimoire-core/src/scanner.rs` + `src-tauri/src/scanner/mod.rs`; by hand: `crates/grimoire-core/src/{lib,state}.rs`, both manifests, `src-tauri/src/desktop.rs`, `scripts/ci-route{,.test}.ts`, `src/lib/ipc.test.ts`
 
-- [x] Split by item and by test (`rs-items.mjs`'s `split` and `inner`): 41 items and 34 tests to the core; the headers, the raw-body parsing, the embedded assets, 12 commands and 8 tests stay.
+- [x] Split by item and by test (`rs-items.ts`'s `split` and `inner`): 41 items and 34 tests to the core; the headers, the raw-body parsing, the embedded assets, 12 commands and 8 tests stay.
 - [x] Rewritten as it moves: `Instant` → `Tick`; `std::fs` and `.is_file()` → `platform::files`; the capture's clock → `platform::clock::now_secs`; `TitleReader::load` → `files::read` + `TitleReader::from_bytes` (`read_models`, its sentences kept); `Embedded::compiled()` → `ScannerState::carry`, said once by the host.
 - [x] `State.scanner`, built empty by `State::new`; `desktop::start` calls `state.scanner.carry(scanner::compiled())` above `app.manage` and manages no scanner state; the commands reach `state.scanner`.
 - [x] `card-scanner` in the core's `[dependencies]`; the CI router's `crates/*` arm runs `core` too.

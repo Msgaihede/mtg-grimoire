@@ -58,7 +58,7 @@ imported by that package's name.
   workspace conversion moved nothing. Each checkout's dev database is at
   `src-tauri/target/debug/data`.
 - **The deploy tool is isolated on purpose.** `app-worker/package.json` names `wrangler` and
-  nothing else, has its own `package-lock.json`, and `scripts/release-rule.test.mjs` pins the two
+  nothing else, has its own `package-lock.json`, and `scripts/release-rule.test.ts` pins the two
   lines the secret-holding `web-deploy` job runs: `npm ci --ignore-scripts` and
   `npx --no-install wrangler deploy`.
 - **The committed Android project runs `npm`.** `mobile/src-tauri/gen/android/…/BuildTask.kt` is
@@ -177,10 +177,10 @@ it.
 
 **Everything that names a path.**
 - `package.json` scripts keep their names and take new paths.
-- `scripts/ci-route.mjs` gets new arms in the same order of precedence, and
-  `scripts/ci-route.test.mjs`'s census is re-derived. The four workflows are re-pathed.
+- `scripts/ci-route.ts` gets new arms in the same order of precedence, and
+  `scripts/ci-route.test.ts`'s census is re-derived. The four workflows are re-pathed.
 - A script that something still calls — an npm script, a workflow, a test — is updated. The
-  one-shot `scripts/core-step-*.mjs` migration scripts that nothing calls are left as written.
+  one-shot `scripts/core-step-*.ts` migration scripts that nothing calls are left as written.
 - `eslint.config.js`, `.storybook/main.ts`, `.design-sync/`, `.gitignore`, `.vscode/`, `.mcp.json`.
 
 **Docs.** Living docs are updated: every `CLAUDE.md` (each moves with its area, and the root's
@@ -246,7 +246,7 @@ manifest, so the `wrangler`-only manifest and its `package-lock.json` move to
 `infrastructure/wrangler/`, which `pnpm-workspace.yaml` does not list. `web-deploy` still runs
 `npm ci --ignore-scripts` against that lockfile and then that install's `wrangler` from
 `infrastructure/app-worker`, and installs no pnpm. `ci.yml`'s `web` job installs the same way for
-the sync smoke. `scripts/release-rule.test.mjs` pins the new lines: still one deploy line, still a
+the sync smoke. `scripts/release-rule.test.ts` pins the new lines: still one deploy line, still a
 manifest naming `wrangler` alone.
 
 **pnpm everywhere else.** `packageManager` pins the version; `package-lock.json` gives way to
@@ -254,8 +254,8 @@ manifest naming `wrangler` alone.
 `pnpm/action-setup`, and `npm run <name>` becomes `pnpm <name>` with every root script name kept.
 `beforeDevCommand` and `beforeBuildCommand` in the Tauri configs, the Android project's
 `BuildTask.kt`, the `worktree-setup` skill and every command a living doc or an error message tells
-someone to run follow. `scripts/workflow-scripts.test.mjs`, `scripts/toolchain.test.mjs` and
-`scripts/actions-pinned.test.mjs` are taught the new spellings.
+someone to run follow. `scripts/workflow-scripts.test.ts`, `scripts/toolchain.test.ts` and
+`scripts/actions-pinned.test.ts` are taught the new spellings.
 
 **Amended during planning and execution (2026-10-08).** Seven things were measured and came out
 differently from the paragraphs above; the plan
@@ -265,7 +265,7 @@ differently from the paragraphs above; the plan
 - `@grimoire/light` does not depend on `@grimoire/app-worker`. Rule 4 is wider than written: a
   file Node loads itself — a Vite, Vitest or Storybook config, and everything under `scripts/` —
   imports by relative path. Vite bundles what a config reaches by path and leaves a package name
-  to Node, which could not run an `enum`; and `scripts/web-deploy-probe.mjs` runs in a job that
+  to Node, which could not run an `enum`; and `scripts/web-deploy-probe.ts` runs in a job that
   installs nothing.
 - The three Workers keep the `tsconfig.json` they had and do not extend `tsconfig.base.json`.
 - The hosting Worker's one import from the shared UI is also a wrangler `alias`: `web-deploy`
@@ -281,13 +281,13 @@ Found while the plan ran:
   lockfile changed by itself was not installed.
 - The session hook deletes a `node_modules` npm made before it installs. `pnpm install` over one
   exits 0 and leaves npm's hoisted packages in place, with pnpm's strictness silently off.
-- `scripts/workflow-scripts.test.mjs` refuses a pnpm call it cannot read (`pnpm --filter x run
+- `scripts/workflow-scripts.test.ts` refuses a pnpm call it cannot read (`pnpm --filter x run
   y`), a `--` anywhere on a pnpm line, and any npm, npx, pnpx or corepack line but the deploy
-  tool's install; `scripts/toolchain.test.mjs` holds pnpm's setup step directly above Node's.
+  tool's install; `scripts/toolchain.test.ts` holds pnpm's setup step directly above Node's.
 - The hosting Worker's test reads its `src/` at every depth, so a package-name import in a
   subfolder needs an alias too.
 
-And one rule the design did not state, held by `scripts/workspace.test.mjs`: a package declares
+And one rule the design did not state, held by `scripts/workspace.test.ts`: a package declares
 what its files import. pnpm's layout does not enforce it — Node finds a package the root declares
 from any folder beneath it.
 

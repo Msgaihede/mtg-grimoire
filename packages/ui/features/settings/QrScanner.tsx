@@ -41,7 +41,7 @@ import { PANEL_BUTTON, TOUCH_CODE_ROOM, TOUCH_FIELD } from "./controls";
  * takes today. That fallback's textarea → `onCode` wiring is what the story exercises; the frame
  * loop and the decode are the live pass's to prove.
  *
- * **That pass is a command since 2026-10-04**: `scripts/pairing-scan-smoke.mjs` runs the light
+ * **That pass is a command since 2026-10-04**: `scripts/pairing-scan-smoke.ts` runs the light
  * app in a headless Chromium whose camera is a file — a screenshot of the Sync panel's own QR
  * code at a phone's width — and watches this loop decode it and hand the text over, then the
  * refused-camera branch land on the box below. What no flag can stand in for is the *grant*: the

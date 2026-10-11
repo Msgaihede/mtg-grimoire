@@ -6,7 +6,7 @@
  * so over the fake a live camera never added a card. Nothing could drive the reader's half of the
  * Scanner without the real engine: not a story with a camera, not `mobile:dev`, not a smoke. This
  * is the script that replaced it — a believable session a frame at a time, so the page, its
- * stories and `scripts/phone-scanner-smoke.mjs` have cards landing in the tray.
+ * stories and `scripts/phone-scanner-smoke.ts` have cards landing in the tray.
  *
  * **One card is thirteen frames**: nothing in frame, the tracker weighing it, the frame that
  * decides (the one that moves `decision_seq`), and the card lying there decided until it is lifted.

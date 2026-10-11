@@ -398,10 +398,10 @@ Follow the `running-the-app` skill. **Only one app runs across every worktree an
 
 - [ ] **Step 2: Drive a real folder drag over CDP**
 
-Use `scripts/cdp.mjs` per [the contract](../../reference/live-ui-verification.md). Dispatch `pointerdown` on a folder card, several `pointermove`s toward a sibling, and a `pointerup`.
+Use `scripts/cdp.ts` per [the contract](../../reference/live-ui-verification.md). Dispatch `pointerdown` on a folder card, several `pointermove`s toward a sibling, and a `pointerup`.
 
 Two traps that have each cost a session here:
-- **`cdp.mjs click` needs a `hover --rest 200` first** — a cold pointer makes the next action a no-op that still prints success.
+- **`cdp.ts click` needs a `hover --rest 200` first** — a cold pointer makes the next action a no-op that still prints success.
 - **Clicking and reading in one `eval` answers about the frame before React re-rendered.** Split the drop and the assertion into two separate `eval` calls.
 
 - [ ] **Step 3: Assert the write reached the backend**

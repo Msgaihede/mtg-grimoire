@@ -1608,7 +1608,7 @@ Storybook runs in a browser and the suite runs in jsdom. **Neither ships.** Ever
 - Modify: `docs/reference/decks-storage.md` and `src/features/decks/CLAUDE.md` (fill in the measured lines Task 13 left open)
 
 **Two worktree-specific facts, learned the hard way on this repo:**
-- **Drive `scripts/cdp.mjs` from PowerShell, not Bash** — the Bash tool refuses its `eval` calls as unverifiable in a worktree-isolated session. Avoid nested quotes and `$` in the expression you pass.
+- **Drive `scripts/cdp.ts` from PowerShell, not Bash** — the Bash tool refuses its `eval` calls as unverifiable in a worktree-isolated session. Avoid nested quotes and `$` in the expression you pass.
 - A CDP recorder dies with the window it is attached to and says nothing about it. Re-attach after any relaunch and check the line count at the end.
 
 - [ ] **Step 1: Launch the real app with CDP**
@@ -1623,13 +1623,13 @@ npm run tauri dev
 - [ ] **Step 2: Attach the console recorder before anything else**
 
 ```bash
-node scripts/cdp.mjs console out.jsonl
+node scripts/cdp.ts console out.jsonl
 ```
 It dies with the window it is attached to and says nothing about it. Re-attach after any relaunch and check the line count at the end.
 
 - [ ] **Step 3: Walk the gallery path**
 
-Using `scripts/cdp.mjs`: `click` the **Import deck** button, `eval` the reference list into the textarea (dispatch a real `input` event so React sees it), preview, and read back:
+Using `scripts/cdp.ts`: `click` the **Import deck** button, `eval` the reference list into the textarea (dispatch a real `input` event so React sees it), preview, and read back:
 
 - the tally and its category names;
 - that the commander step **asks** (the reference list has dozens of eligible cards);

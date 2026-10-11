@@ -53,7 +53,7 @@ are all things no suite could have seen.
   in front of the stack while the stack caught up around it. This is the shape of live check a
   paint-order bug needs: jsdom lays nothing out and paints nothing, so the whole suite was green
   on it, and a class assertion is all a test can ever hold.
-- **Do not aim `hover` at the card's `<li>` — aim at its marks strip.** `cdp.mjs hover` targets
+- **Do not aim `hover` at the card's `<li>` — aim at its marks strip.** `cdp.ts hover` targets
   an element's box **centre**, and a card is 319px tall in a stack that advances 34px, so the
   centre of card 2 is painted over by card 7. The strip to aim at is the marks strip — since the
   2026-08-13 redesign an `absolute top-0 left-0 right-[5px]` span, **27px** tall inside the 34px
@@ -61,7 +61,7 @@ are all things no suite could have seen.
   `span:first-child` note, two rewrites later, and it gets worse as the card gets taller — which
   it just did.
 - **`data-stack-open` exists so a probe can _count_ open cards.** The CSS lift was observable
-  from neither a test nor `cdp.mjs` — `userEvent.hover` never engaged `:hover`, and nothing in
+  from neither a test nor `cdp.ts` — `userEvent.hover` never engaged `:hover`, and nothing in
   the DOM said which card was up. Count activations, never whether one happened.
 - **`element.focus()` over CDP opens nothing, and it is not a bug in the component.** The window
   is in the background while it is being driven, so `document.hasFocus()` is **false** and
@@ -70,11 +70,11 @@ are all things no suite could have seen.
   while the button's `aria-label` read back correctly from the same eval, which is exactly how
   this looks like a broken keyboard path. Drive the **pointer** instead —
   `li.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }))` then wait past the 70ms
-  dwell — or `cdp.mjs hover --probe`, which is what the numbers above were taken with. Testing
+  dwell — or `cdp.ts hover --probe`, which is what the numbers above were taken with. Testing
   the caret path live needs the window actually focused.
 - **To read a 210px card at a legible size, clone the pile rather than zoom the page.**
   `document.documentElement.style.zoom` reflows the editor and carries the stack out of the
-  viewport; `cdp.mjs size` is fixed at `deviceScaleFactor: 1` and cannot magnify. What works is
+  viewport; `cdp.ts size` is fixed at `deviceScaleFactor: 1` and cannot magnify. What works is
   cloning the pile into a `position: fixed` element with its own `zoom` — inline styles and
   `data-*` attributes come with the clone, so an open card stays open in it. Remove it before
   any further probe: it is a second copy of every `[data-deck-stack]` and `[data-stack-open]`
@@ -337,7 +337,7 @@ thin` was measured as an alternative and is not one: **10px instead of 15**, des
   **207**, one pixel short. At 192 the panel draws at its full **384px** there; at 1024 with the
   pane docked the desk is **346** and the panel is correctly still a rail (`aria-disabled`).
 - **The remove tray did not move, which is the reason the band sits below the price strip.**
-  Probed mid-drag with `cdp.mjs drag --cancel --probe`: the tray spans **647 → 676**, and 647 is
+  Probed mid-drag with `cdp.ts drag --cancel --probe`: the tray spans **647 → 676**, and 647 is
   the desk row's own bottom to the pixel, with the band beginning at **688**. A band between the
   two would have put four charts between a card in the air and the one drop that takes it out of
   the deck.
@@ -561,7 +561,7 @@ in a render is the whole window going blank, and jsdom never assembled the state
 
 - **Reproduced in three presses.** Alternating the two tabs at **40 ms** intervals killed the tree
   on the fourth click; the same loop at **120 ms** survived 16 presses, and hand-paced clicks
-  through `cdp.mjs` (~500 ms apart) survived 12. `document.getElementById('root').childElementCount`
+  through `cdp.ts` (~500 ms apart) survived 12. `document.getElementById('root').childElementCount`
   is the cheap tell — **0** where a living app reads 1.
 - **The console named it exactly**: `Uncaught Error: Too many re-renders. React limits the number
   of renders to prevent an infinite loop.`, followed by React's own
@@ -699,7 +699,7 @@ the desk row therefore does not move.
 
 Driven in the shipped window (`pnpm tauri dev`, a **debug** build, against the real synced
 corpus copied out of the main checkout — 116k cards, real prices, real decks). CDP over
-`scripts/cdp.mjs`. Two defects found, neither of which any test in the repo could have caught,
+`scripts/cdp.ts`. Two defects found, neither of which any test in the repo could have caught,
 and both fixed in the same pass.
 
 ### What it confirmed
@@ -760,7 +760,7 @@ short for a good reason; the renderer is where the cost lands.
 ## The quick zones become the ribbon — 2026-08-18, `pnpm tauri dev` (debug), 1280×800
 
 Driven in the shipped window against the real synced corpus copied out of the main checkout, on a
-14-card Commander deck. Every figure below is a `cdp.mjs drag … --probe` reading taken **while a
+14-card Commander deck. Every figure below is a `cdp.ts drag … --probe` reading taken **while a
 card was in the air**, which is the only state this bar exists in.
 
 The reader's report was that the bar does not look like it replaces the row it lands on. It does
@@ -820,7 +820,7 @@ the wrapping half at the same 1280 width; a larger desk is now in the one-line h
   frames answer different questions and neither says which. `innerWidth` belongs in the same
   `--probe` as every rect, and `IsZoomed` on the window handle is the cheap tell afterwards.
 - **A bar that only exists during a drag can still be photographed.** `--probe` cannot take a
-  screenshot, and the drag ends when the `cdp.mjs` process exits. Cloning the bar inside the probe
+  screenshot, and the drag ends when the `cdp.ts` process exits. Cloning the bar inside the probe
   — `cloneNode(true)` positioned `fixed` at the rect it was measured at — leaves real pixels of
   the real element in the page for a `shot` afterwards, and setting the clone's own
   `style.height`/`gap`/`padding` back to the old values photographs before and after from one
@@ -1051,7 +1051,7 @@ shared menu directly, so neither one ever sees the seam between them.
 ### The harness trap this cost twenty minutes to
 
 **A stacked deck card cannot be clicked at its centre.** `CardStack` overlaps every card by 285px,
-so a collapsed one's only hittable part is its 34px reveal strip — and `cdp.mjs click <css>` aims
+so a collapsed one's only hittable part is its 34px reveal strip — and `cdp.ts click <css>` aims
 at rect centres. A Ctrl-click aimed at one card marked a *third* one, twice, and read exactly like
 the chord not reaching the app. Switching the toolbar's view select to `grid` answered it in one
 command. Hovering first makes it worse rather than better: the dwell fans a card open and reflows
@@ -1072,7 +1072,7 @@ exercised instead, through the Wishlist entry, because navigating away from a de
 
 **The count chip at reduced motion, and its position against the pointer.** The chip was caught
 with a `MutationObserver` on `document.body` — the container `setCustomNativeDragPreview` appends
-for one frame is removed by its own monitor on `dragstart`, so `cdp.mjs drag --probe`, which fires
+for one frame is removed by its own monitor on `dragstart`, so `cdp.ts drag --probe`, which fires
 between `dragOver` and `drop`, is too late to see it. What was read is the text and the colour;
 the 12px offset is unmeasured.
 
@@ -1185,7 +1185,7 @@ and it clears itself. Left as it is, deliberately.
   would have killed their server: re-`adopt` the lock onto your own dispatcher pid first, then
   release. The `app` lock's `FREE`-is-not-empty rule applies to this one too.
 - **`querySelector` cannot carry a quoted attribute value through the PowerShell hop** into
-  `cdp.mjs eval` — `section[aria-label^="Deck editor"]` arrives as
+  `cdp.ts eval` — `section[aria-label^="Deck editor"]` arrives as
   `section[aria-label^= Deck editor]` and throws. Filter a `querySelectorAll` in JS instead, then
   stamp the element and address it by a bare attribute.
 
@@ -1303,7 +1303,7 @@ documented in [decks-storage.md](decks-storage.md).
 
 ### The console
 
-A `cdp.mjs console` recorder was attached across a Collection → Decks → Search → Decks round
+A `cdp.ts console` recorder was attached across a Collection → Decks → Search → Decks round
 trip: **22 lines, no errors**. Every one of them is pragmatic-dnd's `Auto scrolling has been
 attached to an element that appears not to be scrollable`, which the deck's droppable columns
 emit on every editor mount and which predates this change — a park restore is an editor mount, so
@@ -1316,7 +1316,7 @@ drop cannot be started from a synthetic event — Chromium refuses — so every
 `@atlaskit/pragmatic-drag-and-drop` drop in this app has been undrivable over CDP, and the live
 passes could only ever confirm that the right elements *were* draggable. The folder tree moved to
 `@dnd-kit/dom` in this branch, dnd-kit is pointer-based, and `Input.dispatchMouseEvent` produces
-pointer events the renderer trusts. `scripts/cdp.mjs pull <css> <dx> <dy>` is the command: a real
+pointer events the renderer trusts. `scripts/cdp.ts pull <css> <dx> <dy>` is the command: a real
 `mousePressed` → several `mouseMoved` with the button held → `mouseReleased`, which is exactly the
 gesture the sensor is watching for.
 
@@ -1412,7 +1412,7 @@ is removed.
   not have this problem. (That list is `WATCH_IGNORED` in `vite.watch.ts` since 2026-10-08, shared by
   every Vite program through `vite.base.ts`; the dev server's root is `apps/desktop`, so the module
   to re-`fetch` is at `/@fs/<absolute path of the checkout>/packages/ui/lib/folderDrag.ts`.)
-- **`cdp.mjs type` takes no selector.** It joins *all* its arguments into the text, so
+- **`cdp.ts type` takes no selector.** It joins *all* its arguments into the text, so
   `type "Zeta drag A" "input[aria-label='New folder name']"` created a folder called
   `Zeta drag A input[aria-label='New folder name']`. Focus the field first — `press` does take a
   selector — and give `type` the text alone.
@@ -1432,7 +1432,7 @@ not to load", and it needs a portable exe rather than another dev-server pass.
 the card payload, the category reorder, the deck being filed, the count chip, the remove tray and
 the auto-scroller, all on `@dnd-kit/dom` and none of them a native HTML5 drag any more.
 
-**Driven with `cdp.mjs pull`, and `cdp.mjs drag` cannot be used at all now.** That command waits on
+**Driven with `cdp.ts pull`, and `cdp.ts drag` cannot be used at all now.** That command waits on
 `Input.dragIntercepted`, which only fires for a native drag, and there are none left in the app.
 `pull` is a real press, real moves and a real release — which is what dnd-kit's `PointerSensor`
 listens for.
@@ -1639,7 +1639,7 @@ arithmetic until this pass and is now a reading.
 
 **The console was clean**: 8 entries across a Search → Decks navigation, no error and no warning.
 
-**One trap this pass paid for, and it is not about the feature.** `cdp.mjs console <file>`
+**One trap this pass paid for, and it is not about the feature.** `cdp.ts console <file>`
 **appends**. The first capture came back carrying two React `ReferenceError`s and a Vite HMR
 failure that looked exactly like this branch breaking the search wall — and every one of them was
 dated `2026-08-05`, out of a file left behind by a session a month earlier. Delete the log before
@@ -2522,7 +2522,7 @@ vocabulary with the ledger's own `−{missing}`. Three story plays (`GridView`, 
 ## The token stack on the deck's own parts, and one-row pile headings — 2026-09-26, `pnpm tauri dev` (debug), 1920×1080, a copy of the real db
 
 Token stacks PR 1 ([the spec](../superpowers/specs/2026-09-26-token-stacks-design.md) §3), driven
-over `scripts/cdp.mjs` on the reader's 100-card Commander deck **Bruna** (a plan kept, 14 piles,
+over `scripts/cdp.ts` on the reader's 100-card Commander deck **Bruna** (a plan kept, 14 piles,
 8 tokens), after switching its token pile on through Deck settings the way a reader does. The
 copied `user.db` climbed to **v50** on launch and every deck read `token_rail_index = -1` — the
 migration proved on real data rather than on a fixture, which a worktree cannot otherwise show.
@@ -2560,7 +2560,7 @@ heading's own line in all three.
 
 ### The rail: a real pointer drag, two arrow presses and the journal
 
-- **Drag.** `cdp.mjs drag` answers *"the browser never started a drag"* — it drives an HTML5
+- **Drag.** `cdp.ts drag` answers *"the browser never started a drag"* — it drives an HTML5
   drag, and this app's drags are dnd-kit pointer gestures. `pull "<grip>" 105 -136 --steps 20`
   from the token pile's grip onto the Sideboard moved the pile above it, stored `0`, and wrote
   `{"field":"tokenRail","from":-1,"to":0}` to `deck_audit`.
@@ -2589,7 +2589,7 @@ format.
 ## Token entries, per list, and the mode control — 2026-09-26, `pnpm tauri dev` (debug), 1920×1080, a copy of the real db
 
 Token stacks PR 2 ([the spec](../superpowers/specs/2026-09-26-token-stacks-design.md) §4, user
-schema **v52**), driven over `scripts/cdp.mjs` on **Bruna** again, from a copy of the main
+schema **v52**), driven over `scripts/cdp.ts` on **Bruna** again, from a copy of the main
 checkout's `data` folder taken at **v46** — so the launch climbed six rungs, not one.
 
 ### The climb and the legacy pick

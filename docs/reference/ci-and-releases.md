@@ -33,7 +33,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   **`ci-ok` red**. A green pipeline proves nothing about a gate; that run is the proof.
 - **A change only builds what it can have broken.** The `changes` job diffs against the base
   (`git diff --name-only --no-renames`, so it needs `fetch-depth: 0`) and pipes the paths to
-  **`scripts/ci-route.mjs`** (moved out of an inline `case` on 2026-09-26, with `case`'s
+  **`scripts/ci-route.ts`** (moved out of an inline `case` on 2026-09-26, with `case`'s
   first-match-wins order and `*`-crosses-`/` matching kept), which routes each one:
   `apps/desktop/src-tauri/**` → **`frontend` and `rust`**; `packages/ui/**`, `apps/desktop/public/**`,
   `apps/desktop/index.html`, **`.storybook/**`** (its own arm since 2026-09-27 — it used to fall to the
@@ -44,7 +44,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   since 2026-10-02, `core`; **the cargo workspace's own files at the root — `Cargo.toml`,
   `Cargo.lock`, `.cargo/**`** → the same three (2026-10-02, below);
   **`release.yml`, `scanner-bundle.yml` and `.github/dependabot.yml` → `frontend`**, because
-  `scripts/toolchain.test.mjs` and `scripts/actions-pinned.test.mjs` read them (below); `.nvmrc`
+  `scripts/toolchain.test.ts` and `scripts/actions-pinned.test.ts` read them (below); `.nvmrc`
   → the jobs that bundle the page (`frontend`, `storybook` and, since 2026-10-04, `web`;
   `android` installs Node too and is not routed by it, because every arm that sets `android`
   sets `rust`);
@@ -53,11 +53,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `*.ps1`/`*.psm1`/`*.psd1` → `powershell`; `ci.yml` and the router itself → **every job**;
   **`crates/*` → `frontend` and `rust`** (declared 2026-09-08 — it is what
   the fail-safe below was already doing for the `card-scanner` crate, whose `.rs` files
-  `ipc.test.ts` reads as text and whose `scripts/*.mjs` `eslint .` lints) **and `core` since
+  `ipc.test.ts` reads as text and whose `scripts/*.ts` `eslint .` lints) **and `core` since
   2026-10-03**, when the engine took `card-scanner` as a dependency, **with
   `crates/grimoire-core/**` above it → `frontend`, `rust` and `core`** (2026-10-02);
   prose and editor bookkeeping → neither (`.release-please-manifest.json` sat there until
-  2026-10-04, when `scripts/release-rule.test.mjs` began reading it: `frontend` now);
+  2026-10-04, when `scripts/release-rule.test.ts` began reading it: `frontend` now);
   `scripts/android-sign.sh` → `frontend`, `rust` and `android`, which runs it (below; since
   2026-10-07 it is `scripts/android-release/*`, and the script is gone);
   and **anything unrecognised → every**
@@ -72,7 +72,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     `crates/grimoire-core/**`, `crates/*` (`card-scanner`, which the engine links), the root
     `Cargo.toml`/`Cargo.lock`/`.cargo/**`, the toolchain pin and its action. The lockfile has a
     second reason — it is where the job reads which `wasm-bindgen` CLI to install.
-    `ci-route.test.mjs` holds that no arm sets `core` without `web`.
+    `ci-route.test.ts` holds that no arm sets `core` without `web`.
   - **`crates/grimoire-web/**` → `frontend`, `rust` and `web`**, on an arm above
     `crates/grimoire-core/*` and `crates/*`. `rust` because it is a workspace member, formatted,
     linted and tested natively; `frontend` for `apps/desktop/src-tauri/**`'s reason (a `.rs` a test reads as
@@ -104,11 +104,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     APK's bundle too and still do not set it, because `web` now builds that same page through
     that same config on every such change.
   - **Four single files and one folder sit above the tree that would otherwise take them**,
-    each because that tree's arm does not set `web`: `scripts/build-wasm.mjs`,
-    `scripts/web-smoke.mjs`, `scripts/web-sync-smoke.mjs` (step 6.3) and — since step 5.2 —
-    `scripts/web-smoke/*`, which holds `harness.mjs`, the module both runs are written in,
-    `sync-harness.mjs`, the relay and the pairing the sync runs share (step 6.5; its measurement,
-    `scripts/web-sync-pull.mjs`, is run by no job and stays under `scripts/*`), and
+    each because that tree's arm does not set `web`: `scripts/build-wasm.ts`,
+    `scripts/web-smoke.ts`, `scripts/web-sync-smoke.ts` (step 6.3) and — since step 5.2 —
+    `scripts/web-smoke/*`, which holds `harness.ts`, the module both runs are written in,
+    `sync-harness.ts`, the relay and the pairing the sync runs share (step 6.5; its measurement,
+    `scripts/web-sync-pull.ts`, is run by no job and stays under `scripts/*`), and
     the fixtures the smoke
     answers the engine with, above `scripts/*` (which would lint a broken build script and
     never run it; a fixture changed is a first run changed, and nothing but `web` runs it), and
@@ -136,7 +136,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     it** — this said *nothing in CI* until 2026-10-04, when `release.yml`'s `web-deploy` began
     deploying it at a release tag (*The release rule*, below), from the lockfile that sits in
     this tree since the same day, and since 2026-10-08 in `infrastructure/wrangler/`: its `package.json` and
-    `package-lock.json` are the `web` job's, read by `scripts/release-rule.test.mjs`, and `ci.yml`'s `web`
+    `package-lock.json` are the `web` job's, read by `scripts/release-rule.test.ts`, and `ci.yml`'s `web`
     job installs them for the sync smoke. `infrastructure/app-worker/package.json` is the pnpm workspace's.
   - **The fail-safe sets `web` and still does not set `android`**, and the two answers come
     from one question: can a path nobody placed be an input? Never to the APK, whose inputs each
@@ -183,7 +183,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `packages/ui/features/transfer/__golden__/` directory (`transfer::{card,fields,write}`) and
   `infrastructure/share-worker/wrangler.jsonc` (`share::publish`)**, every one inside `#[cfg(test)]`. Those
   figures are the day's, and nothing relies on
-  them: **`scripts/ci-route.test.mjs` derives the census from the sources on every run** and
+  them: **`scripts/ci-route.test.ts` derives the census from the sources on every run** and
   fails when a file is read by a job the router does not send it to, or crosses the boundary and
   is not routed to both `frontend` and `rust`. Reverting either half of the fix was run as a
   mutation and the derived census went red both times, not only the hand-written table. Cost
@@ -202,7 +202,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   protected name; `fail-fast: false` keeps one red shard from cancelling the rest.
   **`storybook` has its own `changes` output** because it reads less than `frontend` — nothing
   under `apps/desktop/src-tauri/`, `crates/` or `scripts/` — and it was added to all five lists a gated job
-  must be in. `ci-route.test.mjs` now checks the last two of those (`ci-ok`'s `needs` and its
+  must be in. `ci-route.test.ts` now checks the last two of those (`ci-ok`'s `needs` and its
   loop) for every name in `JOBS`, where it used to check only the output and the `if:`.
 - **Rust is pinned by `rust-toolchain.toml`, and no workflow may install its own** (issue #559,
   2026-09-27). Every workflow used `dtolnay/rust-toolchain@stable` with `clippy -D warnings`, so a
@@ -211,16 +211,16 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `rustfmt` and `clippy`; `.github/actions/rust-toolchain` reads the channel with `sed` and hands
   it to `dtolnay/rust-toolchain` — `@master` until 2026-09-28 and pinned by SHA since (next
   bullet) — which does not read the file itself.
-  **`scripts/toolchain.test.mjs` is the fence**:
+  **`scripts/toolchain.test.ts` is the fence**:
   it globs every workflow and fails on a direct `dtolnay/rust-toolchain` use, a `rustup`
   install, or a `node-version:` that is not `node-version-file: .nvmrc`, and on a channel that is
   not an exact `x.y.z`. **Node is pinned the same way**: `.nvmrc` (24, the version the app is
   developed on — CI ran 22 until this change) feeds every `setup-node`, and `package.json`'s
-  `engines` floor is `>=22.18`, the newest any script here needs (`scripts/golden.mjs`).
+  `engines` floor is `>=22.18`, the newest any script here needs (`scripts/golden.ts`).
 - **The workspace is installed with pnpm, and the jobs that hold a secret install none**
   (2026-10-08; five jobs since 2026-10-11, where it was `android-sign` and `web-deploy`). Every job that installs runs `pnpm/action-setup` (pinned by SHA, the version
   taken from `package.json`'s `packageManager`), then `actions/setup-node` with `cache: pnpm`,
-  then `pnpm install --frozen-lockfile`; `scripts/toolchain.test.mjs` holds pnpm's step directly
+  then `pnpm install --frozen-lockfile`; `scripts/toolchain.test.ts` holds pnpm's step directly
   above Node's, once for every install. `android-sign`, `relay-deploy`, `share-deploy`, `web-deploy` and `play-upload` have no pnpm step at all,
   for the reason they have no cargo (*The release rule*, below). The deploy tool is
   `infrastructure/wrangler`, a folder the workspace does not list, installed with
@@ -233,13 +233,13 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   step.** `setup-node` (read at the pinned v7.0.0) turns a cache on by itself when
   `package.json`'s `packageManager` names npm; it names pnpm, so the job cached nothing before
   the key and caches nothing with it, and the key keeps that so if the field or the action's
-  default moves. `scripts/release-rule.test.mjs` holds the step whole, and still refuses the
+  default moves. `scripts/release-rule.test.ts` holds the step whole, and still refuses the
   word `cache` anywhere else in the secret-holding jobs (two then, five since 2026-10-11). **The release build's runner is `pnpm tauri
   build`**: `tauri-action` finds `pnpm-lock.yaml` at the root and runs the root's `tauri` script,
   which goes to
   `apps/desktop`; that is why the root keeps `@tauri-apps/cli` in its manifest
-  (`scripts/release-rule.test.mjs` holds the script's text and the dependency).
-  `scripts/workflow-scripts.test.mjs` reads `pnpm <name>` (and the `-w` forms), refuses a pnpm
+  (`scripts/release-rule.test.ts` holds the script's text and the dependency).
+  `scripts/workflow-scripts.test.ts` reads `pnpm <name>` (and the `-w` forms), refuses a pnpm
   call it cannot read, a `--` anywhere on a pnpm line, and any npm, npx, pnpx or corepack line
   but the deploy tool's install.
 - **Every third-party action is pinned by commit SHA, every checkout drops its token, and no
@@ -266,16 +266,16 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     uploaded the APK; since 2026-10-07 it uploads nothing to the release and gets
     `contents: read`, with `android`, `web`, `share`, `relay-deploy`, `share-deploy` and
     `web-deploy`: a deploy to Cloudflare needs nothing of GitHub's.
-  - **`scripts/actions-pinned.test.mjs` is the fence**: it globs every workflow and composite
+  - **`scripts/actions-pinned.test.ts` is the fence**: it globs every workflow and composite
     action and fails on a `uses:` that is neither local nor a SHA with a version comment, a
     checkout without `persist-credentials: false`, a write grant above `jobs:`, a Dependabot
     config that stops watching either directory. (It also fenced the update-signing secret to one
     step of a `sign` job until that job was removed on 2026-09-29, below; **since 2026-10-04
-    `scripts/release-rule.test.mjs` fences the two jobs that hold a secret now** *(five since 2026-10-11)* — *The release
+    `scripts/release-rule.test.ts` fences the two jobs that hold a secret now** *(five since 2026-10-11)* — *The release
     rule*, below.) Comments are stripped
     before any of it is read, since these files explain themselves in prose that names both.
 - **Every `pnpm <name>` a workflow asks for is a script `package.json` has**
-  (`scripts/workflow-scripts.test.mjs`). On 2026-10-04 the edit that added `lint:claude`
+  (`scripts/workflow-scripts.test.ts`). On 2026-10-04 the edit that added `lint:claude`
   (`daa70e12`) took `web:smoke`'s line instead of sitting beside it; nothing `pnpm verify`
   runs calls `web:smoke`, so the first thing to notice was the `web` job — `npm error Missing
   script` (npm's words then) on `main`, and again on the release PR (#786) once it merged `main`. The fence globs
@@ -378,7 +378,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   engine depends on since the scanner's session glue moved on 2026-10-03, the day that arm gained
   `core` as it said it would — and never `apps/desktop/src-tauri/**`, which the engine does not depend on.
   Both legs therefore compile `card-scanner`, `ocrs`, `rten` and `image` too. Every arm that sets
-  `core` sets `rust` too, and `ci-route.test.mjs` holds the router to that.
+  `core` sets `rust` too, and `ci-route.test.ts` holds the router to that.
   **None of the job's own details were measured on it when this was written; its first run is
   the PR that adds it.** They are the removed `wasm` and `android` jobs' (the first attempt,
   still readable at `cd54f1a6`), where each was measured: Ubuntu **24.04 for clang ≥ 18**, because
@@ -424,7 +424,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `wasm-bindgen` over the result, bundles the light page around the module and has a headless
   Chrome load it from `localhost`. Step by step, on `ubuntu-24.04`:
   - **clang, with `core`'s ≥ 18 guard**, copied from that job's wasm leg: the module is the
-    engine linked, so it compiles the same `sqlite-wasm-rs` shim. `scripts/build-wasm.mjs`
+    engine linked, so it compiles the same `sqlite-wasm-rs` shim. `scripts/build-wasm.ts`
     finds the compiler as `clang` on `PATH`.
   - Node from `.nvmrc` with pnpm's cache, `pnpm install --frozen-lockfile`, the composite toolchain action with
     `targets: wasm32-unknown-unknown`, and `Swatinem/rust-cache` with `workspaces: ". ->
@@ -451,9 +451,9 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     warnings`**, ahead of the build: the one place the host's `#[wasm_bindgen]` shell is linted.
     `glue.rs` is gated to this target, so the `rust` job's native `clippy --workspace` never
     compiles it, and `core`'s wasm leg lints the engine alone.
-    `scripts/build-wasm.mjs` reads the same lockfile for itself and refuses a CLI that differs,
+    `scripts/build-wasm.ts` reads the same lockfile for itself and refuses a CLI that differs,
     so the two parses disagreeing is a red step rather than a quiet skew, and
-    **`scripts/toolchain.test.mjs` fails any workflow whose install line has anything but a
+    **`scripts/toolchain.test.ts` fails any workflow whose install line has anything but a
     shell variable after `--version`**. Driven locally against the real lockfile with `cargo`
     and the CLI stubbed (Git Bash, 2026-10-04): one entry reads `0.2.127`; two entries and no
     entry each stop the step with the count; a CLI answering another version stops it.
@@ -491,7 +491,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     `if-no-files-found: error`) **whenever the bundle was built, a failed smoke included** — a
     page that would not open on the runner is the one somebody needs to serve and look at.
 
-  **What it proves is the smoke script's to say** (`scripts/web-smoke.mjs`), and since step 5.2
+  **What it proves is the smoke script's to say** (`scripts/web-smoke.ts`), and since step 5.2
   (2026-10-04) that is **an offline first run**: the module instantiates, the engine opens its
   database, and the launch's downloads — the card sync, both Tagger files, the combos, and
   Card Kingdom's list when Settings picks it — run to their end in one Chrome on Linux, with
@@ -573,11 +573,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   | `android-sign` | `release-please`, `android` | `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_PASSWORD` | Re-signs that bundle with the owner's upload key (`scripts/android-release/sign-bundle.sh`), held to the committed fingerprint, and leaves `mtg-grimoire-<version>-android.aab` as the artifact `play-upload-bundle` (30 days); its output `signed` tells `play-upload` whether it did. Attaches nothing to the draft; `contents: read` |
   | `web` | `release-please` | no | `ci.yml`'s `web` job less its lint and size report: clang, the wasm target, the lockfile's `wasm-bindgen` CLI, `web:wasm`, `web:build`, `web:smoke`; `apps/light/dist-web/` handed on as the artifact `web-bundle` (14 days) |
   | `share` | `release-please` | no | The share viewer: `pnpm share:build`, a check that `apps/share/dist-share/assets/share.js` is there and not empty; `apps/share/dist-share/` handed on as the artifact `share-bundle` (14 days). `ci.yml`'s `frontend` runs the same build |
-  | `relay-deploy` | `release-please`, `build`, `android-sign`, `web`, `share` | `CLOUDFLARE_INFRA_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | The token alone decides whether it runs. Refuses a tag older than the newest published release; `npm ci --ignore-scripts` in `infrastructure/wrangler/`; then, from `infrastructure/relay/`, `wrangler d1 migrations apply mtg-grimoire-relay --remote` and `wrangler deploy`; then `scripts/relay-deploy-probe.mjs` against the relay's address |
-  | `share-deploy` | `release-please`, `share`, `relay-deploy` | `CLOUDFLARE_INFRA_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | The same, from `infrastructure/share-worker/`, with the `share-bundle` downloaded into `apps/share/dist-share/` first (its bookkeeping table is `d1_migrations_share`); then `scripts/share-deploy-probe.mjs` |
-  | `scan-deploy` (since 2026-10-11, with the card scanner's Send) | `release-please`, `share-deploy` | `CLOUDFLARE_INFRA_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | The scan inbox. The token alone decides, as above. Refuses an older tag; `npm ci --ignore-scripts` in `infrastructure/wrangler/`; then `wrangler deploy` from `infrastructure/scan-worker/` — no database, so no migration, and no bundle; then `scripts/scan-deploy-probe.mjs`, seven requests of the inbox's address, none of which reaches the bucket |
-  | `web-deploy` | `release-please`, `build`, `android-sign`, `web`, `share-deploy`, `scan-deploy` | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | Refuses a tag older than the newest published release; `npm ci --ignore-scripts` in `infrastructure/wrangler/`, then `node ../wrangler/node_modules/wrangler/bin/wrangler.js deploy` from `infrastructure/app-worker/`; then `scripts/web-deploy-probe.mjs` against `https://mtg-grimoire.app` |
-  | `play-upload` (`android (upload to Play)`) | `release-please`, `android-sign`, `web-deploy` | `PLAY_SERVICE_ACCOUNT_JSON` | Asks whether the account is set and `android-sign` signed a bundle; either missing → uploads nothing, says which, green. Otherwise downloads `play-upload-bundle` and runs `node scripts/android-release/play-upload.mjs "aab-in/mtg-grimoire-$VERSION-android.aab" <versionCode>` — no install, no build — which puts it on the `internal` track. `contents: read` |
+  | `relay-deploy` | `release-please`, `build`, `android-sign`, `web`, `share` | `CLOUDFLARE_INFRA_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | The token alone decides whether it runs. Refuses a tag older than the newest published release; `npm ci --ignore-scripts` in `infrastructure/wrangler/`; then, from `infrastructure/relay/`, `wrangler d1 migrations apply mtg-grimoire-relay --remote` and `wrangler deploy`; then `scripts/relay-deploy-probe.ts` against the relay's address |
+  | `share-deploy` | `release-please`, `share`, `relay-deploy` | `CLOUDFLARE_INFRA_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | The same, from `infrastructure/share-worker/`, with the `share-bundle` downloaded into `apps/share/dist-share/` first (its bookkeeping table is `d1_migrations_share`); then `scripts/share-deploy-probe.ts` |
+  | `scan-deploy` (since 2026-10-11, with the card scanner's Send) | `release-please`, `share-deploy` | `CLOUDFLARE_INFRA_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | The scan inbox. The token alone decides, as above. Refuses an older tag; `npm ci --ignore-scripts` in `infrastructure/wrangler/`; then `wrangler deploy` from `infrastructure/scan-worker/` — no database, so no migration, and no bundle; then `scripts/scan-deploy-probe.ts`, seven requests of the inbox's address, none of which reaches the bucket |
+  | `web-deploy` | `release-please`, `build`, `android-sign`, `web`, `share-deploy`, `scan-deploy` | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | Refuses a tag older than the newest published release; `npm ci --ignore-scripts` in `infrastructure/wrangler/`, then `node ../wrangler/node_modules/wrangler/bin/wrangler.js deploy` from `infrastructure/app-worker/`; then `scripts/web-deploy-probe.ts` against `https://mtg-grimoire.app` |
+  | `play-upload` (`android (upload to Play)`) | `release-please`, `android-sign`, `web-deploy` | `PLAY_SERVICE_ACCOUNT_JSON` | Asks whether the account is set and `android-sign` signed a bundle; either missing → uploads nothing, says which, green. Otherwise downloads `play-upload-bundle` and runs `node scripts/android-release/play-upload.ts "aab-in/mtg-grimoire-$VERSION-android.aab" <versionCode>` — no install, no build — which puts it on the `internal` track. `contents: read` |
   | `publish` | `release-please`, `build`, `android-sign`, `relay-deploy`, `share-deploy`, `scan-deploy`, `web-deploy`, `play-upload` | no | Flips the draft to published |
 
   - **Since 2026-10-07 the Android host goes to Google Play, and only there** (the owner's
@@ -757,7 +757,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     deploys the web app, so until it is set the earlier rule holds.**
     A **deploy between releases** is still by hand, and a web deploy whose build needs new
     relay behaviour still needs the relay's first.
-  - **`scripts/release-rule.test.mjs` is the fence**, and every line of this list was checked
+  - **`scripts/release-rule.test.ts` is the fence**, and every line of this list was checked
     by breaking `release.yml` that way and seeing a test go red (23 mutations, 2026-10-04;
     seven more for the Worker jobs, 2026-10-11, below): the seven jobs *(eleven on a release since 2026-10-11, thirteen with the changelog jobs)*
     and what each needs; that no job's `if:` is looser than `release_created`;
@@ -794,7 +794,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     arithmetic keeps its order while the minor and the patch stay under 1000; the test holds
     that, and that nobody adds an explicit code or `autoIncrementVersionCode` (which counts in
     a file that is not committed, so every runner would start from one).
-  - **Between releases, `pnpm web:deploy-guard`** (`scripts/web-deploy-guard.mjs`) is the
+  - **Between releases, `pnpm web:deploy-guard`** (`scripts/web-deploy-guard.ts`) is the
     same rule for a deploy by hand: it reads `USER_SCHEMA_VERSION` in the working tree and at
     the last release's tag (`v` + `.release-please-manifest.json`'s version, through `git show`)
     and exits 1 when they differ — *"This tree's user schema is 60, the last release (v0.40.0)
@@ -878,7 +878,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     `CLOUDFLARE_ACCOUNT_ID`: they fail. `web-deploy` asks for both values and fails on one
     without the other; these two do not, because the account id is already in the environment
     for `web-deploy`, so asking for both would fail every release until the new token existed.
-    (`scripts/release-rule.test.mjs`: *asks for the token alone, and does nothing without it*.)
+    (`scripts/release-rule.test.ts`: *asks for the token alone, and does nothing without it*.)
   - **The scan inbox is the fourth Worker a release deploys (2026-10-11, the same day; the
     owner's decision, with the card scanner's Send — #890).** `scan-deploy` puts
     `infrastructure/scan-worker/` on `mtg-grimoire-scans.denmark-east.workers.dev`, **behind
@@ -887,7 +887,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     relay's token — the one that has deployed a Worker with a bucket bound — and the token
     alone decides, as for the other two. No database, so one `wrangler` line and not two; no
     bundle, so nothing downloaded: the script imports nothing outside its own folder. **Its
-    probe stores nothing** (`scripts/scan-deploy-probe.mjs`, seven requests, held to the
+    probe stores nothing** (`scripts/scan-deploy-probe.ts`, seven requests, held to the
     Worker's own code over a bucket that throws if it is touched): a probe that wrote would
     put a scan nobody sent in the inbox on every release, so the bucket's binding is shown by
     the first scan a reader sends and by nothing in the job. ⚠️ **The bucket has to exist
@@ -898,7 +898,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     morning's; the fence now says four jobs and six lines. **Not until a release**: the job
     has run nowhere but in the fence.
   - **The D1 design.** `schema.sql` of each Worker is the **frozen baseline**: the shape
-    production holds (compared with it on 2026-10-11, and it matched), pinned by SHA-256 in `scripts/d1-migrations.test.mjs`, and it cannot be
+    production holds (compared with it on 2026-10-11, and it matched), pinned by SHA-256 in `scripts/d1-migrations.test.ts`, and it cannot be
     re-run (the relay's has four plain `ALTER TABLE … ADD COLUMN`). `infrastructure/relay/migrations/`
     and `infrastructure/share-worker/migrations/` are wrangler's **tracked folders and start
     empty** (each holds a `README.md` of the rules and nothing else), so the first run finds
@@ -917,7 +917,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     folder's doing**: with an absolute `--persist-to` in the scratchpad, wrangler wrote the
     database path as `./C:\Users\Markus\…\d1-empty\v3\d1` and answered `X [ERROR] internal
     error; reference = 2i6bg8jcinn79qv2lbb6889a`, exit 1 — the quirk
-    `scripts/web-smoke/sync-harness.mjs` already documents. CI passes no `--persist-to`; the
+    `scripts/web-smoke/sync-harness.ts` already documents. CI passes no `--persist-to`; the
     runs below use a relative one. **Empty folder** (only `README.md` in it):
 
     ```
@@ -980,7 +980,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     no tables, so exactly the three probes that read D1 fail and the other seven pass:
 
     ```
-    node scripts/relay-deploy-probe.mjs http://127.0.0.1:8799
+    node scripts/relay-deploy-probe.ts http://127.0.0.1:8799
     attempt 1 of 1: the key store reads D1 for a credential it does not know: answered 500, not 401 — the router is live and the `group_keys` table is missing; the refresh door, with a device, refuses the secret: answered 500, not 401; the pairing rendezvous has its table: answered 500, not 404 — the route is live and the `pairing_rendezvous` table is missing
     ### http://127.0.0.1:8799 does not answer as this relay
 
@@ -1033,7 +1033,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 
     (`index.js` 88,338 bytes.) **Not proved**: the same on Linux with a token, which is what the first release is.
   - **The fence, by mutation** (2026-10-11). A copy of the finished `release.yml` was kept; one
-    mutation was applied, `pnpm exec vitest run scripts/release-rule.test.mjs` run, and the file
+    mutation was applied, `pnpm exec vitest run scripts/release-rule.test.ts` run, and the file
     restored and compared by SHA-256 (identical every time). Every mutation turned red the test
     named for it; the other red tests are the fence being redundant, not wrong:
 
@@ -1050,13 +1050,13 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     The seventh is why that test's first version was wrong: it set aside any step that named
     `GITHUB_TOKEN`, which hid a step holding the token beside it. The clause was dropped.
   - **Why the fence is held to the letter.** Every `run:` line of the five secret-holding jobs
-    is in `RUNS` in `scripts/release-rule.test.mjs`, and the fence reads the workflow with its
+    is in `RUNS` in `scripts/release-rule.test.ts`, and the fence reads the workflow with its
     comments stripped, so a comment may say what it likes and a line may not change.
   - **The bundle goes to Google Play's internal track from the release (2026-10-11, piece B;
     the design is the same spec's §6).** `play-upload` (`android (upload to Play)` on the run
     page) is the last job before `publish`, behind all four deploys (three when this was written), because Play takes a
     `versionCode` once and nothing after it can be taken back. It runs
-    `scripts/android-release/play-upload.mjs`, which needs no install: Node's `crypto` signs the
+    `scripts/android-release/play-upload.ts`, which needs no install: Node's `crypto` signs the
     service account's JWT and `fetch` does the rest. **Seven requests** (six until the final
     review, 2026-10-11, added the fourth): a token (scope
     `androidpublisher`), a new edit of `com.mtggrimoire.app`, the bundles Play holds, the
@@ -1111,11 +1111,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
       each ends before any request, nothing was sent to Google, and no key exists):
 
       ```
-      $ node scripts/android-release/play-upload.mjs
-      usage: node scripts/android-release/play-upload.mjs <bundle.aab> <versionCode>
+      $ node scripts/android-release/play-upload.ts
+      usage: node scripts/android-release/play-upload.ts <bundle.aab> <versionCode>
       exit 2
 
-      $ PLAY_SERVICE_ACCOUNT_JSON='oops' node scripts/android-release/play-upload.mjs package.json 43001
+      $ PLAY_SERVICE_ACCOUNT_JSON='oops' node scripts/android-release/play-upload.ts package.json 43001
       ### Google Play — the upload failed
 
       PLAY_SERVICE_ACCOUNT_JSON is not JSON
@@ -1123,7 +1123,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
       The signed bundle is this run's artifact `play-upload-bundle`; it can be uploaded by hand.
       exit 1
 
-      $ PLAY_SERVICE_ACCOUNT_JSON='' node scripts/android-release/play-upload.mjs package.json 43001
+      $ PLAY_SERVICE_ACCOUNT_JSON='' node scripts/android-release/play-upload.ts package.json 43001
       ### Google Play — the upload failed
 
       PLAY_SERVICE_ACCOUNT_JSON is not set
@@ -1134,7 +1134,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 
       `oops` appears nowhere in the output.
     - **The fence, by mutation** (2026-10-11). The finished `release.yml` was copied first; each
-      mutation was one exact-string replace, `pnpm exec vitest run scripts/release-rule.test.mjs`
+      mutation was one exact-string replace, `pnpm exec vitest run scripts/release-rule.test.ts`
       run, and the file restored and compared by SHA-256 (equal every time). Every mutation
       turned red the test named; the others are the fence being redundant:
 
@@ -1212,12 +1212,12 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 
   | Job | Needs | Holds a secret | What it does |
   | --- | --- | --- | --- |
-  | `changelog-write` | `release-please` | `OPENROUTER_API_KEY` (`environment: changelog`) | Installs nothing. `node scripts/changelog/cli.mjs next`: the released version from `main`'s manifest, the coming one from the release branch's; the entries of `v<released>..HEAD`; the notes as the artifact `release-notes` (14 days). `contents: read` |
+  | `changelog-write` | `release-please` | `OPENROUTER_API_KEY` (`environment: changelog`) | Installs nothing. `node scripts/changelog/cli.ts next`: the released version from `main`'s manifest, the coming one from the release branch's; the entries of `v<released>..HEAD`; the notes as the artifact `release-notes` (14 days). `contents: read` |
   | `changelog-commit` | `release-please`, `changelog-write` | no | Puts that file on release-please's branch as `changelog/<version>.md` through the contents API, as `docs(changelog): notes for <version> from <commit>`. No checkout; `contents: write` |
 
   - **Nothing needs either job.** A failure there is a red run on that push and holds no release
     up; a release merged without the file is published with release-please's notes.
-  - **The checks** (`scripts/changelog/notes.mjs`): every entry is cited by an item or listed as
+  - **The checks** (`scripts/changelog/notes.ts`): every entry is cited by an item or listed as
     left out; no reference is to something that was not sent; no text carries a link or a URL,
     and each is one line; at most five highlights; every area is from the list. A failed answer
     is sent back once with what failed, and a second failure writes nothing. They hold the answer
@@ -1230,7 +1230,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     draft, and no model is called on a release. Missing, empty or unreadable → release-please's
     notes stay, the summary says so, and the release is published.
   - **A published note is corrected in its file**, by pull request, then
-    `node scripts/changelog/cli.mjs push <version>`, which keeps the body it replaces in a folder
+    `node scripts/changelog/cli.ts push <version>`, which keeps the body it replaces in a folder
     outside the repository and refuses a draft. `changelog/` holds a file for every release since
     0.2.0, written by the same generator; `push --all` is what puts those on the releases
     published before this, and it is run on the owner's word.
@@ -1243,7 +1243,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 
   | Job | Needs | Holds a secret | What it does |
   | --- | --- | --- | --- |
-  | `announce` | `release-please`, `publish` | `DISCORD_WEBHOOK_URL` (`environment: discord`) | Installs nothing. Reads the release's body as published (`gh release view`, the run's token), then `node scripts/changelog/discord.mjs notes.md` posts it. `contents: read` |
+  | `announce` | `release-please`, `publish` | `DISCORD_WEBHOOK_URL` (`environment: discord`) | Installs nothing. Reads the release's body as published (`gh release view`, the run's token), then `node scripts/changelog/discord.ts notes.md` posts it. `contents: read` |
 
   - **What is posted is the body as published**: the generated `changelog/<version>.md`, or
     release-please's notes when `publish` kept those. The first message opens with
@@ -1473,7 +1473,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `tauri.conf.json` per Tauri host (two), and no member's own manifest. **A new member now owes
   a lockfile selector in the config and `version.workspace = true` in its own manifest** — a
   manifest with a literal version of its own is a second version nothing bumps.
-  **And since 2026-10-04 one test holds all of it at once** — `scripts/release-rule.test.mjs`:
+  **And since 2026-10-04 one test holds all of it at once** — `scripts/release-rule.test.ts`:
   every member the root `Cargo.toml` lists has its manifest and its own `Cargo.lock` selector in
   the config, both Tauri hosts have their `tauri.conf.json` there, the config names nothing
   else, and every one of those versions — with `package.json`'s and

@@ -2107,7 +2107,7 @@ are unrunnable during a fan-out, so this is where they are answered — budget a
 
 `npm run tauri dev` — take the app lock through `.claude/skills/running-the-app/lock.ps1` first;
 one app runs across every worktree and a second exits with code 0, no window and no stderr. Drive
-it over CDP from **PowerShell** (`scripts/cdp.mjs`; Bash refuses `eval` here), and remember: click
+it over CDP from **PowerShell** (`scripts/cdp.ts`; Bash refuses `eval` here), and remember: click
 then read is pre-flush, so split a click and its assertion into two `eval`s; `hover --rest 200`
 before a `click` or the cold pointer makes it a no-op; wrap every binding in an IIFE, because
 `eval` shares one scope.

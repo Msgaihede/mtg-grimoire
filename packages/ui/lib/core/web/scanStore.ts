@@ -8,7 +8,7 @@ import type { CacheLike, CachesLike } from "./sw/pictures";
  * light app's step 7.5).
  *
  * **The source is the app's own origin.** The release build copies the three files into the
- * web app's static files (`scripts/scanner-assets.mjs --web`, `apps/light/vite.config.ts`), because
+ * web app's static files (`scripts/scanner-assets.ts --web`, `apps/light/vite.config.ts`), because
  * the place a native host downloads them from — a GitHub release — sends no CORS header, so a
  * page cannot read it. Beside them is a manifest of that build's own making: each file's name,
  * length and SHA-256, and the bundle's format version.

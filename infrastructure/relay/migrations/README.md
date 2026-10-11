@@ -11,7 +11,7 @@ the live database, harmless, by design.
 - **`../schema.sql` is the baseline and is never edited.** It is the shape production holds: the
   database was built from it by hand, and on 2026-10-11 `sqlite_master` of the live database
   was compared with it, and matched (`docs/reference/ci-and-releases.md`).
-  `scripts/d1-migrations.test.mjs` pins its hash; a red hash means the change belongs in a new
+  `scripts/d1-migrations.test.ts` pins its hash; a red hash means the change belongs in a new
   file here.
 - **Name a file `NNNN_what-it-does.sql`**: four digits, the next number, lower case and hyphens.
   The same test refuses a number used twice and a gap.
