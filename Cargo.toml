@@ -19,7 +19,8 @@
 # `target/debug/data`. **An agent worktree keeps what cargo can rebuild apart from that, in
 # `target/cache`** (2026-10-11): `.claude/hooks/worktree-cargo.toml` is a cargo config for the
 # worktrees alone, with the measurements, and it also turns their incremental cache off and
-# trims their debug info. Nothing in it reaches this manifest's profiles in any other checkout.
+# trims their debug info — as `[profile.dev]` below does for every checkout, since the same day.
+# Nothing in it reaches this manifest's profiles in any other checkout.
 #
 # **`crates/card-scanner` is excluded on purpose**, and the `exclude` is not optional: a path
 # dependency that lives under the workspace root becomes a member automatically. It stays a
@@ -68,6 +69,38 @@ exclude = ["crates/card-scanner"]
 version = "0.43.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
+
+# **A dev build carries line tables and nothing more, and its dependencies carry no debug info
+# at all** (2026-10-11). A backtrace still names the file and the line; a debugger shows no
+# variables. **Why: on Windows the debug info is the link** — every rebuild ends by writing the
+# PDB again, whole. Measured that day on the desktop app (`cargo build -p mtg-grimoire`,
+# toolchain 1.98.1, incremental cache on, each column in a build tree of its own; a rebuild is
+# after appending a function to that file, twice):
+#
+# | | Full debug info | These two tables |
+# | --- | --- | --- |
+# | From nothing | 191.5 s | 136.3 s |
+# | Rebuild after an edit in `crates/grimoire-core/src/lib.rs` | 27.5 s, 20.6 s | 15.2 s, 16.4 s |
+# | … in the desktop host's `lib.rs` | 14.9 s, 12.7 s | 8.3 s, 8.4 s |
+# | … in its `main.rs`, a link and little else | 7.9 s, 7.3 s | 4.3 s, 4.6 s |
+# | The build tree | 13.0 GB | 5.1 GB |
+#
+# The agent worktrees have built this way since the same day — `.claude/hooks/worktree-cargo.toml`
+# sets the same two things, for the size of the tree — which is how clippy, the whole suite and
+# `tauri dev` were already proven under it before it became every checkout's and CI's.
+# `.cargo/fast.toml` has the rest of the table: what a linker, a newer compiler and Cranelift
+# each measured on top of this.
+#
+# **For a debugger session, ask for the variables back** with `CARGO_PROFILE_DEV_DEBUG=true` in
+# the environment of the build. That is the workspace's own crates, where a breakpoint goes, and
+# a rebuild of those alone; an environment variable outranks this file and the worktrees' config
+# both.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+# Every crate that is not a member of the workspace — `crates/card-scanner` among them.
+debug = false
 
 # **The scanner's crates at full optimisation in a debug build.** The `image`/`imageproc`
 # overrides live in `crates/card-scanner/Cargo.toml` too, and there they do nothing for this
