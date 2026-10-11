@@ -3,6 +3,19 @@
   "name": "mtg-grimoire-relay",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-27",
+  // **The address, since 2026-10-11**: a Custom Domain on the zone the web app's origin is the
+  // apex of, so the deploy states the DNS record and the certificate itself. It is `RELAY_BASE`
+  // below and `entitlement::RELAY_BASE` in every build cut after that day.
+  "routes": [{ "pattern": "relay.mtg-grimoire.app", "custom_domain": true }],
+  // ⚠️ **This line is what keeps every installed build syncing.** Each release through 0.44.0,
+  // and the Android bundle beside it, has `mtg-grimoire-relay.denmark-east.workers.dev` compiled
+  // in (`RELAY_BASE_LEGACY` below), and wrangler infers `workers_dev: false` the moment a config
+  // has `routes`: without `true` written here the next deploy turns that address off and exits 0.
+  // The owner's decision, 2026-10-11: both addresses answer, indefinitely.
+  // `scripts/relay-deploy-probe.test.ts` holds the line, and the release's probe asks the old
+  // address after the deploy. `preview_urls` is left unstated on purpose — omitted, wrangler does
+  // not change the setting the Worker already has.
+  "workers_dev": true,
   // One Durable Object per pairing group, addressed by the group id. No R2, no KV: KV allows
   // 1 000 writes/day on the free plan, which this would spend in an afternoon.
   "durable_objects": {
@@ -66,6 +79,13 @@
   // slash on either side fails the exchange with `invalid_grant`, which says nothing about a
   // path.
   //
+  // **`RELAY_BASE_LEGACY` is the address every build through 0.44.0 was compiled with**, and it
+  // is here for one reader: `patreon.ts`'s `redirectUri`. Such a build names this address in its
+  // authorize request, Patreon sends the reader's browser to it, and the code exchange has to
+  // repeat it — so a callback that arrives at the old address is answered with the old URI, and
+  // every other one with `RELAY_BASE`. Both URIs are registered on the Patreon client. Unset, the
+  // callback is a 500 that names it.
+  //
   // **`PATREON_CLIENT_ID` and `PATREON_CAMPAIGN_ID` are the real values**, public for the same
   // reason and so `vars` rather than secrets. `PATREON_CLIENT_ID` must equal
   // `entitlement::PATREON_CLIENT_ID` in the Rust byte for byte: the app builds the authorize URL
@@ -76,8 +96,10 @@
   // The limits on the five routes a caller reaches with no token — runbook step 8, and
   // `src/ratelimit.ts` is the reasoning. Each of those routes reads D1 before it can refuse
   // anything, and a limit refuses the caller ahead of that read. **It does not keep the request
-  // off the account's 100,000-a-day budget**: the Worker has already been invoked to ask, and a
-  // rule in front of the Worker needs a zone, which `workers.dev` has none of.
+  // off the account's 100,000-a-day budget**: the Worker has already been invoked to ask. A rule
+  // in front of the Worker needs a zone — `relay.mtg-grimoire.app` has one since 2026-10-11 and
+  // no rule on it; `workers.dev`, which still answers, has none — so a rule could only ever
+  // cover one of the two addresses, and the limits stay in here.
   //
   // One binding per limit, because a binding carries exactly one: `/claim`; `/token` and
   // `/rotate`; `/keys` and the pairing rendezvous. Per client address, per 60 seconds — `period`
@@ -111,7 +133,8 @@
   // A local web build that needs a relay asks a local one, with the var overridden where that one
   // is started (`wrangler dev --local --var APP_ORIGINS:…`).
   "vars": {
-    "RELAY_BASE": "https://mtg-grimoire-relay.denmark-east.workers.dev",
+    "RELAY_BASE": "https://relay.mtg-grimoire.app",
+    "RELAY_BASE_LEGACY": "https://mtg-grimoire-relay.denmark-east.workers.dev",
     "PATREON_CLIENT_ID": "UFkUESN45GFyy36WQBaOpedWwFvtcOfujPZz_s8Yhu54z4I7-eA8Zg9lv-FEXqV4",
     "PATREON_CAMPAIGN_ID": "16694056",
     "APP_ORIGINS": "https://mtg-grimoire.app",

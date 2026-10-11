@@ -14,12 +14,21 @@ import type { Probe } from "./deploy-probe.ts";
 // without a credential tells one deploy from the next, so that rests on `wrangler deploy`
 // exiting zero, and the version id it prints is in the job's log.
 //
+// **Two addresses since 2026-10-11.** The relay answers at `relay.mtg-grimoire.app` and, for
+// every build compiled before that day, still at its `workers.dev` address. After the ten, one
+// request is made of the old address (`LEGACY_PROBES`): a deploy that turned it off — a config
+// that lost `workers_dev: true` does, and `wrangler deploy` exits 0 — stops every installed app
+// syncing, and this is what leaves that release a draft. Given an origin of its own, the script
+// asks that origin and nothing else.
+//
 // It deploys nothing and holds no token.
 import { pathToFileURL } from "node:url";
 import { askAll, askUntil, report } from "./deploy-probe.ts";
 
-/** `RELAY_BASE` in `infrastructure/relay/wrangler.jsonc`, and in every binary. */
-export const RELAY = "https://mtg-grimoire-relay.denmark-east.workers.dev";
+/** `RELAY_BASE` in `infrastructure/relay/wrangler.jsonc`, and in every build since 2026-10-11. */
+export const RELAY = "https://relay.mtg-grimoire.app";
+/** `RELAY_BASE_LEGACY`, same file: the address in every build through 0.44.0. */
+export const LEGACY = "https://mtg-grimoire-relay.denmark-east.workers.dev";
 /** The one origin a page may ask from (`APP_ORIGINS`, same file). */
 export const APP = "https://mtg-grimoire.app";
 
@@ -105,15 +114,44 @@ export const PROBES: Probe[] = [
   },
 ];
 
+/**
+ * What the old address is asked: the pre-flight, which is answered ahead of every limiter and
+ * every read, so six attempts of it spend nobody's budget. One request is enough — the address
+ * is the same Worker, and the ten above have already said how that Worker answers.
+ */
+export const LEGACY_PROBES: Probe[] = PROBES.filter(
+  (probe) => probe.name === "a page's pre-flight is answered",
+);
+
+/**
+ * Every sentence about what is wrong: the ten at `origin`, then the one at the old address when
+ * `origin` is the relay's own. Each sentence from the old address names it, because the report's
+ * heading names only `origin`.
+ */
+export async function askBoth(
+  origin: string,
+  send?: (request: Request) => Promise<Response>,
+): Promise<string[]> {
+  const wrong = await askAll(origin, PROBES, send);
+  if (origin !== RELAY) return wrong;
+  const legacy = await askAll(LEGACY, LEGACY_PROBES, send);
+  return [
+    ...wrong,
+    ...legacy.map(
+      (sentence) => `at ${LEGACY}, which every build through 0.44.0 asks — ${sentence}`,
+    ),
+  ];
+}
+
 async function main() {
   const [origin = RELAY] = process.argv.slice(2);
-  const result = await askUntil(() => askAll(origin, PROBES));
+  const result = await askUntil(() => askBoth(origin));
   process.exitCode = report(
     {
       passed: `${origin} answers as this relay`,
       failed: `${origin} does not answer as this relay`,
     },
-    `all ${PROBES.length} probes of \`docs/reference/hosted-relay-deploy.md\` step 0 were answered as this tree's router answers them. Which version is live is \`wrangler deploy\`'s to say, in this job's log.`,
+    `all ${PROBES.length} probes of \`docs/reference/hosted-relay-deploy.md\` step 0 were answered as this tree's router answers them${origin === RELAY ? `, and \`${LEGACY}\` still answers` : ""}. Which version is live is \`wrangler deploy\`'s to say, in this job's log.`,
     result,
   );
 }

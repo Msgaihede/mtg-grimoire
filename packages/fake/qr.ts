@@ -1,7 +1,8 @@
 /**
- * A QR encoder for one symbol: **version 9 at error-correction level M**, byte mode — the
- * 53×53 the pairing invite is drawn as (`sync_pair::invite::qr_payload`: 162 bytes against the
- * relay's address, measured 2026-08-31; version 8 holds 152 and does not fit).
+ * A QR encoder for one symbol: **version 8 at error-correction level M**, byte mode — 49×49,
+ * the largest the pairing invite is drawn as (`sync_pair::invite::qr_payload`: 141 bytes
+ * against the relay's address since 2026-10-11, and version 8 holds 152). It was version 9,
+ * 53×53, while the relay's address was its `workers.dev` one and the invite 162 bytes.
  *
  * **Why the fake has an encoder at all.** Until 2026-10-04 `sync_pairing_begin` here answered a
  * 21×21 grid of noise with three finder patterns drawn on it — a *picture* of a QR code, said so
@@ -12,11 +13,14 @@
  * at all. With a real symbol the same story is the thing a phone is held up to, and a headless
  * browser's fake camera can be fed the panel's own drawing (`scripts/pairing-scan-smoke.ts`).
  *
- * **One version, on purpose.** The crate asks its `qrcode` dependency for the smallest symbol
- * that fits and gets version 9 for every invite, because every invite is the same length. A
- * general encoder is the version tables for forty sizes and four levels; this is the one row of
- * them the app draws, and a text that does not fit that row is refused rather than drawn as
- * something else. A shorter text is padded and still drawn at 53.
+ * **One version and one mode, on purpose.** The crate asks its `qrcode` dependency for the
+ * smallest symbol that fits, and that encoder packs a run of digits or capitals tighter than
+ * bytes — so the app draws an invite at 49 modules or at 45, by the invite's own bytes
+ * (`invite.rs`, `the_invite_is_drawn_at_49_modules_or_fewer`). A general encoder is the version
+ * tables for forty sizes, four levels and three modes; this is the one row a whole invite fits
+ * as plain bytes, which is the largest symbol the app ever draws for one and so the hardest a
+ * camera is asked to read. A text that does not fit that row is refused rather than drawn as
+ * something else, and a shorter text is padded and still drawn at 49.
  *
  * The algorithm is ISO/IEC 18004's, in the order the standard gives it: the bit stream, the
  * Reed–Solomon blocks, the function patterns, the zigzag, the mask with the lowest penalty, and
@@ -25,20 +29,20 @@
  */
 import type { QrMatrix } from "@grimoire/ui/lib/ipc";
 
-/** Version 9: `17 + 4 × 9` modules a side. */
-const VERSION = 9;
+/** Version 8: `17 + 4 × 8` modules a side. */
+const VERSION = 8;
 const SIZE = 17 + 4 * VERSION;
 
-/** Level M at version 9: three blocks of 36 data codewords and two of 37, 22 of correction each. */
-const BLOCKS = [36, 36, 36, 37, 37];
+/** Level M at version 8: two blocks of 38 data codewords and two of 39, 22 of correction each. */
+const BLOCKS = [38, 38, 39, 39];
 const EC_PER_BLOCK = 22;
 const DATA_CODEWORDS = BLOCKS.reduce((sum, n) => sum + n, 0);
 
 /** Byte mode spends four bits on the mode and, below version 10, eight on the length. */
 export const QR_CAPACITY_BYTES = DATA_CODEWORDS - 2;
 
-/** Where version 9's alignment patterns are centred, on both axes. */
-const ALIGNMENT = [6, 26, 46];
+/** Where version 8's alignment patterns are centred, on both axes. */
+const ALIGNMENT = [6, 24, 42];
 
 /** Level M's two bits in the format word. */
 const LEVEL_M = 0;
@@ -294,7 +298,7 @@ function penalty(dark: readonly (readonly boolean[])[]): number {
 }
 
 /**
- * `text` as the 53×53 symbol the app draws an invite as, in `QrMatrix`'s shape: row-major, `true`
+ * `text` as the 49×49 symbol the app draws an invite as, at its largest, in `QrMatrix`'s shape: row-major, `true`
  * for a dark module, and no quiet zone — that is `QrCode`'s to draw, as it is for the crate's.
  *
  * Refuses a text that does not fit the symbol, in words, rather than drawing a different one.

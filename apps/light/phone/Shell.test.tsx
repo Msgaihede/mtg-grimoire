@@ -173,7 +173,7 @@ describe("a card the desktop face had open", () => {
     renderPhone(<PhoneFace />, { path: card, state: OVERLAID });
 
     expect(window.location.pathname + window.location.search).toBe(card);
-    expect(window.history.state).toEqual(PUSHED);
+    expect(window.history.state).toEqual({ ...PUSHED, depth: 1 });
 
     const landed = new Promise((resolve) =>
       window.addEventListener("popstate", resolve, { once: true }),

@@ -216,9 +216,10 @@ function SortDirection<SortKey extends string>({ search }: { search: FilterSurfa
  * cards the search now holds.
  *
  * **It is not a place.** The URL names a view, a deck and a card (`routes.ts`); a sheet of
- * controls over a page is the page's own state, so opening it pushes nothing and Back is not how
- * it closes — Escape, the ✕, the scrim and `Show N cards` are. A card is a place because a reader
- * sends one to somebody; nobody sends a half-set filter.
+ * controls over a page is the page's own state, so opening it changes no address. Back still
+ * closes it, as it closes every open dialog on this face (`sheetHistory.ts`), alongside Escape,
+ * the ✕, the scrim, a drag down and `Show N cards`. A card is a place because a reader sends one
+ * to somebody; nobody sends a half-set filter.
  *
  * **Mounted by the page, inside the shell**, where `CardSheet` is a sibling of the shell. Both
  * are `Dialog`, whose scrim is `fixed inset-0`, so both depend on nothing between them and the

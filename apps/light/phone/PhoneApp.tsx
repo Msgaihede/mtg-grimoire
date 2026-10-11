@@ -4,6 +4,7 @@ import { MotionConfig } from "motion/react";
 import { NAV } from "@grimoire/ui/components/nav";
 import { TooltipProvider } from "@grimoire/ui/components/tooltip/TooltipProvider";
 import { usePrefetchShelfFolds } from "@grimoire/ui/features/shelves/useShelfFolds";
+import { DialogHostContext, type DialogHost } from "@grimoire/ui/lib/dialogHost";
 import type { LightView } from "@grimoire/ui/lib/edition";
 import type { DeckVariant } from "@grimoire/ui/lib/ipc";
 import { queryClient } from "@grimoire/ui/lib/query";
@@ -20,7 +21,17 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { TradePage } from "./pages/TradePage";
 import { WishlistPage } from "./pages/WishlistPage";
 import { adoptOverlay, navigate, usePlace } from "./router";
+import { adoptStaleSheet, claimBack } from "./sheetHistory";
 import { Shell } from "./Shell";
+import { useTouchShell } from "./touchShell";
+
+/**
+ * What this face lends every `Dialog` it draws — its own sheets and the shared panels Settings
+ * draws alike (`@grimoire/ui/lib/dialogHost`): an entry in history per open dialog, so Back
+ * closes it, and a header a finger can drag down. One object for the face's life, so no dialog
+ * re-claims its step on a render.
+ */
+const PHONE_DIALOGS: DialogHost = { claimBack, swipeToClose: true };
 
 /** The word for a destination — the desktop rail's, so the two apps cannot name one differently. */
 const titleOf = (view: LightView): string => NAV.find((n) => n.id === view)?.label ?? "";
@@ -93,9 +104,14 @@ export function PhoneFace() {
   // one this router can close with a Back by the time its sheet draws — see `adoptOverlay`. A lazy
   // initializer for `useDesktopPlace`'s reason; StrictMode's second run finds nothing to adopt.
   useState(() => {
+    // A sheet's entry a reload kept, with no sheet left to close, goes first: the overlay check
+    // below reads the entry's state, and a sheet's would hide the page's from it.
+    adoptStaleSheet();
     adoptOverlay();
     return null;
   });
+  // The page stops zooming as a whole while this face is up — see `touchShell.ts`.
+  useTouchShell();
   const place = usePlace();
   // The stored folds, asked for at launch as `AppShell` asks for them — so neither cabinet draws
   // its shelves at the defaults and then re-folds a frame later.
@@ -115,18 +131,20 @@ export function PhoneFace() {
   const pick = (deckId: number, list: DeckVariant) =>
     setPicks((now) => new Map(now).set(deckId, list));
   return (
-    <CardDataContext.Provider value={cardData}>
-      <Shell title={titleOf(place.view)} activity={activity}>
-        <Pages place={place} picks={picks} onPick={pick} />
-      </Shell>
-      {/* A sibling of the shell, not a child of a page: `Dialog`'s scrim is `fixed inset-0`, and
+    <DialogHostContext.Provider value={PHONE_DIALOGS}>
+      <CardDataContext.Provider value={cardData}>
+        <Shell title={titleOf(place.view)} activity={activity}>
+          <Pages place={place} picks={picks} onPick={pick} />
+        </Shell>
+        {/* A sibling of the shell, not a child of a page: `Dialog`'s scrim is `fixed inset-0`, and
           nothing that covers the window may mount inside a box that could become its containing
           block. `App.tsx` mounts the desktop's card modal the same way. */}
-      <CardSheet
-        cardId={place.cardId}
-        deckPicked={place.deckId === null ? null : (picks.get(place.deckId) ?? null)}
-      />
-    </CardDataContext.Provider>
+        <CardSheet
+          cardId={place.cardId}
+          deckPicked={place.deckId === null ? null : (picks.get(place.deckId) ?? null)}
+        />
+      </CardDataContext.Provider>
+    </DialogHostContext.Provider>
   );
 }
 

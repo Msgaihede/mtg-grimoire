@@ -15,6 +15,20 @@
   // between two deploys that have to agree about a token format.
   "compatibility_date": "2026-08-27",
 
+  // **The address, since 2026-10-11**: a Custom Domain on the zone the web app's origin is the
+  // apex of, so the deploy states the DNS record and the certificate itself. It is `SHARE_BASE`
+  // below, and the host of every link minted from that day on.
+  "routes": [{ "pattern": "share.mtg-grimoire.app", "custom_domain": true }],
+  // ⚠️ **This line is what keeps the earlier address answering.** Every release through 0.44.0
+  // has `mtg-grimoire-share.denmark-east.workers.dev` compiled in and publishes to it, and a link
+  // minted before the move names it — and wrangler infers `workers_dev: false` the moment a
+  // config has `routes`: without `true` written here the next deploy turns that address off and
+  // exits 0. The owner's decision, 2026-10-11: both addresses answer, indefinitely.
+  // `scripts/share-deploy-probe.test.ts` holds the line, and the release's probe asks the old
+  // address after the deploy. `preview_urls` is left unstated on purpose — omitted, wrangler does
+  // not change the setting the Worker already has.
+  "workers_dev": true,
+
   // **No `durable_objects` and no `migrations`.** Nothing here may reach a Durable Object: that
   // is the line that meters (spec §8), and this Worker is the one that will carry anonymous
   // traffic. Its state is D1 and R2, both of which bill per operation rather than per request.
@@ -94,17 +108,23 @@
   },
 
   "vars": {
-    // **This Worker's own address, real since the first deploy on 2026-10-01** — the Worker's
-    // name and the account's `workers.dev` subdomain, read back from the deploy rather than
-    // guessed. It was the placeholder `<set on first deploy>` until then, deliberately one that
-    // could not be mistaken for an address.
+    // **This Worker's own address: the Custom Domain above, since 2026-10-11.** From the first
+    // deploy on 2026-10-01 until then it was the Worker's name on the account's `workers.dev`
+    // subdomain, which still answers (`workers_dev`, above) — and before that the placeholder
+    // `<set on first deploy>`, deliberately one that could not be mistaken for an address.
+    //
+    // **One address and no legacy var, unlike the relay's.** This is read to mint a link and to
+    // write a page's `og:url`, and both name the current address whichever one was asked: a build
+    // that published to the old address is handed a link at the new one, and opens it — no
+    // client checks a link's host. A page names its snapshot by a relative path (`src/page.ts`),
+    // so a link minted before the move still fetches from the address it was opened at.
     //
     // ⚠️ **It must equal the Rust's `share::publish::SHARE_BASE` byte for byte** — the trap
     // `infrastructure/relay/wrangler.jsonc` documents for `RELAY_BASE` and the OAuth redirect URI, with less
     // mercy: a mismatch produces links that resolve to nothing rather than an error anybody
     // sees. `share::publish`'s tests read this file and compare. No trailing slash: every link
     // the app shows is `{SHARE_BASE}/s/{id}`, built by `env.ts`'s `shareUrl`.
-    "SHARE_BASE": "https://mtg-grimoire-share.denmark-east.workers.dev",
+    "SHARE_BASE": "https://share.mtg-grimoire.app",
   },
 
   // The three secrets stay in `wrangler secret put` and are never committed (spec §9). This

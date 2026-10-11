@@ -20,6 +20,7 @@ import { LegalitySection } from "./card/Legality";
 import { OpenOnSection } from "./card/OpenOn";
 import { OracleTagsSection } from "./card/OracleTags";
 import { Note, Source } from "./card/parts";
+import { PinchZoom } from "./card/PinchZoom";
 import { PrintingsSection } from "./card/Printings";
 import type { Place } from "../routes";
 import { back, usePlace } from "./router";
@@ -146,6 +147,9 @@ export function CardSheet({
       size="w-[28rem] pt-[env(safe-area-inset-top)] sm:pt-0"
       onDismiss={close}
       onClose={close}
+      // The sheet *is* an entry — `?card=` — so Back closes it by the place, and the shell must
+      // not push a second step for it.
+      placeBacked
     >
       {/* `relative` because this is the box carrying the overflow, and rarity gems and language
           badges carry `sr-only` spans — an absolutely positioned caption with no positioned
@@ -210,9 +214,11 @@ function CardBody({
     <div className="flex flex-col gap-4">
       <ActionsSection card={card} place={place} deckPicked={deckPicked} />
 
-      <div className="mx-auto w-full max-w-64">
+      {/* A pinch zooms the picture, and only the picture (`card/PinchZoom.tsx`); keyed by the
+          printing, so a step down the printings list starts the next one at rest. */}
+      <PinchZoom key={card.id} className="mx-auto w-full max-w-64">
         <CardArt cardId={card.id} name={card.name} variant="display" loading="eager" />
-      </div>
+      </PinchZoom>
 
       <div className="flex flex-col gap-3">
         {faces.map((face, i) => (

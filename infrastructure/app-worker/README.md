@@ -573,8 +573,8 @@ H='^HTTP|content-type|cache-control|content-security-policy|x-content-type|refer
 | 16 | `curl -s -o /dev/null -D - "$A/icons/icon-192.png" \| grep -iE "$H"` | `200`, `image/png`, `cache-control: no-cache` | **2026-10-04** — `200`, `image/png`, `no-cache`, the policy equal byte for byte |
 | 17 | `curl -s -o /dev/null -D - "$A/assets/$W" \| grep -iE "$H"` | `200`, a JavaScript MIME type, **`cache-control: no-cache`** — one value, not a year and not three joined — the policy, and an `etag` | **2026-10-04** — `200`, `text/javascript`, `no-cache` — one value — the policy equal byte for byte, and a strong `ETag` |
 | 18 | `E=$(curl -s -o /dev/null -D - "$A/assets/$W" \| grep -i '^etag' \| cut -d' ' -f2 \| tr -d '\r')`, then `curl -s -o /dev/null -D - -H "If-None-Match: $E" "$A/assets/$W" \| grep -iE "$H"` | **`304`, with the policy line on it.** This is the response that re-governs a returning reader's engine after a change to `_headers`; a 304 without the policy leaves the old one in force (measured) | **2026-10-04** — **`304 Not Modified`, with the policy on it, equal byte for byte**, `no-cache`, and probe 17's `ETag` |
-| 19 | `curl -s -o /dev/null -D - "$A/" \| grep -i '^content-security-policy' \| grep -c 'connect-src[^;]* https://mtg-grimoire-relay\.denmark-east\.workers\.dev[ ;]'` | `1` — the policy the host sends names the relay. `0` is a build from before the engine asked it from a page, and that build's sync panel answers the refusal sentence instead | **2026-10-04, 15:59 UTC** — `0`: production was a build from before this entry (and `0` again at 23:18:35, a minute before the deploy). **Asked again at 23:19:35 UTC, of the build deployed at 23:19:22 — `1`**, and the `wss://` source is in the same line |
-| 20 | `curl -s -o /dev/null -D - -X OPTIONS -H "Origin: $A" -H "Access-Control-Request-Method: POST" -H "Access-Control-Request-Headers: authorization,content-type" https://mtg-grimoire-relay.denmark-east.workers.dev/token \| grep -iE '^HTTP\|^access-control'` | `204`, **`access-control-allow-origin: https://mtg-grimoire.app`**, and an `access-control-allow-headers` that names `authorization` and `content-type` — the two request headers the engine sets, and the pre-flight every sync request from a page costs. ⚠️ **Asked of the relay, not of this Worker, and asked BEFORE this Worker's deploy** (*The steps, in order*): no allow-origin line is a relay that cannot answer a page | **2026-10-04, 15:59 UTC** — `405 Method Not Allowed`, `Allow: POST`, **and no `access-control-*` line**: the relay deployed that minute predates its allow-list, which is the answer that means *stop*. **Asked again 2026-10-04, 23:09 UTC**, of the relay deployed at 17:22 — **`204` with `access-control-allow-origin: https://mtg-grimoire.app`** and `access-control-allow-headers: authorization, content-type`: the answer that means *go* |
+| 19 | `curl -s -o /dev/null -D - "$A/" \| grep -i '^content-security-policy' \| grep -c 'connect-src[^;]* https://relay\.mtg-grimoire\.app[ ;]'` | `1` — the policy the host sends names the relay, at the address it has had since 2026-10-11 (the dated answers in the next cell grepped for its `workers.dev` one, which a build through 0.44.0 names). `0` is such a build, or one from before the engine asked the relay from a page, and that build's sync panel answers the refusal sentence instead | **2026-10-04, 15:59 UTC** — `0`: production was a build from before this entry (and `0` again at 23:18:35, a minute before the deploy). **Asked again at 23:19:35 UTC, of the build deployed at 23:19:22 — `1`**, and the `wss://` source is in the same line |
+| 20 | `curl -s -o /dev/null -D - -X OPTIONS -H "Origin: $A" -H "Access-Control-Request-Method: POST" -H "Access-Control-Request-Headers: authorization,content-type" https://relay.mtg-grimoire.app/token \| grep -iE '^HTTP\|^access-control'` | `204`, **`access-control-allow-origin: https://mtg-grimoire.app`**, and an `access-control-allow-headers` that names `authorization` and `content-type` — the two request headers the engine sets, and the pre-flight every sync request from a page costs. ⚠️ **Asked of the relay, not of this Worker, and asked BEFORE this Worker's deploy** (*The steps, in order*): no allow-origin line is a relay that cannot answer a page | **2026-10-04, 15:59 UTC** — `405 Method Not Allowed`, `Allow: POST`, **and no `access-control-*` line**: the relay deployed that minute predates its allow-list, which is the answer that means *stop*. **Asked again 2026-10-04, 23:09 UTC**, of the relay deployed at 17:22 — **`204` with `access-control-allow-origin: https://mtg-grimoire.app`** and `access-control-allow-headers: authorization, content-type`: the answer that means *go* |
 
 **Beside the table, the same minute**: the document served — to `-H "Sec-Fetch-Mode: navigate"`
 and to a plain `GET /` — was byte for byte `apps/light/dist-web/index.html`; and `www.mtg-grimoire.app` did
@@ -594,9 +594,14 @@ headless Chrome 154.0.8037.95: no violation, the app past its gate, that console
 
 ⚠️ **"Byte for byte the line in `_headers`" means the `_headers` of the build that was
 deployed** — `apps/light/dist-web/_headers`, never this directory's on another commit. **The host has the
-relay's sources since the deploy of 23:19 UTC on 2026-10-04**: this directory's policy names
+relay's sources since the deploy of 23:19 UTC on 2026-10-04**: that build's policy names
 `https://mtg-grimoire-relay.denmark-east.workers.dev` and its `wss://` twin in `connect-src`,
-and so does production's. (Until that deploy the tree was ahead of the host by those sources,
+and so does production's. **Since 2026-10-11 this directory's names
+`https://relay.mtg-grimoire.app` and its `wss://` twin instead** — the relay's address moved onto
+this zone, and the page's engine asks only that constant — so the tree is ahead of the host by
+those two sources until the release that carries them; the relay answers at both addresses, so
+the build in production goes on syncing across it. Probe 20 names the new address, and its dated
+*Answered* cell is the old one's. (Until that deploy the tree was ahead of the host by those sources,
 and this paragraph said so.) The dated *Answered* cells of probes 1–18 are from builds without
 them and stay true of those builds; the bullets above have all twenty as the build of 23:19
 answered and as the present one does. Probes 19 and 20 came with the relay's sources. Each was asked first at 15:59 UTC of
@@ -1024,8 +1029,9 @@ Read from Cloudflare's documentation on 2026-10-04; none of it measured here.
   was in control at 1,553 ms, and a fresh profile has no card to draw until its corpus is built,
   21.4 s in. One run, in one Chrome; a returning reader whose worker was evicted is the case it
   does not cover.)
-- **A flood of misses is the exposure**, and unlike the two `workers.dev` Workers this one sits
-  behind a zone: a rate-limiting rule on `mtg-grimoire.app` can refuse a caller *before* the Worker
+- **A flood of misses is the exposure**, and unlike the relay and the share Worker — which answer at `workers.dev` as well as at their own
+  names on this zone, so a rule could cover only one of each one's two addresses — this one sits
+  wholly behind a zone: a rate-limiting rule on `mtg-grimoire.app` can refuse a caller *before* the Worker
   is invoked, which `infrastructure/relay/src/ratelimit.ts` could not do for the relay. **None is configured.**
   It is the first thing to add if the relay's 70% notification ever fires for this Worker's sake.
 - **What a spent day does, and does not do.** In the router's source

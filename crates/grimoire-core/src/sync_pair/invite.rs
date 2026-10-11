@@ -61,8 +61,14 @@ pub enum InviteError {
 /// **Un-hyphenated.** The hyphens are the typed form's, for a reader copying five characters at
 /// a time; in a QR they are 20 bytes that buy nothing and push the symbol a version larger.
 ///
-/// Measured 2026-08-31: 162 bytes against `RELAY_BASE`, a **version-9 QR at level M** — 53×53
-/// modules. Version 8 holds 152 and does not fit.
+/// **141 bytes against `RELAY_BASE`, and never more than a version-8 QR at level M — 49×49
+/// modules** (2026-10-11, held by `the_invite_is_drawn_at_49_modules_or_fewer`). Version 8 holds
+/// 152 bytes as bytes, so every invite fits it; [`qr_matrix`]'s encoder packs a run of digits or
+/// capitals tighter than that and draws some invites at version 7, 45×45 — which one depends on
+/// the invite's own bytes. This comment said *162 bytes, a version-9 symbol, 53×53* from
+/// 2026-08-31, against the relay's `workers.dev` address, which is 21 bytes longer and which
+/// every build through 0.44.0 still draws against (one invite measured at both: 49 modules
+/// there, 45 here).
 pub fn qr_payload(code: &str, relay_base: &str) -> String {
     let bare: String = code.chars().filter(|c| *c != '-').collect();
     format!("{relay_base}/pair#{bare}")
@@ -300,8 +306,41 @@ mod tests {
             token: [3; 16],
         };
         let code = inv.encode();
-        let url = qr_payload(&code, "https://mtg-grimoire-relay.denmark-east.workers.dev");
-        assert_eq!(Invite::decode(&url).expect("the URL form must decode"), inv);
+        // Both addresses the relay answers at: a build compiled with either draws its invite
+        // against its own, and a build compiled with the other has to read it.
+        for relay in [
+            crate::sync_engine::entitlement::RELAY_BASE,
+            "https://mtg-grimoire-relay.denmark-east.workers.dev",
+        ] {
+            let url = qr_payload(&code, relay);
+            assert_eq!(
+                Invite::decode(&url).expect("the URL form must decode"),
+                inv,
+                "{relay}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_invite_is_drawn_at_49_modules_or_fewer() {
+        // `qr_payload`'s figures, which `packages/fake/qr.ts` draws to and
+        // `scripts/pairing-scan-smoke.ts` measures a phone's width against: a relay address that
+        // grows can push the symbol a version larger, and this is where that is noticed.
+        //
+        // Three invites, because the encoder packs a run of digits tighter than a run of letters:
+        // which symbol an invite gets depends on its bytes, and only the ceiling is the same for
+        // all of them. Measured 2026-10-11: 45 modules for the first and 49 for the second.
+        for bytes in [[1u8, 2, 3], [0x11, 0x22, 0x33], [0xff, 0xff, 0xff]] {
+            let inv = Invite {
+                group_id: [bytes[0]; 16],
+                public_key: [bytes[1]; 32],
+                token: [bytes[2]; 16],
+            };
+            let url = qr_payload(&inv.encode(), crate::sync_engine::entitlement::RELAY_BASE);
+            assert_eq!(url.len(), 141, "{bytes:?}");
+            let width = qr_matrix(&url).expect("the invite fits").width;
+            assert!((45..=49).contains(&width), "{bytes:?} drew {width} modules");
+        }
     }
 
     #[test]

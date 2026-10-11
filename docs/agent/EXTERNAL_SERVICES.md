@@ -9,6 +9,28 @@ construction).
 > **Deploy state changes outside the repository.** Wherever a paragraph below says _deployed_ or
 > _not deployed_, ask the host before you believe it or its opposite.
 
+> **All three Workers are on the `mtg-grimoire.app` zone since 2026-10-11, and two of them have a
+> second address.** The web app is the apex. The relay is `https://relay.mtg-grimoire.app` and the
+> share Worker `https://share.mtg-grimoire.app` — Custom Domains, `RELAY_BASE` and `SHARE_BASE` in
+> each config and in every build cut since. **Their `workers.dev` addresses still answer and are
+> meant to, indefinitely** (the owner's decision): `mtg-grimoire-relay.denmark-east.workers.dev`
+> and `mtg-grimoire-share.denmark-east.workers.dev` are compiled into every release through 0.44.0
+> and the Android bundle beside it, and each is the same Worker over the same database, so the two
+> kinds of build pair and sync with each other. What keeps them on is one line in each config,
+> `workers_dev: true` — wrangler infers `false` beside a route, and a deploy that lost the line
+> would exit 0 — held by the probe scripts' tests and asked again by each release's probe.
+> **The one thing an address decides is Patreon's redirect URI**: the relay repeats whichever of
+> its two a reader's callback arrived at (`RELAY_BASE_LEGACY`, `patreon.ts`), so **both URIs must
+> be registered on the Patreon client, the new one before the release that carries a build naming
+> it** — the owner's step, **done 2026-10-11 by his word**, as is the permission the relay's and
+> the share Worker's deploy token needs from that release on, Zone → Workers Routes → Edit on the
+> zone ([ci-and-releases.md](../reference/ci-and-releases.md)). Neither has been exercised: no
+> build has named the new URI to Patreon, and no deploy has stated a Custom Domain with that token. **Every probe and deploy recorded below
+> with an earlier date was at a `workers.dev` address**; the new names answer since that day, below. [The design](../superpowers/specs/2026-10-11-workers-on-mtg-grimoire-app-design.md)
+> has the rollout.
+>
+> **Both names were attached on 2026-10-11 at about 16:50 UTC**, by an agent at the owner's ask, through the Cloudflare API (`PUT /accounts/{id}/workers/domains`) — no deploy, no code, and `workers.dev` left on for both Workers. Asked straight after: `scripts/relay-deploy-probe.ts` passed its ten at `https://relay.mtg-grimoire.app` and its one at the old address, on the first attempt; the share Worker's four probes passed at `https://share.mtg-grimoire.app` and at the old address, and `/assets/share.js` was the same 510,300 bytes at both. **What answers there is still the build of the 0.44.0 release**, whose relay knows one redirect URI: until the next release deploys this tree, a Patreon callback that arrived at the new address would be exchanged with the old URI and refused — and no build names the new address yet.
+
 ## Contents
 
 - [Scryfall and the price feeds](#scryfall-and-the-price-feeds)
@@ -203,9 +225,10 @@ token sync mints. It is the one place the relay's "it can decrypt nothing it sto
 holding: **a snapshot is stored in the clear**, which is what buys the OpenGraph card in Discord,
 and is why six collection columns are _absent_ from the format rather than switched off in it.
 **`share::publish::SHARE_BASE` is that Worker's address**,
-`https://mtg-grimoire-share.denmark-east.workers.dev`, compiled in and public on `RELAY_BASE`'s
+`https://share.mtg-grimoire.app` since 2026-10-11 (`https://mtg-grimoire-share.denmark-east.workers.dev`
+before it, which still answers — the note at the top of this file), compiled in and public on `RELAY_BASE`'s
 terms, and equal byte for byte to the `SHARE_BASE` var in `infrastructure/share-worker/wrangler.jsonc`. It was a
-placeholder until the deploy, so **every release before the one that carries it still refuses a
+placeholder until the first deploy, so **every release before the one that carries it still refuses a
 press in words rather than publishing**. Its one secret is the relay's own `RELAY_HMAC_KEY`, the
 same value on both Workers; ask the host before you believe any of this or its opposite.
 [collection-sharing.md](../reference/collection-sharing.md) is the record, and lists what only a

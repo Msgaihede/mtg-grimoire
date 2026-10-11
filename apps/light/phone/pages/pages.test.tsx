@@ -128,9 +128,11 @@ describe("Search", () => {
   });
 
   it("closes the card from the sheet's own button, and leaves no Back that reopens it", async () => {
-    // Search by way of Decks, so there is a page beneath it for a Back to land on.
-    renderPhone(<PhoneFace />, { path: "/decks" });
-    await userEvent.click(screen.getByRole("link", { name: "Search" }));
+    // Search over an entry of Decks, so there is a page beneath it for a Back to land on. Not by
+    // way of the Search tab: a tab renames an entry that is not the start view's (`switchTo`).
+    window.history.replaceState(null, "", "/decks");
+    window.history.pushState(null, "", "/search");
+    renderPhone(<PhoneFace />, { path: "/search" });
     const wall = await screen.findByRole("list", { name: "Search results" });
     await userEvent.click(await waitFor(() => within(wall).getAllByRole("button")[0], SETTLE));
     const sheet = await screen.findByRole("dialog");

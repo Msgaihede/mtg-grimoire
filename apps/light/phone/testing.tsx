@@ -5,6 +5,7 @@ import { onTestFinished, vi } from "vitest";
 import { TooltipProvider } from "@grimoire/ui/components/tooltip/TooltipProvider";
 import type { CommandTable } from "@grimoire/fake/scope";
 import { installWorld, type FakeParams } from "@grimoire/fake/world";
+import { resetSheetHistory, sheetHistoryIdle } from "./sheetHistory";
 
 /**
  * The layout jsdom does not have. **Any test that _mounts_ a wall calls this first** — not only
@@ -69,6 +70,11 @@ export function renderPhone(
     commands?: (own: CommandTable) => CommandTable;
   } = {},
 ): RenderResult {
+  // A sheet's entry is history this module keeps a model of (`sheetHistory.ts`): each test starts
+  // with none, and waits at its end for the pop its open sheets' unmount queued to land — landed
+  // in the next test, it would read as that test's reader pressing Back.
+  resetSheetHistory();
+  onTestFinished(() => sheetHistoryIdle());
   window.history.replaceState(state, "", path);
   const world = installWorld(fake ?? { seed: "starter" });
   if (commands) {

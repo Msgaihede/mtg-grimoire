@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { columnsFor, GAP, rowHeightFor, TILE_MIN, tileWidthFor } from "./wall";
+import {
+  columnsAt,
+  columnsFor,
+  GAP,
+  rowHeightFor,
+  TILE_DENSE_MIN,
+  TILE_MIN,
+  tileWidthFor,
+} from "./wall";
 
 describe("the wall's arithmetic", () => {
   it("draws two columns on a 360px phone", () => {
@@ -40,5 +48,24 @@ describe("the wall's arithmetic", () => {
   it("makes a row a card, its chin and a gap", () => {
     // 162 wide → 227 of art at 5:7, a 28px chin ridden 4px up, and the 12px gap.
     expect(rowHeightFor(162)).toBe(227 + 28 - 4 + 12);
+  });
+});
+
+describe("a wall the reader has pinched", () => {
+  it("moves the width's own count by the offset", () => {
+    expect(columnsAt(336, 0)).toBe(2);
+    expect(columnsAt(336, 1)).toBe(3);
+    expect(columnsAt(336, -1)).toBe(1);
+  });
+
+  it("stops at one column and at the narrowest dense tile", () => {
+    expect(columnsAt(336, -5)).toBe(1);
+    // 336px holds four tiles of at least 72px and the gaps between them, and not five.
+    expect(columnsAt(336, 9)).toBe(4);
+    expect(tileWidthFor(336, 4)).toBeGreaterThanOrEqual(TILE_DENSE_MIN);
+  });
+
+  it("answers two for a wall nothing has measured, whatever the offset", () => {
+    expect(columnsAt(0, 3)).toBe(2);
   });
 });

@@ -260,14 +260,20 @@ address was told their pairing code had a typo in it — a sentence pointing at 
 
 **Since 2026-08-31 the QR is not a picture of the 105 characters above — it is a URL, and the
 fragment is load-bearing rather than cosmetic.**
-`https://mtg-grimoire-relay.denmark-east.workers.dev/pair#<the 105 characters, no hyphens>`. A
+`https://relay.mtg-grimoire.app/pair#<the 105 characters, no hyphens>` — against the relay's
+`workers.dev` address, 21 bytes longer, in every build through 0.44.0; a decoder reads everything
+after the last `#`, so each kind of build reads the other's. A
 fragment is never sent to a server, so the relay still never learns the invite — the whole reason
 the code stayed 105 characters instead of shrinking to the ~16 the public key alone would need.
 Put the code in the path instead and the relay would hold A's public key and the one-time token,
 and the six digits would become the sole defence by the back door.
 
-**Measured: 162 bytes, a version-9 QR at error-correction level M** (176-byte capacity; version 8
-holds 152 and does not fit) — 53×53 modules, 61 with the four-module quiet zone `QrCode.tsx` draws.
+**141 bytes since 2026-10-11, and never more than a version-8 QR at error-correction level M** —
+49×49 modules, 57 with the four-module quiet zone `QrCode.tsx` draws. Version 8 holds 152 bytes as
+bytes, so every invite fits it; the encoder packs a run of digits or capitals tighter and draws
+some invites at version 7, 45×45 (`invite.rs`, `the_invite_is_drawn_at_49_modules_or_fewer`).
+This paragraph said *162 bytes, a version-9 QR, 53×53* from 2026-08-31, which is where the next
+sentence's figures come from.
 The panel's `size-56` (224 px, 3.67 px/module) becomes `size-72` (288 px, 4.72 px/module) so the
 larger code stays legible; nothing else about the component changes, and its warning stands —
 `bg-white` and `fill="#000"` are literal, because a QR inverted by dark mode is a QR no camera
@@ -875,7 +881,8 @@ restore-from-backup is exactly the thing that gets reused.
 `packages/fake/db.ts` answers all nine commands, and **there is no cryptography in it**. The six
 digits are derived from the code with a plain hash — the workbench has no X25519, no HKDF and no
 relay. **It does have a QR encoder, since 2026-10-04** (`packages/fake/qr.ts`, read back by `jsQR`
-in `qr.test.ts`): the QR is the real 53-module symbol of `…/pair#<code>` for a code with no key in
+in `qr.test.ts`): the QR is the real 49-module symbol (53 until the relay's address got shorter,
+2026-10-11) of `…/pair#<code>` for a code with no key in
 it, where it used to be a 21×21 picture of the right shape. `sync_pairing_accept` takes that URL as
 `Invite::decode` does, so a story's code can be scanned (`pnpm mobile:scan-smoke`), and the
 fake's copy of `RELAY_BASE` is held to the crate's by reading `entitlement.rs` as text.

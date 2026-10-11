@@ -69,9 +69,16 @@ use std::time::Duration;
 
 /// The share Worker's address.
 ///
-/// **Real since the Worker's first deploy on 2026-10-01** — `mtg-grimoire-share` is its name in
-/// `infrastructure/share-worker/wrangler.jsonc` and `denmark-east` is the account's subdomain, read back from
-/// the deploy and probed rather than guessed. Until that day it was the placeholder
+/// **`share.mtg-grimoire.app` since 2026-10-11**: a Custom Domain of the Worker
+/// `mtg-grimoire-share`, on the zone whose apex is the web app's origin
+/// (`infrastructure/share-worker/wrangler.jsonc`, `routes`). Every release through 0.44.0 was
+/// compiled with the Worker's `workers.dev` address,
+/// `https://mtg-grimoire-share.denmark-east.workers.dev`, **which still answers and is meant to,
+/// indefinitely**: such a build publishes there and is handed a link at this address, and a link
+/// minted before the move still opens where it points. Nothing on this side checks a link's host.
+///
+/// **Real since the Worker's first deploy on 2026-10-01**, at that `workers.dev` address — read
+/// back from the deploy and probed rather than guessed. Until that day it was the placeholder
 /// `<set on first deploy>`, deliberately a string that could not be mistaken for an address: a
 /// guessed host gets copied into documentation and deployed against, which is what the
 /// `database_id` comment in the relay's config records happening.
@@ -85,7 +92,7 @@ use std::time::Duration;
 /// [`entitlement::RELAY_BASE`] is the sibling of this constant. Both are public on the same
 /// terms — an API base is on the wire of every request that uses it and ships inside the binary
 /// whatever this tree says. Spec §14 open item 5.
-pub const SHARE_BASE: &str = "https://mtg-grimoire-share.denmark-east.workers.dev";
+pub const SHARE_BASE: &str = "https://share.mtg-grimoire.app";
 
 /// The `sync_state` key holding an override for [`SHARE_BASE`] — a test/dev knob with no UI,
 /// exactly as [`client::RELAY_URL`] is for the relay.

@@ -1,5 +1,7 @@
 import { useMemo, useSyncExternalStore, type MouseEvent } from "react";
+import { LIGHT_START } from "@grimoire/ui/lib/edition";
 import { isOverlaid, isPushed, parsePlace, placeHref, PUSHED, type Place } from "../routes";
+import { pageState, uncover } from "./sheetHistory";
 
 /**
  * The phone face's router: the URL is where the reader is, and the History API is how they move.
@@ -58,7 +60,40 @@ function holdOver(place: string): void {
 // in the order they were added, so each snapshot read after it finds the hold already gone.
 window.addEventListener("popstate", () => {
   hold = null;
+  // A tab switch's walk back to the first entry has landed: its write goes now, ahead of every
+  // subscriber, so no frame draws the entry it passed through — see {@link switchTo}.
+  const then = traversal;
+  if (then !== null) {
+    traversal = null;
+    clearTimeout(traversalTimer);
+    then();
+  }
 });
+
+/**
+ * How many entries this router has pushed beneath the one the browser is on — `0` on the entry
+ * the app was opened on, and on any entry it did not write (the desktop face's, a link's).
+ *
+ * **Written into each push's state** ({@link pushedAt}), because a tab switch walks back to the
+ * first entry and nothing else on the page knows how far that is. A replace keeps the entry's
+ * state, and with it the count. Read through a sheet's entry to the page beneath it.
+ */
+function depthOf(state: unknown): number {
+  const page = pageState(state);
+  return typeof page === "object" &&
+    page !== null &&
+    "depth" in page &&
+    typeof page.depth === "number"
+    ? page.depth
+    : 0;
+}
+
+/** {@link PUSHED}, stamped with how deep the entry sits — see {@link depthOf}. */
+const pushedAt = (depth: number) => ({ ...PUSHED, depth });
+
+/** The walk back a tab switch is waiting on, and what it writes once it lands. */
+let traversal: (() => void) | null = null;
+let traversalTimer: ReturnType<typeof setTimeout> | undefined;
 
 function subscribe(onChange: () => void): () => void {
   listeners.add(onChange);
@@ -112,8 +147,12 @@ function write(how: "push" | "replace", next: string): void {
       const place = placeAt(next);
       const page = placeHref({ ...place, cardId: null });
       const overItsPage = place.cardId === null || landed(page);
-      if (!overItsPage) window.history.pushState(PUSHED, "", page);
-      if (overItsPage || landed(page)) window.history.pushState(PUSHED, "", next);
+      if (!overItsPage) {
+        window.history.pushState(pushedAt(depthOf(window.history.state) + 1), "", page);
+      }
+      if (overItsPage || landed(page)) {
+        window.history.pushState(pushedAt(depthOf(window.history.state) + 1), "", next);
+      }
     }
   } catch {
     // Refused out loud. What follows is the same as for a refusal that said nothing.
@@ -144,6 +183,9 @@ function write(how: "push" | "replace", next: string): void {
  */
 export function navigate(place: Place, { replace = false }: { replace?: boolean } = {}): void {
   if (isHere(place)) return;
+  // A sheet's entry on top is taken off first, so this write lands where the sheet's was
+  // (`sheetHistory.ts`, rule 3) — a push over it would leave the sheet one Back beneath the page.
+  if (uncover(() => navigate(place, { replace }))) return;
   const next = placeHref(place);
   if (landed(next)) hold = null;
   else if (held() !== null && replace) holdOver(next);
@@ -178,7 +220,7 @@ export function adoptOverlay(): void {
   const card = placeHref(place);
   try {
     window.history.replaceState(null, "", placeHref({ ...place, cardId: null }));
-    window.history.pushState(PUSHED, "", card);
+    window.history.pushState(pushedAt(1), "", card);
   } catch {
     try {
       window.history.replaceState(state, "", card);
@@ -229,6 +271,7 @@ export const BACK_WAIT_MS = 500;
  */
 export function back(fallback: Place): void {
   if (leaving || isHere(fallback)) return;
+  if (uncover(() => back(fallback))) return;
   const entry = placeAt(actual());
   const beneath =
     isPushed(window.history.state) &&
@@ -283,15 +326,87 @@ export function linkTo(
   href: string;
   onClick: (event: MouseEvent<HTMLAnchorElement>) => void;
 } {
+  return anchorTo(place, () => navigate(place, { replace }));
+}
+
+/** An `<a>` to `place` whose unmodified primary click is `go` — {@link linkTo}'s rule, shared. */
+function anchorTo(
+  place: Place,
+  go: () => void,
+): { href: string; onClick: (event: MouseEvent<HTMLAnchorElement>) => void } {
   return {
     href: placeHref(place),
     onClick: (event) => {
       if (event.defaultPrevented || event.button !== 0) return;
       if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
       event.preventDefault();
-      navigate(place, { replace });
+      go();
     },
   };
+}
+
+/** Whether `place` is a top-level destination with nothing open in it. */
+const isRoot = (place: Place): boolean =>
+  place.deckId === null &&
+  place.cardId === null &&
+  (place.folderId ?? null) === null &&
+  (place.tradeId ?? null) === null;
+
+/**
+ * Go to a top-level destination — a tab, or Settings — **as an Android app's bottom navigation
+ * does** (the owner's decision, 2026-10-11): the start view ({@link LIGHT_START}) is the one
+ * entry everything else sits on, and every other destination is one step above it.
+ *
+ * So the switch walks back to the first entry this router wrote on ({@link depthOf}), and from
+ * there pushes the destination over the start view's root, or renames anything else — a reader
+ * who opened the app on a link has no start view beneath them, and a tab is not a reason to
+ * invent one. Back from any tab is then the start view, and Back from there leaves the app.
+ * Drill-downs inside a tab (a deck, a folder, a trade, a card) are still pushes, so Back walks
+ * out of them first. Pressing the tab one is deep inside lands on its root by the same walk.
+ *
+ * **The write waits for the walk to land** and runs from the router's own `popstate` listener,
+ * ahead of every subscriber, so no frame draws the entry the walk passed through. A walk the
+ * browser drops is given {@link BACK_WAIT_MS}, and the write then renames the entry the reader
+ * is on.
+ */
+export function switchTo(place: Place): void {
+  if (uncover(() => switchTo(place))) return;
+  if (traversal !== null) return;
+  const depth = depthOf(window.history.state);
+  const land = () => {
+    const base = placeAt(href());
+    const fromStart = base.view === LIGHT_START && isRoot(base);
+    navigate(place, { replace: !fromStart });
+  };
+  if (depth === 0) {
+    land();
+    return;
+  }
+  traversal = land;
+  traversalTimer = setTimeout(() => {
+    if (traversal !== land) return;
+    traversal = null;
+    land();
+  }, BACK_WAIT_MS);
+  try {
+    window.history.go(-depth);
+  } catch {
+    traversal = null;
+    clearTimeout(traversalTimer);
+    land();
+  }
+}
+
+/**
+ * {@link linkTo} for a tab: a press goes by {@link switchTo}, and **a press on the destination the
+ * reader is already standing on is `onReselect`** — the page's scroller back to its top, which is
+ * what a phone's tab bar does with a second tap.
+ */
+export function tabLinkTo(
+  place: Place,
+  onReselect: () => void,
+): { href: string; onClick: (event: MouseEvent<HTMLAnchorElement>) => void } {
+  return anchorTo(place, () => (isHere(place) ? onReselect() : switchTo(place)));
 }
 
 export function usePlace(): Place {

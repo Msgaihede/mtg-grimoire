@@ -190,10 +190,16 @@ Those are the repo owner's, or a release's: since 2026-10-11 `release.yml`'s `sh
 **Step 0 is to ask the host rather than a document**, for the reason `infrastructure/relay/README.md` opens with:
 that file has been wrong twice about what was deployed, in the same week, and the only sentence
 that cannot rot is a `curl`. **The Worker was first deployed on 2026-10-01 at 20:10 UTC**, at
-`https://mtg-grimoire-share.denmark-east.workers.dev`, and the five against it are:
+`https://mtg-grimoire-share.denmark-east.workers.dev`. **Since 2026-10-11 its address is
+`https://share.mtg-grimoire.app`** — a Custom Domain on the web app's zone (`wrangler.jsonc`,
+`routes`), `SHARE_BASE` in the config and in every build cut since — **and the `workers.dev` one
+still answers, indefinitely** (`workers_dev: true`, written out because wrangler infers `false`
+beside a route): every release through 0.44.0 publishes to it, and a link minted before the move
+names it. The answers recorded below were given at the `workers.dev` address. The five, against
+either:
 
 ```
-S=https://mtg-grimoire-share.denmark-east.workers.dev
+S=https://share.mtg-grimoire.app
 curl -s -o /dev/null -w "%{http_code} %{content_type}\n" "$S/s/AAAAAAAAAAAAAAAA"
 curl -s -o /dev/null -w "%{http_code} %{content_type}\n" "$S/assets/share.js"
 curl -s -w " %{http_code}\n" "$S/g/abc/shares"

@@ -3,6 +3,7 @@ import {
   codeFrom,
   DEVICE_ID,
   GROUP_ID,
+  handleCallback,
   handleClaim,
   handleToken,
   normaliseCode,
@@ -1381,6 +1382,76 @@ describe("/claim — the refresh secret", () => {
     withCode(tables);
     await handleClaim(post("/claim", { ...WELL_FORMED, device: "desk" }), env);
     expect(tables.entitlements[0].refresh_device).toBe("desk");
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// GET /oauth/patreon/callback — which redirect URI the exchange repeats
+// ---------------------------------------------------------------------------------------
+
+/**
+ * The relay answers at two addresses since 2026-10-11, and an app names whichever one it was
+ * compiled with in its authorize request. `patreon.test.ts` holds the choice as a pure function;
+ * this holds the wire — that the callback hands its own request to the exchange, so the address a
+ * reader's browser arrived at is the one Patreon is told.
+ *
+ * Patreon is stubbed to refuse the code, which is the cheapest way to stop: the exchange has been
+ * sent by then, and the handler answers its 502 page without reaching D1.
+ */
+describe("/oauth/patreon/callback — the redirect URI is the address it arrived at", () => {
+  const CURRENT = "https://relay.example";
+  const LEGACY = "https://old-relay.example";
+  const env = {
+    RELAY_BASE: CURRENT,
+    RELAY_BASE_LEGACY: LEGACY,
+    PATREON_CLIENT_ID: "client-for-tests",
+    PATREON_CLIENT_SECRET: "secret-for-tests",
+    PATREON_CAMPAIGN_ID: "campaign-for-tests",
+  } as Env;
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  /** The `redirect_uri` of every token request, with Patreon refusing each. */
+  function refusingPatreon(): string[] {
+    const sent: string[] = [];
+    vi.stubGlobal("fetch", (_input: unknown, init?: { body?: unknown }) => {
+      sent.push(new URLSearchParams(String(init?.body)).get("redirect_uri") ?? "");
+      return Promise.resolve(new Response("{}", { status: 400 }));
+    });
+    // `connectPatreon` logs what it folds into the 502; that is the path under test.
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    return sent;
+  }
+
+  it.each([
+    ["the current address", CURRENT, CURRENT],
+    ["the legacy address, where every build through 0.44.0 sends its reader", LEGACY, LEGACY],
+    ["an address that is neither", "https://preview.example", CURRENT],
+  ])("a callback at %s", async (_name, origin, expected) => {
+    const sent = refusingPatreon();
+
+    const response = await handleCallback(
+      new Request(`${origin}/oauth/patreon/callback?code=abc&state=xyz`),
+      env,
+    );
+
+    expect(response.status).toBe(502);
+    expect(sent).toEqual([`${expected}/oauth/patreon/callback`]);
+  });
+
+  it("is a failure that names the legacy binding when a deploy left it out", async () => {
+    // Without this the relay would go on working for every new build and fail the exchange for
+    // every installed one, as `invalid_grant` folded into "try again in a minute".
+    const sent = refusingPatreon();
+    const without = { ...env, RELAY_BASE_LEGACY: undefined } as unknown as Env;
+
+    await expect(
+      handleCallback(new Request(`${LEGACY}/oauth/patreon/callback?code=abc`), without),
+    ).rejects.toThrow("RELAY_BASE_LEGACY");
+    expect(sent).toEqual([]);
   });
 });
 

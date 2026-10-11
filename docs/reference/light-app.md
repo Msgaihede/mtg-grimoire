@@ -2529,6 +2529,30 @@ page's own sticky line (Search's box) still stops at the inset** — it is the p
   `vite.watch.ts` (#760) already gives every server the same list, which also settles the `EBUSY`
   sentence in §4.
 
+### 7.9 Mobile gestures — Back, pinch and touch (2026-10-11)
+
+Reported by the owner: a pinch zoomed the whole app, tab bar and header included; Back did not do
+what a phone reader expects; and the face was missing touch idioms. What was wrong, and what each
+became (`apps/light/CLAUDE.md` §4 carries the rules):
+
+- **Back skipped every sheet but the card.** Back is a history walk on every host (§8.3), and only
+  the card sheet was an entry — the filters, a row's actions, the trade and transfer sheets and
+  Settings' panels were "not a place", so Back moved the page beneath them or put the app away.
+  Every `Dialog` under the phone face is now an entry of its own (`phone/sheetHistory.ts`, lent
+  through `@grimoire/ui/lib/dialogHost`). The ordering rules — pop at the end of the tick, hand
+  the entry to a sheet opened in the same tick, and let the router uncover before it writes —
+  exist because a traversal is a task later than the write that follows it.
+- **Back walked every tab ever pressed** (§8.6's "four backs walked Decks → Collection → Search →
+  launcher"). Decided: Android's bottom navigation — a tab sits one step over the start view, Back
+  from any tab is Search, Back from Search leaves. `router.ts`'s `switchTo` walks back by the depth
+  each push now records, then pushes or renames.
+- **A pinch zoomed the app.** The phone face locks the page (`user-scalable=no` and
+  `touch-action: pan-x pan-y`, `phone/touchShell.ts`) and gives the pinch to content: the card
+  sheet's picture zooms in its frame, and a wall's pinch steps its columns (remembered).
+- **Touch idioms added**: a dialog's header drags down to close it; a second press on the current
+  tab scrolls the page to its top (from inside the tab, to its root); no pull-to-refresh reload,
+  no grey tap flash, no double-tap zoom wait. Still no long-press, for §7.5's reason.
+
 ## 8. The Android host — phase 4, a step at a time
 
 **Decided by Markus, 2026-10-03**, before anything was built: **the APK is built in CI** (this
