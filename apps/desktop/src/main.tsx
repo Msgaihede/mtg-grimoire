@@ -1,8 +1,8 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { DesktopBoot } from "./DesktopBoot";
-import { installKeyboardModality } from "@/lib/keyboardModality";
-import { installNativeDragGuard } from "@/lib/nativeDrag";
+import { installKeyboardModality } from "@grimoire/ui/lib/keyboardModality";
+import { installNativeDragGuard } from "@grimoire/ui/lib/nativeDrag";
 import "./desktop.css";
 // Mana and set glyphs, as bundled icon fonts — no CDN, and the CSP has no remote source.
 // Imported here rather than from `index.css` so Vite owns them as modules and the

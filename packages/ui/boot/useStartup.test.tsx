@@ -10,11 +10,11 @@ import type { StartupStatus } from "@/lib/ipc";
  */
 const invoke = vi.hoisted(() => vi.fn<(command: string) => Promise<StartupStatus>>());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
-vi.mock("@tauri-apps/api/event", () => import("../../fake/event"));
+vi.mock("@tauri-apps/api/event", () => import("@grimoire/fake/event"));
 
 import { STARTUP_POLL_MS, useStartup } from "@/boot/useStartup";
-import { emitFake, resetListeners } from "../../fake/event";
-import { activeScope } from "../../fake/scope";
+import { emitFake, resetListeners } from "@grimoire/fake/event";
+import { activeScope } from "@grimoire/fake/scope";
 
 const LOADING: StartupStatus = { state: "loading" };
 const READY: StartupStatus = { state: "ready" };

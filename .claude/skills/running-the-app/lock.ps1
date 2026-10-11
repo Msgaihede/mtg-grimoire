@@ -37,7 +37,7 @@ $ErrorActionPreference = 'Stop'
 
 # A lock between `acquire` and `adopt` has no pid yet. Treat it as live for this long
 # so a crash in that window cannot block another agent forever. It has to cover the
-# longest honest acquire->adopt gap, which is a cold `npm run tauri dev` cargo build -
+# longest honest acquire->adopt gap, which is a cold `pnpm tauri dev` cargo build -
 # shorten it and an agent steals a lock out from under a build that is still going.
 # SKILL.md's poll ceiling matches it; change one and change the other.
 $UnadoptedGraceMinutes = 10

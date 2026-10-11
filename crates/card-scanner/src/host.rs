@@ -560,7 +560,7 @@ mod tests {
     /// arm). **`session::fast_reads`' [`join`] never runs**, and neither does a real read
     /// beside a search. What holds those is the helpers' own tests above — the threads each
     /// uses, the order each keeps, the panic each carries — and, with the published models,
-    /// the frame bench (`npm run scanner:bench -- --native`), which fails when the hosts
+    /// the frame bench (`pnpm scanner:bench --native`), which fails when the hosts
     /// disagree about a decision or a read and which CI, having no models, does not run.
     ///
     /// **The threaded session resolves inline and the inline one in the "background".** A real

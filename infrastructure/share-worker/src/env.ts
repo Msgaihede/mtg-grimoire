@@ -1,4 +1,4 @@
-import { TOKEN_TTL_MS, verify, type Claims } from "../../relay/src/token";
+import { TOKEN_TTL_MS, verify, type Claims } from "@grimoire/relay/src/token";
 
 /**
  * The share Worker's bindings, its two caps, and the bearer gate every `/g/…` route stands

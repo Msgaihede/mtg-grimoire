@@ -33,13 +33,13 @@ Also supports a light app (Android via Tauri, distributed through Google Play, a
 
 ## Primary Commands
 
-- `npm run verify` — Build + lint + `cargo fmt --check` + Clippy + Vitest + cargo test. **Run at the end of a feature before committing (not after every change).**
-- `npm run tauri dev` — Run the desktop app (Vite HMR + Rust rebuild). Takes the `app` lock (see `running-the-app` skill).
-- `npm run test` / `test:run` — Run frontend tests via Vitest.
+- `pnpm verify` — Build + lint + `cargo fmt --check` + Clippy + Vitest + cargo test. **Run at the end of a feature before committing (not after every change).**
+- `pnpm tauri dev` — Run the desktop app (Vite HMR + Rust rebuild). Takes the `app` lock (see `running-the-app` skill).
+- `pnpm test` / `test:run` — Run frontend tests via Vitest.
 - `cargo test --workspace` — Run Rust tests across all crates (`apps/desktop/src-tauri`, `crates/grimoire-core`, `apps/light/src-tauri`, `crates/grimoire-web`, `crates/grimoire-scan`).
-- `npm run storybook` / `build-storybook` — Component development workbench (`.storybook/`).
-- `npm run mobile:dev` / `mobile:tauri` — Run the light app in a browser fake or in a phone-sized Tauri window.
-- `npm run web:wasm` / `web:build` / `web:preview` — Build and preview the WASM web target.
+- `pnpm storybook` / `build-storybook` — Component development workbench (`.storybook/`).
+- `pnpm mobile:dev` / `mobile:tauri` — Run the light app in a browser fake or in a phone-sized Tauri window.
+- `pnpm web:wasm` / `web:build` / `web:preview` — Build and preview the WASM web target.
 
 _For complete command options, coverage caveats, and environment flags, see [`docs/agent/RUNNING_AND_VERIFYING.md`](docs/agent/RUNNING_AND_VERIFYING.md)._
 
@@ -93,7 +93,7 @@ Worktree and deployment workflows are managed by skills in `.claude/skills/`:
 
 ## Global Rules
 
-- **Pre-commit verification**: Run `npm run verify` only at the end of a feature before committing, not after each individual change. Avoid running test suites on intermediate edits to minimize churn and repetitive re-fixing.
+- **Pre-commit verification**: Run `pnpm verify` only at the end of a feature before committing, not after each individual change. Avoid running test suites on intermediate edits to minimize churn and repetitive re-fixing.
 - **Commit style (one commit per feature)**: Commits must match the full size of a feature (code, tests, and docs together). Do not split a single feature across multiple commits; multi-commit features fragment and mess up the release-please changelog. Use Conventional Commits (`feat:`, `fix:`, `chore:`, `test:`, `docs:`).
 - **No `@types/node` in webview code**: The frontend is a webview environment; `@types/node` is forbidden to prevent leaking Node types into browser code.
 - **Narrowest permissions**: When declaring Tauri plugin permissions, always request the narrowest required capability, never `:default`.
@@ -101,6 +101,7 @@ Worktree and deployment workflows are managed by skills in `.claude/skills/`:
 - **Worker secrets are never committed**: Secrets (`PATREON_CLIENT_SECRET`, `PATREON_WEBHOOK_SECRET`, `RELAY_HMAC_KEY`) belong solely in Cloudflare Secret storage, never in repository files or `.dev.vars`.
 - **Deployments require explicit instruction**: No agent may deploy a Worker without explicit instruction from the user, and exactly one CI job deploys one: `release.yml`'s `web-deploy` puts the web app (`infrastructure/app-worker/`) on its origin at a release tag (the owner's decision, 2026-10-04 — the three hosts ship from one tag). So **merging the release PR is a deploy of the web app**, and an agent merges it only when asked to. The relay and the share Worker are deployed by no job; nothing else deploys without his ask.
 - **Domain vocabulary precision**: Strictly distinguish between Scryfall tags, user deck labels, card keyword abilities, and note types. Refer to [`docs/agent/DOMAIN_VOCABULARY.md`](docs/agent/DOMAIN_VOCABULARY.md).
+- **Imports cross a package by its name**: `@grimoire/ui/…`, `@grimoire/fake/…`. `@/` is the shared UI's own alias and is written only inside `packages/ui`. A package declares what its files import, in its own `package.json`. `scripts/workspace.test.mjs` holds all three; see [`docs/reference/repository-layout.md`](docs/reference/repository-layout.md).
 - **Live UI verification**: Drive real WebView2 windows over CDP (`scripts/cdp.mjs`) when verifying UI changes; tests alone cannot detect webview-specific rendering glitches.
 
 ---
@@ -109,5 +110,5 @@ Worktree and deployment workflows are managed by skills in `.claude/skills/`:
 
 - **Fan out parallel subagents**: Split large features along architectural seams (Rust commands, TS domain logic, UI, stories, docs) and dispatch independent pieces in parallel.
 - **Prevent file collisions**: Give each subagent distinct files, or assign separate git worktrees (`.claude/skills/worktree-setup`).
-- **Test only at the end of a feature (fan-in)**: Do NOT run tests after each intermediate change or edit. Subagents report what they changed; run `npm run verify` once centrally at the end of the entire feature to verify it works as a whole, minimizing unnecessary re-fixing.
+- **Test only at the end of a feature (fan-in)**: Do NOT run tests after each intermediate change or edit. Subagents report what they changed; run `pnpm verify` once centrally at the end of the entire feature to verify it works as a whole, minimizing unnecessary re-fixing.
 - **User questions**: Use the `AskUserQuestion` tool for clarification or design choices, presenting structured options with evidence and recommended defaults.

@@ -1876,7 +1876,7 @@ cycle with the card never leaving the lens**.
     --bins` beside it so `build-hashes` and `eval` compile and test too, on the Linux leg; the
     first was added 2026-09-08 because until then
     `session::tests` (the `live.html` key census, the panic guard, the reader cadence) was
-    fenced by `npm run verify` and by nothing in CI at all. Measured the same day:
+    fenced by `pnpm verify` and by nothing in CI at all. Measured the same day:
     `cargo fmt --check` reports diffs (`src/bin/build_hashes.rs` among them) and
     `cargo clippy --all-targets --features cli` reports four, every one pre-existing —
     `index.rs:188` (`Mask::len` with no `is_empty`), `cardness.rs:161` and `lock.rs:217`
@@ -2041,7 +2041,7 @@ rather than by a guess, each with its measurement in the comment above the block
 `apps/desktop/src-tauri/Cargo.toml`; a list restated in prose is one that goes stale the next time a profile
 is measured.
 
-**`npm run verify` runs the crate's suite** as a step beside the `src-tauri` one, at
+**`pnpm verify` runs the crate's suite** as a step beside the `src-tauri` one, at
 `--features cli` so the server's own tests are in it. Nothing ran it before.
 
 ### `session::Session` — one frame in, one verdict out
@@ -2324,7 +2324,7 @@ is always the owner's and nobody else has anything newer; an idle one is dropped
 refetched, **unless its hook reports something unsaved**, because an idle entry is where a card
 waits out a write the view left behind. [multi-window.md](multi-window.md) §4 has that half.
 
-**Measured in the window** (debug, `npm run tauri dev`, 2026-09-20, on a data copy with no bundle
+**Measured in the window** (debug, `pnpm tauri dev`, 2026-09-20, on a data copy with no bundle
 and no models — so the view says so, and still holds the lease): window 1 on the Scanner, window 2's
 `scanner_elsewhere` answered **`true`** and its page carried **zero** `<video>` elements; window 1
 navigated away and window 2 switched to the live scanner at **+2 346 ms**, which is the two-second
@@ -2675,8 +2675,8 @@ would `--clobber` the bundle every later release embeds, from code nobody review
 is scoped to that branch and never restored on `main`, so the cache cannot be poisoned either; the
 ref reaches the script through `env:`, never pasted in as an expression.
 
-**The release step fails without the assets, on purpose.** `release.yml` runs `npm run
-scanner:assets` on every matrix leg straight after `npm ci`, and a non-zero exit fails the leg: a
+**The release step fails without the assets, on purpose.** `release.yml` runs `pnpm
+scanner:assets` on every matrix leg straight after `pnpm install --frozen-lockfile`, and a non-zero exit fails the leg: a
 release that silently cannot scan is a regression nobody would see until a reader tried. On
 2026-09-15 that exits **1** with *the release scanner-bundle-v3 has no asset card-hashes.bin (HTTP
 404 …). The scanner-bundle workflow publishes it: …*, because the release has never been published.
@@ -2733,10 +2733,10 @@ fetched until the reader presses.
 
 | Host | Where the three files come from | Asked at run time |
 | --- | --- | --- |
-| Desktop, release build | embedded by `build.rs` from `apps/desktop/src-tauri/scanner-assets/`, which `npm run scanner:assets` fills from the release | nothing — it owes nothing, is offered nothing and makes no request |
+| Desktop, release build | embedded by `build.rs` from `apps/desktop/src-tauri/scanner-assets/`, which `pnpm scanner:assets` fills from the release | nothing — it owes nothing, is offered nothing and makes no request |
 | Desktop, a build with nothing embedded | a file placed in `data/scanner/` by hand, or the download below | GitHub, on the reader's press |
 | Android | the download below, into `<app data>/data/scanner/` | GitHub, on the reader's press |
-| Web | the app's own origin, `/scanner-assets/` — the release's three files, copied into the web build (`npm run scanner:assets -- --web`), with a manifest of their lengths and digests; kept in Cache Storage | the app's own origin, on the reader's press |
+| Web | the app's own origin, `/scanner-assets/` — the release's three files, copied into the web build (`pnpm scanner:assets --web`), with a manifest of their lengths and digests; kept in Cache Storage | the app's own origin, on the reader's press |
 
 **The browser's arm** (step 7.5, 2026-10-07). GitHub answers a release download with no CORS
 header, so a page cannot read the place a native host fetches from; the web build serves the
@@ -3918,7 +3918,7 @@ not separated from the noise of a shared machine.
 
 ### Measured in the app
 
-Taken 2026-09-15 on Windows under `npm run tauri dev` — a **debug** build with the manifest's
+Taken 2026-09-15 on Windows under `pnpm tauri dev` — a **debug** build with the manifest's
 dev-profile overrides (§9) — with the three assets **embedded**, against a copy of the main
 checkout's `data/`. `scanner_status` answered bundle and both models `embedded` and loaded, 117,738
 labels, and no asset sentence was drawn. No release build was made this pass, so every figure
@@ -4040,7 +4040,7 @@ which is why the bench reports the call and not a sum.
 **⚠️ `host::guard` guards nothing where a panic aborts**, and that is not something this crate
 can fix. With `panic = "abort"` there is no unwinding for `catch_unwind` to stop: the panic is a
 trap, the export never returns, and `Verdict::failed("the detector panicked on this frame…")` is
-never built. What that looks like was provoked rather than assumed (`npm run scanner:bench --
+never built. What that looks like was provoked rather than assumed (`pnpm scanner:bench
 --trap`, headless Chrome 154, 2026-10-07): a panic inside the session surfaced in the Worker as
 `RuntimeError: unreachable` thrown out of the call, after the module's panic hook had written
 the panic's own sentence and line to the console; and **the next frame asked of the same instance
@@ -4117,15 +4117,15 @@ takes `card-scanner` with `ocr` and never `corpus`. Two faces over one library:
 | `scanner-bench-native` | the same frames through the same `load` and `frame`, as raw per-frame records on stdout; `--one-thread` holds the run under `host::inline()` and sets `RTEN_NUM_THREADS=1` | `cargo build --release --bin scanner-bench-native` |
 
 ```
-npm run scanner:bench                         build, run in headless Chrome, print the summary
-npm run scanner:bench -- --native             and the native runner, with threads and held to one
-npm run scanner:bench -- --sizes              and the module built without the readers, for its size
-npm run scanner:bench -- --simd               the module built with `simd128`, and run instead
-npm run scanner:bench -- --dir <inputs>       a directory `bench-prep` made, instead of an invented one
-npm run scanner:bench -- --serve --port 8787  leave the page up: a phone opens it after
+pnpm scanner:bench                         build, run in headless Chrome, print the summary
+pnpm scanner:bench --native             and the native runner, with threads and held to one
+pnpm scanner:bench --sizes              and the module built without the readers, for its size
+pnpm scanner:bench --simd               the module built with `simd128`, and run instead
+pnpm scanner:bench --dir <inputs>       a directory `bench-prep` made, instead of an invented one
+pnpm scanner:bench --serve --port 8787  leave the page up: a phone opens it after
                                               `adb reverse tcp:8787 tcp:8787`
-npm run scanner:bench -- --summarise <file>   reduce a native runner's output, e.g. from `adb shell`
-npm run scanner:bench -- --trap               after the run, panic in the module on purpose
+pnpm scanner:bench --summarise <file>   reduce a native runner's output, e.g. from `adb shell`
+pnpm scanner:bench --trap               after the run, panic in the module on purpose
 ```
 
 **The page does the measuring** (`bench/web/page.js`, plain scripts, no bundler): it fetches the
@@ -4259,7 +4259,7 @@ overlay frozen for all of it. Two things make up that factor and they were measu
 The threads are about 2×: the same read held to one native thread costs 110–125 ms. The rest is
 that the module is scalar — `rten`'s WASM kernel is compiled only under
 `target_feature = "simd128"`, and the root's `wasm` profile sets no target feature. Built with
-`RUSTFLAGS="-C target-feature=+simd128"` (`npm run scanner:bench -- --simd`, a tree of its own)
+`RUSTFLAGS="-C target-feature=+simd128"` (`pnpm scanner:bench --simd`, a tree of its own)
 the same reads cost **257–372 ms** — two and a half to four times faster, for 28 kB of module —
 which puts a read frame at 0.65 s and a resolve at 1.2 s. **Nothing in this repository builds with
 that flag**, the engine's module included, and which of the app's browsers would refuse such a
@@ -4403,7 +4403,7 @@ filters, or report a quad that has anything to do with the picture.
 
 ### Measured, 2026-10-07
 
-`npm run mobile:scanner-smoke` (`scripts/phone-scanner-smoke.mjs`), headless Chrome with
+`pnpm mobile:scanner-smoke` (`scripts/phone-scanner-smoke.mjs`), headless Chrome with
 `--use-fake-device-for-media-stream` under a touch pointer and the dark scheme, against
 `mobile:dev` — the Storybook fake, not the engine.
 

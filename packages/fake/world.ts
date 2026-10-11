@@ -49,12 +49,12 @@ import type { FakeScope } from "./scope";
 import { seed } from "./seeds";
 import type { SeedName } from "./seeds";
 import { resetWindow } from "./window";
-import { resetBulkUndo } from "@/lib/bulkUndo";
-import { MEMBERSHIP_ELSEWHERE } from "@/lib/core/hostMembership";
-import { STORAGE_GROUP_WARNING } from "@/lib/core/hostStorage";
+import { resetBulkUndo } from "@grimoire/ui/lib/bulkUndo";
+import { MEMBERSHIP_ELSEWHERE } from "@grimoire/ui/lib/core/hostMembership";
+import { STORAGE_GROUP_WARNING } from "@grimoire/ui/lib/core/hostStorage";
 import lightMembership from "../../apps/light/src-tauri/src/membership.rs?raw";
-import { SITE_DATA_WARNING } from "@/lib/core/web/storage";
-import { useAppStore } from "@/lib/store";
+import { SITE_DATA_WARNING } from "@grimoire/ui/lib/core/web/storage";
+import { useAppStore } from "@grimoire/ui/lib/store";
 
 /**
  * `parameters.fake`, and the whole of what a story may ask for.

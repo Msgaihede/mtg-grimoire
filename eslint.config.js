@@ -5,7 +5,7 @@ import storybook from "eslint-plugin-storybook";
 
 export default tseslint.config(
   // `storybook-static/` joins `apps/desktop/dist/` for the same reason: it is generated output
-  // that `npm run verify` can leave on disk before `lint` runs, and its bundled JS would be
+  // that `pnpm verify` can leave on disk before `lint` runs, and its bundled JS would be
   // linted as if it were source.
   //
   // `.claude/worktrees/` is where Claude Code parks git worktrees — entire second checkouts
@@ -21,7 +21,7 @@ export default tseslint.config(
   //
   // The three design-sync directories are the same argument as `dist/`, one step further out.
   // `ds-bundle/` is the converter's emitted bundle — a 600 KB IIFE plus 14 generated `.d.ts`
-  // files, which on its own contributed ~24,900 errors to `npm run lint` the first time it
+  // files, which on its own contributed ~24,900 errors to `pnpm lint` the first time it
   // existed on disk. `.ds-sync/` is the staged converter and its own `node_modules`.
   // `.design-sync/` is mixed and ignored **whole**, deliberately: most of it is generated
   // (`sb-reference/`, `.cache/`, `dist/`), and the handful of committed files are the sync's
@@ -36,15 +36,15 @@ export default tseslint.config(
       // still holds on disk (gitignored): the wasm-bindgen glue is machine-written and fails
       // `no-undef`.
       "web/public/",
-      // The web app's bundle (`npm run web:build`), and the engine `npm run web:wasm` writes for
+      // The web app's bundle (`pnpm web:build`), and the engine `pnpm web:wasm` writes for
       // it — wasm-bindgen's glue again, which is the file that fails `no-undef`.
       "apps/light/dist-web/",
       "dist-wasm/",
       // The public share viewer's bundle. Generated output like the desktop's `dist/` above, and
-      // on disk on any machine that has run `npm run share:build` — which the share Worker's
+      // on disk on any machine that has run `pnpm share:build` — which the share Worker's
       // deploy requires, because its `wrangler.jsonc` declares an `assets` binding over it.
       "apps/share/dist-share/",
-      // The light app's bundle (`npm run mobile:build`). Generated output like the two above.
+      // The light app's bundle (`pnpm mobile:build`). Generated output like the two above.
       "apps/light/dist-mobile/",
       "storybook-static/",
       // The two cargo hosts, and the workspace's build tree. `target/` was inside the desktop
@@ -72,12 +72,12 @@ export default tseslint.config(
       // wrangler's local state, beside whichever Worker `wrangler dev` was run in — ignored by
       // git everywhere, and on disk on any machine that has run one. Its `tmp/` holds the
       // Worker's bundle with wrangler's own middleware around it, which fails `no-undef` by the
-      // hundred: found 2026-10-04, when `npm run web:sync-smoke` (which starts the relay under
-      // `wrangler dev --local`) was followed by `npm run verify` and 620 errors named no file a
+      // hundred: found 2026-10-04, when `pnpm web:sync-smoke` (which starts the relay under
+      // `wrangler dev --local`) was followed by `pnpm verify` and 620 errors named no file a
       // person wrote. The smoke removes what it made; a `wrangler dev` stopped any other way
       // does not.
       "**/.wrangler/",
-      // The card scanner's frame bench (`npm run scanner:bench`): wasm-bindgen's glue for the
+      // The card scanner's frame bench (`pnpm scanner:bench`): wasm-bindgen's glue for the
       // two modules it builds, machine-written like `dist-wasm/`'s.
       "crates/card-scanner/bench/web/pkg/",
     ],
@@ -95,7 +95,7 @@ export default tseslint.config(
   // Node than this should be asked why. **The card scanner's own scripts are the same kind
   // of file one directory down** (`crates/card-scanner/scripts/`: the page check, the model
   // fetch, the camera-less drive), and `eslint .` reaches them — found 2026-09-08 as 27
-  // `no-undef` errors the first time `npm run verify` ran with the crate in the tree.
+  // `no-undef` errors the first time `pnpm verify` ran with the crate in the tree.
   {
     files: ["scripts/**/*.mjs", "crates/*/scripts/**/*.mjs"],
     languageOptions: {
@@ -158,5 +158,55 @@ export default tseslint.config(
       // under a compiled build, and the virtualised lists are exactly where it would bite.
       "react-hooks/incompatible-library": "off",
     },
+  },
+  // The workspace's import rules, where an editor shows them (2026-10-08). The fence is
+  // `scripts/workspace.test.mjs`: it also reads `vi.mock`, `import()` and a stylesheet, and it
+  // holds the rule this cannot — that a package declares what it imports.
+  //
+  // The patterns are written without a backslash on purpose: `[.]` is a dot in a regular
+  // expression and nothing in a JavaScript string.
+  {
+    files: ["apps/**/*.{ts,tsx}", "packages/fake/**/*.ts", "infrastructure/**/*.ts", ".storybook/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["@/**"],
+              message:
+                "`@/` is the shared UI's own alias. Outside packages/ui, name the module by its package: `@grimoire/ui/…`.",
+            },
+            {
+              regex: "^([.][.]/)+(packages|apps|infrastructure)/[^?]*$",
+              message:
+                "Name another package's module by the package (`@grimoire/ui/…`, `@grimoire/fake/…`), not by a path.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ["packages/ui/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              regex: "^([.][.]/)+(fake|packages|apps|infrastructure)/[^?]*$",
+              message: "Name another package's module by the package (`@grimoire/fake/…`), not by a path.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  // A file Node loads itself reaches source by path (rule 4): Vite bundles what a config imports
+  // by path, and leaves a package name to Node.
+  {
+    files: ["**/vite.*.ts", ".storybook/main.ts"],
+    rules: { "no-restricted-imports": "off" },
   },
 );

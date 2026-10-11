@@ -1,8 +1,8 @@
 import { useId, type ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
-import { FOCUS } from "@/lib/focus";
-import { PRESS_SOFT } from "@/lib/motion";
-import { cn } from "@/lib/utils";
+import { FOCUS } from "@grimoire/ui/lib/focus";
+import { PRESS_SOFT } from "@grimoire/ui/lib/motion";
+import { cn } from "@grimoire/ui/lib/utils";
 
 /**
  * The pieces every section of the card sheet is built from — the heading over a block, the press

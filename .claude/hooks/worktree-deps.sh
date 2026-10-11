@@ -4,7 +4,7 @@
 #
 # Wired to SessionStart in .claude/settings.json, beside merge-main.sh.
 #
-# Why a hook and not prose: `npm install` in a worktree is a mechanical precondition, and
+# Why a hook and not prose: `pnpm install` in a worktree is a mechanical precondition, and
 # the worktree-setup skill was carrying ~360 tokens of instructions for it in every single
 # request of every worktree session (measured 2026-08-21: the skill loaded 1% of the way
 # into a session and was re-sent ~271 times after that). A hook does the thing once and
@@ -40,42 +40,52 @@ cd "$root" || exit 0
 
 # Is node_modules missing, or older than the lockfile? The second case is the one that reads
 # as a real failure and is not: a merge brings a dependency, node_modules still exists, and
-# `tsc` fails TS2307 on the new import. npm writes node_modules/.package-lock.json on every
+# `tsc` fails TS2307 on the new import. pnpm writes node_modules/.modules.yaml on every
 # install, so its mtime is when the tree was last made to match the lock.
+#
+# A tree npm made has no such file, and is deleted before the install rather than installed
+# over. `pnpm install` over one exits 0 and removes nothing (measured 2026-10-08: 450 entries
+# at the root before, 470 after, npm's hoisted `prosemirror-view` still among them), and in
+# that mixture every import no manifest declares goes on resolving - the one thing pnpm's
+# layout is here to stop. Deleting it took 19 s and the install after it 10 s.
 needs_install=0
+replace_tree=0
 reason=""
 if [ ! -d node_modules ]; then
   needs_install=1
   reason="node_modules was absent"
-elif [ ! -f node_modules/.package-lock.json ]; then
+elif [ ! -f node_modules/.modules.yaml ]; then
   needs_install=1
-  reason="node_modules had no install record"
-elif [ package-lock.json -nt node_modules/.package-lock.json ]; then
+  replace_tree=1
+  reason="node_modules was npm's and was deleted first"
+elif [ pnpm-lock.yaml -nt node_modules/.modules.yaml ]; then
   needs_install=1
-  reason="package-lock.json was newer than the last install"
+  reason="pnpm-lock.yaml was newer than the last install"
 fi
 
 branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || printf '?')"
 commits="$(git log --oneline -3 2>/dev/null || true)"
 
-install_line="node_modules already matched package-lock.json; nothing installed."
+install_line="node_modules already matched pnpm-lock.yaml; nothing installed."
 lock_before=""
 if [ "$needs_install" = "1" ]; then
-  lock_before="$(git hash-object package-lock.json 2>/dev/null || true)"
+  lock_before="$(git hash-object pnpm-lock.yaml 2>/dev/null || true)"
   started="$(date +%s)"
-  if npm install --no-audit --no-fund >"$root/npm-install.local" 2>&1; then
-    install_line="Ran npm install ($reason) in $(( $(date +%s) - started ))s. It succeeded."
+  if [ "$replace_tree" = "1" ]; then
+    rm -rf node_modules
+  fi
+  if pnpm install >"$root/pnpm-install.local" 2>&1; then
+    install_line="Ran pnpm install ($reason) in $(( $(date +%s) - started ))s. It succeeded."
   else
-    # A failed install is worth more than a silent one: without it three suites fail on
-    # Vite's server.fs.allow with `Denied ID .../node_modules/mana-font/css/mana.css?raw`,
-    # and `npm run verify` stops at the frontend tests so its cargo half never runs.
-    install_line="Ran npm install ($reason) and IT FAILED after $(( $(date +%s) - started ))s. Read npm-install.local at the worktree root. Until it succeeds, mana/keyrune/iconFont suites fail on Vite's server.fs.allow and npm run verify never reaches cargo test - those failures are not yours."
+    # A failed install is worth more than a silent one: without it nothing resolves, and
+    # `pnpm verify` stops at the first `tsc` so its cargo half never runs.
+    install_line="Ran pnpm install ($reason) and IT FAILED after $(( $(date +%s) - started ))s. Read pnpm-install.local at the worktree root. Until it succeeds, imports do not resolve and pnpm verify never reaches cargo test - those failures are not yours."
   fi
 
 if [ -n "$lock_before" ]; then
-  lock_after="$(git hash-object package-lock.json 2>/dev/null || true)"
+  lock_after="$(git hash-object pnpm-lock.yaml 2>/dev/null || true)"
   if [ "$lock_before" != "$lock_after" ]; then
-    install_line="$install_line NOTE: the install REWROTE package-lock.json, which is a tracked file - it is now dirty in git status and will ride into your PR unless you check it. Decide deliberately whether that change belongs in this branch."
+    install_line="$install_line NOTE: the install REWROTE pnpm-lock.yaml, which is a tracked file - it is now dirty in git status and will ride into your PR unless you check it. Decide deliberately whether that change belongs in this branch."
   fi
 fi
 fi

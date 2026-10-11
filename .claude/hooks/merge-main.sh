@@ -107,8 +107,8 @@ before="$(git rev-parse HEAD 2>/dev/null)"
 if git merge --no-edit --quiet origin/main >/dev/null 2>&1; then
   changed="$(git diff --name-only "$before" HEAD 2>/dev/null | grep -c . || true)"
   note=""
-  if git diff --name-only "$before" HEAD 2>/dev/null | grep -q 'package-lock\.json\|package\.json'; then
-    note=" Dependencies changed - run 'npm install' in this worktree."
+  if git diff --name-only "$before" HEAD 2>/dev/null | grep -q 'pnpm-lock\.yaml\|pnpm-workspace\.yaml\|package\.json'; then
+    note=" Dependencies changed - run 'pnpm install' in this worktree."
   fi
   emit "Merged main into $wt cleanly: $behind commits, $changed files.$note" \
        "origin/main was merged into this worktree automatically ($behind commits, $changed files changed), with no conflicts.$note Your own commits are untouched. If the suite now fails in files you did not write, it is the merge - not your change."
@@ -136,4 +136,4 @@ more=""
 [ "$count" -gt 8 ] && more=" (+$((count - 8)) more)"
 
 emit "Merging main into $wt ($behind commits) conflicts in $count files - resolving now." \
-     "origin/main was merged into this worktree automatically and the merge is IN PROGRESS with $count conflicted files: ${head_list}${more}. Resolve them before continuing with anything else - stopping here leaves the worktree unbuildable, and the conflict only grows. Resolve each file, 'git add' it, then 'git commit --no-edit'. Never 'git add -A' or 'git checkout --ours/--theirs' wholesale here: main's side is other agents' shipped work and your side is yours, so both have to be reconciled by reading them. If package-lock.json conflicted, re-run 'npm install' after resolving. Then 'npm run verify' before going back to what you were doing. To bail out instead, 'git merge --abort' restores the pre-merge state exactly."
+     "origin/main was merged into this worktree automatically and the merge is IN PROGRESS with $count conflicted files: ${head_list}${more}. Resolve them before continuing with anything else - stopping here leaves the worktree unbuildable, and the conflict only grows. Resolve each file, 'git add' it, then 'git commit --no-edit'. Never 'git add -A' or 'git checkout --ours/--theirs' wholesale here: main's side is other agents' shipped work and your side is yours, so both have to be reconciled by reading them. If pnpm-lock.yaml conflicted, take main's copy of it ('git checkout --theirs pnpm-lock.yaml') and run 'pnpm install' after resolving the manifests: a lockfile is not merged by hand. Then 'pnpm verify' before going back to what you were doing. To bail out instead, 'git merge --abort' restores the pre-merge state exactly."

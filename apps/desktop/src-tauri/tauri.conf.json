@@ -4,9 +4,9 @@
   "version": "0.43.0",
   "identifier": "com.mtggrimoire.app",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "pnpm -w run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "pnpm -w run build",
     "frontendDist": "../dist"
   },
   "app": {

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
-import { FRIEND_SHARE_URL } from "../../../fake/seeds";
+import { FRIEND_SHARE_URL } from "@grimoire/fake/seeds";
 import { useAppStore } from "@/lib/store";
 import { SharedPage } from "./SharedPage";
 

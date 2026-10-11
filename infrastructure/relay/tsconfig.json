@@ -1,22 +1,23 @@
 {
   /* The relay's own type-check program, and the reason it is a *separate* file rather than a
-     wider `include` in the root `tsconfig.json` is the same fence `.storybook/tsconfig.json`
+     place in a webview package's program is the same fence `.storybook/tsconfig.json`
      exists for, pointed at a different runtime.
 
      `infrastructure/relay/` runs in workerd. It needs `@cloudflare/workers-types`, which declares
      `Request`, `Response`, `WebSocket`, `DurableObjectState` and about four hundred other globals
      — a whole platform's worth of ambient declarations. The app under `packages/ui/` runs in a
-     WebView2 webview and must see the DOM's versions of those names and nothing else; the root
-     `tsconfig.json` pins `"types": []` for exactly that reason and says so at length. Merging
+     WebView2 webview and must see the DOM's versions of those names and nothing else; the webview
+     programs' base, `tsconfig.base.json`, pins `"types": []` for exactly that reason and says so at length. Merging
      the two programs would put workerd's globals in front of the app's, which is a class of
      bug nobody would think to look for.
 
-     Nothing had to be *excluded* to keep them apart: the root config's `include` names
-     `packages/ui` and three folders under `apps/`, and nothing under `infrastructure/`. This
-     file's `include` is the mirror image — `src`, beside it. `npm run build` runs `tsc` and
-     then a `tsc -p` for each of the other programs, this one among them — `package.json`'s
-     `build` line is the list, and this comment keeps no count of it — so every program is
-     checked by `npm run verify` and none of them can see the others' ambient types.
+     Nothing had to be *excluded* to keep them apart: there is no root config, and the shared
+     UI's and the apps' programs are per-package, over `tsconfig.base.json`; none of their
+     `include`s reaches `infrastructure/`. This file's `include` is the mirror image — `src`,
+     beside it. `pnpm build` runs a `tsc -p` for each program, this one among them —
+     `package.json`'s `build` line is the list, and this comment keeps no count of it — so
+     every program is checked by `pnpm verify` and none of them can see the others' ambient
+     types.
 
      This file was `tsconfig.relay.json` at the repository root until 2026-10-08, with an
      `include` spelled from there. It sits in the Worker's own folder now, as its two

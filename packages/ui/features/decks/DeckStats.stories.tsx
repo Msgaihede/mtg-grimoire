@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
 import type { DeckCard } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
-import { deckCard, orphanDeckCard, printing } from "../../../fake/fixtures";
+import { deckCard, orphanDeckCard, printing } from "@grimoire/fake/fixtures";
 import { DeckStats, STATS_HEADING } from "./DeckStats";
 
 /**

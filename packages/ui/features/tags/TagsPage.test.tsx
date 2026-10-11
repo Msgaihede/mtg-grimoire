@@ -58,8 +58,8 @@ const onArtTagProgress = vi.hoisted(() => vi.fn());
 const syncStatus = vi.hoisted(() => vi.fn());
 const deckAddCard = vi.hoisted(() => vi.fn());
 const deckGet = vi.hoisted(() => vi.fn());
-vi.mock("@tauri-apps/api/window", () => import("../../../fake/window"));
-vi.mock("@tauri-apps/api/event", () => import("../../../fake/event"));
+vi.mock("@tauri-apps/api/window", () => import("@grimoire/fake/window"));
+vi.mock("@tauri-apps/api/event", () => import("@grimoire/fake/event"));
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {

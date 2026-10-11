@@ -21,7 +21,7 @@ import { DOCUMENT, routeFor, shellCacheName, staleShells, type Routable } from "
  * pages and its clock are handed in, so the suite drives an install, an activation and every kind
  * of request over fakes (`serve.test.ts`). `sw.ts` is the hand-in, and has no branch of its own.
  *
- * Compiled twice, like the modules it reads: by the root program for the suite, and by
+ * Compiled twice, like the modules it reads: by the shared UI's program for the suite, and by
  * `packages/ui/tsconfig.web-sw.json` under the `WebWorker` lib for the worker.
  */
 

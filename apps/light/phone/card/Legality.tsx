@@ -5,9 +5,9 @@ import {
   legalitySummary,
   statusClass,
   statusWord,
-} from "@/features/card/legality";
-import { plural } from "@/lib/counts";
-import { cn } from "@/lib/utils";
+} from "@grimoire/ui/features/card/legality";
+import { plural } from "@grimoire/ui/lib/counts";
+import { cn } from "@grimoire/ui/lib/utils";
 import { Note, SheetSection, ShowMore } from "./parts";
 
 /**

@@ -1,10 +1,10 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
-import type { CardSummary, CollectionRow, DeckCard, WishRow } from "@/lib/ipc";
-import { collectionTiles } from "@/features/collection/collectionWall";
-import { tileKeyOf } from "@/lib/tileKey";
+import { TooltipProvider } from "@grimoire/ui/components/tooltip/TooltipProvider";
+import type { CardSummary, CollectionRow, DeckCard, WishRow } from "@grimoire/ui/lib/ipc";
+import { collectionTiles } from "@grimoire/ui/features/collection/collectionWall";
+import { tileKeyOf } from "@grimoire/ui/lib/tileKey";
 import { collectionItem, deckCardItem, searchItem, wishItem } from "./items";
 
 /** A printing sold both ways — which is most of them, and the one a wall leaves unmarked. */

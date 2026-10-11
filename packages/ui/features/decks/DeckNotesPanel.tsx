@@ -216,7 +216,7 @@ export function DeckNotesPanel({
    * ⚠️ **Written during render rather than in an effect, and that is a rule of this repo rather
    * than a style.** eslint's `react-hooks/set-state-in-effect` refuses a `setState` in an effect
    * body outright — and `tsc` and the whole vitest suite are green on the pattern it refuses, so
-   * it only goes red at `npm run verify`. What is left is React's own *adjusting state when a prop
+   * it only goes red at `pnpm verify`. What is left is React's own *adjusting state when a prop
    * changes*: the component sets its **own** state during render, React re-runs it before
    * committing anything, and no child ever sees the stale value.
    *

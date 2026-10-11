@@ -1,5 +1,5 @@
-import { FOCUS } from "@/lib/focus";
-import { cn } from "@/lib/utils";
+import { FOCUS } from "@grimoire/ui/lib/focus";
+import { cn } from "@grimoire/ui/lib/utils";
 
 /**
  * The way out of a screen that has nothing else on it: **a link to where the reader already is**,

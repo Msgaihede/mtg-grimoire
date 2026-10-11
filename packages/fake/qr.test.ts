@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import entitlementRs from "../../crates/grimoire-core/src/sync_engine/entitlement.rs?raw";
 import { RELAY_BASE, allHandlers, makeDb } from "./db";
 import { QR_CAPACITY_BYTES, qrMatrix } from "./qr";
-import type { PairingOffer, QrMatrix } from "@/lib/ipc";
+import type { PairingOffer, QrMatrix } from "@grimoire/ui/lib/ipc";
 
 /** The matrix as pixels: `scale` a module, a four-module quiet zone, black on white. */
 function decode(matrix: QrMatrix, scale = 4): string | null {

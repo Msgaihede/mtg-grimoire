@@ -6,13 +6,6 @@ import { folderDraggable } from "@/lib/folderDrag";
 import { dndManager, DRAGGING_ATTRIBUTE } from "@/lib/dndManager";
 import { dndDraggable } from "@/lib/dndTarget";
 import { boxed, startPointerDrag } from "@/test-drag";
-/**
- * The manifest as text, read through Vite rather than through `node:fs` — this project has
- * no `@types/node` on purpose, and `packages/ui/lib/tokens.test.ts` reaches two levels up to
- * `.storybook/preview.tsx?raw` the same way. A static import, which is what Vite's ambient
- * `*?raw` declaration types; a dynamic one would be typed `any`.
- */
-import manifest from "../../../package.json?raw";
 
 /**
  * **The fence around the block at the foot of `packages/ui/index.css`.**
@@ -463,9 +456,9 @@ describe("the manager's sensors", () => {
 
 
 /**
- * Every source file in the app, in the workbench and in the light app, as text. `?raw` through Vite rather than
- * `node:fs`, for the reason given at the `manifest` import above; `packages/ui/lib/tokens.test.ts` runs
- * the same sweep over the same glob.
+ * Every source file in the app, in the workbench and in the light app, as text. `?raw` through
+ * Vite rather than `node:fs`: this project has no `@types/node` on purpose, so a test cannot
+ * open a file. `packages/ui/lib/tokens.test.ts` runs the same sweep over the same glob.
  *
  * **Both roots, because the removed library had call sites in both.** Four story files each
  * carried a copy of a `DataTransfer` shim until 3b, and `.storybook/` is outside a `/packages/ui/**`
@@ -522,12 +515,22 @@ describe("the drag library is the only drag library", () => {
     expect(offenders, "files importing the removed drag library").toEqual([]);
   });
 
+  /** Every manifest a dependency can come back through: the root's and each package's. */
+  const MANIFESTS = import.meta.glob<string>(
+    ["/package.json", "/packages/*/package.json", "/apps/*/package.json"],
+    { query: "?raw", import: "default", eager: true },
+  );
+
   /**
-   * The half a source sweep cannot see: a dependency can be back in the manifest with nothing
-   * importing it yet, which is how it comes back — one `npm install` that looked harmless.
+   * The half a source sweep cannot see: a dependency can be back in a manifest with nothing
+   * importing it yet, which is how it comes back — one `pnpm add` that looked harmless.
    */
   it("declares no @atlaskit dependency", () => {
-    expect(manifest).not.toMatch(new RegExp(`"${ATLAS}/`));
+    // The drag library is the shared UI's to declare since 2026-10-08, so that is the manifest
+    // this has to be reading; the root's alone would pass over the one file it could return to.
+    expect(MANIFESTS["/packages/ui/package.json"]).toContain('"@dnd-kit/dom"');
+    for (const [path, manifest] of Object.entries(MANIFESTS))
+      expect(manifest, path).not.toMatch(new RegExp(`"${ATLAS}/`));
   });
 
   /**

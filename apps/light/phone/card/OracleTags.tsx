@@ -6,8 +6,8 @@ import {
   ORACLE_TAGS_NO_ORACLE_CARD,
   oracleTagsKey,
   slugsFor,
-} from "@/features/card/oracleTags";
-import { ipc, ipcError, type OracleTagStatus } from "@/lib/ipc";
+} from "@grimoire/ui/features/card/oracleTags";
+import { ipc, ipcError, type OracleTagStatus } from "@grimoire/ui/lib/ipc";
 import { Note, SheetSection, Source } from "./parts";
 
 /**

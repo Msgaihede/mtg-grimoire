@@ -1,8 +1,8 @@
 // The pairing scanner, driven with a camera: **one "device" shows an invite at a phone's width,
 // a second points a (fake) camera at that very drawing and joins**.
 //
-//   npm run mobile:dev                        # the light app over the Storybook fake, port 5175
-//   npm run mobile:scan-smoke                 # or: npm run mobile:scan-smoke -- http://localhost:5185
+//   pnpm mobile:dev                        # the light app over the Storybook fake, port 5175
+//   pnpm mobile:scan-smoke                 # or: pnpm mobile:scan-smoke http://localhost:5185
 //
 // `packages/ui/features/settings/QrScanner.tsx` says of itself that it has no vitest for its camera
 // loop — jsdom has neither `getUserMedia` nor canvas pixels — and that the frame loop and the
@@ -202,7 +202,7 @@ async function syncPanel(send, width, height) {
 
   await until(
     `document.querySelector('ul[aria-label="Settings sections"]') !== null`,
-    `the light app at ${ORIGIN} — is \`npm run mobile:dev\` running?`,
+    `the light app at ${ORIGIN} — is \`pnpm mobile:dev\` running?`,
     30_000,
   );
   await evaluate(`(() => {

@@ -1,7 +1,7 @@
-import { NAV } from "@/components/nav";
-import { LIGHT_VIEWS, type LightView } from "@/lib/edition";
-import { FOCUS_INSET } from "@/lib/focus";
-import { cn } from "@/lib/utils";
+import { NAV } from "@grimoire/ui/components/nav";
+import { LIGHT_VIEWS, type LightView } from "@grimoire/ui/lib/edition";
+import { FOCUS_INSET } from "@grimoire/ui/lib/focus";
+import { cn } from "@grimoire/ui/lib/utils";
 import { linkTo } from "./router";
 
 /**

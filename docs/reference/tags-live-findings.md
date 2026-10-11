@@ -9,7 +9,7 @@ a 43-card corpus. This is the first time any of it ran.
 
 ## The run
 
-`npm run tauri dev` from the `tagger-page` worktree, **debug build**, 2026-08-20, window
+`pnpm tauri dev` from the `tagger-page` worktree, **debug build**, 2026-08-20, window
 1920×1080, against a copy of the dev database (116,700 cards, corpus synced the same morning).
 Rust figures marked *native* were taken with `node:sqlite` against the same file while the app
 held it, so they carry no debug-build multiplier; everything else does, and a debug figure in this

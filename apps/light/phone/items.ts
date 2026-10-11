@@ -1,8 +1,8 @@
-import { FINISH_LABEL, isFinish, playedFinish, soleFinish, type Finish } from "@/lib/finish";
-import type { CollectionTile } from "@/features/collection/collectionWall";
-import type { CardSummary, DeckCard, WishRow } from "@/lib/ipc";
-import type { Currency } from "@/lib/marketplace";
-import { formatPrice } from "@/lib/prices";
+import { FINISH_LABEL, isFinish, playedFinish, soleFinish, type Finish } from "@grimoire/ui/lib/finish";
+import type { CollectionTile } from "@grimoire/ui/features/collection/collectionWall";
+import type { CardSummary, DeckCard, WishRow } from "@grimoire/ui/lib/ipc";
+import type { Currency } from "@grimoire/ui/lib/marketplace";
+import { formatPrice } from "@grimoire/ui/lib/prices";
 import type { WallItem } from "./CardWall";
 import { wishPrinting } from "./WishPrinting";
 

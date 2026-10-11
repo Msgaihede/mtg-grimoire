@@ -41,7 +41,10 @@ own `CLAUDE.md` (`packages/ui/`, `apps/desktop/src-tauri/`, `packages/ui/feature
 ### Prerequisites
 
 - **Node** — the version in [`.nvmrc`](.nvmrc) (24), which is what CI runs; `package.json`'s
-  `engines` floor is 22.18. `npm ci` installs everything else on the TypeScript side.
+  `engines` floor is 22.18.
+- **pnpm** — the version is pinned in `package.json`'s `packageManager` field. Corepack ships
+  with Node: `corepack enable` makes the `pnpm` command use that version. `pnpm install
+  --frozen-lockfile` then installs everything else on the TypeScript side.
 - **Rust via [rustup](https://rustup.rs)** — the toolchain is pinned in
   [`rust-toolchain.toml`](rust-toolchain.toml), and rustup installs it, with `rustfmt` and
   `clippy`, the first time `cargo` runs in the repo. Do not install a different one by hand.
@@ -55,10 +58,10 @@ Rust components are per toolchain, so after `rust-toolchain.toml` moves, `llvm-t
 
 ### Commands
 
-- `npm run tauri dev` — run the app
-- `npm run verify` — build + lint + `cargo fmt --check` + clippy + Vitest + cargo test; run
+- `pnpm tauri dev` — run the app
+- `pnpm verify` — build + lint + `cargo fmt --check` + clippy + Vitest + cargo test; run
   before every commit
-- `npm run storybook` — the component workbench, on a fake backend
+- `pnpm storybook` — the component workbench, on a fake backend
 
 Pull requests are gated on `ci-ok`, which aggregates the frontend build, lint and sharded
 Vitest legs, the Storybook build and a Rust matrix across Windows and Linux — each run only
@@ -72,8 +75,8 @@ from conventional commits by release-please — never edit a version by hand.
 | Frontend — Vitest + v8  | **97.34%** (3777/3880)     | 11,492 in 434 files                      |
 | Rust — `cargo llvm-cov` | **77.45%** (5811/7503)     | 3,005, plus 204 in `crates/card-scanner` |
 
-- `npm run test:coverage` — frontend; writes `coverage/`
-- `npm run test:coverage:rust` — Rust; needs `cargo install cargo-llvm-cov` and
+- `pnpm test:coverage` — frontend; writes `coverage/`
+- `pnpm test:coverage:rust` — Rust; needs `cargo install cargo-llvm-cov` and
   `rustup component add llvm-tools-preview` once
 
 Neither runs in CI — the instrumented Rust rebuild takes minutes against `cargo test`'s seconds.
@@ -85,7 +88,7 @@ each file at its test module and reports both halves. Coverage was measured 2026
 builds, Windows — [docs/reference/test-coverage.md](docs/reference/test-coverage.md) has the
 per-file tables, the thin spots, and the traps — and the suite has grown roughly sixfold since,
 so both percentages are that day's rather than today's. The test counts
-are from `npm run verify`'s own suites on this branch's tree, run on Linux (debug) on
+are from `pnpm verify`'s own suites on this branch's tree, run on Linux (debug) on
 2026-09-27; the Rust count differs slightly by platform because some tests are `cfg`-gated.
 **The numbers above are hand-maintained and nothing recomputes them.**
 

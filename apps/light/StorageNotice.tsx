@@ -1,14 +1,14 @@
 import { useEffect, useId, useState } from "react";
-import { core } from "@/lib/core";
+import { core } from "@grimoire/ui/lib/core";
 import {
   STORAGE_CLEARED,
   STORAGE_CLEARED_DISMISS,
   type StorageCleared,
-} from "@/lib/core/hostStorage";
-import { FOCUS } from "@/lib/focus";
-import { LAYER } from "@/lib/layers";
-import { PRESS } from "@/lib/motion";
-import { cn } from "@/lib/utils";
+} from "@grimoire/ui/lib/core/hostStorage";
+import { FOCUS } from "@grimoire/ui/lib/focus";
+import { LAYER } from "@grimoire/ui/lib/layers";
+import { PRESS } from "@grimoire/ui/lib/motion";
+import { cn } from "@grimoire/ui/lib/utils";
 
 /**
  * **The notice that the host's storage was cleared under the app** — the light-app spec §6: *"The

@@ -1,6 +1,6 @@
-import { wallPrinting } from "@/features/wishlist/wish";
-import { ElsewhereMark } from "@/features/wishlist/wishMarks";
-import type { WishRow } from "@/lib/ipc";
+import { wallPrinting } from "@grimoire/ui/features/wishlist/wish";
+import { ElsewhereMark } from "@grimoire/ui/features/wishlist/wishMarks";
+import type { WishRow } from "@grimoire/ui/lib/ipc";
 
 /**
  * A wish's printing line in the chin — the desktop wall's caption, word for word: `wallPrinting`

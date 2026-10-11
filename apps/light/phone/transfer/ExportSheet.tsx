@@ -1,21 +1,21 @@
 import { useCallback, useId, useState } from "react";
 import { ChevronRight, Copy, Download } from "lucide-react";
-import { Dialog } from "@/components/Dialog";
-import { TRANSFER_FIELDS, type TransferSurface } from "@/features/transfer/fields";
+import { Dialog } from "@grimoire/ui/components/Dialog";
+import { TRANSFER_FIELDS, type TransferSurface } from "@grimoire/ui/features/transfer/fields";
 import {
   EXPORT_FORMATS,
   EXPORT_FORMAT_EXTENSION,
   EXPORT_FORMAT_LABEL,
-} from "@/features/transfer/formats";
-import { useExportModel } from "@/features/transfer/export/useExportModel";
-import type { TransferCard } from "@/features/transfer/TransferCard";
-import { copyText } from "@/lib/clipboard";
-import { FOCUS } from "@/lib/focus";
-import { ipcError } from "@/lib/ipc";
-import { PRESS_SOFT } from "@/lib/motion";
-import { radioKeys } from "@/lib/radioGroup";
-import { cn } from "@/lib/utils";
-import { saveText } from "@/lib/core/files";
+} from "@grimoire/ui/features/transfer/formats";
+import { useExportModel } from "@grimoire/ui/features/transfer/export/useExportModel";
+import type { TransferCard } from "@grimoire/ui/features/transfer/TransferCard";
+import { copyText } from "@grimoire/ui/lib/clipboard";
+import { FOCUS } from "@grimoire/ui/lib/focus";
+import { ipcError } from "@grimoire/ui/lib/ipc";
+import { PRESS_SOFT } from "@grimoire/ui/lib/motion";
+import { radioKeys } from "@grimoire/ui/lib/radioGroup";
+import { cn } from "@grimoire/ui/lib/utils";
+import { saveText } from "@grimoire/ui/lib/core/files";
 import { usePhoneTransferPrefs } from "./prefs";
 
 /**

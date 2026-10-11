@@ -1,9 +1,9 @@
 import { Heart } from "lucide-react";
-import { useWishlistAdd } from "@/features/card/useCardAdds";
-import { useWishEntryWrites } from "@/features/wishlist/useWishEntryWrites";
-import { FOCUS } from "@/lib/focus";
-import { PRESS_SOFT } from "@/lib/motion";
-import { cn } from "@/lib/utils";
+import { useWishlistAdd } from "@grimoire/ui/features/card/useCardAdds";
+import { useWishEntryWrites } from "@grimoire/ui/features/wishlist/useWishEntryWrites";
+import { FOCUS } from "@grimoire/ui/lib/focus";
+import { PRESS_SOFT } from "@grimoire/ui/lib/motion";
+import { cn } from "@grimoire/ui/lib/utils";
 import { ReceiptBar } from "../deck/receipt";
 import { useListReceipt } from "../lists/receipt";
 import type { ActionContext } from "./Actions";

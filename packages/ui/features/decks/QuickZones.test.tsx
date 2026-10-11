@@ -304,7 +304,7 @@ describe("a zone drawn over a pile", () => {
    * pointer is nowhere near it, and `CollisionPriority.Highest` then makes the bar beat the pile
    * the pointer is genuinely inside.
    *
-   * Measured in the shipped window on 2026-08-28 (`npm run tauri dev`, a debug build at
+   * Measured in the shipped window on 2026-08-28 (`pnpm tauri dev`, a debug build at
    * 1920×1080): a card released at `(810, 246)`, **51px below** a bar occupying `y 121–195` and
    * squarely inside the Removal pile, opened the **New category** dialog. The boxes below are
    * that geometry in miniature — a 300px source, a zone the dragged box reaches and the pointer

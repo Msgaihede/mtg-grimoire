@@ -40,7 +40,7 @@ import type { CardCombo, CardCombosPage, ComboPiece, ComboStatus } from "@/lib/i
  * one screenful of rows — a page that ran out inside the scroller would have the observer firing
  * again before the first one had finished landing.
  *
- * **Measured in the shipped window 2026-09-20** (`npm run tauri dev`, a debug build, 1920×1080,
+ * **Measured in the shipped window 2026-09-20** (`pnpm tauri dev`, a debug build, 1920×1080,
  * against a copy of the real pair): a row is **59px**, so fifty of them are **2 987px** of scroller
  * against a **605px** rail — **4.9 screens** of headroom. Driven on Ashnod's Altar, five
  * scroll-to-the-foot passes paged **50 → 100 → 150 → 200 → 250 → 300** with the scroller growing

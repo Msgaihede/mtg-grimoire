@@ -1,36 +1,36 @@
 import { useMemo, useRef, useState } from "react";
-import { useBulkUndoAction } from "@/components/UndoNotice";
-import { CreateDeckDialog } from "@/features/decks/CreateDeckDialog";
-import { useNewDeckFormat } from "@/features/decks/useNewDeckFormat";
-import { AddedToast } from "@/features/scanner/reader/AddedToast";
-import { SCANNING_STOPPED } from "@/features/scanner/reader/readerText";
-import { totalCopies } from "@/features/scanner/reader/tray";
-import { withoutCommitted } from "@/features/scanner/reader/trayCommit";
+import { useBulkUndoAction } from "@grimoire/ui/components/UndoNotice";
+import { CreateDeckDialog } from "@grimoire/ui/features/decks/CreateDeckDialog";
+import { useNewDeckFormat } from "@grimoire/ui/features/decks/useNewDeckFormat";
+import { AddedToast } from "@grimoire/ui/features/scanner/reader/AddedToast";
+import { SCANNING_STOPPED } from "@grimoire/ui/features/scanner/reader/readerText";
+import { totalCopies } from "@grimoire/ui/features/scanner/reader/tray";
+import { withoutCommitted } from "@grimoire/ui/features/scanner/reader/trayCommit";
 import {
   DEFAULT_DETAIL_WAIT_MS,
   DEFAULT_SCANNER_OPTIONS,
   DEFAULT_SEND_PX,
   frameOptions,
-} from "@/features/scanner/scannerOptions";
-import { useCamera, useCameraDevices } from "@/features/scanner/useCamera";
-import { usePageParked } from "@/features/scanner/useParked";
-import { useScanLoop } from "@/features/scanner/useScanLoop";
-import { useScannedDeck } from "@/features/scanner/useScannedDeck";
-import { useScannerElsewhere } from "@/features/scanner/useScannerElsewhere";
-import { useRefusedElsewhere, useScannerHold } from "@/features/scanner/useScannerHold";
-import { useScannerPrefs } from "@/features/scanner/useScannerPrefs";
-import { useScannerStatus } from "@/features/scanner/useScannerStatus";
-import { useTray } from "@/features/scanner/useTray";
-import { useTrayCommit, useTrayFolder } from "@/features/scanner/useTrayCommit";
-import { useTrayLanding } from "@/features/scanner/useTrayLanding";
+} from "@grimoire/ui/features/scanner/scannerOptions";
+import { useCamera, useCameraDevices } from "@grimoire/ui/features/scanner/useCamera";
+import { usePageParked } from "@grimoire/ui/features/scanner/useParked";
+import { useScanLoop } from "@grimoire/ui/features/scanner/useScanLoop";
+import { useScannedDeck } from "@grimoire/ui/features/scanner/useScannedDeck";
+import { useScannerElsewhere } from "@grimoire/ui/features/scanner/useScannerElsewhere";
+import { useRefusedElsewhere, useScannerHold } from "@grimoire/ui/features/scanner/useScannerHold";
+import { useScannerPrefs } from "@grimoire/ui/features/scanner/useScannerPrefs";
+import { useScannerStatus } from "@grimoire/ui/features/scanner/useScannerStatus";
+import { useTray } from "@grimoire/ui/features/scanner/useTray";
+import { useTrayCommit, useTrayFolder } from "@grimoire/ui/features/scanner/useTrayCommit";
+import { useTrayLanding } from "@grimoire/ui/features/scanner/useTrayLanding";
 import {
   SCANNER_OPEN_ELSEWHERE,
   SCANNER_OPENS_HERE_LATER,
-} from "@/features/scanner/verdictText";
-import { ConfirmDialog } from "@/features/settings/ConfirmDialog";
-import { plural } from "@/lib/counts";
-import { ipcError, type ScannerTrayRow } from "@/lib/ipc";
-import { cn } from "@/lib/utils";
+} from "@grimoire/ui/features/scanner/verdictText";
+import { ConfirmDialog } from "@grimoire/ui/features/settings/ConfirmDialog";
+import { plural } from "@grimoire/ui/lib/counts";
+import { ipcError, type ScannerTrayRow } from "@grimoire/ui/lib/ipc";
+import { cn } from "@grimoire/ui/lib/utils";
 import { ReceiptBar } from "../deck/receipt";
 import { useListReceipt } from "../lists/receipt";
 import { navigate } from "../router";

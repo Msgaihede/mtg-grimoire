@@ -8,7 +8,7 @@ import { formatPrice, pricesAsOf } from "@/lib/prices";
  *  shop the number came from, so it names one and holds it still. */
 const PRICES_AS_OF = pricesAsOf(MARKETPLACES.tcgplayer);
 const usdPrice = (value: number | null) => formatPrice(value, "usd");
-import { CARDS, type FakeCard } from "../../../fake/cards";
+import { CARDS, type FakeCard } from "@grimoire/fake/cards";
 import { RarityGem } from "../RarityGem";
 
 /**

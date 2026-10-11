@@ -153,8 +153,8 @@ files, and [light-app.md](light-app.md) §11.5 what was measured in a browser.
 
 ### How the two are built
 
-`npm run web:wasm` (`scripts/build-wasm.mjs`) builds both; `-- --only engine` or
-`-- --only scanner` builds one.
+`pnpm web:wasm` (`scripts/build-wasm.mjs`) builds both; `--only engine` or
+`--only scanner` builds one.
 
 - **The scanner's module is built with `-C target-feature=+simd128`; the engine's is not.**
   `rten` compiles its WebAssembly kernels only under that feature — a title read is 0.3 s with

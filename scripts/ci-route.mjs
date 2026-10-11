@@ -4,7 +4,7 @@
 //   node scripts/ci-route.mjs --all     # no usable base commit: every job, `powershell` too
 //
 // Prints one `job=true|false` line per job in `JOBS` order, which is the shape `$GITHUB_OUTPUT`
-// takes. Dependency-free on purpose: the `changes` job runs it with no `npm ci`.
+// takes. Dependency-free on purpose: the `changes` job runs it with no `pnpm install --frozen-lockfile`.
 //
 // **This was an inline `case` in `ci.yml`, and it moved so `ci-route.test.mjs` can hold it to
 // what the two suites actually read.** That `case` said the two build jobs "share no inputs",
@@ -216,7 +216,7 @@ export const ARMS = [
   // the move put it under `apps/light/` — **above `apps/light/*`**, which would route it as a page
   // file and lose `rust` and `android`. Three jobs run something through it: `frontend` lints it
   // (`eslint .`); `web` builds `apps/light/dist-web/` with it and opens the result; and `android`,
-  // whose `beforeBuildCommand` is `npm run mobile:build` — **the only CI build of this config's
+  // whose `beforeBuildCommand` is `pnpm -w run mobile:build` — **the only CI build of this config's
   // default mode**, into the `apps/light/dist-mobile/` the APK packs, so an edit that adds a mode
   // for the browser and breaks the phone's is red there and nowhere else.
   // **`rust` is here for `android`'s rule and not because it reads the file**: every arm that
@@ -243,7 +243,7 @@ export const ARMS = [
   // only input, so this file reaches no `apps/light/dist-web/`. **Above `apps/desktop/*`**, which
   // is `web`'s too and would take it.
   { match: ["apps/desktop/index.html"], jobs: ["frontend", "storybook"] },
-  // Frontend. What `npm run build` (`tsc && vite build`), `eslint .` and `vitest run` read — and
+  // Frontend. What `pnpm build` (a `tsc -p` for each program, then the desktop's `vite build`), `eslint .` and `vitest run` read — and
   // `storybook`, which builds every `*.stories.tsx` under `packages/ui/` and `apps/desktop/src/`
   // and serves `apps/desktop/public/` as its static directory. **`apps/desktop/*` is the desktop
   // app's own files** — `src/` (its entry and boot screens), `public/`, its eight-line
@@ -260,21 +260,22 @@ export const ARMS = [
   // **Above `packages/fake/*`**, which would otherwise take it.
   { match: ["packages/fake/aliases.ts"], jobs: PAGE_SIDE },
   // The workbench and its fake. `frontend` because vitest collects `packages/fake/**/*.test.ts`,
-  // `tsc -p .storybook` is in `npm run build` and `eslint .` lints it. The fake moved out of
+  // `tsc -p .storybook` is in `pnpm build` and `eslint .` lints it. The fake moved out of
   // `.storybook/` to `packages/fake/` on 2026-10-08; what stays in `.storybook/` is the
   // workbench's config. Until this arm it fell to the fail-safe and ran the whole Rust matrix
   // too; no Rust source reads a file here, which the census below would say if one ever did.
   // **Not `web`**: the fake is aliased in under `fake` mode alone, and the web build's backend
   // is the engine itself.
   { match: ["packages/fake/*", ".storybook/*"], jobs: ["frontend", "storybook"] },
-  // What `npm ci` installs and what `npm run` means, for every job that runs either.
-  { match: ["package.json", "package-lock.json"], jobs: PAGE_SIDE },
+  // What `pnpm install --frozen-lockfile` installs and what `pnpm <name>` means, for every job
+  // that runs either. A package's own manifest is under its folder's arm.
+  { match: ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"], jobs: PAGE_SIDE },
   // Every `tsc` program at the root, and the files every Vite and Vitest program here starts
   // from: `vite.base.ts` (the plugins, the `@` alias and the watch list that all of them share),
   // `vite.watch.ts` (the watch list itself) and `vitest.config.ts` (the test settings, which were
   // inside `vite.config.ts` until 2026-10-08). Storybook's Vite builder loads `vite.base.ts`
   // itself (`viteConfigPath` in `.storybook/main.ts`), and `.storybook/main.ts` imports `vite.watch.ts`;
-  // `web:build` runs `tsc` over the root program and the Worker's own, then Vite through the
+  // `web:build` runs `tsc` over `apps/light`'s program and the web Worker's own, then Vite through the
   // light config, which merges over `vite.base.ts`.
   //
   // **A glob for the programs, and it is a narrowing as well as a widening**: `tsconfig*.json`
@@ -284,7 +285,7 @@ export const ARMS = [
   // programs, which were root files (`tsconfig.relay.json`, …) until 2026-10-08 and so matched
   // the glob: moved into their Workers' folders they would take those folders' arms below —
   // `rust` for the relay, and none of them `storybook` — or the fail-safe, where they ran the
-  // whole Rust matrix and `core` for a file only `npm run build`'s `tsc -p` reads. **Above
+  // whole Rust matrix and `core` for a file only `pnpm build`'s `tsc -p` reads. **Above
   // those arms**, and the order is the rule. `storybook` and `web` are the cheap
   // direction for those two. **`vite.watch.ts` fell to the fail-safe as well** until this arm.
   {
@@ -342,7 +343,7 @@ export const ARMS = [
 
   // **The web app's hosting** (phase 5, step 5.5): `infrastructure/app-worker/`, the third Cloudflare Worker —
   // its `wrangler.jsonc`, the `_headers` file a deploy reads, and a script of a few lines.
-  // `frontend` type-checks it (`tsc -p infrastructure/app-worker/tsconfig.json` in `npm run build`), lints it
+  // `frontend` type-checks it (`tsc -p infrastructure/app-worker/tsconfig.json` in `pnpm build`), lints it
   // and runs its tests, the fence between the Content-Security-Policy and the engine's hosts
   // among them. **And `web`**, which is the only job that *uses* what is here:
   // `apps/light/vite.config.ts` imports `infrastructure/app-worker/src/headers.ts` at load and copies `_headers`
@@ -353,12 +354,15 @@ export const ARMS = [
   // `infrastructure/share-worker/`, whose `wrangler.jsonc` one does, which is why that tree still has no arm.
   // The crossing runs the other way (`hosting.test.ts` reads `crates/grimoire-core`), and the
   // engine's arm already sets `frontend`. No job in this gate deploys it; `release.yml`'s
-  // `web-deploy` does, at a tag, and nothing else may (step 6.6). **`package.json` and
-  // `package-lock.json` here are that job's**: the one tool that deploys, pinned with everything
-  // under it. No job in this gate installs from them — the root's `npm ci` does not see a
-  // manifest that is not a workspace — and `frontend` runs the test that holds them
-  // (`scripts/release-rule.test.mjs`).
+  // `web-deploy` does, at a tag, and nothing else may (step 6.6). Its `package.json` is the
+  // Worker's manifest in the pnpm workspace, read by the root install like any package's.
   { match: ["infrastructure/app-worker/*"], jobs: ["frontend", "web"] },
+
+  // The one tool that deploys that Worker, pinned with everything under it, in a folder of its
+  // own that the workspace does not list. `release-rule.test.mjs` reads its manifest and
+  // lockfile (`frontend`), and the `web` job installs from them, with npm, for the sync smoke.
+  // No job in this gate deploys with it.
+  { match: ["infrastructure/wrangler/*"], jobs: ["frontend", "web"] },
 
   // **The sync relay** (phase 6, step 6.3): `infrastructure/relay/`, the Worker every device of a group asks.
   // Until this arm it fell to the fail-safe, which ran `core` and `storybook` for it as well.

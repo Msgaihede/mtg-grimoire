@@ -3,11 +3,11 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => import("../../../fake/core"));
-vi.mock("@tauri-apps/api/event", () => import("../../../fake/event"));
-vi.mock("@tauri-apps/api/window", () => import("../../../fake/window"));
+vi.mock("@tauri-apps/api/core", () => import("@grimoire/fake/core"));
+vi.mock("@tauri-apps/api/event", () => import("@grimoire/fake/event"));
+vi.mock("@tauri-apps/api/window", () => import("@grimoire/fake/window"));
 
-import { installWorld } from "../../../fake/world";
+import { installWorld } from "@grimoire/fake/world";
 import type { DeckCard } from "@/lib/ipc";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
 import { useDeckCore, type DeckAnchor } from "./useDeckCore";

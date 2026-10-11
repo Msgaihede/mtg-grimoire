@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { DESKTOP_FLOOR_PX } from "@/lib/viewports";
+import { DESKTOP_FLOOR_PX } from "@grimoire/ui/lib/viewports";
 
 export type Face = "phone" | "desktop";
 

@@ -26,7 +26,7 @@ export const SCANNER_NEEDS_SIMD =
 
 /**
  * The origin serves no scanner files, and this browser holds none: a build made without them
- * (`npm run scanner:assets -- --web` was not run before `npm run web:build`). A release never
+ * (`pnpm scanner:assets --web` was not run before `pnpm web:build`). A release never
  * is; a developer's build may be.
  */
 export const SCANNER_NOT_SHIPPED =

@@ -8,12 +8,12 @@ import {
   needsFinishCount,
   readyRows,
   totalCopies,
-} from "@/features/scanner/reader/tray";
-import { FOCUS } from "@/lib/focus";
-import { buildFolderTree, flattenFolders } from "@/lib/folderTree";
-import type { CollectionFolder, ScannerTrayRow } from "@/lib/ipc";
-import { PRESS } from "@/lib/motion";
-import { cn } from "@/lib/utils";
+} from "@grimoire/ui/features/scanner/reader/tray";
+import { FOCUS } from "@grimoire/ui/lib/focus";
+import { buildFolderTree, flattenFolders } from "@grimoire/ui/lib/folderTree";
+import type { CollectionFolder, ScannerTrayRow } from "@grimoire/ui/lib/ipc";
+import { PRESS } from "@grimoire/ui/lib/motion";
+import { cn } from "@grimoire/ui/lib/utils";
 import { ActionSheet, SheetChoice, SheetRow } from "../deck/sheet";
 
 /** The collection's own word for its top level — the desktop tray's, and `CopyActions`'. */

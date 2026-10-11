@@ -24,7 +24,7 @@
  * reads no title and no collector line, it ignores the filters, and the quad it reports is the
  * fixture's whatever the camera shows. Those are the engine's to prove.
  */
-import { MARKS, VERDICTS } from "@/features/scanner/fixtures";
+import { MARKS, VERDICTS } from "@grimoire/ui/features/scanner/fixtures";
 import type {
   ScanMode,
   ScannerChoice,
@@ -34,7 +34,7 @@ import type {
   ScannerResolution,
   ScannerStanding,
   ScannerVerdict,
-} from "@/lib/ipc";
+} from "@grimoire/ui/lib/ipc";
 import { CARDS } from "./cards";
 
 /**

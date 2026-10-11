@@ -4,7 +4,7 @@ import type { CollectionRow, WishRow } from "@/lib/ipc";
 import { transferCard } from "../fixtures";
 import { fromCollectionRow, fromWishRow, type TransferCard } from "../TransferCard";
 import { ExportDialog } from "./ExportDialog";
-import { printing } from "../../../../fake/fixtures";
+import { printing } from "@grimoire/fake/fixtures";
 
 /** How long a `waitFor` will wait for `Dialog`'s first frame — the shell's panel carries its
  *  `initial`, so nothing inside it is visible yet. `Decks/Dialog shell` has the whole reason and

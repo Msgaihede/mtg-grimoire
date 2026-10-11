@@ -242,7 +242,7 @@ rows went on reading as open until 2026-09-27:
   mana cost reads as a badge rather than as damage.
 - **Linux remains entirely unrun**, as everywhere else in this repo.
 
-## The create dialog carrying every deck setting — 2026-08-14, `npm run tauri dev` (debug)
+## The create dialog carrying every deck setting — 2026-08-14, `pnpm tauri dev` (debug)
 
 Driven over CDP against the live corpus (**116,703 cards**, data from 2026-08-13). Everything
 below is a measurement of that window, not of the suite.
@@ -291,7 +291,7 @@ Enter` created the deck and opened the editor. The two textareas keep their newl
 
 ## The stats band, driven 2026-08-14
 
-`npm run tauri dev`, a **debug** build, against the real 116 703-card corpus and a saved
+`pnpm tauri dev`, a **debug** build, against the real 116 703-card corpus and a saved
 11-copy commander deck. The stats moved out of the collapsible aside on the desk row into a
 static band at the foot of the editor, and the toggle went with it. **Every number below is
 why the layout is shaped the way it is, and none of them could have come from the suite —
@@ -345,7 +345,7 @@ thin` was measured as an alternative and is not one: **10px instead of 15**, des
   this pass's own work (a constant referenced before it was renamed); nothing after the layout
   settled.
 
-## The quick zones — 2026-08-15, `npm run tauri dev` (debug), 1280×800 unless stated
+## The quick zones — 2026-08-15, `pnpm tauri dev` (debug), 1280×800 unless stated
 
 The bar of four drop targets across the top of the editor (`QuickZones.tsx`), driven end to end
 against a real deck of 14 cards. Every claim its doc comment makes about layout is here, because
@@ -411,7 +411,7 @@ with the drag's own auto-scroller having run right — bar left **162** against 
 > (`overflow-y-auto` computes `overflow-x` to `auto`, so the box can scroll on two axes whenever
 > anything overflows it), not around the one control that happened to be overflowing it.
 
-## `Auto` re-filing a card the deck already holds — 2026-08-16, `npm run tauri dev` (debug), 1280×800
+## `Auto` re-filing a card the deck already holds — 2026-08-16, `pnpm tauri dev` (debug), 1280×800
 
 Driven on `main` at d5fed47, against the same 14-card deck. The write path is new on both sides —
 `move_card`'s name arm in Rust, `useDeck.refileCard` in TypeScript — and the two halves that no
@@ -478,7 +478,7 @@ either (Token 38, Emblem ~35, Stickers 17, Dungeon 1) or belongs to a supplement
 rule files them by the fallback. Fixing that is a mapping, not a new bucket, and nobody has done
 it.
 
-## The four decklist formats, end to end — 2026-08-16, `npm run tauri dev` (debug), 1280×800
+## The four decklist formats, end to end — 2026-08-16, `pnpm tauri dev` (debug), 1280×800
 
 Driven against the **live corpus of 116 712 cards, Scryfall data of 2026-08-15**, through the real
 `import_resolve` / `deck_import_commit` rather than a stub. The three fixtures are the reader's
@@ -551,7 +551,7 @@ Six radios in `EXPORT_FORMATS` order — `Plain text · MTGO · Arena · Moxfiel
   identical to the original import. `decklists.test.ts` pins the same trip as a fixed point; this
   is that claim made against the real corpus and the real database.
 
-## Switching Live and Theory took the app down — 2026-08-16, `npm run tauri dev` (debug), 1280×800
+## Switching Live and Theory took the app down — 2026-08-16, `pnpm tauri dev` (debug), 1280×800
 
 Driven from `d0bd45b` on a real deck with a plan (6 live rows, 1 theory row), reported by the
 reader as "it doesn't always happen, but switching back and forth a few times in a row will
@@ -587,7 +587,7 @@ in a render is the whole window going blank, and jsdom never assembled the state
   35 ms** across eight bursts, plus 16 real Chromium clicks, left `root` at 1, the pressed tab
   `aria-pressed="true"` every time, and **zero** console errors.
 
-## Switching the theory list **off** took the app down — 2026-09-01, `npm run tauri dev` (debug), a copy of the real db
+## Switching the theory list **off** took the app down — 2026-09-01, `pnpm tauri dev` (debug), a copy of the real db
 
 The second crash of the same family, and the first one reached by an ordinary press rather than
 by racing a control. Reported by the reader as *"when disabling theory deck on a deck that
@@ -697,7 +697,7 @@ the desk row therefore does not move.
 
 ## 2026-08-17 — a deck card names a finish (schema v19)
 
-Driven in the shipped window (`npm run tauri dev`, a **debug** build, against the real synced
+Driven in the shipped window (`pnpm tauri dev`, a **debug** build, against the real synced
 corpus copied out of the main checkout — 116k cards, real prices, real decks). CDP over
 `scripts/cdp.mjs`. Two defects found, neither of which any test in the repo could have caught,
 and both fixed in the same pass.
@@ -757,7 +757,7 @@ the `deck` kind's `field`.
 reused audit kind is a reused *sentence* until somebody writes the second one. The kind list stays
 short for a good reason; the renderer is where the cost lands.
 
-## The quick zones become the ribbon — 2026-08-18, `npm run tauri dev` (debug), 1280×800
+## The quick zones become the ribbon — 2026-08-18, `pnpm tauri dev` (debug), 1280×800
 
 Driven in the shipped window against the real synced corpus copied out of the main checkout, on a
 14-card Commander deck. Every figure below is a `cdp.mjs drag … --probe` reading taken **while a
@@ -826,7 +826,7 @@ the wrapping half at the same 1280 width; a larger desk is now in the one-line h
   `style.height`/`gap`/`padding` back to the old values photographs before and after from one
   build. The clone must be removed afterwards; it is not React's and nothing else will.
 
-## The general import/export feature, driven end to end — 2026-08-20, `npm run tauri dev` (debug), this worktree
+## The general import/export feature, driven end to end — 2026-08-20, `pnpm tauri dev` (debug), this worktree
 
 Task 15's live pass, against a fresh sync in this worktree (116,700 cards, its own
 `target/debug/data/mtg.db` — separate from the main checkout's, which held 0 collection rows and 0
@@ -887,7 +887,7 @@ was left inside the deck that was just created, not looking at its new tile in t
 
 ## The arrow keys walk one card at a time (#178)
 
-Driven in the shipped window **2026-08-21** (`npm run tauri dev`, a **debug** build, 1920×1080,
+Driven in the shipped window **2026-08-21** (`pnpm tauri dev`, a **debug** build, 1920×1080,
 against a copy of the real corpus), on a 14-card Commander deck laid out as six piles —
 `Commander(1) · Instant(3) · Artifact(4) · Creature(4)` in the flow, then `Test(1)` and one railed
 pile. The caret was put on a card by a **real pointer click**, which is the entry point
@@ -928,7 +928,7 @@ Left as the suite's: that ArrowLeft/ArrowRight on a grip still reorder. Driving 
 `deck_category_reorder` writes against the reader's own deck, and the branch was not touched —
 `views.test.tsx` and `DeckEditor.test.tsx` both cover it, including the ids the second one sends.
 
-## The card pane as an overlay, and the remembered search column — 2026-08-22, `npm run tauri dev` (debug), 1280×800
+## The card pane as an overlay, and the remembered search column — 2026-08-22, `pnpm tauri dev` (debug), 1280×800
 
 Issue #183, both halves, driven against a copy of the main checkout's database (14-card Commander
 deck, 116 700-card corpus, a sync running throughout — which is the *contended* read connection
@@ -1012,7 +1012,7 @@ clicked.** That is the design — the pane covers what the reader was not lookin
 a CDP pass that opens a deck card and then reaches for a search tile is aiming at the pane. Close
 the card first.
 
-## Multi-select (#214) — 2026-08-24, `npm run tauri dev` (debug), 1920×1080, a copy of the real db
+## Multi-select (#214) — 2026-08-24, `pnpm tauri dev` (debug), 1920×1080, a copy of the real db
 
 Driven against the `Azula` deck — 122 rows across 13 piles — and the search wall over the real
 116 700-card corpus. Everything below is a reading from the shipped window, not a test.
@@ -1076,7 +1076,7 @@ for one frame is removed by its own monitor on `dragstart`, so `cdp.mjs drag --p
 between `dragOver` and `drop`, is too late to see it. What was read is the text and the colour;
 the 12px offset is unmeasured.
 
-## The three-line header, at all four of its widths — 2026-08-24, `npm run tauri dev` (debug), 1920×1080
+## The three-line header, at all four of its widths — 2026-08-24, `pnpm tauri dev` (debug), 1920×1080
 
 The 2026-08-24 redesign, driven against the main checkout's real corpus (116 700 cards) on a
 100-card Commander deck with a theory list, a sideboard and an inactive Maybeboard. The design's
@@ -1178,7 +1178,7 @@ and it clears itself. Left as it is, deliberately.
 ### Two traps this pass paid for
 
 - **Port 6006 answered from another worktree while the `storybook` lock read `FREE`.** A Storybook
-  from `default-search-filter-order` had been bound since 06:59; `npm run storybook` here then sat
+  from `default-search-filter-order` had been bound since 06:59; `pnpm storybook` here then sat
   on an interactive *"Would you like to run on 6007?"* prompt for ever, and the recipe's
   `Get-NetTCPConnection -LocalPort 6006` loop found **their** pid and adopted it into this
   worktree's lock. The tell was a Vite error overlay naming a path in the other worktree. Releasing
@@ -1189,7 +1189,7 @@ and it clears itself. Left as it is, deliberately.
   `section[aria-label^= Deck editor]` and throws. Filter a `querySelectorAll` in JS instead, then
   stamp the element and address it by a bare attribute.
 
-## `Compare` beside the switch, and `Theory | Actual` — 2026-08-26, `npm run tauri dev` (debug), a copy of the real db
+## `Compare` beside the switch, and `Theory | Actual` — 2026-08-26, `pnpm tauri dev` (debug), a copy of the real db
 
 Three changes to one row, driven at three widths on deck **Azula** (Commander, 100 cards, theory
 on): `Compare` moved out of the variant group, the tabs went back to Theory-first, and `Live`
@@ -1258,7 +1258,7 @@ Pressing `Theory` flipped `aria-pressed` to `Theory=true` / `Actual=false` and r
 about which tab is pressed or remembered moved with the order — `lastVariant` is still what
 decides that.
 
-## The deck a reader parked (#162) — 2026-08-27, `npm run tauri dev` (debug), 1920×1080, a copy of the real db
+## The deck a reader parked (#162) — 2026-08-27, `pnpm tauri dev` (debug), 1920×1080, a copy of the real db
 
 **What the issue asked for**: editing a deck, ducking over to Collection or Wishlist to check
 whether a card is owned or already wished for, and coming back to Decks should land on the deck
@@ -1309,7 +1309,7 @@ attached to an element that appears not to be scrollable`, which the deck's drop
 emit on every editor mount and which predates this change — a park restore is an editor mount, so
 it costs one more batch of them per return and nothing new.
 
-## The folder drag, driven as a gesture — 2026-08-27, `npm run tauri dev` (debug), 1920×1080, a copy of the real db
+## The folder drag, driven as a gesture — 2026-08-27, `pnpm tauri dev` (debug), 1920×1080, a copy of the real db
 
 **The first drag in this app's history that a live pass could actually drive.** HTML5 drag and
 drop cannot be started from a synthetic event — Chromium refuses — so every
@@ -1426,7 +1426,7 @@ preview in a `tauri build` copy is unverified and has reason to be broken. That 
 [frontend-design.md](frontend-design.md)'s "The shipped CSP blocks a plugin dnd-kit cannot be told
 not to load", and it needs a portable exe rather than another dev-server pass.
 
-## Every migrated drag, driven — 2026-08-28, `npm run tauri dev` (debug), 1920x1080, a fresh sync
+## Every migrated drag, driven — 2026-08-28, `pnpm tauri dev` (debug), 1920x1080, a fresh sync
 
 3a proved one gesture in the shipped window and called it the payoff. This is the rest of them:
 the card payload, the category reorder, the deck being filed, the count chip, the remove tray and
@@ -1538,7 +1538,7 @@ like the fix not working — one measurement was taken that way and had to be th
 the one already written down one section up: stop `tauri dev`, delete `node_modules/.vite`,
 relaunch, and **`fetch` the module and grep the served text before believing any reading.**
 
-### Repeated in a packaged build — `tauri build -- --debug --no-bundle`, same day
+### Repeated in a packaged build — `tauri build --debug --no-bundle`, same day
 
 `tauri dev` sends **no CSP at all** — Vite serves the page and Tauri is out of the response path —
 so the shipped `style-src 'self'` cannot be refuted there. The two gestures that depend on it were
@@ -1572,7 +1572,7 @@ exactly like the packaged build having no drags at all. The console was silent t
 no `afterEach` in a live window; the cure is `location.reload()`, and the tell is that the very
 first gesture after a reload works.
 
-## The gallery's colour bar, bracket and filter row (#387) — 2026-09-07, `npm run tauri dev` (debug), a copy of the real db
+## The gallery's colour bar, bracket and filter row (#387) — 2026-09-07, `pnpm tauri dev` (debug), a copy of the real db
 
 Three decks on the wall — **Azula** (Commander, 101 cards), **Serah** (Commander, 100) and **Test
 Deck** (Commander, 0) — plus a folder card. Everything below was read off the shipped WebView2.
@@ -1645,7 +1645,7 @@ failure that looked exactly like this branch breaking the search wall — and ev
 dated `2026-08-05`, out of a file left behind by a session a month earlier. Delete the log before
 the run, and read the timestamps before believing the contents.
 
-## The gallery redrawn (design canvas 1d) — 2026-09-08, `npm run tauri dev` (debug), 1920×1080, a copy of the real db
+## The gallery redrawn (design canvas 1d) — 2026-09-08, `pnpm tauri dev` (debug), 1920×1080, a copy of the real db
 
 The redesign that fused the colour bar to the crop, moved the bracket onto the art, redrew folder
 cards in the deck tile's format, gave the folder tree drawn nesting, and collapsed three heading
@@ -1681,7 +1681,7 @@ and a green Storybook say nothing about the window that ships.
   width the old 14px step did not. It is the design as approved, names have always truncated, and
   nobody has yet looked at a genuinely deep cabinet in it.
 
-## The three alternate views brought up to the stacks' style — 2026-09-08, `npm run tauri dev` (debug), 1920×1080, a copy of the real db
+## The three alternate views brought up to the stacks' style — 2026-09-08, `pnpm tauri dev` (debug), 1920×1080, a copy of the real db
 
 Driven on **Azula**, a 101-card Commander deck, at `cardZoom` **1.1** unless a figure says
 otherwise. The pass was taken twice: once against `main` to record what was being fixed, once
@@ -1778,7 +1778,7 @@ stop, and neither suite could see any of it.
 
 
 
-## The token wall at the stacked card's size — 2026-09-08, `npm run tauri dev` (debug), 1920×1080, a copy of the real db
+## The token wall at the stacked card's size — 2026-09-08, `pnpm tauri dev` (debug), 1920×1080, a copy of the real db
 
 The reader's ask was two things: draw the **Tokens & emblems** tiles at the size of the cards in
 the stacks and follow the deck's zoom, and move the band above the Deck stats. Driven on the
@@ -1840,7 +1840,7 @@ reader does not measure it as one.
 
 ## 2026-09-08 — inline rename on the deck wall
 
-`npm run tauri dev`, a **debug** build, 1920×1080, against a copy of the real database (three
+`pnpm tauri dev`, a **debug** build, 1920×1080, against a copy of the real database (three
 decks, two folders on the wall). The wall's own zoom was the reader's saved 1.2×, so every figure
 below carries `--mark-scale: 1.2` and `--control-scale: 1.02` unless it says otherwise. Console
 recorder attached for the whole pass: **16 entries, no error and no warning.**
@@ -1933,7 +1933,7 @@ Every tile is the same height as its neighbours at every stop, in both states. T
 slack at the bottom — the case worth checking, because those buttons scale with the card and the
 tile does too, so the ratio is what holds rather than any one figure.
 
-## The `Game Changers` filter chip, and the crown that sat on its own line — 2026-09-09, `npm run tauri dev` (debug), 1920×1080, a copy of the real db
+## The `Game Changers` filter chip, and the crown that sat on its own line — 2026-09-09, `pnpm tauri dev` (debug), 1920×1080, a copy of the real db
 
 The game-changer spotlight was withdrawn a day after it shipped and a filter chip took over the
 question it answered (`packages/ui/features/decks/CLAUDE.md` carries the argument). This is the pass that
@@ -2019,7 +2019,7 @@ rather than anything this chip introduced — a reader's own piles and the seede
 screen, and stay drop targets, while a filter is running. It is written down because it looks like
 a finding and is the documented rule.
 
-## The chip merged back into the ledger's count — 2026-09-10, `npm run tauri dev` (debug), a copy of the real db
+## The chip merged back into the ledger's count — 2026-09-10, `pnpm tauri dev` (debug), a copy of the real db
 
 The same deck the section above was driven on — `Azula`, 122 drawn cards, six of them game
 changers — with the filter moved back onto the ledger's game-changer readout, one control between
@@ -2075,7 +2075,7 @@ twice gone hunting phantom scrollbars over.
 
 ## The redesigned Deck stats band, driven 2026-09-10
 
-`npm run tauri dev`, a **debug** build, against a **copy of the main checkout's real database** —
+`pnpm tauri dev`, a **debug** build, against a **copy of the main checkout's real database** —
 117 738 cards, five decks — opened on `Azula`, a 101-card Commander deck (Blue/Black/Red, +3
 sideboard, +24 in switched-off piles). Window sizes below are the OS window; the figures are the
 webview's own `clientWidth`, which is 16px smaller.
@@ -2179,7 +2179,7 @@ order in the DOM whatever flexbox does with them on screen, and every assertion 
 passes. It is this file's own centring rule in its general form: a pairing fault names **two**
 elements, and measuring either one of them reports nothing wrong.
 
-## Issue #473 — a text selection that took the window, 2026-09-19, `npm run tauri dev` (debug), 1920×1080, a copy of the real db
+## Issue #473 — a text selection that took the window, 2026-09-19, `pnpm tauri dev` (debug), 1920×1080, a copy of the real db
 
 The report: *"While moving a card, I accidentally highlighted header text and then selected more
 content by clicking and dragging. This resulted in a soft lock"* — no input anywhere, and no way to
@@ -2225,7 +2225,7 @@ report's and not a measurement.
 - **Not driven live**: the text-field exemption. React reset the filter field's value when it was
   set from outside, so there was nothing selected to pull; `nativeDrag.test.ts` is its only proof.
 
-## Issue #474 — removing a card took the walk with it, 2026-09-20, `npm run tauri dev` (debug), 1920×1080
+## Issue #474 — removing a card took the walk with it, 2026-09-20, `pnpm tauri dev` (debug), 1920×1080
 
 The reader's report was *removing the card from the deck leaves the user on that page and prevents
 navigation to the next card*, filed as a possible regression of #178 — the pass above, which gave
@@ -2291,7 +2291,7 @@ deliberately; the stepper is still dropping the caret everywhere else it reaches
   against `collection_entries` directly. Unrelated to this issue and not investigated further;
   the rows for the collection leg above were seeded instead.
 
-## The redesigned notes band, driven 2026-09-21, `npm run tauri dev` (debug), a fresh worktree db
+## The redesigned notes band, driven 2026-09-21, `pnpm tauri dev` (debug), a fresh worktree db
 
 The band is a masonry of note cards now, and its three acts are dialogs. A fresh worktree
 database, its own Scryfall sync (118,609 cards, data from 2026-09-20), one Commander deck of
@@ -2422,7 +2422,7 @@ real question is whether a keystroke at **key-repeat speed** in the shipped wind
 same gap, and only driving the real WebView2 can answer it. Nothing was measured there, and the
 2026-09-21 pass did not attempt it.
 
-## The editor's missing bottom margin, and one `<dl>` spelled two ways — 2026-09-22, `npm run tauri dev` (debug), 1920×1080, a copy of the real db
+## The editor's missing bottom margin, and one `<dl>` spelled two ways — 2026-09-22, `pnpm tauri dev` (debug), 1920×1080, a copy of the real db
 
 A reader's report of two things at once: that the bottom-most controls were "very hard to use",
 and that the numbers on the ledger line were not all set alike. Both turned out to be true, and
@@ -2519,7 +2519,7 @@ the mark's two states were two different heights on the same card. The mark draw
 vocabulary with the ledger's own `−{missing}`. Three story plays (`GridView`, `StackView`,
 `TextView`) and two tests caught the glyph change, which is the fence working.
 
-## The token stack on the deck's own parts, and one-row pile headings — 2026-09-26, `npm run tauri dev` (debug), 1920×1080, a copy of the real db
+## The token stack on the deck's own parts, and one-row pile headings — 2026-09-26, `pnpm tauri dev` (debug), 1920×1080, a copy of the real db
 
 Token stacks PR 1 ([the spec](../superpowers/specs/2026-09-26-token-stacks-design.md) §3), driven
 over `scripts/cdp.mjs` on the reader's 100-card Commander deck **Bruna** (a plan kept, 14 piles,
@@ -2586,7 +2586,7 @@ The search column's Collection tab listed `Any card`, `Any format`, `Commander`,
 picker; picking `Any card` held (`Showing: Any card`) where the tab had opened on the deck's own
 format.
 
-## Token entries, per list, and the mode control — 2026-09-26, `npm run tauri dev` (debug), 1920×1080, a copy of the real db
+## Token entries, per list, and the mode control — 2026-09-26, `pnpm tauri dev` (debug), 1920×1080, a copy of the real db
 
 Token stacks PR 2 ([the spec](../superpowers/specs/2026-09-26-token-stacks-design.md) §4, user
 schema **v52**), driven over `scripts/cdp.mjs` on **Bruna** again, from a copy of the main

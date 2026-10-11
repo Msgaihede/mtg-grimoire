@@ -81,8 +81,14 @@ const NO_LABELS: readonly DeckLabel[] = [];
  *  slot the reader pressed and emptying one somebody else already refilled.
  *
  *  The **variant** is the third part of the slot and is not a field here: it is the hook's, and
- *  it is in the query key — see {@link useDeck}. */
-interface Slot {
+ *  it is in the query key — see {@link useDeck}.
+ *
+ *  **Exported for a reason nothing in the app has.** It is in the type of what
+ *  {@link useDeckCore} returns — every mutation here takes one — and `useDeck.ts` hands that on
+ *  through two functions of its own. A program that only checks never has to *name* the type;
+ *  the one that writes declarations (`.design-sync/tsconfig.dts.json`) does, and refused both
+ *  functions with TS4058 for as long as this was private. */
+export interface Slot {
   cardId: string;
   categoryId: number;
   /**

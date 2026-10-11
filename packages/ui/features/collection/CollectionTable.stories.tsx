@@ -15,8 +15,8 @@ import type { Shelf } from "@/lib/shelves";
 const TCG = MARKETPLACES.tcgplayer;
 const PRICES_AS_OF = pricesAsOf(TCG);
 const usdPrice = (value: number | null) => formatPrice(value, "usd");
-import type { FakeCard } from "../../../fake/cards";
-import { MISSING, printing } from "../../../fake/fixtures";
+import type { FakeCard } from "@grimoire/fake/cards";
+import { MISSING, printing } from "@grimoire/fake/fixtures";
 import { CollectionTable } from "./CollectionTable";
 
 /** `collection_entries.id`. Its own counter rather than the shared fixtures' one, because these

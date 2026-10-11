@@ -10,8 +10,8 @@ import { LAYER } from "@/lib/layers";
 import { useAppStore, type ViewId } from "@/lib/store";
 import { NAV_COLLAPSED_KEY } from "@/lib/useNavCollapsed";
 import { useUpdate } from "@/lib/useUpdate";
-import { emitFake } from "../../fake/event";
-import { printing } from "../../fake/fixtures";
+import { emitFake } from "@grimoire/fake/event";
+import { printing } from "@grimoire/fake/fixtures";
 import { AppShell } from "./AppShell";
 
 /**

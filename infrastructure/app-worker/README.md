@@ -25,7 +25,8 @@ deploy's own record, with what it has not proved.
 | --- | --- |
 | `wrangler.jsonc` | The Worker: its name, the custom domain, the `assets` binding over `../../apps/light/dist-web` |
 | `_headers` | The response headers, in Cloudflare's format. The web build copies it into `apps/light/dist-web/` |
-| `package.json`, `package-lock.json` | The one tool that deploys this Worker — `wrangler`, at an exact version — and every package under it with its integrity hash. Not a workspace of the root package (*Deploying*) |
+| `package.json` | This Worker's manifest in the pnpm workspace: `@grimoire/app-worker`, and the one package it imports from, `@grimoire/ui`. It names no `wrangler`. |
+| `../wrangler/package.json`, `package-lock.json` | The one tool that deploys this Worker — `wrangler`, at an exact version — and every package under it with its integrity hash. npm's, in a folder of its own that the workspace does not list, so `pnpm install` installs none of it. |
 | `src/index.ts` | The script: a missing file is a 404, never the document |
 | `src/headers.ts` | A reader of `_headers` that answers as Cloudflare's does — for the preview and the tests |
 | `src/hosting.test.ts` | The fence between the policy and the hosts the engine asks |
@@ -56,6 +57,12 @@ reader's data.
 - **The Cloudflare account id is in no file of this repository** — wrangler takes it from the
   login — and `hosting.test.ts` fails if anything shaped like one appears in this directory.
 
+**The script's one import from the shared UI is also in `wrangler.jsonc`, as `alias`.** The
+release's deploy job installs wrangler and nothing else — no pnpm, so nothing links
+`@grimoire/ui` into this folder — and the alias is the path wrangler follows instead. A second
+import from another package needs a second alias; `src/hosting.test.ts` fails without it, which
+is the only place that would be noticed before a release.
+
 ## What it answers
 
 | Request | Answer | Who answers |
@@ -85,7 +92,7 @@ miss reaches the script.
 **What "a navigation" is differs by who is asking, and both rules are deliberate.** Cloudflare's
 is the header a browser sends. The script's, for the clients that send none, is `isNavigation` in
 `packages/ui/lib/core/web/assets.ts` — a `GET` that accepts `text/html`, for a path whose last segment
-has no extension — which is the rule `npm run web:dev` and `web:preview` serve by, imported so the
+has no extension — which is the rule `pnpm web:dev` and `web:preview` serve by, imported so the
 three cannot come to disagree.
 
 **Three trees hold no place at all**: under `/assets/`, `/wasm/` and `/mtgimg/` the script
@@ -222,14 +229,14 @@ a request it matches is a 429 once the free plan's day is spent.
 - **No isolation headers.** The OPFS pool needs neither `Cross-Origin-Opener-Policy` nor
   `-Embedder-Policy`, and `require-corp` would refuse every card picture.
 
-**`npm run web:preview` sends the same headers**, read from the built `apps/light/dist-web/_headers` by
+**`pnpm web:preview` sends the same headers**, read from the built `apps/light/dist-web/_headers` by
 `src/headers.ts`, answers a missing file with a bare 404 as the script does, and answers
 `/_headers` itself with a 404, as the host does. The dev server sends none of it: Vite injects
 `<style>` elements and talks over a WebSocket, which the policy forbids on purpose.
 
 ### What the browser said under it
 
-Headless Chrome 154.0.8037.95 on Windows 11, 2026-10-04, over `npm run web:build` of `main` at
+Headless Chrome 154.0.8037.95 on Windows 11, 2026-10-04, over `pnpm web:build` of `main` at
 `92cbc02b` with this directory merged in. **The module was a copy, not this tree's own build**:
 8,623,589 bytes, taken from the phase's working tree that day (3.07 MB gzipped by Vite's
 report).
@@ -254,7 +261,7 @@ report).
   `connect-src` failed at the card sync — the page said `http request failed: error sending
   request` — and reported the Worker's three refused downloads by name. That sentence is also
   what a reader sees on the day Scryfall moves its bulk files.
-- **Both faces, as deep links**, through `npm run web:preview` with real hosts unresolvable: at
+- **Both faces, as deep links**, through `pnpm web:preview` with real hosts unresolvable: at
   360 × 800 and 1280 × 800, each of `/search`, `/collection`, `/decks`, `/wishlist` and
   `/settings` reached its shell with no violation and nothing thrown, and the console said
   `database open in OPFS — journal delete, corpus journal delete, schema 59` every time.
@@ -376,8 +383,8 @@ and the three hosts ship from one tag ([ci-and-releases.md](../../docs/reference
 
 - **At a release, a job deploys it** (decided by the owner, 2026-10-04). `release.yml`'s `web`
   job builds the bundle at the tag and opens it in a browser — steps 1 to 4 below, as CI's
-  `web` job runs them — and `web-deploy` then installs `wrangler` from this directory's
-  lockfile with no script run, and runs **`npx --no-install wrangler deploy`** from here with a
+  `web` job runs them — and `web-deploy` then installs `wrangler` from `infrastructure/wrangler`'s
+  lockfile with no script run, and runs **`node ../wrangler/node_modules/wrangler/bin/wrangler.js deploy`** from here with a
   token from the `release` environment, which only `main` may use. It then asks the real
   address three things: the document answers 200, its policy is the built `_headers` line, and
   the document is the bundle's (`scripts/web-deploy-probe.mjs` — probe 1 below, and the
@@ -393,30 +400,31 @@ and the three hosts ship from one tag ([ci-and-releases.md](../../docs/reference
   release PR is merged**, and the full table is still somebody's to run after a release that
   changed `_headers`, `wrangler.jsonc` or the script. **No release has run it yet.**
 - **Between releases, by hand** — the rest of this section. Step 6 of *The steps, in order* is
-  the rule's guard for this way: `npm run web:deploy-guard`.
+  the rule's guard for this way: `pnpm web:deploy-guard`.
 
 ⚠️ **No agent runs `wrangler deploy`, or any wrangler command that reaches Cloudflare.** That is
 the repo owner's, as it is for the other two Workers.
 
-**`wrangler` is pinned by this directory's lockfile, and that is the one every deploy runs.**
-`package.json` here names `wrangler` at an exact version and nothing else, and
-`package-lock.json` names all ninety-one packages under it, each with the registry's integrity
-hash. It is not a dependency of the app — this directory is not a workspace of the root
-package, so the root's `npm ci` installs none of it. Before any command below:
+**`wrangler` is pinned by `infrastructure/wrangler`'s lockfile, and that is the one every deploy runs.**
+`infrastructure/wrangler/package.json` names `wrangler` at an exact version and nothing else, and
+`package-lock.json` there names all ninety-one packages under it, each with the registry's integrity
+hash. It is not a dependency of the app — that folder is not in the pnpm workspace, so the root's
+`pnpm install --frozen-lockfile` installs none of it. Before any command below:
 
-```
-npm ci --ignore-scripts --prefix infrastructure/app-worker     # from the repository root; no lifecycle script runs
-cd infrastructure/app-worker && npx --no-install wrangler --version     # 4.146.0, or it fails
+```bash
+npm ci --ignore-scripts --prefix infrastructure/wrangler     # from the repository root; no lifecycle script runs
+cd infrastructure/app-worker && node ../wrangler/node_modules/wrangler/bin/wrangler.js --version     # 4.146.0, or it fails
 ```
 
-**Every `wrangler` below is `npx --no-install wrangler`**: what runs is what that lockfile
-installed, or nothing — never whatever `npx` would fetch that day. Until 2026-10-04 this
+**Every `wrangler` below is `node ../wrangler/node_modules/wrangler/bin/wrangler.js`, run from this
+folder**: the file that lockfile installed, or nothing. It is a path, so nothing is resolved and
+nothing can be fetched in its place. Until 2026-10-04 this
 runbook said `npx wrangler`, which fetched the latest, and the release job said
 `npx wrangler@4.146.0`, which pinned one package and let ninety resolve on the day, two of
 them running a `postinstall`. `--ignore-scripts` costs nothing: `esbuild`'s and `workerd`'s
 scripts only swap a launcher for the binary it starts (a `deploy --dry-run` after such an
 install was run that day, on Windows). Moving the version is `npm install --package-lock-only
---ignore-scripts wrangler@<version> --prefix infrastructure/app-worker` and a pull request with both files.
+--ignore-scripts wrangler@<version> --prefix infrastructure/wrangler` — **in `infrastructure/wrangler`**, not here — and a pull request with both files.
 
 **The 2026-10-04 deploy was run by an agent because Markus asked
 for it in chat**, as he did for the relay's on 2026-10-01 — and **the ask is per deploy**: it
@@ -461,8 +469,8 @@ each time.** The fourth is what production serves, and is the last bullet.
   `2bbd4446` — what production served until 02:29 UTC on 2026-10-05**, and the build the owner
   paired with a desktop that day. Engine build id `d6f5dc2a123a220e`, `index-B-KQBiDj.js`,
   `worker-WDxbzWW_.js`; by an agent under the phase's standing ask, with the wrangler this
-  directory's lockfile pins (4.146.0, `npm ci --ignore-scripts --prefix infrastructure/app-worker`). The steps
-  in order: `npm ci`; `web:wasm` (6 836 569 B); `web:build`; `web:smoke` passed in 19.0 s;
+  `infrastructure/wrangler`'s lockfile pins (4.146.0, `npm ci --ignore-scripts --prefix infrastructure/wrangler`). The steps
+  in order: `pnpm install --frozen-lockfile`; `web:wasm` (6 836 569 B); `web:build`; `web:smoke` passed in 19.0 s;
   `web:sync-smoke` passed in 37.9 s; `web:deploy-guard` exit 0 (59 on both sides, v0.40.0);
   `wrangler dev --local` on 127.0.0.1 with probes 1–11 and 14–19 each answering as the table
   says (the module's brotli transfer 2 016 151 B locally); `deploy --dry-run` (48 files read);
@@ -503,8 +511,8 @@ each time.** The fourth is what production serves, and is the last bullet.
   #828's backup archive and #830's *Not sorted* controls. Engine build id `a3947b5c7a3ba658`
   (the module 6 862 338 B), `index-ByCbemTm.js`, `worker-DfcE0hqp.js`; by an agent under the
   phase's standing ask, eight minutes after the relay's own deploy (02:21:29 UTC — the relay
-  that answers a page), with the wrangler this directory's lockfile pins. The steps in order:
-  `npm ci`; `web:wasm`; `web:build`; `web:smoke` passed in 20.9 s; `web:sync-smoke` —
+  that answers a page), with the wrangler `infrastructure/wrangler`'s lockfile pins. The steps in order:
+  `pnpm install --frozen-lockfile`; `web:wasm`; `web:build`; `web:smoke` passed in 20.9 s; `web:sync-smoke` —
   ⚠️ **the first run failed in teardown**, `EBUSY … unlink
   …\grimoire-web-smoke-…\first_party_sets.db-journal`, a temp profile Chrome had not let go
   of, with the walk's own lines not printed; **the second run passed all twelve lines in
@@ -615,13 +623,13 @@ from yet is a header on no request. So:
   header's revalidation failing — would be a paired tab reading *Not connected to the relay*
   with the violation in its console, and push, pull and ack, which are requests, still working.
 
-1. **`npm ci`**, on Node from `.nvmrc`.
-2. **`npm run web:wasm`** — the engine, into `dist-wasm/`. It needs the `wasm32-unknown-unknown`
+1. **`pnpm install --frozen-lockfile`**, on Node from `.nvmrc`.
+2. **`pnpm web:wasm`** — the engine, into `dist-wasm/`. It needs the `wasm32-unknown-unknown`
    target, **clang 18 or newer** (the SQLite shim is C23; on Windows the script looks in the LLVM
    installer's folder), and a **`wasm-bindgen` CLI of exactly the version `Cargo.lock` resolves**
    — `cargo install wasm-bindgen-cli --version <that> --locked`. The script checks all three and
    says which is wrong.
-3. **`npm run scanner:assets -- --web`, then `npm run web:build`** — the card scanner's three
+3. **`pnpm scanner:assets --web`, then `pnpm web:build`** — the card scanner's three
    files into `dist-wasm/scanner-assets/` with their manifest (18 MB from this repository's
    public release), then the page, into `apps/light/dist-web/`, with the engine under `wasm/<build id>/`,
    the scanner's module under `wasm/<its own build id>/scanner/`, the three files and
@@ -631,9 +639,9 @@ from yet is a header on no request. So:
    last build on this machine, not this commit. Build from the commit being deployed, with a clean
    tree, and check `apps/light/dist-web/_headers` is there — a `apps/light/dist-web/` built before step 5.5 has none,
    and deploys as an app with no policy and no caching rules.
-4. **`npm run web:smoke`** and **`npm run web:scanner-smoke`** (a file for a camera, one real
+4. **`pnpm web:smoke`** and **`pnpm web:scanner-smoke`** (a file for a camera, one real
    card, from the offer's Download to the collection and then offline), then
-   **`npm run web:preview`** and a look in a real browser. Against a deployed or `wrangler dev`
+   **`pnpm web:preview`** and a look in a real browser. Against a deployed or `wrangler dev`
    host, the scanner's addresses to probe are: `/scanner-assets/manifest.json` and the three
    files (`200`, `Cache-Control: no-cache`, the manifest `application/json`),
    `/wasm/<id>/scanner/grimoire_scan_bg.wasm` (`application/wasm`, a year and immutable) and
@@ -642,14 +650,14 @@ from yet is a header on no request. So:
    manifest the address serves must be the bundle's, byte for byte, and for the bundle format
    this tree's scanner reads — a web app deployed without its scanner's files is red there. The
    preview applies the policy by this repository's own reading of `_headers`. **And
-   `npm run web:sync-smoke`** when the engine's sync, the relay or `connect-src` changed: two
+   `pnpm web:sync-smoke`** when the engine's sync, the relay or `connect-src` changed: two
    headless Chrome profiles — the desktop face and the phone face — claim, pair and sync
    through `infrastructure/relay/`'s own code under workerd, by the relay's real name and under this policy,
    so a `connect-src` that lost either of the relay's sources fails there before a reader meets
-   it. It runs this directory's own pinned wrangler (the install under *Step 0*; or
+   it. It runs the pinned wrangler of `infrastructure/wrangler` (the install under *Step 0*; or
    `WRANGLER=<path to a wrangler.js>`), and of wrangler only `d1 execute --local` and
    `dev --local`: it reaches no Cloudflare.
-5. **`cd infrastructure/app-worker && npx --no-install wrangler dev`, and the probes against it — before anything is
+5. **`cd infrastructure/app-worker && node ../wrangler/node_modules/wrangler/bin/wrangler.js dev`, and the probes against it — before anything is
    public.** `wrangler dev` runs Cloudflare's own asset worker and router worker locally, the
    code `workers-sdk` publishes and the edge runs, over this `wrangler.jsonc` and this
    `apps/light/dist-web/`, and deploys nothing. Set `A=http://localhost:8787` (wrangler's default port) and
@@ -669,7 +677,7 @@ from yet is a header on no request. So:
    against the edge's 2,139,023 — so the local figure is not the size a reader downloads.
    `--local` reaches nothing, which is what the rule above turns on; if it asks to log in, it is
    not in local mode: stop.
-6. **`npm run web:deploy-guard`, from the repository root — and stop if it does not exit 0.**
+6. **`pnpm web:deploy-guard`, from the repository root — and stop if it does not exit 0.**
    It reads `USER_SCHEMA_VERSION` in this tree and at the last release's tag and says which it
    found in one sentence. **Exit 1 is the answer that means *wait for a release*:** *"This
    tree's user schema is 60, the last release (v0.40.0) is 59: a web app deployed from here
@@ -692,7 +700,7 @@ from yet is a header on no request. So:
    this step says.**
    (The first deploy's own step here was *look at the zone* — *Before the first deploy*, below
    — which is done.)
-7. **`npx --no-install wrangler deploy`**, from `infrastructure/app-worker/` — `--dry-run` first, which uploads nothing. Read
+7. **`node ../wrangler/node_modules/wrangler/bin/wrangler.js deploy`**, from `infrastructure/app-worker/` — `--dry-run` first, which uploads nothing. Read
    what it prints: the files it read and uploaded, the binding, the custom domain it attached and
    the version id. ⚠️ **It does not say how many `_headers` rules it parsed.** This step told its
    reader to read that count until 2026-10-04, when wrangler 4.146.0 printed no such line.
@@ -858,8 +866,8 @@ touches them.
 
 ### Rolling back
 
-`npx --no-install wrangler rollback` from this directory makes the previous version the
-deployment; `npx --no-install wrangler versions list` shows what there is to go back to (the
+`node ../wrangler/node_modules/wrangler/bin/wrangler.js rollback` from this directory makes the previous version the
+deployment; `node ../wrangler/node_modules/wrangler/bin/wrangler.js versions list` shows what there is to go back to (the
 100 most recent). **To a reader a
 rollback is another deploy**: the chunk names change again, and a page opened on the bad build
 meets the same 404 on its next lazy import.
@@ -879,7 +887,7 @@ test; this section said *none of this has been run* until then. Two builds that 
 - **Non-interactive, `-y` prints *Using fallback value in non-interactive context: yes***, and
   the command warns that it *will not rollback any of the bound resources*. This Worker binds
   nothing but its assets, which are the version's.
-- `npx wrangler deployments list` shows the three deployments with their messages.
+- `node ../wrangler/node_modules/wrangler/bin/wrangler.js deployments list` shows the three deployments with their messages.
 - **To the page that was open it was an update like any other**: the first deploy's `sw.js` is
   different bytes from the marker's, so the bar offered it, and until the press the page went
   on working on the build it had — *What a deploy changes for a reader*, above.
@@ -1060,8 +1068,8 @@ assets binding **that answers a missing path with the document, as the real one 
 script that deferred a missing chunk to the binding fails there.
 
 ```
-npx vitest run infrastructure/app-worker/
-npx tsc -p infrastructure/app-worker/tsconfig.json
+pnpm exec vitest run infrastructure/app-worker/
+pnpm exec tsc -p infrastructure/app-worker/tsconfig.json
 ```
 
 `infrastructure/app-worker/src/**/*.test.ts` is a glob in `vitest.config.ts`; a directory that list does not name

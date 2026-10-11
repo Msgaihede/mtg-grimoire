@@ -6,7 +6,7 @@ import {
   deckGroups,
   deckTheoryMatches,
   deckViolations,
-} from "../../../../fake/fixtures";
+} from "@grimoire/fake/fixtures";
 import { THEORY_MATCH_ATTR, THEORY_MATCH_LABEL } from "../CardMarks";
 import { deckCardSlot } from "../dnd";
 import { TableView } from "./TableView";

@@ -5,9 +5,9 @@ import {
   DEFAULT_SCANNER_PREFS,
   NEEDS_A_FINISH_ROW,
   TRAY_ROWS,
-} from "@/features/scanner/fixtures";
-import { SCANNER_OPEN_ELSEWHERE } from "@/features/scanner/verdictText";
-import { ipc, type ScannerPrefs, type ScannerTrayRow } from "@/lib/ipc";
+} from "@grimoire/ui/features/scanner/fixtures";
+import { SCANNER_OPEN_ELSEWHERE } from "@grimoire/ui/features/scanner/verdictText";
+import { ipc, type ScannerPrefs, type ScannerTrayRow } from "@grimoire/ui/lib/ipc";
 import { ScannerPage } from "./ScannerPage";
 
 /**
@@ -23,8 +23,8 @@ import { ScannerPage } from "./ScannerPage";
  * values the fake keeps per world and no seed carries. The fake's handlers run synchronously inside
  * `invoke`, so the rows are stored before the page's first query asks for them.
  *
- * A camera that *does* open is answered by the fake's scripted pile — `npm run mobile:dev` and
- * `npm run mobile:scanner-smoke` are where that is watched; a story has no camera to open.
+ * A camera that *does* open is answered by the fake's scripted pile — `pnpm mobile:dev` and
+ * `pnpm mobile:scanner-smoke` are where that is watched; a story has no camera to open.
  */
 function Refused({ tray, prefs }: { tray?: ScannerTrayRow[]; prefs?: Partial<ScannerPrefs> }) {
   const restore = useState(() => {
@@ -52,7 +52,7 @@ function Refused({ tray, prefs }: { tray?: ScannerTrayRow[]; prefs?: Partial<Sca
  * camera's column beside the tray's — so a 360px box in a wide
  * canvas would draw the wide arrangement squeezed into a phone's width, which is a picture of
  * nothing. Narrow the canvas with the workbench's viewport tool to see it as a phone held upright
- * draws it; the measurements at 360 and 412 are `npm run mobile:scanner-smoke`'s.
+ * draws it; the measurements at 360 and 412 are `pnpm mobile:scanner-smoke`'s.
  *
  * **Each docs story has a frame of its own**: the page opens sheets and dialogs, which cover the
  * window they are in.

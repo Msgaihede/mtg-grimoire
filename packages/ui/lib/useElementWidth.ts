@@ -12,7 +12,7 @@ import { useCallback, useState, type RefCallback } from "react";
  * **A callback ref rather than a `RefObject` and an effect, and both halves of that are the
  * point.** The state is set from the observer's callback and from nothing else, so there is no
  * `setState` in an effect body — `react-hooks/set-state-in-effect`, which goes red only at
- * `npm run verify` — and no measurement taken on a stale frame. And a callback ref hears about the
+ * `pnpm verify` — and no measurement taken on a stale frame. And a callback ref hears about the
  * element arriving and leaving, which a `RefObject` never tells anybody: a box drawn only after
  * data lands is observed the moment it is drawn, the trap `useDeskWidth`'s doc warns its callers
  * about and `DeckEditor` needed `[hasRow]` to escape. React 19 calls the function the ref returns

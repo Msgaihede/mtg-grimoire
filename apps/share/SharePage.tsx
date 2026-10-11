@@ -1,14 +1,14 @@
 import { Component, useMemo, useState, type ErrorInfo, type ReactNode } from "react";
-import { GrimoireMark } from "@/components/GrimoireMark";
-import { ManaLine } from "@/components/ManaLine";
-import { CONDITION_LABEL, CONDITIONS, type Condition } from "@/lib/conditions";
-import { FINISH_LABEL, FINISHES, type Finish } from "@/lib/finish";
-import { FOCUS } from "@/lib/focus";
-import { LAYER } from "@/lib/layers";
-import { type Currency, resolveMarketplace } from "@/lib/marketplace";
-import { formatPrice } from "@/lib/prices";
-import type { ShareCard, ShareFolder, ShareSnapshot } from "@/lib/shareSnapshot";
-import { cn } from "@/lib/utils";
+import { GrimoireMark } from "@grimoire/ui/components/GrimoireMark";
+import { ManaLine } from "@grimoire/ui/components/ManaLine";
+import { CONDITION_LABEL, CONDITIONS, type Condition } from "@grimoire/ui/lib/conditions";
+import { FINISH_LABEL, FINISHES, type Finish } from "@grimoire/ui/lib/finish";
+import { FOCUS } from "@grimoire/ui/lib/focus";
+import { LAYER } from "@grimoire/ui/lib/layers";
+import { type Currency, resolveMarketplace } from "@grimoire/ui/lib/marketplace";
+import { formatPrice } from "@grimoire/ui/lib/prices";
+import type { ShareCard, ShareFolder, ShareSnapshot } from "@grimoire/ui/lib/shareSnapshot";
+import { cn } from "@grimoire/ui/lib/utils";
 import { ShareTile } from "./ShareTile";
 
 /**

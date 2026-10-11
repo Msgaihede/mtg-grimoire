@@ -1,10 +1,10 @@
 import { Plus } from "lucide-react";
-import { useDeckCore } from "@/features/decks/useDeckCore";
-import { useDecks } from "@/features/decks/useDecks";
-import { count } from "@/lib/counts";
-import { FOCUS } from "@/lib/focus";
-import { PRESS_SOFT } from "@/lib/motion";
-import { cn } from "@/lib/utils";
+import { useDeckCore } from "@grimoire/ui/features/decks/useDeckCore";
+import { useDecks } from "@grimoire/ui/features/decks/useDecks";
+import { count } from "@grimoire/ui/lib/counts";
+import { FOCUS } from "@grimoire/ui/lib/focus";
+import { PRESS_SOFT } from "@grimoire/ui/lib/motion";
+import { cn } from "@grimoire/ui/lib/utils";
 import { shownList } from "../deck/list";
 import { ReceiptBar, useReceipt } from "../deck/receipt";
 import type { ActionContext } from "./Actions";

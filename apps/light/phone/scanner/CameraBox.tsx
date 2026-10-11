@@ -1,7 +1,7 @@
 import type { ReactNode, RefObject } from "react";
-import { Overlay } from "@/features/scanner/Overlay";
-import type { CameraState } from "@/features/scanner/useCamera";
-import type { ScannerVerdict } from "@/lib/ipc";
+import { Overlay } from "@grimoire/ui/features/scanner/Overlay";
+import type { CameraState } from "@grimoire/ui/features/scanner/useCamera";
+import type { ScannerVerdict } from "@grimoire/ui/lib/ipc";
 
 /** What the box is shaped like before a stream has said its own shape. */
 const DEFAULT_ASPECT = 4 / 3;

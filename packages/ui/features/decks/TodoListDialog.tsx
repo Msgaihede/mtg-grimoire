@@ -42,7 +42,7 @@
  * included, so the checklist mode's props are named at the call site and nowhere else here.
  *
  * ⚠️ **Every state decision is made during render or in an event, never with a `setState` in an
- * effect body** — `react-hooks/set-state-in-effect` refuses the shape and only `npm run verify`
+ * effect body** — `react-hooks/set-state-in-effect` refuses the shape and only `pnpm verify`
  * goes red on it. The adoption is React's own *adjusting state when a prop changes*.
  */
 import {

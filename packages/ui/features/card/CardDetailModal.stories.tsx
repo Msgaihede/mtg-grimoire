@@ -1,8 +1,8 @@
 import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useAppStore } from "@/lib/store";
-import { printing } from "../../../fake/fixtures";
-import { seed } from "../../../fake/seeds";
+import { printing } from "@grimoire/fake/fixtures";
+import { seed } from "@grimoire/fake/seeds";
 import { CardDetailModal } from "./CardDetailModal";
 
 /**

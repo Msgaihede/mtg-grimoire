@@ -25,7 +25,13 @@
       "@tauri-apps/api/window": ["../packages/fake/window.ts"],
       "@/lib/images": ["../packages/fake/images.ts"],
       "@/lib/core": ["./core-shim.ts"],
-      "@/*": ["../packages/ui/*"]
+      "@/*": ["../packages/ui/*"],
+      // The same two exceptions under the name every other package uses (2026-10-08): the fake's
+      // `db.ts` imports the images module as `@grimoire/ui/lib/images`.
+      "@grimoire/ui/lib/images": ["../packages/fake/images.ts"],
+      "@grimoire/ui/lib/core": ["./core-shim.ts"],
+      "@grimoire/ui/*": ["../packages/ui/*"],
+      "@grimoire/fake/*": ["../packages/fake/*"]
     }
   }
 }

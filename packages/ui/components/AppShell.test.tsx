@@ -73,8 +73,8 @@ const startView = vi.hoisted(() => vi.fn());
 // reaches for `window.__TAURI_INTERNALS__`, which jsdom does not have, and because both calls
 // are in a mount effect the rejection is unhandled rather than caught — every test here still
 // passes while the run prints hundreds of errors.
-vi.mock("@tauri-apps/api/window", () => import("../../fake/window"));
-vi.mock("@tauri-apps/api/event", () => import("../../fake/event"));
+vi.mock("@tauri-apps/api/window", () => import("@grimoire/fake/window"));
+vi.mock("@tauri-apps/api/event", () => import("@grimoire/fake/event"));
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {

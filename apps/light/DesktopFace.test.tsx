@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type Edition, LIGHT_EDITION } from "@/lib/edition";
-import { useAppStore, type ViewId } from "@/lib/store";
+import { type Edition, LIGHT_EDITION } from "@grimoire/ui/lib/edition";
+import { useAppStore, type ViewId } from "@grimoire/ui/lib/store";
 
 /**
  * What the app saw, render by render. A `vi.fn` rather than an array the probe pushes to: the
@@ -13,9 +13,9 @@ const sawOnRender = vi.hoisted(() => vi.fn<(view: ViewId, edition: Edition) => v
 // `DesktopFace` imports the app as `@/App`'s default export, so that is the shape stood in for.
 // The real one mounts the whole product; what this suite is about is what it is *handed*: where
 // the store stands by the time it renders, and which edition it is told to draw.
-vi.mock("@/App", async () => {
-  const { useEdition } = await import("@/lib/edition");
-  const { useAppStore } = await import("@/lib/store");
+vi.mock("@grimoire/ui/App", async () => {
+  const { useEdition } = await import("@grimoire/ui/lib/edition");
+  const { useAppStore } = await import("@grimoire/ui/lib/store");
   return {
     default: function AppProbe() {
       sawOnRender(useAppStore.getState().activeView, useEdition());

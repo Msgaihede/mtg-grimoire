@@ -1,9 +1,9 @@
 import { useMemo, useState } from "react";
-import { Dialog } from "@/components/Dialog";
-import type { DeckCore } from "@/features/decks/useDeckCore";
-import { useCardSearch, type FormatFilterOption } from "@/features/search/useCardSearch";
-import { count } from "@/lib/counts";
-import type { DeckCard } from "@/lib/ipc";
+import { Dialog } from "@grimoire/ui/components/Dialog";
+import type { DeckCore } from "@grimoire/ui/features/decks/useDeckCore";
+import { useCardSearch, type FormatFilterOption } from "@grimoire/ui/features/search/useCardSearch";
+import { count } from "@grimoire/ui/lib/counts";
+import type { DeckCard } from "@grimoire/ui/lib/ipc";
 import { searchItem } from "../items";
 import type { WallItem } from "../CardWall";
 import { SearchLine, SearchResults } from "../pages/SearchPage";

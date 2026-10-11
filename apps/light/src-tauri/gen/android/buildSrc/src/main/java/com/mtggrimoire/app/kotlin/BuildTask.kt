@@ -16,7 +16,7 @@ open class BuildTask : DefaultTask() {
 
     @TaskAction
     fun assemble() {
-        val executable = """npm""";
+        val executable = """pnpm""";
         try {
             runTauriCli(executable)
         } catch (e: Exception) {
@@ -48,12 +48,16 @@ open class BuildTask : DefaultTask() {
         val rootDirRel = rootDirRel ?: throw GradleException("rootDirRel cannot be null")
         val target = target ?: throw GradleException("target cannot be null")
         val release = release ?: throw GradleException("release cannot be null")
-        // HAND-EDITED: `tauri:light`, never `tauri`. `npm run` runs a script from the repository
-        // root, and from there the Tauri CLI finds the desktop's project (`src-tauri`) and refuses
-        // with "Android Studio project directory …/src-tauri/gen/android doesn't exist" — the
-        // first `android` CI run, 2026-10-03. The script is `cd apps/light && tauri`, so the CLI starts
-        // where it finds this one. `apps/light/host.test.ts` holds it.
-        val args = listOf("run", "--", "tauri:light", "android", "android-studio-script");
+        // HAND-EDITED: the root's `tauri:light` script, never `tauri`, and through
+        // `--workspace-root`. This task starts in `apps/light/src-tauri`: a plain `pnpm run` there
+        // reads the light app's own manifest, which has no such script, and the root's `tauri`
+        // script starts the CLI where it finds the desktop's project and refuses with "Android
+        // Studio project directory …/src-tauri/gen/android doesn't exist" — the first `android`
+        // CI run, 2026-10-03. The script is `cd apps/light && tauri`, so the CLI starts where it
+        // finds this one. pnpm hands every argument after the script's name to it, flags and all
+        // (measured 2026-10-08), so no `--` goes in front of them as npm needed.
+        // `apps/light/host.test.ts` holds both lines.
+        val args = listOf("--workspace-root", "run", "tauri:light", "android", "android-studio-script");
 
         project.exec {
             workingDir(File(project.projectDir, rootDirRel))

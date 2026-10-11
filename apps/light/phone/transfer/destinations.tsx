@@ -2,21 +2,21 @@ import type { JSX } from "react";
 import type {
   DestinationPreviewProps,
   ImportDestination,
-} from "@/features/transfer/import/destination";
+} from "@grimoire/ui/features/transfer/import/destination";
 import {
   COLLECTION_DESTINATION,
   CollectionPreviewBody,
-} from "@/features/transfer/import/destinations/CollectionPreviewBody";
+} from "@grimoire/ui/features/transfer/import/destinations/CollectionPreviewBody";
 import {
   DeckPreviewBody,
   type DeckImportInto,
-} from "@/features/transfer/import/destinations/DeckPreviewBody";
-import { deckDestinationWith } from "@/features/transfer/import/destinations/deckIntoWith";
+} from "@grimoire/ui/features/transfer/import/destinations/DeckPreviewBody";
+import { deckDestinationWith } from "@grimoire/ui/features/transfer/import/destinations/deckIntoWith";
 import {
   NEW_DECK_DESTINATION,
   NewDeckPreviewBody,
   type NewDeckInto,
-} from "@/features/transfer/import/destinations/NewDeckPreviewBody";
+} from "@grimoire/ui/features/transfer/import/destinations/NewDeckPreviewBody";
 import { usePhoneTransferPrefs } from "./prefs";
 
 /**

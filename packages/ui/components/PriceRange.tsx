@@ -155,7 +155,7 @@ export function PriceRange({
   const [lowDraft, setLowDraft] = useState(() => draftOf(min));
   const [highDraft, setHighDraft] = useState(() => draftOf(max));
   // **Re-seeded during render and never in an effect**, which is React's own answer for state
-  // that has to follow a prop — and the only one available here, because `npm run lint` rejects
+  // that has to follow a prop — and the only one available here, because `pnpm lint` rejects
   // a `setState` called synchronously inside a `useEffect` (`react-hooks/set-state-in-effect`).
   //
   // The test is against what the draft *parses to* rather than against a remembered previous

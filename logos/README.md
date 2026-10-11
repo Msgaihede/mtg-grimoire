@@ -30,7 +30,7 @@ Two things fall out of it and neither is a regression:
   is the generator's choice, not a tuned one.
 
 Regenerate the whole set from the master with
-`npx tauri icon logos/png/mark-1024.png -o <dir>`, then copy the flat files over **both**
+`pnpm exec tauri icon logos/png/mark-1024.png -o <dir>`, then copy the flat files over **both**
 `apps/desktop/src-tauri/icons/` and `logos/tauri/`, which are kept byte-identical. Do not point that command at
 `svg/mtg-grimoire-tile.svg` or its renders — that is what put the black plate there. Render into a
 scratch directory rather than over `apps/desktop/src-tauri/icons/`: the command also emits `android/`, `ios/`

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
-import { registerCommands } from "../../../fake/core";
+import { registerCommands } from "@grimoire/fake/core";
 import { FOCUS } from "@/lib/focus";
 import type { DeckRow } from "@/lib/ipc";
 import { cn } from "@/lib/utils";

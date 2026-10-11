@@ -306,7 +306,7 @@ describe("an editor's stylesheet", () => {
    *
    * So an editor built with the option left on is green in every suite and every story, and
    * wrong only in a shipped window. `scripts/web-smoke.mjs` opens a note under the hosting
-   * policy and hears it, but `npm run verify` does not run that — this does.
+   * policy and hears it, but `pnpm verify` does not run that — this does.
    *
    * Tests are skipped: `NoteEditor.test.tsx` builds bare editors by the dozen to drive commands,
    * under jsdom, where a `<style>` in `<head>` is neither refused nor read.

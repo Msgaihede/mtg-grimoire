@@ -10,7 +10,7 @@ import { ARMS, JOBS, armFor, route } from "./ci-route.mjs";
 import ciYml from "../.github/workflows/ci.yml?raw";
 
 // Vite needs both glob arguments as literals, so the options repeat.
-// Mirrors `test.include` in `vitest.config.ts`: every file vitest collects.
+// Mirrors the projects' globs in `vitest.config.ts`: every file vitest collects.
 const TS_TESTS = import.meta.glob(
   [
     "/packages/ui/**/*.test.{ts,tsx}",
@@ -218,13 +218,16 @@ describe("the arms", () => {
     ["packages/fake/aliases.ts", T, F, F, F, T, F, T],
     [".storybook/DesignSystem.mdx", T, F, F, F, T, F, F],
     ["package.json", T, F, F, F, T, F, T],
-    ["package-lock.json", T, F, F, F, T, F, T],
+    ["pnpm-lock.yaml", T, F, F, F, T, F, T],
+    ["pnpm-workspace.yaml", T, F, F, F, T, F, T],
     ["packages/ui/components.json", T, F, F, F, T, F, F],
     ["vite.base.ts", T, F, F, F, T, F, T],
     ["vitest.config.ts", T, F, F, F, T, F, T],
     ["apps/desktop/vite.config.ts", T, F, F, F, T, F, T],
     ["vite.watch.ts", T, F, F, F, T, F, T],
-    ["tsconfig.json", T, F, F, F, T, F, T],
+    ["tsconfig.base.json", T, F, F, F, T, F, T],
+    ["packages/ui/tsconfig.json", T, F, F, F, T, F, T],
+    ["apps/light/package.json", T, F, F, F, T, F, T],
     ["apps/desktop/tsconfig.node.json", T, F, F, F, T, F, T],
     // The web Worker's own `tsc` program, by the glob — so by any name it lands under.
     ["packages/ui/tsconfig.web-worker.json", T, F, F, F, T, F, T],
@@ -291,10 +294,12 @@ describe("the arms", () => {
     ["infrastructure/app-worker/_headers", T, F, F, F, F, F, T],
     ["infrastructure/app-worker/src/headers.ts", T, F, F, F, F, F, T],
     ["infrastructure/app-worker/src/index.ts", T, F, F, F, F, F, T],
-    // The deploy tool's manifest and lockfile (step 6.6): `release-rule.test.mjs` reads both, and
-    // no job in this gate installs from them — `release.yml`'s `web-deploy` does.
+    // The Worker's workspace manifest, and — in a folder of its own since 2026-10-08 — the deploy
+    // tool's manifest and lockfile (step 6.6): `release-rule.test.mjs` reads all three, and no
+    // job in this gate installs the tool to deploy — `release.yml`'s `web-deploy` does.
     ["infrastructure/app-worker/package.json", T, F, F, F, F, F, T],
-    ["infrastructure/app-worker/package-lock.json", T, F, F, F, F, F, T],
+    ["infrastructure/wrangler/package.json", T, F, F, F, F, F, T],
+    ["infrastructure/wrangler/package-lock.json", T, F, F, F, F, F, T],
     // Its runbook is prose, by the arm above every tree's; its `tsc` program is the glob's.
     ["infrastructure/app-worker/README.md", F, F, F, F, F, F, F],
     ["infrastructure/app-worker/tsconfig.json", T, F, F, F, T, F, T],

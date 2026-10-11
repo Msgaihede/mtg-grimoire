@@ -2,15 +2,15 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => import("../../../../packages/fake/core"));
-vi.mock("@tauri-apps/api/event", () => import("../../../../packages/fake/event"));
-vi.mock("@tauri-apps/api/window", () => import("../../../../packages/fake/window"));
+vi.mock("@tauri-apps/api/core", () => import("@grimoire/fake/core"));
+vi.mock("@tauri-apps/api/event", () => import("@grimoire/fake/event"));
+vi.mock("@tauri-apps/api/window", () => import("@grimoire/fake/window"));
 /**
  * The note editor, as a textarea — `DeckNotesPanel.test.tsx`'s stand-in, for its reason: Tiptap
  * does not type in jsdom, and what these tests pin is the host's half of the save, not the editor.
  * It keeps the real component's three props.
  */
-vi.mock("@/features/decks/NoteEditor", () => ({
+vi.mock("@grimoire/ui/features/decks/NoteEditor", () => ({
   default: ({
     value,
     onChange,
@@ -24,8 +24,8 @@ vi.mock("@/features/decks/NoteEditor", () => ({
   ),
 }));
 
-import { ipc, type DeckCard, type DeckVariant } from "@/lib/ipc";
-import { DEFAULT_MARKETPLACE } from "@/lib/marketplace";
+import { ipc, type DeckCard, type DeckVariant } from "@grimoire/ui/lib/ipc";
+import { DEFAULT_MARKETPLACE } from "@grimoire/ui/lib/marketplace";
 import { PhoneFace } from "../PhoneApp";
 import { installLayout, renderPhone } from "../testing";
 
@@ -224,7 +224,7 @@ describe("adding cards to a deck", () => {
   });
 
   it("adds the printing on screen from the card sheet over a deck", async () => {
-    const bolt = (await import("../../../../packages/fake/fixtures")).printing("2x2", "117");
+    const bolt = (await import("@grimoire/fake/fixtures")).printing("2x2", "117");
     renderPhone(<PhoneFace />, { path: `/decks/${MODERN}?card=${bolt.id}` });
     const add = await screen.findByRole("button", { name: /^Add to Modern Goodstuff/ }, SETTLE);
 
@@ -242,7 +242,7 @@ describe("adding cards to a deck", () => {
   });
 
   it("offers no deck add on a card sheet opened anywhere but over a deck", async () => {
-    const bolt = (await import("../../../../packages/fake/fixtures")).printing("2x2", "117");
+    const bolt = (await import("@grimoire/fake/fixtures")).printing("2x2", "117");
     renderPhone(<PhoneFace />, { path: `/search?card=${bolt.id}` });
     await screen.findByRole("dialog", { name: "Lightning Bolt" }, SETTLE);
     // The collection's and the wishlist's adds are on every card since step 3.5b; a deck's is not.

@@ -5,7 +5,7 @@ import { parseFinishes } from "@/lib/finish";
 import { buildFolderTree } from "@/lib/folderTree";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { openDropdown } from "@/test-dropdown";
-import { printing } from "../../../fake/fixtures";
+import { printing } from "@grimoire/fake/fixtures";
 import { AddToCollectionButton, type AddTarget } from "./AddToCollection";
 
 /**

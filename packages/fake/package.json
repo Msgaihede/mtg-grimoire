@@ -1,0 +1,15 @@
+{
+  "name": "@grimoire/fake",
+  "version": "0.0.0",
+  "private": true,
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "dependencies": {
+    "@grimoire/ui": "workspace:*",
+    "@tanstack/react-query": "catalog:"
+  },
+  "devDependencies": {
+    "jsqr": "catalog:",
+    "vitest": "catalog:"
+  }
+}

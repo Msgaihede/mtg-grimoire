@@ -5,17 +5,17 @@ import {
   filterSummary,
   NO_FILTERS,
   SCAN_MODES,
-} from "@/features/scanner/reader/readerText";
-import { DETECT, FINISH_PREF_LABEL } from "@/features/scanner/reader/trayFinish";
-import type { CameraDevice } from "@/features/scanner/useCamera";
-import { SetCombobox } from "@/features/search/SetCombobox";
-import { CONDITION_LABEL, CONDITIONS, type Condition } from "@/lib/conditions";
-import { FINISHES } from "@/lib/finish";
-import { FOCUS } from "@/lib/focus";
-import type { ScanFilters, ScanMode, ScannerFinishPref } from "@/lib/ipc";
-import { PRESS, PRESS_STILL } from "@/lib/motion";
-import { sortOptions } from "@/lib/options";
-import { cn } from "@/lib/utils";
+} from "@grimoire/ui/features/scanner/reader/readerText";
+import { DETECT, FINISH_PREF_LABEL } from "@grimoire/ui/features/scanner/reader/trayFinish";
+import type { CameraDevice } from "@grimoire/ui/features/scanner/useCamera";
+import { SetCombobox } from "@grimoire/ui/features/search/SetCombobox";
+import { CONDITION_LABEL, CONDITIONS, type Condition } from "@grimoire/ui/lib/conditions";
+import { FINISHES } from "@grimoire/ui/lib/finish";
+import { FOCUS } from "@grimoire/ui/lib/focus";
+import type { ScanFilters, ScanMode, ScannerFinishPref } from "@grimoire/ui/lib/ipc";
+import { PRESS, PRESS_STILL } from "@grimoire/ui/lib/motion";
+import { sortOptions } from "@grimoire/ui/lib/options";
+import { cn } from "@grimoire/ui/lib/utils";
 import { ActionSheet, SheetBack, SheetChoice, SheetRow } from "../deck/sheet";
 
 type Page = "main" | "mode" | "filters" | "finish" | "condition" | "camera";

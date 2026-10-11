@@ -8,7 +8,7 @@
 //! ```
 //!
 //! What it writes is what both of the bench's faces read — `scanner-bench-native <dir>` natively, and
-//! the page `npm run scanner:bench -- --dir <dir>` serves:
+//! the page `pnpm scanner:bench --dir <dir>` serves:
 //!
 //! ```text
 //! card-hashes.bin     the bundle: `--bundle` copied, or one built here
@@ -19,7 +19,7 @@
 //!
 //! **No network, ever.** A card's picture is a file somebody already has — a render saved from
 //! Scryfall, a picture out of the app's image cache — and the bundle and the models are the
-//! three files `npm run scanner:assets` downloads. This tool only reads and writes paths.
+//! three files `pnpm scanner:assets` downloads. This tool only reads and writes paths.
 //!
 //! **Without `--bundle` the bundle is built here**: the cards' own descriptors, then `--pad`
 //! entries of noise with ids of their own. The padding is what makes an invented bundle worth

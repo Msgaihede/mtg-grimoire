@@ -1,10 +1,10 @@
 import { Ellipsis } from "lucide-react";
-import { CardTile } from "@/components/CardTile";
-import { CountTag } from "@/components/CountTag";
-import { BUTTON_OVER_ART } from "@/components/QuantityStepper";
-import { FOCUS } from "@/lib/focus";
-import { PRESS } from "@/lib/motion";
-import { cn } from "@/lib/utils";
+import { CardTile } from "@grimoire/ui/components/CardTile";
+import { CountTag } from "@grimoire/ui/components/CountTag";
+import { BUTTON_OVER_ART } from "@grimoire/ui/components/QuantityStepper";
+import { FOCUS } from "@grimoire/ui/lib/focus";
+import { PRESS } from "@grimoire/ui/lib/motion";
+import { cn } from "@grimoire/ui/lib/utils";
 import type { WallItem } from "./CardWall";
 
 /**
