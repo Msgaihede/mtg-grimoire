@@ -545,7 +545,7 @@ pub const TABLES: [Spec; 18] = [
             // deck. **One field, so last-writer-wins takes the whole list**: two devices tagging
             // one deck while apart keep the later list and lose the earlier one's additions,
             // which is the price of a column over a table and the one v58 paid for `todos`.
-            // `DEFAULT '[]'` keeps the old-peer direction safe — a device on v60 names no such
+            // `DEFAULT '[]'` keeps the old-peer direction safe — a device on v61 names no such
             // field — and adding was the safe direction, `theory_mark_*`'s note above.
             //
             // The column's `CHECK` is `json_valid` and nothing narrower, so unlike `token_mode`

@@ -4656,9 +4656,10 @@ v52's captured launch pass:
    reading no `todos`.
 
 `UNDO_V59` sits at the front of every rewind chain — directly behind v60's `UNDO_V60` since
-2026-10-07, which drops `sync_orphans` ([data-and-sync.md](data-and-sync.md)), and since
-2026-10-11 behind v62's `UNDO_V62` too, which drops `decks.tags` (*Deck tags*, below) and leads
-them now —
+2026-10-07, which drops `sync_orphans` ([data-and-sync.md](data-and-sync.md)), v61's
+`UNDO_V61` ahead of that since 2026-10-11, which drops `sync_heard`, and v62's `UNDO_V62` ahead
+of that again since the same day, which drops `decks.tags` (*Deck tags*, below) and leads them
+now —
 and lands on v58's exact shape: it drops the
 table and both indexes, drops the `decks` triggers, and adds `todos` back as v58's `ALTER TABLE`
 wrote it.

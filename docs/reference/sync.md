@@ -1669,15 +1669,16 @@ because the local ones are already in the row.
 **This is why a pushed op is kept rather than deleted.** `client` stamps `pushed_at` and leaves
 the row: the op log is also this device's memory of what it did.
 
-What it does *not* cover is a third device: B has no local ops for a row C edited, so A's
-tombstone and C's edit only meet if they arrive in one batch. The relay hands them over in
-hybrid-logical-clock order, so the common case orders itself; the residual is a sparse edit
-arriving after a tombstone, which cannot rebuild the row it edits. It was **deferred** — written
-here as "rather than lost", and lost after all, with its sender's later ops in the page, while the
-client dropped a deferral. Since 2026-09-27 it is **skipped** as a row this database cannot build:
-recorded in the error log, and taking nothing else of its sender's with it. From a newer sender it
-is held until this device upgrades, and skipped then if it still cannot be built (*Held while it
-can resolve, skipped when it cannot*, below).
+What it did *not* cover is a third device: B has no local ops for a row C edited, so A's
+tombstone and C's edit only met if they arrived in one batch. This said the relay hands them over
+in hybrid-logical-clock order, so the common case orders itself; **it hands them over in the order
+they were pushed**, so all it takes is a device that wrote while offline, and the residual was
+not one shape but every rule: field, placement and add-wins each turned on which pull a write
+arrived in. **Closed 2026-10-11 by user schema v61** — *…and every other device's, remembered*,
+below. (A sparse edit that still cannot be built — its row known here by nothing at all — is
+**skipped** as a row this database cannot build since 2026-09-27: recorded in the error log, and
+taking nothing else of its sender's with it; from a newer sender it is held until this device
+upgrades. *Held while it can resolve, skipped when it cannot*, below.)
 
 ### ...and a resurrected row is rebuilt from it
 
@@ -1702,6 +1703,12 @@ The test asserting both devices name the same folder failed on its first run wit
 `json_type(parents, '$.parent') IS NOT NULL` — `json_type` and not `json_extract`, because a move
 **to the root** is a JSON null and `json_extract` cannot tell that from a key that is not there.
 
+**And every other device's moves this device remembers** (v61, below): a loop two *other*
+devices made is met on the pull that brings the second move, and the page then holds that one
+alone — so the device that made neither cut the move whose stamp it happened to hold, which was
+the earlier one whenever the later arrived first
+(`a_loop_two_other_devices_made_is_cut_where_they_cut_it`).
+
 Spec §7.3 says the **later**-moved folder goes to the root, which leaves the *earlier* move
 standing — the arrangement more devices have already seen and drawn. Convergence is a separate
 requirement and both directions satisfy it; what convergence needs is that both devices consult
@@ -1720,6 +1727,84 @@ this reached every paired device whose managed wishlist held a token. A nameless
 the walk, because a loop can run through one, and it has no move on record, so the cut never
 prefers it. **A read over a whole synced table may not assume a uid; a statement addressed by
 uid cannot reach a nameless row at all, which is why nothing else in `apply` met one.**
+
+### ...and every other device's, remembered (`sync_heard`, user schema v61)
+
+Built 2026-10-11 for issue #842. The three sections above fold the page with this device's **own**
+log, and that is the whole of what `apply` kept: no stamp for anything another device wrote. So two
+writes from two *other* devices met only when they arrived in one pull, and the relay hands rows
+over in the order they were pushed — `a` edits a note offline, `c` edits it later and pushes
+first, `b` pulls, `a` comes online and pushes, `b` pulls again. Measured on three devices holding
+one copy, `b` hearing the two writes as one answer, older first and newer first (`a` and `c` hear
+each other's):
+
+| What `a` and `c` do | `b`, one answer | `b`, older first | `b`, newer first | `a` and `c` |
+| --- | --- | --- | --- | --- |
+| Both edit `notes` | c's | c's | **a's, the older** | c's |
+| Both move the copy (a to the root, c into `F2`) | `F2` | `F2` | **the root** | `F2` |
+| `a` deletes, `c` edits later | kept | **gone** — skipped with an `error_log` row | **gone** | kept |
+| `a` edits, `c` deletes later | gone | gone | gone (an `error_log` row) | gone |
+
+**Now `b` ends as `a` and `c` do in every column.** Every group `apply` writes is folded into a
+**memory** of its row — `merge::Memory`, one `sync_heard` row per row, keyed `(tbl, uid)`: the
+stamp and value that won each field and each placement, the latest stamps asserting the row alive
+and dead, and the counters — and the second fold of *Add-wins needs this device's own history*
+starts from it (`merge::fold_remembering`, through `apply::fold_with_history`) instead of from
+nothing. The fold is the same fold: `a_set_folded_in_two_pulls_through_a_memory_is_the_set_folded_in_one`
+folds every cut of every set both ways and asserts the answer one fold of the whole gives.
+
+- **It is a fold, not a log.** One row per row another device has written, absorbed into
+  (`Memory::absorb`), whatever number of ops made it. That is the storage the issue said a fix
+  would cost: about the size of the row — each distinct stamp stored once and named by index
+  (`merge::Memory`'s stored shape), measured at 596 bytes for a copy and 204 for a binder — what
+  the writer's own `sync_ops` already holds of it, once. Recorded in `run_groups` for every group written, inside the pass's
+  savepoint, so a round rolled back forgets it again.
+- **A row a delete here takes is kept first** (`heard::keep`, from the delete arm): its fields
+  and parents by uid where no op this device heard named them, held under a stamp below every stamp
+  (`merge::before_everything`) so any op beats them, and its counters **whole**. A row made before
+  the group existed is described by no op anywhere, and a third device's later edit that wins
+  add-wins over the delete is a sparse op that cannot describe it either: kept, it is built from
+  what this device held (`a_row_made_before_the_group_and_deleted_here_is_rebuilt_by_a_third_devices_later_edit`;
+  an `error_log` row and no row before).
+- **The counters.** A counter has no stamp, so a memory's counters are either the sum of every
+  delta another device sent — with this device's own out of `sync_ops` on top, every delta the row
+  has seen, `insert_row`'s rule widened from "local" to "known here" — or, once kept, the row as it
+  stood plus every delta heard since, with this device's own deltas up to the keep already inside
+  and left out of the fold (`Memory::holds_own`). Only a row being **built** reads them: an update
+  applies the page's deltas to what the row holds, as before. `a_row_brought_back_by_a_third_devices_later_add_keeps_its_count`.
+- **Filed under the uid the row wears.** A grain match that renames a row, or the re-homing's
+  `adopt_lower`, merges the two memories under the survivor (`heard::renamed`), and a group whose
+  uid was merged into another row is remembered under the survivor's (`emission::survivor`). An
+  orphan's ops are remembered under its own uid, whatever twin the ledger has folded it into: the
+  ledger keeps its own account of a fold, and a twin's memory would be wrong for the orphan the day
+  it returns.
+- ⚠️ **A claim is not judged against its own emitter's memory** (`Memory::without`). A claim is
+  its emitter's whole row as it holds it now, so it already decided everything its emitter wrote
+  before — and it is stamped by the row's `updated_at` on the wall clock, where the emitter's ops
+  were stamped by its hybrid clock, which can run ahead. Folded against the emitter's own earlier
+  ops it lost a note the emitter had replaced: `a_device_back_from_time_out_of_a_group_brings_what_it_did_there`
+  went red with the emitter's clock an hour ahead until the emitter's entries were set aside for
+  its claims. A claim still meets what a *third* device wrote — and that closed the baseline claim
+  design's §11 bullet *a third device's delete, applied here, and a later active claim for that row
+  resurrect the row here only*: the delete is remembered, the claim loses to it as its emitter's
+  own edit lost to it there, and the three devices agree on nothing
+  (`a_claim_is_not_let_through_for_a_row_the_page_deletes`, `…_deleted_before_its_page`,
+  `a_rebroadcast_takes_back_nothing_this_device_did_since`, which pinned `(1, 3)` and `(0, 1, 0)`).
+- **A memory this build cannot read is no memory**, never a failed apply: it only ever adds to
+  what the page and the own log decide.
+
+**What it does not reach.** Nothing is backfilled — the ops applied before the upgrade were
+consumed and the watermark passed them — so a conflict split across the upgrade itself is decided
+as before. A row this device's **own reader** deletes is not kept (only an apply's delete is),
+so a third device's later edit of a row this device made before the group, and deleted itself,
+still cannot be rebuilt here. And the ledger of orphans still records only decisions resting on
+`gone`: a folder a peer really deleted comes back through the memory, but the copies the delete
+arm's re-homing moved out of it on this device stay where it put them.
+
+The tests are `apply/tests/cuts.rs`'s *Three devices* section — each scenario in all three orders,
+`b` required to end as `a` and `c` and to skip nothing — `merge.rs`'s two memory tests, and the
+emission tests above. Disabling the memory turns all nine red; disabling the cycle-break's read of
+it, the loop test; disabling the keep, the row made before the group.
 
 ### A resurrection is an event, not a state
 
@@ -3347,8 +3432,8 @@ An orphan is in one of three places while its parent is gone, and the entry's `s
   An entry ends the moment its row's placement is written again by anything
   (`a_placed_copy_its_own_device_moved_to_the_root_stays_there`).
 - **`absent` and `folded` hold the row as it would be, not the ops that would make it** — its
-  fields, its counters as values, its parents by uid. That is forced, and it is issue #842 seen
-  from here: `apply` remembers no stamp for anything another device wrote, so a row deleted here
+  fields, its counters as values, its parents by uid. That is forced, and it was issue #842 seen
+  from here (closed since by v61's memory, which the ledger does not use): `apply` remembered no stamp for anything another device wrote, so a row deleted here
   cannot be folded back together from this device's own log without reverting every field a peer
   changed. A row this device held is read off the table before the moot delete, with the group
   laid over it as `update_row` would have written it; one it never held is `insert_row`'s reading
@@ -3480,10 +3565,11 @@ as it does not clear `sync_gone`.
 
 **What it does not reach**, the first in *What is still owed* and the rest only here:
 
-- **Three devices.** `apply` still decides last-writer-wins and add-wins by what arrived
-  together (issue #842), and the ledger, recording only decisions resting on `gone`, does not
-  bring back what a peer's *real* delete re-homed when a third device's edit resurrects the
-  folder.
+- **Three devices.** ~~`apply` still decides last-writer-wins and add-wins by what arrived
+  together (issue #842)~~ — closed 2026-10-11 by user schema v61's memory (*…and every other
+  device's, remembered*, above); but the ledger, recording only decisions resting on `gone`, still
+  does not bring back what a peer's *real* delete re-homed when a third device's edit resurrects
+  the folder.
 - **A delete addressed to the uid a merged row wears is read one way, and the other is as
   likely.** The sender deleting that name may mean its own row alone, or — if it has since heard
   of the delete and folded the pair itself — the one row both became, and nothing on the wire
@@ -3507,7 +3593,7 @@ as it does not clear `sync_gone`.
 
 **The tests** are `apply/tests/cuts.rs` and `apply/tests/cuts/found.rs` — thirty-seven for the
 ledger, almost all run both ways and against the sender, with the ledger required empty at the
-end wherever every parent returns, and three that pin issue #842 — and `client/tests/paged.rs`'s
+end wherever every parent returns, and six since that hold issue #842's fix — and `client/tests/paged.rs`'s
 three-ways fixture above. Twenty-four of the ledger's paths were mutated one at a time and each
 turns a test red; which mutation reddens which test is in the pull request.
 
@@ -5054,8 +5140,10 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   when the parent returns*, above, which also records that the copy at the root was the mildest
   of six shapes: on the cascading arm the receiver deleted rows the sender kept. Found by step
   6.5b's split-across-a-page-edge tests and not made by paging.
-- ⚠️ **With three devices, an older edit that arrives in a later pull beats a newer one applied
-  before it** (issue #842; suspected by the paging review and settled by experiment on
+- ~~⚠️ **With three devices, an older edit that arrives in a later pull beats a newer one applied
+  before it**~~ — **closed 2026-10-11 by user schema v61** (`sync_heard`; *…and every other
+  device's, remembered*, above), the field, placement and add-wins rows alike, and the cycle-break
+  with them; what the paragraph below calls the ledger's residual stands. The record: (issue #842; suspected by the paging review and settled by experiment on
   2026-10-07). `apply` folds what it is handed with this device's *own* op log and keeps no stamp
   for anything another device wrote, so two *other* devices' writes are compared only when they
   arrive in one answer. `a` edits a note while offline, `c` edits it later and pushes first, `b`
@@ -5069,10 +5157,12 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   copies of its own out of it — and only on a device whose own log can rebuild the folder at all.
   The fix is for `apply` to remember, per row, the stamp that won each field and placement, and
   for a deleted row enough to rebuild it; storage then grows with every row a peer wrote, which
-  is why it is its own design. Pinned, each with the difference in its last assertion, by
-  `apply/tests/cuts.rs`'s `an_older_edit_from_a_third_device_still_beats_a_newer_one_applied_before_it`,
+  is why it is its own design. Pinned until the fix, each with the difference in its last
+  assertion, by `apply/tests/cuts.rs`'s `an_older_edit_from_a_third_device_still_beats_a_newer_one_applied_before_it`,
   `an_older_move_from_a_third_device_…` and
-  `a_row_one_device_deleted_and_another_edited_later_is_still_lost_on_a_third`.
+  `a_row_one_device_deleted_and_another_edited_later_is_still_lost_on_a_third` — renamed with it
+  to `…_loses_to_a_newer_one_applied_before_it` and `…_is_kept_on_a_third`, and held in all three
+  orders.
 - ~~**A move of a copy this device holds into a binder deleted here is refused where the root
   holds its twin**~~ — found while closing the bullet above and **closed with it** (2026-10-07).
   The `SET NULL` arm cleared the column of the row it had found by uid, the root's grain refused,
@@ -5408,9 +5498,11 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   posts a roster, or ninety days after the deploy (read off `group.ts`'s constructor, unmeasured).
   The migration backfills `heard_at` with its own moment rather than zero, so no live device drops
   off the floor at the deploy — which also counts every long-gone one as heard that day.
-- **A third device's tombstone against a third device's edit.** (The tombstone here is a `del` op.)
-  Add-wins reads this device's own history and the incoming batch; two *other* devices' ops only
-  meet if they arrive together. This said a tombstone table would close it; **user schema v54
+- ~~**A third device's tombstone against a third device's edit.**~~ **Closed 2026-10-11 by user
+  schema v61** — add-wins reads what this device remembers of every other device's ops as well
+  (*…and every other device's, remembered*). The record: (The tombstone here is a `del` op.)
+  Add-wins read this device's own history and the incoming batch; two *other* devices' ops only
+  met if they arrived together. This said a tombstone table would close it; **user schema v54
   built one, and it does not**: `sync_gone` holds tombstones in the other sense — a uid saying a
   parent went, with no stamp, only for the tables other rows are filed under — and add-wins does
   not read it; it answers `gone` alone. **The delivery holds met the same gap from the other side** —
