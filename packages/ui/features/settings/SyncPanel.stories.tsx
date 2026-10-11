@@ -44,7 +44,7 @@ const meta = {
           "cryptography in the workbench and these stories do not pretend there is.** The fake " +
           "derives the six digits from the code with a plain hash — see `FakePairing` in " +
           "`packages/fake/db.ts`. **The QR code is a real one, of a code with no key in " +
-          "it**: the 53-module symbol the app draws an invite as (`packages/fake/qr.ts`), so " +
+          "it**: the 49-module symbol the app draws an invite as (`packages/fake/qr.ts`), so " +
           "a phone held up to a story reads the invite's address, and " +
           "`scripts/pairing-scan-smoke.ts` points a headless browser's camera at it. " +
           "What is real is everything a panel is drawn against: the invite carried by hand, " +
@@ -581,8 +581,8 @@ export const OfferInAPhonesWidth: Story = {
 
     await userEvent.click(await canvas.findByRole("button", { name: /pair a device/i }));
     const qr = await canvas.findByTestId("pairing-qr");
-    // The real symbol: 53 modules and the four of quiet zone either side.
-    await expect(qr).toHaveAttribute("viewBox", "0 0 61 61");
+    // The real symbol: 49 modules and the four of quiet zone either side.
+    await expect(qr).toHaveAttribute("viewBox", "0 0 57 57");
     // As wide as its step and no wider, and square by its own ratio.
     await expect(qr.classList.contains("max-w-full")).toBe(true);
     await expect(qr.classList.contains("aspect-square")).toBe(true);

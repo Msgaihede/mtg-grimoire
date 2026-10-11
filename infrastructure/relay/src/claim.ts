@@ -543,11 +543,12 @@ export async function handleCallback(request: Request, env: Env): Promise<Respon
   // deployed without its client secret — a reader would retry that for ever. `required`
   // throwing out here is a 500 that names the binding in the Worker's log.
   required(env.RELAY_BASE, "RELAY_BASE");
+  required(env.RELAY_BASE_LEGACY, "RELAY_BASE_LEGACY");
   required(env.PATREON_CLIENT_ID, "PATREON_CLIENT_ID");
   required(env.PATREON_CLIENT_SECRET, "PATREON_CLIENT_SECRET");
   required(env.PATREON_CAMPAIGN_ID, "PATREON_CAMPAIGN_ID");
 
-  const connected = await connectPatreon(code, env);
+  const connected = await connectPatreon(code, request, env);
   if (connected === null) {
     return page("Patreon could not be reached", "Try connecting again in a minute.", 502);
   }
@@ -642,13 +643,17 @@ export async function handleCallback(request: Request, env: Env): Promise<Respon
  * sentence that fits all three. **It does not fold a missing binding**: the callback asks for
  * those ahead of this call, so a relay deployed without its client secret is a 500 that names
  * the binding rather than a "try again in a minute" a reader would retry for ever.
+ *
+ * `request` is the callback itself: the address it arrived at is which redirect URI the exchange
+ * repeats (`patreon.ts`'s `redirectUri`).
  */
 async function connectPatreon(
   code: string,
+  request: Request,
   env: Env,
 ): Promise<{ identity: Identity; refreshToken: string } | null> {
   try {
-    const tokens = await exchangeCode(code, env);
+    const tokens = await exchangeCode(code, env, request);
     const identity = await fetchIdentity(tokens.accessToken, env);
     if (identity === null) return null;
     return { identity, refreshToken: tokens.refreshToken };

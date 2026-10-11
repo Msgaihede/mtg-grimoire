@@ -8,22 +8,25 @@ import type { QrMatrix } from "@/lib/ipc";
  * applied to a picture.
  *
  * **One `<rect>` per dark module and none per light one.** A 21×21 code is 441 cells and the
- * pairing invite's 53×53 is 2 809; drawing both colours would double the node count for a
+ * pairing invite's 49×49 is 2 401; drawing both colours would double the node count for a
  * background `fill` already answers. The quiet zone is four modules, which is the QR spec's own
  * minimum and the difference between a code a phone reads instantly and one it hunts for.
  *
- * **`size-72` against the pairing invite's 162-byte URL payload.** That is a version-9 symbol at
- * error-correction level M — 53×53 modules — where the old bare-number payload fit a much smaller
- * symbol. The old `size-56` (224px) drawn over 53 modules is 3.67 px per module; `size-72` (288px)
- * is 4.72, which is the difference between a code a phone's camera locks onto at once and one it
- * has to hunt for.
+ * **`size-72` against the pairing invite's URL payload.** That was 162 bytes and a version-9
+ * symbol at error-correction level M — 53×53 modules — where the old bare-number payload fit a
+ * much smaller symbol. The old `size-56` (224px) drawn over 53 modules is 3.67 px per module;
+ * `size-72` (288px) is 4.72, which is the difference between a code a phone's camera locks onto
+ * at once and one it has to hunt for. **Since 2026-10-11 the invite is 141 bytes and 49 modules
+ * at most** (the relay's address got shorter — `invite.rs`, `qr_payload`), which the same box
+ * draws at 5.05 px a module; a build that still carries the longer address draws the larger
+ * symbol in the same box, so the size stays.
  *
  * **288px is the width it asks for, and the box it is in may hand it less** (2026-10-04). It was
  * a fixed square that refused to shrink, and on the light app's phone face that put it through
  * its own frame: at a 360px window the bordered step around it has 268px inside, and the code
  * stood 20px past that, over the border. Now it is as wide as its container up to 288 and square
- * by its own ratio — 268px at 360, which is 4.26px a module for the 53-module invite once the
- * 4px of padding is out, decoded from a screenshot of that drawing and through a camera feed of
+ * by its own ratio — 268px at 360, which was 4.26px a module for the 53-module invite once the
+ * 4px of padding is out (4.56 for a 49-module one), decoded from a screenshot of that drawing and through a camera feed of
  * it — and 288 at every width that has the room, which is every desktop one (measured box for
  * box against the fixed square it replaced).
  *

@@ -9,6 +9,21 @@
 > moved to `infrastructure/relay/applied-by-hand/` the same day: they were applied by hand,
 > and `infrastructure/relay/migrations/` is now the folder a release applies.
 
+> **Two addresses since 2026-10-11, and one Worker.** The relay's address is
+> `https://relay.mtg-grimoire.app` — a Custom Domain on the web app's zone (`wrangler.jsonc`,
+> `routes`), `RELAY_BASE` in the config and in every build cut since. Every build through 0.44.0
+> was compiled with `https://mtg-grimoire-relay.denmark-east.workers.dev`, **which still answers
+> and is meant to, indefinitely**: `workers_dev: true` is written out in the config because
+> wrangler infers `false` beside a route, and `RELAY_BASE_LEGACY` is that address, read by the
+> OAuth callback alone. **Every answer recorded on this page before that day was given at the
+> `workers.dev` address.** The commands below name the new one; either answers them the same.
+> `scripts/relay-deploy-probe.ts` asks the new address step 0's ten and the old one a
+> pre-flight, so a deploy that turned the old address off leaves its release a draft. The first
+> deploy of this config needs **Zone → Workers Routes → Edit** on `mtg-grimoire.app` in its token,
+> and **Patreon holds two redirect URIs** — step 3.
+>
+> **Both names were attached on 2026-10-11 at about 16:50 UTC**, by an agent at the owner's ask, through the Cloudflare API (`PUT /accounts/{id}/workers/domains`) — no deploy, no code, and `workers.dev` left on for both Workers. Asked straight after: `scripts/relay-deploy-probe.ts` passed its ten at `https://relay.mtg-grimoire.app` and its one at the old address, on the first attempt; the share Worker's four probes passed at `https://share.mtg-grimoire.app` and at the old address, and `/assets/share.js` was the same 510,300 bytes at both. **What answers there is still the build of the 0.44.0 release**, whose relay knows one redirect URI: until the next release deploys this tree, a Patreon callback that arrived at the new address would be exchanged with the old URI and refused — and no build names the new address yet.
+
 ⚠️ **This file opened with "nothing here has been run" until 2026-08-30, and by the end of that
 day two of its three halves had been.** What follows is the record of which, because the whole
 value of this page is that it distinguishes them.
@@ -363,7 +378,7 @@ the streamed answer and compaction by length are what every existing device is s
 0. **Ask the host what is actually there, and branch on the answer rather than on this file.**
    Six `curl`s settle it in ten seconds and cost nothing:
    ```
-   H=https://mtg-grimoire-relay.denmark-east.workers.dev
+   H=https://relay.mtg-grimoire.app
    curl -si "$H/token" -d '{}'
    curl -s -o /dev/null -w "%{http_code}\n" \
      -H "authorization: Bearer $(printf 'ab%.0s' {1..32})" "$H/g/abc/keys?device=deadbeef"
@@ -424,7 +439,7 @@ the streamed answer and compaction by length are what every existing device is s
    a `GET` or an `OPTIONS` that is answered before the rate limiter, D1 and any Durable Object, so
    they spend six Worker requests and nothing more.
    ```
-   H=https://mtg-grimoire-relay.denmark-east.workers.dev
+   H=https://relay.mtg-grimoire.app
    A='Origin: https://mtg-grimoire.app'
    X='Origin: https://example.com'
    # (a) the pre-flight, then its control
@@ -594,7 +609,7 @@ the streamed answer and compaction by length are what every existing device is s
    of this step:
    ```
    curl -s -o /dev/null -w "%{http_code}\n" -H "authorization: Bearer $(printf 'ab%.0s' {1..32})" \
-     "https://mtg-grimoire-relay.denmark-east.workers.dev/g/abc/keys?device=deadbeef"
+     "https://relay.mtg-grimoire.app/g/abc/keys?device=deadbeef"
    ```
    **401 is the pass** — the credential was well-formed, reached the D1 read, and matched nothing.
    **500 means `group_keys` is missing.** A bare `curl` with *no* header answers 401 either way,
@@ -654,7 +669,14 @@ the streamed answer and compaction by length are what every existing device is s
    migration" is a state the fixtures cannot express. It took a device with real history.
 3. **Create the Patreon OAuth client** — **done.** The client and its redirect URI
    `https://mtg-grimoire-relay.denmark-east.workers.dev/oauth/patreon/callback` are registered and
-   were verified live (see the table above), and `wrangler.jsonc`'s `vars` carry
+   were verified live (see the table above). **A second URI,
+   `https://relay.mtg-grimoire.app/oauth/patreon/callback`, is owed beside it** (2026-10-11): a
+   build cut since names that one in its authorize request, a build through 0.44.0 names the
+   first, and the relay repeats whichever a callback arrived at (`patreon.ts`, `redirectUri`).
+   ⚠️ **It has to be registered before the release that carries such a build is published** —
+   without it Connect Patreon fails at Patreon's consent screen, for new builds only, and no
+   probe without a credential can see it. Registering it is the owner's, on the client's page:
+   **done 2026-10-11, by his word** — and not yet exercised, since no build has named it. `wrangler.jsonc`'s `vars` carry
    `PATREON_CLIENT_ID` — **byte for byte equal to `entitlement::PATREON_CLIENT_ID`**, because this
    side builds the authorize URL, the relay builds the exchange, and Patreon compares them — and
    `PATREON_CAMPAIGN_ID` beside it. Both are public.
@@ -723,7 +745,8 @@ the streamed answer and compaction by length are what every existing device is s
    three bindings were created by the deploy that names them. The burst below is how to ask the
    host whether a later deploy still has them. ⚠️ **This step said "add rate-limiting rules", and a rule is the one thing this host cannot
    have**: a WAF rate-limit rule belongs to a zone, and `workers.dev` is not one the account
-   controls. What stands there instead is Cloudflare's rate-limit *binding* — three `ratelimits`
+   controls. (Since 2026-10-11 the relay also answers at `relay.mtg-grimoire.app`, which is on a
+   zone — with no rule on it, and a rule there would cover one of the two addresses.) What stands there instead is Cloudflare's rate-limit *binding* — three `ratelimits`
    entries in `wrangler.jsonc`, asked by `infrastructure/relay/src/ratelimit.ts` after the method check and ahead
    of each handler:
 
@@ -770,7 +793,7 @@ the streamed answer and compaction by length are what every existing device is s
    limiter answers all-400 to it. The check that can tell is the flood, and the `/token` beside it
    is the control showing another bucket was not spent:
    ```
-   H=https://mtg-grimoire-relay.denmark-east.workers.dev
+   H=https://relay.mtg-grimoire.app
    seq 1 400 | xargs -P 40 -I{} curl -s -o /dev/null -w "%{http_code}\n" "$H/claim" -d '{}' | sort | uniq -c
    curl -s -o /dev/null -w "%{http_code}\n" "$H/token" -d '{}'
    ```
