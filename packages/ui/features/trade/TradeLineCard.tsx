@@ -10,10 +10,13 @@ import { RarityGem } from "@/components/RarityGem";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { cardPrintingsKey } from "@/features/card/cardKeys";
 import { FINISH_LABEL, isFinish, parseFinishes, type Finish } from "@/lib/finish";
+import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError } from "@/lib/ipc";
 import type { Printing, Trade, TradeLine, TradeLineChange } from "@/lib/ipc";
 import type { Currency } from "@/lib/marketplace";
+import { PRESS } from "@/lib/motion";
 import { formatPrice } from "@/lib/prices";
+import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { RATE_DEFAULT, fromCents, isOpen, lineMoney, rateOf } from "./trade";
 import { FIGURE, REFUSAL, TRADE_BARE_BUTTON } from "./tradeControls";
@@ -56,12 +59,21 @@ import { useTradeWrites } from "./useTrades";
  * trade archived in another window: the backend says which in a sentence, and the sentence goes
  * under the controls rather than into a toast three panels away.
  *
+ * **The art opens every printing** (issue #902) while the trade is open: the app's printings wall,
+ * asked to rewrite this line rather than to open a card. A line the reader's own collection
+ * supplies is shown only the printings they hold — the copies outside every deck, then the decks'
+ * own in red, split as the add field splits them — and a press there takes that copy's finish as
+ * well, since a copy is one printing in one finish. Any other line is shown every printing, and the
+ * finish follows the backend's rule for a printing change. The dropdown beside it stays for the
+ * reader who knows the set code they are after.
+ *
  * **Closed, it is the same card with the controls gone**: the printing and finish become one line
  * of text, because a `Dropdown` that cannot be opened is a control that lies about being one.
  */
 export function TradeLineCard({ trade, line }: { trade: Trade; line: TradeLine }): JSX.Element {
   const tip = useTooltip();
   const writes = useTradeWrites();
+  const openAllPrintings = useAppStore((s) => s.openAllPrintings);
   const [failure, setFailure] = useState<string | null>(null);
 
   const currency = tradeCurrency(trade);
@@ -78,6 +90,36 @@ export function TradeLineCard({ trade, line }: { trade: Trade; line: TradeLine }
     });
   };
 
+  /**
+   * The printings wall, on this line. Only the parts of a change that *are* changes are sent, so a
+   * press on another finish of the same printing is the finish write — patched into the cache at
+   * once — rather than a printing write that waits for its read.
+   */
+  const oracleId = line.oracleId;
+  const openPrintings =
+    editable && oracleId !== null
+      ? () =>
+          openAllPrintings({
+            cardId: line.cardId,
+            oracleId,
+            name: line.name,
+            deck: null,
+            wish: null,
+            trade: {
+              owned: line.side === "mine" && line.source === "collection",
+              marketplace: trade.marketplace,
+              finish: line.finish,
+              choose: (cardId, finish) => {
+                setFailure(null);
+                const next: TradeLineChange = {};
+                if (cardId !== line.cardId) next.cardId = cardId;
+                if (finish !== null && finish !== line.finish) next.finish = finish;
+                return writes.updateLine(trade.id, line.id, next);
+              },
+            },
+          })
+      : null;
+
   const remove = () => {
     setFailure(null);
     writes.removeLine(trade.id, line.id).catch((e: unknown) => {
@@ -92,16 +134,36 @@ export function TradeLineCard({ trade, line }: { trade: Trade; line: TradeLine }
         "rounded-lg border border-border bg-bg p-2.5",
       )}
     >
-      {/* Decorative: the name is the next thing in the row, and a 56px picture announced by the
-          same words would say every card twice. The finish is passed so a foil wears its sheen —
-          a line *is* a finish, which is `CardArt`'s own rule for when to draw one. */}
-      <CardArt
-        cardId={line.cardId}
-        name=""
-        variant="thumb"
-        finish={line.finish}
-        className={cn("w-14 self-start rounded-[3px]", editable && "row-span-2")}
-      />
+      {/* The picture itself is decorative: the name is the next thing in the row, and a 56px
+          picture announced by the same words would say every card twice. The finish is passed so a
+          foil wears its sheen — a line *is* a finish, which is `CardArt`'s own rule for when to
+          draw one. While the trade is open it is wrapped in the button that opens every printing,
+          and the button's label is what is announced. */}
+      {openPrintings ? (
+        <button
+          type="button"
+          aria-label={`Change the printing of ${line.name}`}
+          onClick={openPrintings}
+          className={cn("row-span-2 w-14 self-start rounded-[3px]", PRESS, FOCUS)}
+          {...tip("All printings", { describes: false })}
+        >
+          <CardArt
+            cardId={line.cardId}
+            name=""
+            variant="thumb"
+            finish={line.finish}
+            className="w-14 rounded-[3px]"
+          />
+        </button>
+      ) : (
+        <CardArt
+          cardId={line.cardId}
+          name=""
+          variant="thumb"
+          finish={line.finish}
+          className={cn("w-14 self-start rounded-[3px]", editable && "row-span-2")}
+        />
+      )}
 
       <div className="flex min-w-0 flex-col gap-0.5">
         <div

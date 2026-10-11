@@ -92,6 +92,12 @@ finish already did them, and a second pass would do them twice.
 - A line's **printing**, **finish** and **quantity** are edited in place on desktop and in a
   sheet on the phone, and a line can be removed. The phone's sheet can also move a line to the
   other side.
+- **On desktop a line's art opens the app's all-printings wall on that line** (issue #902), while
+  the trade is open; a press there rewrites the line and closes. A line your collection supplies
+  is shown only the printings you hold — the copies outside every deck first, then the decks' own
+  under _In your decks_, captioned in red with the deck's name, the quick select's split — and a
+  press takes that copy's finish too. Any other line, either side, is shown every printing, priced
+  at the trade's marketplace, and keeps its finish where the printing has it.
 
 ## 5. Surfaces
 

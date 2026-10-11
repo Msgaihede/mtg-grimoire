@@ -4,7 +4,15 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import { openDropdown } from "@/test-dropdown";
-import type { DeckFinish, DeckVariant, Printing, PrintingsResponse } from "@/lib/ipc";
+import type {
+  CollectionFolder,
+  CollectionQuery,
+  CollectionRow,
+  DeckFinish,
+  DeckVariant,
+  Printing,
+  PrintingsResponse,
+} from "@/lib/ipc";
 import { MARKETPLACES, type MarketplaceId } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 // Type-only, so it is erased before the `vi.mock` below runs — the store's *value* import stays
@@ -125,6 +133,9 @@ const wishlistAdd = vi.fn();
  */
 const wishlistSetPrinting = vi.fn();
 const collectionSetPrinting = vi.fn();
+/** The two reads a trade line's owned wall makes — the reader's copies and their folders. */
+const collectionList = vi.fn();
+const collectionFolderList = vi.fn();
 
 /**
  * Every command the modal's tree can reach, wrapped in an arrow apiece.
@@ -169,6 +180,8 @@ vi.mock("@/lib/ipc", async (original) => ({
     wishlistAdd: (input: unknown) => wishlistAdd(input),
     wishlistSetPrinting: (id: number, cardId: string | null) => wishlistSetPrinting(id, cardId),
     collectionSetPrinting: (id: number, cardId: string) => collectionSetPrinting(id, cardId),
+    collectionList: (query: CollectionQuery) => collectionList(query),
+    collectionFolderList: () => collectionFolderList(),
   },
 }));
 
@@ -219,6 +232,8 @@ beforeEach(() => {
   // either way and reads none of it; it is here so the mutation resolves rather than `undefined`.
   wishlistSetPrinting.mockReset().mockResolvedValue({ id: 7, quantity: 1, removed: false });
   collectionSetPrinting.mockReset().mockResolvedValue({ id: 99, quantity: 3, removed: false });
+  collectionList.mockReset().mockResolvedValue({ items: [], total: 0 });
+  collectionFolderList.mockReset().mockResolvedValue([]);
   // The modal is driven by one store field and nothing else, so the store is the fixture.
   useAppStore.setState(useAppStore.getInitialState());
   // The stand-ins {@link deckCard} and {@link standInDialog} leave in the document. They are
@@ -993,6 +1008,196 @@ describe("AllPrintingsDialog", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(/has no foil version/);
     expect(collectionSetPrinting).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  /**
+   * Issue #902: opened from a trade line's art, a press **rewrites the line** through the write the
+   * trade handed in — the printing alone, so the backend's finish rule stands — and the wall is
+   * priced at the trade's marketplace rather than the app's.
+   */
+  it("rewrites the trade line onto the printing pressed, at the trade's prices", async () => {
+    cardPrintings.mockResolvedValue(page([p("a", "lea"), p("b", "leb")]));
+    const choose = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderDialog();
+    open({
+      cardId: "a",
+      oracleId: "o1",
+      name: "Sol Ring",
+      deck: null,
+      trade: { owned: false, marketplace: "cardmarket", finish: "nonfoil", choose },
+    });
+
+    await user.click(await screen.findByRole("button", { name: /LEB/ }));
+
+    expect(cardPrintings).toHaveBeenCalledWith("o1", "cardmarket", 1000);
+    expect(choose).toHaveBeenCalledExactlyOnceWith("b", null);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // A rewrite, not a look: no card pane opened behind the scrim.
+    expect(useAppStore.getState().selectedCardId).toBeNull();
+    expect(screen.queryByText(pricesAsOf(MARKETPLACES.tcgplayer))).toBeNull();
+  });
+
+  it("keeps the modal open and says why when the trade refuses the printing", async () => {
+    cardPrintings.mockResolvedValue(page([p("a", "lea"), p("b", "leb")]));
+    const choose = vi.fn().mockRejectedValue("This trade is archived.");
+    const user = userEvent.setup();
+    renderDialog();
+    open({
+      cardId: "a",
+      oracleId: "o1",
+      name: "Sol Ring",
+      deck: null,
+      trade: { owned: false, marketplace: "tcgplayer", finish: "nonfoil", choose },
+    });
+
+    await user.click(await screen.findByRole("button", { name: /LEB/ }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Couldn't change the trade line's printing — This trade is archived.",
+    );
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  /** A trade line is on nobody's walk, even where a published list holds the same printing. */
+  it("draws no chevrons for a trade line, whatever list is published behind it", async () => {
+    cardPrintings.mockResolvedValue(page([p("card-1", "lea")]));
+    renderDialog();
+    withListWalk();
+    open({
+      ...LIST_WALK[1],
+      trade: { owned: false, marketplace: "tcgplayer", finish: "nonfoil", choose: vi.fn() },
+    });
+
+    await screen.findByRole("dialog", { name: /Sol Ring/ });
+    expect(screen.queryByRole("button", { name: /next card/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /previous card/i })).toBeNull();
+  });
+
+  /**
+   * Issue #902's other half: a line the reader's own collection supplies is shown **only the
+   * printings they hold** — the copies outside every deck first, then the decks' own under *In
+   * your decks*, captioned in red with the deck's name — and a press takes the copy's finish too.
+   */
+  describe("for a line the reader's collection supplies", () => {
+    const folders: CollectionFolder[] = [
+      {
+        id: 11,
+        parentId: null,
+        name: "Serah",
+        kind: "deck",
+        deckId: 1,
+        sortOrder: 1,
+        locked: false,
+        syncUid: null,
+      },
+    ];
+    const copy = (over: Partial<CollectionRow> & Pick<CollectionRow, "id" | "cardId">) =>
+      ({
+        folderId: null,
+        folderName: null,
+        name: "Sol Ring",
+        oracleId: "o1",
+        setCode: "lea",
+        setName: "Limited Edition Alpha",
+        collectorNumber: "233",
+        lang: "en",
+        rarity: "uncommon",
+        finish: "nonfoil",
+        condition: "NM",
+        quantity: 1,
+        unitPrice: 2.5,
+        proxy: false,
+        ...over,
+      }) as CollectionRow;
+
+    beforeEach(() => {
+      collectionFolderList.mockResolvedValue(folders);
+      collectionList.mockImplementation(async (q: CollectionQuery) => {
+        const items =
+          q.shelves === undefined
+            ? [
+                copy({ id: 1, cardId: "a", quantity: 2 }),
+                copy({ id: 2, cardId: "b", setCode: "leb", finish: "foil", quantity: 1 }),
+              ]
+            : [copy({ id: 3, cardId: "c", setCode: "2ed", folderId: 11, folderName: "Serah" })];
+        return { items, total: items.length };
+      });
+    });
+
+    function openOwned(choose = vi.fn().mockResolvedValue(undefined)) {
+      open({
+        cardId: "a",
+        oracleId: "o1",
+        name: "Sol Ring",
+        deck: null,
+        trade: { owned: true, marketplace: "tcgplayer", finish: "nonfoil", choose },
+      });
+      return choose;
+    }
+
+    it("asks the collection for this card's copies, never every printing", async () => {
+      renderDialog();
+      openOwned();
+
+      await screen.findByRole("button", { name: /LEA 233, Nonfoil/ });
+      expect(cardPrintings).not.toHaveBeenCalled();
+      expect(collectionList).toHaveBeenCalledWith(
+        expect.objectContaining({ oracleId: "o1", allocation: "unallocated", excludeLocked: true }),
+      );
+      expect(collectionList).toHaveBeenCalledWith(
+        expect.objectContaining({ oracleId: "o1", shelves: [11] }),
+      );
+    });
+
+    it("draws the decks' copies after the others, under their own heading and in red", async () => {
+      renderDialog();
+      openOwned();
+
+      const deckTile = await screen.findByRole("button", { name: /2ED 233, Nonfoil, in Serah/ });
+      const heading = screen.getByText("In your decks");
+      // Document order is drawn order: both copies outside a deck, then the heading, then the
+      // deck's copy — never one list.
+      for (const name of [/LEA 233, Nonfoil\)/, /LEB 233, Foil\)/]) {
+        const tile = screen.getByRole("button", { name });
+        expect(tile.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      }
+      expect(heading.compareDocumentPosition(deckTile) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(screen.getByText("2ED · 233 · 1 in Serah")).toHaveClass("text-destructive");
+      expect(screen.getByText("LEA · 233 · 2 owned")).not.toHaveClass("text-destructive");
+    });
+
+    it("takes the copy's printing and its finish, and closes", async () => {
+      const user = userEvent.setup();
+      renderDialog();
+      const choose = openOwned();
+
+      await user.click(await screen.findByRole("button", { name: /LEB 233, Foil/ }));
+
+      expect(choose).toHaveBeenCalledExactlyOnceWith("b", "foil");
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    });
+
+    it("writes nothing for the copy the line already is", async () => {
+      const user = userEvent.setup();
+      renderDialog();
+      const choose = openOwned();
+
+      await user.click(await screen.findByRole("button", { name: /LEA 233, Nonfoil\)/ }));
+
+      expect(choose).not.toHaveBeenCalled();
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    });
+
+    it("says so when the collection holds no copy a trade can take", async () => {
+      collectionList.mockResolvedValue({ items: [], total: 0 });
+      renderDialog();
+      openOwned();
+
+      expect(
+        await screen.findByText("Your collection holds no copy of this card a trade can take."),
+      ).toBeInTheDocument();
+    });
   });
 
   /**

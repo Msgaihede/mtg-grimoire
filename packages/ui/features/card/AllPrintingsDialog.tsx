@@ -33,14 +33,20 @@
  *
  * ## What a press means
  *
- * Four answers, decided by what the surface that opened this named — the scanner tray's hand-back
- * (`printingsRequest.pick`), a wishlist row (`printingsRequest.wish`), a deck slot
- * (`printingsRequest.deck`), or none of them. They are read in that order, and the fall-through is
- * the last of them:
+ * Five answers, decided by what the surface that opened this named — the scanner tray's hand-back
+ * (`printingsRequest.pick`), a trade line (`printingsRequest.trade`), a wishlist row
+ * (`printingsRequest.wish`), a deck slot (`printingsRequest.deck`), or none of them. They are read
+ * in that order, and the fall-through is the last of them (the card modal's copy edit,
+ * `printingsRequest.copy`, sits between the trade and the wish):
  *
  * * **From the scanner's tray** — the press *hands the printing back* to the row that asked and
  *   closes. Nothing is written here: the tray files the answer into its own row, and the collection
  *   write is the tray's Add press, later.
+ * * **From a trade line's art** (issue #902) — the press *rewrites the line* onto that printing,
+ *   through the write the trade handed in, and closes on its success. A line the reader's own
+ *   collection supplies is not shown this wall at all but `TradeOwnedPrintings`, inside the same
+ *   shell: only the printings they hold, split the way the trade's add field splits them. A trade
+ *   line is on no list's walk, so neither wall draws chevrons.
  * * **From a wishlist row** — the press *repoints the wish* onto that printing, through
  *   `wishlistSetPrinting`, and the modal closes on success. The same gesture as the swap below and
  *   for the same reason; the write is a different one only because a wish is addressed by its own
@@ -107,8 +113,10 @@ import {
   type PrintingsRequest,
 } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
+import { MARKETPLACES } from "@/lib/marketplace";
 import { cn } from "@/lib/utils";
 import { refreshCardSearches } from "@/lib/searchMarks";
+import { TradeOwnedPrintings } from "@/features/trade/TradeOwnedPrintings";
 import { buildCardMenu, type CardMenuDeps } from "./cardMenu";
 import { finishRefusal } from "./copyEdit";
 import { handBackToDeckCard } from "./deckControl";
@@ -334,7 +342,9 @@ export function AllPrintingsDialog() {
    */
   const stops = walk.stops;
   const at = useMemo(() => {
-    if (request === null) return -1;
+    // A trade line is on nobody's walk: the trade publishes none, and a stop elsewhere that
+    // happened to share the printing would step the modal off the line onto a card it is not.
+    if (request === null || request.trade) return -1;
     const slot = request.deck;
     return slot === null
       ? stops.findIndex((stop) => stop.deck === null && stop.cardId === request.cardId)
@@ -565,7 +575,15 @@ export function AllPrintingsDialog() {
           component, so it survives a step exactly as it survives a close and a restart. Remounting
           re-reads a resolved query, which is a read of the cache and not a round trip —
           `CardModalArt` is keyed on its card id for the same reason and gets the same answer. */}
-      {request && (
+      {request?.trade?.owned ? (
+        <TradeOwnedPrintings
+          key={request.oracleId}
+          request={request}
+          target={request.trade}
+          countSlot={countSlot}
+          onDone={close}
+        />
+      ) : request && (
         <Body
           key={request.oracleId}
           request={request}
@@ -617,7 +635,12 @@ function Body({
   const { mode, setMode } = usePrintingGroupBy();
   // Which marketplace every price on this wall is quoted at. In the query key, like every priced
   // read in this app, so switching refetches rather than re-labelling numbers from another feed.
-  const { marketplace } = useMarketplace();
+  //
+  // A trade line's wall is quoted at **the trade's** marketplace instead, which is what every figure
+  // on the line beside it is: a printing that read $3 here and $4 on the line once picked would be a
+  // wall that lied about the choice it was offering.
+  const { marketplace: appMarketplace } = useMarketplace();
+  const marketplace = request.trade ? MARKETPLACES[request.trade.marketplace] : appMarketplace;
   const viewCard = useAppStore((s) => s.setSelectedCardId);
   /**
    * How a fold re-points the modal at the row the deck now holds — see {@link onSelect}.
@@ -751,10 +774,30 @@ function Body({
   /** The copy's one refusal made before any write — a printing never made in its finish. */
   const [copyRefusal, setCopyRefusal] = useState<string | null>(null);
 
-  const writing = swap.isPending || repoint.isPending || moveCopy.isPending;
+  /**
+   * The fourth write a press can be: the **trade line** whose art opened this, rewritten onto the
+   * printing pressed (issue #902). The write is the trade's own, handed in on the request, so the
+   * line's cache is settled by the code that owns it; this only fences the wall while it runs and
+   * closes on its success.
+   *
+   * `finish: null`, because a tile on this wall is a printing and not a copy: the backend keeps the
+   * line's finish where the printing comes in it and takes the first one it lists where not —
+   * the rule the line's own printing picker states in its hints.
+   */
+  const trade = request.trade;
+  const retrade = useMutation({
+    mutationFn: (cardId: string) => {
+      if (!trade) return Promise.resolve();
+      return trade.choose(cardId, null);
+    },
+    onSuccess: () => onDone(),
+  });
+
+  const writing = swap.isPending || repoint.isPending || moveCopy.isPending || retrade.isPending;
   const startSwap = swap.mutate;
   const startRepoint = repoint.mutate;
   const startMove = moveCopy.mutate;
+  const startRetrade = retrade.mutate;
 
   /**
    * What the last successful swap **did**, or `null` — the sentence the live region below draws.
@@ -799,6 +842,19 @@ function Body({
           collectorNumber: printing.collectorNumber,
         });
         onDone();
+        return;
+      }
+      /**
+       * **A trade line, read after the hand-back** — the trade builder's line art opened this to
+       * change which printing the line is. A press on the printing the line already is writes
+       * nothing and only closes, as the copy branch below does for the same press.
+       */
+      if (trade) {
+        if (cardId === request.cardId) {
+          onDone();
+          return;
+        }
+        startRetrade(cardId);
         return;
       }
       /**
@@ -938,6 +994,8 @@ function Body({
     [
       writing,
       items,
+      trade,
+      startRetrade,
       copy,
       startMove,
       wish,
@@ -1086,6 +1144,12 @@ function Body({
       {repoint.isError && (
         <p role="alert" className="shrink-0 text-xs text-destructive">
           Couldn't change the wishlist printing — {ipcError(repoint.error)}
+        </p>
+      )}
+      {/* And a trade line the backend would not move — a trade archived in another window. */}
+      {retrade.isError && (
+        <p role="alert" className="shrink-0 text-xs text-destructive">
+          Couldn't change the trade line's printing — {ipcError(retrade.error)}
         </p>
       )}
       {/* And a copy that could not move — refused here before writing, or by the backend. */}
