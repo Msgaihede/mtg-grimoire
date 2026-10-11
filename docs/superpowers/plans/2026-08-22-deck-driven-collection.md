@@ -2597,7 +2597,7 @@ Copy the main checkout's whole `data` folder (not just `mtg.db`) into
 
 - [ ] **Step 3: Drive the pass over CDP**
 
-Use PowerShell for `scripts/cdp.mjs` — Bash refuses the eval in a worktree. Wrap every binding
+Use PowerShell for `scripts/cdp.ts` — Bash refuses the eval in a worktree. Wrap every binding
 in an IIFE; a top-level `const` outlives its command. Split "click then read" into two evals:
 clicking and counting in one eval answers about the frame before React re-rendered.
 

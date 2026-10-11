@@ -546,7 +546,7 @@ rather than guessed here.
 
 | Platform | How |
 | --- | --- |
-| Desktop | `scripts/cdp.mjs` against the Tauri window — [the existing contract](../../reference/live-ui-verification.md) |
+| Desktop | `scripts/cdp.ts` against the Tauri window — [the existing contract](../../reference/live-ui-verification.md) |
 | Web | headless Chrome over CDP against the dev server; the spike's `serve.mjs` + `drive.mjs` are the proven shape |
 | Android | Chrome on a physical device over `adb reverse` + `adb forward localabstract:chrome_devtools_remote`, driven by CDP — **proven in the spike on a OnePlus 12** |
 

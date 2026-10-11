@@ -22,7 +22,7 @@ and `pnpm verify` never reaches `cargo test` — failures that are not yours.
 
 **A worktree resolves more than it declares.** Node looks for a package in every folder above
 a file, and a worktree sits under the main checkout: an import no manifest here declares can
-resolve from `D:\Code\mtg-grimoire\node_modules` and fail in CI. `scripts/workspace.test.mjs`
+resolve from `D:\Code\mtg-grimoire\node_modules` and fail in CI. `scripts/workspace.test.ts`
 is what holds "a package declares what it imports"; nothing that runs the code can.
 
 ## When the branch is wrong
@@ -71,8 +71,9 @@ agent's work may be on it. Prefer a temporary WIP commit. If you must stash, use
 
 ## The build cache is `target/cache`, and it is disposable
 
-Worktrees build with settings the main checkout does not have: no incremental cache, line-only
-debug info, and everything cargo can rebuild under `target/cache`. They come from
+Worktrees build with settings the main checkout does not have: no incremental cache, and
+everything cargo can rebuild under `target/cache`. (Line-only debug info is every checkout's
+since 2026-10-11 — the root `Cargo.toml`'s dev profile.) They come from
 `.claude/worktrees/.cargo/config.toml`, which the hook copies from
 `.claude/hooks/worktree-cargo.toml` — the reasons are in that file. `target/debug` keeps the
 executables and `data/`.
@@ -84,7 +85,7 @@ executables and `data/`.
 - **Never give two checkouts one build tree** (`CARGO_TARGET_DIR`, a shared `build-dir`). The
   second checkout's build prints `Fresh` and runs the first one's code.
 - **`--target-dir` moves only what a build finishes.** A run that needs a build tree of its own
-  sets `CARGO_BUILD_BUILD_DIR` as well, as `scripts/build-wasm.mjs` does.
+  sets `CARGO_BUILD_BUILD_DIR` as well, as `scripts/build-wasm.ts` does.
 - **A tree the hook calls dead** — `src-tauri/target`, or `target/debug/deps` and its three
   neighbours — predates the layout or the cache. No build reads it and nothing else deletes it:
   the app hands a worktree's folder to the next session with it still inside.

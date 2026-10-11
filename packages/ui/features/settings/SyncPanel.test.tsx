@@ -1736,7 +1736,7 @@ describe("a freshly paired device can reach the sync that entitles it", () => {
  * `classList.contains`, never a substring, and on the rendered element rather than on a constant
  * — a class `cn`'s merge dropped is missing here. jsdom applies no media query, so none of this
  * is a pixel; `controls.test.ts` compiles each utility, and the sizes were measured in a browser
- * under a touch pointer (`scripts/pairing-scan-smoke.mjs` takes two of them again).
+ * under a touch pointer (`scripts/pairing-scan-smoke.ts` takes two of them again).
  */
 describe("the panel under a finger", () => {
   const VIEWFINDER = "w-[min(16rem,50dvh)]";

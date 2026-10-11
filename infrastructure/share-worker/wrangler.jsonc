@@ -7,7 +7,7 @@
   // wrangler from `infrastructure/wrangler`'s lockfile — no pnpm, so no `node_modules` link for
   // `@grimoire/relay` — and without this line the bundle stops at "Could not resolve". An exact
   // module, not the package: wrangler matches an alias against the whole specifier
-  // (`infrastructure/app-worker/wrangler.jsonc`, measured 2026-10-08). `scripts/share-worker-alias.test.mjs`
+  // (`infrastructure/app-worker/wrangler.jsonc`, measured 2026-10-08). `scripts/share-worker-alias.test.ts`
   // holds the pair, and holds the module it points at to importing nothing.
   "alias": { "@grimoire/relay/src/token": "../relay/src/token.ts" },
   // The relay's date, deliberately rather than today's: this Worker runs beside it on the same
@@ -24,7 +24,7 @@
   // minted before the move names it — and wrangler infers `workers_dev: false` the moment a
   // config has `routes`: without `true` written here the next deploy turns that address off and
   // exits 0. The owner's decision, 2026-10-11: both addresses answer, indefinitely.
-  // `scripts/share-deploy-probe.test.mjs` holds the line, and the release's probe asks the old
+  // `scripts/share-deploy-probe.test.ts` holds the line, and the release's probe asks the old
   // address after the deploy. `preview_urls` is left unstated on purpose — omitted, wrangler does
   // not change the setting the Worker already has.
   "workers_dev": true,

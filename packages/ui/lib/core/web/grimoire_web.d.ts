@@ -1,5 +1,5 @@
 /**
- * **The engine's module, typed by hand.** `scripts/build-wasm.mjs` runs wasm-bindgen with
+ * **The engine's module, typed by hand.** `scripts/build-wasm.ts` runs wasm-bindgen with
  * `--target web` over `crates/grimoire-web` and writes `grimoire_web.js` and
  * `grimoire_web_bg.wasm` to `dist-wasm/`, which is ignored — so the declarations wasm-bindgen
  * would write beside them are on no machine that has not built the module, and `tsc` runs on all

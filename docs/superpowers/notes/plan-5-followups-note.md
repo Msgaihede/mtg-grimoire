@@ -1,7 +1,7 @@
 # Plan 5 note — deckbuilder follow-ups
 
 Written at the end of Task 9, 2026-08-06. §1 is **measured in the running app** over
-`scripts/cdp.mjs` against the live 116 590-card database; §2–§4 are findings and explicit
+`scripts/cdp.ts` against the live 116 590-card database; §2–§4 are findings and explicit
 deferrals with their reasons. One page, because the plan was four features on Plan 4's
 surfaces rather than a new floor.
 

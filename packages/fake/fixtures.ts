@@ -15,7 +15,7 @@
  * of each from here.
  *
  * **Not `packages/fake/cards.ts`, however obvious a home that looks.** That file is generated
- * *wholesale* — `scripts/gen-storybook-cards.mjs:386-388` builds its entire source in one template
+ * *wholesale* — `scripts/gen-storybook-cards.ts:386-388` builds its entire source in one template
  * string and `writeFileSync`s it over whatever was there — so a helper added beside `CARDS` is
  * deleted by the next corpus refresh, with no conflict and nothing to notice. Its own header says
  * "do not edit by hand". This file is where hand-written fixtures *over* that corpus live instead.
@@ -47,7 +47,7 @@ import type {
  * A fixture printing, by the two columns that identify one — the set code and the collector
  * number printed on the card.
  *
- * By those rather than by index, because `CARDS` is generated (`scripts/gen-storybook-cards.mjs`)
+ * By those rather than by index, because `CARDS` is generated (`scripts/gen-storybook-cards.ts`)
  * and a regeneration may reorder it: an index would then quietly point at a different card and
  * every claim written under it would still read as true. The pair is a key here even though it is
  * not one in `cards` — measured over `CARDS` 2026-08-09, all 43 `(setCode, collectorNumber)` pairs
@@ -176,7 +176,7 @@ export function deckCategory(kind: CategoryKind, over: Partial<DeckCategory> = {
  * front of the real chart, which is the opposite of what these fixtures are for.
  *
  * **Hand-written here rather than added to {@link FakeCard}, and that is a rule rather than a
- * shortcut**: `cards.ts` is generated *wholesale* by `scripts/gen-storybook-cards.mjs`, so a
+ * shortcut**: `cards.ts` is generated *wholesale* by `scripts/gen-storybook-cards.ts`, so a
  * column added to it by hand is deleted by the next corpus refresh with nothing to notice.
  * `.storybook/CLAUDE.md` states it for combo rows and it is the same argument here. This file
  * is where hand-written facts *over* that corpus live.
@@ -787,7 +787,7 @@ function notesFor(version: string): string {
 }
 
 /**
- * A release body in **the generator's shape** (`scripts/changelog/notes.mjs`), which is what a
+ * A release body in **the generator's shape** (`scripts/changelog/notes.ts`), which is what a
  * release publishes when its release PR carried its `changelog/<version>.md`.
  *
  * It carries the three things the reader does with that shape: a **Highlights** bullet whose

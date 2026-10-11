@@ -142,7 +142,7 @@ export const SearchingEveryPrinting: Story = {
     );
     await waitFor(async () => {
       // More than one, rather than exactly four: the corpus is generated
-      // (`scripts/gen-storybook-cards.mjs`) and carries four Bolts today — what the story is
+      // (`scripts/gen-storybook-cards.ts`) and carries four Bolts today — what the story is
       // about is that printings are not folded together, not how many there happen to be.
       await expect(
         within(results).getAllByRole("button", { name: "Lightning Bolt" }).length,

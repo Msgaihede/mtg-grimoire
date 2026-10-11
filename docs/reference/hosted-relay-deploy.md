@@ -5,7 +5,7 @@
 > probes the live address (the owner's decision; [ci-and-releases.md](ci-and-releases.md),
 > *A release deploys everything*). **This page remains the record of every deploy before it and
 > the runbook for a deploy between releases**, which is still by hand and asked for. Step 0's
-> probes are what `scripts/relay-deploy-probe.mjs` asks. The migration files named below
+> probes are what `scripts/relay-deploy-probe.ts` asks. The migration files named below
 > moved to `infrastructure/relay/applied-by-hand/` the same day: they were applied by hand,
 > and `infrastructure/relay/migrations/` is now the folder a release applies.
 
@@ -17,7 +17,7 @@
 > wrangler infers `false` beside a route, and `RELAY_BASE_LEGACY` is that address, read by the
 > OAuth callback alone. **Every answer recorded on this page before that day was given at the
 > `workers.dev` address.** The commands below name the new one; either answers them the same.
-> `scripts/relay-deploy-probe.mjs` asks the new address step 0's ten and the old one a
+> `scripts/relay-deploy-probe.ts` asks the new address step 0's ten and the old one a
 > pre-flight, so a deploy that turned the old address off leaves its release a draft. The first
 > deploy of this config needs **Zone → Workers Routes → Edit** on `mtg-grimoire.app` in its token,
 > and **Patreon holds two redirect URIs** — step 3.
@@ -673,8 +673,8 @@ the streamed answer and compaction by length are what every existing device is s
    first, and the relay repeats whichever a callback arrived at (`patreon.ts`, `redirectUri`).
    ⚠️ **It has to be registered before the release that carries such a build is published** —
    without it Connect Patreon fails at Patreon's consent screen, for new builds only, and no
-   probe without a credential can see it. Registering it is the owner's, on the client's page;
-   nobody has yet said it is done. `wrangler.jsonc`'s `vars` carry
+   probe without a credential can see it. Registering it is the owner's, on the client's page:
+   **done 2026-10-11, by his word** — and not yet exercised, since no build has named it. `wrangler.jsonc`'s `vars` carry
    `PATREON_CLIENT_ID` — **byte for byte equal to `entitlement::PATREON_CLIENT_ID`**, because this
    side builds the authorize URL, the relay builds the exchange, and Patreon compares them — and
    `PATREON_CAMPAIGN_ID` beside it. Both are public.

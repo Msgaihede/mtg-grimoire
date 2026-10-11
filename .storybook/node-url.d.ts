@@ -12,7 +12,10 @@
  * handles turned from `number` into `NodeJS.Timeout`, which is the wrong runtime for a
  * WebView2 app.
  *
- * So the package stays uninstalled and this declaration — visible only to the `.storybook`
+ * The scripts workspace now installs it separately. `pnpm-workspace.yaml` excludes its hoisting
+ * and Vite/Vitest's optional Node peers, so the workbench still cannot resolve those declarations.
+ * `scripts/workspace.test.ts` checks the actual webview program for transitive Node declarations.
+ * This declaration — visible only to the `.storybook`
  * program, which is the only program that includes this file — carries the single function
  * `main.ts` imports. If Storybook config ever needs more of Node than this, that is the
  * moment to weigh a real dependency again, and the answer must account for the leak above.

@@ -35,6 +35,7 @@ Also supports a light app (Android via Tauri, distributed through Google Play, a
 
 - `pnpm verify` — Build + lint + `cargo fmt --check` + Clippy + Vitest + cargo test. **Run at the end of a feature before committing (not after every change).**
 - `pnpm tauri dev` — Run the desktop app (Vite HMR + Rust rebuild). Takes the `app` lock (see `running-the-app` skill).
+- `pnpm tauri:fast dev` / `pnpm cargo:fast <command>` — The same dev build on a dated nightly (parallel front end + `rust-lld`). Opt-in and never the gate: `pnpm verify` and CI stay on the pinned toolchain.
 - `pnpm test` / `test:run` — Run frontend tests via Vitest.
 - `cargo test --workspace` — Run Rust tests across all crates (`apps/desktop/src-tauri`, `crates/grimoire-core`, `apps/light/src-tauri`, `crates/grimoire-web`, `crates/grimoire-scan`).
 - `pnpm storybook` / `build-storybook` — Component development workbench (`.storybook/`).
@@ -101,8 +102,8 @@ Worktree and deployment workflows are managed by skills in `.claude/skills/`:
 - **Worker secrets are never committed**: Secrets (`PATREON_CLIENT_SECRET`, `PATREON_WEBHOOK_SECRET`, `RELAY_HMAC_KEY`) belong solely in Cloudflare Secret storage, never in repository files or `.dev.vars`.
 - **Deployments require explicit instruction**: No agent may deploy a Worker, apply a D1 migration or set a secret without explicit instruction from the user, and none uploads to Google Play. A release deploys all three: `release.yml`'s `relay-deploy`, `share-deploy` and `web-deploy` apply any pending D1 migration and put the relay, the share Worker and the web app (`infrastructure/app-worker/`) on their addresses at a release tag, and `play-upload` puts the signed Android bundle on Google Play's internal track (the owner's decisions, 2026-10-04 and 2026-10-11 — every host ships from one tag). The relay's and the share Worker's jobs deploy only once `CLOUDFLARE_INFRA_API_TOKEN` is set in the `release` environment; until then those two are still deployed by hand, when asked, and `web-deploy` deploys alone. So **merging the release PR is a deploy of everything** (of the web app alone, until then), and an agent merges it only when asked to. Between releases a deploy is by hand and asked for, each time.
 - **Domain vocabulary precision**: Strictly distinguish between Scryfall tags, user deck labels, card keyword abilities, and note types. Refer to [`docs/agent/DOMAIN_VOCABULARY.md`](docs/agent/DOMAIN_VOCABULARY.md).
-- **Imports cross a package by its name**: `@grimoire/ui/…`, `@grimoire/fake/…`. `@/` is the shared UI's own alias and is written only inside `packages/ui`. A package declares what its files import, in its own `package.json`. `scripts/workspace.test.mjs` holds all three; see [`docs/reference/repository-layout.md`](docs/reference/repository-layout.md).
-- **Live UI verification**: Drive real WebView2 windows over CDP (`scripts/cdp.mjs`) when verifying UI changes; tests alone cannot detect webview-specific rendering glitches.
+- **Imports cross a package by its name**: `@grimoire/ui/…`, `@grimoire/fake/…`. `@/` is the shared UI's own alias and is written only inside `packages/ui`. A package declares what its files import, in its own `package.json`. `scripts/workspace.test.ts` holds all three; see [`docs/reference/repository-layout.md`](docs/reference/repository-layout.md).
+- **Live UI verification**: Drive real WebView2 windows over CDP (`scripts/cdp.ts`) when verifying UI changes; tests alone cannot detect webview-specific rendering glitches.
 
 ---
 

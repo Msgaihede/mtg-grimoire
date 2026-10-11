@@ -37,7 +37,7 @@
  * makes is to a different URL, after a 404; {@link download} has why.) Exits non-zero, listing every
  * file that failed, and **sets `process.exitCode` rather than calling `process.exit()`** —
  * exiting while `fetch` still holds a socket aborts Node 24 on Windows with a libuv assertion,
- * which buries the sentence that says what went wrong (`scripts/scanner-assets.mjs` found it
+ * which buries the sentence that says what went wrong (`scripts/scanner-assets.ts` found it
  * first).
  */
 import {
@@ -175,7 +175,7 @@ async function get(url) {
  * 48,094 bytes** (`Last-Modified` 2026-06-29), and the API's `/cards/f5fce9a5-…` answered
  * `not_found` — the printing has left Scryfall, and its crop survives only as the CDN's copy of
  * the bare path. That copy can go at any time; when it does this fails like any other file, and
- * the fix is regenerating the fixture (`scripts/gen-storybook-cards.mjs`), not this script.
+ * the fix is regenerating the fixture (`scripts/gen-storybook-cards.ts`), not this script.
  */
 async function download(url, out) {
   let res = await get(url);

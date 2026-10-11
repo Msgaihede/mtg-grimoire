@@ -324,7 +324,7 @@ mod tests {
     #[test]
     fn the_invite_is_drawn_at_49_modules_or_fewer() {
         // `qr_payload`'s figures, which `packages/fake/qr.ts` draws to and
-        // `scripts/pairing-scan-smoke.mjs` measures a phone's width against: a relay address that
+        // `scripts/pairing-scan-smoke.ts` measures a phone's width against: a relay address that
         // grows can push the symbol a version larger, and this is where that is noticed.
         //
         // Three invites, because the encoder packs a run of digits tighter than a run of letters:

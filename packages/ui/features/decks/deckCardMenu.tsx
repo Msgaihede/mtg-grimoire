@@ -13,6 +13,7 @@
  * Set as commander        (only where the format has a command zone)
  * Set as companion        (only where the format has a slot for one)
  * Set as foil             (or a `Finish ▸` submenu where the printing is sold in three)
+ * Set as deck image       this printing's art crop becomes the deck's cover
  * ─────────────────────
  * Add note…               opens the editor on a note this card will name — Save is the write
  * Notes                ▸  the notes that name this card — only where there are any
@@ -50,6 +51,7 @@ import {
   FolderInput,
   Gem,
   HeartOff,
+  Image as ImageIcon,
   LibraryBig,
   PackageOpen,
   Plus,
@@ -360,6 +362,16 @@ export interface DeckCardMenuDeps {
    * **Three rows read it and three deliberately do not** — see {@link buildDeckCardMenu}.
    */
   picked?: readonly DeckCard[];
+  /**
+   * **Set as deck image** — point the deck's cover at this row's printing, the same
+   * `deckUpdate({ coverCardId })` the settings dialog's cover picker sends. `cardId` is the cover
+   * the deck has now (`DeckRow.coverCardId`), which greys the row on the printing that already is
+   * it; `set` is the write, the surface's for this file's usual reason.
+   *
+   * Optional, and absent takes the row with it — a surface with no deck row to write to (a story,
+   * a read-only mount) offers nothing rather than a press that cannot land. See {@link coverItem}.
+   */
+  cover?: { cardId: string | null; set: (card: DeckCard) => void };
 }
 
 /**
@@ -473,6 +485,7 @@ export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuI
     { kind: "separator", id: "sep-set-as" },
     ...zoneItems(card, deps),
     finishItem(card, deps),
+    ...coverItem(card, deps),
     // **Under a rule of their own, between the `Set as` rows and the removal** — the notes are
     // neither. Everything above them writes the *deck* (where the card goes, what it is called);
     // the row below takes the cardboard out. A note writes neither: it is something the reader
@@ -984,6 +997,33 @@ function zoneItem(
 ): MenuAction {
   if (refusal === null) return { kind: "action", id, label, Icon, onSelect };
   return { kind: "action", id, label, Icon, disabled: true, onSelect: () => {} };
+}
+
+/**
+ * **Set as deck image** — the right-clicked printing's art crop becomes the deck's cover.
+ *
+ * In the `Set as` group because it is a claim of the same kind — what this card *is* to the
+ * deck — and singular for the zone rows' reason: a deck has one cover, so "set 4 cards as the
+ * deck image" names a thing that cannot happen. It is about the **printing** on the row, not the
+ * oracle card, because a cover is a printing's art and two printings of one card are two
+ * pictures.
+ *
+ * The printing that already is the cover greys silently, `zoneItem`'s precedent: drawn rather
+ * than dropped, so the row keeps its place on every card of the deck.
+ */
+function coverItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
+  const cover = deps.cover;
+  if (cover === undefined) return [];
+  const current = cover.cardId === card.cardId;
+  return [
+    {
+      kind: "action",
+      id: "set-cover",
+      label: "Set as deck image",
+      Icon: ImageIcon,
+      ...(current ? { disabled: true, onSelect: () => {} } : { onSelect: () => cover.set(card) }),
+    },
+  ];
 }
 
 /**

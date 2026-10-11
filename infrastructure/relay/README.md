@@ -737,7 +737,7 @@ Every client holds the relay to an answer: once a socket has seen one pong, a pi
 ends it, and the client reconnects. Natively that rests on the runtime answering a protocol ping
 with a pong; in a browser, on the auto-response answering the text one. **Both were seen under
 `wrangler dev --local` on 2026-10-04** — the browser's by headless Chrome 154 driving this code
-through `scripts/web-sync-smoke.mjs`, which also read the 101's `Sec-WebSocket-Protocol:
+through `scripts/web-sync-smoke.ts`, which also read the 101's `Sec-WebSocket-Protocol:
 grimoire.live.v1` off both of its sockets — **and neither has been watched on the deployed
 Worker.**
 
@@ -902,7 +902,7 @@ Four steps, in order, and the first two are why `npx wrangler deploy` alone is n
 runbook, with the probes that say which of them are already done, is
 [hosted-relay-deploy.md](../../docs/reference/hosted-relay-deploy.md). **Since 2026-10-11 a release
 runs this deploy**: `release.yml`'s `relay-deploy` applies any pending migration, deploys, and
-probes the live address (`scripts/relay-deploy-probe.mjs`). The steps below are the by-hand
+probes the live address (`scripts/relay-deploy-probe.ts`). The steps below are the by-hand
 deploy between releases, which is still asked for.
 
 1. `npx wrangler d1 create mtg-grimoire-relay`, then put the id it prints into

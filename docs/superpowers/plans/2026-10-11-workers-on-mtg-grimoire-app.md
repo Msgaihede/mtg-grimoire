@@ -116,7 +116,7 @@ export function exchangeCode(code: string, env: Env, request: Request): Promise<
 
 - [ ] Set the two constants and the fake's copy to the new addresses. Rewrite each doc comment's first paragraph: the address is a Custom Domain on the app's zone; the `workers.dev` address is the same Worker and still answers for builds through 0.44.0. Keep the dated probe history.
 - [ ] `invite.rs`: `decode_accepts_the_url_the_qr_carries` reads an invite drawn against each of the two addresses.
-- [ ] **Found while implementing — the address is part of the pairing QR's payload, so the symbol changes size.** 162 bytes became 141. Measured with the crate's own encoder: an invite is drawn at 45 or 49 modules, by its bytes, and never more than 49 (a new test, `the_invite_is_drawn_at_49_modules_or_fewer`). The comment's "version 9, 53×53, for every invite" was not what that encoder does: it packs digits and capitals tighter than bytes. Followed through `packages/fake/qr.ts` (version 9 → version 8, the largest symbol the app draws: `VERSION`, `BLOCKS`, `ALIGNMENT`), `qr.test.ts`, `scripts/pairing-scan-smoke.mjs` (53 → 49), and the comments in `QrCode.tsx` and `sync.md`. `size-72` stays: a build through 0.44.0 still draws the larger symbol in the same box.
+- [ ] **Found while implementing — the address is part of the pairing QR's payload, so the symbol changes size.** 162 bytes became 141. Measured with the crate's own encoder: an invite is drawn at 45 or 49 modules, by its bytes, and never more than 49 (a new test, `the_invite_is_drawn_at_49_modules_or_fewer`). The comment's "version 9, 53×53, for every invite" was not what that encoder does: it packs digits and capitals tighter than bytes. Followed through `packages/fake/qr.ts` (version 9 → version 8, the largest symbol the app draws: `VERSION`, `BLOCKS`, `ALIGNMENT`), `qr.test.ts`, `scripts/pairing-scan-smoke.ts` (53 → 49), and the comments in `QrCode.tsx` and `sync.md`. `size-72` stays: a build through 0.44.0 still draws the larger symbol in the same box.
 
 ### Task 4: The web app
 
@@ -128,7 +128,7 @@ export function exchangeCode(code: string, env: Env, request: Request): Promise<
 
 ### Task 5: The probes and their fences
 
-**Files:** Modify `scripts/relay-deploy-probe.mjs`, `scripts/share-deploy-probe.mjs`, `scripts/relay-deploy-probe.test.mjs`, `scripts/share-deploy-probe.test.mjs`.
+**Files:** Modify `scripts/relay-deploy-probe.ts`, `scripts/share-deploy-probe.ts`, `scripts/relay-deploy-probe.test.ts`, `scripts/share-deploy-probe.test.ts`.
 
 **Interfaces:** each probe script exports `LEGACY` (string) and `LEGACY_PROBES` (one probe).
 
@@ -142,7 +142,7 @@ const result = await askUntil(async () => [
 ```
 
 - [ ] **Tests.** Replace "ask the address the Worker's name gives it" with: `LEGACY` is `https://${name}.denmark-east.workers.dev`; the config's one route is `{ pattern: new URL(RELAY).host, custom_domain: true }`; the config says `"workers_dev": true` and does not mention `preview_urls`; (relay) `"RELAY_BASE_LEGACY": "${LEGACY}"`; every `LEGACY_PROBES` entry is one of `PROBES` and passes against the tree's Worker asked at `LEGACY`. The relay test's env gains `RELAY_BASE_LEGACY: LEGACY`.
-- [ ] `pnpm exec vitest run scripts/relay-deploy-probe.test.mjs scripts/share-deploy-probe.test.mjs` — pass.
+- [ ] `pnpm exec vitest run scripts/relay-deploy-probe.test.ts scripts/share-deploy-probe.test.ts` — pass.
 
 ### Task 6: Documents
 

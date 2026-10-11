@@ -59,6 +59,10 @@ Rust components are per toolchain, so after `rust-toolchain.toml` moves, `llvm-t
 ### Commands
 
 - `pnpm tauri dev` — run the app
+- `pnpm tauri:fast dev` — run the app with faster Rust rebuilds, on a nightly toolchain it
+  installs the first time ([`.cargo/fast.toml`](.cargo/fast.toml) has what it is and what it
+  measured); `pnpm cargo:fast <command>` is the same for any dev-profile cargo command. Neither
+  is the gate
 - `pnpm verify` — build + lint + `cargo fmt --check` + clippy + Vitest + cargo test; run
   before every commit
 - `pnpm storybook` — the component workbench, on a fake backend
@@ -83,7 +87,7 @@ Neither runs in CI — the instrumented Rust rebuild takes minutes against `carg
 
 The Rust figure counts **shipped code only**, and is ~14 points below what `cargo llvm-cov`
 prints on its own: the crate's tests are inline `#[cfg(test)]` modules, so llvm-cov instruments
-them too and scores every line of them covered by definition. `scripts/coverage-rust.mjs` splits
+them too and scores every line of them covered by definition. `scripts/coverage-rust.ts` splits
 each file at its test module and reports both halves. Coverage was measured 2026-08-12 on debug
 builds, Windows — [docs/reference/test-coverage.md](docs/reference/test-coverage.md) has the
 per-file tables, the thin spots, and the traps — and the suite has grown roughly sixfold since,

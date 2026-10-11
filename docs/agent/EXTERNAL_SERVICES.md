@@ -22,9 +22,10 @@ construction).
 > **The one thing an address decides is Patreon's redirect URI**: the relay repeats whichever of
 > its two a reader's callback arrived at (`RELAY_BASE_LEGACY`, `patreon.ts`), so **both URIs must
 > be registered on the Patreon client, the new one before the release that carries a build naming
-> it** — the owner's step, and nobody has yet said it is done. The relay's and the share Worker's
-> deploy token needs Zone → Workers Routes → Edit on the zone from that release on
-> ([ci-and-releases.md](../reference/ci-and-releases.md)). **Every probe and deploy recorded below
+> it** — the owner's step, **done 2026-10-11 by his word**, as is the permission the relay's and
+> the share Worker's deploy token needs from that release on, Zone → Workers Routes → Edit on the
+> zone ([ci-and-releases.md](../reference/ci-and-releases.md)). Neither has been exercised: no
+> build has named the new URI to Patreon, and no deploy has stated a Custom Domain with that token. **Every probe and deploy recorded below
 > with an earlier date was at a `workers.dev` address**; whether the new names are attached yet
 > is the host's to say. [The design](../superpowers/specs/2026-10-11-workers-on-mtg-grimoire-app-design.md)
 > has the rollout.
@@ -98,7 +99,7 @@ phone, a developer's build — is **offered** them: `scanner_assets` says which 
 they cost, and only a reader's press on that offer calls `scanner_assets_fetch`, which downloads
 them from `https://github.com/Msgaihede/mtg-grimoire/releases/download/scanner-bundle-v<FORMAT_VERSION>/`
 — the prerelease `.github/workflows/scanner-bundle.yml` publishes weekly and
-`scripts/scanner-assets.mjs` already reads at build time. **Optional in the price feeds' sense**:
+`scripts/scanner-assets.ts` already reads at build time. **Optional in the price feeds' sense**:
 nothing is fetched until the reader asks, and without them the scanner detects a card and names
 nothing rather than failing. GitHub answers with a redirect to its asset host
 (`release-assets.githubusercontent.com` when asked on 2026-10-07), which the client follows; an
@@ -245,7 +246,7 @@ which are owed and what they cost, and only a reader's press on that offer calls
 `scanner_assets_fetch`, which downloads them from
 `https://github.com/Msgaihede/mtg-grimoire/releases/download/scanner-bundle-v<FORMAT_VERSION>/`
 — the prerelease `.github/workflows/scanner-bundle.yml` publishes weekly and
-`scripts/scanner-assets.mjs` already reads at build time. **Optional in the price feeds' sense**:
+`scripts/scanner-assets.ts` already reads at build time. **Optional in the price feeds' sense**:
 nothing is fetched until the reader asks, and without them the scanner detects a card and names
 nothing rather than failing.
 

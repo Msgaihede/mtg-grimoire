@@ -6,7 +6,7 @@
 
 **Architecture:** Nothing here is a new mechanism. Task 1 lifts the navigation vocabulary and the sidebar's drop behaviour out of `AppShell` so a second drawing of a nav entry cannot drift from the first; Tasks 2–3 add the bar and let the shell choose between it and the rail; Tasks 4–5 deal with what the ribbon can no longer hold. Tasks 6–8 are one decision each on surfaces that already have the machinery. Task 9 is the measurement the whole plan is answerable to.
 
-**Tech Stack:** React 19, TypeScript 6.0.x, Tailwind v4 (`@theme`/`@custom-variant` in `src/index.css`), `@dnd-kit/dom` 0.5.0, Vitest, Storybook 10.5.7, `scripts/cdp.mjs`.
+**Tech Stack:** React 19, TypeScript 6.0.x, Tailwind v4 (`@theme`/`@custom-variant` in `src/index.css`), `@dnd-kit/dom` 0.5.0, Vitest, Storybook 10.5.7, `scripts/cdp.ts`.
 
 **Spec:** [2026-08-28-mobile-layout-options.md](../specs/2026-08-28-mobile-layout-options.md) — the decision and the per-surface brief. Read "What 9b has to do, per surface" before starting; every task below argues from it. The widths come from [the cross-platform spec](../specs/2026-08-27-cross-platform-design.md) §6.1 and the parity matrix §7.
 
@@ -28,7 +28,7 @@
 
 ## The arithmetic every task is answerable to
 
-Measured in the shipped WebView2 at `cdp.mjs size 390 844` on 2026-08-29, and recorded in [frontend-design.md](../../reference/frontend-design.md).
+Measured in the shipped WebView2 at `cdp.ts size 390 844` on 2026-08-29, and recorded in [frontend-design.md](../../reference/frontend-design.md).
 
 | | px |
 | --- | --- |
@@ -551,7 +551,7 @@ saying different things."
 > a reader who cannot see a tile cannot drag one. Re-ask it once the vertical is fixed.
 
 - [ ] **Step 1** — Build the web target and serve it (`npm run build:wasm`, `npm run web:build`, then `vite preview --config vite.web.config.ts`). **`npm run web:dev` registers no service worker at all**, so a dev-server reading answers nothing about caching — and it cost a pass on 2026-08-29.
-- [ ] **Step 2** — `adb reverse tcp:4173 tcp:4173` and open it on the phone. **This is the only instrument where the URL bar, the safe area and a coarse pointer are real rather than emulated**: `cdp.mjs size` hardcodes `mobile: false` and emulates a narrow *desktop*.
+- [ ] **Step 2** — `adb reverse tcp:4173 tcp:4173` and open it on the phone. **This is the only instrument where the URL bar, the safe area and a coarse pointer are real rather than emulated**: `cdp.ts size` hardcodes `mobile: false` and emulates a narrow *desktop*.
 - [ ] **Step 3** — In one expression, read `visualViewport.height`, the ribbon's box, `main`'s content box, the filter bar's height, the bar's height, and how many tile rows are visible. One expression because a rect and a viewport taken minutes apart can be at two different sizes.
 - [ ] **Step 3b — the one thing Task 8 could not settle without a device, and it is the sharpest open question in this plan.** **dnd-kit hit-tests by rect, not by DOM hit-testing**, so the deck's piles *underneath* the search overlay stay droppable while invisible. A drag begun from a search tile at 390px can therefore land in a pile the reader cannot see. `QuickZones` (`LAYER.dragTray`) and the remove tray both paint **above** the overlay, so those four targets stay visible and usable — it is the piles that are the hazard. Task 8 recorded this rather than fencing it, correctly: a `canDrop` fence means touching drop registrations, and a second registration on one element silently replaces the first. **Drive it on the device and decide.** Three outcomes are legitimate — it is unreachable in practice (a finger starting on a tile inside a full-width overlay has nowhere to travel that is not the overlay); it wants a fence; or the overlay wants to not cover the piles at all. Do not leave it undecided a second time.
 - [ ] **Step 4** — Take the **dialog** reading that has been owed since PR #274: whether `Dialog`'s `fixed inset-0` scrim resolves against the large or the small viewport. The recipe, both branches and where the `h-dvh` pin would go are in `frontend-design.md` under "The dialog against a real URL bar". **Record the numbers either way** — "we looked and it was already right" is a result, and without it the next person pays for the same measurement.

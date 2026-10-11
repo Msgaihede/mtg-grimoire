@@ -12,7 +12,7 @@
   // in (`RELAY_BASE_LEGACY` below), and wrangler infers `workers_dev: false` the moment a config
   // has `routes`: without `true` written here the next deploy turns that address off and exits 0.
   // The owner's decision, 2026-10-11: both addresses answer, indefinitely.
-  // `scripts/relay-deploy-probe.test.mjs` holds the line, and the release's probe asks the old
+  // `scripts/relay-deploy-probe.test.ts` holds the line, and the release's probe asks the old
   // address after the deploy. `preview_urls` is left unstated on purpose — omitted, wrangler does
   // not change the setting the Worker already has.
   "workers_dev": true,

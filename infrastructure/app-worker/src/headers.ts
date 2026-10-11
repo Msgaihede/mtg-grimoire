@@ -37,7 +37,7 @@
  * first, and a header this file has already set is *appended* to rather than replaced.)
  *
  * **Plain TypeScript with nothing but erasable types**, on purpose: Node strips those natively,
- * so a `.mjs` under `scripts/` can import this file as it stands.
+ * so a `.ts` under `scripts/` can import this file as it stands.
  */
 
 /** Cloudflare's limits, from the page above. A deploy that passes either is refused there. */

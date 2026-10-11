@@ -159,7 +159,7 @@ What no moved test exercises and a reader would notice first:
 **Files:** whatever in `src/`, `.storybook/`, `mobile/` and `scripts/` imports or reads one of the ten moved files.
 
 - [x] Every `?raw` import, `readFileSync` and glob that names a moved file points at `crates/grimoire-core/src/…`; a path in prose is corrected too
-- [x] `scripts/ci-route.test.mjs`, `scripts/coverage-rust.mjs`, `.storybook/fake/parity.test.ts`: read, and changed only if a moved file is named
+- [x] `scripts/ci-route.test.ts`, `scripts/coverage-rust.ts`, `.storybook/fake/parity.test.ts`: read, and changed only if a moved file is named
 - [x] `npm run test:run` for the touched suites; nothing that runs cargo
 
 ### Task 6 — the record

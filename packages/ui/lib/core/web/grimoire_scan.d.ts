@@ -1,6 +1,6 @@
 /**
  * **The scanner's module, typed by hand** — `grimoire_web.d.ts`'s twin, for its reason:
- * `scripts/build-wasm.mjs` writes `grimoire_scan.js` and `grimoire_scan_bg.wasm` to
+ * `scripts/build-wasm.ts` writes `grimoire_scan.js` and `grimoire_scan_bg.wasm` to
  * `dist-wasm/scanner/`, which is ignored, so the declarations wasm-bindgen writes beside them
  * are on no machine that has not built the module. `crates/grimoire-scan/CLAUDE.md` §1 is the
  * contract these mirror; the build fails if an export is missing from the glue.

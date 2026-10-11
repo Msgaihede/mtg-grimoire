@@ -1,7 +1,8 @@
 # The relay and the share Worker on mtg-grimoire.app — design
 
 **Date:** 2026-10-11 · **Status:** approved by the owner the same day; the code is in the pull
-request that carries this file, and the rollout (§5) has not begun
+request that carries this file. Of the rollout (§5), steps 1 and 2 are done by the owner's word
+the same day; nothing has been attached or deployed
 
 ## 1. Goal
 
@@ -35,7 +36,7 @@ each other and sync in one group.
 - **Two addresses are compiled in.** `entitlement::RELAY_BASE` (`crates/grimoire-core`) and
   `share::publish::SHARE_BASE` (`apps/desktop/src-tauri`). The share Worker's pair is held byte
   for byte by a test; **the relay's was not** — a review of this change found that nothing
-  compared the constant with the var — and `relay-deploy-probe.test.mjs` holds it now. Every desktop release through 0.44.0 and the Android
+  compared the constant with the var — and `relay-deploy-probe.test.ts` holds it now. Every desktop release through 0.44.0 and the Android
   bundle on Play carry the `workers.dev` values.
 - **The relay reads `RELAY_BASE` in one place**: `patreon.ts`'s `redirectUri`, for the code
   exchange. Patreon compares that URI with the one the app's authorize request carried, exactly.
@@ -122,7 +123,7 @@ The relay's `APP_ORIGINS` does not change — the page's origin is the same.
 
 ### 4.5 Probes and fences
 
-- `scripts/relay-deploy-probe.mjs` and `scripts/share-deploy-probe.mjs`: `RELAY` and `SHARE`
+- `scripts/relay-deploy-probe.ts` and `scripts/share-deploy-probe.ts`: `RELAY` and `SHARE`
   become the new addresses, and each exports a `LEGACY` address. After the full set passes at the
   new address, each asks **one** request of the legacy one (the relay's pre-flight, which spends
   no limiter; the share Worker's gate, whose `401` no switched-off name gives — such a name

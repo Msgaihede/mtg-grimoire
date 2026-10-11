@@ -4,7 +4,7 @@
 
 **Goal:** the decks, the collection, the wishlist, the search, the card pane and the view-state modules are `crates/grimoire-core`'s, with `with_write` and `schema::prepare_database` beside them — moved by one re-runnable script, with the desktop app unchanged.
 
-**Architecture:** `scripts/core-step-4.mjs` splits each domain file at its item boundaries. Everything that has no reason to know about a window goes to `crates/grimoire-core/src/<module>.rs` with its tests; the `#[tauri::command]` wrappers, and anything else that names the desktop, stay at the module's own path as `src-tauri/src/<module>/mod.rs`, which opens with `pub use grimoire_core::<module>::*;`. So `crate::deck::…` resolves in `src-tauri` exactly as it did, and `generate_handler!` is not edited. `sync::with_write` and its body become `grimoire_core::state::with_write` over `&State`.
+**Architecture:** `scripts/core-step-4.ts` splits each domain file at its item boundaries. Everything that has no reason to know about a window goes to `crates/grimoire-core/src/<module>.rs` with its tests; the `#[tauri::command]` wrappers, and anything else that names the desktop, stay at the module's own path as `src-tauri/src/<module>/mod.rs`, which opens with `pub use grimoire_core::<module>::*;`. So `crate::deck::…` resolves in `src-tauri` exactly as it did, and `generate_handler!` is not edited. `sync::with_write` and its body become `grimoire_core::state::with_write` over `&State`.
 
 **Tech Stack:** Rust (the workspace's pinned toolchain), rusqlite 0.40; Node 24 for the script, no dependency.
 
@@ -77,7 +77,7 @@ The launch's logged passes call `maintenance`, `managed_wishlist`, `deck_tokens`
 
 ## The script
 
-`node scripts/core-step-4.mjs` from the repository root. It reads the tree, writes the tree and runs `cargo fmt -p mtg-grimoire -p grimoire-core`. A module whose file is already gone from `src-tauri/src` is skipped, so a second run changes nothing.
+`node scripts/core-step-4.ts` from the repository root. It reads the tree, writes the tree and runs `cargo fmt -p mtg-grimoire -p grimoire-core`. A module whose file is already gone from `src-tauri/src` is skipped, so a second run changes nothing.
 
 For each module on its list:
 
@@ -93,8 +93,8 @@ Then, once: `with_write` into `state.rs`, `prepare_database` into `schema.rs`, t
 **A branch that edited a moved file runs the script before it merges `main`**, so both sides have made the same move. What is left to merge is what the branch changed, and four files `main` edited by hand after its own run:
 
 ```bash
-git checkout origin/main -- scripts/core-step-4.mjs scripts/lib/rs-items.mjs
-node scripts/core-step-4.mjs
+git checkout origin/main -- scripts/core-step-4.ts scripts/lib/rs-items.ts
+node scripts/core-step-4.ts
 git add -A && git commit -m "chore(core): step 4's move, on this branch"
 git merge origin/main
 ```
@@ -141,16 +141,16 @@ The constant and the new test in the core's `deck_todos.rs` merged without a con
 
 ### Task 1 — the splitter and the script
 
-**Files:** create `scripts/lib/rs-items.mjs`, `scripts/lib/rs-items.test.mjs`, `scripts/core-step-4.mjs`.
+**Files:** create `scripts/lib/rs-items.ts`, `scripts/lib/rs-items.test.ts`, `scripts/core-step-4.ts`.
 
-- [x] `rs-items.mjs`: `split(src)` → header, items (text, kind, name, visibility, attributes), tail; `inner(item)` for a braced item's body; `code(text)` with comments and literals blanked. `split` throws if its pieces do not rejoin to the input.
-- [x] `rs-items.test.mjs` (vitest, which already runs `scripts/**/*.test.mjs`): a raw string holding a `}`; a char literal beside a lifetime; a nested block comment; `const X: T = T { .. };`; an attribute with brackets in a string; and the lossless property over every `.rs` file under `src-tauri/src` and `crates/grimoire-core/src`.
-- [x] `core-step-4.mjs`: the six steps above, with `--dry` printing what would stay, move and widen, per module, without writing.
-- [x] `node scripts/core-step-4.mjs --dry` — read every "stays" line against the tables above.
+- [x] `rs-items.ts`: `split(src)` → header, items (text, kind, name, visibility, attributes), tail; `inner(item)` for a braced item's body; `code(text)` with comments and literals blanked. `split` throws if its pieces do not rejoin to the input.
+- [x] `rs-items.test.ts` (vitest, which already runs `scripts/**/*.test.ts`): a raw string holding a `}`; a char literal beside a lifetime; a nested block comment; `const X: T = T { .. };`; an attribute with brackets in a string; and the lossless property over every `.rs` file under `src-tauri/src` and `crates/grimoire-core/src`.
+- [x] `core-step-4.ts`: the six steps above, with `--dry` printing what would stay, move and widen, per module, without writing.
+- [x] `node scripts/core-step-4.ts --dry` — read every "stays" line against the tables above.
 
 ### Task 2 — run it, and make both crates compile
 
-- [x] `node scripts/core-step-4.mjs`.
+- [x] `node scripts/core-step-4.ts`.
 - [x] `cargo check -p grimoire-core --all-targets`, then `cargo check -p mtg-grimoire --all-targets`. **A compile error is fixed in the script, never in the output**, and the script is run again from a clean tree (`git checkout -- . && git clean -fd crates src-tauri/src`).
 - [x] `cargo clippy --workspace --all-targets -- -D warnings`; `cargo check -p mtg-grimoire --locked`.
 - [x] Commit the script, then its output, as two commits.

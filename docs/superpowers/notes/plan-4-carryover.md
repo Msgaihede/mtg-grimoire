@@ -1,7 +1,7 @@
 # Plan 4 carryover — decks & deckbuilder
 
 Written at the end of Task 16, 2026-08-06. Everything in §1 is **measured in the running
-app** over `scripts/cdp.mjs` against the live 116 590-card database; everything else is an
+app** over `scripts/cdp.ts` against the live 116 590-card database; everything else is an
 explicit deferral with its reason. Plan 5 should read §5 before it plans anything.
 
 ---
@@ -19,9 +19,9 @@ with `card_migrations` at the 2 569 rows the app itself wrote.
 
 The two pieces of throwaway harness this smoke needed are **checked in** rather than left in a
 scratchpad for the next session to rebuild — which is what happened to this tooling four times
-before `cdp.mjs` existed at all. `cdp.mjs press Enter|Space [css]` sends the keypress that
+before `cdp.ts` existed at all. `cdp.ts press Enter|Space [css]` sends the keypress that
 actually *activates* a focused control (`key`'s `rawKeyDown` carries no `text`, so Chromium
-hears the key and clicks nothing — measured both ways), and `cdp.mjs drag <source> <target>`
+hears the key and clicks nothing — measured both ways), and `cdp.ts drag <source> <target>`
 is Task 14's real-drag recipe with `--press`, `--from x,y`, `--cancel`, `--probe` and cleanup
 of both pieces of state a dead drag leaves behind.
 
@@ -341,7 +341,7 @@ points at the ledger rather than re-litigating it.
 
 ## 7. Retraction — two plans of CDP claims, re-scored
 
-`scripts/cdp.mjs` had two silent defects, both found and fixed inside this plan (Task 11).
+`scripts/cdp.ts` had two silent defects, both found and fixed inside this plan (Task 11).
 
 - **`media` never worked.** WebView2 accepts a features-only `setEmulatedMedia` and ignores it,
   and the override dies with the socket — so every `media prefers-reduced-motion reduce`

@@ -131,7 +131,7 @@ and whose it is). Nothing was deployed: the web app ships at the next release ta
   became a compile-time matter as well: once the scanner's commands were in the table the
   engine's module kept an OCR runtime it could never run, 9.96 MB where it had been 6.90, because
   a refusal at run time does not let the linker drop code. `platform::host::with_files` closes
-  those commands off on a page at compile time, and `scripts/build-wasm.mjs` refuses an engine
+  those commands off on a page at compile time, and `scripts/build-wasm.ts` refuses an engine
   module over its ceiling.
 - **The models are pinned, where the plan asked only that a download be validated.** A review
   found them trusted on length alone; they are immutable, so both hosts hold them to two SHA-256

@@ -1729,8 +1729,8 @@ can still hide.
 - [ ] **Step 3: The live pass**
 
 Take the app lock and launch, per the `running-the-app` skill. Drive the window with
-`scripts/cdp.mjs` — read `docs/reference/live-ui-verification.md` first; it documents traps that
-have each cost a session. From a worktree, use the **PowerShell** tool for `cdp.mjs`, and note
+`scripts/cdp.ts` — read `docs/reference/live-ui-verification.md` first; it documents traps that
+have each cost a session. From a worktree, use the **PowerShell** tool for `cdp.ts`, and note
 that `click` is a no-op on a cold pointer, so `hover --rest 200` first; that a click and a read in
 one `eval` answers about the frame *before* React re-rendered, so split them; and that every
 binding in an `eval` needs wrapping in an IIFE, since the scope is shared between commands.

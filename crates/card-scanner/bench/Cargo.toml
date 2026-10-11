@@ -65,8 +65,8 @@ image = { version = "0.25", default-features = false, features = ["jpeg"] }
 [target.'cfg(target_family = "wasm")'.dependencies]
 # ⚠️ **Pinned to the repository's own `wasm-bindgen`, exactly** — the root `Cargo.lock`'s, which
 # is the version of the CLI every machine that builds the web host already has. The CLI rewrites
-# what the crate emitted and the pair must be the same release (`scripts/build-wasm.mjs` has the
-# reasons); `scripts/scanner-bench.mjs` refuses to build when this file's lock and the CLI
+# what the crate emitted and the pair must be the same release (`scripts/build-wasm.ts` has the
+# reasons); `scripts/scanner-bench.ts` refuses to build when this file's lock and the CLI
 # disagree. Moving the root's version means moving this line with it.
 wasm-bindgen = "=0.2.127"
 

@@ -5,13 +5,20 @@
 # a floating channel one Rust release could turn every open PR red with no change to the code,
 # and a release binary was built by whatever stable happened to be current that day. Moving the
 # pin is a deliberate commit that runs the whole gate — `rust-toolchain.toml` routes to every
-# job that compiles Rust in `scripts/ci-route.mjs`.
+# job that compiles Rust in `scripts/ci-route.ts`.
 #
 # Workflows never install a toolchain of their own: `.github/actions/rust-toolchain` reads the
-# channel below, and `scripts/toolchain.test.mjs` fails if any workflow names one directly.
+# channel below, and `scripts/toolchain.test.ts` fails if any workflow names one directly.
 #
 # Locally, after moving the pin, re-add `llvm-tools-preview` (for `pnpm test:coverage:rust`)
 # with `rustup component add` — components are per-toolchain, so the old pin's do not carry over.
+#
+# **One command builds with another toolchain, and says so in its name**: `pnpm tauri:fast dev`
+# and `pnpm cargo:fast` (`scripts/rust-fast.ts`), a dated nightly for a faster dev build and
+# nothing else — never `pnpm verify`, CI or a release. **Measure the pin against it when the pin
+# moves** (`.cargo/fast.toml` has the table): on 2026-10-11 that nightly rebuilt the desktop app
+# after an edit in the core in 12 s where 1.98.1 and 1.99.0 both took 16 s, with no flag of its
+# own, so the release that brings that compiler makes most of the fast build redundant.
 [toolchain]
 channel = "1.98.1"
 components = ["rustfmt", "clippy"]

@@ -46,7 +46,7 @@ const meta = {
           "`packages/fake/db.ts`. **The QR code is a real one, of a code with no key in " +
           "it**: the 49-module symbol the app draws an invite as (`packages/fake/qr.ts`), so " +
           "a phone held up to a story reads the invite's address, and " +
-          "`scripts/pairing-scan-smoke.mjs` points a headless browser's camera at it. " +
+          "`scripts/pairing-scan-smoke.ts` points a headless browser's camera at it. " +
           "What is real is everything a panel is drawn against: the invite carried by hand, " +
           "the one number both readers compare, the poll that tells this panel where the " +
           "ceremony has got to, the store that keeps a removed device the status command does " +

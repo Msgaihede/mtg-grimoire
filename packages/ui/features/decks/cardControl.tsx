@@ -102,7 +102,7 @@ export const SELECTED_CARD = "ring-2 ring-accent";
  * How a card says it is the picked one, for anything that has to find it **after the fact**.
  *
  * `CardStack`'s `STACK_OPEN_ATTR` one floor over, for its reason and with the same two readers:
- * a test, and `scripts/cdp.mjs --probe` in the shipped window. The mark itself is a class, and a
+ * a test, and `scripts/cdp.ts --probe` in the shipped window. The mark itself is a class, and a
  * class is a *recipe* — a test that asserted `ring-accent` would go red the day the ring became
  * an outline, which is a change to how this looks and not to what it means. This is what it
  * means, and it is what `views/views.test.tsx` sweeps all four views for.

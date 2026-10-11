@@ -3190,7 +3190,7 @@ folders. Three levels for a two-finish card, which is the cost of not asking two
 
 Three harness facts, two inherited and one new. The collection page is a **div/grid table**, so
 query `[role=row]` and `[role=gridcell]`, never `tbody tr` — `document.querySelectorAll('table')`
-answers `0` on a page plainly showing one. `cdp.mjs` has no right-click, so a synthetic
+answers `0` on a page plainly showing one. `cdp.ts` has no right-click, so a synthetic
 `MouseEvent('contextmenu', { bubbles, clientX, clientY, button: 2 })` on `[data-grid-index]` opens
 the card menu, and each submenu needs `pointerenter` + `mouseover` + `focus()` + `click()`
 together. **New: the folder-name field is controlled, so assigning `.value` writes a character
@@ -3201,7 +3201,7 @@ React never sees** — go through
 **One correction to that note, made 2026-09-03 without a new pass.** The controlled-input trap is
 unchanged, but the field is no longer a strip under the breadcrumb and its submit no longer prints
 `Create folder` — it is a ✓ in the naming tile's own corner, carrying that string as its
-accessible name. So find it by accessible name, never by text; `cdp.mjs`'s `click` takes CSS and
+accessible name. So find it by accessible name, never by text; `cdp.ts`'s `click` takes CSS and
 only `text` matches text, so a pass that matched the words will now find nothing on a control
 plainly on screen. The table above is left as it was read on `3036e18`: it is the record of that
 build, not a description of this one.

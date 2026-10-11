@@ -872,7 +872,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   - **The write path is live in the restored session too**, which is the half a read-only check
     would miss. Four notches down drew **204px** (`scaled(170, 1.2)`) and the row read
     **`{"search":1.2}`** — updated in place rather than accumulating a second entry.
-  - **Two reads that lie, both already on the trap list.** A width read in the *same* `cdp.mjs eval`
+  - **Two reads that lie, both already on the trap list.** A width read in the *same* `cdp.ts eval`
     as the wheel dispatch answers about the frame before React re-rendered — two notches read back
     as "no change" and looked exactly like a dead handler until the dispatch and the measurement
     were split into separate evals. And `root.childElementCount` is **0** for a few seconds after
@@ -985,7 +985,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
     what is _drawn_ rather than what was asked for, so a window narrowed and widened again gives
     the column back. It outlives a collapse and a railing because it lives in the root rather than
     in `OpenPanel`.
-  - **Driven with a real pointer, which needed a new harness command.** `cdp.mjs` had `drag` (the
+  - **Driven with a real pointer, which needed a new harness command.** `cdp.ts` had `drag` (the
     HTML5 drag controller) and `hover`, and neither presses a button and moves. `pull <css> <dx>
 [dy]` does — `mousePressed` → stepped `mouseMoved` with the button held → `mouseReleased` —
     and the reason it had to be real is `setPointerCapture`: a `dispatchEvent(new PointerEvent(…))`
@@ -1189,7 +1189,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   makes that `<ul>` a stacking context, and the `<ul>` is what takes `LAYER.raised` when a card
   opens — the first thing to check if the lift ever regresses in inactive piles alone.
   **All of it is now measured in the shipped window — 2026-08-14, `pnpm tauri dev`, a debug
-  build at 1280×800**, driven over `scripts/cdp.mjs` against the deck "test (copy)" (Commander, 11
+  build at 1280×800**, driven over `scripts/cdp.ts` against the deck "test (copy)" (Commander, 11
   cards, 9 categories, 6 stack columns). **That column count is the fixture as it stood on the day
   and is no longer what this deck draws**: its empty Companion is not drawn at all now, its
   Maybeboard rides the rail rather than the pack, and whether its empty `Enchantment` pile draws is
@@ -1207,7 +1207,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   Sideboard included — the pile under the pointer additionally computed `DROP_OVER`'s gold
   `oklab(0.75 0.0104587 0.119543 / 0.1)`, and the drag source's own pile computed neither. That is
   now measured rather than reasoned from "a ring is a box shadow outside the border box". **The
-  harness caveat stands**: `cdp.mjs drag` intercepts, so a green pass proves nothing about a real
+  harness caveat stands**: `cdp.ts drag` intercepts, so a green pass proves nothing about a real
   hand on a real mouse — [live-ui-verification.md](live-ui-verification.md) says why.
   **The trap in checking any of this: `opacity-60` is unobservable on an _empty_ pile.**
   `CardStack` returns null for a group with no cards, so a switched-off empty pile has no `<ul>` in
@@ -1421,7 +1421,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   seam shadow would draw a permanent divider across a layout in which nothing moves. Two
   consequences went with it, and both were real while it lasted: a card scrolled under the column
   was genuinely not hittable there (correct for an opaque overlay, and the reason the first
-  `cdp.mjs drag` of that pass failed with "the browser never started a drag"), and the rail shared
+  `cdp.ts drag` of that pass failed with "the browser never started a drag"), and the rail shared
   `LAYER.raised` with an open card's list, ordered only by document order. Neither applies to a
   rail that asks for no z-index and covers nothing. `views.test.tsx` asserts the four absences, not
   merely the classes that replaced them.
@@ -1465,7 +1465,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   `lib/useDelayedFlag.ts`.
 - **The anchor and the split are measured in the shipped window — 2026-08-14,
   `pnpm tauri build --debug --no-bundle`, a debug build at 1280×800**, driven over
-  `scripts/cdp.mjs` against the real corpus. (Two things in this group were _not_ driven; the last
+  `scripts/cdp.ts` against the real corpus. (Two things in this group were _not_ driven; the last
   bullet of the four says which.) **The badge lands on the zoomed section's corner exactly.** On the search wall the scroller's rect read `top 190 / right 1260` and the badge painted
   at `top 198 / right 1252` — both edges inset by `ZOOM_BADGE_INSET` and neither off by a pixel. The
   pill computed `position: fixed`, `z-index: 30` (`LAYER.popup`), `pointer-events: none` and a
@@ -5025,7 +5025,7 @@ that comes for free is the half that cannot be turned off.**
 
 #### The same four questions in the shipped window
 
-Driven 2026-08-28 in a **`tauri dev` debug build**, over `scripts/cdp.mjs`, against a copy of the
+Driven 2026-08-28 in a **`tauri dev` debug build**, over `scripts/cdp.ts`, against a copy of the
 real database. The window was left at whatever size it opened at and **the viewport was not
 recorded**, which matters for none of the readings below — every one of them is an attribute, a
 registry entry or a focus target rather than a measurement in pixels.
@@ -5081,7 +5081,7 @@ no drag, no move, caret unchanged.
 
 ##### Two traps this pass cost, both worth writing down
 
-**`cdp.mjs pull` did not start a dnd-kit drag in this window, and a page-dispatched `PointerEvent`
+**`cdp.ts pull` did not start a dnd-kit drag in this window, and a page-dispatched `PointerEvent`
 did.** `Input.dispatchMouseEvent` delivered a well-formed `pointerdown` to the source element
 (`isPrimary: true, button: 0, buttons: 1, pointerType: "mouse"`, not `defaultPrevented`, not inside
 `NOT_A_DRAG`) and eleven `pointermove`s to `document` — and `dndManager.monitor`'s `dragstart` never
@@ -5090,13 +5090,13 @@ fired, on a folder row *and* on a deck tile, with the operation idle and the sou
 `PointerSensor.handlePointerDown` either never ran or returned before its first assignment. Building
 the same gesture out of `new PointerEvent(...)` inside the page starts the drag immediately
 (`data-dragging` on `<html>`, one `[data-dnd-dragging]`). **The cause was not identified.** Note
-that the successful `cdp.mjs pull` drag recorded above was taken against a
+that the successful `cdp.ts pull` drag recorded above was taken against a
 `tauri build --debug --no-bundle` binary, not `tauri dev`, so the difference may be the build rather
 than the harness. Until somebody settles it: **a `pull` that produces no drag is not evidence the
 drag is broken.**
 
 **A `data-probe` attribute does not survive a re-render.** React replaces the folder tree's nodes
-on a query settle, so a probe tagged in one `cdp.mjs` invocation can be gone by the next and the
+on a query settle, so a probe tagged in one `cdp.ts` invocation can be gone by the next and the
 selector then reads as "the element does not exist". Re-tag inside the same invocation that uses it.
 
 #### The trap in measuring any of this
@@ -5277,7 +5277,7 @@ Three things about the copy are worth knowing before touching it.
 **Driven in a built debug app, 2026-08-28** — `tauri build --debug --no-bundle`, the shipped
 `csp`, 1280×800. The policy was confirmed live first, because everything below is void without
 it: a `<style>` created at runtime came back with `sheet === null`. Then a folder card was dragged
-243px with `cdp.mjs pull` over a per-frame sampler (53 frames). The dragged element computed
+243px with `cdp.ts pull` over a per-frame sampler (53 frames). The dragged element computed
 `position: fixed`, `top: 344px`, `left: 456px` — the `--dnd-top`/`--dnd-left` the library had
 written inline — `z-index: 2147483647` (`calc(infinity)`, clamped), `pointer-events: none`, and a
 `translate` walking 0 → 122px → 239.328px as the pointer travelled, with the box itself at
@@ -5299,7 +5299,7 @@ home.
 before this change. `position: absolute`, `top: 0px`, `left: 0px`, `z-index: auto`, `<body>` at
 `cursor: auto` and `user-select: auto`, while `--dnd-top: 344px` and `--dnd-left: 456px` sat on the
 element with nothing reading them. A reload restored all ten. Two traps cost time on the way:
-**`cdp.mjs drag` cannot drive this** — it waits on `Input.dragIntercepted`, which only fires for a
+**`cdp.ts drag` cannot drive this** — it waits on `Input.dragIntercepted`, which only fires for a
 native HTML5 drag, so `pull` (a real press/move/release, and absent from that script's own usage
 string) is the one to reach for; and **`tauri dev` cannot see any of this**, because Vite's dev
 server sends no CSP header at all and the HTML carries no meta, which makes `devCsp` irrelevant
@@ -5392,7 +5392,7 @@ viewport height taken minutes apart can be at two different sizes:
 ```
 
 The shell's height is `documentElement.clientHeight` exactly, which is what it was under
-`h-screen`: **desktop did not move.** `href` is in the payload deliberately — `cdp.mjs` takes the
+`h-screen`: **desktop did not move.** `href` is in the payload deliberately — `cdp.ts` takes the
 first `type: page` target and DevTools, if open, is one, so a probe can silently answer about the
 wrong DOM.
 

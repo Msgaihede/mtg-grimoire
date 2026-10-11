@@ -176,5 +176,5 @@ The cheaper shape is recorded above for whoever wants to revisit it.
 and real pointer movement, which jsdom does not have and which `userEvent.hover` does not
 engage — `CardStack.stories.tsx:57-76` already records that no story can assert the lift. So
 the interaction is proven by a live CDP pass over the shipped WebView2, using
-`scripts/cdp.mjs`'s `hover --from --rest --probe`, approaching sideways onto a middle card's
+`scripts/cdp.ts`'s `hover --from --rest --probe`, approaching sideways onto a middle card's
 title bar, and counting activations rather than checking whether one happened.

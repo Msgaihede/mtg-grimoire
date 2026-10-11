@@ -46,7 +46,7 @@ export default mergeConfig(
       //
       // One project per package, named for it since 2026-10-08, so `vitest run --project light`
       // is that package's tests. The suite is still one program: one root, one environment, one
-      // setup file. `scripts/ci-route.test.mjs` mirrors these globs.
+      // setup file. `scripts/ci-route.test.ts` mirrors these globs.
       projects: [
         // The shared UI. No `*.stories.tsx` is ever collected as a **test file** — every glob
         // here requires a literal `.test.` segment, not a particular extension, so
@@ -115,11 +115,9 @@ export default mergeConfig(
         // glob stays for the warning above: a test written beside `preview.tsx` is collected
         // rather than silently not. `.test.ts` and no `.tsx`, for the fake's reason.
         //
-        // CI's own router, `scripts/ci-route.mjs`, and the fences beside it: plain `.mjs` like
-        // the rest of `scripts/`, so their tests are too — no `tsc` program includes `scripts/`,
-        // and a `.ts` test under `packages/ui/` importing one would need a declaration file to
-        // satisfy `strict`.
-        project("root", [".storybook/**/*.test.ts", "scripts/**/*.test.mjs"]),
+        // CI's own router, `scripts/ci-route.ts`, and the fences beside it run here too.
+        // Their Node types belong to scripts/tsconfig.json, separate from the webview's.
+        project("root", [".storybook/**/*.test.ts", "scripts/**/*.test.ts"]),
       ],
       // Vitest stubs CSS imports as empty strings by default, which would hand
       // `iconFont.test.ts` an empty `mana.css?raw` to assert against. No *component* imports

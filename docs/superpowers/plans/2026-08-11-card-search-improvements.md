@@ -1975,15 +1975,15 @@ Then, from another shell — reading `innerWidth`/`innerHeight` first, because
 `clearDeviceMetricsOverride` restores nothing:
 
 ```
-node scripts/cdp.mjs console out.jsonl        # leave attached; check the line count after
-node scripts/cdp.mjs eval "[innerWidth, innerHeight]"
-node scripts/cdp.mjs shot collapsed.png
-node scripts/cdp.mjs text "All printings"
-node scripts/cdp.mjs shot all-printings.png
-node scripts/cdp.mjs type "sol ring"
-node scripts/cdp.mjs shot foil.png
-node scripts/cdp.mjs media prefers-reduced-motion reduce "getComputedStyle(document.querySelector('[data-foil-sheen]').parentElement).transitionProperty"
-node scripts/cdp.mjs size 1280 800
+node scripts/cdp.ts console out.jsonl        # leave attached; check the line count after
+node scripts/cdp.ts eval "[innerWidth, innerHeight]"
+node scripts/cdp.ts shot collapsed.png
+node scripts/cdp.ts text "All printings"
+node scripts/cdp.ts shot all-printings.png
+node scripts/cdp.ts type "sol ring"
+node scripts/cdp.ts shot foil.png
+node scripts/cdp.ts media prefers-reduced-motion reduce "getComputedStyle(document.querySelector('[data-foil-sheen]').parentElement).transitionProperty"
+node scripts/cdp.ts size 1280 800
 ```
 
 Confirm by eye on the screenshots: the sheen tints without obscuring rules text at both tile widths,

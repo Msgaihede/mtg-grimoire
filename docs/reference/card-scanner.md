@@ -2637,7 +2637,7 @@ against 113,494 from the dev `corpus.db`'s five-day-older bulk — the same rows
 printings.
 
 **The tag is `scanner-bundle-v3`, because `FORMAT_VERSION` is `u16 = 3`.** The workflow `grep -oP`s
-the declaration out of `crates/card-scanner/src/index.rs` and `scripts/scanner-assets.mjs` matches
+the declaration out of `crates/card-scanner/src/index.rs` and `scripts/scanner-assets.ts` matches
 the same line; either fails loudly if the line changes shape, rather than publishing to
 `scanner-bundle-v`. **The version is in the tag, not only in the file**: an app built at version 3
 downloads only from `scanner-bundle-v3` and can never embed a version-4 bundle whose descriptors it
@@ -2683,7 +2683,7 @@ release that silently cannot scan is a regression nobody would see until a reade
 **So the first release after this lands fails on every leg unless `scanner-bundle` has been
 dispatched once on `main`** — and a dispatch button exists only once the workflow file is on `main`.
 
-**`scripts/scanner-assets.mjs`** fetches the three into `apps/desktop/src-tauri/scanner-assets/`, which a developer
+**`scripts/scanner-assets.ts`** fetches the three into `apps/desktop/src-tauri/scanner-assets/`, which a developer
 and the release job both do the same way. A download lands as `<name>.part` and is
 renamed only once whole, because `build.rs` embeds whatever is present and a truncated file would
 ship. A file whose size already equals the response's `content-length` is kept. **It sets
@@ -2740,7 +2740,7 @@ fetched until the reader presses.
 
 **The browser's arm** (step 7.5, 2026-10-07). GitHub answers a release download with no CORS
 header, so a page cannot read the place a native host fetches from; the web build serves the
-same three files itself. `scripts/scanner-assets.mjs --web` fetches them into
+same three files itself. `scripts/scanner-assets.ts --web` fetches them into
 `dist-wasm/scanner-assets/` and writes `manifest.json` beside them — each file's key, name,
 exact length and SHA-256, and the bundle's `FORMAT_VERSION` — and `apps/light/vite.config.ts` holds
 the folder to that manifest before it emits a byte (CI's and the release's builds *require*
@@ -4131,10 +4131,10 @@ pnpm scanner:bench --trap               after the run, panic in the module on pu
 **The page does the measuring** (`bench/web/page.js`, plain scripts, no bundler): it fetches the
 frames, posts each to a dedicated module Worker as a **transferred** `ArrayBuffer` — the trip a
 camera page's frame makes — and times the round trip as well as the call inside it. It shows the
-result as text and leaves it on `window.__scannerBench`, which is all `scripts/scanner-bench.mjs`
+result as text and leaves it on `window.__scannerBench`, which is all `scripts/scanner-bench.ts`
 reads out of the headless browser; so a phone's screen and the script's JSON are one
 measurement. The browser and its DevTools socket are the web smoke's own
-(`scripts/web-smoke/harness.mjs`'s `launch` and `connect`, exported for this). `bench/web/summary.js`
+(`scripts/web-smoke/harness.ts`'s `launch` and `connect`, exported for this). `bench/web/summary.js`
 reduces a run for both hosts — the page imports it and so does the script, for the native
 runner's records — into four kinds of frame kept apart: the **first**, the frame an Exact
 **resolve** landed on, a frame a reader **read** on, and the **steady** rest. A record also
@@ -4403,7 +4403,7 @@ filters, or report a quad that has anything to do with the picture.
 
 ### Measured, 2026-10-07
 
-`pnpm mobile:scanner-smoke` (`scripts/phone-scanner-smoke.mjs`), headless Chrome with
+`pnpm mobile:scanner-smoke` (`scripts/phone-scanner-smoke.ts`), headless Chrome with
 `--use-fake-device-for-media-stream` under a touch pointer and the dark scheme, against
 `mobile:dev` — the Storybook fake, not the engine.
 

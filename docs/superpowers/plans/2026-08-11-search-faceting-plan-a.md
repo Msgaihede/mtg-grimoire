@@ -2265,10 +2265,10 @@ $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
 npm run tauri dev
 ```
 
-Then from another shell, with `scripts/cdp.mjs`:
+Then from another shell, with `scripts/cdp.ts`:
 
 - `console out.jsonl` first, and check the line count at the end — a recorder dies with the window it is attached to and says nothing about it.
-- Type a term, then check a greyed chip really is unpressable: `node scripts/cdp.mjs click "[aria-label='Mana value 7']"` and confirm the result count did not move.
+- Type a term, then check a greyed chip really is unpressable: `node scripts/cdp.ts click "[aria-label='Mana value 7']"` and confirm the result count did not move.
 - Confirm the greying appears at all on the **116k-card corpus**, not just on fixtures — this is the pass that would catch a facet request that never fires, or one that fires per page.
 - Check the first ~500 ms after launch: every control live, nothing greyed, no flash of disabled chips.
 - Time a facet pass in the real app and compare it against the spec's 57 ms worst case.

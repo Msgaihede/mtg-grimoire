@@ -55,7 +55,7 @@ Every `#[tauri::command]` under `src-tauri/src`, read by script with what its bo
 
 ### Task 2: the reads
 
-**Files:** `scripts/core-command-table.mjs` (new), the `commands!` block
+**Files:** `scripts/core-command-table.ts` (new), the `commands!` block
 
 - [x] Drafted from the wrappers: 88 reads — the survey's 89, less `prefetch_images` and `prewarm_collection` (they start a background fetch), plus `card_holdings` (a doc-comment word had excluded it). Five by hand: `marketplace_feed_status`, `error_log_list`, and three whose inline `mod commands` renamed what it imported.
 - [x] Names the bodies' modules imported privately — `Marketplace`, `CardFilters`, `WishlistQuery` — imported at the top of `commands.rs`.

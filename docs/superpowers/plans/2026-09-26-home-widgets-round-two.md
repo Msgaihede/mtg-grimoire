@@ -9180,7 +9180,7 @@ Expected: every story of the four new widgets passes, and no existing play regre
 
 - [ ] **Step 5: Drive the real window**
 
-Read the `running-the-app` skill and take the `app` lock. Copy the **whole** debug `data` folder from the main checkout (`D:/Code/mtg-grimoire/src-tauri/target/debug/data`) into this worktree's `src-tauri/target/debug/data` first — a fresh sync has cards and no collection, and every widget would draw its empty state. Start `npm run tauri dev`, then over `scripts/cdp.mjs` (contract: `docs/reference/live-ui-verification.md`):
+Read the `running-the-app` skill and take the `app` lock. Copy the **whole** debug `data` folder from the main checkout (`D:/Code/mtg-grimoire/src-tauri/target/debug/data`) into this worktree's `src-tauri/target/debug/data` first — a fresh sync has cards and no collection, and every widget would draw its empty state. Start `npm run tauri dev`, then over `scripts/cdp.ts` (contract: `docs/reference/live-ui-verification.md`):
 
 1. Home → Customize → Add widget: the catalogue shows the four new previews, each at its default footprint, inert.
 2. Add each of the four. Each draws real rows from the copied database, or its empty sentence.

@@ -1,0 +1,73 @@
+# The fast dev build's settings. **No cargo command reads this file by itself** — cargo looks for
+# `config.toml` in this folder and nothing else — and `scripts/rust-fast.ts` is what hands it
+# over, with `--config` and the nightly toolchain it names: `pnpm tauri:fast dev`,
+# `pnpm cargo:fast <any dev-profile command>`. That script says why it is opt-in and what it
+# refuses; this file says what each setting bought, and what was measured and left out.
+#
+# **Measured 2026-10-11, debug builds of the desktop app** (`cargo build -p mtg-grimoire`), on
+# one Windows 11 machine with 24 logical cores, each row in a build tree of its own, with the
+# incremental cache on as in the main checkout. "Cold" is from nothing, once. The three rebuilds
+# are after appending a function to `crates/grimoire-core/src/lib.rs`, to the desktop host's
+# `lib.rs`, and to its `main.rs` — the last a link and little else — twice each. "Trimmed" is the
+# root manifest's dev profile: line tables for the workspace, no debug info for a dependency.
+# The nightly is `nightly-2026-10-11`'s compiler, 1.101.0 (6f5da406b).
+#
+# | Toolchain and settings | Cold | Core edit | Host edit | `main.rs` | Tree |
+# | --- | --- | --- | --- | --- | --- |
+# | 1.98.1, full debug info — every build until this day | 191.5 s | 27.5, 20.6 s | 14.9, 12.7 s | 7.9, 7.3 s | 13.0 GB |
+# | 1.98.1, full, `rust-lld` | 181.5 s | 22.2, 22.2 s | 13.8, 15.1 s | 7.2, 7.3 s | 13.3 GB |
+# | 1.98.1, trimmed — every build since | 136.3 s | 15.2, 16.4 s | 8.3, 8.4 s | 4.3, 4.6 s | 5.1 GB |
+# | 1.98.1, trimmed, `rust-lld` | 156.2 s | 16.5, 16.8 s | 7.6, 7.4 s | 3.6, 3.5 s | 5.2 GB |
+# | 1.99.0, trimmed | 132.3 s | 16.8, 15.4 s | 8.5, 7.8 s | 4.1, 6.3 s | 5.0 GB |
+# | nightly, full, `rust-lld`, `-Zthreads=8` | 149.7 s | 16.0, 16.6 s | 10.1, 10.1 s | 5.8, 5.7 s | 9.7 GB |
+# | nightly, trimmed, `rust-lld` | 117.7 s | 12.1, 11.9 s | 6.8, 6.7 s | 3.3, 3.3 s | 3.4 GB |
+# | **nightly, trimmed, `rust-lld`, `-Zthreads=8` — the fast build** | **107.7 s** | **11.4, 11.1 s** | **6.5, 6.3 s** | **3.3, 3.3 s** | **3.4 GB** |
+# | nightly, `rust-lld`, `-Zthreads=8`, Cranelift for LLVM | 102.3 s | 16.8, 13.2 s | 9.1, 6.5 s | 3.8, 3.7 s | 3.8 GB |
+#
+# And `cargo test --workspace --no-run` from nothing, under the agent worktrees' settings (no
+# incremental cache, trimmed): 143.6 s on 1.98.1, 161.5 s with `rust-lld` added, 117.5 s as the
+# fast build. Running the 3 950 tests it builds took 220.6 s more, which no setting here touches.
+#
+# **One run a row, and a cold build is noisy**: the linker's two pairs on 1.98.1 point opposite
+# ways, ten seconds for it and twenty against, so a cold figure that is not twenty seconds from
+# its neighbour has not been told apart from it. Most rebuilds repeat to within a second; the
+# pairs that do not are in the table as they were read.
+#
+# **What the table says.**
+# - **Debug info was most of it, and that is not this file's.** A full PDB is what a Windows link
+#   spends its time writing: trimming it took a link from 7.6 s to 4.5 s and the tree from 13 GB
+#   to 5 GB on the pinned toolchain, so it went into the root manifest's dev profile, for every
+#   build. This file is what a nightly adds to that.
+# - **What a nightly adds is the newer compiler, far more than the flag.** The same rebuilds are
+#   16.7 s, 7.5 s and 3.6 s on 1.98.1 and 12.0 s, 6.8 s and 3.3 s on the nightly with the same
+#   linker and no flag at all; `-Zthreads=8` is the last 0.7 s of a core edit, and ten seconds
+#   cold that the noise could hold. **1.99.0, the stable release of the day, does not have it** —
+#   its row is 1.98.1's — so moving the pin bought nothing that day. **Whichever release brings
+#   it brings most of this file with it**: measure the pin against this row when it moves, and
+#   delete the fast build when the difference is the linker's.
+# - **A linker alone is nothing while the PDB is whole** — 7.2 s against 7.6 s — and about 0.9 s
+#   of a link once it is small: the host and `main.rs` rows, where the core row's own spread is
+#   wider than that. It is no help to a build from nothing, and may cost one.
+# - **Cranelift is not here, though it was the first thing asked for.** With debug info equal it
+#   is five seconds ahead of LLVM cold and behind it on every rebuild. And on
+#   `x86_64-pc-windows-msvc` its code cannot unwind: measured that day in a toy crate on this
+#   nightly, `catch_unwind` caught nothing and a `#[should_panic]` test ended the test binary
+#   with `0xE06D7363`, so `cargo test` cannot run under it and a panic the app survives — the
+#   mirror's pass catches its own — would end a dev app. Its backtraces have no frames either.
+# - **Two suggestions that were measured and are nowhere**: `split-debuginfo = "unpacked"`, which
+#   cargo drops on this target without a word (`rustc --print split-debuginfo` answers `packed`
+#   alone, and rustc was never handed the flag); and `opt-level = 1` for every dependency, which
+#   took a cold build from 181.5 s to 285.4 s and left the rebuilds where they were (21.1 s,
+#   13.5 s and 5.9 s on its steadier round). The crates a dev build needs fast are named one by
+#   one in the root manifest.
+
+[build]
+# rustc's front end — parsing, type checking, borrow checking — on eight threads. Nightly-only:
+# the pinned toolchain refuses the flag and every command with it.
+rustflags = ["-Zthreads=8"]
+
+# `rust-lld` ships inside every toolchain rustup installs, the pinned one included. It is here
+# and not in `config.toml` because cargo sets a linker per target and not per profile, and there
+# it would link the release as well.
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld"

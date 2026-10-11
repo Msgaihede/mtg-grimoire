@@ -1198,7 +1198,7 @@ do not write down a number a build already answers.
    pipe's, and a failing suite reports 0.
 2. `cargo fmt --check` and `cargo clippy` in `src-tauri/` — `verify` runs neither, and CI runs
    both.
-3. Live pass in the real window (`npm run tauri dev`, then `scripts/cdp.mjs`; read
+3. Live pass in the real window (`npm run tauri dev`, then `scripts/cdp.ts`; read
    `docs/reference/live-ui-verification.md` first, and take the app lock via
    `.claude/skills/running-the-app/lock.ps1`). Check, on a deck with a real shortfall: the third
    button appears beside the other two and the band wraps rather than overflowing; the dialog's
