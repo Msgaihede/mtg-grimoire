@@ -1,7 +1,7 @@
 import { keepPreviousData, skipToken, useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { ipc, type ScannerTrayRow } from "@/lib/ipc";
-import type { Currency, MarketplaceId } from "@/lib/marketplace";
+import { resolveMarketplace, type Currency, type MarketplaceId } from "@/lib/marketplace";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { trayPriceIds, trayPriceMap, trayRowPrice, type TrayPriceMap } from "./trayPrice";
 
@@ -33,13 +33,22 @@ interface Answered {
  * that absence as unpriced would flash a dash under every new scan. It carries its marketplace
  * for the same reason one switch over: the previous key's dollars, kept while the euro read is in
  * flight, would otherwise be drawn in the new currency.
+ *
+ * **`at` names another marketplace to quote, and absent is the reader's own.** A tray filing onto
+ * a trade (`useTrayDestination.ts`) is priced where the trade is — a trade keeps the marketplace
+ * it was opened with — so a figure in the list is the figure the trade will show for that card.
+ * The key carries the id either way, so the two never answer for each other.
  */
-export function useTrayPrices(rows: readonly ScannerTrayRow[]): {
+export function useTrayPrices(
+  rows: readonly ScannerTrayRow[],
+  at?: MarketplaceId,
+): {
   priceOf: (row: ScannerTrayRow) => number | null | undefined;
   currency: Currency;
   marketplaceLabel: string;
 } {
-  const { marketplace } = useMarketplace();
+  const { marketplace: own } = useMarketplace();
+  const marketplace = at === undefined ? own : resolveMarketplace(at);
   const ids = useMemo(() => trayPriceIds(rows), [rows]);
   const query = useQuery({
     queryKey: [...TRAY_PRICES_KEY, marketplace.id, ids],

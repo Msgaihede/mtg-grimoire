@@ -53,8 +53,11 @@ Only the owner signs in, creates, accepts, sets a secret or submits.
 8. **Apply for production**, answer Google's questions about the test, wait for the review,
    create the production release.
 
-After that, every release: download `play-upload-bundle` from the release's run, upload it to
-the track, roll it out.
+After that, every release: the `play-upload` job puts the bundle on the internal track, and
+closed testing and production are promoted from there in Play Console (*Test and release* →
+*Promote release*). When `PLAY_SERVICE_ACCOUNT_JSON` is not set, or the job says it uploaded
+nothing, download `play-upload-bundle` from the release's run, upload it to the track by hand
+and roll it out.
 
 ## Store listing → Main store listing
 

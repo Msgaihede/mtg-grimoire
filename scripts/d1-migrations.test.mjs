@@ -1,9 +1,9 @@
 // The relay's D1, as a release changes it (`release.yml`, `relay-deploy` and `share-deploy`):
-// each Worker's `schema.sql` is the baseline — the shape production is taken to hold, having
+// each Worker's `schema.sql` is the baseline — the shape production holds, having
 // been built from these files by hand — and everything after it is a numbered file in that
 // Worker's `migrations/`, which wrangler applies once, in name order, and records in a table of
-// its own. Whether the live database matches is the owner's to check, before the first release
-// that uses the token (`docs/reference/ci-and-releases.md`, *What only the owner can do*).
+// its own. The live database was compared with them on 2026-10-11 and matched
+// (`docs/reference/ci-and-releases.md`, *What only the owner can do*).
 //
 // Held here: the baselines do not change (a change to the schema is a new migration, never an
 // edit), the files are named so that name order is the order they were written in, the whole
@@ -65,8 +65,8 @@ const code = (src) =>
     .join("\n");
 
 describe("the baselines", () => {
-  // **A red hash here means `schema.sql` was edited.** Production is taken to hold that file's
-  // shape, and nothing re-applies it: put the change in a new file in `migrations/` instead.
+  // **A red hash here means `schema.sql` was edited.** Production holds that file's
+  // shape (compared 2026-10-11), and nothing re-applies it: put the change in a new file in `migrations/` instead.
   it("are the files production was built from by hand, to the byte", () => {
     expect(baselineHash(relaySchema)).toBe(
       "4ecf91d0da81f08373c7b2d401111fa9584a55a08d3b86e7c092dda1706d89cc",

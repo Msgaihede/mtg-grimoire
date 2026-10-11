@@ -102,12 +102,12 @@ function ActiveView({ update }: { update: Update }) {
   // Last, and still with no fallback branch after it: the arms above name every `ViewId`, so the
   // `BLURB` map that used to catch whatever was left has nothing to catch.
   //
-  // **Two of those arms are placeholders again, and they are named ones — which is the whole
-  // difference from the map.** `BLURB` was a `Record<ViewId, …>` a view *fell into* by not being
+  // **One of those arms is a placeholder, and it is a named one — which is the whole difference
+  // from the map.** `BLURB` was a `Record<ViewId, …>` a view *fell into* by not being
   // implemented, so a real page shipped without its branch went on drawing a blurb with nothing
-  // red. Trade and Playtesting each return a page component that happens to draw one sentence, so
-  // the day either grows a real one this file does not change and cannot be the thing that was
-  // forgotten.
+  // red. Playtesting returns a page component that happens to draw one sentence, so the day it
+  // grows a real one this file does not change and cannot be the thing that was forgotten. Trade
+  // was the other, and is the proof: its page arrived and this branch was not touched.
   return openDeckId === null ? <DecksPage /> : <DeckEditor key={openDeckId} deckId={openDeckId} />;
 }
 

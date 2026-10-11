@@ -670,7 +670,22 @@ pub const LEGACY_SINGLE_FILE_VERSION: i64 = 26;
 /// whole-list last-writer-wins between two devices tagging one deck while apart. v57's rules
 /// otherwise: on the `decks` capture spec, with a history row (`tags`, both lists) and a place on
 /// `deck_undo::DECK_FIELDS`, and carried by `duplicate_deck`. Every existing deck reads `[]`.
-pub const USER_SCHEMA_VERSION: i64 = 62;
+///
+/// **63 (2026-10-11, [#363](https://github.com/Msgaihede/mtg-grimoire/issues/363), the trade
+/// builder spec) is `trades` and `trade_lines`** — a trade and the cards on its two sides, the
+/// page behind a rail entry that had been a sentence since the rail got it. A trade names its
+/// own marketplace and a percentage of market price for each side; a line is one printing in one
+/// finish on one side, with the printing denormalised beside the soft `card_id` so it still
+/// reads when a sync has dropped the row it names (`collection_entries`' insurance). **A line's
+/// `unit_price` is NULL for as long as the trade is open** — the price is read live — and is
+/// written when the trade is finished or archived, so a trade put away keeps the figures it
+/// closed with; a reopen clears it again. `outcome` is what the finishes did to the collection
+/// and the wishlist, in copies, as JSON whose shape is `trade::TradeOutcome`'s to say. Two rowid
+/// tables, so the update hook sees both and every window hears a write. **Neither syncs** (the
+/// spec's §6): no `sync_uid`, no capture spec, absent from [`SYNCED_TABLES`] — the collection and
+/// wishlist rows a finish writes are captured by their own triggers, as any other write to them
+/// is. **The rung creates both empty**: nothing recorded a trade before it.
+pub const USER_SCHEMA_VERSION: i64 = 63;
 
 /// `corpus.db`'s version, on a number line of its own.
 ///
@@ -933,6 +948,12 @@ pub const TABLES: &[(&str, Side)] = &[
     // The relay URL, the pull cursor and the apply guard (user schema v29). The URL is
     // something the reader typed, which settles this on its own.
     ("sync_state", Side::User),
+    // The cards on a trade's two sides and the trade itself (user schema v63). Nothing rebuilds
+    // either: a feed knows what a card costs and none knows the reader offered four of them for
+    // a Tarmogoyf. Not synced — the trade builder spec's §6 keeps a trade on the device that
+    // made it — and `SYNCED_TABLES` is where that is said.
+    ("trade_lines", Side::User),
+    ("trades", Side::User),
     ("wishlist_entries", Side::User),
     ("wishlist_folders", Side::User),
     // ---- rebuildable ----
@@ -4880,6 +4901,57 @@ CREATE TABLE {schema}.sync_heard (
                  memory TEXT NOT NULL,
                  PRIMARY KEY (tbl, uid)
              ) WITHOUT ROWID;
+
+CREATE TABLE {schema}.trades (
+                 id INTEGER PRIMARY KEY,
+                 -- Never empty: a trade made with no name is `Trade N`, N being this id.
+                 name TEXT NOT NULL,
+                 -- Whose prices the trade is in: one of the four priced marketplaces, chosen
+                 -- when the trade is made. Two trades can be in two currencies.
+                 marketplace TEXT NOT NULL,
+                 -- Percent of market price for each side, 50 to 150 in steps of 5. The
+                 -- command refuses anything else, in words; there is no CHECK.
+                 rate_mine INTEGER NOT NULL DEFAULT 100,
+                 rate_theirs INTEGER NOT NULL DEFAULT 100,
+                 -- `open` is the only status a trade can be edited in.
+                 status TEXT NOT NULL DEFAULT 'open'
+                     CHECK (status IN ('open','finished','archived')),
+                 -- 1 once a finish has run, and a reopen leaves it at 1: a second finish
+                 -- must not open on doing the collection and wishlist steps again.
+                 finished_before INTEGER NOT NULL DEFAULT 0,
+                 -- What the finishes did, in copies, as JSON. NULL until one has run.
+                 outcome TEXT,
+                 created_at INTEGER NOT NULL,
+                 -- When it was finished or archived. NULL while it is open.
+                 closed_at INTEGER
+             );
+
+CREATE TABLE {schema}.trade_lines (
+                 id INTEGER PRIMARY KEY,
+                 trade_id INTEGER NOT NULL REFERENCES trades(id) ON DELETE CASCADE,
+                 -- `mine` is what the reader gives, `theirs` what they are given.
+                 side TEXT NOT NULL CHECK (side IN ('mine','theirs')),
+                 -- Soft reference. No REFERENCES clause: `cards` is in the other file.
+                 card_id TEXT NOT NULL,
+                 -- The printing in the terms printed on the card, read from `cards` when
+                 -- the line is written, so it still reads when the id stops resolving.
+                 name TEXT NOT NULL,
+                 set_code TEXT NOT NULL,
+                 collector_number TEXT NOT NULL,
+                 finish TEXT NOT NULL CHECK (finish IN ('nonfoil','foil','etched')),
+                 -- A line for no copies is not a line: the command removes it instead.
+                 quantity INTEGER NOT NULL CHECK (quantity > 0),
+                 -- Where the line came from.
+                 source TEXT NOT NULL CHECK (source IN ('collection','search','scan')),
+                 -- The order a side is read in, with `id` behind it for a tie.
+                 position INTEGER NOT NULL,
+                 -- One copy at 100%, in the trade's marketplace: written when the trade is
+                 -- finished or archived, NULL again on a reopen. NULL while open, and NULL
+                 -- on a closed trade is a printing that was not quoted, never zero.
+                 unit_price REAL
+             );
+
+CREATE INDEX {schema}.idx_trade_lines_trade ON trade_lines (trade_id);
 "#;
 
 /// Create every user table and its indexes in `schema`, at [`USER_SCHEMA_VERSION`]'s shape.
@@ -8110,6 +8182,96 @@ pub fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
         tx.commit()?;
     }
 
+    // v63 (2026-10-11, issue #363, the trade builder spec): `trades` and `trade_lines` — a trade,
+    // and one row per printing-and-finish on each of its two sides.
+    //
+    // **`trade_lines.card_id` is soft and the printing is written beside it**, the rule every
+    // card reference in this file follows and `collection_entries`' insurance: `cards` is in the
+    // other file and a sync can drop the row, and a trade from last year must still say what was
+    // traded. `name`, `set_code` and `collector_number` are read from `cards` when the line is
+    // written and never again.
+    //
+    // **`unit_price` is the only price either table holds, and it is NULL while the trade is
+    // open.** An open trade is priced live, in `trades.marketplace`; finishing or archiving
+    // copies each line's price in, and a reopen sets it back to NULL. So "is this figure frozen"
+    // is `trades.status` and never a guess from the column — a closed trade's NULL is a printing
+    // that marketplace did not quote on the day, which draws an em dash like any other.
+    //
+    // **No UNIQUE index over a side's lines.** A side holds one line per printing and finish and
+    // `trade::add_trade_lines` and `update_trade_line` are what keep it so, by folding: an index
+    // would turn the fold an edit owes into `UNIQUE constraint failed` half-way through it. The
+    // one index is the lookup every read makes, a trade's lines.
+    //
+    // **The rates carry no CHECK** (50 to 150 in steps of 5 is `trade::set_trade_rate`'s to
+    // refuse, in a sentence), where `status`, `side`, `finish`, `source` and `quantity` do: those
+    // five are vocabularies and a floor that no later build will widen without a rung, and
+    // neither table syncs, so no peer's older build can be refused by one.
+    //
+    // Two rowid tables and no `WITHOUT ROWID`, so the update hook marks both for the other
+    // windows. Not synced, on no capture spec and with no `sync_uid` — the spec's §6. `ON DELETE
+    // CASCADE` is declared and `trade::delete_trade` deletes the lines itself anyway:
+    // `foreign_keys` is a per-connection pragma, and a delete that relied on it would leave
+    // orphans on a connection that never set it.
+    //
+    // It owes [`fixtures::UNDO_V63`] for [`fixtures::UNDO_V37`]'s loud reason — two bare `CREATE
+    // TABLE`s, so a fixture that kept either dies at `table trades already exists` on the way up.
+    if v < 63 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE trades (
+                 id INTEGER PRIMARY KEY,
+                 -- Never empty: a trade made with no name is `Trade N`, N being this id.
+                 name TEXT NOT NULL,
+                 -- Whose prices the trade is in: one of the four priced marketplaces, chosen
+                 -- when the trade is made. Two trades can be in two currencies.
+                 marketplace TEXT NOT NULL,
+                 -- Percent of market price for each side, 50 to 150 in steps of 5. The
+                 -- command refuses anything else, in words; there is no CHECK.
+                 rate_mine INTEGER NOT NULL DEFAULT 100,
+                 rate_theirs INTEGER NOT NULL DEFAULT 100,
+                 -- `open` is the only status a trade can be edited in.
+                 status TEXT NOT NULL DEFAULT 'open'
+                     CHECK (status IN ('open','finished','archived')),
+                 -- 1 once a finish has run, and a reopen leaves it at 1: a second finish
+                 -- must not open on doing the collection and wishlist steps again.
+                 finished_before INTEGER NOT NULL DEFAULT 0,
+                 -- What the finishes did, in copies, as JSON. NULL until one has run.
+                 outcome TEXT,
+                 created_at INTEGER NOT NULL,
+                 -- When it was finished or archived. NULL while it is open.
+                 closed_at INTEGER
+             );
+             CREATE TABLE trade_lines (
+                 id INTEGER PRIMARY KEY,
+                 trade_id INTEGER NOT NULL REFERENCES trades(id) ON DELETE CASCADE,
+                 -- `mine` is what the reader gives, `theirs` what they are given.
+                 side TEXT NOT NULL CHECK (side IN ('mine','theirs')),
+                 -- Soft reference. No REFERENCES clause: `cards` is in the other file.
+                 card_id TEXT NOT NULL,
+                 -- The printing in the terms printed on the card, read from `cards` when
+                 -- the line is written, so it still reads when the id stops resolving.
+                 name TEXT NOT NULL,
+                 set_code TEXT NOT NULL,
+                 collector_number TEXT NOT NULL,
+                 finish TEXT NOT NULL CHECK (finish IN ('nonfoil','foil','etched')),
+                 -- A line for no copies is not a line: the command removes it instead.
+                 quantity INTEGER NOT NULL CHECK (quantity > 0),
+                 -- Where the line came from.
+                 source TEXT NOT NULL CHECK (source IN ('collection','search','scan')),
+                 -- The order a side is read in, with `id` behind it for a tie.
+                 position INTEGER NOT NULL,
+                 -- One copy at 100%, in the trade's marketplace: written when the trade is
+                 -- finished or archived, NULL again on a reopen. NULL while open, and NULL
+                 -- on a closed trade is a printing that was not quoted, never zero.
+                 unit_price REAL
+             );
+             CREATE INDEX idx_trade_lines_trade ON trade_lines (trade_id);",
+        )?;
+        // Literal `63`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA main.user_version = 63;")?;
+        tx.commit()?;
+    }
+
     // **The clock, repaired on every launch at every version — and this is not belt-and-braces.**
     //
     // Every capture trigger ends `FROM sync_clock c, sync_identity i, sync_group g`. That is a
@@ -9692,8 +9854,8 @@ pub(crate) mod tests {
 
         assert_eq!(
             want.len(),
-            93,
-            "thirty-five tables, fifty-five indexes, and the three `sqlite_autoindex` rows a \n             TEXT PRIMARY KEY brings with it — `sync_devices`, `sync_state`, \n             `sync_peers` and `device_names` are `WITHOUT ROWID`, so each one's TEXT primary key IS the \n             table and brings no index of its own, while `collection_shares` is a rowid table and \n             so brings one. `deck_notes`, `deck_note_cards` and `activity` bring none either: all \n             three are `INTEGER PRIMARY KEY`, which is the rowid itself. `price_snapshots` brings none for the `WITHOUT ROWID` reason and `sticky_notes` brings none for the `INTEGER PRIMARY KEY` one, so thirty plus forty-seven plus three was eighty, and v48's `idx_wishlist_folders_managed` makes it forty-eight and eighty-one. v52's `deck_token_printings` is a table and two indexes, and no autoindex for the `INTEGER PRIMARY KEY` reason — thirty-one, fifty and eighty-four. v53's `deck_categories.variant` moves neither figure: a column, and two indexes dropped and rebuilt wider under the names they had. v54's `sync_gone` is a table and nothing else: `WITHOUT ROWID`, so its composite primary key IS the table and brings neither an index nor an autoindex — thirty-two, fifty and eighty-five, counted off the literal rather than added. v55 moves none of the three: a column, and `idx_wishlist_folders_managed` dropped and created again wider under its own name. v56, v57 and v58 are columns and nothing else. v59's `deck_todo_lists` is a table and two indexes, and no autoindex for the `INTEGER PRIMARY KEY` reason — thirty-three, fifty-two and eighty-eight. v60's `sync_orphans` is a table and three indexes — `idx_sync_orphans_parent`, and the partial `idx_sync_orphans_twin` and `idx_sync_orphans_alias` — and no autoindex for v54's reason: `WITHOUT ROWID`, so its composite primary key IS the table — thirty-four, fifty-five and ninety-two, counted off the literal rather than added. v61's `sync_heard` is a table and nothing else, v54's shape: `WITHOUT ROWID`, so its composite primary key IS the table and brings neither an index nor an autoindex — thirty-five, fifty-five and ninety-three, counted off the literal rather than added. \n             Re-COUNT the two figures when a rung moves them; adding one to the number written here is how a wrong one survives"
+            96,
+            "thirty-seven tables, fifty-six indexes, and the three `sqlite_autoindex` rows a \n             TEXT PRIMARY KEY brings with it — `sync_devices`, `sync_state`, \n             `sync_peers` and `device_names` are `WITHOUT ROWID`, so each one's TEXT primary key IS the \n             table and brings no index of its own, while `collection_shares` is a rowid table and \n             so brings one. `deck_notes`, `deck_note_cards` and `activity` bring none either: all \n             three are `INTEGER PRIMARY KEY`, which is the rowid itself. `price_snapshots` brings none for the `WITHOUT ROWID` reason and `sticky_notes` brings none for the `INTEGER PRIMARY KEY` one, so thirty plus forty-seven plus three was eighty, and v48's `idx_wishlist_folders_managed` makes it forty-eight and eighty-one. v52's `deck_token_printings` is a table and two indexes, and no autoindex for the `INTEGER PRIMARY KEY` reason — thirty-one, fifty and eighty-four. v53's `deck_categories.variant` moves neither figure: a column, and two indexes dropped and rebuilt wider under the names they had. v54's `sync_gone` is a table and nothing else: `WITHOUT ROWID`, so its composite primary key IS the table and brings neither an index nor an autoindex — thirty-two, fifty and eighty-five, counted off the literal rather than added. v55 moves none of the three: a column, and `idx_wishlist_folders_managed` dropped and created again wider under its own name. v56, v57 and v58 are columns and nothing else. v59's `deck_todo_lists` is a table and two indexes, and no autoindex for the `INTEGER PRIMARY KEY` reason — thirty-three, fifty-two and eighty-eight. v60's `sync_orphans` is a table and three indexes — `idx_sync_orphans_parent`, and the partial `idx_sync_orphans_twin` and `idx_sync_orphans_alias` — and no autoindex for v54's reason: `WITHOUT ROWID`, so its composite primary key IS the table — thirty-four, fifty-five and ninety-two, counted off the literal rather than added. v61's `sync_heard` is a table and nothing else, v54's shape: `WITHOUT ROWID`, so its composite primary key IS the table and brings neither an index nor an autoindex — thirty-five, fifty-five and ninety-three, counted off the literal rather than added. v63's `trades` and `trade_lines` are two tables and one index, `idx_trade_lines_trade`, and no autoindex for the `INTEGER PRIMARY KEY` reason — thirty-seven, fifty-six and ninety-six, counted off the literal rather than added. \n             Re-COUNT the two figures when a rung moves them; adding one to the number written here is how a wrong one survives"
         );
         for (w, g) in want.iter().zip(got.iter()) {
             assert_eq!(w, g, "{} {} differs from the ladder's", g.0, g.1);
@@ -9813,6 +9975,8 @@ pub(crate) mod tests {
                 "sync_orphans",
                 "sync_peers",
                 "sync_state",
+                "trade_lines",
+                "trades",
                 "wishlist_entries",
                 "wishlist_folders",
             ]
@@ -9837,7 +10001,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
              PRAGMA main.user_version = 28;"
         ))
         .unwrap();
@@ -9869,7 +10033,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 31;"
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 31;"
         ))
         .unwrap();
         conn
@@ -9896,7 +10060,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} PRAGMA main.user_version = 33;"
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} PRAGMA main.user_version = 33;"
         ))
         .unwrap();
         conn
@@ -9923,7 +10087,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
         ))
         .unwrap();
         conn
@@ -9947,7 +10111,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} PRAGMA main.user_version = 37;"
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} PRAGMA main.user_version = 37;"
         ))
         .unwrap();
         conn
@@ -9968,7 +10132,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} PRAGMA main.user_version = 38;"
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} PRAGMA main.user_version = 38;"
         ))
         .unwrap();
         conn
@@ -9989,7 +10153,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} PRAGMA main.user_version = 39;"
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} PRAGMA main.user_version = 39;"
         ))
         .unwrap();
         conn
@@ -10010,7 +10174,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} PRAGMA main.user_version = 41;"
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} PRAGMA main.user_version = 41;"
         ))
         .unwrap();
         conn
@@ -10041,7 +10205,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} PRAGMA main.user_version = 42;"
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} PRAGMA main.user_version = 42;"
         ))
         .unwrap();
         conn
@@ -10062,7 +10226,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} PRAGMA main.user_version = 43;"
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} PRAGMA main.user_version = 43;"
         ))
         .unwrap();
         conn
@@ -10077,7 +10241,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} PRAGMA main.user_version = 44;"
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} PRAGMA main.user_version = 44;"
         ))
         .unwrap();
         conn
@@ -10089,7 +10253,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} PRAGMA main.user_version = 46;"
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} PRAGMA main.user_version = 46;"
         ))
         .unwrap();
         conn
@@ -10121,7 +10285,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} PRAGMA main.user_version = 49;"
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} PRAGMA main.user_version = 49;"
         ))
         .unwrap();
         conn
@@ -10138,7 +10302,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} PRAGMA main.user_version = 50;"
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} PRAGMA main.user_version = 50;"
         ))
         .unwrap();
         conn
@@ -10157,7 +10321,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} PRAGMA main.user_version = 52;"
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} PRAGMA main.user_version = 52;"
         ))
         .unwrap();
         conn
@@ -10207,7 +10371,7 @@ pub(crate) mod tests {
         // without `{UNDO_V38}` v38 dies at `duplicate column name`; the third tier adds one
         // more, so without `{UNDO_V39}` v39 dies the same way. Newest first.
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} PRAGMA main.user_version = 35;"
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} PRAGMA main.user_version = 35;"
         ))
         .unwrap();
         seed_v35_groups(&conn);
@@ -10364,7 +10528,7 @@ pub(crate) mod tests {
         .unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 32;"
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 32;"
         ))
         .unwrap();
         conn
@@ -10421,7 +10585,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
              PRAGMA main.user_version = 27;"
         ))
         .unwrap();
@@ -10799,7 +10963,7 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, USER_SCHEMA_VERSION);
-        assert_eq!(USER_SCHEMA_VERSION, 62);
+        assert_eq!(USER_SCHEMA_VERSION, 63);
     }
 
     /// **It is synced, and `sync_devices` still is not.** The whole point is that a NAME
@@ -11779,7 +11943,7 @@ pub(crate) mod tests {
         .unwrap();
 
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
         ))
         .unwrap();
 
@@ -11866,7 +12030,7 @@ pub(crate) mod tests {
         // The literal, for the reason the two tests below spell out. It is **head**, not this
         // rung's own number — `migrate_user` climbs the whole ladder — so every rung that lands
         // moves it.
-        assert_eq!(version, 62);
+        assert_eq!(version, 63);
         assert_eq!(
             in_group(&conn, DECK_A, "bolt-lea", "nonfoil"),
             2,
@@ -12177,7 +12341,7 @@ pub(crate) mod tests {
         // edited only the four this comment then named and left v43's red. **Do not trust this
         // list.** Bump what you can find, run `cargo test --lib schema::tests`, and every one
         // you missed names itself in a `left: <head>, right: <old>` panic.
-        assert_eq!(version, 62);
+        assert_eq!(version, 63);
         assert_eq!(
             in_group(&conn, DECK_A, "bolt-m10", "nonfoil"),
             1,
@@ -12199,7 +12363,7 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         // The literal, for the reason the test above spells out — head, which every rung moves.
-        assert_eq!(version, 62);
+        assert_eq!(version, 63);
     }
 
     /// The fixture is a real v35 file and not head wearing a v35 label.
@@ -12640,7 +12804,7 @@ pub(crate) mod tests {
             .unwrap();
         // Head, not v41 — `migrate_user` climbs the whole ladder. One of the five the v36
         // block's ⚠️ warns about; this one is why that warning exists.
-        assert_eq!(v, 62);
+        assert_eq!(v, 63);
         conn.execute(
             "INSERT INTO collection_shares
                  (id, folder_uid, title, owner_name, url, fields, state, updated_at)
@@ -12876,7 +13040,7 @@ pub(crate) mod tests {
             .unwrap();
         // Head, not v43 — `migrate_user` climbs the whole ladder. The fifth of the five the
         // v36 block's ⚠️ warns about, and the one v46 missed.
-        assert_eq!(v, 62);
+        assert_eq!(v, 63);
 
         assert_eq!(
             has_column(&conn, "decks", "notes"),
@@ -13337,7 +13501,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 62);
+        assert_eq!(version, 63);
         assert_eq!(has_column(&conn, "decks", "token_stack"), 0, "v52 took it");
         let (mode, stats): (String, i64) = conn
             .query_row(
@@ -13415,7 +13579,7 @@ pub(crate) mod tests {
             .unwrap();
         // Head, not v50 — `migrate_user` climbs the whole ladder, and v51 to v58 sit above this
         // rung.
-        assert_eq!(version, 62);
+        assert_eq!(version, 63);
         assert_eq!(has_column(&conn, "price_snapshots", "copies"), 1);
         assert_eq!(price_is_required(&conn), 0, "an unpriced holding is a row");
         let (rows, null_copies, price_sum): (i64, i64, f64) = conn
@@ -13567,7 +13731,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 62);
+        assert_eq!(version, 63);
         assert_eq!(has_column(&conn, "decks", "token_rail_index"), 1);
         let (index, stats): (i64, i64) = conn
             .query_row(
@@ -13864,7 +14028,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 62);
+        assert_eq!(version, 63);
         assert_eq!(has_column(&conn, "deck_categories", "variant"), 1);
 
         // The live side, untouched: every pile it had, under the same id and uid and stamps.
@@ -14171,7 +14335,7 @@ pub(crate) mod tests {
         // `sync_gone_decks` and `sync_gone_wishlist_folders` triggers to name — [`UNDO_V55`]'s
         // own reason.
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} PRAGMA main.user_version = 53;"
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} PRAGMA main.user_version = 53;"
         ))
         .unwrap();
         migrate_user(&conn).unwrap();
@@ -14207,7 +14371,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} PRAGMA main.user_version = 54;"
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} PRAGMA main.user_version = 54;"
         ))
         .unwrap();
         assert_eq!(has_column(&conn, "wishlist_folders", "managed_tokens"), 0);
@@ -14231,7 +14395,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 62);
+        assert_eq!(version, 63);
         let own: i64 = conn
             .query_row(
                 "SELECT managed_tokens FROM wishlist_folders WHERE name = 'Deck 7'",
@@ -14274,7 +14438,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} PRAGMA main.user_version = 55;"
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} PRAGMA main.user_version = 55;"
         ))
         .unwrap();
         assert_eq!(
@@ -14294,7 +14458,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 62);
+        assert_eq!(version, 63);
         assert_eq!(has_column(&conn, "decks", "curve_creatures"), 1);
         let (split, stats): (i64, i64) = conn
             .query_row(
@@ -14323,7 +14487,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} PRAGMA main.user_version = 56;"
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} PRAGMA main.user_version = 56;"
         ))
         .unwrap();
         assert_eq!(
@@ -14352,7 +14516,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 62);
+        assert_eq!(version, 63);
         let rows: Vec<(String, String, i64, i64)> = {
             let mut stmt = conn
                 .prepare(
@@ -14412,7 +14576,7 @@ pub(crate) mod tests {
         )
         .unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} PRAGMA main.user_version = 56;"
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} PRAGMA main.user_version = 56;"
         ))
         .unwrap();
         // The rewind took the real `sync_upd_decks` off — [`UNDO_V58`] drops it, and [`UNDO_V57`]
@@ -14477,7 +14641,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} PRAGMA main.user_version = 57;"
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} PRAGMA main.user_version = 57;"
         ))
         .unwrap();
         for column in ["todos", "todos_open"] {
@@ -14500,7 +14664,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 62);
+        assert_eq!(version, 63);
         let row: (i64, i64, i64) = conn
             .query_row(
                 "SELECT todos_open, notes_open, managed_wishlist_tokens FROM decks WHERE id = 1",
@@ -14537,7 +14701,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} PRAGMA main.user_version = 58;"
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} PRAGMA main.user_version = 58;"
         ))
         .unwrap();
         assert_eq!(
@@ -14559,7 +14723,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 62);
+        assert_eq!(version, 63);
         type Row = (i64, String, String, i64, i64, i64, Option<String>);
         let rows: Vec<Row> = {
             let mut stmt = conn
@@ -14676,7 +14840,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} PRAGMA main.user_version = 58;"
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} PRAGMA main.user_version = 58;"
         ))
         .unwrap();
         let v58 = head_decks.replace(
@@ -14747,7 +14911,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} PRAGMA main.user_version = 59;"
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} PRAGMA main.user_version = 59;"
         ))
         .unwrap();
         for name in made {
@@ -14767,7 +14931,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 62);
+        assert_eq!(version, 63);
         for name in made {
             let built = sql(&conn, name);
             assert!(built.is_some(), "the rung builds {name}");
@@ -14827,8 +14991,10 @@ pub(crate) mod tests {
 
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
-        conn.execute_batch(&format!("{UNDO_V62} PRAGMA main.user_version = 61;"))
-            .unwrap();
+        conn.execute_batch(&format!(
+            "{UNDO_V63} {UNDO_V62} PRAGMA main.user_version = 61;"
+        ))
+        .unwrap();
         assert_eq!(
             has_column(&conn, "decks", "tags"),
             0,
@@ -14852,7 +15018,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 62);
+        assert_eq!(version, 63);
         assert_eq!(sql(&conn), head_decks, "decks climbed back to head's text");
         let rows: Vec<(String, Option<String>, i64)> = {
             let mut stmt = conn
@@ -14927,8 +15093,10 @@ pub(crate) mod tests {
         // On a fixture that ran `capture::install`, which is the half of [`UNDO_V62`] its three
         // `DROP TRIGGER`s are for: without them this dies at `error in trigger sync_ins_decks
         // after drop column`.
-        conn.execute_batch(&format!("{UNDO_V62} PRAGMA main.user_version = 61;"))
-            .unwrap();
+        conn.execute_batch(&format!(
+            "{UNDO_V63} {UNDO_V62} PRAGMA main.user_version = 61;"
+        ))
+        .unwrap();
         conn.execute_batch(
             "CREATE TABLE fired (n INTEGER);
              CREATE TRIGGER sync_upd_decks AFTER UPDATE ON decks BEGIN
@@ -15075,7 +15243,7 @@ pub(crate) mod tests {
 
     /// **The v61 rung builds `sync_heard` empty, at head's exact text, and only once** — over a
     /// real v60 file, head rewound by [`UNDO_V61`] (alone until v62 landed above it, and behind
-    /// [`UNDO_V62`] since), which first has to show it took the
+    /// [`UNDO_V62`] and then [`UNDO_V63`] since), which first has to show it took the
     /// table. **Seeded before the climb with what a backfill would have to read**: a row another
     /// device wrote, applied, and its watermark — which say *that* a peer was heard and nothing of
     /// which stamp won which field, so the rung has nothing to fill the table from and does not
@@ -15101,7 +15269,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} PRAGMA main.user_version = 60;"
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} PRAGMA main.user_version = 60;"
         ))
         .unwrap();
         assert_eq!(sql(&conn), None, "a v60 file has no sync_heard");
@@ -15119,7 +15287,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 62);
+        assert_eq!(version, 63);
         assert!(sql(&conn).is_some(), "the rung builds sync_heard");
         assert_eq!(sql(&conn), sql(&head), "sync_heard at head's text");
         let count = |table: &str| -> i64 {
@@ -15158,6 +15326,137 @@ pub(crate) mod tests {
             !SYNCED_TABLES.contains(&"sync_heard"),
             "what a device heard is its own and must never be sent to a peer"
         );
+    }
+
+    /// **The v63 rung builds `trades` and `trade_lines` empty, at head's exact text, and only
+    /// once** — over a real v63 file, head rewound by [`UNDO_V63`] alone, which first has to
+    /// show it took both tables and the index. Seeded before the climb with a collection row,
+    /// because the one thing a trade's finish writes to is the collection and the rung must
+    /// leave it exactly where it was.
+    ///
+    /// Then the two tables' own fences, each one a refusal `crate::trade` also makes in words:
+    /// the three vocabularies, the floor under a line's quantity, and the defaults a new trade
+    /// is born with. And that neither syncs — the trade builder spec's §6.
+    #[test]
+    fn v63_builds_the_two_trade_tables_empty_and_holds_their_vocabularies() {
+        let sql = |conn: &Connection, name: &str| -> Option<String> {
+            conn.query_row(
+                "SELECT sql FROM main.sqlite_master WHERE name = ?1",
+                [name],
+                |r| r.get(0),
+            )
+            .optional()
+            .unwrap()
+        };
+        const BUILT: [&str; 3] = ["trades", "trade_lines", "idx_trade_lines_trade"];
+        let head = Connection::open_in_memory().unwrap();
+        create_user_schema(&head, "main").unwrap();
+
+        let conn = Connection::open_in_memory().unwrap();
+        create_user_schema(&conn, "main").unwrap();
+        conn.execute_batch(&format!("{UNDO_V63} PRAGMA main.user_version = 62;"))
+            .unwrap();
+        for name in BUILT {
+            assert_eq!(sql(&conn, name), None, "a v63 file has no {name}");
+        }
+        conn.execute_batch(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,
+                 created_at,updated_at)
+             VALUES ('c1','lea','1','en','nonfoil','NM',3,0,0);",
+        )
+        .unwrap();
+
+        migrate_user(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 63);
+        for name in BUILT {
+            assert!(sql(&conn, name).is_some(), "the rung builds {name}");
+            assert_eq!(sql(&conn, name), sql(&head, name), "{name} at head's text");
+        }
+        let count = |table: &str| -> i64 {
+            conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(
+            count("trades"),
+            0,
+            "nothing recorded a trade before the rung"
+        );
+        assert_eq!(count("trade_lines"), 0);
+        assert_eq!(count("collection_entries"), 1, "the row is where it was");
+        // Twice is the same as once: the stamp keeps a second launch off a bare `CREATE TABLE`.
+        migrate_user(&conn).unwrap();
+
+        // A trade names itself, its marketplace and when it was made, and is born open at 100%
+        // on both sides with nothing finished.
+        conn.execute(
+            "INSERT INTO trades (name, marketplace, created_at) VALUES ('Trade 1', 'tcgplayer', 0)",
+            [],
+        )
+        .unwrap();
+        let born: (i64, i64, String, i64, Option<String>, Option<i64>) = conn
+            .query_row(
+                "SELECT rate_mine, rate_theirs, status, finished_before, outcome, closed_at
+                   FROM trades WHERE id = 1",
+                [],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(born, (100, 100, "open".to_owned(), 0, None, None));
+        assert!(
+            conn.execute("UPDATE trades SET status = 'settled' WHERE id = 1", [])
+                .is_err(),
+            "a status is one of the three"
+        );
+
+        let line = |side: &str, finish: &str, quantity: i64, source: &str| {
+            conn.execute(
+                "INSERT INTO trade_lines
+                    (trade_id, side, card_id, name, set_code, collector_number, finish,
+                     quantity, source, position)
+                 VALUES (1, ?1, 'c1', 'Lightning Bolt', 'lea', '1', ?2, ?3, ?4, 0)",
+                params![side, finish, quantity, source],
+            )
+        };
+        for finish in FINISHES {
+            line("mine", finish, 1, "collection").unwrap();
+        }
+        line("theirs", "foil", 2, "scan").unwrap();
+        line("theirs", "foil", 2, "search").unwrap();
+        assert!(line("ours", "foil", 1, "scan").is_err(), "two sides");
+        assert!(line("mine", "gilded", 1, "scan").is_err(), "three finishes");
+        assert!(line("mine", "foil", 1, "import").is_err(), "three sources");
+        assert!(
+            line("mine", "foil", 0, "scan").is_err(),
+            "a line for no copies is not a line"
+        );
+        let frozen: Option<f64> = conn
+            .query_row("SELECT unit_price FROM trade_lines LIMIT 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(frozen, None, "a line is born with no frozen price");
+
+        for table in ["trades", "trade_lines"] {
+            assert!(
+                !SYNCED_TABLES.contains(&table),
+                "a trade stays on the device that made it"
+            );
+            assert_eq!(side_of(table), Some(Side::User));
+        }
     }
 
     /// **The entry table's own fences, at head.** The grain folds one printing in one finish in
@@ -23150,7 +23449,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 62);
+        assert_eq!(version, 63);
         assert_eq!(
             overrides(&conn),
             before,
@@ -23260,7 +23559,7 @@ pub(crate) mod tests {
         )
         .unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} PRAGMA main.user_version = 58;"
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} PRAGMA main.user_version = 58;"
         ))
         .unwrap();
         conn.execute_batch(
@@ -23759,8 +24058,23 @@ pub mod fixtures {
     /// `idx_device_names_uid` with it.
     pub const UNDO_V31: &str = "DROP TABLE IF EXISTS device_names;";
 
-    /// v62's deck tags — the newest rewind on the user ladder, directly above [`UNDO_V61`], and
+    /// v63's trades — the newest rewind on the user ladder, directly above [`UNDO_V62`], and
     /// prepended to every chain that starts with it.
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason, [`UNDO_V61`]'s exactly: the rung is two bare
+    /// `CREATE TABLE`s, so a fixture that kept either dies at `table trades already exists` on
+    /// the way back up. **The index is named although the `DROP TABLE` would take it**,
+    /// [`UNDO_V60`]'s reason — the rewind names everything the rung created — and **the lines go
+    /// before the trades they reference**, so the rewind is the same on a connection that has
+    /// `foreign_keys` on. None of [`UNDO_V54`]'s ⚠️: neither table syncs, so no trigger on any
+    /// table names either.
+    pub const UNDO_V63: &str = "DROP INDEX IF EXISTS idx_trade_lines_trade;
+         DROP TABLE IF EXISTS trade_lines;
+         DROP TABLE IF EXISTS trades;";
+
+    /// v62's deck tags — the rewind directly under [`UNDO_V63`] and directly above [`UNDO_V61`],
+    /// and prepended to every chain that starts with it. It read "the newest rewind on the user
+    /// ladder" until v63 landed above it.
     ///
     /// Owed for [`UNDO_V13`]'s **loud** reason, [`UNDO_V57`]'s exactly: `ALTER TABLE decks ADD
     /// COLUMN` is not idempotent, so a fixture that kept `tags` dies at `duplicate column name:
@@ -24482,7 +24796,7 @@ pub mod fixtures {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} PRAGMA main.user_version = 51;"
+            "{UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} PRAGMA main.user_version = 51;"
         ))
         .unwrap();
         conn

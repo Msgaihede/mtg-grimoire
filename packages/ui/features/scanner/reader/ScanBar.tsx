@@ -44,6 +44,12 @@ export interface ScanBarProps {
   onCamera: (deviceId: string) => void;
   developer: boolean;
   onDeveloper: (on: boolean) => void;
+  /**
+   * `false` draws no Developer switch: a host that never draws the developer panels — the scanner
+   * opened over a trade — has nothing for it to bring back, and the switch is a stored pref the
+   * Scanner view would then open with. Absent is the Scanner view's bar, switch and all.
+   */
+  developerSwitch?: boolean;
 }
 
 // The two modes' words and the unrestricted filter are `readerText.ts`'s — shared with the light
@@ -100,6 +106,7 @@ export function ScanBar({
   onCamera,
   developer,
   onDeveloper,
+  developerSwitch = true,
 }: ScanBarProps) {
   const summary = filterSummary(filters);
   const filtering =
@@ -179,7 +186,7 @@ export function ScanBar({
         )}
       </BarPopover>
 
-      <DeveloperSwitch on={developer} onChange={onDeveloper} />
+      {developerSwitch && <DeveloperSwitch on={developer} onChange={onDeveloper} />}
     </div>
   );
 }

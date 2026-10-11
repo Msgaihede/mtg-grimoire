@@ -227,3 +227,49 @@ describe("the tray's footer", () => {
     ).toHaveAttribute("aria-disabled", "true");
   });
 });
+
+describe("the tray's footer, filing somewhere that is not the collection", () => {
+  const destination = { title: "Scanned for their side", name: "their side" };
+
+  it("names its press with the destination, and files on it", async () => {
+    const props = mount({ destination });
+    expect(screen.queryByRole("button", { name: /to collection/ })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Add 5 to their side" }));
+    expect(props.onCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("still says how many cards it leaves for want of a finish, and why it cannot go", () => {
+    mount({ destination, rows: [NEEDS_A_FINISH_ROW] });
+    const add = screen.getByRole("button", { name: "Add 0 to their side · 1 needs a finish" });
+    expect(add).toHaveAttribute("aria-disabled", "true");
+    expect(add).toHaveAccessibleDescription("Pick a finish for at least one card first");
+  });
+
+  it("draws no folder, and the destination's summary in its place", () => {
+    const summary = vi.fn((rows: readonly ScannerTrayRow[]) => <p>Scanned so far: {rows.length}</p>);
+    mount({ destination: { ...destination, summary } });
+    expect(screen.queryByRole("button", { name: /^Folder:/ })).toBeNull();
+    expect(screen.getByText("Scanned so far: 3")).toBeInTheDocument();
+    expect(summary).toHaveBeenLastCalledWith(RESOLVED);
+  });
+
+  it("offers Clear all… and no deck", async () => {
+    const props = mount({ destination });
+    const more = screen.getByRole("button", { name: "Tray actions" });
+    await userEvent.click(more);
+    const sheet = await screen.findByRole("dialog", { name: "Scanned cards" });
+    expect(within(sheet).queryByRole("button", { name: /Create deck/ })).toBeNull();
+    await userEvent.click(within(sheet).getByRole("button", { name: "Clear all…" }));
+    expect(props.onClearAll).toHaveBeenCalledWith(more);
+    expect(props.onCreateDeck).not.toHaveBeenCalled();
+  });
+
+  it("says where the cards are going while the write is out", async () => {
+    mount({ destination, committing: true });
+    await userEvent.click(screen.getByRole("button", { name: "Tray actions" }));
+    const sheet = await screen.findByRole("dialog", { name: "Scanned cards" });
+    expect(
+      within(sheet).getByRole("button", { name: /^Clear all…\s*Adding to their side…$/ }),
+    ).toHaveAttribute("aria-disabled", "true");
+  });
+});

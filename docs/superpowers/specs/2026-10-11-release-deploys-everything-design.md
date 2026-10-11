@@ -190,9 +190,12 @@ No dependency: Node's `crypto` signs the service account's JWT, and `fetch` does
 2. Open an edit on `com.mtggrimoire.app`.
 3. List the bundles Play holds. **If this `versionCode` is there, discard the edit, say so and
    end green** — a re-run is not an error.
-4. Upload the bundle; refuse to go on if Play read a different `versionCode` from it.
-5. Put that `versionCode` on the `internal` track, status `completed`.
-6. Commit the edit, and write to the summary what was uploaded and that promotion is the
+4. List the tracks and what each holds. **If a bundle or a track has a higher `versionCode`,
+   discard the edit and end red** — an older release's re-run does not go over a newer build.
+   (Added in execution, which makes seven requests of six: §11.)
+5. Upload the bundle; refuse to go on if Play read a different `versionCode` from it.
+6. Put that `versionCode` on the `internal` track, status `completed`.
+7. Commit the edit, and write to the summary what was uploaded and that promotion is the
    owner's click.
 
 A refusal from Google is printed as Google wrote it, with a line for the three known ones: a
@@ -224,11 +227,11 @@ here.
    with the *Google Play Android Developer API* enabled; a service account with no cloud role;
    a JSON key for it; in Play Console, *Users and permissions* → invite the account's address →
    on *MTG Grimoire*, **Release apps to testing tracks** and nothing above it. Then
-   `gh secret set PLAY_SERVICE_ACCOUNT_JSON --env release --repo Msgaihede/mtg-grimoire < key.json`,
-   and delete the file.
+   `jq -c . key.json | gh secret set PLAY_SERVICE_ACCOUNT_JSON --env release --repo Msgaihede/mtg-grimoire`,
+   and delete the file. The key is stored as one line (§11).
 3. **One read of production's D1, or his word to make it**: `sqlite_master` compared with a
    database built from `schema.sql`, before the first release after piece A. Freezing the
-   baseline is only right if the file is what production holds.
+   baseline is only right if the file is what production holds. Done 2026-10-11 (§11).
 
 ## 8. Not in this design
 
@@ -294,3 +297,78 @@ Found while piece A was built, and not as the sections above say.
 - **The version id `wrangler deploy` prints is in the job's log only.** §5.3 says it "goes into
   the summary"; capturing it would put more shell into a step that holds the token, so it is not
   captured.
+
+## 11. What changed in execution (piece B)
+
+Found while piece B was built, and not as the sections above say.
+
+- **Piece B was built on a tree that already had pull request 888's two changelog jobs and
+  piece A's tightened fence**, so `release.yml` is thirteen jobs, not eleven: eleven on a
+  release, and `changelog-write` and `changelog-commit` between releases. Five jobs hold a
+  secret on a release (`android-sign`, `relay-deploy`, `share-deploy`, `web-deploy`,
+  `play-upload`), and `changelog-write` holds one between releases. `play-upload` is not in the
+  fence's `DEPLOYS`: it starts no `wrangler`.
+- **The script's test runs under the suite's default jsdom environment, not Node's.** The
+  per-file Node directive is honoured by Vitest, but the shared setup file touches `document`
+  and the file fails before any test. All 18 assertions pass under jsdom unchanged. On a runner
+  the script uses Node's own `fetch` and `AbortSignal`.
+- **A review found the fence did not hold `play-upload`'s download step or tie the key to the
+  script's step.** Both are held now: the download step whole, and the key's holder is the step
+  that runs the script. Three mutations record it (`docs/reference/ci-and-releases.md`, *A
+  release deploys everything*, mutations 7 to 9).
+- **`android-sign`'s summary names the upload job as the run page shows it**, *android (upload
+  to Play)*, and says what to do when that job did not run.
+- **The script knows four refusals, not three** (§6.2): a refused key, a draft app, changes
+  waiting for review, and a missing permission.
+- **Production's D1 was compared with the two baselines on 2026-10-11, and matches** (§7 item
+  3): one read of `sqlite_master`, nothing written. The six tables and six named indexes are
+  the same; `_cf_KV` is D1's own; `d1_migrations` and `d1_migrations_share` are not there yet.
+- **The service account's key is stored as single-line JSON** (§7 item 2). GitHub masks each
+  line of a multi-line secret separately, and the key Google downloads is pretty-printed, so
+  set as it came every `{` and `}` in that job's log would read `***`.
+- **Not settled by any of this**: that Play accepts a `completed` internal release for this app
+  through the API, and that *Release apps to testing tracks* is permission enough. The first
+  release with the account set is the first time either is asked.
+
+What the final review of the whole branch changed, the same day:
+
+- **The script refuses a release older than what Play holds** (§6.2 step 4, new). A release
+  that never reached Play — no account at the time — could have its job run again after the
+  next release uploaded, and the older build would have gone onto the internal track. After
+  the bundles the script now reads the tracks (`edits.tracks.list`), takes the highest
+  `versionCode` over both, and if it is above this release's discards the edit, uploads
+  nothing and ends red. **Seven requests, not six.**
+- **§6.2's test was not built as written.** It says the script's steps take the two base
+  addresses and run against a local `node:http` stand-in. They do take the addresses
+  (`hosts`), but the test hands `upload` its `send` and stages Google in memory: the suite
+  runs every file under jsdom, whose `AbortSignal` is not Node's, so Node's `fetch` cannot be
+  counted on to take the signal the script makes there. Node's real `fetch` was put under the
+  script once, by hand, against a `node:http` stand-in on 127.0.0.1 with a throwaway key; what
+  it sent is in `docs/reference/ci-and-releases.md`, *A release deploys everything*.
+- **No answer names its step.** A dropped connection or a deadline is reported as
+  `No answer from Google while trying to <step>: …`, without `fetch`'s `cause` attached. The
+  commit has a deadline of its own, two minutes, and no request follows a redirect.
+- **A success that is not what was asked for is refused and not quoted**: an answer that is
+  not JSON (V8's own message quotes the text, which on a token answer is a slice of a
+  credential), a token answer with no token, an edit with no id. **And, at the owner's ask the
+  same day, three edges the last review had left**: an answer that is JSON and no object, or
+  a list of bundles, tracks, releases or `versionCodes` that came as something other than a
+  list, stops the run — the guard above had read either as "nothing held"; a 2xx at the commit
+  is the commit and its answer is not read, where a page in place of JSON had ended red with
+  "upload it by hand"; and the test's stand-in token is long, because the suite searches a
+  failure's stack for it and `at-1` is in the path of an unluckily named checkout.
+- **The script knows six refusals, not four**: a `versionCode` Play has used somewhere the
+  bundle list does not show, read before the permission hint because Play says it with a 403;
+  and an app Play does not know for the account (a 404 at the edit). A 401 or a 403 reads as a
+  missing permission by status alone only at the token and at the edit.
+- **A discard that fails does not fail the run**, and **the summary's last line depends on
+  what happened**: uploading by hand is not offered after an older release, a `versionCode`
+  mismatch or a `versionCode` Play has used, and after a commit that got no answer or a 5xx
+  the line is to re-run the job first.
+- **The fence holds the key's step whole**, line for line, and the order of the three steps
+  after the asking one. Four edits beside the `run:` had stayed green — a `NODE_OPTIONS` next
+  to the key, `VERSION` from `tag_name`, a `working-directory:`, the script's step above the
+  download — and each is red now (`docs/reference/ci-and-releases.md`, mutations 10 to 13).
+- **Still not settled**: all of the above was run against stand-ins. Play's real answers — the
+  shape of the tracks list, the wording of each refusal — are first seen at the first release
+  with the account set.

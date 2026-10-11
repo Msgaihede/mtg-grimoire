@@ -9,8 +9,8 @@
 #
 #   - `release.yml`'s `android-sign`, with the upload keystore decoded from a secret and
 #     ANDROID_SIGNER_PIN naming the committed fingerprint every release is held to
-#     (`apps/light/src-tauri/release-signer.sha256`). What it writes is the bundle the owner uploads
-#     to Play Console.
+#     (`apps/light/src-tauri/release-signer.sha256`). What it writes is the bundle `play-upload` puts
+#     on Play's internal track.
 #   - `proof.sh` beside this file, which `ci.yml`'s `android` job runs over the bundle it just
 #     built, on keys minted and deleted in the run. What it writes is thrown away: the run is
 #     the proof that this file works, refusals included, before a release is its first run.

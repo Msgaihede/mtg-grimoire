@@ -66,7 +66,7 @@ exclude = ["crates/card-scanner"]
 # `release-please-config.json` bumps `$.workspace.package.version` here, where it used to bump
 # five manifests (and the lockfile). `crates/card-scanner` is not a member and keeps its own.
 [workspace.package]
-version = "0.43.0"
+version = "0.44.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 

@@ -8,11 +8,11 @@ table `d1_migrations` does not name yet, in name order, and records it. A file r
 `d1_migrations_share` in the production D1**, even though no migration is pending: a write to
 the live database, harmless, by design.
 
-- **`../schema.sql` is the baseline and is never edited.** It is the shape production is taken
-  to hold: the database was built from it by hand. Comparing it with the live database is the
-  owner's to do, before the first release that uses the token
-  (`docs/reference/ci-and-releases.md`). `scripts/d1-migrations.test.mjs` pins its hash; a red
-  hash means the change belongs in a new file here.
+- **`../schema.sql` is the baseline and is never edited.** It is the shape production holds: the
+  database was built from it by hand, and on 2026-10-11 `sqlite_master` of the live database
+  was compared with it, and matched (`docs/reference/ci-and-releases.md`).
+  `scripts/d1-migrations.test.mjs` pins its hash; a red hash means the change belongs in a new
+  file here.
 - **Name a file `NNNN_what-it-does.sql`**: four digits, the next number, lower case and hyphens.
   The same test refuses a number used twice and a gap.
 - **Additive only.** The migration is applied before the deploy, so for a moment the previous

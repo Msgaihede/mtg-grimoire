@@ -48,7 +48,7 @@ import type {
   FakePriceSnapshot,
   FakeWish,
 } from "./db";
-import { DECK_CATEGORIES } from "./fixtures";
+import { DECK_CATEGORIES, printing } from "./fixtures";
 import { FRIEND_SHARE_ID, FRIEND_SHARE_URL, seed } from "./seeds";
 import { CARDS, type FakeCard } from "./cards";
 import type {
@@ -71,6 +71,13 @@ import type {
   SearchRequest,
   SearchSortKey,
   StickyNote,
+  Trade,
+  TradeFinishOptions,
+  TradeLineInput,
+  TradeOutcome,
+  TradeSide,
+  TradeSource,
+  TradeSummary,
   TransferImportMode,
   WishlistImportItem,
   WishlistQuery,
@@ -88,6 +95,10 @@ import { deckStats } from "@grimoire/ui/features/decks/DeckStats";
 // The app's half of the default layout, which the fake spells out rather than imports — so the
 // only thing holding the two together is a test that compares them.
 import { DEFAULT_LAYOUT } from "@grimoire/ui/features/home/widgets";
+// The Trade page's own arithmetic and its own Finish defaults, borrowed for the `trades` seed:
+// the page states a balance with `tradeMoney`, so a sum re-spelled here would only prove the
+// fixture agrees with this file.
+import { defaultFinishOptions, tradeMoney } from "@grimoire/ui/features/trade/trade";
 // The app's own note reader, borrowed for one fence a grep could not make: the seeded sticky
 // notes claim to carry a hard break, and only this says whether the characters really are one.
 import { parseNoteBody } from "@grimoire/ui/features/decks/noteMarkdown";
@@ -12298,6 +12309,31 @@ describe("the busy fault", () => {
       // record's whole rule. A number off the IPC boundary has no junk state to fail this loop
       // with instead, so any value would do and the fixture's own today is the honest one.
       at: WHEN,
+      // The eleven trade writes' own keys. `id` and `name` are already on this record; these
+      // seven are what the trade builder added, and none is read on this path — `refuseIfBusy`
+      // is the first statement in all eleven — but each is named because `invoke` matches by
+      // name, which is this record's whole rule.
+      //
+      // Every one is **valid**, for `root`'s reason, and these writes have more refusals of
+      // their own than most: a side that is not one, a percentage off the band, a line that is
+      // not there. `id: 1` and `lineId: 1` name **no trade and no line** in this world, so a
+      // handler that looked either up before taking the lock would fail this loop by answering
+      // "not there any more" instead of BUSY — the ordering mistake this sweep looks for. An
+      // empty `trade` is a real create (both of its fields are optional), an empty `lines` is a
+      // press with nothing to add, and an empty `change` leaves a line as it is.
+      trade: {},
+      side: "mine",
+      rate: 100,
+      lines: [],
+      lineId: 1,
+      change: {},
+      options: {
+        removeGiven: true,
+        addReceived: true,
+        folderId: null,
+        unwishReceived: true,
+        wishGiven: false,
+      },
     };
     // The five above excluded, this is every command that really takes the write lock —
     // re-counted 2026-08-12 **after a merge in which three branches had each added one**,
@@ -12795,7 +12831,12 @@ describe("the busy fault", () => {
     // and `deck_todo_list_create`, `_update` and `_delete` in its place, all plain
     // `sync::with_write`; the two reads, `deck_todo_lists` and `every_deck_todo_list`, sit in
     // `readHandlers`. Read from `left` on this tree, never added to. Count again after a merge.
-    expect(names).toHaveLength(127);
+    // 127 → 138 on 2026-10-11 with the trade builder's eleven writes — `trade_create`, `_rename`,
+    // `_set_rate`, `_add_lines`, `_update_line`, `_remove_line`, `_finish`, `_archive`, `_reopen`,
+    // `_duplicate` and `_delete`, every one of which reaches `refuseIfBusy` first; the two reads,
+    // `trade_list` and `trade_get`, sit in `readHandlers`. Read from `left` on this tree, never
+    // added to. Count again after a merge.
+    expect(names).toHaveLength(138);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -22174,5 +22215,1296 @@ describe("shelves", () => {
     expect(() =>
       writeHandlers(busy).set_stack_hidden({ deckId: 4, categoryId: 12, hidden: true }),
     ).toThrow(/busy/i);
+  });
+});
+
+/**
+ * The trade builder's thirteen commands, held to the rules the crate's own tests hold `trade.rs`
+ * to — the folds, the refusals, which price a line quotes and what a finish really moves.
+ *
+ * Every refusal below is matched on a **word of its meaning** rather than on the whole sentence.
+ * The fake's sentences are `trade.rs`'s own, copied verbatim — but nothing here reads the crate,
+ * so a test that pinned the spelling would only prove the fake agrees with itself, and would go
+ * red on the day the crate rewords one for no reason a story could see.
+ */
+describe("trades", () => {
+  const RAGAVAN = printing("mh2", "138");
+  /** Three finishes — `nonfoil`, `foil`, `etched` — and a different price in each. */
+  const COUNTERSPELL = printing("mh2", "267");
+  const SWORDS = printing("ema", "32");
+  const CHARM = printing("gtc", "148");
+  const URZA = printing("mh2", "259");
+  /** Nonfoil only: the printing a foil line cannot be swapped onto as a foil. */
+  const SOL_RING = printing("c21", "263");
+  /** Etched only. */
+  const RESTART = printing("acr", "211");
+  /** The Japanese Bolt, where a test wants a third printing of one card. */
+  const BOLT_STA = printing("sta", "105");
+
+  const ALL_ON: TradeFinishOptions = {
+    removeGiven: true,
+    addReceived: true,
+    folderId: null,
+    unwishReceived: true,
+    wishGiven: true,
+  };
+  const ALL_OFF: TradeFinishOptions = {
+    removeGiven: false,
+    addReceived: false,
+    folderId: null,
+    unwishReceived: false,
+    wishGiven: false,
+  };
+  const NOTHING_MOVED = {
+    removedFromCollection: 0,
+    removedFromDecks: 0,
+    addedToCollection: 0,
+    removedFromWishlist: 0,
+    addedToWishlist: 0,
+  };
+
+  const BINDER: FakeCollectionFolder = {
+    id: 1,
+    parentId: null,
+    name: "Binder",
+    kind: "user",
+    deckId: null,
+    sortOrder: 0,
+    locked: false,
+  };
+
+  /** One line as `trade_add_lines` takes it, from the card search unless a case says otherwise. */
+  function input(card: FakeCard, finish: Finish, quantity = 1, source: TradeSource = "search") {
+    return { cardId: card.id, finish, quantity, source };
+  }
+
+  /** A world with one open trade in it, id 1, and whatever else a case passes. */
+  function trading(init: Partial<FakeDb> = {}) {
+    const db = makeDb(init);
+    const w = writeHandlers(db);
+    const r = readHandlers(db);
+    const id = w.trade_create({ trade: {} });
+    const get = (trade = id): Trade => {
+      const got = r.trade_get({ id: trade });
+      if (got === null) throw new Error(`no trade ${trade}`);
+      return got;
+    };
+    const add = (side: TradeSide, card: FakeCard, finish: Finish, quantity = 1) =>
+      w.trade_add_lines({ id, side, lines: [input(card, finish, quantity)] });
+    /** Copies of a printing in a finish, wherever they are filed. */
+    const held = (card: FakeCard, finish: Finish) =>
+      db.collectionEntries
+        .filter((e) => e.cardId === card.id && e.finish === finish)
+        .reduce((n, e) => n + e.quantity, 0);
+    return { db, w, r, id, get, add, held };
+  }
+
+  it("names a new trade after its own id, and opens it at 100% a side on the reader's marketplace", () => {
+    const db = makeDb({ marketplace: "cardmarket" });
+    const w = writeHandlers(db);
+    const r = readHandlers(db);
+
+    const first = w.trade_create({ trade: {} });
+    const blank = w.trade_create({ trade: { name: "   " } });
+    const named = w.trade_create({
+      trade: { name: "  Store night swaps ", marketplace: "manapool" },
+    });
+
+    expect([first, blank, named]).toEqual([1, 2, 3]);
+    expect(r.trade_get({ id: first })).toMatchObject({
+      name: "Trade 1",
+      marketplace: "cardmarket",
+      rateMine: 100,
+      rateTheirs: 100,
+      status: "open",
+      finishedBefore: false,
+      outcome: null,
+      closedAt: null,
+      lines: [],
+    });
+    expect(r.trade_get({ id: blank })?.name).toBe("Trade 2");
+    expect(r.trade_get({ id: named })).toMatchObject({
+      name: "Store night swaps",
+      marketplace: "manapool",
+    });
+    // A marketplace that is sent has to be one the app knows: a trade keeps it for good.
+    expect(() => w.trade_create({ trade: { marketplace: "moxfield" as MarketplaceId } })).toThrow(
+      /marketplace/,
+    );
+    expect(db.trades).toHaveLength(3);
+    // …and one that quotes a price. Card trader has no feed and reads TCGplayer's figures
+    // everywhere, so a trade made under it is stored as the marketplace its prices really are.
+    w.set_marketplace({ id: "cardtrader" });
+    const unpriced = [
+      w.trade_create({ trade: {} }),
+      w.trade_create({ trade: { marketplace: "cardtrader" } }),
+    ];
+    expect(unpriced.map((id) => r.trade_get({ id })?.marketplace)).toEqual([
+      "tcgplayer",
+      "tcgplayer",
+    ]);
+    // Gone is `null` on the read and a refusal on a write.
+    expect(r.trade_get({ id: 99 })).toBeNull();
+    expect(() => w.trade_rename({ id: 99, name: "x" })).toThrow(/not there/);
+  });
+
+  it("lists trades newest first, each with a side, a quantity and a price per line", () => {
+    const { db, w, r, id, add } = trading();
+    add("mine", RAGAVAN, "nonfoil");
+    add("theirs", URZA, "foil", 2);
+    const second = w.trade_create({ trade: { name: "Later" } });
+
+    const list = r.trade_list();
+    expect(list.map((t) => t.id)).toEqual([second, id]);
+    expect(list[1]).toMatchObject({
+      name: "Trade 1",
+      marketplace: "tcgplayer",
+      rateMine: 100,
+      rateTheirs: 100,
+      status: "open",
+      closedAt: null,
+      lines: [
+        { side: "mine", quantity: 1, unitPrice: 42.19 },
+        { side: "theirs", quantity: 2, unitPrice: 67.89 },
+      ],
+    });
+    // Two trades made in one instant still list the later id first.
+    db.trades[1].createdAt = db.trades[0].createdAt;
+    expect(r.trade_list().map((t) => t.id)).toEqual([second, id]);
+  });
+
+  it("renames an open trade, trimmed, and a blank name is the default one back", () => {
+    const { w, id, get } = trading();
+    w.trade_rename({ id, name: "  For the cube  " });
+    expect(get().name).toBe("For the cube");
+    // Clearing the field is how a reader asks for `Trade N` again; it is never a nameless row.
+    w.trade_rename({ id, name: "  " });
+    expect(get().name).toBe(`Trade ${id}`);
+  });
+
+  it("folds an add onto the line that already holds that printing and finish on that side", () => {
+    const { w, id, get, add } = trading();
+    add("mine", COUNTERSPELL, "etched", 2);
+    w.trade_add_lines({
+      id,
+      side: "mine",
+      lines: [
+        input(COUNTERSPELL, "etched", 1, "scan"),
+        // Another finish, and the same finish on the other side, are other lines.
+        input(COUNTERSPELL, "foil", 1, "scan"),
+        // Twice in one call folds too.
+        input(CHARM, "nonfoil", 1, "collection"),
+        input(CHARM, "nonfoil", 2, "collection"),
+      ],
+    });
+    add("theirs", COUNTERSPELL, "etched");
+
+    expect(get().lines.map((l) => [l.side, l.name, l.finish, l.quantity, l.source])).toEqual([
+      // The standing line keeps the source it came with.
+      ["mine", "Counterspell", "etched", 3, "search"],
+      ["mine", "Counterspell", "foil", 1, "scan"],
+      ["mine", "Boros Charm", "nonfoil", 3, "collection"],
+      ["theirs", "Counterspell", "etched", 1, "search"],
+    ]);
+  });
+
+  it("adds every line or none: a quantity below one, an unknown card, or a finish, a side or a source that is not a word", () => {
+    const { db, w, id, get } = trading();
+    const good = input(RAGAVAN, "nonfoil");
+    const refused = (lines: TradeLineInput[], words: RegExp) => {
+      expect(() => w.trade_add_lines({ id, side: "mine", lines })).toThrow(words);
+      expect(db.tradeLines).toEqual([]);
+    };
+
+    refused([good, input(URZA, "nonfoil", 0)], /quantity/);
+    refused([good, { ...good, cardId: "gone" }], /card/);
+    refused([good, { ...good, finish: "shiny" as Finish }], /shiny/);
+    refused([good, { ...good, source: "gift" as TradeSource }], /gift/);
+    expect(() => w.trade_add_lines({ id, side: "ours" as TradeSide, lines: [good] })).toThrow(
+      /side/,
+    );
+    expect(db.tradeLines).toEqual([]);
+
+    // Nothing to add is a press that changes nothing.
+    w.trade_add_lines({ id, side: "mine", lines: [] });
+    expect(db.tradeLines).toEqual([]);
+
+    // ⚠️ A finish the printing does not list is **not** refused on the way in: the collection
+    // can hold one (an import says what it says), and a line arrives in the finish a real copy
+    // is in. Sol Ring `c21 263` lists nonfoil alone.
+    w.trade_add_lines({ id, side: "mine", lines: [input(SOL_RING, "foil", 2)] });
+    const [line] = get().lines;
+    expect(line).toMatchObject({ name: "Sol Ring", finish: "foil", quantity: 2, unitPrice: null });
+    // And an edit that steps its quantity, or names the finish it already has, still lands —
+    // only a *change* of finish is held to the printing's list.
+    w.trade_update_line({ lineId: line.id, change: { quantity: 3, finish: "foil" } });
+    expect(get().lines[0]).toMatchObject({ finish: "foil", quantity: 3 });
+    expect(() => w.trade_update_line({ lineId: line.id, change: { finish: "etched" } })).toThrow(
+      /finish/,
+    );
+  });
+
+  it("updates a line's quantity and refuses to take it below one", () => {
+    const { w, get, add } = trading();
+    add("mine", RAGAVAN, "nonfoil", 2);
+    const [line] = get().lines;
+
+    w.trade_update_line({ lineId: line.id, change: { quantity: 5 } });
+    expect(get().lines[0].quantity).toBe(5);
+
+    // Removal is `trade_remove_line`'s, never an underflow.
+    for (const quantity of [0, -1]) {
+      expect(() => w.trade_update_line({ lineId: line.id, change: { quantity } })).toThrow(
+        /quantity/,
+      );
+    }
+    expect(get().lines[0].quantity).toBe(5);
+    expect(() => w.trade_update_line({ lineId: 99, change: { quantity: 1 } })).toThrow(/line/);
+  });
+
+  /**
+   * A line holds at most 9,999 copies — the quantity stepper's own ceiling — however it would
+   * come to hold more. In the crate this is what keeps the column an integer (an overflowing
+   * sum is a REAL to SQLite, and one such row makes every trade unreadable); here it is the
+   * same refusals at the same places, so a story cannot show a line the app would refuse.
+   */
+  it("holds a line to 9999 copies, asked outright or reached by a fold, and adds nothing from a batch that passes it", () => {
+    const { db, w, id, get, add } = trading();
+    const MAX = 9999;
+    const good = input(URZA, "nonfoil");
+    const shape = () => get().lines.map((l) => [l.side, l.name, l.finish, l.quantity]);
+
+    // The ceiling itself is a quantity.
+    add("mine", RAGAVAN, "nonfoil", MAX);
+    const full = [["mine", "Ragavan, Nimble Pilferer", "nonfoil", MAX]];
+    const refused = (side: TradeSide, lines: TradeLineInput[]) => {
+      expect(() => w.trade_add_lines({ id, side, lines })).toThrow(/at most 9999/);
+      // The good line ahead of the bad one went back with it.
+      expect(shape()).toEqual(full);
+    };
+    // Outright: one past it, and nothing a number can be that is larger.
+    refused("theirs", [good, input(CHARM, "nonfoil", MAX + 1)]);
+    refused("theirs", [good, input(CHARM, "nonfoil", Infinity)]);
+    // By a fold: one more onto a full line, and two inputs that only pass it together.
+    refused("mine", [good, input(RAGAVAN, "nonfoil", 1, "scan")]);
+    refused("theirs", [input(CHARM, "nonfoil", 6000), input(CHARM, "nonfoil", 4000)]);
+
+    // An edit is held to it three ways: the quantity it names, a fold it causes without naming
+    // one, and a move across that lands on a line with no room.
+    add("mine", COUNTERSPELL, "foil", 6000);
+    add("mine", COUNTERSPELL, "etched", 4000);
+    add("theirs", RAGAVAN, "nonfoil", 1);
+    const [, foil, etched, theirs] = get().lines;
+    const before = shape();
+    expect(() => w.trade_update_line({ lineId: foil.id, change: { quantity: MAX + 1 } })).toThrow(
+      /at most/,
+    );
+    expect(() => w.trade_update_line({ lineId: etched.id, change: { finish: "foil" } })).toThrow(
+      /at most/,
+    );
+    expect(() => w.trade_update_line({ lineId: theirs.id, change: { side: "mine" } })).toThrow(
+      /at most/,
+    );
+    // A refused fold deletes neither line.
+    expect(shape()).toEqual(before);
+
+    // A fold that lands exactly on the ceiling is a fold.
+    w.trade_update_line({ lineId: etched.id, change: { finish: "foil", quantity: MAX - 6000 } });
+    expect(get().lines.find((l) => l.id === etched.id)).toMatchObject({
+      finish: "foil",
+      quantity: MAX,
+    });
+    expect(db.tradeLines.some((l) => l.id === foil.id)).toBe(false);
+  });
+
+  it("refuses a finish the printing does not come in, and lets the finish follow a printing change", () => {
+    const { w, get, add } = trading();
+    add("mine", COUNTERSPELL, "foil");
+    const lineId = get().lines[0].id;
+
+    w.trade_update_line({ lineId, change: { finish: "etched" } });
+    expect(get().lines[0].finish).toBe("etched");
+
+    // Urza's Saga comes in nonfoil and foil: etched is not kept, and its first listed finish is
+    // taken instead.
+    w.trade_update_line({ lineId, change: { cardId: URZA.id } });
+    expect(get().lines[0]).toMatchObject({ cardId: URZA.id, name: "Urza's Saga", finish: "nonfoil" });
+    expect(() => w.trade_update_line({ lineId, change: { finish: "etched" } })).toThrow(/finish/);
+
+    // A finish the new printing has is kept across the change…
+    w.trade_update_line({ lineId, change: { finish: "foil" } });
+    w.trade_update_line({ lineId, change: { cardId: RAGAVAN.id } });
+    expect(get().lines[0]).toMatchObject({ cardId: RAGAVAN.id, finish: "foil" });
+    // …a sole finish is the first listed one…
+    w.trade_update_line({ lineId, change: { cardId: RESTART.id } });
+    expect(get().lines[0]).toMatchObject({ cardId: RESTART.id, finish: "etched" });
+    // …and a change that names both is held to the new printing, not the old one.
+    expect(() =>
+      w.trade_update_line({ lineId, change: { cardId: SOL_RING.id, finish: "etched" } }),
+    ).toThrow(/finish/);
+    expect(() => w.trade_update_line({ lineId, change: { cardId: "gone" } })).toThrow(/card/);
+    expect(get().lines[0]).toMatchObject({ cardId: RESTART.id, finish: "etched" });
+  });
+
+  it("folds an edited line into the line it now matches, and the edited one keeps its place", () => {
+    const { w, get, add } = trading();
+    add("mine", COUNTERSPELL, "foil", 2);
+    add("mine", CHARM, "nonfoil", 1);
+    add("mine", COUNTERSPELL, "etched", 3);
+    const [foil, charm, etched] = get().lines;
+
+    // The last line becomes a second foil Counterspell: it survives, where it stood, with both
+    // quantities, and the line it matched is gone.
+    w.trade_update_line({ lineId: etched.id, change: { finish: "foil", quantity: 4 } });
+    expect(get().lines.map((l) => [l.id, l.name, l.finish, l.quantity])).toEqual([
+      [charm.id, "Boros Charm", "nonfoil", 1],
+      [etched.id, "Counterspell", "foil", 6],
+    ]);
+    expect(get().lines.some((l) => l.id === foil.id)).toBe(false);
+  });
+
+  it("moves a line to the other side, to the end of the trade, and folds there too", () => {
+    const { w, get, add } = trading();
+    add("mine", RAGAVAN, "nonfoil", 1);
+    add("theirs", URZA, "nonfoil", 1);
+    add("theirs", RAGAVAN, "nonfoil", 2);
+    add("theirs", CHARM, "nonfoil", 1);
+    add("mine", SWORDS, "foil", 1);
+    const [ragavan, urza, , charm, swords] = get().lines;
+
+    w.trade_update_line({ lineId: swords.id, change: { side: "theirs" } });
+    expect(get().lines.filter((l) => l.side === "theirs").map((l) => l.name)).toEqual([
+      "Urza's Saga",
+      "Ragavan, Nimble Pilferer",
+      "Boros Charm",
+      "Swords to Plowshares",
+    ]);
+
+    // Their side already has a nonfoil Ragavan: the moved line takes it in — and it is the moved
+    // line that survives, at the end, where a line carried across always lands.
+    w.trade_update_line({ lineId: ragavan.id, change: { side: "theirs" } });
+    expect(get().lines.map((l) => [l.side, l.id, l.name, l.quantity])).toEqual([
+      ["theirs", urza.id, "Urza's Saga", 1],
+      ["theirs", charm.id, "Boros Charm", 1],
+      ["theirs", swords.id, "Swords to Plowshares", 1],
+      ["theirs", ragavan.id, "Ragavan, Nimble Pilferer", 3],
+    ]);
+    expect(() =>
+      w.trade_update_line({ lineId: swords.id, change: { side: "ours" as TradeSide } }),
+    ).toThrow(/side/);
+  });
+
+  it("removes one line and leaves the rest in order", () => {
+    const { w, get, add } = trading();
+    add("mine", RAGAVAN, "nonfoil");
+    add("mine", CHARM, "nonfoil");
+    add("mine", SWORDS, "foil");
+
+    w.trade_remove_line({ lineId: get().lines[1].id });
+    expect(get().lines.map((l) => l.name)).toEqual([
+      "Ragavan, Nimble Pilferer",
+      "Swords to Plowshares",
+    ]);
+    // A line added after a hole still lands last.
+    add("mine", URZA, "nonfoil");
+    expect(get().lines.map((l) => l.name)).toEqual([
+      "Ragavan, Nimble Pilferer",
+      "Swords to Plowshares",
+      "Urza's Saga",
+    ]);
+    // A line that is already gone is a success: the caller has what it asked for.
+    w.trade_remove_line({ lineId: 99 });
+    expect(get().lines).toHaveLength(3);
+  });
+
+  it("holds a side's percentage to 50–150 in steps of 5", () => {
+    const { w, id, get } = trading();
+    w.trade_set_rate({ id, side: "mine", rate: 50 });
+    w.trade_set_rate({ id, side: "theirs", rate: 150 });
+    expect(get()).toMatchObject({ rateMine: 50, rateTheirs: 150 });
+    w.trade_set_rate({ id, side: "theirs", rate: 80 });
+    expect(get()).toMatchObject({ rateMine: 50, rateTheirs: 80 });
+
+    for (const rate of [45, 155, 0, -50, 97, 82.5, Number.NaN]) {
+      expect(() => w.trade_set_rate({ id, side: "mine", rate })).toThrow(/percentage/);
+    }
+    expect(() => w.trade_set_rate({ id, side: "ours" as TradeSide, rate: 100 })).toThrow(/side/);
+    expect(get()).toMatchObject({ rateMine: 50, rateTheirs: 80 });
+  });
+
+  it("prices a line in the trade's own marketplace, whatever the app is switched to", () => {
+    const db = makeDb({ marketplace: "tcgplayer" });
+    const w = writeHandlers(db);
+    const r = readHandlers(db);
+    const euros = w.trade_create({ trade: { marketplace: "cardmarket" } });
+    const dollars = w.trade_create({ trade: {} });
+    for (const id of [euros, dollars]) {
+      w.trade_add_lines({ id, side: "mine", lines: [input(COUNTERSPELL, "etched")] });
+    }
+    // The reader switches marketplace afterwards; neither trade moves.
+    w.set_marketplace({ id: "cardkingdom" });
+
+    const [inDollars] = r.trade_get({ id: dollars })?.lines ?? [];
+    expect(inDollars).toMatchObject({
+      unitPrice: 3.25,
+      finishPrices: { nonfoil: 2.95, foil: 3.19, etched: 3.25 },
+    });
+    // There is no `eur_etched`: unpriced is `null`, never the nonfoil figure and never zero.
+    const [inEuros] = r.trade_get({ id: euros })?.lines ?? [];
+    expect(inEuros).toMatchObject({
+      unitPrice: null,
+      finishPrices: { nonfoil: 1.69, foil: 2.15, etched: null },
+    });
+    expect(r.trade_list().map((t) => t.lines[0].unitPrice)).toEqual([3.25, null]);
+  });
+
+  it("joins a line's card facts off the printing", () => {
+    const { get, add } = trading();
+    add("theirs", COUNTERSPELL, "foil", 2);
+    expect(get().lines[0]).toMatchObject({
+      side: "theirs",
+      cardId: COUNTERSPELL.id,
+      oracleId: COUNTERSPELL.oracleId,
+      name: "Counterspell",
+      setCode: "mh2",
+      setName: COUNTERSPELL.setName,
+      collectorNumber: "267",
+      rarity: COUNTERSPELL.rarity,
+      layout: COUNTERSPELL.layout,
+      finishes: '["nonfoil","foil","etched"]',
+      finish: "foil",
+      quantity: 2,
+      source: "search",
+    });
+  });
+
+  it("counts a line's copies outside decks and in them apart, and names the decks in the order a finish would take from them", () => {
+    const folders: FakeCollectionFolder[] = [
+      BINDER,
+      { ...BINDER, id: 2, parentId: 1, name: "Sleeved" },
+      { ...BINDER, id: 3, name: "Set aside", locked: true },
+      { ...BINDER, id: 4, parentId: 3, name: "Inside it" },
+      { ...BINDER, id: 5, name: "Burn", kind: "deck", deckId: 1 },
+      { ...BINDER, id: 6, name: "Recently removed", kind: "removed" },
+      { ...BINDER, id: 7, name: "Storm", kind: "deck", deckId: 2 },
+    ];
+    const copy = (id: number, quantity: number, over: Partial<FakeEntry> = {}) =>
+      entry({ id, cardId: COUNTERSPELL.id, finish: "etched", quantity, ...over });
+    const { get, add } = trading({
+      collectionFolders: folders,
+      collectionEntries: [
+        copy(1, 1),
+        // A second root row of the same printing and finish, in another grade.
+        copy(2, 2, { condition: "LP" }),
+        copy(3, 4, { folderId: 2 }),
+        // In neither count: a locked drawer, a drawer inside one, the holding area, another
+        // finish — and a proxy, which is not the card.
+        copy(4, 8, { folderId: 3 }),
+        copy(5, 16, { folderId: 4 }),
+        copy(7, 64, { folderId: 6 }),
+        copy(8, 128, { finish: "foil" }),
+        copy(9, 256, { proxy: true }),
+        // Two decks. Burn's signed copy is the oldest row of the three, and Storm is still
+        // named first: plain copies go before special ones, and a deck is named once.
+        copy(6, 32, { folderId: 5, signed: true }),
+        copy(10, 512, { folderId: 7 }),
+        copy(11, 1024, { folderId: 5 }),
+        copy(12, 2048, { folderId: 7, finish: "foil" }),
+      ],
+    });
+    add("mine", COUNTERSPELL, "etched");
+    add("mine", URZA, "nonfoil");
+    expect(get().lines.map((l) => [l.owned, l.ownedInDecks, l.deckNames])).toEqual([
+      [7, 32 + 512 + 1024, ["Storm", "Burn"]],
+      [0, 0, []],
+    ]);
+  });
+
+  it("counts as wished every copy of the card on the wishlist, in any printing, outside a managed folder", () => {
+    const { get, add } = trading({
+      wishlistFolders: [
+        { id: 1, parentId: null, name: "Ordered", sortOrder: 0 },
+        { id: 2, parentId: null, name: "Deck 4", sortOrder: 1, managedDeckId: 4 },
+      ],
+      wishlistEntries: [
+        // Any printing, another printing, this printing in a folder: all the card.
+        wish({ id: 1, quantity: 1 }),
+        wish({ id: 2, cardId: BOLT_2X2.id, quantity: 2 }),
+        wish({ id: 3, cardId: BOLT_STA.id, quantity: 4, folderId: 1, preferredFinish: "etched" }),
+        // A deck's managed list is the deck's, and another card is another card.
+        wish({ id: 4, cardId: BOLT_STA.id, quantity: 8, folderId: 2 }),
+        wish({ id: 5, cardId: URZA.id, quantity: 16 }),
+      ],
+    });
+    add("theirs", BOLT_STA, "foil");
+    add("theirs", CHARM, "nonfoil");
+    expect(get().lines.map((l) => l.wished)).toEqual([7, 0]);
+  });
+
+  /**
+   * The feature's price rule in one case, on a **feed** marketplace so the day's price can be
+   * moved from the test: `cards` is the shared corpus and no write may touch it.
+   */
+  it("quotes a live price while open, the price it closed with once archived, and a live one again on reopen", () => {
+    const quote = (card: FakeCard, price: number) => ({
+      marketplace: "cardkingdom",
+      cardId: card.id,
+      finish: "nonfoil",
+      price,
+    });
+    const db = makeDb({ marketplacePrices: [quote(RAGAVAN, 40)] });
+    const w = writeHandlers(db);
+    const r = readHandlers(db);
+    const id = w.trade_create({ trade: { marketplace: "cardkingdom" } });
+    w.trade_add_lines({
+      id,
+      side: "mine",
+      // The second is a card the feed has never listed: no price, on the day and afterwards.
+      lines: [input(RAGAVAN, "nonfoil"), input(URZA, "nonfoil")],
+    });
+    const prices = () => r.trade_get({ id })?.lines.map((l) => l.unitPrice);
+
+    db.marketplacePrices = [quote(RAGAVAN, 45)];
+    expect(prices()).toEqual([45, null]);
+
+    w.trade_archive({ id });
+    db.marketplacePrices = [quote(RAGAVAN, 60), quote(URZA, 9)];
+    expect(r.trade_get({ id })).toMatchObject({
+      status: "archived",
+      finishedBefore: false,
+      outcome: null,
+    });
+    expect(r.trade_get({ id })?.closedAt).not.toBeNull();
+    expect(prices()).toEqual([45, null]);
+    expect(r.trade_list()[0].lines.map((l) => l.unitPrice)).toEqual([45, null]);
+    // `finishPrices` is today's all the same: it is a hint about a change, not a record.
+    expect(r.trade_get({ id })?.lines[0].finishPrices.nonfoil).toBe(60);
+
+    w.trade_reopen({ id });
+    expect(r.trade_get({ id })).toMatchObject({ status: "open", closedAt: null });
+    expect(prices()).toEqual([60, 9]);
+    expect(db.tradeLines.map((l) => l.unitPrice)).toEqual([null, null]);
+  });
+
+  it("archives without touching the collection or the wishlist", () => {
+    const { db, w, id, add } = trading({
+      collectionEntries: [entry({ id: 1, cardId: RAGAVAN.id, quantity: 2 })],
+      wishlistEntries: [wish({ id: 1, cardId: URZA.id, quantity: 1 })],
+    });
+    add("mine", RAGAVAN, "nonfoil");
+    add("theirs", URZA, "nonfoil");
+    const entries = structuredClone(db.collectionEntries);
+    const wishes = structuredClone(db.wishlistEntries);
+
+    w.trade_archive({ id });
+    expect(db.collectionEntries).toEqual(entries);
+    expect(db.wishlistEntries).toEqual(wishes);
+    expect(db.tradeLines.map((l) => l.unitPrice)).toEqual([42.19, 39.86]);
+  });
+
+  it("takes given cards out of the collection, root rows first, only as many as it holds, and none of a deck's while the others cover the line", () => {
+    const { db, w, id, add, held } = trading({
+      collectionFolders: [BINDER, { ...BINDER, id: 2, name: "Deck", kind: "deck", deckId: 1 }],
+      collectionEntries: [
+        // Filed first by id, taken second: the loose copies go before the binder's.
+        entry({ id: 1, cardId: CHARM.id, quantity: 2, folderId: 1, tradelistQuantity: 2 }),
+        entry({ id: 2, cardId: CHARM.id, quantity: 2 }),
+        // One Ragavan against a line of three: the collection gives what it holds.
+        entry({ id: 3, cardId: RAGAVAN.id, quantity: 1 }),
+        // A fifth Charm, in a deck. Four outside it cover the line of three, so it stays.
+        entry({ id: 4, cardId: CHARM.id, quantity: 1, folderId: 2 }),
+        // The wrong finish for the Swords line: not taken.
+        entry({ id: 5, cardId: SWORDS.id, finish: "nonfoil", quantity: 1 }),
+      ],
+    });
+    add("mine", CHARM, "nonfoil", 3);
+    add("mine", RAGAVAN, "nonfoil", 3);
+    add("mine", SWORDS, "foil", 1);
+    add("theirs", URZA, "nonfoil", 1);
+
+    const outcome = w.trade_finish({ id, options: { ...ALL_OFF, removeGiven: true } });
+
+    // 3 Charms, the 1 Ragavan there was, and no Swords — and none of them out of the deck.
+    expect(outcome).toEqual({ ...NOTHING_MOVED, removedFromCollection: 4, removedFromDecks: 0 });
+    // The root row went whole and is deleted; the binder's lost one, and its tradelist with it.
+    expect(db.collectionEntries.map((e) => [e.id, e.quantity, e.tradelistQuantity])).toEqual([
+      [1, 1, 1],
+      [4, 1, 0],
+      [5, 1, 0],
+    ]);
+    expect(held(URZA, "nonfoil")).toBe(0);
+  });
+
+  /**
+   * *Which* copies step 1 takes. A line names a printing and a finish and nothing else, so the
+   * old walk — root first, then row id — could delete a signed copy, its price and its notes,
+   * with three plain ones filed beside it and no undo.
+   */
+  it("takes plain copies before a signed, graded, altered, misprinted or serial-numbered one, and never a proxy", () => {
+    const copy = (id: number, over: Partial<FakeEntry> = {}) =>
+      entry({ id, cardId: COUNTERSPELL.id, finish: "foil", quantity: 1, ...over });
+    const world = () =>
+      trading({
+        collectionFolders: [BINDER],
+        collectionEntries: [
+          // Five copies that are each one object, all at the root and all older than the plain
+          // pair: everything the old order reached first.
+          copy(1, { signed: true, purchasePrice: 80, notes: "signed at the prerelease" }),
+          copy(2, { grading: '{"company":"PSA","grade":"10"}' }),
+          copy(3, { altered: true }),
+          copy(4, { misprint: true }),
+          copy(5, { serialNumber: "007/500" }),
+          copy(6, { proxy: true, quantity: 5 }),
+          copy(7, { quantity: 2, folderId: 1 }),
+          // An empty serial number or grading is none at all, as the grain reads it.
+          copy(8, { quantity: 1, folderId: 1, condition: "LP", serialNumber: "", grading: "" }),
+        ],
+      });
+    const left = (db: FakeDb) => db.collectionEntries.map((e) => [e.id, e.quantity]);
+
+    // Three given, eight real copies held: the binder's three plain ones go.
+    const few = world();
+    few.add("mine", COUNTERSPELL, "foil", 3);
+    expect(few.get().lines[0].owned).toBe(8);
+    expect(few.w.trade_finish({ id: few.id, options: { ...ALL_OFF, removeGiven: true } })).toEqual({
+      ...NOTHING_MOVED,
+      removedFromCollection: 3,
+    });
+    expect(left(few.db)).toEqual([[1, 1], [2, 1], [3, 1], [4, 1], [5, 1], [6, 5]]);
+    expect(few.db.collectionEntries[0]).toMatchObject({
+      signed: true,
+      purchasePrice: 80,
+      notes: "signed at the prerelease",
+    });
+
+    // Twenty given: the reader asked for that many and was told eight, so the special copies
+    // go too once the plain ones have. The proxies stay, and alone they are nothing to give.
+    const many = world();
+    many.add("mine", COUNTERSPELL, "foil", 20);
+    expect(
+      many.w.trade_finish({ id: many.id, options: { ...ALL_OFF, removeGiven: true } }),
+    ).toEqual({ ...NOTHING_MOVED, removedFromCollection: 8 });
+    expect(left(many.db)).toEqual([[6, 5]]);
+    const again = many.w.trade_duplicate({ id: many.id });
+    expect(many.get(again).lines[0].owned).toBe(0);
+    expect(
+      many.w.trade_finish({ id: again, options: { ...ALL_OFF, removeGiven: true } }),
+    ).toEqual(NOTHING_MOVED);
+    expect(left(many.db)).toEqual([[6, 5]]);
+  });
+
+  /**
+   * The tradelist of a row that gives up some of its copies. The copies that left in a trade
+   * are the ones it was promising, so it is **spent** — a clamp to what is left, which is the
+   * collection's ordinary rule for a quantity edit, would leave both kept copies of the first
+   * row still on offer.
+   */
+  it("spends the tradelist of a row it takes copies from, down to nothing and no further", () => {
+    const { db, w, id, add } = trading({
+      collectionEntries: [
+        // Four with two for trade, giving two.
+        entry({ id: 1, cardId: CHARM.id, quantity: 4, tradelistQuantity: 2 }),
+        // Five with four for trade, giving one: three are still on offer.
+        entry({ id: 2, cardId: RAGAVAN.id, quantity: 5, tradelistQuantity: 4 }),
+        // Five with one for trade, giving three.
+        entry({ id: 3, cardId: URZA.id, quantity: 5, tradelistQuantity: 1 }),
+        // Not on the trade: untouched.
+        entry({ id: 4, cardId: SWORDS.id, quantity: 3, tradelistQuantity: 3 }),
+      ],
+    });
+    add("mine", CHARM, "nonfoil", 2);
+    add("mine", RAGAVAN, "nonfoil", 1);
+    add("mine", URZA, "nonfoil", 3);
+
+    expect(w.trade_finish({ id, options: { ...ALL_OFF, removeGiven: true } })).toEqual({
+      ...NOTHING_MOVED,
+      removedFromCollection: 6,
+    });
+    expect(db.collectionEntries.map((e) => [e.id, e.quantity, e.tradelistQuantity])).toEqual([
+      [1, 2, 0],
+      [2, 4, 3],
+      [3, 2, 0],
+      [4, 3, 3],
+    ]);
+
+    // The collection's own quantity edit is another write and keeps its own rule: a clamp.
+    w.collection_set_quantity({ id: 4, quantity: 2 });
+    expect(db.collectionEntries[3]).toMatchObject({ quantity: 2, tradelistQuantity: 2 });
+  });
+
+  /**
+   * A deck's copies: taken only for what the copies outside decks leave owed — a signed copy in
+   * a binder goes before a plain one in a deck — and counted apart. **The deck is not told.** Its
+   * list still names the card and its history has no row; what changes is what it reads as
+   * owned, which is what `collection_remove` on such a row leaves too.
+   */
+  it("takes a deck's copies last, counts them apart, and leaves the deck's list alone", () => {
+    const decks = [deck({ id: 1, name: "Burn" }), deck({ id: 2, name: "Storm" })];
+    const { db, w, id, get, add } = trading({
+      decks,
+      deckCategories: categoriesOf(decks),
+      deckCards: [deckCard({ id: 1, deckId: 1, cardId: CHARM.id, quantity: 4 })],
+      collectionFolders: [...groupsOf(decks), BINDER],
+      collectionEntries: [
+        // Burn lists four Charms and holds three, two on the tradelist; Storm holds two.
+        entry({ id: 1, cardId: CHARM.id, quantity: 3, folderId: groupId(1), tradelistQuantity: 2 }),
+        entry({ id: 2, cardId: CHARM.id, quantity: 2, folderId: groupId(2) }),
+        // Four outside any deck: one loose, two in a binder and a signed one beside them.
+        entry({ id: 3, cardId: CHARM.id, quantity: 1 }),
+        entry({ id: 4, cardId: CHARM.id, quantity: 2, folderId: 1 }),
+        entry({ id: 5, cardId: CHARM.id, quantity: 1, folderId: 1, signed: true }),
+      ],
+    });
+    add("mine", CHARM, "nonfoil", 6);
+    const heldByLine = () => {
+      const [line] = get().lines;
+      return [line.owned, line.ownedInDecks, line.deckNames];
+    };
+    expect(heldByLine()).toEqual([4, 5, ["Burn", "Storm"]]);
+    expect(liveDeck(db)?.cards[0].ownedQuantity).toBe(3);
+
+    const outcome = w.trade_finish({ id, options: { ...ALL_OFF, removeGiven: true } });
+
+    // Six asked for: all four outside, and the two still owed out of the older deck row.
+    expect(outcome).toEqual({ ...NOTHING_MOVED, removedFromCollection: 6, removedFromDecks: 2 });
+    expect(get().outcome).toEqual(outcome);
+    // The tradelist of a deck's row is spent like any other's.
+    expect(db.collectionEntries.map((e) => [e.id, e.quantity, e.tradelistQuantity])).toEqual([
+      [1, 1, 0],
+      [2, 2, 0],
+    ]);
+    expect(heldByLine()).toEqual([0, 3, ["Burn", "Storm"]]);
+    // Burn still lists its four and now holds one of them, and nothing was written to it.
+    expect(db.deckCards.map((c) => [c.deckId, c.cardId, c.quantity])).toEqual([[1, CHARM.id, 4]]);
+    expect(liveDeck(db)?.cards[0].ownedQuantity).toBe(1);
+    expect(db.deckAudit).toEqual([]);
+  });
+
+  /**
+   * `trades.outcome` outlives the build that wrote it. One stored before a finish could reach a
+   * deck has no `removedFromDecks`, reads as none, and is added to like any other.
+   */
+  it("reads an outcome stored before decks could be traded as none from decks, and adds to it", () => {
+    const { db, w, id, get, add } = trading({
+      collectionFolders: [{ ...BINDER, id: 2, name: "Deck", kind: "deck", deckId: 1 }],
+      collectionEntries: [entry({ id: 1, cardId: RAGAVAN.id, quantity: 1, folderId: 2 })],
+    });
+    add("mine", RAGAVAN, "nonfoil", 1);
+    db.trades[0].finishedBefore = true;
+    db.trades[0].outcome = {
+      removedFromCollection: 3,
+      addedToCollection: 3,
+      removedFromWishlist: 1,
+      addedToWishlist: 0,
+    };
+    const before = {
+      ...NOTHING_MOVED,
+      removedFromCollection: 3,
+      addedToCollection: 3,
+      removedFromWishlist: 1,
+    };
+    expect(get().outcome).toEqual(before);
+
+    // The only copy there is, and it is a deck's.
+    const done = w.trade_finish({ id, options: { ...ALL_OFF, removeGiven: true } });
+    expect(done).toEqual({ ...NOTHING_MOVED, removedFromCollection: 1, removedFromDecks: 1 });
+    expect(get().outcome).toEqual({ ...before, removedFromCollection: 4, removedFromDecks: 1 });
+  });
+
+  it("adds received cards to the collection in the folder named, folding onto a row already there", () => {
+    const { db, w, id, add } = trading({
+      collectionFolders: [BINDER],
+      collectionEntries: [entry({ id: 1, cardId: URZA.id, quantity: 1, folderId: 1 })],
+    });
+    add("mine", RAGAVAN, "nonfoil", 1);
+    add("theirs", URZA, "nonfoil", 2);
+    add("theirs", COUNTERSPELL, "etched", 1);
+
+    const outcome = w.trade_finish({ id, options: { ...ALL_OFF, addReceived: true, folderId: 1 } });
+
+    expect(outcome).toEqual({ ...NOTHING_MOVED, addedToCollection: 3 });
+    expect(db.collectionEntries.map((e) => [e.cardId, e.finish, e.quantity, e.folderId])).toEqual([
+      [URZA.id, "nonfoil", 3, 1],
+      [COUNTERSPELL.id, "etched", 1, 1],
+    ]);
+  });
+
+  it("takes received cards off the wishlist, this printing's wish first, and never a managed one", () => {
+    const { db, w, id, add } = trading({
+      wishlistFolders: [{ id: 1, parentId: null, name: "Deck 4", sortOrder: 0, managedDeckId: 4 }],
+      wishlistEntries: [
+        wish({ id: 1, quantity: 2 }),
+        wish({ id: 2, cardId: BOLT_STA.id, quantity: 1 }),
+        wish({ id: 3, cardId: BOLT_STA.id, quantity: 5, folderId: 1 }),
+        wish({ id: 4, cardId: URZA.id, quantity: 4 }),
+      ],
+    });
+    add("theirs", BOLT_STA, "foil", 2);
+    add("theirs", URZA, "nonfoil", 1);
+    add("theirs", CHARM, "nonfoil", 1);
+
+    const outcome = w.trade_finish({ id, options: { ...ALL_OFF, unwishReceived: true } });
+
+    // Two Bolts: the pinned wish whole, then one off the any-printing wish. One Urza's Saga.
+    expect(outcome).toEqual({ ...NOTHING_MOVED, removedFromWishlist: 3 });
+    expect(db.wishlistEntries.map((x) => [x.id, x.quantity])).toEqual([
+      [1, 1],
+      [3, 5],
+      [4, 3],
+    ]);
+  });
+
+  it("puts given cards on the wishlist, pinned to the printing and the finish", () => {
+    const { db, w, id, add } = trading({
+      wishlistEntries: [wish({ id: 1, cardId: CHARM.id, quantity: 1, preferredFinish: "nonfoil" })],
+    });
+    add("mine", COUNTERSPELL, "etched", 2);
+    add("mine", CHARM, "nonfoil", 1);
+    add("theirs", URZA, "nonfoil", 1);
+
+    const outcome = w.trade_finish({ id, options: { ...ALL_OFF, wishGiven: true } });
+
+    expect(outcome).toEqual({ ...NOTHING_MOVED, addedToWishlist: 3 });
+    expect(
+      db.wishlistEntries.map((x) => [x.cardId, x.preferredFinish, x.quantity, x.folderId]),
+    ).toEqual([
+      // Folded onto the wish already there for that printing and finish.
+      [CHARM.id, "nonfoil", 2, null],
+      [COUNTERSPELL.id, "etched", 2, null],
+    ]);
+  });
+
+  it("finishes with all four steps, freezes the prices and keeps what it did on the trade", () => {
+    const { db, w, r, id, get, add, held } = trading({
+      collectionEntries: [entry({ id: 1, cardId: RAGAVAN.id, quantity: 1 })],
+      wishlistEntries: [wish({ id: 1, cardId: URZA.id, quantity: 1 })],
+    });
+    add("mine", RAGAVAN, "nonfoil", 1);
+    add("theirs", URZA, "nonfoil", 1);
+    const before = get();
+    expect(before.lines.map((l) => [l.owned, l.wished])).toEqual([
+      [1, 0],
+      [0, 1],
+    ]);
+
+    const outcome = w.trade_finish({ id, options: ALL_ON });
+
+    expect(outcome).toEqual({
+      removedFromCollection: 1,
+      removedFromDecks: 0,
+      addedToCollection: 1,
+      removedFromWishlist: 1,
+      addedToWishlist: 1,
+    });
+    const after = get();
+    expect(after).toMatchObject({ status: "finished", finishedBefore: true, outcome });
+    expect(after.closedAt).toBeGreaterThan(before.createdAt);
+    expect(after.lines.map((l) => l.unitPrice)).toEqual([42.19, 39.86]);
+    expect(db.tradeLines.map((l) => l.unitPrice)).toEqual([42.19, 39.86]);
+    expect(r.trade_list()[0]).toMatchObject({ status: "finished", closedAt: after.closedAt });
+    // The Ragavan left and is now wished for; the Urza's Saga arrived and is no longer.
+    expect([held(RAGAVAN, "nonfoil"), held(URZA, "nonfoil")]).toEqual([0, 1]);
+    expect(db.wishlistEntries.map((x) => [x.cardId, x.preferredFinish, x.quantity])).toEqual([
+      [RAGAVAN.id, "nonfoil", 1],
+    ]);
+  });
+
+  it("finishes an empty trade, and one with every step off, moving nothing", () => {
+    const { db, w, r, id, add } = trading({
+      collectionEntries: [entry({ id: 1, cardId: RAGAVAN.id, quantity: 1 })],
+    });
+    expect(w.trade_finish({ id, options: ALL_ON })).toEqual(NOTHING_MOVED);
+    expect(r.trade_get({ id })).toMatchObject({ status: "finished", outcome: NOTHING_MOVED });
+
+    w.trade_reopen({ id });
+    add("mine", RAGAVAN, "nonfoil");
+    expect(w.trade_finish({ id, options: ALL_OFF })).toEqual(NOTHING_MOVED);
+    expect(db.collectionEntries.map((e) => e.quantity)).toEqual([1]);
+    expect(db.wishlistEntries).toEqual([]);
+  });
+
+  /**
+   * The answer is this press; what the trade keeps is every press. A second pass with the boxes
+   * off — which is how the dialog opens it — must not turn the archive's sentence about the
+   * first into *nothing changed*.
+   */
+  it("answers what this finish did and keeps what every finish did, added together", () => {
+    const { w, id, get, add } = trading({
+      collectionEntries: [entry({ id: 1, cardId: RAGAVAN.id, quantity: 3 })],
+    });
+    add("mine", RAGAVAN, "nonfoil", 1);
+    add("theirs", URZA, "nonfoil", 2);
+    const first = w.trade_finish({ id, options: { ...ALL_ON, wishGiven: false } });
+    expect(first).toEqual({ ...NOTHING_MOVED, removedFromCollection: 1, addedToCollection: 2 });
+
+    w.trade_reopen({ id });
+    expect(w.trade_finish({ id, options: ALL_OFF })).toEqual(NOTHING_MOVED);
+    expect(get().outcome).toEqual(first);
+
+    w.trade_reopen({ id });
+    const third = w.trade_finish({ id, options: { ...ALL_OFF, removeGiven: true } });
+    expect(third).toEqual({ ...NOTHING_MOVED, removedFromCollection: 1 });
+    expect(get().outcome).toEqual({
+      ...NOTHING_MOVED,
+      removedFromCollection: 2,
+      addedToCollection: 2,
+    });
+  });
+
+  /**
+   * A line outlives its printing. `cards` is the sync's table, so the test hands the world a
+   * corpus of its own and takes a card out of it the way a sync that dropped one would.
+   */
+  it("keeps a line whose printing has left the corpus, and skips it in the two steps that add a row", () => {
+    const { db, w, id, get, add, held } = trading({
+      cards: [...CARDS],
+      collectionEntries: [entry({ id: 1, cardId: RAGAVAN.id, quantity: 1 })],
+    });
+    add("mine", RAGAVAN, "nonfoil", 1);
+    add("theirs", URZA, "nonfoil", 1);
+    add("theirs", CHARM, "nonfoil", 1);
+    db.cards = db.cards.filter((c) => c.id !== RAGAVAN.id && c.id !== URZA.id);
+
+    const [ragavan, urza] = get().lines;
+    // Listed under the name it was written with; everything joined off the card is gone.
+    expect(ragavan).toMatchObject({
+      name: "Ragavan, Nimble Pilferer",
+      setCode: "mh2",
+      collectorNumber: "138",
+      oracleId: null,
+      setName: null,
+      rarity: null,
+      finishes: null,
+      unitPrice: null,
+      finishPrices: { nonfoil: null, foil: null, etched: null },
+      owned: 1,
+    });
+    // Its quantity still steps; a finish it cannot be shown to come in is refused.
+    w.trade_update_line({ lineId: urza.id, change: { quantity: 2 } });
+    expect(() => w.trade_update_line({ lineId: urza.id, change: { finish: "foil" } })).toThrow(
+      /finish/,
+    );
+
+    const outcome = w.trade_finish({ id, options: ALL_ON });
+
+    // The Ragavan still leaves — taking copies away needs no card — but it is not wished back,
+    // and the two Urza's Sagas are not added. The Boros Charm is.
+    expect(outcome).toEqual({ ...NOTHING_MOVED, removedFromCollection: 1, addedToCollection: 1 });
+    expect([held(RAGAVAN, "nonfoil"), held(URZA, "nonfoil"), held(CHARM, "nonfoil")]).toEqual([
+      0, 0, 1,
+    ]);
+    expect(db.wishlistEntries).toEqual([]);
+    expect(get().lines.map((l) => l.unitPrice)).toEqual([null, null, 5.84]);
+  });
+
+  it("finishes all or nothing: a folder that is gone or the app's own takes nothing out either", () => {
+    const { db, w, r, id, add } = trading({
+      collectionFolders: [{ ...BINDER, id: 2, name: "Deck", kind: "deck", deckId: 1 }],
+      collectionEntries: [entry({ id: 1, cardId: RAGAVAN.id, quantity: 1 })],
+      wishlistEntries: [wish({ id: 1, cardId: URZA.id, quantity: 1 })],
+    });
+    add("mine", RAGAVAN, "nonfoil", 1);
+    add("theirs", URZA, "nonfoil", 1);
+
+    expect(() => w.trade_finish({ id, options: { ...ALL_ON, folderId: 99 } })).toThrow(/folder/);
+    expect(() => w.trade_finish({ id, options: { ...ALL_ON, folderId: 2 } })).toThrow(/folder/);
+
+    expect(db.collectionEntries.map((e) => [e.id, e.cardId, e.quantity])).toEqual([
+      [1, RAGAVAN.id, 1],
+    ]);
+    expect(db.wishlistEntries.map((x) => [x.id, x.cardId, x.quantity])).toEqual([[1, URZA.id, 1]]);
+    expect(r.trade_get({ id })).toMatchObject({
+      status: "open",
+      finishedBefore: false,
+      outcome: null,
+    });
+    // With the step off, the folder is never looked at.
+    expect(w.trade_finish({ id, options: { ...ALL_OFF, folderId: 99 } })).toEqual(NOTHING_MOVED);
+  });
+
+  it("reopens on live prices and undoes nothing a finish did", () => {
+    const { db, w, id, get, add, held } = trading({
+      collectionEntries: [entry({ id: 1, cardId: RAGAVAN.id, quantity: 1 })],
+    });
+    add("mine", RAGAVAN, "nonfoil", 1);
+    add("theirs", URZA, "nonfoil", 1);
+    const outcome = w.trade_finish({ id, options: ALL_ON });
+
+    w.trade_reopen({ id });
+
+    expect(get()).toMatchObject({
+      status: "open",
+      closedAt: null,
+      // What the dialog reads to open with every step off, and what the first finish did.
+      finishedBefore: true,
+      outcome,
+    });
+    expect(db.tradeLines.map((l) => l.unitPrice)).toEqual([null, null]);
+    expect([held(RAGAVAN, "nonfoil"), held(URZA, "nonfoil")]).toEqual([0, 1]);
+    expect(db.wishlistEntries).toHaveLength(1);
+    // Open again, so it can be edited again — and reopening an open trade changes nothing.
+    w.trade_update_line({ lineId: get().lines[0].id, change: { quantity: 2 } });
+    const open = get();
+    w.trade_reopen({ id });
+    expect(get()).toEqual(open);
+    expect(() => w.trade_reopen({ id: 99 })).toThrow(/not there/);
+  });
+
+  it("refuses every edit to a trade that is not open, and still reopens, duplicates and deletes it", () => {
+    for (const close of ["finish", "archive"] as const) {
+      const { db, w, id, get, add } = trading();
+      add("mine", RAGAVAN, "nonfoil", 1);
+      const lineId = get().lines[0].id;
+      if (close === "finish") w.trade_finish({ id, options: ALL_OFF });
+      else w.trade_archive({ id });
+      const closed = get();
+
+      const edits: (() => unknown)[] = [
+        () => w.trade_rename({ id, name: "Renamed" }),
+        () => w.trade_set_rate({ id, side: "mine", rate: 80 }),
+        () => w.trade_add_lines({ id, side: "mine", lines: [input(URZA, "nonfoil")] }),
+        () => w.trade_update_line({ lineId, change: { quantity: 3 } }),
+        () => w.trade_remove_line({ lineId }),
+        () => w.trade_finish({ id, options: ALL_OFF }),
+        () => w.trade_archive({ id }),
+      ];
+      for (const edit of edits) expect(edit).toThrow(/no longer open/);
+      expect(get()).toEqual(closed);
+
+      const copy = w.trade_duplicate({ id });
+      expect(get(copy).status).toBe("open");
+      w.trade_reopen({ id });
+      expect(get().status).toBe("open");
+      w.trade_delete({ id: copy });
+      expect(db.trades.map((t) => t.id)).toEqual([id]);
+    }
+  });
+
+  it("duplicates a trade as a new open one: same lines, percentages and marketplace, live prices, no past", () => {
+    const { db, w, r, id, get, add } = trading({ marketplace: "cardmarket" });
+    w.trade_rename({ id, name: "Store night swaps" });
+    w.trade_set_rate({ id, side: "theirs", rate: 80 });
+    add("mine", RAGAVAN, "foil", 2);
+    add("theirs", URZA, "nonfoil", 1);
+    w.trade_finish({ id, options: ALL_ON });
+    // The reader's marketplace has moved on since; the copy keeps the trade's.
+    w.set_marketplace({ id: "tcgplayer" });
+
+    const copy = w.trade_duplicate({ id });
+
+    expect(copy).toBe(2);
+    expect(get(copy)).toMatchObject({
+      name: "Store night swaps copy",
+      marketplace: "cardmarket",
+      rateMine: 100,
+      rateTheirs: 80,
+      status: "open",
+      finishedBefore: false,
+      outcome: null,
+      closedAt: null,
+    });
+    const shape = (trade: Trade) =>
+      trade.lines.map((l) => [l.side, l.cardId, l.finish, l.quantity, l.source]);
+    expect(shape(get(copy))).toEqual(shape(get()));
+    // Its own rows, unfrozen, and newest in the list.
+    expect(get(copy).lines.map((l) => l.id)).toEqual([3, 4]);
+    expect(db.tradeLines.filter((l) => l.tradeId === copy).map((l) => l.unitPrice)).toEqual([
+      null,
+      null,
+    ]);
+    expect(r.trade_list().map((t) => t.id)).toEqual([copy, id]);
+    // The source is untouched, frozen prices and all.
+    expect(get()).toMatchObject({ status: "finished", finishedBefore: true });
+    expect(() => w.trade_duplicate({ id: 99 })).toThrow(/not there/);
+  });
+
+  it("deletes a trade with its lines, and deleting one that is gone is a success", () => {
+    const { db, w, r, id, add } = trading();
+    add("mine", RAGAVAN, "nonfoil");
+    const other = w.trade_create({ trade: {} });
+    w.trade_add_lines({ id: other, side: "theirs", lines: [input(URZA, "nonfoil", 1, "scan")] });
+
+    w.trade_delete({ id });
+    w.trade_delete({ id });
+    expect(r.trade_get({ id })).toBeNull();
+    expect(r.trade_list().map((t) => t.id)).toEqual([other]);
+    expect(db.tradeLines.map((l) => l.tradeId)).toEqual([other]);
+  });
+
+  /**
+   * Through `allHandlers`, because that is where the writes are wrapped for undo: a trade names no
+   * deck, so the wrapper has nothing to snapshot and files no step — and a finish, which changes
+   * both the collection and the wishlist, mints no bulk-undo ticket either. It is also the one
+   * case here that sends each command under the name and the argument names `ipc.ts` does.
+   */
+  it("records no undo step and mints no bulk-undo ticket, a finish included", async () => {
+    resetCommands();
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      collectionEntries: [entry({ id: 1, cardId: RAGAVAN.id, quantity: 1 })],
+    });
+    registerCommands(allHandlers(db));
+
+    const id = await invoke<number>("trade_create", { trade: { name: "Swaps" } });
+    await invoke("trade_rename", { id, name: "Swaps, again" });
+    await invoke("trade_set_rate", { id, side: "theirs", rate: 90 });
+    await invoke("trade_add_lines", {
+      id,
+      side: "mine",
+      lines: [input(RAGAVAN, "nonfoil", 2, "collection")],
+    });
+    const trade = await invoke<Trade | null>("trade_get", { id });
+    const lineId = trade?.lines[0].id;
+    await invoke("trade_update_line", { lineId, change: { quantity: 1 } });
+    const outcome = await invoke<TradeOutcome>("trade_finish", { id, options: ALL_ON });
+    await invoke("trade_reopen", { id });
+    await invoke("trade_remove_line", { lineId });
+    await invoke("trade_archive", { id });
+    const copy = await invoke<number>("trade_duplicate", { id });
+    await invoke("trade_delete", { id: copy });
+
+    expect(outcome).toEqual({ ...NOTHING_MOVED, removedFromCollection: 1, addedToWishlist: 1 });
+    expect(outcome).not.toHaveProperty("undoId");
+    expect(db.deckUndo).toEqual([]);
+    expect(db.deckAudit).toEqual([]);
+    await expect(invoke("bulk_undo", { id: 1 })).rejects.toThrow(/no longer be undone/);
+    await expect(invoke<TradeSummary[]>("trade_list")).resolves.toMatchObject([
+      { id, name: "Swaps, again", status: "archived", rateTheirs: 90, lines: [] },
+    ]);
+  });
+
+  /**
+   * The `trades` world, read through the app's own arithmetic rather than a sum re-spelled here:
+   * the page states a balance with `tradeMoney`, so that is what has to come to the design's
+   * figures.
+   */
+  it("seeds five trades, and the design's own adds up to 64.39 against 87.09", () => {
+    const db = seed("trades");
+    const r = readHandlers(db);
+    const list = r.trade_list();
+
+    expect(list.map((t) => [t.id, t.name, t.status])).toEqual([
+      [5, "Trade 5", "open"],
+      [4, "Trade 4", "open"],
+      [3, "Store night swaps", "finished"],
+      [2, "Trade 2", "finished"],
+      [1, "Trade 1", "archived"],
+    ]);
+    expect(list.every((t) => t.marketplace === "tcgplayer")).toBe(true);
+    expect(list.every((t) => t.rateMine === 100 && t.rateTheirs === 100)).toBe(true);
+    expect(list.map((t) => t.closedAt === null)).toEqual([true, true, false, false, false]);
+
+    const money = list.map((t) => tradeMoney(t));
+    expect(money.map((m) => [m.mine.copies, m.theirs.copies])).toEqual([
+      [6, 5],
+      [2, 1],
+      [4, 6],
+      [3, 3],
+      [1, 2],
+    ]);
+    // Cents, which is what `tradeMoney` counts in.
+    expect(money.map((m) => [m.mine.total, m.theirs.total])).toEqual([
+      [6439, 8709],
+      [643, 33],
+      [1460, 1460],
+      [718, 483],
+      [2678, 3053],
+    ]);
+    expect(money.map((m) => m.balance)).toEqual([
+      { kind: "youOwe", cents: 2270 },
+      { kind: "theyOwe", cents: 610 },
+      { kind: "even" },
+      { kind: "theyOwe", cents: 235 },
+      { kind: "youOwe", cents: 375 },
+    ]);
+    expect(money.every((m) => m.mine.unpriced === 0 && m.theirs.unpriced === 0)).toBe(true);
+
+    const five = r.trade_get({ id: 5 });
+    expect(
+      five?.lines.map((l) => [l.side, l.name, l.setCode, l.collectorNumber, l.finish, l.quantity]),
+    ).toEqual([
+      ["mine", "Ragavan, Nimble Pilferer", "mh2", "138", "nonfoil", 1],
+      ["mine", "Counterspell", "mh2", "267", "etched", 2],
+      ["mine", "Swords to Plowshares", "ema", "32", "foil", 1],
+      ["mine", "Boros Charm", "gtc", "148", "nonfoil", 2],
+      ["theirs", "Lightning Bolt", "sta", "105", "foil", 1],
+      ["theirs", "Urza's Saga", "mh2", "259", "nonfoil", 1],
+      ["theirs", "Tarmogoyf", "fut", "153", "nonfoil", 1],
+      ["theirs", "Sol Ring", "c21", "263", "nonfoil", 2],
+    ]);
+    expect(five?.lines.map((l) => l.source)).toEqual([
+      "collection",
+      "collection",
+      "collection",
+      "collection",
+      "scan",
+      "search",
+      "search",
+      "scan",
+    ]);
+    // Every card the reader is giving is really theirs to give, and exactly two of the cards
+    // coming back are on the wishlist.
+    const mine = five?.lines.filter((l) => l.side === "mine") ?? [];
+    const theirs = five?.lines.filter((l) => l.side === "theirs") ?? [];
+    expect(mine.map((l) => l.owned)).toEqual([1, 2, 1, 3]);
+    expect(theirs.map((l) => l.wished)).toEqual([0, 1, 1, 0]);
+    // One of them has a second copy sleeved: `starter`'s damaged Ragavan, in deck 1's group. Its
+    // two Counterspells there are nonfoil, and the line is etched.
+    expect(mine.map((l) => [l.ownedInDecks, l.deckNames])).toEqual([
+      [1, ["Modern Goodstuff"]],
+      [0, []],
+      [0, []],
+      [0, []],
+    ]);
+
+    // The closed trades are frozen, and two lines say so by differing from today's price.
+    const frozen = (id: number) =>
+      r.trade_get({ id })?.lines.map((l) => [l.name, l.unitPrice, l.finishPrices[l.finish]]);
+    expect(frozen(1)).toContainEqual(["Lightning Bolt", 2.15, 2.5]);
+    expect(frozen(2)).toContainEqual(["Bruna, the Fading Light", 4.17, 3.77]);
+    // Stored without `removedFromDecks`, as a finish from before the key left it: none.
+    expect(r.trade_get({ id: 2 })).toMatchObject({
+      finishedBefore: true,
+      outcome: {
+        removedFromCollection: 3,
+        removedFromDecks: 0,
+        addedToCollection: 3,
+        removedFromWishlist: 1,
+        addedToWishlist: 0,
+      },
+    });
+    expect(r.trade_get({ id: 1 })).toMatchObject({ finishedBefore: false, outcome: null });
+
+    // And `starter` has none.
+    expect(readHandlers(seed("starter")).trade_list()).toEqual([]);
+  });
+
+  it("finishes the seeded trade as the dialog's defaults would, and the collection and wishlist follow", () => {
+    const db = seed("trades");
+    const r = readHandlers(db);
+    const trade = r.trade_get({ id: 5 });
+    if (trade === null) throw new Error("the trades world has no trade 5");
+
+    const outcome = writeHandlers(db).trade_finish({ id: 5, options: defaultFinishOptions(trade) });
+
+    // Every line is covered by copies outside a deck, so no deck gives one.
+    expect(outcome).toEqual({
+      removedFromCollection: 6,
+      removedFromDecks: 0,
+      addedToCollection: 5,
+      removedFromWishlist: 2,
+      addedToWishlist: 0,
+    });
+    const after = r.trade_get({ id: 5 });
+    if (after === null) throw new Error("the trades world lost trade 5");
+    // The spare Boros Charm is still in the box, and nothing received is wished for any more.
+    expect(after.lines.filter((l) => l.side === "mine").map((l) => l.owned)).toEqual([0, 0, 0, 1]);
+    // The Ragavan in `Modern Goodstuff` is where it was: all a second finish could take.
+    expect(after.lines[0]).toMatchObject({ ownedInDecks: 1, deckNames: ["Modern Goodstuff"] });
+    expect(after.lines.filter((l) => l.side === "theirs").map((l) => l.wished)).toEqual([
+      0, 0, 0, 0,
+    ]);
+    // Closed at the prices it was looking at: the balance is the one the page drew.
+    expect(tradeMoney(after).balance).toEqual({ kind: "youOwe", cents: 2270 });
   });
 });

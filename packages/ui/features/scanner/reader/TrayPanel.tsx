@@ -37,6 +37,7 @@ import type {
 } from "@/lib/ipc";
 import { DURATION, PRESS, TRANSITION, seconds } from "@/lib/motion";
 import { cn } from "@/lib/utils";
+import type { TrayDestinationFace } from "../useTrayDestination";
 import {
   addLabel,
   addRefusal,
@@ -93,6 +94,18 @@ export interface TrayPanelProps {
    * to come back to.
    */
   onClearAll: (opener: HTMLElement) => void;
+  /**
+   * The tray is filing somewhere that is not the collection (`useTrayDestination.ts`) — a side of
+   * a trade. **Absent is the Scanner view's tray, drawn exactly as it was before this prop.** With
+   * one, the heading and the press take the destination's words, the rows are priced at its
+   * marketplace, and the folder picker gives its place to the destination's own summary: a folder
+   * is a question about the collection. `folderId` and `onFolder` are then unread, and the page
+   * leaves `onCreateDeck` out.
+   */
+  destination?: TrayDestinationFace;
+  /** One sentence about the tray as a whole, under the heading — the destination's warning that
+   *  the tray held cards before this surface opened. `null` or absent draws nothing. */
+  notice?: string | null;
 }
 
 /** The collection's own word for its top level — `AddToCollection`'s `rootLabel`, one tree over. */
@@ -247,8 +260,11 @@ export function TrayPanel({
   layout,
   onLayout,
   onClearAll,
+  destination,
+  notice = null,
 }: TrayPanelProps) {
   const titleId = useId();
+  const title = destination?.title ?? "Scanned cards";
   const tip = useTooltip();
   const copies = totalCopies(rows);
   const waiting = unresolvedCount(rows);
@@ -283,7 +299,7 @@ export function TrayPanel({
   // Nothing to clear, or a commit about to file these very rows — the Add button's two states that
   // are not about printings or finishes, since a card waiting on either can still be thrown away.
   const clearRefused = rows.length === 0 || committing;
-  const { priceOf, currency, marketplaceLabel } = useTrayPrices(rows);
+  const { priceOf, currency, marketplaceLabel } = useTrayPrices(rows, destination?.marketplace);
   const money: Money = { currency, marketplaceLabel };
 
   // What a press on a card does — four writes, each a reducer call waiting for the latest rows, and
@@ -313,10 +329,10 @@ export function TrayPanel({
             gap between them, which the name algorithm fuses into `Scanned cards3`; the label says
             the whole phrase with the unit a bare digit leaves the reader to guess. */}
         <h3
-          aria-label={`Scanned cards, ${plural(copies, "copy", "copies")}`}
+          aria-label={`${title}, ${plural(copies, "copy", "copies")}`}
           className="flex items-baseline gap-2 font-heading text-lg leading-none"
         >
-          <span id={titleId}>Scanned cards</span>
+          <span id={titleId}>{title}</span>
           <span aria-hidden="true" className="font-mono text-sm tabular-nums text-dim">
             {copies}
           </span>
@@ -370,6 +386,18 @@ export function TrayPanel({
           <LayoutToggle layout={layout} onLayout={onLayout} />
         </div>
       </header>
+
+      {/* Above the rows it is about, and outside their scroller: it is a fact about the whole
+          list, and a reader forty cards down should not have to scroll back up to be told. A note
+          rather than an alert — nothing has gone wrong, and it is there from the first paint. */}
+      {notice !== null && (
+        <p
+          role="note"
+          className="mx-3 mt-2 rounded-md border border-accent/40 bg-accent/10 px-3 py-2 text-xs leading-snug"
+        >
+          {notice}
+        </p>
+      )}
 
       {rows.length === 0 ? (
         <p className="flex min-h-0 flex-1 items-center justify-center px-4 py-8 text-center text-sm text-dim">
@@ -463,7 +491,11 @@ export function TrayPanel({
             Create deck…
           </button>
         )}
-        <FolderPicker folderId={folderId} onFolder={onFolder} />
+        {destination === undefined ? (
+          <FolderPicker folderId={folderId} onFolder={onFolder} />
+        ) : (
+          destination.summary?.(rows)
+        )}
         <button
           type="button"
           aria-disabled={refused || undefined}
@@ -492,7 +524,7 @@ export function TrayPanel({
           )}
           {/* One label in both states: the name a reader pressed is the name the pending control
               keeps, and `aria-busy` is what says the write is under way. */}
-          {addLabel(ready, needsFinish)}
+          {addLabel(ready, needsFinish, destination?.name)}
         </button>
       </footer>
     </section>
