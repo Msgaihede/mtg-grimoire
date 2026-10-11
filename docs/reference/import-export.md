@@ -4,7 +4,7 @@ The general transfer feature — `packages/ui/features/transfer/` — that Tasks
 editor so the same parser, writer and fold rule could serve the collection and the wishlist too.
 `packages/ui/features/transfer/CLAUDE.md` carries the binding rules; this is the long-form record behind
 them, with every figure kept beside the build and the date it was taken on. Numbers marked
-**measured** below were taken live on 2026-08-20 against a debug `npm run tauri dev` build in this
+**measured** below were taken live on 2026-08-20 against a debug `pnpm tauri dev` build in this
 worktree, driven over CDP (`docs/reference/live-ui-verification.md` is the harness); numbers marked
 **counted** were read straight off the source referenced beside them and will move the day that
 source does — re-count rather than trust this page.
@@ -926,7 +926,7 @@ second gate, which keeps `Sideboard` / `2 Duress [M19]` in the sideboard. `parse
 each half and each fence, and `decklists.test.ts` holds `Removal (cheap)` behind a `Commander` pile
 as an Archidekt fixed point.
 
-## The live pass — 2026-08-20, `npm run tauri dev` (debug), this worktree
+## The live pass — 2026-08-20, `pnpm tauri dev` (debug), this worktree
 
 Driven over CDP against a fresh sync (116,700 cards, this worktree's own `target/debug/data/mtg.db`,
 separate from the main checkout's). Every collection/wishlist/deck row this pass created was removed
@@ -1101,7 +1101,7 @@ anything to keep in step. `dropsInactive` is the exception that proves it — `w
 `active_only` is the same fact, and it is ported because the *writer* branches on it.
 
 **`packages/ui/features/transfer/__golden__/` is what makes that legal.** One committed corpus and one
-committed golden set per scenario × format × field set; `npm run golden` regenerates them from
+committed golden set per scenario × format × field set; `pnpm golden` regenerates them from
 *this* writer, which is the behaviour of record, and both suites assert byte equality against the
 same files. A change to either writer without the other is a red build. `packages/ui/features/transfer/CLAUDE.md`
 carries the working rules; [text-mirror.md](text-mirror.md) carries the whole record, including

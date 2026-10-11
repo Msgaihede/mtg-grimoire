@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, within } from "storybook/test";
-import { printing } from "../../fake/fixtures";
+import { printing } from "@grimoire/fake/fixtures";
 import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID } from "@/components/tooltip/TooltipProvider";
 import { soleFinish } from "@/lib/finish";
 import { CardArt } from "./CardArt";

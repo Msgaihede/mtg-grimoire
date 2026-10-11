@@ -21,7 +21,7 @@ const startupStatus = vi.hoisted(() => vi.fn());
 const gate = vi.hoisted(() => ({
   heard: undefined as ((status: unknown) => void) | undefined,
 }));
-vi.mock("@/lib/ipc", () => ({
+vi.mock("@grimoire/ui/lib/ipc", () => ({
   ipc: {
     startupStatus,
     onStartupChanged: (cb: (status: unknown) => void) => {

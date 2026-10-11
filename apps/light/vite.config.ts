@@ -1,6 +1,6 @@
 // Node's own modules, in a file `tsc` never reads: a Vite config is type-stripped by Vite and
 // checked by nothing (`apps/desktop/tsconfig.node.json` has why that project lists one file, and
-// the root `tsconfig.json` leaves every app's config out by name), and `@types/node` is never
+// each app's `tsconfig.json` leaves its Vite configs out by name), and `@types/node` is never
 // installed. What this file decides that can be wrong lives in
 // `packages/ui/lib/core/web/assets.ts`, where the suite covers it; what stays here is the
 // filesystem.
@@ -142,7 +142,7 @@ function lightEntry(): Plugin {
 const FAKE_UNBUNDLED = ["@tauri-apps/plugin-clipboard-manager", "@tauri-apps/plugin-opener"];
 
 /**
- * Where `npm run web:wasm` (`scripts/build-wasm.mjs`) writes the engine: wasm-bindgen's glue and
+ * Where `pnpm web:wasm` (`scripts/build-wasm.mjs`) writes the engine: wasm-bindgen's glue and
  * the module, and whatever the glue imports beside itself. Ignored, and read by the web mode
  * alone. At the repository root, as `target/` is — it is a cargo build's output, not this app's
  * — and resolved against this file rather than the working directory.
@@ -152,7 +152,7 @@ const ENGINE_DIR = fileURLToPath(new URL("../../dist-wasm/", import.meta.url));
 /** What a build, a dev server and a reader of the page are each told when it is not there. */
 const ENGINE_MISSING =
   `The card engine has not been built: dist-wasm/ has no ${GLUE_FILE} and ${WASM_FILE}. ` +
-  "Run `npm run web:wasm` first.";
+  "Run `pnpm web:wasm` first.";
 
 /** One file under `dist-wasm/`, by its path from it. */
 interface Built {
@@ -206,7 +206,7 @@ const scannerBuilt = (files: { name: string }[]): boolean =>
 /** What a build is told when the engine is there and the scanner's module is not. */
 const SCANNER_MISSING =
   `The card scanner's module has not been built: dist-wasm/ has no ${SCANNER_GLUE_FILE} and ` +
-  `${SCANNER_WASM_FILE}. Run \`npm run web:wasm\` first.`;
+  `${SCANNER_WASM_FILE}. Run \`pnpm web:wasm\` first.`;
 
 /** `card_scanner::index::FORMAT_VERSION`, read from the crate as `scripts/scanner-assets.mjs` reads it. */
 function scannerFormat(): number {
@@ -228,7 +228,7 @@ function scannerFormat(): number {
  * shipping it would be a download every reader's browser then refuses.
  */
 function scannerAssets(files: Built[], format: number): { ship: Built[] } | { why: string } {
-  const fetchIt = "Run `npm run scanner:assets -- --web`.";
+  const fetchIt = "Run `pnpm scanner:assets --web`.";
   const named = (name: string): Built | undefined =>
     files.find((file) => file.name === `${SCANNER_ASSETS_DIR}${name}`);
   const manifestFile = named(SCANNER_MANIFEST);
@@ -270,7 +270,7 @@ function scannerAssets(files: Built[], format: number): { ship: Built[] } | { wh
  * by URL — so they are put there by hand:
  *
  * - **In dev**, a middleware answers `/wasm/<anything>/…` from `dist-wasm/` as it is on disk at
- *   that moment, uncached, so `npm run web:wasm` beside a running server is picked up by a reload.
+ *   that moment, uncached, so `pnpm web:wasm` beside a running server is picked up by a reload.
  *   A file that is not there is a 404 that says what to run — which the Worker's failed load
  *   carries to the boot screen.
  * - **In a build**, every file is emitted under `wasm/<build>/`, and an engine that was never
@@ -381,7 +381,7 @@ function webScanner(files: Built[], format: number): Plugin {
           res.statusCode = 404;
           res.setHeader("Content-Type", "text/plain; charset=utf-8");
           res.setHeader("Cache-Control", "no-store");
-          res.end("The scanner's files are not here. Run `npm run scanner:assets -- --web`.");
+          res.end("The scanner's files are not here. Run `pnpm scanner:assets --web`.");
           return;
         }
         res.statusCode = 200;
@@ -458,7 +458,7 @@ function webHosting(): Plugin {
     configurePreviewServer(server) {
       if (!existsSync(`${WEB_BUILD}/_headers`)) {
         throw new Error(
-          "apps/light/dist-web/_headers is missing. Run `npm run web:build` first.",
+          "apps/light/dist-web/_headers is missing. Run `pnpm web:build` first.",
         );
       }
       const rules = parseHeaders(readFileSync(`${WEB_BUILD}/_headers`, "utf8"));
@@ -509,7 +509,7 @@ function webHosting(): Plugin {
 export default defineConfig(({ mode, command, isPreview }) => {
   /**
    * **`web` is the web app's build**: the light entry over the engine in a Worker, into
-   * `dist-web/` (`npm run web:build`, `web:dev`, `web:preview`). Every other mode is the light app
+   * `dist-web/` (`pnpm web:build`, `web:dev`, `web:preview`). Every other mode is the light app
    * as it was — `dist-mobile/`, which the Android host embeds, and `fake` for the Storybook fake.
    * Both land in this folder. The page's code is the same; what differs is below `@/lib/core`,
    * which reads this mode (`packages/ui/lib/core/index.ts`).
@@ -562,11 +562,12 @@ export default defineConfig(({ mode, command, isPreview }) => {
     // The favicon is a second copy of the mark for that reason; `apps/light/host.test.ts` holds
     // it equal to the master.
     publicDir: PUBLIC_DIR,
-    // The Storybook fake, under the real `ipc.ts` — **the four aliases `.storybook/main.ts`
+    // The Storybook fake, under the real `ipc.ts` — **the aliases `.storybook/main.ts`
     // declares, read from the one list both use**, for its reason: the fake sits *under* the
     // hand-written mirror, so the light app in a plain browser exercises the mirror too.
     // `mergeConfig` puts these ahead of the base config's `@` alias, and `@/lib/images` has to be
-    // tried before that prefix.
+    // tried before that prefix (the package's name for it, `@grimoire/ui/lib/images`, has a rule of
+    // its own).
     resolve: mode === "fake" ? { alias: FAKE_ALIASES } : {},
     optimizeDeps: mode === "fake" ? { exclude: FAKE_UNBUNDLED } : {},
     // How the Worker is told where its engine is. `define` reaches the Worker's bundle as it

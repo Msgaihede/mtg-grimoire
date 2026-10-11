@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest";
 import { allHandlers, makeDb, scannerAssetHandlers, scannerHandlers } from "./db";
 import { listen } from "./event";
 import { installWorld } from "./world";
-import type { ScannerAssetsProgress } from "@/lib/ipc";
+import type { ScannerAssetsProgress } from "@grimoire/ui/lib/ipc";
 import scannerAssetsRs from "../../crates/grimoire-core/src/scanner_assets.rs?raw";
 
 /**

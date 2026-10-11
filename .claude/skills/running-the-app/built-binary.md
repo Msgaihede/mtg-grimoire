@@ -1,13 +1,13 @@
 # Launching a built binary
 
 Read this only when you are measuring a **release path**. For everything else use
-`npm run tauri dev`, which has none of the three traps below — `SKILL.md` carries that
+`pnpm tauri dev`, which has none of the three traps below — `SKILL.md` carries that
 recipe.
 
 ```powershell
 Get-Process mtg-grimoire -ErrorAction SilentlyContinue   # must be empty
 (Get-Item apps\desktop\src-tauri\src\main.rs).LastWriteTime = Get-Date
-npm run tauri build -- --debug --no-bundle
+pnpm tauri build --debug --no-bundle
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
 $proc = Start-Process "target\debug\mtg-grimoire.exe" -PassThru
 pwsh -NoProfile -File $L adopt app -ProcessId $proc.Id

@@ -257,6 +257,40 @@ manifest naming `wrangler` alone.
 someone to run follow. `scripts/workflow-scripts.test.mjs`, `scripts/toolchain.test.mjs` and
 `scripts/actions-pinned.test.mjs` are taught the new spellings.
 
+**Amended during planning and execution (2026-10-08).** Seven things were measured and came out
+differently from the paragraphs above; the plan
+(`docs/superpowers/plans/2026-10-08-repository-layout-stage-2.md`) has each measurement.
+
+- `@grimoire/desktop` also depends on `@grimoire/fake`, for its tests.
+- `@grimoire/light` does not depend on `@grimoire/app-worker`. Rule 4 is wider than written: a
+  file Node loads itself — a Vite, Vitest or Storybook config, and everything under `scripts/` —
+  imports by relative path. Vite bundles what a config reaches by path and leaves a package name
+  to Node, which could not run an `enum`; and `scripts/web-deploy-probe.mjs` runs in a job that
+  installs nothing.
+- The three Workers keep the `tsconfig.json` they had and do not extend `tsconfig.base.json`.
+- The hosting Worker's one import from the shared UI is also a wrangler `alias`: `web-deploy`
+  bundles it with no workspace links.
+- A stylesheet goes on naming another by path; `@import` and `@source` lines were not rewritten.
+- `.design-sync/` was left as written except for two lines of configuration.
+- `npm run x -- --flag` became `pnpm x --flag`: pnpm hands a `--` to the script.
+
+Found while the plan ran:
+
+- `pnpm-workspace.yaml` sets `optimisticRepeatInstall: false`. pnpm 11 otherwise answers
+  `pnpm install` with "Already up to date" from the manifests' modification times alone, and a
+  lockfile changed by itself was not installed.
+- The session hook deletes a `node_modules` npm made before it installs. `pnpm install` over one
+  exits 0 and leaves npm's hoisted packages in place, with pnpm's strictness silently off.
+- `scripts/workflow-scripts.test.mjs` refuses a pnpm call it cannot read (`pnpm --filter x run
+  y`), a `--` anywhere on a pnpm line, and any npm, npx, pnpx or corepack line but the deploy
+  tool's install; `scripts/toolchain.test.mjs` holds pnpm's setup step directly above Node's.
+- The hosting Worker's test reads its `src/` at every depth, so a package-name import in a
+  subfolder needs an alias too.
+
+And one rule the design did not state, held by `scripts/workspace.test.mjs`: a package declares
+what its files import. pnpm's layout does not enforce it — Node finds a package the root declares
+from any folder beneath it.
+
 ## 7. Verification
 
 Each stage is checked against a baseline taken on the commit before it. "Each build" below means
@@ -298,7 +332,7 @@ inherited from the workspace; a WASM build from an untouched tree is reproducibl
   run `npm run scanner:assets` again, or the next debug build embeds no scanner. `.gitignore` and
   ESLint go on ignoring these folders, in a dated block, until they are gone — found by the final
   review, which noticed that a checkout pulling this would otherwise lint built bundles.
-- **After stage 2**: delete `node_modules` and run `pnpm install`.
+- **After stage 2**: delete `node_modules` and run `pnpm install` — and `infrastructure/app-worker/node_modules`, which held the deploy tool; it installs into `infrastructure/wrangler` now.
 - **Old worktrees** are deleted or re-created; none is merged forward.
 - **Nothing here deploys.** The first release after stage 1 deploys the web app through the
   re-pathed `web-deploy`, as any release does.

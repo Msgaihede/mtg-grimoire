@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
-import { emitFake } from "../../fake/event";
-import { setMaximized, windowCalls } from "../../fake/window";
+import { emitFake } from "@grimoire/fake/event";
+import { setMaximized, windowCalls } from "@grimoire/fake/window";
 import { SNAP_HOVER_EVENTS } from "@/lib/window";
 import { TitleBar } from "./TitleBar";
 

@@ -1,7 +1,7 @@
 import { useRef, useState, type ReactNode } from "react";
-import type { FilterSurface } from "@/features/search/FilterBar";
-import type { TrayCell } from "@/features/search/filterOptions";
-import { StatedFiltersLine } from "@/features/search/StatedFiltersLine";
+import type { FilterSurface } from "@grimoire/ui/features/search/FilterBar";
+import type { TrayCell } from "@grimoire/ui/features/search/filterOptions";
+import { StatedFiltersLine } from "@grimoire/ui/features/search/StatedFiltersLine";
 import { FiltersButton, FiltersSheet } from "./search/FiltersSheet";
 
 /**

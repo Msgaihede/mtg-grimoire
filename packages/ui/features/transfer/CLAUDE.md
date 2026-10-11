@@ -79,7 +79,7 @@ A parallel Rust export writer exists in `apps/desktop/src-tauri/src/transfer/` t
   - `__golden__/corpus.json`: Benchmark dataset covering edge cases (split names, quotes, inactive piles, labels).
   - `__golden__/*.txt`: Golden output files across 7 formats and 2 field configurations.
   - `__golden__/fields.json`: Field registry definitions ensuring parity between TS and Rust field maps.
-- **Regeneration**: `npm run golden` regenerates golden files from the TypeScript implementation.
+- **Regeneration**: `pnpm golden` regenerates golden files from the TypeScript implementation.
 - **Strict parity**: Both Vitest (`golden.test.ts`) and Cargo (`transfer/write.rs`) execute assertions against the same golden files. A discrepancy between TypeScript and Rust fails CI.
 - **No Rust parser**: The filesystem mirror only writes files. Transitive round-trip verification is maintained by Vitest parsing the golden files with `parse.ts`.
 - **Mirror filter policy**: Row filters (`arenaOnly`, `includeInactive`) remain strictly in the UI. The filesystem mirror includes all cards and piles unconditionally (a backup that narrows itself is not a backup).
@@ -92,9 +92,9 @@ Run verification only at the end of feature work:
 
 | Command | Action |
 | --- | --- |
-| `npm run test` / `npx vitest packages/ui/features/transfer` | Run transfer parser, planner, and export unit tests |
+| `pnpm test` / `pnpm exec vitest packages/ui/features/transfer` | Run transfer parser, planner, and export unit tests |
 | `cargo test -p mtg-grimoire transfer::` | Run Rust mirror writer parity tests |
-| `npm run golden` | Regenerate golden files after deliberate writer or field changes |
+| `pnpm golden` | Regenerate golden files after deliberate writer or field changes |
 
 Commit discipline:
 - One commit per feature matching feature size, bundling implementation, tests, and goldens together for clean `release-please` tracking.

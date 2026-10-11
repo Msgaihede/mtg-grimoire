@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { isLightView, LIGHT_START } from "@/lib/edition";
-import { useAppStore } from "@/lib/store";
+import { isLightView, LIGHT_START } from "@grimoire/ui/lib/edition";
+import { useAppStore } from "@grimoire/ui/lib/store";
 import { isOverlaid, isPushed, OVERLAID, parsePlace, placeHref, type Place } from "./routes";
 
 type DesktopWhere = Pick<

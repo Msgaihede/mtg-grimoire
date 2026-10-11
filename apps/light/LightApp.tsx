@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react";
-import { useStartup } from "@/boot/useStartup";
+import { useStartup } from "@grimoire/ui/boot/useStartup";
 import { BootScreen } from "./BootScreen";
 import { DownloadsPrompt } from "./DownloadsPrompt";
 import { FaceBoundary } from "./FaceBoundary";

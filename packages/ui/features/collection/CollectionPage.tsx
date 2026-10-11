@@ -410,7 +410,7 @@ const COLLECTION_LABELS: FilterLabels = {
  * column narrows rather than overflowing. That is why the deck's number is reused rather than a
  * second one invented.
  *
- * **Measured in the shipped window on 2026-09-07** (`npm run tauri dev`, a debug build, against a
+ * **Measured in the shipped window on 2026-09-07** (`pnpm tauri dev`, a debug build, against a
  * real 276-copy collection), and the measurement split it in two: **the floor is the *view's*, not
  * the page's.**
  *

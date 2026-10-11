@@ -10,17 +10,17 @@ import {
   type RefCallback,
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ShelfLabel } from "@/features/shelves/ShelfLabel";
-import { PendingSlot, shelfRowKey } from "@/features/shelves/shelfRows";
+import { ShelfLabel } from "@grimoire/ui/features/shelves/ShelfLabel";
+import { PendingSlot, shelfRowKey } from "@grimoire/ui/features/shelves/shelfRows";
 import {
   fillShelves,
   loadedShelves,
   rowOfTile,
   type LayoutRow,
   type ShelfSection,
-} from "@/lib/shelfLayout";
-import type { Shelf } from "@/lib/shelves";
-import { useElementWidth } from "@/lib/useElementWidth";
+} from "@grimoire/ui/lib/shelfLayout";
+import type { Shelf } from "@grimoire/ui/lib/shelves";
+import { useElementWidth } from "@grimoire/ui/lib/useElementWidth";
 import type { WallItem } from "./CardWall";
 import {
   columnsFor,

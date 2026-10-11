@@ -4,7 +4,7 @@ import { expect, userEvent, within } from "storybook/test";
 import { FOCUS } from "@/lib/focus";
 import { cardImageUrl } from "@/lib/images";
 import { cn } from "@/lib/utils";
-import { printing } from "../../fake/fixtures";
+import { printing } from "@grimoire/fake/fixtures";
 import { CardImage } from "./CardImage";
 
 const BOLT = printing("lea", "161");

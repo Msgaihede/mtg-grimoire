@@ -1,11 +1,11 @@
 import { useCallback, useMemo, useState } from "react";
-import { useDecks } from "@/features/decks/useDecks";
-import { FOLD_PAUSED_REASON } from "@/features/shelves/ShelfToolbar";
-import { ManagedFolderNote } from "@/features/wishlist/ManagedFolderNote";
-import { managedEmptySentence, managedIds } from "@/features/wishlist/managed";
-import { useWishlist, WISHLIST_TRAY } from "@/features/wishlist/useWishlist";
-import { useWishlistFolders } from "@/features/wishlist/useWishlistFolders";
-import { WishlistSummaryHeader } from "@/features/wishlist/WishlistSummary";
+import { useDecks } from "@grimoire/ui/features/decks/useDecks";
+import { FOLD_PAUSED_REASON } from "@grimoire/ui/features/shelves/ShelfToolbar";
+import { ManagedFolderNote } from "@grimoire/ui/features/wishlist/ManagedFolderNote";
+import { managedEmptySentence, managedIds } from "@grimoire/ui/features/wishlist/managed";
+import { useWishlist, WISHLIST_TRAY } from "@grimoire/ui/features/wishlist/useWishlist";
+import { useWishlistFolders } from "@grimoire/ui/features/wishlist/useWishlistFolders";
+import { WishlistSummaryHeader } from "@grimoire/ui/features/wishlist/WishlistSummary";
 import {
   countTotals,
   effectiveCounts,
@@ -15,10 +15,10 @@ import {
   sectionsOf,
   shelfStat,
   subtotalsOf,
-} from "@/features/wishlist/wishShelfPlan";
-import { buildFolderTree, trailOf } from "@/lib/folderTree";
-import { layoutShelves } from "@/lib/shelfLayout";
-import { visibleShelves, type Shelf } from "@/lib/shelves";
+} from "@grimoire/ui/features/wishlist/wishShelfPlan";
+import { buildFolderTree, trailOf } from "@grimoire/ui/lib/folderTree";
+import { layoutShelves } from "@grimoire/ui/lib/shelfLayout";
+import { visibleShelves, type Shelf } from "@grimoire/ui/lib/shelves";
 import { CabinetFilters } from "../CabinetFilters";
 import type { WallItem } from "../CardWall";
 import { wishItem } from "../items";

@@ -1719,7 +1719,7 @@ labels_it_made` is the proof that the reader's own labels are not swept with the
   command can be driven with a path any more. The gap is unchanged in kind: the click → chosen
   file half is the native window's, and the read and the write after it are unit-tested over real
   files.)*
-- **Driven in the shipped window 2026-08-12**, `npm run tauri dev` — so a **debug** build with
+- **Driven in the shipped window 2026-08-12**, `pnpm tauri dev` — so a **debug** build with
   Vite serving the frontend (`/src/main.tsx` in the page's script list, which is the cheap proof
   that no stale embedded `dist/` is being measured — still `/src/main.tsx` since 2026-10-08, now
   `apps/desktop/src/main.tsx`), the live 116 695-card corpus, 1280×800.
@@ -1930,7 +1930,7 @@ manaCost | price | type`). All twelve combinations were driven live 2026-08-11; 
   `STACK_MAX_WIDTH` are gone rather than moved. **That pass predates the `Split X` toggle**
   (schema v13, 2026-08-14): the twelve stand as measured — the toggle is a modifier of one of the
   three modes and not a fourth mode.
-- **The split arm was then driven live 2026-08-14** (`npm run tauri dev`, a **debug** build,
+- **The split arm was then driven live 2026-08-14** (`pnpm tauri dev`, a **debug** build,
   1280×800, against the real 116,703-card corpus), and every claim above about it held:
   - **Exclusive, measured rather than argued.** A deck holding one `{X}{R}` (Fireball, mana
     value 1) read `Mana value 1 :: 2 rows` with the switch off, and `Mana value 1 :: 1 row` plus

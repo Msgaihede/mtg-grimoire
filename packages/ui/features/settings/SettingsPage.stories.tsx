@@ -2,8 +2,8 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import type { UpdateStatus } from "@/lib/ipc";
 import { nextAction, type Update } from "@/lib/useUpdate";
-import { pickAsset } from "../../../fake/db";
-import { CURRENT_VERSION, NEXT_VERSION, release } from "../../../fake/fixtures";
+import { pickAsset } from "@grimoire/fake/db";
+import { CURRENT_VERSION, NEXT_VERSION, release } from "@grimoire/fake/fixtures";
 import { CONFIRM_WORD } from "./ConfirmDialog";
 import { SettingsPage } from "./SettingsPage";
 

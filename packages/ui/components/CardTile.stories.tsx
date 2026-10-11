@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
-import { printing } from "../../fake/fixtures";
+import { printing } from "@grimoire/fake/fixtures";
 import { CardTile } from "@/components/CardTile";
 import { CountTag } from "@/components/CountTag";
 

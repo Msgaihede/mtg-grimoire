@@ -1,14 +1,14 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => import("../../../../packages/fake/core"));
-vi.mock("@tauri-apps/api/event", () => import("../../../../packages/fake/event"));
-vi.mock("@tauri-apps/api/window", () => import("../../../../packages/fake/window"));
+vi.mock("@tauri-apps/api/core", () => import("@grimoire/fake/core"));
+vi.mock("@tauri-apps/api/event", () => import("@grimoire/fake/event"));
+vi.mock("@tauri-apps/api/window", () => import("@grimoire/fake/window"));
 
-import { STATUS } from "@/features/scanner/fixtures";
-import type { CommandTable } from "../../../../packages/fake/scope";
-import type { FakeParams } from "../../../../packages/fake/world";
-import type { ScannerStatus } from "@/lib/ipc";
+import { STATUS } from "@grimoire/ui/features/scanner/fixtures";
+import type { CommandTable } from "@grimoire/fake/scope";
+import type { FakeParams } from "@grimoire/fake/world";
+import type { ScannerStatus } from "@grimoire/ui/lib/ipc";
 import { renderPhone } from "../testing";
 import { ScannerDataSlot } from "./ScannerDataSlot";
 

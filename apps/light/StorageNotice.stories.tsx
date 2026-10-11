@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
-import { CLEARED_LINES, CLEARED_TITLE } from "@/lib/core/web/storage";
+import { CLEARED_LINES, CLEARED_TITLE } from "@grimoire/ui/lib/core/web/storage";
 import { StorageNoticeCard } from "./StorageNotice";
 
 /**

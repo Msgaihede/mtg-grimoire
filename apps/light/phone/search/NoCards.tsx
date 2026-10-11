@@ -1,4 +1,4 @@
-import type { Activity } from "@/lib/activity";
+import type { Activity } from "@grimoire/ui/lib/activity";
 import { DimNote } from "../pages/parts";
 
 /**

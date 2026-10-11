@@ -1,9 +1,9 @@
 import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, within } from "storybook/test";
-import { registerCommands } from "../../../fake/core";
-import { printing } from "../../../fake/fixtures";
-import { activeScope } from "../../../fake/scope";
+import { registerCommands } from "@grimoire/fake/core";
+import { printing } from "@grimoire/fake/fixtures";
+import { activeScope } from "@grimoire/fake/scope";
 import type { CardDetail } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 import { LegalityDialog } from "./LegalityDialog";

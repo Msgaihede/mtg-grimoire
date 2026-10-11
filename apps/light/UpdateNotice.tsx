@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { RefreshCw, X } from "lucide-react";
-import type { HostUpdate } from "@/lib/core/hostUpdate";
-import { FOCUS } from "@/lib/focus";
-import { LAYER } from "@/lib/layers";
-import { PRESS } from "@/lib/motion";
-import { cn } from "@/lib/utils";
+import type { HostUpdate } from "@grimoire/ui/lib/core/hostUpdate";
+import { FOCUS } from "@grimoire/ui/lib/focus";
+import { LAYER } from "@grimoire/ui/lib/layers";
+import { PRESS } from "@grimoire/ui/lib/motion";
+import { cn } from "@grimoire/ui/lib/utils";
 import { useHostUpdate } from "./useHostUpdate";
 
 /**

@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DECISION_GAP_FRAMES } from "@/features/scanner/useScanLoop";
-import { matchStrip } from "@/features/scanner/reader/readerText";
-import { addDecision } from "@/features/scanner/reader/tray";
-import { trayFinish } from "@/features/scanner/reader/trayFinish";
-import type { ScanMode, ScannerTrayRow, ScannerVerdict } from "@/lib/ipc";
+import { DECISION_GAP_FRAMES } from "@grimoire/ui/features/scanner/useScanLoop";
+import { matchStrip } from "@grimoire/ui/features/scanner/reader/readerText";
+import { addDecision } from "@grimoire/ui/features/scanner/reader/tray";
+import { trayFinish } from "@grimoire/ui/features/scanner/reader/trayFinish";
+import type { ScanMode, ScannerTrayRow, ScannerVerdict } from "@grimoire/ui/lib/ipc";
 import { invoke, registerCommands, resetCommands } from "./core";
 import { allHandlers, makeDb } from "./db";
 import {

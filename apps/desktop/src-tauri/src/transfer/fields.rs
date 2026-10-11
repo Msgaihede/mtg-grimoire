@@ -669,7 +669,7 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
             panic!(
                 "the registry golden is not readable at {}: {e}. It is TypeScript's file — \
-                 run `npm run golden`",
+                 run `pnpm golden`",
                 path.display()
             )
         });
@@ -691,7 +691,7 @@ mod tests {
     /// CSV alone, whose header row *is* the field list spelled out.
     ///
     /// So the tables themselves are committed, in the shape that already works: written from
-    /// TypeScript by `npm run golden`, asserted here and in `golden.test.ts`. All 21 pairs on
+    /// TypeScript by `pnpm golden`, asserted here and in `golden.test.ts`. All 21 pairs on
     /// both axes, plus `SURFACE_FIELDS` — which is not recoverable from the intersections,
     /// because a field no format offers drops out of every one of them.
     #[test]

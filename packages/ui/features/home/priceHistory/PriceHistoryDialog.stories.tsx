@@ -5,7 +5,7 @@ import { expect, userEvent, within } from "storybook/test";
 import type { Finish } from "@/lib/finish";
 import type { PriceMoverWindow } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
-import { printing } from "../../../../fake/fixtures";
+import { printing } from "@grimoire/fake/fixtures";
 
 import { NO_HISTORY_SENTENCE, PriceHistoryDialog } from "./PriceHistoryDialog";
 

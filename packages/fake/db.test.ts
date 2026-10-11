@@ -33,7 +33,7 @@ import {
   settleManagedWishlist,
   writeHandlers,
 } from "./db";
-import { isListedToken } from "@/features/decks/deckTokens";
+import { isListedToken } from "@grimoire/ui/features/decks/deckTokens";
 import { listen } from "./event";
 import type {
   FakeActivity,
@@ -75,25 +75,25 @@ import type {
   WishlistImportItem,
   WishlistQuery,
   WishlistSortKey,
-} from "@/lib/ipc";
-import type { Finish } from "@/lib/finish";
-import { PRINTING_GROUP_BY_OPTIONS } from "@/features/card/printings";
+} from "@grimoire/ui/lib/ipc";
+import type { Finish } from "@grimoire/ui/lib/finish";
+import { PRINTING_GROUP_BY_OPTIONS } from "@grimoire/ui/features/card/printings";
 // The app's own reader, borrowed for one fence: a seeded payload whose keys were misspelled
 // degrades to a sentence rather than an error, so nothing but this would notice.
-import { activityLine } from "@/features/home/activityText";
+import { activityLine } from "@grimoire/ui/features/home/activityText";
 // The deck editor's own arithmetic, borrowed for the one fence `deck_completion` exists to keep:
 // the widget has to say what the editor says, and a hand-copy of the sum here would only prove the
 // fake agrees with itself.
-import { deckStats } from "@/features/decks/DeckStats";
+import { deckStats } from "@grimoire/ui/features/decks/DeckStats";
 // The app's half of the default layout, which the fake spells out rather than imports — so the
 // only thing holding the two together is a test that compares them.
-import { DEFAULT_LAYOUT } from "@/features/home/widgets";
+import { DEFAULT_LAYOUT } from "@grimoire/ui/features/home/widgets";
 // The app's own note reader, borrowed for one fence a grep could not make: the seeded sticky
 // notes claim to carry a hard break, and only this says whether the characters really are one.
-import { parseNoteBody } from "@/features/decks/noteMarkdown";
-import type { MarketplaceId } from "@/lib/marketplace";
-import { parseSnapshotValue, SNAPSHOT_VERSION } from "@/lib/shareSnapshot";
-import type { SortSpec } from "@/lib/sort";
+import { parseNoteBody } from "@grimoire/ui/features/decks/noteMarkdown";
+import type { MarketplaceId } from "@grimoire/ui/lib/marketplace";
+import { parseSnapshotValue, SNAPSHOT_VERSION } from "@grimoire/ui/lib/shareSnapshot";
+import type { SortSpec } from "@grimoire/ui/lib/sort";
 
 const BOLT = CARDS.find((c) => c.name === "Lightning Bolt")!;
 /** The second Bolt printing — `2x2 117`, uncommon. Used wherever "a different printing of

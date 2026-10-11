@@ -2,7 +2,7 @@
 
 Storybook serves as a component design workbench, living UI catalogue, and accessibility test
 surface (`@storybook/addon-a11y`). It does not run visual regression screenshots.
-Commands: `npm run storybook` (workbench dev) · `npm run build-storybook` (static build).
+Commands: `pnpm storybook` (workbench dev) · `pnpm build-storybook` (static build).
 Full reference, measurements, and design history: [`docs/reference/storybook.md`](../docs/reference/storybook.md).
 
 ## MCP Integration (`mtg-grimoire-sb-mcp`)
@@ -23,9 +23,9 @@ The fake lives in `packages/fake/` (it was `.storybook/fake/` until 2026-10-08);
   - Commands deliberately omitted must be registered in the `ABSENT` map with documented rationale.
   - The parity test compares command names only; argument and payload types are asserted by `ipc.test.ts`.
 - **The fake sits under `packages/ui/lib/ipc.ts`, not in place of it**:
-  - `aliases.ts` aliases four modules (`@tauri-apps/api/core`, `@tauri-apps/api/event`, `@tauri-apps/api/window`, and `@/lib/images`) to `packages/fake/`.
+  - `aliases.ts` aliases four modules (`@tauri-apps/api/core`, `@tauri-apps/api/event`, `@tauri-apps/api/window`, and the images module under both of its names, `@/lib/images` and `@grimoire/ui/lib/images`) to `packages/fake/`.
   - Because `packages/ui/lib/ipc.ts` is the hand-written TypeScript mirror of Rust structs, placing the fake beneath it ensures every story exercises the mirror and catches type drift.
-  - The same four aliases are consumed by the light app's dev mode (`npm run mobile:dev` via `apps/light/vite.config.ts`), which boots one world before mounting React: `starter` by default, or the `?seed=` / `?fault=` named in the address (`apps/light/fakeBoot.ts`).
+  - The same four aliases are consumed by the light app's dev mode (`pnpm mobile:dev` via `apps/light/vite.config.ts`), which boots one world before mounting React: `starter` by default, or the `?seed=` / `?fault=` named in the address (`apps/light/fakeBoot.ts`).
 - **Single window model**:
   - A story simulates a single window. `window_new` answers but opens nothing; `window_count` always returns 1.
   - Multi-window states are simulated using explicit faults (e.g., `scannerElsewhere` for active hardware leases), never second window instances.
@@ -82,15 +82,15 @@ The fake lives in `packages/fake/` (it was `.storybook/fake/` until 2026-10-08);
   - Stories must import `.storybook/preview.css`, never `packages/ui/index.css` directly.
   - `@source "../.storybook"` ensures Storybook utility classes are not bundled into production application stylesheets.
 - **CI verification**:
-  - `npm run build-storybook` is executed in CI by the `storybook` job. It serves as the compilation gate for `.storybook/DesignSystem.mdx` and `preview.css`.
+  - `pnpm build-storybook` is executed in CI by the `storybook` job. It serves as the compilation gate for `.storybook/DesignSystem.mdx` and `preview.css`.
 
 ## Environment Traps & Integration Caveats
 
 - **Isolated TypeScript Program**:
-  - `.storybook` is type-checked separately via `tsc -p .storybook` (invoked during `npm run build`).
+  - `.storybook` is type-checked separately via `tsc -p .storybook` (invoked during `pnpm build`).
   - **`@types/node` is strictly banned**: Ambient Node types must never enter the frontend program. Webview code expects standard DOM types (`setTimeout` returning `number`, not `NodeJS.Timeout`).
 - **Story Execution under Vitest**:
-  - `packages/ui/stories.test.tsx` runs each story's `play` function under Vitest during `npm run test:run`.
+  - `packages/ui/stories.test.tsx` runs each story's `play` function under Vitest during `pnpm test:run`.
   - `setProjectAnnotations` must execute at module scope before calling `composeStories`.
 - **Mocking Restrictions**:
   - While three Tauri aliases are mocked, **`@/lib/images` must NEVER be mocked in Vitest**. Mocking it triggers a silent 300-second hang without test output or error traces.

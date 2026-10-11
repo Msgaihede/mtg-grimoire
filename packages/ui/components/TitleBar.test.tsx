@@ -5,8 +5,8 @@ import { TitleBar } from "@/components/TitleBar";
 import { LAYER } from "@/lib/layers";
 import { useAppStore } from "@/lib/store";
 import { SNAP_BUTTON_ID, SNAP_HOVER_EVENTS } from "@/lib/window";
-import { emitFake, resetListeners } from "../../fake/event";
-import { resetWindow, setMaximized, windowCalls } from "../../fake/window";
+import { emitFake, resetListeners } from "@grimoire/fake/event";
+import { resetWindow, setMaximized, windowCalls } from "@grimoire/fake/window";
 
 /**
  * The fakes, not hand-rolled stubs, and both at the same rung they sit at in Storybook: under
@@ -14,8 +14,8 @@ import { resetWindow, setMaximized, windowCalls } from "../../fake/window";
  * Tauri methods and four ACL permissions, and a test that mocked it would prove nothing about
  * the one file that can drift from `capabilities/desktop.json`.
  */
-vi.mock("@tauri-apps/api/window", () => import("../../fake/window"));
-vi.mock("@tauri-apps/api/event", () => import("../../fake/event"));
+vi.mock("@tauri-apps/api/window", () => import("@grimoire/fake/window"));
+vi.mock("@tauri-apps/api/event", () => import("@grimoire/fake/event"));
 
 beforeEach(() => {
   resetWindow();

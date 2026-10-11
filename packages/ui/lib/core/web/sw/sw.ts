@@ -5,7 +5,7 @@ import { createWorker } from "./serve";
  * **The web app's service worker** (phase 5, step 5.3; the light-app spec §3.5 and §6).
  * Hand-written — no `workbox`, no `vite-plugin-pwa`.
  *
- * **It is its own `tsc` program** (`packages/ui/tsconfig.web-sw.json`, the `WebWorker` lib; the root program
+ * **It is its own `tsc` program** (`packages/ui/tsconfig.web-sw.json`, the `WebWorker` lib; `packages/ui/tsconfig.json`
  * leaves this one file out, as it leaves out the database Worker's) **and its own bundle**:
  * `apps/light/vite.sw.ts` builds it into `apps/light/dist-web/sw.js` after the web app's own build, because the list
  * below is that build's files. No other build has one, and `web:dev` registers none.

@@ -13,8 +13,8 @@ vi.mock("@tauri-apps/api/event", () => ({
   }),
 }));
 
-import type { HostUpdate } from "@/lib/core/hostUpdate";
-import { LAYER } from "@/lib/layers";
+import type { HostUpdate } from "@grimoire/ui/lib/core/hostUpdate";
+import { LAYER } from "@grimoire/ui/lib/layers";
 import { UpdateNotice, UpdateNoticeBar } from "./UpdateNotice";
 
 /** What a host holding a newer build answers, in that host's own words. */

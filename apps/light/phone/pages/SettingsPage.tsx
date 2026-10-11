@@ -1,16 +1,16 @@
 import { useId, useState, type JSX } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDown } from "lucide-react";
-import { CachePanel } from "@/features/settings/CachePanel";
-import { DangerZonePanel } from "@/features/settings/DangerZonePanel";
-import { ErrorLogPanel } from "@/features/settings/ErrorLogPanel";
-import { HiddenTagsPanel } from "@/features/settings/HiddenTagsPanel";
-import { LabelsPanel } from "@/features/settings/LabelsPanel";
-import { MarketplacePanel } from "@/features/settings/MarketplacePanel";
-import { PrivacyLink } from "@/features/settings/PrivacyLink";
-import { ReviewPanel } from "@/features/settings/ReviewPanel";
-import { SyncPanel } from "@/features/settings/SyncPanel";
-import { TheoryMarksPanel } from "@/features/settings/TheoryMarksPanel";
+import { CachePanel } from "@grimoire/ui/features/settings/CachePanel";
+import { DangerZonePanel } from "@grimoire/ui/features/settings/DangerZonePanel";
+import { ErrorLogPanel } from "@grimoire/ui/features/settings/ErrorLogPanel";
+import { HiddenTagsPanel } from "@grimoire/ui/features/settings/HiddenTagsPanel";
+import { LabelsPanel } from "@grimoire/ui/features/settings/LabelsPanel";
+import { MarketplacePanel } from "@grimoire/ui/features/settings/MarketplacePanel";
+import { PrivacyLink } from "@grimoire/ui/features/settings/PrivacyLink";
+import { ReviewPanel } from "@grimoire/ui/features/settings/ReviewPanel";
+import { SyncPanel } from "@grimoire/ui/features/settings/SyncPanel";
+import { TheoryMarksPanel } from "@grimoire/ui/features/settings/TheoryMarksPanel";
 import {
   GROUPS,
   PANELS,
@@ -18,18 +18,18 @@ import {
   panelsOf,
   type BadgeId,
   type GroupId,
-} from "@/features/settings/nav";
-import { useDangerZone, useLocalCache } from "@/features/settings/useDataReset";
-import { useHiddenTags } from "@/features/settings/useHiddenTags";
-import { count } from "@/lib/counts";
-import { LIGHT_SETTINGS, type LightPanel } from "@/lib/edition";
-import { FOCUS_INSET } from "@/lib/focus";
-import { ipc } from "@/lib/ipc";
-import { LAYER } from "@/lib/layers";
-import { REVIEW_KEY } from "@/lib/query";
-import { useErrorLog, type ErrorLog } from "@/lib/useErrorLog";
-import { useMarketplace } from "@/lib/useMarketplace";
-import { cn } from "@/lib/utils";
+} from "@grimoire/ui/features/settings/nav";
+import { useDangerZone, useLocalCache } from "@grimoire/ui/features/settings/useDataReset";
+import { useHiddenTags } from "@grimoire/ui/features/settings/useHiddenTags";
+import { count } from "@grimoire/ui/lib/counts";
+import { LIGHT_SETTINGS, type LightPanel } from "@grimoire/ui/lib/edition";
+import { FOCUS_INSET } from "@grimoire/ui/lib/focus";
+import { ipc } from "@grimoire/ui/lib/ipc";
+import { LAYER } from "@grimoire/ui/lib/layers";
+import { REVIEW_KEY } from "@grimoire/ui/lib/query";
+import { useErrorLog, type ErrorLog } from "@grimoire/ui/lib/useErrorLog";
+import { useMarketplace } from "@grimoire/ui/lib/useMarketplace";
+import { cn } from "@grimoire/ui/lib/utils";
 
 /**
  * The light edition's panels, in the desktop's drawing order, and the groups that hold them.

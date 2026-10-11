@@ -121,24 +121,24 @@ import {
   DEFAULT_PRINTING_GROUP_BY,
   PRINTING_GROUP_BY_OPTIONS,
   isPrintingGroupBy,
-} from "@/features/card/printings";
-import { MAX_ZOOM, MIN_ZOOM } from "@/lib/cardZoom";
-import { isSearchView } from "@/lib/store";
-import { DEFAULT_GROUP_BY } from "@/features/decks/grouping";
+} from "@grimoire/ui/features/card/printings";
+import { MAX_ZOOM, MIN_ZOOM } from "@grimoire/ui/lib/cardZoom";
+import { isSearchView } from "@grimoire/ui/lib/store";
+import { DEFAULT_GROUP_BY } from "@grimoire/ui/features/decks/grouping";
 // The deck builder's own type precedence, borrowed for `collection_value_history`'s `type` split
 // rather than re-spelled: the crate pins its SQL to this very function with a table of type
 // lines, and a third spelling here would be a workbench whose Artifact Land is an artifact while
 // the window's is something else.
-import { typeBucket } from "@/features/decks/deckBuckets";
-import { DEFAULT_SORT_BY } from "@/features/decks/sorting";
-import { SPECS } from "@/features/decks/validation/fixtures";
-import { DEFAULT_SCANNER_PREFS, STATUS } from "@/features/scanner/fixtures";
+import { typeBucket } from "@grimoire/ui/features/decks/deckBuckets";
+import { DEFAULT_SORT_BY } from "@grimoire/ui/features/decks/sorting";
+import { SPECS } from "@grimoire/ui/features/decks/validation/fixtures";
+import { DEFAULT_SCANNER_PREFS, STATUS } from "@grimoire/ui/features/scanner/fixtures";
 // The app's own list of the four sizes the cache stores, borrowed rather than re-spelled for
 // `hasVariableCost`'s reason below: `card_image_uri` refuses a variant that is not one of them,
 // and a second hand-typed list here would let the workbench and the window disagree about which
 // four exist. Under Storybook this specifier is aliased to `packages/fake/images.ts`, which
 // re-exports it from the real module unchanged — so both programs read the same tuple.
-import { IMAGE_VARIANTS } from "@/lib/images";
+import { IMAGE_VARIANTS } from "@grimoire/ui/lib/images";
 import type {
   ActivityEntry,
   BracketCardRow,
@@ -310,7 +310,7 @@ import type {
   WishlistQuery,
   WishlistSortKey,
   WishlistSummary,
-} from "@/lib/ipc";
+} from "@grimoire/ui/lib/ipc";
 // The app's own `{X}` test, borrowed rather than re-spelled: the fake answers what Rust
 // answers, and a second reading of "does this cost name X" would let the workbench and the
 // window disagree about which cards are X while both looked right.
@@ -320,9 +320,9 @@ import {
   playedFinish,
   soleFinish,
   type Finish,
-} from "@/lib/finish";
-import { BORDERS, type Border } from "@/lib/border";
-import { hasVariableCost } from "@/lib/mana";
+} from "@grimoire/ui/lib/finish";
+import { BORDERS, type Border } from "@grimoire/ui/lib/border";
+import { hasVariableCost } from "@grimoire/ui/lib/mana";
 // The token view's own rules, borrowed rather than re-spelled: `DEFAULT_TOKEN_QUANTITY` is the
 // `0` in the resolver's `deck_tokens.quantity ?? 0` (managed tokens spec §3.1), `isTokenPrinting` is
 // `deck_tokens::is_token_printing`'s TypeScript twin — the layout, or a two-sided layout whose
@@ -335,7 +335,7 @@ import {
   isTokenLayout,
   isTokenPrinting,
   tokenSubtitle,
-} from "@/features/decks/deckTokens";
+} from "@grimoire/ui/features/decks/deckTokens";
 import {
   DEFAULT_MARKETPLACE,
   FEED_MARKETPLACES,
@@ -343,9 +343,9 @@ import {
   MARKETPLACE_IDS,
   isMarketplaceId,
   type MarketplaceId,
-} from "@/lib/marketplace";
-import type { ShareSnapshot } from "@/lib/shareSnapshot";
-import type { SortSpec } from "@/lib/sort";
+} from "@grimoire/ui/lib/marketplace";
+import type { ShareSnapshot } from "@grimoire/ui/lib/shareSnapshot";
+import type { SortSpec } from "@grimoire/ui/lib/sort";
 
 /* ------------------------------------------------------------------ the rows ---------- */
 

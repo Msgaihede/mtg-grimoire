@@ -459,7 +459,7 @@ describe("NoteEditor", () => {
  * ⚠️ **The CSP check is a source sweep because it cannot be a behavioural one.**
  *
  * The shipped policy is `style-src 'self'` and the dev policy adds `style-src 'unsafe-inline'`, so
- * a runtime stylesheet works perfectly under `npm run tauri dev`, works in jsdom, works in
+ * a runtime stylesheet works perfectly under `pnpm tauri dev`, works in jsdom, works in
  * Storybook, and does nothing at all in a built binary — the editor simply draws unstyled and
  * nothing is logged. That is `motion`'s two forbidden APIs exactly, and `packages/ui/lib/tokens.test.ts`
  * bans those the same way, for the same reason.

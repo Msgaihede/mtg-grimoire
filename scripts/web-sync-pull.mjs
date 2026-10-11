@@ -2,14 +2,14 @@
 // What a large `pull` costs a browser: the light app's phase 6, step 6.5 — a measurement. It was
 // taken of the unpaged pull, and asked for paging; since step 6.5b it measures the paged one.
 //
-//     npm run web:wasm && npm run web:build
-//     npm run web:sync-pull -- --ops 10000            a device left behind, then let through
-//     npm run web:sync-pull -- --ops 10000 --live     the same import, heard as it is pushed
-//     npm run web:sync-pull -- --ops 10000 --join     a device paired into a collection that size
-//     npm run web:sync-pull -- --ops 10000 --join --claimed
+//     pnpm web:wasm && pnpm web:build
+//     pnpm web:sync-pull --ops 10000            a device left behind, then let through
+//     pnpm web:sync-pull --ops 10000 --live     the same import, heard as it is pushed
+//     pnpm web:sync-pull --ops 10000 --join     a device paired into a collection that size
+//     pnpm web:sync-pull --ops 10000 --join --claimed
 //                                                      … whose owner was already in a group, so
 //                                                      the relay's log holds the import as well
-//     npm run web:sync-pull -- --ops 1000 --kbps 40   left behind, then let through a slow link
+//     pnpm web:sync-pull --ops 1000 --kbps 40   left behind, then let through a slow link
 //
 // **Not a check, and not CI's.** `web-sync-smoke.mjs` is the walk a pull request is held to; this
 // is the run that says what catching up on a large log costs the engine's Worker — one thread,

@@ -17,7 +17,7 @@ import { Dialog } from "./Dialog";
  * rather than the preset's 260ms — but jsdom has no compositor, `motion` drives that frame off a
  * timer, and the whole suite is a hundred-odd jsdom files running in parallel. So the default
  * one second is a wait on the *scheduler*: these plays passed in isolation every time and four
- * of them failed under `npm run test:run`. Seconds rather than milliseconds for that reason
+ * of them failed under `pnpm test:run`. Seconds rather than milliseconds for that reason
  * alone. `TheoryDiffDialog.stories.tsx` measured the same thing first and carries its own copy,
  * because that dialog draws its own scrim rather than borrowing this one.
  *

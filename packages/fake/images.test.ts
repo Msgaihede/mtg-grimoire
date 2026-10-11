@@ -22,10 +22,11 @@ import {
   setBundledArtRoot,
 } from "./images";
 import * as fake from "./images";
-import * as real from "../ui/lib/images";
-import { IMAGE_VARIANTS, type ImageVariant } from "../ui/lib/images";
+import * as real from "@grimoire/ui/lib/images";
+import { IMAGE_VARIANTS, type ImageVariant } from "@grimoire/ui/lib/images";
 import { CARDS, type FakeCard } from "./cards";
 import { installWorld } from "./world";
+import aliasesText from "./aliases.ts?raw";
 
 /** `Variant::dimensions`, `crates/grimoire-core/src/images.rs`. */
 const DIMENSIONS: Record<ImageVariant, [number, number]> = {
@@ -96,6 +97,15 @@ describe("the re-export", () => {
     expect(fake.IMAGE_RETRY_SPREAD_MS).toBe(real.IMAGE_RETRY_SPREAD_MS);
     expect(fake.IMAGE_RETRY_CEILING_MS).toBe(real.IMAGE_RETRY_CEILING_MS);
     expect(fake.IMAGE_RETRY_LIMIT).toBe(real.IMAGE_RETRY_LIMIT);
+  });
+
+  it("is what both of the real module's names resolve to in a fake host", () => {
+    // Read as text: `aliases.ts` is Node code, and a page-side import of it would run
+    // `fileURLToPath` over an address Vite has already rewritten.
+    expect(aliasesText).toContain('{ find: /^@\\/lib\\/images$/, replacement: fake("images.ts") }');
+    expect(aliasesText).toContain(
+      '{ find: /^@grimoire\\/ui\\/lib\\/images$/, replacement: fake("images.ts") }',
+    );
   });
 });
 

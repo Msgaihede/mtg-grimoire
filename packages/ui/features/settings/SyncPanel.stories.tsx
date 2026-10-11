@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
-import { emitFake } from "../../../fake/event";
-import { PAIR_ONLY_SENTENCE } from "../../../fake/world";
+import { emitFake } from "@grimoire/fake/event";
+import { PAIR_ONLY_SENTENCE } from "@grimoire/fake/world";
 import { SITE_DATA_WARNING } from "@/lib/core/web/storage";
 import { SyncPanel } from "./SyncPanel";
 
@@ -532,7 +532,7 @@ export const NotPairedInABrowser: Story = {
  * draws the sentence where the offer, the membership's status and the claim code would be.
  * Every other story in this file is a host that refuses the name.
  *
- * Drive it at a phone's width with `npm run mobile:dev` at
+ * Drive it at a phone's width with `pnpm mobile:dev` at
  * `http://localhost:5175/settings?fault=pairOnly`.
  */
 export const OnAHostThatOffersNoMembership: Story = {
@@ -565,7 +565,7 @@ export const OnAHostThatOffersNoMembership: Story = {
  * were taken at, and a width the app already ships a class for (a one-off 328 would have put a
  * utility in the built stylesheet for this story alone). **jsdom lays nothing out**, so what
  * this play can hold is the classes that make the fold; `controls.test.ts` compiles them, the
- * measurements are a browser's, and `npm run mobile:scan-smoke` takes them again against the
+ * measurements are a browser's, and `pnpm mobile:scan-smoke` takes them again against the
  * light app.
  */
 export const OfferInAPhonesWidth: Story = {

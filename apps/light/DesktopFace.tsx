@@ -1,5 +1,5 @@
-import App from "@/App";
-import { EditionContext, LIGHT_EDITION } from "@/lib/edition";
+import App from "@grimoire/ui/App";
+import { EditionContext, LIGHT_EDITION } from "@grimoire/ui/lib/edition";
 import { useDesktopPlace } from "./useDesktopPlace";
 
 /**

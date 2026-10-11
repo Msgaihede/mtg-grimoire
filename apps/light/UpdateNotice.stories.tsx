@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
-import { UPDATE_READY } from "@/lib/core/web/update";
+import { UPDATE_READY } from "@grimoire/ui/lib/core/web/update";
 import { UpdateNoticeBar } from "./UpdateNotice";
 
 /**

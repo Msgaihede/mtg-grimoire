@@ -25,12 +25,12 @@ denominators, and the Rust one has had a correction applied that the frontend on
 ## Reproducing it
 
 ```
-npm run test:coverage        # frontend; writes coverage/ and prints the table
-npm run test:coverage:rust   # Rust; writes target/llvm-cov/coverage.lcov
+pnpm test:coverage        # frontend; writes coverage/ and prints the table
+pnpm test:coverage:rust   # Rust; writes target/llvm-cov/coverage.lcov
 ```
 
 The Rust side needs a one-time `cargo install cargo-llvm-cov` plus
-`rustup component add llvm-tools-preview`. It is not part of `npm run verify` and not part of CI:
+`rustup component add llvm-tools-preview`. It is not part of `pnpm verify` and not part of CI:
 the instrumented rebuild is a full cold `cargo build` of the crate and its dependency tree, which
 is minutes, against `cargo test`'s seconds on a warm target directory.
 

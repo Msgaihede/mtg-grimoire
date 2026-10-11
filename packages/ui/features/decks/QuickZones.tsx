@@ -70,7 +70,7 @@ export const QUICK_ZONE_ATTR = "data-quick-zone";
  * the screen: the editor **is** the page scroller, so `top-0` is the top of what they can see.
  *
  * **It clears the deck, and that was measured rather than estimated.** Driven in the shipped
- * window 2026-08-15 (`npm run tauri dev`, a debug build): the bar was **58px** tall and sat over
+ * window 2026-08-15 (`pnpm tauri dev`, a debug build): the bar was **58px** tall and sat over
  * the editor's own header row, clearing the desk row by **155px** at 1280×800 and by **65px** at
  * 1920×1080 — the difference being that the header wraps to two lines at 1280 and does not at
  * 1920. So nothing it draws sits over a pile a reader is aiming at. Scrolled, the deck passes
@@ -85,7 +85,7 @@ export const QUICK_ZONE_ATTR = "data-quick-zone";
  * now, which is the height of the deck's name/settings row it lands on — the thing it is drawn
  * *instead of*. At 74 it covered all but the last **18px** of that row, so a strip of the
  * ribbon's second line sat under a bar that was plainly meant to replace it. Both figures are
- * from the shipped window on 2026-08-18 (`npm run tauri dev`, a debug build, 1280×800): row and
+ * from the shipped window on 2026-08-18 (`pnpm tauri dev`, a debug build, 1280×800): row and
  * bar start at the same y=78, the row measured **92** and the bar **74**.
  *
  * The wrapper is `h-0` and the desk row therefore does not move, so the growth comes off the gap
@@ -268,7 +268,7 @@ export function QuickZoneBar({
         // wrapped lines of 36px controls with `gap-y-2` between them (6 + 36 + 8 + 36 + 6).
         // At 74px the bar covered all but the last 18px of it, so a strip of the ribbon's
         // second line stayed showing under a box that was plainly meant to replace it.
-        // Measured in the shipped window 2026-08-18 (`npm run tauri dev`, a debug build): row
+        // Measured in the shipped window 2026-08-18 (`pnpm tauri dev`, a debug build): row
         // and bar both start at y=78, the row is 92 and the bar was 74.
         //
         // **It does not follow the ribbon back down, and that is a decision rather than an

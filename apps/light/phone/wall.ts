@@ -1,4 +1,4 @@
-import { CHIN_HEIGHT, CHIN_RISE } from "@/lib/cardZoom";
+import { CHIN_HEIGHT, CHIN_RISE } from "@grimoire/ui/lib/cardZoom";
 
 /**
  * The narrowest a tile is drawn.

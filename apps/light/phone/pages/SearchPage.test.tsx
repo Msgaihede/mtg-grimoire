@@ -2,13 +2,13 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => import("../../../../packages/fake/core"));
-vi.mock("@tauri-apps/api/event", () => import("../../../../packages/fake/event"));
-vi.mock("@tauri-apps/api/window", () => import("../../../../packages/fake/window"));
+vi.mock("@tauri-apps/api/core", () => import("@grimoire/fake/core"));
+vi.mock("@tauri-apps/api/event", () => import("@grimoire/fake/event"));
+vi.mock("@tauri-apps/api/window", () => import("@grimoire/fake/window"));
 
-import { registerCommands, type CommandHandler } from "../../../../packages/fake/core";
-import { activeScope } from "../../../../packages/fake/scope";
-import { ipc } from "@/lib/ipc";
+import { registerCommands, type CommandHandler } from "@grimoire/fake/core";
+import { activeScope } from "@grimoire/fake/scope";
+import { ipc } from "@grimoire/ui/lib/ipc";
 import { PhoneFace } from "../PhoneApp";
 import { installLayout, renderPhone } from "../testing";
 

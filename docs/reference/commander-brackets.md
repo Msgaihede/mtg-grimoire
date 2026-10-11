@@ -1387,7 +1387,7 @@ empty columns.
 
 ### Driven in the shipped window — 2026-09-20, debug build (the rail and the pane)
 
-`npm run tauri dev`, a debug build over a copy of the real dev pair, at 1920×1080 and again at
+`pnpm tauri dev`, a debug build over a copy of the real dev pair, at 1920×1080 and again at
 the app's own **1024×700** floor. Two things were owed this pass because the plan derived them
 off the classes rather than off a window — the `w-[62rem]` panel at 1024, and scroll paging on a
 card with thousands of combos — and it found a third that neither suite could see.

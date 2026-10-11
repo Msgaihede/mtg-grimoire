@@ -3,7 +3,7 @@ import { expect, fn, userEvent, within } from "storybook/test";
 import { TOOLTIP_OPEN_MS } from "@/components/tooltip/TooltipProvider";
 import type { DeckCard } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
-import { deckCard, orphanDeckCard, printing } from "../../../fake/fixtures";
+import { deckCard, orphanDeckCard, printing } from "@grimoire/fake/fixtures";
 import { DeckLedger } from "./DeckLedger";
 
 /**

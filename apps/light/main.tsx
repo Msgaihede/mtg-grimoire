@@ -6,8 +6,8 @@
  */
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { installKeyboardModality } from "@/lib/keyboardModality";
-import { installNativeDragGuard } from "@/lib/nativeDrag";
+import { installKeyboardModality } from "@grimoire/ui/lib/keyboardModality";
+import { installNativeDragGuard } from "@grimoire/ui/lib/nativeDrag";
 import { LightApp } from "./LightApp";
 import "./mobile.css";
 // Mana and set glyphs, imported here rather than from the stylesheet so Vite owns them as
@@ -15,7 +15,7 @@ import "./mobile.css";
 import "mana-font/css/mana.css";
 import "keyrune/css/keyrune.css";
 
-/** `npm run mobile:dev`: the Storybook fake answers every command and there is no Rust. */
+/** `pnpm mobile:dev`: the Storybook fake answers every command and there is no Rust. */
 const FAKE = import.meta.env.MODE === "fake";
 
 async function start(): Promise<void> {

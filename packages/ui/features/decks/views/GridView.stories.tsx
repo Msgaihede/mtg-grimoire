@@ -9,7 +9,7 @@ import {
   deckTheoryMatches,
   deckViolations,
   printing,
-} from "../../../../fake/fixtures";
+} from "@grimoire/fake/fixtures";
 import { THEORY_MATCH_ANY_LABEL, THEORY_MATCH_ATTR, THEORY_MATCH_NAME_LABEL } from "../CardMarks";
 import { buildGroups } from "../grouping";
 import { theoryMatchPlan, type TheoryMarkSwitches, type TheoryPlan } from "../theoryMatch";

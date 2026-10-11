@@ -479,7 +479,7 @@ export function FolderCard({
    * for the same prop and is load-bearing rather than a matter of taste: building it at the call
    * site means calling it inside a `.map` **during render**, and `react-hooks/refs` rejects that
    * — a ref read inside a callback handed to a function during render is, to the rule, a ref read
-   * during render. It fails only at `npm run verify`, never at `tsc`.
+   * during render. It fails only at `pnpm verify`, never at `tsc`.
    */
   /**
    * The pencil's press — the *visible* way into a rename, where the menu is the discoverable one.

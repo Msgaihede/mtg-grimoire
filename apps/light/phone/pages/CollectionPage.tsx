@@ -1,25 +1,25 @@
 import { useCallback, useMemo, useState } from "react";
-import { CollectionSummaryHeader } from "@/features/collection/CollectionSummary";
+import { CollectionSummaryHeader } from "@grimoire/ui/features/collection/CollectionSummary";
 import {
   foldChange,
   peekOf,
   rolledUp,
   shelfStat,
-} from "@/features/collection/collectionShelfModel";
+} from "@grimoire/ui/features/collection/collectionShelfModel";
 import {
   collectionTiles,
   shelfTotal,
   subtotalsOf,
   tilesByShelf,
-} from "@/features/collection/collectionWall";
-import { COLLECTION_TRAY, useCollection } from "@/features/collection/useCollection";
-import { useCollectionFolders } from "@/features/collection/useCollectionFolders";
-import { FOLD_PAUSED_REASON } from "@/features/shelves/ShelfToolbar";
-import { buildFolderTree, trailOf } from "@/lib/folderTree";
-import { layoutShelves, type ShelfSection } from "@/lib/shelfLayout";
-import type { Shelf } from "@/lib/shelves";
-import { tileKeyOf } from "@/lib/tileKey";
-import type { CollectionRow } from "@/lib/ipc";
+} from "@grimoire/ui/features/collection/collectionWall";
+import { COLLECTION_TRAY, useCollection } from "@grimoire/ui/features/collection/useCollection";
+import { useCollectionFolders } from "@grimoire/ui/features/collection/useCollectionFolders";
+import { FOLD_PAUSED_REASON } from "@grimoire/ui/features/shelves/ShelfToolbar";
+import { buildFolderTree, trailOf } from "@grimoire/ui/lib/folderTree";
+import { layoutShelves, type ShelfSection } from "@grimoire/ui/lib/shelfLayout";
+import type { Shelf } from "@grimoire/ui/lib/shelves";
+import { tileKeyOf } from "@grimoire/ui/lib/tileKey";
+import type { CollectionRow } from "@grimoire/ui/lib/ipc";
 import { CabinetFilters } from "../CabinetFilters";
 import type { WallItem } from "../CardWall";
 import { collectionItem } from "../items";

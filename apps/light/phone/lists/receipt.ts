@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ipcError } from "@/lib/ipc";
+import { ipcError } from "@grimoire/ui/lib/ipc";
 import { RECEIPT_MS, type ReceiptLine } from "../deck/receipt";
 
 /**

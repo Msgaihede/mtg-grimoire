@@ -18,7 +18,7 @@ import { describe, expect, it } from "vitest";
  * reason: this project has no `@types/node` on purpose, so a test cannot open a file.
  *
  * `apps/share/SharePage.test.tsx` walks its bundle's graph the same way, and its two lessons are kept:
- * relative specifiers are followed as well as `@/…` ones, and a side-effect or dynamic import
+ * relative specifiers and a package's name are followed as well as `@/…` ones, and a side-effect or dynamic import
  * counts. **Phase 3 closed the blind spots phase 1 left**: a root-absolute specifier is followed,
  * an `import.meta.glob` is an import of every file it matches, an `import()` of anything but a
  * literal is refused, and the comment stripper reads strings and regexes as what they are.
@@ -346,13 +346,26 @@ function globToRegExp(glob: string): RegExp {
 }
 
 /**
+ * How a specifier names a folder of this repository without spelling the path: the shared UI's
+ * own alias, and a workspace package's name. A file outside `packages/ui` names a UI module by
+ * the package (`@grimoire/ui/lib/store`), a file inside it by the alias (`@/lib/store`), and the
+ * walk goes through both kinds.
+ */
+const PACKAGE_ROOTS: readonly (readonly [prefix: string, root: string])[] = [
+  ["@/", "/packages/ui/"],
+  ["@grimoire/ui/", "/packages/ui/"],
+  ["@grimoire/fake/", "/packages/fake/"],
+];
+
+/**
  * `spec` as written in `from`, as a root-absolute path with its `.` and `..` folded away. A
- * root-absolute specifier is the root's already — Vite resolves `/packages/ui/lib/store` against the root,
- * which is the repository here — and the alias `@/` is `/packages/ui/`.
+ * root-absolute specifier is the root's already — Vite resolves `/packages/ui/lib/store` against
+ * the root, which is the repository here — and an alias or a package name is its folder.
  */
 function stemOf(from: string, spec: string): string {
-  const raw = spec.startsWith("@/")
-    ? `/packages/ui/${spec.slice(2)}`
+  const named = PACKAGE_ROOTS.find(([prefix]) => spec.startsWith(prefix));
+  const raw = named
+    ? `${named[1]}${spec.slice(named[0].length)}`
     : spec.startsWith("/")
       ? spec
       : `${from.slice(0, from.lastIndexOf("/"))}/${spec}`;
@@ -366,11 +379,13 @@ function stemOf(from: string, spec: string): string {
 }
 
 /**
- * Ours to follow: the alias, a relative path, or a root-absolute one. A bare package name is not,
- * and neither is a protocol-relative `//host/…`.
+ * Ours to follow: the alias, a workspace package's name, a relative path, or a root-absolute
+ * one. Any other bare name is somebody else's package, and so is a protocol-relative `//host/…`.
  */
 const inRepo = (spec: string): boolean =>
-  spec.startsWith("@/") || spec.startsWith(".") || (spec.startsWith("/") && !spec.startsWith("//"));
+  PACKAGE_ROOTS.some(([prefix]) => spec.startsWith(prefix)) ||
+  spec.startsWith(".") ||
+  (spec.startsWith("/") && !spec.startsWith("//"));
 
 /**
  * A stylesheet, a picture, a `?raw` read — a file that is not a module. **A list, not "anything
@@ -547,7 +562,7 @@ describe("the phone face's import graph", () => {
   describe("on a tree with a weld in it", () => {
     const CLEAN: Sources = {
       "/apps/light/phone/Shell.tsx": `import { TabBar } from "./TabBar";`,
-      "/apps/light/phone/TabBar.tsx": `import { NAV } from "@/components/nav";`,
+      "/apps/light/phone/TabBar.tsx": `import { NAV } from "@grimoire/ui/components/nav";`,
       "/packages/ui/components/nav.ts": `import type { ViewId } from "@/lib/store";`,
       "/packages/ui/lib/store.ts": `export const useAppStore = 1;`,
       "/packages/ui/lib/window.ts": `import { getCurrentWindow } from "@tauri-apps/api/window";`,
@@ -579,6 +594,7 @@ describe("the phone face's import graph", () => {
     it("refuses the store, however it is imported", () => {
       const refused = [`${VIA} → /packages/ui/lib/store.ts`];
       expect(withTabBar(`import { useAppStore } from "@/lib/store";`).refused).toEqual(refused);
+      expect(withTabBar(`import { useAppStore } from "@grimoire/ui/lib/store";`).refused).toEqual(refused);
       expect(withTabBar(`import "../../../packages/ui/lib/store";`).refused).toEqual(refused);
       expect(withTabBar(`const s = await import("@/lib/store");`).refused).toEqual(refused);
       // Root-absolute: Vite resolves it against the root, which is the repository.
@@ -638,7 +654,7 @@ describe("the phone face's import graph", () => {
     });
 
     it("refuses Tauri everywhere but behind the core's door", () => {
-      const throughTheDoor = withTabBar(`import { ipc } from "@/lib/ipc";`);
+      const throughTheDoor = withTabBar(`import { ipc } from "@grimoire/ui/lib/ipc";`);
       expect(throughTheDoor.refused).toEqual([]);
       expect([...throughTheDoor.reached]).toContain(TAURI_DOOR);
 
@@ -652,6 +668,11 @@ describe("the phone face's import graph", () => {
       // dead end, and a dead end is a part of the graph nobody checked.
       expect(withTabBar(`import { renderPhone } from "./testing";`).blind).toEqual([
         `${VIA} → ./testing`,
+      ]);
+      // The fake is a package of this repository and is not in the tree either: a phone file that
+      // reached it at runtime would be a part of the graph nobody checked.
+      expect(withTabBar(`import { installWorld } from "@grimoire/fake/world";`).blind).toEqual([
+        `${VIA} → @grimoire/fake/world`,
       ]);
       // A stylesheet is not a module, and is not a dead end.
       expect(withTabBar(`import "./tabs.css";`).blind).toEqual([]);

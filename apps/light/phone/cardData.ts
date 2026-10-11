@@ -7,14 +7,14 @@ import {
   syncActivity,
   topActivity,
   type Activity,
-} from "@/lib/activity";
-import { useComboProgress } from "@/lib/useComboProgress";
-import { useDeviceSyncInvalidation } from "@/lib/useDeviceSyncInvalidation";
-import { useMarketplace, useMarketplaceProgress } from "@/lib/useMarketplace";
-import { useOracleTagProgress } from "@/lib/useOracleTagProgress";
-import { useSync } from "@/lib/useSync";
-import { SYNC_INVALIDATED, useSyncInvalidation } from "@/lib/useSyncInvalidation";
-import { useSyncProgress } from "@/lib/useSyncProgress";
+} from "@grimoire/ui/lib/activity";
+import { useComboProgress } from "@grimoire/ui/lib/useComboProgress";
+import { useDeviceSyncInvalidation } from "@grimoire/ui/lib/useDeviceSyncInvalidation";
+import { useMarketplace, useMarketplaceProgress } from "@grimoire/ui/lib/useMarketplace";
+import { useOracleTagProgress } from "@grimoire/ui/lib/useOracleTagProgress";
+import { useSync } from "@grimoire/ui/lib/useSync";
+import { SYNC_INVALIDATED, useSyncInvalidation } from "@grimoire/ui/lib/useSyncInvalidation";
+import { useSyncProgress } from "@grimoire/ui/lib/useSyncProgress";
 
 /** What a page needs to know about the card database to say the right thing over an empty wall. */
 export interface CardData {

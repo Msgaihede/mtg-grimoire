@@ -106,7 +106,7 @@ import type {
   DeckAuditKind,
   DeckVariant,
   StickyNote,
-} from "@/lib/ipc";
+} from "@grimoire/ui/lib/ipc";
 
 export type SeedName =
   | "empty"

@@ -11,8 +11,8 @@ import { transferOf, type ToWorker } from "./protocol";
  * is nowhere else for the database to be. Every read and every write of the web app queues
  * through this file.
  *
- * **It is its own `tsc` program** (`packages/ui/tsconfig.web-worker.json`, the `WebWorker` lib) and the root
- * program leaves it out, because that one has the DOM's globals and the two libraries declare the
+ * **It is its own `tsc` program** (`packages/ui/tsconfig.web-worker.json`, the `WebWorker` lib) and the shared
+ * UI's program (`packages/ui/tsconfig.json`) leaves it out, because that one has the DOM's globals and the two libraries declare the
  * same names differently. Everything it decides is in `engine.ts`, which the suite runs; what is
  * left here is what only a real Worker can do.
  */

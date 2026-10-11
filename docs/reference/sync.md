@@ -766,7 +766,7 @@ out of date, and it is worth recording exactly how.** It read: *"the Tauri webvi
 permission, `getUserMedia` is not reachable under the CSP in `tauri.conf.json` (`default-src
 'self'`, no `media-src`)."* **CSP has no camera directive.** `media-src` governs a `<video src>`
 URL fetch; a camera stream is assigned through `srcObject`, which is not a fetch and was never in
-CSP's reach. Measured in the running window, 2026-08-31, debug, `npm run tauri dev`, driven over
+CSP's reach. Measured in the running window, 2026-08-31, debug, `pnpm tauri dev`, driven over
 CDP:
 
 | probe | answer |
@@ -877,7 +877,7 @@ digits are derived from the code with a plain hash — the workbench has no X255
 relay. **It does have a QR encoder, since 2026-10-04** (`packages/fake/qr.ts`, read back by `jsQR`
 in `qr.test.ts`): the QR is the real 53-module symbol of `…/pair#<code>` for a code with no key in
 it, where it used to be a 21×21 picture of the right shape. `sync_pairing_accept` takes that URL as
-`Invite::decode` does, so a story's code can be scanned (`npm run mobile:scan-smoke`), and the
+`Invite::decode` does, so a story's code can be scanned (`pnpm mobile:scan-smoke`), and the
 fake's copy of `RELAY_BASE` is held to the crate's by reading `entitlement.rs` as text.
 **What it models faithfully is what a panel is drawn against, and this changed shape on
 2026-08-31**: one number both readers compare, a poll that finds the other side's turn on its
@@ -4640,7 +4640,7 @@ needs is all `platform::socket`'s second arm:
 - **One thread, one connection.** `spawn::blocking` and `on_a_worker` run where they stand, so
   the loop's reads, its outbox gate and its trips all run between two turns of the Worker's
   event loop, on the connection a page's commands use. Measured in headless Chrome 154
-  (`npm run web:sync-smoke -- --measure`, V8's sampling profiler on the Worker): **idle and in
+  (`pnpm web:sync-smoke --measure`, V8's sampling profiler on the Worker): **idle and in
   no group the Worker was busy about 5 ms of a minute** — the five-second read of `sync_group`
   is inside that — and **idle, paired and live about 5–9 ms of a minute**, the quarter-second
   tick and the keepalive inside it. A `search_cards` issued over and over beside a round trip
@@ -5106,7 +5106,7 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   reach, because the held page is re-sent on every trip and grows with everything the group writes
   until the hold ends.
   **Measured 2026-10-04, in a browser against the relay's own code under workerd — and still not
-  built by that step** ([light-app.md](light-app.md) §10.5, `npm run web:sync-pull`). The
+  built by that step** ([light-app.md](light-app.md) §10.5, `pnpm web:sync-pull`). The
   estimate above was right about the relay and low about the device. A 50 000-op import was a
   **44.6 MB** response (33.6 MB on the wire) for ops of 890 B sealed. **On the relay, read
   request by request with its heap collected between them, a pull costs twice the log and a

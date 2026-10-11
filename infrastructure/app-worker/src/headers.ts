@@ -6,7 +6,7 @@
  * `wrangler deploy` parses it and applies its rules to every static-asset response. Nothing in
  * this repository is that parser, so without this module the Content-Security-Policy would first
  * meet the app on the day it was deployed. `apps/light/vite.config.ts` applies `headersFor` in
- * `npm run web:preview`, and `hosting.test.ts` asks it what each address is sent.
+ * `pnpm web:preview`, and `hosting.test.ts` asks it what each address is sent.
  *
  * **It models the part of the format the file uses, and refuses the rest by name.** Verified
  * against `developers.cloudflare.com/workers/static-assets/headers/` on 2026-10-04:

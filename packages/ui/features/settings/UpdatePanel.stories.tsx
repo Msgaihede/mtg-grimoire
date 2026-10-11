@@ -3,13 +3,13 @@ import { expect, fn, userEvent, within } from "storybook/test";
 import type { UpdateStatus } from "@/lib/ipc";
 import type { ReleaseHistory } from "@/lib/useReleaseHistory";
 import { nextAction, type Update } from "@/lib/useUpdate";
-import { pickAsset } from "../../../fake/db";
+import { pickAsset } from "@grimoire/fake/db";
 import {
   CURRENT_VERSION,
   NEXT_VERSION,
   release,
   releaseHistory,
-} from "../../../fake/fixtures";
+} from "@grimoire/fake/fixtures";
 import { UpdatePanel } from "./UpdatePanel";
 
 /**

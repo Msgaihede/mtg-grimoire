@@ -3823,7 +3823,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * leave `gcOnly` standing — a deck narrowed to nothing, with nothing on screen to press to get
    * it back. Gating the **derivation** rather than clearing the flag in an effect is what keeps
    * that a *read*: this repo's lint refuses `setState` in an effect and refuses it only at
-   * `npm run verify`, and a reader who steps a card to zero and undoes it finds their filter
+   * `pnpm verify`, and a reader who steps a card to zero and undoes it finds their filter
    * exactly where they left it.
    *
    * **It is gated on exactly what draws the chip and must go on being so.** {@link DeckLedger}

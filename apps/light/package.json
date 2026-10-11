@@ -1,0 +1,31 @@
+{
+  "name": "@grimoire/light",
+  "version": "0.0.0",
+  "private": true,
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "dependencies": {
+    "@grimoire/fake": "workspace:*",
+    "@grimoire/ui": "workspace:*",
+    "@tanstack/react-query": "catalog:",
+    "@tanstack/react-virtual": "catalog:",
+    "keyrune": "catalog:",
+    "lucide-react": "catalog:",
+    "mana-font": "catalog:",
+    "motion": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "zustand": "catalog:"
+  },
+  "devDependencies": {
+    "@storybook/react-vite": "catalog:",
+    "@tauri-apps/api": "catalog:",
+    "@testing-library/react": "catalog:",
+    "@testing-library/user-event": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "storybook": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  }
+}

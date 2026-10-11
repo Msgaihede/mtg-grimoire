@@ -4,8 +4,8 @@
  * desktop's release build embeds them — or, with `--web`, into `dist-wasm/scanner-assets/`,
  * where the web app's build picks them up to serve from its own origin.
  *
- *   npm run scanner:assets              the desktop's: `build.rs` embeds what lands
- *   npm run scanner:assets -- --web     the web app's: `npm run web:build` ships what lands
+ *   pnpm scanner:assets              the desktop's: `build.rs` embeds what lands
+ *   pnpm scanner:assets --web     the web app's: `pnpm web:build` ships what lands
  *
  * **`--web` writes a manifest beside the three** (`manifest.json`): each file's key, name,
  * exact length and SHA-256, and the bundle's format version. A browser cannot ask the release

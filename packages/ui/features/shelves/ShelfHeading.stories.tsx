@@ -3,7 +3,7 @@ import { expect, fn, userEvent, within } from "storybook/test";
 import type { MenuItem } from "@/components/menu/types";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import type { Shelf } from "@/lib/shelves";
-import { printing } from "../../../fake/fixtures";
+import { printing } from "@grimoire/fake/fixtures";
 import { ShelfHeading, type ShelfDropMark, type ShelfHeadingProps } from "./ShelfHeading";
 import { FOLD_PAUSED_REASON } from "./ShelfToolbar";
 

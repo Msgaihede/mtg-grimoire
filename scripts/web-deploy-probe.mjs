@@ -9,7 +9,7 @@
 //   1. it answers 200;
 //   2. its `Content-Security-Policy` is **the built `_headers` line, byte for byte** — read with
 //      the hosting Worker's own reader (`infrastructure/app-worker/src/headers.ts`), so "the line" means here
-//      what it means to `npm run web:preview` and to `hosting.test.ts`. This is probe 1 of
+//      what it means to `pnpm web:preview` and to `hosting.test.ts`. This is probe 1 of
 //      `infrastructure/app-worker/README.md`'s step 0;
 //   3. the document is `<apps/light/dist-web>/index.html`, byte for byte. The first two pass on yesterday's
 //      deploy whenever the policy did not change; this is the one that says *this* build is what

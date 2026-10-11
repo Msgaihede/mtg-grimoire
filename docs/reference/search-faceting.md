@@ -87,7 +87,7 @@ using it.
   build time from the stored integer rather than folded out of `CardIndex::formats`, so it stays
   right for a bit this build has no name for. It cannot move a **format** count in either
   direction: every `formats[k]` is a subset of it.
-- **What `playableOnly` hides, measured in the shipped window 2026-08-14** (`npm run tauri dev`,
+- **What `playableOnly` hides, measured in the shipped window 2026-08-14** (`pnpm tauri dev`,
   a **debug** build, live 116 703-printing corpus): of **107 346** paper printings, **9 032** are
   legal in no format — 8.4% — leaving **98 314** the search offers by default. Both figures are
   `facet_cards`' own exact `total`, which is printings and is not capped, read through the app's
@@ -439,7 +439,7 @@ using it.
   measurement claims is _none greyed_, which a wider row does not change — but the X chip is the
   one to check first if it is ever re-driven, for the scalar reason above. The same note is on
   `SearchPage.stories.tsx`'s `Empty`, which is the story that pins this state.
-- **The X chip, driven live 2026-08-14** (`npm run tauri dev`, a **debug** build, 1280×800,
+- **The X chip, driven live 2026-08-14** (`pnpm tauri dev`, a **debug** build, 1280×800,
   against a corpus of **116,703** cards synced 2026-08-13). The row drew **ten** chips, the
   tenth named `Cards with X in their mana cost — 2,009 printings` — so the count reaches the
   accessible name on the same rule as `Mana value 0 — 12,162 printings` beside it.
