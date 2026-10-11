@@ -76,7 +76,7 @@ For global repo workflow, style, and testing conventions, refer to:
 
 - **Container-driven layout**: `FilterBar.tsx` uses container queries (`@container/fb`), not viewport media queries. Draggable from 206px.
 - **Query syntax (`features/search/queryLanguage.ts`)**:
-  - Parses Scryfall query terms (`kw:`, `cmc>=3`, `otag:`, `atag:`).
+  - Parses Scryfall's whole language (issue #909): keyword terms (`kw:`, `cmc>=3`, `is:fetchland`, `otag:`), `or`, parentheses, `!exact` names and `not:`. Top-level plain terms keep their own paths (free text, tag tokens, predicates); an `or` or a negated group travels as one `anyOf`/`allOf` predicate that Rust answers as a single SQL clause, and the facet index counts it wide.
   - Tag resolution is exact; queries fail closed on unresolved tags to prevent showing stale results.
 - **Pricing & marketplaces**:
   - Currency and pricing formatting strictly use `formatPrice(value, currency)` driven by `useMarketplace()`.

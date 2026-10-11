@@ -294,6 +294,12 @@ pub struct SetRow {
     /// Scryfall omits the key**, which it does for sets with no printed run — promos, tokens,
     /// most digital sets — and never a zero, which would be a denominator nobody printed.
     pub printed_size: Option<i64>,
+    /// The block this set belongs to, as Scryfall's code (`"zen"`) and name (`"Zendikar"`) —
+    /// corpus schema 8, what `b:` answers from. **`None` where Scryfall omits the key**, which it
+    /// does for every set that belongs to no block (the sets of recent years, most promo and
+    /// digital ones); an empty string is read the same way, a block nobody named.
+    pub block_code: Option<String>,
+    pub block: Option<String>,
 }
 
 /// One entry of Scryfall's id-migration log.
@@ -807,6 +813,16 @@ impl Client {
                     // A non-positive size is read as absent rather than stored: a `/0` would be
                     // a completion bar that divides by nothing.
                     printed_size: s["printed_size"].as_i64().filter(|n| *n > 0),
+                    // An empty string is no block, like an absent key: `sets_need_fetch` asks
+                    // for one non-NULL `block_code`, and `""` would satisfy it without one.
+                    block_code: s["block_code"]
+                        .as_str()
+                        .filter(|t| !t.is_empty())
+                        .map(str::to_owned),
+                    block: s["block"]
+                        .as_str()
+                        .filter(|t| !t.is_empty())
+                        .map(str::to_owned),
                 });
             }
             if v["has_more"].as_bool() != Some(true) {
@@ -1984,6 +2000,33 @@ mod tests {
         let sets = Client::new(server.base_url()).fetch_sets().await.unwrap();
         let sizes: Vec<Option<i64>> = sets.iter().map(|s| s.printed_size).collect();
         assert_eq!(sizes, [Some(269), None, None]);
+    }
+
+    /// Corpus schema 8: a set's block is read as Scryfall sends it — code and name — and is
+    /// `None` both where the key is omitted (a set in no block) and where it is an empty string,
+    /// which `sets_need_fetch`'s bridge would otherwise take for a block.
+    #[tokio::test]
+    async fn fetch_sets_reads_the_block_and_leaves_an_omitted_or_empty_one_unknown() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/sets");
+            then.status(200).json_body(serde_json::json!({
+            "has_more": false,
+            "data": [
+                {"code":"wwk","name":"Worldwake","block_code":"zen","block":"Zendikar"},
+                {"code":"dmu","name":"Dominaria United"},
+                {"code":"odd","name":"Odd","block_code":"","block":""}
+            ]}));
+        });
+        let sets = Client::new(server.base_url()).fetch_sets().await.unwrap();
+        let blocks: Vec<(Option<&str>, Option<&str>)> = sets
+            .iter()
+            .map(|s| (s.block_code.as_deref(), s.block.as_deref()))
+            .collect();
+        assert_eq!(
+            blocks,
+            [(Some("zen"), Some("Zendikar")), (None, None), (None, None)]
+        );
     }
 
     // ---- a host that asks as a page, and keeps no files --------------------------------

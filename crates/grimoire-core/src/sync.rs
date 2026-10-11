@@ -299,10 +299,19 @@ pub fn has_cards(conn: &Connection) -> bool {
 /// because Scryfall publishes no printed size for hundreds of real sets (promos, tokens, most
 /// digital ones), so an any-NULL test would re-fetch the set list on every sync forever. After
 /// one successful fetch this is a single indexed-nothing `EXISTS` that answers `false`.
+///
+/// **The third arm is corpus schema 8's bridge, the second one's twin over `block_code`**: the
+/// rung adds `block_code` and `block` NULL, `/sets` is again their only writer, and without it
+/// `b:` would answer nothing until the next rotation-and-ingest. "Not one" for the same reason —
+/// the sets of recent years belong to no block, so most rows stay NULL for good — and it settles
+/// for the same reason, because hundreds of older sets do. Should Scryfall ever stop publishing
+/// blocks altogether this arm would ask `/sets` on every sync; that is a few small pages, and a
+/// cost to notice rather than a failure.
 fn sets_need_fetch(conn: &Connection) -> bool {
     conn.query_row(
         "SELECT NOT EXISTS (SELECT 1 FROM sets)
-             OR NOT EXISTS (SELECT 1 FROM sets WHERE printed_size IS NOT NULL)",
+             OR NOT EXISTS (SELECT 1 FROM sets WHERE printed_size IS NOT NULL)
+             OR NOT EXISTS (SELECT 1 FROM sets WHERE block_code IS NOT NULL)",
         [],
         |r| r.get::<_, bool>(0),
     )
@@ -339,8 +348,8 @@ pub fn insert_sets(conn: &mut Connection, sets: &[scryfall::SetRow]) -> rusqlite
         let mut stmt = tx.prepare(
             "INSERT OR REPLACE INTO sets
                 (code, name, arena_code, mtgo_code, set_type, released_at, icon_svg_uri,
-                 printed_size)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                 printed_size, block_code, block)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
         )?;
         for s in sets {
             if s.code.trim().is_empty() {
@@ -355,6 +364,8 @@ pub fn insert_sets(conn: &mut Connection, sets: &[scryfall::SetRow]) -> rusqlite
                 s.released_at,
                 s.icon_svg_uri,
                 s.printed_size,
+                s.block_code,
+                s.block,
             ])?;
             written += 1;
         }
@@ -1245,6 +1256,8 @@ mod tests {
             released_at: None,
             icon_svg_uri: None,
             printed_size: None,
+            block_code: None,
+            block: None,
         }
     }
 
@@ -1389,8 +1402,10 @@ mod tests {
         insert_sets(
             &mut conn,
             &[crate::scryfall::SetRow {
-                printed_size: Some(269),
-                ..set_row("dom", "Dominaria")
+                printed_size: Some(249),
+                block_code: Some("zen".into()),
+                block: Some("Zendikar".into()),
+                ..set_row("zen", "Zendikar")
             }],
         )
         .unwrap();
@@ -1419,10 +1434,18 @@ mod tests {
 
         insert_sets(
             &mut conn,
-            &[crate::scryfall::SetRow {
-                printed_size: Some(269),
-                ..set_row("dom", "Dominaria")
-            }],
+            &[
+                crate::scryfall::SetRow {
+                    printed_size: Some(269),
+                    ..set_row("dom", "Dominaria")
+                },
+                // A block on some other set, so this test asks about sizes alone: corpus schema
+                // 8's arm is the next test's subject.
+                crate::scryfall::SetRow {
+                    block_code: Some("zen".into()),
+                    ..set_row("zen", "Zendikar")
+                },
+            ],
         )
         .unwrap();
         assert!(
@@ -1437,6 +1460,58 @@ mod tests {
             )
             .unwrap();
         assert_eq!(size, Some(269), "and the upsert stores it");
+    }
+
+    /// Corpus schema 8's bridge, the printed-size one's twin: a table filled before
+    /// `block_code` existed holds rows, sizes and not one block, and that is a fetch owed —
+    /// while a table where *most* sets have no block (every real one: nothing since the blocks
+    /// were retired belongs to one) owes nothing once any set has one, or `/sets` would be asked
+    /// on every sync for ever. The upsert stores both columns.
+    #[test]
+    fn a_sets_table_with_no_block_anywhere_owes_a_fetch_and_one_with_some_does_not() {
+        let mut conn = db();
+        insert_sets(
+            &mut conn,
+            &[
+                crate::scryfall::SetRow {
+                    printed_size: Some(249),
+                    ..set_row("wwk", "Worldwake")
+                },
+                set_row("dmu", "Dominaria United"),
+            ],
+        )
+        .unwrap();
+        assert!(
+            sets_need_fetch(&conn),
+            "rows from before the columns carry sizes and no block at all"
+        );
+
+        insert_sets(
+            &mut conn,
+            &[crate::scryfall::SetRow {
+                printed_size: Some(249),
+                block_code: Some("zen".into()),
+                block: Some("Zendikar".into()),
+                ..set_row("wwk", "Worldwake")
+            }],
+        )
+        .unwrap();
+        assert!(
+            !sets_need_fetch(&conn),
+            "one published block proves the fetch has run since; the newer set's NULL is Scryfall's"
+        );
+        let (code, block): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT block_code, block FROM sets WHERE code = 'wwk'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (code.as_deref(), block.as_deref()),
+            (Some("zen"), Some("Zendikar")),
+            "and the upsert stores both"
+        );
     }
 
     #[test]

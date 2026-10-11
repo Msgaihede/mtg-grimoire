@@ -150,6 +150,7 @@ mod tests {
             op,
             value: value.to_owned(),
             negated,
+            terms: Vec::new(),
         }
     }
 

@@ -21,7 +21,7 @@ use crate::collection::{valid_quantity, EntryChange, ShelfCount};
 // which is the one drift a shared fence cannot prevent by itself.
 #[cfg(test)]
 use crate::deck_meta::FOLDER_GONE;
-use crate::filters::{escape_like, PredicateField, QueryPredicate, LIKE_ESCAPE};
+use crate::filters::{escape_like, PredicateField, PredicateOp, QueryPredicate, LIKE_ESCAPE};
 use crate::schema::{FINISHES, WISHLIST_GRAIN};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -1277,9 +1277,24 @@ pub(crate) fn wishlist_scope(
                    ORDER BY ({price}) ASC NULLS LAST, c.released_at DESC, c.id ASC
                    LIMIT 1))"
     );
+    // **The top-level name terms are taken out before `push_card_filters` sees them**, because
+    // this list answers every one of them from `w.name` below — and `!"lightning bolt"`, an
+    // exact name, is SQL in `push_card_filters` (issue #909), where it would read `c.name` and
+    // take an orphaned wish out of the list for having no card row to be called anything. A
+    // name term *inside* a group (`!bolt or t:goblin`) stays in, and is answered through the
+    // card row like the rest of its group: an `or` over two columns that are not the same row's
+    // is not a question this list can ask of its own name column.
+    let predicates = q.cards.predicates.as_deref().unwrap_or(&[]);
     let cards = crate::filters::CardFilters {
         text: None,
         paper_only: Some(false),
+        predicates: Some(
+            predicates
+                .iter()
+                .filter(|p| p.field != PredicateField::Name)
+                .cloned()
+                .collect(),
+        ),
         ..q.cards.clone()
     };
     // `Some("w")`, for the reason the collection passes `Some("e")`: a pinned wish copies
@@ -1311,13 +1326,26 @@ pub(crate) fn wishlist_scope(
     // for not being called Bolt. The one place the wire's `name` field does not mean `cards.name`.
     // Substring rather than FTS prefix, like the positive `LIKE` beside it, which is also
     // Scryfall's own reading of a name.
-    let predicates = q.cards.predicates.as_deref().unwrap_or(&[]);
+    //
+    // **An exact name (`!"lightning bolt"`, op `eq`) is equality on the same column**, through
+    // [`crate::filters::exact_name_clause`] — the expression `push_card_filters` uses on
+    // `c.name`, so a wish named for either face of an `A // B` answers it the same way here.
     for pred in predicates
         .iter()
         .filter(|p| p.field == PredicateField::Name)
     {
         let value = pred.value.trim();
         if value.is_empty() {
+            continue;
+        }
+        if pred.op == PredicateOp::Eq {
+            let (sql, params) = crate::filters::exact_name_clause("w.name", value);
+            p.wheres.push(if pred.negated {
+                format!("NOT ({sql})")
+            } else {
+                sql
+            });
+            p.params.extend(params);
             continue;
         }
         let not = if pred.negated { "NOT " } else { "" };
@@ -2862,6 +2890,7 @@ mod tests {
                             op: crate::filters::PredicateOp::Colon,
                             value: excluded.to_owned(),
                             negated: true,
+                            terms: Vec::new(),
                         }]),
                         ..Default::default()
                     },
@@ -2883,6 +2912,68 @@ mod tests {
             kept("god_pharaoh"),
             ["God-Pharaoh's Gift", "Lightning Bolt", "Test Card"],
             "`_` is not `-`"
+        );
+    }
+
+    /// **`!"god-pharaoh's gift"` reads the wish's own name too** (issue #909) — equality on
+    /// `w.name`, case-folded, or on either face of an `A // B` — so an orphaned wish answers an
+    /// exact name, where `push_card_filters`' `lower(c.name) = lower(?)` over the LEFT JOIN
+    /// would have dropped it. A substring is not the name, and the negation keeps everything
+    /// else, orphan included.
+    #[test]
+    fn an_exact_name_reads_the_wishs_own_name_and_finds_an_orphan() {
+        let conn = seeded();
+        for (oracle_id, name) in [
+            ("o1", "Lightning Bolt"),
+            ("o-split", "Fire // Ice"),
+            ("o-nowhere", "God-Pharaoh's Gift"),
+        ] {
+            add_wish(
+                &conn,
+                &WishInput {
+                    oracle_id: Some(oracle_id.to_owned()),
+                    name: Some(name.to_owned()),
+                    quantity: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+        let named = |value: &str, negated: bool| {
+            let mut names: Vec<String> = list_wishes(
+                &conn,
+                &WishlistQuery {
+                    cards: crate::filters::CardFilters {
+                        predicates: Some(vec![QueryPredicate {
+                            field: PredicateField::Name,
+                            op: PredicateOp::Eq,
+                            value: value.to_owned(),
+                            negated,
+                            terms: Vec::new(),
+                        }]),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|r| r.name)
+            .collect();
+            names.sort();
+            names
+        };
+
+        assert_eq!(named("GOD-PHARAOH'S GIFT", false), ["God-Pharaoh's Gift"]);
+        assert_eq!(named("ice", false), ["Fire // Ice"], "either face");
+        assert!(
+            named("lightning", false).is_empty(),
+            "a substring is not the name"
+        );
+        assert_eq!(
+            named("lightning bolt", true),
+            ["Fire // Ice", "God-Pharaoh's Gift"]
         );
     }
 

@@ -51,8 +51,9 @@ export interface TagQuerySurface {
   removeTagChip?: (slug: string, namespace: TagNamespace) => void;
   toggleTagChipMode?: (slug: string, namespace: TagNamespace) => void;
   replaceTagToken?: (token: TagToken, value: string) => void;
-  /** The typed predicates — `cmc>=3`, `t:goblin`. Optional for the same reason the tag fields
-   *  are: a surface with no query parsing at all answers none of them. */
+  /** The typed predicates — `cmc>=3`, `t:goblin`, and an `or` as one chip,
+   *  `t:goblin or t:elf`. Optional for the same reason the tag fields are: a surface with no
+   *  query parsing at all answers none of them. */
   predicateChips?: readonly PredicateChip[];
   removePredicateChip?: (key: string) => void;
   togglePredicateChipMode?: (key: string) => void;
@@ -60,8 +61,7 @@ export interface TagQuerySurface {
 
 export function TagQueryRow({ search }: { search: TagQuerySurface }) {
   const { tagChips = [], tagNotFound = [], predicateChips = [] } = search;
-  const empty =
-    tagChips.length === 0 && tagNotFound.length === 0 && predicateChips.length === 0;
+  const empty = tagChips.length === 0 && tagNotFound.length === 0 && predicateChips.length === 0;
   if (empty) return null;
   return (
     <div className="flex flex-col gap-1.5">
@@ -192,8 +192,14 @@ function TypedChip({
       >
         {/* The term in the mono face: it is something the reader typed rather than a word of
             prose, and a chip beside it holding a tag's label should not read as the same kind
-            of thing. One span, so the accessible name computes as one phrase. */}
-        <span className="max-w-48 truncate font-mono text-sm">{shown}</span>
+            of thing. One span, so the accessible name computes as one phrase.
+            `title` carries the whole term since issue #909: an `or` is one chip whose label is
+            the whole group, `t:goblin or t:elf or t:dwarf`, and `max-w-48` truncates it — the
+            hover is where the cut-off half can still be read. The accessible name above already
+            carries all of it. */}
+        <span className="max-w-48 truncate font-mono text-sm" title={shown}>
+          {shown}
+        </span>
       </button>
       <button
         type="button"
@@ -229,13 +235,7 @@ const SUGGESTIONS = 3;
  * arrives after the search rather than with it, and a reader who is not looking at this corner
  * of the screen has no other way to learn why the results went away.
  */
-function UnknownTagNote({
-  token,
-  onPick,
-}: {
-  token: TagToken;
-  onPick: (value: string) => void;
-}) {
+function UnknownTagNote({ token, onPick }: { token: TagToken; onPick: (value: string) => void }) {
   const { hits } = useTagSearch(token.value, token.namespace);
   const near = hits.slice(0, SUGGESTIONS);
   const namespaceWord = TAG_NAMESPACE_LABEL[token.namespace].toLowerCase();

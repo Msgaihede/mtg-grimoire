@@ -133,6 +133,7 @@ import {
   SCANNER_OPEN_ELSEWHERE,
 } from "@/features/scanner/verdictText";
 import { RATE_MAX, RATE_MIN, RATE_STEP } from "@/features/trade/trade";
+import { IS_VALUES } from "@/features/search/queryLanguage";
 import {
   AUTO_BRACKET,
   ipc,
@@ -5558,15 +5559,22 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
   it("mirrors the query predicate, its two enums and every one of their names", () => {
     const rustPredicate = rustFields(cardFiltersRs, "QueryPredicate").map(camel);
     const tsPredicate = tsFields(ipcSource, "QueryPredicate");
-    expect(rustPredicate).toEqual(["field", "op", "value", "negated"]);
+    // `terms` is the group's branches (issue #909) — `#[serde(default)]` in Rust, optional here.
+    expect(rustPredicate).toEqual(["field", "op", "value", "negated", "terms"]);
     expect([...tsPredicate].sort()).toEqual([...rustPredicate].sort());
 
     const fields = rustVariants(cardFiltersRs, "PredicateField").map(variantName);
-    expect(fields).toHaveLength(13);
+    // Thirteen until issue #909, which added the two groups, the three in-group fields and
+    // Scryfall's long tail of keywords.
+    expect(fields).toHaveLength(48);
     expect(fields).toContain("typeLine");
     expect(fields).toContain("cmc");
-    // The one field no keyword names — a leading `-` on free text (issue #571).
+    // Reached by `-bolt`, `name:` and `!` — the first was its only spelling until issue #909.
     expect(fields).toContain("name");
+    // Two-word variants, where serde's camelCase is the trap this test exists for.
+    expect(fields).toContain("anyOf");
+    expect(fields).toContain("collectorNumber");
+    expect(fields).toContain("paperPrints");
     expect([...tsUnion(ipcSource, "PredicateField")].sort()).toEqual([...fields].sort());
 
     const ops = rustVariants(cardFiltersRs, "PredicateOp").map(variantName);
@@ -5582,6 +5590,31 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
    * A missing one is a search box whose typed terms narrow one list and not the next, with a
    * green build and no error: `#[serde(default)]` drops the unknown key on the way in.
    */
+  /**
+   * **`is:`'s vocabulary is a list at each end** — `filters::IS_VALUES` answers the values, and
+   * `queryLanguage.ts`' `IS_VALUES` decides which of them the box sends at all (any other value
+   * is free text). Nothing type-checks one against the other, and the two ways they can part are
+   * both silent: a value only the parser knows draws a chip over a search Rust answers with
+   * nothing, and a value only Rust knows is one the reader can never reach. So the Rust text is
+   * read and compared, as every other mirror here is. Sorted rather than in order: the lists are
+   * sets to both readers, and a reorder for readability on one side is not a drift.
+   */
+  it("holds the parser's is: vocabulary to the crate's IS_VALUES", () => {
+    const at = cardFiltersRs.indexOf("pub const IS_VALUES");
+    expect(at, "`pub const IS_VALUES` is not in filters.rs").toBeGreaterThan(-1);
+    const open = cardFiltersRs.indexOf("[", cardFiltersRs.indexOf("=", at));
+    const close = cardFiltersRs.indexOf("];", open);
+    const rust = [
+      ...cardFiltersRs
+        .slice(open, close)
+        .replace(/\/\/.*$/gm, "")
+        .matchAll(/"([^"]+)"/g),
+    ].map((m) => m[1]);
+    // The parsers are under suspicion too: a pass must mean both lists were found.
+    expect(rust.length).toBeGreaterThan(100);
+    expect([...IS_VALUES].sort()).toEqual([...rust].sort());
+  });
+
   it("carries the predicate list on the card filters and on the search request", () => {
     expect(rustFields(cardFiltersRs, "CardFilters")).toContain("predicates");
     expect(tsFields(ipcSource, "CardFilters")).toContain("predicates");

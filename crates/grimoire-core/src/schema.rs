@@ -695,6 +695,46 @@ pub const USER_SCHEMA_VERSION: i64 = 63;
 /// and rebuild, because what is behind it is a download. Sharing a scale would invite somebody
 /// to subtract them.
 ///
+/// **8 (2026-10-11, [#909](https://github.com/Msgaihede/mtg-grimoire/issues/909), the full
+/// Scryfall query language) is `cards.print_facts`, `sets.block_code` and `sets.block`** — the
+/// facts about a printing and a set that the search box's newer terms ask and no column held.
+/// `print_facts` carries thirteen of them as **one compact JSON object** (the key list is
+/// [`crate::card_row::CardRow::print_facts`]'): the loyalty `loy:` compares, the flavour text
+/// `ft:` reads, the watermark `wm:` names, the frame year `frame:2015` asks for, the security
+/// stamp `stamp:` names, the colour indicator `has:indicator` asks about, and seven of
+/// Scryfall's booleans that `is:` answers (`reserved`, `reprint`, `textless`, `oversized`,
+/// `story_spotlight`, `booster`, `variation`). The two set columns are what `b:` answers from:
+/// the block's code and its name, so `b:zen`, `b:zendikar` and `b:wwk` — a set *in* the block
+/// — all reach one block.
+///
+/// **One object rather than thirteen columns, and the choice was weighed.** None of the thirteen
+/// is asked often or narrowly enough to earn an index — every one is a `json_extract` over rows
+/// the cheaper filters have already narrowed, asked by a search the reader typed rather than by a
+/// list that redraws. Thirteen columns
+/// would be thirteen `ALTER`s on a table [`create_staging`] copies, thirteen parameters on a
+/// positional `INSERT` that is already 46 long, and a rung for every key Scryfall adds next; an
+/// object is one of each and grows by a line in `card_row`. `legalities`, `games` and
+/// `promo_types` set the precedent of JSON in a `cards` column; this is the first that holds
+/// keys of different types.
+///
+/// It is corpus schema 3's shape over two tables, **one rung and two gates**: `ALTER TABLE
+/// {schema}.cards ADD COLUMN print_facts TEXT` when `PRAGMA {schema}.table_info(cards)` lacks it,
+/// and the two `sets` columns when `PRAGMA {schema}.table_info(sets)` lacks either — each table
+/// asked on its own, because a corpus can be missing either one (a `cards` an interrupted ingest
+/// never put back, a `sets` that was hand-edited) and a missing table owes nothing. Never gated
+/// on this number, for the paragraph at the foot of this doc. **No backfill on either side,
+/// because none is possible**: the card facts live in the gzip `raw` BLOB SQL cannot see into,
+/// and a set's block is Scryfall's `/sets` answer and nowhere in the database. So:
+///
+/// ⚠️ **`print_facts` is `Some("{}")` at the least and never `None` on ingest** —
+/// [`CardRow::keywords`]' fence, and NULL in the column means one thing only: *this row predates
+/// corpus schema 8*. No SQL bridge is offered across that window, unlike `keywords`' — no other
+/// column is a superset of a flavour text or a security stamp — so a term over these facts
+/// answers nothing on an unmigrated row until the next full ingest recreates `cards`, at most a
+/// day away. **The sets' gap is one sync, not one rotation**: `crate::sync`'s `sets_need_fetch`
+/// owes a `/sets` fetch to a table that holds rows and not one `block_code` — printed_size's
+/// bridge, and "not one" for its reason, since the sets of recent years publish no block at all.
+///
 /// **7 (2026-10-11) is `format_specs.validates` and the `unspecified` row it exists for** — a
 /// format for a deck whose format nobody has chosen yet (the ManaBox CSV import creates them,
 /// and the reader picks the real one later), under which the TS engine judges **nothing**. The
@@ -810,7 +850,7 @@ pub const USER_SCHEMA_VERSION: i64 = 63;
 /// on an INSERT naming four columns the table does not have. [`migrate_corpus`] therefore asks
 /// the *shape*; this number is the record of what the shape is, and the thing a future rung
 /// will still want to have moved.
-pub const CORPUS_SCHEMA_VERSION: i64 = 7;
+pub const CORPUS_SCHEMA_VERSION: i64 = 8;
 
 /// Which of the two files a table lives in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5023,11 +5063,11 @@ CREATE TABLE {schema}.cards (
     image_status TEXT,
     image_updated_at TEXT,
     search_text TEXT,
-    raw TEXT NOT NULL, image_uris TEXT, face_image_uris TEXT, artist TEXT, power TEXT, toughness TEXT, legal_mask INTEGER NOT NULL DEFAULT 0, produced_mana TEXT, type_mask INTEGER NOT NULL DEFAULT 0, keywords TEXT);
+    raw TEXT NOT NULL, image_uris TEXT, face_image_uris TEXT, artist TEXT, power TEXT, toughness TEXT, legal_mask INTEGER NOT NULL DEFAULT 0, produced_mana TEXT, type_mask INTEGER NOT NULL DEFAULT 0, keywords TEXT, print_facts TEXT);
 
 CREATE TABLE {schema}.sets (
                 code TEXT PRIMARY KEY, name TEXT NOT NULL, arena_code TEXT, mtgo_code TEXT,
-                set_type TEXT, released_at TEXT, icon_svg_uri TEXT, printed_size INTEGER);
+                set_type TEXT, released_at TEXT, icon_svg_uri TEXT, printed_size INTEGER, block_code TEXT, block TEXT);
 
 CREATE TABLE {schema}.sync_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
@@ -8317,8 +8357,9 @@ pub fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
 /// cards already exists` and stops the launch rather than quietly doing nothing. Anything else
 /// is a file with a shape, and the only things these rungs have to say about one are that the
 /// combo feed's three tables may be a version behind, that `cards` may be missing
-/// `produced_mana`, `type_mask` or `keywords`, that `sets` may be missing `printed_size`, and
-/// that `format_specs` may be missing `validates` or the `unspecified` row it exists for.
+/// `produced_mana`, `type_mask`, `keywords` or `print_facts`, that `sets` may be missing
+/// `printed_size`, `block_code` or `block`, and that `format_specs` may be missing `validates`
+/// or the `unspecified` row it exists for.
 ///
 /// **Every rung is gated on the shape and not on `v < CORPUS_SCHEMA_VERSION`, and that is the
 /// trap worth writing down.** `crate::split`'s `finish` stamps [`CORPUS_SCHEMA_VERSION`] — head,
@@ -8430,6 +8471,18 @@ pub fn migrate_corpus(conn: &Connection) -> rusqlite::Result<()> {
         }
         if unspecified_format_is_owed(conn, CORPUS)? {
             seed_unspecified_format(conn, CORPUS)?;
+        }
+        // Corpus schema 8, the shape gate a sixth and seventh time — one rung, two tables, and
+        // a gate for each because either can be missing on its own. Under a version gate the
+        // `cards` half's symptom is schema 3's word for word: `table cards_staging has no column
+        // named print_facts` at the first ingest after the upgrade. The `sets` half's is schema
+        // 4's: `table sets has no column named block_code` at the tail of that ingest, after the
+        // cards had downloaded.
+        if print_facts_is_owed(conn, CORPUS)? {
+            add_print_facts(conn, CORPUS)?;
+        }
+        if set_blocks_are_owed(conn, CORPUS)? {
+            add_set_blocks(conn, CORPUS)?;
         }
     }
     if v < CORPUS_SCHEMA_VERSION {
@@ -8773,6 +8826,94 @@ fn unspecified_format_is_owed(conn: &Connection, schema: &str) -> rusqlite::Resu
 /// one literal. It names `validates`, so on the climb it runs after [`add_validates`].
 fn seed_unspecified_format(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
     conn.execute_batch(&on_schema(schema, UNSPECIFIED_FORMAT_SEED))
+}
+
+/// Whether corpus schema 8's `ALTER` is owed on `cards` in `schema` — [`keywords_are_owed`]
+/// over the same table, and every one of its reasons.
+///
+/// **The column name and never `sqlite_master`'s text**: [`swap_staging`] drops and recreates
+/// `cards` on every sync out of [`create_staging`]'s `PRAGMA table_info`, so the stored text is a
+/// spelling that changes while the columns do not, and a text probe would re-issue the `ALTER`
+/// and die at `duplicate column name` on exactly the databases that are already right.
+///
+/// ⚠️ **A `cards` that is not there at all owes nothing**: `PRAGMA table_info` on a missing
+/// table is an empty result, `ALTER TABLE … ADD COLUMN` on one raises inside
+/// [`migrate_corpus`], and only an ingest can put the table back — a launch must survive a
+/// repair it cannot carry out.
+fn print_facts_is_owed(conn: &Connection, schema: &str) -> rusqlite::Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA {schema}.table_info(cards)"))?;
+    let names: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(!names.is_empty() && !names.iter().any(|n| n == "print_facts"))
+}
+
+/// Corpus schema 8, the `cards` half: give `cards` its `print_facts` column.
+///
+/// **Schema-qualified through [`on_schema`]**, for [`add_produced_mana`]'s reason: a bare `ALTER
+/// TABLE cards` means `main` — the reader's own file — and with the corpus attached it would
+/// *succeed* against nothing useful.
+///
+/// **No index** — every term over it is a `json_extract`, which no b-tree on the column can seek
+/// through — **no `cards_fts` rebuild** (an unindexed column, no rowid renumbered, schema v2's
+/// precedent), **and no backfill, because none is possible**: the facts live in `raw`, `raw` is a
+/// gzip BLOB, and `json_extract` over one is a hard `malformed JSON` error rather than a NULL.
+/// Every existing row reads NULL — *predates the column*, the one meaning NULL has here, since
+/// [`crate::card_row::CardRow::print_facts`] writes `{}` at the least — until the next full ingest
+/// drops and recreates `cards`.
+fn add_print_facts(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
+    conn.execute_batch(&on_schema(
+        schema,
+        "ALTER TABLE {schema}.cards ADD COLUMN print_facts TEXT;",
+    ))
+}
+
+/// `sets`' column names in `schema` — empty when the table is not there, which is what `PRAGMA
+/// table_info` answers for a missing table rather than an error.
+fn set_column_names(conn: &Connection, schema: &str) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(&format!("PRAGMA {schema}.table_info(sets)"))?;
+    let names = stmt.query_map([], |r| r.get::<_, String>(1))?;
+    names.collect()
+}
+
+/// Whether corpus schema 8's `sets` half is owed: the table is there and lacks `block_code` or
+/// `block` — [`printed_size_is_owed`] over the same table, with two columns where it has one.
+///
+/// **Either, not both**, so a file that somehow holds one of the pair (a hand-edited corpus;
+/// the rung itself runs inside [`migrate_corpus`]'s one transaction and cannot leave half) is
+/// still owed the other, and [`add_set_blocks`] adds only what is missing. A missing `sets` owes
+/// nothing, printed_size's reason: `sets` is never dropped by a sync, so a corpus without one is a
+/// damaged file, and a launch must survive it.
+fn set_blocks_are_owed(conn: &Connection, schema: &str) -> rusqlite::Result<bool> {
+    let names = set_column_names(conn, schema)?;
+    Ok(!names.is_empty()
+        && ["block_code", "block"]
+            .iter()
+            .any(|c| !names.iter().any(|n| n == c)))
+}
+
+/// Corpus schema 8, the `sets` half: give `sets` its `block_code` and `block` columns, each only
+/// if it is missing — `ADD COLUMN` has no `IF NOT EXISTS`.
+///
+/// [`add_printed_size`]'s shape: schema-qualified through [`on_schema`], no index (`b:` answers
+/// from a few hundred rows), and **no backfill, because none is possible** — both are Scryfall's
+/// `/sets` answer and nowhere in `cards.raw`. **Its only writer is the `/sets` fetch**, which
+/// `crate::sync`'s `sets_need_fetch` now owes to a table holding rows and not one `block_code`, so
+/// the gap is one sync. **`block_code` first and `block` second, always**: SQLite splices each
+/// `ADD COLUMN` onto the stored `CREATE TABLE` in the order it runs, and
+/// `the_corpus_schema_is_byte_identical_to_what_the_ladder_builds` compares that text against
+/// [`CORPUS_SCHEMA_SQL`]'s tail, which names them in this order.
+fn add_set_blocks(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
+    let names = set_column_names(conn, schema)?;
+    for column in ["block_code", "block"] {
+        if !names.iter().any(|n| n == column) {
+            conn.execute_batch(&on_schema(
+                schema,
+                &format!("ALTER TABLE {{schema}}.sets ADD COLUMN {column} TEXT;"),
+            ))?;
+        }
+    }
+    Ok(())
 }
 
 /// Corpus schema 2: drop the combo feed's tables and build them again from head.
@@ -9765,6 +9906,11 @@ pub(crate) mod tests {
         // — and take the seed away and the row count at the foot of this test does.
         add_validates(&ladder, "main").unwrap();
         seed_unspecified_format(&ladder, "main").unwrap();
+        // Corpus schema 8's, both halves. Take the first away and `cards` goes red; take the
+        // second away, or let it add the pair in the other order, and `sets` does — the
+        // literal's tail names `block_code` before `block`, as the rung splices them.
+        add_print_facts(&ladder, "main").unwrap();
+        add_set_blocks(&ladder, "main").unwrap();
         let want = dump(&ladder, "main");
 
         let pair = memory_pair();
@@ -22262,6 +22408,7 @@ pub(crate) mod tests {
                         op: PredicateOp::Colon,
                         value: value.to_owned(),
                         negated: false,
+                        terms: Vec::new(),
                     }]),
                     ..Default::default()
                 },
@@ -22572,6 +22719,180 @@ pub(crate) mod tests {
 
         assert!(!validates_is_owed(&conn, CORPUS).unwrap());
         assert!(!unspecified_format_is_owed(&conn, CORPUS).unwrap());
+        migrate_corpus(&conn).expect("a launch must not die over a repair it cannot carry out");
+    }
+
+    // ---- corpus schema 8: the facts a printing and a set carry ------------------------
+
+    /// A pair whose corpus wears **head's version stamp over a `cards` with no `print_facts` and
+    /// a `sets` with neither `block_code` nor `block`** — [`corpus_missing_keywords`]' and
+    /// [`corpus_missing_printed_size`]'s constructions together, and the state every converted
+    /// database and every fresh install is in on the day corpus schema 8 ships.
+    ///
+    /// `DROP COLUMN` is available for [`corpus_missing_keywords`]' reason: no index names any of
+    /// the three, and none is a key or `UNIQUE`.
+    fn corpus_missing_schema_8() -> Connection {
+        let conn = memory_pair();
+        conn.execute_batch(&format!(
+            "ALTER TABLE {CORPUS}.cards DROP COLUMN print_facts;
+             ALTER TABLE {CORPUS}.sets DROP COLUMN block;
+             ALTER TABLE {CORPUS}.sets DROP COLUMN block_code;
+             PRAGMA {CORPUS}.user_version = {CORPUS_SCHEMA_VERSION};"
+        ))
+        .unwrap();
+        conn
+    }
+
+    /// **The population a version gate would miss**, for both halves: head's number over the old
+    /// shape. Under a version gate the next ingest would raise `table cards_staging has no column
+    /// named print_facts`, and — had it got past that — its `/sets` fetch `table sets has no
+    /// column named block_code`, after the cards had downloaded. A set row already there keeps
+    /// every field it had and reads a NULL block, and twice is once.
+    #[test]
+    fn a_corpus_stamped_at_head_with_no_print_facts_or_blocks_still_gets_them() {
+        let conn = corpus_missing_schema_8();
+        conn.execute(
+            "INSERT INTO sets (code, name, printed_size) VALUES ('zen', 'Zendikar', 249)",
+            [],
+        )
+        .unwrap();
+        let version: i64 = conn
+            .query_row(&format!("PRAGMA {CORPUS}.user_version"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, CORPUS_SCHEMA_VERSION);
+        for (has, what) in [
+            (corpus_cards_has(&conn, "print_facts"), "cards.print_facts"),
+            (corpus_sets_has(&conn, "block_code"), "sets.block_code"),
+            (corpus_sets_has(&conn, "block"), "sets.block"),
+        ] {
+            assert!(
+                !has,
+                "the fixture must start without {what} or it tests nothing"
+            );
+        }
+
+        migrate_corpus(&conn).unwrap();
+
+        assert!(
+            corpus_cards_has(&conn, "print_facts"),
+            "the number said head and the shape did not"
+        );
+        assert!(corpus_sets_has(&conn, "block_code"));
+        assert!(corpus_sets_has(&conn, "block"));
+        let (name, size, code, block): (String, i64, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT name, printed_size, block_code, block FROM sets WHERE code = 'zen'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (name.as_str(), size),
+            ("Zendikar", 249),
+            "the rung moves no row"
+        );
+        assert_eq!(
+            (code, block),
+            (None, None),
+            "and invents no block: only `/sets` knows one"
+        );
+        // `ADD COLUMN` has no `IF NOT EXISTS`, so an ungated second pass would stop the launch.
+        migrate_corpus(&conn).unwrap();
+    }
+
+    /// Each table is gated on its own: a corpus missing only the `sets` half is owed only that
+    /// half, and one missing only `block` — a hand-edited file; the rung itself cannot leave half
+    /// inside [`migrate_corpus`]'s transaction — is owed only `block`, which [`add_set_blocks`]
+    /// adds without re-adding the column that is there.
+    #[test]
+    fn each_half_of_the_schema_8_rung_is_gated_on_its_own_table() {
+        let conn = memory_pair();
+        conn.execute_batch(&format!("ALTER TABLE {CORPUS}.sets DROP COLUMN block;"))
+            .unwrap();
+
+        assert!(!print_facts_is_owed(&conn, CORPUS).unwrap());
+        assert!(set_blocks_are_owed(&conn, CORPUS).unwrap());
+
+        migrate_corpus(&conn).unwrap();
+
+        assert!(corpus_sets_has(&conn, "block_code"));
+        assert!(corpus_sets_has(&conn, "block"));
+        assert!(!set_blocks_are_owed(&conn, CORPUS).unwrap());
+    }
+
+    /// The counterweight: a fresh corpus is built with all three columns and owes nothing — the
+    /// builder and the rung are two paths to one shape, which `the_corpus_schema_is_byte_
+    /// identical_to_what_the_ladder_builds` compares byte for byte.
+    #[test]
+    fn a_fresh_corpus_has_print_facts_and_blocks_and_owes_nothing() {
+        let conn = memory_pair();
+        assert!(corpus_cards_has(&conn, "print_facts"));
+        assert!(corpus_sets_has(&conn, "block_code"));
+        assert!(corpus_sets_has(&conn, "block"));
+        assert!(!print_facts_is_owed(&conn, CORPUS).unwrap());
+        assert!(!set_blocks_are_owed(&conn, CORPUS).unwrap());
+
+        migrate_corpus(&conn).unwrap();
+        migrate_corpus(&conn).unwrap();
+
+        assert!(corpus_cards_has(&conn, "print_facts"));
+        assert!(corpus_sets_has(&conn, "block"));
+    }
+
+    /// ⚠️ **Both halves are schema-qualified**, `the_keywords_rung_lands_on_the_corpus_and_not_on_
+    /// the_user_file`'s claim for this rung. With a decoy `cards` and `sets` on the user side, an
+    /// unqualified `ALTER` lands on `main` and the qualified form cannot. In the field `user.db`
+    /// has neither table, which is what would make the mistake silent.
+    #[test]
+    fn the_schema_8_rung_lands_on_the_corpus_and_not_on_the_user_file() {
+        let conn = corpus_missing_schema_8();
+        conn.execute_batch(
+            "CREATE TABLE main.cards (id TEXT PRIMARY KEY);
+             CREATE TABLE main.sets (code TEXT PRIMARY KEY);",
+        )
+        .unwrap();
+
+        add_print_facts(&conn, CORPUS).unwrap();
+        add_set_blocks(&conn, CORPUS).unwrap();
+
+        assert!(corpus_cards_has(&conn, "print_facts"));
+        assert!(corpus_sets_has(&conn, "block_code"));
+        assert!(corpus_sets_has(&conn, "block"));
+        for table in ["cards", "sets"] {
+            let user_side: i64 = conn
+                .query_row(
+                    &format!("SELECT count(*) FROM pragma_table_info('{table}', 'main')"),
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                user_side, 1,
+                "the decoy `{table}` keeps its one column: an unqualified ALTER puts the \
+                 corpus's column in the reader's own file, silently"
+            );
+        }
+    }
+
+    /// And a corpus with neither `cards` nor `sets` owes nothing rather than dying — the debt
+    /// this rung repairs is *a table missing a column*, never *a missing table*, and only an
+    /// ingest or a fetch can put either back.
+    #[test]
+    fn a_corpus_with_no_cards_or_sets_table_owes_the_schema_8_rung_nothing() {
+        let conn = memory_pair();
+        conn.execute_batch(&format!(
+            "DROP TABLE {CORPUS}.cards_fts; DROP TABLE {CORPUS}.cards; DROP TABLE {CORPUS}.sets;"
+        ))
+        .unwrap();
+
+        assert!(
+            !print_facts_is_owed(&conn, CORPUS).unwrap(),
+            "there is no `cards` to alter, so nothing is owed"
+        );
+        assert!(
+            !set_blocks_are_owed(&conn, CORPUS).unwrap(),
+            "there is no `sets` to alter, so nothing is owed"
+        );
         migrate_corpus(&conn).expect("a launch must not die over a repair it cannot carry out");
     }
 

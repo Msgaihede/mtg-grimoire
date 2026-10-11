@@ -150,11 +150,14 @@ export const SearchSyntax: Story = {
     await waitFor(async () => {
       await expect(syntax).toHaveAttribute("aria-selected", "true");
     });
-    // One row from each of the three groups, and the note that is the only prose on the tab.
+    // Rows from the first, a middle and the last section, the long tail's (issue #909), and
+    // the two literals of the prose that says how terms combine.
     await expect(canvas.getByText("t:goblin")).toBeInTheDocument();
     await expect(canvas.getByText("cmc>=3")).toBeInTheDocument();
+    await expect(canvas.getByText("is:fetchland")).toBeInTheDocument();
     await expect(canvas.getByText("atag:dragon")).toBeInTheDocument();
     await expect(canvas.getByText("-t:land")).toBeInTheDocument();
+    await expect(canvas.getByText("(t:goblin or t:elf) c:r")).toBeInTheDocument();
     // The chords are replaced, not appended: a 384px panel cannot hold both.
     await expect(canvas.queryByText("Show this list")).toBeNull();
 

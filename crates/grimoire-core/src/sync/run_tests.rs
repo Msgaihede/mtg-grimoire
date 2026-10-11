@@ -130,7 +130,9 @@ fn publish(server: &MockServer, cards: u64) -> usize {
         when.method(GET).path("/sets");
         then.status(200).json_body(serde_json::json!({
             "has_more": false,
-            "data": [{"code": "x", "name": "Set X", "printed_size": 5}]
+            // A size and a block, so the second run's `sets_need_fetch` is satisfied by both of
+            // its bridges (corpus schemas 4 and 8) and finds nothing to fetch.
+            "data": [{"code": "x", "name": "Set X", "printed_size": 5, "block_code": "xb", "block": "Block X"}]
         }));
     });
     size

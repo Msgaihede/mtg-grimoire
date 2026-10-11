@@ -6588,6 +6588,7 @@ mod tests {
                 op: crate::filters::PredicateOp::Colon,
                 value: "goblin".into(),
                 negated: false,
+                terms: Vec::new(),
             }]
         };
         let heavy = || {
@@ -6596,6 +6597,7 @@ mod tests {
                 op: crate::filters::PredicateOp::Gte,
                 value: "3".into(),
                 negated: false,
+                terms: Vec::new(),
             }]
         };
 

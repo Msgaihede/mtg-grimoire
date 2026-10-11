@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { ipc, type CardFilters, type DeckCard, type QueryPredicate } from "@/lib/ipc";
-import { parseQuery, tokenKey } from "@/features/search/queryLanguage";
+import { ipc, type CardFilters, type DeckCard } from "@/lib/ipc";
+import { parseQuery, tokenKey, wirePredicate } from "@/features/search/queryLanguage";
 import { DEBOUNCE_MS } from "@/features/search/useCardSearch";
 import { termsFor, type TagChip } from "@/features/tags/tagFilters";
 
@@ -16,11 +16,12 @@ import { termsFor, type TagChip } from "@/features/tags/tagFilters";
  *   still finds the goblins, and plain typing costs no round trip. {@link needleMatches} is that
  *   test, written once.
  * - **Every typed term is Rust's.** `t:goblin`, `cmc>=3`, `-kw:flying`, `a:avon`, `f:modern`,
- *   `otag:removal` and the rest go to `deck_query_cards`, which runs them through the one
- *   `filters` SQL the search, the collection and the wishlist already share. A `DeckCard` carries
- *   no keywords, no artist and no tags, and a second evaluator of the other ten fields here would
- *   be a second implementation of `c:` against `id:`, rarity's order and a star power — which is
- *   the drift `packages/ui/CLAUDE.md` says the parse/SQL split exists to prevent.
+ *   `otag:removal` and the rest — an `or` too, `bolt or shock` included, which is one `anyOf`
+ *   term whose bare words Rust matches by FTS — go to `deck_query_cards`, which runs them
+ *   through the one `filters` SQL the search, the collection and the wishlist already share. A
+ *   `DeckCard` carries no keywords, no artist and no tags, and a second evaluator of the other
+ *   fields here would be a second implementation of `c:` against `id:`, rarity's order and a star
+ *   power — which is the drift `packages/ui/CLAUDE.md` says the parse/SQL split exists to prevent.
  *
  * **The terms are parsed from the debounced string and the free text from the live one**, so a
  * plain word narrows at once while a term waits out {@link DEBOUNCE_MS} — the search boxes' own
@@ -52,12 +53,6 @@ export function needleMatches(card: Pick<DeckCard, "name" | "typeLine">, needle:
     card.name.toLowerCase().includes(needle) ||
     (card.typeLine ?? "").toLowerCase().includes(needle)
   );
-}
-
-/** One term as the wire carries it — the box's span dropped, so two spellings of one question are
- *  one query key (`useCardSearch`'s `bare`). */
-function bare({ field, op, value, negated }: QueryPredicate): QueryPredicate {
-  return { field, op, value, negated };
 }
 
 /** No typed term narrows — one frozen value, so the memo below hands back the same object. */
@@ -117,7 +112,7 @@ export function useDeckCardQuery(deckId: number, input: string): DeckCardQuery {
 
   const filters = useMemo((): Pick<CardFilters, "predicates" | "oracleTags" | "artTags"> => {
     const out: Pick<CardFilters, "predicates" | "oracleTags" | "artTags"> = {};
-    if (parsed.predicates.length > 0) out.predicates = parsed.predicates.map(bare);
+    if (parsed.predicates.length > 0) out.predicates = parsed.predicates.map(wirePredicate);
     if (tags.terms.oracleTags) out.oracleTags = tags.terms.oracleTags;
     if (tags.terms.artTags) out.artTags = tags.terms.artTags;
     return out;

@@ -935,15 +935,35 @@ export interface CardFilters {
  * What one {@link QueryPredicate} is a statement about — `filters::PredicateField`, whose
  * variants carry `#[serde(rename_all = "camelCase")]`, so these strings are the wire.
  *
- * **`name`, `typeLine` and `oracleText` emit no SQL at all.** They travel in the same list as
- * the other ten and are folded into the FTS5 `MATCH` string instead, because `LIKE` over either
- * text column measured 80× to 250× slower on the real corpus. Nothing on this side has to know
- * that — it is recorded because the three are the fields whose behaviour differs from their
+ * **`name`, `typeLine` and `oracleText` emit no SQL at the top level.** They travel in the same
+ * list as the rest and are folded into the FTS5 `MATCH` string instead, because `LIKE` over
+ * either text column measured 80× to 250× slower on the real corpus. Nothing on this side has to
+ * know that — it is recorded because the three are the fields whose behaviour differs from their
  * neighbours', and the difference is invisible in the payload. (The wishlist is the exception
  * for `name`: it answers one from its own denormalised name column, as it does its free text.)
+ * Two exceptions since issue #909: a `name` whose op is `eq` — Scryfall's `!"exact name"` — is
+ * plain SQL equality and never FTS, and inside a group every FTS field becomes its own
+ * `rowid IN (… MATCH …)` sub-select, because one `MATCH` string cannot sit under an `OR`.
  *
- * `name` has no keyword: `queryLanguage.ts` sends it only for a leading `-` on free text —
- * `-bolt`, `-"lightning bolt"` — so on the wire it is always negated.
+ * `name` is what `queryLanguage.ts` sends for a leading `-` on free text — `-bolt`,
+ * `-"lightning bolt"` — for the `name:` keyword, and for `!` (op `eq`).
+ *
+ * # The fields issue #909 added
+ *
+ * - **`anyOf` / `allOf` are the two groups.** They carry no value (`""`), their op is ignored
+ *   (`"colon"` is sent), and {@link QueryPredicate.terms} holds what they combine: `anyOf` is
+ *   Scryfall's `or`, `allOf` a parenthesised conjunction that had to stay one unit — negated,
+ *   `-(t:goblin c:r)`, or nested under an `or`. A plain top-level `(a b)` is flattened by the
+ *   parser and never arrives as an `allOf`.
+ * - **`text`, `oracleTag` and `artTag` exist only for what sits inside a group.** At the top level
+ *   free text rides `SearchRequest.text` and a tag rides `tag_resolve` and `oracleTags`/`artTags`,
+ *   as they always have; inside an `or` neither path can carry them, so a bare word becomes a
+ *   `text` term (FTS over every column) and a tag term an `oracleTag`/`artTag` term that Rust
+ *   resolves by normalised name in SQL. An unknown name inside a group matches nothing, and the
+ *   other branches of its `or` still answer.
+ * - **The other thirty-odd are Scryfall keywords** — `queryLanguage.ts`' `QUERY_KEYWORDS` is the
+ *   table that names each one's spellings, and `docs/reference/search-syntax.md` says how each
+ *   is matched.
  */
 export type PredicateField =
   | "name"
@@ -958,7 +978,42 @@ export type PredicateField =
   | "toughness"
   | "rarity"
   | "setCode"
-  | "format";
+  | "format"
+  | "anyOf"
+  | "allOf"
+  | "text"
+  | "oracleTag"
+  | "artTag"
+  | "flavor"
+  | "watermark"
+  | "manaCost"
+  | "devotion"
+  | "produces"
+  | "loyalty"
+  | "powTou"
+  | "collectorNumber"
+  | "setType"
+  | "block"
+  | "inPrinting"
+  | "game"
+  | "language"
+  | "year"
+  | "date"
+  | "usd"
+  | "eur"
+  | "tix"
+  | "border"
+  | "frame"
+  | "stamp"
+  | "banned"
+  | "restricted"
+  | "prints"
+  | "paperPrints"
+  | "sets"
+  | "paperSets"
+  | "newFeature"
+  | "is"
+  | "has";
 
 /**
  * A {@link QueryPredicate}'s comparison — `filters::PredicateOp`, camelCase on the wire.
@@ -966,14 +1021,14 @@ export type PredicateField =
  * **`"colon"` is Scryfall's `:` and means a different thing on each field**: `c:rg` is `c>=rg`
  * and answers 676 cards, while `id:rg` is `id<=rg` and answers 13,399 (both measured on
  * Scryfall, 2026-09-22). `queryLanguage.ts` resolves it per keyword before sending, so a
- * `"colon"` on the wire is one of the four fields whose default really is `:` — and Rust
+ * `"colon"` on the wire is one of the fields whose default really is `:` — and Rust
  * resolves it the same way for anything else, rather than refusing.
  */
 export type PredicateOp = "colon" | "eq" | "ne" | "gt" | "gte" | "lt" | "lte";
 
 /**
- * One parsed term of a search box — `t:goblin`, `cmc>=3`, `-a:rebecca`. Rust:
- * `filters::QueryPredicate`.
+ * One parsed term of a search box — `t:goblin`, `cmc>=3`, `-a:rebecca`, `(t:goblin or t:elf)`.
+ * Rust: `filters::QueryPredicate`.
  *
  * **Parsing happens here and never in Rust.** `packages/ui/features/search/queryLanguage.ts` reads the
  * box into free text, tag tokens and a list of these; the crate receives closed enums and emits
@@ -981,18 +1036,27 @@ export type PredicateOp = "colon" | "eq" | "ne" | "gt" | "gte" | "lt" | "lte";
  *
  * **One list rather than ten fields on {@link CardFilters}**, because a list carries three
  * things no field can spell: negation, repetition (`t:creature t:goblin` is two terms and both
- * must hold) and an operator per term. Terms AND with each other and with every other filter;
- * there is no `or` and no grouping.
+ * must hold) and an operator per term. Terms in the list AND with each other and with every
+ * other filter; Scryfall's `or` and parentheses arrive as **one** term of the list, an `anyOf` or
+ * `allOf` whose {@link terms} are the branches (issue #909), so the list itself stays a
+ * conjunction and every reader of it that predates grouping is still right about it.
  */
 export interface QueryPredicate {
   field: PredicateField;
   op: PredicateOp;
-  /** Exactly what the reader typed, **unnormalised except for rarity**: `c:RG` and `s:NEO`
-   *  arrive with their case, and Rust folds it. Rarity is the one keyword the parser expands
-   *  and lower-cases first, so `r:c` is sent as `"common"`. */
+  /** What the reader typed, **canonicalised only where the parser owns a vocabulary**: `c:RG`
+   *  and `s:NEO` arrive with their case, and Rust folds it. Rarity is expanded and lower-cased
+   *  (`r:c` is sent as `"common"`), every closed vocabulary — `is:`, `game:`, `border:`,
+   *  `frame:`, `stamp:`, `has:`, `new:` — is lower-cased, a language name becomes its code, and
+   *  a numeric field compared with another (`pow>tou`) carries `"@toughness"`. `""` on the two
+   *  groups. */
   value: string;
-  /** A leading `-` in the box. Rust reads an absent field as `false`. */
+  /** A leading `-` in the box (or `not:`). Rust reads an absent field as `false`. */
   negated: boolean;
+  /** What an `anyOf` or `allOf` combines — sent **only** on those two fields, absent on every
+   *  other. Rust reads an absent list as empty (`#[serde(default)]`), and a group with nothing
+   *  usable in it adds no clause. */
+  terms?: QueryPredicate[];
 }
 
 /**

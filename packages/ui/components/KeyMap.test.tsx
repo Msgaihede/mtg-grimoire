@@ -97,9 +97,7 @@ describe("KeyMap", () => {
 
     expect(capsFor("Undo")).toEqual(["Ctrl", "Z"]);
     expect(capsFor("Redo")).toEqual(["Ctrl", "Y", "Ctrl", "Shift", "Z"]);
-    expect(screen.getByText("Redo").nextElementSibling?.textContent).toContain(
-      "or",
-    );
+    expect(screen.getByText("Redo").nextElementSibling?.textContent).toContain("or");
   });
 
   /**
@@ -290,7 +288,7 @@ describe("KeyMap", () => {
  * The panel's second half: what a reader may type into any card search box.
  *
  * **The whole of why this is a tab rather than a fifth section** is that the panel is 384px wide
- * and is opened to find a chord: fourteen keywords with examples appended under the chord
+ * and is opened to find a chord: forty-five keywords with examples appended under the chord
  * sections would bury the thing it is for. The two halves are also not the same shape — a
  * syntax row is a word you type and an explanation, not a chord — so they cannot share the
  * caps layout.
@@ -320,9 +318,9 @@ describe("KeyMap's search syntax tab", () => {
 
   /**
    * The other half of the same fence, and it is not implied by the first: a table every row of
-   * which parses is worth nothing if the panel draws twelve of its fourteen rows. The grouping
-   * is derived rather than written down, so a keyword added to the table with a shape nobody
-   * anticipated must still reach the screen — this is what says it did.
+   * which parses is worth nothing if the panel draws forty of its forty-five rows. Each row names
+   * its own section, so a keyword filed under a section the panel does not draw would parse and
+   * never reach the screen — this is what says every one did.
    */
   it("draws a row for every keyword in the table", async () => {
     const user = userEvent.setup();
@@ -335,6 +333,33 @@ describe("KeyMap's search syntax tab", () => {
       expect(screen.getByText(spec.keywords.join(" · "))).toBeInTheDocument();
       expect(screen.getByText(spec.example)).toBeInTheDocument();
       expect(screen.getByText(spec.blurb)).toBeInTheDocument();
+    }
+  });
+
+  /**
+   * The prose is the one part of the tab the table does not hold, so it is the one part the two
+   * fences above cannot see: a literal there that the parser read as free text would teach the
+   * reader a spelling the box ignores. Each one is drawn, and each one parses to terms with
+   * nothing left over — the grammar issue #909 added, said in four examples.
+   */
+  it("teaches or, parentheses, exact names and not: with literals that parse", async () => {
+    const user = userEvent.setup();
+    useAppStore.setState({ keyMapOpen: true });
+    render(<Harness />);
+
+    await user.click(screen.getByRole("tab", { name: "Search syntax" }));
+
+    for (const [literal, count] of [
+      ["(t:goblin or t:elf) c:r", 2],
+      ['!"lightning bolt"', 1],
+      ["not:reprint", 1],
+      ["-is:reprint", 1],
+      ["pow>tou", 1],
+    ] as const) {
+      expect(screen.getByText(literal)).toBeInTheDocument();
+      const parsed = parseQuery(literal);
+      expect(parsed.text, `${literal} leaked free text`).toBe("");
+      expect(parsed.predicates, literal).toHaveLength(count);
     }
   });
 

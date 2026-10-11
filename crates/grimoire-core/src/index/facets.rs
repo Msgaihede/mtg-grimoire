@@ -2103,6 +2103,7 @@ mod tests {
                 op: crate::filters::PredicateOp::Colon,
                 value: "instant".into(),
                 negated,
+                terms: Vec::new(),
             }])
         };
 
@@ -2155,6 +2156,7 @@ mod tests {
                     op: crate::filters::PredicateOp::Colon,
                     value: "helix".into(),
                     negated: true,
+                    terms: Vec::new(),
                 }]);
             }),
         )
