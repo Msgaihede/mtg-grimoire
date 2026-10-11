@@ -423,7 +423,7 @@ export const IntoANewFolder: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    await userEvent.click(await canvas.findByLabelText("Decklist"));
+    await userEvent.click(await canvas.findByLabelText("Card list"));
     await userEvent.paste("1 Sol Ring\n2 Lightning Bolt");
     await userEvent.click(canvas.getByRole("button", { name: "Preview" }));
 
