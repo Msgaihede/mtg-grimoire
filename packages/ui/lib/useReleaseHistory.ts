@@ -46,3 +46,30 @@ export function useReleaseHistory(lastCheckAt: string | null) {
 }
 
 export type ReleaseHistory = ReturnType<typeof useReleaseHistory>;
+
+/**
+ * The same history for a host with no updater: the releases this build carries
+ * (`bundledReleases.ts`), in {@link useReleaseHistory}'s shape so `VersionHistory` draws either.
+ *
+ * **A query over an `import()`**, so the notes are a chunk of their own, fetched the first time a
+ * reader opens the panel and never by a session that does not. `staleTime: Infinity` because
+ * nothing can change them while the page runs: a newer build brings its own.
+ */
+export function useBundledHistory(): ReleaseHistory {
+  const query = useQuery({
+    queryKey: ["bundledReleaseHistory"],
+    queryFn: () => import("@/lib/bundledReleases").then((m) => [...m.BUNDLED_RELEASES]),
+    staleTime: Infinity,
+  });
+
+  return {
+    releases: query.data ?? NONE,
+    // No `fetchStatus` reading needed: this query is never disabled, so `pending` is in flight.
+    loading: query.isPending,
+    // A chunk that will not load is the page's own failure — an old tab across a deploy that
+    // took the file away — and the cure is the reload every such failure asks for.
+    error: query.error
+      ? "The version history could not be loaded. Reload the app to try again."
+      : null,
+  };
+}

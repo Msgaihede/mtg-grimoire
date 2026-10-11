@@ -34,6 +34,10 @@ export type LightView = (typeof LIGHT_VIEWS)[number];
  * feeds, the image cache, marketplace, the danger zone — and says Backup (the mirror) and Updates
  * (the portable swap) are not in it. Each panel, and why:
  *
+ * - **`updates`** — the version running and every release's notes, which the owner asked for on
+ *   both light hosts (2026-10-11). Not the spec's portable swap: the edition has no updater
+ *   (`Edition.updater`), so the panel drawn under this id is `VersionPanel`, which reads both
+ *   answers out of the build and asks no host anything.
  * - **`prices`** — *marketplace*, and *card data and the optional feeds*: it is the whole of the
  *   `Card data` entry, and its rows are where each price feed's own state is drawn.
  * - **`sync`** — *sync and pairing*, and *the supporter block*, which is that panel's second half.
@@ -51,8 +55,6 @@ export type LightView = (typeof LIGHT_VIEWS)[number];
  *
  * And what is left out:
  *
- * - **`updates`** — the portable swap, a desktop feature (spec §4). A light install is updated
- *   by its store or by a deploy, neither of which this app drives.
  * - **`backup`** — the plain-text mirror, a desktop feature (spec §4): a folder of files the
  *   reader's own sync client picks up, which a browser and a phone do not have.
  * - **`data-folder`** — a path on disk and the image-write failures in it. A browser's storage
@@ -62,6 +64,7 @@ export type LightView = (typeof LIGHT_VIEWS)[number];
  *   nothing (`LIGHT_START`). A stored start view is a question it does not ask.
  */
 export const LIGHT_SETTINGS = [
+  "updates",
   "prices",
   "sync",
   "review",
@@ -118,6 +121,15 @@ export interface Edition {
    * Opening somebody else's share is the other half, and `views` already leaves it out.
    */
   publishes: boolean;
+  /**
+   * Whether this app installs its own updates — the desktop's portable updater, and Settings'
+   * `UpdatePanel` over it (check, download, restart, and the history the check fetched).
+   *
+   * **False in the light edition because no light host has the commands**: `update_*` is the
+   * desktop host's alone, and a light install is updated by its store or by a deploy. Its Updates
+   * entry draws `VersionPanel` instead — the version and the notes the build carries.
+   */
+  updater: boolean;
 }
 
 export const FULL_EDITION: Edition = {
@@ -127,6 +139,7 @@ export const FULL_EDITION: Edition = {
   startView: "home",
   settings: null,
   publishes: true,
+  updater: true,
 };
 
 export const LIGHT_EDITION: Edition = {
@@ -136,6 +149,7 @@ export const LIGHT_EDITION: Edition = {
   startView: LIGHT_START,
   settings: LIGHT_SETTINGS,
   publishes: false,
+  updater: false,
 };
 
 export function editionHas(edition: Edition, view: ViewId): boolean {

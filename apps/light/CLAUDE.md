@@ -50,6 +50,7 @@ The Android app and the Web app share identical client-side code; the phone face
 - Defined in `packages/ui/lib/edition.ts`. `DesktopFace` injects `LIGHT_EDITION`; phone Settings reads `LIGHT_SETTINGS`.
 - Chords and views outside the edition are inert.
 - Navigation guard: `useReaches(view)` hides unreachable options, and `useDesktopPlace` rejects programmatic moves outside the edition.
+- Updates without an updater: `LIGHT_SETTINGS` holds `updates`, and `Edition.updater` is false, so both faces draw `VersionPanel` (`packages/ui/features/settings/`) — the version and the release notes the build carries (`lib/appVersion.ts`, `lib/bundledReleases.ts`, from `vite.base.ts`'s `define` and `changelog/`). It asks no host anything; never draw `UpdatePanel` or call `update_*` here.
 - Capability guard: `usePublishes()` (`packages/ui/lib/reach.ts`, from the edition's `publishes`) is false in the light edition, whose hosts have no `share_*` commands, so the collection's Share half is not drawn there for any membership and `share_list` is never asked.
 
 ### The Phone Import Fence

@@ -72,6 +72,7 @@ describe("the editions' Settings entries", () => {
   it("gives the light edition spec §4's reduced Settings, and nothing the spec leaves out", () => {
     expect(LIGHT_EDITION.settings).toBe(LIGHT_SETTINGS);
     expect(panelsOf(LIGHT_EDITION.settings)).toEqual([
+      "updates",
       "prices",
       "sync",
       "review",
@@ -82,16 +83,24 @@ describe("the editions' Settings entries", () => {
       "errors",
       "danger",
     ]);
-    // Backup (the mirror) and Updates (the portable swap) by the spec's name; the folder's path
-    // and the stored start view because a light install has neither to offer.
-    for (const gone of ["updates", "backup", "data-folder", "start-view"] as const) {
+    // Backup (the mirror) by the spec's name; the folder's path and the stored start view because
+    // a light install has neither to offer. Updates is drawn, without the updater (below).
+    for (const gone of ["backup", "data-folder", "start-view"] as const) {
       expect(panelsOf(LIGHT_EDITION.settings)).not.toContain(gone);
     }
   });
 
   it("drops the light rail's entries with nothing left in them, and only those", () => {
     const groups = groupsOf(panelsOf(LIGHT_EDITION.settings));
-    expect(groups).toEqual(["carddata", "sync", "tags", "appearance", "storage", "errors"]);
+    expect(groups).toEqual([
+      "updates",
+      "carddata",
+      "sync",
+      "tags",
+      "appearance",
+      "storage",
+      "errors",
+    ]);
     for (const group of groups) {
       expect(visiblePanels(group, "", panelsOf(LIGHT_EDITION.settings)).length).toBeGreaterThan(0);
     }
@@ -102,6 +111,11 @@ describe("the editions' Settings entries", () => {
     expect(visiblePanels("carddata", "dropbox", light)).toEqual([]);
     expect(visiblePanels("carddata", "dropbox")).toEqual(["backup"]);
     expect(visiblePanels("carddata", "patreon", light)).toEqual(["sync"]);
+  });
+
+  it("gives only the full edition an updater", () => {
+    expect(FULL_EDITION.updater).toBe(true);
+    expect(LIGHT_EDITION.updater).toBe(false);
   });
 
   it("lists a panel once and orders it by the page, not by the list", () => {
