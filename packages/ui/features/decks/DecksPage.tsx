@@ -7,7 +7,7 @@ import {
   type CSSProperties,
   type RefObject,
 } from "react";
-import { ArrowUp, ChevronDown, ChevronRight, LayoutGrid, Plus } from "lucide-react";
+import { ArrowUp, ChevronDown, ChevronRight, Plus } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import { FolderNameField } from "@/components/FolderNameField";
@@ -21,6 +21,7 @@ import {
 } from "@/components/FilterChips";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { useTooltip } from "@/components/tooltip/useTooltip";
+import { ViewAllToggle } from "@/components/ViewAllToggle";
 import { atLeast, cardScaleVars, scaled } from "@/lib/cardZoom";
 import { plural } from "@/lib/counts";
 import { ART_ASPECT } from "@/lib/images";
@@ -1542,21 +1543,12 @@ export function DecksPage() {
                   deletes their last folder from the flat wall is not left in a view with its
                   switch gone. */}
               {(folders.folders.length > 0 || flat) && (
-                <button
+                <ViewAllToggle
                   ref={viewAllRef}
-                  type="button"
-                  aria-pressed={flat}
-                  aria-label={VIEW_ALL_NAME}
-                  onClick={() => setFlat(!flat)}
-                  className={cn(
-                    HEADING_BUTTON,
-                    "inline-flex items-center gap-1.5",
-                    flat && "border-accent text-accent hover:text-accent",
-                  )}
-                >
-                  <LayoutGrid className="size-3.5" aria-hidden="true" />
-                  View all
-                </button>
+                  pressed={flat}
+                  name={VIEW_ALL_NAME}
+                  onToggle={() => setFlat(!flat)}
+                />
               )}
 
               {/* **One control for every verb, where there were three.**

@@ -4449,6 +4449,112 @@ describe("the wall at the root", () => {
  * that folder — and either way the new folder appears where it will live, as a placeholder heading
  * whose name is the field, last among its siblings, over an empty shelf.
  */
+/**
+ * **`View all`** (issue #907) — every card on one flat wall, no shelves, the deck gallery's toggle
+ * (issue #750) one page over. Each tile's chin names the drawer it is in, because the wall draws no
+ * heading to say it; pressing it again, or Escape, goes back to the folder asked underneath.
+ */
+describe("View all", () => {
+  const viewAll = () => screen.getByRole("button", { name: "View all cards" });
+  const escape = (on: Element = document.body) =>
+    fireEvent.keyDown(on, { key: "Escape", code: "Escape" });
+  /** The tile a card's name is drawn on — `CardGrid`'s root for it. */
+  const tileOf = (name: string) =>
+    onPage(screen.getAllByAltText(name)).closest<HTMLElement>("[data-grid-index]")!;
+
+  const FILED = [
+    { ...BOLT, id: 7, folderId: 9, folderName: "Foils" },
+    {
+      ...BOLT,
+      id: 8,
+      cardId: "c2",
+      name: "Counterspell",
+      folderId: 20,
+      folderName: "Mono-Red Aggro",
+    },
+    { ...BOLT, id: 10, cardId: "c3", name: "Dark Ritual", folderId: null, folderName: null },
+  ];
+
+  it("draws every card on one wall, each naming its drawer on its chin, and goes back", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionFolderList.mockResolvedValue([BINDER, FOILS, DECK_GROUP, REMOVED]);
+    collectionList.mockResolvedValue(page(FILED));
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await findHeading("Trade binder");
+    expect(viewAll()).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(viewAll());
+
+    expect(viewAll()).toHaveAttribute("aria-pressed", "true");
+    // Every folder, in the reader's sort alone: no shelves on the wire.
+    await waitFor(() => expect(lastQuery().shelves).toBeUndefined());
+    expect(lastQuery().folderId).toBeUndefined();
+    expect(lastQuery().rootOnly).toBeUndefined();
+    // No headings, and none of the shelf controls — the wall draws no shelves to act on.
+    await waitFor(() => expect(queryHeading("Trade binder")).toBeNull());
+    expect(queryHeading("Not sorted")).toBeNull();
+    expect(screen.queryByRole("group", { name: "Shelves" })).toBeNull();
+    // A card in a shut deck group is on the wall too, and every chin says where its card lives.
+    const deckTile = await waitFor(() => tileOf("Counterspell"));
+    expect(within(deckTile).getByText("Mono-Red Aggro")).toBeInTheDocument();
+    expect(within(tileOf("Lightning Bolt")).getByText("Foils")).toBeInTheDocument();
+    expect(within(tileOf("Dark Ritual")).getByText("Not sorted")).toBeInTheDocument();
+
+    await user.click(viewAll());
+
+    await findHeading("Trade binder");
+    expect(viewAll()).toHaveAttribute("aria-pressed", "false");
+    await waitFor(() => expect(lastQuery().shelves).toEqual([UNFILED_SHELF, 3, 9]));
+    expect(within(tileOf("Lightning Bolt")).queryByText("Foils")).toBeNull();
+  });
+
+  it("goes back to the folder it was pressed in, on Escape, with the caret on the toggle", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, FOILS]);
+    collectionList.mockResolvedValue(page(FILED.slice(0, 1)));
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await openShelf(user, "Trade binder");
+    await waitFor(() => expect(standingIn()).toBe(3));
+
+    await user.click(viewAll());
+    await waitFor(() => expect(lastQuery().shelves).toBeUndefined());
+    // The root's figures: the flat wall covers every card, not the folder underneath it.
+    await waitFor(() => expect(standingIn()).toBeNull());
+
+    expect(escape()).toBe(false);
+
+    await waitFor(() => expect(standingIn()).toBe(3));
+    expect(viewAll()).toHaveAttribute("aria-pressed", "false");
+    expect(viewAll()).toHaveFocus();
+    expect(await findHeading("Foils")).toBeInTheDocument();
+  });
+
+  /** The table says what the wall does: a `Folder` column, in place of the bands it draws no more. */
+  it("draws a flat table with a Folder column", async () => {
+    useAppStore.setState({ collectionView: "table" });
+    collectionFolderList.mockResolvedValue([BINDER, FOILS]);
+    collectionList.mockResolvedValue(page(FILED.slice(0, 1)));
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByRole("row", { name: /Lightning Bolt/ });
+    expect(screen.queryByRole("columnheader", { name: "Folder" })).toBeNull();
+
+    await user.click(viewAll());
+
+    expect(await screen.findByRole("columnheader", { name: "Folder" })).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("row", { name: /Lightning Bolt/ })).getByText("Foils"),
+    ).toBeInTheDocument();
+  });
+
+  it("draws no toggle where there is no cabinet to leave out", async () => {
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+    expect(screen.queryByRole("button", { name: "View all cards" })).toBeNull();
+  });
+});
+
 describe("Add folder", () => {
   it("is on the path row, Not sorted and every folder the reader made", async () => {
     collectionFolderList.mockResolvedValue([BINDER, FOILS]);

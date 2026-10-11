@@ -423,6 +423,57 @@ describe("walking to a level", () => {
  * changes what is asked for without making it a different list, and a wall that jumped to the top
  * on every chevron press would be a wall nobody could fold anything in.
  */
+/**
+ * **`View all`** (issue #907): every wish wherever it is filed, in the reader's sort alone. Here an
+ * absent `folderId` is the root's loose wishes, so the list is asked `flatten`ed with no `shelves`;
+ * the counts stay the root's, which cover everything, and the folder asked underneath stays.
+ */
+describe("View all", () => {
+  it("asks for every wish flattened, with no shelves, and goes back to the folder after", async () => {
+    const { result } = renderHook(() => useWishlist(), { wrapper });
+    act(() => result.current.openFolder(1));
+    await waitFor(() => expect(result.current.folderId).toBe(1));
+    await waitFor(() => expect(lastQuery().shelves).toEqual([1, 2]));
+
+    act(() => result.current.setViewAll(true));
+
+    expect(result.current.requestedViewAll).toBe(true);
+    await waitFor(() => expect(result.current.viewAll).toBe(true));
+    expect(lastQuery().flatten).toBe(true);
+    expect(lastQuery()).not.toHaveProperty("shelves");
+    expect(lastQuery()).not.toHaveProperty("folderId");
+    expect(lastCount().shelves).toEqual([0, 1, 2, 3, 9]);
+    // The root's shelves, the managed one included: every folder a tile's chin may have to name.
+    expect(result.current.folderId).toBeNull();
+    expect(result.current.shelves.map((shelf) => shelf.id)).toEqual([0, 1, 2, 3, 9]);
+    expect(result.current.requestedFolderId).toBe(1);
+
+    act(() => result.current.setViewAll(false));
+
+    await waitFor(() => expect(result.current.viewAll).toBe(false));
+    expect(result.current.folderId).toBe(1);
+    expect(lastQuery().shelves).toEqual([1, 2]);
+    expect(lastQuery()).not.toHaveProperty("flatten");
+  });
+
+  it("is a list identity of its own, and opening a folder leaves it", async () => {
+    const { result } = renderHook(() => useWishlist(), { wrapper });
+    await waitFor(() => expect(lastQuery().shelves).toEqual([0, 1, 2, 3]));
+    const root = result.current.queryKeyString;
+
+    act(() => result.current.setViewAll(true));
+    await waitFor(() => expect(result.current.viewAll).toBe(true));
+    expect(result.current.queryKeyString).not.toBe(root);
+
+    act(() => result.current.openFolder(3));
+
+    expect(result.current.requestedViewAll).toBe(false);
+    await waitFor(() => expect(result.current.folderId).toBe(3));
+    expect(result.current.viewAll).toBe(false);
+    expect(lastQuery().shelves).toEqual([3]);
+  });
+});
+
 describe("listKey", () => {
   it("keys the list's identity on the level, so two folders never share a scroll position", async () => {
     const { result } = renderHook(() => useWishlist(), { wrapper });
