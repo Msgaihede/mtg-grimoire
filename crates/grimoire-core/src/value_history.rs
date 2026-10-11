@@ -4,8 +4,10 @@
 //! **One read, [`history`], over the table [`crate::price_history`] writes.** Since user schema
 //! v50 each `price_snapshots` row is a **holding** — a printing the reader held that day, with
 //! `copies` beside a price that is NULL where the marketplace did not quote it — so a past day's
-//! value is `Σ copies × price` over that day's priced rows, and its held set is all of them. Rows
-//! written before the upgrade carry NULL `copies` and are **never read**: the graph starts on the
+//! value is `Σ copies × price` over that day's priced rows, and its held set is all of them. A
+//! row at `copies = 0` is a printing the reader watches and does not hold (issue #906) and is
+//! **never read** here. Rows written before the upgrade carry NULL `copies` and are never read
+//! either: the graph starts on the
 //! upgrade day, because the only quantity a backfill could have used is today's, and that would
 //! draw a card bought last week as owned all along.
 //!
@@ -193,7 +195,9 @@ fn type_key() -> String {
 /// keep horizon — all four read once, by [`history`]'s first statement, so a read straddling UTC
 /// midnight cannot put a row on both sides of a line.
 ///
-/// * `src` — rows with a count, before today and inside [`KEEP_DAYS`], priced or not; a daily
+/// * `src` — rows with a count, before today and inside [`KEEP_DAYS`], priced or not — and a
+///   count of at least one, so a watched printing's `copies = 0` row (issue #906) is never a
+///   holding and a row from before v50 (NULL) is never read; a daily
 ///   row's period is its day, an older one's its week, and the horizon's own week is read only
 ///   from the horizon on (the module doc says why).
 /// * `kept` — one row per printing per period, its latest, and the period's day as `at`.
@@ -211,7 +215,7 @@ fn periods_sql(key: &str, name: &str, market: Marketplace) -> String {
                          ELSE 'week ' || ({row_week}) END AS period
                FROM price_snapshots p
               WHERE p.marketplace = ?1
-                AND p.copies IS NOT NULL
+                AND p.copies > 0
                 AND p.day < ?2
                 AND p.day >= ?4
                 AND (p.day >= ?3 OR {row_week} < {horizon_week})
@@ -1014,6 +1018,22 @@ mod tests {
         assert_eq!(totals(&h), [18.0, 20.0]);
         assert_eq!(h.points[1].day, h.today);
         assert!(h.points[1].live);
+    }
+
+    /// **A watched printing's row is no holding** (issue #906): the snapshot writes it at
+    /// `copies = 0` so the Price movers widget has a history for a card the reader does not own,
+    /// and the graph must neither count it nor read it as a period of its own.
+    #[test]
+    fn a_watched_row_at_no_copies_is_never_read() {
+        let conn = conn();
+        own(&conn, "bolt", "nonfoil", "NM", 2);
+        past(&conn, 1, "bolt", "nonfoil", 9.0, Some(2));
+        past(&conn, 1, "ring", "nonfoil", 500.0, Some(0));
+        past(&conn, 3, "ring", "nonfoil", 400.0, Some(0));
+
+        let h = tcg(&conn, "total");
+
+        assert_eq!(totals(&h), [18.0, 20.0], "one past point, the bolts alone");
     }
 
     /// **An empty collection answers nothing**, whatever history the table keeps — the widget's

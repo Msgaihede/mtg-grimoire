@@ -64,7 +64,11 @@ vi.mock("./widgets/ValueHistoryWidget", () => ({ ValueHistoryWidget: stubs.body 
 vi.mock("./widgets/WishlistValueWidget", () => ({ WishlistValueWidget: stubs.body }));
 vi.mock("./widgets/RecentCardsWidget", () => ({ RecentCardsWidget: stubs.body }));
 vi.mock("./widgets/SetCompletionWidget", () => ({ SetCompletionWidget: stubs.body }));
-vi.mock("./widgets/PriceMoversWidget", () => ({ PriceMoversWidget: stubs.body }));
+vi.mock("./widgets/PriceMoversWidget", () => ({
+  PriceMoversWidget: stubs.body,
+  // The folders and cards behind `Chosen` (issue #906).
+  PriceMoversWidgetSettings: stubs.settings,
+}));
 vi.mock("./widgets/StickyNotesWidget", () => ({ StickyNotesWidget: stubs.body }));
 vi.mock("./widgets/DeckTodosWidget", () => ({
   DeckTodosWidget: stubs.body,

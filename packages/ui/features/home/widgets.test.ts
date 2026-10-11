@@ -217,6 +217,7 @@ describe("WIDGETS", () => {
         picks: {
           window: { ids: ["7d", "30d", "all"], dflt: undefined },
           direction: { ids: ["both", "up", "down"], dflt: undefined },
+          scope: { ids: ["owned", "chosen"], dflt: undefined },
         },
         toggles: {},
         chip: "window",

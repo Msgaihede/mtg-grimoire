@@ -17,9 +17,18 @@
 //! * **A row is a holding, not a price (user schema v50).** Every printing the reader holds gets
 //!   its row, priced or not, so a card whose price starts or stops being quoted stays in the
 //!   table and [`crate::value_history`] reads that as a price moving rather than as a card
-//!   arriving or leaving. **Every reader in this module skips a NULL-price row exactly as it
-//!   skipped an absent one** — never a mover, a baseline, a history point or a day held — and the
-//!   thinning never lets one displace a priced row a reader here would have kept (see [`prune`]).
+//!   arriving or leaving.
+//! * **…or a printing the reader is watching, at `copies = 0` (issue #906).** The Price movers
+//!   widget can be narrowed to wishlist folders and to cards the reader does not own, and a
+//!   printing with no history has nothing to move against — so a snapshot also records every
+//!   printing a wish pins ([`wished_printings`]) and every card on the device's watch list
+//!   ([`watched`]), **priced rows only**, with no copies. Such a row is never a holding:
+//!   [`crate::value_history`] reads only `copies > 0`, and a printing both owned and watched is
+//!   one row carrying its owned count. [`movers`] and [`history`] read a watched row exactly as
+//!   an owned one, because a price is a fact about the printing and not about who holds it.
+//! * **Every reader in this module skips a NULL-price row exactly as it skipped an absent one**
+//!   — never a mover, a baseline, a history point or a day held — and the thinning never lets
+//!   one displace a priced row a reader here would have kept (see [`prune`]).
 //!   **One exception, per marketplace per day: a marketplace that prices none of the held
 //!   printings writes nothing.** That is a feed the reader never selected, and its rows would say
 //!   nothing while doubling the table — and, worse, would make the day the feed first arrives read
@@ -78,7 +87,8 @@
 //!
 //! # Movers, and the two sentences they must keep apart
 //!
-//! A mover is an owned, priced printing whose live price differs from its baseline: the latest
+//! A mover is an owned, priced printing — or, under a [`PriceMoverScope`], a printing the scope
+//! names — whose live price differs from its baseline: the latest
 //! priced snapshot on or before `date('now', '-7 days')` (or `-30 days`), or for `all` the oldest
 //! priced snapshot before today — a NULL-price row is no baseline, as an absent one was not.
 //! **There is no fallback to a younger baseline** — a window with no snapshot old enough answers
@@ -91,7 +101,7 @@
 use crate::collection_source::{self, Availability};
 use crate::sorting::{self, Marketplace};
 use rusqlite::{params, Connection};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Nothing older than this many days survives a [`prune`] — a year and a month, so `all` can
 /// always reach back past the same week last year.
@@ -130,6 +140,94 @@ pub fn priced_markets() -> Vec<Marketplace> {
         }
     }
     out
+}
+
+/// The `app_meta` key of the device's price watch list — a JSON array of printing ids.
+///
+/// **Device-local, like the home layout it is derived from** (`app_meta` is in no
+/// `SYNCED_TABLES` entry): the page writes it from the cards its Price movers widgets are
+/// narrowed to, so it says which printings this device's snapshots should remember a price for
+/// and nothing else. It is an index of the layout, not a second source of truth — the widget
+/// config is what the reader chose, and this is how Rust, which never reads a widget's config,
+/// is told.
+pub const K_PRICE_WATCH: &str = "price_watch";
+
+/// The most printings the watch list holds. Each one is a row a day in every marketplace that
+/// prices it, so the list is bounded the way [`KEEP_DAYS`] bounds the days.
+pub const MAX_WATCHED: usize = 500;
+
+/// What [`set_watched`] says about a list past [`MAX_WATCHED`].
+pub const TOO_MANY_WATCHED: &str =
+    "That is too many cards to follow prices for. Choose 500 or fewer.";
+
+/// The printings on the device's watch list, in the order they were written. A missing row, an
+/// unreadable one and an entry that is not a string all read as nothing — `app_meta`'s rule: a
+/// lost index costs a few days of history and is rewritten by the page's next layout change.
+pub fn watched(conn: &Connection) -> Vec<String> {
+    crate::app_meta::get_app_meta(conn, K_PRICE_WATCH)
+        .and_then(|raw| serde_json::from_str::<Vec<serde_json::Value>>(&raw).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|v| v.as_str().map(str::to_owned))
+        .filter(|id| !id.trim().is_empty())
+        .take(MAX_WATCHED)
+        .collect()
+}
+
+/// Replace the watch list. Blank ids are dropped and a repeated one is kept once, at its first
+/// place; more than [`MAX_WATCHED`] distinct ids is refused in words rather than cut, so a page
+/// that asked for a card is never quietly told yes. **Writes nothing when the list is
+/// unchanged**, since the page sends it on every layout change that touches a Price movers
+/// widget.
+pub fn set_watched(conn: &Connection, card_ids: &[String]) -> Result<(), String> {
+    let mut list: Vec<&str> = Vec::new();
+    for id in card_ids.iter().map(|id| id.trim()) {
+        if !id.is_empty() && !list.contains(&id) {
+            list.push(id);
+        }
+    }
+    if list.len() > MAX_WATCHED {
+        return Err(TOO_MANY_WATCHED.to_owned());
+    }
+    if watched(conn) == list {
+        return Ok(());
+    }
+    let json = serde_json::to_string(&list).map_err(|e| e.to_string())?;
+    crate::app_meta::set_app_meta(conn, K_PRICE_WATCH, &json).map_err(|e| e.to_string())
+}
+
+/// Every finish there is, as a JSON array literal for `json_each` — what a wish with no
+/// preferred finish and a watched card are tracked in. A finish a printing is not made in is
+/// simply never priced, and every reader here drops an unpriced row.
+fn every_finish() -> String {
+    format!("'[\"{}\"]'", crate::schema::FINISHES.join("\",\""))
+}
+
+/// `(card_id, finish)` for every printing a wish pins, narrowed by `filter` (an `AND …` over
+/// `wishlist_entries w`, or empty). **An any-printing wish is no printing** and is left out: it
+/// has no price of its own to have moved. A wish with no preferred finish is a wish for the card
+/// and is tracked in every finish — `wishlist::WISH_PREFERRED_FINISH`'s reading, which refuses to
+/// treat "no preference" as nonfoil.
+fn wished_printings(filter: &str) -> String {
+    format!(
+        "SELECT w.card_id AS card_id, f.value AS finish
+           FROM wishlist_entries w,
+                json_each(CASE WHEN w.preferred_finish IS NULL THEN {every}
+                               ELSE json_array(w.preferred_finish) END) f
+          WHERE w.card_id IS NOT NULL{filter}",
+        every = every_finish(),
+    )
+}
+
+/// `(card_id, finish)` for every printing in the JSON array bound at `param`, in every finish.
+/// An entry that is not a string is skipped rather than refused.
+fn listed_printings(param: &str) -> String {
+    format!(
+        "SELECT j.value AS card_id, f.value AS finish
+           FROM json_each({param}) j, json_each({every}) f
+          WHERE j.type = 'text'",
+        every = every_finish(),
+    )
 }
 
 /// Record today's price for every owned printing in every priced marketplace, then keep the
@@ -182,6 +280,9 @@ fn write_snapshot(conn: &Connection, markets: &[Marketplace]) -> rusqlite::Resul
         )?;
         prune(&tx, floor.as_deref())?;
     }
+    // The watch list, read once inside the transaction and bound as `?3` into both statements.
+    // A list of strings always serialises; the fallback is the type system's, not a case.
+    let watch = serde_json::to_string(&watched(&tx)).unwrap_or_else(|_| "[]".to_owned());
     let mut written = 0;
     for market in markets {
         let key = market_key(*market);
@@ -196,8 +297,8 @@ fn write_snapshot(conn: &Connection, markets: &[Marketplace]) -> rusqlite::Resul
         // which kept exactly the same rule and rewrote every row on every launch, ingest and feed
         // store — thousands of rows, both b-trees, a third of a megabyte of WAL on a USB stick
         // for a day in which nothing had changed.
-        written += tx.execute(&stale_sql(&tx, *market), params![key, today])?;
-        written += tx.execute(&snapshot_sql(&tx, *market), params![key, today])?;
+        written += tx.execute(&stale_sql(&tx, *market), params![key, today, watch])?;
+        written += tx.execute(&snapshot_sql(&tx, *market), params![key, today, watch])?;
     }
     tx.commit()?;
     Ok(written)
@@ -205,18 +306,22 @@ fn write_snapshot(conn: &Connection, markets: &[Marketplace]) -> rusqlite::Resul
 
 /// The holding a snapshot records for one marketplace today, as the CTE both of
 /// [`write_snapshot`]'s statements open with: `held(card_id, finish, price, copies)`, one row per
-/// printing and finish the reader holds.
+/// printing and finish the reader holds **or watches**.
 ///
 /// **`WITH owned(card_id, finish, copies)`** is [`collection_source::copies_by_printing_and_finish`]
 /// under [`Availability::Everything`], named — the crate's one statement of "which printings does
-/// the reader own, per finish". `held` writes the price expression once for the places that read
-/// it, the rows and the gate. `owned` is grouped on `(card_id, finish)`, so `held` never names one
-/// key twice — which the upsert needs, since `DO UPDATE` may not touch one row twice.
+/// the reader own, per finish". **`wanted(card_id, finish)`** is every printing a wish pins and
+/// every one on the watch list (bound as `?3`), in [`wished_printings`]' and [`listed_printings`]'
+/// finishes. `held` groups the two on `(card_id, finish)`, so it never names one key twice — which
+/// the upsert needs, since `DO UPDATE` may not touch one row twice — and a printing both owned and
+/// watched is one row carrying its owned count.
 ///
 /// **Every held printing is a row, priced or not** (user schema v50): `price` is NULL where this
 /// marketplace does not quote that finish, and `cards` is a `LEFT JOIN`, so a printing the corpus
 /// has lost is still a holding — the live point of [`crate::value_history`] counts it, and a
-/// snapshot that did not would read its return to the corpus as a purchase.
+/// snapshot that did not would read its return to the corpus as a purchase. **A watched printing
+/// is a row only when it is priced**, at `copies = 0`: it is no holding, so no reader needs its
+/// gaps, and the watch list's every finish would otherwise write two NULLs for each card.
 ///
 /// **`copies` rides beside the price**: the same sum `owned` already computes to decide what is
 /// owned, every folder at once, so a day's row says what the reader's holding of that printing was
@@ -224,15 +329,22 @@ fn write_snapshot(conn: &Connection, markets: &[Marketplace]) -> rusqlite::Resul
 fn held_cte(conn: &Connection, market: Marketplace) -> String {
     format!(
         "WITH owned(card_id, finish, copies) AS ({owned}),
+         wanted(card_id, finish) AS ({wished} UNION {listed}),
          held AS (
-             SELECT o.card_id AS card_id, o.finish AS finish, {price} AS price,
-                    o.copies AS copies
-               FROM owned o
-               LEFT JOIN cards c ON c.id = o.card_id
-              WHERE o.copies > 0
+             SELECT card_id, finish, price, copies
+               FROM (SELECT k.card_id AS card_id, k.finish AS finish, {price} AS price,
+                            max(k.copies) AS copies
+                       FROM (SELECT card_id, finish, copies FROM owned WHERE copies > 0
+                             UNION ALL
+                             SELECT card_id, finish, 0 FROM wanted) k
+                       LEFT JOIN cards c ON c.id = k.card_id
+                      GROUP BY k.card_id, k.finish)
+              WHERE copies > 0 OR price IS NOT NULL
          )",
         owned = collection_source::copies_by_printing_and_finish(conn, Availability::Everything),
-        price = sorting::price_expr(market, "o.finish"),
+        wished = wished_printings(""),
+        listed = listed_printings("?3"),
+        price = sorting::price_expr(market, "k.finish"),
     )
 }
 
@@ -242,7 +354,7 @@ fn held_cte(conn: &Connection, market: Marketplace) -> String {
 const PRICES_SOMETHING_HELD: &str = "EXISTS (SELECT 1 FROM held WHERE price IS NOT NULL)";
 
 /// One marketplace's delete for today: every row of its day the new holding does not contain.
-/// Bound: `?1` the marketplace key, `?2` today (`YYYY-MM-DD`).
+/// Bound: `?1` the marketplace key, `?2` today (`YYYY-MM-DD`), `?3` the watch list (JSON).
 ///
 /// A row goes when its `(card_id, finish)` is no longer held — sold, or stepped to zero, since
 /// the day's previous snapshot — or when [`PRICES_SOMETHING_HELD`] is false and the whole day
@@ -262,7 +374,7 @@ fn stale_sql(conn: &Connection, market: Marketplace) -> String {
 }
 
 /// One marketplace's upsert for today, into a day [`stale_sql`] has just trimmed to the keys it
-/// writes. Bound: `?1` the marketplace key, `?2` today (`YYYY-MM-DD`).
+/// writes. Bound: `?1` the marketplace key, `?2` today (`YYYY-MM-DD`), `?3` the watch list (JSON).
 ///
 /// **A row that already says the same thing is not written.** The `DO UPDATE` carries a `WHERE`
 /// that compares both values with `IS NOT`, so a NULL price that stays NULL is no change and a
@@ -384,6 +496,52 @@ pub struct PriceMovers {
     pub days: i64,
 }
 
+/// What a Price movers widget is narrowed to (issue #906) — the printings it measures, in place
+/// of every owned one. Each list may be empty; a scope whose three are all empty names nothing
+/// and answers no movers.
+///
+/// * `collection_folders` — collection folder ids, **each one direct**: the page expands a chosen
+///   folder into everything filed under it (`folderDescendants`), exactly as the wishlist savings
+///   widget's `shelves` are expanded. `0` is the root, the copies filed in no folder. Every kind
+///   counts — a deck's group and `Recently removed` included — because a filter is not a write.
+/// * `wishlist_folders` — wishlist folder ids, direct, `0` the root; a deck's managed wishlist is
+///   a folder like any other here. An any-printing wish names no printing and is skipped.
+/// * `cards` — printing ids, owned or not, each in every finish it is priced in.
+///
+/// Absent on the wire — every build before this, and a widget left on *Everything you own* —
+/// is [`movers`]' own question, every owned printing.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PriceMoverScope {
+    pub collection_folders: Vec<i64>,
+    pub wishlist_folders: Vec<i64>,
+    pub cards: Vec<String>,
+}
+
+impl PriceMoverScope {
+    /// The `pool(card_id, finish)` CTE body this scope reads. Bound: `?2` the collection folder
+    /// ids, `?3` the wishlist folder ids, `?4` the card ids — each a JSON array.
+    ///
+    /// **It names `collection_entries` in its own `FROM`**, one of the statements
+    /// [`crate::collection_source`]'s module doc lists: it narrows the copies by where they are
+    /// filed, which no builder there does. `quantity > 0` is the builders' own ownership rule.
+    fn pool_sql() -> String {
+        format!(
+            "SELECT e.card_id, e.finish FROM collection_entries e
+              WHERE e.quantity > 0
+                AND coalesce(e.folder_id, 0) IN (SELECT value FROM json_each(?2))
+             UNION
+             {wished}
+             UNION
+             {listed}",
+            wished = wished_printings(
+                " AND coalesce(w.folder_id, 0) IN (SELECT value FROM json_each(?3))"
+            ),
+            listed = listed_printings("?4"),
+        )
+    }
+}
+
 /// Which snapshot a printing is measured against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Window {
@@ -443,14 +601,7 @@ impl Direction {
 }
 
 /// The movers at `market` over `window`, largest move first, at most `limit` (clamped to
-/// `1..=`[`MAX_LIMIT`]).
-///
-/// One statement answers every owned priced printing with a baseline; the zero filter, the
-/// direction, the order and the limit are applied here, because `since` has to be read over the
-/// rows *before* those four narrow them. The row count is the owned printings, not the history.
-///
-/// Sorted by `|delta|` descending, then name, card id and finish, so two moves of one size come
-/// back in the same order on every read.
+/// `1..=`[`MAX_LIMIT`]) — over every owned printing. [`movers_in`] with no scope.
 pub fn movers(
     conn: &Connection,
     window: &str,
@@ -458,18 +609,48 @@ pub fn movers(
     market: Marketplace,
     limit: i64,
 ) -> Result<PriceMovers, String> {
+    movers_in(conn, window, direction, market, limit, None)
+}
+
+/// The movers at `market` over `window` among the printings `scope` names — every owned one when
+/// it is `None` — largest move first, at most `limit` (clamped to `1..=`[`MAX_LIMIT`]).
+///
+/// One statement answers every priced printing in the pool with a baseline; the zero filter, the
+/// direction, the order and the limit are applied here, because `since` has to be read over the
+/// rows *before* those four narrow them. The row count is the pool, not the history.
+///
+/// Sorted by `|delta|` descending, then name, card id and finish, so two moves of one size come
+/// back in the same order on every read.
+pub fn movers_in(
+    conn: &Connection,
+    window: &str,
+    direction: &str,
+    market: Marketplace,
+    limit: i64,
+    scope: Option<&PriceMoverScope>,
+) -> Result<PriceMovers, String> {
     let limit = limit.clamp(1, MAX_LIMIT) as usize;
     let direction = Direction::parse(direction);
     let (cutoff, order) = Window::parse(window).baseline();
 
+    // **Two pools, one statement after them.** Unscoped is the owned printings, through
+    // `collection_source` as before; scoped is the three lists the page sent.
+    let pool = match scope {
+        None => format!(
+            "owned(card_id, finish, copies) AS ({owned}),
+             pool(card_id, finish) AS (SELECT card_id, finish FROM owned WHERE copies > 0)",
+            owned =
+                collection_source::copies_by_printing_and_finish(conn, Availability::Everything),
+        ),
+        Some(_) => format!("pool(card_id, finish) AS ({})", PriceMoverScope::pool_sql()),
+    };
     let sql = format!(
-        "WITH owned(card_id, finish, copies) AS ({owned}),
+        "WITH {pool},
          live AS (
-             SELECT o.card_id AS card_id, o.finish AS finish, c.name AS name,
+             SELECT t.card_id AS card_id, t.finish AS finish, c.name AS name,
                     c.set_code AS set_code, c.set_name AS set_name, {price} AS now
-               FROM owned o
-               JOIN cards c ON c.id = o.card_id
-              WHERE o.copies > 0
+               FROM pool t
+               JOIN cards c ON c.id = t.card_id
          ),
          based AS (
              SELECT l.*,
@@ -488,33 +669,47 @@ pub fn movers(
              ON p.day = b.then_day AND p.marketplace = ?1
             AND p.card_id = b.card_id AND p.finish = b.finish
            LEFT JOIN sets s ON s.code = b.set_code",
-        owned = collection_source::copies_by_printing_and_finish(conn, Availability::Everything),
-        price = sorting::price_expr(market, "o.finish"),
+        price = sorting::price_expr(market, "t.finish"),
     );
     let key = market_key(market);
 
+    let read = |r: &rusqlite::Row<'_>| {
+        let now: f64 = r.get(5)?;
+        let then: f64 = r.get(6)?;
+        Ok((
+            PriceMover {
+                card_id: r.get(0)?,
+                name: r.get(1)?,
+                set_code: r.get(2)?,
+                set_name: r.get(3)?,
+                finish: r.get(4)?,
+                now,
+                then,
+                delta: now - then,
+            },
+            r.get::<_, i64>(7)?,
+        ))
+    };
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map(params![key], |r| {
-            let now: f64 = r.get(5)?;
-            let then: f64 = r.get(6)?;
-            Ok((
-                PriceMover {
-                    card_id: r.get(0)?,
-                    name: r.get(1)?,
-                    set_code: r.get(2)?,
-                    set_name: r.get(3)?,
-                    finish: r.get(4)?,
-                    now,
-                    then,
-                    delta: now - then,
-                },
-                r.get::<_, i64>(7)?,
-            ))
-        })
-        .map_err(|e| e.to_string())?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|e| e.to_string())?;
+    let rows = match scope {
+        None => stmt.query_map(params![key], read),
+        Some(scope) => {
+            // Lists of numbers and strings always serialise; the fallback is the type system's.
+            let json = |v: serde_json::Result<String>| v.unwrap_or_else(|_| "[]".to_owned());
+            stmt.query_map(
+                params![
+                    key,
+                    json(serde_json::to_string(&scope.collection_folders)),
+                    json(serde_json::to_string(&scope.wishlist_folders)),
+                    json(serde_json::to_string(&scope.cards))
+                ],
+                read,
+            )
+        }
+    }
+    .map_err(|e| e.to_string())?
+    .collect::<rusqlite::Result<Vec<_>>>()
+    .map_err(|e| e.to_string())?;
 
     let since = rows.iter().map(|(_, day)| *day).max();
     let mut movers: Vec<PriceMover> = rows
@@ -1444,6 +1639,265 @@ mod tests {
         assert_eq!(
             out.days, 1,
             "the history is still there; it just moves nothing owned"
+        );
+    }
+
+    /// A wish for one printing, filed at `folder` (`None` the root). `card_id: None` is an
+    /// any-printing wish, `finish: None` a wish with no preferred finish.
+    fn wish(conn: &Connection, card_id: Option<&str>, finish: Option<&str>, folder: Option<i64>) {
+        conn.execute(
+            "INSERT INTO wishlist_entries (oracle_id, card_id, name, quantity, preferred_finish,
+                                           folder_id, created_at, updated_at)
+             VALUES ('o-wish', ?1, 'A Wish', 1, ?2, ?3, 0, 0)",
+            params![card_id, finish, folder],
+        )
+        .unwrap();
+    }
+
+    /// Today's rows with their copies, for the watched-printing tests.
+    fn held_today(conn: &Connection) -> Vec<(String, String, String, Option<f64>, i64)> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT marketplace, card_id, finish, price, copies FROM price_snapshots
+                  WHERE day = date('now') ORDER BY marketplace, card_id, finish",
+            )
+            .unwrap();
+        let out = stmt
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        out
+    }
+
+    fn ids(list: &[&str]) -> Vec<String> {
+        list.iter().map(|id| (*id).to_owned()).collect()
+    }
+
+    /// **The watch list keeps each id once, in the order given, and refuses rather than cuts.**
+    /// Junk in the row reads as nothing, and a list that has not changed is not written again.
+    #[test]
+    fn the_watch_list_is_kept_tidy_and_bounded() {
+        let conn = conn();
+        assert!(watched(&conn).is_empty(), "no row is no watch");
+
+        set_watched(&conn, &ids(&["ring", " ", "bolt", "ring", " lonely "])).unwrap();
+        assert_eq!(watched(&conn), ids(&["ring", "bolt", "lonely"]));
+
+        // An unchanged list writes nothing: stored in a spelling a rewrite would reformat, the
+        // same list sent again leaves the row's text as it was.
+        crate::app_meta::set_app_meta(&conn, K_PRICE_WATCH, r#"[ "ring","bolt","lonely" ]"#)
+            .unwrap();
+        set_watched(&conn, &ids(&["ring", "bolt", "lonely"])).unwrap();
+        assert_eq!(
+            crate::app_meta::get_app_meta(&conn, K_PRICE_WATCH).as_deref(),
+            Some(r#"[ "ring","bolt","lonely" ]"#),
+            "the same list is not written again"
+        );
+
+        let many: Vec<String> = (0..=MAX_WATCHED).map(|n| format!("c{n}")).collect();
+        assert_eq!(set_watched(&conn, &many).unwrap_err(), TOO_MANY_WATCHED);
+        assert_eq!(watched(&conn).len(), 3, "a refused list leaves the old one");
+
+        for junk in ["not json", "{}", r#"[1, null, "bolt", ""]"#] {
+            crate::app_meta::set_app_meta(&conn, K_PRICE_WATCH, junk).unwrap();
+            let want: Vec<String> = if junk.contains("bolt") {
+                ids(&["bolt"])
+            } else {
+                Vec::new()
+            };
+            assert_eq!(watched(&conn), want, "{junk}");
+        }
+    }
+
+    /// **A snapshot remembers the printings a wish pins and the watch list names, at no copies,
+    /// and only where they are priced** (issue #906) — so a widget narrowed to a wishlist folder
+    /// or an unowned card has history to measure. A printing both owned and watched is one row
+    /// at its owned count, and an any-printing wish names no printing.
+    #[test]
+    fn a_snapshot_remembers_wished_and_watched_printings_at_no_copies() {
+        let conn = conn();
+        own(&conn, "bolt", "nonfoil");
+        wish(&conn, Some("lonely"), None, None); // every finish; only nonfoil is priced
+        wish(&conn, Some("bolt"), Some("foil"), None); // a finish the reader does not hold
+        wish(&conn, None, None, None); // any printing: nothing to remember
+        set_watched(&conn, &ids(&["ring", "bolt", "nowhere"])).unwrap();
+
+        snapshot(&conn).unwrap();
+
+        let tcg: Vec<_> = held_today(&conn)
+            .into_iter()
+            .filter(|row| row.0 == "tcgplayer")
+            .map(|(_, id, finish, price, copies)| (id, finish, price, copies))
+            .collect();
+        let row = |id: &str, finish: &str, price: f64, copies: i64| {
+            (id.to_owned(), finish.to_owned(), Some(price), copies)
+        };
+        assert_eq!(
+            tcg,
+            [
+                row("bolt", "foil", 50.0, 0),
+                row("bolt", "nonfoil", 10.0, 2),
+                row("lonely", "nonfoil", 3.0, 0),
+                row("ring", "nonfoil", 100.0, 0),
+            ],
+            "no NULL rows for what is only watched, and `nowhere` is not in the corpus"
+        );
+
+        // The value graph never reads a watched row as a holding.
+        let held: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM price_snapshots WHERE day = date('now') AND copies > 0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            held, 3,
+            "bolt nonfoil at TCGplayer, Cardmarket and Card Kingdom"
+        );
+
+        // Stopping the watch takes the row out of the day, as selling a printing does.
+        set_watched(&conn, &[]).unwrap();
+        snapshot(&conn).unwrap();
+        assert!(
+            !held_today(&conn).iter().any(|row| row.1 == "ring"),
+            "the day holds its last snapshot's printings"
+        );
+    }
+
+    /// **A scope measures what it names and nothing else**: a collection folder (the root is
+    /// `0`), a wishlist folder, and a card the reader does not own — each against the history
+    /// the snapshots kept for it.
+    #[test]
+    fn a_scope_narrows_movers_to_its_folders_and_cards() {
+        let conn = conn();
+        conn.execute_batch(
+            "INSERT INTO collection_folders (id, name, sort_order, created_at, updated_at)
+                 VALUES (7, 'Binder', 0, 0, 0);
+             INSERT INTO collection_entries (card_id, set_code, collector_number, lang, finish,
+                                             condition, quantity, folder_id, created_at,
+                                             updated_at)
+                 VALUES ('ring', 'lea', '0', 'en', 'nonfoil', 'NM', 1, 7, 0, 0);
+             INSERT INTO wishlist_folders (id, name, sort_order, created_at, updated_at)
+                 VALUES (3, 'Wants', 0, 0, 0);",
+        )
+        .unwrap();
+        own(&conn, "bolt", "nonfoil"); // at the root, live 10
+        wish(&conn, Some("bolt"), Some("foil"), Some(3)); // live 50
+        past(&conn, 8, "tcgplayer", "bolt", "nonfoil", 9.0); // +1
+        past(&conn, 8, "tcgplayer", "ring", "nonfoil", 90.0); // +10
+        past(&conn, 8, "tcgplayer", "bolt", "foil", 40.0); // +10
+        past(&conn, 8, "tcgplayer", "lonely", "nonfoil", 1.0); // +2, never owned
+
+        let moved = |scope: PriceMoverScope| -> Vec<(String, String)> {
+            movers_in(
+                &conn,
+                "7d",
+                "both",
+                Marketplace::Tcgplayer,
+                10,
+                Some(&scope),
+            )
+            .unwrap()
+            .movers
+            .into_iter()
+            .map(|m| (m.card_id, m.finish))
+            .collect()
+        };
+        let pair = |id: &str, finish: &str| (id.to_owned(), finish.to_owned());
+
+        let everything = movers(&conn, "7d", "both", Marketplace::Tcgplayer, 10).unwrap();
+        assert_eq!(
+            everything.movers.len(),
+            2,
+            "unscoped is every owned printing"
+        );
+
+        assert_eq!(
+            moved(PriceMoverScope {
+                collection_folders: vec![7],
+                ..Default::default()
+            }),
+            [pair("ring", "nonfoil")]
+        );
+        assert_eq!(
+            moved(PriceMoverScope {
+                collection_folders: vec![0],
+                ..Default::default()
+            }),
+            [pair("bolt", "nonfoil")],
+            "0 is the copies filed in no folder"
+        );
+        assert_eq!(
+            moved(PriceMoverScope {
+                wishlist_folders: vec![3],
+                ..Default::default()
+            }),
+            [pair("bolt", "foil")]
+        );
+        assert_eq!(
+            moved(PriceMoverScope {
+                wishlist_folders: vec![0],
+                ..Default::default()
+            }),
+            Vec::<(String, String)>::new(),
+            "nothing is wished for at the root"
+        );
+        assert_eq!(
+            moved(PriceMoverScope {
+                cards: ids(&["lonely"]),
+                ..Default::default()
+            }),
+            [pair("lonely", "nonfoil")],
+            "a card the reader does not own moves against its own history"
+        );
+        assert_eq!(
+            moved(PriceMoverScope {
+                collection_folders: vec![7, 0],
+                wishlist_folders: vec![3],
+                cards: ids(&["bolt", "lonely"]),
+            }),
+            [
+                pair("bolt", "foil"),
+                pair("ring", "nonfoil"),
+                pair("lonely", "nonfoil"),
+                pair("bolt", "nonfoil"),
+            ],
+            "the three lists together, each printing once, largest move first"
+        );
+
+        let none = movers_in(
+            &conn,
+            "7d",
+            "both",
+            Marketplace::Tcgplayer,
+            10,
+            Some(&PriceMoverScope::default()),
+        )
+        .unwrap();
+        assert!(none.movers.is_empty(), "an empty scope names nothing");
+        assert_eq!(none.since, None);
+        assert_eq!(none.days, 1, "the history is still there");
+    }
+
+    /// The wire's spelling: camelCase, and every list optional.
+    #[test]
+    fn a_scope_reads_the_names_the_page_sends() {
+        let scope: PriceMoverScope = serde_json::from_value(serde_json::json!({
+            "collectionFolders": [0, 7],
+            "cards": ["bolt"],
+        }))
+        .unwrap();
+        assert_eq!(
+            scope,
+            PriceMoverScope {
+                collection_folders: vec![0, 7],
+                wishlist_folders: Vec::new(),
+                cards: ids(&["bolt"]),
+            }
         );
     }
 

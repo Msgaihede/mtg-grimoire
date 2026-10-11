@@ -5,6 +5,7 @@ import { createElement, type ReactNode } from "react";
 
 const homeLayout = vi.hoisted(() => vi.fn());
 const setHomeLayout = vi.hoisted(() => vi.fn());
+const setPriceWatch = vi.hoisted(() => vi.fn());
 // The original is spread back in rather than replaced wholesale: `ipc` is a hand-written mirror
 // and a bare `vi.fn()` object erases every field this module does not name, so a command added
 // later fails at run time instead of at `tsc`. `useFolderPane.test.ts`' shape — and every fixture
@@ -12,7 +13,7 @@ const setHomeLayout = vi.hoisted(() => vi.fn());
 // `mockResolvedValue` accepts a struct missing a required field.
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { homeLayout, setHomeLayout },
+  ipc: { homeLayout, setHomeLayout, setPriceWatch },
 }));
 
 import type { HomeLayout, HomeWidget } from "@/lib/ipc";
@@ -50,6 +51,7 @@ beforeEach(() => {
   // failure below also answers with.
   homeLayout.mockReset().mockResolvedValue(layout());
   setHomeLayout.mockReset().mockResolvedValue(undefined);
+  setPriceWatch.mockReset().mockResolvedValue(undefined);
 });
 
 /**
@@ -291,5 +293,58 @@ describe("useHomeLayout", () => {
     expect(result.current.ready).toBe(true);
     expect(result.current.layout).toEqual(seeded);
     await waitFor(() => expect(homeLayout).not.toHaveBeenCalled());
+  });
+});
+
+/**
+ * **The price watch list is the cards the page's Price movers widgets name** (issue #906) — sent
+ * on the stored layout's first answer and on every change to the set, and never by a page that has
+ * not named one.
+ */
+describe("the price watch list", () => {
+  const card = (id: string) => ({ id, name: id, setCode: "lea", collectorNumber: "1" });
+  const movers = (id: string, cards: string[], scope = "chosen"): HomeWidget =>
+    widget({ id, kind: "priceMovers", config: { scope, cards: cards.map(card) } });
+
+  it("sends nothing for a page that names no card", async () => {
+    const { result } = renderHook(() => useHomeLayout(), { wrapper });
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    act(() => result.current.update(layout({ widgets: [movers("m", [])] })));
+    expect(setPriceWatch).not.toHaveBeenCalled();
+  });
+
+  it("sends every named card once, sorted, set-aside widgets included, and each change after", async () => {
+    homeLayout.mockResolvedValue(
+      layout({
+        widgets: [movers("a", ["ring", "bolt"]), movers("b", ["bolt", "lotus"], "owned"), widget()],
+      }),
+    );
+    const { result } = renderHook(() => useHomeLayout(), { wrapper });
+    await waitFor(() => expect(setPriceWatch).toHaveBeenCalledTimes(1));
+    expect(setPriceWatch).toHaveBeenLastCalledWith(["bolt", "lotus", "ring"]);
+
+    // A change that moves no card sends nothing.
+    act(() =>
+      result.current.update(
+        layout({ widgets: [movers("a", ["bolt", "ring"]), movers("b", ["lotus", "bolt"])] }),
+      ),
+    );
+    expect(setPriceWatch).toHaveBeenCalledTimes(1);
+
+    // Removing the widgets empties the list, and that is said too.
+    act(() => result.current.update(layout()));
+    await waitFor(() => expect(setPriceWatch).toHaveBeenCalledTimes(2));
+    expect(setPriceWatch).toHaveBeenLastCalledWith([]);
+  });
+
+  it("sends the list again after a refusal, even an emptied one", async () => {
+    homeLayout.mockResolvedValue(layout({ widgets: [movers("a", ["bolt"])] }));
+    setPriceWatch.mockRejectedValueOnce("busy");
+    const { result } = renderHook(() => useHomeLayout(), { wrapper });
+    await waitFor(() => expect(setPriceWatch).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    act(() => result.current.update(layout()));
+    await waitFor(() => expect(setPriceWatch).toHaveBeenCalledTimes(2));
+    expect(setPriceWatch).toHaveBeenLastCalledWith([]);
   });
 });

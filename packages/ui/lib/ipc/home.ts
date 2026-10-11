@@ -117,6 +117,22 @@ export type PriceMoverWindow = "7d" | "30d" | "all";
 /** Which way a mover went. `both` ranks gainers and losers together by the size of the move. */
 export type PriceMoverDirection = "both" | "up" | "down";
 
+/**
+ * What a Price movers widget is narrowed to (issue #906) — `price_history.rs`'s `PriceMoverScope`.
+ * Sent in place of *every owned printing*; absent is that question.
+ *
+ * Every id is **direct**: the widget expands a chosen folder into the folders inside it before it
+ * asks, as the Wishlist savings widget does. `0` is a cabinet's root — the copies or wishes filed
+ * in no folder. `cards` are printing ids, owned or not, each measured in every finish it is priced
+ * in. All three are `#[serde(default)]` on the Rust side, so a misspelt key here is not a refusal:
+ * it is an empty list, which `ipc.test.ts` reads the struct to rule out.
+ */
+export interface PriceMoverScope {
+  collectionFolders: number[];
+  wishlistFolders: number[];
+  cards: string[];
+}
+
 /** One owned printing whose price moved — `price_history.rs`'s `PriceMover`. */
 export interface PriceMover {
   cardId: string;
@@ -494,19 +510,40 @@ export const homeCommands = {
   setCompletion: () => invoke<SetCompletion[]>("set_completion"),
   /**
    * The owned printings whose price at `marketplace` moved most since the window's baseline
-   * snapshot, largest move first, at most `limit` (clamped `1..=100`). See {@link PriceMovers}.
+   * snapshot, largest move first, at most `limit` (clamped `1..=100`) — or, given a `scope`, the
+   * printings it names (issue #906). See {@link PriceMovers} and {@link PriceMoverScope}.
+   *
+   * **No `scope` key at all when there is none**, rather than `scope: undefined`: an unscoped read
+   * is the exact request every build before the scope sent.
    */
   priceMovers: (
     window: PriceMoverWindow,
     direction: PriceMoverDirection,
     marketplace: MarketplaceId,
     limit: number,
-  ) => invoke<PriceMovers>("price_movers", { window, direction, marketplace, limit }),
+    scope?: PriceMoverScope,
+  ) =>
+    invoke<PriceMovers>("price_movers", {
+      window,
+      direction,
+      marketplace,
+      limit,
+      ...(scope === undefined ? {} : { scope }),
+    }),
+  /**
+   * Replace this device's price watch list — the printings the Price movers widgets are narrowed
+   * to, which every later price snapshot remembers whether or not they are owned (issue #906).
+   * Sent by `useHomeLayout` when the cards its widgets name change; a card added today has history
+   * from the next snapshot on (the next launch, card sync or price refresh). More than 500 is
+   * refused in words; `BUSY` under a sync, which the caller ignores — the next layout change sends
+   * the list again.
+   */
+  setPriceWatch: (cardIds: string[]) => invoke<void>("set_price_watch", { cardIds }),
   /**
    * One printing's daily price at `marketplace` and `finish`, before today and oldest first,
    * beside today's live figure — the Price movers popup's read. The points are `price_snapshots`'
-   * rows, which are only ever taken of **owned** printings, so a printing never owned answers no
-   * points and may still answer a `now`. See {@link PriceHistory}.
+   * rows, which are taken of **owned, wished-for and watched** printings, so a printing never held,
+   * pinned or watched answers no points and may still answer a `now`. See {@link PriceHistory}.
    */
   priceHistory: (cardId: string, finish: Finish, marketplace: MarketplaceId) =>
     invoke<PriceHistory>("price_history", { cardId, finish, marketplace }),

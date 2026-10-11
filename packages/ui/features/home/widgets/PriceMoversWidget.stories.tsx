@@ -3,8 +3,9 @@ import { expect, fn, within } from "storybook/test";
 import type { HomeWidget } from "@/lib/ipc";
 import { makeFit, spanPx } from "../fit";
 import { WidgetCard } from "../WidgetCard";
+import { WidgetSettingsPanel } from "../WidgetSettingsPanel";
 import { widgetDensity } from "../widgetSettings";
-import { PriceMoversWidget } from "./PriceMoversWidget";
+import { NOTHING_CHOSEN, PriceMoversWidget, PriceMoversWidgetSettings } from "./PriceMoversWidget";
 
 /** The grid's target cell — the size the page aims its columns at. Not exported, for CSF. */
 const CELL = 104;
@@ -119,5 +120,62 @@ export const NoHistoryYet: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(await canvas.findByText(/^No price history yet\./)).toBeInTheDocument();
+  },
+};
+
+/**
+ * Narrowed to what the reader chose (issue #906) — here the copies filed in no collection folder,
+ * which is where the fake's collection lies. The footer says the list is the chosen cards'.
+ */
+export const ChosenFolders: Story = {
+  args: { widget: movers(4, 4, { scope: "chosen", collectionFolderIds: [0] }) },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const list = await canvas.findByRole("list", { name: "Price movers" });
+    await expect(within(list).getAllByText(SIGNED).length).toBeGreaterThan(0);
+    await expect(
+      canvas.getByText("TCGplayer prices of what you chose over the last seven days."),
+    ).toBeInTheDocument();
+  },
+};
+
+/** `Chosen` with nothing chosen: a sentence pointing at the settings, and no read at all. */
+export const NothingChosen: Story = {
+  args: { widget: movers(2, 2, { scope: "chosen" }) },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findByText(NOTHING_CHOSEN)).toBeInTheDocument();
+  },
+};
+
+/**
+ * The settings panel under `Chosen`: the two folder checklists, the chosen cards with a way to
+ * take each off, and a search over every card in the data, owned or not.
+ */
+export const ChosenSettings: Story = {
+  args: {
+    widget: movers(2, 3, {
+      scope: "chosen",
+      collectionFolderIds: [0],
+      cards: [{ id: "sol-ring", name: "Sol Ring", setCode: "lea", collectorNumber: "270" }],
+    }),
+  },
+  render: ({ widget }) => (
+    <div className="w-72 rounded-md border border-border bg-surface p-3">
+      <WidgetSettingsPanel
+        widget={widget}
+        onConfig={fn()}
+        extraSettings={<PriceMoversWidgetSettings widget={widget} onConfig={fn()} />}
+      />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByLabelText("Collection folders")).toBeInTheDocument();
+    await expect(canvas.getByLabelText("Wishlist folders")).toBeInTheDocument();
+    await expect(
+      canvas.getByRole("button", { name: "Remove Sol Ring · LEA #270" }),
+    ).toBeInTheDocument();
+    await expect(canvas.getByLabelText("Cards")).toBeInTheDocument();
   },
 };

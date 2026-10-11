@@ -848,8 +848,8 @@ distinct number counts and the widget draws a count with no percentage.
 ### Price movers — user schema 45, `price_snapshots`
 
 No price history existed: `cards` is dropped on every sync and `marketplace_prices` is replaced
-wholesale. `price_snapshots (day, marketplace, card_id, finish, price)` records one owned printing's
-price per marketplace per day, through `sorting::price_expr`, after every card ingest, after every
+wholesale. `price_snapshots (day, marketplace, card_id, finish, price)` records one owned (or, since
+issue #906, wished-for or watched) printing's price per marketplace per day, through `sorting::price_expr`, after every card ingest, after every
 feed store, and once at launch — so the first launch after upgrading already holds a baseline. It
 is **not synced**, for `activity`'s reason, and a soft reference to `cards.id` like every user table.
 
@@ -864,6 +864,23 @@ days of snapshots the marketplace holds — **so the widget can say two differen
 history yet* and *nothing moved*. `since` is taken before zero moves and the direction are filtered
 out, because computed over the returned movers a quiet week would also answer `null` and read as a
 database that had never remembered a price.
+
+**A widget can be narrowed to chosen folders and cards**
+([issue #906](https://github.com/Msgaihede/mtg-grimoire/issues/906)). The `Which cards` pick is
+*Everything you own* (the read above, unchanged) or *Chosen*, which opens three lists in the
+widget's settings: collection folders, wishlist folders — a deck's group, `Recently removed` and a
+deck's managed wishlist included, because a filter is not a write — and cards, searched over the
+whole card data whether owned or not. The choices live in the widget's `config`; the page expands a
+chosen folder into everything filed under it and sends `price_movers` a `PriceMoverScope`
+(`collectionFolders`, `wishlistFolders`, `cards`, `0` each cabinet's root). **A card nobody owns
+has no history unless something remembers it**, so the snapshot now also writes, at `copies = 0`
+and only where priced, every printing a wish pins (an any-printing wish names none; a wish with no
+preferred finish is tracked in every finish) and every card on `app_meta.price_watch` — the
+device-local watch list `useHomeLayout` derives from the cards the page's Price movers widgets
+name and sends through `set_price_watch` (at most 500). Such a row is never a holding: the value
+graph reads only `copies > 0`. A card chosen today therefore has history from the next snapshot
+on, and until a window's baseline exists the widget says *no price history for your chosen cards
+yet* rather than counting the table's days.
 
 **A mover is a press, and it opens the Price history popup**
 ([issue #515](https://github.com/Msgaihede/mtg-grimoire/issues/515)). `price_history(card_id,

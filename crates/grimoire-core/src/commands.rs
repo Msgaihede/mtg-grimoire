@@ -857,9 +857,10 @@ commands! {
     read price_history in price_history(card_id: String, finish: String, marketplace: Option<Marketplace>) = |conn| {
         history(conn, &card_id, &finish, marketplace.unwrap_or_default())
     };
-    read price_movers in price_history(window: String, direction: String, marketplace: Option<Marketplace>, limit: i64) = |conn| {
-        movers(conn, &window, &direction, marketplace.unwrap_or_default(), limit)
+    read price_movers in price_history(window: String, direction: String, marketplace: Option<Marketplace>, limit: i64, scope: Option<PriceMoverScope>) = |conn| {
+        movers_in(conn, &window, &direction, marketplace.unwrap_or_default(), limit, scope.as_ref())
     };
+    write set_price_watch in price_history(card_ids: Vec<String>) = |conn| set_watched(conn, &card_ids);
 
     // recent_cards
     read recent_cards in recent_cards(limit: u32) = |conn| Ok(recent(conn, limit));
@@ -2337,6 +2338,14 @@ mod tests {
             // Structs with a required field, which `{}` would stop at the door.
             "search_marks" => json!({ "req": { "ids": ["c-bolt"] } }),
             "set_home_layout" => json!({ "layout": seeded.layout }),
+            // The scoped statement, which `{}` would never reach: all three lists at once.
+            "price_movers" => json!({
+                "window": "7d",
+                "direction": "both",
+                "limit": 10,
+                "scope": { "collectionFolders": [0], "wishlistFolders": [0], "cards": ["c-bolt"] },
+            }),
+            "set_price_watch" => json!({ "cardIds": ["c-bolt"] }),
             "deck_token_swap" => json!({
                 "deckId": seeded.deck,
                 "variant": "live",

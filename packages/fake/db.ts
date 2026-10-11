@@ -243,6 +243,7 @@ import type {
   PriceHistory,
   PriceMover,
   PriceMovers,
+  PriceMoverScope,
   PricePoint,
   Printing,
   QrMatrix,
@@ -2223,6 +2224,14 @@ export interface FakeDb {
    */
   recentCards: FakeRecentCard[];
   /**
+   * `app_meta.price_watch` — the printings this device's snapshots remember a price for whether
+   * or not they are owned: the cards the page's Price movers widgets name (issue #906), written by
+   * {@link writeHandlers.set_price_watch}. **No snapshot runs in this workbench**, so nothing here
+   * reads it — a story stands in a watched card's history by seeding
+   * {@link FakeDb.priceHistory} for it, as the crate's snapshot would have.
+   */
+  priceWatch: string[];
+  /**
    * `sticky_notes` — the reader's own prose on the home page, user schema v46.
    *
    * **A sticky note hangs off nothing**, which is what separates it from {@link FakeDb.deckNotes}:
@@ -3176,6 +3185,41 @@ const PRICE_MOVER_WINDOWS: Readonly<Record<string, number | null>> = {
   all: null,
 };
 
+/** `price_history::MAX_WATCHED` — the most printings the watch list holds. */
+const MAX_PRICE_WATCH = 500;
+
+/** `price_history::TOO_MANY_WATCHED`, verbatim. */
+const TOO_MANY_WATCHED = "That is too many cards to follow prices for. Choose 500 or fewer.";
+
+/** `schema::FINISHES` — what a wish with no preferred finish and a watched card are tracked in. */
+const EVERY_FINISH = ["nonfoil", "foil", "etched"] as const;
+
+/**
+ * The printings {@link readHandlers.price_movers} measures: every owned one with no `scope`,
+ * else `PriceMoverScope::pool_sql`'s three lists — possibly naming one printing twice, which the
+ * caller folds.
+ */
+function priceMoverPool(
+  db: FakeDb,
+  scope: PriceMoverScope | undefined,
+): { cardId: string; finish: FakeEntry["finish"] }[] {
+  if (scope === undefined) return db.collectionEntries.filter((e) => e.quantity > 0);
+  const folders = new Set(scope.collectionFolders ?? []);
+  const shelves = new Set(scope.wishlistFolders ?? []);
+  return [
+    ...db.collectionEntries.filter((e) => e.quantity > 0 && folders.has(e.folderId ?? 0)),
+    ...db.wishlistEntries
+      .filter((w) => w.cardId !== null && shelves.has(w.folderId ?? 0))
+      .flatMap((w) =>
+        (w.preferredFinish === null ? EVERY_FINISH : [w.preferredFinish]).map((finish) => ({
+          cardId: w.cardId as string,
+          finish,
+        })),
+      ),
+    ...(scope.cards ?? []).flatMap((cardId) => EVERY_FINISH.map((finish) => ({ cardId, finish }))),
+  ];
+}
+
 /**
  * `price_history::DAILY_DAYS` — the band inside which every day's snapshot is kept. Past it the
  * crate thins to one row per printing per seven-day bucket, and
@@ -3577,6 +3621,7 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // {@link historyFromCollection}: a world with a collection opens with a strip of cards and
     // a history to measure movers against, and a world with none opens on both sentences.
     recentCards: [],
+    priceWatch: [],
     priceHistory: [],
     // **Empty, and derived from nothing** — which is what separates it from the two fields above
     // rather than an omission beside them. A collection implies cards the reader opened and
@@ -12508,12 +12553,19 @@ export function readHandlers(db: FakeDb) {
      * with the row it names. **A printing that did not move is not a mover**, and neither is one
      * with no price today or none in the baseline. `limit` is clamped to `1..=100`; a window or a
      * direction this command does not know is refused in words.
+     *
+     * **`scope` (issue #906) replaces the owned printings with the ones it names** —
+     * `PriceMoverScope::pool_sql`: copies filed directly in a listed collection folder, the
+     * printings pinned by wishes directly in a listed wishlist folder (a wish with no preferred
+     * finish in every finish, an any-printing wish in none), and each listed card in every finish.
+     * `0` is a cabinet's root. Each printing once.
      */
     price_movers: (args: {
       window: string;
       direction: string;
       marketplace?: string;
       limit: number;
+      scope?: PriceMoverScope;
     }): PriceMovers => {
       // **A word this command does not know reads as the default, never a refusal** —
       // `price_history.rs` parses `window` as 7d and `direction` as both for anything else, so a
@@ -12547,9 +12599,9 @@ export function readHandlers(db: FakeDb) {
       );
       const seen = new Set<string>();
       const movers: PriceMover[] = [];
-      for (const e of db.collectionEntries) {
+      for (const e of priceMoverPool(db, args.scope)) {
         const key = `${e.cardId}:${e.finish}`;
-        if (e.quantity <= 0 || seen.has(key)) continue;
+        if (seen.has(key)) continue;
         seen.add(key);
         const card = cardById(db, e.cardId);
         const now = finishPriceAt(db, card, e.finish, mp);
@@ -22875,6 +22927,21 @@ export function writeHandlers(db: FakeDb) {
      * `sync::with_write` takes it before `record_now` looks at the id. The card modal ignores the
      * refusal either way.
      */
+    /**
+     * `price_history::set_watched` — replace the device's price watch list (issue #906). Blank ids
+     * dropped, each kept once at its first place, more than {@link MAX_PRICE_WATCH} refused in the
+     * crate's words rather than cut.
+     */
+    set_price_watch: (args: { cardIds: string[] }): void => {
+      refuseIfBusy(db);
+      const list: string[] = [];
+      for (const id of args.cardIds.map((each) => each.trim())) {
+        if (id !== "" && !list.includes(id)) list.push(id);
+      }
+      if (list.length > MAX_PRICE_WATCH) throw refuse(TOO_MANY_WATCHED);
+      db.priceWatch = list;
+    },
+
     record_recent_card: (args: { cardId: string }): void => {
       refuseIfBusy(db);
       if (args.cardId.trim() === "") throw refuse(NO_RECENT_CARD_ID);

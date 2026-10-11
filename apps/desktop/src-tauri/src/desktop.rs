@@ -650,10 +650,12 @@ pub fn run() {
             recent_cards::record_recent_card,
             // The Set completion and Price movers widgets, and a mover's detail: three reads on
             // the read-only connection. The movers' history is written by the launch, a sync and
-            // a feed store, never by a command — see `price_history`'s doc.
+            // a feed store, never by a command — see `price_history`'s doc. The one write is the
+            // watch list those snapshots read: which unowned cards the widgets follow.
             set_completion::set_completion,
             price_history::price_movers,
             price_history::price_history,
+            price_history::set_price_watch,
             // The Collection value graph: one read on the read-only connection, over the same
             // snapshots and the live collection — the day's `copies` are written beside the
             // price by that same snapshot, never by a command.
