@@ -31,6 +31,26 @@ export function columnsFor(width: number): number {
 }
 
 /**
+ * The narrowest a tile is drawn once a reader has pinched a wall in (`wallDensity.ts`): four
+ * columns on a 360px phone, where {@link TILE_MIN} draws two. Below it a card's name in the chin
+ * is a letter or two and the picture is a colour.
+ */
+export const TILE_DENSE_MIN = 72;
+
+/**
+ * How many columns a wall `width` px wide draws with the reader's pinch applied — `offset`
+ * columns more (pinched in) or fewer (pinched out) than {@link columnsFor}, and never fewer than
+ * one or more than {@link TILE_DENSE_MIN} allows. **Unmeasured is still two**, whatever the
+ * offset: the first paint is no place for a guess at a width.
+ */
+export function columnsAt(width: number, offset: number): number {
+  const fit = columnsFor(width);
+  if (width <= 0) return fit;
+  const most = Math.max(fit, Math.floor((width + GAP) / (TILE_DENSE_MIN + GAP)));
+  return Math.min(most, Math.max(1, fit + offset));
+}
+
+/**
  * The width each tile is drawn at: the wall shared out, so the tiles reach both edges.
  *
  * The desktop wall draws an exact tile and centres the remainder, because there a wheel steps the

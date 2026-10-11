@@ -3,7 +3,8 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import type { ChinPrinting } from "@grimoire/ui/components/CardChin";
 import type { Finish } from "@grimoire/ui/lib/finish";
 import { useElementWidth } from "@grimoire/ui/lib/useElementWidth";
-import { columnsFor, GAP, rowHeightFor, tileWidthFor } from "./wall";
+import { GAP, rowHeightFor, tileWidthFor } from "./wall";
+import { useKeepPlace, useWallColumns } from "./wallDensity";
 import { WallTile } from "./WallTile";
 
 /** One tile's worth of facts — what every list on the phone face is turned into. */
@@ -80,7 +81,8 @@ export function CardWall({
   // The list, not the scroller: the scroller's own padding is not room a tile can be drawn in,
   // and `useElementWidth` answers the content box of whatever it is put on.
   const [measure, width] = useElementWidth<HTMLUListElement>();
-  const columns = columnsFor(width);
+  // The width's own count, moved by the reader's pinch (`wallDensity.ts`).
+  const columns = useWallColumns(scroller, width);
   const tileWidth = tileWidthFor(width, columns);
   const rowHeight = rowHeightFor(tileWidth);
   const rowCount = Math.ceil(items.length / columns);
@@ -97,6 +99,7 @@ export function CardWall({
   useLayoutEffect(() => {
     rows.measure();
   }, [rows, rowHeight]);
+  useKeepPlace(scroller, columns, rows.getTotalSize());
 
   // A different list starts at its top — and before paint, or one frame shows the new list at the
   // old list's offset. Through the virtualiser rather than the element, so the window it draws

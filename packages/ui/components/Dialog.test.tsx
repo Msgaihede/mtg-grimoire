@@ -2,8 +2,9 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useIsPresent } from "motion/react";
 import { describe, expect, it, vi } from "vitest";
+import { DialogHostContext, type DialogHost } from "@/lib/dialogHost";
 import { LAYER } from "@/lib/layers";
-import { CARET_SETTLE_MS, Dialog } from "./Dialog";
+import { CARET_SETTLE_MS, Dialog, SWIPE_CLOSE_PX } from "./Dialog";
 
 /**
  * The shell's own contract, tested away from any host.
@@ -740,5 +741,109 @@ describe("Dialog", () => {
     );
 
     await waitFor(() => expect(dialog).toHaveFocus());
+  });
+});
+
+describe("a dialog under a host that lends a finger's gestures", () => {
+  function hosted(host: DialogHost, props: Partial<React.ComponentProps<typeof Dialog>> = {}) {
+    const onDismiss = vi.fn();
+    const onClose = vi.fn();
+    const view = render(
+      <DialogHostContext.Provider value={host}>
+        <Dialog
+          open
+          title="Filters"
+          closeLabel="Close filters"
+          size="w-[26rem]"
+          onDismiss={onDismiss}
+          onClose={onClose}
+          {...props}
+        >
+          <p>Body</p>
+        </Dialog>
+      </DialogHostContext.Provider>,
+    );
+    return { onDismiss, onClose, ...view };
+  }
+  const header = () =>
+    screen.getByRole("heading", { name: "Filters" }).closest("header") as HTMLElement;
+  const touch = (y: number) => ({
+    pointerId: 1,
+    pointerType: "touch",
+    isPrimary: true,
+    clientY: y,
+  });
+
+  it("claims a Back step while open, hands Back its Escape close, and releases it on close", () => {
+    const release = vi.fn();
+    let back: (() => void) | undefined;
+    const claimBack = vi.fn((onBack: () => void) => {
+      back = onBack;
+      return release;
+    });
+    const { onDismiss, rerender } = hosted({ claimBack, swipeToClose: false });
+    expect(claimBack).toHaveBeenCalledOnce();
+    back?.();
+    expect(onDismiss).toHaveBeenCalledOnce();
+
+    rerender(
+      <DialogHostContext.Provider value={{ claimBack, swipeToClose: false }}>
+        <Dialog
+          open={false}
+          title="Filters"
+          closeLabel="Close filters"
+          size="w-[26rem]"
+          onDismiss={onDismiss}
+          onClose={vi.fn()}
+        >
+          <p>Body</p>
+        </Dialog>
+      </DialogHostContext.Provider>,
+    );
+    expect(release).toHaveBeenCalledOnce();
+    expect(claimBack).toHaveBeenCalledOnce();
+  });
+
+  it("claims nothing for a dialog that is already a place", () => {
+    const claimBack = vi.fn(() => () => {});
+    hosted({ claimBack, swipeToClose: false }, { placeBacked: true });
+    expect(claimBack).not.toHaveBeenCalled();
+  });
+
+  it("closes when the header is dragged down past the line, and not short of it", () => {
+    const { onClose } = hosted({ claimBack: () => () => {}, swipeToClose: true });
+    // Held still before the let-go, so the release is no flick: only the distance decides.
+    const drag = (to: number) => {
+      fireEvent.pointerDown(header(), touch(0));
+      fireEvent.pointerMove(header(), touch(20));
+      fireEvent.pointerMove(header(), touch(to));
+      fireEvent.pointerMove(header(), touch(to));
+      fireEvent.pointerUp(header(), touch(to));
+    };
+    drag(SWIPE_CLOSE_PX - 20);
+    expect(onClose).not.toHaveBeenCalled();
+
+    drag(SWIPE_CLOSE_PX + 10);
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("leaves a mouse's drag alone, and draws no grabber where nothing grants the gesture", () => {
+    const { onClose, container } = hosted({ claimBack: () => () => {}, swipeToClose: true });
+    const mouse = { pointerId: 2, pointerType: "mouse", isPrimary: true };
+    fireEvent.pointerDown(header(), { ...mouse, clientY: 0 });
+    fireEvent.pointerMove(header(), { ...mouse, clientY: 300 });
+    fireEvent.pointerUp(header(), { ...mouse, clientY: 300 });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(container.querySelector("header")).toHaveClass("touch-none");
+  });
+
+  it("is a desktop dialog with no host: no grabber, no drag", () => {
+    const { onClose, container } = open();
+    expect(container.querySelector("header")).not.toHaveClass("touch-none");
+    const h = container.querySelector("header") as HTMLElement;
+    fireEvent.pointerDown(h, touch(0));
+    fireEvent.pointerMove(h, touch(300));
+    fireEvent.pointerUp(h, touch(300));
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

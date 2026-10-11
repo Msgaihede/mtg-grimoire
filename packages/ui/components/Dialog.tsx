@@ -1,9 +1,18 @@
-import { useEffect, useId, useRef, type JSX, type ReactNode } from "react";
+import { useEffect, useId, useRef, type HTMLAttributes, type JSX, type ReactNode } from "react";
 import { X } from "lucide-react";
-import { AnimatePresence, motion, useIsPresent } from "motion/react";
+import {
+  animate,
+  AnimatePresence,
+  motion,
+  useIsPresent,
+  useMotionValue,
+  useReducedMotion,
+  type MotionValue,
+} from "motion/react";
+import { useBackClaim, useDialogHost } from "@/lib/dialogHost";
 import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
-import { dialog as dialogMotion, scrim } from "@/lib/motion";
+import { dialog as dialogMotion, DURATION, EASE, scrim, seconds } from "@/lib/motion";
 import { trapTab } from "@/lib/trapTab";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
@@ -259,8 +268,18 @@ export interface DialogProps {
    * of the panel and nothing else.
    */
   onDismiss: () => void;
-  /** A press on the scrim: close without moving focus. The reader is already somewhere else. */
+  /**
+   * A press on the scrim: close without moving focus. The reader is already somewhere else. A
+   * header dragged down is the same gesture made with a finger (`DialogHost.swipeToClose`), and
+   * closes through this too.
+   */
   onClose: () => void;
+  /**
+   * **`open` is already a history entry** — a place, as the phone face's card sheet is — so a
+   * Back closes this dialog by moving the place, and the shell must not claim a second step for
+   * it (`DialogHost.claimBack`). Absent, a host that lends Back gets one entry per open dialog.
+   */
+  placeBacked?: boolean;
   children: ReactNode;
 }
 
@@ -341,6 +360,7 @@ export function Dialog({
   caretPulse,
   onDismiss,
   onClose,
+  placeBacked = false,
   children,
 }: DialogProps): JSX.Element {
   // The `"inner"` rung, **registered out here on the flag** rather than one floor down on the
@@ -357,6 +377,11 @@ export function Dialog({
   // overlay's, which mounts *after* this one and therefore lands above it on the hook's stack.
   // `enabled: open` kills it on the render that starts the exit.
   useDismissOnEscape({ layer: "inner", onDismiss, enabled: open });
+  // **Back is Escape on a phone**, and it is claimed on the flag for the rung's reason above: a
+  // fading panel is already closed, and its entry must leave history on the render that starts
+  // the exit. The same `onDismiss`, so a Back hands the caret back exactly as Escape does. A host
+  // that lends nothing (`dialogHost.ts`) makes this a no-op.
+  useBackClaim({ enabled: open && !placeBacked, onBack: onDismiss });
 
   // Closed is *nothing mounted*, not a hidden panel: a body reads a deck, a folder tree, an
   // audit log, and a dialog nobody opened has no business asking for any of them. It also means
@@ -420,9 +445,10 @@ function Panel({
   onDismiss,
   onClose,
   children,
-}: Omit<DialogProps, "open">) {
+}: Omit<DialogProps, "open" | "placeBacked">) {
   const id = useId();
   const panelRef = useRef<HTMLDivElement>(null);
+  const swipe = useSwipeToClose(useDialogHost()?.swipeToClose === true, onClose);
   /** False from the render that starts the fade out — the panel goes inert on it, and a host's
    *  body sees the same answer, which is what `useDeckField` writes on. */
   const present = useIsPresent();
@@ -594,6 +620,9 @@ function Panel({
       <motion.div
         {...dialogMotion}
         ref={panelRef}
+        // The header's drag (`useSwipeToClose`). A motion value, so the scale tween and the drag
+        // compose into one transform and the exit fades from wherever the finger let go.
+        style={{ y: swipe.y }}
         tabIndex={-1}
         role="dialog"
         aria-modal="true"
@@ -696,7 +725,23 @@ function Panel({
           // control. `packages/ui/lib/focus.ts` carries the rule and all ten sites.
         )}
       >
-        <header className="flex items-center gap-3 border-b border-border px-5 py-4">
+        <header
+          {...swipe.handlers}
+          className={cn(
+            "flex items-center gap-3 border-b border-border px-5 py-4",
+            // The header is the sheet's handle under a finger: no pan of its own to give up, so
+            // `touch-none` costs nothing and hands every move to the drag.
+            swipe.enabled && "relative touch-none",
+          )}
+        >
+          {/* The grabber, which says the header can be dragged — below `sm`, where the panel is a
+              sheet at the foot of the glass or the glass itself. */}
+          {swipe.enabled && (
+            <span
+              aria-hidden
+              className="absolute top-1.5 left-1/2 h-1 w-9 -translate-x-1/2 rounded-full bg-border sm:hidden"
+            />
+          )}
           <div className="min-w-0 flex-1">
             {/* Cinzel at 20px — the display face's own rule in this app: view titles and hero
                 copy, never below 18px. */}
@@ -754,4 +799,105 @@ function Panel({
       </motion.div>
     </motion.div>
   );
+}
+
+/** How far a header must be dragged before letting go closes the panel, in px. */
+export const SWIPE_CLOSE_PX = 96;
+/** A flick: a release this fast downward closes from any distance, in px per ms. */
+const SWIPE_FLICK = 0.5;
+/** Movement under this is still a tap — the ✕ inside the header keeps its press. */
+const SWIPE_SLOP_PX = 8;
+
+/**
+ * Drag a panel down by its header, and let go past {@link SWIPE_CLOSE_PX} (or with a flick) to
+ * close it — a phone's bottom sheet, and the card sheet that fills a phone's glass.
+ *
+ * **Touch only, and only where the host grants it** (`DialogHost.swipeToClose`): a mouse that
+ * drags across a desktop header is selecting its title. **Pointer events with capture taken only
+ * past the slop**, so a press on the ✕ inside the header is still a click. Upward drags are
+ * refused rather than rubber-banded: a sheet has nowhere to go but down.
+ *
+ * Closes through `onClose`, the scrim's road — a gesture made with the finger the reader is
+ * already holding over the page, so there is no caret to hand back.
+ */
+function useSwipeToClose(
+  enabled: boolean,
+  onClose: () => void,
+): {
+  enabled: boolean;
+  y: MotionValue<number>;
+  handlers: Pick<
+    HTMLAttributes<HTMLElement>,
+    "onPointerDown" | "onPointerMove" | "onPointerUp" | "onPointerCancel"
+  >;
+} {
+  const y = useMotionValue(0);
+  const reduced = useReducedMotion() === true;
+  /** The finger on the header: where it went down, its last sample and speed, and whether it
+   *  has passed the slop and become a drag. */
+  const drag = useRef<{
+    id: number;
+    startY: number;
+    lastY: number;
+    lastT: number;
+    v: number;
+    live: boolean;
+  } | null>(null);
+
+  const settle = () => {
+    if (reduced) y.set(0);
+    else void animate(y, 0, { duration: seconds(DURATION.base), ease: EASE.standard });
+  };
+
+  if (!enabled) return { enabled, y, handlers: {} };
+  return {
+    enabled,
+    y,
+    handlers: {
+      onPointerDown: (e) => {
+        if (e.pointerType !== "touch" || !e.isPrimary) return;
+        drag.current = {
+          id: e.pointerId,
+          startY: e.clientY,
+          lastY: e.clientY,
+          lastT: e.timeStamp,
+          v: 0,
+          live: false,
+        };
+      },
+      onPointerMove: (e) => {
+        const d = drag.current;
+        if (d === null || d.id !== e.pointerId) return;
+        const dy = e.clientY - d.startY;
+        if (!d.live) {
+          if (Math.abs(dy) < SWIPE_SLOP_PX) return;
+          if (dy < 0) {
+            drag.current = null;
+            return;
+          }
+          d.live = true;
+          // So the drag keeps the finger past the header's edge. Absent where nothing captures
+          // (jsdom), which costs only that.
+          if ("setPointerCapture" in e.currentTarget)
+            e.currentTarget.setPointerCapture(e.pointerId);
+        }
+        const dt = e.timeStamp - d.lastT;
+        if (dt > 0) d.v = (e.clientY - d.lastY) / dt;
+        d.lastY = e.clientY;
+        d.lastT = e.timeStamp;
+        y.set(Math.max(0, dy));
+      },
+      onPointerUp: (e) => {
+        const d = drag.current;
+        drag.current = null;
+        if (d === null || d.id !== e.pointerId || !d.live) return;
+        if (y.get() >= SWIPE_CLOSE_PX || d.v >= SWIPE_FLICK) onClose();
+        else settle();
+      },
+      onPointerCancel: () => {
+        if (drag.current?.live === true) settle();
+        drag.current = null;
+      },
+    },
+  };
 }
