@@ -171,7 +171,8 @@ a request it matches is a 429 once the free plan's day is spent.
   `scanner_submit::SCAN_BASE`, asked only when a reader presses the card scanner's Send: one
   `POST` of a run of frames with its label in a header, which costs a pre-flight that Worker answers for
   the origins on its own `APP_ORIGINS` (`infrastructure/scan-worker/src/cors.ts`). One fact in
-  two deploys again, **and that Worker's comes first** — until it is deployed a Send from a page
+  two deploys again, **and that Worker's comes first** (in a release, `scan-deploy` runs ahead of
+  `web-deploy`) — until it is deployed a Send from a page
   is a request that leaves and fails, which the dialog says in a sentence. Nobody has sent one
   from a browser.
 - **The relay is in `connect-src`, and it was the one host there that answered this origin by

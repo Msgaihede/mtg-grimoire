@@ -374,7 +374,7 @@ export const ARMS = [
   // — the crossing runs the other way, as it does for the hosting Worker (`label.test.ts` and
   // `wrangler.test.ts` read `crates/grimoire-core/src/scanner_submit.rs`), and the engine's arm
   // already sets `frontend`. **Not `web`**: no build copies or runs it. Its README is prose, by
-  // the arm above every tree's. No job deploys it.
+  // the arm above every tree's. `release.yml`'s `scan-deploy` deploys it, at a release tag.
   { match: ["infrastructure/scan-worker/*"], jobs: ["frontend"] },
 
   // The one tool that deploys the hosting Worker, pinned with everything under it, in a folder

@@ -222,38 +222,69 @@ both of its objects, in the bucket and in any copy.
 
 ## Deploying
 
-⚠️ **No agent may run `wrangler deploy` or create the bucket.** Those are the repository owner's,
-and no CI job deploys this Worker. `wrangler dev --local` is the only wrangler command an agent
-may run.
+**A release deploys this Worker** (`release.yml`'s `scan-deploy`; the owner's decision,
+2026-10-11). Merging the release PR puts this folder's script on its address, behind the share
+Worker and **ahead of the web app** — the page's policy names this host, and its Send waits on
+this Worker's CORS answer — with the relay's deploy token (`CLOUDFLARE_INFRA_API_TOKEN`, in the
+`release` environment), and then asks the live address the probes below. Without that token the
+job deploys nothing, says so in the run's summary and ends green.
 
-**This Worker has not been deployed.** Until it is, a press on Send is answered in a sentence —
-*the server answered 404* from a desktop or a phone, *the server could not be reached* from a
-browser — and nothing else in the app notices.
+⚠️ **No agent may run `wrangler deploy` or create the bucket unasked.** Between releases a
+deploy is by hand and asked for, each time, as for every Worker. `wrangler dev --local` is the
+only wrangler command an agent may run on its own.
 
-1. `npx wrangler r2 bucket create mtg-grimoire-scans`. The deploy fails naming the `SCANS`
-   binding until the bucket exists.
-2. `npx wrangler deploy`, from this folder, and read the address it prints. It must be
-   `https://mtg-grimoire-scans.denmark-east.workers.dev` — the Worker's name and the account's
-   subdomain — which is `scanner_submit::SCAN_BASE` in the engine, a source in the web policy
-   and a row of the privacy policy. `src/wrangler.test.ts` holds the name to the engine's line.
-3. Ask the host, rather than this file, what it does:
+**What only the owner does, once**: create the bucket.
 
-   ```
-   S=https://mtg-grimoire-scans.denmark-east.workers.dev
-   curl -s -w " %{http_code}\n" "$S/scan"
-   curl -s -w " %{http_code}\n" -X POST "$S/scan"
-   curl -s -o /dev/null -w "%{http_code} %header{access-control-allow-origin}\n" -X OPTIONS \
-     -H "origin: https://mtg-grimoire.app" -H "access-control-request-method: POST" "$S/scan"
-   curl -s -w " %{http_code}\n" "$S/runs/x.bin"
-   ```
+```
+npx wrangler r2 bucket create mtg-grimoire-scans --location weur
+```
 
-   A deployed Worker answers `{"error":"method not allowed"} 405`,
-   `{"error":"a scan is sent as application/octet-stream"} 415`, `204 https://mtg-grimoire.app`
-   and `{"error":"not found"} 404`. Then send one real scan from the app and read it back out of
-   the bucket: that is the only thing that shows the bucket binding works.
+The deploy fails naming the `SCANS` binding until the bucket exists — and in a release that
+stops the web app's deploy too, which waits for this one. (Created 2026-10-11, by the owner's
+word.) There is no secret to set and no schema to apply. Before the Android release that
+carries Send, the Play Console's Data safety form changes — `docs/play/README.md`, *Data
+safety*.
 
-There is no secret to set and no schema to apply. Before the Android release that carries Send,
-the Play Console's Data safety form changes — `docs/play/README.md`, *Data safety*.
+**By hand** — a first deploy that should not wait for a release, or one between releases —
+from this folder, with the pinned tool:
+
+```
+npm ci --ignore-scripts --prefix ../wrangler
+node ../wrangler/node_modules/wrangler/bin/wrangler.js deploy
+```
+
+Read the address it prints. It must be `https://mtg-grimoire-scans.denmark-east.workers.dev` —
+the Worker's name and the account's subdomain — which is `scanner_submit::SCAN_BASE` in the
+engine, a source in the web policy and a row of the privacy policy. `src/wrangler.test.ts`
+holds the name to the engine's line.
+
+**Ask the host, rather than this file, what it does.** The release's own probe holds no token
+and stores nothing; from the repository's root:
+
+```
+node scripts/scan-deploy-probe.mjs
+```
+
+Its seven requests, and what a deployed Worker answers:
+
+| Request | Answer |
+| --- | --- |
+| `GET /scan` | `405`, `method not allowed` |
+| `POST /scan` as `image/jpeg` | `415`, `a scan is sent as application/octet-stream` — one picture's type, refused |
+| `POST /scan` as `application/octet-stream`, with no label | `400`, `that request carried no label` |
+| `OPTIONS /scan` from `https://mtg-grimoire.app` | `204`, with that origin allowed |
+| `POST /scan` from `https://mtg-grimoire.app`, with no type | `415`, and readable by the page: the origin allowed |
+| `OPTIONS /scan` from another origin | `405`, with no origin allowed |
+| `GET /runs/x.bin` | `404`, `not found` — nothing is served back |
+
+`scripts/scan-deploy-probe.test.mjs` asks the same seven of this tree's code, over a bucket that
+throws if it is touched. **None of them stores anything**, so none shows that the bucket's
+binding takes a write: send one real scan from the app and read it back out of the bucket
+(*Reading the inbox*, above).
+
+**Until a Worker is deployed** a press on Send is answered in a sentence — *the server answered
+404* from a desktop or a phone, *the server could not be reached* from a browser — and nothing
+else in the app notices.
 
 ## Testing
 

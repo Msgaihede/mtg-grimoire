@@ -4500,7 +4500,7 @@ second, captioned with how long before the press it was taken.
 could span a reset the session makes itself — a mode switch, an accepted filter — and be
 labelled with the new mode or filter throughout. *The run*, above, is what it does now.
 
-**The inbox has not been deployed, and nobody has sent a scan through it.** Past the page, every
+**No release has deployed the inbox yet, and nobody has sent a scan through it.** Past the page, every
 wire is held by tests on each side of it — the engine over a mock server, the Worker over fakes
 of its two bindings — and by nothing that crosses a real network. What only real use can show:
 
@@ -4515,7 +4515,8 @@ of its two bindings — and by nothing that crosses a real network. What only re
   does, not by a browser run with the WASM scanner.
 - **The edge**: that the bucket binding takes a write, that a browser's pre-flight is answered
   as the suite answers it, and whether 500 waiting runs is a ceiling a real week ever meets.
-  `infrastructure/scan-worker/README.md` has the deploy and the four probes.
+  `infrastructure/scan-worker/README.md` has the deploy — a release's `scan-deploy` job, since
+  2026-10-11 — and the probes that job asks of the live address.
 
 ## On the phone face
 

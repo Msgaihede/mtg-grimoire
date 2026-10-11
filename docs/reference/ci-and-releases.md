@@ -563,7 +563,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
                   ├─ web ────────────────────────────────┤
                   └─ share ──────────────────────────────┤
                                                          ▼
-          relay-deploy → share-deploy → web-deploy → play-upload → publish
+   relay-deploy → share-deploy → scan-deploy → web-deploy → play-upload → publish
   ```
 
   | Job | Needs | Holds a secret | What it does |
@@ -575,9 +575,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   | `share` | `release-please` | no | The share viewer: `pnpm share:build`, a check that `apps/share/dist-share/assets/share.js` is there and not empty; `apps/share/dist-share/` handed on as the artifact `share-bundle` (14 days). `ci.yml`'s `frontend` runs the same build |
   | `relay-deploy` | `release-please`, `build`, `android-sign`, `web`, `share` | `CLOUDFLARE_INFRA_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | The token alone decides whether it runs. Refuses a tag older than the newest published release; `npm ci --ignore-scripts` in `infrastructure/wrangler/`; then, from `infrastructure/relay/`, `wrangler d1 migrations apply mtg-grimoire-relay --remote` and `wrangler deploy`; then `scripts/relay-deploy-probe.mjs` against the relay's address |
   | `share-deploy` | `release-please`, `share`, `relay-deploy` | `CLOUDFLARE_INFRA_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | The same, from `infrastructure/share-worker/`, with the `share-bundle` downloaded into `apps/share/dist-share/` first (its bookkeeping table is `d1_migrations_share`); then `scripts/share-deploy-probe.mjs` |
-  | `web-deploy` | `release-please`, `build`, `android-sign`, `web`, `share-deploy` | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | Refuses a tag older than the newest published release; `npm ci --ignore-scripts` in `infrastructure/wrangler/`, then `node ../wrangler/node_modules/wrangler/bin/wrangler.js deploy` from `infrastructure/app-worker/`; then `scripts/web-deploy-probe.mjs` against `https://mtg-grimoire.app` |
+  | `scan-deploy` (since 2026-10-11, with the card scanner's Send) | `release-please`, `share-deploy` | `CLOUDFLARE_INFRA_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | The scan inbox. The token alone decides, as above. Refuses an older tag; `npm ci --ignore-scripts` in `infrastructure/wrangler/`; then `wrangler deploy` from `infrastructure/scan-worker/` — no database, so no migration, and no bundle; then `scripts/scan-deploy-probe.mjs`, seven requests of the inbox's address, none of which reaches the bucket |
+  | `web-deploy` | `release-please`, `build`, `android-sign`, `web`, `share-deploy`, `scan-deploy` | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | Refuses a tag older than the newest published release; `npm ci --ignore-scripts` in `infrastructure/wrangler/`, then `node ../wrangler/node_modules/wrangler/bin/wrangler.js deploy` from `infrastructure/app-worker/`; then `scripts/web-deploy-probe.mjs` against `https://mtg-grimoire.app` |
   | `play-upload` (`android (upload to Play)`) | `release-please`, `android-sign`, `web-deploy` | `PLAY_SERVICE_ACCOUNT_JSON` | Asks whether the account is set and `android-sign` signed a bundle; either missing → uploads nothing, says which, green. Otherwise downloads `play-upload-bundle` and runs `node scripts/android-release/play-upload.mjs "aab-in/mtg-grimoire-$VERSION-android.aab" <versionCode>` — no install, no build — which puts it on the `internal` track. `contents: read` |
-  | `publish` | `release-please`, `build`, `android-sign`, `relay-deploy`, `share-deploy`, `web-deploy`, `play-upload` | no | Flips the draft to published |
+  | `publish` | `release-please`, `build`, `android-sign`, `relay-deploy`, `share-deploy`, `scan-deploy`, `web-deploy`, `play-upload` | no | Flips the draft to published |
 
   - **Since 2026-10-07 the Android host goes to Google Play, and only there** (the owner's
     decision; `docs/superpowers/specs/2026-10-07-google-play-release-design.md`). What follows
@@ -878,6 +879,24 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     without the other; these two do not, because the account id is already in the environment
     for `web-deploy`, so asking for both would fail every release until the new token existed.
     (`scripts/release-rule.test.mjs`: *asks for the token alone, and does nothing without it*.)
+  - **The scan inbox is the fourth Worker a release deploys (2026-10-11, the same day; the
+    owner's decision, with the card scanner's Send — #890).** `scan-deploy` puts
+    `infrastructure/scan-worker/` on `mtg-grimoire-scans.denmark-east.workers.dev`, **behind
+    the share Worker and ahead of the web app**: the page's policy names that host and its
+    Send waits on that Worker's CORS answer, so `web-deploy` now needs it. It reads the
+    relay's token — the one that has deployed a Worker with a bucket bound — and the token
+    alone decides, as for the other two. No database, so one `wrangler` line and not two; no
+    bundle, so nothing downloaded: the script imports nothing outside its own folder. **Its
+    probe stores nothing** (`scripts/scan-deploy-probe.mjs`, seven requests, held to the
+    Worker's own code over a bucket that throws if it is touched): a probe that wrote would
+    put a scan nobody sent in the inbox on every release, so the bucket's binding is shown by
+    the first scan a reader sends and by nothing in the job. ⚠️ **The bucket has to exist
+    before the first release that carries the job** — `mtg-grimoire-scans`, the owner's to
+    create — or `wrangler deploy` fails naming the binding and, since `web-deploy` waits for
+    this job, the web app is not deployed and the release stays a draft. The counts above —
+    *three deploys*, *five wrangler lines*, the mutation table's test names — are that
+    morning's; the fence now says four jobs and six lines. **Not until a release**: the job
+    has run nowhere but in the fence.
   - **The D1 design.** `schema.sql` of each Worker is the **frozen baseline**: the shape
     production holds (compared with it on 2026-10-11, and it matched), pinned by SHA-256 in `scripts/d1-migrations.test.mjs`, and it cannot be
     re-run (the relay's has four plain `ALTER TABLE … ADD COLUMN`). `infrastructure/relay/migrations/`
@@ -1035,7 +1054,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     comments stripped, so a comment may say what it likes and a line may not change.
   - **The bundle goes to Google Play's internal track from the release (2026-10-11, piece B;
     the design is the same spec's §6).** `play-upload` (`android (upload to Play)` on the run
-    page) is the last job before `publish`, behind all three deploys, because Play takes a
+    page) is the last job before `publish`, behind all four deploys (three when this was written), because Play takes a
     `versionCode` once and nothing after it can be taken back. It runs
     `scripts/android-release/play-upload.mjs`, which needs no install: Node's `crypto` signs the
     service account's JWT and `fetch` does the rest. **Seven requests** (six until the final
@@ -1080,7 +1099,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
       job first.
     - **What it does without a value.** No `PLAY_SERVICE_ACCOUNT_JSON`, or `android-sign` signed
       no bundle (its output `signed`): nothing uploaded, the summary says which, green. A failure
-      in it leaves all three Workers deployed and the release a draft.
+      in it leaves every Worker deployed — four, since `scan-deploy` — and the release a draft.
     - **The script's test runs under the suite's default jsdom environment, not Node's.** The
       per-file Node directive is honoured by Vitest, but the shared setup file
       (`packages/ui/test-setup.ts`) touches `document` at its top level and the file fails with
@@ -1354,15 +1373,20 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   - **`CLOUDFLARE_ACCOUNT_ID`** is the 32-hex id on the dashboard's Workers overview, and what
     `node ../wrangler/node_modules/wrangler/bin/wrangler.js whoami` prints from `infrastructure/app-worker/`.
   - **The Workers' deploy token (`CLOUDFLARE_INFRA_API_TOKEN`).** A second custom token on the
-    one account, for `relay-deploy` and `share-deploy`: **Account → Workers Scripts → Edit**,
+    one account, for `relay-deploy`, `share-deploy` and `scan-deploy`: **Account → Workers Scripts → Edit**,
     **Account → D1 → Edit**, **Account → Workers R2 Storage → Edit**. No zone permission — both
     Workers are on `workers.dev`. ⚠️ **It can write the database that holds every entitlement
     and deploy over any Worker on the account**, the web app's included; what bounds it is the
     `release` environment's restriction to `main` (step 0).
     `gh secret set CLOUDFLARE_INFRA_API_TOKEN --env release --repo Msgaihede/mtg-grimoire`.
-    **Not verified**: no deploy has been made with such a token. If the first run fails on a
-    permission, its log names it. Until it is set the two jobs end green having deployed
-    nothing, and each says so in the run's summary.
+    **Used once, as read off the host on 2026-10-11**: the release run of 0.44.0 (run
+    38143404661) ended `relay (deploy)` and `share (deploy)` green with no step skipped, so the
+    token is set and deployed both — the share Worker with its bucket bound, which is what
+    `scan-deploy` asks of it too. If a run fails on a permission, its log names it. Without the
+    token the three jobs end green having deployed nothing, and each says so in the run's
+    summary. **The scan inbox's bucket** (`mtg-grimoire-scans`) is the owner's to create, once,
+    before the first release that carries `scan-deploy`:
+    `npx wrangler r2 bucket create mtg-grimoire-scans --location weur`.
   - **Is `schema.sql` what production holds? Compared 2026-10-11: it is.** The baseline is
     frozen on the claim that it is, so an agent compared it at the owner's word. One read of
     the live database's `sqlite_master` (`SELECT type, name, tbl_name, sql … ORDER BY type,

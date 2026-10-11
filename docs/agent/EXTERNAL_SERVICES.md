@@ -347,9 +347,13 @@ Android release that carries Send**. A browser sends too, so the Worker answers 
 origin by name (`APP_ORIGINS`, its `src/cors.ts`) and the hosting policy's `connect-src` names
 its host: one fact in two deploys, **this Worker's first**.
 
-**It has not been deployed.** The bucket (`mtg-grimoire-scans`) is the owner's to create and the
-deploy the owner's to run; no job deploys it and no agent may unasked. Until then a Send is
-answered *the server answered 404* on a desktop or a phone and *could not be reached* in a
-browser. Ask the host before you believe this or its opposite.
+**A release deploys it** (`release.yml`'s `scan-deploy`; the owner's decision, 2026-10-11):
+behind the share Worker and ahead of the web app, with the relay's deploy token, then seven
+probes of the live address, none of which stores anything (`scripts/scan-deploy-probe.mjs`).
+The bucket (`mtg-grimoire-scans`) was the owner's to create, and by his word exists since that
+day. Between releases a deploy is by hand and asked for, as for every Worker, and no agent may
+unasked. **As this is written no release has run that job**, so until one does — or the owner
+deploys by hand — a Send is answered *the server answered 404* on a desktop or a phone and
+*could not be reached* in a browser. Ask the host before you believe this or its opposite.
 [`infrastructure/scan-worker/README.md`](../../infrastructure/scan-worker/README.md) is the
-runbook, with the four probes a deployed one answers, and how the inbox is read and emptied.
+runbook, with the probes a deployed one answers, and how the inbox is read and emptied.
