@@ -125,8 +125,8 @@ fn open_failed(e: String) -> String {
 pub async fn import_pick_file(window: tauri::WebviewWindow) -> Result<Option<ImportFile>, String> {
     let dialog = move || {
         crate::file_dialog::modal_to(&window)
-            .set_title("Choose a decklist")
-            .add_filter("Decklist", &DECKLIST_EXTENSIONS)
+            .set_title("Choose a card list")
+            .add_filter("Card list", &DECKLIST_EXTENSIONS)
             .blocking_pick_file()
     };
     let Some(path) = crate::file_dialog::show(crate::file_dialog::FILE_PICKER, dialog).await?

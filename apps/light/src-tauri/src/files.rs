@@ -75,13 +75,13 @@ async fn save(app: &tauri::AppHandle, args: Option<Value>) -> Result<Value, Stri
 
 async fn pick(app: &tauri::AppHandle) -> Result<Value, String> {
     let (tx, rx) = tauri::async_runtime::channel(1);
-    let mut dialog = app.dialog().file().set_title("Choose a decklist");
+    let mut dialog = app.dialog().file().set_title("Choose a card list");
     // **No filter on a phone.** Android's picker filters by MIME type, and the dialog plugin maps
     // each extension through `MimeTypeMap`, dropping the ones it does not know — `.dec` and
     // `.dek` among them — so a filter there greys out half of what a decklist is saved as. The
     // decode and the parser are the fence; the filter was only ever a hint.
     if !cfg!(mobile) {
-        dialog = dialog.add_filter("Decklist", &DECKLIST_EXTENSIONS);
+        dialog = dialog.add_filter("Card list", &DECKLIST_EXTENSIONS);
     }
     dialog.pick_file(move |path| {
         let _ = tx.try_send(path);

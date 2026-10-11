@@ -95,7 +95,7 @@ export function decodeDecklist(bytes: Uint8Array): ImportFile {
 /**
  * A file the reader picked, as a decklist. Rejects with `import.rs`'s own sentence for a file over
  * the cap, and with the browser's for one it could not read — the phone sheet frames either as
- * "Couldn't read a decklist from a file — …", the desktop dialog's frame, true of both.
+ * "Couldn't read a card list from a file — …", the desktop dialog's frame, true of both.
  */
 export async function readDecklistFile(file: File): Promise<ImportFile> {
   if (file.size > MAX_DECKLIST_BYTES) throw new Error(TOO_BIG);

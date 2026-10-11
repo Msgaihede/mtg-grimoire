@@ -1226,7 +1226,7 @@ describe("DecksPage", () => {
     // preview step, beside the tally its format changes — so the list has to be read before
     // there is a select to look at. What the claim is about is unchanged: the answer this
     // screen resolved reaches both surfaces that make a deck.
-    await userEvent.click(await screen.findByLabelText("Decklist"));
+    await userEvent.click(await screen.findByLabelText("Card list"));
     await userEvent.paste("1 Sol Ring");
     await userEvent.click(screen.getByRole("button", { name: "Preview" }));
 
@@ -1281,7 +1281,7 @@ describe("DecksPage", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Import deck" }));
 
-    expect(await screen.findByRole("dialog", { name: "Import a decklist" })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "Import cards" })).toBeInTheDocument();
     // The gallery has no deck open, so there is nothing to merge into and no choice to offer.
     expect(screen.queryByLabelText(/^Merge/)).not.toBeInTheDocument();
   });
@@ -1300,7 +1300,7 @@ describe("DecksPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Import deck" }));
 
     await waitFor(() => expect(screen.getAllByRole("dialog")).toHaveLength(1));
-    expect(screen.getByRole("dialog", { name: "Import a decklist" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Import cards" })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "New deck" }));
 
@@ -1315,7 +1315,7 @@ describe("DecksPage", () => {
     await screen.findByRole("list", { name: "Your decks" });
     await userEvent.click(screen.getByRole("button", { name: "Import deck" }));
 
-    await userEvent.click(await screen.findByLabelText("Decklist"));
+    await userEvent.click(await screen.findByLabelText("Card list"));
     await userEvent.paste("1 Sol Ring");
     await userEvent.click(screen.getByRole("button", { name: "Preview" }));
     // The name is the destination's question and is asked on its own step.

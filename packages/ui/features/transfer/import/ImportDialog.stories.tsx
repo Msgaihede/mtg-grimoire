@@ -132,7 +132,7 @@ export const Empty: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    const box = await canvas.findByLabelText("Decklist");
+    const box = await canvas.findByLabelText("Card list");
     await waitFor(async () => {
       await expect(box).toHaveFocus();
     });
@@ -156,7 +156,7 @@ export const PastedReferenceList: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    await userEvent.click(await canvas.findByLabelText("Decklist"));
+    await userEvent.click(await canvas.findByLabelText("Card list"));
     await userEvent.paste(REFERENCE_LIST);
     await userEvent.click(canvas.getByRole("button", { name: "Preview" }));
     await userEvent.type(await canvas.findByLabelText("Name"), "Selvala");
@@ -179,7 +179,7 @@ export const WithUnmatchedLines: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    await userEvent.click(await canvas.findByLabelText("Decklist"));
+    await userEvent.click(await canvas.findByLabelText("Card list"));
     await userEvent.paste("4 Lightning Bolt\n2 Sol Ring\n1 Lightning Bolth\n1 Counterspell");
     await userEvent.click(canvas.getByRole("button", { name: "Preview" }));
     await userEvent.type(await canvas.findByLabelText("Name"), "Burn");
@@ -203,7 +203,7 @@ export const AmbiguousCommander: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    await userEvent.click(await canvas.findByLabelText("Decklist"));
+    await userEvent.click(await canvas.findByLabelText("Card list"));
     await userEvent.paste(
       "1 Tymna the Weaver\n1 Thrasios, Triton Hero\n1 Kenrith, the Returned King\n1 Sol Ring",
     );
@@ -246,7 +246,7 @@ export const IntoExistingDeck: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    await userEvent.click(await canvas.findByLabelText("Decklist"));
+    await userEvent.click(await canvas.findByLabelText("Card list"));
     await userEvent.paste("1 Sol Ring\n1 Rhystic Study");
     await userEvent.click(canvas.getByRole("button", { name: "Preview" }));
 
@@ -287,7 +287,7 @@ export const WithArchidektLabels: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    await userEvent.click(await canvas.findByLabelText("Decklist"));
+    await userEvent.click(await canvas.findByLabelText("Card list"));
     await userEvent.paste(
       "2x Sol Ring [Ramp] ^Keeper,#4aab08^\n" +
         "1x Rhystic Study [Draw] ^Keeper,#4aab08^\n" +
@@ -323,7 +323,7 @@ export const Refused: Story = {
   play: async ({ args, canvasElement }) => {
     const canvas = within(canvasElement);
 
-    await userEvent.click(await canvas.findByLabelText("Decklist"));
+    await userEvent.click(await canvas.findByLabelText("Card list"));
     await userEvent.paste("1 Sol Ring");
     await userEvent.click(canvas.getByRole("button", { name: "Preview" }));
     await userEvent.click(await canvas.findByRole("button", { name: "Import" }));
@@ -335,7 +335,7 @@ export const Refused: Story = {
     });
     await expect(args.onImported).not.toHaveBeenCalled();
     await userEvent.click(canvas.getByRole("button", { name: "Back" }));
-    await expect(await canvas.findByLabelText("Decklist")).toHaveValue("1 Sol Ring");
+    await expect(await canvas.findByLabelText("Card list")).toHaveValue("1 Sol Ring");
   },
 };
 
@@ -393,7 +393,7 @@ export const IntoCollection: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    await userEvent.click(await canvas.findByLabelText("Decklist"));
+    await userEvent.click(await canvas.findByLabelText("Card list"));
     await userEvent.paste("1 Sol Ring\n2 Lightning Bolt");
     await userEvent.click(canvas.getByRole("button", { name: "Preview" }));
 
@@ -425,7 +425,7 @@ export const IntoWishlist: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    await userEvent.click(await canvas.findByLabelText("Decklist"));
+    await userEvent.click(await canvas.findByLabelText("Card list"));
     await userEvent.paste("1 Sol Ring\n2 Lightning Bolt");
     await userEvent.click(canvas.getByRole("button", { name: "Preview" }));
 

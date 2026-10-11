@@ -34,7 +34,7 @@ const PRIMARY = cn(
 );
 
 /**
- * **Import a decklist**, on the phone: paste a list or pick a file, see what it would do, then
+ * **Import cards**, on the phone: paste a list or pick a file, see what it would do, then
  * write it — the desktop's two steps, over the desktop's own machinery.
  *
  * **What is the phone's own is the first step's drawing and the file.** The box is 16px, so
@@ -69,7 +69,7 @@ export function ImportSheet({
   return (
     <Dialog
       open={open}
-      title="Import a decklist"
+      title="Import cards"
       subtitle={destination.Subtitle === undefined ? subtitle : <destination.Subtitle />}
       closeLabel="Close import"
       size="h-full w-[42rem] pt-[env(safe-area-inset-top)] sm:pt-0"
@@ -108,7 +108,7 @@ function Body({
     readDecklistFile(file)
       .then(source.takeFile, (error: unknown) =>
         // The desktop dialog's frame, true of an oversized file and an unreadable one alike.
-        setFileFailure(`Couldn't read a decklist from a file — ${ipcError(error)}`),
+        setFileFailure(`Couldn't read a card list from a file — ${ipcError(error)}`),
       )
       .finally(() => {
         setReading(false);
@@ -196,7 +196,7 @@ function Body({
           ref={fileRef}
           type="file"
           accept={DECKLIST_ACCEPT}
-          aria-label="Decklist file"
+          aria-label="Card list file"
           tabIndex={-1}
           className="sr-only"
           onChange={(e) => pick(e.target.files?.[0])}

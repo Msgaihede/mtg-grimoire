@@ -2408,7 +2408,7 @@ viewport — nothing scrolls the document.
 
 | What | 1100 × 600 | 1280 × 650 | 1024 × 700 | 1024 × 560 |
 | --- | --- | --- | --- | --- |
-| A deck's *Import a decklist* | 540 tall, its body scrolls (400 of 451) | 585, scrolls (445 / 451) | 591, fits | 504, scrolls (364 / 451) |
+| A deck's *Import cards* | 540 tall, its body scrolls (400 of 451) | 585, scrolls (445 / 451) | 591, fits | 504, scrolls (364 / 451) |
 | Export (a deck's, the collection's) | 363 / 411, fit | fit | fit | fit |
 | The card modal's middle column | fits, 3 columns | fits, 3 columns | **0px tall** | **0px tall** |
 

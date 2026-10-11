@@ -26,7 +26,7 @@
  * is the decode (issue #555): a byte-order mark is honoured, valid UTF-8 is UTF-8, and anything
  * else is read as Windows-1252 rather than lossily — so an `é` in Excel's Western European "CSV"
  * is an `é` and not `U+FFFD`. The read answers **which** of those it took, because the last one is
- * a guess only the reader can check. The dialog's title, its "Decklist" filter and the four
+ * a guess only the reader can check. The dialog's title, its "Card list" filter and the four
  * extensions under it are `import.rs`'s too now (`DECKLIST_EXTENSIONS`), because the dialog is.
  */
 import { ipc, type ImportFile } from "@/lib/ipc";
