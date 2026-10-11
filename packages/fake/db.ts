@@ -2124,6 +2124,13 @@ export interface FakeDb {
    */
   hiddenStacks: Record<string, number[]>;
   /**
+   * `app_meta.deck_search_width` — how wide the reader dragged each deck's card search column
+   * (issue #932), as deck id (decimal) → px. **Empty to begin with**, which is every column at its
+   * default. See {@link readHandlers.deck_search_width} and
+   * {@link writeHandlers.set_deck_search_width}.
+   */
+  deckSearchWidths: Record<string, number>;
+  /**
    * `app_meta.deck_sort` — how the deck gallery was last ordered, as `"<key>:<direction>"`.
    *
    * A **stored string** and `null` for the row not being there, which is
@@ -3592,6 +3599,9 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     shelfFolds: { collection: {}, wishlist: {} },
     // Every stack drawn in every deck — `hidden_stacks`' answer for a row never written.
     hiddenStacks: {},
+    // Every deck's search column at its default — `deck_search_width`'s answer for a row never
+    // written.
+    deckSearchWidths: {},
     // The gallery's order, and a `null` rather than a value again: `deck_sort` answers
     // `updated:desc` for a wall nobody has re-ordered, so every deck story that says nothing
     // about the picker is standing in the order the app ships — most recently touched first,
@@ -12183,6 +12193,13 @@ export function readHandlers(db: FakeDb) {
      */
     hidden_stacks: (args: { deckId: number }): number[] =>
       [...(db.hiddenStacks[String(args.deckId)] ?? [])].sort((a, b) => a - b),
+
+    /**
+     * `searchwidth::deck_search_width` — the width one deck's card search column was dragged to,
+     * or `null` for a deck nobody has dragged. A read, so it answers through a sync.
+     */
+    deck_search_width: (args: { deckId: number }): number | null =>
+      db.deckSearchWidths[String(args.deckId)] ?? null,
 
     /**
      * `decksort::deck_sort` — how the deck gallery was last ordered, or the default.
@@ -22627,6 +22644,25 @@ export function writeHandlers(db: FakeDb) {
       if (ids.length === 0) delete next[key];
       else next[key] = ids;
       db.hiddenStacks = next;
+    },
+
+    /**
+     * `searchwidth::set_deck_search_width` — remember one deck's card search column width. The
+     * lock first, like every write here; then the crate's two refusals — an id that is not
+     * positive (`searchwidth::NOT_A_DECK` verbatim) and a width outside its storage band.
+     */
+    set_deck_search_width: (args: { deckId: number; width: number }): void => {
+      refuseIfBusy(db);
+      if (!(args.deckId > 0)) {
+        throw refuse("A card search width is stored for a deck, named by its id.");
+      }
+      if (!Number.isInteger(args.width) || args.width < 100 || args.width > 4000) {
+        throw refuse(
+          `${args.width} is not a card search width this app stores. ` +
+            "Expected a whole number of pixels between 100 and 4000.",
+        );
+      }
+      db.deckSearchWidths = { ...db.deckSearchWidths, [String(args.deckId)]: args.width };
     },
 
     /**

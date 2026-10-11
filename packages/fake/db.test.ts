@@ -12839,7 +12839,10 @@ describe("the busy fault", () => {
     // 138 → 139 on 2026-10-11 with `set_price_watch` (issue #906), a plain `sync::with_write`
     // `app_meta` write; the movers' read, `price_movers`, sits in `readHandlers`. Read from `left`
     // on this tree. Count again after a merge.
-    expect(names).toHaveLength(139);
+    // 139 → 140 on 2026-10-11 with `set_deck_search_width` (issue #932), a plain
+    // `sync::with_write` `app_meta` write; its read half, `deck_search_width`, sits in
+    // `readHandlers`. Read from `left` on this tree. Count again after a merge.
+    expect(names).toHaveLength(140);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -22193,6 +22196,29 @@ describe("shelves", () => {
     const busy = makeDb({ fault: "busy" });
     expect(() =>
       writeHandlers(busy).set_shelf_folds({ page: "collection", changes: { "11": true } }),
+    ).toThrow(/busy/i);
+  });
+
+  it("round-trips deck_search_width through set_deck_search_width, per deck, inside the band", () => {
+    const db = makeDb();
+    const r = readHandlers(db);
+    const w = writeHandlers(db);
+    expect(r.deck_search_width({ deckId: 4 })).toBeNull();
+
+    w.set_deck_search_width({ deckId: 4, width: 512 });
+    w.set_deck_search_width({ deckId: 5, width: 260 });
+    w.set_deck_search_width({ deckId: 4, width: 480 });
+    expect(r.deck_search_width({ deckId: 4 })).toBe(480);
+    expect(r.deck_search_width({ deckId: 5 })).toBe(260);
+    expect(r.deck_search_width({ deckId: 6 })).toBeNull();
+
+    expect(() => w.set_deck_search_width({ deckId: 0, width: 400 })).toThrow(/deck/);
+    expect(() => w.set_deck_search_width({ deckId: 4, width: 99 })).toThrow(/between/);
+    expect(() => w.set_deck_search_width({ deckId: 4, width: 4001 })).toThrow(/between/);
+    expect(() => w.set_deck_search_width({ deckId: 4, width: 300.5 })).toThrow(/between/);
+    expect(r.deck_search_width({ deckId: 4 })).toBe(480);
+    expect(() =>
+      writeHandlers(makeDb({ fault: "busy" })).set_deck_search_width({ deckId: 4, width: 400 }),
     ).toThrow(/busy/i);
   });
 

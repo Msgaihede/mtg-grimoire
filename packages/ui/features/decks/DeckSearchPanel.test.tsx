@@ -67,6 +67,9 @@ const marketplaceFeedStatus = vi.hoisted(() => vi.fn());
  * type-line floor, and the state every case that is not about tags was written against.
  */
 const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
+/** The column's remembered width per deck (issue #932) — `null`, never dragged, by default. */
+const deckSearchWidth = vi.hoisted(() => vi.fn());
+const setDeckSearchWidth = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -96,6 +99,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     getMarketplace,
     marketplaceFeedStatus,
     oracleTagsForPrintings,
+    deckSearchWidth,
+    setDeckSearchWidth,
   },
 }));
 
@@ -107,6 +112,7 @@ import {
   type DeckSearchTab,
 } from "./DeckSearchPanel";
 import { SEARCH_OPEN_KEY } from "@/features/search/useSearchOpen";
+import { DECK_SEARCH_WIDTH_KEY } from "./useDeckSearchWidth";
 import { AUTO_CATEGORY } from "./autoCategory";
 import { useDeck } from "./useDeck";
 import { useAppStore } from "@/lib/store";
@@ -272,6 +278,8 @@ beforeEach(() => {
   prefetchImages.mockReset().mockResolvedValue(undefined);
   searchOpen.mockReset().mockResolvedValue({ deck: true });
   setSearchOpen.mockReset().mockResolvedValue(undefined);
+  deckSearchWidth.mockReset().mockResolvedValue(null);
+  setDeckSearchWidth.mockReset().mockResolvedValue(undefined);
   collectionList.mockReset().mockResolvedValue({ items: [OWNED_BOLT], total: 1 });
   // `deckCardId` is the `deck_cards` row the move landed on — always named by this command,
   // so a mock that omitted it would encode an answer the backend cannot give.
@@ -403,12 +411,16 @@ function panel({
    * last press, so a seeded entry is a *second* deck opened after they made a choice.
    */
   storedTab = undefined as DeckSearchTab | undefined,
+  /** The width this deck's column was last dragged to, seeded for {@link storedOpen}'s reason. */
+  storedWidth = undefined as number | undefined,
 } = {}) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   if (storedOpen !== undefined) client.setQueryData(SEARCH_OPEN_KEY, { deck: storedOpen });
   if (storedTab !== undefined) client.setQueryData(DECK_SEARCH_TAB_KEY, storedTab);
+  if (storedWidth !== undefined)
+    client.setQueryData([...DECK_SEARCH_WIDTH_KEY, deckId], storedWidth);
   let props: Props = {
     categories,
     deckId,
@@ -1185,17 +1197,17 @@ describe("DeckSearchPanel", () => {
 
     const drawn = screen.getByRole("region", { name: "Add cards" });
     expect(drawn.classList.contains("border-l")).toBe(true);
-    expect(
-      screen.getByRole("button", { name: PANEL_TOGGLE }).classList.contains("border"),
-    ).toBe(false);
+    expect(screen.getByRole("button", { name: PANEL_TOGGLE }).classList.contains("border")).toBe(
+      false,
+    );
 
     await userEvent.click(screen.getByRole("button", { name: PANEL_TOGGLE }));
 
     const railed = screen.getByRole("region", { name: "Add cards" });
     expect(railed.classList.contains("border-l")).toBe(true);
-    expect(
-      screen.getByRole("button", { name: PANEL_TOGGLE }).classList.contains("border"),
-    ).toBe(false);
+    expect(screen.getByRole("button", { name: PANEL_TOGGLE }).classList.contains("border")).toBe(
+      false,
+    );
 
     // The sideways title is the whole of what the rail draws besides the chevron, so a pointer
     // dragged down the shut column would otherwise highlight the panel's own name. Found by the
@@ -1836,9 +1848,7 @@ describe("DeckSearchPanel tabs", () => {
     expect(strip.parentElement).toBe(header.parentElement);
     // `compareDocumentPosition` rather than an index: it says "the strip follows the header" in
     // the DOM's own terms, and survives anything else being added to the panel between them.
-    expect(
-      header.compareDocumentPosition(strip) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    expect(header.compareDocumentPosition(strip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   /**
@@ -1974,7 +1984,6 @@ describe("DeckSearchPanel tabs", () => {
   });
 });
 
-
 /**
  * The panel's own width, which the reader owns from its left edge.
  *
@@ -2085,6 +2094,27 @@ describe("DeckSearchPanel resizing", () => {
 
     await userEvent.click(toggle);
     expect(column()).toHaveStyle({ width: "584px" });
+  });
+
+  /**
+   * **And it outlives the deck** (issue #932): the width is remembered per deck, so opening the
+   * deck again draws the column the reader left, and the drag is what writes it.
+   */
+  it("opens at the width this deck's column was last dragged to", async () => {
+    await openPanel({ storedWidth: 520 });
+    expect(column()).toHaveStyle({ width: "520px" });
+  });
+
+  it("remembers a drag for this deck, and a reopened deck draws it", async () => {
+    const view = await openPanel();
+
+    drag(900, 750);
+    expect(column()).toHaveStyle({ width: "534px" });
+    await waitFor(() => expect(setDeckSearchWidth).toHaveBeenCalledWith(4, 534));
+
+    view.remount();
+    await screen.findByRole("button", { name: PANEL_TOGGLE });
+    expect(column()).toHaveStyle({ width: "534px" });
   });
 
   /**

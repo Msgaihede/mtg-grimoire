@@ -64,6 +64,7 @@ import { notedOracleIds } from "./deckNotes";
 import { useDeckNotes } from "./useDeckNotes";
 import { useHiddenStacks } from "./useHiddenStacks";
 import { DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
+import { usePrefetchDeckSearchWidth } from "./useDeckSearchWidth";
 import { DeckStats } from "./DeckStats";
 import { DeckTokensPanel, tokenWallDrawn } from "./DeckTokensPanel";
 import { TokenArtPicker } from "./TokenArtPicker";
@@ -310,6 +311,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // surfaces of one deck can name two marketplaces.
   const { marketplace } = useMarketplace();
   const deck = useDeck(deckId, variant);
+  // The search column's remembered width (issue #932), asked for beside `deck_get` rather than
+  // when the column mounts after it — see `usePrefetchDeckSearchWidth`.
+  usePrefetchDeckSearchWidth(deckId);
   /*
    * **`useAddMode` was read here from 2026-08-23 to 2026-08-25 and is deleted.**
    *
