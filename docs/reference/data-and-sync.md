@@ -550,14 +550,16 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   sentences from here, and says why — `CORPUS_SCHEMA_VERSION` on the rebuildable one, which stood
   at **1** from the split until it grew its first rung on 2026-09-08: **corpus schema
   2**, four prose columns on `combos`, described in
-  [commander-brackets.md](commander-brackets.md). (That sentence said "first and only" and three
+  [commander-brackets.md](commander-brackets.md). (That sentence said "first and only" and five
   more have landed since, all gated on the table's *shape* for the reason
   `schema::migrate_corpus` gives: **corpus schema 3** is `cards.produced_mana` (2026-09-10),
   **corpus schema 4** is `sets.printed_size` (2026-09-15), Scryfall's printed-run denominator,
   written only by the `/sets` fetch — which `sync::sets_need_fetch` now also asks for when the
   table holds rows and not one size, so the column fills at the next sync rather than at the next
-  bulk rotation — and **corpus schema 5** is `cards.type_mask` (2026-09-22), the rung with its
-  own paragraph below.) This page names that rung rather than parking
+  bulk rotation — **corpus schema 5** is `cards.type_mask` (2026-09-22), the rung with its
+  own paragraph below, **corpus schema 6** is `cards.keywords` (2026-09-22), and **corpus
+  schema 7** is `format_specs.validates` with the `unspecified` row it exists for (2026-10-11),
+  described in [decks-storage.md](decks-storage.md).) This page names that rung rather than parking
   the head number beside it, for the reason the next two sentences give about the other half of
   the pair — and note the two scales are **deliberately incomparable**, so nothing may subtract
   one from the other: a user version says what has been done to rows that exist nowhere else, a

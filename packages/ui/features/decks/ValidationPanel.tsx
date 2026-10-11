@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, type RefObject } from "react";
-import { CircleCheck, TriangleAlert } from "lucide-react";
+import { CircleCheck, CircleDashed, TriangleAlert } from "lucide-react";
 import { AnimatePresence, motion, useIsPresent } from "motion/react";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FOCUS } from "@/lib/focus";
@@ -211,13 +211,19 @@ export function ValidationPanel({
   /**
    * The whole sentence, which the button never draws in full.
    *
-   * **It names the format in both states.** The count is visible text again, but the ruleset is
+   * **It names the format in every state.** The count is visible text again, but the ruleset is
    * not — the ledger's own `Format` term says it, and that term is the first thing to go when the
    * column is narrow. So the name is the one place both facts are always true, which is what
    * makes it worth spending on a tooltip that otherwise repeats the words beside it.
+   *
+   * **A format that judges nothing (`validates` false — `unspecified`) is a third state, not a
+   * clean deck.** The engine returns no issues for it, and "No issues" with a green check would be
+   * a verdict about rules the reader never chose — the import's binder decks would all read as
+   * passing. So it says it was not checked, in grey, from the cell and never from the key.
    */
-  const label =
-    count === 0
+  const label = !spec.validates
+    ? `Not checked · ${spec.displayName}`
+    : count === 0
       ? `No issues · ${spec.displayName}`
       : `${count} ${count === 1 ? "issue" : "issues"} · ${spec.displayName}`;
 
@@ -282,7 +288,10 @@ export function ValidationPanel({
             wording, kept deliberately. A warning is "a fact worth a look" rather than a broken
             rule, so a two-tone count would be more precise; it would also be a control with two
             numbers on it, and the panel behind it already tells the two apart per sentence. */}
-        {count === 0 ? (
+        {/* Uncoloured for a format that judges nothing: neither green nor red is true of it. */}
+        {!spec.validates ? (
+          <CircleDashed className="size-3.5 shrink-0" aria-hidden="true" />
+        ) : count === 0 ? (
           <CircleCheck className="size-3.5 shrink-0 text-ok" aria-hidden="true" />
         ) : (
           <TriangleAlert className="size-3.5 shrink-0 text-destructive" aria-hidden="true" />
@@ -292,11 +301,13 @@ export function ValidationPanel({
             rather than two spellings of the same fact — which is what keeps `tight` a *deletion*
             and not a second string that can drift from this one. A clean deck at that width says
             nothing at all and leans on the glyph, because "No" alone is not a readout. */}
-        {count === 0
-          ? !tight && "No issues"
-          : tight
-            ? count
-            : `${count} ${count === 1 ? "issue" : "issues"}`}
+        {!spec.validates
+          ? !tight && "Not checked"
+          : count === 0
+            ? !tight && "No issues"
+            : tight
+              ? count
+              : `${count} ${count === 1 ? "issue" : "issues"}`}
       </button>
 
       {/* The panel's presence, and it is safe here in a way it is not on the editor's four
@@ -432,7 +443,15 @@ export function ValidationFindings({
 
   return (
     <>
-      {issues.length === 0 ? (
+      {/* Before the empty list's sentence, because the engine answers a format that judges
+          nothing with an empty list too — and "passes every rule" is the one thing that is not
+          true of it. Both faces draw this component, so both say so in the same words. */}
+      {!spec.validates ? (
+        <p className="text-dim">
+          {spec.displayName} decks are not checked against any rules. Choose a format for this deck
+          to check it.
+        </p>
+      ) : issues.length === 0 ? (
         <p className="text-dim">
           No issues. This deck passes every {spec.displayName} rule we check.
         </p>

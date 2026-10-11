@@ -10,7 +10,7 @@ const NONE: readonly FormatSpec[] = [];
 /**
  * The format rules, as data, once per session.
  *
- * `format_specs` is seeded by `schema::migrate` and by nothing else: 25 rows written before
+ * `format_specs` is seeded by `schema::migrate` and by nothing else: 26 rows written before
  * the first command can be served, changing only when a migration corrects a cell — which is
  * to say once per app version, never while the app is running. So this is the one query in
  * the app that holds its answer with a flat `staleTime: Infinity`, and the one query root a

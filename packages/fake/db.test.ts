@@ -2920,9 +2920,9 @@ describe("the table as a command table", () => {
 describe("the tables that are not tables", () => {
   it("serves format_specs from the validation fixtures, in sort order", () => {
     const specs = readHandlers(makeDb()).format_specs_list();
-    // 12 of the 25 seeded rows — `validation/fixtures.ts` mirrors the formats the engine tests need,
-    // measured 2026-08-09.
-    expect(specs).toHaveLength(12);
+    // 13 of the 26 seeded rows — `validation/fixtures.ts` mirrors the formats the engine tests need,
+    // 12 measured 2026-08-09 and `unspecified` since corpus schema 7.
+    expect(specs).toHaveLength(13);
     expect(specs.map((s) => s.sortOrder)).toEqual(
       [...specs.map((s) => s.sortOrder)].sort((a, b) => a - b),
     );

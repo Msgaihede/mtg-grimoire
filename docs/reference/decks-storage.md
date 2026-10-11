@@ -392,6 +392,20 @@ preferred_finish`'s nullability one table over.
   `sideboard_max`, `allows_companion`, `max_mana_value` and `enabled_in_picker` as columns. A
   rules change is a **new migration step re-running the seed constant**, never an engine
   branch, and a new format is a row. Never derive one format from another.
+- **`unspecified` is the 26th row, and `validates` is the cell it needed** (corpus schema 7,
+  2026-10-11). A deck whose format nobody has chosen yet — the ManaBox CSV import creates them,
+  and the reader picks the real format later; the "New deck" picker offers it too. The engine
+  judges nothing about it: `validateDeck` and `validateForMarks` return `[]` when
+  `spec.validates` is false, read from the cell and never the key, and the check chip says
+  **Not checked** in grey rather than "No issues" in green. `casual` could not serve: it is the
+  loosest *judged* row and still holds a commander zone and a companion to their rules. The
+  column is `NOT NULL DEFAULT 1`, so the other 25 rows keep 1 with no backfill. **The rung is
+  shape-gated twice** (`validates_is_owed`, then `unspecified_format_is_owed`) because
+  `split::finish` stamps head onto the frozen ladder's output; and **neither `FORMAT_SPECS_SEED`
+  nor `FORMAT_SPECS_SEED_V5` names the column** — the frozen ladder replays both on every fresh
+  install before the column exists — so the row is its own constant, `UNSPECIFIED_FORMAT_SEED`,
+  which `create_corpus_schema` runs too. `deck::DEFAULT_FORMAT` stays `casual`; the UI's key is
+  `UNSPECIFIED_FORMAT` in `FormatSelect.tsx`.
 - **Validation is TypeScript** (spec §3), in `packages/ui/features/decks/validation/`: `engine.ts`
   (size, copy limits, restricted semantics, legality), `singleton.ts` (exact-phrase
   exceptions, re-derived from oracle text and never a card list), `commanders.ts`
