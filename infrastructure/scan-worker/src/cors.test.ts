@@ -66,7 +66,7 @@ describe("a pre-flight", () => {
 
   it("is not answered off the route, whoever asks", async () => {
     const box = inbox();
-    const response = await worker.fetch(asking(APP, "/frames/x.jpg"), box.env);
+    const response = await worker.fetch(asking(APP, "/runs/x.bin"), box.env);
     expect(response.status).toBe(404);
     expect(cors(response)).toEqual([]);
   });
@@ -93,7 +93,7 @@ describe("an answer to a page", () => {
 
   it("names it on every refusal, which is where a page needs it most", async () => {
     // A browser hides a cross-origin response without the header and reports a network error:
-    // a full inbox, a picture too large and a wait would all read as "could not be reached".
+    // a full inbox, a run too large and a wait would all read as "could not be reached".
     const refusals: [number, Response][] = [
       [503, await worker.fetch(scan({ origin: APP }), inbox({ waiting: MAX_PENDING }).env)],
       [429, await worker.fetch(scan({ origin: APP }), inbox({ allow: false }).env)],

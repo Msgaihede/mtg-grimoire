@@ -6,8 +6,9 @@
  * press, and both mount the same dialog, so a sentence written at a call site is a sentence the
  * other face says differently by the next edit. And for its rule: **these are a reader's words**.
  * The scanner's own vocabulary — what it measured, what it was leaning towards and by how much —
- * is `verdictText.ts`'s and never reaches here; a reader is sending *a picture* of *a card*, and
- * `submitText.test.ts` sweeps every string below for the words that would say otherwise.
+ * is `verdictText.ts`'s and never reaches here; a reader is sending *pictures* of *a card* — a
+ * scan is a run of them, and to a reader each one is a picture — and `submitText.test.ts` sweeps
+ * every string below for the words that would say otherwise.
  */
 import { count } from "@/lib/counts";
 
@@ -17,11 +18,55 @@ export const SEND_SCAN = "Send scan…";
 /** The dialog's heading, and so its accessible name. */
 export const SEND_TITLE = "Send this scan";
 
-/** The picture's `alt`: what it is *for*, since what it shows is whatever was in front of the lens. */
-export const PICTURE_ALT = "The picture that will be sent";
+/**
+ * A press too soon: the scanner has not been shown enough yet for there to be a scan to send —
+ * a camera that has only just started, or evidence only just reset. Said over the picture, where
+ * a refused reset is, and it says what to do, which is all there is to do.
+ */
+export const SCAN_TOO_SHORT =
+  "Not enough of the scan yet. Hold the card under the camera a moment and press again.";
 
-/** Over the search box — and its label, so the question and the box's name are one sentence. */
-export const WHICH_CARD = "Which card is in the picture?";
+/** `Picture 7 of 18` — which of the scan's pictures, as the slider says its value. */
+export function pictureOf(n: number, total: number): string {
+  return `Picture ${n} of ${total}`;
+}
+
+/**
+ * A picture's `alt`: which one it is, and what it is *for* — what it shows is whatever was in
+ * front of the lens.
+ */
+export function pictureAlt(n: number, total: number): string {
+  return `${pictureOf(n, total)} that will be sent`;
+}
+
+/** The slider's name. Its value is said by {@link pictureOf}. */
+export const PICTURE = "Picture";
+
+/**
+ * Under the picture: which one is showing, and when it was taken — `Picture 7 of 18 · 1.2 s
+ * before you pressed`, and for the last `Picture 18 of 18 · the moment you pressed`.
+ *
+ * **The last is "the moment you pressed" whatever its clock says**: it is the newest thing the
+ * scanner had been shown at the press, and it is the picture the reader's answer is about — so
+ * it is named for what it is to them. Every other is given in tenths of a second and never as
+ * `0.0`, which would say two pictures were taken at once.
+ */
+export function pictureLine(n: number, total: number, ms: number): string {
+  if (n >= total) return `${pictureOf(n, total)} · the moment you pressed`;
+  const seconds = Math.max(0.1, Math.round(-ms / 100) / 10).toFixed(1);
+  return `${pictureOf(n, total)} · ${seconds} s before you pressed`;
+}
+
+/** The press that walks the pictures once, first to last — and what it says while it does. */
+export const PLAY = "Play";
+export const STOP_PLAYING = "Stop";
+
+/**
+ * Over the search box — and its label, so the question and the box's name are one sentence.
+ * **The last picture**, because a run can begin on one card and end on another, and the answer
+ * names the one under the camera at the press.
+ */
+export const WHICH_CARD = "Which card is in the last picture?";
 
 export const SEARCH_PLACEHOLDER = "Card name…";
 
@@ -104,28 +149,37 @@ export const FINISH_NEEDS_CARD = "Choose the card first.";
 export const ONE_FINISH = "This printing comes in one finish.";
 
 /** Why Send will not send yet — the card first, because the finishes offered depend on it. */
-export const CHOOSE_THE_CARD = "Choose the card in the picture.";
+export const CHOOSE_THE_CARD = "Choose the card in the last picture.";
 export const CHOOSE_ITS_FINISH = "Choose its finish.";
 
 /**
  * What is sent, to whom, and what is not — above the press, always, and never behind one.
  *
- * **Every clause is a promise the engine keeps**: the submission is the picture, the printing's
- * id and finish, what the scanner had answered (`ScannerSubmission` in `lib/ipc.ts`), and the
- * app's version and which app it is, which the engine adds (`Label` in `scanner_submit.rs`);
- * nothing of the collection rides with it. **It lists what is sent rather than saying "nothing
- * else"**, because there is a little else and a reader is owed the list.
+ * **It counts the pictures**, because the count is the thing a reader could not have guessed: a
+ * press on *Send scan…* sends the last couple of seconds the scanner saw, not the one picture on
+ * screen, and every one of them is theirs to look through first.
+ *
+ * **Every clause is a promise the engine keeps**: the submission is the pictures, the
+ * printing's id and finish, what the scanner had answered and how it was set — its mode, and the
+ * sets and dates it was narrowed to (`ScannerSubmission` in `lib/ipc.ts`) — and the app's version
+ * and which app it is, which the engine adds (`Label` in `scanner_submit.rs`); nothing of the
+ * collection rides with it. **It lists what is sent rather
+ * than saying "nothing else"**, because there is a little else and a reader is owed the list.
  *
  * **And it says nothing is _kept_ that says who they are — not that nothing is sent.** A request
  * arrives from an address, as every request does, and the inbox uses it to limit how often one
  * address may send; what it stores has no address, device or account in it. The privacy policy
  * says the same at length. A field added to either struct is a sentence owed here, and there.
  */
-export const DISCLOSURE =
-  "This picture and the card you choose are sent to MTG Grimoire's maker, with what the scanner " +
-  "read, the app's version and which app it is, and kept to improve the scanner. Nothing from " +
-  "your collection is sent, and nothing is kept that says who you are. Check that the picture " +
-  "shows only what you mean to send.";
+export function disclosure(pictures: number): string {
+  return (
+    `These ${pictures} pictures — the last couple of seconds the scanner saw — and the card you ` +
+    "choose are sent to MTG Grimoire's maker, with what the scanner read and how it was set, the " +
+    "app's version and which app it is, and kept to improve the scanner. Nothing from your " +
+    "collection is sent, and nothing is kept that says who you are. Look through them and check " +
+    "they show only what you mean to send."
+  );
+}
 
 export const CANCEL = "Cancel";
 /** The dialog's own press: no ellipsis, because this one opens nothing — it sends. */
@@ -134,9 +188,6 @@ export const SENDING = "Sending…";
 
 export const SENT = "Sent — thank you.";
 export const REFERENCE = "Reference:";
-/** Nothing sent says who sent it, so the reference is the only way back to one picture. */
-export const KEEP_THE_REFERENCE = "Keep the reference if you ever want this picture deleted.";
+/** Nothing kept says who sent it, so the reference is the only way back to one scan. */
+export const KEEP_THE_REFERENCE = "Keep the reference if you ever want these pictures deleted.";
 export const DONE = "Done";
-
-/** A press that got no picture out of the camera — said over it, where a refused reset is. */
-export const PICTURE_NOT_TAKEN = "Couldn't take a picture to send. Try again.";

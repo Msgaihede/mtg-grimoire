@@ -3,9 +3,9 @@ import scannerSubmitRs from "../../../crates/grimoire-core/src/scanner_submit.rs
 import wranglerText from "../wrangler.jsonc?raw";
 import privacyPage from "../../../apps/light/public/privacy.html?raw";
 import { LABEL_HEADER } from "./cors";
-import { MAX_FRAME_BYTES } from "./env";
+import { MAX_LABEL_CHARS, MAX_RUN_BYTES, MAX_RUN_FRAMES, MIN_RUN_FRAMES } from "./env";
 import { LIMIT } from "./index";
-import { INBOX_FULL } from "./submit";
+import { INBOX_FULL, RUN_TYPE } from "./submit";
 
 /**
  * The fence between this Worker's configuration, its code and the engine that asks it.
@@ -58,10 +58,23 @@ describe("wrangler.jsonc, against the engine", () => {
     expect(config.main).toBe("src/index.ts");
   });
 
-  it("caps a picture where the engine caps it", () => {
-    const cap = engine(/pub const MAX_FRAME_BYTES: usize = ([0-9* ]+);/, "MAX_FRAME_BYTES");
-    const bytes = cap.split("*").reduce((product, factor) => product * Number(factor), 1);
-    expect(bytes).toBe(MAX_FRAME_BYTES);
+  it("bounds a run where the engine bounds it: its frames, its bytes and its label", () => {
+    // Each is refused by the engine first, in a reader's sentence; a number that moved on one
+    // side only is a run this Worker turns away with a developer's, or one the app never sends.
+    const figure = (name: string): number =>
+      engine(new RegExp(`pub const ${name}: usize = ([0-9* ]+);`), name)
+        .split("*")
+        .reduce((product, factor) => product * Number(factor), 1);
+    expect(figure("MAX_RUN_BYTES")).toBe(MAX_RUN_BYTES);
+    expect(figure("MIN_RUN_FRAMES")).toBe(MIN_RUN_FRAMES);
+    expect(figure("MAX_RUN_FRAMES")).toBe(MAX_RUN_FRAMES);
+    expect(figure("MAX_LABEL_CHARS")).toBe(MAX_LABEL_CHARS);
+    // Never one picture, on either side, whatever the floor is moved to.
+    expect(MIN_RUN_FRAMES).toBeGreaterThan(1);
+  });
+
+  it("is sent the run the way the engine sends it", () => {
+    expect(scannerSubmitRs).toContain(`.header("content-type", "${RUN_TYPE}")`);
   });
 
   it("reads the label from the header the engine puts it in", () => {

@@ -86,9 +86,10 @@ export const Matching: Story = {
 };
 
 /**
- * No live picture — the camera refused, or not open yet — so the page hands the strip no press
- * and *Send scan…* is not drawn. Reset stays: the evidence it throws away is the scanner's, and
- * that is there whatever the camera is doing.
+ * Nothing the scanner has been shown — the camera refused or not open yet, or recognition
+ * stopped — so the page hands the strip no press and *Send scan…* is not drawn: a scan is the
+ * last couple of seconds of frames, and there are none. Reset stays: the evidence it throws away
+ * is the scanner's, and that is there whatever the camera is doing.
  */
 export const NoPictureToSend: Story = {
   args: { verdict: null, onSend: undefined },

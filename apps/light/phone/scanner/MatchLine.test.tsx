@@ -144,7 +144,7 @@ describe("the phone's status line", () => {
     expect(onSend).toHaveBeenCalledWith(send);
   });
 
-  /** The desktop's rule: no live picture, no press — and Reset is unaffected. */
+  /** The desktop's rule: no run to send, no press — and Reset is unaffected. */
   it("draws no Send scan… where the page hands it no press", () => {
     line(VERDICTS.voting);
     expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();

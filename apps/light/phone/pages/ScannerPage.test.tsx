@@ -1,4 +1,4 @@
-import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -303,6 +303,8 @@ const tab = (name: string) =>
 
 let restoreCanvas = () => {};
 let restoreVideo = () => {};
+/** A test's own canvas, laid over the file's (the Send scan tests number their frames). */
+let restoreFrames = () => {};
 beforeEach(() => {
   installLayout();
   restoreCanvas = shimCanvas();
@@ -313,6 +315,9 @@ afterEach(async () => {
   // `SHOWN`. A parked frame never settles and needs no waiting for.
   cleanup();
   await settled();
+  // Lifted before the file's own: it was laid over that one, and puts that one back.
+  restoreFrames();
+  restoreFrames = () => {};
   restoreCanvas();
   restoreVideo();
   restoreVideo = () => {};
@@ -728,11 +733,18 @@ describe("the phone's Scanner page", () => {
 
 /**
  * ***Send scan…*** on the phone: the desktop page's hook and its dialog, opened from the status
- * line's second press, over the fake world's own `search_cards` and `scanner_submit`.
+ * line's second press, over the fake world's own `search_cards` and `scanner_submit`. **A scan is
+ * a run of the frames the pump sent, never one picture**, so every test here that opens the
+ * dialog first lets the scanner be shown enough to have one.
  */
 describe("sending a scan from the Scanner page", () => {
-  /** The dialog, opened from the press, with the search asked for Lightning Bolt's printings. */
-  async function opened() {
+  /**
+   * The dialog, opened from the press once the scanner has answered a run's worth of frames,
+   * with the search asked for Lightning Bolt's printings.
+   */
+  async function opened(cards: { sent: ScannerOptions[] }) {
+    // Well past the fewest frames that are a scan, whatever was on the wire at the press.
+    await waitFor(() => expect(cards.sent.length).toBeGreaterThan(10), SETTLE);
     const opener = await screen.findByRole("button", { name: "Send scan…" }, SETTLE);
     await userEvent.click(opener);
     const dialog = await screen.findByRole("dialog", { name: "Send this scan" }, SETTLE);
@@ -742,6 +754,33 @@ describe("sending a scan from the Scanner page", () => {
     await userEvent.type(box, "Lightning Bolt");
     return { opener, dialog };
   }
+
+  /**
+   * A canvas whose every encode is a JPEG of its own — `ff d8` and then the encode's number in
+   * two bytes — where the file's shim hands every frame the same three: a run is several frames,
+   * and a test of one has to be able to tell them apart and say what order they came in. Two
+   * bytes, because a pump answered every three milliseconds is past 255 frames within a second.
+   */
+  function numberedCanvas(): () => void {
+    let n = 0;
+    return shim(HTMLCanvasElement.prototype, {
+      toBlob: {
+        value: (cb: (blob: Blob) => void) => {
+          n += 1;
+          cb(new Blob([new Uint8Array([0xff, 0xd8, n >> 8, n & 0xff])]));
+        },
+      },
+    });
+  }
+  /** Which encode a frame of a run was, read back out of the text it was sent as. */
+  function numberOf(jpeg: string): number {
+    const bytes = atob(jpeg);
+    return (bytes.charCodeAt(2) << 8) | bytes.charCodeAt(3);
+  }
+
+  /** The picture of the run that is showing — by its name, since a printing's tile is one too. */
+  const picture = (dialog: HTMLElement) =>
+    within(dialog).getByRole("img", { name: /^Picture \d+ of \d+ that will be sent$/ });
 
   it("offers no Send scan… without a live picture", async () => {
     noCamera("NotAllowedError");
@@ -754,14 +793,16 @@ describe("sending a scan from the Scanner page", () => {
     expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
   });
 
-  it("sends the picture under the printing and finish the reader chooses, and shows the reference", async () => {
+  it("sends the run under the printing and finish the reader chooses, and shows the reference", async () => {
     camera();
     restoreVideo = shimVideo();
-    const sent: { frame: string; submission: ScannerSubmission }[] = [];
+    restoreFrames = numberedCanvas();
+    const cards = pile(1, "looking");
+    const sent: { submission: ScannerSubmission }[] = [];
     const { seen } = mount({
       over: (own) => ({
-        scanner_frame: pile(1, "looking").frame,
-        scanner_submit: (args: { frame: string; submission: ScannerSubmission }) => {
+        scanner_frame: cards.frame,
+        scanner_submit: (args: { submission: ScannerSubmission }) => {
           sent.push(args);
           return (own.scanner_submit as (a: unknown) => unknown)(args);
         },
@@ -769,15 +810,24 @@ describe("sending a scan from the Scanner page", () => {
     });
     await waitFor(() => expect(trayRows()).toHaveLength(1), SETTLE);
 
-    const { opener, dialog } = await opened();
-    // The canvas shim's three bytes, as the text that is drawn and sent.
-    expect(
-      within(dialog).getByRole("img", { name: "The picture that will be sent" }),
-    ).toHaveAttribute("src", "data:image/jpeg;base64,AQID");
+    const { opener, dialog } = await opened(cards);
+    // It rests on the last frame of the run, drawn out of the text that will be sent, and says
+    // how many there are: every one of them is the reader's to look through.
+    const slider = within(dialog).getByRole("slider", { name: "Picture" });
+    const pictures = Number(slider.getAttribute("max"));
+    expect(pictures).toBeGreaterThanOrEqual(5);
+    expect(pictures).toBeLessThanOrEqual(20);
+    expect(picture(dialog)).toHaveAttribute(
+      "alt",
+      `Picture ${pictures} of ${pictures} that will be sent`,
+    );
+    const shown = picture(dialog).getAttribute("src") ?? "";
+    expect(shown).toMatch(/^data:image\/jpeg;base64,/);
+    expect(dialog).toHaveTextContent(`These ${pictures} pictures — the last couple of seconds`);
 
     const send = within(dialog).getByRole("button", { name: "Send scan" });
     expect(send).toHaveAttribute("aria-disabled", "true");
-    expect(send).toHaveAccessibleDescription("Choose the card in the picture.");
+    expect(send).toHaveAccessibleDescription("Choose the card in the last picture.");
 
     // Three finishes, so the printing alone is not an answer.
     await userEvent.click(
@@ -794,17 +844,46 @@ describe("sending a scan from the Scanner page", () => {
 
     expect(await within(dialog).findByText("Sent — thank you.", {}, SETTLE)).toBeInTheDocument();
     expect(dialog).toHaveTextContent(`Reference: ${FAKE_SCAN_ID}`);
+    // One call, of one argument: the submission, with the whole run inside it.
     expect(sent).toHaveLength(1);
-    expect(sent[0].frame).toBe("AQID");
-    expect(sent[0].submission).toMatchObject({
+    expect(Object.keys(sent[0])).toEqual(["submission"]);
+    const { submission } = sent[0];
+    expect(submission).toMatchObject({
       cardId: printing("sta", "105").id,
       finish: "etched",
       mode: "fast",
+      filters: DEFAULT_SCANNER_PREFS.filters,
     });
     // Every key the engine's struct has, each present even where it is `null`.
-    expect(Object.keys(sent[0].submission).sort()).toEqual(
-      ["bundle", "cardId", "confidence", "distance", "finish", "mode", "reported"].sort(),
+    expect(Object.keys(submission).sort()).toEqual(
+      [
+        "bundle",
+        "cardId",
+        "confidence",
+        "distance",
+        "filters",
+        "finish",
+        "mode",
+        "reported",
+        "run",
+      ].sort(),
     );
+
+    // **The run is frames the pump really sent**: as many as the dialog counted, consecutive
+    // encodes of the camera's picture in the order they were made, the last of them the one the
+    // dialog rested on — and each counted back from the press, none after it.
+    expect(submission.run).toHaveLength(pictures);
+    const encodes = submission.run.map((frame) => numberOf(frame.jpeg));
+    expect(encodes).toEqual(Array.from({ length: pictures }, (_, n) => encodes[0] + n));
+    expect(`data:image/jpeg;base64,${submission.run[pictures - 1].jpeg}`).toBe(shown);
+    const ms = submission.run.map((frame) => frame.ms);
+    expect([...ms].sort((a, b) => a - b)).toEqual(ms);
+    expect(ms.every((one) => Number.isInteger(one) && one <= 0)).toBe(true);
+    for (const frame of submission.run) {
+      expect(Object.keys(frame).sort()).toEqual(
+        ["confidence", "decided", "detail", "distance", "jpeg", "lock", "ms", "ok"].sort(),
+      );
+    }
 
     await userEvent.click(within(dialog).getByRole("button", { name: "Done" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull(), SETTLE);
@@ -817,12 +896,13 @@ describe("sending a scan from the Scanner page", () => {
   it("says the inbox's own sentence when it is full, and keeps the dialog and the answers", async () => {
     camera();
     restoreVideo = shimVideo();
+    const cards = pile(0, "looking");
     mount({
       fake: { seed: "starter", fault: "scanInboxFull" },
-      over: () => ({ scanner_frame: pile(0, "looking").frame }),
+      over: () => ({ scanner_frame: cards.frame }),
     });
 
-    const { dialog } = await opened();
+    const { dialog } = await opened(cards);
     // Alpha's Bolt was printed one way, so its finish is chosen for the reader.
     const lea = await within(dialog).findByRole("radio", { name: "Lightning Bolt — LEA 161" }, SETTLE);
     await userEvent.click(lea);
@@ -846,11 +926,102 @@ describe("sending a scan from the Scanner page", () => {
   it("hands the caret back to the press when the dialog is dismissed", async () => {
     camera();
     restoreVideo = shimVideo();
-    mount({ over: () => ({ scanner_frame: pile(0, "looking").frame }) });
-    const { opener } = await opened();
+    const cards = pile(0, "looking");
+    mount({ over: () => ({ scanner_frame: cards.frame }) });
+    const { opener } = await opened(cards);
     await userEvent.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull(), SETTLE);
     expect(opener).toHaveFocus();
+  });
+
+  /**
+   * The reader is asked to look through every picture, so every one is a place the slider stops
+   * — at a finger's size, from the shared floor.
+   */
+  it("walks every picture of the run on the dialog's slider", async () => {
+    camera();
+    restoreVideo = shimVideo();
+    restoreFrames = numberedCanvas();
+    const cards = pile(0, "looking");
+    mount({ over: () => ({ scanner_frame: cards.frame }) });
+    const { dialog } = await opened(cards);
+
+    const slider = within(dialog).getByRole("slider", { name: "Picture" });
+    expect(slider.classList.contains("coarse:min-h-[var(--target-min)]")).toBe(true);
+    const pictures = Number(slider.getAttribute("max"));
+    expect(pictures).toBeGreaterThanOrEqual(5);
+    const drawn = new Set<string>();
+    for (let n = 1; n <= pictures; n++) {
+      fireEvent.change(slider, { target: { value: String(n) } });
+      expect(picture(dialog)).toHaveAttribute(
+        "alt",
+        `Picture ${n} of ${pictures} that will be sent`,
+      );
+      drawn.add(picture(dialog).getAttribute("src") ?? "");
+    }
+    // As many pictures as stops: each one drew a frame of its own.
+    expect(drawn.size).toBe(pictures);
+  });
+
+  /**
+   * **No press while recognition is stopped**: a scan is the frames the scanner was given, and
+   * stopped it is given none. The stopped sentence over the picture is the whole of what is said.
+   */
+  it("draws no Send scan… while recognition is stopped, and brings it back with the scanner", async () => {
+    camera();
+    restoreVideo = shimVideo();
+    const cards = pile(0, "looking");
+    mount({ over: () => ({ scanner_frame: cards.frame }) });
+    await waitFor(() => expect(cards.sent.length).toBeGreaterThan(2), SETTLE);
+    expect(await screen.findByRole("button", { name: "Send scan…" }, SETTLE)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Stop scanning" }));
+    expect(
+      await screen.findByText("Scanning stopped. Press Start scanning to resume."),
+    ).toBeInTheDocument();
+    // The camera is still live; the press is gone all the same, and Reset is not.
+    expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Reset evidence" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Start scanning" }));
+    expect(await screen.findByRole("button", { name: "Send scan…" }, SETTLE)).toBeInTheDocument();
+  });
+
+  /**
+   * **All of a run or none of it.** A press before the scanner has been shown enough — here it
+   * has answered one frame — opens no dialog and sends no single picture in its place: it says
+   * what to do, over the camera, in words.
+   */
+  it("says so over the picture when there is not enough of a scan yet, and opens nothing", async () => {
+    camera();
+    restoreVideo = shimVideo();
+    const sent: unknown[] = [];
+    const { view } = mount({
+      over: () => ({
+        // One frame answered, and every one after it parked: a run of one.
+        scanner_frame: frames(VERDICTS.voting),
+        scanner_submit: (args: unknown) => {
+          sent.push(args);
+          return { id: FAKE_SCAN_ID };
+        },
+      }),
+    });
+    await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"), SETTLE);
+
+    await userEvent.click(screen.getByRole("button", { name: "Send scan…" }));
+    const box = view.container.querySelector<HTMLElement>("[data-camera-box]");
+    expect(within(box as HTMLElement).getByRole("status")).toHaveTextContent(
+      "Not enough of the scan yet. Hold the card under the camera a moment and press again.",
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(sent).toEqual([]);
+
+    // Stopped, the press is gone and its sentence with it: the line is the stopped sentence's.
+    await userEvent.click(screen.getByRole("button", { name: "Stop scanning" }));
+    expect(within(box as HTMLElement).getByRole("status")).toHaveTextContent(
+      "Scanning stopped. Press Start scanning to resume.",
+    );
+    expect(screen.queryByText(/Not enough of the scan yet/)).toBeNull();
   });
 });
 

@@ -52,7 +52,8 @@ export interface PrintingPickerProps {
 }
 
 /**
- * *Which card is in the picture?* — a search box, and every printing it finds as a card to press.
+ * *Which card is in the last picture?* — a search box, and every printing it finds as a card to
+ * press.
  *
  * `DeckCoverPicker`'s shape, asked a different question. That one offers *pictures*, so its tiles
  * are art crops; this one asks for **the exact printing**, which is told apart by everything a

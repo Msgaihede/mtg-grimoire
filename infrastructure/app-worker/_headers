@@ -54,7 +54,7 @@
 #                                               (`infrastructure/scan-worker/`), asked only when a
 #                                               reader presses the card scanner's Send. It answers
 #                                               this origin by name too (its `src/cors.ts`), and
-#                                               its pre-flight, because a picture's type and the
+#                                               its pre-flight, because the body's type and the
 #                                               label's header are neither on a browser's safelist.
 #                NOT manapool.com: it sends no Access-Control-Allow-Origin, so a page cannot read
 #                it whatever this says.

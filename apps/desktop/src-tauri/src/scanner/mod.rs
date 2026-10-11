@@ -313,22 +313,22 @@ pub async fn scanner_assets_fetch(
     grimoire_core::scanner_assets::fetch(&state.core).await
 }
 
-/// Send one camera picture, and the card a reader says it shows, to the scan inbox — the core's
-/// `scanner_submit::submit`, which has the rules: what is sent, what is refused before any
-/// request, and that nothing in it says who sent it. **The one command that sends a picture off
-/// this computer, and only a reader's press on Send calls it.**
+/// Send one scan — the last couple of seconds of camera frames, and the card a reader says they
+/// show — to the scan inbox: the core's `scanner_submit::submit`, which has the rules: what is
+/// sent, what is refused before any request (a single picture among it), and that nothing in it
+/// says who sent it. **The one command that sends a picture off this computer, and only a
+/// reader's press on Send calls it.**
 ///
-/// **No lease, and no webview**, for [`scanner_assets_fetch`]'s reason. The picture is base64
-/// in `frame`, an ordinary argument, so this wrapper takes no raw request and is on no list in
-/// `command_table` but the table's own.
+/// **No lease, and no webview**, for [`scanner_assets_fetch`]'s reason. The pictures are base64
+/// inside `submission`, an ordinary argument, so this wrapper takes no raw request and is on no
+/// list in `command_table` but the table's own.
 #[tauri::command]
 pub async fn scanner_submit(
     state: tauri::State<'_, Arc<AppState>>,
-    frame: String,
     submission: Submission,
 ) -> Result<grimoire_core::scanner_submit::Submitted, String> {
     let state = state.inner().clone();
-    grimoire_core::scanner_submit::submit(&state.core, frame, submission).await
+    grimoire_core::scanner_submit::submit(&state.core, submission).await
 }
 
 #[cfg(test)]

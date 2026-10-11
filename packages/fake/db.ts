@@ -260,6 +260,7 @@ import type {
   ScannerAssetsOwed,
   ScannerAssetsProgress,
   ScannerCaptured,
+  ScannerSubmission,
   ScannerSubmitted,
   ScannerPrefs,
   ScannerStatus,
@@ -1569,10 +1570,10 @@ export interface FakeUpdate {
  * state, and a refusal no story can reach would be one more sentence to keep in step with
  * `scanner.rs` for nothing.
  *
- * **`scanInboxFull`** is the scan inbox turning a picture away because it holds as many as it
- * may until its maker has read them: `scanner_submit` refuses in the engine's sentence. The one
+ * **`scanInboxFull`** is the scan inbox turning a scan away because it holds as many as it may
+ * until its maker has read them: `scanner_submit` refuses in the engine's sentence. The one
  * refusal of that command a story cannot reach by what it sends — every other is about the
- * picture or the card — and the one a reader is most likely to meet.
+ * pictures or the card — and the one a reader is most likely to meet.
  *
  * **`shareLapsed`** is a shared collection link that has gone dark, and it is `pairingReadError`'s
  * split one feature over: **the one refusal in the viewer's flow a reader cannot produce by
@@ -24664,6 +24665,17 @@ export const SCAN_INBOX_FULL = "The scan inbox is full for now. Thank you — tr
 /** The reference every submission over the fake is answered with — an id in the inbox's shape. */
 export const FAKE_SCAN_ID = "20261011T101500Z-0123456789abcdef";
 
+/**
+ * `scanner_submit.rs`' `TOO_SHORT` and `MIN_RUN_FRAMES`, verbatim — `scannerSubmit.test.ts` reads
+ * the Rust to hold both. **A scan is a run of frames, never one picture**: the engine refuses a
+ * run shorter than this before any request, and the fake keeps that one refusal of its own
+ * rather than take whatever it is handed, so a page that sent a single still would be told so in
+ * the workbench and in the phone's smoke run, and not first by a real inbox.
+ */
+export const SCAN_TOO_SHORT =
+  "Not enough of the scan yet. Hold the card under the camera a moment and press again.";
+export const SCAN_MIN_FRAMES = 5;
+
 /** A copy through JSON, which is what `app_meta` stores — so a story holding the object it was
  *  handed cannot reach back into the row, and a row cannot hold anything JSON would not. */
 function throughJson<T>(value: T): T {
@@ -24726,10 +24738,13 @@ export function scannerHandlers(db: FakeDb) {
     /** `scanner::scanner_capture`. */
     scanner_capture: (): ScannerCaptured => ({ saved: "live-1757300000.jpg" }),
     /**
-     * `scanner_submit::submit` — taken, whatever it was handed: the fake has no inbox and sends
-     * nothing anywhere. Under `scanInboxFull` it refuses as the engine does for a full one.
+     * `scanner_submit::submit` — a run of frames is taken, whatever is in it: the fake has no
+     * inbox and sends nothing anywhere. **A run too short to be one is refused first, as the
+     * engine refuses it** ({@link SCAN_TOO_SHORT}): one picture is not a scan on any host, this
+     * one included. Under `scanInboxFull` it refuses as the engine does for a full inbox.
      */
-    scanner_submit: (): ScannerSubmitted => {
+    scanner_submit: (args: { submission: ScannerSubmission }): ScannerSubmitted => {
+      if (args.submission.run.length < SCAN_MIN_FRAMES) throw refuse(SCAN_TOO_SHORT);
       if (db.fault === "scanInboxFull") throw refuse(SCAN_INBOX_FULL);
       return { id: FAKE_SCAN_ID };
     },

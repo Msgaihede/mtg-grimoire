@@ -219,30 +219,35 @@ function LiveScanner() {
   const [optionsOpen, setOptionsOpen] = useState(false);
   const optionsOpener = useRef<HTMLElement | null>(null);
 
-  // *Send scan…*: the picture on screen to the scanner's maker, under the card a reader says it
-  // shows — the desktop page's hook and its dialog, both shared. The verdict is the one the status
-  // line is drawn from, `null` while recognition is stopped: the loop keeps its last answer across
-  // a Stop, and it may be about a card that has since been swapped.
+  // *Send scan…*: the last couple of seconds the scanner was shown, to its maker, under the card
+  // a reader says the last of them shows — the desktop page's hook and its dialog, both shared.
+  // **A run, never one picture**: the frames are the pump's own (`loop.recent`), so the press
+  // grabs nothing. **Offered only while there can be one** — a camera live and recognition
+  // running: stopped, the pump has let its frames go and is sending none, and no press is drawn.
+  const sendable = camera.kind === "live" && scanning;
   const submit = useScanSubmit({
-    grab: loop.grab,
-    verdict: scanning ? loop.verdict : null,
+    recent: loop.recent,
+    verdict: loop.verdict,
     mode: prefs.mode,
     status,
+    filters: prefs.filters,
+    ready: sendable,
   });
 
   // What the picture has to say: that recognition is stopped, or the loop's failures, a refused
-  // reset and a Send scan that got no picture — a busy database, a frame the host turned away.
-  // The detector's own refusal (no card in this frame) is a developer's sentence and is not said
-  // here. Nothing on a host with no session, where the box holds the engine's sentence instead.
+  // reset and a Send scan pressed too soon — a busy database, a frame the host turned away, a
+  // camera that has only just started. The detector's own refusal (no card in this frame) is a
+  // developer's sentence and is not said here. Nothing on a host with no session, where the box
+  // holds the engine's sentence instead.
   //
-  // **A Send scan that got no picture is said while recognition is stopped too**, in place of
-  // the stopped sentence until the next press: the press is offered there — the camera is live —
-  // and one that opened nothing and said nothing is a button that looks broken.
+  // **A Send scan that opened nothing is never silent** — one that said nothing is a button that
+  // looks broken. Stopped, the line is the stopped sentence's alone: the press is not drawn
+  // there, and the hook drops its sentence with the press.
   const cameraNote =
     unavailable !== null
       ? null
       : !scanning
-        ? (submit.error ?? SCANNING_STOPPED)
+        ? SCANNING_STOPPED
         : (loop.error ?? resetError ?? submit.error);
 
   return (
@@ -293,9 +298,9 @@ function LiveScanner() {
                 hasBundle={hasBundle}
                 lastResolution={loop.lastResolution}
                 onReset={onReset}
-                // Offered only over a picture, as on the desktop: with no camera live there is
-                // nothing to grab, and the box above is already saying why.
-                onSend={camera.kind === "live" ? submit.open : undefined}
+                // Offered only while there can be a run to send, as on the desktop — see
+                // `sendable`. With no camera live, or stopped, the box above is saying why not.
+                onSend={sendable ? submit.open : undefined}
               />
             )}
           </div>
@@ -389,11 +394,7 @@ function LiveScanner() {
 
       {/* The shared dialog, mounted bare: its controls take a finger's size from the shared
           recipes, so it needs no floor reached in from here as the desktop's New deck does. */}
-      <SubmitScanDialog
-        still={submit.still}
-        onDismiss={submit.onDismiss}
-        onClose={submit.onClose}
-      />
+      <SubmitScanDialog run={submit.run} onDismiss={submit.onDismiss} onClose={submit.onClose} />
 
       <div className={CREATE_DECK_FLOOR}>
         <CreateDeckDialog

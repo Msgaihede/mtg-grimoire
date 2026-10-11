@@ -20,7 +20,7 @@
   // whose write route a stranger can reach, so it is bound to the least there is: one bucket and
   // one limiter. `src/env.ts` is the argument.
 
-  // The inbox: `frames/{id}.jpg` and `labels/{id}.json`, two objects a submission. R2 for the
+  // The inbox: `runs/{id}.bin` and `labels/{id}.json`, two objects a submission. R2 for the
   // share Worker's reasons — 10 GB stored and a million writes a month on the free plan — and a
   // bucket of its own rather than a prefix in `mtg-grimoire-shares`, so that nothing the share
   // Worker can be made to do reaches a scan and emptying this one can never touch a binder.

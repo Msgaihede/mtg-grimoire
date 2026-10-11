@@ -1,16 +1,25 @@
-//! **Sending one scan**: a camera picture and the card a reader says it shows, to the scan inbox
-//! (`infrastructure/scan-worker/`), where they are kept to improve the scanner (issue #776).
+//! **Sending one scan**: the last couple of seconds of camera frames and the card a reader says
+//! they show, to the scan inbox (`infrastructure/scan-worker/`), where they are kept to improve
+//! the scanner (issue #776).
 //!
 //! **The one thing in this crate that sends a picture off the device**, and it has one caller:
-//! a reader's press on Send, with that picture on the screen and the printing and the finish
+//! a reader's press on Send, with those pictures on the screen and the printing and the finish
 //! chosen by hand. Nothing here runs on a launch, on a schedule or on a frame — the scanner
 //! itself still examines every picture where it was taken and keeps none.
 //!
-//! **What is sent is the picture and a [`Label`], and the label says nothing of who sent it**:
-//! the printing and its finish, what the scanner had read, the app's version and what kind of
-//! host it is on. No device id, no group, no collection. The privacy policy
-//! (`apps/light/public/privacy.html`) promises exactly that, so a field added to [`Label`] is a
-//! sentence owed there.
+//! **A scan is a run of frames and never one picture.** The scanner decides over a run — a lock
+//! that settles, evidence that pools, a vote that crosses a bar — so a single frame cannot say
+//! what it did, and a still taken for the purpose is a picture the scanner never judged. What is
+//! sent is the frames it *was* given, byte for byte and in order, each beside what it answered
+//! for it: put back through the scanner, that is the scan again. So [`pictures`] takes a whole
+//! run or refuses: one too short to be a run is turned away in a sentence, and nothing here
+//! trims one to fit — what a reader was shown is what is sent, or nothing is.
+//!
+//! **What is sent is the run and a [`Label`], and the label says nothing of who sent it**: the
+//! printing and its finish, what the scanner had read, what it was narrowed to, the app's
+//! version and what kind of host it is on. No device id, no group, no collection. The privacy
+//! policy (`apps/light/public/privacy.html`) promises exactly that, so a field added to
+//! [`Label`] is a sentence owed there.
 //!
 //! **The page names the card by id and nothing else about it.** [`label_for`] reads the
 //! printing's name, set, number and language out of this install's own card data, and refuses a
@@ -18,7 +27,7 @@
 //! name, and "foil" beside a card that has no foil never reaches the inbox. The label is the
 //! whole value of a submission; a wrong one is worse than none.
 //!
-//! **A `task` in the table, and its picture is base64 in its arguments** — not a `bytes` entry
+//! **A `task` in the table, and its pictures are base64 in its arguments** — not a `bytes` entry
 //! like the scanner's frame. A frame is nine a second and is answered by this engine; this is
 //! one call a press, awaited across a network, and `bytes` runs its body on the blocking pool
 //! where nothing can be awaited. Four thirds of two megabytes, once, is the price.
@@ -26,7 +35,7 @@
 //! **Every host sends it the same way**, a page included: a `fetch` from the engine's Worker,
 //! which the inbox answers for the web app's origin by name
 //! (`infrastructure/scan-worker/src/cors.ts`) and the hosting policy's `connect-src` allows
-//! (`infrastructure/app-worker/_headers`). The picture's type and the label's header each cost a
+//! (`infrastructure/app-worker/_headers`). The body's type and the label's header each cost a
 //! browser a pre-flight, which that Worker answers.
 
 use std::fmt::Write as _;
@@ -34,6 +43,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine as _;
+use card_scanner::filters::ScanFilters;
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::platform::http;
@@ -55,19 +65,42 @@ pub const SCAN_BASE: &str = "https://mtg-grimoire-scans.denmark-east.workers.dev
 /// server and how a developer asks `wrangler dev --local`.
 pub const SCAN_URL: &str = "scan_url";
 
-/// Two megabytes a picture — **`infrastructure/scan-worker/src/env.ts`'s `MAX_FRAME_BYTES`**,
-/// which a test there reads this line to hold. Refused here first, so a reader on a slow link
-/// is told in a sentence rather than after an upload.
-pub const MAX_FRAME_BYTES: usize = 2 * 1024 * 1024;
+/// The fewest frames that are a run. Under this the scanner had not been looking long enough
+/// for the frames to say anything a single picture would not — and a single picture is what
+/// this never sends. `infrastructure/scan-worker/src/env.ts`'s `MIN_RUN_FRAMES`, which a test
+/// there reads this line to hold, and the page's `RUN_MIN_FRAMES` (`ipc.test.ts`).
+pub const MIN_RUN_FRAMES: usize = 5;
+
+/// The most frames in a run: about two seconds at the pump's nine a second. `env.ts`'s
+/// `MAX_RUN_FRAMES` and the page's `RUN_MAX_FRAMES`, held the same way.
+pub const MAX_RUN_FRAMES: usize = 20;
+
+/// Two megabytes a run, every frame of it together — **`env.ts`'s `MAX_RUN_BYTES`**, held the
+/// same way. Refused here first, so a reader on a slow link is told in a sentence rather than
+/// after an upload. The page keeps its run under less than this (`RUN_MAX_BYTES`), so the
+/// refusal is a backstop and not something a reader meets.
+pub const MAX_RUN_BYTES: usize = 2 * 1024 * 1024;
 
 /// The header the label rides in — `cors.ts`'s `LABEL_HEADER`, which the same test holds.
 pub const LABEL_HEADER: &str = "x-scan-label";
+
+/// The label's header, in characters — `env.ts`'s `MAX_LABEL_CHARS`, held the same way. A real
+/// one is some four thousand: twenty frames' figures are most of it.
+pub const MAX_LABEL_CHARS: usize = 8192;
 
 /// The label's shape. A second shape is a second number, and an inbox deployed for it.
 pub const LABEL_VERSION: u8 = 1;
 
 /// The finishes a card comes in, as `cards.finishes` and the page both spell them.
 const FINISHES: [&str; 3] = ["nonfoil", "foil", "etched"];
+
+/// How many set codes a label's filters carry. Past this the list is cut, which is the one
+/// place a label says less than was so — a reader narrowed to more sets than this is not a
+/// thing the popover makes easy, and the header has a size.
+const MAX_FILTER_SETS: usize = 64;
+
+/// The furthest back a frame's `ms` is believed: a minute, where a run is two seconds.
+const MAX_AGE_MS: f64 = 60_000.0;
 
 /// The inbox's word for "full", `submit.ts`'s `INBOX_FULL` — matched on the code, never on the
 /// sentence beside it.
@@ -79,24 +112,30 @@ const INBOX_FULL_CODE: &str = "inbox_full";
 const RATE_LIMITED_CODE: &str = "rate_limited";
 
 pub const NO_SUCH_PRINTING: &str = "That printing is not in this device's card data.";
-pub const NOT_A_PICTURE: &str = "That picture could not be read.";
-pub const TOO_LARGE: &str = "That picture is too large to send.";
+pub const NOT_A_PICTURE: &str = "One of those pictures could not be read.";
+pub const TOO_LARGE: &str = "That scan is too large to send.";
+/// The page says this first and in these words (`submitText.ts`), before it opens a dialog.
+pub const TOO_SHORT: &str =
+    "Not enough of the scan yet. Hold the card under the camera a moment and press again.";
 pub const INBOX_FULL: &str = "The scan inbox is full for now. Thank you — try again in a few days.";
 pub const SLOW_DOWN: &str = "Too many scans were sent at once. Wait a minute and send it again.";
 pub const UNREACHABLE: &str = "The scan could not be sent: the server could not be reached.";
 
-/// What a reader says a picture shows, and what the scanner had said — the page's half of a
+/// What a reader says a scan shows, and what the scanner had said — the page's half of a
 /// [`Label`], mirrored as `ScannerSubmission` in `packages/ui/lib/ipc.ts`.
 ///
 /// The four after `finish` are the scanner's side at the press, each absent when it had none.
-/// They are taken as the page gives them and tidied in [`label_for`]: nothing here is a reason
-/// to turn a submission away, because a picture the scanner made nothing of is as much worth
-/// having as one it named wrongly.
+/// They are taken as the page gives them and tidied in [`label_for`]: nothing in them is a
+/// reason to turn a submission away, because a run the scanner made nothing of is as much
+/// worth having as one it named wrongly.
 ///
 /// **`reported` is the printing the scanner had decided on, and absent while it had decided
 /// nothing** — never the card it was only leaning towards. The tracker's leader is keyed by
 /// what its evidence pooled on, which is an oracle id: sent here it would be an id of another
 /// kind beside `card_id`, and "the scanner got it right" could never be read off the two.
+///
+/// **`card_id` and `finish` name the card in the last frame**, the one under the camera at the
+/// press. `filters` is the scanner crate's own struct, snake case inside as it is everywhere.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Submission {
@@ -107,6 +146,28 @@ pub struct Submission {
     pub confidence: Option<f64>,
     pub distance: Option<u32>,
     pub bundle: Option<u32>,
+    pub filters: ScanFilters,
+    pub run: Vec<SubmissionFrame>,
+}
+
+/// One frame of a run: the picture the scanner was given, and what it answered for it —
+/// `ScannerSubmissionFrame` in `ipc.ts`.
+///
+/// **`jpeg` is the pump's own frame**, in base64: the bytes `scanner_frame` judged, not a
+/// picture made for sending. `ms` is when it was taken, counted back from the press — zero or
+/// negative, and a number of any spelling, since it is a difference of two of the page's
+/// clock readings.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmissionFrame {
+    pub jpeg: String,
+    pub ms: f64,
+    pub ok: bool,
+    pub lock: Option<String>,
+    pub confidence: Option<f64>,
+    pub distance: Option<u32>,
+    pub decided: Option<String>,
+    pub detail: bool,
 }
 
 /// A scan the inbox took, and the reference it filed it under — `ScannerSubmitted` in `ipc.ts`.
@@ -117,9 +178,13 @@ pub struct Submitted {
     pub id: String,
 }
 
-/// What the inbox stores beside a picture — `Label` in `infrastructure/scan-worker/src/label.ts`,
+/// What the inbox stores beside a run — `Label` in `infrastructure/scan-worker/src/label.ts`,
 /// which checks every field and stores only what it checked. `label.test.ts` there reads these
-/// five structs' fields and fails when the two part.
+/// six structs' fields and fails when the two part.
+///
+/// **`run` is one entry a frame, oldest first, and it is the index of the body**: the frames
+/// are sent end to end with nothing between them, and each entry's `bytes` is where the next
+/// one starts.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Label {
     pub v: u8,
@@ -127,7 +192,7 @@ pub struct Label {
     pub finish: String,
     pub scanner: LabelScanner,
     pub app: LabelApp,
-    pub frame: LabelFrame,
+    pub run: Vec<LabelFrame>,
 }
 
 /// The printing, by Scryfall's id and by what is printed on it.
@@ -140,8 +205,8 @@ pub struct LabelCard {
     pub name: String,
 }
 
-/// The scanner's side. An absent figure is `null` on the wire and never left out: the inbox
-/// tells "it had none" from "this build does not send it" by the key being there.
+/// The scanner's side at the press. An absent figure is `null` on the wire and never left out:
+/// the inbox tells "it had none" from "this build does not send it" by the key being there.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LabelScanner {
     pub reported: Option<String>,
@@ -149,6 +214,16 @@ pub struct LabelScanner {
     pub confidence: Option<f64>,
     pub distance: Option<u32>,
     pub bundle: Option<u32>,
+    pub filters: LabelFilters,
+}
+
+/// What the scanner was narrowed to: it decides which printings it could have answered with,
+/// so a run replayed without it is another scan. Empty `sets` and two `null`s is no filter.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct LabelFilters {
+    pub sets: Vec<String>,
+    pub from: Option<String>,
+    pub to: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -157,10 +232,21 @@ pub struct LabelApp {
     pub platform: String,
 }
 
+/// One frame of the run: where it is in the body, how big it is, and what the scanner answered
+/// for it. `bytes`, `width` and `height` are facts read off the frame here; the rest is the
+/// page's, tidied.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LabelFrame {
+    pub ms: i32,
+    pub bytes: u32,
     pub width: u32,
     pub height: u32,
+    pub ok: bool,
+    pub lock: Option<String>,
+    pub confidence: Option<f64>,
+    pub distance: Option<u32>,
+    pub decided: Option<String>,
+    pub detail: bool,
 }
 
 /// The inbox this install asks: the override when one is stored, [`SCAN_BASE`] otherwise.
@@ -174,24 +260,65 @@ pub fn base(conn: &Connection) -> String {
     }
 }
 
-/// The picture out of its base64, and its size in pixels as its own header states it.
+/// One frame as it was found in the body: how long it is and its size in pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Measured {
+    pub bytes: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// A run out of its base64: the frames end to end, oldest first, and each one measured.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pictures {
+    pub body: Vec<u8>,
+    pub frames: Vec<Measured>,
+}
+
+/// The run's pictures, or the sentence that refuses the whole of it.
 ///
-/// **Checked as a JPEG here, not trusted as one**: the size is read out of the frame header, so
-/// bytes that are not a JPEG have none and are refused before any request — and the label's
-/// `frame` is then a fact about these bytes rather than something the page said about them.
-pub fn picture(frame: &str) -> Result<(Vec<u8>, u32, u32), String> {
-    // Four characters carry three bytes: a text this long cannot decode to a picture that fits.
-    if frame.len() > MAX_FRAME_BYTES / 3 * 4 + 4 {
+/// **All of the frames or none.** A run too short is not a run ([`TOO_SHORT`]); one too long or
+/// too heavy is refused rather than cut ([`TOO_LARGE`]), because a cut one is not what the
+/// reader was shown; and one frame that is not a picture refuses the lot ([`NOT_A_PICTURE`]),
+/// because the frames either side of a hole are not the scan.
+///
+/// **Each frame is checked as a JPEG here, not trusted as one**: its size is read out of its
+/// own frame header, so bytes that are not a JPEG have none and are refused before any request
+/// — and what the label says of a frame is then a fact about these bytes rather than something
+/// the page said about them.
+pub fn pictures(run: &[SubmissionFrame]) -> Result<Pictures, String> {
+    if run.len() < MIN_RUN_FRAMES {
+        return Err(TOO_SHORT.to_owned());
+    }
+    if run.len() > MAX_RUN_FRAMES {
         return Err(TOO_LARGE.to_owned());
     }
-    let jpeg = base64::engine::general_purpose::STANDARD
-        .decode(frame)
-        .map_err(|_| NOT_A_PICTURE.to_owned())?;
-    if jpeg.len() > MAX_FRAME_BYTES {
+    // Four characters carry three bytes, and each frame's text is padded to a whole four: a
+    // text this long cannot decode to a run that fits.
+    let text: usize = run.iter().map(|frame| frame.jpeg.len()).sum();
+    if text > (MAX_RUN_BYTES / 3 + 1 + run.len()) * 4 {
         return Err(TOO_LARGE.to_owned());
     }
-    let (width, height) = jpeg_size(&jpeg).ok_or_else(|| NOT_A_PICTURE.to_owned())?;
-    Ok((jpeg, width, height))
+
+    let mut body = Vec::with_capacity(text / 4 * 3);
+    let mut frames = Vec::with_capacity(run.len());
+    for frame in run {
+        let jpeg = base64::engine::general_purpose::STANDARD
+            .decode(&frame.jpeg)
+            .map_err(|_| NOT_A_PICTURE.to_owned())?;
+        if body.len() + jpeg.len() > MAX_RUN_BYTES {
+            return Err(TOO_LARGE.to_owned());
+        }
+        let (width, height) = jpeg_size(&jpeg).ok_or_else(|| NOT_A_PICTURE.to_owned())?;
+        frames.push(Measured {
+            // Under the cap, which is far inside a `u32`.
+            bytes: u32::try_from(jpeg.len()).map_err(|_| TOO_LARGE.to_owned())?,
+            width,
+            height,
+        });
+        body.extend_from_slice(&jpeg);
+    }
+    Ok(Pictures { body, frames })
 }
 
 /// A JPEG's width and height, from its first frame header — or `None` for bytes that are not
@@ -232,13 +359,88 @@ fn jpeg_size(bytes: &[u8]) -> Option<(u32, u32)> {
     None
 }
 
-/// A scan mode's name, or anything shaped like one: a short lower-case word, which is what the
-/// inbox takes. Not the list of modes, so a third mode is not a submission refused.
+/// A scan mode's name, a lock's phase, or anything shaped like one: a short lower-case word,
+/// which is what the inbox takes. Not the list of either, so a third mode is not a submission
+/// refused.
 fn is_word(text: &str) -> bool {
     (1..=16).contains(&text.len())
         && text
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+}
+
+/// A printing's id as the page gave it, or `None` for one that is blank or no id at all. Sixty
+/// four characters is room for any id there is, and what bounds the label's header.
+fn tidy_id(id: Option<&str>) -> Option<String> {
+    id.map(str::trim)
+        .filter(|id| !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_graphic()))
+        .map(str::to_owned)
+}
+
+/// A share of the evidence, so between nothing and all of it — and to three places, which is
+/// more than the figure means and keeps twenty of them inside a header.
+fn tidy_confidence(confidence: Option<f64>) -> Option<f64> {
+    confidence
+        .filter(|c| c.is_finite())
+        .map(|c| (c.clamp(0.0, 1.0) * 1000.0).round() / 1000.0)
+}
+
+/// A count of bits out of 256. A figure outside its own range is one the scanner did not mean.
+fn tidy_distance(distance: Option<u32>) -> Option<u32> {
+    distance.filter(|bits| *bits <= 256)
+}
+
+/// `YYYY-MM-DD`, or nothing: a cleared date input reports a blank, which is no bound.
+fn tidy_date(date: Option<&str>) -> Option<String> {
+    let date = date.map(str::trim)?;
+    let shaped = date.len() == 10
+        && date.bytes().enumerate().all(|(at, b)| match at {
+            4 | 7 => b == b'-',
+            _ => b.is_ascii_digit(),
+        });
+    shaped.then(|| date.to_owned())
+}
+
+/// The reader's narrowing as the label carries it: set codes in lower case, each once, in the
+/// order they were given, and the two dates.
+fn tidy_filters(filters: &ScanFilters) -> LabelFilters {
+    let mut sets: Vec<String> = Vec::new();
+    for set in &filters.sets {
+        let set = set.trim().to_lowercase();
+        let coded = (2..=8).contains(&set.len())
+            && set
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit());
+        if coded && !sets.contains(&set) && sets.len() < MAX_FILTER_SETS {
+            sets.push(set);
+        }
+    }
+    LabelFilters {
+        sets,
+        from: tidy_date(filters.released_from.as_deref()),
+        to: tidy_date(filters.released_to.as_deref()),
+    }
+}
+
+/// One frame's entry: what was measured of it, and the page's figures tidied.
+fn tidy_frame(frame: &SubmissionFrame, measured: Measured) -> LabelFrame {
+    LabelFrame {
+        // Before the press, so never after it; and a whole number of milliseconds.
+        ms: if frame.ms.is_finite() {
+            frame.ms.round().clamp(-MAX_AGE_MS, 0.0) as i32
+        } else {
+            0
+        },
+        bytes: measured.bytes,
+        width: measured.width,
+        height: measured.height,
+        ok: frame.ok,
+        lock: frame.lock.clone().filter(|phase| is_word(phase)),
+        confidence: tidy_confidence(frame.confidence),
+        distance: tidy_distance(frame.distance),
+        decided: tidy_id(frame.decided.as_deref()),
+        detail: frame.detail,
+    }
 }
 
 /// The label for one submission: the printing read out of this install's own card data, the
@@ -248,11 +450,12 @@ fn is_word(text: &str) -> bool {
 /// these cards do not have, and a finish that printing is not made in. `cards.finishes` that is
 /// missing or unreadable is *unknown* and refuses nothing — an older corpus, not a card with no
 /// foil.
+///
+/// `frames` is [`pictures`]' measure of `submission.run`, one for one.
 pub fn label_for(
     conn: &Connection,
     submission: &Submission,
-    width: u32,
-    height: u32,
+    frames: &[Measured],
 ) -> Result<Label, String> {
     let finish = submission.finish.as_str();
     if !FINISHES.contains(&finish) {
@@ -304,27 +507,23 @@ pub fn label_for(
         },
         finish: finish.to_owned(),
         scanner: LabelScanner {
-            reported: submission
-                .reported
-                .as_deref()
-                .map(str::trim)
-                .filter(|id| !id.is_empty())
-                .map(str::to_owned),
+            reported: tidy_id(submission.reported.as_deref()),
             mode: submission.mode.clone(),
-            // A share of the evidence, so between nothing and all of it; and a count of bits
-            // out of 256. A figure outside its own range is one the scanner did not mean.
-            confidence: submission
-                .confidence
-                .filter(|c| c.is_finite())
-                .map(|c| c.clamp(0.0, 1.0)),
-            distance: submission.distance.filter(|bits| *bits <= 256),
+            confidence: tidy_confidence(submission.confidence),
+            distance: tidy_distance(submission.distance),
             bundle: submission.bundle,
+            filters: tidy_filters(&submission.filters),
         },
         app: LabelApp {
             version: env!("CARGO_PKG_VERSION").to_owned(),
             platform: crate::platform::device::kind().to_lowercase(),
         },
-        frame: LabelFrame { width, height },
+        run: submission
+            .run
+            .iter()
+            .zip(frames)
+            .map(|(frame, measured)| tidy_frame(frame, *measured))
+            .collect(),
     })
 }
 
@@ -334,6 +533,10 @@ pub fn label_for(
 /// arrive as something else; the inbox refuses a header that is not ASCII rather than repair
 /// one. `packages/ui/lib/ipc.ts`'s `asciiJson` is this rule for the scanner's own frames. Only
 /// a string can hold such a character in JSON, so escaping them one at a time is safe.
+///
+/// **And inside [`MAX_LABEL_CHARS`]**, which the inbox refuses a header past. Every field that
+/// could run on is bounded above, so this is the same backstop the byte cap is — but a label
+/// that got past it would be a 400 with a developer's sentence, and this is the reader's.
 fn ascii_json(label: &Label) -> Result<String, String> {
     let json = serde_json::to_string(label)
         .map_err(|e| format!("The scan's label could not be written: {e}"))?;
@@ -347,6 +550,9 @@ fn ascii_json(label: &Label) -> Result<String, String> {
         for unit in c.encode_utf16(&mut units) {
             let _ = write!(ascii, "\\u{unit:04x}");
         }
+    }
+    if ascii.len() > MAX_LABEL_CHARS {
+        return Err(TOO_LARGE.to_owned());
     }
     Ok(ascii)
 }
@@ -367,18 +573,19 @@ fn http() -> http::Client {
     build_http()
 }
 
-/// Ten seconds to connect, and **a minute for the answer to begin** — which is not a gap
+/// Ten seconds to connect, and **two minutes for the answer to begin** — which is not a gap
 /// between reads here: the client starts that clock when the request is sent, so it runs
-/// through the whole upload, and a picture of a megabyte over a phone's weak uplink is most of
-/// the wait. Ninety seconds for all of it where the host has no socket to bound.
+/// through the whole upload, and a run of a megabyte and a half over a phone's weak uplink is
+/// most of the wait. Two and a half minutes for all of it where the host has no socket to
+/// bound.
 fn build_http() -> http::Client {
     http::Client::new(&http::Config {
         user_agent: crate::scryfall::USER_AGENT,
         connect_timeout: Some(Duration::from_secs(10)),
-        read_timeout: Some(Duration::from_secs(60)),
+        read_timeout: Some(Duration::from_secs(120)),
         https_only: false,
     })
-    .deadline(Duration::from_secs(90))
+    .deadline(Duration::from_secs(150))
 }
 
 /// What a refusal's body says its reason is, when it says one.
@@ -406,19 +613,24 @@ fn taken(body: &str) -> Result<Submitted, String> {
     Ok(taken)
 }
 
-/// Post one picture and its label to the inbox at `base`, and read what it answers.
+/// Post one run and its label to the inbox at `base`, and read what it answers.
+///
+/// **The body is the frames end to end and nothing else** — no wrapper, no separator: the
+/// label's `run` says how long each is, so what the inbox stores is the scanner's own bytes
+/// and one cut per entry finds them again. It is sent as `application/octet-stream`, because a
+/// run of JPEGs is not a JPEG.
 ///
 /// **Every refusal the inbox words is reworded here for a reader**, matched on the status or on
 /// the code and never on the inbox's own sentence, which is written for a developer. A status
 /// with no sentence of its own is named — on a native host a Worker that is not deployed answers
 /// 404, and "the server answered 404" is what says so.
-async fn send(base: &str, jpeg: Vec<u8>, label: &Label) -> Result<Submitted, String> {
+async fn send(base: &str, body: Vec<u8>, label: &Label) -> Result<Submitted, String> {
     let header = ascii_json(label)?;
     let response = http()
         .post(&format!("{base}/scan"))
-        .header("content-type", "image/jpeg")
+        .header("content-type", "application/octet-stream")
         .header(LABEL_HEADER, &header)
-        .bytes(jpeg)
+        .bytes(body)
         .send()
         .await
         .map_err(|_| UNREACHABLE.to_owned())?;
@@ -438,25 +650,21 @@ async fn send(base: &str, jpeg: Vec<u8>, label: &Label) -> Result<Submitted, Str
 
 /// Send one scan — the table's `scanner_submit` and the desktop wrapper of the same name.
 ///
-/// The picture is decoded and the label read on the blocking pool, holding the read connection
-/// for one indexed row and letting it go before anything is awaited; then the request. **No
+/// The run is decoded and the label read on the blocking pool, holding the read connection for
+/// one indexed row and letting it go before anything is awaited; then the request. **No
 /// lease**: who holds the scanner is one question and what a reader chooses to send is another,
 /// as it is for the scanner's files.
-pub async fn submit(
-    state: &Arc<State>,
-    frame: String,
-    submission: Submission,
-) -> Result<Submitted, String> {
+pub async fn submit(state: &Arc<State>, submission: Submission) -> Result<Submitted, String> {
     let shared = Arc::clone(state);
-    let (jpeg, label, base) = crate::platform::spawn::blocking(move || -> Result<_, String> {
-        let (jpeg, width, height) = picture(&frame)?;
+    let (body, label, base) = crate::platform::spawn::blocking(move || -> Result<_, String> {
+        let Pictures { body, frames } = pictures(&submission.run)?;
         let conn = shared.lock_db_read();
-        let label = label_for(&conn, &submission, width, height)?;
-        Ok((jpeg, label, base(&conn)))
+        let label = label_for(&conn, &submission, &frames)?;
+        Ok((body, label, base(&conn)))
     })
     .await
     .map_err(|e| format!("The scan could not be sent: {e}"))??;
-    send(&base, jpeg, &label).await
+    send(&base, body, &label).await
 }
 
 #[cfg(test)]
@@ -476,6 +684,27 @@ mod tests {
         base64::engine::general_purpose::STANDARD.encode(bytes)
     }
 
+    /// One frame of `bytes`, taken `ms` before the press, that the scanner made nothing of.
+    fn frame_of(bytes: &[u8], ms: f64) -> SubmissionFrame {
+        SubmissionFrame {
+            jpeg: base64_of(bytes),
+            ms,
+            ok: false,
+            lock: None,
+            confidence: None,
+            distance: None,
+            decided: None,
+            detail: false,
+        }
+    }
+
+    /// `frames` tiny pictures, 110 ms apart and the last one at the press — oldest first.
+    fn run_of(frames: usize) -> Vec<SubmissionFrame> {
+        (0..frames)
+            .map(|at| frame_of(TINY_JPEG, -110.0 * (frames - 1 - at) as f64))
+            .collect()
+    }
+
     fn submission(card_id: &str, finish: &str) -> Submission {
         Submission {
             card_id: card_id.to_owned(),
@@ -485,6 +714,8 @@ mod tests {
             confidence: Some(0.82),
             distance: Some(31),
             bundle: Some(98_000),
+            filters: ScanFilters::default(),
+            run: run_of(MIN_RUN_FRAMES),
         }
     }
 
@@ -504,8 +735,16 @@ mod tests {
     }
 
     fn labelled(state: &State, submission: &Submission) -> Result<Label, String> {
-        label_for(&state.lock_db_read(), submission, 160, 120)
+        let measured = pictures(&submission.run)?;
+        label_for(&state.lock_db_read(), submission, &measured.frames)
     }
+
+    /// What [`pictures`] measures of one [`TINY_JPEG`].
+    const TINY: Measured = Measured {
+        bytes: 35,
+        width: 160,
+        height: 120,
+    };
 
     /// A label written out, for the tests that are about the wire and need no card data.
     fn written() -> Label {
@@ -525,15 +764,20 @@ mod tests {
                 confidence: None,
                 distance: None,
                 bundle: None,
+                filters: LabelFilters {
+                    sets: Vec::new(),
+                    from: None,
+                    to: None,
+                },
             },
             app: LabelApp {
                 version: env!("CARGO_PKG_VERSION").to_owned(),
                 platform: "desktop".to_owned(),
             },
-            frame: LabelFrame {
-                width: 160,
-                height: 120,
-            },
+            run: run_of(MIN_RUN_FRAMES)
+                .iter()
+                .map(|frame| tidy_frame(frame, TINY))
+                .collect(),
         }
     }
 
@@ -545,43 +789,97 @@ mod tests {
     }
 
     #[test]
-    fn a_picture_is_read_out_of_its_base64_with_its_own_size() {
-        let (jpeg, width, height) = picture(&base64_of(TINY_JPEG)).expect("a JPEG");
-        assert_eq!(jpeg, TINY_JPEG);
-        assert_eq!((width, height), (160, 120));
+    fn a_run_is_read_out_of_its_base64_end_to_end_with_each_frame_measured() {
+        // Two sizes of picture, so "end to end" is told from "the same one five times".
+        let mut longer = TINY_JPEG.to_vec();
+        longer.extend_from_slice(&[0; 7]);
+        let mut run = run_of(MIN_RUN_FRAMES);
+        run[1] = frame_of(&longer, -330.0);
+
+        let read = pictures(&run).expect("a run");
+        let mut expected = Vec::new();
+        for at in 0..MIN_RUN_FRAMES {
+            expected.extend_from_slice(if at == 1 { &longer } else { TINY_JPEG });
+        }
+        assert_eq!(read.body, expected);
+        assert_eq!(read.frames.len(), MIN_RUN_FRAMES);
+        assert_eq!(read.frames[0], TINY);
+        assert_eq!(read.frames[1], Measured { bytes: 42, ..TINY });
+        // The entries are the index of the body: their lengths are the whole of it.
+        let total: u32 = read.frames.iter().map(|frame| frame.bytes).sum();
+        assert_eq!(total as usize, read.body.len());
+    }
+
+    /// **Never one picture.** The rule the whole module is built on: fewer frames than a run is
+    /// a refusal in a sentence, not a submission of what there was.
+    #[test]
+    fn a_run_too_short_to_be_one_is_refused_and_a_single_picture_most_of_all() {
+        for frames in 0..MIN_RUN_FRAMES {
+            assert_eq!(
+                pictures(&run_of(frames)).unwrap_err(),
+                TOO_SHORT,
+                "{frames}"
+            );
+        }
+        assert!(pictures(&run_of(MIN_RUN_FRAMES)).is_ok());
+        // Whatever the floor is moved to, it is never one.
+        const _: () = assert!(MIN_RUN_FRAMES > 1);
     }
 
     #[test]
-    fn what_is_not_a_picture_is_refused_before_any_request() {
-        assert_eq!(picture("").unwrap_err(), NOT_A_PICTURE);
-        assert_eq!(picture("not base64 at all!").unwrap_err(), NOT_A_PICTURE);
-        // Base64 of bytes that are no JPEG, and of a JPEG cut off before its frame header.
-        assert_eq!(
-            picture(&base64_of(b"GIF89a....")).unwrap_err(),
-            NOT_A_PICTURE
-        );
-        assert_eq!(
-            picture(&base64_of(&TINY_JPEG[..20])).unwrap_err(),
-            NOT_A_PICTURE
-        );
-        // A scan with no frame header in front of it.
+    fn one_frame_that_is_not_a_picture_refuses_the_whole_run() {
+        // Base64 of bytes that are no JPEG, a JPEG cut off before its frame header, a scan with
+        // no frame header in front of it, and text that is not base64 at all.
         let headless = [0xff, 0xd8, 0xff, 0xda, 0x00, 0x08, 0, 0, 0, 0, 0, 0];
-        assert_eq!(picture(&base64_of(&headless)).unwrap_err(), NOT_A_PICTURE);
+        let wrong = [
+            base64_of(b"GIF89a...."),
+            base64_of(&TINY_JPEG[..20]),
+            base64_of(&headless),
+            "not base64 at all!".to_owned(),
+            String::new(),
+        ];
+        for bad in wrong {
+            // Wherever in the run it is: nothing is sent around a hole.
+            for at in [0, 2, MIN_RUN_FRAMES - 1] {
+                let mut run = run_of(MIN_RUN_FRAMES);
+                run[at].jpeg.clone_from(&bad);
+                assert_eq!(pictures(&run).unwrap_err(), NOT_A_PICTURE, "{bad} at {at}");
+            }
+        }
     }
 
     #[test]
-    fn a_picture_over_the_cap_is_refused_by_its_text_and_by_its_bytes() {
-        // By the text alone, before it is decoded…
-        let long = "A".repeat(MAX_FRAME_BYTES / 3 * 4 + 8);
-        assert_eq!(picture(&long).unwrap_err(), TOO_LARGE);
-        // …and a JPEG one byte past the cap, whose text is inside the first bound's slack.
-        let mut over = TINY_JPEG.to_vec();
-        over.resize(MAX_FRAME_BYTES + 1, 0);
-        assert_eq!(picture(&base64_of(&over)).unwrap_err(), TOO_LARGE);
-        // At the cap it is a picture.
-        let mut at = TINY_JPEG.to_vec();
-        at.resize(MAX_FRAME_BYTES, 0);
-        assert!(picture(&base64_of(&at)).is_ok());
+    fn a_run_over_the_cap_is_refused_by_its_count_its_text_and_its_bytes() {
+        // One frame too many, however small each is: refused, never cut to the newest twenty.
+        assert_eq!(
+            pictures(&run_of(MAX_RUN_FRAMES + 1)).unwrap_err(),
+            TOO_LARGE
+        );
+        assert!(pictures(&run_of(MAX_RUN_FRAMES)).is_ok());
+
+        // By the text alone, before any of it is decoded: this is not base64 and is never read.
+        let mut long = run_of(MIN_RUN_FRAMES);
+        long[0].jpeg = "!".repeat(MAX_RUN_BYTES / 3 * 4 + 64);
+        assert_eq!(pictures(&long).unwrap_err(), TOO_LARGE);
+
+        // Frames that each fit and together do not: one byte past the cap…
+        let share = MAX_RUN_BYTES / MIN_RUN_FRAMES;
+        let padded = |length: usize| {
+            let mut jpeg = TINY_JPEG.to_vec();
+            jpeg.resize(length, 0);
+            jpeg
+        };
+        let mut over: Vec<SubmissionFrame> = (0..MIN_RUN_FRAMES)
+            .map(|_| frame_of(&padded(share), 0.0))
+            .collect();
+        over[0] = frame_of(
+            &padded(MAX_RUN_BYTES - share * (MIN_RUN_FRAMES - 1) + 1),
+            0.0,
+        );
+        assert_eq!(pictures(&over).unwrap_err(), TOO_LARGE);
+        // …and exactly at it, which is a run.
+        over[0] = frame_of(&padded(MAX_RUN_BYTES - share * (MIN_RUN_FRAMES - 1)), 0.0);
+        assert_eq!(pictures(&over).expect("a run").body.len(), MAX_RUN_BYTES);
     }
 
     #[test]
@@ -608,11 +906,57 @@ mod tests {
         assert_eq!(label.scanner.bundle, Some(98_000));
         assert_eq!(label.app.version, env!("CARGO_PKG_VERSION"));
         assert_eq!(label.app.platform, "desktop");
+    }
+
+    #[test]
+    fn the_label_has_an_entry_a_frame_in_the_runs_own_order() {
+        let state = seeded("submit-run");
+        let mut sent = submission("c-bolt", "foil");
+        sent.run = run_of(6);
+        sent.run[5] = SubmissionFrame {
+            ok: true,
+            lock: Some("locked".to_owned()),
+            confidence: Some(0.9126),
+            distance: Some(12),
+            decided: Some("c-bolt".to_owned()),
+            detail: true,
+            ..frame_of(TINY_JPEG, 0.0)
+        };
+        let label = labelled(&state, &sent).expect("a label");
         assert_eq!(
-            label.frame,
+            label.run.iter().map(|frame| frame.ms).collect::<Vec<_>>(),
+            [-550, -440, -330, -220, -110, 0]
+        );
+        // What the scanner made nothing of says so in `null`s, with its size beside it…
+        assert_eq!(
+            label.run[0],
             LabelFrame {
+                ms: -550,
+                bytes: 35,
                 width: 160,
-                height: 120
+                height: 120,
+                ok: false,
+                lock: None,
+                confidence: None,
+                distance: None,
+                decided: None,
+                detail: false,
+            }
+        );
+        // …and the frame it decided on carries what it said.
+        assert_eq!(
+            label.run[5],
+            LabelFrame {
+                ms: 0,
+                bytes: 35,
+                width: 160,
+                height: 120,
+                ok: true,
+                lock: Some("locked".to_owned()),
+                confidence: Some(0.913),
+                distance: Some(12),
+                decided: Some("c-bolt".to_owned()),
+                detail: true,
             }
         );
     }
@@ -662,11 +1006,37 @@ mod tests {
         sent.confidence = Some(1.4);
         sent.distance = Some(900);
         sent.bundle = None;
+        // One frame with every figure outside its own range.
+        sent.run[0] = SubmissionFrame {
+            ms: 250.4,
+            lock: Some("Locked On".to_owned()),
+            confidence: Some(f64::INFINITY),
+            distance: Some(257),
+            decided: Some("an id\nwith a line in it".to_owned()),
+            ..frame_of(TINY_JPEG, 0.0)
+        };
+        sent.run[1].ms = f64::NAN;
+        sent.run[2].ms = -9_000_000.0;
+        sent.run[3].ms = -219.6;
+        sent.run[3].confidence = Some(-0.2);
+        sent.run[3].decided = Some("x".repeat(65));
         let label = labelled(&state, &sent).expect("a label");
         assert_eq!(label.scanner.reported, None);
         assert_eq!(label.scanner.confidence, Some(1.0));
         assert_eq!(label.scanner.distance, None);
         assert_eq!(label.scanner.bundle, None);
+        // A frame is never after the press, never a fraction and never further back than a
+        // minute; a clock that read nothing is the press itself.
+        assert_eq!(label.run[0].ms, 0);
+        assert_eq!(label.run[1].ms, 0);
+        assert_eq!(label.run[2].ms, -60_000);
+        assert_eq!(label.run[3].ms, -220);
+        assert_eq!(label.run[0].lock, None);
+        assert_eq!(label.run[0].confidence, None);
+        assert_eq!(label.run[0].distance, None);
+        assert_eq!(label.run[0].decided, None);
+        assert_eq!(label.run[3].confidence, Some(0.0));
+        assert_eq!(label.run[3].decided, None);
 
         sent.confidence = Some(f64::NAN);
         assert_eq!(
@@ -680,6 +1050,44 @@ mod tests {
             labelled(&state, &sent).unwrap_err(),
             "Fast Mode is not a scan mode."
         );
+    }
+
+    #[test]
+    fn the_filters_cross_as_set_codes_and_dates_and_nothing_else() {
+        let state = seeded("submit-filters");
+        let mut sent = submission("c-bolt", "foil");
+        assert_eq!(
+            labelled(&state, &sent).expect("a label").scanner.filters,
+            LabelFilters {
+                sets: Vec::new(),
+                from: None,
+                to: None
+            }
+        );
+
+        sent.filters = ScanFilters {
+            sets: [" 2X2 ", "lea", "", "2x2", "not a set code", "../x"]
+                .map(str::to_owned)
+                .to_vec(),
+            // A cleared date input is a blank, which is no bound; a date is `YYYY-MM-DD`.
+            released_from: Some("  ".to_owned()),
+            released_to: Some("2022-07-08".to_owned()),
+        };
+        assert_eq!(
+            labelled(&state, &sent).expect("a label").scanner.filters,
+            LabelFilters {
+                sets: vec!["2x2".to_owned(), "lea".to_owned()],
+                from: None,
+                to: Some("2022-07-08".to_owned())
+            }
+        );
+
+        sent.filters.released_to = Some("8 July 2022".to_owned());
+        sent.filters.sets = (0..200).map(|n| format!("s{n}")).collect();
+        let filters = labelled(&state, &sent).expect("a label").scanner.filters;
+        assert_eq!(filters.to, None);
+        assert_eq!(filters.sets.len(), MAX_FILTER_SETS);
+        assert_eq!(filters.sets[0], "s0");
     }
 
     #[test]
@@ -702,14 +1110,74 @@ mod tests {
         // A character past the basic plane is a surrogate pair, as JSON spells one.
         assert!(header.contains("\\ud83d\\udf02"), "{header}");
         assert_eq!(serde_json::from_str::<Label>(&header).expect("JSON"), label);
-        // An absent figure is `null`, never a missing key.
+        // An absent figure is `null`, never a missing key — at the press and in every frame.
         let bare = ascii_json(&written()).expect("a header");
-        for absent in ["reported", "confidence", "distance", "bundle"] {
+        for absent in [
+            "reported",
+            "confidence",
+            "distance",
+            "bundle",
+            "from",
+            "to",
+            "lock",
+            "decided",
+        ] {
             assert!(
                 bare.contains(&format!("\"{absent}\":null")),
                 "{absent}: {bare}"
             );
         }
+    }
+
+    /// **The header has a size and the label has twenty frames in it.** Every field that could
+    /// run on is bounded where it is tidied; this is the sum of those bounds, with the longest
+    /// card name there is spelled in characters that each cost six.
+    #[test]
+    fn the_longest_label_a_run_can_make_fits_its_header() {
+        let id = "f".repeat(64);
+        let worst = SubmissionFrame {
+            ms: -59_999.0,
+            ok: false,
+            lock: Some("a".repeat(16)),
+            confidence: Some(0.123_456),
+            distance: Some(256),
+            decided: Some(id.clone()),
+            detail: false,
+            ..frame_of(TINY_JPEG, 0.0)
+        };
+        let widest = Measured {
+            bytes: u32::try_from(MAX_RUN_BYTES).expect("a cap"),
+            width: 65_535,
+            height: 65_535,
+        };
+        let mut label = written();
+        label.card = LabelCard {
+            id: id.clone(),
+            set: "a".repeat(8),
+            number: "★".repeat(32),
+            lang: "zhs".to_owned(),
+            name: "龍".repeat(200),
+        };
+        label.scanner = LabelScanner {
+            reported: Some(id),
+            mode: "a".repeat(16),
+            confidence: Some(0.123),
+            distance: Some(256),
+            bundle: Some(u32::MAX),
+            filters: tidy_filters(&ScanFilters {
+                sets: (0..200).map(|n| format!("set{n:05}")).collect(),
+                released_from: Some("1993-08-05".to_owned()),
+                released_to: Some("2026-10-11".to_owned()),
+            }),
+        };
+        label.run = vec![tidy_frame(&worst, widest); MAX_RUN_FRAMES];
+        let header = ascii_json(&label).expect("inside the header");
+        assert!(header.len() <= MAX_LABEL_CHARS, "{}", header.len());
+        // And it is a bound that is met, not one with nothing near it: a label this side could
+        // not have built — a name of a thousand such characters — is refused in the reader's
+        // sentence rather than sent to be a 400.
+        label.card.name = "龍".repeat(1000);
+        assert_eq!(ascii_json(&label).unwrap_err(), TOO_LARGE);
     }
 
     /// **The wire, held from both ends by one file.** The inbox is another deploy in another
@@ -721,6 +1189,18 @@ mod tests {
     #[test]
     fn the_label_on_the_wire_is_the_one_the_inbox_is_tested_against() {
         let golden = include_str!("__golden__/scan-label.txt").trim_end();
+        let seen = |ms: i32, bytes: u32| LabelFrame {
+            ms,
+            bytes,
+            width: 960,
+            height: 540,
+            ok: true,
+            lock: Some("acquiring".to_owned()),
+            confidence: None,
+            distance: Some(44),
+            decided: None,
+            detail: false,
+        };
         let label = Label {
             v: LABEL_VERSION,
             card: LabelCard {
@@ -737,15 +1217,46 @@ mod tests {
                 confidence: Some(0.82),
                 distance: Some(31),
                 bundle: None,
+                filters: LabelFilters {
+                    sets: vec!["2x2".to_owned(), "lea".to_owned()],
+                    from: None,
+                    to: Some("2022-07-08".to_owned()),
+                },
             },
             app: LabelApp {
                 version: "0.43.0".to_owned(),
                 platform: "android".to_owned(),
             },
-            frame: LabelFrame {
-                width: 1920,
-                height: 1080,
-            },
+            run: vec![
+                LabelFrame {
+                    ms: -440,
+                    bytes: 48_211,
+                    width: 960,
+                    height: 540,
+                    ok: false,
+                    lock: None,
+                    confidence: None,
+                    distance: None,
+                    decided: None,
+                    detail: false,
+                },
+                seen(-330, 51_877),
+                seen(-220, 52_340),
+                LabelFrame {
+                    lock: Some("locked".to_owned()),
+                    confidence: Some(0.413),
+                    distance: Some(31),
+                    detail: true,
+                    ..seen(-110, 52_102)
+                },
+                LabelFrame {
+                    lock: Some("locked".to_owned()),
+                    confidence: Some(0.82),
+                    distance: Some(31),
+                    decided: Some("f29ba16f-c8fb-42fe-aabf-87089cb214a7".to_owned()),
+                    ..seen(0, 51_990)
+                },
+            ],
         };
         assert_eq!(ascii_json(&label).expect("a header"), golden);
     }
@@ -761,7 +1272,7 @@ mod tests {
 
     /// The whole trip: the table's own entry point, against an inbox that takes it.
     #[tokio::test]
-    async fn a_scan_is_posted_as_a_jpeg_with_its_label_in_a_header() {
+    async fn a_scan_is_posted_as_its_frames_end_to_end_with_its_label_in_a_header() {
         let inbox = httpmock::MockServer::start();
         let state = seeded("submit-trip");
         crate::sync_engine::client::set_state(&state.lock_db(), SCAN_URL, &inbox.base_url())
@@ -771,16 +1282,17 @@ mod tests {
         let took = inbox.mock(|when, then| {
             when.method(POST)
                 .path("/scan")
-                .header("content-type", "image/jpeg")
+                .header("content-type", "application/octet-stream")
                 .header(LABEL_HEADER, header.as_str())
-                // The picture byte for byte: nothing wraps it and nothing re-encodes it.
-                .is_true(|sent| sent.body_ref() == TINY_JPEG);
+                // The frames byte for byte and nothing between them: nothing wraps a frame and
+                // nothing re-encodes one.
+                .is_true(|sent| sent.body_ref() == TINY_JPEG.repeat(MIN_RUN_FRAMES).as_slice());
             then.status(201)
                 .header("content-type", "application/json")
                 .body(r#"{"id":"20261011T101500Z-0123456789abcdef"}"#);
         });
 
-        let sent = submit(&state, base64_of(TINY_JPEG), submission("c-bolt", "foil")).await;
+        let sent = submit(&state, submission("c-bolt", "foil")).await;
         took.assert();
         assert_eq!(sent.expect("taken").id, "20261011T101500Z-0123456789abcdef");
     }
@@ -796,10 +1308,17 @@ mod tests {
             then.status(201).body(r#"{"id":"x"}"#);
         });
 
-        let no_card = submit(&state, base64_of(TINY_JPEG), submission("c-nobody", "foil")).await;
+        let no_card = submit(&state, submission("c-nobody", "foil")).await;
         assert_eq!(no_card.unwrap_err(), NO_SUCH_PRINTING);
-        let no_picture = submit(&state, "!!".to_owned(), submission("c-bolt", "foil")).await;
-        assert_eq!(no_picture.unwrap_err(), NOT_A_PICTURE);
+
+        let mut holed = submission("c-bolt", "foil");
+        holed.run[2].jpeg = "!!".to_owned();
+        assert_eq!(submit(&state, holed).await.unwrap_err(), NOT_A_PICTURE);
+
+        // One picture is never sent, whatever else about the submission is whole.
+        let mut single = submission("c-bolt", "foil");
+        single.run.truncate(1);
+        assert_eq!(submit(&state, single).await.unwrap_err(), TOO_SHORT);
         asked.assert_calls(0);
     }
 
@@ -818,7 +1337,7 @@ mod tests {
     #[tokio::test]
     async fn each_refusal_of_the_inboxs_is_a_sentence_for_a_reader() {
         assert_eq!(
-            told(413, r#"{"error":"…","code":"frame_limit"}"#).await,
+            told(413, r#"{"error":"…","code":"run_limit"}"#).await,
             TOO_LARGE
         );
         assert_eq!(

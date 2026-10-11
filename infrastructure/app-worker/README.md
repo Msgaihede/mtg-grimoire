@@ -169,7 +169,7 @@ a request it matches is a 429 once the free plan's day is spent.
 - **The scan inbox is in `connect-src` since 2026-10-11, and answers this origin by name as the
   relay does** (issue #776). `mtg-grimoire-scans.denmark-east.workers.dev` is the engine's
   `scanner_submit::SCAN_BASE`, asked only when a reader presses the card scanner's Send: one
-  `POST` of a JPEG with its label in a header, which costs a pre-flight that Worker answers for
+  `POST` of a run of frames with its label in a header, which costs a pre-flight that Worker answers for
   the origins on its own `APP_ORIGINS` (`infrastructure/scan-worker/src/cors.ts`). One fact in
   two deploys again, **and that Worker's comes first** — until it is deployed a Send from a page
   is a request that leaves and fails, which the dialog says in a sentence. Nobody has sent one

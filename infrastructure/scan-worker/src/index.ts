@@ -6,7 +6,7 @@ import { handleSubmit } from "./submit";
  * The scan Worker's entry: one route, the pre-flight in front of it and the limiter behind that.
  *
  * `POST /scan` is the whole of it (`submit.ts`). There is deliberately no second route — nothing
- * lists the inbox, nothing reads a picture back, nothing deletes one — because every one of those
+ * lists the inbox, nothing reads a run back, nothing deletes one — because every one of those
  * would be a thing a stranger could ask of a Worker that has no way to tell a stranger from the
  * maker. `env.ts` has the rest of that argument.
  */

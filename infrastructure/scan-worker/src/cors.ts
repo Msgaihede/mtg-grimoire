@@ -24,12 +24,13 @@ export interface CorsEnv {
 export const LABEL_HEADER = "x-scan-label";
 
 /**
- * The request headers a pre-flight is told it may send: `content-type`, because `image/jpeg` is
- * not one of the three types a browser sends unasked, and the label's own.
+ * The request headers a pre-flight is told it may send: `content-type`, because
+ * `application/octet-stream` is not one of the three types a browser sends unasked, and the
+ * label's own.
  *
  * ⚠️ **A header the engine starts sending and this list does not name fails every submission from
  * the web app and none from the desktop** — the browser refuses the pre-flight and never sends the
- * picture, and the engine sees a network error with no status.
+ * run, and the engine sees a network error with no status.
  */
 const ALLOW_HEADERS = `content-type, ${LABEL_HEADER}`;
 
@@ -73,7 +74,7 @@ export function preflight(request: Request, origin: string, methods: string): Re
 /**
  * `response`, readable by a page at `origin`. **On every answer and above all on the refusals**: a
  * browser hides a cross-origin response without the header and reports a network error, and the
- * engine words a full inbox, a picture too large and a wait each differently.
+ * engine words a full inbox, a run too large and a wait each differently.
  */
 export function withCors(response: Response, origin: string): Response {
   const readable = new Response(response.body, response);

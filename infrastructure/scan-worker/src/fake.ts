@@ -1,14 +1,14 @@
 import { LABEL_HEADER } from "./cors";
 import type { Env } from "./env";
-import type { Label } from "./label";
+import type { Frame, Label } from "./label";
 
 /**
- * The suite's stand-ins: a bucket, a limiter, a label and a request.
+ * The suite's stand-ins: a bucket, a limiter, a label, a run and a request.
  *
  * There is no workerd here, by `vitest.config.ts`'s deliberate choice, so the handler is a plain
  * function over an injected `Env` and these are what is injected. **The bucket keeps bytes and
  * counts what it was asked**, because half of what this Worker promises is an absence — a refused
- * picture was never stored, a full inbox was not read past — and an absence can only be asserted
+ * run was never stored, a full inbox was not read past — and an absence can only be asserted
  * against something that would have recorded the presence.
  */
 
@@ -43,7 +43,10 @@ export function inbox(
   const objects = new Map<string, Stored>();
   for (let n = 0; n < (options.waiting ?? 0); n += 1) {
     const id = `20261001T000000Z-${n.toString(16).padStart(16, "0")}`;
-    objects.set(`frames/${id}.jpg`, { bytes: new Uint8Array([0xff]), contentType: "image/jpeg" });
+    objects.set(`runs/${id}.bin`, {
+      bytes: new Uint8Array([0xff]),
+      contentType: "application/octet-stream",
+    });
     objects.set(`labels/${id}.json`, {
       bytes: new Uint8Array([0x7b, 0x7d]),
       contentType: "application/json",
@@ -94,7 +97,29 @@ export const untouchable = new Proxy(
   },
 ) as unknown as R2Bucket;
 
-/** A whole label, as the engine builds one — Lightning Bolt, Double Masters 2022, in foil. */
+/** One frame's entry, `ms` before the press and `bytes` long, that the scanner made nothing of. */
+export function frame(ms: number, bytes: number, over: Partial<Frame> = {}): Frame {
+  return {
+    ms,
+    bytes,
+    width: 960,
+    height: 540,
+    ok: false,
+    lock: null,
+    confidence: null,
+    distance: null,
+    decided: null,
+    detail: false,
+    ...over,
+  };
+}
+
+/**
+ * A whole label, as the engine builds one — Lightning Bolt, Double Masters 2022, in foil, over
+ * the fewest frames that are a run: nothing found, a lock being taken, and the frame it was
+ * decided on. **Every frame is a different length**, so a body cut at the wrong place is a body
+ * some test can tell from the right one.
+ */
 export function label(): Label {
   return {
     v: 1,
@@ -112,17 +137,71 @@ export function label(): Label {
       confidence: 0.82,
       distance: 31,
       bundle: 98_000,
+      filters: { sets: ["2x2", "lea"], from: null, to: "2022-07-08" },
     },
     app: { version: "0.43.0", platform: "desktop" },
-    frame: { width: 1920, height: 1080 },
+    run: [
+      frame(-440, 64),
+      frame(-330, 80, { ok: true, lock: "acquiring", distance: 44 }),
+      frame(-220, 72, { ok: true, lock: "acquiring", distance: 44 }),
+      frame(-110, 96, { ok: true, lock: "locked", confidence: 0.413, distance: 31, detail: true }),
+      frame(0, 68, {
+        ok: true,
+        lock: "locked",
+        confidence: 0.82,
+        distance: 31,
+        decided: "f29ba16f-c8fb-42fe-aabf-87089cb214a7",
+      }),
+    ],
   };
 }
 
 /** A JPEG's first bytes and a little after them. Nothing here decodes one. */
 export function jpeg(length = 64): Uint8Array {
   const bytes = new Uint8Array(length);
-  bytes.set([0xff, 0xd8, 0xff, 0xe0]);
+  bytes.set([0xff, 0xd8, 0xff, 0xe0].slice(0, length));
   return bytes;
+}
+
+/**
+ * The body a list of frames describes: a JPEG's beginning at each one, as long as its entry says,
+ * end to end. Each frame's fifth byte is its place in the run, so a frame out of order — or a
+ * body stored as anything but what was sent — is told apart byte for byte.
+ */
+export function frames(run: readonly { bytes: number }[] = label().run): Uint8Array {
+  const body = new Uint8Array(run.reduce((sum, entry) => sum + entry.bytes, 0));
+  let at = 0;
+  for (const [index, entry] of run.entries()) {
+    body.set(jpeg(entry.bytes), at);
+    if (entry.bytes > 4) body[at + 4] = index + 1;
+    at += entry.bytes;
+  }
+  return body;
+}
+
+/** `label()` over `lengths`, one frame each and the last one at the press. */
+export function labelOver(lengths: readonly number[]): Label {
+  return {
+    ...label(),
+    run: lengths.map((bytes, at) => frame(-110 * (lengths.length - 1 - at), bytes)),
+  };
+}
+
+/** The lengths a sent label lists, when it lists any — for the body {@link scan} sends by default. */
+function listed(sent: unknown): { bytes: number }[] | null {
+  const run = (sent as { run?: unknown } | null)?.run;
+  if (!Array.isArray(run)) return null;
+  const entries = run as unknown[];
+  const whole = entries.every(
+    (entry): entry is { bytes: number } =>
+      typeof entry === "object" &&
+      entry !== null &&
+      Number.isInteger((entry as { bytes?: unknown }).bytes) &&
+      (entry as { bytes: number }).bytes >= 0 &&
+      // A length no test means to allocate: such a label is refused before its body matters.
+      (entry as { bytes: number }).bytes <= 4 * 1024 * 1024,
+  );
+  return whole ? entries : null;
 }
 
 export const ADDRESS = "203.0.113.7";
@@ -130,6 +209,8 @@ export const ADDRESS = "203.0.113.7";
 /**
  * One request to the inbox. Everything defaults to a submission it would take; `null` leaves a
  * header off, and `label` may be any value (it is stringified) or the header's text as it is.
+ * **The body defaults to the frames the label lists**, so a test that changes a label's run and
+ * says nothing of the body is still a submission that adds up.
  */
 export function scan(
   options: {
@@ -145,7 +226,7 @@ export function scan(
 ): Request {
   const method = options.method ?? "POST";
   const headers: Record<string, string> = { "cf-connecting-ip": ADDRESS, ...options.headers };
-  const type = options.type === undefined ? "image/jpeg" : options.type;
+  const type = options.type === undefined ? "application/octet-stream" : options.type;
   if (type !== null) headers["content-type"] = type;
   const text =
     options.labelText === undefined
@@ -155,7 +236,8 @@ export function scan(
   if (options.origin !== undefined) headers.origin = options.origin;
 
   const carries = method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
-  const body = options.body === undefined ? jpeg() : options.body;
+  const body =
+    options.body === undefined ? frames(listed(options.label) ?? undefined) : options.body;
   return new Request(`https://scans.example${options.path ?? "/scan"}`, {
     method,
     headers,

@@ -89,16 +89,16 @@ describe("MatchStrip", () => {
     expect(onSend).toHaveBeenCalledWith(send);
   });
 
-  /** A picture the scanner cannot name at all is as much worth sending as one it named wrongly. */
+  /** A scan the scanner cannot name at all is as much worth sending as one it named wrongly. */
   it("offers Send scan… before there is a card", () => {
     render(<MatchStrip {...props({ verdict: null, onSend: vi.fn() })} />);
     expect(screen.getByRole("button", { name: "Send scan…" })).toBeEnabled();
   });
 
   /**
-   * No handler is no live picture — a camera refused or not yet open — and then there is no
-   * button: not a greyed one, whose reason would be a second copy of the sentence already
-   * standing where the picture would be. Reset is unaffected.
+   * No handler is no run to send — a camera refused or not yet open, recognition stopped — and
+   * then there is no button: not a greyed one, whose reason would be a second copy of the
+   * sentence already standing over the picture. Reset is unaffected.
    */
   it("draws no Send scan… where the page hands it no press", () => {
     render(<MatchStrip {...props()} />);

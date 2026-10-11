@@ -120,7 +120,7 @@ import { ipc } from "@/lib/ipc";
 import { SCANNING_STOPPED } from "./reader/readerText";
 import { importItems } from "./reader/tray";
 import { ScannerPage } from "./ScannerPage";
-import { PICTURE_NOT_TAKEN } from "./submit/submitText";
+import { SCAN_TOO_SHORT } from "./submit/submitText";
 import { SCANNER_ELSEWHERE_POLL_MS } from "./useScannerElsewhere";
 
 function mount() {
@@ -1103,10 +1103,11 @@ describe("ScannerPage", () => {
 });
 
 /**
- * ***Send scan…*** (issue #776): the picture on screen, to the scanner's maker, under the printing
- * and finish a reader says it shows. The dialog's own suite (`submit/SubmitScanDialog.test.tsx`)
- * holds what it asks and refuses; what is asked here is the page's half — where the press is
- * offered, what it freezes, where the dialog is mounted, and that nothing stops for it.
+ * ***Send scan…*** (issue #776): the last couple of seconds the scanner was shown, to its maker,
+ * under the printing and finish a reader says the last of them shows. The dialog's own suite
+ * (`submit/SubmitScanDialog.test.tsx`) holds what it asks and refuses; what is asked here is the
+ * page's half — where the press is offered, what it freezes, where the dialog is mounted, and
+ * that nothing stops for it.
  */
 describe("ScannerPage sending a scan", () => {
   /** The printing the Fast fixture decides on, as the search answers it. */
@@ -1142,13 +1143,52 @@ describe("ScannerPage sending a scan", () => {
     expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
   });
 
-  it("freezes the picture on the press, asks which card it is, and sends the reader's answer", async () => {
+  /**
+   * A canvas whose every encode is a JPEG of its own — `ff d8 n` for the nth — where the file's
+   * shim hands every frame the same three bytes: a run is several frames, and a test of one has
+   * to be able to tell them apart and say what order they came in. Laid over the file's shim and
+   * lifted in the test's own `finally`.
+   */
+  function numberedCanvas(): () => void {
+    let n = 0;
+    return shim(HTMLCanvasElement.prototype, {
+      toBlob: {
+        value: (cb: (blob: Blob) => void) => cb(new Blob([new Uint8Array([0xff, 0xd8, ++n])])),
+      },
+    });
+  }
+  /** The nth frame as the text it is drawn and sent as. */
+  const text = (n: number) => btoa(String.fromCharCode(0xff, 0xd8, n));
+
+  /**
+   * These verdicts, ten milliseconds apart, and then nothing: every frame after the last is
+   * parked. So the run the pump holds is exactly these frames for as long as a test looks at it —
+   * and none is an answer already settled, which would starve the file's timers (`paced`).
+   */
+  function answers(...verdicts: ScannerVerdict[]) {
+    let n = 0;
+    vi.mocked(ipc.scannerFrame).mockImplementation(() => {
+      const verdict = verdicts[n++];
+      return verdict === undefined
+        ? new Promise(() => {})
+        : new Promise((resolve) => setTimeout(() => resolve(verdict), 10));
+    });
+  }
+
+  /** The picture of the run that is showing — by its name, since a printing's tile is one too. */
+  const picture = (dialog: HTMLElement) =>
+    within(dialog).getByRole("img", { name: /^Picture \d+ of \d+ that will be sent$/ });
+
+  it("freezes the run on the press, asks which card the last picture shows, and sends every frame of it", async () => {
     const restore = shimVideo();
+    const plainFrames = numberedCanvas();
     opens();
     // A bundle that loaded and models that did not: the models' sentence under the camera is the
-    // tell that the status is in, which the submission's last figure is read from.
+    // tell that the status is in, which the submission's `bundle` is read from.
     vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.noModels);
-    frames(VERDICTS.decided);
+    // Seven frames: three the scanner was still weighing, then four it had decided on.
+    const weighing: ScannerVerdict = { ...VERDICTS.voting, decision_seq: 0 };
+    answers(weighing, weighing, weighing, ...Array<ScannerVerdict>(4).fill(VERDICTS.decided));
     vi.mocked(ipc.searchCards).mockResolvedValue({
       items: [SARUMAN],
       total: 1,
@@ -1159,6 +1199,8 @@ describe("ScannerPage sending a scan", () => {
     try {
       const { container } = mount();
       await screen.findByText(/No OCR models\. Put/);
+      // All seven answered: the eighth is on the wire, and stays there.
+      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(8));
       await waitFor(() => expect(statusLine()).toHaveTextContent("Storm of Saruman"));
 
       const opener = screen.getByRole("button", { name: "Send scan…" });
@@ -1173,10 +1215,12 @@ describe("ScannerPage sending a scan", () => {
       expect(scope).not.toBeNull();
       expect(scope?.contains(dialog)).toBe(false);
 
-      // The canvas shim's three bytes, as the text that is drawn and sent.
-      expect(
-        within(dialog).getByRole("img", { name: "The picture that will be sent" }),
-      ).toHaveAttribute("src", "data:image/jpeg;base64,AQID");
+      // It rests on the last frame the pump sent, as the text that is drawn and sent, and says
+      // how many there are to look through.
+      expect(picture(dialog)).toHaveAttribute("src", `data:image/jpeg;base64,${text(7)}`);
+      expect(picture(dialog)).toHaveAttribute("alt", "Picture 7 of 7 that will be sent");
+      expect(within(dialog).getByRole("slider", { name: "Picture" })).toHaveAttribute("max", "7");
+      expect(dialog).toHaveTextContent("These 7 pictures — the last couple of seconds");
       // The search opens on the card the strip was naming, and nothing is chosen.
       expect(within(dialog).getByRole("searchbox")).toHaveValue("Storm of Saruman");
       const printing = await within(dialog).findByRole("radio", {
@@ -1193,17 +1237,52 @@ describe("ScannerPage sending a scan", () => {
       await user.click(within(dialog).getByRole("button", { name: "Send scan" }));
 
       await waitFor(() => expect(ipc.scannerSubmit).toHaveBeenCalledTimes(1));
-      expect(ipc.scannerSubmit).toHaveBeenCalledWith("AQID", {
+      // One argument, and everything in it.
+      const call = vi.mocked(ipc.scannerSubmit).mock.calls[0];
+      expect(call).toHaveLength(1);
+      const [sent] = call;
+      expect(sent).toMatchObject({
         cardId: "storm-of-saruman-ltr-72",
         finish: "foil",
         // What the scanner had said, read at the press: the Fast fixture's decision, its
-        // tracker's confidence, its best candidate's bits, and the bundle's card count.
+        // tracker's confidence, its best candidate's bits, the bundle's card count, and the
+        // filters it was under.
         reported: "storm-of-saruman-ltr-72",
         mode: "fast",
         confidence: 1,
         distance: 30,
         bundle: STATUS.noModels.labels,
+        filters: DEFAULT_SCANNER_PREFS.filters,
       });
+
+      // **The run is the frames the pump really sent**, byte for byte and in the order it sent
+      // them — not a picture taken for the purpose after the press.
+      const pumped = vi
+        .mocked(ipc.scannerFrame)
+        .mock.calls.slice(0, 7)
+        .map(([jpeg]) => btoa(String.fromCharCode(...jpeg)));
+      expect(pumped).toEqual([1, 2, 3, 4, 5, 6, 7].map(text));
+      expect(sent.run.map((frame) => frame.jpeg)).toEqual(pumped);
+      // Each beside what the scanner answered for it.
+      const settled = "storm-of-saruman-ltr-72";
+      expect(sent.run.map((frame) => frame.decided)).toEqual([
+        null,
+        null,
+        null,
+        settled,
+        settled,
+        settled,
+        settled,
+      ]);
+      expect(sent.run.map((frame) => frame.confidence)).toEqual([0.625, 0.625, 0.625, 1, 1, 1, 1]);
+      expect(sent.run.every((frame) => frame.ok && frame.lock === "locked" && !frame.detail)).toBe(
+        true,
+      );
+      // Counted back from the press: oldest first, and none after it.
+      const ms = sent.run.map((frame) => frame.ms);
+      expect([...ms].sort((a, b) => a - b)).toEqual(ms);
+      expect(new Set(ms).size).toBe(7);
+      expect(ms.every((one) => Number.isInteger(one) && one <= 0)).toBe(true);
       // Nothing was written to the developer's dataset: that is another press.
       expect(ipc.scannerCapture).not.toHaveBeenCalled();
 
@@ -1213,16 +1292,19 @@ describe("ScannerPage sending a scan", () => {
       await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
       expect(opener).toHaveFocus();
     } finally {
+      plainFrames();
       restore();
     }
   });
 
   /**
    * **The camera keeps running behind the dialog**, as it does behind the tray's two questions —
-   * and the picture in the dialog is the one taken at the press, whatever has been read since.
+   * and the run in the dialog is the one frozen at the press, however far the pump's own has
+   * turned over since.
    */
-  it("goes on reading behind the dialog, with the picture as it was at the press", async () => {
+  it("goes on reading behind the dialog, with the run as it was at the press", async () => {
     const restore = shimVideo();
+    const plainFrames = numberedCanvas();
     opens();
     // A bundle that loaded, so the strip names the card the scanner is leaning towards.
     vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
@@ -1231,20 +1313,28 @@ describe("ScannerPage sending a scan", () => {
     try {
       mount();
       await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"));
+      // Enough of a scan to send: a few frames more than the fewest.
+      await waitFor(() =>
+        expect(vi.mocked(ipc.scannerFrame).mock.calls.length).toBeGreaterThan(8),
+      );
       await user.click(screen.getByRole("button", { name: "Send scan…" }));
       const dialog = await screen.findByRole("dialog", { name: "Send this scan" });
-      const picture = within(dialog).getByRole("img", { name: "The picture that will be sent" });
+      const shown = picture(dialog);
+      const address = shown.getAttribute("src");
+      const count = within(dialog).getByRole("slider", { name: "Picture" }).getAttribute("max");
+      expect(Number(count)).toBeGreaterThanOrEqual(5);
       expect(within(dialog).getByRole("searchbox")).toHaveValue("Plains");
 
+      // A whole new run's worth of frames goes by behind it.
       const sent = vi.mocked(ipc.scannerFrame).mock.calls.length;
       await waitFor(() =>
-        expect(vi.mocked(ipc.scannerFrame).mock.calls.length).toBeGreaterThan(sent + 2),
+        expect(vi.mocked(ipc.scannerFrame).mock.calls.length).toBeGreaterThan(sent + 22),
       );
-      // The same element, on the same picture, with the same word in the box.
-      expect(within(dialog).getByRole("img", { name: "The picture that will be sent" })).toBe(
-        picture,
-      );
-      expect(picture).toHaveAttribute("src", "data:image/jpeg;base64,AQID");
+      // The same element, on the same picture, of the same number of pictures, with the same
+      // word in the box.
+      expect(picture(dialog)).toBe(shown);
+      expect(shown).toHaveAttribute("src", address);
+      expect(within(dialog).getByRole("slider", { name: "Picture" })).toHaveAttribute("max", count);
       expect(within(dialog).getByRole("searchbox")).toHaveValue("Plains");
 
       // Escape hands the caret back to the press; the scanner never stopped.
@@ -1252,91 +1342,101 @@ describe("ScannerPage sending a scan", () => {
       await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
       expect(screen.getByRole("button", { name: "Send scan…" })).toHaveFocus();
     } finally {
+      plainFrames();
       restore();
     }
   });
 
   /**
-   * The loop keeps its last answer across a Stop, and that answer may be about a card that has
-   * since been swapped. With recognition stopped the scanner is saying nothing, so nothing is
-   * what the picture is sent beside — and the search opens empty.
+   * **No press while recognition is stopped.** A scan is the frames the scanner was given, and
+   * stopped it is given none — the pump lets its run go at the Stop, since a run never spans one
+   * — so there is nothing to send. Not a greyed button: the stopped sentence over the picture is
+   * already saying what would bring the press back.
    */
-  it("sends nothing for the scanner while recognition is stopped", async () => {
+  it("draws no press while recognition is stopped, and brings it back with the scanner", async () => {
     const restore = shimVideo();
     opens();
     vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
     paced();
-    vi.mocked(ipc.searchCards).mockResolvedValue({
-      items: [SARUMAN],
-      total: 1,
-      totalIsCapped: false,
-    });
     const user = userEvent.setup();
     try {
       mount();
       await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"));
+      expect(screen.getByRole("button", { name: "Send scan…" })).toBeInTheDocument();
+
       await user.click(screen.getByRole("button", { name: "Stop scanning" }));
       await waitFor(() => expect(statusLine()).toHaveTextContent("Looking"));
-      // Still a live picture, so still a press.
-      await user.click(screen.getByRole("button", { name: "Send scan…" }));
+      // The camera is still live and its picture still moving; the press is gone all the same.
+      expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Reset evidence" })).toBeInTheDocument();
+      expect(screen.getByText(SCANNING_STOPPED)).toBeInTheDocument();
 
-      const dialog = await screen.findByRole("dialog", { name: "Send this scan" });
-      const box = within(dialog).getByRole("searchbox");
-      expect(box).toHaveValue("");
-      expect(ipc.searchCards).not.toHaveBeenCalled();
-
-      await user.type(box, "storm");
-      await user.click(
-        await within(dialog).findByRole(
-          "radio",
-          { name: "Storm of Saruman — LTR 72" },
-          { timeout: 3000 },
-        ),
-      );
-      await user.click(within(dialog).getByRole("radio", { name: "Nonfoil" }));
-      await user.click(within(dialog).getByRole("button", { name: "Send scan" }));
-      await waitFor(() => expect(ipc.scannerSubmit).toHaveBeenCalledTimes(1));
-      expect(vi.mocked(ipc.scannerSubmit).mock.calls[0]?.[1]).toMatchObject({
-        cardId: "storm-of-saruman-ltr-72",
-        finish: "nonfoil",
-        reported: null,
-        confidence: null,
-        distance: null,
-      });
+      await user.click(screen.getByRole("button", { name: "Start scanning" }));
+      expect(await screen.findByRole("button", { name: "Send scan…" })).toBeInTheDocument();
+      expect(ipc.scannerSubmit).not.toHaveBeenCalled();
     } finally {
       restore();
     }
   });
 
   /**
-   * **A press that got no picture is never silent.** The press is offered wherever a camera is
-   * live, which includes recognition stopped and — with the Developer panels on — a frame the
-   * detector is refusing; in both the line over the picture used to be spoken for, and the press
-   * opened nothing and said nothing. A canvas that hands back no context is how a grab comes to
-   * nothing here.
+   * **A press that opened nothing is never silent.** A scan is all of a run or none of it, so a
+   * press before the scanner has been shown enough — here it has answered one frame — opens no
+   * dialog and falls back to no single picture: it says what to do, over the camera, where a
+   * refused reset is said.
    */
-  it("says so when the press got no picture, stopped or not, and opens nothing", async () => {
-    const restoreVideo = shimVideo();
-    const blind = shim(HTMLCanvasElement.prototype, { getContext: { value: () => null } });
+  it("says so when the press comes before there is enough of a scan, and opens nothing", async () => {
+    const restore = shimVideo();
     opens();
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+    // One frame answered, and the next parked: a run of one.
+    frames(VERDICTS.voting);
     const user = userEvent.setup();
     try {
-      mount();
-      await user.click(await screen.findByRole("button", { name: "Send scan…" }));
-      expect(await screen.findByText(PICTURE_NOT_TAKEN)).toBeInTheDocument();
-      expect(screen.queryByRole("dialog")).toBeNull();
+      const { container } = mount();
+      await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"));
+      expect(strip(container)).toHaveTextContent("");
 
-      // Stopped: the press still stands over a live picture, and its answer stands in for the
-      // stopped sentence until the next press.
-      await user.click(screen.getByRole("button", { name: "Stop scanning" }));
-      expect(screen.queryByText(SCANNING_STOPPED)).toBeNull();
       await user.click(screen.getByRole("button", { name: "Send scan…" }));
-      expect(await screen.findByText(PICTURE_NOT_TAKEN)).toBeInTheDocument();
+      expect(strip(container)).toHaveTextContent(SCAN_TOO_SHORT);
       expect(screen.queryByRole("dialog")).toBeNull();
       expect(ipc.scannerSubmit).not.toHaveBeenCalled();
+      expect(ipc.searchCards).not.toHaveBeenCalled();
+
+      // Stopped, the press is gone and so is its sentence: *press again* with nothing to press
+      // would be an instruction nobody can follow. The line is the stopped sentence's.
+      await user.click(screen.getByRole("button", { name: "Stop scanning" }));
+      expect(screen.queryByText(SCAN_TOO_SHORT)).toBeNull();
+      expect(screen.getByText(SCANNING_STOPPED)).toBeInTheDocument();
+      // …and it does not come back unasked when the scanner does.
+      await user.click(screen.getByRole("button", { name: "Start scanning" }));
+      await screen.findByRole("button", { name: "Send scan…" });
+      expect(screen.queryByText(SCAN_TOO_SHORT)).toBeNull();
     } finally {
-      blind();
-      restoreVideo();
+      restore();
+    }
+  });
+
+  /**
+   * With the Developer panels on, the line over the camera is the detector's own on every frame
+   * with no card in it — and a press that opened nothing still has to be heard over that.
+   */
+  it("says a press came too soon over the detector's own sentence, with the Developer panels on", async () => {
+    const restore = shimVideo();
+    opens();
+    storedPrefs({ developer: true });
+    frames(VERDICTS.noCard);
+    const user = userEvent.setup();
+    try {
+      const { container } = mount();
+      await waitFor(() => expect(strip(container)).toHaveTextContent(VERDICTS.noCard.error ?? ""));
+
+      await user.click(screen.getByRole("button", { name: "Send scan…" }));
+      expect(strip(container)).toHaveTextContent(SCAN_TOO_SHORT);
+      expect(strip(container)).not.toHaveTextContent("no quadrilateral");
+      expect(screen.queryByRole("dialog")).toBeNull();
+    } finally {
+      restore();
     }
   });
 });

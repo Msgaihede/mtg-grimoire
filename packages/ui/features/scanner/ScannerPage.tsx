@@ -203,23 +203,32 @@ function LiveScanner() {
   };
 
   /**
-   * *Send scan…* (issue #776): the picture on screen to the scanner's maker, under the printing
-   * and finish a reader says it shows — `useScanSubmit`, shared with the phone's page.
+   * *Send scan…* (issue #776): the last couple of seconds the scanner was shown, to its maker,
+   * under the printing and finish a reader says the last of them shows — `useScanSubmit`, shared
+   * with the phone's page.
+   *
+   * **A run, never one picture**: the frames are the pump's own (`loop.recent`), the ones the
+   * scanner was really given, so the press grabs nothing and there is no single-picture way to
+   * send.
    *
    * **Not the capture above, and neither replaces the other.** That one is the Developer
    * column's: a file written beside the app, named by whoever is running it. This one is every
-   * reader's, leaves the device, and so asks first — its dialog shows the picture and says where
-   * it goes.
+   * reader's, leaves the device, and so asks first — its dialog shows the pictures and says where
+   * they go.
    *
-   * **The verdict it is handed is the one the strip is drawn from**, `null` while recognition is
-   * stopped: the loop keeps its last answer across a Stop, and a card swapped since then would
-   * be sent beside what the scanner said about the one before it.
+   * **Offered only while there can be a run** — a camera live *and* recognition running. Stopped,
+   * the pump has let its frames go (a run never spans a Stop) and is sending none, so there is
+   * nothing to send and no press is drawn: the stopped sentence over the picture already says
+   * what would bring one back.
    */
+  const sendable = camera.kind === "live" && scanning;
   const submit = useScanSubmit({
-    grab: loop.grab,
-    verdict: scanning ? loop.verdict : null,
+    recent: loop.recent,
+    verdict: loop.verdict,
     mode: prefs.mode,
     status: statusData,
+    filters: prefs.filters,
+    ready: sendable,
   });
 
   // The tray into the collection, in one `scanner_tray_commit` — all or nothing, the rows with a
@@ -276,11 +285,11 @@ function LiveScanner() {
 
   // The detector's own refusal is a developer's sentence — contours examined, a quad rejected —
   // and the reader has the status line for what it means to them. The loop's failures, a refused
-  // reset and a *Send scan…* that got no picture are not the detector's, and every reader gets
-  // those. **A press that got no picture is never silent**: it takes this line over from the
+  // reset and a *Send scan…* pressed too soon are not the detector's, and every reader gets
+  // those. **A press that opened nothing is never silent**: it takes this line over from the
   // detector's own sentence, which a Developer reader is otherwise shown on every frame with no
-  // card in it, and it stands in for the stopped sentence below — *Send scan…* is offered
-  // wherever a camera is live, which is in both of those states.
+  // card in it. It is not said while recognition is stopped, where the line is the stopped
+  // sentence's: the press is not drawn there, and the hook drops its sentence with the press.
   const detectorSentence =
     prefs.developer && loop.verdict?.ok === false && submit.error === null
       ? (loop.verdict.error ?? "")
@@ -342,9 +351,9 @@ function LiveScanner() {
               hasBundle={hasBundle}
               lastResolution={loop.lastResolution}
               onReset={onReset}
-              // Offered only over a picture: until a camera is live there is nothing to grab, and
-              // the box under the strip is already saying why.
-              onSend={camera.kind === "live" ? submit.open : undefined}
+              // Offered only while there can be a run to send — see `sendable`. Without a live
+              // camera, or stopped, the box under the strip is already saying why not.
+              onSend={sendable ? submit.open : undefined}
             />
             {/* The column is the height, and the video box takes what the strip above it and the
                 asset notes under it leave. **Cropped rather than letterboxed** (`object-cover`, and
@@ -356,7 +365,7 @@ function LiveScanner() {
               <AddedToast card={scanning ? landed : null} onDone={clearLanded} />
               {!scanning && (
                 <p role="status" className="absolute left-3 top-2 p-2 text-xs text-dim">
-                  {submit.error ?? SCANNING_STOPPED}
+                  {SCANNING_STOPPED}
                 </p>
               )}
               {camera.kind === "error" && (
@@ -512,11 +521,7 @@ function LiveScanner() {
           if (!scannedDeck.isPending) setDeckRows(null);
         }}
       />
-      <SubmitScanDialog
-        still={submit.still}
-        onDismiss={submit.onDismiss}
-        onClose={submit.onClose}
-      />
+      <SubmitScanDialog run={submit.run} onDismiss={submit.onDismiss} onClose={submit.onClose} />
     </>
   );
 }

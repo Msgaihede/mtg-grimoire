@@ -22,16 +22,16 @@ vi.mock("@/lib/ipc", async (orig) => {
 
 import { ipc } from "@/lib/ipc";
 import { STATUS, VERDICTS } from "../fixtures";
-import type { ScanStill } from "./still";
+import type { ScanFilters, ScannerSubmissionFrame } from "../types";
+import { runFrameOf, type RunFrame, type ScanRun } from "./run";
 import { SubmitScanDialog } from "./SubmitScanDialog";
 import {
   CHOOSE_ITS_FINISH,
   CHOOSE_THE_CARD,
-  DISCLOSURE,
+  disclosure,
   FINISH_NEEDS_CARD,
   KEEP_THE_REFERENCE,
   ONE_FINISH,
-  PICTURE_ALT,
   SEARCH_PROMPT,
   SET_HINT,
   WHICH_CARD,
@@ -96,29 +96,63 @@ const page = (items: CardSummary[], total = items.length, totalIsCapped = false)
   totalIsCapped,
 });
 
-/** The picture as three bytes' worth of text, and a scanner that had led with the wrong Bolt. */
-const STILL: ScanStill = {
-  frame: "AQID",
-  said: { reported: "bolt-2x2", mode: "exact", confidence: 0.82, distance: 36, bundle: 117630 },
+const NO_FILTERS: ScanFilters = { sets: [], released_from: null, released_to: null };
+
+/**
+ * A run of six frames, each a byte's worth of text a test can tell from the others — the
+ * scanner found no card in the first, weighed one through the middle, and had decided on the
+ * wrong Bolt by the last two.
+ */
+const FRAMES: ScannerSubmissionFrame[] = ["AQ==", "Ag==", "Aw==", "BA==", "BQ==", "Bg=="].map(
+  (jpeg, index, all) => ({
+    jpeg,
+    ms: -8 - (all.length - 1 - index) * 110,
+    ok: index > 0,
+    lock: index > 1 ? "locked" : "acquiring",
+    confidence: index === 0 ? null : 0.82,
+    distance: index === 0 ? null : 36,
+    decided: index >= 4 ? "bolt-2x2" : null,
+    detail: index === 3,
+  }),
+);
+const LAST_PICTURE = `data:image/jpeg;base64,${FRAMES[FRAMES.length - 1].jpeg}`;
+
+/** The run, and a scanner that had led with the wrong Bolt under one set's filter. */
+const RUN: ScanRun = {
+  frames: FRAMES,
+  said: {
+    reported: "bolt-2x2",
+    mode: "exact",
+    confidence: 0.82,
+    distance: 36,
+    bundle: 117630,
+    filters: { sets: ["2x2"], released_from: null, released_to: null },
+  },
   leadName: "Lightning Bolt",
 };
 
 const REFERENCE = "20261011T101500Z-0123456789abcdef";
 const INBOX_FULL = "The scan inbox is full for now. Thank you — try again in a few days.";
 
-function open(still: ScanStill | null = STILL) {
+function open(run: ScanRun | null = RUN) {
   const onDismiss = vi.fn();
   const onClose = vi.fn();
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const view = render(
     <QueryClientProvider client={client}>
-      <SubmitScanDialog still={still} onDismiss={onDismiss} onClose={onClose} />
+      <SubmitScanDialog run={run} onDismiss={onDismiss} onClose={onClose} />
     </QueryClientProvider>,
   );
   return { onDismiss, onClose, ...view };
 }
 
 const dialog = () => screen.getByRole("dialog", { name: "Send this scan" });
+/**
+ * The one picture of the run that is showing — the rest are mounted and `hidden`. By its name,
+ * because every printing's tile is a picture too.
+ */
+const picture = () => within(dialog()).getByRole("img", { name: /^Picture \d+ of \d+ that will be sent$/ });
+const slider = () => within(dialog()).getByRole("slider", { name: "Picture" });
 const printings = () => screen.findByRole("radiogroup", { name: "Printings" });
 const finishes = () => screen.getByRole("radiogroup", { name: "Finish" });
 const send = () => screen.getByRole("button", { name: /^(Send scan|Sending…)$/ });
@@ -144,19 +178,56 @@ afterEach(() => {
 });
 
 describe("SubmitScanDialog", () => {
-  it("mounts nothing while there is no picture", () => {
+  it("mounts nothing while there is no run", () => {
     open(null);
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(ipc.searchCards).not.toHaveBeenCalled();
   });
 
-  /** What the reader checks and what is sent are one string, drawn behind a `data:` scheme. */
-  it("draws the picture out of the text that will be sent", () => {
+  /**
+   * What the reader looks through and what is sent are the same strings, each drawn behind a
+   * `data:` scheme. The dialog rests on the last of them: the card the reader's answer names.
+   */
+  it("rests on the last picture of the run, out of the text that will be sent", () => {
     open();
-    const picture = within(dialog()).getByRole("img", { name: PICTURE_ALT });
-    expect(picture).toHaveAttribute("src", "data:image/jpeg;base64,AQID");
+    expect(picture()).toHaveAttribute("src", LAST_PICTURE);
+    expect(picture()).toHaveAttribute("alt", "Picture 6 of 6 that will be sent");
+    expect(within(dialog()).getByText("Picture 6 of 6 · the moment you pressed")).toBeInTheDocument();
     // Never an object URL: the shipped policy allows no `blob:` picture on any host.
-    expect(picture.getAttribute("src")).not.toMatch(/^blob:/);
+    expect(picture().getAttribute("src")).not.toMatch(/^blob:/);
+  });
+
+  /**
+   * The reader is asked to check every picture, so every one is a place the slider stops — and
+   * nothing about looking through them touches the two answers.
+   */
+  it("walks every picture of the run on the slider, and leaves the answers alone", async () => {
+    open();
+    await answer("Lightning Bolt — STA 105", "Foil");
+    expect(slider()).toHaveAttribute("max", String(FRAMES.length));
+    expect(slider()).toHaveValue(String(FRAMES.length));
+
+    for (let n = 1; n <= FRAMES.length; n++) {
+      fireEvent.change(slider(), { target: { value: String(n) } });
+      expect(picture()).toHaveAttribute("src", `data:image/jpeg;base64,${FRAMES[n - 1].jpeg}`);
+      expect(slider()).toHaveAttribute("aria-valuetext", `Picture ${n} of 6`);
+    }
+    fireEvent.change(slider(), { target: { value: "2" } });
+    expect(within(dialog()).getByText("Picture 2 of 6 · 0.4 s before you pressed")).toBeInTheDocument();
+
+    expect(await tile("Lightning Bolt — STA 105")).toHaveAttribute("aria-checked", "true");
+    expect(finish("Foil")).toHaveAttribute("aria-checked", "true");
+    // Whichever picture is showing, what is sent is the whole run — the next test's call.
+    expect(send()).not.toHaveAttribute("aria-disabled");
+  });
+
+  /** Nothing moves until the reader asks: a dialog that opened playing would not be showing the
+   *  picture it asks about. */
+  it("offers Play, and plays nothing by itself", async () => {
+    open();
+    expect(within(dialog()).getByRole("button", { name: "Play" })).toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(picture()).toHaveAttribute("src", LAST_PICTURE);
   });
 
   it("opens the search on the scanner's card and draws every printing it finds", async () => {
@@ -341,13 +412,23 @@ describe("SubmitScanDialog", () => {
     expect(send()).toHaveAttribute("aria-disabled", "true");
   });
 
-  it("sends the picture under the reader's two answers, beside what the scanner had said", async () => {
+  /**
+   * **One argument, and the whole run in it.** The reader's two answers, what the scanner had
+   * said, the filters it was under, and every frame as it stood at the press — oldest first,
+   * each with what the scanner answered for it. Whichever picture the dialog happens to be
+   * showing, none is left out and none is sent alone.
+   */
+  it("sends the whole run under the reader's two answers, beside what the scanner had said", async () => {
     open();
     await answer("Lightning Bolt — STA 105", "Foil");
+    // Looking at an earlier picture changes nothing about what is sent.
+    fireEvent.change(slider(), { target: { value: "2" } });
     await userEvent.click(send());
 
     await waitFor(() => expect(ipc.scannerSubmit).toHaveBeenCalledTimes(1));
-    expect(ipc.scannerSubmit).toHaveBeenCalledWith("AQID", {
+    const call = vi.mocked(ipc.scannerSubmit).mock.calls[0];
+    expect(call).toHaveLength(1);
+    expect(call[0]).toEqual({
       cardId: "bolt-sta",
       finish: "foil",
       reported: "bolt-2x2",
@@ -355,19 +436,40 @@ describe("SubmitScanDialog", () => {
       confidence: 0.82,
       distance: 36,
       bundle: 117630,
+      filters: { sets: ["2x2"], released_from: null, released_to: null },
+      run: FRAMES,
+    });
+    expect(call[0].run).toHaveLength(6);
+    expect(call[0].run.map((one) => one.jpeg)).toEqual(["AQ==", "Ag==", "Aw==", "BA==", "BQ==", "Bg=="]);
+    expect(call[0].run[3]).toEqual({
+      jpeg: "BA==",
+      ms: -228,
+      ok: true,
+      lock: "locked",
+      confidence: 0.82,
+      distance: 36,
+      decided: null,
+      detail: true,
     });
   });
 
   it("sends nulls where the scanner had said nothing", async () => {
     open({
-      frame: "AQID",
-      said: { reported: null, mode: "fast", confidence: null, distance: null, bundle: null },
+      frames: FRAMES,
+      said: {
+        reported: null,
+        mode: "fast",
+        confidence: null,
+        distance: null,
+        bundle: null,
+        filters: NO_FILTERS,
+      },
       leadName: "Lightning Bolt",
     });
     await answer("Lightning Bolt — LEA 161");
     await userEvent.click(send());
     await waitFor(() => expect(ipc.scannerSubmit).toHaveBeenCalledTimes(1));
-    expect(ipc.scannerSubmit).toHaveBeenCalledWith("AQID", {
+    expect(ipc.scannerSubmit).toHaveBeenCalledWith({
       cardId: "bolt-lea",
       finish: "nonfoil",
       reported: null,
@@ -375,11 +477,13 @@ describe("SubmitScanDialog", () => {
       confidence: null,
       distance: null,
       bundle: null,
+      filters: NO_FILTERS,
+      run: FRAMES,
     });
   });
 
   /**
-   * The reference arrives in this dialog and nowhere else. A dialog closed mid-send is a picture
+   * The reference arrives in this dialog and nowhere else. A dialog closed mid-send is a scan
    * sent and a reference lost, so every way out waits for the answer.
    */
   it("says it is sending, takes no second press, and holds its ways out until the answer", async () => {
@@ -459,8 +563,11 @@ describe("SubmitScanDialog", () => {
     expect(thanks).toHaveTextContent(KEEP_THE_REFERENCE);
     // The reference is text a reader can select whole, not a control.
     expect(within(thanks).getByText(REFERENCE).classList.contains("select-all")).toBe(true);
-    // The form is gone — there is nothing more to answer — and Done has the caret.
+    expect(KEEP_THE_REFERENCE).toBe("Keep the reference if you ever want these pictures deleted.");
+    // The form is gone — there is nothing more to answer or to look through — and Done has
+    // the caret.
     expect(screen.queryByRole("searchbox")).toBeNull();
+    expect(screen.queryByRole("slider")).toBeNull();
     expect(screen.queryByRole("button", { name: "Send scan" })).toBeNull();
     const done = screen.getByRole("button", { name: "Done" });
     await waitFor(() => expect(done).toHaveFocus());
@@ -469,9 +576,12 @@ describe("SubmitScanDialog", () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
-  it("says what is sent and where, above the press, with the way to the policy", async () => {
+  it("says how many pictures are sent and where, above the press, with the way to the policy", async () => {
     open();
-    expect(within(dialog()).getByText(DISCLOSURE)).toBeVisible();
+    // The count is the run's own: six frames, six pictures.
+    const said = within(dialog()).getByText(disclosure(FRAMES.length));
+    expect(said).toBeVisible();
+    expect(said).toHaveTextContent(/^These 6 pictures — the last couple of seconds the scanner saw — /);
     expect(within(dialog()).getByRole("link", { name: "Privacy policy" })).toHaveAttribute(
       "href",
       "https://mtg-grimoire.app/privacy",
@@ -479,8 +589,17 @@ describe("SubmitScanDialog", () => {
     // Not inside the body's scroller: it is on screen however far the printings are scrolled.
     const scroller = (await printings()).closest(".overflow-y-auto:not([role='radiogroup'])");
     expect(scroller).not.toBeNull();
-    expect(scroller?.contains(screen.getByText(DISCLOSURE))).toBe(false);
+    expect(scroller?.contains(said)).toBe(false);
     expect(scroller?.contains(send())).toBe(false);
+    // The pictures are in it, with the two questions: they are what is scrolled through.
+    expect(scroller?.contains(picture())).toBe(true);
+    expect(scroller?.contains(slider())).toBe(true);
+  });
+
+  it("counts the pictures of whatever run it was opened on", () => {
+    open({ ...RUN, frames: FRAMES.slice(1) });
+    expect(within(dialog()).getByText(disclosure(5))).toBeInTheDocument();
+    expect(picture()).toHaveAttribute("alt", "Picture 5 of 5 that will be sent");
   });
 
   it("hands Cancel to the dismissal that gives the caret back", async () => {
@@ -493,7 +612,7 @@ describe("SubmitScanDialog", () => {
 
 describe("the printings a reader chooses between", () => {
   it("asks nothing for an empty box, and says what typing will do", async () => {
-    open({ ...STILL, leadName: "" });
+    open({ ...RUN, leadName: "" });
     expect(screen.getByText(SEARCH_PROMPT)).toBeInTheDocument();
     expect(screen.queryByRole("radiogroup", { name: "Printings" })).toBeNull();
     await new Promise((resolve) => setTimeout(resolve, 350));
@@ -594,7 +713,7 @@ describe("the printings a reader chooses between", () => {
     expect(finish("Foil")).toHaveAttribute("aria-checked", "true");
     await userEvent.click(send());
     await waitFor(() => expect(ipc.scannerSubmit).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(ipc.scannerSubmit).mock.calls[0]?.[1]).toMatchObject({
+    expect(vi.mocked(ipc.scannerSubmit).mock.calls[0]?.[0]).toMatchObject({
       cardId: "bolt-sta",
       finish: "foil",
     });
@@ -642,23 +761,30 @@ describe("the printings a reader chooses between", () => {
  * takes is the dialog's.
  */
 describe("the dialog, opened by the press", () => {
+  /**
+   * What the pump is holding: six frames it sent and had answered, a byte each, a hundred and
+   * ten milliseconds apart on the page's own clock — all of them before any press below.
+   */
+  const NEWEST = performance.now();
+  const RING: RunFrame[] = [1, 2, 3, 4, 5, 6].map((n) =>
+    runFrameOf(new Uint8Array([n]), NEWEST - (6 - n) * 110, VERDICTS.exactAmbiguous, false),
+  );
+
   function Page() {
     const submit = useScanSubmit({
-      grab: async () => new Uint8Array([1, 2, 3]),
+      recent: () => RING,
       verdict: VERDICTS.exactAmbiguous,
       mode: "exact",
       status: STATUS.present,
+      filters: NO_FILTERS,
+      ready: true,
     });
     return (
       <>
         <button type="button" onClick={(e) => submit.open(e.currentTarget)}>
           Send scan…
         </button>
-        <SubmitScanDialog
-          still={submit.still}
-          onDismiss={submit.onDismiss}
-          onClose={submit.onClose}
-        />
+        <SubmitScanDialog run={submit.run} onDismiss={submit.onDismiss} onClose={submit.onClose} />
       </>
     );
   }
@@ -678,13 +804,28 @@ describe("the dialog, opened by the press", () => {
 
   const gone = () => waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 
-  it("opens on the picture the press took, searching for the card the scanner named", async () => {
+  it("opens on the last frame of the run the press froze, searching for the card the scanner named", async () => {
     await press();
-    expect(within(dialog()).getByRole("img", { name: PICTURE_ALT })).toHaveAttribute(
-      "src",
-      "data:image/jpeg;base64,AQID",
-    );
+    // The pump's sixth byte, as text: the newest frame it had sent.
+    expect(picture()).toHaveAttribute("src", "data:image/jpeg;base64,Bg==");
+    expect(picture()).toHaveAttribute("alt", "Picture 6 of 6 that will be sent");
     expect(screen.getByRole("searchbox", { name: WHICH_CARD })).toHaveValue("Lightning Bolt");
+  });
+
+  it("sends the run the press froze, each frame counted back from it", async () => {
+    await press();
+    await answer("Lightning Bolt — LEA 161");
+    await userEvent.click(send());
+    await waitFor(() => expect(ipc.scannerSubmit).toHaveBeenCalledTimes(1));
+    const [sent] = vi.mocked(ipc.scannerSubmit).mock.calls[0];
+    expect(sent.run.map((one) => one.jpeg)).toEqual(["AQ==", "Ag==", "Aw==", "BA==", "BQ==", "Bg=="]);
+    // Oldest first, a hundred and ten milliseconds apart, and none after the press.
+    const ms = sent.run.map((one) => one.ms);
+    expect([...ms].sort((a, b) => a - b)).toEqual(ms);
+    expect(ms.every((one) => one <= 0)).toBe(true);
+    expect(ms[5] - ms[0]).toBe(550);
+    expect(sent.filters).toEqual(NO_FILTERS);
+    expect(sent.reported).toBe(VERDICTS.exactAmbiguous.decision?.printing);
   });
 
   it("hands the caret back to the press on Escape", async () => {

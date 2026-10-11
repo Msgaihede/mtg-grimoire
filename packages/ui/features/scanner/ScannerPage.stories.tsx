@@ -89,7 +89,8 @@ type Story = StoryObj<typeof meta>;
  * answer regardless of the camera, which is what lets the two halves of this view be tested apart.
  *
  * **One press is not here, and its absence is the rule**: *Send scan…* stands beside *Reset
- * evidence* only over a live picture, and a refused camera has none to send. Its dialog is
+ * evidence* only while a camera is live and the scanner is running — a scan is the last couple
+ * of seconds of frames it was shown, and a refused camera has shown it none. Its dialog is
  * storied by itself (`Scanner/Reader/Send scan dialog`), since no story has a camera to open.
  */
 export const CameraRefused: Story = {

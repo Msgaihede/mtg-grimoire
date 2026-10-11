@@ -8,18 +8,18 @@ import { ipc, ipcError, type CardSummary } from "@/lib/ipc";
 import { radioKeys } from "@/lib/radioGroup";
 import { cn } from "@/lib/utils";
 import { PrintingPicker } from "./PrintingPicker";
-import { submissionOf, type ScanStill } from "./still";
+import { submissionOf, type ScanRun } from "./run";
+import { RunPictures } from "./RunPictures";
 import {
   CANCEL,
   CHOOSE_ITS_FINISH,
   CHOOSE_THE_CARD,
-  DISCLOSURE,
+  disclosure,
   DONE,
   FINISH,
   FINISH_NEEDS_CARD,
   KEEP_THE_REFERENCE,
   ONE_FINISH,
-  PICTURE_ALT,
   REFERENCE,
   SEND,
   SEND_TITLE,
@@ -29,10 +29,11 @@ import {
 
 export interface SubmitScanDialogProps {
   /**
-   * The picture the reader pressed *Send scan…* on, with what the scanner was saying about it —
-   * `useScanSubmit`'s. `null` is the dialog closed, which is the only time nothing is drawn.
+   * The run the reader pressed *Send scan…* on — the last couple of seconds the scanner was
+   * shown, with what it was saying at the end of them — `useScanSubmit`'s. `null` is the dialog
+   * closed, which is the only time nothing is drawn.
    */
-  still: ScanStill | null;
+  run: ScanRun | null;
   /** Escape, the ✕, Cancel and Done: hand the caret back to the press that opened this. */
   onDismiss: () => void;
   /** The scrim: close without moving the caret. */
@@ -40,13 +41,19 @@ export interface SubmitScanDialogProps {
 }
 
 /**
- * *Send this scan* — the picture a reader is about to send, and the two questions that make it
- * worth having: **which printing is it, and in which finish.**
+ * *Send this scan* — the pictures a reader is about to send, and the two questions that make
+ * them worth having: **which printing is it, and in which finish.**
  *
- * A picture the scanner got wrong is only useful to its maker with the right answer beside it,
+ * A scan the scanner got wrong is only useful to its maker with the right answer beside it,
  * and the scanner's own answer is by construction the one that cannot be trusted here. So the
  * reader gives both halves themselves (issue #776): nothing is chosen for them but a finish the
  * printing leaves no choice about, and Send says why it will not send until both are.
+ *
+ * **All of the run or none of it.** What is sent is every frame the scanner was given in its
+ * last couple of seconds — it decides over a run, so one picture could not say what it did — and
+ * there is no switch here to send fewer: the reader looks through them (`RunPictures`), and
+ * sends them or cancels. The two answers name **the card in the last one**, the one under the
+ * camera at the press.
  *
  * **Both Scanner surfaces mount this one component**, so it reads no store and no window, and
  * every control grows for a finger through the shared recipes rather than through anything it
@@ -54,13 +61,13 @@ export interface SubmitScanDialogProps {
  * container-query box: a container is the containing block for the shell's fixed scrim.
  *
  * **A send cannot be walked away from.** The reference the inbox answers with is the only handle
- * a reader will ever have on their picture — nothing sent says who sent it — and it arrives in
- * this dialog. A dialog closed while the request was in flight would be a picture sent and a
+ * a reader will ever have on their pictures — nothing kept says who sent them — and it arrives in
+ * this dialog. A dialog closed while the request was in flight would be a scan sent and a
  * reference dropped on the floor, so Escape, the ✕ and the scrim wait for the answer, as
  * *Create deck* does for its write.
  */
 export function SubmitScanDialog({
-  still,
+  run,
   onDismiss,
   onClose,
 }: SubmitScanDialogProps): JSX.Element {
@@ -74,7 +81,7 @@ export function SubmitScanDialog({
   }, []);
   return (
     <Dialog
-      open={still !== null}
+      open={run !== null}
       title={SEND_TITLE}
       closeLabel="Close"
       // The printings' four columns set it: at 36rem each card is about 125px across — reckoned
@@ -88,7 +95,7 @@ export function SubmitScanDialog({
         if (!sending.current) onClose();
       }}
     >
-      {still !== null && <Body still={still} onSending={onSending} onDismiss={onDismiss} />}
+      {run !== null && <Body run={run} onSending={onSending} onDismiss={onDismiss} />}
     </Dialog>
   );
 }
@@ -129,14 +136,16 @@ function finishesOf(card: CardSummary): readonly Finish[] {
  * **Memoised, because of where it is mounted.** A Scanner page re-renders on every verdict —
  * about nine a second — and this dialog is its child, with up to two hundred card pictures in
  * it. Its three props are a value in state and two stable functions (`useScanSubmit`), so behind
- * the memo the body renders when the reader does something and not when the camera does.
+ * the memo the body renders when the reader does something and not when the camera does. Which
+ * of the run's pictures is showing is `RunPictures`' own state for the same reason one floor
+ * down: a pass through them is nine steps a second, and none of them is the printings' business.
  */
 const Body = memo(function Body({
-  still,
+  run,
   onSending,
   onDismiss,
 }: {
-  still: ScanStill;
+  run: ScanRun;
   /** Tell the shell a send has started or ended, so it holds its ways out meanwhile. */
   onSending: (on: boolean) => void;
   onDismiss: () => void;
@@ -146,7 +155,7 @@ const Body = memo(function Body({
   const [finish, setFinish] = useState<FinishChoice | null>(null);
   const [pending, setPending] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
-  /** The inbox's reference for the picture it took — `null` until it has taken one. */
+  /** The inbox's reference for the scan it took — `null` until it has taken one. */
   const [sent, setSent] = useState<string | null>(null);
   /** The same fact as `pending`, readable inside the tick a second press lands in. */
   const inFlight = useRef(false);
@@ -201,10 +210,9 @@ const Body = memo(function Body({
     setRefusal(null);
     setPending(true);
     try {
-      const taken = await ipc.scannerSubmit(
-        still.frame,
-        submissionOf(still, chosen.id, finish.value),
-      );
+      // One argument: the reader's two answers, what the scanner had said, and every frame of
+      // the run as it stood at the press.
+      const taken = await ipc.scannerSubmit(submissionOf(run, chosen.id, finish.value));
       setSent(taken.id);
     } catch (e) {
       // Drawn in place, with both choices left as they were: the commonest refusals are the
@@ -226,33 +234,12 @@ const Body = memo(function Body({
               children must overflow it instead — the printings' grid is a scroller of its own,
               which is exactly the item a column would squeeze first. */}
           <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 pt-4 pb-4">
-            {/* **The picture, out of the very text that is sent** — `ScanStill.frame` says why.
-                A `data:` address and never an object URL: the shipped policy's image sources
-                allow the first on every host and the second on none. A bare image element for
-                `RectifiedPanel`'s reason — this is a camera frame, keyed on nothing and fetched
-                from nowhere, and `CardImage` is for a card's picture, which this is not. On
-                black, as the camera's own box is, and never cropped: the reader is asked to
-                check what is in it, edges included.
+            {/* **The pictures, out of the very text that is sent** — one at a time, resting on
+                the last, with the way through all of them under it. `RunPictures` has the box
+                and its reasons. */}
+            <RunPictures frames={run.frames} />
 
-                **A block in a block, and deliberately not a centring grid.** The picture is
-                1920px wide by nature and is held to its box by a percentage; in a grid with
-                no stated column that percentage is of a track sized by the picture itself,
-                which clamps nothing — the shell's own scrim records that trap, measured. Here
-                the containing block is the scroller's column, whose width is settled before
-                the picture is asked, so both ceilings bind and the ratio is kept.
-
-                **Shorter where the dialog is the whole screen** (below the shell's own 640px
-                turn): a phone held upright takes an upright picture, and at the taller ceiling
-                it left the printings a strip to be chosen in. */}
-            <div className="overflow-hidden rounded-lg bg-black">
-              <img
-                src={`data:image/jpeg;base64,${still.frame}`}
-                alt={PICTURE_ALT}
-                className="mx-auto block max-h-48 max-w-full object-contain sm:max-h-64"
-              />
-            </div>
-
-            <PrintingPicker initialQuery={still.leadName} chosen={chosen} onChoose={choose} />
+            <PrintingPicker initialQuery={run.leadName} chosen={chosen} onChoose={choose} />
 
             <div ref={finishBox}>
               <FinishRadios
@@ -266,7 +253,7 @@ const Body = memo(function Body({
           {/* **Outside the scroller**, so what is sent and to whom is on screen at the moment of
               the press however far the printings have been scrolled. */}
           <footer className="flex shrink-0 flex-col gap-2 border-t border-border px-5 pt-3 pb-4">
-            <p className="text-xs leading-relaxed text-dim">{DISCLOSURE}</p>
+            <p className="text-xs leading-relaxed text-dim">{disclosure(run.frames.length)}</p>
 
             {refusal !== null && (
               // `alert`, not `status`: mounted only when there is something to say, and

@@ -175,7 +175,7 @@ end-to-end encrypted so that the developer cannot read it.
 
 | Question | Answer | Why |
 | --- | --- | --- |
-| Does your app collect or share any of the required user data types? | **Yes** | Sync, when a reader turns it on, sends the relay a device identifier; and the card scanner's Send, when a reader presses it, sends one camera picture |
+| Does your app collect or share any of the required user data types? | **Yes** | Sync, when a reader turns it on, sends the relay a device identifier; and the card scanner's Send, when a reader presses it, sends a scan: the last couple of seconds of camera pictures, five to twenty of them |
 | Is all of the user data collected by your app encrypted in transit? | Yes | Every host the engine asks is an `https://` constant in `crates/grimoire-core`, and the relay's socket is `wss://`; a release build also sets `usesCleartextTraffic="false"` |
 | Does your app allow users to create an account? | No | The app has no accounts; pairing links a user's own devices and creates no login |
 | Do you provide a way for users to request that their data is deleted? | Yes | The privacy policy's *Removing your data* and its contact — a sent scan is found by the reference the app showed. The Console asks for an address: `https://mtg-grimoire.app/privacy` |
@@ -185,16 +185,22 @@ end-to-end encrypted so that the developer cannot read it.
 | Type | Collected | Shared | Processed ephemerally | Required or optional | Purpose |
 | --- | --- | --- | --- | --- | --- |
 | Device or other IDs | Yes | No | No | Optional — only if the reader pairs devices | App functionality |
-| Photos and videos → Photos | Yes | No | No | Optional — only a picture the reader sends from the card scanner, one at a time | Analytics |
+| Photos and videos → Photos | Yes | No | No | Optional — only a scan the reader sends from the card scanner: five to twenty stills, about two seconds, one scan at a time | Analytics |
 
 ⚠️ **The second row is new with the card scanner's Send (issue #776, 2026-10-11), and it has to
 be in the Console before the release that carries Send reaches a track.** Until that build, the
-form's old answer — *Photos: not collected* — was true. The picture is *collected* in Google's
-sense because it leaves the device and is kept (`infrastructure/scan-worker/`, an R2 bucket in the
-owner's Cloudflare account); it is not *shared*, because nobody else is given it; and it is not
-*ephemeral*, because it is stored. The app shows the reader the exact picture and what is sent
-with it before the press that sends it, which is the prominent disclosure Play's User Data policy
-asks for where a photo is collected.
+form's old answer — *Photos: not collected* — was true. The pictures are *collected* in Google's
+sense because they leave the device and are kept (`infrastructure/scan-worker/`, an R2 bucket in
+the owner's Cloudflare account); they are not *shared*, because nobody else is given them; and
+they are not *ephemeral*, because they are stored. The app shows the reader every picture of the
+scan — a slider steps through them — and what is sent with them before the press that sends
+them, which is the prominent disclosure Play's User Data policy asks for where a photo is
+collected.
+
+**Photos or Videos is a second judgement in that row, for the owner.** A scan is a run of still
+JPEGs with no sound and no video file, which is *Photos*; but it is two seconds of them in order,
+which is a short clip in everything but its container. *Photos* is what is sent; declaring
+*Videos* beside it, with the same answers, is the cautious reading and costs nothing.
 
 **The purpose is the one judgement in that row, for the owner.** *Analytics* is Google's word for
 data "about how users use the app or how it performs", and these pictures are used to measure
@@ -206,10 +212,11 @@ Everything else: **not collected**. In particular:
 
 - *App activity, App info and performance, Personal info, Files and docs, Location, Contacts,
   Financial info, Messages, Audio, Calendar, Health, Web browsing*: none leaves the device.
-  **The camera's pictures are examined on the device and discarded, except the one a reader
-  sends**: nothing is sent while scanning, and a sent picture's label names a card and the
-  scanner's own reading of it — no device, account or group identifier, which is why *Device or
-  other IDs* above is still about sync alone.
+  **The camera's pictures are examined on the device and discarded, except the scan a reader
+  sends**: nothing is sent while scanning — the scanner holds the last two seconds of frames in
+  memory so that there is something to send, and no longer — and a sent scan's label names a
+  card and the scanner's own reading of it — no device, account or group identifier, which is
+  why *Device or other IDs* above is still about sync alone.
 - **A reader's collection and decks do leave the device when sync is on, and are not declared**:
   they are encrypted with a key only the reader's own devices hold, which is the exemption
   above.

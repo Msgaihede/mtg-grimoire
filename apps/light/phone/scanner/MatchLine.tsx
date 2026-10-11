@@ -55,7 +55,8 @@ export function MatchLine({
   onReset: () => void;
   /**
    * *Send scan…* — the desktop strip's press and its rule: handed the press for the caret, and
-   * **absent where there is no live picture to send, which draws no button**.
+   * **absent where there can be no run to send — no live camera, or recognition stopped — which
+   * draws no button**.
    */
   onSend?: (opener: HTMLElement) => void;
 }) {

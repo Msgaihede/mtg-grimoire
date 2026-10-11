@@ -2,8 +2,9 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_DETAIL_WAIT_MS, DEFAULT_SCANNER_OPTIONS, DEFAULT_SEND_PX } from "./scannerOptions";
 import { READS, VERDICTS } from "./fixtures";
+import { RUN_MAX_BYTES, RUN_MAX_FRAMES } from "./submit/run";
 import type { ScannerOptions, ScannerVerdict } from "./types";
-import { useScanLoop, type GrabbedPair } from "./useScanLoop";
+import { useScanLoop, type GrabbedPair, type RunFrame } from "./useScanLoop";
 
 const scannerFrame =
   vi.fn<
@@ -1159,5 +1160,351 @@ describe("useScanLoop", () => {
     const bytes = await result.current.grab(Infinity, 0.92);
     expect(bytes).toBe(BYTES);
     expect(grabFrame).toHaveBeenLastCalledWith(expect.anything(), Infinity, 0.92);
+  });
+});
+
+/**
+ * **The run** (`recent()`): the last frames the pump sent and had answered, for *Send scan…* —
+ * which sends a run of them and never one picture. What is asked here is what is in it, and
+ * when it is let go.
+ */
+describe("the run useScanLoop keeps", () => {
+  /**
+   * A grab that hands back a JPEG of its own each time — `ff d8 n` for the nth — in an array of
+   * its own. The suite's shared `BYTES` would do for neither question below: the frames have to
+   * be told apart, and one of the tests empties what the pump sends.
+   */
+  function numbered() {
+    let n = 0;
+    return vi.fn(async (): Promise<Uint8Array | null> => new Uint8Array([0xff, 0xd8, ++n]));
+  }
+  /** Which grabs a run holds, by the number each frame carries. */
+  const numbers = (run: readonly RunFrame[]) => run.map((frame) => frame.jpeg[2]);
+
+  /** Gates for the first `count` frames, answered when a test chooses; later frames park. */
+  function gated(count: number) {
+    const gates = Array.from({ length: count }, () => deferred<ScannerVerdict>());
+    let n = 0;
+    scannerFrame.mockImplementation(
+      () => gates[n++]?.promise ?? deferred<ScannerVerdict>().promise,
+    );
+    return gates;
+  }
+
+  /**
+   * What the web host does to a frame it is handed: its buffer is *transferred* to the scanner's
+   * Worker (`lib/core/web/scanner.ts`), which leaves the caller's array detached and empty.
+   */
+  function detach(bytes: Uint8Array) {
+    structuredClone(bytes.buffer, { transfer: [bytes.buffer as ArrayBuffer] });
+  }
+
+  it("is empty until a frame has been answered", async () => {
+    gated(1);
+    const { result } = mount({ grabFrame: numbered() });
+    expect(result.current.recent()).toEqual([]);
+    await tick();
+    // Sent, and not yet answered: a frame is not in the run until its verdict is taken.
+    expect(scannerFrame).toHaveBeenCalledTimes(1);
+    expect(result.current.recent()).toEqual([]);
+  });
+
+  it("keeps each frame it sent beside what the scanner answered for it, oldest first", async () => {
+    const gates = gated(3);
+    const { result } = mount({ grabFrame: numbered() });
+    await tick();
+    await act(async () => gates[0].resolve(VERDICTS.noCard));
+    await act(async () => gates[1].resolve(VERDICTS.voting));
+    await act(async () => gates[2].resolve(VERDICTS.decided));
+
+    const run = result.current.recent();
+    expect(numbers(run)).toEqual([1, 2, 3]);
+    expect(run.map((frame) => Array.from(frame.jpeg))).toEqual([
+      [0xff, 0xd8, 1],
+      [0xff, 0xd8, 2],
+      [0xff, 0xd8, 3],
+    ]);
+    expect(run.map(({ ok, lock, confidence, distance, decided, detail }) => ({
+      ok,
+      lock,
+      confidence,
+      distance,
+      decided,
+      detail,
+    }))).toEqual([
+      { ok: false, lock: "idle", confidence: null, distance: null, decided: null, detail: false },
+      { ok: true, lock: "locked", confidence: 0.625, distance: 74, decided: null, detail: false },
+      {
+        ok: true,
+        lock: "locked",
+        confidence: 1,
+        distance: 30,
+        decided: "storm-of-saruman-ltr-72",
+        detail: false,
+      },
+    ]);
+  });
+
+  /** When the frame was drawn off the video — not when its bytes, or its answer, came back. */
+  it("stamps each frame with the clock as it was grabbed", async () => {
+    scannerFrame.mockImplementation(() => answersIn(10));
+    const started = performance.now();
+    const { result } = mount({ grabFrame: numbered() });
+    await tick(35);
+    const run = result.current.recent();
+    // Three answered ten milliseconds apart, and a fourth on the wire.
+    expect(numbers(run)).toEqual([1, 2, 3]);
+    expect(run.map((frame) => frame.at - started)).toEqual([0, 10, 20]);
+  });
+
+  it("does not keep a frame whose call was refused", async () => {
+    const second = deferred<ScannerVerdict>();
+    scannerFrame
+      .mockReturnValueOnce(Promise.reject("scanner_frame: no bundle loaded"))
+      .mockReturnValueOnce(second.promise)
+      .mockReturnValue(deferred<ScannerVerdict>().promise);
+    const { result } = mount({ grabFrame: numbered() });
+    await tick();
+    expect(result.current.error).toBe("scanner_frame: no bundle loaded");
+    expect(result.current.recent()).toEqual([]);
+
+    await act(async () => second.resolve(VERDICTS.voting));
+    expect(numbers(result.current.recent())).toEqual([2]);
+  });
+
+  /**
+   * A verdict the page did not take is not in the run either: the run is what the answers on
+   * screen were made from, and an answer thrown away was never on it.
+   */
+  it("does not keep a frame whose answer was thrown away when the evidence was cleared", async () => {
+    const gates = gated(3);
+    const { result } = mount({ grabFrame: numbered(), detailWaitMs: 0 });
+    await tick();
+    await act(async () => gates[0].resolve(VERDICTS.voting));
+    expect(numbers(result.current.recent())).toEqual([1]);
+
+    // The second frame is on the wire when the evidence goes.
+    act(() => result.current.clearReads());
+    expect(result.current.recent()).toEqual([]);
+    await act(async () => gates[1].resolve(VERDICTS.decided));
+    await tick();
+    expect(result.current.recent()).toEqual([]);
+
+    // The run starts again with the first frame answered after it.
+    await act(async () => gates[2].resolve(VERDICTS.voting));
+    expect(numbers(result.current.recent())).toEqual([3]);
+  });
+
+  it("does not keep a frame whose answer lands after the camera stopped", async () => {
+    const gates = gated(2);
+    const videoRef = { current: readyVideo() };
+    const grabFrame = numbered();
+    const { result, rerender } = renderHook(
+      ({ live }: { live: boolean }) => useScanLoop({ videoRef, live, ...KNOBS, grabFrame }),
+      { initialProps: { live: true } },
+    );
+    await tick();
+    await act(async () => gates[0].resolve(VERDICTS.voting));
+    expect(numbers(result.current.recent())).toEqual([1]);
+
+    rerender({ live: false });
+    await act(async () => gates[1].resolve(VERDICTS.decided));
+    await tick(60);
+    expect(result.current.recent()).toEqual([]);
+  });
+
+  /** About two seconds of frames: the twenty-first pushes the first out, from the old end. */
+  it("holds twenty frames at most, dropping the oldest", async () => {
+    scannerFrame.mockImplementation(() => answersIn(10));
+    const { result } = mount({ grabFrame: numbered() });
+    await tick(10 * RUN_MAX_FRAMES + 55);
+    const run = numbers(result.current.recent());
+    expect(run).toHaveLength(RUN_MAX_FRAMES);
+    // More than twenty were answered, the run is the newest twenty, and they are consecutive.
+    expect(run[0]).toBeGreaterThan(1);
+    expect(run).toEqual(Array.from({ length: RUN_MAX_FRAMES }, (_, n) => run[0] + n));
+  });
+
+  /** A camera whose frames are heavy keeps a shorter run, never a heavier one. */
+  it("holds a mebibyte and a half of frames at most, dropping the oldest", async () => {
+    scannerFrame.mockImplementation(() => answersIn(10));
+    let n = 0;
+    const grabFrame = vi.fn(async (): Promise<Uint8Array | null> => {
+      const frame = new Uint8Array(400_000);
+      frame[2] = ++n;
+      return frame;
+    });
+    const { result } = mount({ grabFrame });
+    await tick(45);
+    // Four answered; three of them fit the budget, and they are the newest three.
+    const run = result.current.recent();
+    expect(numbers(run)).toEqual([2, 3, 4]);
+    expect(run.reduce((sum, frame) => sum + frame.jpeg.length, 0)).toBeLessThanOrEqual(
+      RUN_MAX_BYTES,
+    );
+  });
+
+  it("is emptied with the evidence, and by a reset", async () => {
+    scannerFrame.mockImplementation(() => answersIn(10));
+    const { result } = mount({ grabFrame: numbered(), detailWaitMs: 0 });
+    await tick(35);
+    expect(result.current.recent().length).toBeGreaterThan(1);
+
+    act(() => result.current.clearReads());
+    expect(result.current.recent()).toEqual([]);
+
+    // It fills again from the frames sent after — and a reset lets those go too, at the press.
+    await tick(35);
+    const refilled = numbers(result.current.recent());
+    expect(refilled.length).toBeGreaterThan(0);
+    let reset!: Promise<void>;
+    act(() => {
+      reset = result.current.reset();
+    });
+    expect(result.current.recent()).toEqual([]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20);
+      await reset;
+    });
+    expect(scannerReset).toHaveBeenCalledTimes(1);
+    // Nothing from before the reset came back with the frames sent after it.
+    await tick(35);
+    const after = numbers(result.current.recent());
+    expect(after.length).toBeGreaterThan(0);
+    expect(Math.min(...after)).toBeGreaterThan(Math.max(...refilled));
+  });
+
+  /** A run never spans a Stop, or two camera streams. */
+  it("is emptied when the pump stops, and starts over when it starts again", async () => {
+    scannerFrame.mockImplementation(() => answersIn(10));
+    const videoRef = { current: readyVideo() };
+    const grabFrame = numbered();
+    const { result, rerender } = renderHook(
+      ({ live }: { live: boolean }) => useScanLoop({ videoRef, live, ...KNOBS, grabFrame }),
+      { initialProps: { live: true } },
+    );
+    await tick(35);
+    const before = numbers(result.current.recent());
+    expect(before.length).toBeGreaterThan(1);
+
+    rerender({ live: false });
+    expect(result.current.recent()).toEqual([]);
+    await tick(60);
+    expect(result.current.recent()).toEqual([]);
+
+    rerender({ live: true });
+    await tick(35);
+    const after = numbers(result.current.recent());
+    expect(after.length).toBeGreaterThan(1);
+    expect(Math.min(...after)).toBeGreaterThan(Math.max(...before));
+  });
+
+  /**
+   * ⚠️ **The web host empties the array it is sent.** A frame goes to its scanner's Worker by
+   * transfer, so the `Uint8Array` the pump made is detached — zero-length — from the moment the
+   * call is made. A run that kept those arrays would be twenty empty frames in a browser and
+   * twenty good ones on the desktop, with nothing red anywhere; so the run keeps a copy, taken
+   * before the call.
+   */
+  it("keeps its own copy of each frame, which survives the host emptying the one it was sent", async () => {
+    scannerFrame.mockImplementation((jpeg) => {
+      detach(jpeg);
+      return answersIn(10);
+    });
+    const { result } = mount({ grabFrame: numbered() });
+    await tick(35);
+
+    // The premise: what the pump handed over really is gone.
+    const handed = scannerFrame.mock.calls.map(([jpeg]) => jpeg);
+    expect(handed.length).toBeGreaterThan(2);
+    for (const jpeg of handed) expect(jpeg.length).toBe(0);
+
+    // And the run has every byte of every frame that was answered.
+    const run = result.current.recent();
+    expect(run.map((frame) => Array.from(frame.jpeg))).toEqual([
+      [0xff, 0xd8, 1],
+      [0xff, 0xd8, 2],
+      [0xff, 0xd8, 3],
+    ]);
+  });
+
+  it("keeps a copy even where the host leaves the frame alone", async () => {
+    const first = deferred<ScannerVerdict>();
+    scannerFrame
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValue(deferred<ScannerVerdict>().promise);
+    const { result } = mount();
+    await tick();
+    await act(async () => first.resolve(VERDICTS.voting));
+    const [kept] = result.current.recent();
+    // The same bytes in an array of the run's own: what was sent is still what was sent.
+    expect(kept.jpeg).toEqual(BYTES);
+    expect(kept.jpeg).not.toBe(BYTES);
+    expect(scannerFrame.mock.calls[0][0]).toBe(BYTES);
+  });
+
+  /** A detail image is not kept or sent; that one went to the scanner with a frame is. */
+  it("says which frame went to the scanner with a detail image", async () => {
+    const gates = gated(3);
+    const { result } = mount({ detailWaitMs: 0 });
+    await tick();
+    await act(async () => gates[0].resolve({ ...VERDICTS.voting, wants_detail: true }));
+    await act(async () => gates[1].resolve({ ...VERDICTS.voting, wants_detail: false }));
+    await act(async () => gates[2].resolve(VERDICTS.voting));
+
+    const run = result.current.recent();
+    expect(run.map((frame) => frame.detail)).toEqual([false, true, false]);
+    // The paired frame's own small JPEG is the one in the run — never the detail image.
+    expect(run[1].jpeg).toEqual(PAIR_FRAME);
+    expect(run[0].jpeg).toEqual(BYTES);
+  });
+
+  it("says no detail went with a pair that had none to give", async () => {
+    const gates = gated(2);
+    const grabPair = vi.fn(async (): Promise<GrabbedPair | null> => ({
+      frame: PAIR_FRAME,
+      detail: null,
+    }));
+    const { result } = mount({ grabPair, detailWaitMs: 0 });
+    await tick();
+    await act(async () => gates[0].resolve({ ...VERDICTS.voting, wants_detail: true }));
+    await act(async () => gates[1].resolve(VERDICTS.voting));
+    expect(result.current.recent().map((frame) => frame.detail)).toEqual([false, false]);
+  });
+
+  /**
+   * A press reads the run once and the pump goes on: the array it was handed is its own, and a
+   * frame that lands afterwards is not in it.
+   */
+  it("hands out a snapshot that later frames do not reach", async () => {
+    const gates = gated(3);
+    const { result } = mount({ grabFrame: numbered() });
+    await tick();
+    await act(async () => gates[0].resolve(VERDICTS.voting));
+    await act(async () => gates[1].resolve(VERDICTS.voting));
+
+    const taken = result.current.recent();
+    expect(numbers(taken)).toEqual([1, 2]);
+    await act(async () => gates[2].resolve(VERDICTS.decided));
+    expect(numbers(taken)).toEqual([1, 2]);
+    expect(numbers(result.current.recent())).toEqual([1, 2, 3]);
+
+    // …nor does emptying the ring reach an array already handed out.
+    const whole = result.current.recent();
+    act(() => result.current.clearReads());
+    expect(numbers(whole)).toEqual([1, 2, 3]);
+    expect(result.current.recent()).toEqual([]);
+  });
+
+  it("is the same function from render to render", async () => {
+    const first = deferred<ScannerVerdict>();
+    scannerFrame
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValue(deferred<ScannerVerdict>().promise);
+    const { result } = mount();
+    const recent = result.current.recent;
+    await tick();
+    await act(async () => first.resolve(VERDICTS.voting));
+    expect(result.current.recent).toBe(recent);
   });
 });

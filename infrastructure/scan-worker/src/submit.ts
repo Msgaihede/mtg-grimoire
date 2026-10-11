@@ -1,21 +1,29 @@
 import { LABEL_HEADER } from "./cors";
-import { MAX_FRAME_BYTES, MAX_PENDING, json, type Env } from "./env";
+import { MAX_PENDING, MAX_RUN_BYTES, json, type Env } from "./env";
 import { readLabel, type Label } from "./label";
 
 /**
- * `POST /scan` — one picture from the card scanner and what a reader said it shows.
+ * `POST /scan` — one scan from the card scanner: the run of frames it was given, and what a
+ * reader said they show.
  *
- * The body is the JPEG and nothing else; the label rides in a header (`label.ts`). That is the
- * shape the app already sends a camera frame to its own scanner in, and it means the object in
- * the bucket is the picture byte for byte: nothing is decoded, re-encoded or unwrapped here, on a
- * plan that gives a request ten milliseconds of CPU.
+ * **The body is the frames end to end and nothing else**; the label rides in a header
+ * (`label.ts`) and its `run` says how long each frame is, which is the only framing there is.
+ * So the object in the bucket is the scanner's own bytes: nothing is decoded, re-encoded or
+ * unwrapped here, on a plan that gives a request ten milliseconds of CPU, and one cut per entry
+ * finds the frames again (`README.md`, *Reading the inbox*).
+ *
+ * **It is sent as `application/octet-stream`, and `image/jpeg` is refused**: a run of JPEGs is
+ * not a JPEG, and the one thing this route must never take is a single picture sent as one.
  */
 
 /** The machine-readable half of each refusal the app words for a reader. */
-export const FRAME_LIMIT = "frame_limit";
+export const RUN_LIMIT = "run_limit";
 export const INBOX_FULL = "inbox_full";
 
-/** `ff d8 ff` — how every JPEG starts, and the whole of the format check. */
+/** How a run is sent, and how it is stored. */
+export const RUN_TYPE = "application/octet-stream";
+
+/** `ff d8 ff` — how every JPEG starts, and the whole of the format check, once a frame. */
 const JPEG_MAGIC = [0xff, 0xd8, 0xff];
 
 /** What a stored sidecar holds: the label, and the three things only this side knows. */
@@ -23,10 +31,11 @@ export interface Sidecar extends Label {
   id: string;
   /** This Worker's clock, never the sender's. */
   received_at: string;
+  /** The whole run's length: the sum of its frames', which was held to the body's own. */
   bytes: number;
 }
 
-export const frameKey = (id: string): string => `frames/${id}.jpg`;
+export const runKey = (id: string): string => `runs/${id}.bin`;
 export const labelKey = (id: string): string => `labels/${id}.json`;
 
 /**
@@ -59,7 +68,7 @@ async function bounded(
     const { done, value } = await reader.read();
     if (done === true || value === undefined) break;
     size += value.byteLength;
-    if (size > MAX_FRAME_BYTES && !over) {
+    if (size > MAX_RUN_BYTES && !over) {
       over = true;
       chunks.length = 0;
     }
@@ -79,11 +88,24 @@ async function bounded(
 function tooLarge(size: number): Response {
   return json(
     {
-      error: `that picture is ${size} bytes and a scan may be at most ${MAX_FRAME_BYTES}`,
-      code: FRAME_LIMIT,
+      error: `that run is ${size} bytes and a scan may be at most ${MAX_RUN_BYTES}`,
+      code: RUN_LIMIT,
     },
     413,
   );
+}
+
+/**
+ * Which frame of the body does not start as a JPEG does, walking the label's lengths — or `null`
+ * when every one does. The caller has already held those lengths to the body's own.
+ */
+function notAJpeg(bytes: Uint8Array, label: Label): number | null {
+  let at = 0;
+  for (const [index, frame] of label.run.entries()) {
+    if (JPEG_MAGIC.some((byte, offset) => bytes[at + offset] !== byte)) return index;
+    at += frame.bytes;
+  }
+  return null;
 }
 
 /** How long an isolate goes on answering "full" without asking the bucket again. */
@@ -96,7 +118,7 @@ export const FULL_FOR_MS = 60_000;
  * **What it saves is the list.** A list is a billed R2 operation, and once the inbox is full
  * every submission would otherwise buy one only to be refused — which is exactly what a flood
  * against a full inbox is made of. It is a memory of one isolate and no more than a minute long,
- * so an inbox that has been emptied takes pictures again within that minute everywhere.
+ * so an inbox that has been emptied takes scans again within that minute everywhere.
  */
 const foundFull = new WeakMap<R2Bucket, number>();
 
@@ -111,21 +133,26 @@ function full(): Response {
  * Store one submission, and answer the id it was stored under.
  *
  * **The order is every check that costs nothing, then the body, then the one list.** The content
- * type and the label are facts about the headers; a declared length past the cap is one too, and
- * is believed only when it refuses; and an inbox this isolate found full under a minute ago is
- * still full.
+ * type and the label are facts about the headers, and so is what the label's frames add up to;
+ * a declared length past the cap is one too, and is believed only when it refuses; and an inbox
+ * this isolate found full under a minute ago is still full.
  *
- * ⚠️ **The inbox is counted after the picture has arrived, and never before** — the reverse of
- * what reads as thrifty. Counted first, a sender who sent its headers and held its body back had
- * been let past the cap before it stored a byte, and a thousand of them could be let past a
- * nearly full inbox at once and then all finish. Counted here, what stands between the count and
- * the write is nothing a sender controls.
+ * **The body has to be exactly the frames the label lists**: as long as their lengths together,
+ * and starting as a JPEG does at every one of them. A body that is one picture under a label
+ * that lists five is refused here like any other that does not add up — the label is the index
+ * of the bytes, and a wrong index is a run nobody can cut apart.
  *
- * **And what is counted is pictures, not labels.** The picture is written first and the label
- * last — a write that fails in between leaves a picture nobody named, which is litter and not a
- * wrong answer, where a label with no picture under it would be the reverse. But the picture is
- * the two megabytes, so it is the picture {@link MAX_PENDING} counts: were it labels, every
- * picture whose label never landed would be bytes the cap could not see.
+ * ⚠️ **The inbox is counted after the run has arrived, and never before** — the reverse of what
+ * reads as thrifty. Counted first, a sender who sent its headers and held its body back had been
+ * let past the cap before it stored a byte, and a thousand of them could be let past a nearly
+ * full inbox at once and then all finish. Counted here, what stands between the count and the
+ * write is nothing a sender controls.
+ *
+ * **And what is counted is runs, not labels.** The run is written first and the label last — a
+ * write that fails in between leaves a run nobody named, which is litter and not a wrong answer,
+ * where a label with no run under it would be the reverse. But the run is the two megabytes, so
+ * it is the run {@link MAX_PENDING} counts: were it labels, every run whose label never landed
+ * would be bytes the cap could not see.
  *
  * **Both writes are handed to the runtime to finish** (`waitUntil`), because a sender who hangs
  * up cancels a request where it stands, and "between the two writes" is a place to stand. Neither
@@ -145,24 +172,32 @@ export async function handleSubmit(
   ctx?: ExecutionContext,
 ): Promise<Response> {
   const type = request.headers.get("content-type")?.split(";")[0].trim().toLowerCase();
-  if (type !== "image/jpeg") return json({ error: "a scan is sent as image/jpeg" }, 415);
+  if (type !== RUN_TYPE) return json({ error: `a scan is sent as ${RUN_TYPE}` }, 415);
 
   const label = readLabel(request.headers.get(LABEL_HEADER));
   if (typeof label === "string") return json({ error: label }, 400);
 
+  const listed = label.run.reduce((sum, frame) => sum + frame.bytes, 0);
+  if (listed > MAX_RUN_BYTES) return tooLarge(listed);
+
   const declared = Number(request.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > MAX_FRAME_BYTES) return tooLarge(declared);
+  if (Number.isFinite(declared) && declared > MAX_RUN_BYTES) return tooLarge(declared);
 
   if (now - (foundFull.get(env.SCANS) ?? -Infinity) < FULL_FOR_MS) return full();
 
-  if (request.body === null) return json({ error: "that request carried no picture" }, 400);
+  if (request.body === null) return json({ error: "that request carried no frames" }, 400);
   const { bytes, size } = await bounded(request.body);
   if (bytes === null) return tooLarge(size);
-  if (bytes.byteLength < JPEG_MAGIC.length || JPEG_MAGIC.some((byte, at) => bytes[at] !== byte)) {
-    return json({ error: "that is not a JPEG" }, 400);
+  if (bytes.byteLength !== listed) {
+    return json(
+      { error: `that run is ${bytes.byteLength} bytes and its label lists ${listed}` },
+      400,
+    );
   }
+  const wrong = notAJpeg(bytes, label);
+  if (wrong !== null) return json({ error: `frame ${wrong} of that run is not a JPEG` }, 400);
 
-  const waiting = await env.SCANS.list({ prefix: "frames/", limit: MAX_PENDING });
+  const waiting = await env.SCANS.list({ prefix: "runs/", limit: MAX_PENDING });
   if (waiting.truncated || waiting.objects.length >= MAX_PENDING) {
     foundFull.set(env.SCANS, now);
     return full();
@@ -176,7 +211,7 @@ export async function handleSubmit(
     bytes: bytes.byteLength,
   };
   const stored = (async () => {
-    await env.SCANS.put(frameKey(id), bytes, { httpMetadata: { contentType: "image/jpeg" } });
+    await env.SCANS.put(runKey(id), bytes, { httpMetadata: { contentType: RUN_TYPE } });
     await env.SCANS.put(labelKey(id), JSON.stringify(sidecar), {
       httpMetadata: { contentType: "application/json" },
     });

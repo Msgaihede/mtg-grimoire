@@ -79,7 +79,7 @@ This file contains only global instructions. **The binding rules for any specifi
 | [`.storybook/CLAUDE.md`](.storybook/CLAUDE.md)                                       | Storybook workbench, mock database (`packages/fake/db.ts`), seed fixtures, and fault simulation             |
 | [`.github/CLAUDE.md`](.github/CLAUDE.md)                                             | CI workflows, path routers, and release-please configuration                                                |
 | [`infrastructure/app-worker/README.md`](infrastructure/app-worker/README.md)         | Web app Cloudflare Worker hosting, headers, and deploy runbook                                              |
-| [`infrastructure/scan-worker/README.md`](infrastructure/scan-worker/README.md)       | Scan inbox Worker — the route the scanner's Send posts a picture to, its bounds, and deploy runbook         |
+| [`infrastructure/scan-worker/README.md`](infrastructure/scan-worker/README.md)       | Scan inbox Worker — the route the scanner's Send posts a run of frames to, its bounds, and deploy runbook   |
 
 ---
 

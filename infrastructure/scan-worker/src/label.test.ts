@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import goldenLabel from "../../../crates/grimoire-core/src/__golden__/scan-label.txt?raw";
 import scannerSubmitRs from "../../../crates/grimoire-core/src/scanner_submit.rs?raw";
-import { MAX_LABEL_CHARS } from "./env";
-import { label } from "./fake";
-import { FINISHES, readLabel, type Label } from "./label";
+import { MAX_LABEL_CHARS, MAX_RUN_BYTES, MAX_RUN_FRAMES, MIN_RUN_FRAMES } from "./env";
+import { frame, label, labelOver } from "./fake";
+import { FINISHES, MAX_FILTER_SETS, readLabel, type Label } from "./label";
 
 /**
  * The label's checks, and the fence between this file's shape and the engine's.
@@ -17,7 +17,7 @@ import { FINISHES, readLabel, type Label } from "./label";
 
 const read = (value: unknown): Label | string => readLabel(JSON.stringify(value));
 
-/** `label()` with one path replaced — `with("card.id", 7)`. */
+/** `label()` with one path replaced — `withField("card.id", 7)`, `withField("run.0.ms", 1)`. */
 function withField(path: string, value: unknown): unknown {
   const whole = JSON.parse(JSON.stringify(label())) as Record<string, unknown>;
   const keys = path.split(".");
@@ -27,15 +27,33 @@ function withField(path: string, value: unknown): unknown {
   return whole;
 }
 
+/** `label()` with one path deleted. */
+function without(path: string): unknown {
+  const whole = JSON.parse(JSON.stringify(label())) as Record<string, unknown>;
+  const keys = path.split(".");
+  let at = whole;
+  for (const key of keys.slice(0, -1)) at = at[key] as Record<string, unknown>;
+  delete at[keys[keys.length - 1]];
+  return whole;
+}
+
 describe("a label that is whole", () => {
   it("is read back as it was sent", () => {
     expect(read(label())).toEqual(label());
   });
 
-  it("may say the scanner read nothing", () => {
-    const silent = {
+  it("may say the scanner read nothing, at the press and in every frame", () => {
+    const silent: Label = {
       ...label(),
-      scanner: { reported: null, mode: "exact", confidence: null, distance: null, bundle: null },
+      scanner: {
+        reported: null,
+        mode: "exact",
+        confidence: null,
+        distance: null,
+        bundle: null,
+        filters: { sets: [], from: null, to: null },
+      },
+      run: [-440, -330, -220, -110, 0].map((ms) => frame(ms, 64)),
     };
     expect(read(silent)).toEqual(silent);
   });
@@ -54,6 +72,80 @@ describe("a label that is whole", () => {
       (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
     );
     expect(readLabel(header)).toEqual(named);
+  });
+
+  it("takes every frame's times as they are, in the order they were sent", () => {
+    // Oldest first is the app's order and is stored as it came: this side sorts nothing.
+    const sent = labelOver([64, 64, 64, 64, 64, 64]);
+    const taken = read(sent) as Label;
+    expect(taken.run.map((entry) => entry.ms)).toEqual([-550, -440, -330, -220, -110, 0]);
+  });
+
+  it("takes as many filtered sets as the engine sends, and no more", () => {
+    const sets = Array.from({ length: MAX_FILTER_SETS }, (_, n) => `s${n}`);
+    expect(read(withField("scanner.filters.sets", sets))).toMatchObject({
+      scanner: { filters: { sets } },
+    });
+    expect(typeof read(withField("scanner.filters.sets", [...sets, "one"]))).toBe("string");
+  });
+});
+
+/**
+ * **The rule the whole feature is built on: all of the frames or nothing, and never a single
+ * screenshot.** The scanner decides over a run, so one picture cannot say what it did. There is
+ * no key in this shape a lone still can be sent in, and a run too short to be one is refused
+ * like any other label that is not whole.
+ */
+describe("a scan is a run of frames, never one picture", () => {
+  const SHORT = `a scan is a run of at least ${MIN_RUN_FRAMES} frames, never one picture`;
+
+  it("refuses one picture, and every run shorter than a run", () => {
+    for (let frames = 0; frames < MIN_RUN_FRAMES; frames += 1) {
+      const lengths = Array.from({ length: frames }, () => 64);
+      expect(read(labelOver(lengths)), String(frames)).toBe(SHORT);
+    }
+    expect(MIN_RUN_FRAMES).toBeGreaterThan(1);
+  });
+
+  it("takes the shortest run and the longest, and refuses one frame more", () => {
+    const of = (frames: number): unknown => labelOver(Array.from({ length: frames }, () => 64));
+    expect((read(of(MIN_RUN_FRAMES)) as Label).run).toHaveLength(MIN_RUN_FRAMES);
+    expect((read(of(MAX_RUN_FRAMES)) as Label).run).toHaveLength(MAX_RUN_FRAMES);
+    expect(read(of(MAX_RUN_FRAMES + 1))).toBe(
+      `a scan is a run of at most ${MAX_RUN_FRAMES} frames`,
+    );
+  });
+
+  it("refuses the shape that carried one still, which has no run in it", () => {
+    // What this inbox was first written to take: one picture's size, and nothing else of it.
+    const still = { ...(without("run") as object), frame: { width: 1920, height: 1080 } };
+    expect(read(still)).toBe("that label lists no frames");
+    for (const run of [null, {}, "five", 5]) {
+      expect(read(withField("run", run)), JSON.stringify(run)).toBe("that label lists no frames");
+    }
+  });
+
+  it("drops a still's size sent beside a run rather than storing it", () => {
+    const both = { ...label(), frame: { width: 1920, height: 1080 } };
+    expect(read(both)).toEqual(label());
+    expect(read(both)).not.toHaveProperty("frame");
+  });
+
+  it("fits the longest run the engine sends inside the header's cap", () => {
+    // Twenty frames with every figure present, under the longest name this side takes.
+    const full = labelOver(Array.from({ length: MAX_RUN_FRAMES }, () => MAX_RUN_BYTES));
+    full.card.name = "x".repeat(200);
+    full.run = full.run.map((entry) => ({
+      ...entry,
+      ms: -59_999,
+      lock: "acquiring",
+      confidence: 0.123,
+      distance: 256,
+      decided: "f29ba16f-c8fb-42fe-aabf-87089cb214a7",
+    }));
+    const header = JSON.stringify(full);
+    expect(header.length).toBeLessThan(MAX_LABEL_CHARS);
+    expect(typeof readLabel(header)).toBe("object");
   });
 });
 
@@ -91,7 +183,7 @@ describe("a label that is refused", () => {
     ["card.id", 7],
     ["card.set", ""],
     ["card.set", "2X2"],
-    ["card.set", "../frames"],
+    ["card.set", "../runs"],
     ["card.number", ""],
     ["card.number", "x".repeat(33)],
     ["card.number", "1\n2"],
@@ -116,27 +208,85 @@ describe("a label that is refused", () => {
     ["scanner.distance", 1.5],
     ["scanner.bundle", -1],
     ["scanner.bundle", "98000"],
+    ["scanner.filters", null],
+    ["scanner.filters", []],
+    ["scanner.filters.sets", null],
+    ["scanner.filters.sets", "2x2"],
+    ["scanner.filters.sets", ["2X2"]],
+    ["scanner.filters.sets", ["2x2", 7]],
+    ["scanner.filters.sets", ["../labels"]],
+    ["scanner.filters.from", ""],
+    ["scanner.filters.from", "8 July 2022"],
+    ["scanner.filters.to", "2022-7-8"],
+    ["scanner.filters.to", 20220708],
     ["app", null],
     ["app.version", ""],
     ["app.version", "0.43.0 (beta)"],
     ["app.platform", "Desktop"],
     ["app.platform", ""],
-    ["frame", null],
-    ["frame.width", 0],
-    ["frame.width", 8193],
-    ["frame.height", 1080.5],
-    ["frame.height", "1080"],
+    ["run.0", null],
+    ["run.0", []],
+    ["run.0", "a frame"],
+    ["run.4.ms", 1],
+    ["run.0.ms", -60_001],
+    ["run.0.ms", -110.5],
+    ["run.0.ms", "-110"],
+    ["run.0.bytes", 0],
+    ["run.0.bytes", 2],
+    ["run.0.bytes", MAX_RUN_BYTES + 1],
+    ["run.0.bytes", 64.5],
+    ["run.2.width", 0],
+    ["run.2.width", 8193],
+    ["run.2.height", 540.5],
+    ["run.2.height", "540"],
+    ["run.1.ok", "true"],
+    ["run.1.ok", null],
+    ["run.1.lock", "Locked On"],
+    ["run.1.lock", ""],
+    ["run.1.lock", 2],
+    ["run.3.confidence", -0.1],
+    ["run.3.confidence", 1.1],
+    ["run.3.confidence", "0.4"],
+    ["run.3.distance", 257],
+    ["run.3.distance", 1.5],
+    ["run.4.decided", "Lightning Bolt"],
+    ["run.4.decided", 0],
+    ["run.4.detail", 0],
+    ["run.4.detail", null],
   ])("refuses %s = %j", (path, value) => {
     expect(typeof read(withField(path, value))).toBe("string");
+  });
+
+  it("names the frame a refusal is about", () => {
+    expect(read(withField("run.3.distance", 257))).toBe(
+      "that label's frame 3 has a distance that is not a count of bits",
+    );
   });
 
   it("refuses a figure that is left out rather than null", () => {
     // The engine sends `null` for a figure the scanner did not have. A key that is missing is
     // a build that does not send it, and this side must not read the two as one.
-    for (const key of ["reported", "confidence", "distance", "bundle"]) {
-      const sent = JSON.parse(JSON.stringify(label())) as { scanner: Record<string, unknown> };
-      delete sent.scanner[key];
-      expect(typeof read(sent), key).toBe("string");
+    for (const path of [
+      "scanner.reported",
+      "scanner.confidence",
+      "scanner.distance",
+      "scanner.bundle",
+      "scanner.filters",
+      "scanner.filters.sets",
+      "scanner.filters.from",
+      "scanner.filters.to",
+      "run.0.ms",
+      "run.0.bytes",
+      "run.0.width",
+      "run.0.height",
+      "run.0.ok",
+      "run.0.lock",
+      "run.0.confidence",
+      "run.0.distance",
+      "run.0.decided",
+      "run.0.detail",
+    ]) {
+      expect(typeof read(without(path)), path).toBe("string");
     }
   });
 });
@@ -154,21 +304,24 @@ describe("the engine's label, read as text", () => {
     expect(fields("Label")).toEqual(Object.keys(whole));
     expect(fields("LabelCard")).toEqual(Object.keys(whole.card));
     expect(fields("LabelScanner")).toEqual(Object.keys(whole.scanner));
+    expect(fields("LabelFilters")).toEqual(Object.keys(whole.scanner.filters));
     expect(fields("LabelApp")).toEqual(Object.keys(whole.app));
-    expect(fields("LabelFrame")).toEqual(Object.keys(whole.frame));
+    expect(fields("LabelFrame")).toEqual(Object.keys(whole.run[0]));
+    // And the shape has nowhere to put one picture: the run is the only pictures there are.
+    expect(fields("Label")).not.toContain("frame");
   });
 
   it("is sent with no rename, no default and no field left out", () => {
-    // Any serde attribute on these five structs or on a field of them changes the wire with
+    // Any serde attribute on these six structs or on a field of them changes the wire with
     // every field name unmoved — a rename, a skip, a `skip_serializing_if` that leaves a `null`
     // out. So none at all: from the comment above `Label`, so an attribute on `Label` itself is
     // inside the cut, to the first thing after `LabelFrame`.
-    const from = scannerSubmitRs.indexOf("/// What the inbox stores beside a picture");
+    const from = scannerSubmitRs.indexOf("/// What the inbox stores beside a run");
     const to = scannerSubmitRs.indexOf("/// The inbox this install asks");
     expect(from).toBeGreaterThan(-1);
     expect(to).toBeGreaterThan(from);
     const structs = scannerSubmitRs.slice(from, to);
-    expect(structs.match(/pub struct \w+ \{/g)).toHaveLength(5);
+    expect(structs.match(/pub struct \w+ \{/g)).toHaveLength(6);
     expect(structs).not.toMatch(/#\[serde\(/);
   });
 
@@ -183,6 +336,9 @@ describe("the engine's label, read as text", () => {
     const header = goldenLabel.trimEnd();
     // ASCII as it crosses, and inside the header's cap.
     expect(header).toMatch(/^[\x20-\x7e]+$/);
+    expect(header.length).toBeLessThan(MAX_LABEL_CHARS);
+    const acquiring = { ok: true, lock: "acquiring", distance: 44 };
+    const decided = "f29ba16f-c8fb-42fe-aabf-87089cb214a7";
     expect(readLabel(header)).toEqual({
       v: 1,
       card: {
@@ -194,14 +350,27 @@ describe("the engine's label, read as text", () => {
       },
       finish: "foil",
       scanner: {
-        reported: "f29ba16f-c8fb-42fe-aabf-87089cb214a7",
+        reported: decided,
         mode: "exact",
         confidence: 0.82,
         distance: 31,
         bundle: null,
+        filters: { sets: ["2x2", "lea"], from: null, to: "2022-07-08" },
       },
       app: { version: "0.43.0", platform: "android" },
-      frame: { width: 1920, height: 1080 },
+      run: [
+        frame(-440, 48_211),
+        frame(-330, 51_877, acquiring),
+        frame(-220, 52_340, acquiring),
+        frame(-110, 52_102, {
+          ok: true,
+          lock: "locked",
+          confidence: 0.413,
+          distance: 31,
+          detail: true,
+        }),
+        frame(0, 51_990, { ok: true, lock: "locked", confidence: 0.82, distance: 31, decided }),
+      ],
     });
   });
 
@@ -214,5 +383,11 @@ describe("the engine's label, read as text", () => {
     const listed = /const FINISHES: \[&str; 3\] = \[([^\]]+)\];/.exec(scannerSubmitRs)?.[1];
     expect(listed, "no FINISHES in scanner_submit.rs").toBeDefined();
     expect([...(listed ?? "").matchAll(/"(\w+)"/g)].map((m) => m[1])).toEqual([...FINISHES]);
+  });
+
+  it("takes as many filtered sets as the engine keeps", () => {
+    const kept = /const MAX_FILTER_SETS: usize = (\d+);/.exec(scannerSubmitRs)?.[1];
+    expect(kept, "no MAX_FILTER_SETS in scanner_submit.rs").toBeDefined();
+    expect(Number(kept)).toBe(MAX_FILTER_SETS);
   });
 });

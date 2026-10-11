@@ -19,13 +19,14 @@ export interface MatchStripProps {
    */
   onReset: () => void;
   /**
-   * *Send scan…*: the picture on screen, to the scanner's maker, with the card a reader says it
-   * shows (`submit/`). Handed the press, for the caret to come back to when the dialog closes.
+   * *Send scan…*: the last couple of seconds the scanner was shown, to its maker, with the card a
+   * reader says the last of them shows (`submit/`). Handed the press, for the caret to come back
+   * to when the dialog closes.
    *
-   * **Absent where there is no live picture to send, and then no button is drawn** — a camera
-   * that was refused or has not opened, a host with no scanner session. Not a greyed one: a
-   * press that can only refuse owes the reader its reason, and the reason is already the
-   * sentence standing where the picture would be.
+   * **Absent where there can be no run to send, and then no button is drawn** — a camera that
+   * was refused or has not opened, a host with no scanner session, recognition stopped. Not a
+   * greyed one: a press that can only refuse owes the reader its reason, and the reason is
+   * already the sentence standing over the picture, or where the picture would be.
    */
   onSend?: (opener: HTMLElement) => void;
 }
@@ -86,12 +87,12 @@ export const STRIP_SENTENCE: Record<StripTone, string> = {
  * it is the one copy of that press on the screen, so a Developer reader does not meet two buttons
  * by one name.
  *
- * **_Send scan…_ stands beside it, for every reader too** (issue #776), wherever there is a live
- * picture ({@link MatchStripProps.onSend}). This row is where a reader is looking when the
+ * **_Send scan…_ stands beside it, for every reader too** (issue #776), wherever the scanner is
+ * running ({@link MatchStripProps.onSend}). This row is where a reader is looking when the
  * scanner names the wrong card or will not name one, which is the moment the press is for. It
  * sits outside the live region for Reset's reason — a button is not news — and it is not the
  * Developer column's *Add frame to dataset*: that one writes a file beside the app for the
- * person running it, and this one sends a picture to somebody else, after a dialog that says so.
+ * person running it, and this one sends a scan to somebody else, after a dialog that says so.
  */
 export function MatchStrip({
   verdict,

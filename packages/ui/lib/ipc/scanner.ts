@@ -202,17 +202,47 @@ export interface ScannerCaptured {
 }
 
 /**
- * What a reader says a picture shows, and what the scanner had said about it — `Submission` in
+ * One frame of a sent scan: the picture the scanner was given, and what it answered for it —
+ * `SubmissionFrame` in `crates/grimoire-core/src/scanner_submit.rs`.
+ *
+ * **`jpeg` is the pump's own frame, byte for byte** (base64) — the very bytes `scanner_frame`
+ * judged, at the size and quality the pump sends — so a run of these put back through the
+ * scanner in order is what the scanner saw. The five after `ms` are its answer for this frame,
+ * each `null` (or `false`) where it had none.
+ */
+export interface ScannerSubmissionFrame {
+  jpeg: string;
+  /** Milliseconds before the press this frame was taken: zero or negative. */
+  ms: number;
+  /** `ScannerVerdict.ok`: whether a card was found in it at all. */
+  ok: boolean;
+  /** `ScannerLock.phase`, or `null` where the verdict carried no lock. */
+  lock: ScannerLockPhase | null;
+  confidence: number | null;
+  /** The best candidate's distance in bits, `ScannerCandidate.distance`. */
+  distance: number | null;
+  /** The printing the scanner had decided on by this frame, or `null`. */
+  decided: string | null;
+  /** Whether a detail image went to the scanner with this frame. It is not kept or sent. */
+  detail: boolean;
+}
+
+/**
+ * What a reader says a scan shows, and what the scanner had said about it — `Submission` in
  * `crates/grimoire-core/src/scanner_submit.rs`.
+ *
+ * **A scan is a run of frames, never one picture** (`run`, oldest first — the last couple of
+ * seconds the scanner saw before the press): the scanner decides over a run, so a single frame
+ * cannot say what it did. The engine refuses a run too short to be one.
  *
  * **The card is an id and the finish a word, and nothing else about the card is sent from
  * here**: the engine reads the printing's name, set, number and language out of its own card
- * data, so a label can never pair one printing's id with another's name. The four figures after
- * them are the scanner's side of the story at the press, each `null` when it had none — a frame
- * with no card in it is as much worth sending as one it named wrongly.
+ * data, so a label can never pair one printing's id with another's name. They name **the card in
+ * the last frame** — the one under the camera at the press. The figures after them are the
+ * scanner's side of the story at the press, each `null` when it had none.
  */
 export interface ScannerSubmission {
-  /** The printing in the picture — a Scryfall id, as every `cardId` in this file is. */
+  /** The printing in the last frame — a Scryfall id, as every `cardId` in this file is. */
   cardId: string;
   finish: Finish;
   /**
@@ -227,6 +257,9 @@ export interface ScannerSubmission {
   distance: number | null;
   /** How many cards the scanner's bundle held — `ScannerStatus.labels` — or `null` unasked. */
   bundle: number | null;
+  /** The sets and dates the scanner was narrowed to: they decide what it could have answered. */
+  filters: ScanFilters;
+  run: ScannerSubmissionFrame[];
 }
 
 /**
@@ -740,18 +773,20 @@ export const scannerCommands = {
       headers: { "x-scanner-capture": asciiJson(sidecar) },
     }),
   /**
-   * `scanner_submit::submit`, as `scanner_submit`. **The one command that sends a camera picture
-   * off the device**: `frame` — a JPEG, base64 — and the card a reader says it shows go to the
-   * scan inbox (`infrastructure/scan-worker/`), where they are kept to improve the scanner.
-   * **Only ever called from a reader's press on Send**, with that picture on the screen.
+   * `scanner_submit::submit`, as `scanner_submit`. **The one command that sends camera pictures
+   * off the device**: the run of frames in `submission` and the card a reader says they show go
+   * to the scan inbox (`infrastructure/scan-worker/`), where they are kept to improve the
+   * scanner. **Only ever called from a reader's press on Send**, with those pictures on the
+   * screen.
    *
-   * The frame is base64 in the arguments and not a raw body like {@link ipc.scannerFrame}'s: this
-   * is one call a press, it has to be awaited across a network, and the page already holds the
-   * text to draw the picture with. Rejects in one sentence — no such printing, a finish that
-   * printing does not come in, a picture too large, an inbox that is full or cannot be reached.
+   * The frames are base64 in the arguments and not a raw body like {@link ipc.scannerFrame}'s:
+   * this is one call a press, it has to be awaited across a network, and the page already holds
+   * the text to draw the pictures with. Rejects in one sentence — a run too short to be one, no
+   * such printing, a finish that printing does not come in, an inbox that is full or cannot be
+   * reached.
    */
-  scannerSubmit: (frame: string, submission: ScannerSubmission) =>
-    invoke<ScannerSubmitted>("scanner_submit", { frame, submission }),
+  scannerSubmit: (submission: ScannerSubmission) =>
+    invoke<ScannerSubmitted>("scanner_submit", { submission }),
   /**
    * `scanner::scanner_set_filters`. Narrows every later frame to these sets and dates, and resets
    * the tracker. **Rejects in the crate's words** — no card names loaded to filter by, or filters
