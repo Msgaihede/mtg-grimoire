@@ -33,6 +33,7 @@ vi.mock("@/features/settings/TheoryMarksPanel", () => ({
   TheoryMarksPanel: stub("panel:theory"),
 }));
 vi.mock("@/features/settings/UpdatePanel", () => ({ UpdatePanel: stub("panel:update") }));
+vi.mock("@/features/settings/VersionPanel", () => ({ VersionPanel: stub("panel:version") }));
 
 /** Every command answers `null`, except the one the page polls a number from. */
 vi.mock("@/lib/ipc", async (importOriginal) => ({
@@ -80,6 +81,7 @@ describe("Settings in the light edition", () => {
   it("offers only the groups that hold a light panel, in the rail's order", () => {
     render(light(<SettingsPage update={NO_UPDATE} />));
     expect(entries()).toEqual([
+      "Updates",
       "Card data",
       "Sync",
       "Tags",
@@ -89,13 +91,13 @@ describe("Settings in the light edition", () => {
     ]);
   });
 
-  it("opens on its first entry, since it has no Updates to land on", () => {
+  it("opens on Updates, and draws the version panel there rather than the updater", () => {
     render(light(<SettingsPage update={NO_UPDATE} />));
-    expect(within(rail()).getByRole("button", { name: "Card data" })).toHaveAttribute(
+    expect(within(rail()).getByRole("button", { name: "Updates" })).toHaveAttribute(
       "aria-current",
       "page",
     );
-    expect(screen.getByText("panel:prices")).toBeInTheDocument();
+    expect(screen.getByText("panel:version")).toBeInTheDocument();
     expect(screen.queryByText("panel:update")).toBeNull();
   });
 
@@ -129,7 +131,7 @@ describe("Settings in the light edition", () => {
     useAppStore.setState({ pendingSettingsPanel: "backup" });
     render(light(<SettingsPage update={NO_UPDATE} />));
     await waitFor(() => expect(useAppStore.getState().pendingSettingsPanel).toBeNull());
-    expect(screen.getByText("panel:prices")).toBeInTheDocument();
+    expect(screen.getByText("panel:version")).toBeInTheDocument();
     expect(screen.queryByText("panel:backup")).toBeNull();
   });
 

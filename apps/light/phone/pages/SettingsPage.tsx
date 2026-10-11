@@ -11,6 +11,7 @@ import { PrivacyLink } from "@grimoire/ui/features/settings/PrivacyLink";
 import { ReviewPanel } from "@grimoire/ui/features/settings/ReviewPanel";
 import { SyncPanel } from "@grimoire/ui/features/settings/SyncPanel";
 import { TheoryMarksPanel } from "@grimoire/ui/features/settings/TheoryMarksPanel";
+import { VersionPanel } from "@grimoire/ui/features/settings/VersionPanel";
 import {
   GROUPS,
   PANELS,
@@ -57,6 +58,10 @@ const GROUP_LIST = groupsOf(PANEL_LIST);
  */
 function Panel({ id, log }: { id: LightPanel; log: ErrorLog }): JSX.Element {
   switch (id) {
+    case "updates":
+      // The light edition's own Updates: the version and the notes the build carries. The
+      // desktop's `UpdatePanel` drives an updater no light host has (`Edition.updater`).
+      return <VersionPanel />;
     case "prices":
       return <Prices />;
     case "sync":
@@ -117,7 +122,7 @@ function Danger(): JSX.Element {
  * one; a group in the URL would be a change to that grammar and to the desktop's adapter.
  *
  * **No search box.** The desktop's answers a reader with a word rather than a category across
- * every panel it has; this list is six rows on one screen, and the box would cost the screen's
+ * every panel it has; this list is seven rows on one screen, and the box would cost the screen's
  * first line to find what is already on it.
  *
  * Nothing here asks where it is running or which edition it is: this face draws the light

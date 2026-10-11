@@ -14,6 +14,7 @@ import { StartViewPanel } from "@/features/settings/StartViewPanel";
 import { SyncPanel } from "@/features/settings/SyncPanel";
 import { TheoryMarksPanel } from "@/features/settings/TheoryMarksPanel";
 import { UpdatePanel } from "@/features/settings/UpdatePanel";
+import { VersionPanel } from "@/features/settings/VersionPanel";
 import {
   PANELS,
   groupsOf,
@@ -323,9 +324,15 @@ export function SettingsPage({ update }: { update: Update }) {
           ~232px when wrapped-and-full-width is not in play either, and the query could not tell
           the two states apart. This is the first thing a reviewer will want to change back. */}
       <div className="flex min-w-0 flex-[999_1_480px] flex-col gap-8">
-        {shown("updates") && (
-          <UpdatePanel update={update} history={history} windows={windows} />
-        )}
+        {/* **The edition decides which Updates this is.** The full edition's installs itself; the
+            light edition's hosts have no updater, and draw the version and the notes the build
+            carries instead (`VersionPanel`, which the phone face draws too). */}
+        {shown("updates") &&
+          (edition.updater ? (
+            <UpdatePanel update={update} history={history} windows={windows} />
+          ) : (
+            <VersionPanel />
+          ))}
 
         {/* **The only panel under `Card data`, and it was the first of two.** `CombosPanel` sat
             directly under this one on the argument that it was the same kind of thing — both
