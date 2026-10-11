@@ -18,5 +18,12 @@
 # `--manifest-path`. That package keeps its own tree: `crates/card-scanner/.cargo/config.toml`
 # answers a run started inside it, and every scripted run from the root (`pnpm verify`,
 # `ci.yml`, `scanner-bundle.yml`) passes `--target-dir crates/card-scanner/target`.
+#
+# **The agent worktrees read one more file, and it is that same walk put to use** (2026-10-11):
+# `.claude/worktrees/.cargo/config.toml`, the folder above them, which no other checkout is
+# under. It is a copy of `.claude/hooks/worktree-cargo.toml` — no incremental cache, trimmed
+# debug info, and `build-dir = "{workspace-root}/target/cache"`, so that what cargo can rebuild
+# sits apart from the executables and `data/`. Settings for the worktrees alone go there; a
+# line added to *this* file reaches the main checkout and CI as well.
 [build]
 target-dir = "target"

@@ -1,0 +1,49 @@
+# Cargo settings for the agent worktrees, and for no other checkout.
+#
+# `.claude/hooks/worktree-deps.sh` copies this file to `.claude/worktrees/.cargo/config.toml`
+# when there is none. Cargo reads a `.cargo/config.toml` from every folder above the one it is
+# run in, so a file there reaches each worktree under it — and neither the main checkout, which
+# keeps cargo's defaults for `tauri dev`, nor CI. A worktree's own `.cargo/config.toml` is
+# nearer and wins key by key; it pins `target-dir` and nothing here contradicts it.
+#
+# **Why.** Measured 2026-10-11: 33 checkouts held 640 GB of build trees, `debug/incremental`
+# alone 276 GB of it, and nothing ever deleted one. **What this file buys**, the same day and in
+# one worktree, both from nothing: `pnpm verify`'s Rust builds (clippy over every target, the
+# check, the workspace's tests) left a 19.0 GB tree with cargo's defaults and a 4.3 GB one with
+# these settings, and took about ten minutes against seven. `tauri dev`, the tests and
+# `scripts/build-wasm.mjs` were each run under them.
+#
+# **What it is not: a shared build tree.** That is the obvious fix and it links the wrong code.
+# Tried the same day on cargo 1.98.1, one toy workspace checked out twice: with one
+# `CARGO_TARGET_DIR`, and equally with one shared `build.build-dir`, the second checkout's build
+# printed `Fresh` and its executable ran the first checkout's source — both checkouts name a
+# member's artifact by its path under the workspace root, and cargo judges freshness by
+# timestamp. Nor would sharing reach the bytes: third-party crates were about 15% of a tree.
+
+[build]
+# rustc's incremental cache is kept for a workspace's own crates only, and pays for itself on
+# the second build after a small edit. An agent that verifies once at the end mostly pays for
+# it: 6.9 GB of that 19.0 after one pass, 17.2 GB of a 31.5 GB tree a few sessions old. The
+# cost of turning it off is that an edited crate is compiled whole.
+incremental = false
+
+# Everything cargo can rebuild goes under `target/cache`; `target/debug` keeps the executables
+# and, beside them, `data/` — a debug build's database. **So `target/cache` can be deleted at
+# any time and `target` cannot** (`cargo clean` still takes both). `{workspace-root}` is the
+# checkout cargo is building, which keeps the cache inside its own worktree: it goes when the
+# worktree does, and no two checkouts meet in it.
+#
+# ⚠️ **`--target-dir` no longer moves a whole build**, only what it finishes. A script that
+# wants a build tree of its own for one run — `scripts/build-wasm.mjs`, `scripts/scanner-bench.mjs`
+# — hands that run `CARGO_BUILD_BUILD_DIR` as well. `cargo metadata` answers both folders, as
+# `target_directory` and `build_directory`.
+build-dir = "{workspace-root}/target/cache"
+
+[profile.dev]
+# A backtrace still names the file and the line. A debugger shows no variables — attach one
+# from the main checkout.
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+# Every crate that is not a member of the workspace.
+debug = false

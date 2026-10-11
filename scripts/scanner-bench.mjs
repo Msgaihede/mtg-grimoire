@@ -97,7 +97,10 @@ const MODULE = "scanner_bench";
  * target feature, so the module the app ships is scalar. It is here because the readers'
  * inference (`rten`) has a WASM kernel it compiles only under that feature, and what that is
  * worth in a Worker is a figure the next step needs. It builds into a tree of its own —
- * changed flags would otherwise recompile every dependency twice a run, there and back.
+ * changed flags would otherwise recompile every dependency twice a run, there and back. Each
+ * build is handed its tree as `CARGO_BUILD_BUILD_DIR` as well as `--target-dir`: where a config
+ * sets `build.build-dir` (the agent worktrees do), `--target-dir` moves only the finished
+ * module and the intermediates of all three would share one folder.
  */
 const BUILDS = {
   ocr: { features: [], rustflags: null, tree: TARGET_DIR },
@@ -199,7 +202,11 @@ function buildModule(name) {
       "--locked",
       ...features,
     ],
-    rustflags === null ? process.env : { ...process.env, RUSTFLAGS: rustflags },
+    {
+      ...process.env,
+      CARGO_BUILD_BUILD_DIR: tree,
+      ...(rustflags === null ? {} : { RUSTFLAGS: rustflags }),
+    },
   );
   const built = join(tree, TARGET, PROFILE, `${MODULE}.wasm`);
   if (!existsSync(built)) fail(`cargo finished and ${built} is not there.`);

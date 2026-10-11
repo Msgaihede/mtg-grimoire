@@ -4110,7 +4110,8 @@ one survives a rebuild and reads as a failed change. Three steps, none of which 
    shows the bytes it will actually paint. Composite them over a light ground — over a dark one
    the old tile and the new mark are nearly the same picture, which is the whole reason this
    shipped.
-2. **Read `target/debug/build/mtg-grimoire-*/out/resource.rc`.** `tauri-build` writes it,
+2. **Read `target/debug/build/mtg-grimoire-*/out/resource.rc`** (in an agent worktree,
+   `target/cache/debug/build/…`: the build cache has its own folder there). `tauri-build` writes it,
    and the `32512 ICON "…"` line names the absolute path it embedded — `32512` is
    `IDI_APPLICATION`, the icon the shell reads off the exe.
 3. **Search the sibling `resource.lib` for the literal PNG bytes** of a new entry and of the one it

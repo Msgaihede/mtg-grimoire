@@ -47,7 +47,8 @@ file does not repeat them:
 - **`worktree-setup`** — the working rules for a second checkout: the base-branch check,
   what is not shared with the main checkout, and the shared stash stack. `pnpm install` is
   no longer a step here — `.claude/hooks/worktree-deps.sh` runs it at SessionStart, along
-  with reporting the branch.
+  with reporting the branch, seeing that the worktrees have their cargo settings
+  (`.claude/hooks/worktree-cargo.toml`), and naming a build tree no build reads any more.
 - **`running-the-app`** — **only one app and one Storybook can run across every worktree**,
   and both collisions are silent. Two locks in `locks/` under the git **common** dir
   (`D:/Code/mtg-grimoire/.git/locks` — a worktree's own `.git` is a file, not a
