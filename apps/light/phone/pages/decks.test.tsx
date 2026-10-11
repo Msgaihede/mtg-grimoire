@@ -203,7 +203,7 @@ describe("the deck gallery", () => {
     await screen.findByRole("heading", { level: 2, name: "Constructed" }, SETTLE);
 
     await user.click(screen.getByRole("button", { name: "New deck from a list" }));
-    const sheet = await screen.findByRole("dialog", { name: "Import a decklist" });
+    const sheet = await screen.findByRole("dialog", { name: "Import cards" });
     expect(sheet).toHaveTextContent("Into a new deck in Constructed");
     await user.click(within(sheet).getByRole("textbox"));
     await user.paste("4 Lightning Bolt\n4 Sol Ring");

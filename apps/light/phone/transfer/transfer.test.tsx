@@ -118,7 +118,7 @@ describe("a deck's import, on the phone", () => {
     await user.click(
       await screen.findByRole("button", { name: "Import cards into this deck" }, SETTLE),
     );
-    const sheet = await screen.findByRole("dialog", { name: /Import a decklist/ }, SETTLE);
+    const sheet = await screen.findByRole("dialog", { name: /Import cards/ }, SETTLE);
     await user.type(
       within(sheet).getByRole("textbox", { name: "Paste a decklist" }),
       "2 Counterspell",
@@ -145,11 +145,11 @@ describe("a deck's import, on the phone", () => {
     await user.click(
       await screen.findByRole("button", { name: "Import cards into this deck" }, SETTLE),
     );
-    const sheet = await screen.findByRole("dialog", { name: /Import a decklist/ }, SETTLE);
+    const sheet = await screen.findByRole("dialog", { name: /Import cards/ }, SETTLE);
     const box = within(sheet).getByRole("textbox", { name: "Paste a decklist" });
 
     await user.upload(
-      within(sheet).getByLabelText("Decklist file"),
+      within(sheet).getByLabelText("Card list file"),
       new File(["1 Sol Ring\n3 Counterspell\n"], "list.txt", { type: "text/plain" }),
     );
     await waitFor(() => expect(box).toHaveValue("1 Sol Ring\n3 Counterspell\n"), SETTLE);
@@ -161,7 +161,7 @@ describe("a deck's import, on the phone", () => {
       0x31, 0x20, 0xc6, 0x74, 0x68, 0x65, 0x72, 0x20, 0x56, 0x69, 0x61, 0x6c,
     ]);
     await user.upload(
-      within(sheet).getByLabelText("Decklist file"),
+      within(sheet).getByLabelText("Card list file"),
       new File([legacy], "legacy.txt", { type: "text/plain" }),
     );
     await waitFor(() => expect(box).toHaveValue("1 Æther Vial"), SETTLE);
@@ -257,7 +257,7 @@ describe("CollectionTransfer", () => {
     const before = held(await collectionRows(), "Counterspell");
 
     await user.click(screen.getByRole("button", { name: "Import cards into your collection" }));
-    const sheet = await screen.findByRole("dialog", { name: /Import a decklist/ }, SETTLE);
+    const sheet = await screen.findByRole("dialog", { name: /Import cards/ }, SETTLE);
     await user.type(
       within(sheet).getByRole("textbox", { name: "Paste a decklist" }),
       "3 Counterspell",

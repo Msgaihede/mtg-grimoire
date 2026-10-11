@@ -8336,9 +8336,10 @@ export const ipc = {
    * a collection nobody can reason about. A refusal rolls the whole file back.
    *
    * **`folderId` files the whole file into one folder, and absent — the default — is the root.**
-   * A file says nothing about a reader's filing, so the collection's own import step sends
-   * nothing and lands every row at the top level exactly as it always has. The **deck** arm of
-   * the import dialog is the one caller that names a folder: it sends the group of the deck the
+   * A file says nothing about a reader's filing, so the collection's own import step asks
+   * (`Import into`, issue #872): Not sorted sends nothing, and a drawer of the reader's own —
+   * or one the step has just made — sends its id. The **deck** arm of the import dialog is the
+   * other caller that names a folder: it sends the group of the deck the
    * same press just wrote a list into, so the decklist and the group agree the moment the dialog
    * closes and the copies are out of every other deck's reach. Ticking that box while the copies
    * stopped at the root left the deck reading *missing* on every line the reader had just said

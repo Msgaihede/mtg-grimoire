@@ -177,12 +177,14 @@ const meta = {
           "the action row beside the buttons. " +
           "With no stop for the open card there is no pair at all — `flanks: undefined` — " +
           "because a chevron that cannot say where it would go is worse than no chevron.\n\n" +
-          "**`Add to deck` is a `Dropdown` rather than the card menu's deck picker**, and that " +
-          "is forced: the context menu is mounted at the app root at `LAYER.popup` and this " +
-          "modal's scrim is two rungs above it at `LAYER.overlay`, so a menu opened from in here " +
-          "would paint *behind* the scrim — invisible, unreachable, and with nothing going red. " +
-          "The numbers are `layers.ts`'s and are deliberately not spelled here: " +
-          "`layers.test.ts` sweeps `packages/ui/` for one and reads a doc string as markup.",
+          "**`Add to deck` is a `Dropdown` rather than the card menu's deck picker**, because it " +
+          "is a control of the panel's own action row and paints above the scrim from inside " +
+          "the panel. **A right-click on the picture opens the card menu** (issue #846): the " +
+          "menu is mounted at the app root, and it takes `LAYER.menuOverDialog` rather than " +
+          "`LAYER.popup` when it is opened from inside a dialog, so it is drawn over this " +
+          "modal's scrim instead of behind it. The numbers are `layers.ts`'s and are " +
+          "deliberately not spelled here: `layers.test.ts` sweeps `packages/ui/` for one and " +
+          "reads a doc string as markup.",
       },
     },
   },

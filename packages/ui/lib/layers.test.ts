@@ -52,6 +52,12 @@ describe("the layer scale", () => {
     // because `SyncProgress`'s full-window takeover must still cover a hint describing a control
     // the reader can no longer see.
     expect(numberOf(LAYER.overlayStacked)).toBeLessThan(numberOf(LAYER.tooltip));
+    // A context menu opened from inside a dialog is a `fixed` sibling of that dialog's scrim in
+    // the root stacking context, so it has to clear the highest dialog rung or it paints behind
+    // the scrim (issue #846) — and a menu over a view stays under the drag tray, which is why
+    // this is a rung of its own rather than a higher `popup`. A hint over a menu row still wins.
+    expect(numberOf(LAYER.overlayStacked)).toBeLessThan(numberOf(LAYER.menuOverDialog));
+    expect(numberOf(LAYER.menuOverDialog)).toBeLessThan(numberOf(LAYER.tooltip));
     expect(numberOf(LAYER.tooltip)).toBeLessThan(numberOf(LAYER.gate));
     // And the window's own caption is above every one of them. `decorations: false` makes that
     // row the only way to move, minimize or close the app, so a surface covering it does not

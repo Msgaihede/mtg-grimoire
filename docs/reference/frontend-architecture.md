@@ -25,7 +25,7 @@ Right-click context menus are owned by a single root provider:
 
 1. **Root-Level Mounting**:
    - `ContextMenuProvider` wraps the app in `App.tsx` and renders the menu container as a **direct sibling of `AppShell`**.
-   - Menus are assigned `LAYER.popup` z-index.
+   - Menus are assigned `LAYER.popup` z-index over a view, and `LAYER.menuOverDialog` when the element they were opened from is inside a `role="dialog"` (`menuLayer` in `ContextMenu.tsx`). A root-mounted menu is a sibling of every dialog's scrim, so at `popup` a menu opened from the card detail modal painted behind it (issue #846).
 2. **Escaping Stacking Contexts**:
    - CSS properties such as `transform`, `filter`, `perspective`, and `contain` create new CSS stacking contexts.
    - Mounting menus inside nested component trees causes their `z-index` to be trapped within the local stacking context, resulting in menus being clipped by overflow containers or rendered behind dialog scrims.

@@ -109,6 +109,9 @@ vi.mock("@/lib/externalLinks", async (original) => ({
 }));
 
 import { CardDetailModal } from "./CardDetailModal";
+import { CardToDeckProvider } from "./cardMenu";
+import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
+import { LAYER } from "@/lib/layers";
 import { LABEL_COLORS } from "@/features/decks/labelColors";
 import { openExternal } from "@/lib/externalLinks";
 import { useAppStore } from "@/lib/store";
@@ -803,6 +806,39 @@ it("credits the illustrator of the face on screen, meld view included", async ()
   expect(screen.queryByText(/illustrated by christopher rush\./i)).not.toBeInTheDocument();
   // The frame is a picture of that card too — the alt text is what a screen reader announces.
   expect(screen.getByAltText("Brisela, Voice of Nightmares")).toBeInTheDocument();
+});
+
+/**
+ * Issue #846: a right-click on the card in the modal opened nothing. Under the two providers
+ * `App.tsx` mounts above it — `useContextMenu` answers a no-op with no `ContextMenuProvider`, so
+ * without them this test would pass by never being asked.
+ */
+it("opens the card menu on a right-click of the picture, drawn over the modal's scrim", async () => {
+  useAppStore.getState().setSelectedCardId("c1");
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={qc}>
+      <CardToDeckProvider>
+        <ContextMenuProvider>
+          <CardDetailModal />
+        </ContextMenuProvider>
+      </CardToDeckProvider>
+    </QueryClientProvider>,
+  );
+
+  const picture = await screen.findByAltText("Lightning Bolt");
+  const press = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+  act(() => {
+    picture.dispatchEvent(press);
+  });
+
+  expect(press.defaultPrevented).toBe(true);
+  const menu = await screen.findByRole("menu");
+  expect(within(menu).getByRole("menuitem", { name: "Copy card name" })).toBeInTheDocument();
+  expect(within(menu).getByRole("menuitem", { name: "View all printings" })).toBeInTheDocument();
+  // The half jsdom cannot see as pixels: the panel is a root-mounted sibling of the scrim, and at
+  // `LAYER.popup` it was drawn behind it.
+  expect(menu).toHaveClass(LAYER.menuOverDialog);
 });
 
 it("dates the prices it draws, in the footer beside the credit", async () => {

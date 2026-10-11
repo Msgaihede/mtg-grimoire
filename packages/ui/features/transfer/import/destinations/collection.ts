@@ -571,8 +571,8 @@ function wholeNumber(text: string): number | undefined {
  *   copies toward the file's number anyway (`ImportCommitOutcome.leftInFolders`).
  *
  *   **Which folder is the caller's decision and is made after this runs.** A file says nothing
- *   about a reader's filing, so the collection's own import step names none and its rows land at
- *   the root. The **deck** arms' "Add cards to collection" box says *these copies are in this
+ *   about a reader's filing, so the collection's own import step asks the reader (`Import into`,
+ *   issue #872) and files the whole file into the one they name — the root by default. The **deck** arms' "Add cards to collection" box says *these copies are in this
  *   deck*, so `useImport` sends that deck's `collection_folders` group — the decklist and the
  *   group agree the moment the dialog closes, and no other deck can claim the copies.
  *   `DeckPreview`'s `OWN_COPIES_HINT` is where the reader is told the second half.

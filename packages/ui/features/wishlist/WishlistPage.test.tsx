@@ -1592,8 +1592,8 @@ describe("WishlistPage", () => {
     await screen.findByText("Lightning Bolt");
 
     await user.click(screen.getByRole("button", { name: "Import to wishlist" }));
-    const dialog = await screen.findByRole("dialog", { name: "Import a decklist" });
-    await user.click(within(dialog).getByLabelText("Decklist"));
+    const dialog = await screen.findByRole("dialog", { name: "Import cards" });
+    await user.click(within(dialog).getByLabelText("Card list"));
     await user.paste("1 Sol Ring");
     await user.click(within(dialog).getByRole("button", { name: "Preview" }));
 
@@ -1618,7 +1618,7 @@ describe("WishlistPage", () => {
       ),
     );
     await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Import a decklist" })).not.toBeInTheDocument(),
+      expect(screen.queryByRole("dialog", { name: "Import cards" })).not.toBeInTheDocument(),
     );
   });
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { LAYER } from "@/lib/layers";
 import { MenuRows, SUBMENU_HOVER_MS } from "./ContextMenu";
 import { ContextMenuProvider } from "./ContextMenuProvider";
 import { useContextMenu } from "./useContextMenu";
@@ -62,6 +63,34 @@ describe("ContextMenu", () => {
     expect(event.defaultPrevented).toBe(true);
     expect(await screen.findByRole("menu")).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "Copy card name" })).toBeInTheDocument();
+  });
+
+  /**
+   * Issue #846. The panel is a root-mounted sibling of every dialog's scrim, so a menu opened from
+   * inside one has to clear the dialog's rung or it is drawn, focused and invisible. jsdom paints
+   * nothing, so the class is the only thing a suite can see — the pixels are the running window's.
+   */
+  it("takes the dialog rung when it was opened from inside a dialog, and popup otherwise", () => {
+    const items: MenuItem[] = [
+      { kind: "action", id: "copy", label: "Copy card name", onSelect: vi.fn() },
+    ];
+    render(
+      <ContextMenuProvider>
+        <Host items={items} />
+        <div role="dialog" aria-label="Card">
+          <Host items={items} />
+        </div>
+      </ContextMenuProvider>,
+    );
+    const [onView, inDialog] = screen.getAllByRole("button", { name: "target" });
+
+    rightClick(onView!);
+    expect(screen.getByRole("menu")).toHaveClass(LAYER.popup);
+    expect(screen.getByRole("menu")).not.toHaveClass(LAYER.menuOverDialog);
+
+    rightClick(inDialog!);
+    expect(screen.getByRole("menu")).toHaveClass(LAYER.menuOverDialog);
+    expect(screen.getByRole("menu")).not.toHaveClass(LAYER.popup);
   });
 
   it("runs the item and closes", async () => {

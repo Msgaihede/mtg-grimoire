@@ -9,7 +9,16 @@ import {
   type ReactNode,
 } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, Download, FolderInput, Lock, LockOpen, Trash2 } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  Download,
+  FolderInput,
+  Lock,
+  LockOpen,
+  Trash2,
+  Upload,
+} from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { Dialog } from "@/components/Dialog";
 import { UndoNotice } from "@/components/UndoNotice";
@@ -44,7 +53,7 @@ import {
 } from "@/features/shelves/useHeadingCaret";
 import { ExportDialog } from "@/features/transfer/export/ExportDialog";
 import { everythingLabel, scopeLabel, useExportScope } from "@/features/transfer/export/scope";
-import { collectionDestination } from "@/features/transfer/import/destinations/CollectionPreview";
+import { collectionDestinationInto } from "@/features/transfer/import/destinations/CollectionPreview";
 import { ImportExportPair } from "@/features/transfer/ImportExportPair";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import { CONDITION_LABEL, CONDITIONS, MENU_CONDITION } from "@/lib/conditions";
@@ -696,9 +705,31 @@ export function CollectionPage() {
   );
   const exportScope = exportFolder === null ? collectionExportScope : folderExportScope;
 
-  /** The import dialog. One destination, so no radio group is drawn — a choice between one
-   *  thing is not a choice. */
-  const [importing, setImporting] = useState(false);
+  /**
+   * The import dialog, and the folder its `Import into` opens on (issue #872) — `null` while it is
+   * shut. One destination, so no radio group is drawn — a choice between one thing is not a
+   * choice.
+   *
+   * **Which folder is the entry point's to say.** The header's `Import cards` opens on the drawer
+   * the reader is standing in, or on Not sorted at the root or inside a shelf the app owns; a
+   * folder menu's `Import…` opens on that folder, and hands the caret back to its `⋯` on the way
+   * out, which is the menu's `Export…` rule.
+   */
+  const [importing, setImporting] = useState<{
+    folderId: number | null;
+    fromMenu: boolean;
+  } | null>(null);
+  const importFolderId = importing?.folderId ?? null;
+  // Keyed on the folder alone: what comes back is a component identity, and a fresh one would
+  // remount the step under the reader (`collectionDestinationInto`'s rule).
+  const importDestinations = useMemo(
+    () => [collectionDestinationInto({ folderId: importFolderId })],
+    [importFolderId],
+  );
+  const closeImport = (refocus: boolean) => {
+    if (refocus && importing?.fromMenu === true) openerRef.current?.focus();
+    setImporting(null);
+  };
 
   /**
    * The entry writes — the stepper, the removal and the bulk removal — and the cache arithmetic
@@ -1624,6 +1655,17 @@ export function CollectionPage() {
           !effectivelyLocked &&
           [...folderDescendants(folders.folders, folder.id)].some((id) => lockedIds.has(id));
         return [
+          // A file into this drawer, its subfolders untouched — the counterpart of the row under
+          // it, which exports the drawer with everything inside it. Live on a locked folder: the
+          // lock holds copies back from decks and refuses a delete, and adding cardboard to a
+          // drawer set aside disturbs nothing in it.
+          {
+            kind: "action",
+            id: "import",
+            label: "Import…",
+            Icon: Upload,
+            onSelect: () => setImporting({ folderId: folder.id, fromMenu: true }),
+          },
           {
             kind: "action",
             id: "export",
@@ -2917,7 +2959,17 @@ export function CollectionPage() {
           <div className="flex flex-wrap items-start justify-end gap-2">
             <ShareFolderMenu target={shareTarget} />
             <ImportExportPair
-              onImport={() => setImporting(true)}
+              onImport={() =>
+                setImporting({
+                  // The drawer on screen, when it is one of the reader's own; a deck's group and
+                  // `Recently removed` are no place for a file to land.
+                  folderId:
+                    folderId !== null && userFolders.some((folder) => folder.id === folderId)
+                      ? folderId
+                      : null,
+                  fromMenu: false,
+                })
+              }
               onExport={() => {
                 setExportFolder(null);
                 setExporting(true);
@@ -3667,15 +3719,16 @@ export function CollectionPage() {
       />
 
       {/* One destination — the collection itself — so no destination radios are drawn: a
-          choice between one thing is not a choice. `onDone`'s message is discarded, the same
+          choice between one thing is not a choice. Which folder is the step's own `Import into`,
+          opened on the one the entry point named. `onDone`'s message is discarded, the same
           precedent `DeckEditor` and `DecksPage` set for their own import dialogs: the numbers
           are already on screen, in the preview the reader just committed. */}
       <ImportDialog
-        destinations={[collectionDestination]}
-        open={importing}
-        onDismiss={() => setImporting(false)}
-        onClose={() => setImporting(false)}
-        onDone={() => setImporting(false)}
+        destinations={importDestinations}
+        open={importing !== null}
+        onDismiss={() => closeImport(true)}
+        onClose={() => closeImport(false)}
+        onDone={() => closeImport(false)}
       />
     </section>
   );

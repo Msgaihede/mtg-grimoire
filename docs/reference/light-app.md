@@ -2408,7 +2408,7 @@ viewport — nothing scrolls the document.
 
 | What | 1100 × 600 | 1280 × 650 | 1024 × 700 | 1024 × 560 |
 | --- | --- | --- | --- | --- |
-| A deck's *Import a decklist* | 540 tall, its body scrolls (400 of 451) | 585, scrolls (445 / 451) | 591, fits | 504, scrolls (364 / 451) |
+| A deck's *Import cards* | 540 tall, its body scrolls (400 of 451) | 585, scrolls (445 / 451) | 591, fits | 504, scrolls (364 / 451) |
 | Export (a deck's, the collection's) | 363 / 411, fit | fit | fit | fit |
 | The card modal's middle column | fits, 3 columns | fits, 3 columns | **0px tall** | **0px tall** |
 
@@ -7278,7 +7278,8 @@ under *What is still owed* in [sync.md](sync.md), with its fixture in
 - ~~**a copy filed into a binder that was deleted on the receiver**, whose sender later brings
   the binder back, is kept on one device and not the other.~~ **Fixed 2026-10-07** (issue #841);
   what the same experiments found beside it — with three devices, an older edit arriving in a
-  later pull beats a newer one — is issue #842 and still owed.
+  later pull beats a newer one — is issue #842, **fixed 2026-10-11** by user schema v61's
+  memory of what other devices wrote (`sync_heard`; [sync.md](sync.md)).
 
 ## 11. The scanner on a light install — phase 7, a step at a time
 
