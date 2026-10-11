@@ -8,6 +8,10 @@ import {
   tokenCardName,
   type DeckTokenView,
 } from "@grimoire/ui/features/decks/deckTokens";
+import {
+  DESCRIPTION_HEADING,
+  shownDescription,
+} from "@grimoire/ui/features/decks/DeckDescriptionPanel";
 import { noteTitle } from "@grimoire/ui/features/decks/deckNotes";
 import { DeleteNoteDialog } from "@grimoire/ui/features/decks/DeleteNoteDialog";
 import { NoteBody } from "@grimoire/ui/features/decks/noteBody";
@@ -42,9 +46,10 @@ import type { Receipt } from "../deck/receipt";
 /**
  * The side rail, **last** — the owner's order for 360px, and inside it the desktop's own order
  * down the page: the check and the bracket (the editor's two chips on the ledger), then the bands
- * under the desk — tokens, the curve, deck notes, deck to-do lists. Every one of them is the
- * desktop's own reading drawn inline as a section, because a phone has no ledger to hang a
- * popover from and no width for bands side by side.
+ * under the desk — tokens, the curve, the deck's description (only when it has one, issue #912),
+ * deck notes, deck to-do lists. Every one of them is the desktop's own reading drawn inline as a
+ * section, because a phone has no ledger to hang a popover from and no width for bands side by
+ * side.
  *
  * **What it writes is the desktop's, through the desktop's own dialogs** (step 3.5a): the bracket
  * through the advisory's own picker, a deck note through `NoteEditorDialog` — the one editor, Save
@@ -98,9 +103,26 @@ export function DeckRail({
       )}
       <TokensSection deckId={deckId} variant={variant} onOpenCard={onOpenCard} />
       <CurveSection cards={cards} row={row} />
+      <DescriptionSection description={row.description} />
       <NotesSection notes={notes} receipt={receipt} onOpenCard={onOpenCard} />
       <TodosSection deckId={deckId} />
     </div>
+  );
+}
+
+/**
+ * The deck's own description (`decks.description`), read-only, ahead of the notes — the desktop
+ * band's place in its row (`DeckDescriptionPanel`, issue #912). ⚠️ Not a note: it is written in
+ * Deck settings. **Nothing at all when it is blank**, the band's rule, so a deck without one has
+ * no empty section to scroll past.
+ */
+function DescriptionSection({ description }: { description: string | null }) {
+  const shown = shownDescription(description);
+  if (shown === null) return null;
+  return (
+    <Section title={DESCRIPTION_HEADING}>
+      <p className="select-text whitespace-pre-line break-words text-xs text-text">{shown}</p>
+    </Section>
   );
 }
 

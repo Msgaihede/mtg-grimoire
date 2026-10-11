@@ -80,7 +80,8 @@ Normalized via `deckKind.ts` (`regular`, `theory`, `virtual`):
 - **Undocked bar (`UndockedBar.tsx`)**: Floating bottom controls hosting view mode toggles, zoom steppers, card search dock toggle, and bulk selection actions.
 - **Quick Add (`QuickAdd.tsx`)**: High-speed keyboard card entry supporting instant search, quantity increments, and category targeting without leaving the keyboard (Enter commits, Escape reverts).
 - **Tokens & Emblems (`DeckTokensPanel`)**: Dedicated token management (`deck_token_printings`), supporting three modes (`managed`, `collection`, `hidden`).
-- **Notes & To-dos**:
+- **Description, Notes & To-dos** (one row below the price strip: three columns when wide, two, then one — an intrinsic `auto-fit` grid over `NOTES_TODOS_COLUMN`, never `@container`):
+  - Description band (`DeckDescriptionPanel.tsx`, issue #912): `decks.description`, read-only, first in the row. Not mounted when blank (`shownDescription`), so it takes no column. Open on arrival; the disclosure is editor state, not a deck column. The gallery cover's hint is the artist credit only.
   - Notes band: Titled multi-document rich text notes (`deck_notes`) with Markdown/ProseMirror formatting.
   - `NoteEditor.tsx` (both bands' editor) passes `injectCSS: false`: Tiptap's default appends a runtime stylesheet the shipped CSP refuses. Its header has what that sheet carried and why no rule replaced it.
   - To-do band: Structured deck checklists (`deck_todo_lists`) supporting item completion and ordering.

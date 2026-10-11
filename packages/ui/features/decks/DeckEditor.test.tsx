@@ -2209,6 +2209,55 @@ describe("DeckEditor", () => {
   });
 
   /**
+   * **The deck's description is the row's first band, open on arrival** (issue #912) — beside the
+   * notes and the to-do lists, in the one grid that counts its own columns, so a wide editor draws
+   * three tracks, a narrower one two, and a narrow one stacks them. Its disclosure is editor
+   * state: shutting it writes nothing to the deck.
+   */
+  it("draws the description first in the notes row, open, and shuts it without a write", async () => {
+    deckGet.mockResolvedValue(
+      detail({ description: "  Bolt the face.\nThen bolt it again.  " }, []),
+    );
+    await open();
+
+    const description = await screen.findByRole("region", { name: "Description" });
+    const notes = screen.getByRole("region", { name: "Notes" });
+    const todos = screen.getByRole("region", { name: "To-do" });
+    const row = notes.parentElement!;
+    expect(description.parentElement).toBe(row);
+    expect(row.firstElementChild).toBe(description);
+    expect(todos.parentElement).toBe(row);
+    expect(description.tagName).toBe("SECTION");
+    expect(description.classList).toContain("shrink-0");
+
+    const disclosure = within(description).getByRole("button", { name: "Description" });
+    expect(disclosure).toHaveAttribute("aria-expanded", "true");
+    const body = document.getElementById(disclosure.getAttribute("aria-controls") ?? "")!;
+    expect(body.classList).toContain("select-text");
+    // Trimmed, with the reader's line break kept for `whitespace-pre-line` to draw.
+    expect(body.querySelector("p")?.textContent).toBe("Bolt the face.\nThen bolt it again.");
+
+    const writes = deckUpdate.mock.calls.length;
+    await userEvent.click(disclosure);
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    expect(within(description).queryByText(/Bolt the face/)).not.toBeInTheDocument();
+    expect(deckUpdate).toHaveBeenCalledTimes(writes);
+  });
+
+  /**
+   * **A blank description draws no band and takes no column** (issue #912): whitespace is no
+   * description, and the row holds the notes and to-do bands alone, as it did before.
+   */
+  it("draws no description band for a blank description", async () => {
+    deckGet.mockResolvedValue(detail({ description: "  \n " }, []));
+    await open();
+
+    const notes = screen.getByRole("region", { name: "Notes" });
+    expect(screen.queryByRole("region", { name: "Description" })).not.toBeInTheDocument();
+    expect(notes.parentElement?.children).toHaveLength(2);
+  });
+
+  /**
    * **The press writes `decks.todos_open` through the ordinary `deck_update`** — the one piece of
    * the band's wiring its own suite cannot see, since it has no deck to write to. Shut on arrival:
    * the column is `DEFAULT 0`.
