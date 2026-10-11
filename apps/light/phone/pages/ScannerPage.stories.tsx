@@ -92,6 +92,10 @@ type Story = StoryObj<typeof meta>;
  * The bar, the tray and the footer are drawn regardless — the prefs, the tray and `scanner_status`
  * answer whatever the camera does. Add stays on the page, greyed, **with its reason in words under
  * it**: the desktop says that reason in a tooltip, which a finger never opens.
+ *
+ * **_Send scan…_ is not drawn here** — the status line's second press, beside *Reset evidence*,
+ * stands only over a live picture. Its dialog is the desktop's own and is storied there
+ * (`Scanner/Reader/Send scan dialog`); a story has no camera to open one from.
  */
 export const CameraRefused: Story = {
   play: async ({ canvasElement }) => {
@@ -102,6 +106,8 @@ export const CameraRefused: Story = {
     await expect(canvas.getByRole("status", { name: "Scanner status" })).toHaveTextContent(
       "Point the camera at a card",
     );
+    await expect(canvas.getByRole("button", { name: "Reset evidence" })).toBeInTheDocument();
+    await expect(canvas.queryByRole("button", { name: "Send scan…" })).toBeNull();
     await expect(await canvas.findByText("Cards you scan appear here.")).toBeInTheDocument();
     await expect(canvas.getByRole("button", { name: "Add 0 to collection" })).toHaveAttribute(
       "aria-disabled",

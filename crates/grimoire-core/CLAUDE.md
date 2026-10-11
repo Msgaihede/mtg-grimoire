@@ -109,6 +109,14 @@ For hosts without Tauri macro dispatch (Android `core_call` and WASM `call`):
 - **Progress is `scanner:assets`** (`PROGRESS_EVENT`, payload `Progress`, its `phase` one of the four `PHASE_*` constants `ipc.test.ts` pins) through `State::events`; when a file has landed the fetch calls `ScannerState::forget()`, so the next scanner command reads it with no restart.
 - **Refused on a page** in `scanner::NOT_IN_A_BROWSER_YET`, before any request — `fetch` through `host::with_files`, `owed` ahead of `Source::shipped()`: GitHub sends no CORS header and a page keeps no files. A browser's source (the app's own origin) and store (Cache Storage) are the web host's, answered on the page in this module's shapes (`packages/ui/lib/core/web/scanner.ts`).
 
+## 7c. Sending a Scan (`src/scanner_submit.rs`)
+
+- **One command, `scanner_submit` (`submit`), and the only code here that sends a picture off the device**: one camera frame and the printing and finish a reader chose for it, posted to the scan inbox (`infrastructure/scan-worker/`, `SCAN_BASE`). Its one caller is a reader's press on Send; nothing runs it on a launch, a schedule or a frame, and it takes no lease.
+- **A `task`, with the picture base64 in its arguments** — not a third `bytes` entry: a `bytes` body runs on the blocking pool, where a request cannot be awaited. It answers on a page as on any host (the inbox answers the web app's origin; the hosting policy's `connect-src` names it).
+- **The page sends an id and a finish; the engine supplies the facts.** `label_for` reads the printing's name, set, number and language from `cards` and refuses a printing these cards lack and a finish it is not made in; `picture` refuses what is not a JPEG or is over `MAX_FRAME_BYTES`, and reads the size from the JPEG's own header. Every refusal is one sentence and is made before any request.
+- **`Label` is a wire to another deploy**, sent as ASCII JSON in the `x-scan-label` header. `scan-worker`'s `label.test.ts` and `wrangler.test.ts` read this file for its five label structs, `LABEL_VERSION`, `SCAN_BASE`, `MAX_FRAME_BYTES`, `LABEL_HEADER` and the two refusal codes, and `src/__golden__/scan-label.txt` is one header both suites hold the text of — change either side in one commit. `reported` is a *decided printing* or absent, never a standing's oracle id. **Nothing in a label may say who sent it** (the privacy policy promises it); a new field owes that page a sentence.
+- The inbox's refusals are reworded for a reader by status or `code`, never by its sentence. `SCAN_URL` is a `sync_state` override with no UI, for tests and `wrangler dev --local`.
+
 ---
 
 ## 8. Build, Test, and Verification Commands

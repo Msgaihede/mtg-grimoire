@@ -7582,6 +7582,42 @@ export interface ScannerCaptured {
   saved: string;
 }
 
+/**
+ * What a reader says a picture shows, and what the scanner had said about it — `Submission` in
+ * `crates/grimoire-core/src/scanner_submit.rs`.
+ *
+ * **The card is an id and the finish a word, and nothing else about the card is sent from
+ * here**: the engine reads the printing's name, set, number and language out of its own card
+ * data, so a label can never pair one printing's id with another's name. The four figures after
+ * them are the scanner's side of the story at the press, each `null` when it had none — a frame
+ * with no card in it is as much worth sending as one it named wrongly.
+ */
+export interface ScannerSubmission {
+  /** The printing in the picture — a Scryfall id, as every `cardId` in this file is. */
+  cardId: string;
+  finish: Finish;
+  /**
+   * The printing the scanner had **decided** on (`ScannerDecision.printing`), or `null` while it
+   * had decided nothing. Never a standing's `id`: that is the oracle id its evidence pooled on,
+   * an id of another kind than {@link ScannerSubmission.cardId}.
+   */
+  reported: string | null;
+  mode: ScanMode;
+  confidence: number | null;
+  /** The best candidate's distance in bits, `ScannerCandidate.distance`. */
+  distance: number | null;
+  /** How many cards the scanner's bundle held — `ScannerStatus.labels` — or `null` unasked. */
+  bundle: number | null;
+}
+
+/**
+ * A scan the server took — `Submitted` in `scanner_submit.rs`. `id` is the reference the reader
+ * is shown: nothing sent says who sent it, so it is the only way one submission is found again.
+ */
+export interface ScannerSubmitted {
+  id: string;
+}
+
 /** The decoded frame's own size — `FrameSize` in `session.rs`. */
 export interface ScannerFrameSize {
   w: number;
@@ -11115,6 +11151,19 @@ export const ipc = {
     invoke<ScannerCaptured>("scanner_capture", jpeg, {
       headers: { "x-scanner-capture": asciiJson(sidecar) },
     }),
+  /**
+   * `scanner_submit::submit`, as `scanner_submit`. **The one command that sends a camera picture
+   * off the device**: `frame` — a JPEG, base64 — and the card a reader says it shows go to the
+   * scan inbox (`infrastructure/scan-worker/`), where they are kept to improve the scanner.
+   * **Only ever called from a reader's press on Send**, with that picture on the screen.
+   *
+   * The frame is base64 in the arguments and not a raw body like {@link ipc.scannerFrame}'s: this
+   * is one call a press, it has to be awaited across a network, and the page already holds the
+   * text to draw the picture with. Rejects in one sentence — no such printing, a finish that
+   * printing does not come in, a picture too large, an inbox that is full or cannot be reached.
+   */
+  scannerSubmit: (frame: string, submission: ScannerSubmission) =>
+    invoke<ScannerSubmitted>("scanner_submit", { frame, submission }),
   /**
    * `scanner::scanner_set_filters`. Narrows every later frame to these sets and dates, and resets
    * the tracker. **Rejects in the crate's words** — no card names loaded to filter by, or filters

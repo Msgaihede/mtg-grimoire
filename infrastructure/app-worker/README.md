@@ -166,8 +166,16 @@ a request it matches is a 429 once the free plan's day is spent.
   scanner's debug page. A sixth feed in a file the test has never heard of is red. **Not Mana
   Pool** (it sends no `Access-Control-Allow-Origin`, so a page cannot read it whatever a policy
   says).
-- **The relay is in `connect-src`, and it is the one host there that answers this origin by
-  name.** The engine asks it from a page as it does from any host — pairing, the Patreon claim,
+- **The scan inbox is in `connect-src` since 2026-10-11, and answers this origin by name as the
+  relay does** (issue #776). `mtg-grimoire-scans.denmark-east.workers.dev` is the engine's
+  `scanner_submit::SCAN_BASE`, asked only when a reader presses the card scanner's Send: one
+  `POST` of a JPEG with its label in a header, which costs a pre-flight that Worker answers for
+  the origins on its own `APP_ORIGINS` (`infrastructure/scan-worker/src/cors.ts`). One fact in
+  two deploys again, **and that Worker's comes first** — until it is deployed a Send from a page
+  is a request that leaves and fails, which the dialog says in a sentence. Nobody has sent one
+  from a browser.
+- **The relay is in `connect-src`, and it was the one host there that answered this origin by
+  name until the scan inbox joined it.** The engine asks it from a page as it does from any host — pairing, the Patreon claim,
   push, pull, the key check — and each of those is a cross-origin `fetch`; all but the
   pairing poll carry `authorization` or a JSON `content-type`, and so cost a pre-flight. The
   relay answers that pre-flight, and stamps every answer after it, only for an origin on its

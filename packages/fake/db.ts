@@ -260,6 +260,7 @@ import type {
   ScannerAssetsOwed,
   ScannerAssetsProgress,
   ScannerCaptured,
+  ScannerSubmitted,
   ScannerPrefs,
   ScannerStatus,
   ScannerTrayRow,
@@ -1548,6 +1549,11 @@ export interface FakeUpdate {
  * state, and a refusal no story can reach would be one more sentence to keep in step with
  * `scanner.rs` for nothing.
  *
+ * **`scanInboxFull`** is the scan inbox turning a picture away because it holds as many as it
+ * may until its maker has read them: `scanner_submit` refuses in the engine's sentence. The one
+ * refusal of that command a story cannot reach by what it sends — every other is about the
+ * picture or the card — and the one a reader is most likely to meet.
+ *
  * **`shareLapsed`** is a shared collection link that has gone dark, and it is `pairingReadError`'s
  * split one feature over: **the one refusal in the viewer's flow a reader cannot produce by
  * typing.** Every other way `share_open` fails is reachable from the paste box — a pasted
@@ -1609,6 +1615,7 @@ export type Fault =
   | "scannerUpdate"
   | "scannerFetchFails"
   | "scannerElsewhere"
+  | "scanInboxFull"
   | "shareLapsed"
   | "lentStorage"
   | "pairOnly";
@@ -24553,6 +24560,12 @@ const NO_PRINTING_MATCHES = "No printing matches these filters.";
 /** `scanner.rs`' `OPEN_ELSEWHERE`, verbatim — `verdictText.ts`' `SCANNER_OPEN_ELSEWHERE`. */
 const OPEN_ELSEWHERE = "The scanner is open in another window.";
 
+/** `scanner_submit.rs`' `INBOX_FULL`, verbatim; `ipc.test.ts` holds the two together. */
+export const SCAN_INBOX_FULL = "The scan inbox is full for now. Thank you — try again in a few days.";
+
+/** The reference every submission over the fake is answered with — an id in the inbox's shape. */
+export const FAKE_SCAN_ID = "20261011T101500Z-0123456789abcdef";
+
 /** A copy through JSON, which is what `app_meta` stores — so a story holding the object it was
  *  handed cannot reach back into the row, and a row cannot hold anything JSON would not. */
 function throughJson<T>(value: T): T {
@@ -24614,6 +24627,14 @@ export function scannerHandlers(db: FakeDb) {
     scanner_reset: (): void => resetScanScript(script),
     /** `scanner::scanner_capture`. */
     scanner_capture: (): ScannerCaptured => ({ saved: "live-1757300000.jpg" }),
+    /**
+     * `scanner_submit::submit` — taken, whatever it was handed: the fake has no inbox and sends
+     * nothing anywhere. Under `scanInboxFull` it refuses as the engine does for a full one.
+     */
+    scanner_submit: (): ScannerSubmitted => {
+      if (db.fault === "scanInboxFull") throw refuse(SCAN_INBOX_FULL);
+      return { id: FAKE_SCAN_ID };
+    },
     /**
      * `scanner::scanner_set_filters` — the crate's two refusals, reached without a corpus.
      *

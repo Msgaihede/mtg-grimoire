@@ -112,6 +112,13 @@ impl Request {
         Request(self.0.body(body))
     }
 
+    /// The body, as bytes that are not text — `scanner_submit`'s one picture. `content-type` is
+    /// the caller's to set, as it is for [`Request::body`]; in a browser any type but the three
+    /// a form sends costs a pre-flight, which the host asked has to answer.
+    pub fn bytes(self, body: Vec<u8>) -> Request {
+        Request(self.0.body(body))
+    }
+
     /// Send it. Any status is an `Ok`: reading 304, 404 and 429 is the caller's.
     pub async fn send(self) -> Result<Response, Error> {
         self.0.send().await.map(Response).map_err(Error::wire)

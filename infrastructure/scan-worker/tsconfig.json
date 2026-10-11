@@ -1,0 +1,35 @@
+{
+  /* The scan Worker's type-check program. Every compiler option below is
+     `infrastructure/relay/tsconfig.json`'s byte for byte, and that file carries the argument for
+     why a Worker gets a program of its own: `@cloudflare/workers-types` declares `Request`,
+     `Response` and some four hundred other globals, and the app under `packages/ui/` must see the
+     DOM's versions of those names and nothing else.
+
+     A fourth file rather than a wider `include` in any of the other three, for
+     `infrastructure/share-worker/tsconfig.json`'s reason: `mtg-grimoire-scans` is a deploy of its
+     own, and one program spanning two Workers lets an edit to one fail the other's check. It
+     names no module outside its own folder — this Worker imports none.
+
+     `infrastructure/scan-worker/src`'s `*.test.ts` are inside the program, as the relay's are: a
+     test that does not type-check can drift from what it asserts about.
+     `infrastructure/scan-worker/src/vite.d.ts` declares the two Vite imports the tests read
+     `wrangler.jsonc` and the engine's Rust by. */
+  "compilerOptions": {
+    "target": "ES2022",
+    /* No `DOM`: this is not a browser. `@cloudflare/workers-types` supplies the fetch, stream
+       and URL globals workerd actually has, which are a different and smaller set. */
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["@cloudflare/workers-types"],
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["src"]
+}

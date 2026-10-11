@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Privacy policy — MTG Grimoire</title>
-    <meta name="description" content="What MTG Grimoire keeps on your device, what it asks other services for, and what its sync relay stores." />
+    <meta name="description" content="What MTG Grimoire keeps on your device, what it asks other services for, and what its sync relay and its scan inbox store." />
     <link rel="icon" type="image/svg+xml" href="/mtg-grimoire-mark.svg" />
     <link rel="stylesheet" href="/privacy.css" />
   </head>
@@ -13,7 +13,7 @@
       <img src="/mtg-grimoire-mark.svg" alt="" />
       <h1>MTG Grimoire privacy policy</h1>
     </header>
-    <p class="dated">Effective 7 October 2026. This covers the MTG Grimoire apps for Android, for the web at mtg-grimoire.app, and for Windows and Linux.</p>
+    <p class="dated">Effective 11 October 2026. This covers the MTG Grimoire apps for Android, for the web at mtg-grimoire.app, and for Windows and Linux.</p>
 
     <p>MTG Grimoire is made by Markus Seerup. It is a tool for keeping track of a Magic: The Gathering collection. It has no accounts, shows no advertising, and contains no analytics, tracking or crash-reporting code.</p>
 
@@ -22,7 +22,7 @@
     <p>On Android the app is excluded from Google's device backup, so your collection is not copied to your Google account. In a browser, the same data is kept in that browser's storage for mtg-grimoire.app.</p>
 
     <h2>What the app asks other services for</h2>
-    <p>The app downloads card data, card pictures and prices from the services below, directly from your device, and every connection it makes is encrypted (HTTPS). Each of them sees your IP address and the request itself, as any website you visit does, and may log it under its own policy. The Android and desktop apps identify themselves as <code>MTGGrimoire</code> with their version number; in a browser, your browser identifies itself as it always does. None of these requests contains your collection, your decks or anything that identifies you to MTG Grimoire. Which pictures are asked for follows which cards you look at.</p>
+    <p>The app downloads card data, card pictures and prices from the services below, directly from your device, and every connection it makes is encrypted (HTTPS). Each of them sees your IP address and the request itself, as any website you visit does, and may log it under its own policy. The Android and desktop apps identify themselves as <code>MTGGrimoire</code> with their version number; in a browser, your browser identifies itself as it always does. None of these requests contains your collection, your decks or anything that identifies you to MTG Grimoire, with two exceptions, each described below: sync, which carries your changes encrypted so that only your own devices can read them, and the last row of the table, which carries a picture you chose to send. Which pictures are asked for follows which cards you look at.</p>
     <table class="hosts">
       <thead>
         <tr><th scope="col">Address</th><th scope="col">What is asked for</th></tr>
@@ -36,12 +36,25 @@
         <tr><td>manapool.com</td><td>Mana Pool's price list, if you choose it (Android and desktop only)</td></tr>
         <tr><td>mtg-grimoire-relay.denmark-east.workers.dev</td><td>Sync between your devices, described below — only while you pair a device, and from then on</td></tr>
         <tr><td>github.com</td><td>The card scanner's files, about 18 MB — only when you press the scanner's Download, and only in the Android app. GitHub hands the download on to its own file servers</td></tr>
+        <tr><td>mtg-grimoire-scans.denmark-east.workers.dev</td><td>One picture from the card scanner and the card you say it shows, described below — only when you press the scanner's Send</td></tr>
       </tbody>
     </table>
     <p>The desktop apps also ask GitHub (api.github.com) whether a newer version exists. The Android app and the web app do not, and the web app asks GitHub for nothing: its card scanner's files come from mtg-grimoire.app itself, when you press the scanner's Download.</p>
 
     <h2>The camera</h2>
-    <p>The app asks for the camera the first time you use it to scan a pairing code or, where the app offers it, a card. Pictures from the camera are examined on your device and are never sent anywhere. They are not kept, except that the desktop app's card scanner has a control that saves a picture to a folder on your computer when you press it.</p>
+    <p>The app asks for the camera the first time you use it to scan a pairing code or, where the app offers it, a card. Pictures from the camera are examined on your device. They are not kept and are not sent anywhere, with two exceptions, and each takes a press of yours for one picture: the desktop app's card scanner has a control that saves a picture to a folder on your computer, and the card scanner's Send, described next.</p>
+
+    <h2>Sending a scan</h2>
+    <p>The card scanner has a Send control. It is how you can show MTG Grimoire's maker a card the scanner read wrongly, or read well, so the scanner can be tested against it and improved. Nothing is sent until you press it and then confirm: the app first shows you the exact picture, and you choose which card and which finish it shows.</p>
+    <p>What is sent is:</p>
+    <ul>
+      <li>that one picture, as the camera took it — so it shows whatever was in front of the camera, and the app asks you to look at it first;</li>
+      <li>the card and finish you chose;</li>
+      <li>what the scanner itself had read: the card it had settled on, if it had settled on one, how sure it was, which scanning mode was on and how many cards its data held;</li>
+      <li>the picture's size, the app's version, and whether it was sent from the Android app, the web app or a desktop app.</li>
+    </ul>
+    <p>It is stored on Cloudflare, in MTG Grimoire's own account, where only its maker can read it, and it is used only to test and improve the card scanner. It is not published and is not passed to anyone else. Nothing stored with it says who sent it: no name, no account, no device or group identifier, and not your IP address. Like every request the app makes, this one reaches the server from your IP address, and the Android and desktop apps name themselves and their version as they always do; the address is used while the request is being answered, to limit how often one address may send, and is not kept. This server keeps no log of requests.</p>
+    <p>When a scan has been sent the app shows a reference for it. A sent scan is kept until the scanner no longer has a use for it, or until you ask for it to be deleted.</p>
 
     <h2>Sync between your devices</h2>
     <p>Sync is optional. If you pair two or more installs of MTG Grimoire, they exchange changes through a relay server that MTG Grimoire runs on Cloudflare.</p>
@@ -66,6 +79,7 @@
     <ul>
       <li>Everything on a phone is removed by uninstalling the app; in a browser, by clearing the site's data; on a computer, by deleting the app's data folder. Settings also has a reset.</li>
       <li>A device leaves a sync group from Settings, under Sync; any device in the group can remove another. Removing a device stops it receiving anything new.</li>
+      <li>To have a scan you sent deleted, write to the address below with the reference the app showed when it was sent. Nothing stored with a scan says who sent it, so the reference is the only way it can be found.</li>
       <li>To have a group's records, a membership's record or a shared snapshot deleted from the relay, write to the address below and include the device identifier shown in Settings, under Sync — the line of letters and digits beneath this device's name. It is how the right records are found.</li>
     </ul>
 

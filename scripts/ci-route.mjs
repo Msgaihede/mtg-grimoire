@@ -281,7 +281,7 @@ export const ARMS = [
   // **A glob for the programs, and it is a narrowing as well as a widening**: `tsconfig*.json`
   // is anchored, so it is the root's files only (`.storybook/tsconfig.json` matches its own arm,
   // `.design-sync/tsconfig.json` still falls through). It names the web Worker's program
-  // whatever that file is called. **And `infrastructure/*/tsconfig.json`**, the three Workers'
+  // whatever that file is called. **And `infrastructure/*/tsconfig.json`**, the four Workers'
   // programs, which were root files (`tsconfig.relay.json`, …) until 2026-10-08 and so matched
   // the glob: moved into their Workers' folders they would take those folders' arms below —
   // `rust` for the relay, and none of them `storybook` — or the fail-safe, where they ran the
@@ -358,8 +358,18 @@ export const ARMS = [
   // Worker's manifest in the pnpm workspace, read by the root install like any package's.
   { match: ["infrastructure/app-worker/*"], jobs: ["frontend", "web"] },
 
-  // The one tool that deploys that Worker, pinned with everything under it, in a folder of its
-  // own that the workspace does not list. `release-rule.test.mjs` reads its manifest and
+  // **The scan inbox** (issue #776): `infrastructure/scan-worker/`, the fourth Cloudflare Worker
+  // — the one route the card scanner's Send posts a picture to. `frontend` type-checks it
+  // (`tsc -p infrastructure/scan-worker/tsconfig.json` in `pnpm build`), lints it and runs its
+  // tests, and that is every job that reads it. **Not `rust`**: no Rust source reads a file here
+  // — the crossing runs the other way, as it does for the hosting Worker (`label.test.ts` and
+  // `wrangler.test.ts` read `crates/grimoire-core/src/scanner_submit.rs`), and the engine's arm
+  // already sets `frontend`. **Not `web`**: no build copies or runs it. Its README is prose, by
+  // the arm above every tree's. No job deploys it.
+  { match: ["infrastructure/scan-worker/*"], jobs: ["frontend"] },
+
+  // The one tool that deploys the hosting Worker, pinned with everything under it, in a folder
+  // of its own that the workspace does not list. `release-rule.test.mjs` reads its manifest and
   // lockfile (`frontend`), and the `web` job installs from them, with npm, for the sync smoke.
   // No job in this gate deploys with it.
   { match: ["infrastructure/wrangler/*"], jobs: ["frontend", "web"] },

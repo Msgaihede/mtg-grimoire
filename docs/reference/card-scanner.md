@@ -4309,6 +4309,115 @@ The scans stay in the tray after creation or cancellation. Creating a deck write
 the separate **Add to collection** action records physical ownership. The dialog explains
 this before creation, and a successful creation opens the deck editor.
 
+## Sending a scan to the inbox
+
+**A reader can send one camera picture, with the exact card it shows, so the scanner can be
+tested against it** (issue #776, 2026-10-11). §8's caveat is the reason: no accuracy figure in
+this document rests on more than eleven labelled photographs, and the frames that would settle
+most of §8 are the ones readers see and nobody else does. **Send** — beside *Reset evidence* on
+both faces — is how one of them reaches the corpus.
+
+**It is the only thing here that sends a picture off the device, and it takes two presses.** The
+first grabs the frame on the screen and freezes it in a dialog; nothing has been sent. The reader
+then chooses **the exact printing** and **its finish** by hand, and the second press sends. The
+scanner itself is unchanged: every other frame is examined where it was taken and discarded.
+
+### What the reader chooses, and why nothing is chosen for them
+
+The label is the whole value of a submission — a picture nobody has named is a photograph, and a
+picture with the printing and the finish beside it is a test. So **nothing is pre-selected**: the
+search starts from the name the scanner was leaning towards, because that is usually the card,
+but the printing is a press of the reader's own on a tile of that printing, and the finish is a
+press too unless the chosen printing is made in exactly one. A default the scanner filled in
+would be the scanner grading itself; the cases worth having are the ones where it was wrong, and
+those are exactly the ones a reader would click through.
+
+The finish is asked because no hash can tell it and it is half of what §4's *The finish* is
+about: a foil's glare is the commonest way a frame goes wrong, and a corpus that does not say
+which frames are foils cannot measure that.
+
+### What is sent
+
+| | From | Notes |
+| --- | --- | --- |
+| The picture | the `<video>`, through the loop's `grab` | A JPEG no longer than 1920 px on its long edge at quality 0.9 — **not** the size the pump sends for detection, for *Adding a frame to the dataset*'s reason, and not the sensor's full size either: 2 MB is the inbox's cap |
+| `card` — id, set, number, language, name | **the engine**, from `cards`, by the id the reader chose | The page sends the id alone, so a label cannot pair one printing's id with another's name |
+| `finish` | the reader | Refused when the printing is not made in it; `cards.finishes` that is missing is *unknown* and refuses nothing |
+| `scanner.reported` | the verdict at the press | The printing the session had **decided** on (`decision.printing`, carried on every committed frame), else `null`. **Never the leading standing's `id`**, which is the oracle id the tracker pooled evidence on — an id of another kind than the printing beside it. So `reported === card.id` is a scan it got right, another id one it got wrong, `null` one it had not answered |
+| `scanner.mode`, `confidence`, `distance`, `bundle` | the verdict, the prefs and `ScannerStatus.labels` | Each `null` when the scanner had none; with `reported` `null`, the two figures are how far it had got |
+| `frame` — width, height | the engine, from the JPEG's own frame header | Which is also what refuses bytes that are not a JPEG |
+| `app` — version, platform | the engine | `desktop`, `android` or `browser` |
+
+**Nothing in it says who sent it** — no device id, no group, no account — and the inbox stores
+no address and keeps no log. The privacy policy (`apps/light/public/privacy.html`, *Sending a
+scan*) promises that in those words; a field added to the label is a sentence owed there. The
+inbox answers an id, which the dialog shows as the reference: it is the only way one submission
+is found again, and so the only handle a deletion request has.
+
+### The path
+
+`ipc.scannerSubmit(frame, submission)` → the engine's `scanner_submit` (`crates/grimoire-core/
+src/scanner_submit.rs`) → `POST /scan` on the scan inbox (`infrastructure/scan-worker/`).
+
+- **A `task` in the command table, with the picture as base64 in its arguments** — not a third
+  `bytes` entry like the frame and the capture. A `bytes` body runs on the blocking pool, where a
+  request cannot be awaited; and this is one call a press, not nine a second. The page already
+  holds the text: the dialog draws the picture from the same base64 it sends, as a `data:` image,
+  because `img-src` allows `data:` on every host and `blob:` on none.
+- **Every host sends it the same way**, the web app included — it is not one of the commands the
+  web host answers on the page in front of the engine. From a browser it is a cross-origin
+  `fetch` whose content type and label header each cost a pre-flight; the inbox answers both for
+  the web app's origin, and the hosting policy's `connect-src` names its host.
+- **Every refusal the engine can make, it makes before any request**: a picture that is not a
+  JPEG or is over 2 MB, a printing this install's cards do not have, a finish the printing is
+  not made in. What the inbox refuses is reworded for a reader by status or `code` — full
+  (*try again in a few days*), too many at once, too large — and anything else is named by its
+  number. A rejection is drawn in the dialog, which stays open with the reader's choices so a
+  second press can try again.
+- **The label crosses to another deploy**, as ASCII JSON in the `x-scan-label` header, and the
+  inbox stores only the fields it checked. `scan-worker`'s `label.test.ts` reads the engine's
+  five label structs as text and fails when the two part; `wrangler.test.ts` holds the address,
+  the cap, the header's name and the two refusal codes the same way; and one header exactly as
+  the engine writes it (`crates/grimoire-core/src/__golden__/scan-label.txt`) is asserted by the
+  engine's suite and read whole by the inbox's, so the two cannot part over how a number, a
+  `null` or an escaped character is spelled.
+- **The inbox is bounded, and by what** is `infrastructure/scan-worker/README.md`'s: 2 MB a
+  picture, 500 pictures waiting, 12 a minute from one address. A full one is the engine's
+  *try again in a few days*.
+
+The developer panel's **Add frame to dataset** (*Adding a frame to the dataset*, §6, and
+`scanner_capture`) is a different thing and is unchanged: it writes a file beside the app, with a
+name typed freely, on a host that keeps files. Send is for a reader, works where there are no
+files, and takes a printing rather than a string.
+
+### Seen, 2026-10-11 — and what was not
+
+**The dialog was driven with a camera, on the phone face, in a real browser** — headless
+Chromium with its fake camera, over the Storybook fake (`pnpm mobile:scanner-smoke`, step 12, at
+360×800 and 412×915 under a touch pointer). The press stands beside *Reset evidence* and leaves
+the match bar its room; the dialog draws the camera's own 1920×1080 frame from the very text it
+goes on to send; nothing is chosen and Send is out of reach with its reason; a printing sold
+three ways brings its finishes into view; one `scanner_submit` carries the two answers; the
+reference comes back, and Done hands the caret to the press. Every control in it is 44px or more
+and nothing hangs off the side. The desktop strip and the dialog's states were looked at in
+Storybook at 1100×820 and at 375×812.
+
+**One thing that pass found, and the fix is in the dialog**: at a phone's height the finishes sat
+under the fold of the dialog's scroller, so a reader who had just chosen a printing was told
+*Choose its finish.* by a footer with no finish in sight. Choosing a printing that leaves the
+finish open now scrolls the group into view (`nearest`, so a dialog tall enough does not move),
+and the picture's ceiling is lower where the dialog is the whole screen.
+
+**The inbox has not been deployed, and nobody has sent a scan through it.** Past the page, every
+wire is held by tests on each side of it — the engine over a mock server, the Worker over fakes
+of its two bindings — and by nothing that crosses a real network. Nobody has pressed Send in the
+desktop app's own window or on a phone in a hand. What only a deploy and a real press can show:
+that the bucket binding takes a write, that a browser's pre-flight is answered at the edge as
+the suite answers it, what a real camera's 1920-pixel frame weighs against the 2 MB cap
+(Chromium's test pattern is 22 kB and says nothing about it), and whether 500 waiting
+submissions is a ceiling a real week ever meets. `infrastructure/scan-worker/README.md` has the
+deploy and the four probes.
+
 ## On the phone face
 
 The light app's phone face (below 1024px; [light-app.md](light-app.md)) has had a Scanner tab

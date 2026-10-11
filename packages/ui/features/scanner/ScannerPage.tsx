@@ -22,6 +22,8 @@ import {
   DEFAULT_SEND_PX,
   frameOptions as frameOptionsOf,
 } from "./scannerOptions";
+import { SubmitScanDialog } from "./submit/SubmitScanDialog";
+import { useScanSubmit } from "./submit/useScanSubmit";
 import type { ScannerOptions, ScannerTrayRow } from "./types";
 import { useCamera, useCameraDevices } from "./useCamera";
 import { useScanLoop } from "./useScanLoop";
@@ -200,6 +202,26 @@ function LiveScanner() {
     return saved.saved;
   };
 
+  /**
+   * *Send scan…* (issue #776): the picture on screen to the scanner's maker, under the printing
+   * and finish a reader says it shows — `useScanSubmit`, shared with the phone's page.
+   *
+   * **Not the capture above, and neither replaces the other.** That one is the Developer
+   * column's: a file written beside the app, named by whoever is running it. This one is every
+   * reader's, leaves the device, and so asks first — its dialog shows the picture and says where
+   * it goes.
+   *
+   * **The verdict it is handed is the one the strip is drawn from**, `null` while recognition is
+   * stopped: the loop keeps its last answer across a Stop, and a card swapped since then would
+   * be sent beside what the scanner said about the one before it.
+   */
+  const submit = useScanSubmit({
+    grab: loop.grab,
+    verdict: scanning ? loop.verdict : null,
+    mode: prefs.mode,
+    status: statusData,
+  });
+
   // The tray into the collection, in one `scanner_tray_commit` — all or nothing, the rows with a
   // known finish, the folder asked about again at the press (`useTrayCommit`).
   const {
@@ -253,12 +275,16 @@ function LiveScanner() {
   };
 
   // The detector's own refusal is a developer's sentence — contours examined, a quad rejected —
-  // and the reader has the status line for what it means to them. The loop's failures and a
-  // refused reset are not the detector's, and every reader gets those.
+  // and the reader has the status line for what it means to them. The loop's failures, a refused
+  // reset and a *Send scan…* that got no picture are not the detector's, and every reader gets
+  // those. **A press that got no picture is never silent**: it takes this line over from the
+  // detector's own sentence, which a Developer reader is otherwise shown on every frame with no
+  // card in it, and it stands in for the stopped sentence below — *Send scan…* is offered
+  // wherever a camera is live, which is in both of those states.
   const detectorSentence =
-    prefs.developer && loop.verdict?.ok === false
+    prefs.developer && loop.verdict?.ok === false && submit.error === null
       ? (loop.verdict.error ?? "")
-      : (loop.error ?? resetError ?? "");
+      : (loop.error ?? resetError ?? submit.error ?? "");
 
   return (
     // **`@container/scan` because the split answers this view's own width, never the window's** —
@@ -267,8 +293,9 @@ function LiveScanner() {
     // what the developer column leaves, the tray the other third, and the panels get a column of
     // their own. A container is the containing block for anything `fixed` inside it, so nothing
     // that must cover the window may mount in here — and nothing does: the dropdowns measure the
-    // block they land in, the all-printings dialog is drawn at the app root, and the tray's
-    // *Clear all…* question is this fragment's second child, a sibling of the box and not inside it.
+    // block they land in, the all-printings dialog is drawn at the app root, and the page's three
+    // dialogs — *Clear all…*, *Create deck…* and *Send scan…* — are this fragment's other
+    // children, siblings of the box and not inside it.
     <>
       <section className="@container/scan flex h-full flex-col gap-3">
         {/* Not shown: the ribbon already says `Scanner`, and every pixel of this view's height is
@@ -315,6 +342,9 @@ function LiveScanner() {
               hasBundle={hasBundle}
               lastResolution={loop.lastResolution}
               onReset={onReset}
+              // Offered only over a picture: until a camera is live there is nothing to grab, and
+              // the box under the strip is already saying why.
+              onSend={camera.kind === "live" ? submit.open : undefined}
             />
             {/* The column is the height, and the video box takes what the strip above it and the
                 asset notes under it leave. **Cropped rather than letterboxed** (`object-cover`, and
@@ -326,7 +356,7 @@ function LiveScanner() {
               <AddedToast card={scanning ? landed : null} onDone={clearLanded} />
               {!scanning && (
                 <p role="status" className="absolute left-3 top-2 p-2 text-xs text-dim">
-                  {SCANNING_STOPPED}
+                  {submit.error ?? SCANNING_STOPPED}
                 </p>
               )}
               {camera.kind === "error" && (
@@ -481,6 +511,11 @@ function LiveScanner() {
         onClose={() => {
           if (!scannedDeck.isPending) setDeckRows(null);
         }}
+      />
+      <SubmitScanDialog
+        still={submit.still}
+        onDismiss={submit.onDismiss}
+        onClose={submit.onClose}
       />
     </>
   );

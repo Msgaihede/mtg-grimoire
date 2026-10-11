@@ -1,7 +1,8 @@
-import { RotateCcw } from "lucide-react";
+import { RotateCcw, Send } from "lucide-react";
 import type { ScanMode, ScannerResolution, ScannerVerdict } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
+import { SEND_SCAN } from "../submit/submitText";
 import { matchStrip, type LastAdded, type StripState, type StripTone } from "./readerText";
 
 export interface MatchStripProps {
@@ -17,7 +18,27 @@ export interface MatchStripProps {
    * latched reads — so the next card is weighed from nothing.
    */
   onReset: () => void;
+  /**
+   * *Send scan…*: the picture on screen, to the scanner's maker, with the card a reader says it
+   * shows (`submit/`). Handed the press, for the caret to come back to when the dialog closes.
+   *
+   * **Absent where there is no live picture to send, and then no button is drawn** — a camera
+   * that was refused or has not opened, a host with no scanner session. Not a greyed one: a
+   * press that can only refuse owes the reader its reason, and the reason is already the
+   * sentence standing where the picture would be.
+   */
+  onSend?: (opener: HTMLElement) => void;
 }
+
+/**
+ * The strip's two presses, in one recipe: a hairline box at the bar's end, dim until it is
+ * pointed at. This file's own — the phone's line draws its two at a thumb's size.
+ */
+const STRIP_PRESS = cn(
+  "inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-0.5 text-xs text-dim",
+  "hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+  PRESS,
+);
 
 /**
  * The pill's box per tone. **Every tone draws a border**, the filled one in its own fill colour,
@@ -49,7 +70,7 @@ export const STRIP_SENTENCE: Record<StripTone, string> = {
  * the card it is leaning towards or has settled on, and a bar for how close it is.
  *
  * **Pure** — everything it draws is one {@link matchStrip} value, so a story or a test can stand
- * up any state from the five props alone. The sixth is the one press it carries.
+ * up any state from the five props alone. The other two are the presses it carries.
  *
  * **The row is the view's live region**, always mounted and named `Scanner status` as the one line
  * under the camera it replaces was, so a screen reader is watching it before the first card lands.
@@ -62,7 +83,15 @@ export const STRIP_SENTENCE: Record<StripTone, string> = {
  * press in the Developer column's Match panel only, so a reader whose scanner had settled on the
  * wrong card — or was still leaning towards the last one — had no way to make it start over short
  * of moving the card out of frame. The bar is what it resets, so it is drawn beside the bar; and
- * it is the one copy on the screen, so a Developer reader does not meet two buttons by one name.
+ * it is the one copy of that press on the screen, so a Developer reader does not meet two buttons
+ * by one name.
+ *
+ * **_Send scan…_ stands beside it, for every reader too** (issue #776), wherever there is a live
+ * picture ({@link MatchStripProps.onSend}). This row is where a reader is looking when the
+ * scanner names the wrong card or will not name one, which is the moment the press is for. It
+ * sits outside the live region for Reset's reason — a button is not news — and it is not the
+ * Developer column's *Add frame to dataset*: that one writes a file beside the app for the
+ * person running it, and this one sends a picture to somebody else, after a dialog that says so.
  */
 export function MatchStrip({
   verdict,
@@ -71,6 +100,7 @@ export function MatchStrip({
   hasBundle,
   lastResolution,
   onReset,
+  onSend,
 }: MatchStripProps) {
   const strip = matchStrip(verdict, mode, lastAdded, hasBundle, lastResolution);
   // **The leader is drawn and not announced.** While the tracker is still weighing, its leader can
@@ -137,22 +167,25 @@ export function MatchStrip({
         )}
       </div>
 
-      {/* The bar takes the row and the button its own width; `items-center` puts the 6px bar on
-          the button's middle rather than its top. */}
+      {/* The bar takes the row and each button its own width; `items-center` puts the 6px bar on
+          the buttons' middle rather than their top. */}
       <div className="flex items-center gap-3">
         <MatchBar strip={strip} />
-        <button
-          type="button"
-          onClick={onReset}
-          className={cn(
-            "inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-0.5 text-xs text-dim",
-            "hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
-            PRESS,
-          )}
-        >
+        <button type="button" onClick={onReset} className={STRIP_PRESS}>
           <RotateCcw aria-hidden="true" className="size-3.5" />
           Reset evidence
         </button>
+        {onSend !== undefined && (
+          <button
+            type="button"
+            aria-haspopup="dialog"
+            onClick={(e) => onSend(e.currentTarget)}
+            className={STRIP_PRESS}
+          >
+            <Send aria-hidden="true" className="size-3.5" />
+            {SEND_SCAN}
+          </button>
+        )}
       </div>
     </div>
   );

@@ -955,6 +955,17 @@ commands! {
     blocking scanner_assets in scanner_assets() = |state| owed(&state);
     task scanner_assets_fetch in scanner_assets() = |state| async move { fetch(&state).await };
 
+    // scanner_submit — one camera picture and the card a reader says it shows, sent to the scan
+    // inbox to improve the scanner (issue #776): the one command that sends a picture off the
+    // device, and only a reader's press on Send calls it. A `task`, awaited where it stands,
+    // because it reaches a network — which is also why **its picture is base64 in its arguments
+    // and it is not a third `bytes` entry**: a `bytes` body runs on the blocking pool, where
+    // nothing can be awaited. **No lease**, for the files' reason: who holds the scanner and
+    // what a reader chooses to send are two questions. It answers on a page as on any host.
+    task scanner_submit in scanner_submit(frame: String, submission: Submission) = |state| async move {
+        submit(&state, frame, submission).await
+    };
+
     // search
     read list_sets in search() = |conn| run_list_sets(conn);
     read search_cards in search(req: SearchRequest) = |conn| run_search(conn, &req);
@@ -2341,6 +2352,12 @@ mod tests {
             // The scanner's files: the read and the fetch (a `task`) both stop at the same
             // sentence on a page, before the session is loaded or any host is asked.
             "scanner_assets" | "scanner_assets_fetch" => Value::Null,
+            // A real picture of a card these tables have, so the body runs whole — the decode,
+            // the read on the one connection, and the request, which stops at the mock's 404.
+            "scanner_submit" => json!({
+                "frame": base64_of(TINY_JPEG),
+                "submission": { "cardId": "c-bolt", "finish": "nonfoil", "mode": "fast" },
+            }),
             // With text, so the facet pass reads the database rather than answering from memory.
             "facet_cards" => json!({ "req": { "text": "bolt" } }),
             "sync_review_clear" => json!({ "table": reviewable, "uid": "nobody" }),
@@ -2464,6 +2481,13 @@ mod tests {
                 &nowhere.base_url(),
             )
             .expect("the relay's override");
+            // And the scan inbox's, for the same reason: a Send must stop at the mock.
+            crate::sync_engine::client::set_state(
+                &conn,
+                crate::scanner_submit::SCAN_URL,
+                &nowhere.base_url(),
+            )
+            .expect("the scan inbox's override");
             // Just checked, so an unforced refresh asks Commander Spellbook nothing.
             conn.execute(
                 "INSERT INTO combo_meta (id, checked_at) VALUES (1, unixepoch())",
@@ -2690,17 +2714,85 @@ mod tests {
     /// are not the session's: neither takes the lease, and neither is one of the twelve above.
     const SCANNER_ASSETS: [&str; 2] = ["scanner_assets", "scanner_assets_fetch"];
 
+    /// The one that sends a scan to the inbox (issue #776) — not the session's either: it takes
+    /// no lease, and it is the only one of the fifteen that asks a server of ours.
+    const SCANNER_SUBMIT: [&str; 1] = ["scanner_submit"];
+
+    /// `TINY_JPEG` as the page sends a picture to `scanner_submit`: standard base64.
+    fn base64_of(bytes: &[u8]) -> String {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    }
+
     #[test]
     fn all_twelve_scanner_commands_are_in_the_table() {
-        for name in SCANNER.iter().chain(&SCANNER_ASSETS) {
+        for name in SCANNER.iter().chain(&SCANNER_ASSETS).chain(&SCANNER_SUBMIT) {
             assert!(TABLE.iter().any(|e| e.name == *name), "{name}");
         }
         let in_table = TABLE.iter().filter(|e| e.name.contains("scanner")).count();
         assert_eq!(
             in_table,
-            SCANNER.len() + SCANNER_ASSETS.len(),
+            SCANNER.len() + SCANNER_ASSETS.len() + SCANNER_SUBMIT.len(),
             "a scanner command these lists lack"
         );
+    }
+
+    /// **A scan, through the table**: the arguments arrive camelCase, the picture as base64
+    /// text, and what the inbox answers is what the page reads — `{ "id": … }`. And a body
+    /// beside them is refused, because this is not a `bytes` entry: a host that sent the
+    /// picture raw has called it the scanner's frame's way.
+    #[tokio::test]
+    async fn a_scan_is_sent_through_the_table() {
+        let inbox = httpmock::MockServer::start();
+        let took = inbox.mock(|when, then| {
+            when.method(httpmock::Method::POST).path("/scan");
+            then.status(201)
+                .body(r#"{"id":"20261011T101500Z-0123456789abcdef"}"#);
+        });
+        let (state, _dir) =
+            crate::state::fixtures::on_files("commands-scanner-submit", "http://127.0.0.1:1");
+        {
+            let conn = state.lock_db();
+            crate::schema::fixtures::seed_card(&conn, "c-bolt", "lea", "161");
+            crate::sync_engine::client::set_state(
+                &conn,
+                crate::scanner_submit::SCAN_URL,
+                &inbox.base_url(),
+            )
+            .expect("the scan inbox's override");
+        }
+        let args = json!({
+            "frame": base64_of(TINY_JPEG),
+            "submission": {
+                "cardId": "c-bolt",
+                "finish": "foil",
+                "reported": null,
+                "mode": "exact",
+                "confidence": 0.5,
+                "distance": 12,
+                "bundle": 98000,
+            },
+        });
+
+        let raw = dispatch(
+            &state,
+            "scanner_submit",
+            args.clone(),
+            Some(TINY_JPEG.to_vec()),
+        )
+        .await;
+        assert_eq!(raw.unwrap_err(), "scanner_submit takes no raw body.");
+        took.assert_calls(0);
+
+        let sent = dispatch(&state, "scanner_submit", args, None)
+            .await
+            .expect("taken");
+        assert_eq!(sent, json!({ "id": "20261011T101500Z-0123456789abcdef" }));
+        took.assert_calls(1);
+
+        let entry = TABLE.iter().find(|e| e.name == "scanner_submit").unwrap();
+        assert_eq!(entry.kind, Kind::Task);
+        assert_eq!(entry.args, ["frame", "submission"]);
     }
 
     /// **The scanner's files, through the table**: on an install with nothing, the read names

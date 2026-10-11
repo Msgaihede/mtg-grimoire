@@ -1,4 +1,4 @@
-# The workspace: the shared UI and the fake, the three apps, and the three Workers.
+# The workspace: the shared UI and the fake, the three apps, and the four Workers.
 # `infrastructure/wrangler` is not here and must never be: it is the deploy tool, npm's, with a
 # lockfile of its own, and a glob such as `infrastructure/*` would take it in
 # (`scripts/release-rule.test.mjs` holds this list).
@@ -8,6 +8,7 @@ packages:
   - infrastructure/relay
   - infrastructure/share-worker
   - infrastructure/app-worker
+  - infrastructure/scan-worker
 
 # One range for every name that more than one package declares; a manifest writes `catalog:` for
 # it. A name only one package declares keeps its range in that manifest.

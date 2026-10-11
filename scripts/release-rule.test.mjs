@@ -865,7 +865,7 @@ describe("deploys, across every workflow", () => {
     // The runner's platform is in it: `npm ci` on Linux installs these two without a script.
     expect(lock.packages["node_modules/@esbuild/linux-x64"]).toBeDefined();
     expect(lock.packages["node_modules/@cloudflare/workerd-linux-64"]).toBeDefined();
-    // The tool's folder is npm's. pnpm's workspace is these five entries and no glob that could
+    // The tool's folder is npm's. pnpm's workspace is these six entries and no glob that could
     // take `infrastructure/wrangler` in — a member's dependencies are resolved by pnpm-lock.yaml,
     // and this lockfile would stop being what installs.
     const members = [...workspaceYaml.matchAll(/^ {2}- (\S+)$/gm)].map((m) => m[1]);
@@ -875,6 +875,7 @@ describe("deploys, across every workflow", () => {
       "infrastructure/relay",
       "infrastructure/share-worker",
       "infrastructure/app-worker",
+      "infrastructure/scan-worker",
     ]);
     // And the Worker's own manifest, in the folder the tool left, is not a second home for it.
     const worker = JSON.parse(appWorkerPackage);
@@ -972,10 +973,13 @@ describe("deploys, across every workflow", () => {
     }
   });
 
-  it("names neither of the other two Workers, and no Cloudflare secret anywhere else", () => {
+  it("names none of the other three Workers, and no Cloudflare secret anywhere else", () => {
     // One line names the relay, and it deploys nothing: the sync smoke's step in `ci.yml`,
     // which runs the relay's code on the runner — the test above has what that run may do.
-    expect(lines.filter(({ line }) => /\b(?:relay|share-worker)\b/.test(line))).toEqual([
+    // The scan inbox (`infrastructure/scan-worker/`) is named by none: no job runs or deploys it.
+    expect(
+      lines.filter(({ line }) => /\b(?:relay|share-worker|scan-worker)\b/.test(line)),
+    ).toEqual([
       {
         path: "/.github/workflows/ci.yml",
         line: "      - name: Pair two browsers through the local relay",

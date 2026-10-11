@@ -108,6 +108,9 @@ import scannerRsDesktop from "../../../apps/desktop/src-tauri/src/scanner/mod.rs
 // `downloads.rs` for the row it answers in — `Due`, the shape every offer of a download is made of.
 import scannerAssetsRs from "../../../crates/grimoire-core/src/scanner_assets.rs?raw";
 import downloadsRs from "../../../crates/grimoire-core/src/downloads.rs?raw";
+// Sending a scan to the inbox (issue #776): the engine's module, whose `Submission` the page
+// fills in and whose `Submitted` it reads the reference out of.
+import scannerSubmitRs from "../../../crates/grimoire-core/src/scanner_submit.rs?raw";
 import sessionRs from "../../../crates/card-scanner/src/session.rs?raw";
 import resolveRs from "../../../crates/card-scanner/src/resolve.rs?raw";
 import filtersRs from "../../../crates/card-scanner/src/filters.rs?raw";
@@ -3865,6 +3868,34 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(invoke).toHaveBeenLastCalledWith("scanner_frame", jpeg, plain);
   });
 
+  /**
+   * **A scan sent to the inbox is ordinary arguments, not a raw body** — the one scanner call
+   * with a picture in it that is. The table's entry is a `task`, which refuses a body, so a
+   * wrapper here that sent the bytes the way a frame goes would be refused on every host of the
+   * table and work on the desktop alone.
+   */
+  it("scanner_submit sends the picture as text beside what the reader chose", async () => {
+    const submission = {
+      cardId: "c-bolt",
+      finish: "foil" as const,
+      reported: null,
+      mode: "exact" as const,
+      confidence: 0.5,
+      distance: 12,
+      bundle: 98_000,
+    };
+    await ipc.scannerSubmit("QUJD", submission);
+    expect(invoke).toHaveBeenCalledWith("scanner_submit", { frame: "QUJD", submission });
+    // The desktop wrapper and the core function it calls, by the names the wire is read with.
+    expect(scannerRs).toMatch(
+      /pub async fn scanner_submit\([^)]*\bframe: String,\s*submission: Submission,/s,
+    );
+    expect(scannerSubmitRs).toMatch(
+      /pub async fn submit\(\s*state: &Arc<State>,\s*frame: String,\s*submission: Submission,/s,
+    );
+    expect(desktopRs).toContain("scanner::scanner_submit,");
+  });
+
   it("scanner_capture carries the sidecar the same way", async () => {
     const sidecar = { expected: "Plains", reported: "", confidence: "", votes: "8.0", distance: "74" };
     await ipc.scannerCapture(new Uint8Array([9]), sidecar);
@@ -5704,6 +5735,16 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["ScannerAssetDue", downloadsRs, "Due"],
     ["ScannerAssetsOwed", scannerAssetsRs, "Owed"],
     ["ScannerAssetsProgress", scannerAssetsRs, "Progress"],
+    // **A scan sent to the inbox** (issue #776): what the reader chose and what the scanner had
+    // said, and the reference that comes back. camelCase, the app's own.
+    //
+    // `Submission`'s four figures are `Option`s, so a renamed one is not a refusal: it is
+    // `None`, and every label in the inbox says the scanner read nothing — the half of a
+    // submission that says what it got wrong, gone, with every test of the dialog still green.
+    // A renamed `cardId` or `finish` is at least loud. A renamed `id` on the answer is a
+    // reader thanked and shown no reference, which is the only way a picture is found again.
+    ["ScannerSubmission", scannerSubmitRs, "Submission"],
+    ["ScannerSubmitted", scannerSubmitRs, "Submitted"],
     // **The three oldest structs in the app, and none of them had ever been fenced** (2026-09-22,
     // added with strict colours and the type chips). `SearchRequest` is every search the window
     // asks for, `CardFilters` is the half of it the collection and the wishlist flatten into

@@ -33,6 +33,8 @@ vi.mock("@grimoire/ui/features/scanner/useParked", async (original) => {
   };
 });
 
+import { FAKE_SCAN_ID, SCAN_INBOX_FULL } from "@grimoire/fake/db";
+import { printing } from "@grimoire/fake/fixtures";
 import type { CommandTable } from "@grimoire/fake/scope";
 import { FRAMES_PER_CARD, newScanScript, scanStep } from "@grimoire/fake/scannerScript";
 import {
@@ -50,6 +52,7 @@ import type {
   CollectionImportItem,
   ScannerOptions,
   ScannerPrefs,
+  ScannerSubmission,
   ScannerTrayRow,
   ScannerVerdict,
 } from "@grimoire/ui/lib/ipc";
@@ -720,6 +723,134 @@ describe("the phone's Scanner page", () => {
     await waitFor(() => expect(seen.resets).toBe(1), SETTLE);
     // The card it had already taken stays in the tray.
     expect(trayRows()).toEqual([["Urza's Saga", "1"]]);
+  });
+});
+
+/**
+ * ***Send scan…*** on the phone: the desktop page's hook and its dialog, opened from the status
+ * line's second press, over the fake world's own `search_cards` and `scanner_submit`.
+ */
+describe("sending a scan from the Scanner page", () => {
+  /** The dialog, opened from the press, with the search asked for Lightning Bolt's printings. */
+  async function opened() {
+    const opener = await screen.findByRole("button", { name: "Send scan…" }, SETTLE);
+    await userEvent.click(opener);
+    const dialog = await screen.findByRole("dialog", { name: "Send this scan" }, SETTLE);
+    const box = within(dialog).getByRole("searchbox");
+    // Whatever the scanner had been naming: this test's card is one the corpus has four of.
+    await userEvent.clear(box);
+    await userEvent.type(box, "Lightning Bolt");
+    return { opener, dialog };
+  }
+
+  it("offers no Send scan… without a live picture", async () => {
+    noCamera("NotAllowedError");
+    mount();
+    expect(await screen.findByRole("alert", {}, SETTLE)).toHaveTextContent(
+      "MTG Grimoire needs camera access to scan a card.",
+    );
+    // The status line and its reset are there; the press that needs a picture is not.
+    expect(screen.getByRole("button", { name: "Reset evidence" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
+  });
+
+  it("sends the picture under the printing and finish the reader chooses, and shows the reference", async () => {
+    camera();
+    restoreVideo = shimVideo();
+    const sent: { frame: string; submission: ScannerSubmission }[] = [];
+    const { seen } = mount({
+      over: (own) => ({
+        scanner_frame: pile(1, "looking").frame,
+        scanner_submit: (args: { frame: string; submission: ScannerSubmission }) => {
+          sent.push(args);
+          return (own.scanner_submit as (a: unknown) => unknown)(args);
+        },
+      }),
+    });
+    await waitFor(() => expect(trayRows()).toHaveLength(1), SETTLE);
+
+    const { opener, dialog } = await opened();
+    // The canvas shim's three bytes, as the text that is drawn and sent.
+    expect(
+      within(dialog).getByRole("img", { name: "The picture that will be sent" }),
+    ).toHaveAttribute("src", "data:image/jpeg;base64,AQID");
+
+    const send = within(dialog).getByRole("button", { name: "Send scan" });
+    expect(send).toHaveAttribute("aria-disabled", "true");
+    expect(send).toHaveAccessibleDescription("Choose the card in the picture.");
+
+    // Three finishes, so the printing alone is not an answer.
+    await userEvent.click(
+      await within(dialog).findByRole("radio", { name: "Lightning Bolt — STA 105" }, SETTLE),
+    );
+    expect(send).toHaveAccessibleDescription("Choose its finish.");
+    await userEvent.click(send);
+    expect(sent).toEqual([]);
+
+    await userEvent.click(within(dialog).getByRole("radio", { name: "Etched" }));
+    // A finger's size, from the shared recipes: the phone reaches no floor into this dialog.
+    expect(send.classList.contains("coarse:min-h-[var(--target-min)]")).toBe(true);
+    await userEvent.click(send);
+
+    expect(await within(dialog).findByText("Sent — thank you.", {}, SETTLE)).toBeInTheDocument();
+    expect(dialog).toHaveTextContent(`Reference: ${FAKE_SCAN_ID}`);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].frame).toBe("AQID");
+    expect(sent[0].submission).toMatchObject({
+      cardId: printing("sta", "105").id,
+      finish: "etched",
+      mode: "fast",
+    });
+    // Every key the engine's struct has, each present even where it is `null`.
+    expect(Object.keys(sent[0].submission).sort()).toEqual(
+      ["bundle", "cardId", "confidence", "distance", "finish", "mode", "reported"].sort(),
+    );
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Done" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull(), SETTLE);
+    expect(opener).toHaveFocus();
+    // The tray was no part of it: the card scanned before the press is still there, unfiled.
+    expect(trayRows()).toEqual([["Urza's Saga", "1"]]);
+    expect(seen.commits).toEqual([]);
+  });
+
+  it("says the inbox's own sentence when it is full, and keeps the dialog and the answers", async () => {
+    camera();
+    restoreVideo = shimVideo();
+    mount({
+      fake: { seed: "starter", fault: "scanInboxFull" },
+      over: () => ({ scanner_frame: pile(0, "looking").frame }),
+    });
+
+    const { dialog } = await opened();
+    // Alpha's Bolt was printed one way, so its finish is chosen for the reader.
+    const lea = await within(dialog).findByRole("radio", { name: "Lightning Bolt — LEA 161" }, SETTLE);
+    await userEvent.click(lea);
+    expect(within(dialog).getByRole("radio", { name: "Nonfoil" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await userEvent.click(within(dialog).getByRole("button", { name: "Send scan" }));
+
+    await waitFor(
+      () => expect(within(dialog).getByRole("alert")).toHaveTextContent(SCAN_INBOX_FULL),
+      SETTLE,
+    );
+    expect(within(dialog).queryByText("Sent — thank you.")).toBeNull();
+    expect(lea).toHaveAttribute("aria-checked", "true");
+    expect(within(dialog).getByRole("button", { name: "Send scan" })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+  });
+
+  it("hands the caret back to the press when the dialog is dismissed", async () => {
+    camera();
+    restoreVideo = shimVideo();
+    mount({ over: () => ({ scanner_frame: pile(0, "looking").frame }) });
+    const { opener } = await opened();
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull(), SETTLE);
+    expect(opener).toHaveFocus();
   });
 });
 

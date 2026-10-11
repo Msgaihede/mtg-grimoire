@@ -12,6 +12,8 @@ import {
   DEFAULT_SEND_PX,
   frameOptions,
 } from "@grimoire/ui/features/scanner/scannerOptions";
+import { SubmitScanDialog } from "@grimoire/ui/features/scanner/submit/SubmitScanDialog";
+import { useScanSubmit } from "@grimoire/ui/features/scanner/submit/useScanSubmit";
 import { useCamera, useCameraDevices } from "@grimoire/ui/features/scanner/useCamera";
 import { usePageParked } from "@grimoire/ui/features/scanner/useParked";
 import { useScanLoop } from "@grimoire/ui/features/scanner/useScanLoop";
@@ -217,12 +219,31 @@ function LiveScanner() {
   const [optionsOpen, setOptionsOpen] = useState(false);
   const optionsOpener = useRef<HTMLElement | null>(null);
 
-  // What the picture has to say: that recognition is stopped, or the loop's failures and a
-  // refused reset — a busy database, a frame the host turned away. The detector's own refusal (no
-  // card in this frame) is a developer's sentence and is not said here. Nothing on a host with no
-  // session, where the box holds the engine's sentence instead.
+  // *Send scan…*: the picture on screen to the scanner's maker, under the card a reader says it
+  // shows — the desktop page's hook and its dialog, both shared. The verdict is the one the status
+  // line is drawn from, `null` while recognition is stopped: the loop keeps its last answer across
+  // a Stop, and it may be about a card that has since been swapped.
+  const submit = useScanSubmit({
+    grab: loop.grab,
+    verdict: scanning ? loop.verdict : null,
+    mode: prefs.mode,
+    status,
+  });
+
+  // What the picture has to say: that recognition is stopped, or the loop's failures, a refused
+  // reset and a Send scan that got no picture — a busy database, a frame the host turned away.
+  // The detector's own refusal (no card in this frame) is a developer's sentence and is not said
+  // here. Nothing on a host with no session, where the box holds the engine's sentence instead.
+  //
+  // **A Send scan that got no picture is said while recognition is stopped too**, in place of
+  // the stopped sentence until the next press: the press is offered there — the camera is live —
+  // and one that opened nothing and said nothing is a button that looks broken.
   const cameraNote =
-    unavailable !== null ? null : !scanning ? SCANNING_STOPPED : (loop.error ?? resetError);
+    unavailable !== null
+      ? null
+      : !scanning
+        ? (submit.error ?? SCANNING_STOPPED)
+        : (loop.error ?? resetError ?? submit.error);
 
   return (
     <>
@@ -272,6 +293,9 @@ function LiveScanner() {
                 hasBundle={hasBundle}
                 lastResolution={loop.lastResolution}
                 onReset={onReset}
+                // Offered only over a picture, as on the desktop: with no camera live there is
+                // nothing to grab, and the box above is already saying why.
+                onSend={camera.kind === "live" ? submit.open : undefined}
               />
             )}
           </div>
@@ -362,6 +386,14 @@ function LiveScanner() {
         will leave the tray without being added to your collection. Cards you scan while this is
         open stay.
       </ConfirmDialog>
+
+      {/* The shared dialog, mounted bare: its controls take a finger's size from the shared
+          recipes, so it needs no floor reached in from here as the desktop's New deck does. */}
+      <SubmitScanDialog
+        still={submit.still}
+        onDismiss={submit.onDismiss}
+        onClose={submit.onClose}
+      />
 
       <div className={CREATE_DECK_FLOOR}>
         <CreateDeckDialog

@@ -21,6 +21,8 @@ export type {
   ScannerStatus,
   ScannerSidecar,
   ScannerCaptured,
+  ScannerSubmission,
+  ScannerSubmitted,
   ScannerFrameSize,
   ScannerLockPhase,
   ScannerLock,

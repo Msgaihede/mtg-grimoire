@@ -166,13 +166,14 @@ function breachesIn(code, styles = {}) {
 }
 
 describe("the workspace's packages", () => {
-  it("are the eight, each private and at 0.0.0, and the root", () => {
+  it("are the nine, each private and at 0.0.0, and the root", () => {
     expect(PACKAGES.map(({ dir, manifest }) => `${dir} ${manifest.name}`).sort()).toEqual([
       "/apps/desktop/ @grimoire/desktop",
       "/apps/light/ @grimoire/light",
       "/apps/share/ @grimoire/share",
       "/infrastructure/app-worker/ @grimoire/app-worker",
       "/infrastructure/relay/ @grimoire/relay",
+      "/infrastructure/scan-worker/ @grimoire/scan-worker",
       "/infrastructure/share-worker/ @grimoire/share-worker",
       "/packages/fake/ @grimoire/fake",
       "/packages/ui/ @grimoire/ui",
@@ -205,6 +206,8 @@ describe("the workspace's packages", () => {
       "@grimoire/relay": [],
       "@grimoire/share-worker": ["@grimoire/relay"],
       "@grimoire/app-worker": ["@grimoire/ui"],
+      // Nothing: it shares no module with the relay, on purpose (`scan-worker/src/env.ts`).
+      "@grimoire/scan-worker": [],
     });
     // The shared UI reaches the fake from its tests and stories only.
     const ui = PACKAGES.find(({ manifest }) => manifest.name === "@grimoire/ui").manifest;

@@ -1,6 +1,6 @@
 # External services, Workers and deploys
 
-Every network dependency the app has, what "optional" means for each one, and the three
+Every network dependency the app has, what "optional" means for each one, and the four
 Cloudflare Workers with their deploy state and secrets. Moved out of the root
 [`CLAUDE.md`](../../CLAUDE.md) without changing the wording, so every date and probe is still
 here. The root file keeps only the rules every agent needs (secrets, deploy asks, optional by
@@ -20,6 +20,7 @@ construction).
 - [The share Worker (read-only shared collection)](#the-share-worker-read-only-shared-collection)
 - [The scanner's files, from this repository's GitHub release](#the-scanners-files-from-this-repositorys-github-release)
 - [The app Worker (the light app's web host)](#the-app-worker-the-light-apps-web-host)
+- [The scan Worker (the scanner's inbox)](#the-scan-worker-the-scanners-inbox)
 
 ## Scryfall and the price feeds
 
@@ -301,3 +302,46 @@ and the one policy violation known on the live site, the deck note editor's — 
 source that day, and raised by the deployed build until the next deploy** — are in
 [light-app.md](../reference/light-app.md) §9.7. Ask the host before you believe this or its
 opposite.
+
+## The scan Worker (the scanner's inbox)
+
+**A _fourth_ Worker takes the one thing this app ever sends its maker: a camera picture a reader
+chose to send, with the card they say it shows** (issue #776, 2026-10-11). The card scanner's
+**Send** grabs the frame on the screen, the reader picks the exact printing and its finish, and
+the engine's `scanner_submit` posts the JPEG and a label to `infrastructure/scan-worker/`, which
+keeps both in R2 so the scanner can be tested against them. **Optional in the strictest sense
+here: nothing is asked until a reader presses Send on a picture they are looking at** — no
+launch, no schedule, no frame — and a Worker that is down or full costs a sentence in the dialog
+and nothing else. It is the only place a picture leaves the device; the scanner still examines
+every frame where it was taken and keeps none.
+
+**`scanner_submit::SCAN_BASE` is its address**,
+`https://mtg-grimoire-scans.denmark-east.workers.dev`, compiled in and public on `RELAY_BASE`'s
+terms — the Worker's `name` and the account's subdomain, which `scan-worker`'s own
+`wrangler.test.ts` holds to the engine's line. **It is the one write on the account that is
+behind no token**, since a reader is not asked for a membership to say the scanner was wrong; so
+it is a Worker of its own that binds the least there is — one R2 bucket and one rate limiter, **no
+D1, no Durable Object and no secret** — and it offers no way to read, list or delete what it took.
+What bounds it is in its own code: 2 MB a picture, a label checked field by field and stored only
+as checked, 12 submissions a minute from one address, and **500 pictures waiting, after which
+it refuses until the owner has emptied it** — about a gigabyte, whoever is sending. The count is
+taken once a picture has wholly arrived and it counts pictures rather than labels, so neither a
+sender who holds its body back nor one who hangs up between the two writes gets past it; a burst
+that counts in the same instant can still leave it holding the cap and that burst, which only a
+database or a Durable Object could close.
+
+**What is stored says nothing of who sent it** — no device, group or account id, no address, and
+the Worker's logging is off (`observability.enabled: false`) so Cloudflare keeps no request line
+either. The privacy policy (`apps/light/public/privacy.html`, *Sending a scan*) says exactly
+that, and Google Play's Data safety form has to say *Photos*
+([docs/play/README.md](../play/README.md)) — **the owner's to change in the Console before the
+Android release that carries Send**. A browser sends too, so the Worker answers the web app's
+origin by name (`APP_ORIGINS`, its `src/cors.ts`) and the hosting policy's `connect-src` names
+its host: one fact in two deploys, **this Worker's first**.
+
+**It has not been deployed.** The bucket (`mtg-grimoire-scans`) is the owner's to create and the
+deploy the owner's to run; no job deploys it and no agent may unasked. Until then a Send is
+answered *the server answered 404* on a desktop or a phone and *could not be reached* in a
+browser. Ask the host before you believe this or its opposite.
+[`infrastructure/scan-worker/README.md`](../../infrastructure/scan-worker/README.md) is the
+runbook, with the four probes a deployed one answers, and how the inbox is read and emptied.

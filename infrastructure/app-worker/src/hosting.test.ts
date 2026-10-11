@@ -10,6 +10,7 @@ import feedRs from "../../../crates/grimoire-core/src/marketplace_feed.rs?raw";
 import scryfallRs from "../../../crates/grimoire-core/src/scryfall.rs?raw";
 import oracleTagsRs from "../../../crates/grimoire-core/src/tags/oracle.rs?raw";
 import entitlementRs from "../../../crates/grimoire-core/src/sync_engine/entitlement.rs?raw";
+import scannerSubmitRs from "../../../crates/grimoire-core/src/scanner_submit.rs?raw";
 import socketRs from "../../../crates/grimoire-core/src/platform/socket.rs?raw";
 import webCoreTs from "../../../packages/ui/lib/core/web/index.ts?raw";
 import { headersFor, parseHeaders } from "./headers";
@@ -31,8 +32,9 @@ const OWN: Record<string, string> = import.meta.glob("./**/*.ts", {
  * **What it holds, exactly, in two halves:**
  *
  * - *A host that moved.* The engine's addresses are read by name — `SCRYFALL_API`, `IMAGE_HOST`,
- *   `FEED_URL`, Card Kingdom's `url()` and the sync relay's `RELAY_BASE` — and `connect-src` is
- *   held set-equal to their hosts and the bulk files'. Change one in the Rust and this is red.
+ *   `FEED_URL`, Card Kingdom's `url()`, the sync relay's `RELAY_BASE` and the scan inbox's
+ *   `SCAN_BASE` — and `connect-src` is held set-equal to their hosts and the bulk files'. Change
+ *   one in the Rust and this is red.
  * - *A host that is new.* A census of every `https://` literal in the code the three crates
  *   **ship** — above each file's test modules, comments out — each of which has to be a host in
  *   `connect-src` or on a short list of hosts no browser's engine asks, with the reason. A sixth
@@ -136,6 +138,16 @@ const RELAY_BASE = constant(
   entitlementRs,
   /pub const RELAY_BASE: &str = "([^"]+)"/,
   "entitlement.rs's RELAY_BASE",
+);
+/**
+ * The scan inbox (`infrastructure/scan-worker/`), which the card scanner's Send posts one picture
+ * to. A page asks it as every host does, and it answers this origin by name — its own
+ * `APP_ORIGINS`, which that Worker's suite holds to this origin.
+ */
+const SCAN_BASE = constant(
+  scannerSubmitRs,
+  /pub const SCAN_BASE: &str = "([^"]+)"/,
+  "scanner_submit.rs's SCAN_BASE",
 );
 const CARD_KINGDOM = feedUrl("CardKingdom");
 const MANA_POOL = feedUrl("ManaPool");
@@ -304,6 +316,9 @@ describe("connect-src, against the hosts the engine asks", () => {
     ["the sync relay", RELAY_BASE],
     // The same relay, for the one thing it is asked that is not a request: live sync's socket.
     ["the sync relay's live socket", RELAY_SOCKET],
+    // Asked only when a reader presses the card scanner's Send; the Worker's own CORS answers
+    // this origin, and its pre-flight (`infrastructure/scan-worker/src/cors.ts`).
+    ["the scan inbox", SCAN_BASE],
     ...BULK_FILES.map((url): [string, string] => ["a bulk file", url]),
   ])("allows %s — %s", (_what, url) => {
     expect(csp["connect-src"]).toContain(origin(url));
@@ -321,6 +336,7 @@ describe("connect-src, against the hosts the engine asks", () => {
       CARD_KINGDOM,
       RELAY_BASE,
       RELAY_SOCKET,
+      SCAN_BASE,
       ...BULK_FILES,
     ].map(origin);
     expect([...csp["connect-src"]].sort()).toEqual(["'self'", ...new Set(asked)].sort());

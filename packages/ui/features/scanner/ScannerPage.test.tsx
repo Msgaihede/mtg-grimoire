@@ -3,10 +3,13 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  CardSummary,
   CollectionFolder,
   ScannerAssetsOwed,
   ScannerPrefs,
+  ScannerSubmitted,
   ScannerVerdict,
+  SearchResponse,
 } from "@/lib/ipc";
 import { SCANNER_NOT_IN_A_BROWSER_YET, SCANNER_OPEN_ELSEWHERE } from "./verdictText";
 import {
@@ -48,6 +51,13 @@ vi.mock("@/lib/ipc", async (orig) => {
       // app cannot produce — and one that would make every test here fail for the wrong reason.
       scannerReset: vi.fn(async () => {}),
       scannerCapture: vi.fn(async () => ({ saved: "live-7.jpg" })),
+      // *Send scan…*: the inbox's answer, and the search its dialog asks for printings. Both
+      // mocked so no test reaches the real core, and typed by what they answer — a bare `vi.fn()`
+      // takes any shape a test hands it.
+      scannerSubmit: vi.fn(async (): Promise<ScannerSubmitted> => ({ id: "unset" })),
+      searchCards: vi.fn(
+        async (): Promise<SearchResponse> => ({ items: [], total: 0, totalIsCapped: false }),
+      ),
       // The four the reader's half reads and writes. The pump waits for the first two to have
       // answered — prefs loaded and their filters pushed — so each is a resolved promise by default.
       scannerPrefs: vi.fn(async () => prefs),
@@ -107,8 +117,10 @@ vi.mock("./useWindowParked", async () => {
   };
 });
 import { ipc } from "@/lib/ipc";
+import { SCANNING_STOPPED } from "./reader/readerText";
 import { importItems } from "./reader/tray";
 import { ScannerPage } from "./ScannerPage";
+import { PICTURE_NOT_TAKEN } from "./submit/submitText";
 import { SCANNER_ELSEWHERE_POLL_MS } from "./useScannerElsewhere";
 
 function mount() {
@@ -288,6 +300,8 @@ const COMMANDS = [
   ipc.scannerFrame,
   ipc.scannerReset,
   ipc.scannerCapture,
+  ipc.scannerSubmit,
+  ipc.searchCards,
   ipc.scannerPrefs,
   ipc.setScannerPrefs,
   ipc.scannerSetFilters,
@@ -1084,6 +1098,245 @@ describe("ScannerPage", () => {
       expect(vi.mocked(ipc.scannerFrame).mock.calls[1]?.[1].mode).toBe("exact");
     } finally {
       restore();
+    }
+  });
+});
+
+/**
+ * ***Send scan…*** (issue #776): the picture on screen, to the scanner's maker, under the printing
+ * and finish a reader says it shows. The dialog's own suite (`submit/SubmitScanDialog.test.tsx`)
+ * holds what it asks and refuses; what is asked here is the page's half — where the press is
+ * offered, what it freezes, where the dialog is mounted, and that nothing stops for it.
+ */
+describe("ScannerPage sending a scan", () => {
+  /** The printing the Fast fixture decides on, as the search answers it. */
+  const SARUMAN: CardSummary = {
+    id: "storm-of-saruman-ltr-72",
+    name: "Storm of Saruman",
+    setCode: "ltr",
+    setName: "The Lord of the Rings: Tales of Middle-earth",
+    collectorNumber: "72",
+    rarity: "mythic",
+    typeLine: "Enchantment",
+    manaCost: "{4}{U}{U}",
+    price: null,
+    layout: "normal",
+    oracleId: "storm-of-saruman",
+    finishes: '["nonfoil","foil"]',
+    promoTypes: null,
+    gameChanger: false,
+    ownedQuantity: 0,
+    wishlisted: false,
+    printings: 1,
+    priceLow: null,
+    priceHigh: null,
+  };
+  const REFERENCE = "20261011T101500Z-0123456789abcdef";
+
+  /** No live picture, no press: the box under the strip is already saying why. */
+  it("does not offer the press while the camera is refused", async () => {
+    refused();
+    mount();
+    await screen.findByText("MTG Grimoire needs camera access to scan a card.");
+    expect(screen.getByRole("button", { name: "Reset evidence" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
+  });
+
+  it("freezes the picture on the press, asks which card it is, and sends the reader's answer", async () => {
+    const restore = shimVideo();
+    opens();
+    // A bundle that loaded and models that did not: the models' sentence under the camera is the
+    // tell that the status is in, which the submission's last figure is read from.
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.noModels);
+    frames(VERDICTS.decided);
+    vi.mocked(ipc.searchCards).mockResolvedValue({
+      items: [SARUMAN],
+      total: 1,
+      totalIsCapped: false,
+    });
+    vi.mocked(ipc.scannerSubmit).mockResolvedValue({ id: REFERENCE });
+    const user = userEvent.setup();
+    try {
+      const { container } = mount();
+      await screen.findByText(/No OCR models\. Put/);
+      await waitFor(() => expect(statusLine()).toHaveTextContent("Storm of Saruman"));
+
+      const opener = screen.getByRole("button", { name: "Send scan…" });
+      // Beside Reset evidence, outside the live region, like it.
+      expect(statusLine()).not.toContainElement(opener);
+      await user.click(opener);
+
+      const dialog = await screen.findByRole("dialog", { name: "Send this scan" });
+      // A sibling of the view's container box, never inside it: a container is the containing
+      // block for the dialog's `fixed` scrim.
+      const scope = container.querySelector(".\\@container\\/scan");
+      expect(scope).not.toBeNull();
+      expect(scope?.contains(dialog)).toBe(false);
+
+      // The canvas shim's three bytes, as the text that is drawn and sent.
+      expect(
+        within(dialog).getByRole("img", { name: "The picture that will be sent" }),
+      ).toHaveAttribute("src", "data:image/jpeg;base64,AQID");
+      // The search opens on the card the strip was naming, and nothing is chosen.
+      expect(within(dialog).getByRole("searchbox")).toHaveValue("Storm of Saruman");
+      const printing = await within(dialog).findByRole("radio", {
+        name: "Storm of Saruman — LTR 72",
+      });
+      expect(printing).toHaveAttribute("aria-checked", "false");
+      expect(ipc.searchCards).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "Storm of Saruman", collapse: false }),
+      );
+      expect(ipc.scannerSubmit).not.toHaveBeenCalled();
+
+      await user.click(printing);
+      await user.click(within(dialog).getByRole("radio", { name: "Foil" }));
+      await user.click(within(dialog).getByRole("button", { name: "Send scan" }));
+
+      await waitFor(() => expect(ipc.scannerSubmit).toHaveBeenCalledTimes(1));
+      expect(ipc.scannerSubmit).toHaveBeenCalledWith("AQID", {
+        cardId: "storm-of-saruman-ltr-72",
+        finish: "foil",
+        // What the scanner had said, read at the press: the Fast fixture's decision, its
+        // tracker's confidence, its best candidate's bits, and the bundle's card count.
+        reported: "storm-of-saruman-ltr-72",
+        mode: "fast",
+        confidence: 1,
+        distance: 30,
+        bundle: STATUS.noModels.labels,
+      });
+      // Nothing was written to the developer's dataset: that is another press.
+      expect(ipc.scannerCapture).not.toHaveBeenCalled();
+
+      expect(await within(dialog).findByText("Sent — thank you.")).toBeInTheDocument();
+      expect(dialog).toHaveTextContent(`Reference: ${REFERENCE}`);
+      await user.click(within(dialog).getByRole("button", { name: "Done" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(opener).toHaveFocus();
+    } finally {
+      restore();
+    }
+  });
+
+  /**
+   * **The camera keeps running behind the dialog**, as it does behind the tray's two questions —
+   * and the picture in the dialog is the one taken at the press, whatever has been read since.
+   */
+  it("goes on reading behind the dialog, with the picture as it was at the press", async () => {
+    const restore = shimVideo();
+    opens();
+    // A bundle that loaded, so the strip names the card the scanner is leaning towards.
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+    paced();
+    const user = userEvent.setup();
+    try {
+      mount();
+      await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"));
+      await user.click(screen.getByRole("button", { name: "Send scan…" }));
+      const dialog = await screen.findByRole("dialog", { name: "Send this scan" });
+      const picture = within(dialog).getByRole("img", { name: "The picture that will be sent" });
+      expect(within(dialog).getByRole("searchbox")).toHaveValue("Plains");
+
+      const sent = vi.mocked(ipc.scannerFrame).mock.calls.length;
+      await waitFor(() =>
+        expect(vi.mocked(ipc.scannerFrame).mock.calls.length).toBeGreaterThan(sent + 2),
+      );
+      // The same element, on the same picture, with the same word in the box.
+      expect(within(dialog).getByRole("img", { name: "The picture that will be sent" })).toBe(
+        picture,
+      );
+      expect(picture).toHaveAttribute("src", "data:image/jpeg;base64,AQID");
+      expect(within(dialog).getByRole("searchbox")).toHaveValue("Plains");
+
+      // Escape hands the caret back to the press; the scanner never stopped.
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(screen.getByRole("button", { name: "Send scan…" })).toHaveFocus();
+    } finally {
+      restore();
+    }
+  });
+
+  /**
+   * The loop keeps its last answer across a Stop, and that answer may be about a card that has
+   * since been swapped. With recognition stopped the scanner is saying nothing, so nothing is
+   * what the picture is sent beside — and the search opens empty.
+   */
+  it("sends nothing for the scanner while recognition is stopped", async () => {
+    const restore = shimVideo();
+    opens();
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+    paced();
+    vi.mocked(ipc.searchCards).mockResolvedValue({
+      items: [SARUMAN],
+      total: 1,
+      totalIsCapped: false,
+    });
+    const user = userEvent.setup();
+    try {
+      mount();
+      await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"));
+      await user.click(screen.getByRole("button", { name: "Stop scanning" }));
+      await waitFor(() => expect(statusLine()).toHaveTextContent("Looking"));
+      // Still a live picture, so still a press.
+      await user.click(screen.getByRole("button", { name: "Send scan…" }));
+
+      const dialog = await screen.findByRole("dialog", { name: "Send this scan" });
+      const box = within(dialog).getByRole("searchbox");
+      expect(box).toHaveValue("");
+      expect(ipc.searchCards).not.toHaveBeenCalled();
+
+      await user.type(box, "storm");
+      await user.click(
+        await within(dialog).findByRole(
+          "radio",
+          { name: "Storm of Saruman — LTR 72" },
+          { timeout: 3000 },
+        ),
+      );
+      await user.click(within(dialog).getByRole("radio", { name: "Nonfoil" }));
+      await user.click(within(dialog).getByRole("button", { name: "Send scan" }));
+      await waitFor(() => expect(ipc.scannerSubmit).toHaveBeenCalledTimes(1));
+      expect(vi.mocked(ipc.scannerSubmit).mock.calls[0]?.[1]).toMatchObject({
+        cardId: "storm-of-saruman-ltr-72",
+        finish: "nonfoil",
+        reported: null,
+        confidence: null,
+        distance: null,
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  /**
+   * **A press that got no picture is never silent.** The press is offered wherever a camera is
+   * live, which includes recognition stopped and — with the Developer panels on — a frame the
+   * detector is refusing; in both the line over the picture used to be spoken for, and the press
+   * opened nothing and said nothing. A canvas that hands back no context is how a grab comes to
+   * nothing here.
+   */
+  it("says so when the press got no picture, stopped or not, and opens nothing", async () => {
+    const restoreVideo = shimVideo();
+    const blind = shim(HTMLCanvasElement.prototype, { getContext: { value: () => null } });
+    opens();
+    const user = userEvent.setup();
+    try {
+      mount();
+      await user.click(await screen.findByRole("button", { name: "Send scan…" }));
+      expect(await screen.findByText(PICTURE_NOT_TAKEN)).toBeInTheDocument();
+      expect(screen.queryByRole("dialog")).toBeNull();
+
+      // Stopped: the press still stands over a live picture, and its answer stands in for the
+      // stopped sentence until the next press.
+      await user.click(screen.getByRole("button", { name: "Stop scanning" }));
+      expect(screen.queryByText(SCANNING_STOPPED)).toBeNull();
+      await user.click(screen.getByRole("button", { name: "Send scan…" }));
+      expect(await screen.findByText(PICTURE_NOT_TAKEN)).toBeInTheDocument();
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(ipc.scannerSubmit).not.toHaveBeenCalled();
+    } finally {
+      blind();
+      restoreVideo();
     }
   });
 });

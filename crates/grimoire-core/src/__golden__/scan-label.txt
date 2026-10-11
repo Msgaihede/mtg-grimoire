@@ -1,0 +1,1 @@
+{"v":1,"card":{"id":"ce711943-c1a1-43a0-8b89-8d169cfb8e06","set":"2x2","number":"117\u2605","lang":"en","name":"Lim-D\u00fbl\u2019s Vault"},"finish":"foil","scanner":{"reported":"f29ba16f-c8fb-42fe-aabf-87089cb214a7","mode":"exact","confidence":0.82,"distance":31,"bundle":null},"app":{"version":"0.43.0","platform":"android"},"frame":{"width":1920,"height":1080}}

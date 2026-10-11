@@ -30,7 +30,12 @@
 //      candidate answers it;
 //  10. on its side at 800×360 the camera's column and the tray's stand side by side, with nothing
 //      off the screen, no control under 44px and Add under a thumb;
-//  11. with the camera refused the page lands on its sentence.
+//  11. with the camera refused the page lands on its sentence;
+//  12. *Send scan…* stands beside *Reset evidence* over a live picture and leaves the match bar
+//      room; its dialog draws the camera's own frame from the very text it will send, with
+//      nothing chosen and Send out of reach; a printing sold more than one way brings its
+//      finishes into view under a thumb; and the two answers go out with that picture in one
+//      `scanner_submit`, the reference comes back, and Done hands the caret to the press.
 //
 // **What it cannot prove is everything the fake stands in for**: recognition (the script names its
 // own cards whatever the lens shows), a phone's real frame rate, the detail frame (the script never
@@ -517,6 +522,93 @@ async function phone(send, width, height) {
   await page.evaluate(`smoke.press(smoke.controls(smoke.sheet()).find((b) => /^Use .*2X2/.test(smoke.named(b))), 'another printing')`);
   await page.until(`smoke.sheet() === null && smoke.starting('More printings of Lightning Bolt — 2X2 117') !== undefined`, "the printing handed back");
   say(`${at}: Exact — ${asking.rows} rows, the fifth card waits with three candidates; a press settles it, and the printings sheet hands another back`);
+
+  // ------------------------------------------------ 12. Send scan -------------------------
+  // Recognition is stopped and the camera is not: the press stands over a live picture, and the
+  // dialog opens with nothing the scanner said — so its search starts empty and is typed into.
+  await page.evaluate(`(async () => {
+    const core = await import('${FS}packages/fake/core.ts');
+    const { activeScope } = await import('${FS}packages/fake/scope.ts');
+    const own = activeScope().commands;
+    window.sentScans = [];
+    core.registerCommands({
+      scanner_submit: (args) => { window.sentScans.push(args); return own.scanner_submit(args); },
+    });
+    return true;
+  })()`);
+  const row = await page.evaluate(`(() => {
+    const send = smoke.button('Send scan…');
+    send.scrollIntoView({ block: 'center' });
+    const bar = document.querySelector('[role="progressbar"][aria-label="Match progress"]');
+    return { ...smoke.measure(), send: smoke.box(send), bar: smoke.box(bar).width, reachable: smoke.reachable(send) };
+  })()`);
+  hold(`${at}, the status line with Send scan on it`, row);
+  if (!row.reachable) fail(`${at}: Send scan… is not under a thumb`);
+  if (row.bar < 80) fail(`${at}: Send scan… leaves the match bar ${Math.round(row.bar)}px`);
+  await page.evaluate(`smoke.press(smoke.button('Send scan…'), 'Send scan')`);
+  await page.until(`smoke.sheet() !== null && /Send this scan/.test(smoke.sheet().textContent)`, "the Send scan dialog");
+  const opened = await page.evaluate(`(async () => {
+    const picture = smoke.sheet().querySelector('img');
+    await picture.decode();
+    const send = smoke.button('Send scan', smoke.sheet());
+    // Kept on the page, not brought back: it is the picture, and it is compared where it is.
+    window.shownScan = picture.src.slice(23);
+    return { src: picture.src.slice(0, 23), bytes: Math.round((window.shownScan.length * 3) / 4), size: picture.naturalWidth + 'x' + picture.naturalHeight,
+      box: smoke.box(picture), disabled: send.getAttribute('aria-disabled'), reason: document.getElementById(send.getAttribute('aria-describedby'))?.textContent,
+      chosen: smoke.sheet().querySelectorAll('[role="radio"][aria-checked="true"]').length, sent: window.sentScans.length };
+  })()`);
+  if (opened.src !== "data:image/jpeg;base64,") fail(`${at}: the picture to be sent is drawn from ${opened.src}…`);
+  if (opened.size !== cam.stream) fail(`${at}: the picture to be sent is ${opened.size}, the camera's is ${cam.stream}`);
+  if (opened.box.width < 100 || opened.box.right > width + 0.5) fail(`${at}: the picture to be sent is drawn ${Math.round(opened.box.width)}px wide`);
+  if (opened.disabled !== "true" || opened.reason !== "Choose the card in the picture.") fail(`${at}: before any answer Send is ${opened.disabled} and says "${opened.reason}"`);
+  if (opened.chosen !== 0 || opened.sent !== 0) fail(`${at}: the dialog opened with ${opened.chosen} answers chosen and ${opened.sent} scans sent`);
+  // A typed name, as a reader types one: through the box's own setter, so React hears it.
+  await page.evaluate(`(() => {
+    const box = smoke.sheet().querySelector('input[type="search"]');
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(box, 'Lightning Bolt');
+    box.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  })()`);
+  await page.until(`smoke.button('Lightning Bolt — STA 105', smoke.sheet()) !== undefined`, "the printings of the typed card");
+  await sleep(350);
+  hold(`${at}, the Send scan dialog`, await page.evaluate(`smoke.measure(smoke.sheet())`));
+  // A printing sold more than one way: the finishes are asked for, and brought to the reader —
+  // on a screen this short they start under the fold of the dialog's scroller.
+  await page.evaluate(`smoke.press(smoke.button('Lightning Bolt — STA 105', smoke.sheet()), 'a printing')`);
+  await page.until(`smoke.button('Foil', smoke.sheet())?.getAttribute('aria-disabled') === null`, "the finishes of the chosen printing");
+  await sleep(200);
+  const asked = await page.evaluate(`(() => {
+    const dialog = smoke.sheet();
+    const send = smoke.button('Send scan', dialog);
+    const finishes = smoke.box(smoke.button('Foil', dialog).closest('[role="radiogroup"]'));
+    const footer = smoke.box(dialog.querySelector('footer'));
+    const scroller = smoke.box(dialog.querySelector('.overflow-y-auto'));
+    return { reason: document.getElementById(send.getAttribute('aria-describedby'))?.textContent,
+      inView: finishes.top >= scroller.top - 0.5 && finishes.bottom <= Math.min(scroller.bottom, footer.top) + 0.5,
+      reachable: smoke.reachable(smoke.button('Foil', dialog)), footer: smoke.reachable(send),
+      checked: dialog.querySelectorAll('[role="radiogroup"]:not([aria-label="Printings"]) [aria-checked="true"]').length };
+  })()`);
+  if (asked.reason !== "Choose its finish." || asked.checked !== 0) fail(`${at}: with a printing chosen Send says "${asked.reason}" and ${asked.checked} finishes are chosen for the reader`);
+  if (!asked.inView || !asked.reachable) fail(`${at}: the finishes are asked for and are not on screen (in view ${asked.inView}, under a thumb ${asked.reachable})`);
+  if (!asked.footer) fail(`${at}: Send is not under a thumb`);
+  await page.shot("send-scan");
+  await page.evaluate(`smoke.press(smoke.button('Foil', smoke.sheet()), 'a finish')`);
+  await page.until(`smoke.button('Send scan', smoke.sheet()).getAttribute('aria-disabled') === null`, "Send to come within reach");
+  await page.evaluate(`smoke.press(smoke.button('Send scan', smoke.sheet()), 'Send')`);
+  await page.until(`window.sentScans.length === 1 && /Sent — thank you\\./.test(smoke.sheet().textContent)`, "the scan to be sent and thanked for");
+  const scan = await page.evaluate(`({ ...window.sentScans[0], frame: undefined, same: window.sentScans[0].frame === window.shownScan,
+    said: smoke.sheet().textContent, picture: smoke.sheet().querySelector('img') !== null })`);
+  if (!scan.same) fail(`${at}: the picture sent is not the picture that was shown`);
+  if (scan.submission.finish !== "foil" || !/^[0-9a-f-]{36}$/.test(scan.submission.cardId)) fail(`${at}: sent ${JSON.stringify(scan.submission)}`);
+  if (scan.submission.reported !== null || scan.submission.mode !== "exact") fail(`${at}: with recognition stopped the scanner's side went out as ${JSON.stringify(scan.submission)}`);
+  if (!/Reference: \d{8}T\d{6}Z-[0-9a-f]{16}/.test(scan.said)) fail(`${at}: the thanks reads "${scan.said}"`);
+  hold(`${at}, the thanks`, await page.evaluate(`smoke.measure(smoke.sheet())`));
+  await page.evaluate(`smoke.press(smoke.button('Done', smoke.sheet()), 'Done')`);
+  await page.until(`smoke.sheet() === null`, "the dialog to close");
+  const back = await page.evaluate(`({ focused: smoke.named(document.activeElement), sent: window.sentScans.length })`);
+  if (back.focused !== "Send scan…") fail(`${at}: Done left the caret on "${back.focused}"`);
+  if (back.sent !== 1) fail(`${at}: ${back.sent} scans were sent`);
+  say(`${at}: Send scan — a ${opened.size} picture of ${Math.round(opened.bytes / 1024)} kB drawn from the text that is sent, nothing chosen for the reader; a printing, its finishes brought into view, Foil, one scanner_submit, a reference, and the caret back on the press`);
 
   const thrown = await page.evaluate(`window.thrown`);
   if (thrown.length > 0) fail(`${at}: the page threw — ${thrown.join(" | ")}`);

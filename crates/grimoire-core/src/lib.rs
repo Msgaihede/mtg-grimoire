@@ -154,6 +154,9 @@ pub mod scanner;
 /// **The scanner's three files, fetched when a reader asks**: what this install owes of them,
 /// and the download — checked, renamed into place, and the loaded session let go.
 pub mod scanner_assets;
+/// **One camera picture and the card a reader says it shows, sent to the scan inbox** — the one
+/// thing here that sends a picture off the device, and only at a reader's press.
+pub mod scanner_submit;
 /// **Every table, both ladders and the staging swaps.** `bring_to_head` is the half of a launch
 /// that may stop it; `prepare_database` is that and the half that is logged and left owing.
 pub mod schema;

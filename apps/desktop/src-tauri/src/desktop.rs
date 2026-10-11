@@ -743,6 +743,10 @@ pub fn run() {
             // owes nothing and so is never offered it. See the core's `scanner_assets`.
             scanner::scanner_assets,
             scanner::scanner_assets_fetch,
+            // One camera picture and the card a reader says it shows, sent to the scan inbox to
+            // improve the scanner — only ever from a reader's press on Send. See the core's
+            // `scanner_submit`.
+            scanner::scanner_submit,
             // The relay, the membership and the review queue (spec §6.1, §7.2–§7.4, §7.7 and
             // §10). The panel's two reads, the Connect press, the claim code the reader pastes
             // back, one round trip now, the rows carrying a sentence, clearing one of them, and
