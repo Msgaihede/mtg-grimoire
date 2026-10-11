@@ -35,6 +35,7 @@ import {
 import {
   Copy,
   ExternalLink,
+  FlipHorizontal2,
   Folder,
   FolderInput,
   Heart,
@@ -79,6 +80,7 @@ import type { Marketplace } from "@/lib/marketplace";
 import type { PaneDeckContext, PrintingsRequest } from "@/lib/store";
 import { sortOptions } from "@/lib/options";
 import { openMarketplaceForCard } from "./openMarketplace";
+import { toggleShownFace } from "./shownFace";
 
 /**
  * The card a menu was opened on, as every surface can describe it.
@@ -152,6 +154,23 @@ export interface CardMenuTarget {
    * cardboard.
    */
   typeLine?: string | null;
+  /**
+   * Whether this menu offers **Flip card** — issue #844, the right-click half of turning a card
+   * over without opening the modal.
+   *
+   * **Set by a surface that draws this card's picture and has a back to show**, and by nothing
+   * else: the walls' tiles and the deck editor's Stacks and Grid faces, for a printing
+   * `hasBackFace` (`./printings`) says has a second side. A table row, a text line and a printings
+   * row draw no picture, so a row there that "flipped" the card would be a press with nothing to
+   * see — they leave this out, and the row is an absence rather than a greyed entry for
+   * {@link entryId}'s reason: it is a property of the surface, not of the card.
+   *
+   * The press turns the printing over everywhere it is drawn (`./shownFace` says why the key is
+   * the printing), and it is always about the card that was right-clicked — a picked set does not
+   * turn over with it, for the reason "Copy card image" stays singular: what is on screen is one
+   * picture per tile, and a flip is a look at one of them.
+   */
+  flip?: boolean;
 }
 
 /** Everything the card menu needs that is not the card. Built once per surface, not per row. */
@@ -408,6 +427,24 @@ export function buildCardMenu(target: CardMenuTarget, deps: CardMenuDeps): MenuI
   }
 
   return [
+    // First, and ruled off on its own: it is the one row that changes what the reader is looking
+    // at rather than doing something *with* the card, and it sits where a right-click lands —
+    // the gesture the issue asked for is "right-click to flip", so the verb is one row away.
+    ...(target.flip
+      ? [
+          {
+            kind: "action",
+            id: "flip",
+            // The modal's own words for its own button (`CardModalArt`), so one verb is learnt
+            // once. Not "Show back" / "Show front": the press toggles, and a label that changed
+            // with the side would be a label to read before every press.
+            label: "Flip card",
+            Icon: FlipHorizontal2,
+            onSelect: () => toggleShownFace(target.cardId),
+          } satisfies MenuAction,
+          { kind: "separator", id: "sep-flip" } satisfies MenuItem,
+        ]
+      : []),
     {
       kind: "action",
       id: "copy-name",

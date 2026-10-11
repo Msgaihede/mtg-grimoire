@@ -7526,6 +7526,8 @@ function toWishRow(db: FakeDb, w: FakeWish, mp: MarketplaceId): WishRow {
     // own printing, an any-printing wish is the newest printing of its oracle card, and only a
     // genuine orphan is `null`.
     artCardId: card?.id ?? null,
+    // The drawn printing's layout, off the same join — what says the wall's tile turns over.
+    layout: card?.layout ?? null,
     quantity: w.quantity,
     preferredFinish: w.preferredFinish,
     // The cheapest way to satisfy the wish, per copy — {@link wishPriceAt}, which the folder

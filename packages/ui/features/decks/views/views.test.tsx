@@ -37,6 +37,7 @@ import {
 } from "../CardMarks";
 import type { TheoryPlan } from "../theoryMatch";
 import { card } from "../validation/fixtures";
+import { resetShownFaces } from "@/features/card/shownFace";
 import type { ValidationIssue } from "../validation/types";
 import { deckCardScale, stackCardWidth, stackLiftRoom } from "../CardStack";
 import {
@@ -5259,3 +5260,58 @@ describe("StackView hidden stacks", () => {
   });
 });
 
+
+/**
+ * Issue #844 — the deck's two picture views turn a two-sided card over from the card itself: a
+ * flip button under the stepper, in the same column, and the face drawn on whichever side the
+ * reader left it. A one-sided card gets no button.
+ */
+describe("flipping a deck card", () => {
+  beforeEach(() => resetShownFaces());
+
+  const drawGrid = (cards: DeckCard[], actions?: DeckCardActions) =>
+    render(
+      <GridView
+        tracksCollection
+        groups={buildGroups(cards, [RAMP], "category", "alphabetical")}
+        marketplace={TCG}
+        actions={actions}
+      />,
+    );
+  const delver = () => card({ name: "Delver of Secrets", cardId: "delver", layout: "transform" });
+  const faceSrc = () =>
+    within(screen.getByRole("list", { name: "Ramp" }))
+      .getAllByRole("listitem")[0]
+      .querySelector("img")
+      ?.getAttribute("src") ?? "";
+
+  it("stands the flip button under the stepper on a two-sided card", () => {
+    drawGrid([delver()], { setQuantity: vi.fn(), drop: vi.fn() });
+    const flip = screen.getByRole("button", { name: "Flip Delver of Secrets" });
+    const less = screen.getByRole("button", { name: /^Decrease Copies of Delver of Secrets/ });
+    // One column, the stepper first: `DeckCardControls`' own wrapper holds both.
+    const column = flip.parentElement!;
+    expect(column).toHaveAttribute("data-no-drag");
+    expect(column.contains(less)).toBe(true);
+    expect(less.compareDocumentPosition(flip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("offers no flip on a one-sided card", () => {
+    drawGrid([card({ name: "Sol Ring" })], { setQuantity: vi.fn(), drop: vi.fn() });
+    expect(screen.queryByRole("button", { name: /^Flip / })).toBeNull();
+  });
+
+  it("offers the flip even where the deck cannot be stepped — looking is not a write", () => {
+    drawGrid([delver()]);
+    expect(screen.getByRole("button", { name: "Flip Delver of Secrets" })).toBeInTheDocument();
+  });
+
+  it("turns the face to its back and back again", () => {
+    drawGrid([delver()]);
+    expect(faceSrc()).toMatch(/\/delver\/0$/);
+    fireEvent.click(screen.getByRole("button", { name: "Flip Delver of Secrets" }));
+    expect(faceSrc()).toMatch(/\/delver\/1$/);
+    fireEvent.click(screen.getByRole("button", { name: "Flip Delver of Secrets" }));
+    expect(faceSrc()).toMatch(/\/delver\/0$/);
+  });
+});

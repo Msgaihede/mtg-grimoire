@@ -7,6 +7,7 @@ import {
 } from "react";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { useTooltip } from "@/components/tooltip/useTooltip";
+import { hasBackFace } from "@/features/card/printings";
 import { dragData } from "@/features/decks/dnd";
 import { CardGrid, type GridCard, type GridSections } from "@/features/search/CardGrid";
 import type { Finish } from "@/lib/finish";
@@ -67,6 +68,10 @@ const NO_TILES: readonly WishTile[] = [];
  * The set and number are carried anyway, from the *wish*, so the tile keeps a truthful pair for
  * anything that reads the shape — {@link tileCaption} is what actually draws them.
  */
+/** Whether a wish's tile turns over — the layout of the printing it is drawn as. Module-level, so
+ *  `CardGrid`'s `flips` is handed one function for the life of the wall. */
+const wishFlips = (tile: WishTile): boolean => hasBackFace(tile.wish.layout);
+
 function toTile(wish: WishRow, managed: boolean): WishTile {
   return {
     managed,
@@ -298,9 +303,9 @@ export function WishlistGrid({
    * wish names no cardboard to ask a question about, so the menu is not offered — the answer must
    * not differ between two drawings of one list.
    */
-  rowMenu?: (row: WishRow) => ((e: ReactMouseEvent) => void) | undefined;
+  rowMenu?: (row: WishRow, flip?: boolean) => ((e: ReactMouseEvent) => void) | undefined;
   /** The same menu from the keyboard, on exactly the wishes its pointer twin is. */
-  rowMenuKey?: (row: WishRow) => ((e: ReactKeyboardEvent) => void) | undefined;
+  rowMenuKey?: (row: WishRow, flip?: boolean) => ((e: ReactKeyboardEvent) => void) | undefined;
   /** Which marketplace the cost mark quotes. Passed rather than read here so the wall and the
    *  header above it cannot disagree about what they are pricing in. */
   marketplace: Marketplace;
@@ -638,8 +643,12 @@ export function WishlistGrid({
           </span>
         )
       }
-      cardMenu={rowMenu && ((tile) => rowMenu(tile.wish))}
-      cardMenuKey={rowMenuKey && ((tile) => rowMenuKey(tile.wish))}
+      // The wall's third argument is whether the tile turns over, handed on so the menu offers
+      // "Flip card" here and not on the table's row of the same wish (issue #844).
+      cardMenu={rowMenu && ((tile, _picked, flip) => rowMenu(tile.wish, flip))}
+      cardMenuKey={rowMenuKey && ((tile, _picked, flip) => rowMenuKey(tile.wish, flip))}
+      // The drawn printing's layout, which is the picture the flip turns — see `WishRow.layout`.
+      flips={wishFlips}
       // `dragRecord` rather than `dragPayload`, because a wish tile's drag is two marks in one
       // record and that slot carries one — see {@link tileDrag} and `CardGrid`'s own note.
       dragRecord={tileDrag}
