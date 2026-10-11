@@ -675,7 +675,8 @@ its figures and the `→` that opens it (issue #599 — the title folds now, as 
 be refused for** — no Add folder, no Rename, no `⋯`,
 no drag, and no card target that arms. `renderHeading` wires the first four only for a reader's own
 folder, and every heading's card target comes from `cardDrops`, which asks `canFile` — and
-`canFile` refuses a managed destination (all three in `WishlistPage.tsx`).
+`canFile` refuses a managed destination (all three in `WishlistPage.tsx` until issue #557; `cardDrops`
+and `canFile` are in `useWishDrops.ts` since).
 
 **An empty managed folder keeps its heading and draws one box under it, identical in both views**,
 because a deck whose plan asks for nothing more is good news rather than a hidden shelf.
@@ -1427,6 +1428,9 @@ they were before the press. Findings B and C, both known and accepted, are recor
 | ~~`packages/ui/features/wishlist/WishFolderCard.tsx`~~ | **Deleted 2026-09-26** with the folder band, beside `ManagedWishFolders.tsx`. A folder is a shelf heading |
 | `packages/ui/features/wishlist/wishShelfPlan.ts` | The wishlist's reading of the shelves: `toShelfFolder`, `NEW_FOLDER_SHELF`, `effectiveCounts`, `countTotals`, `shelfStat`, `foldedForDrag` and the table's `shelfTable` |
 | `packages/ui/features/wishlist/WishShelfHeading.tsx` | The heading, the sticky bar and the empty box, each wired to `readWishDrop` and this page's filing policy |
+| `packages/ui/features/wishlist/useWishDrops.ts` | The page's filing policy, out of `WishlistPage` since issue #557: `canFile` / `fileWish`, `addWish`, `cardDrops`, and the folder drops `folderPlacement` / `placeFolder` and `canMoveInto` / `moveInto` |
+| `packages/ui/features/wishlist/WishFolderPanel.tsx` | The strip of folder questions — `Move to folder…`, `Delete…`, `Clear…` — with `FolderQuestion`, `DeleteFolderConfirm`, `ClearFolderConfirm` and `ROOT_LABEL`; out of `WishlistPage` since issue #557 |
+| `packages/ui/features/wishlist/useWishEntryWrites.ts` | The stepper, the removal, the filing, back to any printing, and `settleWhole`; the optimistic patch, snapshot and restore are `packages/ui/lib/useOptimisticEntries.ts`, shared with the collection since issue #557 |
 | `packages/ui/components/FolderNameField.tsx` | The one naming field, both shapes, `FOLDER_CARD_HEIGHT` and `useFolderFieldReturn` — drawn on a shelf heading since 2026-09-26 |
 | ~~`packages/ui/components/NewFolderCard.tsx`~~ | **Deleted 2026-09-26** with the folder band. Add folder is `ShelfToolbar` and `ShelfHeading` |
 | `packages/ui/components/ParentFolderCard.tsx` | The up-one-level tile — drawn by no cabinet since 2026-09-26, with its stories kept; the deck gallery's `FolderCard` imports its words. Its folder half is a breadcrumb segment's drop now |

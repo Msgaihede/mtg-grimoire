@@ -539,6 +539,19 @@ pub const TABLES: [Spec; 18] = [
             // safely for an old peer — `0`, a shut band — and adding was the safe direction,
             // `theory_mark_*`'s note above: a v57 device neither names nor reads the key.
             "todos_open",
+            // The reader's own tags for the deck (user schema v62, issue #834) — a JSON array of
+            // strings in one column, `collection_entries.tags`' shape on the spec at the top of
+            // this list, and it travels for `bracket`'s reason: `Meme` is an answer about the
+            // deck. **One field, so last-writer-wins takes the whole list**: two devices tagging
+            // one deck while apart keep the later list and lose the earlier one's additions,
+            // which is the price of a column over a table and the one v58 paid for `todos`.
+            // `DEFAULT '[]'` keeps the old-peer direction safe — a device on v61 names no such
+            // field — and adding was the safe direction, `theory_mark_*`'s note above.
+            //
+            // The column's `CHECK` is `json_valid` and nothing narrower, so unlike `token_mode`
+            // there is no value a newer build could send that this one defers: any JSON lands,
+            // and `deck::read_tags` reads what it can of it.
+            "tags",
         ],
         counters: &[],
         parents: &[
@@ -1559,6 +1572,49 @@ mod tests {
             fields.get("todos_open"),
             Some(&serde_json::json!(1)),
             "an opened band must reach the reader's other devices, in {fields}"
+        );
+    }
+
+    /// **A deck's tags travel** (user schema v62, issue #834) — the reader's own words about the
+    /// deck, and a tag that stayed behind would leave `Meme` on one device and an untagged deck
+    /// on the next, with nothing on screen saying why. As the column's JSON text, the way
+    /// `collection_entries.tags` goes out, and an emptied list is an op too: taking the last tag
+    /// off has to reach the other devices as surely as putting the first one on.
+    #[test]
+    fn a_decks_tags_are_captured() {
+        let conn = db();
+        conn.execute(
+            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
+             VALUES (1, 'Burn', 'modern', 0, 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+
+        conn.execute(
+            r#"UPDATE decks SET tags = '["No Gamechangers","Meme"]' WHERE id = 1"#,
+            [],
+        )
+        .unwrap();
+
+        let rows = ops(&conn);
+        assert_eq!(rows.len(), 1, "one write, one op");
+        let fields: serde_json::Value = serde_json::from_str(&rows[0].2).unwrap();
+        assert_eq!(
+            fields.get("tags"),
+            Some(&serde_json::json!(r#"["No Gamechangers","Meme"]"#)),
+            "the tags must reach the reader's other devices, in {fields}"
+        );
+
+        conn.execute("UPDATE decks SET tags = '[]' WHERE id = 1", [])
+            .unwrap();
+        let rows = ops(&conn);
+        assert_eq!(rows.len(), 2, "a second write, a second op");
+        let fields: serde_json::Value = serde_json::from_str(&rows[1].2).unwrap();
+        assert_eq!(
+            fields.get("tags"),
+            Some(&serde_json::json!("[]")),
+            "and so must taking the last one off, in {fields}"
         );
     }
 

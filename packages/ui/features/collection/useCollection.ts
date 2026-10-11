@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   keepPreviousData,
   useInfiniteQuery,
@@ -704,6 +704,23 @@ export function useCollection({
 
   const rows = useMemo(() => pages?.pages.flatMap((p) => p.items) ?? [], [pages]);
 
+  /**
+   * One press on a column header, as the object below publishes it. **Held still across
+   * renders** (issue #557): the table is memoised, and a handler minted fresh on every render
+   * would hand it a new prop on every keystroke in the filter box and render every row again for
+   * nothing.
+   */
+  const toggleSort = useCallback(
+    (key: string, additive: boolean) =>
+      setSort((spec) =>
+        applySort(spec, key as CollectionSortKey, {
+          additive,
+          firstDir: COLLECTION_FIRST_DIR[key as CollectionSortKey] ?? "asc",
+        }),
+      ),
+    [],
+  );
+
   return {
     text,
     setText,
@@ -845,13 +862,7 @@ export function useCollection({
     /** The columns this list is ordered by, first one deciding. Empty is name order. */
     sort,
     /** One press on a column header. `additive` is Shift being held. */
-    toggleSort: (key: string, additive: boolean) =>
-      setSort((spec) =>
-        applySort(spec, key as CollectionSortKey, {
-          additive,
-          firstDir: COLLECTION_FIRST_DIR[key as CollectionSortKey] ?? "asc",
-        }),
-      ),
+    toggleSort,
     /**
      * The filter bar's select: one term, replacing whatever was there.
      *

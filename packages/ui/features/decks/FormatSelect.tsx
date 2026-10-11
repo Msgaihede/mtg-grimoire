@@ -19,6 +19,23 @@ import { ANY_GAME, GAME_OPTIONS, pickerFormats, useFormatSpecs } from "./useForm
 export const DEFAULT_FORMAT = "casual";
 
 /**
+ * The format of a deck **nobody has chosen a format for yet** — `format_specs`' `unspecified`
+ * row (corpus schema 7), whose `validates` cell is false, so the engine judges nothing about it
+ * and the check chip says "Not checked" rather than "No issues".
+ *
+ * The ManaBox CSV import is what creates these: an export says which cards are in a binder and
+ * nothing about what they are for, so the importer files each into a deck of this format and the
+ * reader picks the real one afterwards. The picker offers it too, for a deck started that way by
+ * hand.
+ *
+ * **Not {@link DEFAULT_FORMAT}, and not to become it.** A deck started by hand gets `casual`,
+ * which is still judged — a commander zone and a companion are held to their rules there. This
+ * constant names the key for a caller that sets it deliberately; nothing about the engine reads
+ * it (the engine reads the cell), so it is a name for a row and never a rule.
+ */
+export const UNSPECIFIED_FORMAT = "unspecified";
+
+/**
  * "What is this deck for", as the one control that asks it.
  *
  * **Lifted out of `CreateDeckDialog` when the import dialog needed the same question**, and the

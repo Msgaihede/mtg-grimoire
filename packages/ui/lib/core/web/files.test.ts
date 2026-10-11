@@ -219,11 +219,11 @@ describe("the web host's file commands", () => {
     await expect(second).resolves.toEqual({ text: "4 Lightning Bolt\n", encoding: "utf-8" });
   });
 
-  it("refuses a file over the megabyte in import.rs's own sentence", async () => {
+  it("refuses a file over the cap in import.rs's own sentence", async () => {
     const asked = answeringFiles(engine().core).call("import_pick_file");
     choose(new File(["x".repeat(MAX_DECKLIST_BYTES + 1)], "huge.txt"));
     await expect(asked).rejects.toBe(
-      "That file is over 1 MB. A decklist is text; this reads at most 1 MB.",
+      "That file is over 8 MB. An import is text; this reads at most 8 MB.",
     );
   });
 

@@ -89,6 +89,7 @@ const SPECS: FormatSpec[] = PICKER.map((f, i) => ({
   maxManaValue: null,
   allowsCompanion: true,
   sortOrder: i,
+  validates: true,
 }));
 
 let client: QueryClient;

@@ -81,7 +81,7 @@ export const PICK_FOCUS_GRACE_MS = 1000;
  *   that pick would be read as cancelled, and the reader would choose again.
  * - **One picker at a time**: a second ask answers the first with `null`. The dialog cannot make
  *   one while its button is greyed, so this is for a caller that can — a second mount, a script.
- * - **The megabyte and the four readings are `readDecklistFile`'s**, which are `import.rs`'s —
+ * - **The size cap and the four readings are `readDecklistFile`'s**, which are `import.rs`'s —
  *   the cap is checked against the file's size before a byte is read, and the bytes are UTF-8,
  *   UTF-16 by its mark, or Windows-1252, with the reading answered beside the text.
  * - **Two failures, two sentences**, as on the desktop: the cap's own, and *That file could not

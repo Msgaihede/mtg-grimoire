@@ -1,1 +1,5 @@
 * text=auto eol=lf
+
+# A real ManaBox export (issue #873), kept byte for byte: ManaBox writes CRLF, and a fixture
+# normalised to LF would test a file nobody exports.
+packages/ui/features/transfer/import/__fixtures__/*.csv -text

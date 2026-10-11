@@ -35,7 +35,7 @@
  * and for its reason: the workbench can stand the band up in the states that matter, including a
  * refused read that no seed produces.
  */
-import { useCallback, useId, useMemo, useRef, useState, type JSX, type Ref } from "react";
+import { memo, useCallback, useId, useMemo, useRef, useState, type JSX, type Ref } from "react";
 import { ChevronRight, Plus } from "lucide-react";
 import { FOCUS } from "@/lib/focus";
 import { ipcError, type DeckTodoList } from "@/lib/ipc";
@@ -85,8 +85,15 @@ interface Editing {
  *
  * **The read runs whether or not the band is open**, `DeckNotesPanel`'s call: the header says how
  * many to-dos are open across every list, and that number is the reason to open it.
+ *
+ * **Memoised (issue #557)**, `DeckNotesPanel`'s arrangement: three props, all held still by the
+ * editor, so the band is drawn again for its own lists and not for every render of the desk.
  */
-export function DeckTodosPanel({ deckId, open, onToggle }: DeckTodosPanelProps): JSX.Element {
+export const DeckTodosPanel = memo(function DeckTodosPanel({
+  deckId,
+  open,
+  onToggle,
+}: DeckTodosPanelProps): JSX.Element {
   const todos = useDeckTodoLists(deckId);
   const lists = todos.lists;
 
@@ -223,7 +230,7 @@ export function DeckTodosPanel({ deckId, open, onToggle }: DeckTodosPanelProps):
       />
     </>
   );
-}
+});
 
 export interface TodosBandProps {
   open: boolean;

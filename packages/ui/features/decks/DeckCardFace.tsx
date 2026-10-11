@@ -281,6 +281,17 @@ export interface DeckCardFaceProps {
   /** The nonce this card's last add was given, or `undefined` for a card that did not just arrive
    *  — passed through as the mark's `key`, so a second add replays it. */
   landedKey: number | undefined;
+  /**
+   * Which side of the card the picture is of — `0`, the front, unless the reader turned it over
+   * with the flip button under the stepper or the card menu's "Flip card" (issue #844). The two
+   * views read it from `features/card/shownFace` behind `turnsOver`; the token pile passes
+   * nothing and draws the front, as it always has.
+   *
+   * **The picture only.** The no-picture frame under it still prints the row's own name, cost and
+   * type line, which for a two-sided card are the front's — what shows while the back is loading
+   * is the card it is, not half of it.
+   */
+  face?: number;
   className?: string;
 }
 
@@ -299,6 +310,7 @@ export function DeckCardFace({
   theoryMark,
   noted = false,
   landedKey,
+  face: side = 0,
   className,
 }: DeckCardFaceProps) {
   // The whole card ({@link DECK_CARD_VARIANT}, which is `display` at 672×936), not the `art` crop.
@@ -310,7 +322,7 @@ export function DeckCardFace({
   // it is corrected here rather than carried across, because a moved comment is the last place a
   // stale number gets read.
   const face = useImageRetry(
-    card.needsReview === null ? cardImageUrl(card.cardId, 0, DECK_CARD_VARIANT) : null,
+    card.needsReview === null ? cardImageUrl(card.cardId, side, DECK_CARD_VARIANT) : null,
   );
   const finish = playedFinish(card.finish, card.finishes);
   // There is a URL and it has not failed. Not "the bytes have arrived" — nothing here can know

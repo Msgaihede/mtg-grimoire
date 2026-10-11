@@ -47,6 +47,7 @@ beforeEach(() => {
  *  is a fixture neither can change. */
 const BOLT: WishRow = {
   legalities: null,
+  layout: null,
   id: 7,
   oracleId: "o-bolt",
   cardId: "c1",

@@ -822,6 +822,92 @@ instead (`WishlistPlanItem`'s doc). A plain `1 Sol Ring` becomes a wish for the 
 un-pinned plain-text lines committed as three rows with `card_id IS NULL` and a populated
 `oracle_id`, both in the database and in the wishlist table's own "Any printing" caption.
 
+## A ManaBox collection, sorted by binder — issue #873, 2026-10-11
+
+ManaBox exports a whole collection as one CSV and says, on every row, which **binder** the copy
+is in — `Binder Name`, and `Binder Type` beside it (`binder` or `deck` in the issue's excerpt;
+ManaBox's own vocabulary also has `list`). Read as a plain collection import, that file landed
+every copy at the root, and the reader re-filed every card into drawers they had already made
+once. **The collection step now offers to sort it**: a box, ticked, that only appears when a line
+names a binder.
+
+| Binder Type | Becomes | Where the copies go |
+| --- | --- | --- |
+| `deck` | a **new deck** of that name, format `unspecified`, its cards in the **auto-sort's piles** | the deck's own group — owned, as the new-deck arm's "Add cards to collection" box files them |
+| anything else (`binder`, `list`, blank) | the **top-level `user` folder** of that name, made if missing | that folder |
+| no binder name on the row | — | the root, as an unsorted import |
+
+**Read on the way in, never written.** `parse.ts` reads the pair into `ParsedLine.binder`, not
+into `extra`: `extra` is keyed by registry field, and a registry field is one the writer, its
+golden files and the Rust mirror's field map would all owe a column. The two headers are matched
+by `normalizeHeader` outside `HEADER_TO_FIELD`, never count toward `csvHeaderOf`'s two known
+columns, and are left off the "Not read" line once read. A `Binder Type` with no `Binder Name`
+beside it names no drawer and stays on that line. ManaBox's `Added` column is the day the row
+entered ManaBox — Archidekt's `Date Added` again — and stays unread for that one's reason.
+
+**No planner of its own.** `destinations/binders.ts`' `planBinderImport` cuts one sub-list per
+binder out of the dialog's `ParsedList` — re-indexing the resolver's rows, because
+`ImportResolveRow.index` is a position in the list that was sent — and plans each with
+`planCollectionImport`, and a deck's list with `buildImportPlan` beside it. A card lands in the
+same pile and at the same grain whichever door it came through. **A deck's piles are the
+auto-sort's**: ManaBox names no category, so every line falls through `categoryFor` to
+`autoCategoryFor` — the card's Oracle tags (read once for the whole file by the dialog's resolve),
+then its type line — and `deck_import_commit` find-or-creates each pile as an `'auto'` category,
+exactly as a card added by hand would be filed. Groups are keyed on kind and exact
+name; a group none of whose rows matched is dropped, and its rows are still on the preview's
+unmatched list.
+
+**The format is `unspecified` because the export does not say.** A ManaBox deck carries no format
+and no command zone, so the deck is created in the one format whose `format_specs.validates` cell
+is `0` — judged by no rule until the reader picks one, rather than accused of being a 100-card
+Commander deck with no commander.
+
+**The write is a sequence of the writes that already shipped**, `useImport.ts`'s
+`importBinderGroups`: per group, `collection_import_commit` into the folder (or the root), or
+`createDeckFromList` — `deck_create` then `deck_import_commit`, the deck deleted again if the list
+is refused — then `collection_import_commit` into the deck's group. **Always `add`**: `set` is
+collection-wide, so run once per binder it would have each group rewrite the others'; the mode
+radios are hidden while the box is ticked. Folders are matched **case-insensitively, trimmed, at
+the top level, among `user` folders only** — a deck's group is never a binder's folder, since
+copies filed there would sit in a deck that does not play them — and the press's one
+`collection_folder_list` read is extended as it makes folders, so `Bulk` and `bulk` make one.
+
+**What that costs is a press that can stop part-way, and it stops loudly**: the first refusal
+ends it, and the sentence names the binder it stopped at and every binder that had already landed.
+A deck whose *copies* were refused stays — its list landed and is the deck that was asked for —
+and says so. **No undo is offered**: each group's commit carries its own ticket, and offering the
+last would take back one folder while saying it took back the file. A single command doing the
+whole file in one transaction is the stronger shape and is not what shipped; the per-group
+commands each carry fences (the folder kinds, the deck rollback, the eleven-term merge) that a new
+command would have had to restate.
+
+### Measured against a whole real export — 2026-10-11
+
+`import/manabox.test.ts` runs the parser and both planners over a **real, unedited** ManaBox
+collection export, `import/__fixtures__/manabox-collection.csv` (kept byte for byte, CRLF and all,
+by a `-text` line in `.gitattributes`): **9,583 rows, 30,656 copies, 1.76 MB**, five binders and
+four 100-card decks, six condition words (`near_mint`, `excellent`, `light_played`, `good`,
+`played`, `poor`) and five languages (`en`, `de`, `fr`, `zh_CN`, `ja`). Every row parses, every
+grade, language and price reads, and parsing plus both plans takes about a quarter of a second
+under Vitest. It found the two things the hand-written fixtures could not:
+
+- **The file was over the import cap.** `MAX_IMPORT_BYTES` (`import.rs`) and its browser copy
+  `MAX_DECKLIST_BYTES` were one megabyte — "two orders of magnitude past any real decklist" — and
+  refused this file before a line was read. Both are **8 MiB** now (~45,000 such rows), and the
+  refusal names one figure twice instead of a decimal division that agreed with `at most 1 MB` by
+  rounding.
+- **The preview's merge list was the whole file's**: 382 lines "merged into an earlier line",
+  among them copies in one binder merged into a copy in another — a merge the sorted press never
+  makes. `BinderPlan.folded` / `droppedPrices` are the binders' own (118 here), and the preview
+  lists those while the box is ticked.
+
+The test does not resolve: each row is matched to a printing keyed on its own set and collector
+number, which is the answer a corpus holding every card would give.
+
+**The binder sort and `Import into` (issue #872) share the step.** While the box is ticked the
+folder selector is hidden with the mode radios — the binders name every row's destination, so a
+single one would be a question the press does not ask — and unticking it brings both back.
+
 ## What a `set` will do, said before the press — issue #555
 
 The collection preview's `set` sentence is drawn from `collection_import_preview`, which is the
@@ -1193,3 +1279,9 @@ imports that same component rather than drawing a second), and `useImport.ts` (`
 from the other side of the app and the two had drifted to two different invalidations. Where those
 copies end up is
 [collection-folders.md](collection-folders.md)'s subject, not this page's.
+
+The ManaBox binder sort (issue #873) is `import/parse.ts` (`Binder`, `binderColumnsOf`,
+`binderOf`), `destinations/binders.ts` (`planBinderImport`, `hasBinders`),
+`destinations/BinderSort.tsx` (the box, the per-binder list and the closing sentence),
+`destinations/CollectionPreviewBody.tsx` (where the box replaces the mode radios) and
+`useImport.ts` (`importBinders`, `importBinderGroups`, `createDeckFromList`).

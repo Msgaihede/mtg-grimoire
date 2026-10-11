@@ -81,6 +81,7 @@ const MADE: DeckRow = {
   todosOpen: false,
   defaultCategoryId: 0,
   bracket: 0,
+  tags: [],
   updatedAt: 1786266000,
 };
 

@@ -11,19 +11,19 @@
  * a native host answers with a dialog it opens itself; in the web app `web/files.ts` answers both
  * on the page, with the read and the download written here.
  *
- * It was `apps/light/phone/transfer/browserFiles.ts` until the web host needed the same megabyte and
+ * It was `apps/light/phone/transfer/browserFiles.ts` until the web host needed the same size cap and
  * the same four readings (phase 5, step 5.4). The clipboard it also carried is `@/lib/clipboard`'s
  * now, on both faces.
  */
 import type { ImportFile } from "@/lib/ipc";
 
 /**
- * The most a decklist file may be — `import.rs`'s `MAX_IMPORT_BYTES`, the same megabyte the
+ * The most an import file may be — `import.rs`'s `MAX_IMPORT_BYTES`, the same 8 MiB the
  * desktop's read and the paste path are held to, so the two faces cannot disagree about how long
- * a decklist may be. Checked against `File.size` before a byte is read: a 200 MB file picked by
+ * a file may be. (One megabyte until issue #873: a whole ManaBox collection export is over it.) Checked against `File.size` before a byte is read: a 200 MB file picked by
  * mistake costs nothing.
  */
-export const MAX_DECKLIST_BYTES = 1024 * 1024;
+export const MAX_DECKLIST_BYTES = 8 * 1024 * 1024;
 
 /**
  * What the picker offers. The desktop dialog's four (`import.rs`'s `DECKLIST_EXTENSIONS`) and the
@@ -56,7 +56,7 @@ const CP1252_HIGH: readonly string[] = [
 ];
 
 /** The sentence `import.rs` refuses an oversized file with, word for word. */
-const TOO_BIG = "That file is over 1 MB. A decklist is text; this reads at most 1 MB.";
+const TOO_BIG = "That file is over 8 MB. An import is text; this reads at most 8 MB.";
 
 /**
  * A decklist file's bytes as text, in `import.rs`'s order — and answering which reading it took,

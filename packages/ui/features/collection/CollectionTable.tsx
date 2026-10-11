@@ -1,5 +1,6 @@
 import {
   Fragment,
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -611,8 +612,14 @@ function DraggableRow({
  * and the view opens on all of them — and one row per *entry* rather than per card, because
  * a foil in a sleeve and a played nonfoil are two different things to own, priced
  * differently and sold separately.
+ *
+ * **Memoised** (issue #557). `VirtualTable` draws every mounted row on every render it gets, so a
+ * render of this table that nothing about the list asked for — a keystroke in the page's filter
+ * box, which is the page's state — drew every row again. The page hands this only props that hold
+ * still across such a render, so behind `memo` it is not rendered at all; a render that does
+ * change a prop draws as it always did.
  */
-export function CollectionTable({
+export const CollectionTable = memo(function CollectionTable({
   rows,
   total,
   listKey,
@@ -929,4 +936,4 @@ export function CollectionTable({
       />
     </div>
   );
-}
+});

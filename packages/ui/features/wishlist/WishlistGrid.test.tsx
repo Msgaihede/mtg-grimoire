@@ -39,6 +39,7 @@ import { readWishDrag } from "./wishDrag";
 const BOLT: WishRow = {
   // The Arena export filter's field and its only reader — nothing this suite drives touches it.
   legalities: null,
+  layout: null,
   id: 7,
   oracleId: "o-bolt",
   cardId: "c1",
