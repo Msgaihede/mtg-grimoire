@@ -6742,7 +6742,8 @@ exact at every stop the ladder has; a measured one would answer a frame late.
   because gold mono capitals are how the tile spells what the *app* says about a deck. The row is
   exactly one tag tall with `flex-wrap-reverse` and `overflow-hidden`, so tags that do not fit are
   clipped whole instead of cut through a word; nothing counts the hidden ones, and the full list
-  is in Deck settings. Measured in Storybook at 100% (Chromium, 2026-10-11): the row is 18px
+  is in Deck settings. The row is drawn in the stored order, which the reader sets by moving the
+  chips in Deck settings (issue #913) — so the tags kept on a narrow tile are the first ones. Measured in Storybook at 100% (Chromium, 2026-10-11): the row is 18px
   tall, 4px above the pill and 6px in from the art's edge either way, and three surplus tags
   wrapped to a second line that the box clipped whole. Not yet measured in the shipped WebView2
   window, nor at the zoom ladder's two ends.

@@ -4848,6 +4848,11 @@ command: it rides `DeckRow` and `DeckPatch`.
   written only when the tidied list differs from the stored one. The lists are compared exactly
   and the case fold is within one list only: `["meme"]` over `["Meme"]` is a change, and so is a
   reorder; `[" Meme "]` over `["Meme"]` is not.
+- **The order is the array's, and the reader sets it** ([issue #913](https://github.com/Msgaihede/mtg-grimoire/issues/913)).
+  Deck settings' chips move by drag (`tagDrag.ts`) or by ←/→ on a chip's word, and the write is
+  the whole list in its new order through the same `DeckPatch.tags` — no `sort_order` and no
+  reorder command, because `clean_tags` already keeps the order it is handed. `DeckTile` draws the
+  row in that order, so the first tags are the ones a narrow tile still shows.
 - **v57's rules otherwise**: on `deck_undo::DECK_FIELDS`, so one Ctrl+Z puts the list back as its
   stored text; carried by `duplicate_deck`, verbatim; on the `decks` capture spec, where it is
   **one field** — two devices tagging one deck while apart keep the later list whole.

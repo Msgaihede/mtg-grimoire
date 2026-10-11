@@ -41,6 +41,7 @@ import { CreateDeckDialog } from "./CreateDeckDialog";
 import { deckFormats, filterDecks, NO_DECK_FILTER, type DeckFilter } from "./deckFilter";
 import { DeckTile } from "./DeckTile";
 import { type DeckMenuDeps } from "./deckMenu";
+import { tagsInUse } from "./deckTags";
 import {
   DECK_SORT_OPTIONS,
   NATURAL_DESC,
@@ -324,6 +325,9 @@ export function DecksPage() {
    * has already gone back to null.
    */
   const [settingsDeckId, setSettingsDeckId] = useState<number | null>(null);
+  /** Where the settings dialog puts the caret when it opens — `"tags"` from the deck menu's
+   *  **Add tag → New tag…** (issue #914), nothing from every other door. */
+  const [settingsFocus, setSettingsFocus] = useState<"tags" | undefined>(undefined);
   const [showArchived, setShowArchived] = useState(false);
   /**
    * How the wall is narrowed — **and it is deliberately not remembered.**
@@ -874,8 +878,9 @@ export function DecksPage() {
   /** Everything about a deck that is not a card in it, over the gallery — without opening the
    *  editor, which is the whole point of hosting the dialog here. */
   const openDeckSettings = useCallback(
-    (deckId: number, opener: HTMLButtonElement | null) => {
+    (deckId: number, opener: HTMLButtonElement | null, focus?: "tags") => {
       setSettingsDeckId(deckId);
+      setSettingsFocus(focus);
       open({ kind: "deckSettings" }, opener);
     },
     [open],
@@ -893,22 +898,38 @@ export function DecksPage() {
    * `askDelete` is the confirmation and not the delete — see {@link DeckMenuDeps}, which carries
    * no `remove` at all.
    *
-   * The two mutations are taken as `mutate` rather than as the mutation objects: `useMutation`
+   * The mutations are taken as `mutate` rather than as the mutation objects: `useMutation`
    * answers a fresh object every render and a stable `mutate`, so this memo would otherwise be
    * rebuilt on every render of a wall that redraws on every drag.
+   *
+   * **`tagsInUse` is the one value in here**, so the object is rebuilt when the wall's own
+   * `deck_list` answer changes — which redraws every tile anyway. A drag does not touch it.
    */
   const moveDeck = setFolder.mutate;
   const duplicateDeck = decks.duplicate.mutate;
+  const updateDeck = decks.update.mutate;
+  const inUse = useMemo(() => tagsInUse(decks.decks), [decks.decks]);
   const deckMenuDeps = useMemo<DeckMenuDeps>(
     () => ({
       setOpenDeckId,
       startRename: (deck) => startDeckRename(deck, menuOpenerRef.current),
-      openSettings: (deckId) => openDeckSettings(deckId, menuOpenerRef.current),
+      openSettings: (deckId, focus) => openDeckSettings(deckId, menuOpenerRef.current, focus),
       moveToFolder: (deckId, folderId) => moveDeck({ id: deckId, folderId }),
+      tagsInUse: inUse,
+      setTags: (deckId, tags) => updateDeck({ id: deckId, patch: { tags } }),
       duplicate: duplicateDeck,
       askDelete: (deck) => askDelete(deck, menuOpenerRef.current),
     }),
-    [setOpenDeckId, startDeckRename, openDeckSettings, moveDeck, duplicateDeck, askDelete],
+    [
+      setOpenDeckId,
+      startDeckRename,
+      openDeckSettings,
+      moveDeck,
+      inUse,
+      updateDeck,
+      duplicateDeck,
+      askDelete,
+    ],
   );
 
   const confirmDelete = useCallback(
@@ -2096,6 +2117,7 @@ export function DecksPage() {
       {settingsDeckId !== null && (
         <DeckSettingsDialog
           deckId={settingsDeckId}
+          focus={settingsFocus}
           open={panel?.kind === "deckSettings"}
           onDismiss={dismiss}
           onClose={close}

@@ -56,6 +56,7 @@ import { DeckLedger } from "./DeckLedger";
 // anywhere on this path would put it back with nothing going red. `DeckNotesPanel.test.tsx`
 // sweeps `packages/ui/` for exactly that.
 import { DeckNotesPanel, type DeckNoteRequest } from "./DeckNotesPanel";
+import { DeckDescriptionPanel, shownDescription } from "./DeckDescriptionPanel";
 // The same rule for the band under it: `DeckTodosPanel` reaches the editor through `React.lazy`
 // in checklist mode, and this file names only the band.
 import { DeckTodosPanel } from "./DeckTodosPanel";
@@ -172,19 +173,22 @@ const DECK_FLOOR = 192;
 const DESK_GAP = 16;
 
 /**
- * The narrowest column the Notes and To-do bands are drawn in side by side (issue #685). The row
- * holding them fits two columns only when it is at least twice this plus its `gap-x-6`, and one
- * full-width column otherwise, so this is the whole of where the fold happens — **1048px of row**.
+ * The narrowest column the Description, Notes and To-do bands are drawn in side by side (issues
+ * #685 and #912). The row holding them fits as many columns as it holds this plus a `gap-x-6`
+ * each, and one full-width column otherwise, so this is the whole of where the folds happen —
+ * **920px of row** for two and **1392px** for three. A deck with no description draws no
+ * Description band, so its row holds two tracks at most.
  *
- * 32rem because each band's own card grid holds one 280px track of cards and grows a second at
+ * 28rem because each band's own card grid holds one 280px track of cards and grows a second at
  * **568px** (280 twice plus its 8px gutter — `NOTE_GAP` and `TODO_LIST_GAP` agree), so a column
- * this wide shows each band one comfortable track at the fold and two a little past it. Much
- * narrower and a band at the fold is one card squeezed toward its floor; much wider and a window
- * with room for both bands side by side would still stack them. A CSS length rather than a pixel
- * count because the template is a string, spelled in an inline `style` rather than an arbitrary
- * Tailwind value for Tailwind's whole-class-name rule.
+ * this wide shows each band one comfortable track at the fold. It was 32rem while the row held
+ * two bands; with three, 32rem would only line them up on a row of 1584px, which a window with a
+ * docked search panel rarely has. Much narrower and a band at the fold is one card squeezed
+ * toward its floor. A CSS length rather than a pixel count because the template is a string,
+ * spelled in an inline `style` rather than an arbitrary Tailwind value for Tailwind's
+ * whole-class-name rule.
  */
-export const NOTES_TODOS_COLUMN = "32rem";
+export const NOTES_TODOS_COLUMN = "28rem";
 
 /**
  * Which deck the editor has restored the remembered controls for, and under which readings of
@@ -382,6 +386,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
 
   const row = deck.deck;
   const spec = row ? formatSpecFor(row.formatKey) : null;
+  /** The deck's description as its band draws it, or `null` — which draws no band (issue #912). */
+  const description = shownDescription(row?.description);
   const loading = deck.query.isPending;
   const readFailure = deck.query.isError ? ipcError(deck.query.error) : null;
   /** The read succeeded and answered nothing: another view deleted this deck. */
@@ -4012,10 +4018,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       )}
 
       {row && (
-        // **The Notes and To-do bands share one row: two columns when there is room, one above
-        // the other when there is not** (issue #685). Each keeps its own header, disclosure,
-        // count and New button, so the row is placement and nothing else — on a wide monitor a
-        // reader reads what they wrote beside what is left to do, rather than under a wall of it.
+        // **The Description, Notes and To-do bands share one row: three columns when there is
+        // room, two, or one above the other when there is not** (issues #685 and #912). Each
+        // keeps its own header and disclosure, so the row is placement and nothing else — on a
+        // wide monitor a reader reads what the deck is for beside what they wrote about it and
+        // what is left to do, rather than under a wall of it. A deck with no description mounts
+        // no Description band, so the row is the two bands it always was.
         //
         // **An intrinsic grid, never `@container` and never a viewport breakpoint.** Both bands
         // mount their dialogs inside their own `<section>`, and a container box is the containing
@@ -4037,6 +4045,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             gridTemplateColumns: `repeat(auto-fit, minmax(min(100%, ${NOTES_TODOS_COLUMN}), 1fr))`,
           }}
         >
+          {/* The deck's own description (issue #912) — first in the row, and not drawn at all
+              when it is blank, so it takes no column. Open on arrival; `DeckDescriptionPanel`'s
+              header says why that is editor state rather than a `decks.*_open` column. */}
+          {description !== null && <DeckDescriptionPanel description={description} />}
+
           {/* What the reader has written down about this deck — many notes, each managed and
               deleted on its own, each free to name any number of cards (issue #447, schema v43).
 

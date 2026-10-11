@@ -36,6 +36,12 @@ export interface DeckSettingsDialogProps {
   onDismiss: () => void;
   /** A click on the scrim: close without moving focus. The reader is already somewhere else. */
   onClose: () => void;
+  /**
+   * `"tags"` opens with the caret in the Tags field, its suggestions showing — the gallery's
+   * **Add tag → New tag…** (issue #914), which is a reader who came here to type one word.
+   * Absent is every other door, and then {@link Dialog}'s own rule stands: no field is focused.
+   */
+  focus?: "tags";
 }
 
 /**
@@ -96,6 +102,7 @@ export function DeckSettingsDialog({
   open,
   onDismiss,
   onClose,
+  focus,
 }: DeckSettingsDialogProps): JSX.Element {
   // `<Settings/>` here is an *element*, not a call: React renders it only where the shell puts
   // it in the tree, which is inside the `open &&`. So a closed dialog costs no `deck_get`, no
@@ -110,14 +117,14 @@ export function DeckSettingsDialog({
       onDismiss={onDismiss}
       onClose={onClose}
     >
-      <Settings deckId={deckId} />
+      <Settings deckId={deckId} focus={focus} />
     </Dialog>
   );
 }
 
 /** The deck half — the queries, the writes and the body's own scroller. Mounted only while the
  *  dialog is open, which is what makes its drafts a session. */
-function Settings({ deckId }: { deckId: number }) {
+function Settings({ deckId, focus }: { deckId: number; focus?: "tags" }) {
   const deck = useDeck(deckId);
   const { specs } = useFormatSpecs();
   const folders = useDeckFolders();
@@ -603,6 +610,7 @@ function Settings({ deckId }: { deckId: number }) {
             // Passing the list is what draws the Tags field: this host has a deck row to write
             // them to, which the create dialog has not.
             tagsInUse={inUse}
+            focusTags={focus === "tags"}
             folders={{
               paths,
               unread: folders.query.isError ? ipcError(folders.query.error) : null,

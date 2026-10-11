@@ -321,7 +321,7 @@ describe("SearchPage", () => {
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
     expect(lastRequest().collapse).toBe(true);
     await openTray();
-    expect(screen.getByRole("button", { name: "All printings" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Show all printings" })).toHaveAttribute(
       "aria-pressed",
       "false",
     );
@@ -332,10 +332,10 @@ describe("SearchPage", () => {
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
     await openTray();
 
-    await userEvent.click(screen.getByRole("button", { name: "All printings" }));
+    await userEvent.click(screen.getByRole("button", { name: "Show all printings" }));
 
     await waitFor(() => expect(lastRequest().collapse).toBeUndefined());
-    expect(screen.getByRole("button", { name: "All printings" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Show all printings" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -346,12 +346,12 @@ describe("SearchPage", () => {
    * change whether you are looking at cards or at cardboard — the same reasoning that keeps
    * the sort out of it.
    */
-  it("does not count All printings as a filter, and Reset all leaves it alone", async () => {
+  it("does not count Show all printings as a filter, and Reset all leaves it alone", async () => {
     wrap(<SearchPage />);
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
     await openTray();
 
-    await userEvent.click(screen.getByRole("button", { name: "All printings" }));
+    await userEvent.click(screen.getByRole("button", { name: "Show all printings" }));
     // Nothing to reset: a view mode is not a filter, so Reset all stays greyed. It is drawn
     // from the first render — a button that appeared here would slide the whole row — so the
     // claim is that it is dead, not that it is absent.
@@ -364,7 +364,7 @@ describe("SearchPage", () => {
     const reset = await screen.findByRole("button", { name: "Reset all — 1 filter active" });
     await userEvent.click(reset);
 
-    expect(screen.getByRole("button", { name: "All printings" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Show all printings" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );

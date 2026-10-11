@@ -318,7 +318,7 @@ export function SearchPage() {
    */
   const pendingSet = useAppStore((s) => s.pendingSearchSet);
   const clearPendingSet = useAppStore((s) => s.clearPendingSearchSet);
-  const search = useCardSearch({ initialSet: pendingSet });
+  const search = useCardSearch({ initialSet: pendingSet, rememberAs: "search" });
   const { query, searchKey } = search;
   const view = useAppStore((s) => s.searchView);
   const [appliedSet, setAppliedSet] = useState(pendingSet);

@@ -30,6 +30,20 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.45.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.44.0...v0.45.0) (2026-10-11)
+
+
+### Features
+
+* **light:** mobile gestures on the phone face — Back closes sheets, Android-style tabs, pinch zoom ([e37cbe3](https://github.com/Msgaihede/mtg-grimoire/commit/e37cbe3b42837103f54cc526f4f48b383230be73))
+* **light:** mobile gestures on the phone face — Back closes sheets, Android-style tabs, pinch zoom ([15a7636](https://github.com/Msgaihede/mtg-grimoire/commit/15a7636e88c7e966f817cfb0081272f54e1efd99))
+* **light:** show the version and the release notes in Settings ([0a9390c](https://github.com/Msgaihede/mtg-grimoire/commit/0a9390cc6e466a6b41d6fddcc2631a931f646007))
+* **light:** show the version and the release notes in Settings ([55134d7](https://github.com/Msgaihede/mtg-grimoire/commit/55134d79a8e77f3163557c46de995d0226843efc))
+* send a scan — a run of frames and the exact card they show — to improve the scanner ([#890](https://github.com/Msgaihede/mtg-grimoire/issues/890)) ([a5bd6c9](https://github.com/Msgaihede/mtg-grimoire/commit/a5bd6c91e0a2dc5ccd84ede9e56f770a4bdebe63))
+* set the deck image from a card's right-click menu ([f2322df](https://github.com/Msgaihede/mtg-grimoire/commit/f2322dfc3eb5e2bac8f42546bdd911537ae6fbf6))
+* set the deck image from a card's right-click menu ([cc55c2a](https://github.com/Msgaihede/mtg-grimoire/commit/cc55c2ab9a498b1404ea0eec9167904291e22faa))
+* the relay and the share Worker answer on mtg-grimoire.app ([#898](https://github.com/Msgaihede/mtg-grimoire/issues/898)) ([ca77ddb](https://github.com/Msgaihede/mtg-grimoire/commit/ca77ddb943bc40fc209d030163095a9467d12aeb))
+
 ## [0.44.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.43.0...v0.44.0) (2026-10-11)
 
 

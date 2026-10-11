@@ -30,6 +30,7 @@ import { TRANSITION } from "@/lib/motion";
 import type { SortDir } from "@/lib/sort";
 import { useAppStore, type ListSection } from "@/lib/store";
 import { clearFieldOnEscape } from "@/lib/useDismissOnEscape";
+import { useElementWidth } from "@/lib/useElementWidth";
 import { cn } from "@/lib/utils";
 import { colorDisabled, countDisabled, facetTitle, optionDisabled } from "./facets";
 import {
@@ -62,6 +63,39 @@ export { StatedFiltersLine } from "./StatedFiltersLine";
 // file (which reads the store). Re-exported here so every caller keeps its import.
 export { SEARCH_TRAY, type TrayCell };
 
+/**
+ * The printings switch's name, on the bar and in the tray alike — one control, so one name, and
+ * a `getByRole` or a voice command finds it wherever the width put it. A verb since issue #911:
+ * off the tray's `Printings` caption, the bare `All printings` it was read as a label rather than
+ * as something to press.
+ */
+export const SHOW_ALL_PRINTINGS = "Show all printings";
+
+/**
+ * **Where `Show all printings` rides the bar beside Filters rather than waiting in the tray** —
+ * two bands of the row's own width, because the bar folds into one line at 1500 and that fold
+ * spends the room the switch had (issue #911).
+ *
+ * The switch is 140px and the row's 12px gap, and both bands open where the search box can still
+ * hold its 192px basis (`basis-48`) with it there: below that the box's hypothetical size no
+ * longer fits its line and `flex-wrap` throws the switch onto a line of its own. Swept in
+ * headless Chromium over `Search/FilterBar` and the built stylesheet, 1px steps (2026-10-11),
+ * **with the Filters badge drawn**, which is the widest the first line gets — the line fits from
+ * 1015 on two lines and from 1603 on one. Each edge carries ~20px over that: a second badge digit
+ * is ~8, and the rest keeps the edge off the 15–17px a scrollbar moves `main`'s content box by, so
+ * a 1280 window (1032 of row, 1015 under a scrollbar) does not swap the switch in and out as
+ * results arrive and the page starts to scroll. A badge that appears is never what moves it:
+ * a control that left the bar on a press of a different one would be leaving under the hand.
+ *
+ * A width read from script rather than a container query, and the row's own fold reasoning is why:
+ * one switch is drawn **once**, on the bar or in the tray, never in both with one hidden — that is
+ * two controls with one accessible name the moment the tray opens. `0` is unmeasured
+ * (`useElementWidth`), and it lands in the tray: the one home that fits every width, so a first
+ * paint, jsdom and the docked panel's 206px floor are all safe in it.
+ */
+export function printingsOnBar(rowWidth: number): boolean {
+  return rowWidth >= 1040 && (rowWidth < 1500 || rowWidth >= 1624);
+}
 
 /**
  * What this row's own controls are **called**, and the `id` stem their labels bind through.
@@ -388,6 +422,15 @@ export function FilterBar<SortKey extends string>({
   const [trayOpen, setTrayOpen] = useState(false);
   const trayId = useId();
   /**
+   * The row's width, for the one placement a container query cannot make — see
+   * {@link printingsOnBar}. The row rather than the root: the root is a column whose height
+   * changes as the tray opens and the stated filters come and go, and none of that is a width.
+   */
+  const [rowRef, rowWidth] = useElementWidth<HTMLDivElement>();
+  const printingsUp = search.toggleAllPrintings !== undefined && printingsOnBar(rowWidth);
+  // On the bar, the tray drops its cell rather than drawing the switch a second time.
+  const trayCells = printingsUp ? tray.filter((cell) => cell !== "printings") : tray;
+  /**
    * How many printings each option would leave, or `undefined` when that is not known.
    *
    * Every control below reads it through `facets.ts`, which is where the rule lives:
@@ -449,7 +492,10 @@ export function FilterBar<SortKey extends string>({
    * gave a 1500px bar its air are what tip the second line into a third.
    */
   const row = (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-2 @min-[640px]/fb:gap-x-2.5 @min-[900px]/fb:gap-x-3">
+    <div
+      ref={rowRef}
+      className="flex flex-wrap items-center gap-x-2 gap-y-2 @min-[640px]/fb:gap-x-2.5 @min-[900px]/fb:gap-x-3"
+    >
       {/* The name is the surface's — see {@link FilterLabels}, and the two questions it keeps
           apart. */}
       <label htmlFor={`${labels.idStem}-text`} className="sr-only">
@@ -540,6 +586,22 @@ export function FilterBar<SortKey extends string>({
           1500 it separates the mana values from Filters; below that, the colours from Filters.
           Gone below 640, where the Filters button takes the rest of the colours' line itself. */}
       <div aria-hidden="true" className="order-[4] hidden flex-1 @min-[640px]/fb:block" />
+
+      {/* **`Show all printings`, beside Filters wherever there is room for it** (issue #911) — see
+          {@link printingsOnBar} for the widths. A view mode and not a filter, as it is in the
+          tray, so neither the badge nor Reset all counts it. Before Filters in the tree at the
+          same `order`, so Filters stays the last thing ahead of the hairline and the
+          controls about how the results are shown; `shrink-0` and `whitespace-nowrap` because
+          the bands were measured against its full 140px, and a switch that wrapped its own
+          words would be one line taller than the bar. */}
+      {printingsUp && (
+        <ToggleChip
+          label={SHOW_ALL_PRINTINGS}
+          pressed={search.allPrintings ?? false}
+          onClick={() => search.toggleAllPrintings?.()}
+          className="order-[5] shrink-0 whitespace-nowrap"
+        />
+      )}
 
       <FiltersButton
         open={trayOpen}
@@ -862,7 +924,7 @@ export function FilterBar<SortKey extends string>({
         <FilterTray
           id={trayId}
           search={search}
-          cells={tray}
+          cells={trayCells}
           labels={labels}
           formatOptions={formatOptions}
         />
@@ -1268,9 +1330,10 @@ export function FilterTray<SortKey extends string>({
 
     /* A view mode rather than a filter — it says which *rows* the wall draws, one per card or
             one per printing — so it is untouched by Reset all and absent from the badge. In the
-            tray rather than on the bar because it is the rarest press on this whole surface: the
-            search answers "which cards exist", and this is the way through to "which printings",
-            which is otherwise the card pane's question. */
+            tray only where the bar has no room for it: since issue #911 a wide bar draws it
+            beside Filters and `FilterBar` leaves this cell out of the list it passes, so it is
+            never drawn twice ({@link printingsOnBar}). The quick bar has no room of its own for
+            it and keeps the cell at every width. */
     printings: search.toggleAllPrintings ? (
       <TrayField key="printings" label="Printings">
         {/* **One label, never flipped to `One per card` when it is off.** This is a plain
@@ -1280,7 +1343,7 @@ export function FilterTray<SortKey extends string>({
             flips nothing either: it answers the same problem with two buttons, because *its*
             two states are two different questions rather than one question's on and off. */}
         <ToggleChip
-          label="All printings"
+          label={SHOW_ALL_PRINTINGS}
           pressed={search.allPrintings ?? false}
           onClick={() => search.toggleAllPrintings?.()}
           className="w-full"
