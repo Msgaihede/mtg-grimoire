@@ -343,6 +343,19 @@ importers:
         specifier: "catalog:"
         version: 5.0.2(@vitest/coverage-v8@5.0.2)(jsdom@30.0.1)(vite@8.3.1(esbuild@0.28.1)(jiti@2.7.0))
 
+  infrastructure/scan-worker:
+    dependencies:
+      "@grimoire/relay":
+        specifier: workspace:*
+        version: link:../relay
+    devDependencies:
+      "@cloudflare/workers-types":
+        specifier: "catalog:"
+        version: 5.20260828.1
+      vitest:
+        specifier: "catalog:"
+        version: 5.0.2(@vitest/coverage-v8@5.0.2)(jsdom@30.0.1)(vite@8.3.1(esbuild@0.28.1)(jiti@2.7.0))
+
   infrastructure/share-worker:
     dependencies:
       "@grimoire/relay":

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useBulkUndoAction } from "@grimoire/ui/components/UndoNotice";
 import { CreateDeckDialog } from "@grimoire/ui/features/decks/CreateDeckDialog";
 import { useNewDeckFormat } from "@grimoire/ui/features/decks/useNewDeckFormat";
@@ -12,6 +12,9 @@ import {
   DEFAULT_SEND_PX,
   frameOptions,
 } from "@grimoire/ui/features/scanner/scannerOptions";
+import { SubmitScanDialog } from "@grimoire/ui/features/scanner/submit/SubmitScanDialog";
+import { useMaySendScans } from "@grimoire/ui/features/scanner/submit/useMaySendScans";
+import { useScanSubmit } from "@grimoire/ui/features/scanner/submit/useScanSubmit";
 import { useCamera, useCameraDevices } from "@grimoire/ui/features/scanner/useCamera";
 import { usePageParked } from "@grimoire/ui/features/scanner/useParked";
 import { useScanLoop } from "@grimoire/ui/features/scanner/useScanLoop";
@@ -131,7 +134,7 @@ export function ScannerPage({ destination }: { destination?: TrayDestination }) 
  */
 function LiveScanner({ destination }: { destination: TrayDestination | undefined }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const { prefs, update, filterError, loaded, unavailable, resync } = useScannerPrefs();
+  const { prefs, update, inForce, filterError, loaded, unavailable, resync } = useScannerPrefs();
   // Session-only, the desktop's: a deliberate Stop survives the page being hidden and shown.
   const [scanning, setScanning] = useState(true);
   const parked = usePageParked();
@@ -237,12 +240,55 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   const [optionsOpen, setOptionsOpen] = useState(false);
   const optionsOpener = useRef<HTMLElement | null>(null);
 
-  // What the picture has to say: that recognition is stopped, or the loop's failures and a
-  // refused reset — a busy database, a frame the host turned away. The detector's own refusal (no
-  // card in this frame) is a developer's sentence and is not said here. Nothing on a host with no
-  // session, where the box holds the engine's sentence instead.
+  // *Send scan…*: the last couple of seconds the scanner was shown, to its maker, under the card
+  // a reader says the last of them shows — the desktop page's hook and its dialog, both shared.
+  // **A run, never one picture**: the frames are the pump's own (`loop.recent`), so the press
+  // grabs nothing. **Offered only while there can be one** — a camera live and recognition
+  // running: stopped, the pump has let its frames go and is sending none, and no press is drawn.
+  // **And only on the Scanner tab itself — never over a trade** (the owner's decision,
+  // 2026-10-11): with a `destination` this page is already a sheet, and its reader is in the
+  // middle of something else.
+  // **And only for a supporter** (the owner's decision; the shared `useMaySendScans`) — the
+  // third condition, and the one with no sentence anywhere: a device that is not a supporter's,
+  // or whose membership has not been read yet, sees no press and not a word about why. This is
+  // the face the Play build draws, which may not lead a reader to a membership bought elsewhere,
+  // so nothing here hints at one. A lapse while the dialog is open is the engine's to refuse.
+  // **The filters it says are the ones in force** (`inForce`), not the ones the sheet is drawing:
+  // `prefs.filters` moves before the session has taken a change, and goes back if it is refused.
+  const maySend = useMaySendScans();
+  const sendable = destination === undefined && maySend && camera.kind === "live" && scanning;
+  const submit = useScanSubmit({
+    recent: loop.recent,
+    verdict: loop.verdict,
+    mode: prefs.mode,
+    status,
+    filters: inForce,
+    ready: sendable,
+  });
+  // **A run never spans a change of filters**, as on the desktop: the session drops its tracker
+  // to take a changed set, which the pump cannot see, so when the filters in force move the
+  // frames kept so far are let go (`ScanLoop.breakRun`). The one extra run at mount empties a
+  // ring nothing has reached yet.
+  const { breakRun } = loop;
+  useEffect(() => {
+    breakRun();
+  }, [inForce, breakRun]);
+
+  // What the picture has to say: that recognition is stopped, or the loop's failures, a refused
+  // reset and a Send scan pressed too soon — a busy database, a frame the host turned away, a
+  // camera that has only just started. The detector's own refusal (no card in this frame) is a
+  // developer's sentence and is not said here. Nothing on a host with no session, where the box
+  // holds the engine's sentence instead.
+  //
+  // **A Send scan that opened nothing is never silent** — one that said nothing is a button that
+  // looks broken. Stopped, the line is the stopped sentence's alone: the press is not drawn
+  // there, and the hook drops its sentence with the press.
   const cameraNote =
-    unavailable !== null ? null : !scanning ? SCANNING_STOPPED : (loop.error ?? resetError);
+    unavailable !== null
+      ? null
+      : !scanning
+        ? SCANNING_STOPPED
+        : (loop.error ?? resetError ?? submit.error);
 
   return (
     <>
@@ -292,6 +338,10 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
                 hasBundle={hasBundle}
                 lastResolution={loop.lastResolution}
                 onReset={onReset}
+                // Offered only where `sendable` says, as on the desktop: a run to send, the
+                // Scanner tab itself, and a supporter's device. With no camera live, or stopped,
+                // the box above is saying why not; of the membership nothing is said at all.
+                onSend={sendable ? submit.open : undefined}
               />
             )}
           </div>
@@ -396,6 +446,10 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
         will leave the tray without being added to {destination?.name ?? "your collection"}. Cards
         you scan while this is open stay.
       </ConfirmDialog>
+
+      {/* The shared dialog, mounted bare: its controls take a finger's size from the shared
+          recipes, so it needs no floor reached in from here as the desktop's New deck does. */}
+      <SubmitScanDialog run={submit.run} onDismiss={submit.onDismiss} onClose={submit.onClose} />
 
       <div className={CREATE_DECK_FLOOR}>
         <CreateDeckDialog

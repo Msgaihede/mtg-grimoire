@@ -249,6 +249,7 @@ describe("the workspace's packages", () => {
       "/apps/share/ @grimoire/share",
       "/infrastructure/app-worker/ @grimoire/app-worker",
       "/infrastructure/relay/ @grimoire/relay",
+      "/infrastructure/scan-worker/ @grimoire/scan-worker",
       "/infrastructure/share-worker/ @grimoire/share-worker",
       "/packages/fake/ @grimoire/fake",
       "/packages/ui/ @grimoire/ui",
@@ -282,6 +283,10 @@ describe("the workspace's packages", () => {
       "@grimoire/relay": [],
       "@grimoire/share-worker": ["@grimoire/relay"],
       "@grimoire/app-worker": ["@grimoire/ui"],
+      // The relay's token module and nothing else of it: the inbox takes a scan from a
+      // supporter's device, and checks the token the way the share Worker does
+      // (`scan-worker/src/auth.ts`).
+      "@grimoire/scan-worker": ["@grimoire/relay"],
       "@grimoire/scripts": [],
     });
     // The shared UI reaches the fake from its tests and stories only.

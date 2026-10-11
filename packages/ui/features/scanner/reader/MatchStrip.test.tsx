@@ -71,6 +71,41 @@ describe("MatchStrip", () => {
     expect(screen.getByRole("button", { name: "Reset evidence" })).toBeEnabled();
   });
 
+  /**
+   * *Send scan…* (#776) stands beside Reset, outside the announcement for its reason, and hands
+   * up the press itself — the page keeps it, for the caret to come back to when the dialog closes.
+   */
+  it("draws Send scan… beside Reset evidence, outside the announcement, and hands up the press", async () => {
+    const onSend = vi.fn();
+    render(<MatchStrip {...props({ onSend })} />);
+    const send = screen.getByRole("button", { name: "Send scan…" });
+    expect(send.parentElement).toBe(bar().parentElement);
+    expect(send.previousElementSibling).toBe(screen.getByRole("button", { name: "Reset evidence" }));
+    expect(region()).not.toContainElement(send);
+    expect(send).toHaveAttribute("aria-haspopup", "dialog");
+
+    await userEvent.click(send);
+    expect(onSend).toHaveBeenCalledOnce();
+    expect(onSend).toHaveBeenCalledWith(send);
+  });
+
+  /** A scan the scanner cannot name at all is as much worth sending as one it named wrongly. */
+  it("offers Send scan… before there is a card", () => {
+    render(<MatchStrip {...props({ verdict: null, onSend: vi.fn() })} />);
+    expect(screen.getByRole("button", { name: "Send scan…" })).toBeEnabled();
+  });
+
+  /**
+   * No handler is no run to send — a camera refused or not yet open, recognition stopped — and
+   * then there is no button: not a greyed one, whose reason would be a second copy of the
+   * sentence already standing over the picture. Reset is unaffected.
+   */
+  it("draws no Send scan… where the page hands it no press", () => {
+    render(<MatchStrip {...props()} />);
+    expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Reset evidence" })).toBeInTheDocument();
+  });
+
   it("asks for a card before there is one, with an empty bar and no line to cross", () => {
     render(<MatchStrip {...props({ verdict: null })} />);
     expect(region()).toHaveTextContent(/^Looking Point the camera at a card$/);

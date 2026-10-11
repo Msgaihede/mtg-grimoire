@@ -1,0 +1,81 @@
+{
+  "$schema": "../wrangler/node_modules/wrangler/config-schema.json",
+  "name": "mtg-grimoire-scans",
+  "main": "src/index.ts",
+  // The script's one import of another package's module, as a path wrangler follows with
+  // nothing installed — the share Worker's line, for the share Worker's reason: `release.yml`'s
+  // `scan-deploy` runs no pnpm, so nothing links `@grimoire/relay` into this folder there. An
+  // exact module, not the package. `scripts/scan-worker-alias.test.ts` holds the pair.
+  "alias": { "@grimoire/relay/src/token": "../relay/src/token.ts" },
+  // The relay's date, for the share Worker's reason: it runs beside them on the same account and
+  // nothing here wants a newer runtime.
+  "compatibility_date": "2026-08-27",
+
+  // ⚠️ **The address, and it is compiled into the app**: a Custom Domain on the zone the web
+  // app's origin is the apex of, as the relay's and the share Worker's are (the owner's
+  // decision, 2026-10-11), so the deploy states the DNS record and the certificate itself.
+  // `https://scans.mtg-grimoire.app` is `scanner_submit::SCAN_BASE` in the engine, a source in
+  // the web app's `connect-src` (`infrastructure/app-worker/_headers`) and a row of the privacy
+  // policy. `src/wrangler.test.ts` reads the Rust and holds this pattern to it.
+  "routes": [{ "pattern": "scans.mtg-grimoire.app", "custom_domain": true }],
+  // **One address, written out rather than left to a default.** Unlike the relay and the share
+  // Worker this one keeps no `workers.dev` address: no build was ever cut with one for it, so
+  // there is nobody to keep it answering for. A preview URL would be one more address for every
+  // version ever uploaded, each bound to the same bucket, and nothing asks one.
+  "workers_dev": false,
+  "preview_urls": false,
+
+  // **No `d1_databases`, no `durable_objects`, and one secret that is not in this file.** The
+  // bindings are one bucket and one limiter. The secret is `RELAY_HMAC_KEY` — the relay's
+  // signing key, by which this Worker checks that a scan comes from a supporter's device
+  // (`src/auth.ts`). It is Cloudflare's to hold and the owner's to set, with the relay's own
+  // value (`README.md`, *Deploying*); a deploy neither reads nor changes it, and it is never a
+  // `var`. `src/env.ts` is the argument for all of it.
+
+  // The inbox: `runs/{id}.bin` and `labels/{id}.json`, two objects a submission. R2 for the
+  // share Worker's reasons — 10 GB stored and a million writes a month on the free plan — and a
+  // bucket of its own rather than a prefix in `mtg-grimoire-shares`, so that nothing the share
+  // Worker can be made to do reaches a scan and emptying this one can never touch a binder.
+  //
+  // ⚠️ **The bucket has to exist before the first deploy**: `npx wrangler r2 bucket create
+  // mtg-grimoire-scans`, the owner's to run (`README.md`, *Deploying*). The deploy fails naming
+  // this binding until it does.
+  "r2_buckets": [
+    {
+      "binding": "SCANS",
+      "bucket_name": "mtg-grimoire-scans",
+    },
+  ],
+
+  // Twelve submissions a minute from one address — `src/index.ts`'s `LIMIT` repeats the two
+  // numbers so the refusal can say how long to wait, and `src/wrangler.test.ts` holds them
+  // together. `period` takes 10 or 60 and nothing else. `namespace_id` is an integer of our own
+  // choosing and the bucket a count is kept in: the relay owns 1001–1003, and reusing one would
+  // have two Workers spend each other's budget.
+  //
+  // A name that drifts from `Env`'s is a binding the Worker reads as `undefined`, which it treats
+  // as "no limit" on purpose — the deploy would succeed and nothing would be limited.
+  "ratelimits": [
+    { "name": "RL_SUBMIT", "namespace_id": "2001", "simple": { "limit": 12, "period": 60 } },
+  ],
+
+  "vars": {
+    // **The pages a browser may send a scan from**, comma-separated and compared exactly —
+    // `src/cors.ts`. One entry: the light app's web build. No trailing slash, the way a browser
+    // spells `Origin`. It is not an access control; unset, the web app's Send fails and every
+    // native client, which sends no `Origin`, goes on working.
+    //
+    // ⚠️ A development origin does not belong in the committed value, for the relay's reason: a
+    // local build that needs this Worker asks a local one (`wrangler dev --local --var
+    // APP_ORIGINS:…`).
+    "APP_ORIGINS": "https://mtg-grimoire.app",
+  },
+
+  // **No log at all, written out rather than left to a default.** With observability on,
+  // Cloudflare keeps a line for each request holding its headers — the sender's address, and
+  // the label — for days, and a fault's line carries the same. The privacy policy says of this
+  // server that an address is used to limit how often one may send and that it keeps no log of
+  // requests; `src/wrangler.test.ts` holds this line to that sentence. A fault is read live,
+  // with `wrangler tail`, by whoever is looking for one.
+  "observability": { "enabled": false },
+}

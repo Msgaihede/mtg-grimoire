@@ -173,6 +173,97 @@ describe("useScannerPrefs", () => {
   });
 
   /**
+   * **`inForce` is what the session is searching under, which is not always what is drawn.**
+   * `prefs.filters` is the popover's: it moves when the reader moves it. `inForce` moves only
+   * when the session accepts — so a frame being judged is judged under it, and a scan that is
+   * sent says it. None until the session has accepted any, as `persistable` reads a session.
+   */
+  it("says no filters are in force until the session has accepted the stored ones", async () => {
+    scannerPrefs.mockResolvedValue(STORED);
+    let accept!: () => void;
+    scannerSetFilters.mockReturnValueOnce(new Promise<void>((resolve) => (accept = resolve)));
+    const { result } = mount();
+    expect(result.current.inForce).toEqual(DEFAULT_SCANNER_PREFS.filters);
+
+    // The row is in and drawn; its filters are on their way to the session.
+    await waitFor(() => expect(scannerSetFilters).toHaveBeenCalledWith(HOB));
+    expect(result.current.prefs.filters).toEqual(HOB);
+    expect(result.current.inForce).toEqual(DEFAULT_SCANNER_PREFS.filters);
+
+    await act(async () => accept());
+    expect(result.current.inForce).toEqual(HOB);
+    expect(result.current.loaded).toBe(true);
+  });
+
+  it("keeps the filters in force while a change is on its way, and moves them when it is accepted", async () => {
+    scannerPrefs.mockResolvedValue(STORED);
+    const { result } = mount();
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    expect(result.current.inForce).toEqual(HOB);
+
+    let accept!: () => void;
+    scannerSetFilters.mockReturnValueOnce(new Promise<void>((resolve) => (accept = resolve)));
+    const wider: ScanFilters = { sets: ["hob", "ltr"], released_from: null, released_to: null };
+    act(() => result.current.update({ filters: wider }));
+    // Drawn, and not yet what any frame is judged under.
+    await waitFor(() => expect(result.current.prefs.filters).toEqual(wider));
+    expect(scannerSetFilters).toHaveBeenLastCalledWith(wider);
+    expect(result.current.inForce).toEqual(HOB);
+
+    await act(async () => accept());
+    expect(result.current.inForce).toEqual(wider);
+    expect(result.current.prefs.filters).toEqual(wider);
+  });
+
+  /** A refusal leaves the session where it was, so what is in force does not move at all. */
+  it("keeps the filters in force through a refused change", async () => {
+    scannerPrefs.mockResolvedValue(STORED);
+    const { result } = mount();
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    const taken = result.current.inForce;
+    expect(taken).toEqual(HOB);
+
+    let refuse!: (e: unknown) => void;
+    scannerSetFilters.mockReturnValueOnce(new Promise<void>((_, reject) => (refuse = reject)));
+    act(() => result.current.update({ filters: ZZZ }));
+    await waitFor(() => expect(result.current.prefs.filters).toEqual(ZZZ));
+    expect(result.current.inForce).toBe(taken);
+
+    await act(async () => refuse(REFUSED));
+    await waitFor(() => expect(result.current.filterError).toBe(REFUSED));
+    // The popover is put back to what the session holds — and that never stopped being this.
+    await waitFor(() => expect(result.current.prefs.filters).toEqual(HOB));
+    expect(result.current.inForce).toBe(taken);
+  });
+
+  /** With nothing accepted yet, a refusal is a session still searching under no filters. */
+  it("says no filters are in force after the stored ones were refused", async () => {
+    scannerPrefs.mockResolvedValue(STORED);
+    scannerSetFilters.mockRejectedValueOnce(REFUSED);
+    const { result } = mount();
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    expect(result.current.filterError).toBe(REFUSED);
+    expect(result.current.inForce).toEqual(DEFAULT_SCANNER_PREFS.filters);
+  });
+
+  /**
+   * Another window's lease is not an answer about the filters: the session has not taken them,
+   * so nothing is in force yet — and it is, the moment the push that follows is accepted.
+   */
+  it("moves nothing into force on the lease's refusal, and does once the push is taken", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    scannerPrefs.mockResolvedValue(STORED);
+    scannerSetFilters.mockRejectedValueOnce(SCANNER_OPEN_ELSEWHERE);
+    const { result } = mount();
+    await advance(0);
+    expect(result.current.inForce).toEqual(DEFAULT_SCANNER_PREFS.filters);
+
+    await advance(SCANNER_ELSEWHERE_POLL_MS);
+    expect(scannerSetFilters).toHaveBeenCalledTimes(2);
+    expect(result.current.inForce).toEqual(HOB);
+  });
+
+  /**
    * **A BUSY write keeps the prefs in memory and says nothing** — a sync holds the write
    * connection for seconds, and the reader's switch has not failed, it is waiting. Trying again
    * after a short delay is what makes a change nobody follows up survive a restart; a try that

@@ -111,6 +111,9 @@ import scannerRsDesktop from "../../../apps/desktop/src-tauri/src/scanner/mod.rs
 // `downloads.rs` for the row it answers in — `Due`, the shape every offer of a download is made of.
 import scannerAssetsRs from "../../../crates/grimoire-core/src/scanner_assets.rs?raw";
 import downloadsRs from "../../../crates/grimoire-core/src/downloads.rs?raw";
+// Sending a scan to the inbox (issue #776): the engine's module, whose `Submission` the page
+// fills in and whose `Submitted` it reads the reference out of.
+import scannerSubmitRs from "../../../crates/grimoire-core/src/scanner_submit.rs?raw";
 import sessionRs from "../../../crates/card-scanner/src/session.rs?raw";
 import resolveRs from "../../../crates/card-scanner/src/resolve.rs?raw";
 import filtersRs from "../../../crates/card-scanner/src/filters.rs?raw";
@@ -124,6 +127,7 @@ import ipcBarrel from "./ipc.ts?raw";
 import { CONDITIONS, CONDITION_NOT_SET } from "@/lib/conditions";
 import { DEFAULT_SCANNER_OPTIONS } from "@/features/scanner/scannerOptions";
 import { DEFAULT_SCANNER_PREFS, TRAY_ROWS } from "@/features/scanner/fixtures";
+import { RUN_MAX_BYTES, RUN_MAX_FRAMES, RUN_MIN_FRAMES } from "@/features/scanner/submit/run";
 import {
   SCANNER_NOT_IN_A_BROWSER_YET,
   SCANNER_OPEN_ELSEWHERE,
@@ -4082,6 +4086,74 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(invoke).toHaveBeenLastCalledWith("scanner_frame", jpeg, plain);
   });
 
+  /**
+   * **A scan sent to the inbox is one ordinary argument, not a raw body** — the one scanner call
+   * with pictures in it that is. The table's entry is a `task`, which refuses a body, so a
+   * wrapper here that sent the bytes the way a frame goes would be refused on every host of the
+   * table and work on the desktop alone.
+   *
+   * **And it is a run of frames, with no picture beside it.** The wrapper takes the submission
+   * and nothing else: a second argument carrying one still is the shape this replaced, and a
+   * still is a picture the scanner never judged.
+   */
+  it("scanner_submit sends a run of frames inside what the reader chose, and nothing beside it", async () => {
+    const submission = {
+      cardId: "c-bolt",
+      finish: "foil" as const,
+      reported: null,
+      mode: "exact" as const,
+      confidence: 0.5,
+      distance: 12,
+      bundle: 98_000,
+      filters: { sets: ["2x2"], released_from: null, released_to: null },
+      run: [-440, -330, -220, -110, 0].map((ms) => ({
+        jpeg: "QUJD",
+        ms,
+        ok: ms === 0,
+        lock: ms === 0 ? ("locked" as const) : null,
+        confidence: null,
+        distance: null,
+        decided: null,
+        detail: false,
+      })),
+    };
+    await ipc.scannerSubmit(submission);
+    expect(invoke).toHaveBeenCalledWith("scanner_submit", { submission });
+    expect(ipc.scannerSubmit).toHaveLength(1);
+    // The desktop wrapper and the core function it calls, by the names the wire is read with —
+    // and neither takes a picture of its own.
+    const wrapper = /pub async fn scanner_submit\(([^)]*)\)/s.exec(scannerRs)?.[1];
+    expect(wrapper).toMatch(/\bsubmission: Submission,/);
+    expect(wrapper).not.toMatch(/\bframe\b/);
+    expect(scannerSubmitRs).toMatch(
+      /pub async fn submit\(\s*state: &Arc<State>,\s*submission: Submission,?\s*\)/,
+    );
+    expect(desktopRs).toContain("scanner::scanner_submit,");
+  });
+
+  /**
+   * **What the page keeps is what the engine will take.** The ring in `submit/run.ts` and the
+   * engine's `pictures` each bound a run, in two languages: a page that kept more frames than
+   * the engine takes, or opened its dialog on fewer than the engine calls a run, would show a
+   * reader a Send that can only be refused. The bytes are the one that is *under* and not
+   * *equal* — the page's budget is in JPEG as the pump made it, and leaves the engine's cap room.
+   */
+  it("a run is bounded on the page where the engine bounds it", () => {
+    const engine = (name: string): number => {
+      const written = new RegExp(`pub const ${name}: usize = ([0-9* ]+);`).exec(
+        scannerSubmitRs,
+      )?.[1];
+      if (written === undefined) throw new Error(`scanner_submit.rs no longer declares ${name}`);
+      return written.split("*").reduce((product, factor) => product * Number(factor), 1);
+    };
+    expect(RUN_MIN_FRAMES).toBe(engine("MIN_RUN_FRAMES"));
+    expect(RUN_MAX_FRAMES).toBe(engine("MAX_RUN_FRAMES"));
+    expect(RUN_MAX_BYTES).toBeLessThanOrEqual(engine("MAX_RUN_BYTES"));
+    // Never one picture, whatever the floor is moved to.
+    expect(RUN_MIN_FRAMES).toBeGreaterThan(1);
+    expect(RUN_MAX_FRAMES).toBeGreaterThanOrEqual(RUN_MIN_FRAMES);
+  });
+
   it("scanner_capture carries the sidecar the same way", async () => {
     const sidecar = {
       expected: "Plains",
@@ -6017,6 +6089,19 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["ScannerAssetDue", downloadsRs, "Due"],
     ["ScannerAssetsOwed", scannerAssetsRs, "Owed"],
     ["ScannerAssetsProgress", scannerAssetsRs, "Progress"],
+    // **A scan sent to the inbox** (issue #776): what the reader chose and what the scanner had
+    // said, the run of frames it is made of, and the reference that comes back. camelCase, the
+    // app's own — but for `filters`, which is the scanner crate's struct and on `snakeMirrors`.
+    //
+    // `Submission`'s four figures are `Option`s, so a renamed one is not a refusal: it is
+    // `None`, and every label in the inbox says the scanner read nothing — the half of a
+    // submission that says what it got wrong, gone, with every test of the dialog still green.
+    // A frame's three are the same, twenty times over. A renamed `cardId`, `finish`, `run` or
+    // `jpeg` is at least loud. A renamed `id` on the answer is a reader thanked and shown no
+    // reference, which is the only way a scan is found again.
+    ["ScannerSubmission", scannerSubmitRs, "Submission"],
+    ["ScannerSubmissionFrame", scannerSubmitRs, "SubmissionFrame"],
+    ["ScannerSubmitted", scannerSubmitRs, "Submitted"],
     // **The three oldest structs in the app, and none of them had ever been fenced** (2026-09-22,
     // added with strict colours and the type chips). `SearchRequest` is every search the window
     // asks for, `CardFilters` is the half of it the collection and the wishlist flatten into

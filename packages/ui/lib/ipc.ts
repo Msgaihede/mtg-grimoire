@@ -49,6 +49,7 @@
  * `ScannerCaptured`/`ScannerPrefs`/
  * `ScannerTrayRow`/`ScannerTrayChoice`             — `crates/grimoire-core/src/scanner.rs`
  * `ScannerAssetsOwed`/`ScannerAssetsProgress`      — `crates/grimoire-core/src/scanner_assets.rs`
+ * `ScannerSubmission`/`ScannerSubmitted`           — `crates/grimoire-core/src/scanner_submit.rs`
  * `ScannerAssetDue`                                — `crates/grimoire-core/src/downloads.rs`
  * `ScannerOptions`/`ScannerVerdict`/`ScannerFrameSize`/
  * `ScannerStages`/`ScannerStanding`/`ScannerTracked`/

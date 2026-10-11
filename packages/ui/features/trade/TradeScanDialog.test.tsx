@@ -44,6 +44,15 @@ vi.mock("@/lib/ipc", async (orig) => {
       getMarketplace: vi.fn(async () => "tcgplayer"),
       marketplaceFeedStatus: vi.fn(async () => []),
       printingPrices: vi.fn(async () => []),
+      // The Scanner view reads the membership for its Send scan press, which is never drawn over
+      // a trade. Answered so the read stays off the real core; a supporter's, so a press that
+      // did appear here would not be hidden by this answer.
+      syncSupporterStatus: vi.fn(async () => ({
+        entitled: true,
+        status: "active",
+        since: 1_756_000_000,
+        groupBound: true,
+      })),
       tradeAddLines: vi.fn(async () => {}),
     },
   };

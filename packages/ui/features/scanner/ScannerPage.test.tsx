@@ -1,12 +1,16 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  CardSummary,
   CollectionFolder,
   ScannerAssetsOwed,
   ScannerPrefs,
+  ScannerSubmitted,
   ScannerVerdict,
+  SearchResponse,
+  SupporterStatus,
 } from "@/lib/ipc";
 import { SCANNER_NOT_IN_A_BROWSER_YET, SCANNER_OPEN_ELSEWHERE } from "./verdictText";
 import {
@@ -48,6 +52,26 @@ vi.mock("@/lib/ipc", async (orig) => {
       // app cannot produce — and one that would make every test here fail for the wrong reason.
       scannerReset: vi.fn(async () => {}),
       scannerCapture: vi.fn(async () => ({ saved: "live-7.jpg" })),
+      // *Send scan…*: the inbox's answer, and the search its dialog asks for printings. Both
+      // mocked so no test reaches the real core, and typed by what they answer — a bare `vi.fn()`
+      // takes any shape a test hands it.
+      scannerSubmit: vi.fn(async (): Promise<ScannerSubmitted> => ({ id: "unset" })),
+      searchCards: vi.fn(
+        async (): Promise<SearchResponse> => ({ items: [], total: 0, totalIsCapped: false }),
+      ),
+      // The membership, which *Send scan…* is drawn for and for nobody else. **A supporter's by
+      // default, and the default is doing work**: every test here that asks why the press is or
+      // is not there — a refused camera, a Stop, a trade — is asking about its own condition,
+      // and can only ask it where the membership would have let the press be drawn. The tests
+      // about the membership itself say what it answers instead.
+      syncSupporterStatus: vi.fn(
+        async (): Promise<SupporterStatus> => ({
+          entitled: true,
+          status: "active",
+          since: 1_756_000_000,
+          groupBound: true,
+        }),
+      ),
       // The four the reader's half reads and writes. The pump waits for the first two to have
       // answered — prefs loaded and their filters pushed — so each is a resolved promise by default.
       scannerPrefs: vi.fn(async () => prefs),
@@ -107,8 +131,11 @@ vi.mock("./useWindowParked", async () => {
   };
 });
 import { ipc } from "@/lib/ipc";
+import { SCANNING_STOPPED } from "./reader/readerText";
 import { importItems } from "./reader/tray";
 import { ScannerPage } from "./ScannerPage";
+import { runClock } from "./submit/run";
+import { SCAN_TOO_SHORT } from "./submit/submitText";
 import { SCANNER_ELSEWHERE_POLL_MS } from "./useScannerElsewhere";
 import type { TrayDestination } from "./useTrayDestination";
 
@@ -289,6 +316,9 @@ const COMMANDS = [
   ipc.scannerFrame,
   ipc.scannerReset,
   ipc.scannerCapture,
+  ipc.scannerSubmit,
+  ipc.searchCards,
+  ipc.syncSupporterStatus,
   ipc.scannerPrefs,
   ipc.setScannerPrefs,
   ipc.scannerSetFilters,
@@ -1090,6 +1120,637 @@ describe("ScannerPage", () => {
 });
 
 /**
+ * ***Send scan…*** (issue #776): the last couple of seconds the scanner was shown, to its maker,
+ * under the printing and finish a reader says the last of them shows. The dialog's own suite
+ * (`submit/SubmitScanDialog.test.tsx`) holds what it asks and refuses; what is asked here is the
+ * page's half — where the press is offered, what it freezes, where the dialog is mounted, and
+ * that nothing stops for it.
+ */
+describe("ScannerPage sending a scan", () => {
+  /** The printing the Fast fixture decides on, as the search answers it. */
+  const SARUMAN: CardSummary = {
+    id: "storm-of-saruman-ltr-72",
+    name: "Storm of Saruman",
+    setCode: "ltr",
+    setName: "The Lord of the Rings: Tales of Middle-earth",
+    collectorNumber: "72",
+    rarity: "mythic",
+    typeLine: "Enchantment",
+    manaCost: "{4}{U}{U}",
+    price: null,
+    layout: "normal",
+    oracleId: "storm-of-saruman",
+    finishes: '["nonfoil","foil"]',
+    promoTypes: null,
+    gameChanger: false,
+    ownedQuantity: 0,
+    wishlisted: false,
+    printings: 1,
+    priceLow: null,
+    priceHigh: null,
+  };
+  const REFERENCE = "20261011T101500Z-0123456789abcdef";
+
+  /**
+   * **The run's clock, taken off the wall** — `runClock`, the one seam the pump stamps a frame
+   * through and a press reads the time through. A run reaches four seconds back from the press
+   * and no further (`RUN_MAX_AGE_MS`), and this file stalls for longer than that under a full
+   * parallel run: on the real clock a test that lets the pump answer and then presses would find
+   * its frames too old to send, on a slow machine and on no other.
+   *
+   * Every reading is ten milliseconds after the one before it — a frame, the next frame, the
+   * press. So the frames are in the order they were sent, each at a time of its own, and none is
+   * ever old, whatever the machine was doing between them. Lifted by the file's own
+   * `restoreAllMocks`.
+   */
+  beforeEach(() => {
+    let at = 1000;
+    vi.spyOn(runClock, "now").mockImplementation(() => (at += 10));
+  });
+
+  /** No live picture, no press: the box under the strip is already saying why. */
+  it("does not offer the press while the camera is refused", async () => {
+    refused();
+    mount();
+    await screen.findByText("MTG Grimoire needs camera access to scan a card.");
+    expect(screen.getByRole("button", { name: "Reset evidence" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
+  });
+
+  /**
+   * A canvas whose every encode is a JPEG of its own — `ff d8 n` for the nth — where the file's
+   * shim hands every frame the same three bytes: a run is several frames, and a test of one has
+   * to be able to tell them apart and say what order they came in. Laid over the file's shim and
+   * lifted in the test's own `finally`.
+   */
+  function numberedCanvas(): () => void {
+    let n = 0;
+    return shim(HTMLCanvasElement.prototype, {
+      toBlob: {
+        value: (cb: (blob: Blob) => void) => cb(new Blob([new Uint8Array([0xff, 0xd8, ++n])])),
+      },
+    });
+  }
+  /** The nth frame as the text it is drawn and sent as. */
+  const text = (n: number) => btoa(String.fromCharCode(0xff, 0xd8, n));
+
+  /**
+   * These verdicts, ten milliseconds apart, and then nothing: every frame after the last is
+   * parked. So the run the pump holds is exactly these frames for as long as a test looks at it —
+   * and none is an answer already settled, which would starve the file's timers (`paced`).
+   */
+  function answers(...verdicts: ScannerVerdict[]) {
+    let n = 0;
+    vi.mocked(ipc.scannerFrame).mockImplementation(() => {
+      const verdict = verdicts[n++];
+      return verdict === undefined
+        ? new Promise(() => {})
+        : new Promise((resolve) => setTimeout(() => resolve(verdict), 10));
+    });
+  }
+
+  /** The picture of the run that is showing — by its name, since a printing's tile is one too. */
+  const picture = (dialog: HTMLElement) =>
+    within(dialog).getByRole("img", { name: /^Picture \d+ of \d+ that will be sent$/ });
+
+  it("freezes the run on the press, asks which card the last picture shows, and sends every frame of it", async () => {
+    const restore = shimVideo();
+    const plainFrames = numberedCanvas();
+    opens();
+    // A bundle that loaded and models that did not: the models' sentence under the camera is the
+    // tell that the status is in, which the submission's `bundle` is read from.
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.noModels);
+    // Seven frames: three the scanner was still weighing, then four it had decided on.
+    const weighing: ScannerVerdict = { ...VERDICTS.voting, decision_seq: 0 };
+    answers(weighing, weighing, weighing, ...Array<ScannerVerdict>(4).fill(VERDICTS.decided));
+    vi.mocked(ipc.searchCards).mockResolvedValue({
+      items: [SARUMAN],
+      total: 1,
+      totalIsCapped: false,
+    });
+    vi.mocked(ipc.scannerSubmit).mockResolvedValue({ id: REFERENCE });
+    const user = userEvent.setup();
+    try {
+      const { container } = mount();
+      await screen.findByText(/No OCR models\. Put/);
+      // All seven answered: the eighth is on the wire, and stays there.
+      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(8));
+      await waitFor(() => expect(statusLine()).toHaveTextContent("Storm of Saruman"));
+
+      const opener = screen.getByRole("button", { name: "Send scan…" });
+      // Beside Reset evidence, outside the live region, like it.
+      expect(statusLine()).not.toContainElement(opener);
+      await user.click(opener);
+
+      const dialog = await screen.findByRole("dialog", { name: "Send this scan" });
+      // A sibling of the view's container box, never inside it: a container is the containing
+      // block for the dialog's `fixed` scrim.
+      const scope = container.querySelector(".\\@container\\/scan");
+      expect(scope).not.toBeNull();
+      expect(scope?.contains(dialog)).toBe(false);
+
+      // It rests on the last frame the pump sent, as the text that is drawn and sent, and says
+      // how many there are to look through.
+      expect(picture(dialog)).toHaveAttribute("src", `data:image/jpeg;base64,${text(7)}`);
+      expect(picture(dialog)).toHaveAttribute("alt", "Picture 7 of 7 that will be sent");
+      expect(within(dialog).getByRole("slider", { name: "Picture" })).toHaveAttribute("max", "7");
+      expect(dialog).toHaveTextContent("These 7 pictures — the last couple of seconds");
+      // The search opens on the card the strip was naming, and nothing is chosen.
+      expect(within(dialog).getByRole("searchbox")).toHaveValue("Storm of Saruman");
+      const printing = await within(dialog).findByRole("radio", {
+        name: "Storm of Saruman — LTR 72",
+      });
+      expect(printing).toHaveAttribute("aria-checked", "false");
+      expect(ipc.searchCards).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "Storm of Saruman", collapse: false }),
+      );
+      expect(ipc.scannerSubmit).not.toHaveBeenCalled();
+
+      await user.click(printing);
+      await user.click(within(dialog).getByRole("radio", { name: "Foil" }));
+      await user.click(within(dialog).getByRole("button", { name: "Send scan" }));
+
+      await waitFor(() => expect(ipc.scannerSubmit).toHaveBeenCalledTimes(1));
+      // One argument, and everything in it.
+      const call = vi.mocked(ipc.scannerSubmit).mock.calls[0];
+      expect(call).toHaveLength(1);
+      const [sent] = call;
+      expect(sent).toMatchObject({
+        cardId: "storm-of-saruman-ltr-72",
+        finish: "foil",
+        // What the scanner had said, read at the press: the Fast fixture's decision, its
+        // tracker's confidence, its best candidate's bits, the bundle's card count, and the
+        // filters it was under.
+        reported: "storm-of-saruman-ltr-72",
+        mode: "fast",
+        confidence: 1,
+        distance: 30,
+        bundle: STATUS.noModels.labels,
+        filters: DEFAULT_SCANNER_PREFS.filters,
+      });
+
+      // **The run is the frames the pump really sent**, byte for byte and in the order it sent
+      // them — not a picture taken for the purpose after the press.
+      const pumped = vi
+        .mocked(ipc.scannerFrame)
+        .mock.calls.slice(0, 7)
+        .map(([jpeg]) => btoa(String.fromCharCode(...jpeg)));
+      expect(pumped).toEqual([1, 2, 3, 4, 5, 6, 7].map(text));
+      expect(sent.run.map((frame) => frame.jpeg)).toEqual(pumped);
+      // Each beside what the scanner answered for it.
+      const settled = "storm-of-saruman-ltr-72";
+      expect(sent.run.map((frame) => frame.decided)).toEqual([
+        null,
+        null,
+        null,
+        settled,
+        settled,
+        settled,
+        settled,
+      ]);
+      expect(sent.run.map((frame) => frame.confidence)).toEqual([0.625, 0.625, 0.625, 1, 1, 1, 1]);
+      expect(sent.run.every((frame) => frame.ok && frame.lock === "locked" && !frame.detail)).toBe(
+        true,
+      );
+      // Counted back from the press: oldest first, and none after it.
+      const ms = sent.run.map((frame) => frame.ms);
+      expect([...ms].sort((a, b) => a - b)).toEqual(ms);
+      expect(new Set(ms).size).toBe(7);
+      expect(ms.every((one) => Number.isInteger(one) && one <= 0)).toBe(true);
+      // Nothing was written to the developer's dataset: that is another press.
+      expect(ipc.scannerCapture).not.toHaveBeenCalled();
+
+      expect(await within(dialog).findByText("Sent — thank you.")).toBeInTheDocument();
+      expect(dialog).toHaveTextContent(`Reference: ${REFERENCE}`);
+      await user.click(within(dialog).getByRole("button", { name: "Done" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(opener).toHaveFocus();
+    } finally {
+      plainFrames();
+      restore();
+    }
+  });
+
+  /**
+   * **The camera keeps running behind the dialog**, as it does behind the tray's two questions —
+   * and the run in the dialog is the one frozen at the press, however far the pump's own has
+   * turned over since.
+   */
+  it("goes on reading behind the dialog, with the run as it was at the press", async () => {
+    const restore = shimVideo();
+    const plainFrames = numberedCanvas();
+    opens();
+    // A bundle that loaded, so the strip names the card the scanner is leaning towards.
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+    paced();
+    const user = userEvent.setup();
+    try {
+      mount();
+      await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"));
+      // Enough of a scan to send: a few frames more than the fewest.
+      await waitFor(() =>
+        expect(vi.mocked(ipc.scannerFrame).mock.calls.length).toBeGreaterThan(8),
+      );
+      await user.click(screen.getByRole("button", { name: "Send scan…" }));
+      const dialog = await screen.findByRole("dialog", { name: "Send this scan" });
+      const shown = picture(dialog);
+      const address = shown.getAttribute("src");
+      const count = within(dialog).getByRole("slider", { name: "Picture" }).getAttribute("max");
+      expect(Number(count)).toBeGreaterThanOrEqual(5);
+      expect(within(dialog).getByRole("searchbox")).toHaveValue("Plains");
+
+      // A whole new run's worth of frames goes by behind it.
+      const sent = vi.mocked(ipc.scannerFrame).mock.calls.length;
+      await waitFor(() =>
+        expect(vi.mocked(ipc.scannerFrame).mock.calls.length).toBeGreaterThan(sent + 22),
+      );
+      // The same element, on the same picture, of the same number of pictures, with the same
+      // word in the box.
+      expect(picture(dialog)).toBe(shown);
+      expect(shown).toHaveAttribute("src", address);
+      expect(within(dialog).getByRole("slider", { name: "Picture" })).toHaveAttribute("max", count);
+      expect(within(dialog).getByRole("searchbox")).toHaveValue("Plains");
+
+      // Escape hands the caret back to the press; the scanner never stopped.
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(screen.getByRole("button", { name: "Send scan…" })).toHaveFocus();
+    } finally {
+      plainFrames();
+      restore();
+    }
+  });
+
+  /**
+   * **No press while recognition is stopped.** A scan is the frames the scanner was given, and
+   * stopped it is given none — the pump lets its run go at the Stop, since a run never spans one
+   * — so there is nothing to send. Not a greyed button: the stopped sentence over the picture is
+   * already saying what would bring the press back.
+   */
+  it("draws no press while recognition is stopped, and brings it back with the scanner", async () => {
+    const restore = shimVideo();
+    opens();
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+    paced();
+    const user = userEvent.setup();
+    try {
+      mount();
+      await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"));
+      expect(screen.getByRole("button", { name: "Send scan…" })).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Stop scanning" }));
+      await waitFor(() => expect(statusLine()).toHaveTextContent("Looking"));
+      // The camera is still live and its picture still moving; the press is gone all the same.
+      expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Reset evidence" })).toBeInTheDocument();
+      expect(screen.getByText(SCANNING_STOPPED)).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Start scanning" }));
+      expect(await screen.findByRole("button", { name: "Send scan…" })).toBeInTheDocument();
+      expect(ipc.scannerSubmit).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+
+  /**
+   * **A press that opened nothing is never silent.** A scan is all of a run or none of it, so a
+   * press before the scanner has been shown enough — here it has answered one frame — opens no
+   * dialog and falls back to no single picture: it says what to do, over the camera, where a
+   * refused reset is said.
+   */
+  it("says so when the press comes before there is enough of a scan, and opens nothing", async () => {
+    const restore = shimVideo();
+    opens();
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+    // One frame answered, and the next parked: a run of one.
+    frames(VERDICTS.voting);
+    const user = userEvent.setup();
+    try {
+      const { container } = mount();
+      await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"));
+      expect(strip(container)).toHaveTextContent("");
+
+      await user.click(screen.getByRole("button", { name: "Send scan…" }));
+      expect(strip(container)).toHaveTextContent(SCAN_TOO_SHORT);
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(ipc.scannerSubmit).not.toHaveBeenCalled();
+      expect(ipc.searchCards).not.toHaveBeenCalled();
+
+      // Stopped, the press is gone and so is its sentence: *press again* with nothing to press
+      // would be an instruction nobody can follow. The line is the stopped sentence's.
+      await user.click(screen.getByRole("button", { name: "Stop scanning" }));
+      expect(screen.queryByText(SCAN_TOO_SHORT)).toBeNull();
+      expect(screen.getByText(SCANNING_STOPPED)).toBeInTheDocument();
+      // …and it does not come back unasked when the scanner does.
+      await user.click(screen.getByRole("button", { name: "Start scanning" }));
+      await screen.findByRole("button", { name: "Send scan…" });
+      expect(screen.queryByText(SCAN_TOO_SHORT)).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
+  /**
+   * With the Developer panels on, the line over the camera is the detector's own on every frame
+   * with no card in it — and a press that opened nothing still has to be heard over that.
+   */
+  it("says a press came too soon over the detector's own sentence, with the Developer panels on", async () => {
+    const restore = shimVideo();
+    opens();
+    storedPrefs({ developer: true });
+    frames(VERDICTS.noCard);
+    const user = userEvent.setup();
+    try {
+      const { container } = mount();
+      await waitFor(() => expect(strip(container)).toHaveTextContent(VERDICTS.noCard.error ?? ""));
+
+      await user.click(screen.getByRole("button", { name: "Send scan…" }));
+      expect(strip(container)).toHaveTextContent(SCAN_TOO_SHORT);
+      expect(strip(container)).not.toHaveTextContent("no quadrilateral");
+      expect(screen.queryByRole("dialog")).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
+  /** The Filters popover's release date, set as a reader sets it: sent to the session at once. */
+  async function narrowTo(user: ReturnType<typeof userEvent.setup>, from: string) {
+    await user.click(screen.getByRole("button", { name: "Filters: Any set" }));
+    // `fireEvent`, as the bar's own suite does: a date field has no text for user-event to type.
+    fireEvent.change(await screen.findByLabelText("Released from"), { target: { value: from } });
+    // Drawn at once, whatever the session goes on to say of it.
+    const drawn = await screen.findByRole("button", { name: new RegExp(`^Filters: .*${from}`) });
+    await user.click(drawn);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Filters" })).toBeNull());
+  }
+
+  /**
+   * **A scan says the filters its frames were judged under**: the ones the session last took
+   * (`useScannerPrefs`' `inForce`), never the ones the bar is drawing. A filter is drawn the
+   * moment the reader changes it and sent to the session, which has not answered yet — and may
+   * refuse. Pressed in that moment, a scan labelled with what the bar shows would say its frames
+   * were searched under filters the session had never held.
+   */
+  it("sends the filters the session has taken, not ones still on their way to it", async () => {
+    const restore = shimVideo();
+    opens();
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+    // The popover's set picker asks for the set list as it mounts.
+    vi.spyOn(ipc, "listSets").mockResolvedValue([]);
+    // The mount's push is taken at once; the reader's is on its way for as long as the test runs.
+    let pushes = 0;
+    vi.mocked(ipc.scannerSetFilters).mockImplementation(() =>
+      ++pushes === 1 ? Promise.resolve() : new Promise<void>(() => {}),
+    );
+    // The pump runs throughout, so whenever the press lands there is a run of fresh frames.
+    paced();
+    vi.mocked(ipc.searchCards).mockResolvedValue({
+      items: [SARUMAN],
+      total: 1,
+      totalIsCapped: false,
+    });
+    vi.mocked(ipc.scannerSubmit).mockResolvedValue({ id: REFERENCE });
+    const user = userEvent.setup();
+    try {
+      mount();
+      await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"));
+      await waitFor(() =>
+        expect(vi.mocked(ipc.scannerFrame).mock.calls.length).toBeGreaterThan(8),
+      );
+
+      await narrowTo(user, "2020-01-01");
+      const pending = { sets: [], released_from: "2020-01-01", released_to: null };
+      expect(ipc.scannerSetFilters).toHaveBeenCalledTimes(2);
+      expect(ipc.scannerSetFilters).toHaveBeenLastCalledWith(pending);
+
+      await user.click(screen.getByRole("button", { name: "Send scan…" }));
+      const dialog = await screen.findByRole("dialog", { name: "Send this scan" });
+      await user.click(
+        await within(dialog).findByRole("radio", { name: "Storm of Saruman — LTR 72" }),
+      );
+      await user.click(within(dialog).getByRole("radio", { name: "Foil" }));
+      await user.click(within(dialog).getByRole("button", { name: "Send scan" }));
+
+      await waitFor(() => expect(ipc.scannerSubmit).toHaveBeenCalledTimes(1));
+      const [sent] = vi.mocked(ipc.scannerSubmit).mock.calls[0];
+      // The bar says 2020; the session never has, and neither does the scan.
+      expect(screen.getByRole("button", { name: /^Filters: .*2020-01-01/ })).toBeInTheDocument();
+      expect(sent.filters).toEqual(DEFAULT_SCANNER_PREFS.filters);
+      expect(sent.run.length).toBeGreaterThanOrEqual(5);
+    } finally {
+      restore();
+    }
+  });
+
+  /**
+   * **A run never spans a change of filters.** The session drops its tracker to take a changed
+   * set, so every frame the pump was holding was judged under the old one: sent after the
+   * change, they would go out under filters they were never searched with. The page lets the run
+   * go when the filters in force move (`ScanLoop.breakRun`) — and nothing on screen with it,
+   * since the session reset itself and no reader asked for anything to be forgotten.
+   */
+  it("starts the run over when the session takes changed filters, and leaves the screen alone", async () => {
+    const restore = shimVideo();
+    opens();
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+    vi.spyOn(ipc, "listSets").mockResolvedValue([]);
+    // Seven frames answered and the eighth parked: the run is those seven until it is let go,
+    // and nothing sent afterwards can refill it.
+    answers(...Array<ScannerVerdict>(7).fill(VERDICTS.voting));
+    const user = userEvent.setup();
+    try {
+      const { container } = mount();
+      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(8));
+      await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"));
+
+      // The premise: as things stand there is a run to send, all seven frames of it.
+      await user.click(screen.getByRole("button", { name: "Send scan…" }));
+      const dialog = await screen.findByRole("dialog", { name: "Send this scan" });
+      expect(within(dialog).getByRole("slider", { name: "Picture" })).toHaveAttribute("max", "7");
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+      // The reader narrows the scan, and the session takes it — which is when it is stored.
+      await narrowTo(user, "2020-01-01");
+      const taken = { sets: [], released_from: "2020-01-01", released_to: null };
+      await waitFor(() =>
+        expect(ipc.setScannerPrefs).toHaveBeenLastCalledWith(
+          expect.objectContaining({ filters: taken }),
+        ),
+      );
+
+      // Not one frame has been judged under the new filters, so there is nothing to send yet.
+      await user.click(screen.getByRole("button", { name: "Send scan…" }));
+      expect(strip(container)).toHaveTextContent(SCAN_TOO_SHORT);
+      expect(screen.queryByRole("dialog", { name: "Send this scan" })).toBeNull();
+      // The strip goes on naming the card: this was the run's break, not the evidence's.
+      expect(statusLine()).toHaveTextContent("Plains");
+      expect(ipc.scannerReset).not.toHaveBeenCalled();
+      expect(ipc.scannerSubmit).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+
+  /**
+   * **Only a supporter's device draws the press** (the owner's decision; `useMaySendScans`) —
+   * and a device that is not one is told nothing: no greyed press, no sentence, no name for what
+   * it lacks. The light app draws this page too, in the build Google Play distributes, which may
+   * not lead a reader to a membership bought somewhere else.
+   *
+   * Every test below has everything else the press needs — a live camera, recognition running,
+   * the scanner naming a card — so the membership is the one thing that differs between them.
+   */
+  describe("for a supporter and for nobody else", () => {
+    /** Connected and paid up; `GRACE` is the same with a card Patreon is still retrying. */
+    const ACTIVE: SupporterStatus = {
+      entitled: true,
+      status: "active",
+      since: 1_756_000_000,
+      groupBound: true,
+    };
+    const GRACE: SupporterStatus = { ...ACTIVE, status: "grace" };
+    /** Out of the box, and a membership that ended — the same three fields, told apart by one. */
+    const NEVER: SupporterStatus = {
+      entitled: false,
+      status: "dead",
+      since: null,
+      groupBound: false,
+    };
+    const ENDED: SupporterStatus = { ...NEVER, groupBound: true };
+
+    /** The view with a camera open and the scanner naming a card, frames going by. */
+    async function running() {
+      opens();
+      vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+      paced();
+      const view = mount();
+      await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"));
+      return view;
+    }
+
+    /** `count` more frames answered — each a render of the page, so anything owed is drawn. */
+    async function framesGoBy(count: number) {
+      const sent = vi.mocked(ipc.scannerFrame).mock.calls.length;
+      await waitFor(() =>
+        expect(vi.mocked(ipc.scannerFrame).mock.calls.length).toBeGreaterThan(sent + count),
+      );
+    }
+
+    /** Everything the view says: its text, and every name or description an element carries. */
+    function said(container: HTMLElement): string {
+      const named = Array.from(container.querySelectorAll("*")).flatMap((element) =>
+        ["aria-label", "aria-description", "title", "alt", "placeholder"].map(
+          (attribute) => element.getAttribute(attribute) ?? "",
+        ),
+      );
+      return [container.textContent ?? "", ...named].join("\n");
+    }
+    /** A word that would name what the device lacks, or point at getting it. */
+    const NAMES_A_MEMBERSHIP = /patreon|supporter|membership|\bmembers?\b|pledge|subscri|payment/i;
+
+    it.each<[string, SupporterStatus]>([
+      ["active", ACTIVE],
+      ["in its grace window", GRACE],
+    ])("draws the press for a membership that is %s", async (_, status) => {
+      const restore = shimVideo();
+      vi.mocked(ipc.syncSupporterStatus).mockResolvedValue(status);
+      try {
+        await running();
+        const press = await screen.findByRole("button", { name: "Send scan…" });
+        expect(press).toBeEnabled();
+        expect(ipc.syncSupporterStatus).toHaveBeenCalledTimes(1);
+      } finally {
+        restore();
+      }
+    });
+
+    it.each<[string, SupporterStatus]>([
+      ["has never been a supporter's", NEVER],
+      ["was a supporter's and no longer is", ENDED],
+    ])("draws no press, and not a word about it, on a device that %s", async (_, status) => {
+      const restore = shimVideo();
+      vi.mocked(ipc.syncSupporterStatus).mockResolvedValue(status);
+      try {
+        const { container } = await running();
+        expect(ipc.syncSupporterStatus).toHaveBeenCalledTimes(1);
+        // The answer has been in for several renders: this is not a press still on its way.
+        await framesGoBy(6);
+        expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
+        // Not a greyed one either, under any name; the strip's other press is untouched.
+        expect(screen.queryByRole("button", { name: /send/i })).toBeNull();
+        expect(screen.getByRole("button", { name: "Reset evidence" })).toBeEnabled();
+        // …and nothing on the view names what is missing, in text or in a label.
+        expect(said(container)).not.toMatch(NAMES_A_MEMBERSHIP);
+        expect(strip(container)).toHaveTextContent("");
+      } finally {
+        restore();
+      }
+    });
+
+    /**
+     * `unknown` is the read in flight, and it draws nothing: a press drawn before the answer
+     * would flash at the one reader the answer then takes it from.
+     */
+    it("draws no press while the membership is being read, and draws it when a supporter's answer lands", async () => {
+      const restore = shimVideo();
+      let answer!: (status: SupporterStatus) => void;
+      vi.mocked(ipc.syncSupporterStatus).mockReturnValue(
+        new Promise<SupporterStatus>((resolve) => (answer = resolve)),
+      );
+      try {
+        const { container } = await running();
+        expect(ipc.syncSupporterStatus).toHaveBeenCalledTimes(1);
+        // Asked and unanswered, with the scanner well under way.
+        await framesGoBy(6);
+        expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
+        expect(said(container)).not.toMatch(NAMES_A_MEMBERSHIP);
+
+        await act(async () => answer(ACTIVE));
+        expect(await screen.findByRole("button", { name: "Send scan…" })).toBeEnabled();
+      } finally {
+        restore();
+      }
+    });
+
+    it("draws no press when that answer is that the device is not a supporter's", async () => {
+      const restore = shimVideo();
+      let answer!: (status: SupporterStatus) => void;
+      vi.mocked(ipc.syncSupporterStatus).mockReturnValue(
+        new Promise<SupporterStatus>((resolve) => (answer = resolve)),
+      );
+      try {
+        await running();
+        await act(async () => answer(NEVER));
+        await framesGoBy(6);
+        expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
+      } finally {
+        restore();
+      }
+    });
+
+    /** A read that was refused is `unknown` too — a busy database is not a membership. */
+    it("draws no press where the membership could not be read", async () => {
+      const restore = shimVideo();
+      vi.mocked(ipc.syncSupporterStatus).mockRejectedValue(
+        "The card database is busy finishing a sync. Try that again in a moment.",
+      );
+      try {
+        const { container } = await running();
+        expect(ipc.syncSupporterStatus).toHaveBeenCalledTimes(1);
+        await framesGoBy(6);
+        expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
+        // The refusal is not drawn anywhere either: it is not this view's to explain.
+        expect(strip(container)).toHaveTextContent("");
+      } finally {
+        restore();
+      }
+    });
+  });
+});
+
+/**
  * **A mounted view holds the scanner, whatever its camera is doing.** The lease used to be renewed
  * by frames alone, and a view whose camera was refused, failing or slow to start sent none — so it
  * lapsed in two seconds and a second window got through the gate with this one's tray still on
@@ -1464,6 +2125,17 @@ describe("ScannerPage with a destination", () => {
     try {
       mountOver(destination);
       await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(2));
+      // A live camera, a running scanner and a supporter's device (the file's default answer,
+      // asked and in) — where the Scanner view draws *Send scan…*. Over a trade it is not
+      // offered, to a supporter or to anyone: this page is already inside a dialog, and that
+      // press opens one.
+      expect(await screen.findByRole("button", { name: "Reset evidence" })).toBeInTheDocument();
+      expect(ipc.syncSupporterStatus).toHaveBeenCalled();
+      await expect(vi.mocked(ipc.syncSupporterStatus).mock.results[0].value).resolves.toMatchObject({
+        entitled: true,
+        status: "active",
+      });
+      expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
       await user.click(
         await within(theirTray()).findByRole("button", { name: "Add 5 to their side" }),
       );

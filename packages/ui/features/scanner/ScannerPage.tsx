@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type JSX } from "react";
+import { useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { ConfirmDialog } from "@/features/settings/ConfirmDialog";
 import { CreateDeckDialog } from "@/features/decks/CreateDeckDialog";
 import { useNewDeckFormat } from "@/features/decks/useNewDeckFormat";
@@ -22,6 +22,9 @@ import {
   DEFAULT_SEND_PX,
   frameOptions as frameOptionsOf,
 } from "./scannerOptions";
+import { SubmitScanDialog } from "./submit/SubmitScanDialog";
+import { useMaySendScans } from "./submit/useMaySendScans";
+import { useScanSubmit } from "./submit/useScanSubmit";
 import type { ScannerOptions, ScannerTrayRow } from "./types";
 import { useCamera, useCameraDevices } from "./useCamera";
 import { useScanLoop } from "./useScanLoop";
@@ -91,7 +94,7 @@ function ElsewhereSentence() {
 
 function LiveScanner({ destination }: { destination: TrayDestination | undefined }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const { prefs, update, filterError, loaded, unavailable, resync } = useScannerPrefs();
+  const { prefs, update, inForce, filterError, loaded, unavailable, resync } = useScannerPrefs();
   // The developer panels are the Scanner view's own; a destination's host draws none of them, and
   // asks the engine for none of the previews they alone show.
   const developer = destination === undefined && prefs.developer;
@@ -213,6 +216,61 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     return saved.saved;
   };
 
+  /**
+   * *Send scan…* (issue #776): the last couple of seconds the scanner was shown, to its maker,
+   * under the printing and finish a reader says the last of them shows — `useScanSubmit`, shared
+   * with the phone's page.
+   *
+   * **A run, never one picture**: the frames are the pump's own (`loop.recent`), the ones the
+   * scanner was really given, so the press grabs nothing and there is no single-picture way to
+   * send.
+   *
+   * **Not the capture above, and neither replaces the other.** That one is the Developer
+   * column's: a file written beside the app, named by whoever is running it. This one leaves the
+   * device, and so asks first — its dialog shows the pictures and says where they go.
+   *
+   * **Three conditions, and the press is drawn only where all three hold.**
+   *
+   * **While there can be a run** — a camera live *and* recognition running. Stopped, the pump
+   * has let its frames go (a run never spans a Stop) and is sending none, so there is nothing to
+   * send and no press is drawn: the stopped sentence over the picture already says what would
+   * bring one back.
+   *
+   * **Only in the Scanner view itself — never over a trade** (the owner's decision,
+   * 2026-10-11). Mounted with a `destination` this page is already inside a dialog, and its
+   * reader is in the middle of something else; *Create deck…* is not drawn there for the same
+   * reason.
+   *
+   * **And only for a supporter** (the owner's decision; `useMaySendScans`). Unlike the other
+   * two, this one has **no sentence anywhere**: a device that is not a supporter's — or whose
+   * membership has not been read yet — sees no press, no greyed one, and no word about why. The
+   * hook says why that silence is a rule and not an omission. A lapse while the dialog is open
+   * is not this page's either: the engine refuses the send, and the dialog draws the refusal.
+   *
+   * **The filters it says are the ones in force** (`inForce`), not the ones the bar is drawing:
+   * `prefs.filters` moves the moment the reader changes it, before the session has taken the
+   * change, and is put back if the session refuses it.
+   */
+  const maySend = useMaySendScans();
+  const sendable = destination === undefined && maySend && camera.kind === "live" && scanning;
+  const submit = useScanSubmit({
+    recent: loop.recent,
+    verdict: loop.verdict,
+    mode: prefs.mode,
+    status: statusData,
+    filters: inForce,
+    ready: sendable,
+  });
+  // **A run never spans a change of filters.** The session drops its tracker to take a changed
+  // set, and the pump cannot see that — a filter is a call of its own, not a frame's — so the
+  // page says it: when the filters in force move, the frames kept so far are let go
+  // (`ScanLoop.breakRun`). An effect, since it writes the loop's refs; the one extra run at mount
+  // empties a ring nothing has reached yet.
+  const { breakRun } = loop;
+  useEffect(() => {
+    breakRun();
+  }, [inForce, breakRun]);
+
   // The tray into the collection, in one `scanner_tray_commit` — all or nothing, the rows with a
   // known finish, the folder asked about again at the press (`useTrayCommit`).
   const {
@@ -269,12 +327,16 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   };
 
   // The detector's own refusal is a developer's sentence — contours examined, a quad rejected —
-  // and the reader has the status line for what it means to them. The loop's failures and a
-  // refused reset are not the detector's, and every reader gets those.
+  // and the reader has the status line for what it means to them. The loop's failures, a refused
+  // reset and a *Send scan…* pressed too soon are not the detector's, and every reader gets
+  // those. **A press that opened nothing is never silent**: it takes this line over from the
+  // detector's own sentence, which a Developer reader is otherwise shown on every frame with no
+  // card in it. It is not said while recognition is stopped, where the line is the stopped
+  // sentence's: the press is not drawn there, and the hook drops its sentence with the press.
   const detectorSentence =
-    developer && loop.verdict?.ok === false
+    developer && loop.verdict?.ok === false && submit.error === null
       ? (loop.verdict.error ?? "")
-      : (loop.error ?? resetError ?? "");
+      : (loop.error ?? resetError ?? submit.error ?? "");
 
   return (
     // **`@container/scan` because the split answers this view's own width, never the window's** —
@@ -283,8 +345,9 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     // what the developer column leaves, the tray the other third, and the panels get a column of
     // their own. A container is the containing block for anything `fixed` inside it, so nothing
     // that must cover the window may mount in here — and nothing does: the dropdowns measure the
-    // block they land in, the all-printings dialog is drawn at the app root, and the tray's
-    // *Clear all…* question is this fragment's second child, a sibling of the box and not inside it.
+    // block they land in, the all-printings dialog is drawn at the app root, and the page's three
+    // dialogs — *Clear all…*, *Create deck…* and *Send scan…* — are this fragment's other
+    // children, siblings of the box and not inside it.
     <>
       <section className="@container/scan flex h-full flex-col gap-3">
         {/* Not shown: the ribbon already says `Scanner`, and every pixel of this view's height is
@@ -332,6 +395,10 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
               hasBundle={hasBundle}
               lastResolution={loop.lastResolution}
               onReset={onReset}
+              // Offered only where `sendable` says: a run to send, the Scanner view itself, and
+              // a supporter's device. Without a live camera, or stopped, the box under the strip
+              // is already saying why not; of the membership nothing is said at all.
+              onSend={sendable ? submit.open : undefined}
             />
             {/* The column is the height, and the video box takes what the strip above it and the
                 asset notes under it leave. **Cropped rather than letterboxed** (`object-cover`, and
@@ -507,6 +574,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
           if (!scannedDeck.isPending) setDeckRows(null);
         }}
       />
+      <SubmitScanDialog run={submit.run} onDismiss={submit.onDismiss} onClose={submit.onClose} />
     </>
   );
 }

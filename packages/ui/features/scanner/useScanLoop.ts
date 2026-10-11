@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { ipc, ipcError } from "@/lib/ipc";
+import { pushRunFrame, runClock, runFrameOf, type RunFrame } from "./submit/run";
 import type {
   ScannerCollector,
   ScannerDecision,
@@ -8,6 +9,10 @@ import type {
   ScannerResolution,
   ScannerVerdict,
 } from "./types";
+
+// The ring's entry, under the loop's own name for it — a caller of `recent()` has no other
+// business in `submit/`.
+export type { RunFrame };
 
 /** What the loop has to say: the last verdict, its cost, the running rate, the last failure. */
 export interface ScanLoop {
@@ -43,7 +48,43 @@ export interface ScanLoop {
   /** One frame out of the video, for the capture button. `Infinity` means "do not downscale". */
   grab: (longEdge: number, quality: number) => Promise<Uint8Array | null>;
   /**
-   * Throw the current verdict and all kept reads away, ignoring unfinished frames.
+   * The last frames the pump sent, oldest first, each with what the scanner answered for it —
+   * for *Send scan…*, which sends a run of them (`submit/run.ts`).
+   *
+   * **Only frames whose verdict the page took**: one whose answer was thrown away — the camera
+   * stopped under it, the evidence was cleared, a reset was in flight — or whose call was refused
+   * is not in it, so the run is exactly what the scanner's answers on screen were made from.
+   * **And never across a break in the evidence**: emptied by {@link ScanLoop.clearReads} and
+   * {@link ScanLoop.reset}, and whenever the pump starts or stops, so a run cannot span a reset,
+   * a Stop or two camera streams. **Nor across the two breaks the session makes by itself**,
+   * which nothing above sees: it forgets the card on the first frame it is sent in another
+   * *mode*, and when it takes a changed set of *filters*. The first is read off the answers —
+   * the ring starts over at a frame judged in another mode than the one before it
+   * (`pushRunFrame`); the second is the page's to say, with {@link ScanLoop.breakRun}. And never
+   * further back than a few seconds before its newest frame (`RUN_MAX_AGE_MS`).
+   *
+   * A function and not a value, because the ring is a ref: it turns over nine times a second and
+   * nothing draws it. Each call hands back a fresh array of the same entries — a snapshot, which
+   * a frame that lands afterwards is not in.
+   */
+  recent: () => readonly RunFrame[];
+  /**
+   * **The run starts over here, and nothing else does**: the frames kept so far are let go, and a
+   * frame already on its way to the scanner does not join the ones after it.
+   *
+   * For the break the pump cannot see: the session took a changed set of filters, and dropped its
+   * tracker to do it. Every frame the ring holds was judged under the old ones, and a run sent
+   * across the change would be labelled with filters its first frames were never searched under.
+   * The page calls this when the filters in force change (`useScannerPrefs`' `inForce`).
+   *
+   * **Not {@link ScanLoop.clearReads}.** The session reset itself; nothing on screen is stale. So
+   * the verdict, the kept reads and the decision edge are left exactly as they are, and a frame
+   * in flight still has its answer taken and drawn — it is only kept out of the run, because it
+   * may have been judged on either side of the change. Stable, like `recent`.
+   */
+  breakRun: () => void;
+  /**
+   * Throw the current verdict, all kept reads and the run away, ignoring unfinished frames.
    *
    * The Reset press's other half: `scanner_reset` drops the tracker's evidence in the crate,
    * and the latches above are evidence this side is holding. Leaving them would show a
@@ -167,6 +208,12 @@ function sleep(ms: number): Promise<void> {
  *   it starts a pump of its own that owes no wait.
  *
  * ⚠️ **None of it was measured on a camera** — `scannerOptions.ts`'s `DEFAULT_DETAIL_WAIT_MS`.
+ *
+ * **And the pump keeps the last couple of seconds of what it sent** — `recent()`, for *Send
+ * scan…*. A scan is a run of frames and never one picture, and the only run worth sending is
+ * the one the scanner was really given: these JPEGs, at this size and quality, in this order,
+ * each beside the verdict it got. Nothing is grabbed or encoded for it — the frames are the
+ * ones already made for the detector — and nothing is turned into text until a reader presses.
  */
 export function useScanLoop({
   videoRef,
@@ -286,6 +333,36 @@ export function useScanLoop({
   const evidenceRef = useRef(0);
   const pendingFrameRef = useRef<Promise<void> | null>(null);
   const resetRef = useRef<Promise<void> | null>(null);
+  /**
+   * The run: the last frames this pump sent and had answered, oldest first (`submit/run.ts` has
+   * its bounds). A ref for `lastSeqRef`'s reason, more so — it changes with every frame, nothing
+   * draws it, and the one reader wants it as it stands at a press rather than at the last render.
+   *
+   * **Emptied wherever the evidence is** — `clearReads`, and the pump's start and its stop — and
+   * a frame in flight across any of those never reaches it: it is added on the line that takes
+   * the verdict, behind the same two checks. **And at the session's own two breaks**, which
+   * leave this side's evidence standing: a frame answered in another mode than the last starts
+   * it over as it is added (`pushRunFrame`), and `breakRun` empties it when the session takes
+   * changed filters — with `runEpochRef` keeping out the frame in flight across that one.
+   */
+  const runRef = useRef<RunFrame[]>([]);
+  /**
+   * Which run a frame belongs to: moved by `breakRun` and by nothing else. A frame notes it as it
+   * is sent and joins the ring only if it has not moved by the time its verdict is taken.
+   *
+   * **A counter of the ring's own, and deliberately not `evidenceRef`.** That one throws the
+   * frame's *answer* away — right for a reset, where the answer is about a card the reader asked
+   * the scanner to forget. A change of filters stales nothing on screen, so the answer is kept
+   * and drawn, and only the frame's place in the run is refused.
+   */
+  const runEpochRef = useRef(0);
+
+  const recent = useCallback((): readonly RunFrame[] => runRef.current.slice(), []);
+
+  const breakRun = useCallback(() => {
+    runEpochRef.current += 1;
+    runRef.current = [];
+  }, []);
 
   const clearReads = useCallback(() => {
     // A grab or IPC answer already outstanding belongs to the evidence being discarded (#781).
@@ -298,6 +375,9 @@ export function useScanLoop({
     wantsDetailRef.current = false;
     waitedRef.current = false;
     sinceDecisionRef.current = Infinity;
+    // The frames are evidence too: a run sent after a reset must not open on the card the
+    // reader has just asked the scanner to forget.
+    runRef.current = [];
   }, []);
 
   const reset = useCallback(() => {
@@ -335,6 +415,8 @@ export function useScanLoop({
     sinceDecisionRef.current = Infinity;
     wantsDetailRef.current = false;
     waitedRef.current = false;
+    // Nor has it sent a frame: a run is one stream's, start to press.
+    runRef.current = [];
 
     async function pump() {
       while (!stopped) {
@@ -361,6 +443,10 @@ export function useScanLoop({
         // Read and lowered in one step, before the grab can throw — see `wantsDetailRef`.
         const paired = wantsDetailRef.current;
         wantsDetailRef.current = false;
+        // When this frame is the video's: both grabs draw it on the call and encode afterwards,
+        // so the clock is read before the call and not when the bytes come back. The run's own
+        // clock (`runClock`), which is the one a press reads; the round trip below is the wall's.
+        const grabbedAt = runClock.now();
         try {
           if (paired) {
             const pair = await grabPairRef.current(video, sendPxRef.current, PUMP_QUALITY);
@@ -390,6 +476,19 @@ export function useScanLoop({
         });
         // Whether this frame's answer earns the wait before the next grab — see `waitedRef`.
         let waits = false;
+        // **The run's own copy of the frame, taken before the call and never after it.** The web
+        // host hands a frame to its scanner's Worker by *transferring* its buffer
+        // (`lib/core/web/scanner.ts`), which leaves the array this side holds detached and
+        // zero-length the moment the call is made. A ring that kept `bytes` would be full of
+        // frames on the desktop and full of nothing in a browser, with no error anywhere — so it
+        // keeps a copy, on every host alike. A frame's worth of bytes copied nine times a second,
+        // which is small beside the encode that made them.
+        const kept = bytes.slice();
+        // Said of the frame as it was sent: a pair with an empty detail goes out as a plain frame.
+        const withDetail = detail !== null && detail.length > 0;
+        // Which run this frame is sent into — see `runEpochRef`. Noted here, as it goes out, and
+        // not at the grab: a frame grabbed before a break and sent after it is judged after it.
+        const epoch = runEpochRef.current;
         const t0 = performance.now();
         try {
           // Two arities rather than a trailing `null`, so a frame with no detail is the very
@@ -417,6 +516,13 @@ export function useScanLoop({
           setRoundTripMs(ms);
           setRate((1000 * trips.length) / trips.reduce((a, b) => a + b, 0));
           setVerdict(answer);
+          // The frame joins the run exactly where its verdict is taken, and nowhere else: a
+          // frame whose answer was dropped above, or refused below, was never part of what the
+          // scanner is seen to have said. Nor does one that was on the wire across `breakRun`:
+          // its answer is drawn like any other, and it belongs to neither run.
+          if (epoch === runEpochRef.current) {
+            pushRunFrame(runRef.current, runFrameOf(kept, grabbedAt, answer, withDetail));
+          }
           // Latched only where there is something to latch: a frame the readers did not run
           // on carries `null`, and overwriting with it is the flicker this exists to stop.
           if (answer.ocr !== null) setLastOcr(answer.ocr);
@@ -464,6 +570,9 @@ export function useScanLoop({
     void pump();
     return () => {
       stopped = true;
+      // A stopped pump's frames are not a run anyone can send: the next press belongs to a
+      // stream that has not started yet.
+      runRef.current = [];
     };
     // `videoRef` is stable by construction; everything else the loop reads is behind a ref.
   }, [live, videoRef]);
@@ -477,6 +586,8 @@ export function useScanLoop({
     rate,
     error,
     grab,
+    recent,
+    breakRun,
     clearReads,
     reset,
   };

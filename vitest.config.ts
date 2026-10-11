@@ -109,6 +109,11 @@ export default mergeConfig(
         // engine's Rust as text and fails when the Content-Security-Policy and the hosts the
         // engine asks part.
         project("app-worker", ["infrastructure/app-worker/src/**/*.test.ts"]),
+        // The fourth Worker — `infrastructure/scan-worker/`, the scan inbox the card scanner's
+        // Send posts one picture to — on the same terms: a plain handler over fakes of its two
+        // bindings, a bucket and a limiter. `label.test.ts` and `wrangler.test.ts` read the
+        // engine's Rust and this Worker's configuration as text and fail when they part.
+        project("scan-worker", ["infrastructure/scan-worker/src/**/*.test.ts"]),
         // The root package's own two folders, which belong to no other.
         //
         // The workbench's own folder. Nothing in it is a test since the fake moved out, and the

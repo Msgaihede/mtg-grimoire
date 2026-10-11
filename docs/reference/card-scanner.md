@@ -4309,6 +4309,245 @@ The scans stay in the tray after creation or cancellation. Creating a deck write
 the separate **Add to collection** action records physical ownership. The dialog explains
 this before creation, and a successful creation opens the deck editor.
 
+## Sending a scan to the inbox
+
+**A reader can send a scan — the last couple of seconds of frames the scanner was given, with
+the exact card they show — so the scanner can be tested against it** (issue #776, 2026-10-11).
+§8's caveat is the reason: no accuracy figure in this document rests on more than eleven
+labelled photographs, and the frames that would settle most of §8 are the ones readers see and
+nobody else does. **Send** — beside *Reset evidence* on both faces — is how they reach the
+corpus.
+
+**A scan is a run of frames, never one picture** — the owner's rule, the same day: *all the
+frames or nothing at all; we don't want a single screenshot*. Everything in §5 and §10 is about
+what happens *across* frames: a lock that needs two that agree, evidence that pools and decays,
+a vote that crosses a bar, a title read on the frame after a lock. One still says none of that,
+and a still taken for the purpose — at another size and quality than the pump's — is a picture
+the scanner never judged. What is sent is therefore the frames it **was** given, byte for byte
+and in order, each beside what it answered for it: put back through a session, with the mode
+and filters the label names, that is the scan again. It is the whole run or nothing, on every
+layer — the page opens no dialog on fewer than five frames, the engine refuses a run that short
+before any request, and the inbox has no shape a single picture fits.
+
+**It is the Scanner view's own, and never offered over a trade** (the owner's decision,
+2026-10-11): the Trade page mounts this same page inside a dialog — a sheet, on a phone — to
+file scans into one side of a trade, and there the press is not drawn, as *Create deck…* is
+not. Both pages hold that with a test.
+
+**And it is a supporter's** (the owner's decision, 2026-10-11, the same day; it was built first
+for every reader). Three layers hold it, as three hold the run. The press is drawn only where
+the membership reads active or in grace (`submit/useMaySendScans.ts`, one hook for both
+pages); the engine refuses any other device before it reads a picture, and sends the relay's
+token with the scan; and the inbox verifies that token before it reads anything else
+(`infrastructure/scan-worker/src/auth.ts`). **Where the press is not drawn, nothing is — no
+greyed button, no sentence, no hint.** The phone page is the one Google Play distributes, and
+it may not lead a reader to a membership bought elsewhere, so the silence is the rule and not
+an omission. The engine's three sentences for it (`NOT_ON`, `UNCONFIRMED`, `NOT_ACCEPTED`)
+name no membership either, and a test holds every sentence in that file to it. Both pages
+hold the four readings — active, grace, never, ended — and the read still in flight with a
+test apiece.
+
+**It is the only thing here that sends a picture off the device, and it takes two presses.** The
+first freezes the run and opens a dialog on it; nothing has been sent. The reader looks through
+the pictures, chooses **the exact printing** and **its finish** by hand, and the second press
+sends. The scanner itself is unchanged: every frame is examined where it was taken, and none is
+kept past the two seconds below.
+
+### The run
+
+`useScanLoop` keeps the last frames its pump sent, in a ring (`recent()`, `submit/run.ts`):
+
+- **Only frames whose verdict the page took.** A frame is added on the line that accepts its
+  answer — one that was refused, or whose answer was thrown away because the camera stopped or
+  the evidence was cleared under it, was never part of what the reader saw the scanner say.
+- **At most twenty frames and a megabyte and a half** (`RUN_MAX_FRAMES`, `RUN_MAX_BYTES`), the
+  oldest dropped first: about two seconds at the pump's nine a second. Fewer than five
+  (`RUN_MIN_FRAMES`) is not a scan, and the press says *Not enough of the scan yet…* over the
+  picture instead of opening a dialog. `ipc.test.ts` holds the two frame counts to the engine's
+  and the byte budget under the engine's 2 MB.
+- **Never across a break in the evidence.** The ring is emptied by `clearReads` and `reset`, and
+  whenever the pump starts or stops — so a run cannot span a *Reset evidence*, a Stop, or two
+  camera streams, and the press is offered only while a camera is live and recognition is
+  running. **Nor across the two breaks the session makes itself** (§10): a frame judged in
+  another mode than the one before it starts the ring over, because the session forgets the
+  card on a mode switch; and a filter set the session accepts starts it over too (`breakRun`),
+  with any frame in flight across that moment left out. So every frame of a run was judged in
+  the mode and under the filters the label names — which are read from the run and from what
+  the session accepted, never from a control the reader has only just moved. **One sliver is
+  left**: a press that lands in the round trip between the session taking a new filter and the
+  page hearing that it has sends the last frame or two under the old filter's name.
+- **Never older than four seconds** (`RUN_MAX_AGE_MS`), at the ring and again at the press: a
+  pump that stalled leaves frames that are not *the last couple of seconds*, and they are left
+  out before the count is taken.
+- **The ring holds a copy of each frame's bytes, taken before the call.** The web host
+  *transfers* a frame's buffer to its scanner Worker, which leaves the page's array detached and
+  empty the moment `scanner_frame` is called; a ring that kept the array it sent would hold
+  twenty frames on the desktop and twenty nothings in a browser, with no error anywhere.
+- **In memory only, and bytes rather than text.** Nothing is encoded until a press, nothing is
+  written anywhere, and the frames go when the pump stops. The privacy policy says so in a
+  sentence (*The camera*), because "pictures are not kept" was the old promise and two seconds
+  of them now are, for exactly this.
+
+A press reads the ring and the page's state in one synchronous step (`useScanSubmit`): there is
+no grab to await, so nothing moves between the press and the snapshot. The camera and the pump
+run on behind the dialog; the snapshot is a value no later frame can reach.
+
+### What the reader sees and chooses, and why nothing is chosen for them
+
+The dialog rests on **the last picture** — the card under the camera at the press, which is the
+one the reader's answer names (*Which card is in the last picture?*) — with a slider through
+all of them, each captioned with how long before the press it was taken, and a **Play** that
+walks them once at about the scanner's own cadence (not offered to a reader who has asked for
+less motion; the slider reaches every picture without it). The disclosure above Send counts
+them: a press sends *these n pictures*, not the one on screen, and every one is theirs to look
+through first. Each is drawn from the very base64 that is sent, as a `data:` image, so what is
+looked at and what leaves cannot be two encodes of a frame.
+
+The label is the whole value of a submission — a run nobody has named is so many photographs,
+and a run with the printing and the finish beside it is a test. So **nothing is pre-selected**:
+the search starts from the name the scanner was leaning towards, because that is usually the
+card, but the printing is a press of the reader's own on a tile of that printing, and the finish
+is a press too unless the chosen printing is made in exactly one. A default the scanner filled
+in would be the scanner grading itself; the cases worth having are the ones where it was wrong,
+and those are exactly the ones a reader would click through.
+
+The finish is asked because no hash can tell it and it is half of what §4's *The finish* is
+about: a foil's glare is the commonest way a frame goes wrong, and a corpus that does not say
+which frames are foils cannot measure that.
+
+### What is sent
+
+| | From | Notes |
+| --- | --- | --- |
+| The frames | the pump, through the ring | The JPEGs `scanner_frame` judged — 960 px on the long edge at quality 0.72 as shipped — five to twenty of them, oldest first, end to end in the request's body. **Not** a still at another size: a replay has to be given what the scanner was |
+| `card` — id, set, number, language, name | **the engine**, from `cards`, by the id the reader chose | The page sends the id alone, so a label cannot pair one printing's id with another's name. It is the card in the **last** frame |
+| `finish` | the reader | Refused when the printing is not made in it; `cards.finishes` that is missing is *unknown* and refuses nothing |
+| `scanner.reported` | the run's last frame | The printing the session had **decided** on (`decision.printing`, carried on every committed frame), else `null` — the last frame's own, so it always agrees with `run`'s last `decided`. **Never the leading standing's `id`**, which is the oracle id the tracker pooled evidence on — an id of another kind than the printing beside it. So `reported === card.id` is a scan it got right, another id one it got wrong, `null` one it had not answered |
+| `scanner.mode`, `confidence`, `distance`, `bundle` | the run's last frame, and `ScannerStatus.labels` | Each `null` when the scanner had none; with `reported` `null`, the two figures are how far it had got. An id that is not a Scryfall id, or a count past the inbox's range, is tidied to `null` by the engine rather than sent to be refused |
+| `scanner.filters` — sets, from, to | the filters the session last **accepted** (`useScannerPrefs`' `inForce`) | What the scanner was narrowed to decides what it *could* have answered; a replay without it is another scan. Not the popover's own state, which is drawn before the session takes it and put back if it refuses. Set codes in lower case, at most 64 |
+| `run[n]` — `ms`, `bytes`, `width`, `height` | the page's clock; the engine, from each JPEG's own header | `ms` is milliseconds before the press, zero or negative, so the gaps are the real frame rate. `bytes` is where the next frame starts: **`run` is the body's only index**. The header read is also what refuses bytes that are not a JPEG |
+| `run[n]` — `ok`, `lock`, `confidence`, `distance`, `decided` | that frame's own verdict | What the scanner answered for *this* frame: whether it found a card, the lock's phase, the tracker's confidence after it, the best match's distance, and the printing it had decided on by then (`null` before it had). The frame where `decided` first appears is the one it made up its mind on |
+| `run[n].detail` | the pump | A larger picture went to the scanner beside this frame (§4's detail frame, for the title read). **It is not in the run** — so a replay of such a frame gives the title reader less than it had, and the flag is how a reader of the corpus knows which |
+| `app` — version, platform | the engine | `desktop`, `android` or `browser` |
+
+**Nothing in it says who sent it** — no device id, no group, no account — and the inbox stores
+no address and keeps no log. The privacy policy (`apps/light/public/privacy.html`, *Sending a
+scan*) promises that in those words; a field added to the label is a sentence owed there. The
+inbox answers an id, which the dialog shows as the reference: it is the only way one submission
+is found again, and so the only handle a deletion request has.
+
+**What a run does not hold**, for whoever replays one: anything before its first frame — a
+tracker that had been pooling evidence for ten seconds starts a replay with none — the detail
+pictures, and the options that are not in the label (the sliders of §6's panel, which a reader's
+build leaves at their defaults). A run that begins on one card and ends on another is labelled
+for the last; the per-frame `decided` is what tells the two apart.
+
+### The path
+
+`ipc.scannerSubmit(submission)` → the engine's `scanner_submit` (`crates/grimoire-core/
+src/scanner_submit.rs`) → `POST /scan` on the scan inbox (`infrastructure/scan-worker/`).
+
+- **A `task` in the command table, with the pictures as base64 inside its one argument** — not
+  a third `bytes` entry like the frame and the capture. A `bytes` body runs on the blocking
+  pool, where a request cannot be awaited; and this is one call a press, not nine a second. The
+  page already holds the text, since the dialog draws from it.
+- **Every host sends it the same way**, the web app included — it is not one of the commands the
+  web host answers on the page in front of the engine. From a browser it is a cross-origin
+  `fetch` whose content type and label header each cost a pre-flight; the inbox answers both for
+  the web app's origin, and the hosting policy's `connect-src` names its host.
+- **Every refusal the engine can make, it makes before any request**, and each refuses the whole
+  submission: a run of fewer than five frames (*Not enough of the scan yet…* — the page's own
+  sentence, said by the engine for a page that did not), one of more than twenty or over 2 MB
+  (never trimmed to fit — a cut run is not what the reader was shown), a frame that is not a
+  JPEG (nothing is sent around a hole), a printing this install's cards do not have, a finish
+  the printing is not made in. What the inbox refuses is reworded for a reader by status or
+  `code` — full (*try again in a few days*), too many at once, too large — and anything else is
+  named by its number. A rejection is drawn in the dialog, which stays open with the reader's
+  choices so a second press can try again.
+- **The body is the frames end to end, as `application/octet-stream`**, with nothing between
+  them; the label crosses beside it as ASCII JSON in the `x-scan-label` header — some four
+  thousand characters for twenty frames, under a cap of 8192 that the engine bounds its own
+  fields to fit. The inbox holds the body to the label (as long as its frames together, a JPEG's
+  first bytes at each of them), stores only the fields it checked, and refuses `image/jpeg` —
+  one picture's type — outright.
+- **The wire is held from both ends.** `scan-worker`'s `label.test.ts` reads the engine's six
+  label structs as text and fails when the two part; `wrangler.test.ts` holds the address, the
+  three bounds of a run, the header's name and cap, the content type and the two refusal codes
+  the same way; and one header exactly as the engine writes it
+  (`crates/grimoire-core/src/__golden__/scan-label.txt`) is asserted by the engine's suite and
+  read whole by the inbox's, so the two cannot part over how a number, a `null` or an escaped
+  character is spelled. The Storybook fake refuses a run shorter than five in the engine's
+  sentence too, so a page that sent one picture would be told so in the workbench.
+- **The inbox is bounded, and by what** is `infrastructure/scan-worker/README.md`'s: 2 MB and
+  twenty frames a run, 500 runs waiting, 12 a minute from one address. A full one is the
+  engine's *try again in a few days*. That README also has the dozen lines that cut a stored run
+  back into its frames.
+
+The developer panel's **Add frame to dataset** (*Adding a frame to the dataset*, §6, and
+`scanner_capture`) is a different thing and is unchanged: it writes one full-size frame to a
+file beside the app, with a name typed freely, on a host that keeps files. Send is for a reader,
+works where there are no files, takes a printing rather than a string, and sends what the
+scanner saw rather than what the sensor did.
+
+### Seen, 2026-10-11 — and what was not
+
+**The run was driven with a camera, on the phone face, in a real browser** — headless Chromium
+with its fake camera, over the Storybook fake (`pnpm mobile:scanner-smoke`, step 12, at 360×800
+and 412×915 under a touch pointer). Stopped, no press is drawn. Started, with the scanner's
+answers held back, a press opens nothing and says *Not enough of the scan yet…*. Then the
+dialog opens on eight frames spanning 1.1 to 2.0 seconds — each one, byte for byte and in
+order, a frame `scanner_frame` had been handed, and each drawn from the very text that goes on
+to be sent. The last is showing, the slider stands at 8 of 8 and reaches the first with its
+caption, *Play* walks them once and stops on the last; nothing is chosen and Send is out of
+reach with its reason; a printing sold three ways brings its finishes into view; one
+`scanner_submit` goes out with one argument holding all eight; the reference comes back, and
+Done hands the caret to the press. Every control in it is 44px or more and nothing hangs off
+the side.
+
+**And the membership, the same evening, in the same run**: the page that scans through the
+smoke's first nine steps is a device with no membership behind it. Started again and answered
+eight more frames — more than a run needs — it draws no control with *send* in its name and no
+word of a membership anywhere on the page. Everything above then happens on the same page
+loaded as a supporter's (`?fault=patreonGroupEntitled`), put into Exact first so that the mode
+the label names is one the reader chose.
+
+**At a desktop's size the dialog was looked at in Storybook, in a browser at 1100×820**: 576px
+wide with nothing off its side; *Play*, sampled every 60 ms, drew exactly one picture at every
+sample from the first to the last and stopped there; the slider moved to the second showed the
+second, captioned with how long before the press it was taken.
+
+**An independent review of the change found one thing that mattered, and it is fixed**: a run
+could span a reset the session makes itself — a mode switch, an accepted filter — and be
+labelled with the new mode or filter throughout. *The run*, above, is what it does now.
+
+**The inbox is deployed — by hand, by the owner, on 2026-10-11 — and nobody has sent a scan
+through it.** Its address and its door were asked that evening and answered as the suite
+answers them (`infrastructure/scan-worker/README.md`, *Deploying*: seven probes of seven, a
+nonsense token a 401, no second address). Past that, every wire is held by tests on each side
+of it — the engine over a mock server, the Worker over fakes of its two bindings — and no scan
+has crossed a real network. What only real use can show:
+
+- **What twenty real frames weigh.** Chromium's test pattern is some 7 kB a frame and says
+  nothing about it; forty to ninety kilobytes for a 960-pixel frame of a desk is an estimate,
+  and the 1.5 MB budget against it is unmeasured. On a camera whose frames are heavier the run
+  is shorter in frames, never over the budget.
+- **The desktop app's own window, and a phone in a hand.** Nobody has pressed Send in WebView2
+  or on Android; that a step between pictures does not flash was sampled in Chromium only.
+- **The web host.** There the scanner is a Worker and a frame's buffer is transferred to it;
+  that the ring's copy survives is held by a unit test that detaches the array as the host
+  does, not by a browser run with the WASM scanner.
+- **The door, end to end.** No real token has met the Worker: that the key the owner sets on it
+  is the relay's — a wrong one refuses every supporter with *the server did not accept this
+  device*, and no probe can tell the two apart — and that a token minted by the live relay
+  verifies there, are shown by the first scan a supporter sends. Nor has the membership been
+  read on the desktop page with a camera live; both pages' tests hold it over mocks.
+- **The edge**: that the bucket binding takes a write, that a browser — and not only the
+  probe's own pre-flight, which was answered — is let through as the suite says, that a
+  release's `scan-deploy` does under the CI token what the owner's deploy did by hand, and
+  whether 500 waiting runs is a ceiling a real week ever meets.
+  `infrastructure/scan-worker/README.md` has the deploy — a release's `scan-deploy` job, since
+  2026-10-11 — and the probes that job asks of the live address.
+
 ## On the phone face
 
 The light app's phone face (below 1024px; [light-app.md](light-app.md)) has had a Scanner tab

@@ -87,6 +87,13 @@ type Story = StoryObj<typeof meta>;
  *
  * The bar and the tray beside the video are unaffected: prefs, the tray and `scanner_status` all
  * answer regardless of the camera, which is what lets the two halves of this view be tested apart.
+ *
+ * **One press is not here, and its absence is the rule**: *Send scan…* stands beside *Reset
+ * evidence* only while a camera is live and the scanner is running — a scan is the last couple
+ * of seconds of frames it was shown, and a refused camera has shown it none — and only on a
+ * supporter's device, which this story's world is not either (`submit/useMaySendScans`). Its
+ * dialog is storied by itself (`Scanner/Reader/Send scan dialog`), since no story has a camera
+ * to open.
  */
 export const CameraRefused: Story = {
   play: async ({ canvasElement }) => {
@@ -94,6 +101,8 @@ export const CameraRefused: Story = {
     await expect(
       await canvas.findByText("MTG Grimoire needs camera access to scan a card."),
     ).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "Reset evidence" })).toBeInTheDocument();
+    await expect(canvas.queryByRole("button", { name: "Send scan…" })).toBeNull();
   },
 };
 

@@ -20,6 +20,7 @@ const TS_TESTS = import.meta.glob<string>(
     "/infrastructure/relay/src/**/*.test.ts",
     "/infrastructure/share-worker/src/**/*.test.ts",
     "/infrastructure/app-worker/src/**/*.test.ts",
+    "/infrastructure/scan-worker/src/**/*.test.ts",
     "/apps/share/**/*.test.{ts,tsx}",
     "/apps/light/**/*.test.{ts,tsx}",
     "/scripts/**/*.test.ts",
@@ -309,6 +310,14 @@ describe("the arms", () => {
     // Its runbook is prose, by the arm above every tree's; its `tsc` program is the glob's.
     ["infrastructure/app-worker/README.md", F, F, F, F, F, F, F],
     ["infrastructure/app-worker/tsconfig.json", T, F, F, F, T, F, T],
+    // The scan inbox: checked, linted and tested by `frontend` and used by no build. No Rust
+    // source reads a file of it — its own tests read the engine's, which is the engine's arm.
+    ["infrastructure/scan-worker/wrangler.jsonc", T, F, F, F, F, F, F],
+    ["infrastructure/scan-worker/src/index.ts", T, F, F, F, F, F, F],
+    ["infrastructure/scan-worker/src/label.test.ts", T, F, F, F, F, F, F],
+    ["infrastructure/scan-worker/package.json", T, F, F, F, F, F, F],
+    ["infrastructure/scan-worker/README.md", F, F, F, F, F, F, F],
+    ["infrastructure/scan-worker/tsconfig.json", T, F, F, F, T, F, T],
     ["some/new/thing.txt", T, T, T, F, T, F, T],
     // The light app: its host, built into an APK, and its pages, which no Rust job reads — and
     // which are the web build's own page, where the phone's host is nothing to a browser.
@@ -431,9 +440,9 @@ describe("the arms", () => {
     expect(at("apps/light/vite.sw.ts")).toBeLessThan(at("apps/light/*"));
   });
 
-  // The three Workers' `tsc` programs are `infrastructure/*/tsconfig.json`, one glob, and a
-  // Worker's own arm is `infrastructure/<name>/*` (the app's and the relay's; the share Worker
-  // has none and falls to the fail-safe): below those arms a Worker's tsconfig would route to
+  // The four Workers' `tsc` programs are `infrastructure/*/tsconfig.json`, one glob, and a
+  // Worker's own arm is `infrastructure/<name>/*` (the app's, the relay's and the scan inbox's;
+  // the share Worker has none and falls to the fail-safe): below those arms a Worker's tsconfig would route to
   // what the Worker's files do and not to what a program does, silently fewer jobs. The table
   // above holds each tsconfig's jobs; this holds the order that makes them so.
   it("puts the Workers' tsconfig arm above every Worker's own arm", () => {

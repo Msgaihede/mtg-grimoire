@@ -30,7 +30,19 @@
 //      candidate answers it;
 //  10. on its side at 800×360 the camera's column and the tray's stand side by side, with nothing
 //      off the screen, no control under 44px and Add under a thumb;
-//  11. with the camera refused the page lands on its sentence.
+//  11. with the camera refused the page lands on its sentence;
+//  12. *Send scan…* is a supporter's, and sends a run of frames and never one picture: on a
+//      device with no membership behind it the press is not drawn over a running scanner and
+//      nothing on the page names one; on a supporter's (`?fault=patreonGroupEntitled`), stopped,
+//      the press is not drawn;
+//      over a running scanner it stands beside *Reset evidence* and leaves the match bar
+//      room; pressed before the scanner has answered enough frames it opens nothing and says
+//      so; then its dialog holds the last frames the scanner was given — each drawn from the
+//      very text it will send, the last one showing, a slider and a *Play* through them — with
+//      nothing chosen and Send out of reach; a printing sold more than one way brings its
+//      finishes into view under a thumb; and the two answers go out with every one of those
+//      frames in one `scanner_submit`, the reference comes back, and Done hands the caret to
+//      the press.
 //
 // **What it cannot prove is everything the fake stands in for**: recognition (the script names its
 // own cards whatever the lens shows), a phone's real frame rate, the detail frame (the script never
@@ -664,6 +676,413 @@ async function phone(send: Send, width: number, height: number) {
   );
   say(
     `${at}: Exact — ${asking.rows} rows, the fifth card waits with three candidates; a press settles it, and the printings sheet hands another back`,
+  );
+
+  // ------------------------------------------------ 12. Send scan -------------------------
+  // A scan is a run of the frames the scanner was given, never one picture. So: stopped, there
+  // is no press at all; started, a press before the scanner has answered enough frames opens
+  // nothing and says why; and once it has, the dialog holds exactly those frames — every one of
+  // them drawn from the text that is sent — and Send sends them all, in one call.
+  //
+  // **And it is a supporter's, and nobody else's.** The device that has scanned through the
+  // steps above has no membership behind it. Started again, and answered more frames than a
+  // run needs, it is offered no press and told nothing about one — no greyed button, no
+  // sentence — which is what the Play build's face owes its reader.
+  await page.evaluate(`(async () => {
+    const core = await import('${FS}packages/fake/core.ts');
+    const { activeScope } = await import('${FS}packages/fake/scope.ts');
+    const own = activeScope().commands;
+    window.answered = 0;
+    core.registerCommands({
+      scanner_frame: async (bytes, options) => {
+        const answer = await own.scanner_frame(bytes, options);
+        window.answered += 1;
+        return answer;
+      },
+    });
+    return true;
+  })()`);
+  await page.evaluate(`smoke.press(smoke.button('Start scanning'), 'Start scanning')`);
+  await page.until(`window.answered >= 8`, "a device with no membership to scan on", 30_000);
+  const stranger = await page.evaluate<{ sends: string[]; said: boolean }>(`(() => {
+    const main = document.querySelector('main');
+    return {
+      sends: smoke.controls().map(smoke.named).filter((name) => /send/i.test(name)),
+      said: /patreon|supporter|membership|pledge|subscri/i.test(main.textContent),
+    };
+  })()`);
+  if (stranger.sends.length > 0)
+    fail(`${at}: a device that is not a supporter's is offered ${JSON.stringify(stranger.sends)}`);
+  if (stranger.said) fail(`${at}: the Scanner page names a membership to a device without one`);
+  // The rest is a supporter's device: the same page, in the world where the relay knows it.
+  await page.go("/scanner?fault=patreonGroupEntitled");
+  await page.until(`${TRACK}?.readyState === 'live'`, "a supporter's camera");
+  // Exact, as the page above was left: the mode a label names has to be the one in force, and
+  // a page still on its default would prove nothing about that.
+  await page.evaluate(`smoke.press(smoke.button('Exact'), 'Exact')`);
+  await page.until(
+    `smoke.button('Exact').getAttribute('aria-pressed') === 'true'`,
+    "Exact to take on a supporter's page",
+  );
+  await page.until(`smoke.button('Stop scanning') !== undefined`, "a supporter's scanner to run");
+  await page.evaluate(`smoke.press(smoke.button('Stop scanning'), 'Stop scanning')`);
+  await page.until(`smoke.button('Start scanning') !== undefined`, "the scanner to stop");
+  await sleep(400);
+  const idle = await page.evaluate<{ press: boolean; live: string | undefined }>(
+    `({ press: smoke.button('Send scan…') !== undefined, live: ${TRACK}?.readyState })`,
+  );
+  if (idle.live !== "live") fail(`${at}: stopped, the camera's track is ${idle.live}`);
+  if (idle.press)
+    fail(
+      `${at}: with recognition stopped the page offers Send scan… — there is no run to send, and one picture is not a scan`,
+    );
+  // The scanner's answers are held back, so frames go out and none comes home: the run is empty
+  // for as long as the test says. Every frame the scanner is handed is kept as text, in the
+  // order it answered, to hold what is sent to what it was really given.
+  await page.evaluate(`(async () => {
+    const core = await import('${FS}packages/fake/core.ts');
+    const { activeScope } = await import('${FS}packages/fake/scope.ts');
+    const own = activeScope().commands;
+    const text = (bytes) => {
+      let binary = '';
+      for (let at = 0; at < bytes.length; at += 0x8000) binary += String.fromCharCode(...bytes.subarray(at, at + 0x8000));
+      return btoa(binary);
+    };
+    window.sentScans = [];
+    window.given = [];
+    const held = new Promise((release) => { window.releaseFrames = release; });
+    core.registerCommands({
+      scanner_frame: async (bytes, options) => {
+        const sent = text(bytes);
+        await held;
+        const answer = await own.scanner_frame(bytes, options);
+        window.given.push(sent);
+        return answer;
+      },
+      scanner_submit: (args) => { window.sentScans.push(args); return own.scanner_submit(args); },
+    });
+    return true;
+  })()`);
+  await page.evaluate(`smoke.press(smoke.button('Start scanning'), 'Start scanning')`);
+  await page.until(
+    `smoke.button('Send scan…') !== undefined`,
+    "Send scan… to be offered over a running scanner",
+  );
+  const row = await page.evaluate<
+    Measurement & { send: Box; bar: number; reachable: boolean }
+  >(`(() => {
+    const send = smoke.button('Send scan…');
+    send.scrollIntoView({ block: 'center' });
+    const bar = document.querySelector('[role="progressbar"][aria-label="Match progress"]');
+    return { ...smoke.measure(), send: smoke.box(send), bar: smoke.box(bar).width, reachable: smoke.reachable(send) };
+  })()`);
+  hold(`${at}, the status line with Send scan on it`, row);
+  if (!row.reachable) fail(`${at}: Send scan… is not under a thumb`);
+  if (row.bar < 80) fail(`${at}: Send scan… leaves the match bar ${Math.round(row.bar)}px`);
+  // Too soon: not one frame has been answered. No dialog, a sentence, and nothing sent.
+  await page.evaluate(`smoke.press(smoke.button('Send scan…'), 'Send scan, too soon')`);
+  await page.until(
+    `/Not enough of the scan yet\\./.test(document.body.textContent)`,
+    "the press that came too soon to be answered in a sentence",
+  );
+  const early = await page.evaluate<{ dialog: boolean; sent: number; given: number }>(
+    `({ dialog: smoke.sheet() !== null, sent: window.sentScans.length, given: window.given.length })`,
+  );
+  if (early.dialog || early.sent !== 0)
+    fail(
+      `${at}: a press with no run to send opened a dialog (${early.dialog}) or sent ${early.sent} scans`,
+    );
+  if (early.given !== 0)
+    fail(`${at}: ${early.given} frames were answered while the scanner's answers were held`);
+  // Now the scanner answers, and a couple of seconds of it is a scan.
+  await page.evaluate(`(window.releaseFrames(), true)`);
+  await page.until(
+    `window.given.length >= 8`,
+    "the scanner to answer enough frames for a run",
+    30_000,
+  );
+  await page.evaluate(
+    `(() => { window.givenAtPress = window.given.slice(); smoke.press(smoke.button('Send scan…'), 'Send scan'); return true; })()`,
+  );
+  await page.until(
+    `smoke.sheet() !== null && /Send this scan/.test(smoke.sheet().textContent)`,
+    "the Send scan dialog",
+  );
+  const opened = await page.evaluate<{
+    pictures: number;
+    showing: number;
+    last: boolean;
+    size: string;
+    edge: number;
+    bytes: number;
+    box: Box;
+    slider: { min: string; max: string; value: string; name: string; box: Box } | null;
+    play: boolean;
+    said: string;
+    disabled: string | null;
+    reason: string | undefined;
+    chosen: number;
+    sent: number;
+  }>(`(async () => {
+    const dialog = smoke.sheet();
+    const pictures = [...dialog.querySelectorAll('img[src^="data:image/jpeg;base64,"]')];
+    await Promise.all(pictures.map((picture) => picture.decode()));
+    const send = smoke.button('Send scan', dialog);
+    const slider = dialog.querySelector('input[type="range"]');
+    const showing = pictures.filter((picture) => picture.getClientRects().length > 0);
+    // Kept on the page, not brought back: they are the pictures, and are compared where they are.
+    window.shownScan = pictures.map((picture) => picture.src.slice(23));
+    return { pictures: pictures.length,
+      showing: showing.length, last: showing[0] === pictures[pictures.length - 1],
+      size: showing[0].naturalWidth + 'x' + showing[0].naturalHeight, edge: Math.max(showing[0].naturalWidth, showing[0].naturalHeight),
+      bytes: window.shownScan.reduce((sum, text) => sum + Math.round((text.length * 3) / 4), 0),
+      box: smoke.box(showing[0]), slider: slider === null ? null : { min: slider.min, max: slider.max, value: slider.value, name: smoke.named(slider), box: smoke.box(slider) },
+      play: smoke.button('Play', dialog) !== undefined, said: dialog.textContent,
+      disabled: send.getAttribute('aria-disabled'), reason: document.getElementById(send.getAttribute('aria-describedby'))?.textContent,
+      chosen: dialog.querySelectorAll('[role="radio"][aria-checked="true"]').length, sent: window.sentScans.length };
+  })()`);
+  if (opened.pictures < 5 || opened.pictures > 20)
+    fail(`${at}: the dialog holds ${opened.pictures} pictures — a scan is a run of 5 to 20`);
+  if (opened.showing !== 1 || !opened.last)
+    fail(
+      `${at}: the dialog opens showing ${opened.showing} pictures, the last of them: ${opened.last}`,
+    );
+  if (opened.edge > 960 || opened.edge < 320)
+    fail(`${at}: the pictures are ${opened.size} — not the frames the pump sends`);
+  if (opened.box.width < 100 || opened.box.right > width + 0.5)
+    fail(`${at}: the picture is drawn ${Math.round(opened.box.width)}px wide`);
+  if (opened.slider === null || opened.slider.name !== "Picture")
+    fail(`${at}: there is no slider through the pictures (${JSON.stringify(opened.slider)})`);
+  if (
+    opened.slider.min !== "1" ||
+    opened.slider.max !== String(opened.pictures) ||
+    opened.slider.value !== String(opened.pictures)
+  ) {
+    fail(
+      `${at}: the slider runs ${opened.slider.min}–${opened.slider.max} at ${opened.slider.value} over ${opened.pictures} pictures`,
+    );
+  }
+  if (!opened.play) fail(`${at}: there is no Play through the pictures`);
+  if (!opened.said.includes(`These ${opened.pictures} pictures`))
+    fail(`${at}: the disclosure does not count the ${opened.pictures} pictures it sends`);
+  if (
+    !opened.said.includes(
+      `Picture ${opened.pictures} of ${opened.pictures} · the moment you pressed`,
+    )
+  )
+    fail(`${at}: the last picture is not captioned as the press`);
+  if (opened.disabled !== "true" || opened.reason !== "Choose the card in the last picture.")
+    fail(`${at}: before any answer Send is ${opened.disabled} and says "${opened.reason}"`);
+  if (opened.chosen !== 0 || opened.sent !== 0)
+    fail(
+      `${at}: the dialog opened with ${opened.chosen} answers chosen and ${opened.sent} scans sent`,
+    );
+  await sleep(200);
+  await page.shot("send-scan-run");
+  // The slider reaches every picture: the first, and then back to the one the answer is about.
+  const step = (to: number) => `(() => {
+    const slider = smoke.sheet().querySelector('input[type="range"]');
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(slider, String(${to}));
+    slider.dispatchEvent(new Event('input', { bubbles: true }));
+    slider.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  })()`;
+  // By its box and not its `hidden` property: the property is what the component sets, and a
+  // stylesheet that drew a hidden picture anyway would leave two on screen with this none the wiser.
+  const SHOWN = `(() => {
+    const drawn = [...smoke.sheet().querySelectorAll('img[src^="data:image/jpeg;base64,"]')].map((picture) => picture.getClientRects().length > 0);
+    return drawn.filter(Boolean).length === 1 ? drawn.indexOf(true) : -1;
+  })()`;
+  await page.evaluate(step(1));
+  await page.until(`${SHOWN} === 0`, "the slider to show the first picture");
+  const earliest = await page.evaluate<string>(`smoke.sheet().textContent`);
+  if (
+    !new RegExp(`Picture 1 of ${opened.pictures} · \\d+\\.\\d s before you pressed`).test(earliest)
+  )
+    fail(`${at}: the first picture is not captioned with when it was taken`);
+  // Play walks them once, first to last, and stops on the last.
+  await page.evaluate(step(opened.pictures));
+  await page.until(
+    `${SHOWN} === ${opened.pictures - 1}`,
+    "the slider to come back to the last picture",
+  );
+  await page.evaluate(`smoke.press(smoke.button('Play', smoke.sheet()), 'Play')`);
+  await page.until(
+    `((at) => at >= 0 && at < ${opened.pictures - 1})(${SHOWN})`,
+    "Play to start from the first picture",
+    5_000,
+  );
+  await page.until(
+    `${SHOWN} === ${opened.pictures - 1} && smoke.button('Play', smoke.sheet()) !== undefined`,
+    "Play to end on the last picture",
+    10_000,
+  );
+  // A typed name, as a reader types one: through the box's own setter, so React hears it.
+  await page.evaluate(`(() => {
+    const box = smoke.sheet().querySelector('input[type="search"]');
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(box, 'Lightning Bolt');
+    box.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  })()`);
+  await page.until(
+    `smoke.button('Lightning Bolt — STA 105', smoke.sheet()) !== undefined`,
+    "the printings of the typed card",
+  );
+  await sleep(350);
+  hold(
+    `${at}, the Send scan dialog`,
+    await page.evaluate<Measurement>(`smoke.measure(smoke.sheet())`),
+  );
+  // A printing sold more than one way: the finishes are asked for, and brought to the reader —
+  // on a screen this short they start under the fold of the dialog's scroller.
+  await page.evaluate(
+    `smoke.press(smoke.button('Lightning Bolt — STA 105', smoke.sheet()), 'a printing')`,
+  );
+  await page.until(
+    `smoke.button('Foil', smoke.sheet())?.getAttribute('aria-disabled') === null`,
+    "the finishes of the chosen printing",
+  );
+  await sleep(200);
+  const asked = await page.evaluate<{
+    reason: string | undefined;
+    inView: boolean;
+    reachable: boolean;
+    footer: boolean;
+    checked: number;
+  }>(`(() => {
+    const dialog = smoke.sheet();
+    const send = smoke.button('Send scan', dialog);
+    const finishes = smoke.box(smoke.button('Foil', dialog).closest('[role="radiogroup"]'));
+    const footer = smoke.box(dialog.querySelector('footer'));
+    const scroller = smoke.box(dialog.querySelector('.overflow-y-auto'));
+    return { reason: document.getElementById(send.getAttribute('aria-describedby'))?.textContent,
+      inView: finishes.top >= scroller.top - 0.5 && finishes.bottom <= Math.min(scroller.bottom, footer.top) + 0.5,
+      reachable: smoke.reachable(smoke.button('Foil', dialog)), footer: smoke.reachable(send),
+      checked: dialog.querySelectorAll('[role="radiogroup"]:not([aria-label="Printings"]) [aria-checked="true"]').length };
+  })()`);
+  if (asked.reason !== "Choose its finish." || asked.checked !== 0)
+    fail(
+      `${at}: with a printing chosen Send says "${asked.reason}" and ${asked.checked} finishes are chosen for the reader`,
+    );
+  if (!asked.inView || !asked.reachable)
+    fail(
+      `${at}: the finishes are asked for and are not on screen (in view ${asked.inView}, under a thumb ${asked.reachable})`,
+    );
+  if (!asked.footer) fail(`${at}: Send is not under a thumb`);
+  await page.shot("send-scan");
+  await page.evaluate(`smoke.press(smoke.button('Foil', smoke.sheet()), 'a finish')`);
+  await page.until(
+    `smoke.button('Send scan', smoke.sheet()).getAttribute('aria-disabled') === null`,
+    "Send to come within reach",
+  );
+  await page.evaluate(`smoke.press(smoke.button('Send scan', smoke.sheet()), 'Send')`);
+  await page.until(
+    `window.sentScans.length === 1 && /Sent — thank you\\./.test(smoke.sheet().textContent)`,
+    "the scan to be sent and thanked for",
+  );
+  const scan = await page.evaluate<{
+    keys: string[];
+    /** The submission less its run: the reader's two answers and the scanner's side. */
+    said: {
+      cardId: string;
+      finish: string;
+      reported: string | null;
+      mode: string;
+      filters?: Record<string, unknown>;
+    };
+    /** The run as it was sent, each picture cut to its first four characters. */
+    frames: ({ jpeg: string; ms: number } & Record<string, unknown>)[];
+    shown: boolean;
+    newest: number;
+    behind: number;
+    given: boolean;
+    thanks: string;
+  }>(`(() => {
+    const [sent] = window.sentScans;
+    const { run, ...said } = sent.submission;
+    const texts = run.map((frame) => frame.jpeg);
+    // Where the newest frame sent stands among the frames the scanner answered before the press:
+    // the last of them, or the one before a frame that was answered as the press landed.
+    const newest = window.givenAtPress.lastIndexOf(texts[texts.length - 1]);
+    const from = newest - texts.length + 1;
+    return { keys: Object.keys(sent), said, frames: run.map(({ jpeg, ...figures }) => ({ ...figures, jpeg: jpeg.slice(0, 4) })),
+      shown: texts.length === window.shownScan.length && texts.every((text, at) => text === window.shownScan[at]),
+      newest, behind: window.givenAtPress.length - 1 - newest,
+      given: from >= 0 && texts.every((text, at) => text === window.givenAtPress[from + at]),
+      thanks: smoke.sheet().textContent };
+  })()`);
+  if (scan.keys.join() !== "submission")
+    fail(
+      `${at}: scanner_submit was handed ${scan.keys.join(", ")} — a scan is one submission, with no picture beside it`,
+    );
+  if (!scan.shown)
+    fail(`${at}: the pictures sent are not the pictures that were shown, one for one`);
+  if (scan.frames.length !== opened.pictures)
+    fail(`${at}: ${opened.pictures} pictures were shown and ${scan.frames.length} sent`);
+  if (!scan.given || scan.behind > 1)
+    fail(
+      `${at}: the pictures sent are not the last frames the scanner was given (newest at ${scan.newest}, ${scan.behind} behind)`,
+    );
+  if (scan.frames.some((frame) => frame.jpeg !== "/9j/"))
+    fail(`${at}: a picture that was sent is not a JPEG`);
+  if (scan.frames[scan.frames.length - 1].ms < -1000)
+    fail(
+      `${at}: the newest picture was taken ${scan.frames[scan.frames.length - 1].ms}ms before the press`,
+    );
+  if (
+    scan.frames.some(
+      (frame, n) =>
+        !Number.isInteger(frame.ms) || frame.ms > 0 || (n > 0 && frame.ms < scan.frames[n - 1].ms),
+    )
+  ) {
+    fail(
+      `${at}: the pictures' times are not whole milliseconds before the press, oldest first — ${scan.frames.map((frame) => frame.ms).join(", ")}`,
+    );
+  }
+  if (
+    scan.frames.some(
+      (frame) =>
+        typeof frame.ok !== "boolean" ||
+        typeof frame.detail !== "boolean" ||
+        !("lock" in frame) ||
+        !("confidence" in frame) ||
+        !("distance" in frame) ||
+        !("decided" in frame),
+    )
+  ) {
+    fail(
+      `${at}: a picture went out without what the scanner answered for it — ${JSON.stringify(scan.frames[0])}`,
+    );
+  }
+  if (scan.said.finish !== "foil" || !/^[0-9a-f-]{36}$/.test(scan.said.cardId))
+    fail(`${at}: sent ${JSON.stringify(scan.said)}`);
+  if (
+    scan.said.mode !== "exact" ||
+    !(scan.said.reported === null || /^[0-9a-f-]{36}$/.test(scan.said.reported))
+  )
+    fail(`${at}: the scanner's side went out as ${JSON.stringify(scan.said)}`);
+  const filters = scan.said.filters;
+  if (
+    filters === undefined ||
+    !Array.isArray(filters.sets) ||
+    !("released_from" in filters) ||
+    !("released_to" in filters)
+  ) {
+    fail(`${at}: the filters went out as ${JSON.stringify(filters)}`);
+  }
+  if (!/Reference: \d{8}T\d{6}Z-[0-9a-f]{16}/.test(scan.thanks))
+    fail(`${at}: the thanks reads "${scan.thanks}"`);
+  hold(`${at}, the thanks`, await page.evaluate<Measurement>(`smoke.measure(smoke.sheet())`));
+  await page.evaluate(`smoke.press(smoke.button('Done', smoke.sheet()), 'Done')`);
+  await page.until(`smoke.sheet() === null`, "the dialog to close");
+  const back = await page.evaluate<{ focused: string; sent: number }>(
+    `({ focused: smoke.named(document.activeElement), sent: window.sentScans.length })`,
+  );
+  if (back.focused !== "Send scan…") fail(`${at}: Done left the caret on "${back.focused}"`);
+  if (back.sent !== 1) fail(`${at}: ${back.sent} scans were sent`);
+  const span = -scan.frames[0].ms;
+  say(
+    `${at}: Send scan — no press and no word of one on a device that is not a supporter's; on one that is, no press while stopped, a press too soon says so and opens nothing; then ${opened.pictures} ${opened.size} pictures over ${(span / 1000).toFixed(1)}s, ${Math.round(opened.bytes / 1024)} kB, every one a frame the scanner was given and drawn from the text that is sent; a slider and a Play through them, nothing chosen for the reader; a printing, its finishes brought into view, Foil, one scanner_submit with all of them, a reference, and the caret back on the press`,
   );
 
   const thrown = await page.evaluate<string[]>(`window.thrown`);

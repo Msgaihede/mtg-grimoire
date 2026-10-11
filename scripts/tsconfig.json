@@ -19,5 +19,5 @@
     "types": ["node", "vite/client"]
   },
   "include": ["**/*.ts"],
-  "exclude": ["relay-deploy-probe.test.ts", "share-deploy-probe.test.ts"]
+  "exclude": ["relay-deploy-probe.test.ts", "scan-deploy-probe.test.ts", "share-deploy-probe.test.ts"]
 }

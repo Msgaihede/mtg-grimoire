@@ -1,6 +1,8 @@
-import { RotateCcw } from "lucide-react";
+import { RotateCcw, Send } from "lucide-react";
+import { useTooltip } from "@grimoire/ui/components/tooltip/useTooltip";
 import { MatchBar, STRIP_PILL, STRIP_SENTENCE } from "@grimoire/ui/features/scanner/reader/MatchStrip";
 import { matchStrip, type LastAdded } from "@grimoire/ui/features/scanner/reader/readerText";
+import { SEND_SCAN } from "@grimoire/ui/features/scanner/submit/submitText";
 import { FOCUS } from "@grimoire/ui/lib/focus";
 import type { ScanMode, ScannerResolution, ScannerVerdict } from "@grimoire/ui/lib/ipc";
 import { PRESS } from "@grimoire/ui/lib/motion";
@@ -19,14 +21,21 @@ import { cn } from "@grimoire/ui/lib/utils";
  *
  * - line one — the pill, then the card and its printing, the name truncating;
  * - line two — what to do next, wrapping if it must;
- * - the bar, with *Reset evidence* at its end, 44px under a thumb.
+ * - the bar, with *Reset evidence* and *Send scan…* at its end, each 44px under a thumb.
  *
  * **Two lines of height whatever is in them**, so the tray under the strip does not jump as the
  * row changes from a sentence to a name and back — the desktop strip's rule, for the thing below
  * it here rather than the camera.
  *
  * **The row is the page's live region**, named `Scanner status` as on the desktop, and for its
- * reasons the leaning name is drawn and not announced, and the bar and the button sit outside it.
+ * reasons the leaning name is drawn and not announced, and the bar and the buttons sit outside it.
+ *
+ * **_Send scan…_ is a glyph here and words on the desktop**, and the width is why. At 360px the
+ * strip is 308px inside its padding; *Reset evidence* takes about 122 of them, and the same
+ * press spelled out would take another hundred — leaving the bar under 70px, which is a bar that
+ * says nothing. A 44px square leaves it about 125. (Reckoned from the classes, not measured on a
+ * phone.) The name is the desktop's own, word for word, as the press's accessible name and as
+ * what a pointer is shown.
  */
 export function MatchLine({
   verdict,
@@ -35,6 +44,7 @@ export function MatchLine({
   hasBundle,
   lastResolution,
   onReset,
+  onSend,
 }: {
   verdict: ScannerVerdict | null;
   mode: ScanMode;
@@ -43,7 +53,17 @@ export function MatchLine({
   hasBundle: boolean;
   lastResolution: ScannerResolution | null;
   onReset: () => void;
+  /**
+   * *Send scan…* — the desktop strip's press and its rule: handed the press for the caret, and
+   * **absent where the page does not offer it, which draws no button**. The page's three
+   * conditions (its `sendable`): there can be a run to send — a live camera and recognition
+   * running; the page is the Scanner tab itself, not mounted over a trade; and the device is a
+   * supporter's. Of the third nothing is said, here or on the page — no greyed press, no hint:
+   * this line is handed a press or it is not, and knows nothing of why.
+   */
+  onSend?: (opener: HTMLElement) => void;
 }) {
+  const tip = useTooltip();
   const strip = matchStrip(verdict, mode, lastAdded, hasBundle, lastResolution);
   const leaning = strip.tone === "progress";
   const hidden = leaning ? true : undefined;
@@ -108,6 +128,25 @@ export function MatchLine({
           <RotateCcw aria-hidden className="size-3.5" />
           Reset evidence
         </button>
+        {onSend !== undefined && (
+          <button
+            type="button"
+            aria-label={SEND_SCAN}
+            aria-haspopup="dialog"
+            // `describes: false`: the words are the `aria-label` above. The app's own tooltip and
+            // not a `title`, which this app draws nowhere; a finger never sees either, and the
+            // dialog the press opens is headed with what it does.
+            {...tip(SEND_SCAN, { describes: false })}
+            onClick={(e) => onSend(e.currentTarget)}
+            className={cn(
+              "inline-flex size-11 shrink-0 items-center justify-center rounded-md text-dim",
+              PRESS,
+              FOCUS,
+            )}
+          >
+            <Send aria-hidden className="size-4" />
+          </button>
+        )}
       </div>
     </div>
   );

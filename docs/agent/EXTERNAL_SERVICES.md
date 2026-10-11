@@ -1,6 +1,6 @@
 # External services, Workers and deploys
 
-Every network dependency the app has, what "optional" means for each one, and the three
+Every network dependency the app has, what "optional" means for each one, and the four
 Cloudflare Workers with their deploy state and secrets. Moved out of the root
 [`CLAUDE.md`](../../CLAUDE.md) without changing the wording, so every date and probe is still
 here. The root file keeps only the rules every agent needs (secrets, deploy asks, optional by
@@ -42,6 +42,7 @@ construction).
 - [The share Worker (read-only shared collection)](#the-share-worker-read-only-shared-collection)
 - [The scanner's files, from this repository's GitHub release](#the-scanners-files-from-this-repositorys-github-release)
 - [The app Worker (the light app's web host)](#the-app-worker-the-light-apps-web-host)
+- [The scan Worker (the scanner's inbox)](#the-scan-worker-the-scanners-inbox)
 
 ## Scryfall and the price feeds
 
@@ -327,3 +328,70 @@ and the one policy violation known on the live site, the deck note editor's — 
 source that day, and raised by the deployed build until the next deploy** — are in
 [light-app.md](../reference/light-app.md) §9.7. Ask the host before you believe this or its
 opposite.
+
+## The scan Worker (the scanner's inbox)
+
+**A _fourth_ Worker takes the one thing this app ever sends its maker: a couple of seconds of
+camera frames a reader chose to send, with the card they say they show** (issue #776,
+2026-10-11). **A scan is a run of frames and never one picture** — the owner's rule, *all the
+frames or nothing at all*: the scanner decides over a run, so a single still cannot say what it
+did. The page keeps the last twenty frames the scanner was given, in memory; the card scanner's
+**Send** freezes them, the reader looks through them and picks the exact printing and its
+finish, and the engine's `scanner_submit` posts the frames end to end and a label to
+`infrastructure/scan-worker/`, which keeps both in R2 so the scanner can be tested against them.
+**Optional in the strictest sense here: nothing is asked until a reader presses Send on
+pictures they are looking at** — no launch, no schedule, no frame — and a Worker that is down or
+full costs a sentence in the dialog and nothing else. It is the only place a picture leaves the
+device; the scanner still examines every frame where it was taken and keeps none past those two
+seconds.
+
+**`scanner_submit::SCAN_BASE` is its address**, `https://scans.mtg-grimoire.app`, compiled in
+and public on `RELAY_BASE`'s terms — a Custom Domain on the web app's zone, as the relay's and
+the share Worker's are, and the route's `pattern` in `scan-worker`'s `wrangler.jsonc`, which
+its own `wrangler.test.ts` holds to the engine's line. It has no `workers.dev` address: no
+build was ever cut with one.
+
+**Sending a scan is a supporter's** (the owner's decision, 2026-10-11; it was first built open
+to anybody). Three places hold it. The page draws the press only where `sync_supporter_status`
+reads active or grace (`useMaySendScans`) — **and says nothing at all where it does not**,
+because the Play build draws that page and may not lead a reader to a membership. The engine
+refuses a device that is not entitled before it reads a picture, and sends the relay's token
+as a bearer. And the Worker verifies that token with `RELAY_HMAC_KEY` before it reads anything
+about the scan (`src/auth.ts`) — the share Worker's check of a publish, with the same key and
+the same imported module. ⚠️ **So the key is on three Workers now**, each set by the owner
+with one value (the secrets rule is unchanged: never in a file, never typed by an agent); this one
+verifies and never mints, and the token's claims reach neither the bucket, the limiter's key
+nor a log.
+
+It is a Worker of its own that binds the least there is — one R2 bucket and one rate limiter,
+**no D1 and no Durable Object** — and it offers no way to read, list or delete what it took.
+What bounds a supporter's device, and a leaked token for the day it lives, is in its own code:
+five to twenty frames and 2 MB a run (a single picture is
+refused, whichever way it is sent), a label checked field by field and stored only as checked,
+12 submissions a minute from one address, and **500 runs waiting, after which it refuses until
+the owner has emptied it** — about a gigabyte, whoever is sending. The count is taken once a run
+has wholly arrived and it counts runs rather than labels, so neither a sender who holds its body
+back nor one who hangs up between the two writes gets past it; a burst that counts in the same
+instant can still leave it holding the cap and that burst, which only a database or a Durable
+Object could close.
+
+**What is stored says nothing of who sent it** — no device, group or account id (the token names
+all three, and none of it is kept), no address, and
+the Worker's logging is off (`observability.enabled: false`) so Cloudflare keeps no request line
+either. The privacy policy (`apps/light/public/privacy.html`, *Sending a scan*) says exactly
+that, and Google Play's Data safety form has to say *Photos* and *Videos*, both (the owner's
+decision, 2026-10-11; [docs/play/README.md](../play/README.md)) — **the owner's to change in the Console before the
+Android release that carries Send**. A browser sends too, so the Worker answers the web app's
+origin by name (`APP_ORIGINS`, its `src/cors.ts`) and the hosting policy's `connect-src` names
+its host: one fact in two deploys, **this Worker's first**.
+
+**A release deploys it** (`release.yml`'s `scan-deploy`; the owner's decision, 2026-10-11):
+behind the share Worker and ahead of the web app, with the relay's deploy token, then seven
+probes of the live address, none of which stores anything (`scripts/scan-deploy-probe.ts`).
+The bucket (`mtg-grimoire-scans`) was the owner's to create, and by his word exists since that
+day. Between releases a deploy is by hand and asked for, as for every Worker, and no agent may
+unasked. **As this is written no release has run that job**, so until one does — or the owner
+deploys by hand — a Send is answered *the server answered 404* on a desktop or a phone and
+*could not be reached* in a browser. Ask the host before you believe this or its opposite.
+[`infrastructure/scan-worker/README.md`](../../infrastructure/scan-worker/README.md) is the
+runbook, with the probes a deployed one answers, and how the inbox is read and emptied.

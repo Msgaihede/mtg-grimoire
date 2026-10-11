@@ -1,4 +1,4 @@
-import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -33,6 +33,8 @@ vi.mock("@grimoire/ui/features/scanner/useParked", async (original) => {
   };
 });
 
+import { FAKE_SCAN_ID, SCAN_INBOX_FULL } from "@grimoire/fake/db";
+import { printing } from "@grimoire/fake/fixtures";
 import type { CommandTable } from "@grimoire/fake/scope";
 import { FRAMES_PER_CARD, newScanScript, scanStep } from "@grimoire/fake/scannerScript";
 import {
@@ -41,6 +43,7 @@ import {
   TRAY_ROWS,
   VERDICTS,
 } from "@grimoire/ui/features/scanner/fixtures";
+import { runClock } from "@grimoire/ui/features/scanner/submit/run";
 import {
   DB_BUSY,
   SCANNER_NOT_IN_A_BROWSER_YET,
@@ -48,13 +51,19 @@ import {
 } from "@grimoire/ui/features/scanner/verdictText";
 import type {
   CollectionImportItem,
+  ScanFilters,
   ScannerOptions,
   ScannerPrefs,
+  ScannerSubmission,
   ScannerTrayRow,
   ScannerVerdict,
+  SupporterStatus,
 } from "@grimoire/ui/lib/ipc";
+import { supporterState } from "@grimoire/ui/lib/query";
 import type { FakeParams } from "@grimoire/fake/world";
+import type { TrayDestination } from "@grimoire/ui/features/scanner/useTrayDestination";
 import { PhoneFace } from "../PhoneApp";
+import { ScannerPage } from "./ScannerPage";
 import { installLayout, renderPhone } from "../testing";
 
 /**
@@ -68,6 +77,13 @@ vi.setConfig({ testTimeout: 45_000 });
 const last = <T,>(items: readonly T[]): T | undefined => items[items.length - 1];
 /** The fixture tray's three rows that are not waiting on a pick — five copies. */
 const RESOLVED = TRAY_ROWS.filter((row) => row.choices.length === 0);
+/**
+ * **A supporter's world.** *Send scan…* is drawn for a supporter and for nobody else, and the
+ * fake's own `starter` world is not one — so every test that asks why the press is or is not
+ * there for a reason of its own (no camera, a Stop, a trade) is mounted in this one, where the
+ * membership would have let it be drawn. Entitled through its group, which is how a phone is.
+ */
+const SUPPORTER: FakeParams = { seed: "starter", fault: "patreonGroupEntitled" };
 
 /* ------------------------------------------------------------------ the browser's half ---- */
 
@@ -233,7 +249,10 @@ function mount({
   prefs,
   tray,
   over,
+  destination,
 }: {
+  /** The page alone, filing into this — as the Trade page's sheet mounts it — and not the face. */
+  destination?: TrayDestination;
   fake?: FakeParams;
   /** What `scanner_prefs` answers, over the crate's defaults. */
   prefs?: Partial<ScannerPrefs>;
@@ -249,7 +268,8 @@ function mount({
     holds: 0,
     resets: 0,
   };
-  const view = renderPhone(<PhoneFace />, {
+  const page = destination === undefined ? <PhoneFace /> : <ScannerPage destination={destination} />;
+  const view = renderPhone(page, {
     path: "/scanner",
     fake,
     commands: (own) => {
@@ -300,6 +320,10 @@ const tab = (name: string) =>
 
 let restoreCanvas = () => {};
 let restoreVideo = () => {};
+/** A test's own canvas, laid over the file's (the Send scan tests number their frames). */
+let restoreFrames = () => {};
+/** The run's clock put back on the wall (the Send scan tests take it off — see their describe). */
+let restoreClock = () => {};
 beforeEach(() => {
   installLayout();
   restoreCanvas = shimCanvas();
@@ -310,6 +334,12 @@ afterEach(async () => {
   // `SHOWN`. A parked frame never settles and needs no waiting for.
   cleanup();
   await settled();
+  // After the page has gone, so no frame of this test is stamped by two clocks.
+  restoreClock();
+  restoreClock = () => {};
+  // Lifted before the file's own: it was laid over that one, and puts that one back.
+  restoreFrames();
+  restoreFrames = () => {};
   restoreCanvas();
   restoreVideo();
   restoreVideo = () => {};
@@ -720,6 +750,597 @@ describe("the phone's Scanner page", () => {
     await waitFor(() => expect(seen.resets).toBe(1), SETTLE);
     // The card it had already taken stays in the tray.
     expect(trayRows()).toEqual([["Urza's Saga", "1"]]);
+  });
+});
+
+/**
+ * ***Send scan…*** on the phone: the desktop page's hook and its dialog, opened from the status
+ * line's second press, over the fake world's own `search_cards` and `scanner_submit`. **A scan is
+ * a run of the frames the pump sent, never one picture**, so every test here that opens the
+ * dialog first lets the scanner be shown enough to have one.
+ */
+describe("sending a scan from the Scanner page", () => {
+  /**
+   * **The run's clock, taken off the wall** — `runClock`, the one seam the pump stamps a frame
+   * through and a press reads the time through. A run reaches four seconds back from the press
+   * and no further, and this file is the one that has run past eight-second waits on a busy
+   * machine: on the real clock a press there would find a ring of good frames too old to send.
+   *
+   * Every reading is ten milliseconds after the one before it — a frame, the next frame, the
+   * press — so the frames are in the order they were sent, each at a time of its own, and none
+   * is ever old, however long the machine took between them.
+   */
+  beforeEach(() => {
+    let at = 1000;
+    const clock = vi.spyOn(runClock, "now").mockImplementation(() => (at += 10));
+    restoreClock = () => clock.mockRestore();
+  });
+
+  /**
+   * The dialog, opened from the press once the scanner has answered a run's worth of frames,
+   * with the search asked for Lightning Bolt's printings.
+   */
+  async function opened(cards: { sent: ScannerOptions[] }) {
+    // Well past the fewest frames that are a scan, whatever was on the wire at the press.
+    await waitFor(() => expect(cards.sent.length).toBeGreaterThan(10), SETTLE);
+    const opener = await screen.findByRole("button", { name: "Send scan…" }, SETTLE);
+    await userEvent.click(opener);
+    const dialog = await screen.findByRole("dialog", { name: "Send this scan" }, SETTLE);
+    const box = within(dialog).getByRole("searchbox");
+    // Whatever the scanner had been naming: this test's card is one the corpus has four of.
+    await userEvent.clear(box);
+    await userEvent.type(box, "Lightning Bolt");
+    return { opener, dialog };
+  }
+
+  /**
+   * A canvas whose every encode is a JPEG of its own — `ff d8` and then the encode's number in
+   * two bytes — where the file's shim hands every frame the same three: a run is several frames,
+   * and a test of one has to be able to tell them apart and say what order they came in. Two
+   * bytes, because a pump answered every three milliseconds is past 255 frames within a second.
+   */
+  function numberedCanvas(): () => void {
+    let n = 0;
+    return shim(HTMLCanvasElement.prototype, {
+      toBlob: {
+        value: (cb: (blob: Blob) => void) => {
+          n += 1;
+          cb(new Blob([new Uint8Array([0xff, 0xd8, n >> 8, n & 0xff])]));
+        },
+      },
+    });
+  }
+  /** Which encode a frame of a run was, read back out of the text it was sent as. */
+  function numberOf(jpeg: string): number {
+    const bytes = atob(jpeg);
+    return (bytes.charCodeAt(2) << 8) | bytes.charCodeAt(3);
+  }
+
+  /** The picture of the run that is showing — by its name, since a printing's tile is one too. */
+  const picture = (dialog: HTMLElement) =>
+    within(dialog).getByRole("img", { name: /^Picture \d+ of \d+ that will be sent$/ });
+
+  /**
+   * The world's own answer about the membership, with each one kept: a test that says a press is
+   * or is not there *because of* the membership can then say what the membership was — in
+   * `supporterState`'s one word, the reading the page itself takes.
+   */
+  function membership(own: CommandTable, answers: SupporterStatus[]): CommandTable {
+    return {
+      sync_supporter_status: () => {
+        const answer = (own.sync_supporter_status as () => SupporterStatus)();
+        answers.push(answer);
+        return answer;
+      },
+    };
+  }
+
+  /** `count` more frames answered — each a render of the page, so anything owed is drawn. */
+  async function framesGoBy(cards: { sent: ScannerOptions[] }, count: number) {
+    const sent = cards.sent.length;
+    await waitFor(() => expect(cards.sent.length).toBeGreaterThan(sent + count), SETTLE);
+  }
+
+  it("offers no Send scan… without a live picture", async () => {
+    noCamera("NotAllowedError");
+    mount({ fake: SUPPORTER });
+    expect(await screen.findByRole("alert", {}, SETTLE)).toHaveTextContent(
+      "MTG Grimoire needs camera access to scan a card.",
+    );
+    // The status line and its reset are there; the press that needs a picture is not.
+    expect(screen.getByRole("button", { name: "Reset evidence" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
+  });
+
+  it("sends the run under the printing and finish the reader chooses, and shows the reference", async () => {
+    camera();
+    restoreVideo = shimVideo();
+    restoreFrames = numberedCanvas();
+    const cards = pile(1, "looking");
+    const sent: { submission: ScannerSubmission }[] = [];
+    const { seen } = mount({
+      fake: SUPPORTER,
+      over: (own) => ({
+        scanner_frame: cards.frame,
+        scanner_submit: (args: { submission: ScannerSubmission }) => {
+          sent.push(args);
+          return (own.scanner_submit as (a: unknown) => unknown)(args);
+        },
+      }),
+    });
+    await waitFor(() => expect(trayRows()).toHaveLength(1), SETTLE);
+
+    const { opener, dialog } = await opened(cards);
+    // It rests on the last frame of the run, drawn out of the text that will be sent, and says
+    // how many there are: every one of them is the reader's to look through.
+    const slider = within(dialog).getByRole("slider", { name: "Picture" });
+    const pictures = Number(slider.getAttribute("max"));
+    expect(pictures).toBeGreaterThanOrEqual(5);
+    expect(pictures).toBeLessThanOrEqual(20);
+    expect(picture(dialog)).toHaveAttribute(
+      "alt",
+      `Picture ${pictures} of ${pictures} that will be sent`,
+    );
+    const shown = picture(dialog).getAttribute("src") ?? "";
+    expect(shown).toMatch(/^data:image\/jpeg;base64,/);
+    expect(dialog).toHaveTextContent(`These ${pictures} pictures — the last couple of seconds`);
+
+    const send = within(dialog).getByRole("button", { name: "Send scan" });
+    expect(send).toHaveAttribute("aria-disabled", "true");
+    expect(send).toHaveAccessibleDescription("Choose the card in the last picture.");
+
+    // Three finishes, so the printing alone is not an answer.
+    await userEvent.click(
+      await within(dialog).findByRole("radio", { name: "Lightning Bolt — STA 105" }, SETTLE),
+    );
+    expect(send).toHaveAccessibleDescription("Choose its finish.");
+    await userEvent.click(send);
+    expect(sent).toEqual([]);
+
+    await userEvent.click(within(dialog).getByRole("radio", { name: "Etched" }));
+    // A finger's size, from the shared recipes: the phone reaches no floor into this dialog.
+    expect(send.classList.contains("coarse:min-h-[var(--target-min)]")).toBe(true);
+    await userEvent.click(send);
+
+    expect(await within(dialog).findByText("Sent — thank you.", {}, SETTLE)).toBeInTheDocument();
+    expect(dialog).toHaveTextContent(`Reference: ${FAKE_SCAN_ID}`);
+    // One call, of one argument: the submission, with the whole run inside it.
+    expect(sent).toHaveLength(1);
+    expect(Object.keys(sent[0])).toEqual(["submission"]);
+    const { submission } = sent[0];
+    expect(submission).toMatchObject({
+      cardId: printing("sta", "105").id,
+      finish: "etched",
+      mode: "fast",
+      filters: DEFAULT_SCANNER_PREFS.filters,
+    });
+    // Every key the engine's struct has, each present even where it is `null`.
+    expect(Object.keys(submission).sort()).toEqual(
+      [
+        "bundle",
+        "cardId",
+        "confidence",
+        "distance",
+        "filters",
+        "finish",
+        "mode",
+        "reported",
+        "run",
+      ].sort(),
+    );
+
+    // **The run is frames the pump really sent**: as many as the dialog counted, consecutive
+    // encodes of the camera's picture in the order they were made, the last of them the one the
+    // dialog rested on — and each counted back from the press, none after it.
+    expect(submission.run).toHaveLength(pictures);
+    const encodes = submission.run.map((frame) => numberOf(frame.jpeg));
+    expect(encodes).toEqual(Array.from({ length: pictures }, (_, n) => encodes[0] + n));
+    expect(`data:image/jpeg;base64,${submission.run[pictures - 1].jpeg}`).toBe(shown);
+    const ms = submission.run.map((frame) => frame.ms);
+    expect([...ms].sort((a, b) => a - b)).toEqual(ms);
+    expect(ms.every((one) => Number.isInteger(one) && one <= 0)).toBe(true);
+    for (const frame of submission.run) {
+      expect(Object.keys(frame).sort()).toEqual(
+        ["confidence", "decided", "detail", "distance", "jpeg", "lock", "ms", "ok"].sort(),
+      );
+    }
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Done" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull(), SETTLE);
+    expect(opener).toHaveFocus();
+    // The tray was no part of it: the card scanned before the press is still there, unfiled.
+    expect(trayRows()).toEqual([["Urza's Saga", "1"]]);
+    expect(seen.commits).toEqual([]);
+  });
+
+  it("says the inbox's own sentence when it is full, and keeps the dialog and the answers", async () => {
+    camera();
+    restoreVideo = shimVideo();
+    const cards = pile(0, "looking");
+    mount({
+      // A full inbox is something only a supporter can meet, so this fault's world is one's.
+      fake: { seed: "starter", fault: "scanInboxFull" },
+      over: () => ({ scanner_frame: cards.frame }),
+    });
+
+    const { dialog } = await opened(cards);
+    // Alpha's Bolt was printed one way, so its finish is chosen for the reader.
+    const lea = await within(dialog).findByRole("radio", { name: "Lightning Bolt — LEA 161" }, SETTLE);
+    await userEvent.click(lea);
+    expect(within(dialog).getByRole("radio", { name: "Nonfoil" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await userEvent.click(within(dialog).getByRole("button", { name: "Send scan" }));
+
+    await waitFor(
+      () => expect(within(dialog).getByRole("alert")).toHaveTextContent(SCAN_INBOX_FULL),
+      SETTLE,
+    );
+    expect(within(dialog).queryByText("Sent — thank you.")).toBeNull();
+    expect(lea).toHaveAttribute("aria-checked", "true");
+    expect(within(dialog).getByRole("button", { name: "Send scan" })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+  });
+
+  it("hands the caret back to the press when the dialog is dismissed", async () => {
+    camera();
+    restoreVideo = shimVideo();
+    const cards = pile(0, "looking");
+    mount({ fake: SUPPORTER, over: () => ({ scanner_frame: cards.frame }) });
+    const { opener } = await opened(cards);
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull(), SETTLE);
+    expect(opener).toHaveFocus();
+  });
+
+  /**
+   * The reader is asked to look through every picture, so every one is a place the slider stops
+   * — at a finger's size, from the shared floor.
+   */
+  it("walks every picture of the run on the dialog's slider", async () => {
+    camera();
+    restoreVideo = shimVideo();
+    restoreFrames = numberedCanvas();
+    const cards = pile(0, "looking");
+    mount({ fake: SUPPORTER, over: () => ({ scanner_frame: cards.frame }) });
+    const { dialog } = await opened(cards);
+
+    const slider = within(dialog).getByRole("slider", { name: "Picture" });
+    expect(slider.classList.contains("coarse:min-h-[var(--target-min)]")).toBe(true);
+    const pictures = Number(slider.getAttribute("max"));
+    expect(pictures).toBeGreaterThanOrEqual(5);
+    const drawn = new Set<string>();
+    for (let n = 1; n <= pictures; n++) {
+      fireEvent.change(slider, { target: { value: String(n) } });
+      expect(picture(dialog)).toHaveAttribute(
+        "alt",
+        `Picture ${n} of ${pictures} that will be sent`,
+      );
+      drawn.add(picture(dialog).getAttribute("src") ?? "");
+    }
+    // As many pictures as stops: each one drew a frame of its own.
+    expect(drawn.size).toBe(pictures);
+  });
+
+  /**
+   * **No press over a trade** (the owner's decision, 2026-10-11): the Trade page mounts this page
+   * in a sheet of its own, filing into one side of a trade, and *Send scan…* is the Scanner tab's.
+   * A live camera, a running scanner and a supporter's device — everything the tab needs to draw
+   * the press — and none.
+   */
+  it("draws no Send scan… where the page is mounted over a trade", async () => {
+    camera();
+    restoreVideo = shimVideo();
+    const cards = pile(0, "looking");
+    const answers: SupporterStatus[] = [];
+    mount({
+      fake: SUPPORTER,
+      over: (own) => ({ scanner_frame: cards.frame, ...membership(own, answers) }),
+      destination: {
+        title: "Scanned for their side",
+        name: "their side",
+        commit: () => Promise.resolve(),
+      },
+    });
+    await waitFor(() => expect(cards.sent.length).toBeGreaterThan(2), SETTLE);
+    expect(
+      await screen.findByRole("button", { name: "Reset evidence" }, SETTLE),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop scanning" })).toBeInTheDocument();
+    // The membership was asked and is a supporter's, several frames ago: it is the trade, and
+    // nothing else, that keeps the press away.
+    expect(answers.map(supporterState)).toContain("active");
+    await framesGoBy(cards, 6);
+    expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
+  });
+
+  /**
+   * **No press while recognition is stopped**: a scan is the frames the scanner was given, and
+   * stopped it is given none. The stopped sentence over the picture is the whole of what is said.
+   */
+  it("draws no Send scan… while recognition is stopped, and brings it back with the scanner", async () => {
+    camera();
+    restoreVideo = shimVideo();
+    const cards = pile(0, "looking");
+    mount({ fake: SUPPORTER, over: () => ({ scanner_frame: cards.frame }) });
+    await waitFor(() => expect(cards.sent.length).toBeGreaterThan(2), SETTLE);
+    expect(await screen.findByRole("button", { name: "Send scan…" }, SETTLE)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Stop scanning" }));
+    expect(
+      await screen.findByText("Scanning stopped. Press Start scanning to resume."),
+    ).toBeInTheDocument();
+    // The camera is still live; the press is gone all the same, and Reset is not.
+    expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Reset evidence" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Start scanning" }));
+    expect(await screen.findByRole("button", { name: "Send scan…" }, SETTLE)).toBeInTheDocument();
+  });
+
+  /**
+   * **All of a run or none of it.** A press before the scanner has been shown enough — here it
+   * has answered one frame — opens no dialog and sends no single picture in its place: it says
+   * what to do, over the camera, in words.
+   */
+  it("says so over the picture when there is not enough of a scan yet, and opens nothing", async () => {
+    camera();
+    restoreVideo = shimVideo();
+    const sent: unknown[] = [];
+    const { view } = mount({
+      fake: SUPPORTER,
+      over: () => ({
+        // One frame answered, and every one after it parked: a run of one.
+        scanner_frame: frames(VERDICTS.voting),
+        scanner_submit: (args: unknown) => {
+          sent.push(args);
+          return { id: FAKE_SCAN_ID };
+        },
+      }),
+    });
+    await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"), SETTLE);
+
+    await userEvent.click(screen.getByRole("button", { name: "Send scan…" }));
+    const box = view.container.querySelector<HTMLElement>("[data-camera-box]");
+    expect(within(box as HTMLElement).getByRole("status")).toHaveTextContent(
+      "Not enough of the scan yet. Hold the card under the camera a moment and press again.",
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(sent).toEqual([]);
+
+    // Stopped, the press is gone and its sentence with it: the line is the stopped sentence's.
+    await userEvent.click(screen.getByRole("button", { name: "Stop scanning" }));
+    expect(within(box as HTMLElement).getByRole("status")).toHaveTextContent(
+      "Scanning stopped. Press Start scanning to resume.",
+    );
+    expect(screen.queryByText(/Not enough of the scan yet/)).toBeNull();
+  });
+
+  /**
+   * The options sheet's release date, set as a reader sets it — sent to the session as it is
+   * made — and the sheet shut again.
+   */
+  async function narrowTo(from: string) {
+    await userEvent.click(screen.getByRole("button", { name: "Scanner options" }));
+    const sheet = await screen.findByRole("dialog", { name: "Scanner options" }, SETTLE);
+    await userEvent.click(within(sheet).getByRole("button", { name: /^Filters/ }));
+    // `fireEvent`: a date field has no text for user-event to type into.
+    fireEvent.change(await within(sheet).findByLabelText("Released from", {}, SETTLE), {
+      target: { value: from },
+    });
+    await userEvent.keyboard("{Escape}");
+    await waitFor(
+      () => expect(screen.queryByRole("dialog", { name: "Scanner options" })).toBeNull(),
+      SETTLE,
+    );
+  }
+
+  /**
+   * **A scan says the filters its frames were judged under**: the ones the session last took
+   * (`useScannerPrefs`' `inForce`), never the ones the sheet is drawing. A filter is drawn the
+   * moment the reader changes it and sent to the session, which has not answered yet and may
+   * refuse — and a press in that moment must not say the session held it.
+   */
+  it("sends the filters the session has taken, not ones still on their way to it", async () => {
+    camera();
+    restoreVideo = shimVideo();
+    // The pump runs throughout, so whenever the press lands there is a run of fresh frames.
+    const cards = pile(0, "looking");
+    const pushed: ScanFilters[] = [];
+    const sent: { submission: ScannerSubmission }[] = [];
+    mount({
+      fake: SUPPORTER,
+      over: (own) => ({
+        scanner_frame: cards.frame,
+        // The mount's push is the world's to answer; the reader's is on its way for as long as
+        // the test runs.
+        scanner_set_filters: (args: { filters: ScanFilters }) => {
+          pushed.push(args.filters);
+          return pushed.length === 1
+            ? (own.scanner_set_filters as (a: unknown) => unknown)(args)
+            : new Promise<void>(() => {});
+        },
+        scanner_submit: (args: { submission: ScannerSubmission }) => {
+          sent.push(args);
+          return (own.scanner_submit as (a: unknown) => unknown)(args);
+        },
+      }),
+    });
+    await waitFor(() => expect(cards.sent.length).toBeGreaterThan(10), SETTLE);
+
+    await narrowTo("2020-01-01");
+    expect(pushed).toEqual([
+      DEFAULT_SCANNER_PREFS.filters,
+      { sets: [], released_from: "2020-01-01", released_to: null },
+    ]);
+
+    const { dialog } = await opened(cards);
+    await userEvent.click(
+      await within(dialog).findByRole("radio", { name: "Lightning Bolt — LEA 161" }, SETTLE),
+    );
+    await userEvent.click(within(dialog).getByRole("button", { name: "Send scan" }));
+    await waitFor(() => expect(sent).toHaveLength(1), SETTLE);
+    // The sheet says 2020; the session never has, and neither does the scan.
+    expect(sent[0].submission.filters).toEqual(DEFAULT_SCANNER_PREFS.filters);
+    expect(sent[0].submission.run.length).toBeGreaterThanOrEqual(5);
+  });
+
+  /**
+   * **A run never spans a change of filters.** The session drops its tracker to take a changed
+   * set, so every frame the pump was holding was judged under the old one. The page lets the run
+   * go when the filters in force move — and nothing on screen with it: the session reset itself,
+   * and no reader asked for anything to be forgotten.
+   */
+  it("starts the run over when the session takes changed filters, and leaves the status line alone", async () => {
+    camera();
+    restoreVideo = shimVideo();
+    // Eight frames answered and the ninth parked: the run is those eight until it is let go, and
+    // nothing sent afterwards can refill it.
+    const answered = frames(...Array<ScannerVerdict>(8).fill(VERDICTS.voting));
+    let asked = 0;
+    const { seen, view } = mount({
+      fake: SUPPORTER,
+      over: () => ({
+        scanner_frame: (...args: Parameters<Frame>) => {
+          asked += 1;
+          return answered(...args);
+        },
+      }),
+    });
+    await waitFor(() => expect(asked).toBe(9), SETTLE);
+    await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"), SETTLE);
+
+    // The premise: as things stand there is a run to send, all eight frames of it. (On the
+    // describe's clock, so it is here however long the machine took to get to this line.)
+    await userEvent.click(screen.getByRole("button", { name: "Send scan…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Send this scan" }, SETTLE);
+    expect(within(dialog).getByRole("slider", { name: "Picture" })).toHaveAttribute("max", "8");
+    await userEvent.keyboard("{Escape}");
+    await waitFor(
+      () => expect(screen.queryByRole("dialog", { name: "Send this scan" })).toBeNull(),
+      SETTLE,
+    );
+
+    // The reader narrows the scan, and the session takes it — which is when it is stored.
+    await narrowTo("2020-01-01");
+    await waitFor(
+      () =>
+        expect(last(seen.prefs)?.filters).toEqual({
+          sets: [],
+          released_from: "2020-01-01",
+          released_to: null,
+        }),
+      SETTLE,
+    );
+
+    // Not one frame has been judged under the new filters, so there is nothing to send yet.
+    await userEvent.click(screen.getByRole("button", { name: "Send scan…" }));
+    const box = view.container.querySelector<HTMLElement>("[data-camera-box]");
+    expect(within(box as HTMLElement).getByRole("status")).toHaveTextContent(
+      "Not enough of the scan yet. Hold the card under the camera a moment and press again.",
+    );
+    expect(screen.queryByRole("dialog", { name: "Send this scan" })).toBeNull();
+    // The line goes on naming the card: this was the run's break, not the evidence's.
+    expect(statusLine()).toHaveTextContent("Plains");
+    expect(seen.resets).toBe(0);
+  });
+
+  /**
+   * **Only a supporter's device draws the press** (the owner's decision; the shared
+   * `useMaySendScans`) — and a device that is not one is told nothing: no greyed press, no
+   * sentence, no name for what it lacks. This is the face the build Google Play distributes
+   * draws, and that build may not lead a reader to a membership bought somewhere else.
+   *
+   * Every test below has everything else the press needs — a live camera and recognition running
+   * — so the membership is the one thing that differs between them, and each says what the world
+   * answered for it.
+   */
+  describe("for a supporter and for nobody else", () => {
+    /** The tab with a camera open and the scanner answering, the membership's answers kept. */
+    async function running(
+      fake: FakeParams | undefined,
+      supporter?: (own: CommandTable) => CommandTable,
+    ) {
+      camera();
+      restoreVideo = shimVideo();
+      const cards = pile(0, "looking");
+      const answers: SupporterStatus[] = [];
+      const { view } = mount({
+        fake,
+        over: (own) => ({
+          scanner_frame: cards.frame,
+          ...(supporter?.(own) ?? membership(own, answers)),
+        }),
+      });
+      await waitFor(() => expect(cards.sent.length).toBeGreaterThan(2), SETTLE);
+      expect(
+        await screen.findByRole("button", { name: "Reset evidence" }, SETTLE),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Stop scanning" })).toBeInTheDocument();
+      return { cards, answers, view };
+    }
+
+    /** Everything the page says: its text, and every name or description an element carries. */
+    function said(): string {
+      const named = Array.from(document.body.querySelectorAll("*")).flatMap((element) =>
+        ["aria-label", "aria-description", "title", "alt", "placeholder"].map(
+          (attribute) => element.getAttribute(attribute) ?? "",
+        ),
+      );
+      return [document.body.textContent ?? "", ...named].join("\n");
+    }
+    /** A word that would name what the device lacks, or point at getting it. */
+    const NAMES_A_MEMBERSHIP = /patreon|supporter|membership|\bmembers?\b|pledge|subscri|payment/i;
+
+    it.each<[string, FakeParams, string]>([
+      ["entitled through its group", SUPPORTER, "active"],
+      ["in its grace window", { seed: "starter", fault: "patreonDeclined" }, "grace"],
+    ])("draws the press for a membership that is %s", async (_, fake, reading) => {
+      const { answers } = await running(fake);
+      const press = await screen.findByRole("button", { name: "Send scan…" }, SETTLE);
+      expect(press).toBeEnabled();
+      expect(answers.map(supporterState)).toContain(reading);
+    });
+
+    it.each<[string, FakeParams | undefined, string]>([
+      ["has never been a supporter's", undefined, "never"],
+      ["was a supporter's and no longer is", { seed: "starter", fault: "patreonLapsed" }, "ended"],
+    ])("draws no press, and not a word about it, on a device that %s", async (_, fake, reading) => {
+      const { cards, answers } = await running(fake);
+      await waitFor(() => expect(answers.map(supporterState)).toContain(reading), SETTLE);
+      // The answer has been in for several renders: this is not a press still on its way.
+      await framesGoBy(cards, 6);
+      expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
+      // Not a greyed one either, under any name; the line's other press is untouched.
+      expect(screen.queryByRole("button", { name: /send/i })).toBeNull();
+      expect(screen.getByRole("button", { name: "Reset evidence" })).toBeEnabled();
+      // …and nothing on the page names what is missing, in text or in a label.
+      expect(said()).not.toMatch(NAMES_A_MEMBERSHIP);
+    });
+
+    /**
+     * `unknown` is the read in flight, and it draws nothing: a press drawn before the answer
+     * would flash at the one reader the answer then takes it from.
+     */
+    it("draws no press while the membership is being read, and draws it when a supporter's answer lands", async () => {
+      let answer!: () => void;
+      const { cards } = await running(SUPPORTER, (own) => ({
+        sync_supporter_status: () =>
+          new Promise<unknown>((resolve) => {
+            answer = () => resolve((own.sync_supporter_status as () => unknown)());
+          }),
+      }));
+      // Asked and unanswered, with the scanner well under way.
+      await waitFor(() => expect(answer).toBeTypeOf("function"), SETTLE);
+      await framesGoBy(cards, 6);
+      expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
+      expect(said()).not.toMatch(NAMES_A_MEMBERSHIP);
+
+      await act(async () => answer());
+      expect(await screen.findByRole("button", { name: "Send scan…" }, SETTLE)).toBeEnabled();
+    });
   });
 });
 

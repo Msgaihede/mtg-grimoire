@@ -37,6 +37,9 @@ const meta = {
     hasBundle: true,
     lastResolution: null,
     onReset: fn(),
+    // A live camera, which is every state but `NoPictureToSend`'s: the page hands the strip this
+    // press only while there is a picture to send.
+    onSend: fn(),
   },
   decorators: [
     // The camera's column at the app's narrow rung: `ScanBar.stories.tsx`'s 1032px content column
@@ -73,6 +76,27 @@ export const Matching: Story = {
     await expect(status(canvasElement)).not.toContainElement(reset);
     await userEvent.click(reset);
     await expect(args.onReset).toHaveBeenCalledOnce();
+    // Send scan… stands beside it wherever the page hands the strip the press, and hands up the
+    // press it was given — the page keeps that for the caret.
+    const send = within(canvasElement).getByRole("button", { name: "Send scan…" });
+    await expect(status(canvasElement)).not.toContainElement(send);
+    await userEvent.click(send);
+    await expect(args.onSend).toHaveBeenCalledWith(send);
+  },
+};
+
+/**
+ * Nothing the scanner has been shown — the camera refused or not open yet, or recognition
+ * stopped — so the page hands the strip no press and *Send scan…* is not drawn: a scan is the
+ * last couple of seconds of frames, and there are none. Reset stays: the evidence it throws away
+ * is the scanner's, and that is there whatever the camera is doing.
+ */
+export const NoPictureToSend: Story = {
+  args: { verdict: null, onSend: undefined },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.queryByRole("button", { name: "Send scan…" })).toBeNull();
+    await expect(canvas.getByRole("button", { name: "Reset evidence" })).toBeInTheDocument();
   },
 };
 

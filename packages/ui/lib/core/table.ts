@@ -1,3 +1,4 @@
+import { toBase64 } from "@/lib/base64";
 import { tauriCore } from "./tauri";
 import type { CallArgs, CallOptions, Core } from "./types";
 
@@ -39,13 +40,3 @@ export const tableCore: Core = {
   },
   listen: tauriCore.listen,
 };
-
-/** Bytes as standard base64, in chunks so a camera frame never overflows an argument list. */
-export function toBase64(bytes: Uint8Array): string {
-  let text = "";
-  const step = 0x8000;
-  for (let i = 0; i < bytes.length; i += step) {
-    text += String.fromCharCode(...bytes.subarray(i, i + step));
-  }
-  return btoa(text);
-}

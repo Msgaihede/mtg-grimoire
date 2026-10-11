@@ -24,12 +24,14 @@ function line(
     hasBundle = true,
     lastResolution = null,
     onReset = vi.fn(),
+    onSend,
   }: {
     mode?: ScanMode;
     lastAdded?: LastAdded;
     hasBundle?: boolean;
     lastResolution?: ScannerResolution | null;
     onReset?: () => void;
+    onSend?: (opener: HTMLElement) => void;
   } = {},
 ) {
   const { unmount } = render(
@@ -40,6 +42,7 @@ function line(
       hasBundle={hasBundle}
       lastResolution={lastResolution}
       onReset={onReset}
+      onSend={onSend}
     />,
   );
   return {
@@ -115,6 +118,37 @@ describe("the phone's status line", () => {
     const { status } = line(null);
     expect(status.classList.contains("min-h-12")).toBe(true);
     expect(status.children).toHaveLength(2);
+  });
+
+  /**
+   * The desktop strip's second press, by the desktop's name, as a 44px glyph: the words would
+   * take the bar's room at 360px.
+   */
+  it("draws Send scan… as a thumb-sized press beside Reset, outside the live region", async () => {
+    const onSend = vi.fn();
+    const { status } = line(VERDICTS.voting, { onSend });
+    const send = screen.getByRole("button", { name: "Send scan…" });
+    const reset = screen.getByRole("button", { name: "Reset evidence" });
+    expect(status.contains(send)).toBe(false);
+    expect(send.previousElementSibling).toBe(reset);
+    expect(send.parentElement).toBe(screen.getByRole("progressbar", { name: "Match progress" }).parentElement);
+    // A glyph and no words, a finger's size both ways, and the bar keeps the row's spare width.
+    expect(send.textContent).toBe("");
+    expect(send.classList.contains("size-11")).toBe(true);
+    expect(send.classList.contains("shrink-0")).toBe(true);
+    expect(send).toHaveAttribute("aria-haspopup", "dialog");
+
+    await userEvent.click(send);
+    expect(onSend).toHaveBeenCalledTimes(1);
+    // Handed the press itself, which the page keeps for the caret.
+    expect(onSend).toHaveBeenCalledWith(send);
+  });
+
+  /** The desktop's rule: no run to send, no press — and Reset is unaffected. */
+  it("draws no Send scan… where the page hands it no press", () => {
+    line(VERDICTS.voting);
+    expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Reset evidence" })).toBeInTheDocument();
   });
 });
 
