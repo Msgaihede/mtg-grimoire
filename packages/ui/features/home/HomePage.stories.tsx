@@ -194,6 +194,7 @@ export const CatalogueOpen: Story = {
       "Recently viewed",
       "Set completion",
       "Price movers",
+      "Latest change notes",
       "Deck completion",
       "To review",
       "Wishlist savings",

@@ -133,7 +133,8 @@ own census; `DEFAULT_LAYOUT` is what a first launch is handed. A kind may be in 
 joined the catalogue alone because either one would break the rectangle; `valueHistory`
 (§14), which stayed out for `newPrintings`' reason — a widget in the seed rearranges the page of
 every reader who never asked for it; §15's `deckCompletion`, `toReview`, `wishlistSavings`
-and `comingSoon`, for that reason again (their spec's §1); and §16's `deckTodos`, for it once more.
+and `comingSoon`, for that reason again (their spec's §1); §16's `deckTodos`, for it once more;
+and `changeNotes` (issue #905), for it yet again.
 So the sentence below still names **eight** widgets in an
 eight-by-seven rectangle and is correct as written, and `DEFAULT_LAYOUT`'s three copies —
 `widgets.ts`, `home.rs` and the Storybook fake — did not move. Counting the table below and
@@ -170,6 +171,7 @@ stores nothing). All of it lives in `config` — the extension rule below.
 | `stickyNotes` | the reader's own notes, as a board of tinted tiles or a pad of stacked sheets | `{ layout: board·pad, dates, strip, pinned }` |
 | `deckTodos` | every deck's To-do band gathered: a heading per deck, each of its lists' titles under that, and the to-dos under each title, ticked off in place (§16) | `{ scope: all·chosen, deckIds, order: edited·name·open, done, nested, archived, counts }` |
 | `newPrintings` | reprints of cards the watched decks hold, in release-day groups | `{ scope: all·chosen, deckIds, window: 30·90·365, langs: en·all·chosen, langIds, virtual, theory, basics }` |
+| `changeNotes` | **Latest change notes** — the newest releases' notes as this build carries them (`useBundledHistory`, so every host and offline), version and day over each body; `All versions` opens Settings on Updates | `{ releases: 1·3·5, highlights }` |
 | `deckCompletion` | each deck's actual list against the collection or against its plan, with the cost of the rest | `{ compare: collection·theory, scope: all·chosen, deckIds, order: done·cheapest·name, complete }` |
 | `toReview` | scanned cards waiting, flagged binder entries, wishes and deck cards, and Recently removed — each row opening its list | `{ removed }` |
 | `wishlistSavings` | pinned wishes with a cheaper printing, biggest saving first | `{ scope: all·chosen, folderIds, managed }` |
