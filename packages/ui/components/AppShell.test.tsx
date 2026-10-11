@@ -195,8 +195,8 @@ import { boxed, startPointerDrag } from "@/test-drag";
  * The shell's update state, in its resting position: nothing found, nothing running.
  *
  * These tests are about the sidebar, the sync and the drop targets, and `App` — not the
- * shell — is what actually calls `useUpdate`. The ribbon's update button has its own tests
- * in `Ribbon.test.tsx`, where the interesting values are.
+ * shell — is what actually calls `useUpdate`. The header's update button has its own tests
+ * in `ChromeStatus.test.tsx`, where the interesting values are.
  */
 const noUpdate: Update = {
   status: null,
@@ -338,7 +338,11 @@ it("renders nav and refresh button", async () => {
   // keeps the ribbon's own title out of the answer, and the collapse toggle at the rail's foot is
   // the last button inside it.
   const nav = screen.getByRole("navigation", { name: "Views" });
-  expect(within(nav).getAllByRole("button").map((b) => b.textContent)).toEqual([
+  expect(
+    within(nav)
+      .getAllByRole("button")
+      .map((b) => b.textContent),
+  ).toEqual([
     "Home",
     "Search",
     "Tagger",
@@ -433,6 +437,39 @@ describe("the Shared row", () => {
  * cannot. Nothing else in the app draws a close button, so dropping this component is not a
  * cosmetic regression and would leave every other test in this file green.
  */
+/**
+ * No page header since 2026-10-11: the heading is for screen readers alone, inside `main` (the
+ * positioned scroller an `sr-only` needs), and the app's status rides the window header — so
+ * Refresh is an icon button there and the mana line is the next thing under it.
+ */
+it("draws no visible page header and carries Refresh in the window header", () => {
+  render(
+    <AppShell update={noUpdate}>
+      <div>content</div>
+    </AppShell>,
+  );
+
+  const heading = screen.getByRole("heading", { level: 1 });
+  expect(heading).toHaveClass("sr-only");
+  expect(heading.closest("main")).not.toBeNull();
+
+  const header = screen
+    .getByText("MTG GRIMOIRE")
+    .closest("[data-tauri-drag-region].shrink-0")?.parentElement;
+  const refresh = screen.getByRole("button", { name: "Refresh data" });
+  expect(header?.contains(refresh)).toBe(true);
+  expect(refresh).toHaveTextContent("");
+  // Refresh sits immediately before the keyboard map's button.
+  const keys = screen.getByRole("button", { name: "Keyboard shortcuts" });
+  expect(refresh.compareDocumentPosition(keys) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+  // The header, then the mana line, then the row the page lives in.
+  const root = document.querySelector("div.h-dvh");
+  expect(root?.children[0]).toBe(header);
+  expect(root?.children[1]).toHaveAttribute("aria-hidden", "true");
+  expect(root?.children[1]).toHaveClass("h-0.5");
+});
+
 it("draws the window's own caption, because Windows no longer does", () => {
   render(
     <AppShell update={noUpdate}>
@@ -846,8 +883,7 @@ describe("collapsing the sidebar", () => {
   });
 
   /** An entry's word, which is in the DOM in both states and `sr-only` in one of them. */
-  const word = (label: string) =>
-    screen.getByRole("button", { name: label }).querySelector("span");
+  const word = (label: string) => screen.getByRole("button", { name: label }).querySelector("span");
 
   /**
    * The first half of the 2026-08-22 report, as the rule rather than as the symptom.
@@ -1449,7 +1485,7 @@ describe("the card menu's deck write", () => {
  * whatever is on screen.
  *
  * Both are asserted through the **store** rather than only through what is drawn, and that is
- * deliberate on either side: `activeView` is what the nine destinations, the ribbon's title and
+ * deliberate on either side: `activeView` is what the nine destinations, the page's `<h1>` and
  * `App`'s view swap all read, so it is the fact the binding is actually for; and `keyMapOpen`'s
  * panel is drawn by `TitleBar`, whose own file tests it — a shell test that went looking for the
  * panel would be asserting somebody else's component through this one. The first case checks the
@@ -1875,9 +1911,9 @@ describe("the stored opening view", () => {
    * The behaviour the mount buys: a stored word lands the app on that view.
    *
    * The store is put on Home first — where `store.ts` really starts — so this is about a *move*
-   * rather than about the state the `beforeEach` already left behind. The ribbon's `<h1>` is the
+   * rather than about the state the `beforeEach` already left behind. The page's `<h1>` is the
    * observable rather than the store field, because a reader cannot see a zustand field: `NAV`'s
-   * label is both the rail's word and the ribbon's title, so one heading says which page the app
+   * label is both the rail's word and the page's heading, so one heading says which page the app
    * came up on.
    */
   it("lands the app on the stored view", async () => {
@@ -1965,9 +2001,10 @@ describe("the light edition", () => {
     ]);
   });
 
-  it("draws no window caption, and the full edition still does", () => {
+  it("draws no draggable caption, and the full edition still does", () => {
     // `TitleBar` is the only thing in the shell that carries a drag region, and the attribute
-    // does not inherit — so its presence is the caption's presence.
+    // does not inherit — so its presence is the caption's presence. The light edition's header
+    // band claims none.
     const { unmount } = renderLight();
     expect(document.querySelector("[data-tauri-drag-region]")).toBeNull();
     unmount();
@@ -2047,26 +2084,21 @@ describe("the light edition", () => {
   });
 
   /**
-   * The keyboard map's only mount is inside `TitleBar`, and this edition draws no `TitleBar` — so
-   * a shell that went on claiming `F1` would take the browser's own key and show nothing for it.
+   * The light edition draws the header as a band without window verbs (2026-10-11): the same
+   * lockup, the same status run and the same keyboard map. So `F1` is taken here too, and the
+   * band carries no drag region, because nothing in it can move the window.
    *
    * **Fired by hand** for the reason the auto-repeat cases above give in another form: what is
    * asserted is the event's own `defaultPrevented`, and `user.keyboard` does not hand it back.
    */
-  it("leaves F1 to the browser, because nothing here would draw the map", () => {
-    const { unmount } = renderLight();
-    expect(fireEvent.keyDown(document.body, { key: "F1" })).toBe(true);
-    expect(useAppStore.getState().keyMapOpen).toBe(false);
-    unmount();
-
-    // The control: the same press under the edition that draws a caption is taken and opens the
-    // map — so the two lines above are about the edition, and not about a keydown the handler
-    // never matched in the first place.
-    render(
-      <AppShell update={noUpdate}>
-        <div>content</div>
-      </AppShell>,
-    );
+  it("draws the header band without window verbs, and F1 opens its map", () => {
+    renderLight();
+    expect(screen.getByText("MTG GRIMOIRE")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Keyboard shortcuts" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refresh data" })).toBeInTheDocument();
+    for (const name of ["Minimize", "Maximize", "Close"]) {
+      expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+    }
     expect(fireEvent.keyDown(document.body, { key: "F1" })).toBe(false);
     expect(useAppStore.getState().keyMapOpen).toBe(true);
   });
