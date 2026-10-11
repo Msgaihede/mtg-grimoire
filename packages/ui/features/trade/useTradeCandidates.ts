@@ -138,16 +138,7 @@ export function useTradeCandidates(
     return () => clearTimeout(timer);
   }, [asked]);
 
-  const { folders, query: folderList } = useCollectionFolderList();
-  const deckFolders = useMemo(() => {
-    const decks = folders.filter((folder) => folder.kind === "deck");
-    return decks.length > 0 ? decks : NO_FOLDERS;
-  }, [folders]);
-  /** In id order, so the key is the same key whatever order the cabinet lists its folders in. */
-  const deckShelves = useMemo(
-    () => deckFolders.map((folder) => folder.id).sort((a, b) => a - b),
-    [deckFolders],
-  );
+  const { folders, folderList, deckFolders, deckShelves } = useDeckShelves();
   const decksAsked = scope === "collection" && deckShelves.length > 0;
 
   const collection = useQuery({
@@ -207,14 +198,16 @@ export function useTradeCandidates(
   const rows = useMemo(() => {
     if (asked.length === 0) return NO_ROWS;
     if (scope === "collection") {
-      return collection.data ? fromCollection(collection.data.items, folders, asked) : NO_ROWS;
+      return collection.data
+        ? ranked(collectionCandidates(collection.data.items, folders), asked)
+        : NO_ROWS;
     }
     return cards.data ? cards.data.items.map(fromSearch) : NO_ROWS;
   }, [asked, scope, collection.data, cards.data, folders]);
 
   const deckRows = useMemo(() => {
     if (asked.length === 0 || !decksAsked || !decks.data) return NO_ROWS;
-    const found = fromDecks(decks.data.items, deckFolders, asked);
+    const found = ranked(deckCandidates(decks.data.items, deckFolders), asked);
     return found.length > 0 ? found : NO_ROWS;
   }, [asked, decksAsked, decks.data, deckFolders]);
 
@@ -242,6 +235,27 @@ export function useTradeCandidates(
             ? ipcError(decks.error)
             : null,
   };
+}
+
+/**
+ * The collection's folders, and the deck groups among them as the shelves a read can name.
+ *
+ * Shared by the add field and the trade line's owned-printings wall, which ask the same two
+ * questions of the collection — the copies outside every deck, and the decks' own — and must
+ * split them along the same line.
+ */
+export function useDeckShelves() {
+  const { folders, query: folderList } = useCollectionFolderList();
+  const deckFolders = useMemo(() => {
+    const decks = folders.filter((folder) => folder.kind === "deck");
+    return decks.length > 0 ? decks : NO_FOLDERS;
+  }, [folders]);
+  /** In id order, so the key is the same key whatever order the cabinet lists its folders in. */
+  const deckShelves = useMemo(
+    () => deckFolders.map((folder) => folder.id).sort((a, b) => a - b),
+    [deckFolders],
+  );
+  return { folders, folderList, deckFolders, deckShelves };
 }
 
 /**
@@ -276,17 +290,17 @@ function ranked(rows: readonly TradeCandidate[], asked: string): TradeCandidate[
 }
 
 /**
- * Collection rows folded to one candidate per printing and finish, names first ({@link ranked}).
+ * Collection rows folded to one candidate per printing and finish, in the backend's order. The add
+ * field ranks them by name ({@link ranked}); the owned-printings wall takes them as they come.
  *
  * **The fold is the trade's own grain.** A side's line is a printing in a finish; the condition a
  * copy is in, its language and the folder it sits in are the collection's business, and a list
  * that offered "Boros Charm, NM" and "Boros Charm, LP" as two cards would add two lines that fold
  * into one the moment they land.
  */
-function fromCollection(
+export function collectionCandidates(
   items: readonly CollectionRow[],
   folders: readonly CollectionFolder[],
-  asked: string,
 ): TradeCandidate[] {
   const takeable = new Set(folders.filter((f) => f.kind === "user").map((f) => f.id));
   const byKey = new Map<string, TradeCandidate>();
@@ -317,13 +331,13 @@ function fromCollection(
       deckName: null,
     });
   }
-  return ranked([...byKey.values()], asked);
+  return [...byKey.values()];
 }
 
 /**
  * The rows a deck is holding, folded to one candidate per printing, finish **and deck**.
  *
- * **The deck stays in the grain**, where {@link fromCollection} folds every folder away: which
+ * **The deck stays in the grain**, where {@link collectionCandidates} folds every folder away: which
  * binder a spare copy sits in is no part of a trade, and which deck a copy would be pulled out of
  * is the whole of what the reader has to be told. Two decks holding the same Sol Ring are two
  * rows, each under its own deck's name.
@@ -335,10 +349,9 @@ function fromCollection(
  *
  * `source` is still `collection`: see {@link TradeCandidate.source}.
  */
-function fromDecks(
+export function deckCandidates(
   items: readonly CollectionRow[],
   deckFolders: readonly CollectionFolder[],
-  asked: string,
 ): TradeCandidate[] {
   const decks = new Map(deckFolders.map((folder) => [folder.id, folder]));
   const byKey = new Map<string, TradeCandidate>();
@@ -370,7 +383,7 @@ function fromDecks(
       deckName: row.folderName ?? deck.name,
     });
   }
-  return ranked([...byKey.values()], asked);
+  return [...byKey.values()];
 }
 
 /**

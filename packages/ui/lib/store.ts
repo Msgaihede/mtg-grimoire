@@ -17,6 +17,7 @@ import {
 import type { TransferSurface } from "@/features/transfer/fields";
 import type { SweepScope } from "@/features/wishlist/wholeWishlistQuery";
 import type { DeckFinish, DeckVariant, PriceMoverWindow, ScannerTrayChoice } from "./ipc";
+import type { MarketplaceId } from "./marketplace";
 
 /**
  * The eleven top-level destinations in the sidebar.
@@ -1148,6 +1149,44 @@ export interface PrintingsRequest {
    * must not be handed back after arrowing to card B.
    */
   pick?: (p: ScannerTrayChoice) => void;
+  /**
+   * The trade line a press *rewrites* onto the printing pressed, or absent — issue #902, and only
+   * ever set by the trade builder's line art.
+   *
+   * **Optional, for `pick`'s reason**: one construction site, and a `CardWalkStop` carries none —
+   * the modal draws no walk for a trade line at all, so nothing can step it onto a card the line
+   * is not.
+   */
+  trade?: TradePrintingsTarget;
+}
+
+/**
+ * What the trade builder hands {@link PrintingsRequest.trade}: which wall to draw, what it is
+ * priced at, and the write a press makes.
+ *
+ * **The write is the trade's, handed in rather than made here**, exactly as the scanner tray's
+ * `pick` is: the line is addressed by a trade and a line id that only the trade's own cache knows
+ * how to settle, and the modal is mounted at `App` level with no business knowing either.
+ */
+export interface TradePrintingsTarget {
+  /**
+   * `true` for a line the reader's own collection supplies (`source: "collection"`): the wall is
+   * then the reader's own copies of the card — the ones outside every deck first, then the decks'
+   * own in a red section under them, which is how the add field splits them. `false` is every
+   * printing there is, the wall every other surface draws.
+   */
+  owned: boolean;
+  /** The trade's marketplace — the one every figure on the line is quoted at. */
+  marketplace: MarketplaceId;
+  /** The finish the line is in, so an owned wall can ring the copy the line already is. */
+  finish: Finish;
+  /**
+   * Make the line this printing — and, from an owned tile, this finish, because a copy the reader
+   * holds is one printing *in* one finish. `null` keeps the backend's rule for a printing change:
+   * the line's finish where the printing comes in it, the first one it lists where not. Rejects
+   * with the backend's sentence.
+   */
+  choose: (cardId: string, finish: Finish | null) => Promise<void>;
 }
 
 /**

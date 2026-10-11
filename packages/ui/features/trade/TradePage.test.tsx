@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
@@ -18,6 +18,7 @@ import type {
   TradeSide,
   TradeSummary,
 } from "@/lib/ipc";
+import { useAppStore } from "@/lib/store";
 import { openDropdown, pickOption } from "@/test-dropdown";
 
 /**
@@ -324,6 +325,8 @@ const lineOf = (within_: HTMLElement, name: string) =>
 beforeEach(() => {
   nextLine = 100;
   backend.trades = [];
+  // The printings wall's request is a store field, and a line's art writes it.
+  useAppStore.setState(useAppStore.getInitialState());
   const m = ipcMock;
   m.tradeList.mockReset().mockImplementation(async () => backend.trades.map(summary));
   m.tradeGet
@@ -1039,6 +1042,65 @@ describe("an open trade", () => {
     expect(ipcMock.tradeUpdateLine).toHaveBeenCalledExactlyOnceWith(swords?.id, {
       cardId: "stp-msc",
     });
+  });
+
+  /**
+   * Issue #902: the art opens the app's printings wall on the line — the reader's own copies for a
+   * line their collection supplies, every printing for any other — and a press there rewrites the
+   * line with only the parts that changed.
+   */
+  it("opens the line's printings from its art, and writes the one chosen there", async () => {
+    const user = userEvent.setup();
+    backend.trades = [canvasTrade()];
+    wrap(<TradePage />);
+    await tradeSection("Trade 5");
+    const swords = backend.trades[0].lines.find((l) => l.name === "Swords to Plowshares");
+
+    await user.click(
+      screen.getByRole("button", { name: "Change the printing of Swords to Plowshares" }),
+    );
+
+    const request = useAppStore.getState().printingsRequest;
+    expect(request).toMatchObject({
+      cardId: "stp-ema",
+      oracleId: "stp-oracle",
+      name: "Swords to Plowshares",
+      deck: null,
+      wish: null,
+      trade: { owned: true, marketplace: "tcgplayer", finish: "foil" },
+    });
+
+    // An owned tile in the same printing and another finish is the finish write alone…
+    await act(() => request?.trade?.choose("stp-ema", "nonfoil"));
+    expect(ipcMock.tradeUpdateLine).toHaveBeenLastCalledWith(swords?.id, { finish: "nonfoil" });
+    // …a printing from the full wall is the printing alone, the finish left to the backend…
+    await act(() => request?.trade?.choose("stp-msc", null));
+    expect(ipcMock.tradeUpdateLine).toHaveBeenLastCalledWith(swords?.id, { cardId: "stp-msc" });
+    // …and an owned tile in another printing and finish says both.
+    await act(() => request?.trade?.choose("stp-a25", "nonfoil"));
+    expect(ipcMock.tradeUpdateLine).toHaveBeenLastCalledWith(swords?.id, {
+      cardId: "stp-a25",
+      finish: "nonfoil",
+    });
+  });
+
+  it("shows every printing, not the reader's copies, for a card on their side", async () => {
+    const user = userEvent.setup();
+    backend.trades = [canvasTrade()];
+    wrap(<TradePage />);
+    await tradeSection("Trade 5");
+
+    await user.click(screen.getByRole("button", { name: "Change the printing of Urza's Saga" }));
+
+    expect(useAppStore.getState().printingsRequest?.trade?.owned).toBe(false);
+  });
+
+  it("leaves the art a picture once the trade is closed", async () => {
+    backend.trades = [canvasTrade({ status: "archived", closedAt: day(10, 4) })];
+    wrap(<TradePage />);
+    await tradeSection("Trade 5");
+
+    expect(screen.queryByRole("button", { name: /^Change the printing of/ })).toBeNull();
   });
 
   it("removes a line", async () => {
