@@ -38,6 +38,7 @@ const EVERY_KIND: Record<WidgetKind, true> = {
   setCompletion: true,
   priceMovers: true,
   newPrintings: true,
+  changeNotes: true,
   stickyNotes: true,
   deckTodos: true,
   deckCompletion: true,
@@ -262,6 +263,13 @@ describe("WIDGETS", () => {
         toggles: { virtual: false, theory: true, basics: false },
         chip: "window",
       },
+      // Issue #905. Whole releases rather than lines, the latest alone by default; the highlights
+      // cut is something a reader asks for, so it starts off.
+      changeNotes: {
+        picks: { releases: { ids: [1, 3, 5], dflt: undefined } },
+        toggles: { highlights: false },
+        chip: undefined,
+      },
       // Round two (2026-09-26), and issue #600. `compare` is sent to Rust and each word is a
       // `Compare` arm there; `scope` is `newPrintings`' two words, a checklist of the decks the
       // comparison can measure; and `complete` is the second switch in the registry that starts
@@ -361,6 +369,26 @@ describe("WIDGETS", () => {
     expect(DEFAULT_LAYOUT.widgets).toHaveLength(8);
     // The record's insertion order is the catalogue's, and these four close it.
     expect(WIDGETS.slice(-4).map((widget) => widget.kind)).toEqual([...kinds]);
+  });
+
+  /**
+   * **Latest change notes** (issue #905), off the default layout and before round two's four, so
+   * the catalogue's tail the case above pins is unmoved.
+   */
+  it("carries the change notes kind in the catalogue, off the default layout", () => {
+    expect(isWidgetKind("changeNotes")).toBe(true);
+    const order = WIDGETS.map((widget) => widget.kind);
+    expect(order.indexOf("changeNotes")).toBe(order.indexOf("newPrintings") + 1);
+    expect(DEFAULT_LAYOUT.widgets.some((widget) => widget.kind === "changeNotes")).toBe(false);
+
+    const meta = widgetMeta("changeNotes");
+    expect(meta.label).toBe("Latest change notes");
+    expect({ def: meta.def, min: meta.min, max: meta.max }).toEqual({
+      def: [3, 3],
+      min: [2, 2],
+      max: [6, 8],
+    });
+    expect(pickDefault(meta.picks.find((pick) => pick.key === "releases")!)).toBe(1);
   });
 
   /**

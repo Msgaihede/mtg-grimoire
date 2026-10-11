@@ -121,6 +121,7 @@ import type { ConfigPatch, WidgetBodyProps } from "./widgetProps";
 import { widgetDensity } from "./widgetSettings";
 import type { WidgetKind } from "./widgets";
 import { ActivityWidget } from "./widgets/ActivityWidget";
+import { ChangeNotesWidget } from "./widgets/ChangeNotesWidget";
 import { CollectionValueWidget } from "./widgets/CollectionValueWidget";
 import { ComingSoonWidget } from "./widgets/ComingSoonWidget";
 import {
@@ -247,6 +248,8 @@ function renderBody(props: WidgetBodyProps): ReactElement {
       return <PriceMoversWidget {...props} />;
     case "newPrintings":
       return <NewPrintingsWidget {...props} />;
+    case "changeNotes":
+      return <ChangeNotesWidget {...props} />;
     case "stickyNotes":
       return <StickyNotesWidget {...props} />;
     case "deckTodos":
