@@ -140,6 +140,267 @@ pub struct Resolved {
     /// The latest stamp in the whole set, which is what the applier writes back as the row's
     /// watermark.
     pub at: Option<Hlc>,
+    /// The latest stamp of anything that asserted the row exists, and of anything that said it is
+    /// gone — what add-wins compared, kept so that a [`Memory`] can be folded on from here.
+    pub alive: Option<Hlc>,
+    pub dead: Option<Hlc>,
+}
+
+/// A stamp below every stamp a device can issue: what a value this device **kept** of a row is
+/// held under when nothing it heard says who wrote it ([`Memory::keep`]). Any op about the field
+/// beats it, so it decides nothing but what a row rebuilt from memory holds where no op ever
+/// named the field. Below the ledger of orphans' own `ms = 0` stamp too, which is a decision.
+pub fn before_everything() -> Hlc {
+    Hlc {
+        ms: i64::MIN,
+        ctr: 0,
+        device: String::new(),
+    }
+}
+
+/// What a device remembers of one row from **other devices'** ops, once it has applied them —
+/// issue #842.
+///
+/// [`fold`] answers from what it is handed, and the applier hands it the page together with this
+/// device's *own* op log. Nothing else another device wrote was kept, so two ops from two other
+/// devices met only when they arrived in one pull: split across two, the second won whatever its
+/// stamp, on the one device that wrote neither. This is what was missing — the stamp that won
+/// each field and each placement, with its value, the latest stamps asserting the row alive and
+/// dead, and the counters — and [`fold_remembering`] folds a page on top of it exactly as if
+/// every op it was made from had arrived in that page.
+///
+/// **It is a fold, not a log**: one per row, whatever number of ops made it, and absorbing an op
+/// into it is [`fold_remembering`] once more ([`Memory::absorb`]). Order-independent for the
+/// reason `fold` is, and two memories of one row merge the same way ([`Memory::merge`]).
+///
+/// # The counters
+///
+/// A counter is a sum of deltas and there is no stamp to compare, so what `counters` holds is
+/// said by `whole`:
+///
+/// - **`whole` false**: the sum of every delta of another device's applied here. With this
+///   device's own deltas out of `sync_ops` on top, that is every delta the row has seen — which is
+///   what a row rebuilt here starts from (`insert_row`'s rule, *every delta, local ones included*,
+///   with "local" now meaning "known here").
+/// - **`whole` true**: the row as this device held it when an apply took it out ([`Memory::keep`]),
+///   plus every delta another device sent since. This device's own deltas up to `through` are
+///   already inside, and the applier leaves them out ([`Memory::holds_own`]).
+///
+/// On the update path neither matters: an update applies the page's deltas to what the row holds.
+///
+/// **Stored as [`Stored`]**, each distinct stamp once: an insert's twenty fields share one stamp,
+/// and spelled out beside every field the stamps were most of the row.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(into = "Stored", try_from = "Stored")]
+pub struct Memory {
+    pub fields: BTreeMap<String, (serde_json::Value, Hlc)>,
+    pub parents: BTreeMap<String, (Option<String>, Hlc)>,
+    pub counters: BTreeMap<String, i64>,
+    pub claims: BTreeMap<String, i64>,
+    pub alive: Option<Hlc>,
+    pub dead: Option<Hlc>,
+    /// `counters` are the whole row, not deltas — see the type's doc.
+    pub whole: bool,
+    /// With `whole`: the latest of this device's own ops already inside `counters`.
+    pub through: Option<Hlc>,
+}
+
+/// A [`Memory`] as `sync_heard.memory` holds it: every stamp it names once, in `s` as
+/// `[ms, ctr, device]`, and each field, placement and stamp of its own by index into `s`.
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct Stored {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    s: Vec<(i64, i64, String)>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    f: BTreeMap<String, (serde_json::Value, usize)>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    p: BTreeMap<String, (Option<String>, usize)>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    c: BTreeMap<String, i64>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    k: BTreeMap<String, i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    a: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    d: Option<usize>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    w: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    t: Option<usize>,
+}
+
+impl From<Memory> for Stored {
+    fn from(m: Memory) -> Stored {
+        let mut s: Vec<(i64, i64, String)> = Vec::new();
+        let mut index = |at: Hlc| -> usize {
+            let key = (at.ms, at.ctr, at.device);
+            match s.iter().position(|held| *held == key) {
+                Some(i) => i,
+                None => {
+                    s.push(key);
+                    s.len() - 1
+                }
+            }
+        };
+        let f = m
+            .fields
+            .into_iter()
+            .map(|(k, (v, at))| (k, (v, index(at))))
+            .collect();
+        let p = m
+            .parents
+            .into_iter()
+            .map(|(k, (v, at))| (k, (v, index(at))))
+            .collect();
+        let a = m.alive.map(&mut index);
+        let d = m.dead.map(&mut index);
+        let t = m.through.map(&mut index);
+        Stored {
+            s,
+            f,
+            p,
+            c: m.counters,
+            k: m.claims,
+            a,
+            d,
+            w: m.whole,
+            t,
+        }
+    }
+}
+
+impl TryFrom<Stored> for Memory {
+    type Error = String;
+
+    fn try_from(st: Stored) -> Result<Memory, String> {
+        let at = |i: usize| -> Result<Hlc, String> {
+            st.s.get(i)
+                .map(|(ms, ctr, device)| Hlc {
+                    ms: *ms,
+                    ctr: *ctr,
+                    device: device.clone(),
+                })
+                .ok_or_else(|| format!("no stamp {i}"))
+        };
+        let mut fields = BTreeMap::new();
+        for (k, (v, i)) in &st.f {
+            fields.insert(k.clone(), (v.clone(), at(*i)?));
+        }
+        let mut parents = BTreeMap::new();
+        for (k, (v, i)) in &st.p {
+            parents.insert(k.clone(), (v.clone(), at(*i)?));
+        }
+        Ok(Memory {
+            fields,
+            parents,
+            alive: st.a.map(at).transpose()?,
+            dead: st.d.map(at).transpose()?,
+            through: st.t.map(at).transpose()?,
+            counters: st.c,
+            claims: st.k,
+            whole: st.w,
+        })
+    }
+}
+
+impl Memory {
+    /// Fold `ops` in. They must be ops this memory has not taken before — the applier's watermark
+    /// is what makes that so — or their deltas count twice; a claim is a maximum and a field a
+    /// stamp, so either taken twice is the same answer.
+    pub fn absorb(&mut self, ops: &[Op]) {
+        let r = fold_remembering(self, ops);
+        self.fields = r.fields;
+        self.parents = r.parents;
+        self.counters = r.counters;
+        self.claims = r.claims;
+        self.alive = r.alive;
+        self.dead = r.dead;
+    }
+
+    /// Keep what this device held of a row an apply is about to take out: each field and parent
+    /// no op this memory holds has named — under [`before_everything`], so any op beats it — and
+    /// the counters whole, with `through` the latest of this device's own ops inside them.
+    pub fn keep(
+        &mut self,
+        fields: BTreeMap<String, serde_json::Value>,
+        parents: BTreeMap<String, Option<String>>,
+        counters: BTreeMap<String, i64>,
+        through: Option<Hlc>,
+    ) {
+        for (k, v) in fields {
+            self.fields
+                .entry(k)
+                .or_insert_with(|| (v, before_everything()));
+        }
+        for (k, p) in parents {
+            self.parents
+                .entry(k)
+                .or_insert_with(|| (p, before_everything()));
+        }
+        self.counters = counters;
+        self.whole = true;
+        self.through = through;
+    }
+
+    /// This memory without what `device` wrote: its fields and placements, and the alive and
+    /// dead stamps where they are its. **For folding a claim of `device`'s**, which is its whole
+    /// row as it holds it now and so already decided everything it wrote before — and which is
+    /// stamped by the row's `updated_at` on the wall clock, where its ops were stamped by its
+    /// hybrid clock, which can run ahead of it. Against its own earlier ops a claim could lose a
+    /// field its emitter had since changed: measured, an emitter whose clock ran an hour ahead
+    /// sent a note it had replaced, and the replacement lost to the old one here. Without them a
+    /// claim meets what it met before there was a memory — this device's own ops — and what a
+    /// third device wrote.
+    pub fn without(&self, device: &str) -> Memory {
+        let mut out = self.clone();
+        out.fields.retain(|_, (_, at)| at.device != device);
+        out.parents.retain(|_, (_, at)| at.device != device);
+        if out.alive.as_ref().is_some_and(|at| at.device == device) {
+            out.alive = None;
+        }
+        if out.dead.as_ref().is_some_and(|at| at.device == device) {
+            out.dead = None;
+        }
+        out
+    }
+
+    /// Whether this device's own op at `at` is already inside `counters` ([`Memory::keep`]).
+    pub fn holds_own(&self, at: &Hlc) -> bool {
+        self.whole && self.through.as_ref().is_some_and(|t| at <= t)
+    }
+
+    /// Two memories of what has become one row — a row renamed to another's uid, or two met on a
+    /// grain. Fields and placements by stamp, the alive and dead stamps by the later, claims by
+    /// the greater; counters add, as the two rows' counts did when they met.
+    pub fn merge(&mut self, other: Memory) {
+        for (k, (v, at)) in other.fields {
+            match self.fields.get(&k) {
+                Some((_, held)) if *held >= at => {}
+                _ => {
+                    self.fields.insert(k, (v, at));
+                }
+            }
+        }
+        for (k, (p, at)) in other.parents {
+            match self.parents.get(&k) {
+                Some((_, held)) if *held >= at => {}
+                _ => {
+                    self.parents.insert(k, (p, at));
+                }
+            }
+        }
+        for (k, n) in other.counters {
+            *self.counters.entry(k).or_insert(0) += n;
+        }
+        for (k, n) in other.claims {
+            let held = self.claims.entry(k).or_insert(n);
+            *held = (*held).max(n);
+        }
+        self.alive = self.alive.take().max(other.alive);
+        self.dead = self.dead.take().max(other.dead);
+        self.whole |= other.whole;
+        self.through = self.through.take().max(other.through);
+    }
 }
 
 /// Fold every op about one row into one answer.
@@ -161,13 +422,31 @@ pub struct Resolved {
 /// itself. [`super::apply`]'s `sync_peers` watermark covers the same hazard *between* batches;
 /// this covers it *within* one.
 pub fn fold(ops: &[Op]) -> Resolved {
-    let mut out = Resolved::default();
+    fold_remembering(&Memory::default(), ops)
+}
+
+/// [`fold`], starting from what this device remembers of the row ([`Memory`]) rather than from
+/// nothing — so an op that arrives on a later pull than another device's newer one still loses
+/// to it, as it would have in one pull (issue #842).
+///
+/// **The memory is a starting point and not an op**, so it is never deduplicated against the ops
+/// by stamp: an op this memory already took would have its deltas counted twice, which is the
+/// caller's to rule out, and the applier's watermark does.
+pub fn fold_remembering(memory: &Memory, ops: &[Op]) -> Resolved {
+    let mut out = Resolved {
+        fields: memory.fields.clone(),
+        parents: memory.parents.clone(),
+        counters: memory.counters.clone(),
+        claims: memory.claims.clone(),
+        at: memory.alive.clone().max(memory.dead.clone()),
+        ..Resolved::default()
+    };
     let mut seen: BTreeSet<&Hlc> = BTreeSet::new();
     // The latest stamp of anything that ASSERTS the row exists. Add-wins compares the tombstone
     // against this rather than against the whole set, so a delete that lost to an edit is a
     // resurrection and a delete that came after everything is a delete.
-    let mut latest_alive: Option<&Hlc> = None;
-    let mut latest_dead: Option<&Hlc> = None;
+    let mut latest_alive: Option<&Hlc> = memory.alive.as_ref();
+    let mut latest_dead: Option<&Hlc> = memory.dead.as_ref();
 
     for op in ops {
         if !seen.insert(&op.at) {
@@ -244,6 +523,8 @@ pub fn fold(ops: &[Op]) -> Resolved {
         (Some(_), None) => out.deleted = true,
         _ => {}
     }
+    out.alive = latest_alive.cloned();
+    out.dead = latest_dead.cloned();
     out
 }
 
@@ -638,6 +919,132 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&body).unwrap(),
             r#"{"id":[5,0],"i":4}"#
+        );
+    }
+
+    /// **Issue #842, in the pure fold.** Whatever the set, folding part of it into a [`Memory`]
+    /// and the rest on top answers what one fold of the whole answers — every cut, in both
+    /// orders: the older edit, the older move and the older delete arriving after a newer op
+    /// still lose to it, and two deltas still sum. Before the memory a device folded the second
+    /// part with nothing of the first, which is the defect.
+    #[test]
+    fn a_set_folded_in_two_pulls_through_a_memory_is_the_set_folded_in_one() {
+        let mut older_move = put(
+            "a",
+            1_000,
+            json!({"notes": "older"}),
+            json!({"quantity": 1}),
+        );
+        older_move.parents.insert("folder".into(), None);
+        let mut newer_move = put(
+            "c",
+            2_000,
+            json!({"notes": "newer"}),
+            json!({"quantity": 2}),
+        );
+        newer_move
+            .parents
+            .insert("folder".into(), Some("f2".into()));
+        let sets: Vec<Vec<Op>> = vec![
+            vec![older_move, newer_move],
+            vec![
+                del("a", 1_000),
+                put("c", 2_000, json!({"notes": "kept"}), json!({})),
+            ],
+            vec![
+                put("a", 1_000, json!({"notes": "x"}), json!({})),
+                del("c", 2_000),
+            ],
+            vec![
+                claim("a", 500, json!({"quantity": 4})),
+                put("c", 2_000, json!({}), json!({"quantity": -1})),
+            ],
+        ];
+        for set in sets {
+            let whole = fold_both_ways(&set);
+            for cut in 0..=set.len() {
+                for (first, second) in [(&set[..cut], &set[cut..]), (&set[cut..], &set[..cut])] {
+                    let mut memory = Memory::default();
+                    memory.absorb(first);
+                    let split = fold_remembering(&memory, second);
+                    assert_eq!(
+                        (
+                            &split.fields,
+                            &split.parents,
+                            &split.counters,
+                            &split.claims
+                        ),
+                        (
+                            &whole.fields,
+                            &whole.parents,
+                            &whole.counters,
+                            &whole.claims
+                        ),
+                        "{set:?} cut at {cut}"
+                    );
+                    assert_eq!(
+                        (split.deleted, split.resurrected, &split.alive, &split.dead),
+                        (whole.deleted, whole.resurrected, &whole.alive, &whole.dead),
+                        "{set:?} cut at {cut}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// What a device **kept** of a row loses to every op about the same field, and stands only
+    /// where no op ever named it — the field a row made before the group existed carries in no
+    /// op anywhere. Its counters are whole, and this device's own ops up to `through` are inside
+    /// them.
+    #[test]
+    fn a_kept_value_stands_only_where_no_op_named_the_field() {
+        let mut memory = Memory::default();
+        memory.absorb(&[put("a", 1_000, json!({"notes": "heard"}), json!({}))]);
+        memory.keep(
+            [
+                ("notes".to_owned(), json!("held")),
+                ("condition".to_owned(), json!("NM")),
+            ]
+            .into(),
+            [("folder".to_owned(), Some("f1".to_owned()))].into(),
+            [("quantity".to_owned(), 3)].into(),
+            Some(at(900, "b")),
+        );
+        let r = fold_remembering(
+            &memory,
+            &[put("c", 2_000, json!({"condition": "LP"}), json!({}))],
+        );
+        assert_eq!(
+            r.fields["notes"].0,
+            json!("heard"),
+            "a stamp beats a kept value"
+        );
+        assert_eq!(r.fields["condition"].0, json!("LP"), "and so does any op");
+        assert_eq!(
+            r.parents["folder"].0.as_deref(),
+            Some("f1"),
+            "kept where nothing named it"
+        );
+        assert_eq!(r.counters.get("quantity"), Some(&3), "the counters whole");
+        assert!(memory.holds_own(&at(900, "b")));
+        assert!(
+            !memory.holds_own(&at(901, "b")),
+            "an own op after the keep is not inside"
+        );
+        let text = serde_json::to_string(&memory).unwrap();
+        let back: Memory = serde_json::from_str(&text).unwrap();
+        assert_eq!(back, memory, "a memory round-trips through its column");
+        // Five references — two fields, a placement, the alive stamp and `through` — to three
+        // stamps: the kept values' one, `a`'s put, and this device's own.
+        let stored: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            stored["s"].as_array().map(Vec::len),
+            Some(3),
+            "each stamp is stored once, however many fields it won: {text}"
+        );
+        assert!(
+            serde_json::from_str::<Memory>(r#"{"f":{"notes":["x",3]}}"#).is_err(),
+            "a field naming a stamp that is not there is no memory"
         );
     }
 
