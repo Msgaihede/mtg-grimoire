@@ -121,6 +121,9 @@ export default tseslint.config(
         Request: "readonly",
         Response: "readonly",
         URL: "readonly",
+        // Asked and answered: `play-upload.mjs` posts the token request as a form, which is
+        // what Google's token endpoint takes.
+        URLSearchParams: "readonly",
       },
     },
   },
