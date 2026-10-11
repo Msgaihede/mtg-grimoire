@@ -55,7 +55,7 @@ _For complete command options, coverage caveats, and environment flags, see [`do
   - `crates/grimoire-core` is the engine with no window dependency. It contains schemas, database migrations, decks, collection, wishlist, search, and Scryfall clients. Compiles to native and WASM.
   - `apps/desktop/src-tauri` is the desktop application: windows, menus, native updater, IPC commands (`#[tauri::command]`), and filesystem mirror.
 - **IPC Type Mirroring**:
-  - `packages/ui/lib/ipc.ts` is the hand-written TypeScript mirror of Rust structs.
+  - `packages/ui/lib/ipc.ts` is the hand-written TypeScript mirror of Rust structs: a barrel over one file per domain in `packages/ui/lib/ipc/`. Import it only as `@/lib/ipc` (ESLint refuses a domain file).
   - `packages/ui/lib/ipc.test.ts` asserts byte/field parity against the Rust source text to prevent schema drift.
 
 _For full architecture details and golden export fences, see [`docs/agent/ARCHITECTURE.md`](docs/agent/ARCHITECTURE.md)._
