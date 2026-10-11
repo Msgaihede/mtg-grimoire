@@ -1,6 +1,6 @@
 # Generated release notes — design
 
-**Date:** 2026-10-11 · **Status:** awaiting the owner's review
+**Date:** 2026-10-11 · **Status:** approved by the owner, 2026-10-11 · **Plan:** `docs/superpowers/plans/2026-10-11-generated-release-notes.md`
 
 ## 1. Goal
 
@@ -107,7 +107,7 @@ tests, documentation, internal plumbing — is left out of the text and accounte
 ## 5. The generator
 
 Plain `.mjs` in `scripts/changelog/`, with no dependency beyond Node, shared by CI and the
-backfill. Four modules and a command line:
+backfill. Five modules and a command line:
 
 | File | Does |
 | --- | --- |
@@ -115,6 +115,7 @@ backfill. Four modules and a command line:
 | `prompt.mjs` | Builds the instructions and the input from those entries. |
 | `openrouter.mjs` | One request, with a timeout and retries. |
 | `notes.mjs` | The JSON schema, the checks, and the markdown renderer. |
+| `generate.mjs` | Asks, checks, and asks once more on a failed check (added while planning). |
 | `cli.mjs` | `next`, `tag`, `backfill`, `push` — §6 and §8. |
 
 `git`, the GitHub API and OpenRouter are passed in as functions, so each module is tested with
