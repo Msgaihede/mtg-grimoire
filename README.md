@@ -59,6 +59,10 @@ Rust components are per toolchain, so after `rust-toolchain.toml` moves, `llvm-t
 ### Commands
 
 - `pnpm tauri dev` — run the app
+- `pnpm tauri:fast dev` — run the app with faster Rust rebuilds, on a nightly toolchain it
+  installs the first time ([`.cargo/fast.toml`](.cargo/fast.toml) has what it is and what it
+  measured); `pnpm cargo:fast <command>` is the same for any dev-profile cargo command. Neither
+  is the gate
 - `pnpm verify` — build + lint + `cargo fmt --check` + clippy + Vitest + cargo test; run
   before every commit
 - `pnpm storybook` — the component workbench, on a fake backend

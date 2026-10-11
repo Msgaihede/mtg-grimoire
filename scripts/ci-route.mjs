@@ -103,8 +103,10 @@ export const ARMS = [
   // the config that says where they build. **`core` because the lockfile is shared**: a
   // dependency bumped for the desktop moves the versions the engine's other two targets
   // compile, and `rust` builds neither of them. `frontend` is here as it was while the lockfile
-  // sat under `apps/desktop/src-tauri/*`; no test reads these three today, so that half is the cheap
-  // direction to be wrong in. Above the fail-safe for `storybook`'s sake, as the arm above is.
+  // sat under `apps/desktop/src-tauri/*`, and since 2026-10-11 because a test reads them:
+  // `scripts/rust-fast.test.mjs` holds the manifest and `.cargo/config.toml` to carrying nothing
+  // the pinned toolchain refuses, and `.cargo/fast.toml` to its two settings. Above the fail-safe
+  // for `storybook`'s sake, as the arm above is.
   // **The patterns are anchored, so these are the root's only** — `apps/desktop/src-tauri/Cargo.toml` and
   // `crates/card-scanner/.cargo/config.toml` match their own trees' arms below.
   // **And `android`**: the lockfile is what the APK links, and the root manifest names the light
