@@ -4471,6 +4471,49 @@ file beside the app, with a name typed freely, on a host that keeps files. Send 
 works where there are no files, takes a printing rather than a string, and sends what the
 scanner saw rather than what the sensor did.
 
+### Seen, 2026-10-11 — and what was not
+
+**The run was driven with a camera, on the phone face, in a real browser** — headless Chromium
+with its fake camera, over the Storybook fake (`pnpm mobile:scanner-smoke`, step 12, at 360×800
+and 412×915 under a touch pointer). Stopped, no press is drawn. Started, with the scanner's
+answers held back, a press opens nothing and says *Not enough of the scan yet…*. Then the
+dialog opens on eight frames spanning 1.1 to 2.0 seconds — each one, byte for byte and in
+order, a frame `scanner_frame` had been handed, and each drawn from the very text that goes on
+to be sent. The last is showing, the slider stands at 8 of 8 and reaches the first with its
+caption, *Play* walks them once and stops on the last; nothing is chosen and Send is out of
+reach with its reason; a printing sold three ways brings its finishes into view; one
+`scanner_submit` goes out with one argument holding all eight; the reference comes back, and
+Done hands the caret to the press. Every control in it is 44px or more and nothing hangs off
+the side.
+
+**At a desktop's size the dialog was looked at in Storybook, in a browser at 1100×820**: 576px
+wide with nothing off its side; *Play*, sampled every 60 ms, drew exactly one picture at every
+sample from the first to the last and stopped there; the slider moved to the second showed the
+second, captioned with how long before the press it was taken.
+
+**An independent review of the change found one thing that mattered, and it is fixed**: a run
+could span a reset the session makes itself — a mode switch, an accepted filter — and be
+labelled with the new mode or filter throughout. *The run*, above, is what it does now.
+
+**The inbox has not been deployed, and nobody has sent a scan through it.** Past the page, every
+wire is held by tests on each side of it — the engine over a mock server, the Worker over fakes
+of its two bindings — and by nothing that crosses a real network. What only real use can show:
+
+- **What twenty real frames weigh.** Chromium's test pattern is some 7 kB a frame and says
+  nothing about it; forty to ninety kilobytes for a 960-pixel frame of a desk is an estimate,
+  and the 1.5 MB budget against it is unmeasured. On a camera whose frames are heavier the run
+  is shorter in frames, never over the budget.
+- **The desktop app's own window, and a phone in a hand.** Nobody has pressed Send in WebView2
+  or on Android; that a step between pictures does not flash was sampled in Chromium only.
+- **The web host.** There the scanner is a Worker and a frame's buffer is transferred to it;
+  that the ring's copy survives is held by a unit test that detaches the array as the host
+  does, not by a browser run with the WASM scanner.
+- **The edge**: that the bucket binding takes a write, that a browser's pre-flight is answered
+  as the suite answers it, and whether 500 waiting runs is a ceiling a real week ever meets.
+  `infrastructure/scan-worker/README.md` has the deploy and the four probes.
+- **Inside a trade.** The Trade page mounts the scanner in a dialog of its own, and Send is not
+  offered there: a second dialog opened from inside that one has not been seen in a window.
+
 ## On the phone face
 
 The light app's phone face (below 1024px; [light-app.md](light-app.md)) has had a Scanner tab

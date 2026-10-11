@@ -615,6 +615,8 @@ async function phone(send, width, height) {
   if (!opened.said.includes(`Picture ${opened.pictures} of ${opened.pictures} · the moment you pressed`)) fail(`${at}: the last picture is not captioned as the press`);
   if (opened.disabled !== "true" || opened.reason !== "Choose the card in the last picture.") fail(`${at}: before any answer Send is ${opened.disabled} and says "${opened.reason}"`);
   if (opened.chosen !== 0 || opened.sent !== 0) fail(`${at}: the dialog opened with ${opened.chosen} answers chosen and ${opened.sent} scans sent`);
+  await sleep(200);
+  await page.shot("send-scan-run");
   // The slider reaches every picture: the first, and then back to the one the answer is about.
   const step = (to) => `(() => {
     const slider = smoke.sheet().querySelector('input[type="range"]');
