@@ -79,7 +79,7 @@ export const MAX_RUN_BYTES = 2 * 1024 * 1024;
 /**
  * Five hundred runs waiting to be read, and then the inbox is full until it is emptied.
  *
- * **This is the bound on what a stranger can make the account store**: 500 × 2 MB is about a
+ * **This is the bound on what the inbox can be made to store**: 500 × 2 MB is about a
  * gigabyte against R2's free ten, whoever is sending and however many addresses they send from.
  * A rate limit cannot be that bound — it is per address and, measured on the relay, far looser
  * than its number reads. The price is that a flood can fill the inbox and turn honest readers

@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fireEvent, fn, userEvent, waitFor, within } from "storybook/test";
-import { FAKE_SCAN_ID, SCAN_INBOX_FULL } from "@grimoire/fake/db";
+import { FAKE_SCAN_ID, SCAN_INBOX_FULL, SCAN_NOT_ON } from "@grimoire/fake/db";
 import { RUN_PICTURES, RUNS } from "./fixtures";
 import { SubmitScanDialog } from "./SubmitScanDialog";
 import { CHOOSE_ITS_FINISH, CHOOSE_THE_CARD, disclosure, SEARCH_PROMPT } from "./submitText";
@@ -20,6 +20,11 @@ import { CHOOSE_ITS_FINISH, CHOOSE_THE_CARD, disclosure, SEARCH_PROMPT } from ".
  * Bolts of its corpus come back as four tiles — sold one, two, one and three ways, which is every
  * shape the finish group takes — and Send is answered by the fake's `scanner_submit`.
  *
+ * **The world is a supporter's** (`patreonGroupEntitled`): sending a scan is a supporter's, the
+ * pages draw the press that opens this dialog for nobody else, and the fake's `scanner_submit`
+ * refuses every other world as the engine does. `MembershipEnded` is the one way a reader who
+ * is not a supporter can be looking at it.
+ *
  * **Nothing is chosen for the reader** except a finish the printing leaves no choice about. The
  * scanner's own guess opens the search and selects nothing: a scan is sent because the scanner
  * got it wrong or could not say, so its answer is the one label that cannot be trusted here.
@@ -38,7 +43,10 @@ const meta = {
     onDismiss: fn(),
     onClose: fn(),
   },
-  parameters: { docs: { story: { inline: false, height: "820px" } } },
+  parameters: {
+    docs: { story: { inline: false, height: "820px" } },
+    fake: { fault: "patreonGroupEntitled" },
+  },
 } satisfies Meta<typeof SubmitScanDialog>;
 
 export default meta;
@@ -192,6 +200,29 @@ export const InboxFull: Story = {
       within(printings).getByRole("radio", { name: "Lightning Bolt — LEA 161" }),
     ).toHaveAttribute("aria-checked", "true");
     await expect(send).not.toHaveAttribute("aria-disabled");
+  },
+};
+
+/**
+ * A membership that ended while the dialog was open — the press is gone from the page behind
+ * it, and the dialog is still here. Send is refused before anything is read or sent, in the
+ * engine's sentence, which **names no membership and no way to get one**: this dialog is
+ * drawn by the build Google Play distributes too.
+ */
+export const MembershipEnded: Story = {
+  parameters: { fake: { fault: "patreonLapsed" } },
+  play: async ({ canvasElement }) => {
+    const { dialog, printings } = await opened(canvasElement);
+    await userEvent.click(within(printings).getByRole("radio", { name: "Lightning Bolt — LEA 161" }));
+    const send = within(dialog).getByRole("button", { name: "Send scan" });
+    await userEvent.click(send);
+
+    const refusal = await within(dialog).findByRole("alert");
+    await expect(refusal).toHaveTextContent(SCAN_NOT_ON);
+    await expect(refusal.textContent).not.toMatch(
+      /patreon|supporter|membership|pledge|subscri|payment/i,
+    );
+    await expect(within(dialog).queryByText("Sent — thank you.")).toBeNull();
   },
 };
 

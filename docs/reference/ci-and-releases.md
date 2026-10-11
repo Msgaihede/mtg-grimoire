@@ -881,19 +881,29 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     (`scripts/release-rule.test.ts`: *asks for the token alone, and does nothing without it*.)
   - **The scan inbox is the fourth Worker a release deploys (2026-10-11, the same day; the
     owner's decision, with the card scanner's Send — #890).** `scan-deploy` puts
-    `infrastructure/scan-worker/` on `mtg-grimoire-scans.denmark-east.workers.dev`, **behind
+    `infrastructure/scan-worker/` on `https://scans.mtg-grimoire.app` — a Custom Domain from its
+    first deploy, with no `workers.dev` address beside it — **behind
     the share Worker and ahead of the web app**: the page's policy names that host and its
     Send waits on that Worker's CORS answer, so `web-deploy` now needs it. It reads the
     relay's token — the one that has deployed a Worker with a bucket bound — and the token
     alone decides, as for the other two. No database, so one `wrangler` line and not two; no
-    bundle, so nothing downloaded: the script imports nothing outside its own folder. **Its
+    bundle, so nothing downloaded: the script's one import from outside its folder is the relay's
+    token module, which its `wrangler.jsonc` `alias` gives a path for
+    (`scripts/scan-worker-alias.test.ts`). **Its
     probe stores nothing** (`scripts/scan-deploy-probe.ts`, seven requests, held to the
     Worker's own code over a bucket that throws if it is touched): a probe that wrote would
     put a scan nobody sent in the inbox on every release, so the bucket's binding is shown by
-    the first scan a reader sends and by nothing in the job. ⚠️ **The bucket has to exist
+    the first scan a supporter sends and by nothing in the job. ⚠️ **The bucket has to exist
     before the first release that carries the job** — `mtg-grimoire-scans`, the owner's to
     create — or `wrangler deploy` fails naming the binding and, since `web-deploy` waits for
-    this job, the web app is not deployed and the release stays a draft. The counts above —
+    this job, the web app is not deployed and the release stays a draft. ⚠️ **And so does its
+    one secret** (the same day, when sending a scan became a supporter's): the Worker verifies
+    the relay's token before it reads a scan, so it holds `RELAY_HMAC_KEY`, the owner's to put
+    there with the relay's value. A `secret put` did not stick on the share Worker before that
+    Worker existed, so the first deploy is by hand and the secret straight after it
+    (`infrastructure/scan-worker/README.md`, *Deploying*). Without it every `POST /scan` is a
+    500 that names the key, the probe's requests at the door say so, the job fails, and the
+    release stays a draft with the web app undeployed. The counts above —
     *three deploys*, *five wrangler lines*, the mutation table's test names — are that
     morning's; the fence now says four jobs and six lines. **Not until a release**: the job
     has run nowhere but in the fence.
@@ -1429,7 +1439,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     token the three jobs end green having deployed nothing, and each says so in the run's
     summary. **The scan inbox's bucket** (`mtg-grimoire-scans`) is the owner's to create, once,
     before the first release that carries `scan-deploy`:
-    `npx wrangler r2 bucket create mtg-grimoire-scans --location weur`.
+    `npx wrangler r2 bucket create mtg-grimoire-scans --location weur`. **And its secret**,
+    before that release too: `RELAY_HMAC_KEY`, with the value the relay and the share Worker
+    hold, put on the scan Worker after a first deploy by hand
+    (`infrastructure/scan-worker/README.md`, *Deploying* — three steps, in order).
   - **Is `schema.sql` what production holds? Compared 2026-10-11: it is.** The baseline is
     frozen on the claim that it is, so an agent compared it at the owner's word. One read of
     the live database's `sqlite_master` (`SELECT type, name, tbl_name, sql … ORDER BY type,

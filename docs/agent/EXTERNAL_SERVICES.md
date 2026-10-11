@@ -345,14 +345,28 @@ full costs a sentence in the dialog and nothing else. It is the only place a pic
 device; the scanner still examines every frame where it was taken and keeps none past those two
 seconds.
 
-**`scanner_submit::SCAN_BASE` is its address**,
-`https://mtg-grimoire-scans.denmark-east.workers.dev`, compiled in and public on `RELAY_BASE`'s
-terms — the Worker's `name` and the account's subdomain, which `scan-worker`'s own
-`wrangler.test.ts` holds to the engine's line. **It is the one write on the account that is
-behind no token**, since a reader is not asked for a membership to say the scanner was wrong; so
-it is a Worker of its own that binds the least there is — one R2 bucket and one rate limiter, **no
-D1, no Durable Object and no secret** — and it offers no way to read, list or delete what it took.
-What bounds it is in its own code: five to twenty frames and 2 MB a run (a single picture is
+**`scanner_submit::SCAN_BASE` is its address**, `https://scans.mtg-grimoire.app`, compiled in
+and public on `RELAY_BASE`'s terms — a Custom Domain on the web app's zone, as the relay's and
+the share Worker's are, and the route's `pattern` in `scan-worker`'s `wrangler.jsonc`, which
+its own `wrangler.test.ts` holds to the engine's line. It has no `workers.dev` address: no
+build was ever cut with one.
+
+**Sending a scan is a supporter's** (the owner's decision, 2026-10-11; it was first built open
+to anybody). Three places hold it. The page draws the press only where `sync_supporter_status`
+reads active or grace (`useMaySendScans`) — **and says nothing at all where it does not**,
+because the Play build draws that page and may not lead a reader to a membership. The engine
+refuses a device that is not entitled before it reads a picture, and sends the relay's token
+as a bearer. And the Worker verifies that token with `RELAY_HMAC_KEY` before it reads anything
+about the scan (`src/auth.ts`) — the share Worker's check of a publish, with the same key and
+the same imported module. ⚠️ **So the key is on three Workers now**, each set by the owner
+with one value (the secrets rule is unchanged: never in a file, never typed by an agent); this one
+verifies and never mints, and the token's claims reach neither the bucket, the limiter's key
+nor a log.
+
+It is a Worker of its own that binds the least there is — one R2 bucket and one rate limiter,
+**no D1 and no Durable Object** — and it offers no way to read, list or delete what it took.
+What bounds a supporter's device, and a leaked token for the day it lives, is in its own code:
+five to twenty frames and 2 MB a run (a single picture is
 refused, whichever way it is sent), a label checked field by field and stored only as checked,
 12 submissions a minute from one address, and **500 runs waiting, after which it refuses until
 the owner has emptied it** — about a gigabyte, whoever is sending. The count is taken once a run
@@ -361,7 +375,8 @@ back nor one who hangs up between the two writes gets past it; a burst that coun
 instant can still leave it holding the cap and that burst, which only a database or a Durable
 Object could close.
 
-**What is stored says nothing of who sent it** — no device, group or account id, no address, and
+**What is stored says nothing of who sent it** — no device, group or account id (the token names
+all three, and none of it is kept), no address, and
 the Worker's logging is off (`observability.enabled: false`) so Cloudflare keeps no request line
 either. The privacy policy (`apps/light/public/privacy.html`, *Sending a scan*) says exactly
 that, and Google Play's Data safety form has to say *Photos* and *Videos*, both (the owner's

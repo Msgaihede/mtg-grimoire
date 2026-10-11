@@ -890,11 +890,15 @@ jobs:
   # deploy. No database, so no migration; no bundle, so nothing downloaded: the Worker is its
   # own script and `wrangler.jsonc`, which binds one R2 bucket (`mtg-grimoire-scans`, the
   # owner's to have created: the deploy fails naming the binding until it exists) and one
-  # rate limiter. It holds no secret of its own.
+  # rate limiter, and states one Custom Domain (`scans.mtg-grimoire.app` — the token's zone
+  # permission, as for the relay). **It holds one secret, `RELAY_HMAC_KEY`, which is
+  # Cloudflare's to keep and the owner's to have set**: sending a scan is a supporter's, and
+  # the Worker checks the relay's token. A deploy neither reads nor changes it and this
+  # workflow never sees it; unset, the probe's requests at the door answer 500 and say so.
   #
   # **The probe stores nothing.** No request of it reaches the bucket — a probe that did would
   # put a scan nobody sent in the inbox on every release — so what shows the binding takes a
-  # write is the first scan a reader sends. Everything else `relay-deploy` says of itself holds
+  # write is the first scan a supporter sends. Everything else `relay-deploy` says of itself holds
   # here: nothing built, the pinned `wrangler` run by path, every line held by the fence.
   scan-deploy:
     name: scan (deploy)
@@ -969,8 +973,9 @@ jobs:
         working-directory: infrastructure/wrangler
         run: npm ci --ignore-scripts
 
-      # The one step the token reaches, and the deploy: live the moment it returns. The script
-      # imports nothing outside its own folder, so it bundles in a job with no workspace links.
+      # The one step the token reaches, and the deploy: live the moment it returns. From the
+      # Worker's folder; its `alias` is what lets the script's one import of the relay's token
+      # module bundle in a job with no workspace links (`scripts/scan-worker-alias.test.ts`).
       - name: Deploy the Worker
         if: steps.token.outputs.present == 'true'
         working-directory: infrastructure/scan-worker
@@ -980,8 +985,9 @@ jobs:
           WRANGLER_SEND_METRICS: "false"
         run: node ../wrangler/node_modules/wrangler/bin/wrangler.js deploy
 
-      # The README's seven, asked of the real address: the route, the two refusals that say what
-      # the inbox takes, the web app's origin let in and another's not, and nothing served back.
+      # The README's seven, asked of the real address: the route, the door shut to no token and
+      # to a nonsense one — a 500 there is a signing key the owner has not set — the web app's
+      # origin let in and another's not, and nothing served back.
       # ⚠️ **A failure here leaves the scan inbox deployed and the release a draft.**
       - name: Ask the host
         if: steps.token.outputs.present == 'true'

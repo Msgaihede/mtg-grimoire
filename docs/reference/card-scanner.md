@@ -4334,6 +4334,19 @@ before any request, and the inbox has no shape a single picture fits.
 file scans into one side of a trade, and there the press is not drawn, as *Create deck…* is
 not. Both pages hold that with a test.
 
+**And it is a supporter's** (the owner's decision, 2026-10-11, the same day; it was built first
+for every reader). Three layers hold it, as three hold the run. The press is drawn only where
+the membership reads active or in grace (`submit/useMaySendScans.ts`, one hook for both
+pages); the engine refuses any other device before it reads a picture, and sends the relay's
+token with the scan; and the inbox verifies that token before it reads anything else
+(`infrastructure/scan-worker/src/auth.ts`). **Where the press is not drawn, nothing is — no
+greyed button, no sentence, no hint.** The phone page is the one Google Play distributes, and
+it may not lead a reader to a membership bought elsewhere, so the silence is the rule and not
+an omission. The engine's three sentences for it (`NOT_ON`, `UNCONFIRMED`, `NOT_ACCEPTED`)
+name no membership either, and a test holds every sentence in that file to it. Both pages
+hold the four readings — active, grace, never, ended — and the read still in flight with a
+test apiece.
+
 **It is the only thing here that sends a picture off the device, and it takes two presses.** The
 first freezes the run and opens a dialog on it; nothing has been sent. The reader looks through
 the pictures, chooses **the exact printing** and **its finish** by hand, and the second press
@@ -4491,6 +4504,13 @@ reach with its reason; a printing sold three ways brings its finishes into view;
 Done hands the caret to the press. Every control in it is 44px or more and nothing hangs off
 the side.
 
+**And the membership, the same evening, in the same run**: the page that scans through the
+smoke's first nine steps is a device with no membership behind it. Started again and answered
+eight more frames — more than a run needs — it draws no control with *send* in its name and no
+word of a membership anywhere on the page. Everything above then happens on the same page
+loaded as a supporter's (`?fault=patreonGroupEntitled`), put into Exact first so that the mode
+the label names is one the reader chose.
+
 **At a desktop's size the dialog was looked at in Storybook, in a browser at 1100×820**: 576px
 wide with nothing off its side; *Play*, sampled every 60 ms, drew exactly one picture at every
 sample from the first to the last and stopped there; the slider moved to the second showed the
@@ -4513,8 +4533,15 @@ of its two bindings — and by nothing that crosses a real network. What only re
 - **The web host.** There the scanner is a Worker and a frame's buffer is transferred to it;
   that the ring's copy survives is held by a unit test that detaches the array as the host
   does, not by a browser run with the WASM scanner.
+- **The door, end to end.** No real token has met the Worker: that the key the owner sets on it
+  is the relay's — a wrong one refuses every supporter with *the server did not accept this
+  device*, and no probe can tell the two apart — and that a token minted by the live relay
+  verifies there, are shown by the first scan a supporter sends. Nor has the membership been
+  read on the desktop page with a camera live; both pages' tests hold it over mocks.
 - **The edge**: that the bucket binding takes a write, that a browser's pre-flight is answered
-  as the suite answers it, and whether 500 waiting runs is a ceiling a real week ever meets.
+  as the suite answers it, that the deploy states `scans.mtg-grimoire.app` as the relay's and
+  the share Worker's names were, and whether 500 waiting runs is a ceiling a real week ever
+  meets.
   `infrastructure/scan-worker/README.md` has the deploy — a release's `scan-deploy` job, since
   2026-10-11 — and the probes that job asks of the live address.
 

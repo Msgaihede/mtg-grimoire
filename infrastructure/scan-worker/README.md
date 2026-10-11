@@ -5,6 +5,13 @@ one route: the card scanner's **Send** posts one scan to it — the last couple 
 frames the scanner was given, with the exact printing and finish a reader says they show — and
 it keeps both so the scanner can be tested against them and improved (issue #776).
 
+**Sending a scan is a supporter's** (the owner's decision, 2026-10-11). The app draws the press
+only on a device whose sync group a membership covers, the engine refuses a send from any other
+before it builds a request, and this Worker takes a scan only with the relay's token on it
+(`src/auth.ts`) — the check the share Worker makes of a publish, with the same key. It answers
+at **`https://scans.mtg-grimoire.app`**, a Custom Domain on the web app's zone, and nowhere
+else.
+
 **A scan is a run of frames, never one picture.** The scanner decides over a run — a lock that
 settles, evidence that pools, a vote that crosses a bar — so one frame cannot say what it did.
 What is sent is five to twenty of the frames it actually judged, byte for byte and in order,
@@ -22,26 +29,35 @@ asked on a launch, on a schedule or on a frame.
 
 ## Why it is a Worker of its own
 
-**Blast radius, and the kind of route this is.** Every other write this project's servers take is
-behind a token the relay minted, which is behind a membership. This one is behind nothing — a
-reader is not asked to pay to say the scanner was wrong — so it is the one route on the account a
-stranger can make store bytes. It therefore binds the least there is: **one R2 bucket and one rate
-limiter. No D1, no Durable Object, no secret, no service binding, and it imports no module of
-another Worker's.** A fault here can fill or lose the scans; it cannot reach a membership, a sync
-log or a shared binder, and a deploy here cannot break any of them.
+**Blast radius.** It binds the least there is: **one R2 bucket and one rate limiter. No D1, no
+Durable Object, no service binding.** A fault here can fill or lose the scans; it cannot write a
+membership, a sync log or a shared binder, and a deploy here cannot break any of them.
+
+⚠️ **It does hold one secret, and it is the one that matters**: `RELAY_HMAC_KEY`, the key the
+relay signs every sync token with, so that this Worker can tell a supporter's device from a
+stranger (`src/auth.ts`). It was first built open to anybody and held nothing; the door cost it
+that, and the key is on three Workers where it was on two. What this one does with it is
+`verify` and nothing else. It imports that one module of the relay's (`wrangler.jsonc`'s
+`alias`), mints nothing, returns no claim, stores none and keeps no log:
+`src/wrangler.test.ts` holds that the key is read in `auth.ts` alone, and
+`scripts/scan-worker-alias.test.ts` that the script a deploy uploads cannot reach `mint`.
 
 **And nothing is ever read back out through it.** There is no `GET` for a run or a label, no
-listing and no delete: a Worker with no way to tell a stranger from its maker must not offer
-either of them anything. An upload route that also served what it took would be free image
-hosting for whoever found it. The maker reads the bucket with his own credentials (below).
+listing and no delete: the token says a device may send and nothing says a request is the
+maker's, so no sender is offered either. An upload route that also served what it took would be
+image hosting for whoever held a token. The maker reads the bucket with his own credentials (below).
 
 ## The route
 
 | Route | Body | Answer |
 | --- | --- | --- |
-| `POST /scan` | the run's frames end to end, as `application/octet-stream` | `201 { "id": "…" }` |
+| `POST /scan`, with `authorization: Bearer <the relay's token>` | the run's frames end to end, as `application/octet-stream` | `201 { "id": "…" }` |
 | `OPTIONS /scan` (a browser's pre-flight) | | `204`, for an origin on `APP_ORIGINS` |
 | anything else | | `404`, or `405` on `/scan` |
+
+**The token is the one the app syncs with** — minted by the relay for a device whose group a
+membership covers, good for a day — and it is checked and thrown away: `verify` answers yes or
+no, and no claim of it reaches the handler, the bucket, the limiter's key or a log.
 
 **The body is the JPEGs one after another with nothing between them.** The label says how long
 each is (`run[n].bytes`), which is the only framing there is — so what is stored is the
@@ -59,6 +75,8 @@ The refusals, in the order they are checked — each before anything that costs 
 | --- | --- | --- |
 | 405 | | not `POST` (ahead of the limiter) |
 | 429 | `rate_limited` | more than 12 a minute from one address |
+| 500 | `no_key` | this Worker holds no `RELAY_HMAC_KEY`: it was deployed and its secret never set (*Deploying*) |
+| 401 | `unauthorized` | no bearer token, or one the relay's key does not verify — expired, another key's, edited, junk. One answer for all of them, and **ahead of everything about the scan**: a stranger's type, label and body are not read |
 | 415 | | not sent as `application/octet-stream` — **`image/jpeg`, one picture's type, among them** |
 | 400 | | no label, or one `src/label.ts` refuses (the sentence names the field, and the frame) — **a `run` of fewer than five frames among them** |
 | 413 | `run_limit` | over 2 MB by what the label's frames add up to, or by its `content-length` |
@@ -70,7 +88,11 @@ The refusals, in the order they are checked — each before anything that costs 
 The app words each of these for a reader itself (`crates/grimoire-core/src/scanner_submit.rs`),
 matching on the status or the `code` and never on the sentence, which is written for a developer
 with a `curl`. It also refuses a run that is too short, too long or too heavy before any request,
-so the 400 and the 413 above are backstops a reader does not meet.
+so the 400 and the 413 above are backstops a reader does not meet — and a device that is not a
+supporter's before any request too, so a 401 is what a token that died in flight, or a key that
+is not the relay's, looks like. It words a 401 or a 403 as *the server did not accept this
+device* and **never as anything about a membership**: the Android build is Google Play's, and
+may not lead a reader to one bought elsewhere.
 
 ## What is stored
 
@@ -130,7 +152,10 @@ answered: a run replayed without them is another scan.
 | `decided` | the printing the scanner had decided on by this frame, or `null` — the frame where this first appears is the one it made up its mind on |
 | `detail` | a larger picture went to the scanner with this frame. **It is not in the run** — a replay of a `detail` frame gives the scanner less than it had |
 
-**Nothing stored says who sent it**: no device, no group, no account, no address. The privacy
+**Nothing stored says who sent it**: no device, no group, no account, no address. The token
+that opened the door names the first three, and none of it is kept — not in either object
+(`src/auth.test.ts`, *leaves nothing of its token in what is stored*) and, with observability
+off, not in a log. The privacy
 policy (`apps/light/public/privacy.html`, *Sending a scan*) promises that, so a field added to
 the label is a sentence owed there — and `id` is the only way one submission is found again,
 which is why the app shows it to the reader.
@@ -143,6 +168,9 @@ cap all the same — see below.
 
 ## What bounds it
 
+- **A supporter's token** (`src/auth.ts`). Who can store a byte here is the devices a
+  membership covers, and whoever holds a leaked token for the day it lives. Everything below is
+  what bounds *them*.
 - **500 runs waiting** (`MAX_PENDING`), counted by listing `runs/` — one list a submission, no
   counter to drift. With the 2 MB cap that is **about a gigabyte**, against R2's free ten,
   whoever is sending and from however many addresses. A full inbox turns scans away with a
@@ -172,15 +200,19 @@ cap all the same — see below.
 - **A strict label.** A submission without a whole one is refused, not stored.
 
 It does not keep a request off the account's 100,000-a-day budget: the Worker has already been
-invoked to refuse it, and a rule in front of the Worker needs a zone, which `workers.dev` has not.
+invoked to refuse it. A rule in front of the Worker is possible now that it is on the zone, and
+none is set.
 
 ## A browser
 
 The web app's engine sends from a page with `fetch`, so `src/cors.ts` answers the pre-flight and
 puts `Access-Control-Allow-Origin` on every answer — the refusals above all — for an origin on
 `APP_ORIGINS`, which is exactly `https://mtg-grimoire.app`. It is the relay's `cors.ts`, copied,
-and it is **not an access control** here either: `curl` sends whatever `Origin` it likes. What it
-buys is that a foreign page cannot spend a reader's browser on filling the inbox. The web
+and it is **not an access control** here either — `src/auth.ts` is, and `curl` sends whatever
+`Origin` it likes. What it buys is that a foreign page cannot have a reader's browser ask this
+Worker and read what it answers. The pre-flight is told it may send `authorization`,
+`content-type` and `x-scan-label` — the three headers the engine sets — and is itself answered
+ahead of the door, since a browser sends it with no token. The web
 policy's `connect-src` names this Worker's host (`infrastructure/app-worker/_headers`), so **this
 Worker is deployed before a web build that asks it**: a page that asks a host with no CORS answer
 fails every request.
@@ -233,17 +265,49 @@ job deploys nothing, says so in the run's summary and ends green.
 deploy is by hand and asked for, each time, as for every Worker. `wrangler dev --local` is the
 only wrangler command an agent may run on its own.
 
-**What only the owner does, once**: create the bucket.
+**What only the owner does, once** — three things, and the order of the last two matters.
 
-```
-npx wrangler r2 bucket create mtg-grimoire-scans --location weur
-```
+1. **Create the bucket.**
 
-The deploy fails naming the `SCANS` binding until the bucket exists — and in a release that
-stops the web app's deploy too, which waits for this one. (Created 2026-10-11, by the owner's
-word.) There is no secret to set and no schema to apply. Before the Android release that
-carries Send, the Play Console's Data safety form changes — `docs/play/README.md`, *Data
-safety*.
+   ```
+   npx wrangler r2 bucket create mtg-grimoire-scans --location weur
+   ```
+
+   The deploy fails naming the `SCANS` binding until the bucket exists — and in a release that
+   stops the web app's deploy too, which waits for this one. (Created 2026-10-11, by the
+   owner's word.)
+
+2. **Let the deploy token state a Custom Domain**: `CLOUDFLARE_INFRA_API_TOKEN` needs *Zone →
+   Workers Routes → Edit* on `mtg-grimoire.app`, as the relay's and the share Worker's own
+   Custom Domains do (added 2026-10-11, by the owner's word —
+   `docs/reference/ci-and-releases.md`, *What only the owner can do*). With it the deploy
+   states `scans.mtg-grimoire.app`'s DNS record and certificate itself. A deploy by hand uses
+   the owner's own login, which has it.
+
+3. **Set the one secret, after the first deploy** — from this folder, in a terminal of the
+   owner's own, never an agent's:
+
+   ```
+   node ../wrangler/node_modules/wrangler/bin/wrangler.js secret put RELAY_HMAC_KEY
+   ```
+
+   with the **same value** the relay and the share Worker hold. ⚠️ **After, not before**: on
+   the share Worker a `secret put` against a Worker that did not exist yet did not stick
+   (`infrastructure/share-worker/README.md`, *Deploying*). ⚠️ **Cloudflare never shows a
+   secret back**, so the value comes from wherever the owner kept it. If it was not kept, the
+   way out is a new key put on all three Workers in one sitting — which ends every token
+   already minted, so each device is refused once and asks the relay for a new one. A deploy
+   neither reads nor changes the secret: it is set once.
+
+   **Until it is set the Worker answers every `POST /scan` with 500, `no_key`**, and the probe
+   below fails saying so by name. ⚠️ **In a release that leaves the release a draft and the web
+   app undeployed** — `web-deploy` and `publish` wait for `scan-deploy`. So the first deploy
+   is the one to make **by hand** (below), with the secret straight after it, before the
+   release that carries Send. If a release gets there first, set the secret and re-run that
+   run's failed jobs.
+
+There is no schema to apply. Before the Android release that carries Send, the Play Console's
+Data safety form changes — `docs/play/README.md`, *Data safety*.
 
 **By hand** — a first deploy that should not wait for a release, or one between releases —
 from this folder, with the pinned tool:
@@ -253,10 +317,10 @@ npm ci --ignore-scripts --prefix ../wrangler
 node ../wrangler/node_modules/wrangler/bin/wrangler.js deploy
 ```
 
-Read the address it prints. It must be `https://mtg-grimoire-scans.denmark-east.workers.dev` —
-the Worker's name and the account's subdomain — which is `scanner_submit::SCAN_BASE` in the
-engine, a source in the web policy and a row of the privacy policy. `src/wrangler.test.ts`
-holds the name to the engine's line.
+Read what it prints: the route `scans.mtg-grimoire.app (custom domain)`, and no `workers.dev`
+address. `https://scans.mtg-grimoire.app` is `scanner_submit::SCAN_BASE` in the engine, a
+source in the web policy and a row of the privacy policy; `src/wrangler.test.ts` holds the
+route's pattern to the engine's line. Then step 3 above: the secret.
 
 **Ask the host, rather than this file, what it does.** The release's own probe holds no token
 and stores nothing; from the repository's root:
@@ -270,21 +334,23 @@ Its seven requests, and what a deployed Worker answers:
 | Request | Answer |
 | --- | --- |
 | `GET /scan` | `405`, `method not allowed` |
-| `POST /scan` as `image/jpeg` | `415`, `a scan is sent as application/octet-stream` — one picture's type, refused |
-| `POST /scan` as `application/octet-stream`, with no label | `400`, `that request carried no label` |
+| `POST /scan` with no token | `401`, `unauthorized` — the door is shut |
+| `POST /scan` with `authorization: Bearer nonsense` | `401`, `unauthorized` — the door holds a key. ⚠️ **`500` here, and on the request above, is the secret's tell: `RELAY_HMAC_KEY` is not set** |
 | `OPTIONS /scan` from `https://mtg-grimoire.app` | `204`, with that origin allowed |
-| `POST /scan` from `https://mtg-grimoire.app`, with no type | `415`, and readable by the page: the origin allowed |
+| `POST /scan` from `https://mtg-grimoire.app`, with no token | `401`, and readable by the page: the origin allowed |
 | `OPTIONS /scan` from another origin | `405`, with no origin allowed |
 | `GET /runs/x.bin` | `404`, `not found` — nothing is served back |
 
 `scripts/scan-deploy-probe.test.ts` asks the same seven of this tree's code, over a bucket that
-throws if it is touched. **None of them stores anything**, so none shows that the bucket's
-binding takes a write: send one real scan from the app and read it back out of the bucket
-(*Reading the inbox*, above).
+throws if it is touched. **None of them stores anything and none holds a token**, so two things
+are shown only by a real scan: that the bucket's binding takes a write, and that **this
+Worker's key is the relay's** — a wrong key refuses nonsense exactly as the right one does, and
+then answers every supporter's Send with *the server did not accept this device*. Send one scan
+from a supporter's device and read it back out of the bucket (*Reading the inbox*, above).
 
-**Until a Worker is deployed** a press on Send is answered in a sentence — *the server answered
-404* from a desktop or a phone, *the server could not be reached* from a browser — and nothing
-else in the app notices.
+**Until a Worker is deployed** the name does not resolve, so a supporter's press on Send is
+answered in a sentence — *the server could not be reached* — and nothing else in the app
+notices.
 
 ## Testing
 
@@ -296,6 +362,11 @@ handler is a plain function over an injected `Env`, driven as `worker.fetch(requ
 pnpm exec vitest run --project scan-worker
 pnpm exec tsc -p infrastructure/scan-worker/tsconfig.json
 ```
+
+`auth.test.ts` is the door, and every refusal in it is asserted over a bucket that throws.
+`fake.ts` mints the suite's tokens with the relay's own `mint` and a key of its own, and sends
+one by default — so every request the other suites make is a supporter's, and each is about
+what it says it is about.
 
 `label.test.ts` and `wrangler.test.ts` read the engine's Rust, this folder's `wrangler.jsonc` and
 the privacy policy as text: a label field the engine sends and this side does not read, an

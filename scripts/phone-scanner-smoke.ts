@@ -717,6 +717,13 @@ async function phone(send: Send, width: number, height: number) {
   // The rest is a supporter's device: the same page, in the world where the relay knows it.
   await page.go("/scanner?fault=patreonGroupEntitled");
   await page.until(`${TRACK}?.readyState === 'live'`, "a supporter's camera");
+  // Exact, as the page above was left: the mode a label names has to be the one in force, and
+  // a page still on its default would prove nothing about that.
+  await page.evaluate(`smoke.press(smoke.button('Exact'), 'Exact')`);
+  await page.until(
+    `smoke.button('Exact').getAttribute('aria-pressed') === 'true'`,
+    "Exact to take on a supporter's page",
+  );
   await page.until(`smoke.button('Stop scanning') !== undefined`, "a supporter's scanner to run");
   await page.evaluate(`smoke.press(smoke.button('Stop scanning'), 'Stop scanning')`);
   await page.until(`smoke.button('Start scanning') !== undefined`, "the scanner to stop");

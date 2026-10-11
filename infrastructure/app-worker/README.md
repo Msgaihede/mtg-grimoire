@@ -167,9 +167,9 @@ a request it matches is a 429 once the free plan's day is spent.
   Pool** (it sends no `Access-Control-Allow-Origin`, so a page cannot read it whatever a policy
   says).
 - **The scan inbox is in `connect-src` since 2026-10-11, and answers this origin by name as the
-  relay does** (issue #776). `mtg-grimoire-scans.denmark-east.workers.dev` is the engine's
-  `scanner_submit::SCAN_BASE`, asked only when a reader presses the card scanner's Send: one
-  `POST` of a run of frames with its label in a header, which costs a pre-flight that Worker answers for
+  relay does** (issue #776). `scans.mtg-grimoire.app` is the engine's
+  `scanner_submit::SCAN_BASE`, asked only when a supporter presses the card scanner's Send: one
+  `POST` of a run of frames with its label in a header and the relay's token as a bearer, which costs a pre-flight that Worker answers for
   the origins on its own `APP_ORIGINS` (`infrastructure/scan-worker/src/cors.ts`). One fact in
   two deploys again, **and that Worker's comes first** (in a release, `scan-deploy` runs ahead of
   `web-deploy`) — until it is deployed a Send from a page
