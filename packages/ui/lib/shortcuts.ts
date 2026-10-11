@@ -180,6 +180,20 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
         { pointer: "click", shift: true },
       ],
     },
+    {
+      id: "selectAll",
+      label: "Select all cards",
+      /**
+       * Every card the wall's filters match (issue #910), and bound from this entry:
+       * `features/search/selectAllSurface.ts` matches against it.
+       *
+       * **`global`, beside `select`, for `select`'s reason** — it is live wherever a wall of cards
+       * is, which is five views and the deck editor's docked column, and a row repeated under six
+       * headings is six rows to keep in step. On a view with no wall the chord is the browser's
+       * own, as it always was.
+       */
+      chords: [{ key: "a", ctrl: true }],
+    },
   ],
   // The home page binds nothing of its own: its widget reorder is a drag and the keyboard's
   // equivalent lives on the card's own controls, which is a focused button rather than a chord

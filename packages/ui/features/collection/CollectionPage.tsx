@@ -2930,6 +2930,8 @@ export function CollectionPage() {
                 dragRecord={tileDrag}
                 // Ctrl and Shift build a set of tiles (issue #214).
                 selectionScope="collection"
+                // Ctrl+A is owed the whole collection, however long — `SELECT_ALL_LIMIT`.
+                selectAllLimit={Infinity}
                 // **The ring follows the *tile*, so `selectedId` is a composite.** Two tiles here
                 // carry one card id, and the pane's `selectedCardId` alone would ring both of a
                 // printing the reader opened one of. Built through {@link tileKeyOf} rather than

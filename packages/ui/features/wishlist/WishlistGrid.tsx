@@ -413,6 +413,8 @@ export const WishlistGrid = memo(function WishlistGrid({
       // mark, so it contributes no card payload to a group — `CardGrid`'s `dragRest` reads that
       // back through `readDragData` rather than inventing one.
       selectionScope="wishlist"
+      // Ctrl+A is owed the whole wishlist, however long — `CardGrid`'s `SELECT_ALL_LIMIT`.
+      selectAllLimit={Infinity}
       selectedId={selectedCardId}
       onSelect={selectCard}
       // The same arrow-key walk the other two page-walls take, on the same terms: `selectedId`

@@ -295,6 +295,15 @@ describe("the catalogue's own entries answer the presses they document", () => {
     expect(matchesShortcut(contextMenu, press("ContextMenu", { ctrl: true }))).toBe(false);
   });
 
+  // Exactness is what keeps this chord out of anything a view may one day bind beside it.
+  it("Ctrl+A selects everything, and neither Ctrl+Shift+A nor a bare A does", () => {
+    const selectAll = shortcut("global", "selectAll");
+    expect(matchesShortcut(selectAll, press("a", { ctrl: true }))).toBe(true);
+    expect(matchesShortcut(selectAll, press("a", { meta: true }))).toBe(true);
+    expect(matchesShortcut(selectAll, press("a", { ctrl: true, shift: true }))).toBe(false);
+    expect(matchesShortcut(selectAll, press("a"))).toBe(false);
+  });
+
   it("the pointer rows match no keypress at all", () => {
     expect(matchesShortcut(shortcut("global", "zoom"), press("z", { ctrl: true }))).toBe(false);
     expect(matchesShortcut(shortcut("global", "select"), press("z", { ctrl: true }))).toBe(false);
@@ -434,6 +443,7 @@ describe("the catalogue's shape", () => {
       "contextMenu",
       "zoom",
       "select",
+      "selectAll",
     ]);
     expect(SHORTCUTS.deckEditor.map((s) => s.id)).toEqual(["undo", "redo", "remove"]);
   });
@@ -450,6 +460,7 @@ describe("the catalogue's shape", () => {
       contextMenu: "Open context menu",
       zoom: "Resize the cards",
       select: "Select multiple cards",
+      selectAll: "Select all cards",
     });
     expect(Object.fromEntries(SHORTCUTS.deckEditor.map((s) => [s.id, s.label] as const))).toEqual({
       undo: "Undo",
