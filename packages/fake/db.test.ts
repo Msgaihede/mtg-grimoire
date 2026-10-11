@@ -10242,6 +10242,204 @@ describe("the deck row itself", () => {
   });
 
   /**
+   * `decks.tags` (user schema v62, issue #834): the reader's own **deck tags** — free text, and
+   * neither a Scryfall Tagger tag nor a deck label. `NOT NULL DEFAULT '[]'`, so a seed that never
+   * says and a deck made here both answer `[]`, on every read that carries the row.
+   *
+   * **The write tidies and refuses nothing** — `deck::clean_tags`: trimmed, inner whitespace
+   * closed to one space, empties dropped, and a repeat dropped whatever its capitals so the first
+   * spelling wins and the order stays the reader's.
+   */
+  it("wears no deck tags by default, and tidies the list a patch names", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1 })] });
+    const w = writeHandlers(db);
+    const r = readHandlers(db);
+    expect(r.deck_list()[0].tags).toEqual([]);
+    expect(r.deck_get({ id: 1, variant: "live" })!.deck.tags).toEqual([]);
+    expect(w.deck_create({ deck: { name: "Burn", formatKey: "modern" } }).tags).toEqual([]);
+
+    const tidied = ["No Gamechangers", "Budget", "Only removal"];
+    expect(
+      w.deck_update({
+        id: 1,
+        patch: {
+          tags: [
+            "  No   Gamechangers ",
+            "",
+            "Budget",
+            " \t ",
+            "budget",
+            "NO GAMECHANGERS",
+            "Only\tremoval",
+          ],
+        },
+      }).tags,
+    ).toEqual(tidied);
+    // The row every other read answers is the list as stored, not the list as sent.
+    expect(r.deck_list().find((d) => d.id === 1)!.tags).toEqual(tidied);
+    expect(r.deck_get({ id: 1, variant: "live" })!.deck.tags).toEqual(tidied);
+    // No length limit: a tag is the reader's sentence if they want one.
+    const long = "a deck I only bring out when ".repeat(20).trim();
+    expect(w.deck_update({ id: 1, patch: { tags: [long] } }).tags).toEqual([long]);
+  });
+
+  /** **The list replaces, it never merges** — which is what lets `[]` clear the column where a
+   *  `coalesce` patch otherwise cannot — and an absent key is still "leave it". */
+  it("replaces the whole tag list, clears it with [] and leaves it on an absent key", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1, tags: ["Budget", "Meme"] })] });
+    const w = writeHandlers(db);
+
+    expect(w.deck_update({ id: 1, patch: { name: "Renamed" } }).tags).toEqual(["Budget", "Meme"]);
+    expect(w.deck_update({ id: 1, patch: {} }).tags).toEqual(["Budget", "Meme"]);
+    // Not a union with what was there: `Budget` and `Meme` are gone.
+    expect(w.deck_update({ id: 1, patch: { tags: ["Gimmick"] } }).tags).toEqual(["Gimmick"]);
+    expect(w.deck_update({ id: 1, patch: { tags: [] } }).tags).toEqual([]);
+    expect(readHandlers(db).deck_list()[0].tags).toEqual([]);
+    // And a list of nothing but blanks is the empty list, not a refusal.
+    w.deck_update({ id: 1, patch: { tags: ["Gimmick"] } });
+    expect(w.deck_update({ id: 1, patch: { tags: ["  ", ""] } }).tags).toEqual([]);
+  });
+
+  /**
+   * One history row under `deck.rs`'s word `tags`, carrying **both whole lists** — and only when
+   * the tidied list differs from the stored one. The comparison is element by element and
+   * case-sensitive, so a respelling and a reorder are both changes, while the same tags sent
+   * back untidy are not.
+   */
+  it("audits a tag change with both lists, and writes no row for the list it already has", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1 })] });
+    const w = writeHandlers(db);
+    const edits = () =>
+      db.deckAudit
+        .filter((a) => a.deckId === 1 && a.kind === "deck")
+        .map((a) => JSON.parse(a.payload) as Record<string, unknown>)
+        .filter((p) => p.field === "tags");
+
+    // A deck that wears none, told to wear none.
+    w.deck_update({ id: 1, patch: { tags: [] } });
+    w.deck_update({ id: 1, patch: { tags: [" "] } });
+    expect(edits()).toEqual([]);
+
+    w.deck_update({ id: 1, patch: { tags: ["Budget", "Meme"] } });
+    expect(edits()).toEqual([{ field: "tags", from: [], to: ["Budget", "Meme"] }]);
+
+    // The same list, as it stands and then untidy: the tidied list is what is compared.
+    w.deck_update({ id: 1, patch: { tags: ["Budget", "Meme"] } });
+    w.deck_update({ id: 1, patch: { tags: [" Budget ", "Meme", "meme"] } });
+    w.deck_update({ id: 1, patch: { name: "Renamed" } });
+    expect(edits()).toHaveLength(1);
+
+    w.deck_update({ id: 1, patch: { tags: ["budget", "Meme"] } });
+    w.deck_update({ id: 1, patch: { tags: ["Meme", "budget"] } });
+    w.deck_update({ id: 1, patch: { tags: [] } });
+    expect(edits().slice(1)).toEqual([
+      { field: "tags", from: ["Budget", "Meme"], to: ["budget", "Meme"] },
+      { field: "tags", from: ["budget", "Meme"], to: ["Meme", "budget"] },
+      { field: "tags", from: ["Meme", "budget"], to: [] },
+    ]);
+  });
+
+  /** **Ctrl+Z puts the previous list back**, and redo the new one — `deck_undo::DECK_FIELDS`
+   *  names the column. Twice round, because a step is read again on every pass: a row that
+   *  shared its list with the step would let the second pass restore whatever the first left. */
+  it("puts a deck's tags back on undo and forward again on redo", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1, tags: ["Budget"] })] });
+    const h = allHandlers(db);
+    const tags = () => h.deck_list().find((d) => d.id === 1)!.tags;
+    h.deck_update({ id: 1, patch: { tags: ["Budget", "Meme"] } });
+
+    const undo = h.deck_undo_state({ deckId: 1, redoId: null }).undo!;
+    expect(JSON.parse(undo.payload)).toMatchObject({ field: "tags" });
+    for (let pass = 0; pass < 2; pass += 1) {
+      h.deck_undo_apply({ deckId: 1, auditId: undo.id });
+      expect(tags()).toEqual(["Budget"]);
+      h.deck_redo_apply({ deckId: 1, auditId: undo.id });
+      expect(tags()).toEqual(["Budget", "Meme"]);
+    }
+
+    // An untouched list files no step: the newest one is still the tag change.
+    h.deck_update({ id: 1, patch: { tags: ["Budget", "Meme"] } });
+    expect(h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id).toBe(undo.id);
+    // And clearing is a step like any other — `[]` goes back to the two it replaced.
+    h.deck_update({ id: 1, patch: { tags: [] } });
+    const cleared = h.deck_undo_state({ deckId: 1, redoId: null }).undo!;
+    expect(cleared.id).not.toBe(undo.id);
+    h.deck_undo_apply({ deckId: 1, auditId: cleared.id });
+    expect(tags()).toEqual(["Budget", "Meme"]);
+  });
+
+  /** A copy of a `Meme` deck is a `Meme` deck — wearing **its own list**, so a tag taken off the
+   *  copy stays on the original and the other way round. */
+  it("carries a deck's tags to a duplicate as a list of its own", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1, tags: ["Meme", "Budget"] }), deck({ id: 2 })] });
+    const w = writeHandlers(db);
+
+    const copy = w.deck_duplicate({ id: 1 });
+    expect(copy.tags).toEqual(["Meme", "Budget"]);
+    const stored = db.decks.find((d) => d.id === copy.id)!;
+    expect(stored.tags).not.toBe(db.decks[0].tags);
+    // A deck that wears none copies to a deck that wears none.
+    expect(w.deck_duplicate({ id: 2 }).tags).toEqual([]);
+
+    w.deck_update({ id: copy.id, patch: { tags: ["Meme"] } });
+    expect(readHandlers(db).deck_list().find((d) => d.id === 1)!.tags).toEqual(["Meme", "Budget"]);
+    w.deck_update({ id: 1, patch: { tags: [] } });
+    expect(readHandlers(db).deck_list().find((d) => d.id === copy.id)!.tags).toEqual(["Meme"]);
+  });
+
+  /** **The stored list is nobody else's array** — not the one a caller sent, and not the one a
+   *  caller was answered with. Either would let a story that sorted a list in place rewrite the
+   *  deck's tags without a write. */
+  it("keeps its tag list apart from the one it was sent and the ones it answers with", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1 })] });
+    const w = writeHandlers(db);
+    const r = readHandlers(db);
+    const sent = ["Gimmick", "Budget"];
+
+    const answered = w.deck_update({ id: 1, patch: { tags: sent } });
+    sent.push("Meme");
+    answered.tags.reverse();
+    r.deck_list()[0].tags.length = 0;
+    r.deck_get({ id: 1, variant: "live" })!.deck.tags.push("Meme");
+
+    expect(r.deck_list()[0].tags).toEqual(["Gimmick", "Budget"]);
+    expect(db.decks[0].tags).toEqual(["Gimmick", "Budget"]);
+  });
+
+  /**
+   * The starter world's three tagged decks, which are the three at the root — what the gallery
+   * draws and what the tag field's suggestions are read from. `Budget` is the one two decks
+   * share; deck 4 and every deck another seed adds wear none.
+   */
+  it("seeds deck tags on the three decks at the root and on no other", () => {
+    const worn = (name: Parameters<typeof seed>[0]) =>
+      readHandlers(seed(name))
+        .deck_list()
+        .map((d) => [d.id, d.tags] as const)
+        .sort(([a], [b]) => a - b);
+    const STARTER = [
+      [1, ["Budget", "Only removal"]],
+      [2, ["Gimmick", "No Gamechangers", "Budget"]],
+      [3, ["Meme"]],
+      [4, []],
+    ];
+    expect(worn("starter")).toEqual(STARTER);
+    // A seed built on `starter` keeps those four as they are and tags nothing it adds.
+    for (const name of ["virtualDeck", "tokenPlan"] as const) {
+      const rows = worn(name);
+      expect(rows.slice(0, 4), name).toEqual(STARTER);
+      expect(rows.slice(4).every(([, tags]) => tags.length === 0), name).toBe(true);
+    }
+    // And a seeded list is already tidy: writing it back is not a change.
+    const db = seed("starter");
+    const rows = db.deckAudit.length;
+    for (const d of readHandlers(db).deck_list()) {
+      writeHandlers(db).deck_update({ id: d.id, patch: { tags: d.tags } });
+    }
+    expect(db.deckAudit).toHaveLength(rows);
+  });
+
+  /**
    * The three columns that remember where the reader was — and the three things this write
    * deliberately does **not** do, which is most of why it is a command of its own rather than a
    * `DeckPatch` field: no `updated_at` bump, no history row, no folder write. Looking at a tab

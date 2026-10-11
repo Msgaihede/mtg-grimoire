@@ -661,6 +661,9 @@ mod tests {
             // User schema v51's rail index, `-1` (*last*) as a fresh deck carries it — here for
             // `bracket`'s reason: the layout reads five fields and not this one.
             token_rail_index: -1,
+            // User schema v62's deck tags, none as a fresh deck carries them — here for
+            // `bracket`'s reason. The mirror writes no file for them.
+            tags: Vec::new(),
         }
     }
 

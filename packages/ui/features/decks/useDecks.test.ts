@@ -66,6 +66,7 @@ const BURN: DeckRow = {
   todosOpen: false,
   defaultCategoryId: 0,
   bracket: 0,
+  tags: [],
 };
 
 let client: QueryClient;

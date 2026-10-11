@@ -15,6 +15,7 @@ import {
   type DeckSettingsFormProps,
   type DeckSettingsValue,
 } from "./DeckSettingsForm";
+import type { TagInUse } from "./deckTags";
 
 /**
  * The cover picker, stubbed.
@@ -56,7 +57,15 @@ const VALUE: DeckSettingsValue = {
   managedWishlistTokens: false,
   folderId: null,
   defaultCategoryId: AUTO_CATEGORY,
+  tags: [],
 };
+
+/** What other decks wear, as `tagsInUse` answers it — alphabetical, one row per tag. */
+const TAGS_IN_USE: TagInUse[] = [
+  { tag: "Budget", count: 2 },
+  { tag: "Meme", count: 1 },
+  { tag: "No Gamechangers", count: 1 },
+];
 
 /**
  * The deck's piles, **in `sortOrder` and not alphabetically** — the order the reader dragged
@@ -140,6 +149,9 @@ function Harness({
       // absent is the create dialog, which is one case rather than the ordinary one. A test that
       // wants that case passes `false` and says so.
       canSetTheoryMarks={rest.canSetTheoryMarks ?? true}
+      // `in`, for `categories`' reason two props up: absent is the create host, and then no
+      // Tags field is drawn at all.
+      tagsInUse={"tagsInUse" in rest ? rest.tagsInUse : TAGS_IN_USE}
       cover={rest.cover ?? COVER}
       idPrefix={rest.idPrefix ?? "s"}
     />
@@ -946,5 +958,40 @@ describe("folderPaths", () => {
       "Cube 2",
       "Cube 10",
     ]);
+  });
+});
+
+/**
+ * The deck's own tags (`decks.tags`, user schema v62, issue #834). `DeckTagsField.test.tsx` has
+ * the field; what belongs here is the form's half — which host draws it, and what leaves through
+ * which callback.
+ */
+describe("DeckSettingsForm — tags", () => {
+  it("draws the tags it is handed and reports the whole new list through onChange", async () => {
+    const user = userEvent.setup();
+    const { onChange, onCommit } = form({ value: { ...VALUE, tags: ["Budget"] } });
+
+    expect(screen.getByRole("button", { name: "Remove the Budget tag" })).toBeInTheDocument();
+
+    await user.type(screen.getByRole("combobox", { name: "Tags" }), "Meme{Enter}");
+
+    expect(onChange).toHaveBeenCalledWith({ tags: ["Budget", "Meme"] });
+    // A tag settles in one act, like a select: there is no second callback for it to fire, and
+    // a host that wrote on both would write every tag twice.
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **Absent is the create host, and then the field is not drawn at all** — `categories`' rule.
+   * `DeckInput` carries no tags, so a tag typed inside "New deck" would be an answer nothing
+   * could write down; an empty list is a different thing, and is every reader's first tag.
+   */
+  it("draws no Tags field for a host that cannot write one, and draws it for an empty list", () => {
+    form({ tagsInUse: undefined });
+    expect(screen.queryByRole("combobox", { name: "Tags" })).not.toBeInTheDocument();
+    cleanup();
+
+    form({ tagsInUse: [] });
+    expect(screen.getByRole("combobox", { name: "Tags" })).toBeInTheDocument();
   });
 });

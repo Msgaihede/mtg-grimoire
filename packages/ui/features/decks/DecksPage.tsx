@@ -1373,6 +1373,16 @@ export function DecksPage() {
         : null,
     [formatSpecFor, floorByDeck],
   );
+  /**
+   * Whether a tile's deck is one a bracket is printed for at all — {@link bracketFor}'s own
+   * fence, asked without the answer. A tile places its tag row by it (`DeckTile`'s
+   * `bracketExpected`), so the row is already clear of the pill's place while
+   * `deck_bracket_reads` is still out rather than lifting when it lands.
+   */
+  const bracketExpectedFor = useCallback(
+    (deck: DeckRow) => formatSpecFor(deck.formatKey)?.commanderRule != null,
+    [formatSpecFor],
+  );
 
   const heading = flat ? EVERY_DECK_LABEL : openNode === null ? ROOT_LABEL : openNode.folder.name;
   /**
@@ -1895,6 +1905,7 @@ export function DecksPage() {
                   // bracket — see {@link bracketFor}.
                   pips={pipsByDeck.get(deck.id) ?? null}
                   bracketLabel={bracketFor(deck)}
+                  bracketExpected={bracketExpectedFor(deck)}
                   decks={decks}
                   nodes={nodes}
                   folderId={folderOf(deck)}
@@ -2046,6 +2057,7 @@ export function DecksPage() {
                       // As above: one read for the whole gallery, handed down per tile.
                       pips={pipsByDeck.get(deck.id) ?? null}
                       bracketLabel={bracketFor(deck)}
+                      bracketExpected={bracketExpectedFor(deck)}
                       decks={decks}
                       nodes={nodes}
                       folderId={folderOf(deck)}

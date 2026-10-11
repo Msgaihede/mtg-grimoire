@@ -362,6 +362,7 @@ const BURN: DeckRow = {
   todosOpen: false,
   defaultCategoryId: 0,
   bracket: 0,
+  tags: [],
 };
 
 /** Two drawers, one inside the other — flat rows, because the tree is the page's to build from

@@ -1118,6 +1118,7 @@ const deck = (over: Partial<DeckRow> & { id: number; name: string }): DeckRow =>
   todosOpen: false,
   defaultCategoryId: 0,
   bracket: 0,
+  tags: [],
   ...over,
 });
 

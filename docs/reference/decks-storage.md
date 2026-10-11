@@ -4670,8 +4670,10 @@ v52's captured launch pass:
    reading no `todos`.
 
 `UNDO_V59` sits at the front of every rewind chain — directly behind v60's `UNDO_V60` since
-2026-10-07, which drops `sync_orphans` ([data-and-sync.md](data-and-sync.md)), and v61's
-`UNDO_V61` ahead of that since 2026-10-11, which drops `sync_heard` and leads them now —
+2026-10-07, which drops `sync_orphans` ([data-and-sync.md](data-and-sync.md)), v61's
+`UNDO_V61` ahead of that since 2026-10-11, which drops `sync_heard`, and v62's `UNDO_V62` ahead
+of that again since the same day, which drops `decks.tags` (*Deck tags*, below) and leads them
+now —
 and lands on v58's exact shape: it drops the
 table and both indexes, drops the `decks` triggers, and adds `todos` back as v58's `ALTER TABLE`
 wrote it.
@@ -4814,3 +4816,46 @@ v58 needed no entry, because the list was a column of `decks`. A table does: `de
 `userTables.json` and `syncedTables.json`, and `crossWindow.ts`' `TABLE_KEYS` maps it to `DECKS`,
 `["decks"]`. The band's key `["decks", "todos", deckId]` and the widget's
 `["decks", "todos", "lists"]` both sit under it, so a write in one window reaches both in the other.
+
+## Deck tags: free text on the deck, in `decks.tags`
+
+User schema **v62** (2026-10-11, [issue #834](https://github.com/Msgaihede/mtg-grimoire/issues/834))
+is `decks.tags TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags))` — the reader's own tags for a
+deck (`Meme`, `Budget`, `No Gamechangers`) as a JSON array of strings, `collection_entries.tags`'
+declaration word for word. **Not a Scryfall Tagger tag and not a deck label** (`deck_labels`);
+[DOMAIN_VOCABULARY.md](../agent/DOMAIN_VOCABULARY.md) keeps them apart. No new table and no new
+command: it rides `DeckRow` and `DeckPatch`.
+
+- **A column and not a table**, v58's argument, and unlike the to-dos it has nothing to grow into:
+  a tag is a word, with no body, no order of its own and no identity past its spelling. So there
+  is **no table of tags** — which tags exist is read off the decks that wear one — and the list
+  inherits the deck's cascade, change mask and capture trigger.
+- **`DeckRow.tags` is a `Vec<String>`, parsed in Rust and read leniently** (`deck::read_tags`):
+  the array's string items in order; text that is not an array, an item that is not a string, and
+  a value that is not text at all read as absent. The `CHECK` asks for valid JSON and nothing
+  narrower, and the column syncs, so a newer peer's shape can land in it and must not fail a
+  `deck_list`. ⚠️ The collection's `tags` travels as its stored JSON **text**; this one arrives as
+  an array.
+- **`DeckPatch.tags` replaces the list, and `[]` clears it.** Absent (or `null`) is still "leave
+  it"; `Some(vec![])` is bound as the text `[]`, which `coalesce(?27, tags)` writes like any other
+  value — the one field on the patch that can empty its column, with no second convention and no
+  command of its own.
+- **Tidied on write, never refused** — `deck::clean_tags`: each tag is
+  `split_whitespace().join(" ")`, an empty result is dropped, and a tag whose `to_lowercase()`
+  equals an earlier kept one is dropped, so the first spelling wins and the order is otherwise the
+  reader's. No length limit and no cap on the count.
+- **A history row, `{ "field": "tags", "from": [...], "to": [...] }`**, both sides whole lists,
+  written only when the tidied list differs from the stored one. The lists are compared exactly
+  and the case fold is within one list only: `["meme"]` over `["Meme"]` is a change, and so is a
+  reorder; `[" Meme "]` over `["Meme"]` is not.
+- **v57's rules otherwise**: on `deck_undo::DECK_FIELDS`, so one Ctrl+Z puts the list back as its
+  stored text; carried by `duplicate_deck`, verbatim; on the `decks` capture spec, where it is
+  **one field** — two devices tagging one deck while apart keep the later list whole.
+- **Positional reads, at the end as always.** `DECK_SELECT` appends `d.tags` after `d.todos_open`;
+  `deck_row` reads it at **33**, `update_deck`'s before-read at **20**, and the UPDATE binds it as
+  `?27`. Read the numbers off `deck_row`, never off this page.
+- **The rung is one `ADD COLUMN`** with the `CHECK` on it (v52's `token_mode` is the precedent),
+  takes no capture trigger off because it writes no row, and adds no index.
+  `deck_tags_round_trip_tidy_audit_and_undo` (`deck.rs`) and
+  `v62_gives_every_deck_an_empty_tag_list_behind_a_json_check` (`schema.rs`) are the fences;
+  [data-and-sync.md](data-and-sync.md)'s v62 paragraph has the rewind.

@@ -134,6 +134,24 @@ const TILE_MARK = cn(
 );
 
 /**
+ * One of the reader's own tags, in the row over the art's two marks (issue #834).
+ *
+ * **{@link TILE_MARK}'s box and deliberately not its face.** Same radius, same felt, same
+ * padding and the same scaled type size, so the row sits on the picture as part of one set of
+ * marks — but the border and the ink are the neutral pair and the words keep their own
+ * capitals in the reading face. Accent, mono and capitals are how this tile spells what the
+ * *app* says about a deck (its kind, its bracket); a tag is what the *reader* said, and
+ * `NO GAMECHANGERS` in gold beside `BRACKET 3` would read as a third thing the app had worked
+ * out. Not positioned here, unlike the marks: a tag is a flex item of the row that holds it.
+ */
+const TILE_TAG = cn(
+  "min-w-0 max-w-full truncate rounded-sm border border-border bg-bg/70",
+  "px-[calc(0.375rem*var(--mark-scale,1))]",
+  "text-[calc(0.6rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
+  "text-text",
+);
+
+/**
  * One deck: its cover art, what colours it is, its name, what it is and how big it is.
  *
  * The art is the tile — an `art` crop rather than a card image, because a wall of full cards
@@ -166,6 +184,7 @@ export function DeckTile({
   deck,
   pips,
   bracketLabel,
+  bracketExpected,
   decks,
   nodes,
   folderId,
@@ -220,6 +239,19 @@ export function DeckTile({
    * corrected in one.
    */
   bracketLabel: string | null;
+  /**
+   * Whether this deck's format has a command zone at all — so whether a bracket pill is *coming*,
+   * answered or not. It decides one thing: where the tag row sits.
+   *
+   * {@link bracketLabel} is `null` both for a format with no bracket and for a Commander deck
+   * whose estimate is still out, and the tag row sits a mark higher when the art's bottom edge
+   * is taken. Read off the label alone, an untold Commander deck would draw its tags on the edge
+   * and then lift them a mark's height when `deck_bracket_reads` answered — a row moving under
+   * the reader's eye on every opening of the gallery. So the row is placed by what the edge
+   * *will* hold. The page already asks the format this exact question to decide whether to
+   * print a label; this is that answer handed down rather than a second opinion formed here.
+   */
+  bracketExpected: boolean;
   decks: Decks;
   nodes: readonly FolderNode[];
   /** The folder it is in now, normalised through the folder list this screen actually has. */
@@ -282,6 +314,11 @@ export function DeckTile({
   const unit = deck.cardCount === 1 ? "card" : "cards";
   const colorsLabel = deckColorsLabel(pips);
   const badge = deckBadge(deck);
+  /** Whether a mark is drawn on the art's bottom edge right now — what mounts the overlay. */
+  const hasMarks = badge !== null || bracketLabel !== null;
+  /** Whether that edge is taken *or about to be* — what decides where the tag row sits, so it
+   *  does not move when a bracket that was always coming arrives. See {@link bracketExpected}. */
+  const edgeTaken = hasMarks || bracketExpected;
   const confirming = panel?.kind === "deleteDeck" && panel.deckId === deck.id;
   const choosingFolder = panel?.kind === "moveDeck" && panel.deckId === deck.id;
   const renaming = panel?.kind === "renameDeck" && panel.deckId === deck.id;
@@ -597,11 +634,60 @@ export function DeckTile({
           than a child of it. There the press still opens the card; here it would open nothing.
           The pill says its words in visible type anyway, which is exactly what the caption gave
           before it, so the hint would buy a sentence at the price of a hole in the picture. */}
-      {(badge !== null || bracketLabel !== null) && (
+      {(hasMarks || deck.tags.length > 0) && (
         <div
           className="pointer-events-none absolute inset-x-0 top-0"
           style={{ aspectRatio: ART_ASPECT }}
         >
+          {/* The reader's own tags, in one row **above** the two marks (issue #834) — and on the
+              art's bottom edge, in their place, on a deck that wears neither: a Modern list read
+              against the binder has no badge and no bracket, and a row floating a mark's height
+              above an empty edge would read as a layout fault.
+
+              **Outside the `<button>` for the marks' reason, and a list for its own.** The tile
+              is still named for its deck, and a reader who cannot see the row hears `Tags` and
+              then each word, rather than three stray phrases after a bracket.
+
+              **One line, and whole tags only.** `flex-wrap-reverse` fills the bottom line first
+              and stacks any overflow *above* it, where the box — exactly one tag tall — clips
+              it. So a deck with more tags than the tile is wide shows the first few entire
+              rather than the last one cut through the middle of a word; a single tag wider than
+              the tile truncates instead (`TILE_TAG`). Nothing counts the hidden ones: a `+2`
+              would need the row measured, and the whole list is in Deck settings, which is
+              where a tag is added in the first place.
+
+              **Packed to the right**, over the bracket, which is where the issue drew it and
+              the corner the tile already uses for "how to think about this deck". The row is as
+              wide as the art less the marks' own inset, so a long list runs back toward the
+              badge's corner before it wraps.
+
+              The offset from the bottom is the marks' inset, plus a mark (its line and its two
+              hairlines, which are the one thing here that does not scale), plus a quarter-rem
+              of air — written as one `calc` so the gap between the two rows scales with the
+              marks instead of growing as they do. */}
+          {deck.tags.length > 0 && (
+            <ul
+              aria-label="Tags"
+              className={cn(
+                "absolute inset-x-[calc(0.375rem*var(--mark-scale,1))]",
+                "flex flex-wrap-reverse content-start justify-end overflow-hidden",
+                "gap-[calc(0.25rem*var(--mark-scale,1))]",
+                // `_+_` spells the spaces CSS wants round a `+` in `calc()`. Tailwind adds them
+                // to the tight spelling too (`DeckTile.test.ts` compiles both), so this is the
+                // readable form rather than the only working one.
+                "h-[calc(1rem*var(--mark-scale,1)_+_2px)]",
+                edgeTaken
+                  ? "bottom-[calc(1.625rem*var(--mark-scale,1)_+_2px)]"
+                  : "bottom-[calc(0.375rem*var(--mark-scale,1))]",
+              )}
+            >
+              {deck.tags.map((tag) => (
+                <li key={tag} className={TILE_TAG}>
+                  {tag}
+                </li>
+              ))}
+            </ul>
+          )}
           {/* What kind of deck this is — that it keeps a plan, or that it keeps no cardboard.
               Absent on the ordinary one-list deck, which is the majority of the wall;
               {@link deckBadge} argues why that absence is the rule rather than an omission. */}
