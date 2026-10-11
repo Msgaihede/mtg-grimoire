@@ -3830,8 +3830,9 @@ virtualised wall is enough to settle where the panel mounts, and root-mounting i
 that traps nothing as well as on one that traps both, so nothing here moves. What it is not is a
 licence to anchor a hint inside a deck table row: the placement is the hook's, not the caller's.)
 A panel whose DOM node lives outside the whole tree, at `LAYER.tooltip`
-(`z-47` since 2026-09-03, above every dialog rung because a hint can be shown over the deck
-editor's dialogs — and over a nested overlay, which is what moved it off 46 — below
+(`z-48` since 2026-10-11, above every dialog rung because a hint can be shown over the deck
+editor's dialogs — and over a nested overlay, which is what moved it off 46, and over a context
+menu opened from inside a dialog (`LAYER.menuOverDialog`, issue #846), which moved it off 47 — below
 `gate`'s 50 because `SyncProgress` covers the window and a hint floating over it would describe
 something the reader cannot see), needs neither raised further nor clipped by an
 `overflow-hidden` scroller. `PrintingPreview` was what paying the alternative cost: it

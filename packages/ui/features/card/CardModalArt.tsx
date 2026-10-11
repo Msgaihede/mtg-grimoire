@@ -1,4 +1,4 @@
-import { useState, type JSX } from "react";
+import { useState, type JSX, type MouseEvent as ReactMouseEvent } from "react";
 import {
   ArrowRight,
   Combine,
@@ -155,6 +155,7 @@ export function CardModalArt({
   onToggleFoil,
   meld,
   onShowSet,
+  onContextMenu,
 }: {
   card: CardDetail;
   /** Which face the picture is of — 0 is the front. */
@@ -204,6 +205,16 @@ export function CardModalArt({
    * means — this file is presentational and never reaches the store (issue #503).
    */
   onShowSet: (setCode: string) => void;
+  /**
+   * A right-click on the picture or the line naming its printing — the card menu, which the host
+   * builds (issue #846). This file is presentational and never sees `CardMenuDeps`, so it only
+   * says where the card is; absent, the picture offers nothing and the provider's suppression
+   * stands.
+   *
+   * On the bordered box rather than the whole column: the controls under it change what the
+   * picture shows, and a right-click on `Flip card` is not a question about the card.
+   */
+  onContextMenu?: (e: ReactMouseEvent) => void;
 }): JSX.Element {
   const tip = useTooltip();
   const sides = faceCount(card.layout, card.faces.length);
@@ -357,7 +368,10 @@ export function CardModalArt({
           instead, which is where the rounded corners actually are; at rest the card fills the
           frame exactly, so the only thing the missing clip changes is that the turn is drawn
           whole. */}
-      <div className="grid rounded-xl border border-border bg-bg @min-[640px]/card:min-h-0 @min-[640px]/card:grid-rows-[minmax(0,1fr)_auto]">
+      <div
+        onContextMenu={onContextMenu}
+        className="grid rounded-xl border border-border bg-bg @min-[640px]/card:min-h-0 @min-[640px]/card:grid-rows-[minmax(0,1fr)_auto]"
+      >
         {/* **The frame is what the column sees, and the card inside it is what turns.**
 
             Two elements rather than one, because a quarter-turned card is a *landscape* rectangle
