@@ -38,6 +38,10 @@ Right-click context menus are owned by a single root provider:
 ## IPC Mirroring & Text Verification
 
 - **Mirror Maintenance**: TypeScript interfaces in `packages/ui/lib/ipc.ts` mirror Rust DTOs by hand.
+- **One module, thirteen files** (issue #557, 2026-10-11): `ipc.ts` is a barrel. The interfaces and wrappers live in `packages/ui/lib/ipc/<domain>.ts`, each domain exporting a `<domain>Commands` object that the barrel spreads into `ipc`; the transport (`invoke`, `asciiJson`, `ipcError`) is `ipc/invoke.ts`. The barrel re-exports every type with `export type *` and values by name, so a commands object never reaches a page except as part of `ipc`.
+  - Everything outside the mirror imports `@/lib/ipc` — the seam `vi.mock("@/lib/ipc", …)` replaces in 140-odd suites. ESLint refuses `@/lib/ipc/*` and a relative path into the folder.
+  - `ipc.test.ts` reads the barrel and every domain file (a glob) as one text, and fails on a method two domains both define (a spread would keep the last silently) and on a domain the barrel does not re-export.
+  - A new command goes in its domain's object; a new domain is a file in `ipc/`, one `export type *` line and one spread in the barrel.
 - **Verification Fence (`ipc.test.ts`)**:
   - `ipc.test.ts` uses Vite's `?raw` import to load Rust `.rs` files as text.
   - It parses struct definitions and compares field names and casing against the TypeScript mirror to catch drift at test time before runtime serialization errors occur.
