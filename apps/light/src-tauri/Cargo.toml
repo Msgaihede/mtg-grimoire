@@ -18,11 +18,17 @@ publish = false
 
 [lib]
 # The `_lib` suffix keeps the library's name apart from the binary's on Windows
-# (rust-lang/cargo#8519), as `src-tauri`'s does. **The three crate types are what Tauri's
-# mobile build asks for**: `cdylib` is the `.so` Gradle packs into the APK, `staticlib` is iOS's
-# (not built here, and harmless), `rlib` is what `main.rs` links on a desktop.
+# (rust-lang/cargo#8519), as `src-tauri`'s does. **Two crate types**: `cdylib` is the `.so`
+# Gradle packs into the APK, `rlib` is what `main.rs` links on a desktop.
+#
+# **Tauri's template also lists `staticlib`, and it is left out on purpose.** That one is iOS's
+# (`tauri ios` looks for `lib<name>.a`; nothing on the Android path does), and it was not
+# harmless: every crate type of a library is built by every build that names the package, so
+# each `cargo test --workspace` on a desktop linked the whole dependency graph into
+# `grimoire_light_lib.lib` — 2 134 MB, the largest file in a build tree (measured 2026-10-11).
+# An iOS host puts it back.
 name = "grimoire_light_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

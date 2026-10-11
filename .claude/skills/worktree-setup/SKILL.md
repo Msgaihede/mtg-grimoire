@@ -1,6 +1,6 @@
 ---
 name: worktree-setup
-description: Use when starting work in an mtg-grimoire git worktree under .claude/worktrees/, before running pnpm verify, the test suite, the app, or Storybook. Symptoms it prevents - "Denied ID .../node_modules/mana-font/css/mana.css?raw", failing mana/keyrune/iconFont suites, 403s on @fontsource woff2 files, TS2307 after a merge, and files that should exist but do not.
+description: Use when starting work in an mtg-grimoire git worktree under .claude/worktrees/, before running pnpm verify, the test suite, the app, or Storybook, and when a build runs out of disk. Symptoms it prevents - "Denied ID .../node_modules/mana-font/css/mana.css?raw", failing mana/keyrune/iconFont suites, 403s on @fontsource woff2 files, TS2307 after a merge, files that should exist but do not, and rustc's "no space on device" / "os error 112".
 ---
 
 # Worktree setup
@@ -8,6 +8,9 @@ description: Use when starting work in an mtg-grimoire git worktree under .claud
 A worktree is a full second checkout. It shares the git object store with the main
 checkout and **almost nothing else** — not `node_modules`, not `target`, not
 the database.
+
+**The hook's report can carry a `Cargo:` line. Act on it before building**: it names a build
+tree to delete, or a settings file it could not write.
 
 **Dependencies and the branch are a hook now** — `.claude/hooks/worktree-deps.sh` at
 SessionStart. It reports both and installs when `node_modules` is missing or older than
@@ -49,8 +52,9 @@ checkout's `target` and its app opens the main checkout's dev database.
 | Per worktree | Shared with every worktree |
 | --- | --- |
 | `node_modules` | the git object store |
-| `target` (gigabytes) | **the stash stack** |
+| `target/cache` — the build cache (gigabytes) | **the stash stack** |
 | `target/debug/data/` — db **and** image cache | the lock dir, `<git common dir>/locks` |
+| | cargo's settings, `.claude/worktrees/.cargo/config.toml` |
 
 pnpm's store (`D:\.pnpm-store`) is shared by every checkout on the drive: a worktree's
 `node_modules` is links into it, and an install is seconds.
@@ -64,6 +68,26 @@ this machine that is `D:/Code/mtg-grimoire/.git`.
 agent's work may be on it. Prefer a temporary WIP commit. If you must stash, use
 `git stash push -u -m "<unique-tag>"`, capture the SHA, and restore with
 `git stash apply <sha>`.
+
+## The build cache is `target/cache`, and it is disposable
+
+Worktrees build with settings the main checkout does not have: no incremental cache, line-only
+debug info, and everything cargo can rebuild under `target/cache`. They come from
+`.claude/worktrees/.cargo/config.toml`, which the hook copies from
+`.claude/hooks/worktree-cargo.toml` — the reasons are in that file. `target/debug` keeps the
+executables and `data/`.
+
+- **`rm -rf target/cache` is always safe**, and is the answer to `os error 112` and "no space on
+  device". It costs the next `pnpm verify` about seven minutes of compiling and nothing else
+  (a 4.3 GB cache, measured 2026-10-11).
+- **Never `cargo clean`, and never delete `target`**: both take `target/debug/data`.
+- **Never give two checkouts one build tree** (`CARGO_TARGET_DIR`, a shared `build-dir`). The
+  second checkout's build prints `Fresh` and runs the first one's code.
+- **`--target-dir` moves only what a build finishes.** A run that needs a build tree of its own
+  sets `CARGO_BUILD_BUILD_DIR` as well, as `scripts/build-wasm.mjs` does.
+- **A tree the hook calls dead** — `src-tauri/target`, or `target/debug/deps` and its three
+  neighbours — predates the layout or the cache. No build reads it and nothing else deletes it:
+  the app hands a worktree's folder to the next session with it still inside.
 
 ## The Bash tool refuses things here
 
@@ -82,4 +106,6 @@ Then, in order:
 - **Running against real data** rather than an empty wall → `live-data.md`, beside this
   file. Copying `target/debug/data` beats a 93-second sync, but only the whole
   folder works and only with the app stopped.
-- **Work finished** → verify, commit the feature, push branch, and open PR.
+- **Work finished** → verify, commit the feature, push branch, and open PR. **Then
+  `rm -rf target/cache`.** A worktree outlives its work by days, and on 2026-10-11 the build
+  trees of idle ones were 509 GB; a fix round rebuilds the cache.

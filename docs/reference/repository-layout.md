@@ -22,6 +22,11 @@ is the same, because an agent worktree nested under the main checkout would othe
 main checkout's config and build into the main checkout's tree. That file carries the argument
 and the measurement.
 
+The same upward walk is put to use since 2026-10-11: `.claude/worktrees/.cargo/config.toml`, a
+copy of `.claude/hooks/worktree-cargo.toml` that the session hook writes, is read by every agent
+worktree and by no other checkout. There the rebuildable part of the tree is `target/cache`
+(`build.build-dir`), and `target/debug` keeps the executables and `data/`.
+
 ## The workspace
 
 Since 2026-10-08 each part is a package with a manifest of its own, in a pnpm workspace.

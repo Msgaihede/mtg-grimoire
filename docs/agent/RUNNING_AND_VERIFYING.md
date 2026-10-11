@@ -19,7 +19,10 @@ Related: the `running-the-app` skill (locks and ports), [live-ui-verification.md
   2026-10-03 the light app's Android host `apps/light/src-tauri`, and since 2026-10-04 its web
   host `crates/grimoire-web`, natively). **Its
   build tree is `target` at the root**: `.cargo/config.toml` pins it. It was `src-tauri/target`
-  until 2026-10-08, which the workspace of 2026-10-02 had kept.
+  until 2026-10-08, which the workspace of 2026-10-02 had kept. **In an agent worktree the part
+  cargo can rebuild is `target/cache`** — deletable at any time — and `target/debug` keeps the
+  executables and `data/`; worktrees also build without an incremental cache and with line-only
+  debug info (`.claude/hooks/worktree-cargo.toml`, since 2026-10-11).
 - **Arguments follow a script's name with no `--`**: `pnpm web:wasm --only engine`. npm stripped a `--`; pnpm hands it to the script, so `pnpm mobile:scan-smoke -- http://host` gives the script `--` as its first argument.
 - `pnpm exec vitest run --project <name>` runs one package's tests (the projects are the packages: `ui`, `light`, and so on).
 - `pnpm install` after a merge or a pull that changes a manifest or `pnpm-lock.yaml`.
