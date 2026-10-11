@@ -30,6 +30,41 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.44.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.43.0...v0.44.0) (2026-10-11)
+
+
+### Features
+
+* a release deploys the relay and the share Worker ([#885](https://github.com/Msgaihede/mtg-grimoire/issues/885)) ([012322a](https://github.com/Msgaihede/mtg-grimoire/commit/012322ad0b96a38b863de1136a37c9c5aaaefa74))
+* a release uploads the Android bundle to Google Play ([#892](https://github.com/Msgaihede/mtg-grimoire/issues/892)) ([ddb23ab](https://github.com/Msgaihede/mtg-grimoire/commit/ddb23abdb95c303cfee230757357edb5e4a574cb))
+* **app:** load the six occasional views on first open ([91c6a3f](https://github.com/Msgaihede/mtg-grimoire/commit/91c6a3fcaaece69f6182805afe08dd2ffcd0c758)), closes [#557](https://github.com/Msgaihede/mtg-grimoire/issues/557)
+* **collection:** share the optimistic entry writes and split the Collection and Wishlist pages ([0361e66](https://github.com/Msgaihede/mtg-grimoire/commit/0361e6603d3bb4ffb0f2dc7d2a8a9681138793f3))
+* **decks:** split DeckEditor into DeckDesk, layers, drops and keyboard hooks, and memoise its views ([89de140](https://github.com/Msgaihede/mtg-grimoire/commit/89de1407fb6503fd63f7b71be232780969bb52b1))
+* **decks:** tag a deck with your own words, shown on its gallery tile ([355ba25](https://github.com/Msgaihede/mtg-grimoire/commit/355ba25098e6de413bb28974b0590e30e2196917))
+* **decks:** tag a deck with your own words, shown on its gallery tile ([24cb685](https://github.com/Msgaihede/mtg-grimoire/commit/24cb685d0c861b0b47044d528ba5e3ce0aa7f09f)), closes [#834](https://github.com/Msgaihede/mtg-grimoire/issues/834)
+* flip two-sided cards from their tile and the right-click menu ([ab22156](https://github.com/Msgaihede/mtg-grimoire/commit/ab22156fda9b348f69a1f1c8d3cd212d044d205a))
+* flip two-sided cards from their tile and the right-click menu ([8e019b3](https://github.com/Msgaihede/mtg-grimoire/commit/8e019b3ce3a5e23b73d444917ff903943e2fc50b)), closes [#844](https://github.com/Msgaihede/mtg-grimoire/issues/844)
+* import cards into a specific collection folder ([41da3a0](https://github.com/Msgaihede/mtg-grimoire/commit/41da3a0917ad549b46eddfef2451f8b45f2ad067))
+* import cards into a specific collection folder ([77491cb](https://github.com/Msgaihede/mtg-grimoire/commit/77491cbb1fa5f2fc91bc628239ef15a838cd2d7c)), closes [#872](https://github.com/Msgaihede/mtg-grimoire/issues/872)
+* **ipc:** split ipc.ts by domain behind the same ipc object ([72653dc](https://github.com/Msgaihede/mtg-grimoire/commit/72653dc2a89f311b31b53196850a4c574da43809)), closes [#557](https://github.com/Msgaihede/mtg-grimoire/issues/557)
+* **release:** release notes written from each release's pull requests ([#888](https://github.com/Msgaihede/mtg-grimoire/issues/888)) ([bfd57c9](https://github.com/Msgaihede/mtg-grimoire/commit/bfd57c97234cac4a5f9af5d48fd397c1e4605b7a))
+* show a deck's description on hover in the deck gallery ([34fb6f3](https://github.com/Msgaihede/mtg-grimoire/commit/34fb6f3fd74e6a27a9525848a0ed55e3b432c81f))
+* show a deck's description on hover in the deck gallery ([e5cba56](https://github.com/Msgaihede/mtg-grimoire/commit/e5cba5659b679fa3966ec83751de626543290211)), closes [#840](https://github.com/Msgaihede/mtg-grimoire/issues/840)
+* **trade:** build a trade with two sides, prices and a balance, on both faces ([#891](https://github.com/Msgaihede/mtg-grimoire/issues/891)) ([8185f82](https://github.com/Msgaihede/mtg-grimoire/commit/8185f82d064dade8046390abb33444f04fd9bd14)), closes [#363](https://github.com/Msgaihede/mtg-grimoire/issues/363)
+* **transfer:** sort a ManaBox CSV into folders and decks by binder ([e271ddc](https://github.com/Msgaihede/mtg-grimoire/commit/e271ddc935cbbd5f576308dbbb2392f0b9360cd9))
+* **transfer:** sort a ManaBox CSV into folders and decks by binder ([de6c598](https://github.com/Msgaihede/mtg-grimoire/commit/de6c59809d45c44070e0238c565280fcb30fe0be)), closes [#873](https://github.com/Msgaihede/mtg-grimoire/issues/873)
+
+
+### Bug Fixes
+
+* **ipc:** reject every ipc call with the backend's sentence as a string ([f16992b](https://github.com/Msgaihede/mtg-grimoire/commit/f16992b38df537809e5b514c51c3c45ff69f6eff)), closes [#557](https://github.com/Msgaihede/mtg-grimoire/issues/557)
+* open the card menu on a right-click in the card detail modal ([8dcd9fa](https://github.com/Msgaihede/mtg-grimoire/commit/8dcd9fa37fd19e4807420b205afb53a69b5b5898))
+* open the card menu on a right-click in the card detail modal ([cb17292](https://github.com/Msgaihede/mtg-grimoire/commit/cb17292bec1e9d0d1e5adf314868de320d28d93f)), closes [#846](https://github.com/Msgaihede/mtg-grimoire/issues/846)
+* **sync:** remember what other devices wrote, so a third device's older op loses on a later pull ([c7c52e5](https://github.com/Msgaihede/mtg-grimoire/commit/c7c52e53d6dc35fdec2e5330d8c7a7ef0c30517e))
+* **sync:** remember what other devices wrote, so a third device's older op loses on a later pull ([c8b16ab](https://github.com/Msgaihede/mtg-grimoire/commit/c8b16ab9803980060cf5cb39d7c0961ea9f04879)), closes [#842](https://github.com/Msgaihede/mtg-grimoire/issues/842)
+* title the import dialog "Import cards" rather than "Import a decklist" ([0b6004a](https://github.com/Msgaihede/mtg-grimoire/commit/0b6004afdaee868d3cf0b5cfa10bfedc30a15773))
+* title the import dialog "Import cards" rather than "Import a decklist" ([e7504a4](https://github.com/Msgaihede/mtg-grimoire/commit/e7504a422e1893f15ae8e2f27af5d3afa9584d06)), closes [#871](https://github.com/Msgaihede/mtg-grimoire/issues/871)
+
 ## [0.43.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.42.0...v0.43.0) (2026-10-07)
 
 
