@@ -193,6 +193,8 @@ describe("the arms", () => {
     [".gitignore", F, F, F, F, F, F, F],
     // Read by `release-rule.test.mjs` since step 6.6: the deploy guard finds the last tag in it.
     [".release-please-manifest.json", T, F, F, F, F, F, F],
+    // Read by `scripts/changelog/files.test.mjs`, through a glob: above the prose arm's `*.md`.
+    ["changelog/0.43.0.md", T, F, F, F, F, F, F],
     // Read by a Rust test since the engine's manifest began carrying the app's version.
     ["release-please-config.json", T, T, F, F, F, F, F],
     ["scripts/x.ps1", F, F, F, T, F, F, F],

@@ -32,7 +32,12 @@
 //     where it would reach every build in the tree;
 //   * that run has **a build tree of its own** (`<target>/scanner-simd128`). Cargo keys an
 //     artifact on its flags, but a tree holds one copy of each — two builds taking turns in one
-//     tree would each throw the other's dependencies away, every run;
+//     tree would each throw the other's dependencies away, every run. **`--target-dir` alone is
+//     not a tree of its own where a config sets `build.build-dir`** (the agent worktrees do,
+//     `.claude/hooks/worktree-cargo.toml`): the intermediates would go on sharing that one
+//     folder, so the run is handed `CARGO_BUILD_BUILD_DIR` too — `scanner-simd128` under
+//     whatever `cargo metadata` calls the build directory, which is the target directory
+//     itself wherever no config has moved it;
 //   * it is `-p grimoire-scan` **and nothing else**. Features are resolved for the packages a
 //     build names: built beside the engine, the scanner's crate would be compiled with the
 //     `corpus` feature the engine asks it for, and the module would carry SQLite.
@@ -351,16 +356,21 @@ function targetFeatures(bytes) {
 }
 
 // Asked of cargo rather than assumed: `.cargo/config.toml` pins the build tree, and an
-// environment may move it.
+// environment may move it. `build_directory` is where the intermediates go, which is the same
+// folder unless a config sets `build.build-dir`.
 const metadata = capture("cargo", ["metadata", "--format-version", "1", "--no-deps", "--locked"]);
 if (metadata === undefined) refuse("`cargo metadata` could not say where the build tree is.");
-const TARGET_DIR = JSON.parse(metadata).target_directory;
+const { target_directory: TARGET_DIR, build_directory: BUILD_DIR = TARGET_DIR } =
+  JSON.parse(metadata);
 
 /** Build one module, run `wasm-bindgen` over it, hold it to its gates and print its size. */
 function build(name) {
   const { package: pkg, module, out, exports, glue: written, tree, features } = MODULES[name];
   const started = performance.now();
   const target = tree === null ? TARGET_DIR : join(TARGET_DIR, tree);
+  // A tree of its own takes its intermediates with it (the header says why `--target-dir`
+  // does not): the same folder name, under wherever this checkout keeps them.
+  const own = tree === null ? env : { ...env, CARGO_BUILD_BUILD_DIR: join(BUILD_DIR, tree) };
   run(
     "cargo",
     [
@@ -375,7 +385,7 @@ function build(name) {
       "--locked",
       ...(tree === null ? [] : ["--target-dir", target]),
     ],
-    { env: withFeatures(env, features) },
+    { env: withFeatures(own, features) },
   );
   const built = join(target, TARGET, PROFILE, `${module}.wasm`);
   if (!existsSync(built)) refuse(`cargo finished and ${built} is not there.`);

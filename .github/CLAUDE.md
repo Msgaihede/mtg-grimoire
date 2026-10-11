@@ -25,6 +25,7 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
   - Root `vite.base.ts`, `vite.watch.ts`, `vitest.config.ts`, `tsconfig*.json` and `infrastructure/*/tsconfig.json` route to `frontend`, `storybook`, and `web`.
   - `package.json`, `pnpm-lock.yaml` and `pnpm-workspace.yaml` route to the page-side jobs; `infrastructure/app-worker/**` and `infrastructure/wrangler/**` (the deploy tool's manifest and lockfile) route to `frontend` and `web`; `infrastructure/scan-worker/**` (the scan inbox, which no build uses and no job deploys) to `frontend` alone.
   - `scripts/android-release/*` routes to `frontend`, `rust`, and `android` (must sit above `scripts/*`); `.release-please-manifest.json` routes to `frontend`.
+  - `changelog/*` routes to `frontend` (must sit above the prose arm's `*.md`): `scripts/changelog/files.test.mjs` reads every release's notes.
   - `*.ps1`/`*.psm1`/`*.psd1` routes to `powershell` (must sit above `apps/desktop/src-tauri/*` and `scripts/*`).
   - Unrecognised paths fall through to a fail-safe that runs all build jobs (`frontend`, `rust`, `core`, `storybook`, `web`).
   - **Fence test**: `scripts/ci-route.test.mjs` verifies that every file read across jobs is properly routed.
@@ -90,9 +91,14 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
   (a repository secret is readable from any branch's workflow; an environment's only from `main`, once the owner restricts it). `on:` is a push to `main` only.
   Each first asks whether its values are set, handed `true`/`false` and never the value: none → sign/deploy nothing, say so in the summary, end green; some but not all → fail. The Android app is distributed through Google Play only.
 - **One job deploys one Worker**: `web-deploy` is the only `wrangler` in any workflow. The relay and the share Worker are deployed by no job. Merging the release PR is therefore a deploy.
+- **Release notes are written between releases, from pull requests** (2026-10-11): two jobs run on a push that cut **no** release (`release_created != 'true'`), and nothing `needs` them.
+  - `changelog-write` (`environment: changelog`, `OPENROUTER_API_KEY`) installs nothing and runs `node scripts/changelog/cli.mjs next`: every pull request since the last tag, one request to Claude Haiku 5.5 through OpenRouter, the answer checked and rendered by code. No key, no release branch, or the released version still on it → nothing written, green.
+  - `changelog-commit` (`contents: write`, no key, no checkout) puts the file on the release branch as `changelog/<version>.md` through the contents API. The file is written again whenever `main` moves.
+  - `publish` sets the release body from `changelog/<version>.md` at the run's commit before it flips the draft. A missing file keeps release-please's notes and still publishes. **No model is called on a release.**
+  - A lasting correction goes in the pull request's description. A published note is corrected in its file, then `node scripts/changelog/cli.mjs push <version>`. `CHANGELOG.md` stays release-please's raw log.
 - **Fence**: `scripts/release-rule.test.mjs` holds the job graph, the trigger, every spelling of `secrets` and which job may read which, every line a secret-holding job runs (`RUNS`: each `run:`, to the letter, and `shell: bash`),
   the environment, the single `wrangler` line and its lockfile, one version across every manifest and `release-please-config.json`, and an Android `versionCode` that rises with the version.
-  A line added to or changed in any `run:` of `android-sign` or `web-deploy` — a summary's wording included — is made in `RUNS` in the same commit.
+  A line added to or changed in any `run:` of `android-sign`, `web-deploy` or `changelog-write` — a summary's wording included — is made in `RUNS` in the same commit.
 - **Between releases**: `pnpm web:deploy-guard` refuses a by-hand web deploy from a tree whose `USER_SCHEMA_VERSION` differs from the last tag's, or whose last release is still a draft.
   Equal schemas are necessary, not sufficient: a wire change with no schema rung is dropped by an older build, and the guard cannot see it.
 - **Release-please automation**:

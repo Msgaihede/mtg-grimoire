@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Make a Claude worktree's node_modules real before the agent needs it, and hand back the
-# two facts the agent would otherwise spend a tool call each discovering.
+# Make a Claude worktree's node_modules real before the agent needs it, see that the worktrees
+# have their cargo settings, and hand back the facts the agent would otherwise spend a tool
+# call each discovering.
 #
 # Wired to SessionStart in .claude/settings.json, beside merge-main.sh.
 #
@@ -63,6 +64,43 @@ elif [ pnpm-lock.yaml -nt node_modules/.modules.yaml ]; then
   reason="pnpm-lock.yaml was newer than the last install"
 fi
 
+# Cargo's settings for the worktrees live in the folder above them, where cargo's upward walk
+# finds them from every worktree and from no other checkout. worktree-cargo.toml, beside this
+# script, is the file and carries the reasons. It is copied only when there is none: a session
+# on an older branch must not put its copy back over a newer one, because a changed setting
+# rebuilds every worktree's tree. A copy that differs is reported and left alone.
+cargo_line=""
+template="$root/.claude/hooks/worktree-cargo.toml"
+shared="$(dirname "$root")/.cargo/config.toml"
+if [ -f "$template" ]; then
+  if [ ! -f "$shared" ]; then
+    if mkdir -p "$(dirname "$shared")" && cp "$template" "$shared"; then
+      cargo_line="Wrote $shared from .claude/hooks/worktree-cargo.toml (there was none). Every worktree's next cargo run builds into its own target/cache, from nothing."
+    else
+      cargo_line="COULD NOT WRITE $shared. Without it this worktree builds with cargo's defaults: an incremental cache, full debug info, and no target/cache. Copy .claude/hooks/worktree-cargo.toml there by hand."
+    fi
+  elif ! cmp -s "$template" "$shared"; then
+    cargo_line="$shared differs from this branch's .claude/hooks/worktree-cargo.toml and was left alone. If this branch is the one that changed the settings, copy the file over it and expect every worktree to rebuild."
+  fi
+fi
+
+# A build tree no build reads any more, which nothing else will ever delete: the tree of the
+# layout before 2026-10-08, in a checkout that has since taken the new one, and the folders
+# cargo filled under target/debug before the settings above moved them to target/cache
+# (2026-10-11). The app hands a worktree's folder to one session after another, so such a tree
+# outlives the session that built it. Named for the agent rather than deleted here: tens of
+# gigabytes take longer to delete than a hook should hold a session's start.
+dead=""
+if [ -f apps/desktop/src-tauri/Cargo.toml ] && [ -d src-tauri/target ]; then
+  dead="src-tauri/target"
+fi
+if [ -f "$shared" ] && [ -d target/debug/deps ]; then
+  dead="${dead:+$dead }target/debug/deps target/debug/incremental target/debug/build target/debug/.fingerprint"
+fi
+if [ -n "$dead" ]; then
+  cargo_line="${cargo_line:+$cargo_line }DEAD BUILD TREE: no build reads these any more and they hold gigabytes. Delete them now, in the Bash tool: rm -rf $dead"
+fi
+
 branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || printf '?')"
 commits="$(git log --oneline -3 2>/dev/null || true)"
 
@@ -94,7 +132,8 @@ ctx="Worktree setup (SessionStart hook, no action needed unless it says otherwis
 - Branch: $branch
 - HEAD:
 $commits
-- Dependencies: $install_line
+- Dependencies: $install_line${cargo_line:+
+- Cargo: $cargo_line}
 
 A worktree-isolated dispatch is created from main, not from the session's branch. If the branch above is not the one your task belongs to, fast-forward to it before touching anything - use the PowerShell tool, since Bash refuses git reset/merge/switch here. Never rebase, and never git reset a branch another agent may be tracking."
 

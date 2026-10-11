@@ -24,6 +24,23 @@ const V0_9_1 = `## [0.9.1](https://github.com/Msgaihede/mtg-grimoire/compare/v0.
 * **decks:** key the view restore on the deck, not on what it restores ([b707a73](https://github.com/Msgaihede/mtg-grimoire/commit/b707a735cc1c98e60cd7a0d49093b8625c8c0040))
 `;
 
+/**
+ * One release body in the generator's shape — what `scripts/changelog/notes.mjs` renders, and
+ * what a release publishes when its release PR carried its `changelog/<version>.md`.
+ */
+const GENERATED = `### Highlights
+
+- **Scan cards from your phone or browser.** The Scanner comes to the Android and web apps.
+
+### New
+
+- **Android:** sync turns on by pairing with another device (#860)
+
+### Fixed
+
+- **Sync:** a copy moved on one device is no longer skipped on another (#854, #856)
+`;
+
 describe("parseReleaseNotes", () => {
   it("reads release-please's whole vocabulary out of one real release body", () => {
     const blocks = parseReleaseNotes(V0_9_1);
@@ -177,5 +194,61 @@ describe("parseReleaseNotes", () => {
   it("reads both bullet markers and an indented one", () => {
     const blocks = parseReleaseNotes("* one\n- two\n  * three");
     expect(items(blocks)).toEqual(["one", "two", "three"]);
+  });
+
+  it("reads a generated body as headings and lists", () => {
+    const blocks = parseReleaseNotes(GENERATED);
+    expect(blocks.map((b) => b.kind)).toEqual(["heading", "list", "heading", "list", "heading", "list"]);
+    expect(blocks.filter((b) => b.kind === "heading").map(plainText)).toEqual([
+      "Highlights",
+      "New",
+      "Fixed",
+    ]);
+    const highlight = blocks[1];
+    expect(highlight.kind === "list" && highlight.items[0][0]).toEqual({
+      kind: "strong",
+      text: "Scan cards from your phone or browser.",
+    });
+  });
+
+  /**
+   * The pull requests a generated bullet came from, gone.
+   *
+   * GitHub links `(#860)` in a release body; here it is the commit trailer's case again, a
+   * number a reader of a desktop changelog can do nothing with.
+   */
+  it("drops the pull request references that close a bullet", () => {
+    const lists = parseReleaseNotes(GENERATED).filter((b) => b.kind === "list");
+    expect(lists.map((list) => plainText(list))).toEqual([
+      "Scan cards from your phone or browser. The Scanner comes to the Android and web apps.",
+      "Android: sync turns on by pairing with another device",
+      "Sync: a copy moved on one device is no longer skipped on another",
+    ]);
+  });
+
+  it("keeps a reference that is part of a sentence", () => {
+    expect(items(parseReleaseNotes("- see (#12) for why\n- fixed by (#12), mostly"))).toEqual([
+      "see (#12) for why",
+      "fixed by (#12), mostly",
+    ]);
+    // Only `#` and digits is a reference: a bullet that closes on other brackets keeps them.
+    expect(items(parseReleaseNotes("- the limit is now higher (was 100)"))).toEqual([
+      "the limit is now higher (was 100)",
+    ]);
+  });
+
+  // Review Focus 5: an install's cache can hold a release-please body until its next check.
+  it("still reads a release-please body exactly as it did", () => {
+    const legacy =
+      "* **android:** a launcher icon ([#862](https://github.com/Msgaihede/mtg-grimoire/issues/862)) " +
+      "([5460540](https://github.com/Msgaihede/mtg-grimoire/commit/5460540558ce8ef5b69c1e2ebfd8eb9e9c0555c3))";
+    expect(items(parseReleaseNotes(legacy))).toEqual(["android: a launcher icon (#862)"]);
+    expect(items(parseReleaseNotes(V0_9_1))).toHaveLength(2);
+  });
+
+  it("reads a maintenance release as its one line", () => {
+    const blocks = parseReleaseNotes("Maintenance release with no user-facing changes.\n");
+    expect(blocks.map((b) => b.kind)).toEqual(["paragraph"]);
+    expect(plainText(blocks[0])).toBe("Maintenance release with no user-facing changes.");
   });
 });

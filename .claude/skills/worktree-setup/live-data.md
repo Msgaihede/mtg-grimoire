@@ -16,21 +16,18 @@ and a 77 MB download for a sync that still leaves the pictures cold.
 it, and the copy is the wrong shape anyway if it is taken mid-write.
 
 ```powershell
-$src = "D:\Code\mtg-grimoire\src-tauri\target\debug\data"
+$src = "D:\Code\mtg-grimoire\target\debug\data"
 $dst = "target\debug\data"
 Remove-Item $dst -Recurse -Force -ErrorAction SilentlyContinue   # never merge onto an old one
 Copy-Item $src $dst -Recurse
 ```
 
-**`$src` is the main checkout's data folder, and where that is depends on whether it has taken
-the 2026-10-08 layout.** Until it has, its build tree is still `src-tauri\target`, as above. After
-it has, and the owner has moved the data folder only — `src-tauri\target\debug\data` to
-`target\debug\data` — and deleted the rest of `src-tauri\target`, it is
-`D:\Code\mtg-grimoire\target\debug\data`. A cargo build tree does not survive being moved
-(measured 2026-10-08: a moved tree failed at Tauri's build scripts, whose cached output holds
-absolute paths to generated permission files under the old folder — `failed to read plugin
-permissions`), so the tree is rebuilt, never carried. `Test-Path` both before copying; a
-worktree's own `$dst` is `target\debug\data` either way.
+**`$src` is the main checkout's data folder**, which has been `target\debug\data` since it took
+the 2026-10-08 layout (seen there 2026-10-11; `src-tauri\target` is gone). `$dst` is beside this
+worktree's executable and outside its build cache, so deleting `target\cache` leaves it alone.
+Only the folder is ever copied: a cargo build tree does not survive being moved (measured
+2026-10-08 — Tauri's build scripts cache absolute paths to generated permission files, and a
+moved tree failed with `failed to read plugin permissions`).
 
 **`Remove-Item` first is not tidiness.** Copying `mtg.db` on top of a folder that already
 has one leaves the *old* `mtg.db-wal` and `mtg.db-shm` beside the new file — a journal
@@ -53,4 +50,5 @@ Remove-Item "target\debug\data" -Recurse -Force
 ```
 
 Delete it after the last live pass, not at the end of the branch: the next pass copies it
-back in seconds. `target` itself goes when the worktree does.
+back in seconds. `target/cache` is the other thing to delete when the work is done (the skill's
+*Finish*); `target` itself goes when the worktree does.

@@ -27,6 +27,12 @@ the one-line versions.
   (code, tests, and documentation) into a single atomic commit. Do not split a feature into multiple
   commits (such as a code commit followed by a docs or fix commit). Multiple commits per feature
   mess up our `release-please` changelog by producing duplicate or fragmented changelog items.
+- **A pull request's description is what the release notes are written from.** `scripts/changelog/`
+  reads every merged pull request's title and description and has a model write what users see
+  in the app's Updates panel. So a description **opens with what changes for a person using the
+  app**, in a sentence or two of plain words, before anything about how it was done — or says
+  plainly that nothing does. A wrong line in a release's notes is fixed there, not in the
+  generated file, which is written again whenever `main` moves.
 - **Ask through the `AskUserQuestion` tool, not in prose.** When you need more information or a
   decision between approaches, put it in the tool — the option cards are how he wants to answer.
   Keep the evidence with it: lead the question or an option's description with what was measured,
@@ -41,7 +47,8 @@ file does not repeat them:
 - **`worktree-setup`** — the working rules for a second checkout: the base-branch check,
   what is not shared with the main checkout, and the shared stash stack. `pnpm install` is
   no longer a step here — `.claude/hooks/worktree-deps.sh` runs it at SessionStart, along
-  with reporting the branch.
+  with reporting the branch, seeing that the worktrees have their cargo settings
+  (`.claude/hooks/worktree-cargo.toml`), and naming a build tree no build reads any more.
 - **`running-the-app`** — **only one app and one Storybook can run across every worktree**,
   and both collisions are silent. Two locks in `locks/` under the git **common** dir
   (`D:/Code/mtg-grimoire/.git/locks` — a worktree's own `.git` is a file, not a

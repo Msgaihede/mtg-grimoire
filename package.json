@@ -41,6 +41,7 @@
     "test:coverage": "vitest run --coverage --testTimeout=30000",
     "test:coverage:rust": "node scripts/coverage-rust.mjs",
     "golden": "node scripts/golden.mjs",
+    "changelog": "node scripts/changelog/cli.mjs",
     "scanner:assets": "node scripts/scanner-assets.mjs",
     "scanner:bench": "node scripts/scanner-bench.mjs",
     "storybook": "storybook dev -p 6006",

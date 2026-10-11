@@ -752,8 +752,9 @@ export function release(version: string): ReleaseInfo {
 }
 
 /**
- * A release body in **release-please's own shape**, which is the only shape this app ever
- * shows.
+ * A release body in **release-please's own shape** — what every release published before its
+ * notes were written from its pull requests, and what an install's cache can still hold.
+ * {@link generatedNotes} is the other.
  *
  * Every element `packages/ui/lib/releaseNotes.ts` has a rule for is here on purpose, because a
  * fixture that omitted one would let the renderer regress with every story still green:
@@ -786,6 +787,30 @@ function notesFor(version: string): string {
 }
 
 /**
+ * A release body in **the generator's shape** (`scripts/changelog/notes.mjs`), which is what a
+ * release publishes when its release PR carried its `changelog/<version>.md`.
+ *
+ * It carries the three things the reader does with that shape: a **Highlights** bullet whose
+ * bold lead is a sentence, an item whose bold is its **area**, and the **pull request
+ * references** closing an item — one and two — which the reader drops.
+ */
+function generatedNotes(): string {
+  return [
+    "### Highlights",
+    "",
+    "- **Scan cards from your phone or browser.** The Scanner comes to the Android and web apps.",
+    "",
+    "### New",
+    "",
+    "- **Android:** sync turns on by pairing with another device (#860)",
+    "",
+    "### Fixed",
+    "",
+    "- **Sync:** a copy moved on one device is no longer skipped on another (#854, #856)",
+  ].join("\n");
+}
+
+/**
  * The versions behind {@link CURRENT_VERSION}, newest first — one page of `/releases`.
  *
  * Four rather than thirty (`update::HISTORY_PER_PAGE`): the list is a scroller either way,
@@ -813,7 +838,7 @@ export function releaseHistory(): ReleaseNote[] {
   return [
     note(NEXT_VERSION, "2026-08-09T04:02:20Z"),
     note(CURRENT_VERSION, "2026-08-04T09:15:00Z"),
-    note(PAST_VERSIONS[0], "2026-07-28T18:40:00Z"),
+    note(PAST_VERSIONS[0], "2026-07-28T18:40:00Z", generatedNotes()),
     note(PAST_VERSIONS[1], "2026-07-21T11:05:00Z"),
     note(PAST_VERSIONS[2], "2026-07-14T08:00:00Z", ""),
   ];

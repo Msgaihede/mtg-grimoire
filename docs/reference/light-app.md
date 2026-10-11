@@ -2544,7 +2544,9 @@ to tell the page what it is.
 **What was built.**
 
 - **`apps/light/src-tauri`, a second Tauri project and the workspace's third member** (`grimoire-light`,
-  library `grimoire_light_lib`, crate types `staticlib`/`cdylib`/`rlib`). It holds almost nothing:
+  library `grimoire_light_lib`, crate types `cdylib`/`rlib` — Tauri's template also lists
+  `staticlib`, which is iOS's and was dropped on 2026-10-11: on a desktop it linked a 2.1 GB
+  `.lib` into every workspace build). It holds almost nothing:
   the mobile entry point (`run`, `#[cfg_attr(mobile, tauri::mobile_entry_point)]`), **one command,
   `core_call(name, args, body)`**, which forwards to `grimoire_core::dispatch`, the startup gate
   the page waits on, and the `mtgimg` protocol. No plugin. `core:default` is its one capability.
