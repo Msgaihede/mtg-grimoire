@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   keepPreviousData,
   useInfiniteQuery,
@@ -552,6 +552,24 @@ export function useWishlist({
 
   const rows = useMemo(() => pages?.pages.flatMap((p) => p.items) ?? [], [pages]);
 
+  /**
+   * The two handlers the page hands its memoised wall and table, **held still across renders**
+   * (issue #557) — each is documented where the object below publishes it. Written there as arrows,
+   * they were new on every render, so every keystroke in the filter box handed the table a new
+   * `onSort` and every heading a new `onOpen`, and drew every row again for nothing.
+   */
+  const toggleSort = useCallback(
+    (key: string, additive: boolean) =>
+      setSort((spec) =>
+        applySort(spec, key as WishlistSortKey, {
+          additive,
+          firstDir: WISHLIST_FIRST_DIR[key as WishlistSortKey] ?? "asc",
+        }),
+      ),
+    [],
+  );
+  const openFolder = useCallback((id: number | null) => setFolderId(id), []);
+
   return {
     text,
     setText,
@@ -617,13 +635,7 @@ export function useWishlist({
     /** The columns this list is ordered by, first one deciding. Empty is name order. */
     sort,
     /** One press on a column header. `additive` is Shift being held. */
-    toggleSort: (key: string, additive: boolean) =>
-      setSort((spec) =>
-        applySort(spec, key as WishlistSortKey, {
-          additive,
-          firstDir: WISHLIST_FIRST_DIR[key as WishlistSortKey] ?? "asc",
-        }),
-      ),
+    toggleSort,
     /**
      * The filter bar's select: one term, replacing whatever was there.
      *
@@ -723,7 +735,7 @@ export function useWishlist({
     /** Open a folder, or `null` for the root. This hook only tracks where the reader now
      *  stands — it does not own the write that files a wish there, or the one that creates a
      *  folder; both live on the page, beside the headings. */
-    openFolder: (id: number | null) => setFolderId(id),
+    openFolder,
     /**
      * The shelves at and below the **drawn** level, in tree order, shut ones included —
      * `buildShelves`' answer, which the page draws from and re-asks with the folder being added

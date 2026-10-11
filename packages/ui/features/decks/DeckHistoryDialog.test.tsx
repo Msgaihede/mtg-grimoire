@@ -413,5 +413,20 @@ describe("DeckHistoryDialog", () => {
       expect(screen.getByText(/BUSY: the database is being written to/)).toBeInTheDocument();
       expect(screen.queryByText("No changes recorded yet.")).toBeNull();
     });
+
+    /**
+     * **The desktop's shape, which the case above is not** (issue #557). A Rust command refuses
+     * with its `Err(String)` and every `ipc` wrapper rejects with that bare string, so a dialog
+     * that read `error instanceof Error && error.message` passed the test above and drew the
+     * generic fallback on every shipped desktop, with the real sentence thrown away.
+     */
+    it("says it in the backend's words when the rejection is a bare string", async () => {
+      deckAuditList.mockRejectedValue("deck 4 has no history table yet");
+      await drawn();
+
+      expect(await screen.findByText("Couldn't load this deck's history.")).toBeInTheDocument();
+      expect(screen.getByText(/deck 4 has no history table yet/)).toBeInTheDocument();
+      expect(screen.queryByText(/Couldn't reach the database/)).toBeNull();
+    });
   });
 });

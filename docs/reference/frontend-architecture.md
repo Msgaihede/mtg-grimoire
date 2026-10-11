@@ -71,3 +71,22 @@ When running the light app (`apps/light/`):
 3. **Routing Model**:
    - Phone Face: Driven by a lightweight, zero-dependency History API router in `apps/light/phone/router.ts` (`usePlace`, `navigate`, `back`).
    - Desktop Face: Driven by the Zustand application store adapted to URL query parameters via `useDesktopPlace.ts`.
+
+---
+
+## IPC Rejections Have One Shape
+
+Hosts used to disagree about what a refused command rejects with: Tauri hands back the Rust command's `Err(String)`, the web host's Worker and the Android table a string too, the fake core an `Error`, and a transport fault whatever it likes. `DeckHistoryDialog` read `error instanceof Error && error.message`, which passed under the fake and on the shipped desktop always replaced the real Rust sentence with a generic one (issue #557).
+
+- `invoke` in `ipc.ts` now runs every rejection through `ipcError`, so an `ipc.*` wrapper **always rejects with a plain string** — the contract the crates already keep, a value the scanner and the light app compare to their sentence constants with `===`, and one that renders as a React child where an `Error` would throw.
+- Render an IPC failure with `ipcError(e)`; it still handles the other shapes, for what does not come through `invoke` (a direct `core.call`, a file read, a `fetch`).
+
+---
+
+## Route-Level Code Splitting
+
+`App.tsx` imports the five everyday views (Home, Search, Collection, Wishlist, Decks) statically and loads the six occasional ones — Scanner, Settings, Tags, Trade, Playtesting, Shared — with `React.lazy`, under one `Suspense` with no fallback around `ActiveView` (inside the shell, so the rail and title bar never blank).
+
+- Measured on 2026-10-11 with `vite build --config apps/desktop/vite.config.ts`: the JavaScript the first page loads (the entry plus its `modulepreload`s) went from 1,966 KiB (591 KiB gzipped) in one file to 1,671 KiB (503 KiB gzipped). `jsQR` is now only in the Settings chunk.
+- The light app splits one level higher too: `LightApp.tsx` loads each face as its own chunk, and the desktop face it loads is this `App`.
+- `App.test.tsx` reads `App.tsx` as text and fails on a static import of any of the six.

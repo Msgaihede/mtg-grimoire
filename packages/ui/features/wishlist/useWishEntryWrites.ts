@@ -10,11 +10,20 @@
  * **None of these knows about a managed folder**, and none needs to: the backend refuses every
  * hand write into or out of one in `MANAGED_REFUSAL`'s words (`./managed.ts`), and a surface that
  * draws no control over a managed wish is the first fence, not this hook.
+ *
+ * **The cache arithmetic is `@/lib/useOptimisticEntries` since issue #557** — `patchWish`, the
+ * snapshot and the restore were this file's copy of the collection's, almost verbatim, and are one
+ * hook over both lists now. What stays here is what is the wishlist's own: `settleWhole`.
  */
 import { useCallback } from "react";
-import { useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query";
-import { ipc, type WishlistPage as Page, type WishRow } from "@/lib/ipc";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { ipc, type WishRow } from "@/lib/ipc";
 import { refreshCardSearches } from "@/lib/searchMarks";
+import { useOptimisticEntries } from "@/lib/useOptimisticEntries";
+
+/** Every cached copy of the list sits under this — a module constant, because
+ *  `useOptimisticEntries` keys its callbacks on it. */
+const WISHLIST_LIST_KEY = ["wishlist", "list"] as const;
 
 export function useWishEntryWrites() {
   const queryClient = useQueryClient();
@@ -26,41 +35,18 @@ export function useWishEntryWrites() {
    * "everything" list and in whatever narrowed list the reader came from, and a stepper press
    * that fixed one and left the other would show two different numbers for one card one filter
    * click apart.
+   *
+   * A removal moves every page's `total` too: every page carries the same count of the whole
+   * list, so every page's copy of it moves — otherwise the header the *first* page feeds would go
+   * on counting a wish that is gone.
+   *
+   * `snapshot` and `restore` beside it are the undo, for a write the backend refused.
    */
-  const patchWish = useCallback(
-    (id: number, next: ((row: WishRow) => WishRow) | null) => {
-      queryClient.setQueriesData<InfiniteData<Page>>({ queryKey: ["wishlist", "list"] }, (data) => {
-        if (!data || !data.pages.some((p) => p.items.some((r) => r.id === id))) return data;
-        return {
-          ...data,
-          pages: data.pages.map((page) =>
-            next === null
-              ? {
-                  items: page.items.filter((r) => r.id !== id),
-                  // Every page carries the same count of the whole list, so every page's copy
-                  // of it moves — otherwise the header the *first* page feeds would go on
-                  // counting a wish that is gone.
-                  total: Math.max(0, page.total - 1),
-                }
-              : { ...page, items: page.items.map((r) => (r.id === id ? next(r) : r)) },
-          ),
-        };
-      });
-    },
-    [queryClient],
-  );
-
-  /** Undo, for a write the backend refused. */
-  const snapshot = useCallback(
-    () => queryClient.getQueriesData<InfiniteData<Page>>({ queryKey: ["wishlist", "list"] }),
-    [queryClient],
-  );
-  const restore = useCallback(
-    (saved: ReturnType<typeof snapshot>) => {
-      for (const [key, data] of saved) queryClient.setQueryData(key, data);
-    },
-    [queryClient],
-  );
+  const {
+    patchEntry: patchWish,
+    snapshot,
+    restore,
+  } = useOptimisticEntries<WishRow>(WISHLIST_LIST_KEY);
 
   /**
    * How **every** write on this page finishes: the whole `["wishlist"]` root re-read, and the

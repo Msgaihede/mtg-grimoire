@@ -204,9 +204,28 @@ export type Unlisten = () => void;
  * {@link CallOptions}' headers. Every other wrapper passes a record and no options, which is
  * what keeps `core.call`'s one- and two-argument forms — and the
  * `toHaveBeenCalledWith("sync_status")` assertions that depend on them — unchanged.
+ *
+ * **Every rejection leaves here as the backend's sentence, a plain string, whichever host
+ * refused** (issue #557). The hosts disagreed: Tauri rejects with the `Err(String)` itself, the
+ * web host's Worker and the Android table with a string too, but the fake core every test and
+ * story runs on rejects with an `Error`, and a transport fault on any host can be an `Error`
+ * or an object. A caller written against one shape was right on some hosts and wrong on the
+ * rest — `DeckHistoryDialog` read `error instanceof Error && error.message`, which held in
+ * every test and on no shipped desktop, where the real Rust message was always swapped for a
+ * generic one. **A string rather than an `Error`** because the string is the contract the
+ * crates already keep (`Result<_, String>`), the light app and the scanner compare rejections
+ * to their sentence constants with `===`, and a string renders as a React child where an
+ * `Error` throws. {@link ipcError} is what turned the other shapes into that string before, and
+ * it is what does it here, so a caller that still wraps a rejection in it gets the same answer.
  */
 const invoke = <T,>(command: string, args?: CallArgs, options?: CallOptions): Promise<T> =>
-  core.call<T>(command, args, options);
+  // `Promise.resolve` around the call is for the suites, not for a host: every `Core` answers a
+  // promise, but a test that stubs the transport with a bare `vi.fn()` answers `undefined`, and a
+  // `.catch` straight on that would throw where the call used to go through. The command is
+  // still sent synchronously, so a `toHaveBeenCalledWith` right after the call holds as before.
+  Promise.resolve(core.call<T>(command, args, options)).catch((e: unknown) =>
+    Promise.reject(ipcError(e)),
+  );
 
 /**
  * JSON with every non-ASCII character escaped, for the two scanner headers.
@@ -11270,6 +11289,10 @@ export const ipc = {
  * All three commands return `Result<_, String>`, so the rejection value is that bare
  * string — not an `Error`. Rendering it with `String(e)` would be right for those and
  * `"[object Object]"` for anything the IPC layer itself throws, so both are handled.
+ *
+ * **A rejection out of an {@link ipc} wrapper is already a string** — `invoke` runs it through
+ * here on the way out, so the first branch is the one it takes. The other two are for what did
+ * not come through `invoke`: a direct `core.call`, a file read, a `fetch`, a thrown `Error`.
  */
 export function ipcError(e: unknown): string {
   if (typeof e === "string") return e;

@@ -93,6 +93,24 @@ Normalized via `deckKind.ts` (`regular`, `theory`, `virtual`):
 
 ---
 
+## 5a. The Editor's Seams & Re-render Scope (issue #557)
+
+`DeckEditor.tsx` is still the one entry (`<DeckEditor key={openDeckId} deckId={openDeckId} />`, plus the re-exports its tests import), split along the seams it already had:
+
+| File | Owns |
+| --- | --- |
+| `DeckEditor.tsx` | Which deck and which list (variant + its restore), every read and write, the `Layer` slot, the menus, the banners, the bands below the desk. |
+| `DeckDesk.tsx` | How the deck is *looked at*: view, group-by, sort, the filter box and label chips — and what derives from them (`shown`, `groups`, selection order, card walk, `actions`, `viewProps`). Draws the toolbar, the undocked bar and the desk row; the editor's parts arrive as slots (`header`, `tools`, `notices`, `dock`). |
+| `DeckEditorHeader.tsx` | The header's first line (back, name, Theory/Actual, Compare, transfer pair, actions) and its width constants. |
+| `DeckEditorLayers.tsx` | The `Layer` union, `layerMatches`, and every overlay, mounted as a fragment at the editor's top level. |
+| `useDeckDrops.ts` / `useDeckKeyboard.ts` | Every write a drop makes (plus the caret hand-off); the undo/redo and Delete bindings on `window`. |
+
+- **State lives where it is drawn.** The filter is `DeckDesk`'s, so a keystroke never re-renders the editor, the header, the ledger, the docked search wall, or the stats/tokens/notes/to-do bands. Do not lift desk state back into the editor; hand the desk a stable callback instead. `DeckDesk.test.tsx` measures this with render-counting probes.
+- **Memo only holds on stable props.** The four views, `CardStack`, each view's per-pile component, `DeckLedger`, `DeckNotesPanel`, `DeckTodosPanel` and `DeckEditorHeader` are `React.memo`. Callbacks handed down are `useCallback` over `mutate`/`mutateAsync` (stable) — never over a whole mutation object (fresh every render) — or read through a ref.
+- **Per-pile memo compares rows, not arrays** (`views/sameDrawn.ts`): a filter rebuilds every `CardGroup`, but a pile whose row objects are the same in the same order is not redrawn. Never make that comparator deep — a re-read replaces rows precisely when a price or count may have moved.
+
+---
+
 ## 6. Build and Verification Commands
 
 Execute verification tests only at the end of feature work:

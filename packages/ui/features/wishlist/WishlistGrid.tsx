@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useMemo,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -244,8 +245,14 @@ function WishWanted({ wish }: { wish: WishRow }) {
  * Virtualised, zoomable and walkable by the same component the search and the collection draw,
  * which is the point of it being that component: a reader who has learned one of this app's
  * walls has learned all of them.
+ *
+ * **Memoised** (issue #557). `CardGrid` draws every tile it is handed on every render it gets, so a
+ * render of this wall that nothing about the list asked for — a keystroke in the page's filter box,
+ * which is the page's state — drew every tile again. The page hands this only props that hold still
+ * across such a render, so behind `memo` it is not rendered at all; a render that does change a prop
+ * draws as it always did.
  */
-export function WishlistGrid({
+export const WishlistGrid = memo(function WishlistGrid({
   rows,
   listKey,
   folders,
@@ -332,6 +339,10 @@ export function WishlistGrid({
    * `CardGrid` a new `tilesOf`, which re-lays the wall out and re-measures the virtualiser
    * (`GridSections`' "hold `sections` and `tilesOf` still"). The two keys are the page's own memos
    * and move only when the shelves or the rows do.
+   *
+   * (Since issue #557 the page holds the `shelves` object still as well, so a render of the page
+   * that changes no data does not reach this wall at all. The keys stay the two memos: a render
+   * that changes a *drawing* — a heading's figures — must still not re-tile a shelf.)
    */
   const sectionList = shelves?.sections;
   const rowsOfShelf = shelves?.rowsOf;
@@ -654,4 +665,4 @@ export function WishlistGrid({
       dragRecord={tileDrag}
     />
   );
-}
+});

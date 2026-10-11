@@ -2250,6 +2250,8 @@ at the next launch, which a page-held fold could never do.
 - `WishlistPage` → **`useWishEntryWrites.ts`**: the stepper, the removal, the filing and back to any
   printing, plus `setPrinting` (the modal's repoint, which keeps its own copy because it closes
   itself on the answer).
+- Since issue #557 the two hooks above share their optimistic patch, snapshot and restore through
+  **`lib/useOptimisticEntries.ts`**; their exported shapes are unchanged, so nothing here moved.
 - `EditCopy`'s save and the card modal's `Edit` writes → **`useCopyWrites.ts`**; `useCardMenuDeps`'
   two adds → **`card/useCardAdds.ts`**; `UndoNotice`'s behaviour → **`useBulkUndoAction`** in the
   same file. `AllPrintingsDialog`'s own copy of the printing write is left where it is.

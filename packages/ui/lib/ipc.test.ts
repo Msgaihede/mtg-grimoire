@@ -3877,7 +3877,13 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   it("scanner_capture carries the sidecar the same way", async () => {
-    const sidecar = { expected: "Plains", reported: "", confidence: "", votes: "8.0", distance: "74" };
+    const sidecar = {
+      expected: "Plains",
+      reported: "",
+      confidence: "",
+      votes: "8.0",
+      distance: "74",
+    };
     await ipc.scannerCapture(new Uint8Array([9]), sidecar);
     expect(invoke).toHaveBeenCalledWith("scanner_capture", new Uint8Array([9]), {
       headers: { "x-scanner-capture": JSON.stringify(sidecar) },
@@ -3954,7 +3960,12 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(invoke).toHaveBeenCalledWith("scanner_set_filters", { filters });
     expect(scannerRs).toMatch(/fn scanner_set_filters\([^)]*\bfilters\s*:\s*ScanFilters/s);
 
-    const prefs = { ...DEFAULT_SCANNER_PREFS, mode: "exact" as const, folderId: 4, developer: true };
+    const prefs = {
+      ...DEFAULT_SCANNER_PREFS,
+      mode: "exact" as const,
+      folderId: 4,
+      developer: true,
+    };
     invoke.mockResolvedValue(prefs);
     expect(await ipc.scannerPrefs()).toEqual(prefs);
     expect(invoke).toHaveBeenCalledWith("scanner_prefs");
@@ -3985,7 +3996,14 @@ describe("ipc argument names match the Rust command signatures", () => {
    */
   it("commits the tray under its own name with the items, the folder and what is left", async () => {
     expect(scannerRs.length, "scanner.rs was not read").toBeGreaterThan(1_000);
-    const items = [{ cardId: TRAY_ROWS[0].cardId, quantity: 1, finish: "nonfoil" as const, condition: "NM" as const }];
+    const items = [
+      {
+        cardId: TRAY_ROWS[0].cardId,
+        quantity: 1,
+        finish: "nonfoil" as const,
+        condition: "NM" as const,
+      },
+    ];
     const outcome = { added: 1, updated: 0, removed: 0 };
     invoke.mockResolvedValue(outcome);
     expect(await ipc.scannerTrayCommit(items, 7, [TRAY_ROWS[1]])).toEqual(outcome);
@@ -4144,12 +4162,10 @@ describe("the startup gate's command and event", () => {
 it("subscribes to sync:applied and hands the payload through unwrapped", async () => {
   const unlisten = vi.fn();
   let emit: ((evt: { payload: RelayOutcome }) => void) | undefined;
-  listen.mockImplementation(
-    (_name: string, handler: (evt: { payload: RelayOutcome }) => void) => {
-      emit = handler;
-      return Promise.resolve(unlisten);
-    },
-  );
+  listen.mockImplementation((_name: string, handler: (evt: { payload: RelayOutcome }) => void) => {
+    emit = handler;
+    return Promise.resolve(unlisten);
+  });
   const seen: RelayOutcome[] = [];
   const outcome: RelayOutcome = {
     pushed: 1,
@@ -4182,12 +4198,10 @@ it("subscribes to sync:applied and hands the payload through unwrapped", async (
 it("subscribes to sync:live and hands the payload through unwrapped", async () => {
   const unlisten = vi.fn();
   let emit: ((evt: { payload: SyncLiveEvent }) => void) | undefined;
-  listen.mockImplementation(
-    (_name: string, handler: (evt: { payload: SyncLiveEvent }) => void) => {
-      emit = handler;
-      return Promise.resolve(unlisten);
-    },
-  );
+  listen.mockImplementation((_name: string, handler: (evt: { payload: SyncLiveEvent }) => void) => {
+    emit = handler;
+    return Promise.resolve(unlisten);
+  });
   const seen: SyncLiveEvent[] = [];
 
   const stop = await ipc.onSyncLive((e) => seen.push(e));
@@ -4453,6 +4467,34 @@ describe("ipcError", () => {
 });
 
 /**
+ * **One shape out of `invoke`, whatever shape went in** (issue #557). Tauri refuses with the
+ * command's `Err(String)`, the fake core with an `Error`, and a transport fault with whatever it
+ * likes — so a caller that branched on one of them was right on some hosts and wrong on the rest.
+ * Every wrapper now rejects with the sentence as a plain string; each case here is one host's
+ * shape going in.
+ */
+describe("a rejected ipc call", () => {
+  beforeEach(() => invoke.mockReset());
+
+  it("keeps a Rust refusal's string as it is", async () => {
+    invoke.mockRejectedValueOnce("sync already running");
+    await expect(ipc.syncStatus()).rejects.toBe("sync already running");
+  });
+
+  it("turns an Error into its message", async () => {
+    invoke.mockRejectedValueOnce(new Error("window closed"));
+    await expect(ipc.syncStatus()).rejects.toBe("window closed");
+  });
+
+  it("turns anything else into a sentence rather than an object", async () => {
+    invoke.mockRejectedValueOnce({ code: 42 });
+    const rejection = await ipc.syncStatus().catch((e: unknown) => e);
+    expect(typeof rejection).toBe("string");
+    expect(rejection).toContain('{"code":42}');
+  });
+});
+
+/**
  * The four clears take **no arguments at all**, so the only half of the contract that can drift
  * is the command name — and a name Rust does not register is a runtime rejection with no type
  * error anywhere. These are irreversible commands reached from one button each, so "it silently
@@ -4508,7 +4550,10 @@ describe("the collection folder wrappers name the commands `collection_folders.r
     expect(invoke).toHaveBeenCalledWith("collection_folder_create", { parentId: 2, name: "Rares" });
 
     await ipc.collectionFolderRename(2, "Trade binder");
-    expect(invoke).toHaveBeenCalledWith("collection_folder_rename", { id: 2, name: "Trade binder" });
+    expect(invoke).toHaveBeenCalledWith("collection_folder_rename", {
+      id: 2,
+      name: "Trade binder",
+    });
 
     // `null` is the root and is a destination rather than an omission — the way back out.
     await ipc.collectionFolderMove(3, null);
@@ -5080,38 +5125,68 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
    */
   const srcLines = (text: string): string[] => text.split(/\r?\n/);
 
-  /** Field names of a `pub struct` in a Rust source file, in declaration order. */
-  const rustFields = (src: string, name: string): string[] => {
+  /**
+   * The `pub` fields of a `pub struct` in a Rust source file, in declaration order — each with
+   * its type as written and the run of attribute and doc lines directly above it.
+   *
+   * {@link rustFields} is this less the skipped fields, and it is what every table below reads.
+   * The walk at the bottom of this block reads the attributes as well, because it meets the two
+   * the tables never had to: `#[serde(flatten)]`, whose field carries no key of its own, and a
+   * field-level `#[serde(rename = "…")]`.
+   */
+  const rustFieldDecls = (
+    src: string,
+    name: string,
+  ): { name: string; type: string; attrs: string[] }[] => {
     const start = src.indexOf(`pub struct ${name} {`);
     expect(start, `\`pub struct ${name}\` is not in the Rust source given`).toBeGreaterThan(-1);
     const body = srcLines(src.slice(start)).slice(1);
     const end = body.indexOf("}");
     expect(end, `\`${name}\` has no closing brace`).toBeGreaterThan(0);
+    // `r#match` is the one raw identifier in either tree, because `match` is a keyword in Rust
+    // and is not one in TypeScript — the page reads `verdict.match`, so the mirror carries the
+    // bare name and the parser has to see through the prefix.
+    //
+    // The attributes are the whole run above the field, not only the line before it: a doc
+    // comment between `#[serde(…)]` and `pub name:` is legal Rust, and a parser that looked one
+    // line up would read that field as plain.
+    const lines = body.slice(0, end);
+    return lines.flatMap((line, i) => {
+      const field = /^\s*pub\s+(?:r#)?([a-z0-9_]+)\s*:\s*(.*?),?\s*$/.exec(line);
+      if (!field) return [];
+      const attrs: string[] = [];
+      for (let j = i - 1; j >= 0 && /^\s*(?:#\[|\/\/)/.test(lines[j]); j--) attrs.push(lines[j]);
+      return [{ name: field[1], type: field[2], attrs }];
+    });
+  };
+
+  /** Field names of a `pub struct` in a Rust source file, in declaration order. */
+  const rustFields = (src: string, name: string): string[] =>
     // **Two things the plain `pub name:` line cannot express, both of them the scanner's.**
     //
     // A `#[serde(skip)]` field is not in the JSON at all, so it must not be in the mirror
     // either — `LockState::quad` is the live one, and the row for `ScannerLock` would fail for
-    // a field the page can never receive. The attribute is on the line *before* the field, so
-    // the walk needs the neighbouring line and not just its own. `skip_serializing_if` is
+    // a field the page can never receive. The attribute is on a line *before* the field, so
+    // the walk needs the neighbouring lines and not just its own. `skip_serializing_if` is
     // deliberately not matched: that field *is* in the JSON whenever it has a value, and
     // `Verdict::error` is the one that has to stay.
-    //
-    // `r#match` is the one raw identifier in either tree, because `match` is a keyword in Rust
-    // and is not one in TypeScript — the page reads `verdict.match`, so the mirror carries the
-    // bare name and the parser has to see through the prefix.
-    const lines = body.slice(0, end);
-    return lines
-      .map((line, i) =>
-        /^\s*#\[serde\(skip\)\]/.test(lines[i - 1] ?? "")
-          ? undefined
-          : /^\s*pub\s+(?:r#)?([a-z0-9_]+)\s*:/.exec(line)?.[1],
-      )
-      .filter((f): f is string => f !== undefined);
-  };
+    rustFieldDecls(src, name)
+      .filter((d) => !d.attrs.some((a) => /^\s*#\[serde\(skip\)\]/.test(a)))
+      .map((d) => d.name);
+
+  /**
+   * Where `export interface X` starts, whether or not it `extends` anything.
+   *
+   * The `extends` arm is the walk's: until it, every caller named a plain interface and the two
+   * that extend one (`CollectionQuery`, `TokenPrinting`) were sliced by hand where they are
+   * tested. The walk meets all three of them and reads the parents itself.
+   */
+  const tsInterfaceAt = (src: string, name: string): RegExpExecArray | null =>
+    new RegExp(`^export interface ${name}(?: extends ([^{]+))? \\{`, "m").exec(src);
 
   /** Field names of an exported `interface`, comments stripped first. */
   const tsFields = (src: string, name: string): string[] => {
-    const start = src.indexOf(`export interface ${name} {`);
+    const start = tsInterfaceAt(src, name)?.index ?? -1;
     expect(start, `\`export interface ${name}\` is not in ipc.ts`).toBeGreaterThan(-1);
     const body = srcLines(src.slice(start)).slice(1);
     const end = body.indexOf("}");
@@ -5294,14 +5369,14 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
   it.each(mirrors)(
     "the %s mirror agrees with the Rust struct field for field",
     (tsName, rustSource, rustName) => {
-    const rust = rustFields(rustSource, rustName).map(camel);
-    const ts = tsFields(ipcSource, tsName);
+      const rust = rustFields(rustSource, rustName).map(camel);
+      const ts = tsFields(ipcSource, tsName);
 
-    // Not `toEqual` on the raw arrays: the parsers are the thing under suspicion, so a pass
-    // has to mean "both found fields", never "both found nothing".
-    expect(rust.length, `nothing parsed out of \`${rustName}\``).toBeGreaterThan(10);
-    expect(ts.length, `nothing parsed out of \`${tsName}\``).toBeGreaterThan(10);
-    expect([...ts].sort()).toEqual([...rust].sort());
+      // Not `toEqual` on the raw arrays: the parsers are the thing under suspicion, so a pass
+      // has to mean "both found fields", never "both found nothing".
+      expect(rust.length, `nothing parsed out of \`${rustName}\``).toBeGreaterThan(10);
+      expect(ts.length, `nothing parsed out of \`${tsName}\``).toBeGreaterThan(10);
+      expect([...ts].sort()).toEqual([...rust].sort());
     },
   );
 
@@ -5320,9 +5395,12 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
    * field at least reads `undefined` where a value is expected, whereas a removed number
    * compared with `>` simply takes the other branch for ever.
    *
-   * The lesson is the table itself. This fence is **opt-in per struct**, so "is this checked?"
-   * is answered by whether a name appears on one of these two lists and by nothing else.
-   * Adding a row is the whole of the fix and it costs one line.
+   * The lesson is the table itself. This fence was **opt-in per struct**, so "is this checked?"
+   * was answered by whether a name appeared on one of these two lists and by nothing else, and
+   * adding a row was the whole of the fix. **Since 2026-10-11 it is not opt-in**: the walk at the
+   * bottom of this block holds every exported interface to a struct whether or not it is listed
+   * here, and a row on this table is now the way to name a Rust struct the walk would not find
+   * by the interface's own name — the walk's `renamed` map does the same for rows it checks.
    */
   const plainMirrors: [tsName: string, rustSource: string, rustName: string][] = [
     ["CollectionCleared", resetRs, "CollectionCleared"],
@@ -5890,12 +5968,14 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
    * in the Tokens view. Nothing on screen would say why.
    */
   it("names isToken on both sides of the Compare row", () => {
-    expect(rustFields(deckTheoryRs, "TheoryDiffRow"), "`TheoryDiffRow` (Rust) has no `is_token`").toContain(
-      "is_token",
-    );
-    expect(tsFields(ipcSource, "TheoryDiffRow"), "`TheoryDiffRow` (ipc.ts) has no `isToken`").toContain(
-      "isToken",
-    );
+    expect(
+      rustFields(deckTheoryRs, "TheoryDiffRow"),
+      "`TheoryDiffRow` (Rust) has no `is_token`",
+    ).toContain("is_token");
+    expect(
+      tsFields(ipcSource, "TheoryDiffRow"),
+      "`TheoryDiffRow` (ipc.ts) has no `isToken`",
+    ).toContain("isToken");
   });
 
   /**
@@ -5945,6 +6025,277 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     expect([...ts].sort()).toEqual([...own].sort());
   });
 
+  /**
+   * **The walk: every `export interface` in `ipc.ts` is field-checked or says why it is not**
+   * (issue #557, item 4).
+   *
+   * The three tables above are opt-in per struct, and `plainMirrors`' own comment says what that
+   * costs: "is this checked?" was answered by whether someone remembered to add a row. When the
+   * issue was filed 86 of the file's 176 interfaces were on no table — `CardDetail`, `DeckDetail`,
+   * `EntryPatch` and `CollectionQuery` among them, each the shape of a command a reader presses
+   * every day — and a scripted comparison found no drift in any of them. That was luck rather
+   * than a fence, and `DecksCleared::covers` (2026-08-31) is what luck running out looks like.
+   *
+   * So this walks the file instead of a list. For every exported interface it finds the Rust
+   * struct of the same name in **every Rust source in the workspace** (`RUST_SOURCES`, a glob —
+   * a struct in a module nobody has imported here yet is still found), works out what serde
+   * puts on the wire from the struct's own attributes, and compares names. An interface with no
+   * struct of its name has to be on one of two lists, and a new one that is on neither fails
+   * below by name:
+   *
+   * * {@link renamed} — the crate and this file call it different things (`DeckCategory` is
+   *   `DeckCategoryRow`), and the entry is the mapping, so the pair is checked rather than
+   *   excused;
+   * * {@link unmirrored} — there is genuinely no struct to compare with, and the entry says
+   *   why in one line.
+   *
+   * The tables above stay as they are: a name on one of them is checked there, with the floor
+   * that table asserts, and the walk only makes sure nothing escapes all of them.
+   *
+   * **What it compares is the wire, not the declarations**, which is what lets one rule serve
+   * the whole file rather than a table per casing:
+   *
+   * * `#[serde(rename_all = "camelCase")]` on the struct camel-cases the keys, and no
+   *   `rename_all` keeps them verbatim — the scanner's `snakeMirrors` shape, found rather than
+   *   declared. Any other `rename_all` fails, because this walk would be guessing.
+   * * A field-level `#[serde(rename = "…")]` is that key; `#[serde(skip)]` is no key at all,
+   *   exactly as {@link rustFields} reads it.
+   * * `#[serde(flatten)]` contributes the flattened struct's keys and none of its own, and
+   *   `extends` on this side contributes the parent's — so `CollectionQuery` (which flattens
+   *   `CardFilters` in Rust and `extends CardFilters` here) is compared whole, both halves.
+   *
+   * Names only, like every table above: optionality and types are not read. That is the same
+   * bargain the tables make, and the one that makes a text parse of two languages tractable.
+   */
+  // Absolute from the project root, the way `tokens.test.ts` globs the app's sources: the two
+  // roots every crate and every Tauri host keep their code under. `target/` is under neither, so
+  // a build's generated `out/*.rs` is never read as somebody's struct.
+  //
+  // The scanner's `bin/` tools and the out-of-line test modules are left out: nothing in them
+  // reaches the page, and a test's own `pub struct Progress` is exactly the kind of namesake
+  // that would make the walk ask for an `in` it should not need. Reading the other ~255 files
+  // (12 MB) costs this file about three seconds (6.4 s against 3.7 s, 2026-10-11) — the price
+  // of a struct in a module nobody imported here still being found.
+  const RUST_SOURCES = import.meta.glob<string>(
+    [
+      "/crates/*/src/**/*.rs",
+      "/apps/*/src-tauri/src/**/*.rs",
+      "!/crates/*/src/bin/**",
+      "!/{crates/*/src,apps/*/src-tauri/src}/**/tests/**",
+      "!/{crates/*/src,apps/*/src-tauri/src}/**/*tests.rs",
+    ],
+    { query: "?raw", import: "default", eager: true },
+  );
+
+  /**
+   * TypeScript name → the Rust struct that is its wire shape, where the two names differ.
+   *
+   * `in` is a path fragment for a Rust name the workspace declares more than once — `Progress`
+   * is both the card sync's and the scanner download's (`scanner_assets.rs`, which is
+   * `ScannerAssetsProgress` on `plainMirrors`), and only one of them is `sync:progress`. A short
+   * name gets one even while it is unique: a second struct of that name, added anywhere, would
+   * otherwise turn a green row into a "declared twice" failure in somebody else's change.
+   */
+  const renamed: Record<string, { rust: string; in?: string }> = {
+    // `deck_meta.rs`' three reads, each a row of its table with the table's suffix.
+    DeckCategory: { rust: "DeckCategoryRow" },
+    DeckLabel: { rust: "DeckLabelRow" },
+    DeckFolder: { rust: "DeckFolderRow" },
+    FormatSpec: { rust: "FormatSpecRow" },
+    // The progress events' payloads: this side names them for the event, the crate for the
+    // thing that is progressing.
+    SyncProgressEvent: { rust: "Progress", in: "grimoire-core/src/sync.rs" },
+    FeedProgressEvent: { rust: "FeedProgress" },
+    TagProgressEvent: { rust: "TagProgress" },
+    UpdateProgressEvent: { rust: "UpdateProgress" },
+    // `update::Asset`, a release's download — not `scanner::Asset`, the scanner's model file,
+    // which is `ScannerAsset` on `snakeMirrors`.
+    UpdateAsset: { rust: "Asset", in: "src-tauri/src/update.rs" },
+    // Pairing's four, prefixed here because `Offer` and `Device` say nothing on their own in a
+    // file of 200 interfaces. `Device::public_key` is `#[serde(skip)]`, which is the "public key
+    // is deliberately not sent" the interface's comment promises.
+    PairedDevice: { rust: "Device", in: "sync_pair/identity.rs" },
+    PairingOffer: { rust: "Offer", in: "sync_pair/pairing.rs" },
+    PairingHandshake: { rust: "Handshake", in: "sync_pair/pairing.rs" },
+    PairingSealedKey: { rust: "SealedKey", in: "sync_pair/pairing.rs" },
+    ScannerBandOrigin: { rust: "BandOrigin", in: "card-scanner/src/ocr.rs" },
+  };
+
+  /**
+   * TypeScript name → why there is no Rust struct to hold it to. One line each, and a reason a
+   * reader can check: "the Rust side is a `json!`" can be grepped, "not needed" cannot.
+   *
+   * A `json!` payload is the honest case for this list rather than a gap in it — the keys are
+   * written inline at the one `emit` call, so there is no declaration to parse. Both of today's
+   * are pinned on the Rust side instead: `sync_engine/live.rs`' own tests compare whole
+   * `json!({ "state": … })` events, and `sync/run_tests.rs` compares the reconciled payload's
+   * three keys.
+   */
+  const unmirrored: Record<string, string> = {
+    CardCombosQuery:
+      "TS-only: `combos_for_card` takes six flat parameters, and this object is what the wrapper spreads",
+    StickyNotePatch:
+      "TS-only: `sticky_note_update` takes `title`, `body`, `color` and `pinned` as four parameters",
+    SyncLiveEvent: 'Rust side is `json!({ "state": state })` in `sync_engine/live.rs`\'s `emit`',
+    ReconciledEvent:
+      "Rust side is a `json!` of three of `ReconcileStats`' four counts, in `sync.rs` — `skipped` stays home",
+  };
+
+  const tabled = new Set([...mirrors, ...plainMirrors, ...snakeMirrors].map(([ts]) => ts));
+  const interfaces = [...ipcSource.matchAll(/^export interface ([A-Za-z0-9_]+)/gm)].map(
+    (m) => m[1],
+  );
+
+  /** Every source that declares `pub struct <name> {`, narrowed by a rename's `in`. */
+  const rustHomes = (rust: string, within?: string): string[] =>
+    Object.keys(RUST_SOURCES).filter(
+      (path) =>
+        RUST_SOURCES[path].includes(`pub struct ${rust} {`) &&
+        (within === undefined || path.includes(within)),
+    );
+
+  /**
+   * The keys serde writes for a struct — {@link rustFieldDecls} with the struct's `rename_all`,
+   * each field's `rename` and `skip`, and every `flatten` followed into the struct it names.
+   */
+  const rustWireKeys = (path: string, rust: string): string[] => {
+    const src = RUST_SOURCES[path];
+    // The struct's own attributes: the run of non-blank lines above `pub struct`, back to the
+    // end of whatever came before it. A `#[derive(…)]` split over lines is inside that run too.
+    const above = srcLines(src.slice(0, src.indexOf(`pub struct ${rust} {`)));
+    let from = above.length - 1;
+    while (from > 0 && above[from - 1].trim() !== "" && !/[;}]\s*$/.test(above[from - 1])) from--;
+    const renameAll = /rename_all\s*=\s*"([^"]+)"/.exec(above.slice(from).join("\n"))?.[1];
+    expect(
+      renameAll === undefined || renameAll === "camelCase",
+      `\`${rust}\` (${path}) is \`rename_all = "${renameAll}"\`, which this walk does not spell`,
+    ).toBe(true);
+
+    return rustFieldDecls(src, rust).flatMap((d) => {
+      const serde = d.attrs.filter((a) => /^\s*#\[serde\(/.test(a)).join(" ");
+      // `skip` the word, not `skip_serializing_if`: that field is on the wire whenever it has a
+      // value, which is {@link rustFields}' rule too.
+      if (/\bskip\b/.test(serde)) return [];
+      if (/\bflatten\b/.test(serde)) {
+        // The type's own name: `crate::filters::CardFilters` is how both queries spell theirs.
+        const inner =
+          d.type
+            .replace(/^Option<(.*)>$/, "$1")
+            .split("::")
+            .pop() ?? d.type;
+        // The same file first — a flattened struct is almost always its neighbour — and then
+        // anywhere, which has to be exactly one place.
+        const homes = RUST_SOURCES[path].includes(`pub struct ${inner} {`)
+          ? [path]
+          : rustHomes(inner);
+        expect(homes, `\`${rust}.${d.name}\` flattens \`${inner}\`, found in`).toHaveLength(1);
+        return rustWireKeys(homes[0], inner);
+      }
+      const rename = /\brename\s*=\s*"([^"]+)"/.exec(serde)?.[1];
+      return [rename ?? (renameAll === "camelCase" ? camel(d.name) : d.name)];
+    });
+  };
+
+  /**
+   * The keys an interface promises — its own fields and every parent's it `extends`, once each.
+   *
+   * Once each because a field may be declared again below `extends` to carry a comment of its
+   * own: `CollectionQuery.paperOnly` re-states `CardFilters.paperOnly` to say the collection
+   * ignores it. That is one key on the wire, and counting it twice would fail a mirror that is
+   * exactly right.
+   */
+  const tsWireKeys = (name: string): string[] => {
+    const parents = (tsInterfaceAt(ipcSource, name)?.[1] ?? "")
+      .split(",")
+      .map((p) => p.trim())
+      .filter((p) => p !== "");
+    return [...new Set([...parents.flatMap(tsWireKeys), ...tsFields(ipcSource, name)])];
+  };
+
+  /** What the walk decided about each interface: checked against a home, or why not. */
+  const walk = interfaces.map((ts) => {
+    if (tabled.has(ts)) return { ts, verdict: "tabled" as const };
+    if (ts in unmirrored) return { ts, verdict: "unmirrored" as const };
+    const rust = renamed[ts]?.rust ?? ts;
+    const within = renamed[ts]?.in;
+    return { ts, verdict: "walked" as const, rust, within, homes: rustHomes(rust, within) };
+  });
+  const walked = walk.flatMap((w) =>
+    w.verdict === "walked" && w.homes.length === 1 ? [[w.ts, w.rust, w.homes[0]] as const] : [],
+  );
+
+  it("reads every Rust source in the workspace, and finds ipc.ts' interfaces in it", () => {
+    // A glob that matched nothing — a root renamed, a pattern typo'd — would turn every row
+    // below into "no struct of its name", which is loud but points at the wrong thing.
+    expect(Object.keys(RUST_SOURCES).length).toBeGreaterThan(100);
+    expect(Object.keys(RUST_SOURCES)).toContain("/crates/grimoire-core/src/deck.rs");
+    expect(interfaces.length).toBeGreaterThan(150);
+    expect(new Set(interfaces).size, "an interface is exported twice").toBe(interfaces.length);
+  });
+
+  it("holds every exported interface to a Rust struct, or names why it cannot", () => {
+    const loose = walk.flatMap((w) =>
+      w.verdict !== "walked" || w.homes.length === 1
+        ? []
+        : w.homes.length === 0
+          ? [
+              `${w.ts}: no \`pub struct ${w.rust}\` ` +
+                (w.within === undefined ? "anywhere in the workspace" : `under \`${w.within}\``) +
+                " — map it on " +
+                "`renamed` if the crate calls it something else, or put it on `unmirrored` " +
+                "with the reason there is nothing to compare it with",
+            ]
+          : [
+              `${w.ts}: \`pub struct ${w.rust}\` is declared in ${w.homes.join(", ")} — give ` +
+                "its `renamed` entry an `in` that names the one this interface mirrors",
+            ],
+    );
+    expect(loose).toEqual([]);
+  });
+
+  it.each(walked)(
+    "the %s mirror agrees with `%s` field for field, on the wire (%s)",
+    (ts, rust, path) => {
+      const rustKeys = rustWireKeys(path, rust);
+      const tsKeys = tsWireKeys(ts);
+      // The tables' guard, and for the tables' reason: the parsers are the thing under
+      // suspicion, so a pass has to mean "both found fields", never "both found nothing".
+      expect(rustKeys.length, `nothing parsed out of \`${rust}\``).toBeGreaterThan(0);
+      expect(tsKeys.length, `nothing parsed out of \`${ts}\``).toBeGreaterThan(0);
+      expect([...tsKeys].sort()).toEqual([...rustKeys].sort());
+    },
+  );
+
+  /**
+   * The two lists rot the other way: an interface renamed or deleted leaves its entry behind,
+   * and an entry for a name that is not exported excuses nothing and checks nothing — it only
+   * reads as coverage. So each entry has to name something the walk would otherwise have met.
+   */
+  it("keeps no stale entry on either list, and no name on two", () => {
+    const exported = new Set(interfaces);
+    for (const [name, reason] of Object.entries(unmirrored)) {
+      expect(
+        exported.has(name),
+        `\`unmirrored\` names \`${name}\`, which ipc.ts no longer exports`,
+      ).toBe(true);
+      expect(reason.length, `\`unmirrored.${name}\` gives no reason`).toBeGreaterThan(10);
+      expect(name in renamed, `\`${name}\` is on both \`renamed\` and \`unmirrored\``).toBe(false);
+      expect(
+        tabled.has(name),
+        `\`${name}\` is checked by a table and excused by \`unmirrored\``,
+      ).toBe(false);
+    }
+    for (const name of Object.keys(renamed)) {
+      expect(
+        exported.has(name),
+        `\`renamed\` names \`${name}\`, which ipc.ts no longer exports`,
+      ).toBe(true);
+      expect(
+        tabled.has(name),
+        `\`${name}\` is on a table, which already names its Rust struct`,
+      ).toBe(false);
+    }
+  });
 });
 
 /**
