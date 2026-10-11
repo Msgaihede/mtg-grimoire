@@ -43,6 +43,7 @@ import {
   TRAY_ROWS,
   VERDICTS,
 } from "@grimoire/ui/features/scanner/fixtures";
+import { runClock } from "@grimoire/ui/features/scanner/submit/run";
 import {
   DB_BUSY,
   SCANNER_NOT_IN_A_BROWSER_YET,
@@ -50,6 +51,7 @@ import {
 } from "@grimoire/ui/features/scanner/verdictText";
 import type {
   CollectionImportItem,
+  ScanFilters,
   ScannerOptions,
   ScannerPrefs,
   ScannerSubmission,
@@ -305,6 +307,8 @@ let restoreCanvas = () => {};
 let restoreVideo = () => {};
 /** A test's own canvas, laid over the file's (the Send scan tests number their frames). */
 let restoreFrames = () => {};
+/** The run's clock put back on the wall (the Send scan tests take it off — see their describe). */
+let restoreClock = () => {};
 beforeEach(() => {
   installLayout();
   restoreCanvas = shimCanvas();
@@ -315,6 +319,9 @@ afterEach(async () => {
   // `SHOWN`. A parked frame never settles and needs no waiting for.
   cleanup();
   await settled();
+  // After the page has gone, so no frame of this test is stamped by two clocks.
+  restoreClock();
+  restoreClock = () => {};
   // Lifted before the file's own: it was laid over that one, and puts that one back.
   restoreFrames();
   restoreFrames = () => {};
@@ -739,6 +746,22 @@ describe("the phone's Scanner page", () => {
  */
 describe("sending a scan from the Scanner page", () => {
   /**
+   * **The run's clock, taken off the wall** — `runClock`, the one seam the pump stamps a frame
+   * through and a press reads the time through. A run reaches four seconds back from the press
+   * and no further, and this file is the one that has run past eight-second waits on a busy
+   * machine: on the real clock a press there would find a ring of good frames too old to send.
+   *
+   * Every reading is ten milliseconds after the one before it — a frame, the next frame, the
+   * press — so the frames are in the order they were sent, each at a time of its own, and none
+   * is ever old, however long the machine took between them.
+   */
+  beforeEach(() => {
+    let at = 1000;
+    const clock = vi.spyOn(runClock, "now").mockImplementation(() => (at += 10));
+    restoreClock = () => clock.mockRestore();
+  });
+
+  /**
    * The dialog, opened from the press once the scanner has answered a run's worth of frames,
    * with the search asked for Lightning Bolt's printings.
    */
@@ -1022,6 +1045,133 @@ describe("sending a scan from the Scanner page", () => {
       "Scanning stopped. Press Start scanning to resume.",
     );
     expect(screen.queryByText(/Not enough of the scan yet/)).toBeNull();
+  });
+
+  /**
+   * The options sheet's release date, set as a reader sets it — sent to the session as it is
+   * made — and the sheet shut again.
+   */
+  async function narrowTo(from: string) {
+    await userEvent.click(screen.getByRole("button", { name: "Scanner options" }));
+    const sheet = await screen.findByRole("dialog", { name: "Scanner options" }, SETTLE);
+    await userEvent.click(within(sheet).getByRole("button", { name: /^Filters/ }));
+    // `fireEvent`: a date field has no text for user-event to type into.
+    fireEvent.change(await within(sheet).findByLabelText("Released from", {}, SETTLE), {
+      target: { value: from },
+    });
+    await userEvent.keyboard("{Escape}");
+    await waitFor(
+      () => expect(screen.queryByRole("dialog", { name: "Scanner options" })).toBeNull(),
+      SETTLE,
+    );
+  }
+
+  /**
+   * **A scan says the filters its frames were judged under**: the ones the session last took
+   * (`useScannerPrefs`' `inForce`), never the ones the sheet is drawing. A filter is drawn the
+   * moment the reader changes it and sent to the session, which has not answered yet and may
+   * refuse — and a press in that moment must not say the session held it.
+   */
+  it("sends the filters the session has taken, not ones still on their way to it", async () => {
+    camera();
+    restoreVideo = shimVideo();
+    // The pump runs throughout, so whenever the press lands there is a run of fresh frames.
+    const cards = pile(0, "looking");
+    const pushed: ScanFilters[] = [];
+    const sent: { submission: ScannerSubmission }[] = [];
+    mount({
+      over: (own) => ({
+        scanner_frame: cards.frame,
+        // The mount's push is the world's to answer; the reader's is on its way for as long as
+        // the test runs.
+        scanner_set_filters: (args: { filters: ScanFilters }) => {
+          pushed.push(args.filters);
+          return pushed.length === 1
+            ? (own.scanner_set_filters as (a: unknown) => unknown)(args)
+            : new Promise<void>(() => {});
+        },
+        scanner_submit: (args: { submission: ScannerSubmission }) => {
+          sent.push(args);
+          return (own.scanner_submit as (a: unknown) => unknown)(args);
+        },
+      }),
+    });
+    await waitFor(() => expect(cards.sent.length).toBeGreaterThan(10), SETTLE);
+
+    await narrowTo("2020-01-01");
+    expect(pushed).toEqual([
+      DEFAULT_SCANNER_PREFS.filters,
+      { sets: [], released_from: "2020-01-01", released_to: null },
+    ]);
+
+    const { dialog } = await opened(cards);
+    await userEvent.click(
+      await within(dialog).findByRole("radio", { name: "Lightning Bolt — LEA 161" }, SETTLE),
+    );
+    await userEvent.click(within(dialog).getByRole("button", { name: "Send scan" }));
+    await waitFor(() => expect(sent).toHaveLength(1), SETTLE);
+    // The sheet says 2020; the session never has, and neither does the scan.
+    expect(sent[0].submission.filters).toEqual(DEFAULT_SCANNER_PREFS.filters);
+    expect(sent[0].submission.run.length).toBeGreaterThanOrEqual(5);
+  });
+
+  /**
+   * **A run never spans a change of filters.** The session drops its tracker to take a changed
+   * set, so every frame the pump was holding was judged under the old one. The page lets the run
+   * go when the filters in force move — and nothing on screen with it: the session reset itself,
+   * and no reader asked for anything to be forgotten.
+   */
+  it("starts the run over when the session takes changed filters, and leaves the status line alone", async () => {
+    camera();
+    restoreVideo = shimVideo();
+    // Eight frames answered and the ninth parked: the run is those eight until it is let go, and
+    // nothing sent afterwards can refill it.
+    const answered = frames(...Array<ScannerVerdict>(8).fill(VERDICTS.voting));
+    let asked = 0;
+    const { seen, view } = mount({
+      over: () => ({
+        scanner_frame: (...args: Parameters<Frame>) => {
+          asked += 1;
+          return answered(...args);
+        },
+      }),
+    });
+    await waitFor(() => expect(asked).toBe(9), SETTLE);
+    await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"), SETTLE);
+
+    // The premise: as things stand there is a run to send, all eight frames of it. (On the
+    // describe's clock, so it is here however long the machine took to get to this line.)
+    await userEvent.click(screen.getByRole("button", { name: "Send scan…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Send this scan" }, SETTLE);
+    expect(within(dialog).getByRole("slider", { name: "Picture" })).toHaveAttribute("max", "8");
+    await userEvent.keyboard("{Escape}");
+    await waitFor(
+      () => expect(screen.queryByRole("dialog", { name: "Send this scan" })).toBeNull(),
+      SETTLE,
+    );
+
+    // The reader narrows the scan, and the session takes it — which is when it is stored.
+    await narrowTo("2020-01-01");
+    await waitFor(
+      () =>
+        expect(last(seen.prefs)?.filters).toEqual({
+          sets: [],
+          released_from: "2020-01-01",
+          released_to: null,
+        }),
+      SETTLE,
+    );
+
+    // Not one frame has been judged under the new filters, so there is nothing to send yet.
+    await userEvent.click(screen.getByRole("button", { name: "Send scan…" }));
+    const box = view.container.querySelector<HTMLElement>("[data-camera-box]");
+    expect(within(box as HTMLElement).getByRole("status")).toHaveTextContent(
+      "Not enough of the scan yet. Hold the card under the camera a moment and press again.",
+    );
+    expect(screen.queryByRole("dialog", { name: "Send this scan" })).toBeNull();
+    // The line goes on naming the card: this was the run's break, not the evidence's.
+    expect(statusLine()).toHaveTextContent("Plains");
+    expect(seen.resets).toBe(0);
   });
 });
 

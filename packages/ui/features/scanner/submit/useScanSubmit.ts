@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import type { ScanFilters, ScanMode, ScannerStatus, ScannerVerdict } from "../types";
 import type { ScanLoop } from "../useScanLoop";
-import { RUN_MIN_FRAMES, scanRun, type ScanRun } from "./run";
+import { RUN_MIN_FRAMES, runAtPress, runClock, scanRun, type ScanRun } from "./run";
 import { SCAN_TOO_SHORT } from "./submitText";
 
 /** What a Scanner page gets back: the press, the dialog's one prop, and its two ways out. */
@@ -40,6 +40,14 @@ export interface ScanSubmit {
  * **A press too soon opens nothing and says why.** Fewer than `RUN_MIN_FRAMES` is a camera that
  * has only just started, or evidence only just reset — not a scan, and the engine would refuse
  * it. There is no falling back to the one picture on screen: a scan is all of the run or none.
+ * **Counted after the frames too old to be the last few seconds are left out** (`runAtPress`):
+ * a pump that has stalled is holding what it sent a while ago, and that is not enough either.
+ *
+ * **What the scanner had said is the run's last frame's, not the page's.** The press reads the
+ * ring as it stands and everything else as the last render had it, and the ring can be a frame
+ * ahead — so `scanRun` takes the reported printing, the two figures and the mode off the last
+ * frame of the run itself. The `verdict` here is only what the reader was looking at: the name
+ * the search opens on.
  *
  * **Nothing stops for it.** The camera and the pump run on behind the dialog exactly as they do
  * behind the tray's two questions, and cards go on landing in the tray. The run is a value in
@@ -61,12 +69,20 @@ export function useScanSubmit({
 }: {
   /** `useScanLoop`'s run: the last frames the pump sent and had answered, oldest first. */
   recent: ScanLoop["recent"];
-  /** What the scanner is saying now — `null` while it is saying nothing. */
+  /**
+   * What the page is showing the scanner to say — `null` while it shows nothing. **Read for the
+   * name the search opens on and for nothing that is sent.**
+   */
   verdict: ScannerVerdict | null;
+  /** The reader's mode. What is sent is the mode the run's last frame was judged in. */
   mode: ScanMode;
   /** `useScannerStatus`' answer, or `null` before it has one. */
   status: ScannerStatus | null;
-  /** The sets and dates the scanner is narrowed to — the reader's prefs, as the pump has them. */
+  /**
+   * The sets and dates the scanner is narrowed to: **the ones its session last accepted**
+   * (`useScannerPrefs`' `inForce`), never the ones the popover is drawing. A change the session
+   * has not answered yet, or has refused, is not what any frame of the run was judged under.
+   */
   filters: ScanFilters;
   /** There can be a run to send: a camera is live and recognition is running. */
   ready: boolean;
@@ -88,7 +104,12 @@ export function useScanSubmit({
 
   const open = (from: HTMLElement) => {
     if (!ready || opened.current) return;
-    const frames = recent();
+    const ring = recent();
+    // The clock is read after the ring: every frame in it was grabbed before this line. The
+    // run's own clock (`runClock`) — the one the pump stamped those frames by.
+    const pressedAt = runClock.now();
+    // Only what is still the last few seconds, and then whether that is enough of a scan.
+    const frames = runAtPress(ring, pressedAt);
     if (frames.length < RUN_MIN_FRAMES) {
       setError(SCAN_TOO_SHORT);
       return;
@@ -96,8 +117,7 @@ export function useScanSubmit({
     opened.current = true;
     opener.current = from;
     setError(null);
-    // The clock is read after the ring: every frame in it was grabbed before this line.
-    setRun(scanRun(frames, performance.now(), verdict, mode, status, filters));
+    setRun(scanRun(frames, pressedAt, verdict, mode, status, filters));
   };
 
   // The two ways out are stable, which `open` cannot be: the dialog's body is memoised on them,

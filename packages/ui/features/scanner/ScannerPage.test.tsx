@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -120,6 +120,7 @@ import { ipc } from "@/lib/ipc";
 import { SCANNING_STOPPED } from "./reader/readerText";
 import { importItems } from "./reader/tray";
 import { ScannerPage } from "./ScannerPage";
+import { runClock } from "./submit/run";
 import { SCAN_TOO_SHORT } from "./submit/submitText";
 import { SCANNER_ELSEWHERE_POLL_MS } from "./useScannerElsewhere";
 import type { TrayDestination } from "./useTrayDestination";
@@ -1135,6 +1136,23 @@ describe("ScannerPage sending a scan", () => {
   };
   const REFERENCE = "20261011T101500Z-0123456789abcdef";
 
+  /**
+   * **The run's clock, taken off the wall** — `runClock`, the one seam the pump stamps a frame
+   * through and a press reads the time through. A run reaches four seconds back from the press
+   * and no further (`RUN_MAX_AGE_MS`), and this file stalls for longer than that under a full
+   * parallel run: on the real clock a test that lets the pump answer and then presses would find
+   * its frames too old to send, on a slow machine and on no other.
+   *
+   * Every reading is ten milliseconds after the one before it — a frame, the next frame, the
+   * press. So the frames are in the order they were sent, each at a time of its own, and none is
+   * ever old, whatever the machine was doing between them. Lifted by the file's own
+   * `restoreAllMocks`.
+   */
+  beforeEach(() => {
+    let at = 1000;
+    vi.spyOn(runClock, "now").mockImplementation(() => (at += 10));
+  });
+
   /** No live picture, no press: the box under the strip is already saying why. */
   it("does not offer the press while the camera is refused", async () => {
     refused();
@@ -1436,6 +1454,125 @@ describe("ScannerPage sending a scan", () => {
       expect(strip(container)).toHaveTextContent(SCAN_TOO_SHORT);
       expect(strip(container)).not.toHaveTextContent("no quadrilateral");
       expect(screen.queryByRole("dialog")).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
+  /** The Filters popover's release date, set as a reader sets it: sent to the session at once. */
+  async function narrowTo(user: ReturnType<typeof userEvent.setup>, from: string) {
+    await user.click(screen.getByRole("button", { name: "Filters: Any set" }));
+    // `fireEvent`, as the bar's own suite does: a date field has no text for user-event to type.
+    fireEvent.change(await screen.findByLabelText("Released from"), { target: { value: from } });
+    // Drawn at once, whatever the session goes on to say of it.
+    const drawn = await screen.findByRole("button", { name: new RegExp(`^Filters: .*${from}`) });
+    await user.click(drawn);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Filters" })).toBeNull());
+  }
+
+  /**
+   * **A scan says the filters its frames were judged under**: the ones the session last took
+   * (`useScannerPrefs`' `inForce`), never the ones the bar is drawing. A filter is drawn the
+   * moment the reader changes it and sent to the session, which has not answered yet — and may
+   * refuse. Pressed in that moment, a scan labelled with what the bar shows would say its frames
+   * were searched under filters the session had never held.
+   */
+  it("sends the filters the session has taken, not ones still on their way to it", async () => {
+    const restore = shimVideo();
+    opens();
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+    // The popover's set picker asks for the set list as it mounts.
+    vi.spyOn(ipc, "listSets").mockResolvedValue([]);
+    // The mount's push is taken at once; the reader's is on its way for as long as the test runs.
+    let pushes = 0;
+    vi.mocked(ipc.scannerSetFilters).mockImplementation(() =>
+      ++pushes === 1 ? Promise.resolve() : new Promise<void>(() => {}),
+    );
+    // The pump runs throughout, so whenever the press lands there is a run of fresh frames.
+    paced();
+    vi.mocked(ipc.searchCards).mockResolvedValue({
+      items: [SARUMAN],
+      total: 1,
+      totalIsCapped: false,
+    });
+    vi.mocked(ipc.scannerSubmit).mockResolvedValue({ id: REFERENCE });
+    const user = userEvent.setup();
+    try {
+      mount();
+      await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"));
+      await waitFor(() =>
+        expect(vi.mocked(ipc.scannerFrame).mock.calls.length).toBeGreaterThan(8),
+      );
+
+      await narrowTo(user, "2020-01-01");
+      const pending = { sets: [], released_from: "2020-01-01", released_to: null };
+      expect(ipc.scannerSetFilters).toHaveBeenCalledTimes(2);
+      expect(ipc.scannerSetFilters).toHaveBeenLastCalledWith(pending);
+
+      await user.click(screen.getByRole("button", { name: "Send scan…" }));
+      const dialog = await screen.findByRole("dialog", { name: "Send this scan" });
+      await user.click(
+        await within(dialog).findByRole("radio", { name: "Storm of Saruman — LTR 72" }),
+      );
+      await user.click(within(dialog).getByRole("radio", { name: "Foil" }));
+      await user.click(within(dialog).getByRole("button", { name: "Send scan" }));
+
+      await waitFor(() => expect(ipc.scannerSubmit).toHaveBeenCalledTimes(1));
+      const [sent] = vi.mocked(ipc.scannerSubmit).mock.calls[0];
+      // The bar says 2020; the session never has, and neither does the scan.
+      expect(screen.getByRole("button", { name: /^Filters: .*2020-01-01/ })).toBeInTheDocument();
+      expect(sent.filters).toEqual(DEFAULT_SCANNER_PREFS.filters);
+      expect(sent.run.length).toBeGreaterThanOrEqual(5);
+    } finally {
+      restore();
+    }
+  });
+
+  /**
+   * **A run never spans a change of filters.** The session drops its tracker to take a changed
+   * set, so every frame the pump was holding was judged under the old one: sent after the
+   * change, they would go out under filters they were never searched with. The page lets the run
+   * go when the filters in force move (`ScanLoop.breakRun`) — and nothing on screen with it,
+   * since the session reset itself and no reader asked for anything to be forgotten.
+   */
+  it("starts the run over when the session takes changed filters, and leaves the screen alone", async () => {
+    const restore = shimVideo();
+    opens();
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+    vi.spyOn(ipc, "listSets").mockResolvedValue([]);
+    // Seven frames answered and the eighth parked: the run is those seven until it is let go,
+    // and nothing sent afterwards can refill it.
+    answers(...Array<ScannerVerdict>(7).fill(VERDICTS.voting));
+    const user = userEvent.setup();
+    try {
+      const { container } = mount();
+      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(8));
+      await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"));
+
+      // The premise: as things stand there is a run to send, all seven frames of it.
+      await user.click(screen.getByRole("button", { name: "Send scan…" }));
+      const dialog = await screen.findByRole("dialog", { name: "Send this scan" });
+      expect(within(dialog).getByRole("slider", { name: "Picture" })).toHaveAttribute("max", "7");
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+      // The reader narrows the scan, and the session takes it — which is when it is stored.
+      await narrowTo(user, "2020-01-01");
+      const taken = { sets: [], released_from: "2020-01-01", released_to: null };
+      await waitFor(() =>
+        expect(ipc.setScannerPrefs).toHaveBeenLastCalledWith(
+          expect.objectContaining({ filters: taken }),
+        ),
+      );
+
+      // Not one frame has been judged under the new filters, so there is nothing to send yet.
+      await user.click(screen.getByRole("button", { name: "Send scan…" }));
+      expect(strip(container)).toHaveTextContent(SCAN_TOO_SHORT);
+      expect(screen.queryByRole("dialog", { name: "Send this scan" })).toBeNull();
+      // The strip goes on naming the card: this was the run's break, not the evidence's.
+      expect(statusLine()).toHaveTextContent("Plains");
+      expect(ipc.scannerReset).not.toHaveBeenCalled();
+      expect(ipc.scannerSubmit).not.toHaveBeenCalled();
     } finally {
       restore();
     }

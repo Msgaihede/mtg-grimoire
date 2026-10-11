@@ -144,8 +144,9 @@ describe("a scan the inbox takes", () => {
 
 /**
  * **All of the frames or nothing, and never a single screenshot** — held here from the route,
- * where `label.test.ts` holds it for the label alone: there is no request this Worker stores one
- * picture for, whichever way it is dressed.
+ * where `label.test.ts` holds it for the label alone: one picture is refused in both shapes it
+ * arrives in, and under a label that lists a run its lengths do not add up. (Framing, not
+ * content: nothing here decodes a picture — `README.md` says what that leaves.)
  */
 describe("one picture is never a scan", () => {
   it("refuses a JPEG sent as a JPEG, before the label and the bucket", async () => {

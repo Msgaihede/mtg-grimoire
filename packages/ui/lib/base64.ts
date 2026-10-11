@@ -3,8 +3,8 @@
  *
  * A module of its own because it has two callers that share nothing else: the light host's
  * transport (`core/table.ts`), which crosses every raw body this way, and the scanner's Send
- * (`features/scanner/submit`), which sends its one picture as text and draws it from the same
- * text. It imports nothing, so reaching it pulls no host's code in.
+ * (`features/scanner/submit`), which sends each picture of a scan as text and draws it from the
+ * same text. It imports nothing, so reaching it pulls no host's code in.
  */
 export function toBase64(bytes: Uint8Array): string {
   let text = "";

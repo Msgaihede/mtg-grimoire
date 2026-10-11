@@ -2,7 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_DETAIL_WAIT_MS, DEFAULT_SCANNER_OPTIONS, DEFAULT_SEND_PX } from "./scannerOptions";
 import { READS, VERDICTS } from "./fixtures";
-import { RUN_MAX_BYTES, RUN_MAX_FRAMES } from "./submit/run";
+import { RUN_MAX_AGE_MS, RUN_MAX_BYTES, RUN_MAX_FRAMES, runClock } from "./submit/run";
 import type { ScannerOptions, ScannerVerdict } from "./types";
 import { useScanLoop, type GrabbedPair, type RunFrame } from "./useScanLoop";
 
@@ -1257,6 +1257,45 @@ describe("the run useScanLoop keeps", () => {
     expect(run.map((frame) => frame.at - started)).toEqual([0, 10, 20]);
   });
 
+  /**
+   * **The stamp is `runClock`'s — the clock a press reads** — so a test that holds that clock
+   * holds every frame's age with it, and none has to race the machine. The round trip is not on
+   * it: that is how long the scanner took, on the wall, and a held run clock must not flatten it.
+   */
+  it("stamps frames by the run's own clock, and times the round trip by the wall's", async () => {
+    scannerFrame.mockImplementation(() => answersIn(10));
+    let at = 5000;
+    const clock = vi.spyOn(runClock, "now").mockImplementation(() => (at += 100));
+    try {
+      const { result } = mount({ grabFrame: numbered() });
+      await tick(35);
+      expect(result.current.recent().map((frame) => frame.at)).toEqual([5100, 5200, 5300]);
+      expect(result.current.roundTripMs).toBe(10);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  /**
+   * Frames and bytes are not a clock: a pump whose frames come seconds apart would hold half a
+   * minute of them inside both of the other bounds. Driven on the run's clock, with no waiting.
+   */
+  it("holds nothing grabbed more than four seconds before its newest frame", async () => {
+    scannerFrame.mockImplementation(() => answersIn(10));
+    let at = 0;
+    const clock = vi.spyOn(runClock, "now").mockImplementation(() => (at += 1500));
+    try {
+      const { result } = mount({ grabFrame: numbered() });
+      await tick(55);
+      // Five answered, stamped 1500 apart: the newest three are inside four seconds of the last.
+      const run = result.current.recent();
+      expect(numbers(run)).toEqual([3, 4, 5]);
+      expect(run[2].at - run[0].at).toBeLessThanOrEqual(RUN_MAX_AGE_MS);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("does not keep a frame whose call was refused", async () => {
     const second = deferred<ScannerVerdict>();
     scannerFrame
@@ -1502,9 +1541,150 @@ describe("the run useScanLoop keeps", () => {
       .mockReturnValueOnce(first.promise)
       .mockReturnValue(deferred<ScannerVerdict>().promise);
     const { result } = mount();
-    const recent = result.current.recent;
+    const { recent, breakRun } = result.current;
     await tick();
     await act(async () => first.resolve(VERDICTS.voting));
     expect(result.current.recent).toBe(recent);
+    // A page keys an effect on this one: a new function a render would break the run a render.
+    expect(result.current.breakRun).toBe(breakRun);
+  });
+});
+
+/**
+ * **The two breaks the session makes by itself.** A reset, a Stop and a new stream are this
+ * side's doing, and the ring is emptied where they happen. The session also drops its tracker on
+ * its own account — on the first frame it is sent in another mode, and when it takes a changed
+ * set of filters — and a run across either would be frames judged one way under a label that
+ * says another. Neither clears anything on screen, which is what tells them from `clearReads`.
+ */
+describe("the run useScanLoop keeps, across the session's own breaks", () => {
+  function numbered() {
+    let n = 0;
+    return vi.fn(async (): Promise<Uint8Array | null> => new Uint8Array([0xff, 0xd8, ++n]));
+  }
+  const numbers = (run: readonly RunFrame[]) => run.map((frame) => frame.jpeg[2]);
+
+  function gated(count: number) {
+    const gates = Array.from({ length: count }, () => deferred<ScannerVerdict>());
+    let n = 0;
+    scannerFrame.mockImplementation(
+      () => gates[n++]?.promise ?? deferred<ScannerVerdict>().promise,
+    );
+    return gates;
+  }
+
+  const EXACT: ScannerVerdict = { ...VERDICTS.voting, mode: "exact" };
+
+  it("says of each frame which mode the scanner judged it in", async () => {
+    const gates = gated(2);
+    const { result } = mount({ grabFrame: numbered() });
+    await tick();
+    await act(async () => gates[0].resolve(VERDICTS.voting));
+    await act(async () => gates[1].resolve(VERDICTS.decided));
+    expect(result.current.recent().map((frame) => frame.mode)).toEqual(["fast", "fast"]);
+  });
+
+  /**
+   * The mode is the verdict's — the session's own word — and not the option the frame went out
+   * with: the page's switch moves when it is pressed, and the session's when the next frame
+   * reaches it.
+   */
+  it("starts the run over at the first frame the scanner answers in another mode", async () => {
+    const gates = gated(5);
+    const { result } = mount({ grabFrame: numbered(), detailWaitMs: 0 });
+    await tick();
+    await act(async () => gates[0].resolve(VERDICTS.voting));
+    await act(async () => gates[1].resolve(VERDICTS.voting));
+    await act(async () => gates[2].resolve(VERDICTS.voting));
+    expect(numbers(result.current.recent())).toEqual([1, 2, 3]);
+
+    // The reader switched to Exact: this is the frame the session forgot the card on.
+    await act(async () => gates[3].resolve(EXACT));
+    expect(numbers(result.current.recent())).toEqual([4]);
+    expect(result.current.recent()[0].mode).toBe("exact");
+    // What is on screen is untouched — the verdict is the one just taken.
+    expect(result.current.verdict).toEqual(EXACT);
+
+    await act(async () => gates[4].resolve(EXACT));
+    expect(numbers(result.current.recent())).toEqual([4, 5]);
+  });
+
+  it("lets the run go at breakRun, and starts it again with the next frame sent", async () => {
+    const gates = gated(4);
+    const { result } = mount({ grabFrame: numbered(), detailWaitMs: 0 });
+    await tick();
+    await act(async () => gates[0].resolve(VERDICTS.voting));
+    await act(async () => gates[1].resolve(VERDICTS.voting));
+    expect(numbers(result.current.recent())).toEqual([1, 2]);
+
+    // The third frame is on the wire when the session takes the changed filters.
+    expect(scannerFrame).toHaveBeenCalledTimes(3);
+    act(() => result.current.breakRun());
+    expect(result.current.recent()).toEqual([]);
+
+    // **It was sent before the break and answered after it**, so nobody can say which side of
+    // the change judged it: it joins neither run.
+    await act(async () => gates[2].resolve(VERDICTS.decided));
+    expect(result.current.recent()).toEqual([]);
+
+    // The first frame sent after the break is the first of the new run.
+    expect(scannerFrame).toHaveBeenCalledTimes(4);
+    await act(async () => gates[3].resolve(VERDICTS.voting));
+    expect(numbers(result.current.recent())).toEqual([4]);
+  });
+
+  /**
+   * **Not `clearReads`.** The session reset itself and nothing on screen is stale, so the
+   * verdict and the kept reads stay, and the answer to the frame in flight is taken and drawn
+   * like any other — where `clearReads` would have thrown it away.
+   */
+  it("leaves the verdict, the kept reads and the frame in flight's answer alone at breakRun", async () => {
+    const gates = gated(3);
+    const { result } = mount({ grabFrame: numbered(), detailWaitMs: 0 });
+    await tick();
+    const read: ScannerVerdict = { ...VERDICTS.voting, ocr: READS.ocr };
+    await act(async () => gates[0].resolve(read));
+    expect(result.current.verdict).toEqual(read);
+    expect(result.current.lastOcr).toEqual(READS.ocr);
+
+    act(() => result.current.breakRun());
+    expect(result.current.verdict).toEqual(read);
+    expect(result.current.lastOcr).toEqual(READS.ocr);
+    expect(result.current.error).toBeNull();
+
+    // The frame that was on the wire: out of the run, and on the screen.
+    await act(async () => gates[1].resolve(VERDICTS.decided));
+    expect(result.current.recent()).toEqual([]);
+    expect(result.current.verdict).toEqual(VERDICTS.decided);
+    expect(result.current.lastOcr).toEqual(READS.ocr);
+  });
+
+  /**
+   * The decision edge is the session's count of cards, and a change of filters is not a card: a
+   * decision that lands on the frame in flight across the break is still one add.
+   */
+  it("still passes on a decision that lands on the frame in flight across breakRun", async () => {
+    const gates = gated(2);
+    const onDecision = vi.fn();
+    const { result } = mount({ grabFrame: numbered(), detailWaitMs: 0, onDecision });
+    await tick();
+    // The camera's first number is a baseline, not news.
+    await act(async () => gates[0].resolve({ ...VERDICTS.voting, decision_seq: 0 }));
+    act(() => result.current.breakRun());
+    await act(async () => gates[1].resolve({ ...VERDICTS.decided, decision_seq: 1 }));
+    expect(onDecision).toHaveBeenCalledTimes(1);
+    expect(result.current.recent()).toEqual([]);
+  });
+
+  it("breaks an empty run without harm, and as often as it is asked", async () => {
+    const gates = gated(1);
+    const { result } = mount({ grabFrame: numbered() });
+    act(() => result.current.breakRun());
+    act(() => result.current.breakRun());
+    expect(result.current.recent()).toEqual([]);
+    // Sent after both: it is in the run.
+    await tick();
+    await act(async () => gates[0].resolve(VERDICTS.voting));
+    expect(numbers(result.current.recent())).toEqual([1]);
   });
 });

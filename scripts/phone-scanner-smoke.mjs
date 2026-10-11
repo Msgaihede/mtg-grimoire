@@ -590,7 +590,7 @@ async function phone(send, width, height) {
     await Promise.all(pictures.map((picture) => picture.decode()));
     const send = smoke.button('Send scan', dialog);
     const slider = dialog.querySelector('input[type="range"]');
-    const showing = pictures.filter((picture) => !picture.hidden);
+    const showing = pictures.filter((picture) => picture.getClientRects().length > 0);
     // Kept on the page, not brought back: they are the pictures, and are compared where they are.
     window.shownScan = pictures.map((picture) => picture.src.slice(23));
     return { pictures: pictures.length,
@@ -623,7 +623,12 @@ async function phone(send, width, height) {
     slider.dispatchEvent(new Event('change', { bubbles: true }));
     return true;
   })()`;
-  const SHOWN = `[...smoke.sheet().querySelectorAll('img[src^="data:image/jpeg;base64,"]')].findIndex((picture) => !picture.hidden)`;
+  // By its box and not its `hidden` property: the property is what the component sets, and a
+  // stylesheet that drew a hidden picture anyway would leave two on screen with this none the wiser.
+  const SHOWN = `(() => {
+    const drawn = [...smoke.sheet().querySelectorAll('img[src^="data:image/jpeg;base64,"]')].map((picture) => picture.getClientRects().length > 0);
+    return drawn.filter(Boolean).length === 1 ? drawn.indexOf(true) : -1;
+  })()`;
   await page.evaluate(step(1));
   await page.until(`${SHOWN} === 0`, "the slider to show the first picture");
   const earliest = await page.evaluate(`smoke.sheet().textContent`);
@@ -632,7 +637,7 @@ async function phone(send, width, height) {
   await page.evaluate(step(opened.pictures));
   await page.until(`${SHOWN} === ${opened.pictures - 1}`, "the slider to come back to the last picture");
   await page.evaluate(`smoke.press(smoke.button('Play', smoke.sheet()), 'Play')`);
-  await page.until(`${SHOWN} < ${opened.pictures - 1}`, "Play to start from the first picture", 5_000);
+  await page.until(`((at) => at >= 0 && at < ${opened.pictures - 1})(${SHOWN})`, "Play to start from the first picture", 5_000);
   await page.until(`${SHOWN} === ${opened.pictures - 1} && smoke.button('Play', smoke.sheet()) !== undefined`, "Play to end on the last picture", 10_000);
   // A typed name, as a reader types one: through the box's own setter, so React hears it.
   await page.evaluate(`(() => {

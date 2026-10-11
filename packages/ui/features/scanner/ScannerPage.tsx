@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type JSX } from "react";
+import { useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { ConfirmDialog } from "@/features/settings/ConfirmDialog";
 import { CreateDeckDialog } from "@/features/decks/CreateDeckDialog";
 import { useNewDeckFormat } from "@/features/decks/useNewDeckFormat";
@@ -93,7 +93,7 @@ function ElsewhereSentence() {
 
 function LiveScanner({ destination }: { destination: TrayDestination | undefined }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const { prefs, update, filterError, loaded, unavailable, resync } = useScannerPrefs();
+  const { prefs, update, inForce, filterError, loaded, unavailable, resync } = useScannerPrefs();
   // The developer panels are the Scanner view's own; a destination's host draws none of them, and
   // asks the engine for none of the previews they alone show.
   const developer = destination === undefined && prefs.developer;
@@ -238,6 +238,10 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
    * already inside a dialog, and its reader is in the middle of something else — *Create deck…*
    * is not drawn there for the same reason. A second dialog opened from inside that one has not
    * been seen in a window, so the press is not offered where it would open one.
+   *
+   * **The filters it says are the ones in force** (`inForce`), not the ones the bar is drawing:
+   * `prefs.filters` moves the moment the reader changes it, before the session has taken the
+   * change, and is put back if the session refuses it.
    */
   const sendable = destination === undefined && camera.kind === "live" && scanning;
   const submit = useScanSubmit({
@@ -245,9 +249,18 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     verdict: loop.verdict,
     mode: prefs.mode,
     status: statusData,
-    filters: prefs.filters,
+    filters: inForce,
     ready: sendable,
   });
+  // **A run never spans a change of filters.** The session drops its tracker to take a changed
+  // set, and the pump cannot see that — a filter is a call of its own, not a frame's — so the
+  // page says it: when the filters in force move, the frames kept so far are let go
+  // (`ScanLoop.breakRun`). An effect, since it writes the loop's refs; the one extra run at mount
+  // empties a ring nothing has reached yet.
+  const { breakRun } = loop;
+  useEffect(() => {
+    breakRun();
+  }, [inForce, breakRun]);
 
   // The tray into the collection, in one `scanner_tray_commit` — all or nothing, the rows with a
   // known finish, the folder asked about again at the press (`useTrayCommit`).

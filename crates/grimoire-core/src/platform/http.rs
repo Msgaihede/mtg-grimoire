@@ -112,7 +112,7 @@ impl Request {
         Request(self.0.body(body))
     }
 
-    /// The body, as bytes that are not text — `scanner_submit`'s one picture. `content-type` is
+    /// The body, as bytes that are not text — `scanner_submit`'s run of frames. `content-type` is
     /// the caller's to set, as it is for [`Request::body`]; in a browser any type but the three
     /// a form sends costs a pre-flight, which the host asked has to answer.
     pub fn bytes(self, body: Vec<u8>) -> Request {

@@ -4350,7 +4350,17 @@ kept past the two seconds below.
 - **Never across a break in the evidence.** The ring is emptied by `clearReads` and `reset`, and
   whenever the pump starts or stops — so a run cannot span a *Reset evidence*, a Stop, or two
   camera streams, and the press is offered only while a camera is live and recognition is
-  running.
+  running. **Nor across the two breaks the session makes itself** (§10): a frame judged in
+  another mode than the one before it starts the ring over, because the session forgets the
+  card on a mode switch; and a filter set the session accepts starts it over too (`breakRun`),
+  with any frame in flight across that moment left out. So every frame of a run was judged in
+  the mode and under the filters the label names — which are read from the run and from what
+  the session accepted, never from a control the reader has only just moved. **One sliver is
+  left**: a press that lands in the round trip between the session taking a new filter and the
+  page hearing that it has sends the last frame or two under the old filter's name.
+- **Never older than four seconds** (`RUN_MAX_AGE_MS`), at the ring and again at the press: a
+  pump that stalled leaves frames that are not *the last couple of seconds*, and they are left
+  out before the count is taken.
 - **The ring holds a copy of each frame's bytes, taken before the call.** The web host
   *transfers* a frame's buffer to its scanner Worker, which leaves the page's array detached and
   empty the moment `scanner_frame` is called; a ring that kept the array it sent would hold
@@ -4394,9 +4404,9 @@ which frames are foils cannot measure that.
 | The frames | the pump, through the ring | The JPEGs `scanner_frame` judged — 960 px on the long edge at quality 0.72 as shipped — five to twenty of them, oldest first, end to end in the request's body. **Not** a still at another size: a replay has to be given what the scanner was |
 | `card` — id, set, number, language, name | **the engine**, from `cards`, by the id the reader chose | The page sends the id alone, so a label cannot pair one printing's id with another's name. It is the card in the **last** frame |
 | `finish` | the reader | Refused when the printing is not made in it; `cards.finishes` that is missing is *unknown* and refuses nothing |
-| `scanner.reported` | the verdict at the press | The printing the session had **decided** on (`decision.printing`, carried on every committed frame), else `null`. **Never the leading standing's `id`**, which is the oracle id the tracker pooled evidence on — an id of another kind than the printing beside it. So `reported === card.id` is a scan it got right, another id one it got wrong, `null` one it had not answered |
-| `scanner.mode`, `confidence`, `distance`, `bundle` | the verdict, the prefs and `ScannerStatus.labels` | Each `null` when the scanner had none; with `reported` `null`, the two figures are how far it had got |
-| `scanner.filters` — sets, from, to | the prefs, as the pump had them | What the scanner was narrowed to decides what it *could* have answered; a replay without it is another scan. Set codes in lower case, at most 64 |
+| `scanner.reported` | the run's last frame | The printing the session had **decided** on (`decision.printing`, carried on every committed frame), else `null` — the last frame's own, so it always agrees with `run`'s last `decided`. **Never the leading standing's `id`**, which is the oracle id the tracker pooled evidence on — an id of another kind than the printing beside it. So `reported === card.id` is a scan it got right, another id one it got wrong, `null` one it had not answered |
+| `scanner.mode`, `confidence`, `distance`, `bundle` | the run's last frame, and `ScannerStatus.labels` | Each `null` when the scanner had none; with `reported` `null`, the two figures are how far it had got. An id that is not a Scryfall id, or a count past the inbox's range, is tidied to `null` by the engine rather than sent to be refused |
+| `scanner.filters` — sets, from, to | the filters the session last **accepted** (`useScannerPrefs`' `inForce`) | What the scanner was narrowed to decides what it *could* have answered; a replay without it is another scan. Not the popover's own state, which is drawn before the session takes it and put back if it refuses. Set codes in lower case, at most 64 |
 | `run[n]` — `ms`, `bytes`, `width`, `height` | the page's clock; the engine, from each JPEG's own header | `ms` is milliseconds before the press, zero or negative, so the gaps are the real frame rate. `bytes` is where the next frame starts: **`run` is the body's only index**. The header read is also what refuses bytes that are not a JPEG |
 | `run[n]` — `ok`, `lock`, `confidence`, `distance`, `decided` | that frame's own verdict | What the scanner answered for *this* frame: whether it found a card, the lock's phase, the tracker's confidence after it, the best match's distance, and the printing it had decided on by then (`null` before it had). The frame where `decided` first appears is the one it made up its mind on |
 | `run[n].detail` | the pump | A larger picture went to the scanner beside this frame (§4's detail frame, for the title read). **It is not in the run** — so a replay of such a frame gives the title reader less than it had, and the flag is how a reader of the corpus knows which |

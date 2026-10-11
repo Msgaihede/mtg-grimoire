@@ -185,7 +185,7 @@ end-to-end encrypted so that the developer cannot read it.
 | Type | Collected | Shared | Processed ephemerally | Required or optional | Purpose |
 | --- | --- | --- | --- | --- | --- |
 | Device or other IDs | Yes | No | No | Optional — only if the reader pairs devices | App functionality |
-| Photos and videos → Photos | Yes | No | No | Optional — only a scan the reader sends from the card scanner: five to twenty stills, about two seconds, one scan at a time | Analytics |
+| Photos and videos → Photos | Yes | No | No | Optional — only a scan the reader sends from the card scanner: five to twenty stills, about two seconds and never more than four, one scan at a time | Analytics |
 
 ⚠️ **The second row is new with the card scanner's Send (issue #776, 2026-10-11), and it has to
 be in the Console before the release that carries Send reaches a track.** Until that build, the
@@ -198,7 +198,7 @@ them, which is the prominent disclosure Play's User Data policy asks for where a
 collected.
 
 **Photos or Videos is a second judgement in that row, for the owner.** A scan is a run of still
-JPEGs with no sound and no video file, which is *Photos*; but it is two seconds of them in order,
+JPEGs with no sound and no video file, which is *Photos*; but it is a few seconds of them in order,
 which is a short clip in everything but its container. *Photos* is what is sent; declaring
 *Videos* beside it, with the same answers, is the cautious reading and costs nothing.
 
@@ -213,7 +213,7 @@ Everything else: **not collected**. In particular:
 - *App activity, App info and performance, Personal info, Files and docs, Location, Contacts,
   Financial info, Messages, Audio, Calendar, Health, Web browsing*: none leaves the device.
   **The camera's pictures are examined on the device and discarded, except the scan a reader
-  sends**: nothing is sent while scanning — the scanner holds the last two seconds of frames in
+  sends**: nothing is sent while scanning — the scanner holds the last few seconds of frames in
   memory so that there is something to send, and no longer — and a sent scan's label names a
   card and the scanner's own reading of it — no device, account or group identifier, which is
   why *Device or other IDs* above is still about sync alone.

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useBulkUndoAction } from "@grimoire/ui/components/UndoNotice";
 import { CreateDeckDialog } from "@grimoire/ui/features/decks/CreateDeckDialog";
 import { useNewDeckFormat } from "@grimoire/ui/features/decks/useNewDeckFormat";
@@ -133,7 +133,7 @@ export function ScannerPage({ destination }: { destination?: TrayDestination }) 
  */
 function LiveScanner({ destination }: { destination: TrayDestination | undefined }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const { prefs, update, filterError, loaded, unavailable, resync } = useScannerPrefs();
+  const { prefs, update, inForce, filterError, loaded, unavailable, resync } = useScannerPrefs();
   // Session-only, the desktop's: a deliberate Stop survives the page being hidden and shown.
   const [scanning, setScanning] = useState(true);
   const parked = usePageParked();
@@ -246,15 +246,25 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   // running: stopped, the pump has let its frames go and is sending none, and no press is drawn.
   // **And only on the Scanner tab itself**: over a trade (`destination`) this page is already a
   // sheet, and a second one opened from inside it has not been seen on a phone.
+  // **The filters it says are the ones in force** (`inForce`), not the ones the sheet is drawing:
+  // `prefs.filters` moves before the session has taken a change, and goes back if it is refused.
   const sendable = destination === undefined && camera.kind === "live" && scanning;
   const submit = useScanSubmit({
     recent: loop.recent,
     verdict: loop.verdict,
     mode: prefs.mode,
     status,
-    filters: prefs.filters,
+    filters: inForce,
     ready: sendable,
   });
+  // **A run never spans a change of filters**, as on the desktop: the session drops its tracker
+  // to take a changed set, which the pump cannot see, so when the filters in force move the
+  // frames kept so far are let go (`ScanLoop.breakRun`). The one extra run at mount empties a
+  // ring nothing has reached yet.
+  const { breakRun } = loop;
+  useEffect(() => {
+    breakRun();
+  }, [inForce, breakRun]);
 
   // What the picture has to say: that recognition is stopped, or the loop's failures, a refused
   // reset and a Send scan pressed too soon — a busy database, a frame the host turned away, a

@@ -369,13 +369,31 @@ fn is_word(text: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
 }
 
-/// A printing's id as the page gave it, or `None` for one that is blank or no id at all. Sixty
-/// four characters is room for any id there is, and what bounds the label's header.
+/// A Scryfall id as this app spells one: thirty-two lower-case hex digits in the five groups
+/// of a UUID. `label.ts`'s `UUID`, which is what the inbox takes for the two ids the scanner
+/// supplies.
+fn is_uuid(id: &str) -> bool {
+    id.len() == 36
+        && id.bytes().enumerate().all(|(at, b)| match at {
+            8 | 13 | 18 | 23 => b == b'-',
+            _ => b.is_ascii_digit() || (b'a'..=b'f').contains(&b),
+        })
+}
+
+/// The printing the scanner had decided on, as the page gave it — or `None` for one that is
+/// blank or is not an id.
+///
+/// **Held to the shape the inbox checks**, and tidied away rather than sent where it is not
+/// that: the inbox refuses a label whose `reported` or `decided` is anything else, and a
+/// figure of the scanner's must never be why a reader's scan is turned away.
 fn tidy_id(id: Option<&str>) -> Option<String> {
     id.map(str::trim)
-        .filter(|id| !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_graphic()))
+        .filter(|id| is_uuid(id))
         .map(str::to_owned)
 }
+
+/// How many cards a bundle can hold, as far as the inbox believes one: `label.ts`'s bound.
+const MAX_BUNDLE_LABELS: u32 = 10_000_000;
 
 /// A share of the evidence, so between nothing and all of it — and to three places, which is
 /// more than the figure means and keeps twenty of them inside a header.
@@ -511,7 +529,9 @@ pub fn label_for(
             mode: submission.mode.clone(),
             confidence: tidy_confidence(submission.confidence),
             distance: tidy_distance(submission.distance),
-            bundle: submission.bundle,
+            bundle: submission
+                .bundle
+                .filter(|cards| *cards <= MAX_BUNDLE_LABELS),
             filters: tidy_filters(&submission.filters),
         },
         app: LabelApp {
@@ -672,6 +692,10 @@ mod tests {
     use super::*;
     use httpmock::Method::POST;
 
+    /// Two printings' ids, as the scanner names what it decided on.
+    const SHOCK: &str = "f29ba16f-c8fb-42fe-aabf-87089cb214a7";
+    const BOLT: &str = "ce711943-c1a1-43a0-8b89-8d169cfb8e06";
+
     /// A JPEG's headers and nothing under them: start of image, a JFIF segment, a baseline
     /// frame header for 160×120, end of image. Enough for [`jpeg_size`], which decodes nothing.
     const TINY_JPEG: &[u8] = &[
@@ -709,7 +733,7 @@ mod tests {
         Submission {
             card_id: card_id.to_owned(),
             finish: finish.to_owned(),
-            reported: Some("c-shock".to_owned()),
+            reported: Some(SHOCK.to_owned()),
             mode: "fast".to_owned(),
             confidence: Some(0.82),
             distance: Some(31),
@@ -899,7 +923,7 @@ mod tests {
             }
         );
         assert_eq!(label.finish, "foil");
-        assert_eq!(label.scanner.reported.as_deref(), Some("c-shock"));
+        assert_eq!(label.scanner.reported.as_deref(), Some(SHOCK));
         assert_eq!(label.scanner.mode, "fast");
         assert_eq!(label.scanner.confidence, Some(0.82));
         assert_eq!(label.scanner.distance, Some(31));
@@ -918,7 +942,7 @@ mod tests {
             lock: Some("locked".to_owned()),
             confidence: Some(0.9126),
             distance: Some(12),
-            decided: Some("c-bolt".to_owned()),
+            decided: Some(BOLT.to_owned()),
             detail: true,
             ..frame_of(TINY_JPEG, 0.0)
         };
@@ -955,7 +979,7 @@ mod tests {
                 lock: Some("locked".to_owned()),
                 confidence: Some(0.913),
                 distance: Some(12),
-                decided: Some("c-bolt".to_owned()),
+                decided: Some(BOLT.to_owned()),
                 detail: true,
             }
         );
@@ -1019,7 +1043,10 @@ mod tests {
         sent.run[2].ms = -9_000_000.0;
         sent.run[3].ms = -219.6;
         sent.run[3].confidence = Some(-0.2);
-        sent.run[3].decided = Some("x".repeat(65));
+        // An id of another kind — the tracker's leader is an oracle card, by a name like this
+        // one in a test — is not a printing the scanner decided on.
+        sent.run[3].decided = Some("c-bolt".to_owned());
+        sent.run[4].decided = Some(BOLT.to_uppercase());
         let label = labelled(&state, &sent).expect("a label");
         assert_eq!(label.scanner.reported, None);
         assert_eq!(label.scanner.confidence, Some(1.0));
@@ -1037,6 +1064,15 @@ mod tests {
         assert_eq!(label.run[0].decided, None);
         assert_eq!(label.run[3].confidence, Some(0.0));
         assert_eq!(label.run[3].decided, None);
+        assert_eq!(label.run[4].decided, None);
+        // And an id that is one, with a space the page left round it, is kept.
+        sent.reported = Some(format!(" {SHOCK} "));
+        sent.bundle = Some(MAX_BUNDLE_LABELS + 1);
+        let kept = labelled(&state, &sent).expect("a label");
+        assert_eq!(kept.scanner.reported.as_deref(), Some(SHOCK));
+        assert_eq!(kept.scanner.bundle, None);
+        sent.reported = Some("   ".to_owned());
+        sent.bundle = None;
 
         sent.confidence = Some(f64::NAN);
         assert_eq!(
@@ -1134,7 +1170,7 @@ mod tests {
     /// card name there is spelled in characters that each cost six.
     #[test]
     fn the_longest_label_a_run_can_make_fits_its_header() {
-        let id = "f".repeat(64);
+        let id = "f".repeat(8) + "-ffff-ffff-ffff-" + &"f".repeat(12);
         let worst = SubmissionFrame {
             ms: -59_999.0,
             ok: false,
@@ -1163,7 +1199,7 @@ mod tests {
             mode: "a".repeat(16),
             confidence: Some(0.123),
             distance: Some(256),
-            bundle: Some(u32::MAX),
+            bundle: Some(MAX_BUNDLE_LABELS),
             filters: tidy_filters(&ScanFilters {
                 sets: (0..200).map(|n| format!("set{n:05}")).collect(),
                 released_from: Some("1993-08-05".to_owned()),

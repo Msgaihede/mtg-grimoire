@@ -23,7 +23,7 @@ vi.mock("@/lib/ipc", async (orig) => {
 import { ipc } from "@/lib/ipc";
 import { STATUS, VERDICTS } from "../fixtures";
 import type { ScanFilters, ScannerSubmissionFrame } from "../types";
-import { runFrameOf, type RunFrame, type ScanRun } from "./run";
+import { runClock, runFrameOf, type RunFrame, type ScanRun } from "./run";
 import { SubmitScanDialog } from "./SubmitScanDialog";
 import {
   CHOOSE_ITS_FINISH,
@@ -762,17 +762,23 @@ describe("the printings a reader chooses between", () => {
  */
 describe("the dialog, opened by the press", () => {
   /**
-   * What the pump is holding: six frames it sent and had answered, a byte each, a hundred and
-   * ten milliseconds apart on the page's own clock — all of them before any press below.
+   * What the pump is holding at a press: six frames it sent and had answered, a byte each, a
+   * hundred and ten milliseconds apart, the newest grabbed as the press lands. **Stamped off the
+   * run's own clock (`runClock`), in the call the press makes** — the same clock the press reads
+   * a line later — so how old the frames are is the arithmetic below and never how long the
+   * machine took: a run reaches only a few seconds back from the press (`RUN_MAX_AGE_MS`), and
+   * frames stamped once for the file would be older than that by the time a test got to them.
    */
-  const NEWEST = performance.now();
-  const RING: RunFrame[] = [1, 2, 3, 4, 5, 6].map((n) =>
-    runFrameOf(new Uint8Array([n]), NEWEST - (6 - n) * 110, VERDICTS.exactAmbiguous, false),
-  );
+  const ring = (): RunFrame[] => {
+    const newest = runClock.now();
+    return [1, 2, 3, 4, 5, 6].map((n) =>
+      runFrameOf(new Uint8Array([n]), newest - (6 - n) * 110, VERDICTS.exactAmbiguous, false),
+    );
+  };
 
   function Page() {
     const submit = useScanSubmit({
-      recent: () => RING,
+      recent: ring,
       verdict: VERDICTS.exactAmbiguous,
       mode: "exact",
       status: STATUS.present,

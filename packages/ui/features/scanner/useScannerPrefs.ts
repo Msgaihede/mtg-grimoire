@@ -98,6 +98,18 @@ export interface ScannerPrefsState {
   /** Applied at once; persisted whole. A `filters` change persists only once the session takes it. */
   update: (patch: Partial<ScannerPrefs>) => void;
   /**
+   * **The filters the session is searching under**: the last ones it accepted, and none until it
+   * has accepted any.
+   *
+   * Not `prefs.filters`, and the two differ exactly when it matters. That one is what the popover
+   * draws — changed the moment the reader changes it, before the session has answered, and put
+   * back if the session refuses. This one moves only on an acceptance, so it is what every frame
+   * being answered is judged under: what a sent scan says of its filters, and — because the
+   * session drops its tracker to take a changed set — what the page watches to know a run of
+   * frames has been broken (`ScanLoop.breakRun`).
+   */
+  inForce: ScanFilters;
+  /**
    * The last `scanner_set_filters` refusal, in the crate's words, or `null` — never the lease's,
    * which is about another window rather than about the filters.
    */
@@ -190,6 +202,10 @@ export function useScannerPrefs(): ScannerPrefsState {
   // Whether the stored filters have been answered by the session on this mount. State, because
   // `loaded` is drawn from it; set only from a promise's callback, never in an effect's body.
   const [synced, setSynced] = useState(false);
+  // `acceptedRef`, below, as something a page can draw from and key an effect on — see
+  // `ScannerPrefsState.inForce`. Set on the one line the ref is, so the two cannot part; none
+  // until then, which is `persistable`'s reading of a session that has accepted nothing.
+  const [inForce, setInForce] = useState<ScanFilters>(NO_FILTERS);
 
   /** The filters the session last accepted, or `null` before it has accepted any. */
   const acceptedRef = useRef<ScanFilters | null>(null);
@@ -287,6 +303,9 @@ export function useScannerPrefs(): ScannerPrefsState {
         ipc.scannerSetFilters(filters).then(
           () => {
             acceptedRef.current = filters;
+            // Ahead of the check below, with the ref: an older push the session took is in force
+            // whether or not a newer one has been sent since.
+            setInForce(filters);
             settledRef.current = true;
             if (seq !== seqRef.current) return;
             setFilterError(null);
@@ -411,6 +430,7 @@ export function useScannerPrefs(): ScannerPrefsState {
     // this host has a session at all.
     loaded: (failed || data !== undefined) && synced,
     update,
+    inForce,
     filterError,
     unavailable,
     resync,

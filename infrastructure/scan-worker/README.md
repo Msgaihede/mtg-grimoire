@@ -9,8 +9,12 @@ it keeps both so the scanner can be tested against them and improved (issue #776
 settles, evidence that pools, a vote that crosses a bar — so one frame cannot say what it did.
 What is sent is five to twenty of the frames it actually judged, byte for byte and in order,
 each beside what it answered for it: put back through the scanner, that is the scan again. It
-is all of them or nothing — **there is no request this Worker stores a single picture for**
-(`src/label.test.ts` and `src/submit.test.ts`, *one picture is never a scan*).
+is all of them or nothing: **the app cannot send one picture, and this Worker refuses both
+shapes one would arrive in** — a body sent as `image/jpeg`, and a label that lists fewer than
+five frames (`src/label.test.ts` and `src/submit.test.ts`, *one picture is never a scan*). What
+it holds a body to is its framing — as long as the label's frames together, a JPEG's first
+bytes at each — and not its content: nothing here decodes a picture, so a request built by hand
+can still dress one picture as five. The engine reads every frame's header before it sends.
 
 **A reader sends one scan at a time, by hand.** The app shows every picture of the run first,
 the reader picks the card and the finish, and only that press calls this Worker. Nothing here is

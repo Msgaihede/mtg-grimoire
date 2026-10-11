@@ -48,6 +48,34 @@ export const RUN_MAX_BYTES = 1.5 * 1024 * 1024;
 export const RUN_MIN_FRAMES = 5;
 
 /**
+ * The longest a run reaches back, in milliseconds — from its newest frame as the ring keeps it,
+ * and from the press as one is taken ({@link runAtPress}).
+ *
+ * The other two bounds count frames and bytes, and neither is a clock: a pump that stalled — a
+ * read that took a second a frame, a host that was slow to answer — holds twenty frames for as
+ * long as it takes to send twenty more, and one that stopped answering holds them for good. Those
+ * are not *the last couple of seconds*, which is what a reader is told they are sending. About
+ * twice what twenty frames span at the pump's ordinary pace, so a slow host still has a run.
+ */
+export const RUN_MAX_AGE_MS = 4000;
+
+/**
+ * **The clock a run is stamped by and read by**: the pump asks it when a frame is drawn off the
+ * video (`RunFrame.at`), and a press asks it when it lands ({@link runAtPress}, and each frame's
+ * `ms`). Milliseconds on the page's own monotonic clock.
+ *
+ * **One object, and both sides ask it and nothing else**, so a test can hold it still. A run is
+ * a matter of a few seconds ({@link RUN_MAX_AGE_MS}), and a test that parks the pump and then
+ * presses would otherwise be racing the machine it runs on: a suite that stalls for longer than
+ * that finds a ring of perfectly good frames too old to send. Replacing `now` here moves the stamps
+ * and the press together — which a spy on the global clock would also do, along with everything
+ * else that reads it.
+ *
+ * Nothing else is timed by it: the pump's round trips and its rate are the wall's.
+ */
+export const runClock = { now: (): number => performance.now() };
+
+/**
  * One frame the pump sent, as the ring keeps it: the bytes, when they were grabbed, and what the
  * scanner answered for them.
  *
@@ -61,7 +89,7 @@ export const RUN_MIN_FRAMES = 5;
 export interface RunFrame {
   /** The pump's JPEG, as it went to the scanner. */
   jpeg: Uint8Array;
-  /** `performance.now()` as the frame was drawn off the video. */
+  /** {@link runClock}'s reading as the frame was drawn off the video. */
   at: number;
   /** `ScannerVerdict.ok`: whether a card was found in it at all. */
   ok: boolean;
@@ -75,6 +103,15 @@ export interface RunFrame {
   decided: string | null;
   /** A detail image went to the scanner with this frame. It is not kept, and never sent. */
   detail: boolean;
+  /**
+   * The mode the scanner judged this frame in — `ScannerVerdict.mode`, the session's own word
+   * for it and not the page's switch, which moves a frame before the session does.
+   *
+   * **The ring's, and not the wire's.** A run is judged in one mode or it is not a run — the
+   * session forgets the card on the first frame it is sent in another — so the ring starts over
+   * where this changes ({@link pushRunFrame}) and a submission says the mode once, for all of it.
+   */
+  mode: ScanMode;
 }
 
 /**
@@ -101,23 +138,57 @@ export function runFrameOf(
     distance: verdict.match?.candidates[0]?.distance ?? null,
     decided: verdict.decision?.printing ?? null,
     detail,
+    mode: verdict.mode,
   };
 }
 
 /**
- * Add the newest frame to a ring, and drop from the **old** end until it is inside both bounds.
+ * Add the newest frame to a ring, and drop from the **old** end until it is inside every bound:
+ * {@link RUN_MAX_FRAMES}, {@link RUN_MAX_BYTES}, and nothing grabbed more than
+ * {@link RUN_MAX_AGE_MS} before the frame being added.
+ *
+ * **A frame judged in another mode than the one before it starts the ring over.** The session
+ * drops its tracker on the first frame it is sent in a new mode, so everything the ring held was
+ * said of evidence that frame's answer no longer rests on. This is the one break the pump
+ * cannot see for itself — a mode is an option on the frame, not a call of its own — so it is
+ * read here, off what the scanner answered.
  *
  * In place, because the ring is the pump's own and nothing else holds it — a reader of it is
  * handed a copy. A frame that is over the byte budget by itself leaves the ring empty, which is
  * the honest answer: there is no run of such frames that could be sent.
  */
 export function pushRunFrame(ring: RunFrame[], frame: RunFrame): void {
+  if (ring.length > 0 && ring[ring.length - 1].mode !== frame.mode) ring.length = 0;
   ring.push(frame);
   let bytes = ring.reduce((sum, one) => sum + one.jpeg.length, 0);
-  while (ring.length > 0 && (ring.length > RUN_MAX_FRAMES || bytes > RUN_MAX_BYTES)) {
+  while (
+    ring.length > 0 &&
+    (ring.length > RUN_MAX_FRAMES ||
+      bytes > RUN_MAX_BYTES ||
+      frame.at - ring[0].at > RUN_MAX_AGE_MS)
+  ) {
     bytes -= ring[0].jpeg.length;
     ring.shift();
   }
+}
+
+/**
+ * The run as a press takes it: the ring's newest stretch, with nothing in it grabbed more than
+ * {@link RUN_MAX_AGE_MS} before the press.
+ *
+ * {@link pushRunFrame} ages the ring against its newest frame, which says nothing of how long
+ * ago that frame was: a pump waiting on an answer that is slow, or never comes, goes on holding
+ * a ring that was the last couple of seconds once. So the press measures from itself, **before**
+ * it counts what is left against {@link RUN_MIN_FRAMES} — too few is the scanner not having been
+ * shown enough lately, and it is said in the same sentence.
+ *
+ * Walked back from the newest frame and stopped at the first one too old, rather than filtered:
+ * what is sent is one unbroken stretch of what the pump sent, whatever a clock did.
+ */
+export function runAtPress(ring: readonly RunFrame[], pressedAt: number): RunFrame[] {
+  let from = ring.length;
+  while (from > 0 && pressedAt - ring[from - 1].at <= RUN_MAX_AGE_MS) from -= 1;
+  return ring.slice(from);
 }
 
 /**
@@ -165,8 +236,17 @@ function msBefore(at: number, pressedAt: number): number {
 }
 
 /**
- * A {@link ScanRun} from the ring as it stood at the press and the page's state at that moment.
- * Pure, so each rung below is a fixture's worth of test.
+ * A {@link ScanRun} from the run a press took ({@link runAtPress}) and the page's state at that
+ * moment. Pure, so each rung below is a fixture's worth of test.
+ *
+ * **What the scanner had said is read off the run's last frame, and never off the verdict a
+ * render was holding.** `reported`, `confidence`, `distance` and `mode` are that frame's
+ * `decided`, `confidence`, `distance` and `mode`. A press reads the ring as it stands and the
+ * verdict as the last render had it, and the ring is a frame ahead of the render whenever an
+ * answer has landed since: figures taken from the verdict would then sit beside a last frame
+ * that says otherwise, in one submission. So the press-level figures *are* the last frame's, and
+ * the two cannot disagree. The `mode` handed in is the page's, and stands only for a run with no
+ * frame in it — which no press sends.
  *
  * **`reported` is the printing the scanner had decided on, and `null` while it had decided
  * nothing.** Never the tracker's leader: a standing's `id` is what its evidence pooled on — the
@@ -178,15 +258,19 @@ function msBefore(at: number, pressedAt: number): number {
  * `null` rather than left out: a scan it had not named is as much worth having as one it named
  * wrongly.
  *
- * **The name the search opens on is another matter, and takes a leader.** It is a word for a
- * box, not a label: the decision's when there is one — `matchStrip` names a card by the same
- * order, so the box opens on the name the reader was just shown — else the card the tracker is
- * leaning towards, whose label is its best printing's.
+ * **The name the search opens on is another matter: it is the verdict's, and takes a leader.**
+ * It is a word for a box, not a label, and it is not sent — so it comes from what the reader
+ * was looking at, which is the verdict the page had drawn: the decision's name when there is
+ * one — `matchStrip` names a card by the same order, so the box opens on the name the reader was
+ * just shown — else the card the tracker is leaning towards, whose label is its best printing's.
  *
- * `distance` is the best candidate's, in bits, off the last verdict's own match; `bundle` is
- * how many cards the scanner could have answered with, off the status — `null` where the status
- * has not answered, which is "not asked", never "none". `filters` are the sets and dates it was
- * narrowed to, which decide what it could have answered at all.
+ * `bundle` is how many cards the scanner could have answered with, off the status — `null` where
+ * the status has not answered, which is "not asked", never "none". `filters` are the sets and
+ * dates it was narrowed to, which decide what it could have answered at all.
+ *
+ * **A frame goes out field by field, and its `mode` and its clock do not go at all**: the wire
+ * says the mode once for the run, and `ms` in place of `at`. Spelled out rather than spread, so
+ * a field the ring gains for its own bookkeeping cannot reach the inbox by default.
  */
 export function scanRun(
   ring: readonly RunFrame[],
@@ -197,17 +281,23 @@ export function scanRun(
   filters: ScanFilters,
 ): ScanRun {
   const lead = verdict?.tracked?.standings[0];
+  const last = ring.length > 0 ? ring[ring.length - 1] : null;
   return {
-    frames: ring.map(({ jpeg, at, ...answered }) => ({
-      jpeg: toBase64(jpeg),
-      ms: msBefore(at, pressedAt),
-      ...answered,
+    frames: ring.map((frame) => ({
+      jpeg: toBase64(frame.jpeg),
+      ms: msBefore(frame.at, pressedAt),
+      ok: frame.ok,
+      lock: frame.lock,
+      confidence: frame.confidence,
+      distance: frame.distance,
+      decided: frame.decided,
+      detail: frame.detail,
     })),
     said: {
-      reported: verdict?.decision?.printing ?? null,
-      mode,
-      confidence: verdict?.tracked?.confidence ?? null,
-      distance: verdict?.match?.candidates[0]?.distance ?? null,
+      reported: last?.decided ?? null,
+      mode: last?.mode ?? mode,
+      confidence: last?.confidence ?? null,
+      distance: last?.distance ?? null,
       bundle: status?.labels ?? null,
       filters,
     },
