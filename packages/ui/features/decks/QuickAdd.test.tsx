@@ -47,6 +47,7 @@ function found(name: string): CardSummary {
     // A plain `boolean` on a search row, never `null`: a row that came back from `cards` is a
     // card that is there. `false`, because nothing in this file is about the crown.
     gameChanger: false,
+    releasedAt: null,
     finishes: `["nonfoil"]`,
     ownedQuantity: 0,
     wishlisted: false,

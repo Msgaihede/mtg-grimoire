@@ -37,6 +37,7 @@ function found(name: string): CardSummary {
     priceLow: 1.5,
     priceHigh: 1.5,
     gameChanger: false,
+    releasedAt: null,
   };
 }
 

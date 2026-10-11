@@ -37,6 +37,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 
 import { CardGrid, columnsFor, sideGutterFor, tileWidthFor } from "./CardGrid";
 import { SEARCH_DOCK_ATTR } from "./selectAllSurface";
+import { tileUnreleased } from "./SearchPage";
 import { resetShownFaces } from "@/features/card/shownFace";
 import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { OwnedBadge } from "@/components/OwnedBadge";
@@ -94,6 +95,7 @@ const card = (id: string, name: string, finishes = `["nonfoil","foil"]`): CardSu
   // that wear the crown say so by spreading this — see `SearchPage`'s `tileGameChanger` for
   // the one-line callback the wall is really handed.
   gameChanger: false,
+  releasedAt: null,
   ownedQuantity: 0,
   wishlisted: false,
   printings: 1,
@@ -501,6 +503,37 @@ describe("CardGrid", () => {
     expect(screen.getByRole("button", { name: "Rhystic Study" })).toContainElement(crowns[0]);
     expect(screen.getByRole("button", { name: "Rhystic Study" })).toHaveAccessibleName(
       "Rhystic Study",
+    );
+  });
+
+  /**
+   * Issue #940: a printing not out yet is stamped across its art with its set and date — through
+   * the search page's own callback, so the rule tested is the one the wall runs — and the stamp
+   * stays out of the tile button's name.
+   */
+  it("stamps an unreleased printing's tile, and leaves a released one alone", () => {
+    const { container } = render(
+      <CardGrid
+        rows={[
+          { ...card("aaa", "Spoiled Dragon"), setCode: "tla", releasedAt: "2999-01-01" },
+          { ...card("bbb", "Lightning Bolt"), releasedAt: "1993-08-05" },
+        ]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+        zoomSection="search"
+        watermark={tileUnreleased}
+      />,
+    );
+
+    const stamps = container.querySelectorAll("[data-unreleased-watermark]");
+    expect(stamps).toHaveLength(1);
+    expect(stamps[0]?.textContent).toBe("TLA2999-01-01");
+    expect(screen.getByRole("button", { name: "Spoiled Dragon" })).toContainElement(
+      stamps[0] as HTMLElement,
+    );
+    expect(screen.getByRole("button", { name: "Spoiled Dragon" })).toHaveAccessibleName(
+      "Spoiled Dragon",
     );
   });
 
