@@ -6,9 +6,8 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
-  type ReactNode,
 } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { ArrowDown, ArrowUp, Eraser, FolderInput, TrendingDown, Trash2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import type { MenuItem } from "@/components/menu/types";
@@ -18,7 +17,6 @@ import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
-import { MoveToFolder } from "@/features/decks/MoveToFolder";
 import { deckListKey } from "@/features/home/keys";
 import { ShelfLabel } from "@/features/shelves/ShelfLabel";
 import { FOLD_PAUSED_REASON, ShelfToolbar } from "@/features/shelves/ShelfToolbar";
@@ -35,19 +33,16 @@ import { everythingLabel, scopeLabel, useExportScope } from "@/features/transfer
 import { wishlistDestination } from "@/features/transfer/import/destinations/WishlistPreview";
 import { ImportExportPair } from "@/features/transfer/ImportExportPair";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
-import type { SearchCardDrag } from "@/features/search/searchCardDrag";
 import { FilterBar, StatedFiltersLine, type FilterLabels } from "@/features/search/FilterBar";
 import { FilterQuickBar } from "@/features/search/FilterQuickBar";
 import { plural } from "@/lib/counts";
 import { useDragRecord } from "@/lib/dndTarget";
-import { readFolderDrag, type FolderDrag, type FolderEdge } from "@/lib/folderDrag";
-import { reorderedLevel } from "@/lib/folderOrder";
+import { readFolderDrag } from "@/lib/folderDrag";
 import { isFinish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import {
   buildFolderTree,
   flattenFolders,
-  folderDescendants,
   folderLevel,
   trailOf,
   type FolderNode,
@@ -74,7 +69,9 @@ import { writeFailure } from "@/lib/writes";
 import { ManagedFolderNote } from "./ManagedFolderNote";
 import { WishlistSummaryHeader } from "./WishlistSummary";
 import { managedEmptySentence, managedIds, userWishFolders } from "./managed";
+import { useWishDrops } from "./useWishDrops";
 import { useWishEntryWrites } from "./useWishEntryWrites";
+import { ROOT_LABEL, WishFolderPanel } from "./WishFolderPanel";
 import { WishlistBreadcrumb } from "./WishlistBreadcrumb";
 import { WishlistSearchPanel } from "./WishlistSearchPanel";
 import { WishlistGrid, type WishShelves } from "./WishlistGrid";
@@ -84,18 +81,15 @@ import { useWishlist, WISHLIST_TRAY, type Wishlist } from "./useWishlist";
 import { useWishlistFolders } from "./useWishlistFolders";
 import { useWishlistOptimize } from "./useWishlistOptimize";
 import { wholeWishlistQuery, type SweepScope } from "./wholeWishlistQuery";
-import type { WishDrop } from "./wishDrag";
 import {
   WishEmptyShelf,
   WishManagedEmpty,
   WishShelfHeading,
   WishShelfSticky,
-  type CardDrops,
 } from "./WishShelfHeading";
 import {
   countTotals,
   effectiveCounts,
-  fileTarget,
   foldChanges,
   foldFor,
   foldedForDrag,
@@ -114,18 +108,6 @@ import {
 } from "./wishShelfPlan";
 
 /**
- * What the top of the cabinet is called, here and in the two lists this page hands it to.
- *
- * `WishlistBreadcrumb` spells its own copy of this word, because a breadcrumb that had to be
- * told what its own first segment is called would be a component that does not know what it is
- * drawing. This one is the *page's* copy, for the two places the page has to say it: the optimise
- * dialog's scope, and `MoveToFolder`'s top row — whose default is the deck
- * gallery's "All decks", which is the wrong sentence to show a reader filing a card they are
- * buying.
- */
-const ROOT_LABEL = "Wishlist";
-
-/**
  * What the optimise dialog's subtitle calls a sweep over the folders the home page's Wishlist
  * savings widget chose (issue #598): the one folder's name, or how many folders are planned. The
  * scope's shelves already hold every folder inside the chosen ones, so the count is what the plan
@@ -139,19 +121,6 @@ function sweepFolderName(
   if (shelves.length === 1) return folderNameOf(shelves[0] === 0 ? null : shelves[0]) ?? ROOT_LABEL;
   return plural(shelves.length, "folder");
 }
-
-/**
- * The root as {@link reorderedLevel} has to address it — an id no folder has, because
- * `wishlist_folders.id` is an `INTEGER PRIMARY KEY` and therefore always positive.
- *
- * Only a folder dropped on the breadcrumb's root segment needs it, and only to satisfy an argument
- * it does not use: an `inside`
- * landing reads `target` for one thing, the "dropped on itself" refusal, and a folder can never
- * be dropped on the root. The alternative is widening `reorderedLevel`'s `target` to
- * `number | null`, which would put a case in the shared arithmetic that only one caller has.
- * `DecksPage` spells the same constant for the same reason.
- */
-const ROOT_TARGET = 0;
 
 /**
  * The width the wishlist's own list must keep, in px — **`DeckEditor`'s `DECK_FLOOR` read across to
@@ -315,6 +284,18 @@ export function WishlistPage() {
   const view = useAppStore((s) => s.wishlistView);
   const openAllPrintings = useAppStore((s) => s.openAllPrintings);
   const folders = useWishlistFolders();
+  // The folder writes' `mutate` and `reset`, which hold still across renders where the mutation
+  // objects around them are new every time (issue #557). Every heading callback below is built from
+  // these rather than from the objects, so the wall and the table — both memoised — are handed the
+  // same drawings until something drawn on them changed. The `isPending` flags are read off the
+  // objects where they are drawn.
+  const { mutate: createMutate, reset: createReset } = folders.create;
+  const { mutate: renameMutate, reset: renameReset } = folders.rename;
+  const { mutate: moveMutate, reset: moveReset } = folders.move;
+  const { mutate: reorderMutate } = folders.reorder;
+  const { mutate: removeFolderMutate, reset: removeFolderReset } = folders.remove;
+  const { mutate: removeWithWishesMutate, reset: removeWithWishesReset } = folders.removeWithWishes;
+  const { mutate: clearMutate, reset: clearReset } = folders.clear;
 
   /**
    * **The folder another surface asked this page to open on its way in** — `store.ts`'s
@@ -535,53 +516,23 @@ export function WishlistPage() {
    * `settleWhole`; the doc for each is at its new home.
    */
   const { settleWhole, setQuantity, remove, setFolder, anyPrinting } = useWishEntryWrites();
-
-  /**
-   * A card **dropped** out of the search column onto a folder card or a breadcrumb segment.
-   *
-   * **An add and never a move**, which is the whole of what the second arm of {@link WishDrop}
-   * means: the printing in the air is on nobody's list, so there is no row to re-file and
-   * `wishlist_set_folder` has nothing to address. It is the *same write* `useCardMenuDeps` makes
-   * for `Add to wishlist → this folder`, which is what keeps a drop and a right-click one
-   * behaviour rather than two — `quantity: 1`, the printing's own finish as the preference, and
-   * the folder the reader pointed at.
-   *
-   * **`preferredFinish` is the finish the printing actually exists in, carried on the drag.** A
-   * wish for the foil is not filled by the nonfoil, so this is part of what is being asked for
-   * rather than extra detail — and `searchCardDrag` refuses a record whose finish this build does
-   * not know rather than guessing one, which is `useSidebarDrops.ts`'s standing objection answered
-   * at the only place that can answer it. The `+` on the tile beside it is where a reader who
-   * wants to say more says it.
-   *
-   * **`folderId` is never omitted, and `null` is the root.** The field is part of the row's
-   * storage grain, so a folder the caller failed to pass is not a wish filed in the wrong drawer
-   * but a *second* wish for the same card.
-   *
-   * Settled through {@link settleWhole} like every other write on this page: an add changes the
-   * level being drawn, the folder subtotals above it, and every search row's `wishlisted` mark.
-   */
-  const addWish = useMutation({
-    mutationFn: ({ card, folderId: to }: { card: SearchCardDrag; folderId: number | null }) =>
-      ipc.wishlistAdd({
-        cardId: card.cardId,
-        quantity: 1,
-        preferredFinish: card.finish,
-        folderId: to,
-      }),
-    onSettled: settleWhole,
-  });
-
+  // The four writes' `mutate`, held still where the result objects around them are not (issue
+  // #557) — the handlers below are what the memoised wall and table are handed.
+  const { mutate: setQuantityMutate } = setQuantity;
+  const { mutate: removeMutate } = remove;
+  const { mutate: setFolderMutate } = setFolder;
+  const { mutate: anyPrintingMutate } = anyPrinting;
 
   const onSetQuantity = useCallback(
-    (row: WishRow, quantity: number) => setQuantity.mutate({ row, quantity }),
-    [setQuantity],
+    (row: WishRow, quantity: number) => setQuantityMutate({ row, quantity }),
+    [setQuantityMutate],
   );
-  const onRemove = useCallback((row: WishRow) => remove.mutate(row), [remove]);
+  const onRemove = useCallback((row: WishRow) => removeMutate(row), [removeMutate]);
   const onSetFolder = useCallback(
-    (row: WishRow, to: number | null) => setFolder.mutate({ id: row.id, folderId: to }),
-    [setFolder],
+    (row: WishRow, to: number | null) => setFolderMutate({ id: row.id, folderId: to }),
+    [setFolderMutate],
   );
-  const onAnyPrinting = useCallback((row: WishRow) => anyPrinting.mutate(row), [anyPrinting]);
+  const onAnyPrinting = useCallback((row: WishRow) => anyPrintingMutate(row), [anyPrintingMutate]);
 
   /**
    * The other way into a printing: the All printings modal, opened *about this wish*, so a press
@@ -614,12 +565,16 @@ export function WishlistPage() {
   // Never while a walk is answering: the query is the new level's and the page is drawing the old
   // one, so a page asked for now would be a page of a list nobody can see yet.
   const { levelHeld } = wishlist;
+  // The four fields rather than `query`, which is a new object on every render (issue #557): the
+  // memoised wall and table are both handed this, and keyed on `query` it was new on every
+  // keystroke. `fetchNextPage` is the observer's own bound method and holds still.
+  const { hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } = query;
   const onNeedNextPage = useCallback(() => {
     if (levelHeld) return;
-    if (query.hasNextPage && !query.isFetchingNextPage && !query.isFetchNextPageError) {
-      void query.fetchNextPage();
+    if (hasNextPage && !isFetchingNextPage && !isFetchNextPageError) {
+      void fetchNextPage();
     }
-  }, [query, levelHeld]);
+  }, [hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage, levelHeld]);
 
   const currency = marketplace.currency;
 
@@ -837,6 +792,36 @@ export function WishlistPage() {
   }, [userNodes]);
 
   /**
+   * **Every drop on this page** — `useWishDrops` since issue #557: a wish or a printing off the
+   * search column let go on a heading, an empty shelf, the sticky bar or a breadcrumb segment, and a
+   * folder heading let go on another heading or on a segment. Each rule is argued at its new home;
+   * what the page keeps is where each answer is drawn, and Move up / Move down, which write through
+   * the same `folderPlacement` a heading drop does.
+   *
+   * Called here, where the census, the reader's tree, the level each folder is drawn in and the
+   * managed folders all exist, and handed the two writes a drop reuses as their `mutate` — held
+   * still, so the callbacks it answers with are too.
+   */
+  const {
+    addWish,
+    canFile,
+    fileWish,
+    folderPlacement,
+    placeFolder,
+    canMoveInto,
+    moveInto,
+    cardDrops,
+  } = useWishDrops({
+    census: folders.folders,
+    userNodes,
+    treeParent,
+    managed,
+    setFolder: setFolderMutate,
+    reorder: reorderMutate,
+    settleWhole,
+  });
+
+  /**
    * What to call the folder a wish is filed in — `ROOT_LABEL` for the root, `null` for a folder
    * id this page cannot name, which is the honest answer for one another window deleted between
    * the two reads.
@@ -1001,14 +986,14 @@ export function WishlistPage() {
    */
   const startNewFolder = useCallback(
     (parentId: number | null, opener: HTMLElement | null) => {
-      folders.create.reset();
+      createReset();
       if (parentId !== null && parentId !== folderId && !filtering) {
         const parent = shelves.find((shelf) => shelf.id === parentId);
         if (parent !== undefined && parent.collapsed) setFold(parentId, foldFor(parent, false));
       }
       open({ kind: "newFolder", parentId }, opener);
     },
-    [folders.create, folderId, filtering, shelves, setFold, open],
+    [createReset, folderId, filtering, shelves, setFold, open],
   );
 
   /**
@@ -1036,7 +1021,7 @@ export function WishlistPage() {
       if (panel?.kind === "newFolder") {
         const { parentId } = panel;
         const pathRow = headingAddedIn === null;
-        folders.create.mutate(
+        createMutate(
           { parentId, name },
           {
             onSuccess: (made) => {
@@ -1053,109 +1038,10 @@ export function WishlistPage() {
           },
         );
       } else if (panel?.kind === "renameFolder") {
-        folders.rename.mutate({ id: panel.folderId, name }, { onSuccess: dismiss });
+        renameMutate({ id: panel.folderId, name }, { onSuccess: dismiss });
       }
     },
-    [panel, headingAddedIn, folders.create, folders.rename, folds, setFold, dismiss],
-  );
-
-  /**
-   * Where what is in the air may be let go — asked per target, because the answer differs per
-   * target: the folder a wish is already filed in refuses it and draws no ring at all, rather
-   * than a ring that would write nothing and bump `updated_at`. `dropWrite`'s rule about a card
-   * dropped back in its own column, one screen over.
-   *
-   * **A card off the search column has no such refusal to make, and that is a fact about it
-   * rather than a gap here.** It is on nobody's list, so there is no `folderId` to compare a
-   * destination against — every drawer is somewhere it is not already, so every drawer takes it.
-   * **The ownership clause arrived with user schema v48's managed folders** (issue #512), which
-   * are the decks' rather than the reader's — `CollectionPage`'s twin has had one all along for its
-   * deck groups and `Recently removed`. Both ends of a drop are fenced, because the backend refuses
-   * both in `MANAGED_REFUSAL`'s words (`./managed.ts`): a wish may not be filed *into* a deck's
-   * list, and a wish in one may not be filed *out*. The second arm is belt and braces — a managed
-   * wish is not a drag source on either view — so a stray payload cannot light a ring for a write
-   * that is always refused.
-   */
-  const canFile = useCallback(
-    (drop: WishDrop, to: number | null) => {
-      if (to !== null && managed.has(to)) return false;
-      if (drop.kind === "new") return true;
-      if (drop.wish.folderId !== null && managed.has(drop.wish.folderId)) return false;
-      return drop.wish.folderId !== to;
-    },
-    [managed],
-  );
-  /**
-   * And what the drop writes — a **re-file** for a wish that exists, an **add** for a printing
-   * that does not.
-   *
-   * One function for both arms rather than two props threaded to every target, because the target
-   * asks one question and gets one answer: a heading lights up and takes what it is given.
-   * Which command that turns into is the page's business, and it is the page that holds both.
-   */
-  const fileWish = useCallback(
-    (drop: WishDrop, to: number | null) =>
-      drop.kind === "wish"
-        ? setFolder.mutate({ id: drop.wish.wishId, folderId: to })
-        : addWish.mutate({ card: drop.card, folderId: to }),
-    [setFolder, addWish],
-  );
-
-  /**
-   * What a folder let go on a heading means as a write — the destination level and that level's
-   * whole new order — or `null` for a drop this page will not make.
-   *
-   * **One function for both halves of the gesture**: `useFolderDropTarget` asks it per frame to
-   * decide what to draw and again at the drop, and a mark that promised a write the drop refused
-   * would be worse than none. The ownership fence is structural — a heading has a folder target only
-   * where `nodeById` holds it, which is the reader's folders alone.
-   *
-   * **The level is the target's as the tree draws it** ({@link treeParent}), because on shelves a
-   * heading can be at any depth — where the band drew one level, and the level on screen was the
-   * answer.
-   *
-   * **A folder may not land inside itself or inside anything it holds** — asked of the destination
-   * parent, which covers all three landings at once. **Shelves made this reachable**: a folder's own
-   * sub-folder is a heading on the same wall now, so `Ordered` dragged onto `Backordered` is one
-   * move. The backend refuses it in words and `parent_id` cascades on itself, so this is the fence.
-   *
-   * And a drop that would reproduce the order already on screen is not a write — `reorderedLevel`'s
-   * `null`, for the gesture a reader makes by accident whenever they think better of one mid-drag.
-   */
-  const folderPlacement = useCallback(
-    (
-      drag: FolderDrag,
-      target: FolderNode<WishlistFolder>,
-      edge: FolderEdge,
-    ): { parentId: number | null; ids: number[] } | null => {
-      const parentId =
-        edge === "inside" ? target.folder.id : (treeParent.get(target.folder.id) ?? null);
-      if (parentId !== null && parentId === drag.folderId) return null;
-      if (parentId !== null && folderDescendants(folders.folders, drag.folderId).has(parentId)) {
-        return null;
-      }
-      const ids = reorderedLevel({
-        // The target's own children for a nest — in the order the tree already draws them, so a
-        // nest re-states the level it is joining rather than re-sorting it — and the target's own
-        // level for the other two.
-        siblings: (edge === "inside" ? target.children : folderLevel(userNodes, parentId)).map(
-          (node) => node.folder.id,
-        ),
-        dragged: drag.folderId,
-        target: target.folder.id,
-        edge,
-      });
-      return ids === null ? null : { parentId, ids: [...ids] };
-    },
-    [treeParent, folders.folders, userNodes],
-  );
-  const placeFolder = useCallback(
-    (drag: FolderDrag, target: FolderNode<WishlistFolder>, edge: FolderEdge) => {
-      const plan = folderPlacement(drag, target, edge);
-      // A `null` writes **nothing at all** — not a reorder of the level as it stands.
-      if (plan !== null) folders.reorder.mutate(plan);
-    },
-    [folderPlacement, folders.reorder],
+    [panel, headingAddedIn, createMutate, renameMutate, folds, setFold, dismiss],
   );
 
   /**
@@ -1183,9 +1069,9 @@ export function WishlistPage() {
       );
       if (plan === null) return;
       const request = askCaret(folder.id, "manage", { order: plan });
-      folders.reorder.mutate(plan, { onSuccess: () => recordCaret(request) });
+      reorderMutate(plan, { onSuccess: () => recordCaret(request) });
     },
-    [userNodes, treeParent, folderPlacement, folders.reorder, askCaret, recordCaret],
+    [userNodes, treeParent, folderPlacement, reorderMutate, askCaret, recordCaret],
   );
 
   /**
@@ -1208,7 +1094,7 @@ export function WishlistPage() {
             label: "Move to folder…",
             Icon: FolderInput,
             onSelect: () => {
-              folders.move.reset();
+              moveReset();
               open({ kind: "moveFolder", folderId: folder.id }, openerRef.current);
             },
           },
@@ -1250,7 +1136,7 @@ export function WishlistPage() {
               ? { disabled: true, reason: "No cards directly in this folder" }
               : {}),
             onSelect: () => {
-              folders.clear.reset();
+              clearReset();
               open({ kind: "clearFolder", folderId: folder.id }, openerRef.current);
             },
           },
@@ -1262,8 +1148,8 @@ export function WishlistPage() {
             onSelect: () => {
               // Both answers the confirmation offers: a refusal from either last time is not news
               // about this one.
-              folders.remove.reset();
-              folders.removeWithWishes.reset();
+              removeFolderReset();
+              removeWithWishesReset();
               open({ kind: "deleteFolder", folderId: folder.id }, openerRef.current);
             },
           },
@@ -1295,55 +1181,13 @@ export function WishlistPage() {
       userNodes,
       treeParent,
       stepFolder,
-      folders.move,
-      folders.remove,
-      folders.removeWithWishes,
-      folders.clear,
+      moveReset,
+      removeFolderReset,
+      removeWithWishesReset,
+      clearReset,
       folders.summary,
       folders.summaryQuery.data,
     ],
-  );
-
-  /**
-   * A folder let go on a **breadcrumb segment**: filed last inside that level — what the
-   * `ParentFolderCard` "Up one level" tile did, on every segment rather than one tile (spec §6).
-   *
-   * Three refusals, each one {@link folderPlacement} makes too: **already there** (asked of the
-   * level the tree *draws* it in, so an orphan drawn at the root may still be filed at the root
-   * properly), **into itself or anything it holds**, and `reorderedLevel`'s own `null`.
-   */
-  const intoPlacement = useCallback(
-    (drag: FolderDrag, parentId: number | null): { parentId: number | null; ids: number[] } | null => {
-      if ((treeParent.get(drag.folderId) ?? null) === parentId) return null;
-      if (
-        parentId !== null &&
-        (parentId === drag.folderId || folderDescendants(folders.folders, drag.folderId).has(parentId))
-      ) {
-        return null;
-      }
-      const ids = reorderedLevel({
-        // The destination level as the tree draws it, which is what makes the arriving folder
-        // *last*. `userNodes`: the root holds the decks' managed folders too, and a reorder naming
-        // one of those is refused whole.
-        siblings: folderLevel(userNodes, parentId).map((node) => node.folder.id),
-        dragged: drag.folderId,
-        target: parentId ?? ROOT_TARGET,
-        edge: "inside",
-      });
-      return ids === null ? null : { parentId, ids: [...ids] };
-    },
-    [treeParent, folders.folders, userNodes],
-  );
-  const canMoveInto = useCallback(
-    (drag: FolderDrag, parentId: number | null) => intoPlacement(drag, parentId) !== null,
-    [intoPlacement],
-  );
-  const moveInto = useCallback(
-    (drag: FolderDrag, parentId: number | null) => {
-      const plan = intoPlacement(drag, parentId);
-      if (plan !== null) folders.reorder.mutate(plan);
-    },
-    [intoPlacement, folders.reorder],
   );
 
   /**
@@ -1426,6 +1270,25 @@ export function WishlistPage() {
     },
     [leaveCaret, visible, treeParent],
   );
+  /** The strip's four answers, each landing the caret through {@link leaveHeading} where a folder
+   *  leaves its heading — held still for the memoised panel (issue #557). */
+  const moveFolderTo = useCallback(
+    (id: number, parentId: number | null) =>
+      leaveHeading(id, (done) => moveMutate({ id, parentId }, done), parentId),
+    [leaveHeading, moveMutate],
+  );
+  const deleteFolder = useCallback(
+    (id: number) => leaveHeading(id, (done) => removeFolderMutate(id, done)),
+    [leaveHeading, removeFolderMutate],
+  );
+  const deleteFolderWithWishes = useCallback(
+    (id: number) => leaveHeading(id, (done) => removeWithWishesMutate(id, done)),
+    [leaveHeading, removeWithWishesMutate],
+  );
+  const clearFolder = useCallback(
+    (id: number) => clearMutate(id, { onSuccess: dismiss }),
+    [clearMutate, dismiss],
+  );
 
   /** A folder's unfiltered figures, recursive — `null` for Not sorted and before the summary. */
   const figuresOf = useCallback(
@@ -1477,17 +1340,6 @@ export function WishlistPage() {
    * are the page's own promise that nothing is written, whatever a component does with a press.
    */
   const foldPaused = filtering ? FOLD_PAUSED_REASON : undefined;
-
-  /** A card let go on a shelf files into it — the root for Not sorted — through the page's own
-   *  `canFile`, which refuses a managed destination, so a deck's heading never arms. */
-  const cardDrops = useCallback(
-    (shelf: Shelf): CardDrops | undefined => {
-      if (shelf.id === NEW_FOLDER_SHELF) return undefined;
-      const to = fileTarget(shelf);
-      return { canDrop: (drop) => canFile(drop, to), onDrop: (drop) => fileWish(drop, to) };
-    },
-    [canFile, fileWish],
-  );
 
   /**
    * A shelf's heading (spec §3.2). The reader's folders get Add folder, Rename, the `⋯`, a folder
@@ -1548,7 +1400,7 @@ export function WishlistPage() {
             node === undefined
               ? undefined
               : () => {
-                  folders.rename.reset();
+                  renameReset();
                   open({ kind: "renameFolder", folderId: shelf.id }, pressedElement());
                 }
           }
@@ -1576,7 +1428,8 @@ export function WishlistPage() {
       cancelNewFolder,
       openPanel,
       folders.create.isPending,
-      folders.rename,
+      folders.rename.isPending,
+      renameReset,
       countMap,
       drawnShelves,
       figuresOf,
@@ -1658,16 +1511,26 @@ export function WishlistPage() {
    * the two views hold still on is narrower and already stable: the wall keys its tiles on
    * `sections` and `rowsOf` (memos above), and the table hands `VirtualTable` a `band` of its own
    * that never changes. The render props are read at draw time by both.
+   *
+   * **Memoised since issue #557, because the reason above stopped being true.** `renderHeading`
+   * and everything under it close over the writes' `mutate`, `reset` and `isPending` now rather than
+   * the result objects, so across a render that changes no data — a keystroke in the filter box —
+   * both objects are the same ones, and the wall and the table, memoised too, are not rendered at
+   * all. What each view keys its own layout on is unchanged and still right for a render that does
+   * change a drawing.
    */
-  const gridShelves: WishShelves = {
-    sections,
-    rowsOf,
-    renderHeading,
-    renderEmpty,
-    renderLabel,
-    renderSticky,
-    revealShelfId,
-  };
+  const gridShelves = useMemo<WishShelves>(
+    () => ({
+      sections,
+      rowsOf,
+      renderHeading,
+      renderEmpty,
+      renderLabel,
+      renderSticky,
+      revealShelfId,
+    }),
+    [sections, rowsOf, renderHeading, renderEmpty, renderLabel, renderSticky, revealShelfId],
+  );
   /** Each drawn shelf's indent — the table's rails for a wish row are its shelf's (spec §3.3). */
   const indentByShelf = useMemo(
     () => new Map(sections.map(({ shelf }) => [shelf.id, shelf.indent])),
@@ -1756,21 +1619,24 @@ export function WishlistPage() {
         );
   const keepRow = carriedBand < 0 ? null : carriedBand;
 
-  const tableBands: WishTableBands = {
-    heading: renderHeading,
-    empty: renderEmpty,
-    label: renderLabel,
-    // `VirtualTable`'s caller rule (4): nothing over a band, which would cover its own controls.
-    // Always a function, returning `null` where there is nothing to pin: toggling the prop
-    // between a function and `undefined` switches `VirtualTable` between two root shapes, which
-    // remounts the table and drops the caret to `<body>`.
-    sticky: (index: number) => {
-      const row = table.rows[index];
-      if (row === undefined || isBand(row)) return null;
-      return renderSticky(table.owners[index] ?? null, scrollTableTop);
-    },
-    indentOf,
-  };
+  const tableBands = useMemo<WishTableBands>(
+    () => ({
+      heading: renderHeading,
+      empty: renderEmpty,
+      label: renderLabel,
+      // `VirtualTable`'s caller rule (4): nothing over a band, which would cover its own controls.
+      // Always a function, returning `null` where there is nothing to pin: toggling the prop
+      // between a function and `undefined` switches `VirtualTable` between two root shapes, which
+      // remounts the table and drops the caret to `<body>`.
+      sticky: (index: number) => {
+        const row = table.rows[index];
+        if (row === undefined || isBand(row)) return null;
+        return renderSticky(table.owners[index] ?? null, scrollTableTop);
+      },
+      indentOf,
+    }),
+    [renderHeading, renderEmpty, renderLabel, table, renderSticky, scrollTableTop, indentOf],
+  );
 
   const failure = query.isError
     ? ipcError(query.error)
@@ -1853,14 +1719,20 @@ export function WishlistPage() {
   // what names the folder a wish is already in. `readOnly` is the per-row fence: a wish in a
   // managed folder draws no stepper, no pencil, no removal and no drag, since every one of those
   // writes is refused for it.
-  const filing = {
-    folders: folders.folders,
-    nodes: userNodes,
-    readOnly: isManagedWish,
-    onSetFolder,
-    onChangePrinting,
-    onAnyPrinting,
-  };
+  //
+  // A memo since issue #557, for `gridShelves`' reason: every field holds still, so the object does,
+  // and the memoised wall and table it is spread over are not rendered by a keystroke.
+  const filing = useMemo(
+    () => ({
+      folders: folders.folders,
+      nodes: userNodes,
+      readOnly: isManagedWish,
+      onSetFolder,
+      onChangePrinting,
+      onAnyPrinting,
+    }),
+    [folders.folders, userNodes, isManagedWish, onSetFolder, onChangePrinting, onAnyPrinting],
+  );
 
   return (
     <section
@@ -2113,102 +1985,28 @@ export function WishlistPage() {
             />
           )}
 
-          {/* **One strip for the folder layers that are still layers, and it is not a placement
-              decision so much as the only place there is.** Every other anchored layer in this app
-              hangs off a `relative` wrapper around its own trigger; the trigger here is a heading's
-              `⋯`, and a heading has nowhere to hang a panel — one that hosted one would also clip it
-              against the scroller below. So the strip sits directly beneath the path row (spec
-              §3.5).
-
-              **Naming a folder and renaming one are drawn *in the wall*** — on the new folder's own
-              heading, or on the heading being renamed — because in both cases the thing being named
-              has a heading of its own on screen, and a second bordered box above the wall could only
-              repeat what that heading already says. Moving and deleting have no such place: the
-              answer to "into which folder" is a list of the *other* folders, and the answer to
-              "delete this?" is a sentence about what happens to the wishes inside. Neither fits on a
-              40px heading, and neither is a name typed on a line. Clearing joined them on the second
-              argument: "clear this?" is a sentence about which wishes go. */}
+          {/* The strip of folder questions — `WishFolderPanel`, where why it is a strip under the
+              path row rather than a popup on its heading is argued. */}
           {(openPanel?.kind === "moveFolder" ||
             openPanel?.kind === "deleteFolder" ||
             openPanel?.kind === "clearFolder") && (
-            <div className="w-full max-w-sm shrink-0 rounded-lg border border-border bg-surface p-2 text-xs">
-              {openPanel.kind === "moveFolder" && (
-                <MoveToFolder
-                  label={`Move ${folderNameOf(openPanel.folderId) ?? "folder"} into a folder`}
-                  // The reader's drawers only: a deck's managed folder takes no sub-folder.
-                  nodes={userNodes}
-                  currentId={
-                    folders.folders.find((f) => f.id === openPanel.folderId)?.parentId ?? null
-                  }
-                  // The wishlist's own word for the top level. `MoveToFolder` defaults to the deck
-                  // gallery's, which is the surface it was written for.
-                  rootLabel={ROOT_LABEL}
-                  // A folder may not go inside itself or inside anything it holds. The backend
-                  // refuses it in words — `wishlist_folders.parent_id` cascades onto itself, so a
-                  // cycle is a graph SQLite would walk forever the day the folder is deleted — and
-                  // that refusal is a fence rather than the affordance.
-                  forbidden={
-                    new Set([
-                      openPanel.folderId,
-                      ...folderDescendants(folders.folders, openPanel.folderId),
-                    ])
-                  }
-                  forbiddenReason="A folder cannot go inside itself, or inside anything it holds."
-                  // Drawn **into** the strip rather than as a popup of its own: the strip is the
-                  // layer, and a second box with its own shadow and its own z-index over it would
-                  // be a second Escape rung for one decision.
-                  inline
-                  pending={folders.move.isPending}
-                  onPick={(parentId) =>
-                    leaveHeading(
-                      openPanel.folderId,
-                      (done) => folders.move.mutate({ id: openPanel.folderId, parentId }, done),
-                      parentId,
-                    )
-                  }
-                  onClose={close}
-                />
-              )}
-
-              {openPanel.kind === "deleteFolder" && (
-                <DeleteFolderConfirm
-                  name={folderNameOf(openPanel.folderId) ?? "this folder"}
-                  // Either answer in flight holds both buttons: a second press while the first is
-                  // on its way would be a different write racing it to the same folder.
-                  pending={folders.remove.isPending || folders.removeWithWishes.isPending}
-                  onConfirm={() =>
-                    leaveHeading(openPanel.folderId, (done) =>
-                      folders.remove.mutate(openPanel.folderId, done),
-                    )
-                  }
-                  onConfirmWithWishes={() =>
-                    leaveHeading(openPanel.folderId, (done) =>
-                      folders.removeWithWishes.mutate(openPanel.folderId, done),
-                    )
-                  }
-                  onCancel={dismiss}
-                  onClose={close}
-                />
-              )}
-
-              {openPanel.kind === "clearFolder" && (
-                <ClearFolderConfirm
-                  name={folderNameOf(openPanel.folderId) ?? "this folder"}
-                  // Direct, the summary's own grain and exactly what a clear takes — and `null`
-                  // until the summary has answered, rather than a `0` it has not said.
-                  wishes={
-                    folders.summaryQuery.data === undefined
-                      ? null
-                      : (folders.summary.get(openPanel.folderId)?.wishes ?? 0)
-                  }
-                  hasChildren={folders.folders.some((f) => f.parentId === openPanel.folderId)}
-                  pending={folders.clear.isPending}
-                  onConfirm={() => folders.clear.mutate(openPanel.folderId, { onSuccess: dismiss })}
-                  onCancel={dismiss}
-                  onClose={close}
-                />
-              )}
-            </div>
+            <WishFolderPanel
+              panel={openPanel}
+              nodes={userNodes}
+              census={folders.folders}
+              directWishes={folders.summary}
+              summaryAnswered={folders.summaryQuery.data !== undefined}
+              folderNameOf={folderNameOf}
+              movePending={folders.move.isPending}
+              deletePending={folders.remove.isPending || folders.removeWithWishes.isPending}
+              clearPending={folders.clear.isPending}
+              onMoveFolder={moveFolderTo}
+              onDeleteFolder={deleteFolder}
+              onDeleteFolderWithWishes={deleteFolderWithWishes}
+              onClearFolder={clearFolder}
+              onCancel={dismiss}
+              onClose={close}
+            />
           )}
 
           {/* A write that was refused, said where the writing happened. Not folded into the
@@ -2430,203 +2228,6 @@ export function WishlistPage() {
         onClose={() => setOptimizing(false)}
       />
     </section>
-  );
-}
-
-/** A destructive answer in a folder question — outlined in the destructive colour, filled on
- *  hover, and dimmed while a write is in flight. */
-const DESTRUCTIVE_ANSWER = cn(
-  "rounded-md border border-destructive px-2 py-1 text-destructive",
-  "transition-colors duration-150 hover:bg-destructive hover:text-bg",
-  "disabled:opacity-50 motion-reduce:transition-none",
-  FOCUS,
-);
-
-/** The way out of a folder question, which is never disabled — backing out is always possible. */
-const CANCEL_ANSWER = cn(
-  "rounded-md border border-border px-2 py-1 text-dim",
-  "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-  FOCUS,
-);
-
-/**
- * What every destructive question about a folder shares: the layer, the question, the
- * sentence under it, and `Cancel` after whatever answers the caller draws.
- *
- * **One shell because the two questions are one layer**, and a focus or blur rule that reached one
- * of them and not the other would be the strip behaving two ways for one reason no reader could
- * name. The caret moves into the layer as it does for every other one in the app, so Escape has
- * something to hand back and Tab reaches the answers next; a click away closes it without taking
- * the caret back (`close`, not `dismiss` — the reader is already somewhere else), **except while
- * a write is in flight**, so the press that is on its way is not stranded with nothing on screen
- * saying so.
- *
- * The answer row wraps: the strip is `max-w-sm` and never wider, and three buttons are a row of
- * fixed-width controls that has to survive the narrowest box it is drawn in.
- */
-function FolderQuestion({
-  label,
-  question,
-  explanation,
-  pending,
-  onCancel,
-  onClose,
-  children,
-}: {
-  label: string;
-  question: string;
-  explanation: string;
-  pending: boolean;
-  onCancel: () => void;
-  onClose: () => void;
-  /** The destructive answers, in the order they are offered. */
-  children: ReactNode;
-}) {
-  const panelRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    panelRef.current?.focus();
-  }, []);
-
-  return (
-    <div
-      ref={panelRef}
-      tabIndex={-1}
-      role="group"
-      aria-label={label}
-      className={cn("rounded-md", FOCUS)}
-      onBlur={(e) => {
-        if (pending) return;
-        if (!panelRef.current?.contains(e.relatedTarget)) onClose();
-      }}
-    >
-      <p>{question}</p>
-      <p className="mt-1 leading-relaxed text-dim">{explanation}</p>
-      <div className="mt-2 flex flex-wrap gap-2">
-        {children}
-        <button type="button" onClick={onCancel} className={CANCEL_ANSWER}>
-          Cancel
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/**
- * The question a reader will guess wrong, and the sentence that answers it — which now has two
- * answers.
- *
- * **Deleting a folder does not have to delete the wishes in it.** `Delete folder` sets
- * `wishlist_entries.folder_id` to `NULL`, so they surface at the root — filed nowhere and otherwise
- * exactly as they were, still on the shopping list, still counted. `Delete folder and wishes`
- * takes them too, every wish anywhere in the sub-tree (issue #471). `wishlist_folders.parent_id`
- * is `ON DELETE CASCADE` **on itself**, so the folders inside go on either press. The sentence
- * says all of it in one breath, the reassuring half first, because the fear is what stops the
- * press — and the second button sits *after* the first so the answer that loses nothing is still
- * the one a reader meets first.
- *
- * One sentence rather than the deck gallery's counted pair, because the two lists are counted
- * differently: a folder's own heading already says how many wishes are in the drawer, in the
- * recursive number this page summed for it, so a confirmation repeating it would be the same
- * figure twice with two chances to disagree. That recursive number is also exactly what the
- * second button takes, so it needs no restating either.
- */
-function DeleteFolderConfirm({
-  name,
-  pending,
-  onConfirm,
-  onConfirmWithWishes,
-  onCancel,
-  onClose,
-}: {
-  name: string;
-  /** Either delete in flight — both buttons are held while one is on its way. */
-  pending: boolean;
-  onConfirm: () => void;
-  onConfirmWithWishes: () => void;
-  onCancel: () => void;
-  onClose: () => void;
-}) {
-  return (
-    <FolderQuestion
-      label={`Delete ${name}`}
-      question={`Delete “${name}”?`}
-      explanation={
-        "Its cards can go back to your wishlist or be deleted. Subfolders are always deleted."
-      }
-      pending={pending}
-      onCancel={onCancel}
-      onClose={onClose}
-    >
-      <button type="button" onClick={onConfirm} disabled={pending} className={DESTRUCTIVE_ANSWER}>
-        Delete folder
-      </button>
-      <button
-        type="button"
-        onClick={onConfirmWithWishes}
-        disabled={pending}
-        className={DESTRUCTIVE_ANSWER}
-      >
-        Delete folder and cards
-      </button>
-    </FolderQuestion>
-  );
-}
-
-/**
- * Emptying a folder, and keeping it — the wishes filed **directly** in it go, and nothing else.
- *
- * **Unlike {@link DeleteFolderConfirm}, this one states its number**, and the argument there is
- * the reason here, read the other way. The heading carries the *recursive* total, and this
- * press takes only the direct wishes — so on a drawer with sub-folders the two numbers differ,
- * and the number this press will actually take is new information a reader cannot get from the
- * heading. `wishes` is `null` while the summary has not answered, and the sentence then says which
- * wishes without guessing how many.
- *
- * **The sub-folders are named only where there are some.** They keep their wishes — a clear is
- * the level on screen, not the tree under it — and saying so over a drawer that holds no drawers
- * would be answering a question nobody could have asked.
- */
-function ClearFolderConfirm({
-  name,
-  wishes,
-  hasChildren,
-  pending,
-  onConfirm,
-  onCancel,
-  onClose,
-}: {
-  name: string;
-  /** The wishes filed directly in the folder, or `null` before the summary has answered. */
-  wishes: number | null;
-  hasChildren: boolean;
-  pending: boolean;
-  onConfirm: () => void;
-  onCancel: () => void;
-  onClose: () => void;
-}) {
-  const direct =
-    wishes === null
-      ? "Cards in this folder are removed from your wishlist."
-      : wishes === 0
-        ? // Reachable only when the summary answered after the question opened, since the menu
-          // row greys at zero — but an honest sentence costs one line and "Its 0 cards will be
-          // removed" is not one.
-          "This folder has no cards of its own."
-        : `Its ${plural(wishes, "card")} will be removed from your wishlist.`;
-
-  return (
-    <FolderQuestion
-      label={`Clear ${name}`}
-      question={`Clear “${name}”?`}
-      explanation={hasChildren ? `${direct} Subfolders aren't affected.` : direct}
-      pending={pending}
-      onCancel={onCancel}
-      onClose={onClose}
-    >
-      <button type="button" onClick={onConfirm} disabled={pending} className={DESTRUCTIVE_ANSWER}>
-        Clear folder
-      </button>
-    </FolderQuestion>
   );
 }
 

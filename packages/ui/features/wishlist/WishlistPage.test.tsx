@@ -3,8 +3,26 @@ import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ReactElement } from "react";
+import type { ComponentProps, ReactElement } from "react";
 import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID, TooltipProvider } from "@/components/tooltip/TooltipProvider";
+/**
+ * The stepper, **unchanged** — wrapped only so a case can count how often one is drawn (issue
+ * #557), `CollectionPage.test.tsx`'s counter one cabinet over. Every table row and every tile a
+ * reader may step draws one, so a count that does not move across a keystroke is a wall whose rows
+ * did not render again. Every other case draws the real control through the wrapper.
+ */
+const stepperRenders = vi.hoisted(() => ({ count: 0 }));
+vi.mock("@/components/QuantityStepper", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/QuantityStepper")>();
+  const { createElement } = await import("react");
+  return {
+    ...actual,
+    QuantityStepper: (props: ComponentProps<typeof actual.QuantityStepper>) => {
+      stepperRenders.count += 1;
+      return createElement(actual.QuantityStepper, props);
+    },
+  };
+});
 import { readDragData } from "@/features/decks/dnd";
 import { MENU_CONDITION } from "@/lib/conditions";
 import { readWishDrag } from "./wishDrag";
@@ -2139,6 +2157,34 @@ describe("the shelves", () => {
     expect(screen.queryByText(/Your wishlist is empty/)).toBeNull();
     expect(lastQuery().shelves).toEqual([0, ORDERED.id, BACKORDERED.id, SOMEDAY.id]);
   });
+
+  /**
+   * **A keystroke draws no row again** (issue #557) — `CollectionPage.test.tsx`'s case one cabinet
+   * over. The filter box's text is the page's state, so a key re-renders the page before the
+   * debounce has asked anything; the wall and the table are memoised and handed props that hold
+   * still across a render that changes no data, so neither draws a row again — counted by the
+   * stepper every steppable row and tile carries.
+   *
+   * `fireEvent.change` and nothing awaited before the count: once the debounce fires the list is
+   * asked again under the new filter, and drawing its answer is a legitimate render.
+   */
+  it.each(["grid", "table"] as const)(
+    "draws no %s row again on a keystroke in the filter box",
+    async (view) => {
+      useAppStore.setState({ wishlistView: view });
+      wrap(<WishlistPage />);
+      await screen.findAllByRole("spinbutton", { name: /Lightning Bolt/ });
+      const drawn = stepperRenders.count;
+      expect(drawn).toBeGreaterThan(0);
+
+      fireEvent.change(screen.getByRole("searchbox", { name: "Search your wishlist" }), {
+        target: { value: "b" },
+      });
+
+      expect(screen.getByRole("searchbox", { name: "Search your wishlist" })).toHaveValue("b");
+      expect(stepperRenders.count).toBe(drawn);
+    },
+  );
 
   /** Spec §3.6: `Total cost` stops being a sum over the rows that happen to be loaded, and the
    *  "N of M counted" note that owned up to that has nothing left to own up to. */

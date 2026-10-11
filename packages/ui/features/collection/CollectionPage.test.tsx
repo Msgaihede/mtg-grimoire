@@ -16,12 +16,30 @@ vi.mock("@/lib/shelfLayout", async (importOriginal) => {
   return { ...actual, layoutShelves: vi.fn(actual.layoutShelves) };
 });
 import { layoutShelves } from "@/lib/shelfLayout";
+/**
+ * The stepper, **unchanged** — wrapped only so a case can count how often one is drawn (issue
+ * #557). Every table row and every steppable tile draws one, so a count that does not move across
+ * a keystroke is a wall whose rows did not render again. Every other case draws the real control
+ * through the wrapper and cannot tell the difference.
+ */
+const stepperRenders = vi.hoisted(() => ({ count: 0 }));
+vi.mock("@/components/QuantityStepper", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/QuantityStepper")>();
+  const { createElement } = await import("react");
+  return {
+    ...actual,
+    QuantityStepper: (props: ComponentProps<typeof actual.QuantityStepper>) => {
+      stepperRenders.count += 1;
+      return createElement(actual.QuantityStepper, props);
+    },
+  };
+});
 import { dndManager } from "@/lib/dndManager";
 import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import userEvent from "@testing-library/user-event";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ReactElement } from "react";
+import type { ComponentProps, ReactElement } from "react";
 import {
   TOOLTIP_OPEN_MS,
   TOOLTIP_PANEL_ID,
@@ -3562,6 +3580,38 @@ describe("the collection's shelves", () => {
 
       expect(screen.getByRole("searchbox", { name: "Search your collection" })).toHaveValue("b");
       expect(vi.mocked(layoutShelves).mock.calls.length).toBe(laid);
+    },
+  );
+
+  /**
+   * **And a keystroke draws no row again** (issue #557) — the same rule one level further down.
+   * The filter box's text is the page's state, so a key re-renders the page before the debounce
+   * has asked anything; what must not follow it is the wall. The list components are memoised and
+   * every prop the page hands them is held still across a render that changes no data, so the
+   * table's rows and the wall's tiles — counted here by the stepper each one draws — are left
+   * exactly as they were.
+   *
+   * `fireEvent.change` and nothing awaited before the count, the case above's reason: once the
+   * real 300ms debounce fires the list is asked again under the new filter, and redrawing what it
+   * answers is the legitimate render this case is not about.
+   */
+  it.each(["grid", "table"] as const)(
+    "draws no %s row again on a keystroke in the filter box",
+    async (view) => {
+      useAppStore.setState({ collectionView: view });
+      collectionFolderList.mockResolvedValue([BINDER]);
+      wrap(<CollectionPage />);
+      await findHeading("Trade binder");
+      await screen.findAllByRole("spinbutton", { name: /Lightning Bolt/ });
+      const drawn = stepperRenders.count;
+      expect(drawn).toBeGreaterThan(0);
+
+      fireEvent.change(screen.getByRole("searchbox", { name: "Search your collection" }), {
+        target: { value: "b" },
+      });
+
+      expect(screen.getByRole("searchbox", { name: "Search your collection" })).toHaveValue("b");
+      expect(stepperRenders.count).toBe(drawn);
     },
   );
 

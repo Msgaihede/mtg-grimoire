@@ -1,5 +1,6 @@
 import {
   createContext,
+  memo,
   useContext,
   useEffect,
   useRef,
@@ -436,6 +437,10 @@ export interface WishTableBands {
  * callback is {@link bandOf}, one module-scope function for the life of the app, and the render
  * props travel down here instead, where a new value re-renders the bands that read it and nothing
  * else.
+ *
+ * (Since issue #557 the page holds its render props still across a render that changes no data,
+ * so such a render does not reach this table at all. The context stays: a render that *does* change
+ * a drawing — a heading's figures, a field opening — must still redraw the bands alone.)
  */
 const BandsContext = createContext<WishTableBands | null>(null);
 
@@ -564,8 +569,14 @@ function DraggableRow({
  *
  * Virtualised like its two siblings — for consistency of behaviour rather than for scale,
  * because the same list has to keep working when somebody's want-list runs to four figures.
+ *
+ * **Memoised** (issue #557). `VirtualTable` draws every mounted row on every render it gets, so a
+ * render of this table that nothing about the list asked for — a keystroke in the page's filter
+ * box, which is the page's state — drew every row again. The page hands this only props that hold
+ * still across such a render, so behind `memo` it is not rendered at all; a render that does
+ * change a prop draws as it always did.
  */
-export function WishlistTable({
+export const WishlistTable = memo(function WishlistTable({
   rows,
   total,
   listKey,
@@ -755,4 +766,4 @@ export function WishlistTable({
   // Always the provider, even with no bands to hand down: one root shape, so a table that gains or
   // loses its shelves is re-rendered rather than remounted — a remount drops the caret to `<body>`.
   return <BandsContext.Provider value={bands ?? null}>{table}</BandsContext.Provider>;
-}
+});

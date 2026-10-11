@@ -8,13 +8,22 @@
  * copy of them (`docs/reference/light-app.md` §7.5b). The page calls this hook and nothing else
  * about it changed. It reaches no app store: the undo ticket for a bulk removal is `@/lib/bulkUndo`,
  * which is its own.
+ *
+ * **The cache arithmetic is `@/lib/useOptimisticEntries` since issue #557** — the patch, the
+ * snapshot and the restore were this file's copy of the wishlist's, almost verbatim, and are one
+ * hook over both lists now. What stays here is what is the collection's own: the two settle sets.
  */
 import { useCallback } from "react";
-import { useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { offerUndo } from "@/lib/bulkUndo";
 import { plural } from "@/lib/counts";
-import { ipc, type CollectionPage as Page, type CollectionRow } from "@/lib/ipc";
+import { ipc, type CollectionRow } from "@/lib/ipc";
 import { refreshCardSearches } from "@/lib/searchMarks";
+import { useOptimisticEntries } from "@/lib/useOptimisticEntries";
+
+/** Every cached copy of the list sits under this — a module constant, because
+ *  `useOptimisticEntries` keys its callbacks on it. */
+const COLLECTION_LIST_KEY = ["collection", "list"] as const;
 
 export function useCollectionEntryWrites() {
   const queryClient = useQueryClient();
@@ -25,44 +34,11 @@ export function useCollectionEntryWrites() {
    * Every cached filter combination, not just the one on screen: the same row is in the
    * "everything" list and in the "foils only" list, and a stepper press that fixed one and
    * left the other would show two different numbers for one card one filter click apart.
+   *
+   * `snapshot` and `restore` beside it are the undo, for a write the backend refused.
    */
-  const patchEntry = useCallback(
-    (id: number, next: ((row: CollectionRow) => CollectionRow) | null) => {
-      queryClient.setQueriesData<InfiniteData<Page>>(
-        { queryKey: ["collection", "list"] },
-        (data) => {
-          if (!data || !data.pages.some((p) => p.items.some((r) => r.id === id))) return data;
-          return {
-            ...data,
-            pages: data.pages.map((page) =>
-              next === null
-                ? {
-                    items: page.items.filter((r) => r.id !== id),
-                    // Every page carries the same count of the whole list, so every page's
-                    // copy of it moves — otherwise the header the *first* page feeds would go
-                    // on counting a row that is gone.
-                    total: Math.max(0, page.total - 1),
-                  }
-                : { ...page, items: page.items.map((r) => (r.id === id ? next(r) : r)) },
-            ),
-          };
-        },
-      );
-    },
-    [queryClient],
-  );
-
-  /** Undo, for a write the backend refused. */
-  const snapshot = useCallback(
-    () => queryClient.getQueriesData<InfiniteData<Page>>({ queryKey: ["collection", "list"] }),
-    [queryClient],
-  );
-  const restore = useCallback(
-    (saved: ReturnType<typeof snapshot>) => {
-      for (const [key, data] of saved) queryClient.setQueryData(key, data);
-    },
-    [queryClient],
-  );
+  const { patchEntry, snapshot, restore } =
+    useOptimisticEntries<CollectionRow>(COLLECTION_LIST_KEY);
 
   /**
    * What every write here has in common: the header re-fetches, the search is marked stale,
