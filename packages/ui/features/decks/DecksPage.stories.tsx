@@ -1050,9 +1050,10 @@ export const Zoomed: Story = {
  * what the reader said, and the same dress would make it read as a third thing the app had
  * worked out.
  *
- * The row is one line: tags that do not fit are clipped whole rather than cut mid-word, and the
- * full list is in Deck settings. It is a list outside the tile's button, so the tile is still
- * named for its deck — the play pins both.
+ * The row is one line: tags that do not fit are clipped whole rather than cut mid-word, and a
+ * row that drops any ends in an `…` pill whose hover lists every tag (issue #901 — measured, so
+ * it draws only at a width where the seed's tags overflow). It is a list outside the tile's
+ * button, so the tile is still named for its deck — the play pins both.
  */
 export const Tagged: Story = {
   play: async ({ canvasElement }) => {

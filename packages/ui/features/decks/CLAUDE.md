@@ -93,6 +93,7 @@ Normalized via `deckKind.ts` (`regular`, `theory`, `virtual`):
   - The order is the reader's (issue #913): a chip is dragged by its word onto another (`tagDrag.ts`, its own drag mark) or moved with ←/→ on the word, and the write is the whole list from `movedTag` — no reorder command.
   - Suggestions are `tagsInUse(deck_list)` — there is no table of tags. Compare two tags with `tagKey`/`hasTag`, which fold capitals exactly as Rust's `clean_tags` does.
   - `DeckTile` draws them in one row on the art: above the badge and bracket marks, or on the art's bottom edge when the deck has neither. Outside the tile's `<button>`, like the marks.
+  - A row that cannot draw every tag (too many, or one too long) ends in an `…` pill and shows the whole list as pills on hover (issue #901). `useTagOverflow` (`tagRow.ts`) measures natural widths rather than what wrapped, because the pill's reserved room is itself what wraps tags off. The hover is an empty box **inside** the button: the row is `pointer-events-none`, and a press on the strip must still open, menu and drag the deck.
 
 ---
 
