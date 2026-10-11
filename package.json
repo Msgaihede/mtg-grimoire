@@ -14,6 +14,8 @@
     "build": "tsc -p packages/ui && tsc -p packages/fake && tsc -p apps/desktop && tsc -p apps/light && tsc -p apps/share && tsc -p .storybook && tsc -p infrastructure/relay && tsc -p infrastructure/share-worker && tsc -p infrastructure/app-worker && tsc -p infrastructure/scan-worker && tsc -p packages/ui/tsconfig.web-worker.json && tsc -p packages/ui/tsconfig.web-sw.json && vite build --config apps/desktop/vite.config.ts",
     "preview": "vite preview --config apps/desktop/vite.config.ts",
     "tauri": "cd apps/desktop && tauri",
+    "tauri:fast": "node scripts/rust-fast.mjs tauri",
+    "cargo:fast": "node scripts/rust-fast.mjs cargo",
     "share:dev": "vite --config apps/share/vite.config.ts",
     "share:build": "tsc -p apps/share && vite build --config apps/share/vite.config.ts",
     "mobile:dev": "vite --config apps/light/vite.config.ts --mode fake",

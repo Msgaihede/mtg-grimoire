@@ -11,6 +11,17 @@ Related: the `running-the-app` skill (locks and ports), [live-ui-verification.md
 
 - `pnpm tauri dev` — run the app (Vite HMR + Rust rebuild). Takes the `app` lock: only
   one app runs across every worktree. See the `running-the-app` skill.
+- `pnpm tauri:fast dev` / `pnpm cargo:fast <command>` — the same dev build made faster by a
+  second toolchain: a dated nightly with rustc's parallel front end and `rust-lld`
+  (`scripts/rust-fast.mjs` hands cargo `.cargo/fast.toml`, which has every measurement). On the
+  desktop app, debug, 2026-10-11: a rebuild after an edit in the core 11 s against 16 s, in the
+  host 6.4 s against 8.4 s, a cold build 108 s against 136 s — **nearly all of it the newer
+  compiler**, which 1.99.0 did not have, so it is a thing to measure again and likely delete
+  when the pin moves. **Opt-in, one command at a time**: `pnpm verify`, CI and a release never
+  use it, and a test that passes under it has not passed the gate. It takes the `app` lock
+  exactly as `tauri dev` does, installs the nightly the first time, refuses a release build or
+  any named profile, and keeps a second set of artifacts in the same build tree (3.4 GB) —
+  nothing one compiler built is of use to the other.
 - `pnpm verify` — build + lint + `cargo fmt --check` + clippy + Vitest + cargo test. **Run
   at the end of a feature before committing (not after every intermediate change, to minimize re-fixing).**
   Rust is pinned by `rust-toolchain.toml` and Node by `.nvmrc`.
@@ -21,8 +32,15 @@ Related: the `running-the-app` skill (locks and ports), [live-ui-verification.md
   build tree is `target` at the root**: `.cargo/config.toml` pins it. It was `src-tauri/target`
   until 2026-10-08, which the workspace of 2026-10-02 had kept. **In an agent worktree the part
   cargo can rebuild is `target/cache`** — deletable at any time — and `target/debug` keeps the
-  executables and `data/`; worktrees also build without an incremental cache and with line-only
-  debug info (`.claude/hooks/worktree-cargo.toml`, since 2026-10-11).
+  executables and `data/`; worktrees also build without an incremental cache
+  (`.claude/hooks/worktree-cargo.toml`, since 2026-10-11).
+- **A dev build carries line tables only, in every checkout and in CI** (the root
+  `Cargo.toml`'s `[profile.dev]`, since 2026-10-11): a backtrace names the file and the line, a
+  debugger shows no variables, and a dependency carries no debug info at all. On Windows the
+  debug info was the link — a rebuild of the desktop app after an edit in the host went from
+  13.8 s to 8.4 s, and the build tree from 13 GB to 5 GB. For a debugger session, set
+  `CARGO_PROFILE_DEV_DEBUG=true` in the environment of the build: the workspace's own crates
+  get their variables back, and only they rebuild.
 - **Arguments follow a script's name with no `--`**: `pnpm web:wasm --only engine`. npm stripped a `--`; pnpm hands it to the script, so `pnpm mobile:scan-smoke -- http://host` gives the script `--` as its first argument.
 - `pnpm exec vitest run --project <name>` runs one package's tests (the projects are the packages: `ui`, `light`, and so on).
 - `pnpm install` after a merge or a pull that changes a manifest or `pnpm-lock.yaml`.
