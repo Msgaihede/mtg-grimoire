@@ -14,6 +14,7 @@ import { MANA_KEYS, type ManaKey } from "@/lib/mana";
 import { searchMarksMeta } from "@/lib/searchMarks";
 import { applySort, type SortDir, type SortSpec } from "@/lib/sort";
 import { useMarketplace } from "@/lib/useMarketplace";
+import { viewMemory } from "@/lib/viewMemory";
 import {
   chipKey,
   mergeTagTerms,
@@ -666,9 +667,56 @@ export interface CardSearchOptions {
    * `defaultFormat`'s seed above is the same fix for the same reason.
    */
   initialSet?: string | null;
+  /**
+   * Remember this search's filters under this name, so the view opens on them again when the
+   * reader comes back to it (issue #908) — `SearchPage` passes `"search"`, the Tags page
+   * `"tags"`. Absent remembers nothing, which is the deck builder's docked panels: they open on
+   * the deck's own format, and a narrowing left over from another deck would be the wrong answer.
+   *
+   * **Read once, by the `useState` seeds**, so the first request is already the remembered one —
+   * {@link initialSet}'s reason. Window-lifetime memory only (`@/lib/viewMemory`): a restart
+   * opens fresh.
+   *
+   * Everything {@link resetAll} clears is remembered, and so are the sort and the printings mode,
+   * which are views rather than filters but are the reader's choice all the same. A set hand-off
+   * wins over the remembered filters — the reader just asked for that set — and keeps the
+   * remembered sort and printings mode, `showOnlySet`'s rule.
+   */
+  rememberAs?: string;
+}
+
+/** What {@link CardSearchOptions.rememberAs} keeps — every piece of state the reader can set. */
+interface RememberedSearch {
+  text: string;
+  format: string;
+  colorFilter: ColorFilter;
+  types: readonly string[];
+  borders: readonly Border[];
+  finishes: readonly Finish[];
+  sets: readonly string[];
+  manaValues: readonly number[];
+  manaX: boolean;
+  owned: boolean | undefined;
+  rarities: readonly string[];
+  priceMin: number | undefined;
+  priceMax: number | undefined;
+  sort: SortSpec<SearchSortKey>;
+  allPrintings: boolean;
 }
 
 export function useCardSearch(options: CardSearchOptions = {}) {
+  const { rememberAs } = options;
+  /**
+   * What this view held when the reader last left it — {@link CardSearchOptions.rememberAs}.
+   *
+   * Read once, in a `useState` initialiser, so a later render cannot re-seed from a slot the
+   * effect below has since rewritten. `recalled` is the whole memory; `seed` is its filter half,
+   * dropped when a set hand-off is what mounted the page.
+   */
+  const [recalled] = useState(() =>
+    rememberAs === undefined ? undefined : viewMemory<RememberedSearch>(rememberAs).recall(),
+  );
+  const seed = options.initialSet ? undefined : recalled;
   // Read once, and as a string rather than as the object: every caller builds that object
   // inline, so it is a new identity on every render and nothing may depend on it.
   const defaultFormatValue = options.defaultFormat?.value ?? "";
@@ -696,7 +744,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   // a formatting choice: the backend prices the page with it, so it is in the key below and a
   // switch re-asks.
   const { marketplace } = useMarketplace();
-  const [text, setText] = useState("");
+  const [text, setText] = useState(seed?.text ?? "");
   // The format select's whole value, which is three kinds of thing in one string: `""` is
   // `Any format` and the default, {@link ANY_CARD} is `Any card`, anything else is a
   // `legalities` key. {@link formatParams} is the only place that branch is written.
@@ -706,7 +754,10 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   // unfiltered search first and answer it, which is a wall of illegal cards and a second round
   // trip to replace it.
   // `Any card` when opening on a set, for {@link showOnlySet}'s reason.
-  const [format, setFormat] = useState(options.initialSet ? ANY_CARD : defaultFormatValue);
+  // A remembered format wins over the caller's default: it is the reader's own last answer.
+  const [format, setFormat] = useState(
+    options.initialSet ? ANY_CARD : (seed?.format ?? defaultFormatValue),
+  );
   /**
    * The default this filter is currently *sitting on*, so a changed default can be told from a
    * reader who happens to have picked the same key.
@@ -733,40 +784,40 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   // **One state for the row and its `Exact` flag, not two** — one control's two halves, and one
   // value for `resetAll` to put back. {@link ColorFilter} carries the whole reading, including
   // the batching bug behind the rule that used to bind them and the reason that rule is gone.
-  const [colorFilter, setColorFilter] = useState<ColorFilter>(NO_COLORS);
+  const [colorFilter, setColorFilter] = useState<ColorFilter>(seed?.colorFilter ?? NO_COLORS);
   const colors = colorFilter.picked;
   const colorsStrict = colorFilter.strict;
   // The eight card-type chips — {@link CARD_TYPES}, ORed with each other and ANDed with
   // everything else, which is the rarity chips' shape exactly.
-  const [types, setTypes] = useState<readonly string[]>([]);
+  const [types, setTypes] = useState<readonly string[]>(seed?.types ?? []);
   // The border chips (issue #573) — the type chips' shape one dimension along, over two columns
   // Scryfall stores (`@/lib/border` has the three words and the overlap between them).
-  const [borders, setBorders] = useState<readonly Border[]>([]);
+  const [borders, setBorders] = useState<readonly Border[]>(seed?.borders ?? []);
   // The Finish cell, over **the printing's published finishes** — Scryfall's `is:foil` rather
   // than the collection's "which finish is this copy in". Named `finishes` here because that is
   // the `FilterSurface` field the tray's cell reads; it reaches the wire as `printedFinishes`,
   // never as `finishes`, which on the collection's flattened payload means the copy's finish.
-  const [finishes, setFinishes] = useState<readonly Finish[]>([]);
+  const [finishes, setFinishes] = useState<readonly Finish[]>(seed?.finishes ?? []);
   const [sets, setSets] = useState<readonly string[]>(() =>
-    options.initialSet ? [options.initialSet] : [],
+    options.initialSet ? [options.initialSet] : (seed?.sets ?? []),
   );
-  const [manaValues, setManaValues] = useState<readonly number[]>([]);
+  const [manaValues, setManaValues] = useState<readonly number[]>(seed?.manaValues ?? []);
   // The other half of the mana-value question, and **additive rather than exclusive**:
   // Scryfall's `cmc` already counts `{X}` as zero, so `{X}{B}{B}{B}` answers the `3` chip and
   // this one both, and a reader who presses both finds it once. Its own state and not a
   // sentinel inside `manaValues`, because it is not a mana value.
-  const [manaX, setManaX] = useState(false);
-  const [owned, setOwned] = useState<boolean | undefined>(undefined);
-  const [rarities, setRarities] = useState<readonly string[]>([]);
+  const [manaX, setManaX] = useState(seed?.manaX ?? false);
+  const [owned, setOwned] = useState<boolean | undefined>(seed?.owned);
+  const [rarities, setRarities] = useState<readonly string[]>(seed?.rarities ?? []);
   // Two independent ends rather than a `[min, max]` tuple, so moving one does not rewrite the
   // other and so "this end is open" has a value of its own. `undefined` and not `0`/`Infinity`:
   // a zero floor is a real filter (it drops every printing the marketplace does not price) and
   // must not be what an untouched control sends.
-  const [priceMin, setPriceMin] = useState<number | undefined>(undefined);
-  const [priceMax, setPriceMax] = useState<number | undefined>(undefined);
+  const [priceMin, setPriceMin] = useState<number | undefined>(seed?.priceMin);
+  const [priceMax, setPriceMax] = useState<number | undefined>(seed?.priceMax);
   // Not a filter, and deliberately outside `resetAll`: clearing what you are looking at
   // should not also throw away the order you chose to read it in.
-  const [sort, setSort] = useState<SortSpec<SearchSortKey>>([]);
+  const [sort, setSort] = useState<SortSpec<SearchSortKey>>(recalled?.sort ?? []);
   // A **view mode**, and outside `resetAll` for the same reason the sort is: clearing what
   // you are looking at should not also change *how* you are looking at it.
   //
@@ -782,7 +833,9 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   // Seeded from the caller rather than pinned `false` since the Tags page landed — see
   // {@link CardSearchOptions.defaultAllPrintings} for why that page opens uncollapsed. A seed
   // and not a lock: the toggle on the filter row is still the reader's.
-  const [allPrintings, setAllPrintings] = useState(options.defaultAllPrintings ?? false);
+  const [allPrintings, setAllPrintings] = useState(
+    recalled?.allPrintings ?? options.defaultAllPrintings ?? false,
+  );
   // The printings no format allows used to be a chip of their own here, `unplayable`, defaulting
   // to off-and-hidden. It is the format select's `Any card` row now — one control, because the
   // chip and the select were narrowing and widening the same axis and `Modern plus the art
@@ -793,12 +846,54 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   // means: a card legal in no format at all is an art card, a token, an emblem or a piece of
   // memorabilia, and a search for `lightning bolt` that answers with three of them above the
   // card is a search answering the wrong question.
-  const [debouncedText, setDebouncedText] = useState("");
+  // Seeded with the remembered text rather than `""`, so a returning reader's first request is
+  // their query and not the unfiltered wall followed 300 ms later by the one they left.
+  const [debouncedText, setDebouncedText] = useState(seed?.text ?? "");
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedText(text), DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [text]);
+
+  // Keep what the reader has set, for {@link CardSearchOptions.rememberAs}. The live `text`
+  // rather than the debounced one, so a word typed just before leaving is not lost.
+  useEffect(() => {
+    if (rememberAs === undefined) return;
+    viewMemory<RememberedSearch>(rememberAs).keep({
+      text,
+      format,
+      colorFilter,
+      types,
+      borders,
+      finishes,
+      sets,
+      manaValues,
+      manaX,
+      owned,
+      rarities,
+      priceMin,
+      priceMax,
+      sort,
+      allPrintings,
+    });
+  }, [
+    rememberAs,
+    text,
+    format,
+    colorFilter,
+    types,
+    borders,
+    finishes,
+    sets,
+    manaValues,
+    manaX,
+    owned,
+    rarities,
+    priceMin,
+    priceMax,
+    sort,
+    allPrintings,
+  ]);
 
   /**
    * Scryfall's query syntax, read out of the box — `t:goblin`, `cmc>=3`, `otag:"spot removal"`,

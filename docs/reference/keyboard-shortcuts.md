@@ -21,11 +21,11 @@ nothing red. The whole of what the catalogue buys is one sentence:
 > against the same object the panel draws.**
 
 That is a *fence*, not a convention, and it is worth being precise about which rows stand behind
-it. Of the ten entries in `SHORTCUTS`:
+it. Of the eleven entries in `SHORTCUTS`:
 
 | Rows | Fenced how |
 | --- | --- |
-| `switchView`, `keyMap`, `newWindow` (`AppShell`); `undo`, `redo`, `remove` (`DeckEditor`) | **Fenced.** The handler calls `matchesShortcut` against the entry. Rename the id and `shortcut()` throws at import; change a chord and the binding changes with it. |
+| `switchView`, `keyMap`, `newWindow` (`AppShell`); `selectAll` (`selectAllSurface.ts`); `undo`, `redo`, `remove` (`DeckEditor`) | **Fenced.** The handler calls `matchesShortcut` against the entry. Rename the id and `shortcut()` throws at import; change a chord and the binding changes with it. |
 | `dismiss` (`Escape`), `contextMenu` (`Shift+F10`, `Menu`) | **Prose.** The bindings live in `useDismissOnEscape` and `menu/useContextMenu`, and neither reads the catalogue. |
 | `zoom` (`Ctrl+wheel`), `select` (`Ctrl`/`Shift`-click) | **Unmatchable by construction.** A pointer chord carries no `key`, so `matchesChord` answers `false` from its shape rather than from a guard a caller could forget. `useCardZoomGesture` and `multiSelect.ts` keep their own logic; the fence there is only that the label sits next to the code it describes. |
 
@@ -242,6 +242,117 @@ middle-click on the taskbar icon is. [multi-window.md](multi-window.md) is the r
 and the reason is its own.** That guard exists because switching view under an open dialog strands
 the dialog over a page it was not opened from. Opening another window disturbs nothing in this one:
 the dialog stays exactly where it is, in the window that owns it.
+
+## `selectAll`
+
+**`Ctrl+A` picks every card a wall's filters match** (2026-10-11,
+[issue #910](https://github.com/Msgaihede/mtg-grimoire/issues/910)) — on the search page, the Tags
+page, the collection, the wishlist, and the search column docked beside the collection, the
+wishlist and an open deck. It is `CardGrid`'s, so it is live on exactly the walls that take
+`Ctrl`/`Shift`-click (`selectionScope`), and on nothing else: the tables have no picked set, and
+neither has the printings modal. `global` in the catalogue for `select`'s reason — one row rather
+than the same row under six headings.
+
+Four things about it are decisions rather than plumbing.
+
+**"All" is the list, not what is loaded.** Every wall pages (50 rows a search, 100 a collection
+or a wishlist, 60 in the deck editor's collection tab), so the tiles in hand at the press are a
+scroll position — the argument `features/transfer/export/scope.ts` makes about exporting. A set of
+them would be the first hundred cards of three thousand, ringed as if it were all of them. So the
+press writes an *instruction* rather than a list (`Selection.allOf`, `lib/multiSelect.ts`): the set
+is the whole of the wall's order every time it is read, a page that lands later is picked as it is
+drawn, and while the instruction stands the wall asks for the next page as each one arrives. It is
+about one list — the wall's `listKey` — so a filter or a sort that changes ends it and leaves what
+pruning has always left, the picked cards still on the surface; and any press ends it, as a press
+ends any set.
+
+Two limits on that, both the wall's own:
+
+- **Until the walk ends, the set is what has arrived.** A menu opened or a drag begun in that
+  second or two acts on the tiles fetched so far — its label says how many — and nothing on the
+  wall says the set is still growing.
+- **A folded shelf is not in it.** The collection's wall is its open shelves (`drawn`, in
+  `CardGrid`); a folded one fetched nothing, so it contributes nothing, exactly as it contributes
+  nothing to a Shift range. Folding or unfolding one re-keys the list and the walk starts over.
+
+**The fetching ahead stops at 1 000 tiles on a catalogue wall** (`SELECT_ALL_LIMIT`,
+`CardGrid.tsx`). An unfiltered search is the whole database, and what a catalogue wall's menu does
+with a picked set — add to the collection, the wishlist, a deck — is **one write per card**
+(`features/card/cardMenu.tsx`), so the limit is also the largest batch of those one keypress can
+arm. A thousand is past any one set's card list. Past it the set still grows with whatever the
+reader scrolls to. A batched write for those rows is what would let it rise to the 5 000 the
+search's caption counts to. **A wall over the reader's own list passes `Infinity`** — the
+collection, the wishlist, the deck editor's collection tab — because those lists end, half of one
+is the worse failure, and the collection's own bulk writes (a move, a removal) are one command for
+the whole set.
+
+**Two walls can be on screen and the store holds one set**, so the chord is bound once on `window`
+(`features/search/selectAllSurface.ts`) and goes to at most one wall:
+
+- **A page's own wall answers from anywhere on its page; a docked column's answers only from
+  inside the column** (`CardSearchPanel`'s root carries `data-search-dock`). The column is a tool
+  beside what the reader is working on. So in the deck editor the chord is the column's once the
+  reader has pressed or focused something in the column, and is nobody's over the deck — it
+  would otherwise throw the deck's own picked set away to select a search the reader was not
+  looking at. The same holds over the collection's and the wishlist's **tables**, which have no
+  picked set.
+- Among the walls a press can reach, **the one sharing the nearest ancestor with the caret** — or,
+  when the caret is on `<body>`, where a click on anything unfocusable leaves it, with the last
+  thing the reader pressed or focused. The wall is decided *at that touch* and remembered, because
+  the element does not last: the walls are virtualised, and a tile scrolled out of the window is
+  gone.
+- **A wall that is not drawn takes nothing** — a column railed for want of room keeps its wall
+  mounted under `hidden`.
+
+**The deck's own cards are not a surface for it**, deliberately: `Delete` removes a picked set
+there and undo is one press per card, so `Ctrl+A`, `Delete` would be a deck emptied in two keys and
+put back in a hundred.
+
+It yields three ways, each at the call site for the reason the next section gives: to a **text
+field** (`Ctrl+A` in a search box means its text, and every one of these pages has a search box),
+behind a **modal** (`[aria-modal="true"]`, `Delete`'s fence), and to a press something nearer
+already took. Where it acts it `preventDefault`s, which also keeps the browser's own select-all
+from painting every piece of text on the page; where no wall takes it the chord is the browser's,
+as it always was. A held key picks once.
+
+**`Escape` puts a picked set down on a wall, and that arrived with this chord** because this chord
+is what made it owed: until it, the only ways out of a set were a click on a tile, which opens it,
+or a change of filter. It is an `"outer"` rung of `useDismissOnEscape`, armed while a wall holds
+more than one tile (or a `Ctrl+A` over a list of one) — so a dialog or a menu takes its own press
+first, and a deck or a folder closes on the next press rather than this one. It covers a set built
+by `Ctrl`-click too. The `dismiss` row is prose and does not say so.
+
+### The pass — Storybook, Chromium, 2026-10-11
+
+Two stories, the keys pressed for real in a Chromium pane. **Not the WebView2 window and not the
+real database**: a dev app could not be launched that day, so this is the browser's half and the
+fake's timings. Two things only the shipped window can say are still owed a pass — that WebView2
+hands `Ctrl+A` to the page, and what twenty real `search_cards` round trips cost. The pane was not
+on screen, so a *press on an element* below is a dispatched `pointerdown` followed by the focus
+move a browser makes; the chords themselves were real key events.
+
+`Search/Page › Large` (the `large` seed):
+
+| Press | Result |
+| --- | --- |
+| `Ctrl+A`, caret on a filter chip, caption `5,000+ cards` | 50 tiles picked at the press, **1 000** after 1.2 s in twenty writes, and no fetch in the 4 s after — the limit holds. No text selected on the page. |
+| `Escape` | The set is gone and no tile is ringed. |
+| **All printings** off (caption `687 cards`), `Ctrl+A` | **687** picked in 0.9 s, the caption's own number, then quiet. |
+| `Ctrl+A` in the search box, `Ancient` typed | The seven characters selected; the picked set untouched. |
+
+`Decks/Editor › Modern60`, the column docked on its collection tab, six tiles:
+
+| Press | Result |
+| --- | --- |
+| `Ctrl+A`, nothing touched, caret on the editor's root | Nothing picked. |
+| A deck card pressed, then `Ctrl+A` | Nothing picked. |
+| The column's wall pressed — the caret lands on the editor's root, **outside** the column — then `Ctrl+A` | `deck-collection`, 6 of 6 ringed. |
+| `Escape` | The set is gone and the deck is still open. |
+
+**The third row failed on the first build**, and it is why a touch outranks the caret: the press
+was in the column, the caret it left behind was on the editor, and a rule that asked the caret
+first made the column unreachable by any click on something unfocusable. No jsdom test had the
+landing pad; `selectAllSurface.test.ts` has one now.
 
 ## `range` is declared, never counted
 

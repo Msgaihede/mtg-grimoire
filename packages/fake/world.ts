@@ -50,6 +50,7 @@ import { seed } from "./seeds";
 import type { SeedName } from "./seeds";
 import { resetWindow } from "./window";
 import { resetBulkUndo } from "@grimoire/ui/lib/bulkUndo";
+import { resetViewMemory } from "@grimoire/ui/lib/viewMemory";
 import { MEMBERSHIP_ELSEWHERE } from "@grimoire/ui/lib/core/hostMembership";
 import { STORAGE_GROUP_WARNING } from "@grimoire/ui/lib/core/hostStorage";
 import lightMembership from "../../apps/light/src-tauri/src/membership.rs?raw";
@@ -277,6 +278,9 @@ export function installWorld(
   // standing it would draw an Undo on the next story whose press answers "That can no longer be
   // undone." Cleared under the same gate as `useAppStore` and for its reason.
   if (options.resetStore !== false) resetBulkUndo();
+  // `@/lib/viewMemory` is the third (issue #908): the filters a story left on the Search or Tags
+  // page would otherwise be the next story's opening query. Same gate, same reason.
+  if (options.resetStore !== false) resetViewMemory();
 
   const removeCorpus = installCorpus(db.cards);
   const client = worldQueryClient(scope);

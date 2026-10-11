@@ -157,6 +157,13 @@ describe("KeyMap", () => {
     expect(capsFor("Select multiple cards")).toEqual(["Ctrl", "Click", "Shift", "Click"]);
   });
 
+  it("lists Ctrl+A for selecting every card", () => {
+    useAppStore.setState({ keyMapOpen: true });
+    render(<Harness />);
+
+    expect(capsFor("Select all cards")).toEqual(["Ctrl", "A"]);
+  });
+
   it("lists Ctrl+Shift+N for a new window", () => {
     useAppStore.setState({ keyMapOpen: true });
     render(<Harness />);

@@ -2003,3 +2003,102 @@ describe("the deck a search counts copies for", () => {
     expect(lastSearchRequest().availableForDeck).toBeUndefined();
   });
 });
+
+/**
+ * `rememberAs` (issue #908): the Search and Tags pages unmount when the reader switches views,
+ * and a page that opened fresh on the way back made them type their filters in again. Each test
+ * unmounts and mounts a second hook against the same client, which is what a view switch is.
+ */
+describe("remembering a search across a view switch", () => {
+  beforeEach(() => {
+    qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    searchCards.mockReset().mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
+    facetCards.mockReset().mockResolvedValue(READY);
+  });
+
+  /** Set something in every kind of state the memory keeps, then leave. */
+  async function leaveNarrowed(rememberAs?: string) {
+    const first = renderHook(() => useCardSearch({ rememberAs }), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    act(() => {
+      first.result.current.setText("bolt");
+      first.result.current.setFormat("modern");
+      first.result.current.toggleColor("R");
+      first.result.current.toggleSet("lea");
+      first.result.current.toggleRarity("common");
+      first.result.current.setPriceRange(1, 5);
+      first.result.current.setSortKey("name");
+      first.result.current.toggleAllPrintings();
+    });
+    first.unmount();
+  }
+
+  it("opens on the filters, the sort and the printings mode the reader left", async () => {
+    await leaveNarrowed("search");
+    searchCards.mockClear();
+
+    const { result } = renderHook(() => useCardSearch({ rememberAs: "search" }), { wrapper });
+
+    expect(result.current.text).toBe("bolt");
+    expect(result.current.format).toBe("modern");
+    expect(result.current.colors).toEqual(["R"]);
+    expect(result.current.sets).toEqual(["lea"]);
+    expect(result.current.rarities).toEqual(["common"]);
+    expect([result.current.priceMin, result.current.priceMax]).toEqual([1, 5]);
+    expect(result.current.sortSelection).toBe("name");
+    expect(result.current.allPrintings).toBe(true);
+    // The debounce is seeded too, so the **first** request back is the remembered query rather
+    // than the unfiltered wall with the reader's one following 300 ms later.
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    expect(searchCards.mock.calls[0][0]).toMatchObject({ text: "bolt", format: "modern" });
+  });
+
+  it("remembers nothing for a caller that names no slot", async () => {
+    await leaveNarrowed();
+
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+
+    expect(result.current.text).toBe("");
+    expect(result.current.activeCount).toBe(0);
+    expect(result.current.allPrintings).toBe(false);
+  });
+
+  it("keeps two slots apart", async () => {
+    await leaveNarrowed("search");
+
+    const { result } = renderHook(() => useCardSearch({ rememberAs: "tags" }), { wrapper });
+
+    expect(result.current.activeCount).toBe(0);
+  });
+
+  it("remembers a cleared search as cleared", async () => {
+    await leaveNarrowed("search");
+    const second = renderHook(() => useCardSearch({ rememberAs: "search" }), { wrapper });
+    act(() => second.result.current.resetAll());
+    second.unmount();
+
+    const { result } = renderHook(() => useCardSearch({ rememberAs: "search" }), { wrapper });
+
+    expect(result.current.activeCount).toBe(0);
+    // `resetAll` leaves the views alone, and so does the memory of it.
+    expect(result.current.sortSelection).toBe("name");
+  });
+
+  /** The card modal's set name is the reader asking for that set *now*, so it wins over what
+   *  the page held — and, like `showOnlySet`, leaves the sort and the printings mode alone. */
+  it("lets a set hand-off win over the remembered filters", async () => {
+    await leaveNarrowed("search");
+
+    const { result } = renderHook(
+      () => useCardSearch({ rememberAs: "search", initialSet: "m10" }),
+      { wrapper },
+    );
+
+    expect(result.current.sets).toEqual(["m10"]);
+    expect(result.current.format).toBe(ANY_CARD);
+    expect(result.current.text).toBe("");
+    expect(result.current.colors).toEqual([]);
+    expect(result.current.sortSelection).toBe("name");
+    expect(result.current.allPrintings).toBe(true);
+  });
+});

@@ -252,6 +252,9 @@ export interface DeckSettingsFormProps {
    * suggested from.
    */
   tagsInUse?: readonly TagInUse[];
+  /** Put the caret in the Tags field as it mounts — `DeckSettingsDialog`'s `focus="tags"`. Means
+   *  nothing without {@link DeckSettingsFormProps.tagsInUse}, which is what draws the field. */
+  focusTags?: boolean;
   cover: DeckCoverPickerProps;
   idPrefix: string;
 }
@@ -310,6 +313,7 @@ export function DeckSettingsForm({
   // Absent is a host that cannot write the answer, which is the create dialog — see the prop.
   canSetTheoryMarks = false,
   tagsInUse,
+  focusTags = false,
   cover,
   idPrefix,
 }: DeckSettingsFormProps): JSX.Element {
@@ -343,6 +347,7 @@ export function DeckSettingsForm({
             inUse={tagsInUse}
             onChange={(tags) => onChange({ tags })}
             id={idPrefix}
+            autoFocus={focusTags}
           />
         )}
 

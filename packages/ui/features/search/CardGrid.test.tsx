@@ -36,6 +36,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import { CardGrid, columnsFor, sideGutterFor, tileWidthFor } from "./CardGrid";
+import { SEARCH_DOCK_ATTR } from "./selectAllSurface";
 import { resetShownFaces } from "@/features/card/shownFace";
 import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { OwnedBadge } from "@/components/OwnedBadge";
@@ -2099,6 +2100,149 @@ describe("CardGrid multi-select", () => {
 
     expect(seen["aaa"]).toEqual(["aaa", "ccc"]);
     expect(seen["ddd"]).toEqual([]);
+  });
+
+  /**
+   * **Ctrl+A** — issue #910. Which wall the chord is for and when it is left alone are
+   * `selectAllSurface.test.ts`'s; `multiSelect.test.ts` has the arithmetic. What is here is the
+   * wall's own half: that it is up for the chord, that the set grows with the list, and that it
+   * fetches the pages a "select all" is owed.
+   */
+  describe("Ctrl+A", () => {
+    /** The chord, with the caret wherever the test left it — on `<body>` unless it moved it. */
+    async function pressSelectAll() {
+      const user = userEvent.setup();
+      await user.keyboard("{Control>}a{/Control}");
+    }
+
+    const base = {
+      onSelect: vi.fn(),
+      listKey: "k",
+      zoomSection: "search" as const,
+      selectionScope: "search",
+    };
+
+    it("picks every tile, and opens none of them", async () => {
+      const onSelect = wall();
+
+      await pressSelectAll();
+
+      expect(useAppStore.getState().cardSelection?.keys).toEqual(["aaa", "bbb", "ccc", "ddd"]);
+      expect(ringed()).toHaveLength(4);
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    /** What is loaded at the press is a scroll position; the set is the list. */
+    it("picks a page that lands after the press", async () => {
+      const { rerender } = render(
+        <CardGrid rows={ROWS.slice(0, 2)} onNeedNextPage={vi.fn()} {...base} />,
+      );
+      await pressSelectAll();
+      expect(useAppStore.getState().cardSelection?.keys).toEqual(["aaa", "bbb"]);
+
+      rerender(<CardGrid rows={ROWS} onNeedNextPage={vi.fn()} {...base} />);
+
+      expect(useAppStore.getState().cardSelection?.keys).toEqual(["aaa", "bbb", "ccc", "ddd"]);
+      expect(ringed()).toHaveLength(4);
+    });
+
+    /**
+     * The mock is cleared after the first render because the wall's ordinary paging rule has
+     * already asked by then — four tiles is a wall drawn to its end. The press changes nothing
+     * that rule reads, so a call after it is this one's.
+     */
+    it("asks for the next page for as long as the set is everything", async () => {
+      const onNeedNextPage = vi.fn();
+      const { rerender } = render(
+        <CardGrid rows={ROWS.slice(0, 2)} onNeedNextPage={onNeedNextPage} {...base} />,
+      );
+      onNeedNextPage.mockClear();
+
+      await pressSelectAll();
+      expect(onNeedNextPage).toHaveBeenCalled();
+
+      // And it stops with the set: a plain click is the reader putting "everything" down.
+      rerender(<CardGrid rows={ROWS} onNeedNextPage={onNeedNextPage} {...base} />);
+      await userEvent.click(screen.getByRole("button", { name: "Ponder" }));
+      onNeedNextPage.mockClear();
+      rerender(<CardGrid rows={[...ROWS]} onNeedNextPage={onNeedNextPage} {...base} />);
+      expect(onNeedNextPage).not.toHaveBeenCalled();
+    });
+
+    it("fetches no further ahead than its limit", async () => {
+      const onNeedNextPage = vi.fn();
+      render(
+        <CardGrid rows={ROWS} onNeedNextPage={onNeedNextPage} selectAllLimit={4} {...base} />,
+      );
+      onNeedNextPage.mockClear();
+
+      await pressSelectAll();
+
+      expect(useAppStore.getState().cardSelection?.keys).toHaveLength(4);
+      expect(onNeedNextPage).not.toHaveBeenCalled();
+    });
+
+    /** "All forty goblins" is not "all three thousand cards" once the box is cleared. */
+    it("stops growing when the list becomes a different list", async () => {
+      const { rerender } = render(
+        <CardGrid rows={ROWS.slice(0, 2)} onNeedNextPage={vi.fn()} {...base} />,
+      );
+      await pressSelectAll();
+
+      rerender(<CardGrid rows={ROWS} onNeedNextPage={vi.fn()} {...base} listKey="another" />);
+
+      expect(useAppStore.getState().cardSelection?.keys).toEqual(["aaa", "bbb"]);
+      expect(useAppStore.getState().cardSelection?.allOf).toBeUndefined();
+    });
+
+    /** One keypress rings the whole wall, so one keypress has to be able to put it down. */
+    it("is put down by Escape, which leaves a card that is merely open alone", async () => {
+      wall();
+      await pressSelectAll();
+
+      await userEvent.keyboard("{Escape}");
+      expect(useAppStore.getState().cardSelection).toBeNull();
+      expect(ringed()).toHaveLength(0);
+
+      await userEvent.click(screen.getByRole("button", { name: "Ponder" }));
+      await userEvent.keyboard("{Escape}");
+      expect(useAppStore.getState().cardSelection?.keys).toEqual(["ccc"]);
+    });
+
+    it("is not taken by a wall with no selection scope", async () => {
+      wall({ selectionScope: undefined });
+
+      await pressSelectAll();
+
+      expect(useAppStore.getState().cardSelection).toBeNull();
+    });
+
+    it("goes to the wall the reader last pressed when two are drawn", async () => {
+      render(
+        <>
+          <CardGrid rows={ROWS} onNeedNextPage={vi.fn()} {...base} label="Page" />
+          <section {...{ [SEARCH_DOCK_ATTR]: "" }}>
+            <CardGrid
+              rows={ROWS.slice(0, 2)}
+              onNeedNextPage={vi.fn()}
+              {...base}
+              label="Column"
+              selectionScope="column"
+            />
+          </section>
+        </>,
+      );
+
+      await pressSelectAll();
+      expect(useAppStore.getState().cardSelection?.scope).toBe("search");
+
+      fireEvent.pointerDown(screen.getByRole("group", { name: "Column" }));
+      await pressSelectAll();
+      expect(useAppStore.getState().cardSelection).toMatchObject({
+        scope: "column",
+        keys: ["aaa", "bbb"],
+      });
+    });
   });
 });
 

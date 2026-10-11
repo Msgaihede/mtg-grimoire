@@ -78,6 +78,7 @@ For global repo workflow, style, and testing conventions, refer to:
 - **Query syntax (`features/search/queryLanguage.ts`)**:
   - Parses Scryfall query terms (`kw:`, `cmc>=3`, `otag:`, `atag:`).
   - Tag resolution is exact; queries fail closed on unresolved tags to prevent showing stale results.
+- **Filters outlive the page (issue #908)**: the Search and Tags pages open on the filters the reader left. `useCardSearch({ rememberAs })` and the Tags page's chips keep their state in `lib/viewMemory.ts` — window-lifetime module memory, never storage, so a restart opens fresh. The deck builder's docked panels pass no `rememberAs`. `test-setup.ts` and the fake's `installWorld` reset it.
 - **Pricing & marketplaces**:
   - Currency and pricing formatting strictly use `formatPrice(value, currency)` driven by `useMarketplace()`.
   - `null` prices render as an em dash; never fall back to another marketplace's price.
@@ -96,7 +97,7 @@ For global repo workflow, style, and testing conventions, refer to:
   - Global chords catalogued in `packages/ui/lib/shortcuts.ts`.
   - Focus outlines are gated on `data-kbd` (`keyboardModality.ts`).
   - `tabIndex={-1}` landing pad containers carry no focus ring.
-  - Multi-selection: `Ctrl/Cmd` toggles, `Shift` selects range (`packages/ui/lib/multiSelect.ts`).
+  - Multi-selection: `Ctrl/Cmd` toggles, `Shift` selects range (`packages/ui/lib/multiSelect.ts`). `Ctrl+A` picks every card a wall's filters match, unloaded pages included, and `Escape` puts a picked set down — a wall with a `selectionScope` registers itself (`features/search/selectAllSurface.ts`); a docked search column takes the chord only from inside it. See [keyboard-shortcuts.md](../../docs/reference/keyboard-shortcuts.md#selectall).
 
 ---
 

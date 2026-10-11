@@ -1,19 +1,22 @@
-import { useId, useRef, useState, type JSX } from "react";
+import { useEffect, useId, useRef, useState, type JSX } from "react";
 import { AnimatePresence } from "motion/react";
 import { X } from "lucide-react";
 import { PopupPanel } from "@/components/PopupListbox";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import {
   MAX_TAG_LENGTH,
+  movedTag,
   suggestTags,
   withTag,
   withoutTag,
   type TagInUse,
 } from "./deckTags";
 import { CAPTION } from "./formFields";
+import { useDeckTagReorder } from "./tagDrag";
 
 export interface DeckTagsFieldProps {
   /** The deck's tags, in the reader's order — what the chips draw. */
@@ -26,11 +29,17 @@ export interface DeckTagsFieldProps {
   inUse: readonly TagInUse[];
   /**
    * The whole new list, on each act that settles one: Enter, a pick, a chip's ✕, Backspace in
-   * an empty box, or looking away with a tag half typed. **Never a no-op** — a blank or a repeat
+   * an empty box, looking away with a tag half typed, or a chip moved. **Never a no-op** — a blank or a repeat
    * calls nothing — so a host may write on every call.
    */
   onChange: (tags: string[]) => void;
   id: string;
+  /**
+   * Take the caret as the field mounts, which opens the suggestions as any focus does. A host
+   * asks for it when the reader came to type a tag — the gallery menu's **New tag…** — and never
+   * otherwise: dropping the caret into a box makes the first keystroke an edit.
+   */
+  autoFocus?: boolean;
 }
 
 /**
@@ -52,6 +61,7 @@ export interface DeckTagsFieldProps {
  * | ↓ / ↑ | walk the suggestions; the caret never leaves the box (`aria-activedescendant`) |
  * | Backspace, in an empty box | takes the last chip off — one per press, never on a held key |
  * | Escape | closes the list; pressed again, clears what was typed; only then is it the dialog's |
+ * | ← / →, on a chip's word | moves that chip one place (issue #913) |
  *
  * **Nothing is highlighted until an arrow is pressed**, so Enter always means "the word I typed"
  * to a reader who never looked at the list. A suggestion pre-selected under the caret is how a
@@ -65,6 +75,14 @@ export interface DeckTagsFieldProps {
  * own box rather than the input**, so a press on a chip's ✕ is not "away" — otherwise one press
  * would be two writes built from the same list, and the second would undo the first.
  *
+ * ## The order is the reader's
+ *
+ * A chip is dragged by its word and let go on another chip to take its place (`tagDrag.ts`), or
+ * moved a place at a time with the arrow keys on the word — the same write either way, the whole
+ * list in its new order (issue #913). `DeckTile` draws the tags in that order, so the first few are
+ * the ones a narrow tile still shows. With one tag there is nothing to move, and the word is plain
+ * text rather than a tab stop.
+ *
  * ## Anchored, not portalled, and not measured
  *
  * The list is `absolute` under the box in the box's own wrapper — `DeckTile`'s `DeleteConfirm`
@@ -72,7 +90,13 @@ export interface DeckTagsFieldProps {
  * and a panel placed from numbers taken when it opened would then sit over the line being typed
  * on; one that hangs off the box's own bottom edge cannot.
  */
-export function DeckTagsField({ tags, inUse, onChange, id }: DeckTagsFieldProps): JSX.Element {
+export function DeckTagsField({
+  tags,
+  inUse,
+  onChange,
+  id,
+  autoFocus = false,
+}: DeckTagsFieldProps): JSX.Element {
   const [draft, setDraft] = useState("");
   const [open, setOpen] = useState(false);
   /** The highlighted row, or `-1` for none. Read through `active` below, never directly: the
@@ -84,6 +108,30 @@ export function DeckTagsField({ tags, inUse, onChange, id }: DeckTagsFieldProps)
   const uid = useId();
   const listId = `${uid}-suggestions`;
   const optionId = (index: number) => `${uid}-suggestion-${index}`;
+
+  /** The chip an arrow key just moved, whose word gets the caret back once the list it asked for
+   *  is drawn. React moves a keyed chip by taking it out and putting it back, which drops focus. */
+  const owedFocus = useRef<string | null>(null);
+  useEffect(() => {
+    const tag = owedFocus.current;
+    if (tag === null) return;
+    owedFocus.current = null;
+    const handles = rootRef.current?.querySelectorAll<HTMLElement>("[data-tag-handle]") ?? [];
+    for (const handle of handles) {
+      if (handle.dataset.tagHandle === tag) handle.focus();
+    }
+  }, [tags]);
+
+  /** One chip to a new place — a drop or an arrow key. Nothing is reported when nothing moves. */
+  const move = (tag: string, to: number) => {
+    const next = movedTag(tags, tag, to);
+    if (next !== null) onChange(next);
+    return next !== null;
+  };
+  const reorder =
+    tags.length < 2
+      ? undefined
+      : (dragged: string, target: string) => move(dragged, tags.indexOf(target));
 
   const matches = suggestTags(inUse, tags, draft);
   const shown = open && matches.length > 0;
@@ -141,33 +189,23 @@ export function DeckTagsField({ tags, inUse, onChange, id }: DeckTagsFieldProps)
         >
           {tags.length > 0 && (
             <ul aria-label="Tags on this deck" className="contents">
-              {tags.map((tag) => (
-                <li
+              {tags.map((tag, index) => (
+                <TagChip
                   key={tag}
-                  className={cn(
-                    "flex min-w-0 max-w-full items-center gap-0.5 rounded-sm border border-border",
-                    "bg-surface pl-1.5 text-xs leading-5",
-                  )}
-                >
-                  <span className="min-w-0 truncate">{tag}</span>
-                  <button
-                    type="button"
-                    aria-label={`Remove the ${tag} tag`}
-                    onClick={() => {
-                      onChange(withoutTag(tags, tag));
-                      // The chip is about to unmount with the caret on its button; the box is
-                      // the one control here that survives every removal.
-                      inputRef.current?.focus();
-                    }}
-                    className={cn(
-                      "grid size-5 shrink-0 place-items-center rounded-sm text-dim",
-                      "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-                      FOCUS,
-                    )}
-                  >
-                    <X className="size-3" aria-hidden="true" />
-                  </button>
-                </li>
+                  tag={tag}
+                  index={index}
+                  total={tags.length}
+                  onMove={reorder}
+                  onStep={(delta) => {
+                    if (move(tag, index + delta)) owedFocus.current = tag;
+                  }}
+                  onRemove={() => {
+                    onChange(withoutTag(tags, tag));
+                    // The chip is about to unmount with the caret on its button; the box is
+                    // the one control here that survives every removal.
+                    inputRef.current?.focus();
+                  }}
+                />
               ))}
             </ul>
           )}
@@ -181,6 +219,10 @@ export function DeckTagsField({ tags, inUse, onChange, id }: DeckTagsFieldProps)
             aria-autocomplete="list"
             aria-activedescendant={active >= 0 ? optionId(active) : undefined}
             autoComplete="off"
+            // In Deck settings the form mounts once the deck row is read: with the panel when the
+            // row is cached — `Dialog`'s mount effect then leaves the caret where a body put it —
+            // or a beat later, taking it from the panel. Either way it lands here.
+            autoFocus={autoFocus}
             maxLength={MAX_TAG_LENGTH}
             value={draft}
             placeholder={tags.length === 0 ? "Add a tag…" : undefined}
@@ -278,8 +320,83 @@ export function DeckTagsField({ tags, inUse, onChange, id }: DeckTagsFieldProps)
         </AnimatePresence>
       </div>
       <p className="mt-1 text-[0.6875rem] text-dim">
-        Shown on the deck tile. Press Enter to add one.
+        {tags.length < 2
+          ? "Shown on the deck tile. Press Enter to add one."
+          : "Shown on the deck tile in this order. Drag a tag to move it."}
       </p>
     </div>
+  );
+}
+
+/**
+ * One chip: the word, which is the grip when there is more than one tag, and the ✕.
+ *
+ * A component of its own because the drag is a hook per chip (`useDeckTagReorder`).
+ */
+function TagChip({
+  tag,
+  index,
+  total,
+  onMove,
+  onStep,
+  onRemove,
+}: {
+  tag: string;
+  index: number;
+  total: number;
+  /** A chip let go on this one — `undefined` with fewer than two tags, which registers nothing. */
+  onMove: ((dragged: string, target: string) => void) | undefined;
+  /** An arrow key on the word: one place back (`-1`) or forward (`1`). */
+  onStep: (delta: -1 | 1) => void;
+  onRemove: () => void;
+}): JSX.Element {
+  const tip = useTooltip();
+  const { attachChip, attachHandle, over } = useDeckTagReorder(tag, onMove);
+
+  return (
+    <li
+      ref={attachChip}
+      className={cn(
+        "flex min-w-0 max-w-full items-center gap-0.5 rounded-sm border bg-surface pl-1.5",
+        "text-xs leading-5 transition-colors duration-150 motion-reduce:transition-none",
+        over ? "border-accent" : "border-border",
+      )}
+    >
+      {onMove === undefined ? (
+        <span className="min-w-0 truncate">{tag}</span>
+      ) : (
+        <button
+          ref={attachHandle}
+          type="button"
+          data-tag-handle={tag}
+          // The whole of the keyboard reorder, `CategoriesDialog`'s grip turned on its side: the
+          // chips run along a line, so the keys are the ones that point along it. The position is
+          // in the name because the only other way to know where a chip landed is to look.
+          onKeyDown={(e) => {
+            if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+              e.preventDefault();
+              onStep(e.key === "ArrowLeft" ? -1 : 1);
+            }
+          }}
+          aria-label={`Move ${tag}, ${index + 1} of ${total}`}
+          {...tip("Drag to reorder, or press the left and right arrow keys")}
+          className={cn("min-w-0 cursor-grab truncate rounded-sm text-left", FOCUS)}
+        >
+          {tag}
+        </button>
+      )}
+      <button
+        type="button"
+        aria-label={`Remove the ${tag} tag`}
+        onClick={onRemove}
+        className={cn(
+          "grid size-5 shrink-0 place-items-center rounded-sm text-dim",
+          "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
+          FOCUS,
+        )}
+      >
+        <X className="size-3" aria-hidden="true" />
+      </button>
+    </li>
   );
 }

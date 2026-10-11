@@ -31,7 +31,9 @@ import { NextPageRefused, ReadError, useMore } from "./parts";
  * nothing above it is in the scroller.
  */
 export function SearchPage({ onOpen }: { onOpen: (item: WallItem) => void }) {
-  const search = useCardSearch();
+  // Under the desktop page's name, so a reader who crosses faces or comes back from another tab
+  // finds the search they left (issue #908).
+  const search = useCardSearch({ rememberAs: "search" });
   const { query, marketplace } = search;
   const items = useMemo(
     () => search.rows.map((row) => searchItem(row, marketplace.currency)),
