@@ -231,6 +231,8 @@ export function nextOffset(pages: readonly CountedPage[]): number | undefined {
  */
 interface ShownLevel {
   levelId: number | null;
+  /** Whether the frame is the `View all` wall — a level of its own as far as holding goes. */
+  viewAll: boolean;
   figures: CollectionSummary | undefined;
   counts: ShelfCount[] | undefined;
   pages: InfiniteData<CollectionPage> | undefined;
@@ -348,6 +350,23 @@ export function useCollection({
    * `requestedFolderId` and publishes the level on screen as `folderId`.
    */
   const [asked, setAsked] = useState<number | null>(null);
+  /**
+   * **`View all` — every card on one wall, no shelves** (issue #907), the deck gallery's toggle of
+   * the same name (issue #750) one page over.
+   *
+   * Navigation like {@link asked}, and kept beside it for the same reasons: outside the filter
+   * state, untouched by `resetAll`, never restored at launch. **It does not move the reader** — the
+   * folder they were standing in stays asked underneath, and turning the toggle off goes back to it
+   * — but while it is on, the level everything is read from is the root, because that is the level
+   * that covers every card. Opening a folder from anywhere turns it off ({@link openFolder}).
+   *
+   * **The list is asked with no `shelves` at all** — absent `shelves`, `folderId` and `rootOnly` is
+   * "every folder" on the other end — so the reader's sort runs across the whole collection rather
+   * than within each shelf, which is what a flat wall is for. The figures and the counts are the
+   * root's, unchanged: they already cover everything.
+   */
+  const [viewAll, setViewAllState] = useState(false);
+  const level = viewAll ? null : asked;
   const [debouncedText, setDebouncedText] = useState("");
 
   useEffect(() => {
@@ -438,11 +457,16 @@ export function useCollection({
   /** The shelves at the level the reader **asked** for — what the three queries below cover. The
    *  wall is drawn from `shelves` further down, which is these once that level has answered. */
   const askedShelves = useMemo(
-    () => buildShelves({ folders: shelfFolders, levelId: asked, folds, filtering }),
-    [shelfFolders, asked, folds, filtering],
+    () => buildShelves({ folders: shelfFolders, levelId: level, folds, filtering }),
+    [shelfFolders, level, folds, filtering],
   );
   const toCount = useMemo(() => shelvesToCount(askedShelves), [askedShelves]);
   const toFetch = useMemo(() => shelvesToFetch(askedShelves), [askedShelves]);
+  const setViewAll = useCallback((on: boolean) => setViewAllState(on), []);
+  const openFolder = useCallback((folderId: number | null) => {
+    setViewAllState(false);
+    setAsked(folderId);
+  }, []);
   /**
    * **Nothing is asked until the census has answered.** Before it, `buildShelves` has no folders
    * and the list would be Not sorted alone — the empty page of a reader who files everything,
@@ -549,7 +573,7 @@ export function useCollection({
     // themselves are keyed beside this rather than in it — see `countKey` and `fetchKey` below —
     // so that `scrollKey`, which is built from this array, moves with the level and not with a
     // collapse.
-    asked === null ? "root" : String(asked),
+    level === null ? "root" : String(level),
   ];
 
   // `["collection", …]` on all three, so the one `invalidateQueries({ queryKey: ["collection"] })`
@@ -557,8 +581,9 @@ export function useCollection({
   const sortKey = sort.map((t) => `${t.key}:${t.dir}`).join(",");
   /** Every shelf the wall covers — a new folder, a deleted one or a new level is a new list. */
   const countKey = toCount.join(",");
-  /** The shelves drawn open — a collapse is a new list, and only for the list. */
-  const fetchKey = toFetch.join(",");
+  /** The shelves drawn open — a collapse is a new list, and only for the list. `View all` asks for
+   *  no shelves, so it is a list of its own and a fold is not a new one. */
+  const fetchKey = viewAll ? "all" : toFetch.join(",");
   const listKey = ["collection", "list", filterKey, sortKey, fetchKey];
 
   const query = useInfiniteQuery({
@@ -568,7 +593,8 @@ export function useCollection({
         ...filters,
         // **The open shelves, in wall order** — the backend orders by position in this list and
         // then by the sort, so the rows arrive shelf by shelf and a shelf's tiles are contiguous.
-        shelves: toFetch,
+        // **None on the `View all` wall**: every folder, in the reader's sort alone.
+        shelves: viewAll ? undefined : toFetch,
         // **No `excludeLocked` here, and none on the summary below** — issue #436: a set-aside
         // card is still a card the reader owns. The lock is marked on the tile and the heading.
         //
@@ -639,14 +665,21 @@ export function useCollection({
    * change is in flight, and `null` otherwise: nothing but a level change holds, and a filter typed
    * or a shelf folded during the hold is drawn with the new level. `useWishlist` spells it the same.
    */
-  const scrollKey = JSON.stringify(["collection", "list", filterKey, sortKey]);
+  // `View all` is a wall of its own and starts at the top; the segment is appended only while it is
+  // on, so every other list's key reads exactly as it always has.
+  const scrollKey = JSON.stringify(
+    viewAll
+      ? ["collection", "list", filterKey, sortKey, "all"]
+      : ["collection", "list", filterKey, sortKey],
+  );
   const countsKey = JSON.stringify(["collection", "shelfCounts", filterKey, countKey]);
   const levelAnswered = answered(query) && answered(summary) && answered(shelfCounts);
   const [shown, setShown] = useState<ShownLevel | null>(null);
   if (
     levelAnswered &&
     (shown === null ||
-      shown.levelId !== asked ||
+      shown.levelId !== level ||
+      shown.viewAll !== viewAll ||
       shown.figures !== summary.data ||
       shown.counts !== shelfCounts.data ||
       shown.pages !== query.data ||
@@ -656,7 +689,8 @@ export function useCollection({
       shown.countsKey !== countsKey)
   ) {
     setShown({
-      levelId: asked,
+      levelId: level,
+      viewAll,
       figures: summary.data,
       counts: shelfCounts.data,
       pages: query.data,
@@ -667,8 +701,14 @@ export function useCollection({
       countsKey,
     });
   }
-  const held = !levelAnswered && shown !== null && shown.levelId !== asked ? shown : null;
-  const levelId = held === null ? asked : held.levelId;
+  // Turning `View all` on or off is a level change for this rule: the wall is laid out another way,
+  // so the old one is held whole until the new list has answered.
+  const held =
+    !levelAnswered && shown !== null && (shown.levelId !== level || shown.viewAll !== viewAll)
+      ? shown
+      : null;
+  const levelId = held === null ? level : held.levelId;
+  const drawnViewAll = held === null ? viewAll : held.viewAll;
   const drawnFiltering = held === null ? filtering : held.filtering;
   const drawnFolds = held === null ? folds : held.folds;
 
@@ -828,8 +868,19 @@ export function useCollection({
     levelHeld: held !== null,
     /** Open a folder, or `null` for the root. This hook only tracks where the reader now is; it
      *  does not create, rename, move or delete a folder — those live on the page, on the path row
-     *  and the shelf headings. */
-    openFolder: setAsked,
+     *  and the shelf headings. **It also leaves `View all`**: a folder opened is a place to stand,
+     *  and the flat wall stands nowhere. */
+    openFolder,
+    /**
+     * Whether the wall **as drawn** is the `View all` one — every card, no shelves, in the reader's
+     * sort (issue #907). Trails {@link requestedViewAll} by the round trip a level change is held
+     * for, like `folderId`; everything drawn reads this one.
+     */
+    viewAll: drawnViewAll,
+    /** Whether `View all` is **asked for** — the toggle's pressed state, and Escape's. */
+    requestedViewAll: viewAll,
+    /** Turn `View all` on or off. Off goes back to the folder still asked underneath. */
+    setViewAll,
     /**
      * The wall's shelves at the level on screen, in drawing order, **as built** — collapsed ones and
      * an empty Not sorted included. The page draws `visible`; this is what the fold controls and

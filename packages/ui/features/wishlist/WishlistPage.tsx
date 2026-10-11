@@ -13,6 +13,7 @@ import { AnimatePresence, motion } from "motion/react";
 import type { MenuItem } from "@/components/menu/types";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { UndoNotice } from "@/components/UndoNotice";
+import { ViewAllToggle } from "@/components/ViewAllToggle";
 import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
@@ -180,6 +181,9 @@ type Panel =
 
 /** No rows on a shelf — one identity, so `rowsOf` hands `WishlistGrid` a stable array. */
 const NO_ROWS: readonly WishRow[] = [];
+
+/** The `View all` toggle's accessible name — its visible words plus what they are all of. */
+const VIEW_ALL_NAME = "View all wishes";
 /** No thumbnails — a shelf the counts have not reached yet. */
 const NO_PEEK: readonly { cardId: string; name: string }[] = [];
 
@@ -280,6 +284,10 @@ export function WishlistPage() {
     // render-phase hand-offs below compare against this one, or they would ask again every render
     // of the hold; everything that draws reads `folderId`.
     requestedFolderId,
+    // **`View all`** (issue #907) in the same two tenses: the wall drawn, and the toggle pressed.
+    viewAll,
+    requestedViewAll,
+    setViewAll,
   } = wishlist;
   const view = useAppStore((s) => s.wishlistView);
   const openAllPrintings = useAppStore((s) => s.openAllPrintings);
@@ -320,7 +328,9 @@ export function WishlistPage() {
     pendingFolder !== null && pendingFolder.scope === "wishlist" && !folders.query.isPending
       ? pendingFolder.id
       : null;
-  if (pendingHere !== null && requestedFolderId !== pendingHere) {
+  // `|| requestedViewAll`: a drawer named while the flat wall is up is still a drawer to open, even
+  // the one asked underneath it — and opening it leaves the flat wall, which is what ends the write.
+  if (pendingHere !== null && (requestedFolderId !== pendingHere || requestedViewAll)) {
     if (folders.folders.some((folder) => folder.id === pendingHere)) {
       wishlist.openFolder(pendingHere);
     }
@@ -673,7 +683,14 @@ export function WishlistPage() {
     null,
   );
   const census = folders.query.data;
-  if (census !== undefined && requestedFolderId !== null && pendingHere === null) {
+  // **Not while `View all` is up** — the collection's guard: walking the folder asked underneath
+  // would turn the flat wall off under the reader. Turned off, the walk runs at once.
+  if (
+    census !== undefined &&
+    requestedFolderId !== null &&
+    !requestedViewAll &&
+    pendingHere === null
+  ) {
     if (census.some((folder) => folder.id === requestedFolderId)) {
       const ids = trailOf(census, requestedFolderId).map((folder) => folder.id);
       if (levelTrail?.level !== requestedFolderId || !sameIds(ids, levelTrail.ids)) {
@@ -960,8 +977,19 @@ export function WishlistPage() {
     layer: "navigation",
     onDismiss: () =>
       openFolder(askedTrail.length > 1 ? askedTrail[askedTrail.length - 2].id : null),
-    enabled: requestedFolderId !== null,
+    enabled: requestedFolderId !== null && !requestedViewAll,
   });
+  /**
+   * **…and on the `View all` wall the floor is leaving it** (issue #907), back to the folder still
+   * asked underneath — `CollectionPage`'s rung, and the deck gallery's before it. The caret goes to
+   * the toggle, which stays on screen either way.
+   */
+  const viewAllRef = useRef<HTMLButtonElement>(null);
+  const leaveViewAll = useCallback(() => {
+    setViewAll(false);
+    viewAllRef.current?.focus();
+  }, [setViewAll]);
+  useDismissOnEscape({ layer: "navigation", onDismiss: leaveViewAll, enabled: requestedViewAll });
 
   const open = useCallback((next: NonNullable<Panel>, opener: HTMLElement | null) => {
     openerRef.current = opener;
@@ -1693,7 +1721,20 @@ export function WishlistPage() {
    * saying the dashed box's own fact a second time (live pass §13: `Nothing filed here yet.` over
    * `Empty — drag cards here…`).
    */
-  const drawn = useMemo(() => layoutShelves(sections, 1).rows.length > 0, [sections]);
+  //
+  // The `View all` wall draws no shelves, so it draws something exactly when it has a wish.
+  const shelvesDrawn = useMemo(() => layoutShelves(sections, 1).rows.length > 0, [sections]);
+  const drawn = viewAll ? !empty : shelvesDrawn;
+  /**
+   * Every shelf at the root by id — what a `View all` tile's chin and a flat table row name their
+   * folder from (issue #907). The hook's shelves are the root's on that wall, so every folder is in
+   * here, Not sorted under `0`.
+   */
+  const shelfById = useMemo(() => new Map(shelves.map((shelf) => [shelf.id, shelf])), [shelves]);
+  const shelfOfRow = useCallback(
+    (row: WishRow) => shelfById.get(shelfOfWish(row)),
+    [shelfById],
+  );
 
   /**
    * What the export dialog's two sentences say about where the reader is standing. **At the root
@@ -1959,19 +2000,33 @@ export function WishlistPage() {
                 segment first for a folder a reader had named "Add folder". `ml-auto`, so the
                 toolbar holds the row's right end even on the empty list, where the status line
                 beside it has wrapped onto a line of its own and no longer pushes it there. */}
-            <div ref={pathRowRef} className="ml-auto">
-              <ShelfToolbar
-                // The `canMakeFolder` gate, unchanged (spec §3.8): nothing is made inside a deck's
-                // managed folder, so the button is absent there rather than greyed.
-                onAddFolder={
-                  managedHere === null
-                    ? () => startNewFolder(folderId, pressedElement())
-                    : undefined
-                }
-                onExpandAll={expandAll}
-                onCollapseAll={collapseAll}
-                foldPaused={foldPaused}
-              />
+            <div ref={pathRowRef} className="ml-auto flex shrink-0 items-center gap-2">
+              {/* **`View all`** (issue #907) — every wish on one wall, no shelves, in the reader's
+                  sort; each tile's chin names the folder it is in. `CollectionPage`'s toggle and its
+                  rules: drawn wherever there is a cabinet to leave out, and kept while it is on. */}
+              {(hasFolders || requestedViewAll) && (
+                <ViewAllToggle
+                  ref={viewAllRef}
+                  pressed={requestedViewAll}
+                  name={VIEW_ALL_NAME}
+                  onToggle={() => setViewAll(!requestedViewAll)}
+                />
+              )}
+              {/* Not on the flat wall: every one of these is about shelves, and it draws none. */}
+              {!viewAll && (
+                <ShelfToolbar
+                  // The `canMakeFolder` gate, unchanged (spec §3.8): nothing is made inside a deck's
+                  // managed folder, so the button is absent there rather than greyed.
+                  onAddFolder={
+                    managedHere === null
+                      ? () => startNewFolder(folderId, pressedElement())
+                      : undefined
+                  }
+                  onExpandAll={expandAll}
+                  onCollapseAll={collapseAll}
+                  foldPaused={foldPaused}
+                />
+              )}
             </div>
           </div>
 
@@ -2044,11 +2099,15 @@ export function WishlistPage() {
 
           {/* **The shelves** — drawn whenever there is a shelf to draw, which on a filed wishlist
               holding no wishes is still a wall of headings: they are the content. */}
-          {sections.length > 0 &&
+          {/* **The `View all` wall is flat** (issue #907): one run of tiles in the reader's sort,
+              each naming its folder on its chin, and a table with a `Folder` column in place of the
+              bands — drawn whenever there is a wish to draw. */}
+          {(viewAll ? !empty : sections.length > 0) &&
             (view === "grid" ? (
               <WishlistGrid
                 rows={rows}
-                shelves={gridShelves}
+                shelves={viewAll ? undefined : gridShelves}
+                folderOf={viewAll ? shelfOfRow : undefined}
                 listKey={wishlist.queryKeyString}
                 onNeedNextPage={onNeedNextPage}
                 onSetQuantity={onSetQuantity}
@@ -2068,11 +2127,12 @@ export function WishlistPage() {
               />
             ) : (
               <WishlistTable
-                rows={table.rows}
-                total={table.total}
-                bands={tableBands}
-                revealIndex={tableRevealIndex}
-                keepRow={keepRow}
+                rows={viewAll ? rows : table.rows}
+                total={viewAll ? wishlist.total : table.total}
+                bands={viewAll ? undefined : tableBands}
+                folderOf={viewAll ? shelfOfRow : undefined}
+                revealIndex={viewAll ? null : tableRevealIndex}
+                keepRow={viewAll ? null : keepRow}
                 listKey={wishlist.queryKeyString}
                 sort={wishlist.sort}
                 onSort={wishlist.toggleSort}

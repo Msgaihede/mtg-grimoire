@@ -18,6 +18,7 @@ import { RarityGem } from "@/components/RarityGem";
 import { TABLE_BAND_HEIGHT, VirtualTable, type TableColumn } from "@/components/table/VirtualTable";
 import { useTooltip, type TooltipBinder } from "@/components/tooltip/useTooltip";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
+import { shelfColumn } from "@/features/shelves/ShelfPlace";
 import { collectionDraggable } from "@/features/collection/collectionDrag";
 import { CONDITION_LABEL, CONDITION_NOT_SET, type Condition } from "@/lib/conditions";
 import { useDragRecord } from "@/lib/dndTarget";
@@ -76,6 +77,15 @@ function conditionLabel(raw: string): string {
 function copyLabel(row: CollectionRow): string {
   const finish = finishLabel(row.finish);
   return row.condition === CONDITION_NOT_SET ? finish : `${finish}, ${row.condition}`;
+}
+
+/** The columns with {@link shelfColumn} after the name when a row's shelf is to be said. */
+function withFolder(
+  columns: TableColumn<CollectionRow>[],
+  folderOf: ((row: CollectionRow) => Shelf | undefined) | undefined,
+): TableColumn<CollectionRow>[] {
+  if (folderOf === undefined) return columns;
+  return [columns[0], shelfColumn(folderOf), ...columns.slice(1)];
 }
 
 /**
@@ -633,6 +643,7 @@ export const CollectionTable = memo(function CollectionTable({
   rowMenuKey,
   marketplace,
   shelves,
+  folderOf,
 }: {
   rows: CollectionRow[];
   /** Rows matching the filters, not rows loaded — what assistive tech is told the list is. */
@@ -701,6 +712,12 @@ export const CollectionTable = memo(function CollectionTable({
    * draws the layout's bands with each shelf's rows under its heading.
    */
   shelves?: CollectionTableShelves;
+  /**
+   * The shelf a row is filed on — given on the `View all` wall alone (issue #907), where the table
+   * is flat and has no band to name a drawer, and it adds a `Folder` column after the name
+   * ({@link shelfColumn}). Absent: the six columns, as on the shelves.
+   */
+  folderOf?: (row: CollectionRow) => Shelf | undefined;
 }) {
   // Opening a card is a store write and nothing else — `App` owns the pane, so the list
   // never has to know whether one is open, only which card is in it.
@@ -796,7 +813,7 @@ export const CollectionTable = memo(function CollectionTable({
   // indented by its shelf's depth, so the name lines up under its heading's title.
   const columns = useMemo(
     () =>
-      columnsFor(onSetQuantity, onRemove, marketplace, tip, quantityBlocked).map(
+      withFolder(columnsFor(onSetQuantity, onRemove, marketplace, tip, quantityBlocked), folderOf).map(
         (column, index): TableColumn<TableRow> => ({
           ...column,
           cell: (row) => {
@@ -814,7 +831,7 @@ export const CollectionTable = memo(function CollectionTable({
           },
         }),
       ),
-    [onSetQuantity, onRemove, marketplace, tip, quantityBlocked, shelved],
+    [onSetQuantity, onRemove, marketplace, tip, quantityBlocked, shelved, folderOf],
   );
 
   // Indented and railed exactly as the rows under it are. It changes with the page's drawings,

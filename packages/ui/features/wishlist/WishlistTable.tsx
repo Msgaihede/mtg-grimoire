@@ -16,6 +16,7 @@ import { RarityGem } from "@/components/RarityGem";
 import { TABLE_BAND_HEIGHT, VirtualTable, type TableColumn } from "@/components/table/VirtualTable";
 import { useTooltip, type TooltipBinder } from "@/components/tooltip/useTooltip";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
+import { shelfColumn } from "@/features/shelves/ShelfPlace";
 import { FOCUS } from "@/lib/focus";
 import type { FolderNode } from "@/lib/folderTree";
 import type { WishlistFolder, WishlistSortKey, WishRow } from "@/lib/ipc";
@@ -350,6 +351,15 @@ function columnsFor({
   ];
 }
 
+/** The columns with {@link shelfColumn} after the name when a wish's shelf is to be said. */
+function withFolder(
+  columns: TableColumn<WishRow>[],
+  folderOf: ((row: WishRow) => Shelf | undefined) | undefined,
+): TableColumn<WishRow>[] {
+  if (folderOf === undefined) return columns;
+  return [columns[0], shelfColumn(folderOf), ...columns.slice(1)];
+}
+
 /**
  * The wish columns over a table that may carry heading bands. `VirtualTable` draws a band itself
  * and never hands one to a cell (its rule 1), so the guard is for the type — `Row` is the union —
@@ -585,6 +595,7 @@ export const WishlistTable = memo(function WishlistTable({
   folders,
   nodes,
   bands,
+  folderOf,
   revealIndex,
   keepRow,
   readOnly = NOTHING_READ_ONLY,
@@ -603,6 +614,12 @@ export const WishlistTable = memo(function WishlistTable({
   total: number;
   /** The shelves' bands; `rows` carries {@link ShelfBandRow}s between the wishes when given. */
   bands?: WishTableBands;
+  /**
+   * The shelf a wish is filed on — given on the `View all` wall alone (issue #907), where the table
+   * is flat and has no band to name a folder, and it adds a `Folder` column after the name
+   * ({@link shelfColumn}). Absent: the five columns, as on the shelves.
+   */
+  folderOf?: (row: WishRow) => Shelf | undefined;
   /** A row to scroll into view — `VirtualTable`'s `revealIndex`, passed straight through: the page
    *  names the heading band it owes the caret to, or the band of the folder being added. */
   revealIndex?: number | null;
@@ -669,18 +686,21 @@ export const WishlistTable = memo(function WishlistTable({
     <VirtualTable
       rows={rows}
       columns={overBands(
-        columnsFor({
-          folders,
-          nodes,
-          onSetQuantity,
-          onRemove,
-          onSetFolder,
-          onChangePrinting,
-          onAnyPrinting,
-          readOnly,
-          marketplace,
-          tip,
-        }),
+        withFolder(
+          columnsFor({
+            folders,
+            nodes,
+            onSetQuantity,
+            onRemove,
+            onSetFolder,
+            onChangePrinting,
+            onAnyPrinting,
+            readOnly,
+            marketplace,
+            tip,
+          }),
+          folderOf,
+        ),
         bands?.indentOf,
       )}
       label="Your wishlist"

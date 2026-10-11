@@ -687,6 +687,72 @@ describe("useCollection", () => {
     await waitFor(() => expect(result.current.queryKeyString).toBe(root));
   });
 
+  /**
+   * **`View all` asks for every folder, in the reader's sort alone** (issue #907). No `shelves` on
+   * the list — absent `shelves`, `folderId` and `rootOnly` is "every folder" on the other end — so
+   * the sort runs across the whole collection instead of inside each shelf. The figures and the
+   * counts are the root's, which already cover everything, and the folder asked underneath stays.
+   */
+  it("asks for every folder with no shelves on View all, and goes back to the folder after", async () => {
+    collectionFolderList.mockResolvedValue([folder(3), folder(9, { parentId: 3 }), folder(4)]);
+    const { result } = renderHook(() => useCollection(), { wrapper });
+    act(() => result.current.openFolder(3));
+    await waitFor(() => expect(result.current.folderId).toBe(3));
+    await waitFor(() => expect(lastQuery().shelves).toEqual([3, 9]));
+
+    act(() => result.current.setViewAll(true));
+
+    expect(result.current.requestedViewAll).toBe(true);
+    await waitFor(() => expect(result.current.viewAll).toBe(true));
+    expect(lastQuery().shelves).toBeUndefined();
+    expect(lastQuery().folderId).toBeUndefined();
+    expect(lastQuery().rootOnly).toBeUndefined();
+    expect(lastSummary().shelves).toEqual([UNFILED_SHELF, 3, 9, 4]);
+    expect(lastCounts().shelves).toEqual([UNFILED_SHELF, 3, 9, 4]);
+    // The wall is the root's: every shelf is there to name a tile's drawer from.
+    expect(result.current.folderId).toBeNull();
+    expect(result.current.shelves.map((shelf) => shelf.id)).toEqual([UNFILED_SHELF, 3, 9, 4]);
+    expect(result.current.requestedFolderId).toBe(3);
+
+    act(() => result.current.setViewAll(false));
+
+    await waitFor(() => expect(result.current.folderId).toBe(3));
+    expect(result.current.viewAll).toBe(false);
+    expect(lastQuery().shelves).toEqual([3, 9]);
+  });
+
+  /**
+   * **`View all` is a list and a scroll position of its own, and a fold is neither.** Folding a
+   * shelf on the flat wall changes nothing it asks — it fetches no shelves — and opening a folder
+   * from it leaves it, because a folder is a place to stand and the flat wall stands nowhere.
+   */
+  it("keys View all apart, ignores folds on it, and leaves it when a folder is opened", async () => {
+    collectionFolderList.mockResolvedValue([folder(3), folder(4)]);
+    const { result } = renderHook(() => useCollection(), { wrapper });
+    await waitFor(() => expect(lastQuery().shelves).toEqual([UNFILED_SHELF, 3, 4]));
+    const root = result.current.queryKeyString;
+    const scroll = result.current.scrollKey;
+
+    act(() => result.current.setViewAll(true));
+    await waitFor(() => expect(result.current.viewAll).toBe(true));
+    const all = result.current.queryKeyString;
+    expect(all).not.toBe(root);
+    expect(result.current.scrollKey).not.toBe(scroll);
+    const calls = collectionList.mock.calls.length;
+
+    act(() => result.current.setFold(3, true));
+    await waitFor(() => expect(result.current.folds).toEqual({ "3": true }));
+    expect(result.current.queryKeyString).toBe(all);
+    expect(collectionList.mock.calls.length).toBe(calls);
+
+    act(() => result.current.openFolder(4));
+
+    expect(result.current.requestedViewAll).toBe(false);
+    await waitFor(() => expect(result.current.folderId).toBe(4));
+    expect(result.current.viewAll).toBe(false);
+    expect(lastQuery().shelves).toEqual([4]);
+  });
+
   /** Reset all is about the filters: where the reader stands and what they folded are theirs. */
   it("leaves the level and the stored folds alone on Reset all", async () => {
     collectionFolderList.mockResolvedValue([folder(3)]);

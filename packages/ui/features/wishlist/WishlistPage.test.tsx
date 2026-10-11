@@ -2117,6 +2117,78 @@ describe("the walk it publishes for the printings modal", () => {
  * **Shelves** (spec §3): every card at and below the level, one shelf per folder, nested, in tree
  * order — the page a reader who files everything lands on instead of an empty one.
  */
+/**
+ * **`View all`** (issue #907) — every wish on one flat wall, no shelves, in the reader's sort; each
+ * tile's chin names the folder it is in. `CollectionPage.test.tsx`'s block, one cabinet over.
+ */
+describe("View all", () => {
+  beforeEach(() => {
+    wishlistList.mockReset().mockImplementation(listByShelves([BOLT, ANY, FILED]));
+    wishlistFolderList.mockResolvedValue(FOLDERS);
+    wishlistFolderSummary.mockResolvedValue(SUMMARY);
+  });
+  const viewAll = () => screen.getByRole("button", { name: "View all wishes" });
+  /** A wish's tile on this page's own wall — the docked search column draws a wall of its own. */
+  const tileOf = (name: string) =>
+    within(screen.getByRole("group", { name: "Your wishlist" }))
+      .getByAltText(name)
+      .closest<HTMLElement>("[data-grid-index]")!;
+
+  it("draws every wish on one wall, each naming its folder on its chin, and goes back", async () => {
+    useAppStore.setState({ wishlistView: "grid" });
+    const user = userEvent.setup();
+    wrap(<WishlistPage />);
+    await findHeading(ORDERED.id);
+    expect(viewAll()).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(viewAll());
+
+    expect(viewAll()).toHaveAttribute("aria-pressed", "true");
+    await waitFor(() => expect(lastQuery().flatten).toBe(true));
+    expect(lastQuery()).not.toHaveProperty("shelves");
+    await waitFor(() => expect(queryHeading(ORDERED.id)).toBeNull());
+    expect(queryHeading(0)).toBeNull();
+    expect(screen.queryByRole("group", { name: "Shelves" })).toBeNull();
+    const filed = await waitFor(() => tileOf("Rhystic Study"));
+    expect(within(filed).getByText("Ordered")).toBeInTheDocument();
+    expect(within(tileOf("Ancestral Recall")).getByText("Not sorted")).toBeInTheDocument();
+
+    await user.click(viewAll());
+
+    await findHeading(ORDERED.id);
+    expect(viewAll()).toHaveAttribute("aria-pressed", "false");
+    await waitFor(() => expect(lastQuery().shelves).toEqual([0, 1, 2, 3]));
+    expect(within(tileOf("Rhystic Study")).queryByText("Ordered")).toBeNull();
+  });
+
+  it("leaves on Escape with the caret on the toggle, and a table draws a Folder column", async () => {
+    const user = userEvent.setup();
+    wrap(<WishlistPage />);
+    await findHeading(ORDERED.id);
+
+    await user.click(viewAll());
+
+    expect(await screen.findByRole("columnheader", { name: "Folder" })).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("row", { name: /Rhystic Study/ })).getByText("Ordered"),
+    ).toBeInTheDocument();
+
+    expect(fireEvent.keyDown(document.body, { key: "Escape", code: "Escape" })).toBe(false);
+
+    await findHeading(ORDERED.id);
+    expect(viewAll()).toHaveAttribute("aria-pressed", "false");
+    expect(viewAll()).toHaveFocus();
+    expect(screen.queryByRole("columnheader", { name: "Folder" })).toBeNull();
+  });
+
+  it("draws no toggle on a wishlist nobody has filed", async () => {
+    wishlistFolderList.mockResolvedValue([]);
+    wrap(<WishlistPage />);
+    await screen.findByText("Lightning Bolt");
+    expect(screen.queryByRole("button", { name: "View all wishes" })).toBeNull();
+  });
+});
+
 describe("the shelves", () => {
   beforeEach(() => {
     wishlistList.mockReset().mockImplementation(listByShelves([BOLT, ANY, FILED]));
