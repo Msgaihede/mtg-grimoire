@@ -1311,7 +1311,7 @@ export const SwapFolds: Story = {
     // Ring is one tile — its newest printing — which is the right default for building a deck
     // and the wrong one for a story about choosing between two printings.
     await user.click(canvas.getByRole("button", { name: /^Show filters/ }));
-    await user.click(canvas.getByRole("button", { name: "All printings" }));
+    await user.click(canvas.getByRole("button", { name: "Show all printings" }));
 
     // Two tiles, newest printing first — `sld 913` (2025-12-01) ahead of `c21 263` (2021-04-23),
     // which is `search::ORDER_NAME`: the card, then its newest printing.

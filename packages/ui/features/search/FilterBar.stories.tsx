@@ -1017,3 +1017,22 @@ export const StatedFilters: Story = {
     ).toBeInTheDocument();
   },
 };
+
+/**
+ * **`Show all printings` beside Filters**, on a row wide enough to hold it (issue #911).
+ *
+ * 1200px of row, inside the two-line band `printingsOnBar` opens from 1040: the switch is the
+ * first line's, just ahead of Filters, and the tray leaves its `Printings` cell out rather than
+ * drawing the switch a second time. Narrow this box under 1040 — or into the one-line layout's
+ * 1500–1623, where the fold spends its room — and it goes back into the tray.
+ *
+ * **No `play`, deliberately** — `DeckStats`' `ThreeColumns` and its reason. The placement is read
+ * from the row's `ResizeObserver`, and `stories.test.tsx` plays every story under jsdom, whose
+ * observer never reports: the row stays unmeasured there and the switch stays in the tray, so a
+ * play asserting the bar would fail for a reason that is not a bug. The wiring is pinned in
+ * `FilterBar.test.tsx` ("the printings switch"), with the width reported by hand; this story is
+ * where the drawn result is looked at.
+ */
+export const PrintingsBesideFilters: Story = {
+  args: { width: "w-[1200px]" },
+};

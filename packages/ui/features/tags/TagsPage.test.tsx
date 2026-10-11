@@ -847,7 +847,7 @@ describe("the results wall", () => {
 
   /** A view mode and not a lock: a reader narrowed to an oracle tag is asking "which cards do
    *  this", and one row per card is the right answer to that. */
-  it("collapses again when the reader presses All printings", async () => {
+  it("collapses again when the reader presses Show all printings", async () => {
     const user = userEvent.setup();
     wrap(<TagsPage />);
     await screen.findByRole("button", { name: "Lightning Bolt" });
@@ -855,7 +855,7 @@ describe("the results wall", () => {
     // A view mode, and it lives in the filter row's tray with the other five since the row was
     // redesigned — only the box, the colours, the mana values and the sort stay on the bar.
     await user.click(screen.getByRole("button", { name: /^Show filters/ }));
-    await user.click(screen.getByRole("button", { name: "All printings" }));
+    await user.click(screen.getByRole("button", { name: "Show all printings" }));
 
     await waitFor(() => expect(lastRequest().collapse).toBe(true));
   });

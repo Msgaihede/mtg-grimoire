@@ -138,7 +138,7 @@ export const Default: Story = {
     // No Owned pair and no All printings: every row here is a copy the reader has, and these
     // *are* their printings. `COLLECTION_TRAY` is where both absences are argued.
     await expect(canvas.queryByRole("button", { name: /^Owned/ })).toBeNull();
-    await expect(canvas.queryByRole("button", { name: /^All printings/ })).toBeNull();
+    await expect(canvas.queryByRole("button", { name: /^Show all printings/ })).toBeNull();
   },
 };
 
