@@ -90,8 +90,10 @@ type Story = StoryObj<typeof meta>;
  *
  * **One press is not here, and its absence is the rule**: *Send scan…* stands beside *Reset
  * evidence* only while a camera is live and the scanner is running — a scan is the last couple
- * of seconds of frames it was shown, and a refused camera has shown it none. Its dialog is
- * storied by itself (`Scanner/Reader/Send scan dialog`), since no story has a camera to open.
+ * of seconds of frames it was shown, and a refused camera has shown it none — and only on a
+ * supporter's device, which this story's world is not either (`submit/useMaySendScans`). Its
+ * dialog is storied by itself (`Scanner/Reader/Send scan dialog`), since no story has a camera
+ * to open.
  */
 export const CameraRefused: Story = {
   play: async ({ canvasElement }) => {

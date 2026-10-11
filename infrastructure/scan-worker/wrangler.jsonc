@@ -1,24 +1,36 @@
 {
   "$schema": "../wrangler/node_modules/wrangler/config-schema.json",
-  // ⚠️ **The name is half of this Worker's address, and the address is compiled into the app**:
-  // `https://mtg-grimoire-scans.denmark-east.workers.dev` is `scanner_submit::SCAN_BASE` in the
-  // engine, a source in the web app's `connect-src` (`infrastructure/app-worker/_headers`) and a
-  // row of the privacy policy. `src/wrangler.test.ts` reads the Rust and holds this name to it.
   "name": "mtg-grimoire-scans",
   "main": "src/index.ts",
+  // The script's one import of another package's module, as a path wrangler follows with
+  // nothing installed — the share Worker's line, for the share Worker's reason: `release.yml`'s
+  // `scan-deploy` runs no pnpm, so nothing links `@grimoire/relay` into this folder there. An
+  // exact module, not the package. `scripts/scan-worker-alias.test.ts` holds the pair.
+  "alias": { "@grimoire/relay/src/token": "../relay/src/token.ts" },
   // The relay's date, for the share Worker's reason: it runs beside them on the same account and
   // nothing here wants a newer runtime.
   "compatibility_date": "2026-08-27",
 
-  // **One address, written out rather than left to a default.** `workers_dev` is what gives this
-  // Worker the address the engine asks; a preview URL would be a second one for every version
-  // ever uploaded, each bound to the same bucket, and nothing asks one.
-  "workers_dev": true,
+  // ⚠️ **The address, and it is compiled into the app**: a Custom Domain on the zone the web
+  // app's origin is the apex of, as the relay's and the share Worker's are (the owner's
+  // decision, 2026-10-11), so the deploy states the DNS record and the certificate itself.
+  // `https://scans.mtg-grimoire.app` is `scanner_submit::SCAN_BASE` in the engine, a source in
+  // the web app's `connect-src` (`infrastructure/app-worker/_headers`) and a row of the privacy
+  // policy. `src/wrangler.test.ts` reads the Rust and holds this pattern to it.
+  "routes": [{ "pattern": "scans.mtg-grimoire.app", "custom_domain": true }],
+  // **One address, written out rather than left to a default.** Unlike the relay and the share
+  // Worker this one keeps no `workers.dev` address: no build was ever cut with one for it, so
+  // there is nobody to keep it answering for. A preview URL would be one more address for every
+  // version ever uploaded, each bound to the same bucket, and nothing asks one.
+  "workers_dev": false,
   "preview_urls": false,
 
-  // **No `d1_databases`, no `durable_objects`, no secret.** This is the one Worker on the account
-  // whose write route a stranger can reach, so it is bound to the least there is: one bucket and
-  // one limiter. `src/env.ts` is the argument.
+  // **No `d1_databases`, no `durable_objects`, and one secret that is not in this file.** The
+  // bindings are one bucket and one limiter. The secret is `RELAY_HMAC_KEY` — the relay's
+  // signing key, by which this Worker checks that a scan comes from a supporter's device
+  // (`src/auth.ts`). It is Cloudflare's to hold and the owner's to set, with the relay's own
+  // value (`README.md`, *Deploying*); a deploy neither reads nor changes it, and it is never a
+  // `var`. `src/env.ts` is the argument for all of it.
 
   // The inbox: `runs/{id}.bin` and `labels/{id}.json`, two objects a submission. R2 for the
   // share Worker's reasons — 10 GB stored and a million writes a month on the free plan — and a

@@ -1586,7 +1586,8 @@ export interface FakeUpdate {
  * `scanner.rs` for nothing.
  *
  * **`scanInboxFull`** is the scan inbox turning a scan away because it holds as many as it may
- * until its maker has read them: `scanner_submit` refuses in the engine's sentence. The one
+ * until its maker has read them: `scanner_submit` refuses in the engine's sentence. **Its world
+ * is a supporter's** (`applySupporterFault`): sending a scan is, and nobody else reaches the inbox. The one
  * refusal of that command a story cannot reach by what it sends — every other is about the
  * pictures or the card — and the one a reader is most likely to meet.
  *
@@ -3388,7 +3389,9 @@ export function applySupporterFault(db: FakeDb): void {
   if (db.fault === "patreonLapsed") {
     db.supporter = { refreshSecret: false, status: "dead", since: null, groupBound: true };
   }
-  if (db.fault === "patreonGroupEntitled") {
+  // **A full inbox is something only a supporter can meet** — nobody else is let as far as the
+  // inbox — so the world that stories it is a supporter's: through its group, the commoner way.
+  if (db.fault === "patreonGroupEntitled" || db.fault === "scanInboxFull") {
     db.supporter = {
       refreshSecret: false,
       status: "active",
@@ -25711,6 +25714,16 @@ export const SCAN_TOO_SHORT =
   "Not enough of the scan yet. Hold the card under the camera a moment and press again.";
 export const SCAN_MIN_FRAMES = 5;
 
+/**
+ * `scanner_submit.rs`' `NOT_ON`, verbatim (`scannerSubmit.test.ts` reads the Rust): what a device
+ * with no membership behind it is told. **Sending a scan is a supporter's** — the engine asks
+ * `commands::entitled` before it reads a frame, and the inbox asks for the relay's token — so the
+ * fake asks {@link isEntitled} of the same rows `sync_supporter_status` answers from. The page
+ * draws no press for such a device; this is the rule held a second time, as the engine holds it.
+ * The sentence names no membership, on purpose: the build Google Play distributes may not.
+ */
+export const SCAN_NOT_ON = "Sending scans is not turned on for this device.";
+
 /** A copy through JSON, which is what `app_meta` stores — so a story holding the object it was
  *  handed cannot reach back into the row, and a row cannot hold anything JSON would not. */
 function throughJson<T>(value: T): T {
@@ -25773,12 +25786,15 @@ export function scannerHandlers(db: FakeDb) {
     /** `scanner::scanner_capture`. */
     scanner_capture: (): ScannerCaptured => ({ saved: "live-1757300000.jpg" }),
     /**
-     * `scanner_submit::submit` — a run of frames is taken, whatever is in it: the fake has no
-     * inbox and sends nothing anywhere. **A run too short to be one is refused first, as the
+     * `scanner_submit::submit` — a supporter's run of frames is taken, whatever is in it: the
+     * fake has no inbox and sends nothing anywhere. **A device with no membership behind it is
+     * refused first** ({@link SCAN_NOT_ON}), as the engine refuses it before any request. **A run too short to be one is refused first, as the
      * engine refuses it** ({@link SCAN_TOO_SHORT}): one picture is not a scan on any host, this
      * one included. Under `scanInboxFull` it refuses as the engine does for a full inbox.
      */
     scanner_submit: (args: { submission: ScannerSubmission }): ScannerSubmitted => {
+      // The engine's order: who may send, before anything about what is sent.
+      if (!isEntitled(db)) throw refuse(SCAN_NOT_ON);
       if (args.submission.run.length < SCAN_MIN_FRAMES) throw refuse(SCAN_TOO_SHORT);
       if (db.fault === "scanInboxFull") throw refuse(SCAN_INBOX_FULL);
       return { id: FAKE_SCAN_ID };

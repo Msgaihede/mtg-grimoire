@@ -7,8 +7,11 @@
 
      A fourth file rather than a wider `include` in any of the other three, for
      `infrastructure/share-worker/tsconfig.json`'s reason: `mtg-grimoire-scans` is a deploy of its
-     own, and one program spanning two Workers lets an edit to one fail the other's check. It
-     names no module outside its own folder — this Worker imports none.
+     own, and one program spanning two Workers lets an edit to one fail the other's check.
+
+     **`../relay/src/token.ts` is in the program because this Worker imports it** — `verify`,
+     the bearer gate, over the same `RELAY_HMAC_KEY` (`src/auth.ts`). Named by itself, as the
+     share Worker's program names it: the relay's other modules are the relay's own to check.
 
      `infrastructure/scan-worker/src`'s `*.test.ts` are inside the program, as the relay's are: a
      test that does not type-check can drift from what it asserts about.
@@ -31,5 +34,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src"]
+  "include": ["src", "../relay/src/token.ts"]
 }

@@ -1,3 +1,4 @@
+import { mint } from "@grimoire/relay/src/token";
 import { LABEL_HEADER } from "./cors";
 import type { Env } from "./env";
 import type { Frame, Label } from "./label";
@@ -11,6 +12,20 @@ import type { Frame, Label } from "./label";
  * run was never stored, a full inbox was not read past — and an absence can only be asserted
  * against something that would have recorded the presence.
  */
+
+/** The suite's signing key: what the relay and this Worker would both hold. Not a secret. */
+export const KEY = "a-test-signing-key";
+
+/** A token of the relay's for a supporter's device, signed with `key` and dying at `exp`. */
+export const tokenFor = (exp: number, key: string = KEY): Promise<string> =>
+  mint({ sub: "patreon-user-1", grp: "a-sync-group-id", exp, dev: "a-device-id" }, key);
+
+/**
+ * A live token, minted once for the module: good until the year 2100, so a test that moves the
+ * clock stays inside it. {@link scan} sends it unless it is told otherwise — every request the
+ * suite makes is a supporter's by default, so a test about a label or a body is about that.
+ */
+export const TOKEN = await tokenFor(Date.UTC(2100, 0, 1));
 
 export interface Stored {
   bytes: Uint8Array;
@@ -35,10 +50,17 @@ function bytesOf(value: unknown): Uint8Array {
 /**
  * The Worker's bindings. `allow` is what the limiter answers; `origins` is `APP_ORIGINS`, and
  * `null` leaves the var unset; `waiting` is how many submissions are already in the inbox;
- * `down` makes every write fail, as an unreachable bucket does.
+ * `down` makes every write fail, as an unreachable bucket does; `key` is `RELAY_HMAC_KEY`, and
+ * `null` leaves the secret unset, as a Worker deployed before its secret is.
  */
 export function inbox(
-  options: { allow?: boolean; origins?: string | null; waiting?: number; down?: boolean } = {},
+  options: {
+    allow?: boolean;
+    origins?: string | null;
+    waiting?: number;
+    down?: boolean;
+    key?: string | null;
+  } = {},
 ): Inbox {
   const objects = new Map<string, Stored>();
   for (let n = 0; n < (options.waiting ?? 0); n += 1) {
@@ -84,6 +106,7 @@ export function inbox(
     },
   };
   if (options.origins !== null) env.APP_ORIGINS = options.origins ?? "https://mtg-grimoire.app";
+  if (options.key !== null) env.RELAY_HMAC_KEY = options.key ?? KEY;
   return { env, objects, lists, limited };
 }
 
@@ -207,8 +230,8 @@ function listed(sent: unknown): { bytes: number }[] | null {
 export const ADDRESS = "203.0.113.7";
 
 /**
- * One request to the inbox. Everything defaults to a submission it would take; `null` leaves a
- * header off, and `label` may be any value (it is stringified) or the header's text as it is.
+ * One request to the inbox. Everything defaults to a submission it would take — a supporter's,
+ * carrying {@link TOKEN}; `null` leaves a header off, and `label` may be any value (it is stringified) or the header's text as it is.
  * **The body defaults to the frames the label lists**, so a test that changes a label's run and
  * says nothing of the body is still a submission that adds up.
  */
@@ -221,11 +244,16 @@ export function scan(
     type?: string | null;
     body?: Uint8Array | null;
     origin?: string;
+    /** The bearer token; `null` sends no `authorization` at all. A supporter's by default. */
+    token?: string | null;
     headers?: Record<string, string>;
   } = {},
 ): Request {
   const method = options.method ?? "POST";
-  const headers: Record<string, string> = { "cf-connecting-ip": ADDRESS, ...options.headers };
+  const headers: Record<string, string> = { "cf-connecting-ip": ADDRESS };
+  const token = options.token === undefined ? TOKEN : options.token;
+  if (token !== null) headers.authorization = `Bearer ${token}`;
+  Object.assign(headers, options.headers);
   const type = options.type === undefined ? "application/octet-stream" : options.type;
   if (type !== null) headers["content-type"] = type;
   const text =

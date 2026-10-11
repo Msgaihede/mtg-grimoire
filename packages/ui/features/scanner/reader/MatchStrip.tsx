@@ -23,10 +23,17 @@ export interface MatchStripProps {
    * reader says the last of them shows (`submit/`). Handed the press, for the caret to come back
    * to when the dialog closes.
    *
-   * **Absent where there can be no run to send, and then no button is drawn** — a camera that
-   * was refused or has not opened, a host with no scanner session, recognition stopped. Not a
-   * greyed one: a press that can only refuse owes the reader its reason, and the reason is
-   * already the sentence standing over the picture, or where the picture would be.
+   * **Absent where the page does not offer it, and then no button is drawn.** The page's three
+   * conditions (`ScannerPage`'s `sendable`):
+   *
+   * - **there can be a run to send** — not a camera that was refused or has not opened, a host
+   *   with no scanner session, or recognition stopped. Not a greyed press: one that can only
+   *   refuse owes the reader its reason, and the reason is already the sentence standing over
+   *   the picture, or where the picture would be;
+   * - **the page is the Scanner view itself**, not mounted over a trade;
+   * - **the device is a supporter's** (`submit/useMaySendScans`). For this one there is no
+   *   sentence at all, here or on the page: no greyed press, no hint, no name for what is
+   *   missing. This strip is handed a press or it is not, and knows nothing of why.
    */
   onSend?: (opener: HTMLElement) => void;
 }
@@ -87,8 +94,8 @@ export const STRIP_SENTENCE: Record<StripTone, string> = {
  * it is the one copy of that press on the screen, so a Developer reader does not meet two buttons
  * by one name.
  *
- * **_Send scan…_ stands beside it, for every reader too** (issue #776), wherever the scanner is
- * running ({@link MatchStripProps.onSend}). This row is where a reader is looking when the
+ * **_Send scan…_ stands beside it, wherever the page hands this strip the press** (issue #776;
+ * {@link MatchStripProps.onSend} says when it does). This row is where a reader is looking when the
  * scanner names the wrong card or will not name one, which is the moment the press is for. It
  * sits outside the live region for Reset's reason — a button is not news — and it is not the
  * Developer column's *Add frame to dataset*: that one writes a file beside the app for the

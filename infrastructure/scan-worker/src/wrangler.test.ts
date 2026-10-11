@@ -46,14 +46,19 @@ function engine(pattern: RegExp, what: string): string {
 }
 
 const config = jsonc(wranglerText);
+/** The one origin a page may send from — `vars.APP_ORIGINS`, which a test below holds whole. */
+const APP_ORIGIN = (config.vars as { APP_ORIGINS: string }).APP_ORIGINS;
 
 describe("wrangler.jsonc, against the engine", () => {
   it("is deployed where the engine asks", () => {
-    // A `workers.dev` address is the Worker's name and the account's subdomain — the relay's
-    // and the share Worker's are spelled the same way. A name changed here, or an address
-    // changed there, is an app that posts every scan to nothing.
+    // A Custom Domain on the web app's zone, as the relay's and the share Worker's are: the
+    // route's pattern *is* the host. A pattern changed here, or an address changed there, is an
+    // app that posts every scan to nothing.
     const base = engine(/pub const SCAN_BASE: &str = "([^"]+)";/, "SCAN_BASE");
-    expect(base).toBe(`https://${String(config.name)}.denmark-east.workers.dev`);
+    expect(config.routes).toEqual([{ pattern: "scans.mtg-grimoire.app", custom_domain: true }]);
+    expect(base).toBe("https://scans.mtg-grimoire.app");
+    // And on the zone a page is let in from: one registrable name, two hosts of it.
+    expect(new URL(base).hostname.endsWith(`.${new URL(String(APP_ORIGIN)).hostname}`)).toBe(true);
     expect(config.name).toBe("mtg-grimoire-scans");
     expect(config.main).toBe("src/index.ts");
   });
@@ -113,16 +118,25 @@ describe("wrangler.jsonc, against the code", () => {
     // says this server keeps no log of requests, and `enabled: true` here is what would.
     expect(config.observability).toEqual({ enabled: false });
     expect(privacyPage).toContain("This server keeps no log of requests.");
+    // The token is the one thing in a request that says who sent it: a log would keep it, and
+    // the page says of it what `auth.test.ts` holds this Worker to.
+    expect(privacyPage).toContain(
+      "It is read while the request is being answered and is not stored, with the scan or anywhere else.",
+    );
     // And the page names this Worker's host, which is where a reader looks it up.
-    expect(privacyPage).toContain(`<td>${String(config.name)}.denmark-east.workers.dev</td>`);
+    expect(privacyPage).toContain("<td>scans.mtg-grimoire.app</td>");
+    expect(privacyPage).not.toContain(`${String(config.name)}.denmark-east.workers.dev`);
   });
 
-  it("has one address: its own, and no preview of any older version", () => {
-    // A preview URL is a second address for every version ever uploaded, bound to the same
-    // bucket. Written out, not left to a default that has changed between wrangler versions.
-    expect(config.workers_dev).toBe(true);
+  it("has one address: its own name, with no workers.dev one and no preview beside it", () => {
+    // No build was ever cut with a `workers.dev` address for this Worker, so there is nobody
+    // to keep one answering for — unlike the relay and the share Worker, which keep theirs. A
+    // preview URL is one more address for every version ever uploaded, bound to the same
+    // bucket. Both written out, not left to defaults: wrangler infers the first from `routes`,
+    // and the second has changed between its versions.
+    expect(config.workers_dev).toBe(false);
     expect(config.preview_urls).toBe(false);
-    expect(config).not.toHaveProperty("routes");
+    expect(config.routes).toHaveLength(1);
   });
 
   it("binds nothing else: no database, no object, no asset, no schedule", () => {
@@ -131,7 +145,9 @@ describe("wrangler.jsonc, against the code", () => {
         "$schema",
         "name",
         "main",
+        "alias",
         "compatibility_date",
+        "routes",
         "workers_dev",
         "preview_urls",
         "r2_buckets",
@@ -160,10 +176,11 @@ describe("what must not be in this directory", () => {
     }
   });
 
-  it("holds no account id, no secret's name and nowhere to put one", () => {
-    // This Worker verifies no token and signs nothing, so not even the name of a secret has
-    // business here — outside this sentence's own file, which has to spell them to say so.
-    const SECRETS = ["PATREON_CLIENT_SECRET", "PATREON_WEBHOOK_SECRET", "RELAY_HMAC_KEY"];
+  it("holds no account id, neither of Patreon's secrets, and nowhere to put a value", () => {
+    // This Worker checks the relay's token, so it reads one secret by name — `RELAY_HMAC_KEY`,
+    // below. The two that speak to Patreon are the relay's alone and have no business here,
+    // outside this sentence's own file, which has to spell them to say so.
+    const SECRETS = ["PATREON_CLIENT_SECRET", "PATREON_WEBHOOK_SECRET"];
     const found = Object.entries(files as Record<string, string>).flatMap(([name, text]) => {
       if (name.endsWith("/src/wrangler.test.ts")) return [];
       const leaks =
@@ -174,5 +191,29 @@ describe("what must not be in this directory", () => {
     });
     expect(found).toEqual([]);
     expect(Object.keys(files).filter((name) => /\/\.(dev\.vars|env)[^/]*$/.test(name))).toEqual([]);
+  });
+
+  it("reads the signing key by name in one module, and is handed its value by no file", () => {
+    // **A secret is Cloudflare's to hold**: set by the owner, never a `var`, never a line here.
+    // So the configuration does not have the word in it outside a comment — a `vars` entry
+    // would be the key itself, committed — and the only value anywhere is the suite's own.
+    expect(JSON.stringify(config)).not.toContain("RELAY_HMAC_KEY");
+    expect(config.vars).toEqual({ APP_ORIGINS: "https://mtg-grimoire.app" });
+    // The script: one module reads it off the bindings, and that module is the door.
+    const script = Object.entries(files as Record<string, string>).filter(
+      ([name]) => /\/src\/[\w-]+\.ts$/.test(name) && !/\.(test|d)\.ts$/.test(name),
+    );
+    const readers = script
+      .filter(([name, text]) => !name.endsWith("/src/fake.ts") && /\benv\.RELAY_HMAC_KEY\b/.test(text))
+      .map(([name]) => name.slice(name.lastIndexOf("/") + 1));
+    expect(readers).toEqual(["auth.ts"]);
+    // It verifies and never mints: the one function of the relay's token module it may name.
+    const imported = script
+      .filter(([name]) => !name.endsWith("/src/fake.ts"))
+      .flatMap(([, text]) => [
+        ...text.matchAll(/import \{([^}]+)\} from "@grimoire\/relay\/src\/token";/g),
+      ])
+      .flatMap(([, names]) => names.split(",").map((name) => name.trim()));
+    expect(imported).toEqual(["verify"]);
   });
 });

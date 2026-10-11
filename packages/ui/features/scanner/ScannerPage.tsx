@@ -23,6 +23,7 @@ import {
   frameOptions as frameOptionsOf,
 } from "./scannerOptions";
 import { SubmitScanDialog } from "./submit/SubmitScanDialog";
+import { useMaySendScans } from "./submit/useMaySendScans";
 import { useScanSubmit } from "./submit/useScanSubmit";
 import type { ScannerOptions, ScannerTrayRow } from "./types";
 import { useCamera, useCameraDevices } from "./useCamera";
@@ -225,25 +226,33 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
    * send.
    *
    * **Not the capture above, and neither replaces the other.** That one is the Developer
-   * column's: a file written beside the app, named by whoever is running it. This one is every
-   * reader's, leaves the device, and so asks first — its dialog shows the pictures and says where
-   * they go.
+   * column's: a file written beside the app, named by whoever is running it. This one leaves the
+   * device, and so asks first — its dialog shows the pictures and says where they go.
    *
-   * **Offered only while there can be a run** — a camera live *and* recognition running. Stopped,
-   * the pump has let its frames go (a run never spans a Stop) and is sending none, so there is
-   * nothing to send and no press is drawn: the stopped sentence over the picture already says
-   * what would bring one back.
+   * **Three conditions, and the press is drawn only where all three hold.**
    *
-   * **And only in the Scanner view itself — never over a trade** (the owner's decision,
+   * **While there can be a run** — a camera live *and* recognition running. Stopped, the pump
+   * has let its frames go (a run never spans a Stop) and is sending none, so there is nothing to
+   * send and no press is drawn: the stopped sentence over the picture already says what would
+   * bring one back.
+   *
+   * **Only in the Scanner view itself — never over a trade** (the owner's decision,
    * 2026-10-11). Mounted with a `destination` this page is already inside a dialog, and its
    * reader is in the middle of something else; *Create deck…* is not drawn there for the same
    * reason.
+   *
+   * **And only for a supporter** (the owner's decision; `useMaySendScans`). Unlike the other
+   * two, this one has **no sentence anywhere**: a device that is not a supporter's — or whose
+   * membership has not been read yet — sees no press, no greyed one, and no word about why. The
+   * hook says why that silence is a rule and not an omission. A lapse while the dialog is open
+   * is not this page's either: the engine refuses the send, and the dialog draws the refusal.
    *
    * **The filters it says are the ones in force** (`inForce`), not the ones the bar is drawing:
    * `prefs.filters` moves the moment the reader changes it, before the session has taken the
    * change, and is put back if the session refuses it.
    */
-  const sendable = destination === undefined && camera.kind === "live" && scanning;
+  const maySend = useMaySendScans();
+  const sendable = destination === undefined && maySend && camera.kind === "live" && scanning;
   const submit = useScanSubmit({
     recent: loop.recent,
     verdict: loop.verdict,
@@ -386,8 +395,9 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
               hasBundle={hasBundle}
               lastResolution={loop.lastResolution}
               onReset={onReset}
-              // Offered only while there can be a run to send — see `sendable`. Without a live
-              // camera, or stopped, the box under the strip is already saying why not.
+              // Offered only where `sendable` says: a run to send, the Scanner view itself, and
+              // a supporter's device. Without a live camera, or stopped, the box under the strip
+              // is already saying why not; of the membership nothing is said at all.
               onSend={sendable ? submit.open : undefined}
             />
             {/* The column is the height, and the video box takes what the strip above it and the

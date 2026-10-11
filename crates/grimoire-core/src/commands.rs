@@ -2377,9 +2377,11 @@ mod tests {
             // The scanner's files: the read and the fetch (a `task`) both stop at the same
             // sentence on a page, before the session is loaded or any host is asked.
             "scanner_assets" | "scanner_assets_fetch" => Value::Null,
-            // A real run of pictures of a card these tables have, so the body runs whole — the
-            // decode, the read on the one connection, and the request, which stops at the
-            // mock's 404.
+            // A real run of pictures of a card these tables have. This table's device has no
+            // membership behind it, so the body stops where a non-supporter's does: at the one
+            // read on the one connection that asks. A supporter's whole trip on one connection
+            // — the lane, the token, the request — is
+            // `a_supporters_scan_is_sent_on_one_connection_and_one_thread`'s.
             "scanner_submit" => json!({
                 "submission": {
                     "cardId": "c-bolt",
@@ -2788,6 +2790,65 @@ mod tests {
         );
     }
 
+    /// Make this device a supporter's: the one that connected, holding a token good for another
+    /// day — so `scanner_submit` is let past its first check and asks the relay for nothing.
+    fn supporter(conn: &rusqlite::Connection) {
+        let now: i64 = conn
+            .query_row("SELECT unixepoch()", [], |row| row.get(0))
+            .expect("the clock");
+        crate::sync_engine::entitlement::store_grant(
+            conn,
+            "a-supporters-token",
+            "a-refresh-secret",
+            now + 86_400,
+        )
+        .expect("a grant");
+    }
+
+    /// **A supporter's scan, the way a browser's Worker sends it**: one connection, one thread.
+    /// The trip takes the connection for its reads, then the sync lane for the token, then
+    /// neither for the upload — and on this host a lock asked for while it is held is a trap,
+    /// not a wait. `every_command_answers_on_one_connection_and_one_thread` cannot show this:
+    /// its device has no membership, and is turned away at the first read.
+    #[test]
+    fn a_supporters_scan_is_sent_on_one_connection_and_one_thread() {
+        let inbox = httpmock::MockServer::start();
+        let took = inbox.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/scan")
+                .header("authorization", "Bearer a-supporters-token");
+            then.status(201)
+                .body(r#"{"id":"20261011T101500Z-0123456789abcdef"}"#);
+        });
+        let (state, _heard, _dir) =
+            crate::state::fixtures::single("commands-scanner-submit-alone", "http://127.0.0.1:1");
+        assert!(state.one_connection());
+        {
+            let conn = state.lock_db();
+            crate::schema::fixtures::seed_card(&conn, "c-bolt", "lea", "161");
+            crate::sync_engine::client::set_state(
+                &conn,
+                crate::scanner_submit::SCAN_URL,
+                &inbox.base_url(),
+            )
+            .expect("the scan inbox's override");
+            supporter(&conn);
+        }
+        let _page = crate::platform::host::emulate_page();
+        let mut runtime = one_thread_runtime();
+        let args = json!({ "submission": {
+            "cardId": "c-bolt", "finish": "foil", "mode": "fast", "filters": {},
+            "run": scan_run(),
+        }});
+        match drive(&mut runtime, dispatch(&state, "scanner_submit", args, None)) {
+            Alone::Answered(Ok(sent)) => {
+                assert_eq!(sent, json!({ "id": "20261011T101500Z-0123456789abcdef" }));
+            }
+            other => panic!("a supporter's scan on one connection: {other:?}"),
+        }
+        took.assert_calls(1);
+    }
+
     /// **A scan, through the table**: one argument, camelCase, with the run's pictures as
     /// base64 text inside it and the filters snake case as the scanner's are everywhere; and
     /// what the inbox answers is what the page reads — `{ "id": … }`. And a body beside it is
@@ -2810,7 +2871,9 @@ mod tests {
                 .header_includes(
                     crate::scanner_submit::LABEL_HEADER,
                     r#""filters":{"sets":["lea"],"from":null,"to":"1993-12-31"}"#,
-                );
+                )
+                // And the relay's token for this device, which is what the inbox takes it by.
+                .header("authorization", "Bearer a-supporters-token");
             then.status(201)
                 .body(r#"{"id":"20261011T101500Z-0123456789abcdef"}"#);
         });
@@ -2825,6 +2888,7 @@ mod tests {
                 &inbox.base_url(),
             )
             .expect("the scan inbox's override");
+            supporter(&conn);
         }
         let args = json!({
             "submission": {

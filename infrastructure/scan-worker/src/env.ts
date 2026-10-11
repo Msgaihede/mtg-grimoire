@@ -2,12 +2,17 @@
  * The scan Worker's bindings, its caps, and the one helper every answer is built with.
  *
  * **This is a fourth Worker rather than a route on one of the other three, and the reason is the
- * share Worker's: blast radius** (`infrastructure/share-worker/src/env.ts`). Every other write this
- * project's servers take is behind a token the relay minted, which is behind a membership. This one
- * is behind nothing — a reader who scans cards is not asked to pay to say the scanner was wrong —
- * so it is the one route on the account a stranger can make store bytes. It therefore binds **one
- * bucket and one limiter and holds no secret**: no D1, no signing key, no Durable Object. A fault
- * here can fill or lose the scans and cannot reach a membership, a sync log or a shared binder.
+ * share Worker's: blast radius** (`infrastructure/share-worker/src/env.ts`). It binds **one bucket
+ * and one limiter**: no D1, no Durable Object, no service binding. A fault here can fill or lose
+ * the scans and cannot write a membership, a sync log or a shared binder.
+ *
+ * **Its write is behind the relay's token, like every other write this project's servers take**
+ * (the owner's decision, 2026-10-11: sending a scan is a supporter's). It was first built open
+ * to anybody, bounded by its caps alone; `auth.ts` is the door it has now. ⚠️ **That costs this
+ * Worker one secret, and it is the one that matters**: `RELAY_HMAC_KEY` signs every sync token,
+ * and it is now on three Workers where it was on two. What this one does with it is `verify`
+ * and nothing else — it mints nothing, returns no claim and keeps no log — and a change that
+ * made it read the key anywhere but `auth.ts` is one to refuse.
  *
  * **Nothing is ever read back out through this Worker.** There is no `GET` for a run or a label:
  * the maker reads the bucket with his own credentials (`README.md`, *Reading the inbox*). An upload
@@ -34,6 +39,16 @@ export interface Env {
    * exactly the web app's. `cors.ts` is the reasoning, and unset it lets nobody's browser in.
    */
   APP_ORIGINS?: string;
+
+  /**
+   * **The relay's signing key — a secret, and so in no file of this repository.** Set by the
+   * owner with `wrangler secret put RELAY_HMAC_KEY`, to the value the relay and the share Worker
+   * hold (`README.md`, *Deploying*); a deploy neither reads nor changes it. Optional in the type
+   * because a Worker deployed before its secret is set is a state that happens, and `auth.ts`
+   * answers it in a sentence — a 500 that names the key — rather than being typed out of
+   * existence.
+   */
+  RELAY_HMAC_KEY?: string;
 }
 
 /**

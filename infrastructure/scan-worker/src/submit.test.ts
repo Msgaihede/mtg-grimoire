@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LABEL_HEADER } from "./cors";
 import { MAX_LABEL_CHARS, MAX_PENDING, MAX_RUN_BYTES, MIN_RUN_FRAMES } from "./env";
-import { ADDRESS, frames, inbox, jpeg, label, labelOver, scan, untouchable } from "./fake";
+import { ADDRESS, TOKEN, frames, inbox, jpeg, label, labelOver, scan, untouchable } from "./fake";
 import worker, { LIMIT } from "./index";
 import { FULL_FOR_MS, RUN_TYPE, type Sidecar } from "./submit";
 
@@ -15,6 +15,9 @@ import { FULL_FOR_MS, RUN_TYPE, type Sidecar } from "./submit";
  *
  * **Every refusal is asserted with what it must not have cost beside it**: nothing stored, and
  * where the order says so, a bucket that would throw if it were touched at all.
+ *
+ * **Every request here is a supporter's** — `scan()` sends the relay's token unless told not to
+ * — so each test is about what it says it is about. The door itself is `auth.test.ts`'s.
  */
 
 const ID = /^\d{8}T\d{6}Z-[0-9a-f]{16}$/;
@@ -455,6 +458,7 @@ describe("the header the label rides in", () => {
     const request = new Request("https://scans.example/scan", {
       method: "POST",
       headers: {
+        authorization: `Bearer ${TOKEN}`,
         "content-type": "application/octet-stream",
         "X-Scan-Label": JSON.stringify(label()),
       },

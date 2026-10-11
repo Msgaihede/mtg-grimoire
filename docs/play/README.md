@@ -217,10 +217,15 @@ Everything else: **not collected**. In particular:
 - *App activity, App info and performance, Personal info, Files and docs, Location, Contacts,
   Financial info, Messages, Audio, Calendar, Health, Web browsing*: none leaves the device.
   **The camera's pictures are examined on the device and discarded, except the scan a reader
-  sends**: nothing is sent while scanning — the scanner holds the last few seconds of frames in
+  sends, and Send is offered only on a supporter's device** (the owner's decision, 2026-10-11 —
+  the page draws no press and no word of one anywhere else, so nothing on it leads a reader to
+  a membership): nothing is sent while scanning — the scanner holds the last few seconds of frames in
   memory so that there is something to send, and no longer — and a sent scan's label names a
   card and the scanner's own reading of it — no device, account or group identifier, which is
-  why *Device or other IDs* above is still about sync alone.
+  why *Device or other IDs* above is still about sync alone. (The request does carry sync's own
+  token, which names the device and its group: the inbox reads it to check the membership and
+  keeps none of it, in the scan or in a log — `infrastructure/scan-worker/src/auth.test.ts` —
+  so it is the identifier sync already declares, processed and not collected.)
 - **A reader's collection and decks do leave the device when sync is on, and are not declared**:
   they are encrypted with a key only the reader's own devices hold, which is the exemption
   above.

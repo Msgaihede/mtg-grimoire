@@ -10,6 +10,7 @@ import type {
   ScannerSubmitted,
   ScannerVerdict,
   SearchResponse,
+  SupporterStatus,
 } from "@/lib/ipc";
 import { SCANNER_NOT_IN_A_BROWSER_YET, SCANNER_OPEN_ELSEWHERE } from "./verdictText";
 import {
@@ -57,6 +58,19 @@ vi.mock("@/lib/ipc", async (orig) => {
       scannerSubmit: vi.fn(async (): Promise<ScannerSubmitted> => ({ id: "unset" })),
       searchCards: vi.fn(
         async (): Promise<SearchResponse> => ({ items: [], total: 0, totalIsCapped: false }),
+      ),
+      // The membership, which *Send scan…* is drawn for and for nobody else. **A supporter's by
+      // default, and the default is doing work**: every test here that asks why the press is or
+      // is not there — a refused camera, a Stop, a trade — is asking about its own condition,
+      // and can only ask it where the membership would have let the press be drawn. The tests
+      // about the membership itself say what it answers instead.
+      syncSupporterStatus: vi.fn(
+        async (): Promise<SupporterStatus> => ({
+          entitled: true,
+          status: "active",
+          since: 1_756_000_000,
+          groupBound: true,
+        }),
       ),
       // The four the reader's half reads and writes. The pump waits for the first two to have
       // answered — prefs loaded and their filters pushed — so each is a resolved promise by default.
@@ -304,6 +318,7 @@ const COMMANDS = [
   ipc.scannerCapture,
   ipc.scannerSubmit,
   ipc.searchCards,
+  ipc.syncSupporterStatus,
   ipc.scannerPrefs,
   ipc.setScannerPrefs,
   ipc.scannerSetFilters,
@@ -1577,6 +1592,162 @@ describe("ScannerPage sending a scan", () => {
       restore();
     }
   });
+
+  /**
+   * **Only a supporter's device draws the press** (the owner's decision; `useMaySendScans`) —
+   * and a device that is not one is told nothing: no greyed press, no sentence, no name for what
+   * it lacks. The light app draws this page too, in the build Google Play distributes, which may
+   * not lead a reader to a membership bought somewhere else.
+   *
+   * Every test below has everything else the press needs — a live camera, recognition running,
+   * the scanner naming a card — so the membership is the one thing that differs between them.
+   */
+  describe("for a supporter and for nobody else", () => {
+    /** Connected and paid up; `GRACE` is the same with a card Patreon is still retrying. */
+    const ACTIVE: SupporterStatus = {
+      entitled: true,
+      status: "active",
+      since: 1_756_000_000,
+      groupBound: true,
+    };
+    const GRACE: SupporterStatus = { ...ACTIVE, status: "grace" };
+    /** Out of the box, and a membership that ended — the same three fields, told apart by one. */
+    const NEVER: SupporterStatus = {
+      entitled: false,
+      status: "dead",
+      since: null,
+      groupBound: false,
+    };
+    const ENDED: SupporterStatus = { ...NEVER, groupBound: true };
+
+    /** The view with a camera open and the scanner naming a card, frames going by. */
+    async function running() {
+      opens();
+      vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+      paced();
+      const view = mount();
+      await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"));
+      return view;
+    }
+
+    /** `count` more frames answered — each a render of the page, so anything owed is drawn. */
+    async function framesGoBy(count: number) {
+      const sent = vi.mocked(ipc.scannerFrame).mock.calls.length;
+      await waitFor(() =>
+        expect(vi.mocked(ipc.scannerFrame).mock.calls.length).toBeGreaterThan(sent + count),
+      );
+    }
+
+    /** Everything the view says: its text, and every name or description an element carries. */
+    function said(container: HTMLElement): string {
+      const named = Array.from(container.querySelectorAll("*")).flatMap((element) =>
+        ["aria-label", "aria-description", "title", "alt", "placeholder"].map(
+          (attribute) => element.getAttribute(attribute) ?? "",
+        ),
+      );
+      return [container.textContent ?? "", ...named].join("\n");
+    }
+    /** A word that would name what the device lacks, or point at getting it. */
+    const NAMES_A_MEMBERSHIP = /patreon|supporter|membership|\bmembers?\b|pledge|subscri|payment/i;
+
+    it.each<[string, SupporterStatus]>([
+      ["active", ACTIVE],
+      ["in its grace window", GRACE],
+    ])("draws the press for a membership that is %s", async (_, status) => {
+      const restore = shimVideo();
+      vi.mocked(ipc.syncSupporterStatus).mockResolvedValue(status);
+      try {
+        await running();
+        const press = await screen.findByRole("button", { name: "Send scan…" });
+        expect(press).toBeEnabled();
+        expect(ipc.syncSupporterStatus).toHaveBeenCalledTimes(1);
+      } finally {
+        restore();
+      }
+    });
+
+    it.each<[string, SupporterStatus]>([
+      ["has never been a supporter's", NEVER],
+      ["was a supporter's and no longer is", ENDED],
+    ])("draws no press, and not a word about it, on a device that %s", async (_, status) => {
+      const restore = shimVideo();
+      vi.mocked(ipc.syncSupporterStatus).mockResolvedValue(status);
+      try {
+        const { container } = await running();
+        expect(ipc.syncSupporterStatus).toHaveBeenCalledTimes(1);
+        // The answer has been in for several renders: this is not a press still on its way.
+        await framesGoBy(6);
+        expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
+        // Not a greyed one either, under any name; the strip's other press is untouched.
+        expect(screen.queryByRole("button", { name: /send/i })).toBeNull();
+        expect(screen.getByRole("button", { name: "Reset evidence" })).toBeEnabled();
+        // …and nothing on the view names what is missing, in text or in a label.
+        expect(said(container)).not.toMatch(NAMES_A_MEMBERSHIP);
+        expect(strip(container)).toHaveTextContent("");
+      } finally {
+        restore();
+      }
+    });
+
+    /**
+     * `unknown` is the read in flight, and it draws nothing: a press drawn before the answer
+     * would flash at the one reader the answer then takes it from.
+     */
+    it("draws no press while the membership is being read, and draws it when a supporter's answer lands", async () => {
+      const restore = shimVideo();
+      let answer!: (status: SupporterStatus) => void;
+      vi.mocked(ipc.syncSupporterStatus).mockReturnValue(
+        new Promise<SupporterStatus>((resolve) => (answer = resolve)),
+      );
+      try {
+        const { container } = await running();
+        expect(ipc.syncSupporterStatus).toHaveBeenCalledTimes(1);
+        // Asked and unanswered, with the scanner well under way.
+        await framesGoBy(6);
+        expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
+        expect(said(container)).not.toMatch(NAMES_A_MEMBERSHIP);
+
+        await act(async () => answer(ACTIVE));
+        expect(await screen.findByRole("button", { name: "Send scan…" })).toBeEnabled();
+      } finally {
+        restore();
+      }
+    });
+
+    it("draws no press when that answer is that the device is not a supporter's", async () => {
+      const restore = shimVideo();
+      let answer!: (status: SupporterStatus) => void;
+      vi.mocked(ipc.syncSupporterStatus).mockReturnValue(
+        new Promise<SupporterStatus>((resolve) => (answer = resolve)),
+      );
+      try {
+        await running();
+        await act(async () => answer(NEVER));
+        await framesGoBy(6);
+        expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
+      } finally {
+        restore();
+      }
+    });
+
+    /** A read that was refused is `unknown` too — a busy database is not a membership. */
+    it("draws no press where the membership could not be read", async () => {
+      const restore = shimVideo();
+      vi.mocked(ipc.syncSupporterStatus).mockRejectedValue(
+        "The card database is busy finishing a sync. Try that again in a moment.",
+      );
+      try {
+        const { container } = await running();
+        expect(ipc.syncSupporterStatus).toHaveBeenCalledTimes(1);
+        await framesGoBy(6);
+        expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
+        // The refusal is not drawn anywhere either: it is not this view's to explain.
+        expect(strip(container)).toHaveTextContent("");
+      } finally {
+        restore();
+      }
+    });
+  });
 });
 
 /**
@@ -1954,9 +2125,16 @@ describe("ScannerPage with a destination", () => {
     try {
       mountOver(destination);
       await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(2));
-      // A live camera and a running scanner — where the Scanner view draws *Send scan…*. Over a
-      // trade it is not offered: this page is already inside a dialog, and that press opens one.
+      // A live camera, a running scanner and a supporter's device (the file's default answer,
+      // asked and in) — where the Scanner view draws *Send scan…*. Over a trade it is not
+      // offered, to a supporter or to anyone: this page is already inside a dialog, and that
+      // press opens one.
       expect(await screen.findByRole("button", { name: "Reset evidence" })).toBeInTheDocument();
+      expect(ipc.syncSupporterStatus).toHaveBeenCalled();
+      await expect(vi.mocked(ipc.syncSupporterStatus).mock.results[0].value).resolves.toMatchObject({
+        entitled: true,
+        status: "active",
+      });
       expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
       await user.click(
         await within(theirTray()).findByRole("button", { name: "Add 5 to their side" }),

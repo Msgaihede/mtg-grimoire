@@ -1,3 +1,4 @@
+import { refused } from "./auth";
 import { allowedOrigin, preflight, withCors } from "./cors";
 import { json, type Env } from "./env";
 import { handleSubmit } from "./submit";
@@ -5,7 +6,7 @@ import { handleSubmit } from "./submit";
 /**
  * The scan Worker's entry: one route, the pre-flight in front of it and the limiter behind that.
  *
- * `POST /scan` is the whole of it (`submit.ts`). There is deliberately no second route — nothing
+ * `POST /scan` is the whole of it (`submit.ts`), behind the relay's token (`auth.ts`). There is deliberately no second route — nothing
  * lists the inbox, nothing reads a run back, nothing deletes one — because every one of those
  * would be a thing a stranger could ask of a Worker that has no way to tell a stranger from the
  * maker. `env.ts` has the rest of that argument.
@@ -53,7 +54,16 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
   if (request.method !== METHODS) {
     return json({ error: "method not allowed" }, 405, { allow: METHODS });
   }
-  return (await limited(request, env)) ?? handleSubmit(request, env, Date.now(), ctx);
+  // **The limiter, then the door, then everything about the scan.** The limiter first, because
+  // it is what a flood of requests with no token is made to cost least by; then `auth.ts`, so
+  // that nothing a stranger sends — a type, a label, a body — is so much as read; and only a
+  // supporter's request reaches the handler.
+  const now = Date.now();
+  return (
+    (await limited(request, env)) ??
+    (await refused(request, env, now)) ??
+    handleSubmit(request, env, now, ctx)
+  );
 }
 
 export default {

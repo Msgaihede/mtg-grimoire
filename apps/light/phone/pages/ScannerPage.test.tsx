@@ -57,7 +57,9 @@ import type {
   ScannerSubmission,
   ScannerTrayRow,
   ScannerVerdict,
+  SupporterStatus,
 } from "@grimoire/ui/lib/ipc";
+import { supporterState } from "@grimoire/ui/lib/query";
 import type { FakeParams } from "@grimoire/fake/world";
 import type { TrayDestination } from "@grimoire/ui/features/scanner/useTrayDestination";
 import { PhoneFace } from "../PhoneApp";
@@ -75,6 +77,13 @@ vi.setConfig({ testTimeout: 45_000 });
 const last = <T,>(items: readonly T[]): T | undefined => items[items.length - 1];
 /** The fixture tray's three rows that are not waiting on a pick — five copies. */
 const RESOLVED = TRAY_ROWS.filter((row) => row.choices.length === 0);
+/**
+ * **A supporter's world.** *Send scan…* is drawn for a supporter and for nobody else, and the
+ * fake's own `starter` world is not one — so every test that asks why the press is or is not
+ * there for a reason of its own (no camera, a Stop, a trade) is mounted in this one, where the
+ * membership would have let it be drawn. Entitled through its group, which is how a phone is.
+ */
+const SUPPORTER: FakeParams = { seed: "starter", fault: "patreonGroupEntitled" };
 
 /* ------------------------------------------------------------------ the browser's half ---- */
 
@@ -811,9 +820,30 @@ describe("sending a scan from the Scanner page", () => {
   const picture = (dialog: HTMLElement) =>
     within(dialog).getByRole("img", { name: /^Picture \d+ of \d+ that will be sent$/ });
 
+  /**
+   * The world's own answer about the membership, with each one kept: a test that says a press is
+   * or is not there *because of* the membership can then say what the membership was — in
+   * `supporterState`'s one word, the reading the page itself takes.
+   */
+  function membership(own: CommandTable, answers: SupporterStatus[]): CommandTable {
+    return {
+      sync_supporter_status: () => {
+        const answer = (own.sync_supporter_status as () => SupporterStatus)();
+        answers.push(answer);
+        return answer;
+      },
+    };
+  }
+
+  /** `count` more frames answered — each a render of the page, so anything owed is drawn. */
+  async function framesGoBy(cards: { sent: ScannerOptions[] }, count: number) {
+    const sent = cards.sent.length;
+    await waitFor(() => expect(cards.sent.length).toBeGreaterThan(sent + count), SETTLE);
+  }
+
   it("offers no Send scan… without a live picture", async () => {
     noCamera("NotAllowedError");
-    mount();
+    mount({ fake: SUPPORTER });
     expect(await screen.findByRole("alert", {}, SETTLE)).toHaveTextContent(
       "MTG Grimoire needs camera access to scan a card.",
     );
@@ -829,6 +859,7 @@ describe("sending a scan from the Scanner page", () => {
     const cards = pile(1, "looking");
     const sent: { submission: ScannerSubmission }[] = [];
     const { seen } = mount({
+      fake: SUPPORTER,
       over: (own) => ({
         scanner_frame: cards.frame,
         scanner_submit: (args: { submission: ScannerSubmission }) => {
@@ -927,6 +958,7 @@ describe("sending a scan from the Scanner page", () => {
     restoreVideo = shimVideo();
     const cards = pile(0, "looking");
     mount({
+      // A full inbox is something only a supporter can meet, so this fault's world is one's.
       fake: { seed: "starter", fault: "scanInboxFull" },
       over: () => ({ scanner_frame: cards.frame }),
     });
@@ -956,7 +988,7 @@ describe("sending a scan from the Scanner page", () => {
     camera();
     restoreVideo = shimVideo();
     const cards = pile(0, "looking");
-    mount({ over: () => ({ scanner_frame: cards.frame }) });
+    mount({ fake: SUPPORTER, over: () => ({ scanner_frame: cards.frame }) });
     const { opener } = await opened(cards);
     await userEvent.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull(), SETTLE);
@@ -972,7 +1004,7 @@ describe("sending a scan from the Scanner page", () => {
     restoreVideo = shimVideo();
     restoreFrames = numberedCanvas();
     const cards = pile(0, "looking");
-    mount({ over: () => ({ scanner_frame: cards.frame }) });
+    mount({ fake: SUPPORTER, over: () => ({ scanner_frame: cards.frame }) });
     const { dialog } = await opened(cards);
 
     const slider = within(dialog).getByRole("slider", { name: "Picture" });
@@ -995,14 +1027,17 @@ describe("sending a scan from the Scanner page", () => {
   /**
    * **No press over a trade** (the owner's decision, 2026-10-11): the Trade page mounts this page
    * in a sheet of its own, filing into one side of a trade, and *Send scan…* is the Scanner tab's.
-   * A live camera and a running scanner — everything the tab needs to draw the press — and none.
+   * A live camera, a running scanner and a supporter's device — everything the tab needs to draw
+   * the press — and none.
    */
   it("draws no Send scan… where the page is mounted over a trade", async () => {
     camera();
     restoreVideo = shimVideo();
     const cards = pile(0, "looking");
+    const answers: SupporterStatus[] = [];
     mount({
-      over: () => ({ scanner_frame: cards.frame }),
+      fake: SUPPORTER,
+      over: (own) => ({ scanner_frame: cards.frame, ...membership(own, answers) }),
       destination: {
         title: "Scanned for their side",
         name: "their side",
@@ -1014,6 +1049,10 @@ describe("sending a scan from the Scanner page", () => {
       await screen.findByRole("button", { name: "Reset evidence" }, SETTLE),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Stop scanning" })).toBeInTheDocument();
+    // The membership was asked and is a supporter's, several frames ago: it is the trade, and
+    // nothing else, that keeps the press away.
+    expect(answers.map(supporterState)).toContain("active");
+    await framesGoBy(cards, 6);
     expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
   });
 
@@ -1025,7 +1064,7 @@ describe("sending a scan from the Scanner page", () => {
     camera();
     restoreVideo = shimVideo();
     const cards = pile(0, "looking");
-    mount({ over: () => ({ scanner_frame: cards.frame }) });
+    mount({ fake: SUPPORTER, over: () => ({ scanner_frame: cards.frame }) });
     await waitFor(() => expect(cards.sent.length).toBeGreaterThan(2), SETTLE);
     expect(await screen.findByRole("button", { name: "Send scan…" }, SETTLE)).toBeInTheDocument();
 
@@ -1051,6 +1090,7 @@ describe("sending a scan from the Scanner page", () => {
     restoreVideo = shimVideo();
     const sent: unknown[] = [];
     const { view } = mount({
+      fake: SUPPORTER,
       over: () => ({
         // One frame answered, and every one after it parked: a run of one.
         scanner_frame: frames(VERDICTS.voting),
@@ -1111,6 +1151,7 @@ describe("sending a scan from the Scanner page", () => {
     const pushed: ScanFilters[] = [];
     const sent: { submission: ScannerSubmission }[] = [];
     mount({
+      fake: SUPPORTER,
       over: (own) => ({
         scanner_frame: cards.frame,
         // The mount's push is the world's to answer; the reader's is on its way for as long as
@@ -1160,6 +1201,7 @@ describe("sending a scan from the Scanner page", () => {
     const answered = frames(...Array<ScannerVerdict>(8).fill(VERDICTS.voting));
     let asked = 0;
     const { seen, view } = mount({
+      fake: SUPPORTER,
       over: () => ({
         scanner_frame: (...args: Parameters<Frame>) => {
           asked += 1;
@@ -1203,6 +1245,102 @@ describe("sending a scan from the Scanner page", () => {
     // The line goes on naming the card: this was the run's break, not the evidence's.
     expect(statusLine()).toHaveTextContent("Plains");
     expect(seen.resets).toBe(0);
+  });
+
+  /**
+   * **Only a supporter's device draws the press** (the owner's decision; the shared
+   * `useMaySendScans`) — and a device that is not one is told nothing: no greyed press, no
+   * sentence, no name for what it lacks. This is the face the build Google Play distributes
+   * draws, and that build may not lead a reader to a membership bought somewhere else.
+   *
+   * Every test below has everything else the press needs — a live camera and recognition running
+   * — so the membership is the one thing that differs between them, and each says what the world
+   * answered for it.
+   */
+  describe("for a supporter and for nobody else", () => {
+    /** The tab with a camera open and the scanner answering, the membership's answers kept. */
+    async function running(
+      fake: FakeParams | undefined,
+      supporter?: (own: CommandTable) => CommandTable,
+    ) {
+      camera();
+      restoreVideo = shimVideo();
+      const cards = pile(0, "looking");
+      const answers: SupporterStatus[] = [];
+      const { view } = mount({
+        fake,
+        over: (own) => ({
+          scanner_frame: cards.frame,
+          ...(supporter?.(own) ?? membership(own, answers)),
+        }),
+      });
+      await waitFor(() => expect(cards.sent.length).toBeGreaterThan(2), SETTLE);
+      expect(
+        await screen.findByRole("button", { name: "Reset evidence" }, SETTLE),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Stop scanning" })).toBeInTheDocument();
+      return { cards, answers, view };
+    }
+
+    /** Everything the page says: its text, and every name or description an element carries. */
+    function said(): string {
+      const named = Array.from(document.body.querySelectorAll("*")).flatMap((element) =>
+        ["aria-label", "aria-description", "title", "alt", "placeholder"].map(
+          (attribute) => element.getAttribute(attribute) ?? "",
+        ),
+      );
+      return [document.body.textContent ?? "", ...named].join("\n");
+    }
+    /** A word that would name what the device lacks, or point at getting it. */
+    const NAMES_A_MEMBERSHIP = /patreon|supporter|membership|\bmembers?\b|pledge|subscri|payment/i;
+
+    it.each<[string, FakeParams, string]>([
+      ["entitled through its group", SUPPORTER, "active"],
+      ["in its grace window", { seed: "starter", fault: "patreonDeclined" }, "grace"],
+    ])("draws the press for a membership that is %s", async (_, fake, reading) => {
+      const { answers } = await running(fake);
+      const press = await screen.findByRole("button", { name: "Send scan…" }, SETTLE);
+      expect(press).toBeEnabled();
+      expect(answers.map(supporterState)).toContain(reading);
+    });
+
+    it.each<[string, FakeParams | undefined, string]>([
+      ["has never been a supporter's", undefined, "never"],
+      ["was a supporter's and no longer is", { seed: "starter", fault: "patreonLapsed" }, "ended"],
+    ])("draws no press, and not a word about it, on a device that %s", async (_, fake, reading) => {
+      const { cards, answers } = await running(fake);
+      await waitFor(() => expect(answers.map(supporterState)).toContain(reading), SETTLE);
+      // The answer has been in for several renders: this is not a press still on its way.
+      await framesGoBy(cards, 6);
+      expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
+      // Not a greyed one either, under any name; the line's other press is untouched.
+      expect(screen.queryByRole("button", { name: /send/i })).toBeNull();
+      expect(screen.getByRole("button", { name: "Reset evidence" })).toBeEnabled();
+      // …and nothing on the page names what is missing, in text or in a label.
+      expect(said()).not.toMatch(NAMES_A_MEMBERSHIP);
+    });
+
+    /**
+     * `unknown` is the read in flight, and it draws nothing: a press drawn before the answer
+     * would flash at the one reader the answer then takes it from.
+     */
+    it("draws no press while the membership is being read, and draws it when a supporter's answer lands", async () => {
+      let answer!: () => void;
+      const { cards } = await running(SUPPORTER, (own) => ({
+        sync_supporter_status: () =>
+          new Promise<unknown>((resolve) => {
+            answer = () => resolve((own.sync_supporter_status as () => unknown)());
+          }),
+      }));
+      // Asked and unanswered, with the scanner well under way.
+      await waitFor(() => expect(answer).toBeTypeOf("function"), SETTLE);
+      await framesGoBy(cards, 6);
+      expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
+      expect(said()).not.toMatch(NAMES_A_MEMBERSHIP);
+
+      await act(async () => answer());
+      expect(await screen.findByRole("button", { name: "Send scan…" }, SETTLE)).toBeEnabled();
+    });
   });
 });
 

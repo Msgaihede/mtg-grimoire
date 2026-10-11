@@ -95,7 +95,8 @@ type Story = StoryObj<typeof meta>;
  *
  * **_Send scan…_ is not drawn here** — the status line's second press, beside *Reset evidence*,
  * stands only while a camera is live and the scanner is running: a scan is the last couple of
- * seconds of frames it was shown, and here it has been shown none. Its dialog is the desktop's
+ * seconds of frames it was shown, and here it has been shown none. (And only on a supporter's
+ * device, which this story's world is not either.) Its dialog is the desktop's
  * own and is storied there (`Scanner/Reader/Send scan dialog`); a story has no camera to open
  * one from.
  */

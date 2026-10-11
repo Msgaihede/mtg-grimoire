@@ -55,7 +55,7 @@ export interface ScanSubmit {
  * while a dialog is open, so the pictures the reader is looking through are the ones Send sends.
  *
  * Takes the loop's `recent` and `verdict` rather than the whole loop, with the page's own word
- * for whether there can be a run at all (`ready`): the press is drawn only then, and a sentence
+ * for whether the press is offered at all (`ready`): the press is drawn only then, and a sentence
  * about a press is dropped when the press goes away — *press again* over a stopped scanner, with
  * nothing there to press, would be an instruction nobody can follow.
  */
@@ -84,7 +84,12 @@ export function useScanSubmit({
    * has not answered yet, or has refused, is not what any frame of the run was judged under.
    */
   filters: ScanFilters;
-  /** There can be a run to send: a camera is live and recognition is running. */
+  /**
+   * The press is offered — the page's `sendable`: a camera is live and recognition is running,
+   * the page is not mounted over a trade, and the device may send scans (`useMaySendScans`).
+   * `false` refuses a press, and drops the sentence of one that came too soon; it does not close
+   * a dialog that is already open.
+   */
   ready: boolean;
 }): ScanSubmit {
   const [run, setRun] = useState<ScanRun | null>(null);

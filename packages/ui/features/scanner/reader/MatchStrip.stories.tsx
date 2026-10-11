@@ -76,8 +76,8 @@ export const Matching: Story = {
     await expect(status(canvasElement)).not.toContainElement(reset);
     await userEvent.click(reset);
     await expect(args.onReset).toHaveBeenCalledOnce();
-    // Send scan… stands beside it, for every reader too, and hands up the press it was given —
-    // the page keeps that for the caret.
+    // Send scan… stands beside it wherever the page hands the strip the press, and hands up the
+    // press it was given — the page keeps that for the caret.
     const send = within(canvasElement).getByRole("button", { name: "Send scan…" });
     await expect(status(canvasElement)).not.toContainElement(send);
     await userEvent.click(send);

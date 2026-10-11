@@ -15,6 +15,18 @@
 //! run or refuses: one too short to be a run is turned away in a sentence, and nothing here
 //! trims one to fit — what a reader was shown is what is sent, or nothing is.
 //!
+//! **Sending a scan is a supporter's** (the owner's decision, 2026-10-11): a device with a
+//! membership behind it — its own, or its sync group's — and nobody else. It is held three
+//! times. The page draws no press for anybody else; [`submit`] asks
+//! [`crate::sync_engine::commands::entitled`] before it reads a frame; and **the inbox asks for
+//! the relay's token**, the one sync is done with, which only a supporter's device can mint — a
+//! check made here alone would be a suggestion. The token names the device's sync group, so it
+//! is the one thing in a submission that could say who sent it: it rides in the request's
+//! `authorization` header, the inbox checks it and keeps none of it, and it is in no [`Label`].
+//! **No sentence here names a membership**: the build Google Play distributes may not lead a
+//! reader to one bought elsewhere, and its host rewords only what a `sync_` command says
+//! (`apps/light/src-tauri/src/membership.rs`).
+//!
 //! **What is sent is the run and a [`Label`], and the label says nothing of who sent it**: the
 //! printing and its finish, what the scanner had read, what it was narrowed to, the app's
 //! version and what kind of host it is on. No device id, no group, no collection. The privacy
@@ -48,17 +60,20 @@ use rusqlite::{Connection, OptionalExtension};
 
 use crate::platform::http;
 use crate::state::State;
+use crate::sync_engine::entitlement;
 
 /// The scan inbox's address. Compiled in and public on [`crate::sync_engine::entitlement::
-/// RELAY_BASE`]'s terms: the Worker's name and the account's `workers.dev` subdomain. No
-/// trailing slash.
+/// RELAY_BASE`]'s terms: a name of its own on the web app's zone, as the relay's and the share
+/// Worker's are (the owner's decision, 2026-10-11) — a Custom Domain the Worker's deploy
+/// states, so no build has ever been cut with a `workers.dev` address for it and none answers.
+/// No trailing slash.
 ///
 /// ⚠️ **Three files have to agree with it**: `infrastructure/scan-worker/wrangler.jsonc`'s
-/// `name`, the web policy's `connect-src` and the privacy policy's table of hosts. The first
+/// `routes`, the web policy's `connect-src` and the privacy policy's table of hosts. The first
 /// two each have a test that reads this line (`scan-worker`'s `wrangler.test.ts`,
 /// `app-worker`'s `hosting.test.ts`), and `apps/light/host.test.ts` holds the third to the
 /// second.
-pub const SCAN_BASE: &str = "https://mtg-grimoire-scans.denmark-east.workers.dev";
+pub const SCAN_BASE: &str = "https://scans.mtg-grimoire.app";
 
 /// A `sync_state` row that points this install at another inbox — [`crate::sync_engine::
 /// client::RELAY_URL`]'s shape, and like it a row with no UI: it is how a test asks a local
@@ -120,6 +135,17 @@ pub const TOO_SHORT: &str =
 pub const INBOX_FULL: &str = "The scan inbox is full for now. Thank you — try again in a few days.";
 pub const SLOW_DOWN: &str = "Too many scans were sent at once. Wait a minute and send it again.";
 pub const UNREACHABLE: &str = "The scan could not be sent: the server could not be reached.";
+/// What a device with no membership behind it is told, before anything about the scan. The page
+/// draws it no press, so this is the rule held a second time — and **it names no membership**,
+/// for the module's reason: the page says it as it stands, on every host.
+pub const NOT_ON: &str = "Sending scans is not turned on for this device.";
+/// The relay could not be asked for this device's token — or answered something that is neither
+/// a token nor "no". Its own sentence is not passed on: some of them name a membership.
+pub const UNCONFIRMED: &str =
+    "The scan could not be sent: the server could not confirm this device. Try again in a moment.";
+/// The inbox would not take the token: 401 or 403. A key that is not set on it, a token that
+/// died on the way, a device since removed from its group.
+pub const NOT_ACCEPTED: &str = "The scan could not be sent: the server did not accept this device.";
 
 /// What a reader says a scan shows, and what the scanner had said — the page's half of a
 /// [`Label`], mirrored as `ScannerSubmission` in `packages/ui/lib/ipc.ts`.
@@ -644,11 +670,15 @@ fn taken(body: &str) -> Result<Submitted, String> {
 /// the code and never on the inbox's own sentence, which is written for a developer. A status
 /// with no sentence of its own is named — on a native host a Worker that is not deployed answers
 /// 404, and "the server answered 404" is what says so.
-async fn send(base: &str, body: Vec<u8>, label: &Label) -> Result<Submitted, String> {
+///
+/// **`token` is the relay's, for this device** ([`token`]), sent as a bearer: it is what the
+/// inbox lets a scan in by. It is never logged, never in the label and never in a sentence.
+async fn send(base: &str, body: Vec<u8>, label: &Label, token: &str) -> Result<Submitted, String> {
     let header = ascii_json(label)?;
     let response = http()
         .post(&format!("{base}/scan"))
         .header("content-type", "application/octet-stream")
+        .header("authorization", &format!("Bearer {token}"))
         .header(LABEL_HEADER, &header)
         .bytes(body)
         .send()
@@ -659,6 +689,7 @@ async fn send(base: &str, body: Vec<u8>, label: &Label) -> Result<Submitted, Str
     let body = response.text().await.unwrap_or_default();
     match (status, code_of(&body).as_deref()) {
         (201, _) => taken(&body),
+        (401 | 403, _) => Err(NOT_ACCEPTED.to_owned()),
         (413, _) => Err(TOO_LARGE.to_owned()),
         (429, Some(RATE_LIMITED_CODE)) => Err(SLOW_DOWN.to_owned()),
         (_, Some(INBOX_FULL_CODE)) => Err(INBOX_FULL.to_owned()),
@@ -674,9 +705,17 @@ async fn send(base: &str, body: Vec<u8>, label: &Label) -> Result<Submitted, Str
 /// one indexed row and letting it go before anything is awaited; then the request. **No
 /// lease**: who holds the scanner is one question and what a reader chooses to send is another,
 /// as it is for the scanner's files.
+///
+/// **Who may send is asked first, and what is sent second**: a device with no membership behind
+/// it is told [`NOT_ON`] whatever it handed over, before a frame is decoded. Then the token —
+/// on the sync lane, as every request to the relay is made, and let go before the upload — and
+/// only then the inbox.
 pub async fn submit(state: &Arc<State>, submission: Submission) -> Result<Submitted, String> {
     let shared = Arc::clone(state);
     let (body, label, base) = crate::platform::spawn::blocking(move || -> Result<_, String> {
+        if !crate::sync_engine::commands::entitled(&shared.lock_db_read()) {
+            return Err(NOT_ON.to_owned());
+        }
         let Pictures { body, frames } = pictures(&submission.run)?;
         let conn = shared.lock_db_read();
         let label = label_for(&conn, &submission, &frames)?;
@@ -684,7 +723,27 @@ pub async fn submit(state: &Arc<State>, submission: Submission) -> Result<Submit
     })
     .await
     .map_err(|e| format!("The scan could not be sent: {e}"))??;
-    send(&base, body, &label).await
+    let token = token(state).await?;
+    send(&base, body, &label, &token).await
+}
+
+/// The relay's token for this device: the one a sync trip is made with, held while it is fresh
+/// and minted again when it is not ([`entitlement::access_token`]).
+///
+/// **On the lane, for a press** — the relay is asked one thing at a time, and a reader who
+/// presses Send during a sync is told the app is busy rather than left to wait out its trip.
+/// The lane is let go when this returns: the upload is the inbox's and holds nothing of sync's.
+///
+/// `Ok(None)` is the relay saying there is no membership — it has ended since the page drew its
+/// press — which is [`NOT_ON`]. Anything else it could not say is [`UNCONFIRMED`], in this
+/// module's words and never the relay's own.
+async fn token(state: &State) -> Result<String, String> {
+    let lane = state.lane_for_press().await?;
+    match entitlement::access_token(&lane).await {
+        Ok(Some(token)) => Ok(token),
+        Ok(None) => Err(NOT_ON.to_owned()),
+        Err(_) => Err(UNCONFIRMED.to_owned()),
+    }
 }
 
 #[cfg(test)]
@@ -743,8 +802,19 @@ mod tests {
         }
     }
 
-    /// A state on files with one printing in it, made in nonfoil and foil.
+    /// The token a [`seeded`] supporter holds: fresh, so nothing asks the relay for another.
+    const HELD: &str = "a-held-access-token";
+
+    /// A state on files with one printing in it, made in nonfoil and foil — **a supporter's**:
+    /// the device that connected, holding a token good for another day.
     fn seeded(name: &str) -> Arc<State> {
+        let state = unconnected(name);
+        connect(&state, 86_400);
+        state
+    }
+
+    /// The same state with no membership behind it: a device that never connected.
+    fn unconnected(name: &str) -> Arc<State> {
         let (state, _dir) = crate::state::fixtures::on_files(name, "http://127.0.0.1:1");
         {
             let conn = state.lock_db();
@@ -756,6 +826,16 @@ mod tests {
             .expect("the printing's finishes");
         }
         state
+    }
+
+    /// Give `state` a grant whose token dies `good_for` seconds from now — in the past, for one
+    /// the relay would have to be asked to replace.
+    fn connect(state: &State, good_for: i64) {
+        let conn = state.lock_db();
+        let now: i64 = conn
+            .query_row("SELECT unixepoch()", [], |row| row.get(0))
+            .expect("the clock");
+        entitlement::store_grant(&conn, HELD, "a-refresh-secret", now + good_for).expect("a grant");
     }
 
     fn labelled(state: &State, submission: &Submission) -> Result<Label, String> {
@@ -1319,6 +1399,8 @@ mod tests {
             when.method(POST)
                 .path("/scan")
                 .header("content-type", "application/octet-stream")
+                // The relay's token for this device, which is what the inbox lets a scan in by.
+                .header("authorization", format!("Bearer {HELD}").as_str())
                 .header(LABEL_HEADER, header.as_str())
                 // The frames byte for byte and nothing between them: nothing wraps a frame and
                 // nothing re-encodes one.
@@ -1365,7 +1447,7 @@ mod tests {
             when.method(POST).path("/scan");
             then.status(status).body(body);
         });
-        send(&inbox.base_url(), TINY_JPEG.to_vec(), &written())
+        send(&inbox.base_url(), TINY_JPEG.to_vec(), &written(), HELD)
             .await
             .expect_err("a refusal")
     }
@@ -1376,6 +1458,9 @@ mod tests {
             told(413, r#"{"error":"…","code":"run_limit"}"#).await,
             TOO_LARGE
         );
+        // The inbox would not take this device's token, with or without a word about why.
+        assert_eq!(told(401, r#"{"error":"unauthorized"}"#).await, NOT_ACCEPTED);
+        assert_eq!(told(403, "").await, NOT_ACCEPTED);
         assert_eq!(
             told(429, r#"{"error":"…","code":"rate_limited"}"#).await,
             SLOW_DOWN
@@ -1414,9 +1499,108 @@ mod tests {
         assert_eq!(told(201, r#"{"id":"<b>hello</b>"}"#).await, unread);
     }
 
+    /// **Sending a scan is a supporter's**, held in the engine: a device with no membership
+    /// behind it is refused before a frame is read, whatever it handed over, and neither the
+    /// relay nor the inbox hears of it.
+    #[tokio::test]
+    async fn a_device_with_no_membership_behind_it_sends_nothing() {
+        let inbox = httpmock::MockServer::start();
+        let state = unconnected("submit-unconnected");
+        crate::sync_engine::client::set_state(&state.lock_db(), SCAN_URL, &inbox.base_url())
+            .expect("the override");
+        let asked = inbox.mock(|when, then| {
+            when.any_request();
+            then.status(201).body(r#"{"id":"x"}"#);
+        });
+
+        let whole = submit(&state, submission("c-bolt", "foil")).await;
+        assert_eq!(whole.unwrap_err(), NOT_ON);
+        // Who may send is asked before what is sent: one picture, from this device, is told
+        // about the device.
+        let mut single = submission("c-bolt", "foil");
+        single.run.truncate(1);
+        assert_eq!(submit(&state, single).await.unwrap_err(), NOT_ON);
+        asked.assert_calls(0);
+
+        // And a membership that has ended is no membership: the status the relay last gave.
+        entitlement::store_status(&state.lock_db(), "dead", None).expect("the status");
+        let ended = submit(&state, submission("c-bolt", "foil")).await;
+        assert_eq!(ended.unwrap_err(), NOT_ON);
+        asked.assert_calls(0);
+    }
+
+    /// A supporter through its **group** — a phone paired to the device that connected — holds
+    /// no secret of its own and sends all the same: the status is the signal.
+    #[tokio::test]
+    async fn a_device_entitled_through_its_group_is_let_past_the_first_check() {
+        let state = unconnected("submit-group");
+        entitlement::store_status(&state.lock_db(), "active", None).expect("the status");
+        // Past `entitled`, and stopped at the token: this state is in no group, so there is
+        // nothing to mint one with — which the relay's own module calls sync being off.
+        let refused = submit(&state, submission("c-bolt", "foil")).await;
+        assert_eq!(refused.unwrap_err(), NOT_ON);
+        // A card Patreon is still retrying is a membership that has not ended.
+        entitlement::store_status(&state.lock_db(), "grace", None).expect("the status");
+        assert!(crate::sync_engine::commands::entitled(
+            &state.lock_db_read()
+        ));
+    }
+
+    /// A token that has to be minted again and a relay that cannot be reached: the scan is not
+    /// sent, the inbox is not asked, and the sentence is this module's own.
+    #[tokio::test]
+    async fn a_token_the_relay_cannot_be_asked_for_stops_the_scan_before_the_inbox() {
+        let inbox = httpmock::MockServer::start();
+        let state = unconnected("submit-unconfirmed");
+        // Dead a minute ago, so the refresh door is asked — at a relay that is not there.
+        connect(&state, -60);
+        {
+            let conn = state.lock_db();
+            crate::sync_engine::client::set_state(&conn, SCAN_URL, &inbox.base_url())
+                .expect("the override");
+            crate::sync_engine::client::set_state(
+                &conn,
+                crate::sync_engine::client::RELAY_URL,
+                "http://127.0.0.1:1",
+            )
+            .expect("the relay's override");
+        }
+        let asked = inbox.mock(|when, then| {
+            when.any_request();
+            then.status(201).body(r#"{"id":"x"}"#);
+        });
+        let refused = submit(&state, submission("c-bolt", "foil")).await;
+        assert_eq!(refused.unwrap_err(), UNCONFIRMED);
+        asked.assert_calls(0);
+    }
+
+    /// **No sentence of this module names a membership.** The page says each as it stands on
+    /// every host, and the build Google Play distributes may not lead a reader to a membership
+    /// bought elsewhere; its host rewords only what a `sync_` command says, and this is not one.
+    #[test]
+    fn no_sentence_a_reader_is_shown_names_a_membership() {
+        for sentence in [
+            NO_SUCH_PRINTING,
+            NOT_A_PICTURE,
+            TOO_LARGE,
+            TOO_SHORT,
+            INBOX_FULL,
+            SLOW_DOWN,
+            UNREACHABLE,
+            NOT_ON,
+            UNCONFIRMED,
+            NOT_ACCEPTED,
+        ] {
+            let said = sentence.to_lowercase();
+            for word in ["patreon", "membership", "supporter", "pledge", "subscri"] {
+                assert!(!said.contains(word), "{sentence}");
+            }
+        }
+    }
+
     #[tokio::test]
     async fn an_inbox_that_cannot_be_reached_is_said_in_one_sentence() {
-        let refused = send("http://127.0.0.1:1", TINY_JPEG.to_vec(), &written()).await;
+        let refused = send("http://127.0.0.1:1", TINY_JPEG.to_vec(), &written(), HELD).await;
         assert_eq!(refused.unwrap_err(), UNREACHABLE);
     }
 }

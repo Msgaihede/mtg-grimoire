@@ -31,8 +31,11 @@
 //  10. on its side at 800×360 the camera's column and the tray's stand side by side, with nothing
 //      off the screen, no control under 44px and Add under a thumb;
 //  11. with the camera refused the page lands on its sentence;
-//  12. *Send scan…* sends a run of frames and never one picture: stopped, the press is not
-//      drawn; over a running scanner it stands beside *Reset evidence* and leaves the match bar
+//  12. *Send scan…* is a supporter's, and sends a run of frames and never one picture: on a
+//      device with no membership behind it the press is not drawn over a running scanner and
+//      nothing on the page names one; on a supporter's (`?fault=patreonGroupEntitled`), stopped,
+//      the press is not drawn;
+//      over a running scanner it stands beside *Reset evidence* and leaves the match bar
 //      room; pressed before the scanner has answered enough frames it opens nothing and says
 //      so; then its dialog holds the last frames the scanner was given — each drawn from the
 //      very text it will send, the last one showing, a slider and a *Play* through them — with
@@ -680,6 +683,44 @@ async function phone(send: Send, width: number, height: number) {
   // is no press at all; started, a press before the scanner has answered enough frames opens
   // nothing and says why; and once it has, the dialog holds exactly those frames — every one of
   // them drawn from the text that is sent — and Send sends them all, in one call.
+  //
+  // **And it is a supporter's, and nobody else's.** The device that has scanned through the
+  // steps above has no membership behind it. Started again, and answered more frames than a
+  // run needs, it is offered no press and told nothing about one — no greyed button, no
+  // sentence — which is what the Play build's face owes its reader.
+  await page.evaluate(`(async () => {
+    const core = await import('${FS}packages/fake/core.ts');
+    const { activeScope } = await import('${FS}packages/fake/scope.ts');
+    const own = activeScope().commands;
+    window.answered = 0;
+    core.registerCommands({
+      scanner_frame: async (bytes, options) => {
+        const answer = await own.scanner_frame(bytes, options);
+        window.answered += 1;
+        return answer;
+      },
+    });
+    return true;
+  })()`);
+  await page.evaluate(`smoke.press(smoke.button('Start scanning'), 'Start scanning')`);
+  await page.until(`window.answered >= 8`, "a device with no membership to scan on", 30_000);
+  const stranger = await page.evaluate<{ sends: string[]; said: boolean }>(`(() => {
+    const main = document.querySelector('main');
+    return {
+      sends: smoke.controls().map(smoke.named).filter((name) => /send/i.test(name)),
+      said: /patreon|supporter|membership|pledge|subscri/i.test(main.textContent),
+    };
+  })()`);
+  if (stranger.sends.length > 0)
+    fail(`${at}: a device that is not a supporter's is offered ${JSON.stringify(stranger.sends)}`);
+  if (stranger.said) fail(`${at}: the Scanner page names a membership to a device without one`);
+  // The rest is a supporter's device: the same page, in the world where the relay knows it.
+  await page.go("/scanner?fault=patreonGroupEntitled");
+  await page.until(`${TRACK}?.readyState === 'live'`, "a supporter's camera");
+  await page.until(`smoke.button('Stop scanning') !== undefined`, "a supporter's scanner to run");
+  await page.evaluate(`smoke.press(smoke.button('Stop scanning'), 'Stop scanning')`);
+  await page.until(`smoke.button('Start scanning') !== undefined`, "the scanner to stop");
+  await sleep(400);
   const idle = await page.evaluate<{ press: boolean; live: string | undefined }>(
     `({ press: smoke.button('Send scan…') !== undefined, live: ${TRACK}?.readyState })`,
   );
@@ -1034,7 +1075,7 @@ async function phone(send: Send, width: number, height: number) {
   if (back.sent !== 1) fail(`${at}: ${back.sent} scans were sent`);
   const span = -scan.frames[0].ms;
   say(
-    `${at}: Send scan — no press while stopped, a press too soon says so and opens nothing; then ${opened.pictures} ${opened.size} pictures over ${(span / 1000).toFixed(1)}s, ${Math.round(opened.bytes / 1024)} kB, every one a frame the scanner was given and drawn from the text that is sent; a slider and a Play through them, nothing chosen for the reader; a printing, its finishes brought into view, Foil, one scanner_submit with all of them, a reference, and the caret back on the press`,
+    `${at}: Send scan — no press and no word of one on a device that is not a supporter's; on one that is, no press while stopped, a press too soon says so and opens nothing; then ${opened.pictures} ${opened.size} pictures over ${(span / 1000).toFixed(1)}s, ${Math.round(opened.bytes / 1024)} kB, every one a frame the scanner was given and drawn from the text that is sent; a slider and a Play through them, nothing chosen for the reader; a printing, its finishes brought into view, Foil, one scanner_submit with all of them, a reference, and the caret back on the press`,
   );
 
   const thrown = await page.evaluate<string[]>(`window.thrown`);

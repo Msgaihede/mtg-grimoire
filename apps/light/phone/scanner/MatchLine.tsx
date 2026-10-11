@@ -55,8 +55,11 @@ export function MatchLine({
   onReset: () => void;
   /**
    * *Send scan…* — the desktop strip's press and its rule: handed the press for the caret, and
-   * **absent where there can be no run to send — no live camera, or recognition stopped — which
-   * draws no button**.
+   * **absent where the page does not offer it, which draws no button**. The page's three
+   * conditions (its `sendable`): there can be a run to send — a live camera and recognition
+   * running; the page is the Scanner tab itself, not mounted over a trade; and the device is a
+   * supporter's. Of the third nothing is said, here or on the page — no greyed press, no hint:
+   * this line is handed a press or it is not, and knows nothing of why.
    */
   onSend?: (opener: HTMLElement) => void;
 }) {

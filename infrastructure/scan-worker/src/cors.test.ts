@@ -24,9 +24,11 @@ function asking(origin: string, path = "/scan"): Request {
     origin,
     labelText: null,
     type: null,
+    // A pre-flight carries no credentials: a browser sends it before it will send the token.
+    token: null,
     headers: {
       "access-control-request-method": "POST",
-      "access-control-request-headers": "content-type,x-scan-label",
+      "access-control-request-headers": "authorization,content-type,x-scan-label",
     },
   });
 }
@@ -41,9 +43,11 @@ describe("a pre-flight", () => {
     expect(response.status).toBe(204);
     expect(response.headers.get("access-control-allow-origin")).toBe(APP);
     expect(response.headers.get("access-control-allow-methods")).toBe("POST");
-    // The two headers the engine sets, and no third: a header it started sending and this did
-    // not name would fail every submission from a browser and none from anywhere else.
-    expect(response.headers.get("access-control-allow-headers")).toBe("content-type, x-scan-label");
+    // The three headers the engine sets, and no fourth: a header it started sending and this
+    // did not name would fail every submission from a browser and none from anywhere else.
+    expect(response.headers.get("access-control-allow-headers")).toBe(
+      "authorization, content-type, x-scan-label",
+    );
     expect(response.headers.get("vary")).toBe("Origin");
     expect(await response.text()).toBe("");
     // A browser sends one unprompted; charging it to the sender's budget would halve the limit
@@ -73,7 +77,13 @@ describe("a pre-flight", () => {
 
   it("is an OPTIONS only when it says which method it is asking about", async () => {
     const box = inbox();
-    const bare = scan({ method: "OPTIONS", origin: APP, labelText: null, type: null });
+    const bare = scan({
+      method: "OPTIONS",
+      origin: APP,
+      labelText: null,
+      type: null,
+      token: null,
+    });
     const response = await worker.fetch(bare, box.env);
     expect(response.status).toBe(405);
     // Still readable by the page that asked: the header goes on every answer to it.
@@ -100,6 +110,9 @@ describe("an answer to a page", () => {
       [415, await worker.fetch(scan({ origin: APP, type: "image/png" }), inbox().env)],
       [400, await worker.fetch(scan({ origin: APP, labelText: null }), inbox().env)],
       [405, await worker.fetch(scan({ origin: APP, method: "GET" }), inbox().env)],
+      // The door's two: a page whose device is not a supporter's, and a Worker with no key.
+      [401, await worker.fetch(scan({ origin: APP, token: null }), inbox().env)],
+      [500, await worker.fetch(scan({ origin: APP }), inbox({ key: null }).env)],
     ];
     for (const [status, response] of refusals) {
       expect(response.status).toBe(status);

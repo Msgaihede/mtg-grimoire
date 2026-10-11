@@ -13,6 +13,7 @@ import {
   frameOptions,
 } from "@grimoire/ui/features/scanner/scannerOptions";
 import { SubmitScanDialog } from "@grimoire/ui/features/scanner/submit/SubmitScanDialog";
+import { useMaySendScans } from "@grimoire/ui/features/scanner/submit/useMaySendScans";
 import { useScanSubmit } from "@grimoire/ui/features/scanner/submit/useScanSubmit";
 import { useCamera, useCameraDevices } from "@grimoire/ui/features/scanner/useCamera";
 import { usePageParked } from "@grimoire/ui/features/scanner/useParked";
@@ -247,9 +248,15 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   // **And only on the Scanner tab itself — never over a trade** (the owner's decision,
   // 2026-10-11): with a `destination` this page is already a sheet, and its reader is in the
   // middle of something else.
+  // **And only for a supporter** (the owner's decision; the shared `useMaySendScans`) — the
+  // third condition, and the one with no sentence anywhere: a device that is not a supporter's,
+  // or whose membership has not been read yet, sees no press and not a word about why. This is
+  // the face the Play build draws, which may not lead a reader to a membership bought elsewhere,
+  // so nothing here hints at one. A lapse while the dialog is open is the engine's to refuse.
   // **The filters it says are the ones in force** (`inForce`), not the ones the sheet is drawing:
   // `prefs.filters` moves before the session has taken a change, and goes back if it is refused.
-  const sendable = destination === undefined && camera.kind === "live" && scanning;
+  const maySend = useMaySendScans();
+  const sendable = destination === undefined && maySend && camera.kind === "live" && scanning;
   const submit = useScanSubmit({
     recent: loop.recent,
     verdict: loop.verdict,
@@ -331,8 +338,9 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
                 hasBundle={hasBundle}
                 lastResolution={loop.lastResolution}
                 onReset={onReset}
-                // Offered only while there can be a run to send, as on the desktop — see
-                // `sendable`. With no camera live, or stopped, the box above is saying why not.
+                // Offered only where `sendable` says, as on the desktop: a run to send, the
+                // Scanner tab itself, and a supporter's device. With no camera live, or stopped,
+                // the box above is saying why not; of the membership nothing is said at all.
                 onSend={sendable ? submit.open : undefined}
               />
             )}

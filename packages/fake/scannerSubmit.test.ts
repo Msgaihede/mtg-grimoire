@@ -4,9 +4,10 @@
  * and the card a reader says they show to the scan inbox.
  *
  * The fake has no inbox and sends nothing anywhere, so what is held here is the little a story
- * leans on: that a Send is answered with a reference shaped like the inbox's, that one picture
- * is not a scan here either, that the one refusal a story cannot produce by what it sends has a
- * fault, and that the sentences it refuses in are the engine's.
+ * leans on: that a supporter's Send is answered with a reference shaped like the inbox's, that
+ * nobody else's is taken, that one picture is not a scan here either, that the one refusal a
+ * story cannot produce by what it sends has a fault, and that the sentences it refuses in are
+ * the engine's.
  */
 import { describe, expect, it } from "vitest";
 import type { ScannerSubmission } from "@grimoire/ui/lib/ipc";
@@ -14,9 +15,13 @@ import {
   FAKE_SCAN_ID,
   SCAN_INBOX_FULL,
   SCAN_MIN_FRAMES,
+  SCAN_NOT_ON,
   SCAN_TOO_SHORT,
+  applySupporterFault,
   makeDb,
   scannerHandlers,
+  type FakeDb,
+  type Fault,
 } from "./db";
 import scannerSubmitRs from "../../crates/grimoire-core/src/scanner_submit.rs?raw";
 
@@ -53,12 +58,39 @@ function sentence(name: string): string {
   return found;
 }
 
+/** A world as `installWorld` stands one up: the fault's own rows written. */
+function world(fault: Fault | null): FakeDb {
+  const db = makeDb();
+  db.fault = fault;
+  applySupporterFault(db);
+  return db;
+}
+
+/** A supporter's world — through its group, which is how a phone is one. */
+const supporter = (): FakeDb => world("patreonGroupEntitled");
+
 describe("the fake's scan inbox", () => {
-  it("takes a scan and answers a reference", () => {
-    expect(scannerHandlers(makeDb()).scanner_submit(scan(SCAN_MIN_FRAMES))).toEqual({
+  it("takes a supporter's scan and answers a reference", () => {
+    expect(scannerHandlers(supporter()).scanner_submit(scan(SCAN_MIN_FRAMES))).toEqual({
       id: FAKE_SCAN_ID,
     });
-    expect(scannerHandlers(makeDb()).scanner_submit(scan(20))).toEqual({ id: FAKE_SCAN_ID });
+    expect(scannerHandlers(supporter()).scanner_submit(scan(20))).toEqual({ id: FAKE_SCAN_ID });
+    // A card Patreon is still retrying is a membership that has not ended.
+    expect(scannerHandlers(world("patreonDeclined")).scanner_submit(scan(20))).toEqual({
+      id: FAKE_SCAN_ID,
+    });
+  });
+
+  it("takes nobody else's, in the engine's sentence, before anything about the scan", () => {
+    // Never connected, and a membership that has ended: neither is let as far as the inbox —
+    // and a scan of one picture from either is told about the membership, not about the scan.
+    for (const db of [makeDb(), world("patreonLapsed")]) {
+      expect(() => scannerHandlers(db).scanner_submit(scan(20))).toThrow(SCAN_NOT_ON);
+      expect(() => scannerHandlers(db).scanner_submit(scan(1))).toThrow(SCAN_NOT_ON);
+    }
+    expect(SCAN_NOT_ON).toBe(sentence("NOT_ON"));
+    // The build Google Play distributes may not lead a reader to a membership bought elsewhere.
+    expect(SCAN_NOT_ON).not.toMatch(/patreon|membership|supporter|pledge|subscri/i);
   });
 
   it("answers a reference in the shape the inbox mints one in", () => {
@@ -71,9 +103,10 @@ describe("the fake's scan inbox", () => {
     // The feature's rule — all the frames or nothing, never a single screenshot — held where a
     // story and the phone's smoke run would meet it.
     for (let frames = 0; frames < SCAN_MIN_FRAMES; frames += 1) {
-      expect(() => scannerHandlers(makeDb()).scanner_submit(scan(frames)), String(frames)).toThrow(
-        SCAN_TOO_SHORT,
-      );
+      expect(
+        () => scannerHandlers(supporter()).scanner_submit(scan(frames)),
+        String(frames),
+      ).toThrow(SCAN_TOO_SHORT);
     }
     // The fake cannot import the engine's constants, so it spells them again; read as text, the
     // way `qr.test.ts` reads `RELAY_BASE`.
@@ -84,8 +117,8 @@ describe("the fake's scan inbox", () => {
   });
 
   it("refuses under `scanInboxFull`, in the engine's sentence", () => {
-    const db = makeDb();
-    db.fault = "scanInboxFull";
+    // The fault's world is a supporter's: nobody else is let as far as a full inbox.
+    const db = world("scanInboxFull");
     expect(() => scannerHandlers(db).scanner_submit(scan(SCAN_MIN_FRAMES))).toThrow(
       SCAN_INBOX_FULL,
     );
