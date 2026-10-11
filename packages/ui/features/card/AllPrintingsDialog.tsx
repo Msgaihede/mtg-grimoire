@@ -122,7 +122,7 @@ import {
   treatmentOptions,
   type PrintingFilter,
 } from "./printingFilters";
-import { buildPrintingGroups, cheapestPrice, printingTarget } from "./printings";
+import { buildPrintingGroups, cheapestPrice, printingTarget, rowHasBackFace } from "./printings";
 import { PrintingsFilterBar } from "./PrintingsFilterBar";
 import { ownsArrowKeys } from "./arrowKeys";
 import { StepChevron } from "./StepChevron";
@@ -981,12 +981,17 @@ function Body({
   );
   // A thunk per tile, and the items inside it are built on the right-click rather than on the
   // render — a wall of a thousand printings must not build a thousand menus to be scrolled past.
+  //
+  // `flip` is the wall's word that the tile turns over (issue #844), so the menu offers
+  // "Flip card".
   const cardMenu = useCallback(
-    (row: PrintingRow) => menu(() => buildCardMenu(printingTarget(row, cardFacts), menuDeps)),
+    (row: PrintingRow, _picked?: readonly PrintingRow[], flip = false) =>
+      menu(() => buildCardMenu({ ...printingTarget(row, cardFacts), flip }, menuDeps)),
     [menu, cardFacts, menuDeps],
   );
   const cardMenuKey = useCallback(
-    (row: PrintingRow) => menuKey(() => buildCardMenu(printingTarget(row, cardFacts), menuDeps)),
+    (row: PrintingRow, _picked?: readonly PrintingRow[], flip = false) =>
+      menuKey(() => buildCardMenu({ ...printingTarget(row, cardFacts), flip }, menuDeps)),
     [menuKey, cardFacts, menuDeps],
   );
 
@@ -1177,6 +1182,9 @@ function Body({
             money={(row) => formatPrice(cheapestPrice(row.finishPrices), marketplace.currency)}
             cardMenu={cardMenu}
             cardMenuKey={cardMenuKey}
+            // A two-sided printing turns over from its tile (issue #844) — a wall of one card's
+            // printings is where a reader compares backs as often as fronts.
+            flips={rowHasBackFace}
           />
 
           {/* **Spec §5: a price is never shown without saying how old it is** — and this wall is

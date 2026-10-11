@@ -18,6 +18,13 @@ that says so and still answers from the oracle side. (How and when they are fetc
 - The deckbuilder's own coloured per-card mark is a **label** — `deck_labels`,
   `deck_cards.label_id`, the `Labels` dialog.
 - The collection's free-text `tags` column is a third thing again.
+- **A _deck tag_ is that third thing one level up, and the only "tag" a reader types about a
+  deck**: `decks.tags` at user schema v62 (issue #834) — `No Gamechangers`, `Budget`, `Meme` —
+  a JSON array of plain text on the deck's own row, edited in Deck settings and drawn in a row
+  on the gallery tile. It has no table, no colour and no card: the suggestions the field offers
+  are the tags decks currently wear, read off `deck_list`. Say **deck tag** in prose, never a
+  bare "tag", and never "label" — a deck _label_ marks one card inside a deck, a deck _tag_
+  describes the whole deck, and the two are edited a dialog apart.
 - **A _keyword_ is a fourth, and it is the one most likely to be miscalled a tag**:
   `cards.keywords` at corpus schema 5 holds the card's own **keyword abilities** — `flying`,
   `vigilance` — which is what the search box's `kw:` asks about, and it is a fact Scryfall ships

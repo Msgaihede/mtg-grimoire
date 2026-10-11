@@ -30,7 +30,7 @@
  * A host that hands no `folders` draws no selector and lands every row at the root, which is the
  * light app's phone face: it has no folder tree to choose from.
  */
-import { useMemo, useRef, useState, type JSX } from "react";
+import { useId, useMemo, useRef, useState, type JSX } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import type { DropdownOption } from "@/components/Dropdown/types";
@@ -54,6 +54,9 @@ import type { ImportDefaults } from "../../prefs";
 import { CommitBar, useImportCommit } from "../shared/CommitBar";
 import { ModeRadios } from "../shared/ModeRadios";
 import { ImportProblems } from "../shared/Problems";
+import { useImport } from "../useImport";
+import { BinderSort, binderDoneMessage } from "./BinderSort";
+import { hasBinders, planBinderImport } from "./binders";
 import { planCollectionImport, type CollectionPlan } from "./collection";
 import { ProblemList } from "./DeckPreviewBody";
 
@@ -134,6 +137,7 @@ export interface ImportDefaultsProps {
 export function CollectionPreviewBody({
   list,
   resolved,
+  tags,
   onDone,
   onBack,
   defaults,
@@ -141,12 +145,26 @@ export function CollectionPreviewBody({
   folders,
   initialFolderId = null,
 }: DestinationPreviewProps & ImportDefaultsProps & ImportFolderProps): JSX.Element {
+  const id = useId();
   const [mode, setMode] = useState("add");
 
   const plan = useMemo(
     () => planCollectionImport(list, resolved, defaults),
     [list, resolved, defaults],
   );
+
+  // A ManaBox export names the binder every row is in (issue #873), and is then offered sorted:
+  // folders and decks by binder, rather than the whole file into one place. `binderPlan` is
+  // `null` for every file that names none — which is every file but that one — and the step below
+  // is then exactly the step it always was. Planned over the same `resolved` rows and the same
+  // defaults as `plan`, so the copies the list promises are the copies the groups write.
+  const binderPlan = useMemo(
+    () => (hasBinders(list) ? planBinderImport(list, resolved, tags, defaults) : null),
+    [list, resolved, tags, defaults],
+  );
+  const [byBinder, setByBinder] = useState(true);
+  const sorting = binderPlan !== null && byBinder;
+  const { importBinders } = useImport();
 
   /**
    * The reader's own drawers, top to bottom in the order the wall draws them, each labelled with
@@ -226,7 +244,12 @@ export function CollectionPreviewBody({
     // folder not made yet**: there is no id to ask about and nothing to ask — an empty folder set
     // to the file's numbers is the file added, which is the sentence `add` draws.
     enabled:
-      mode === "set" && !making && plan.items.length > 0 && !commit.isPending && !commit.isSuccess,
+      !sorting &&
+      mode === "set" &&
+      !making &&
+      plan.items.length > 0 &&
+      !commit.isPending &&
+      !commit.isSuccess,
     // A refused dry run is said once and the reader can still press Import; retrying it three
     // times with backoff would hold "Counting…" on screen for seconds to say the same thing.
     retry: false,
@@ -234,6 +257,16 @@ export function CollectionPreviewBody({
 
   const runImport = () => {
     if (plan.items.length === 0) return;
+    if (sorting) {
+      // No undo offer: the press is one write per binder, each with a ticket of its own, and
+      // offering the last of them would take back one folder and say it took back the file.
+      // A deck it made is undone the way any deck is — deleting it sends its copies to
+      // `Recently removed`.
+      importBinders.mutate(binderPlan.groups, {
+        onSuccess: (result) => onDone(binderDoneMessage(result)),
+      });
+      return;
+    }
     commit.mutate(undefined, {
       onSuccess: (outcome) => {
         // `?? null`: an outcome from a build (or a test double) that predates the ticket carries
@@ -275,8 +308,10 @@ export function CollectionPreviewBody({
       className="flex min-h-0 flex-1 flex-col"
     >
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
-        {/* First, because the sentence under it names its answer. */}
-        {folders !== undefined && (
+        {/* First, because the sentence under it names its answer. Not while sorting by binder:
+            the binders say where every card goes, so a single destination would be a question
+            the press does not ask. */}
+        {folders !== undefined && !sorting && (
           <div className="flex flex-wrap items-center gap-2 text-sm">
             {/* `Default condition`'s labelling, below, for its reason. */}
             <label id="collection-import-folder-label" htmlFor="collection-import-folder">
@@ -313,15 +348,12 @@ export function CollectionPreviewBody({
           </div>
         )}
 
-        {mode === "set" && !making ? (
-          <SetSummary
-            cardCount={plan.items.length}
-            outcome={dryRun.data}
-            error={dryRun.error}
-          />
+        {/* A sorted press is always `add`, whatever the hidden radios last said. */}
+        {!sorting && mode === "set" && !making ? (
+          <SetSummary cardCount={plan.items.length} outcome={dryRun.data} error={dryRun.error} />
         ) : (
           <p className="text-sm">
-            {cards(plan.totalCards)} will be added to {where}.
+            {cards(plan.totalCards)} will be added to {sorting ? "your collection" : where}.
           </p>
         )}
 
@@ -369,14 +401,36 @@ export function CollectionPreviewBody({
           </div>
         </div>
 
-        <ModeRadios
-          modes={intoFolder ? FOLDER_MODES : COLLECTION_MODES}
-          value={mode}
-          onChange={setMode}
-          label="How to apply this file"
-        />
+        {binderPlan !== null && (
+          <BinderSort
+            plan={binderPlan}
+            checked={byBinder}
+            onChange={setByBinder}
+            id={`${id}-binders`}
+          />
+        )}
 
-        <CollectionProblems plan={plan} />
+        {/* No radios while sorting: the sorted press is always `add`. A `set` counts every
+            folder's copies toward the file's number, so run once per binder it would have each
+            group rewrite what the others had just written — `importBinderGroups` says so too. */}
+        {!sorting && (
+          <ModeRadios
+            modes={intoFolder ? FOLDER_MODES : COLLECTION_MODES}
+            value={mode}
+            onChange={setMode}
+            label="How to apply this file"
+          />
+        )}
+
+        {/* While sorting, the merges listed are the binders' own: the whole-file plan merges
+            copies across binders, which the sorted press never does. */}
+        <CollectionProblems
+          plan={
+            sorting
+              ? { ...plan, folded: binderPlan.folded, droppedPrices: binderPlan.droppedPrices }
+              : plan
+          }
+        />
 
         <ImportProblems
           unmatched={plan.unmatched}
@@ -388,18 +442,21 @@ export function CollectionPreviewBody({
       <CommitBar
         label="Import"
         pendingLabel="Importing…"
-        pending={commit.isPending}
+        pending={sorting ? importBinders.isPending : commit.isPending}
         // A new folder with no name is not a folder yet: the backend would refuse it in words, and
         // a button whose only outcome is that sentence teaches nothing its greying does not.
-        disabled={plan.items.length === 0 || (making && newName.trim() === "")}
-        message={
-          commit.error === null ? "" : `Couldn't import the list — ${ipcError(commit.error)}`
-        }
-        failed={commit.error !== null}
+        disabled={plan.items.length === 0 || (!sorting && making && newName.trim() === "")}
+        message={commitMessage(sorting ? importBinders.error : commit.error)}
+        failed={(sorting ? importBinders.error : commit.error) !== null}
         onBack={onBack}
       />
     </form>
   );
+}
+
+/** The commit bar's sentence for whichever press the step is making — empty until one fails. */
+function commitMessage(error: Error | null): string {
+  return error === null ? "" : `Couldn't import the list — ${ipcError(error)}`;
 }
 
 /**
@@ -428,9 +485,7 @@ function SetSummary({
     return (
       <div className="space-y-1">
         <p className="text-sm">Updates quantities for {cards(cardCount)}.</p>
-        <p className="text-xs text-dim">
-          Couldn&apos;t preview changes — {ipcError(error)}
-        </p>
+        <p className="text-xs text-dim">Couldn&apos;t preview changes — {ipcError(error)}</p>
       </div>
     );
   }
@@ -539,9 +594,7 @@ function CollectionProblems({ plan }: { plan: CollectionPlan }): JSX.Element {
       {plan.unknownLanguages.length > 0 && (
         <ProblemList
           caption={`${plural(plan.unknownLanguages.length, "line")} had an unknown language and ${verb(plan.unknownLanguages.length, "was", "were")} matched without it`}
-          lines={plan.unknownLanguages.map(
-            (u) => `line ${u.lineNumber} · ${u.name} — "${u.said}"`,
-          )}
+          lines={plan.unknownLanguages.map((u) => `line ${u.lineNumber} · ${u.name} — "${u.said}"`)}
         />
       )}
 
@@ -564,9 +617,7 @@ function CollectionProblems({ plan }: { plan: CollectionPlan }): JSX.Element {
       {plan.unreadablePrices.length > 0 && (
         <ProblemList
           caption={`${plural(plan.unreadablePrices.length, "line")} had an unreadable purchase price, and will be added without one`}
-          lines={plan.unreadablePrices.map(
-            (u) => `line ${u.lineNumber} · ${u.name} — "${u.said}"`,
-          )}
+          lines={plan.unreadablePrices.map((u) => `line ${u.lineNumber} · ${u.name} — "${u.said}"`)}
         />
       )}
 

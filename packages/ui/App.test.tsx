@@ -313,6 +313,7 @@ const BURN: DeckRow = {
   todosOpen: false,
   defaultCategoryId: 0,
   bracket: 0,
+  tags: [],
 };
 
 const BOLT: CardSummary = {
@@ -480,6 +481,7 @@ const BOLT_ENTRY: CollectionRow = {
  *  a row that cannot open the card cannot test what Escape does to one. */
 const BOLT_WISH: WishRow = {
   legalities: null,
+  layout: null,
   id: 11,
   oracleId: "o1",
   cardId: "c1",

@@ -70,13 +70,17 @@ export function finishChoices(finishes: string | null): DeckFinish[] {
  * Inactive categories are filtered out for `engine.ts`' reason: a switched-off pile counts
  * toward nothing, so a condition judged against one would be judged against cards that are not
  * in the deck.
+ *
+ * **A format that judges nothing (`validates` false — `unspecified`) refuses nothing here
+ * either**, for this function's own rule read backwards: a row may not offer what the panel then
+ * refuses, and it may not refuse what the panel accepts — and that panel accepts every deck.
  */
 export function companionRefusal(
   card: DeckCard,
   cards: readonly DeckCard[],
   spec: FormatSpec | null,
 ): string | null {
-  if (spec === null) return null;
+  if (spec === null || !spec.validates) return null;
   const deck = cards.filter((row) => row.id !== card.id && row.categoryActive);
   const issues = companionIssues([{ ...card, quantity: 1 }], deck, spec);
   return issues.find((issue) => issue.severity === "error")?.message ?? null;

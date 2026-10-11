@@ -11,8 +11,14 @@
  * A new format is a seeded row; a rules change is an UPDATE. That is the whole design, and
  * a single format key compared here would quietly end it.
  *
- * Two things behave unlike the rest, both by design and both handled once, at the top:
+ * Three things behave unlike the rest, all by design and all handled once, at the top:
  *
+ * * **A format whose `validates` cell is false is not judged at all** (corpus schema 7) — both
+ *   entry points return no issues before reading a single card. One row says so, `unspecified`:
+ *   a deck whose format nobody has chosen yet (the ManaBox import creates them), where any
+ *   verdict would be about rules the reader never picked. It is a cell for this file's own rule
+ *   — `casual` is the loosest *judged* row and still holds a commander zone to eligibility and a
+ *   companion to its condition, so "no rules" could not be spelled with the cells that existed.
  * * **A card in an inactive category counts toward nothing at all** — not size, not copies,
  *   not legality. Schema v8 made that a switch on the *category* rather than a fixed word on
  *   the card: the Maybeboard is simply the predefined category seeded off, a category of the
@@ -68,6 +74,10 @@ const IDENTITY_KINDS: readonly CategoryKind[] = [
  * is a validator that hides the deck it was asked about.
  */
 export function validateDeck(cards: CardFacts[], spec: FormatSpec): ValidationIssue[] {
+  // The format judges nothing (`unspecified`): read from the cell, never from the key — see the
+  // header. Before any card is read, so not even an unreadable `legalities` blob is reported
+  // about a deck nobody has asked a format of.
+  if (!spec.validates) return [];
   // Everything that counts toward nothing is dropped once, here, so no rule below has to
   // remember it exists. One flag rather than the old `zone !== "maybe"`, and that is the whole
   // of schema v8 in this file: the Maybeboard is the predefined category seeded off, and a
@@ -107,6 +117,9 @@ export function validateDeck(cards: CardFacts[], spec: FormatSpec): ValidationIs
  * judged on, and that list is the whole of the difference.
  */
 export function validateForMarks(cards: CardFacts[], spec: FormatSpec): ValidationIssue[] {
+  // Its own guard as well as `validateDeck`'s: `inactiveCardIssues` below is the other half of a
+  // mark, and a switched-off pile is judged against the same rules nobody chose.
+  if (!spec.validates) return [];
   return [
     ...onRows(
       validateDeck(cards, spec),

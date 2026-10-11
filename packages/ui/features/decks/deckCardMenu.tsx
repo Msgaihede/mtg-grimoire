@@ -71,6 +71,7 @@ import type {
   DeckVariant,
   FormatSpec,
 } from "@/lib/ipc";
+import { turnsOver } from "./cardControl";
 // `noteTitle` and `notesForCard` are `deckNotes.ts`'s, imported rather than respelled: a blank
 // title falling back to the body's first line is one rule, and *which notes name this card* is
 // one predicate. A menu that answered either of them itself would be the second spelling that
@@ -130,6 +131,15 @@ export interface DeckCardMenuDeps {
   /** The shared card menu's dependencies, whole — this file adds to that menu, it does not
    *  reimplement any of it. */
   card: CardMenuDeps;
+  /**
+   * Whether the view this menu opens on **draws the card's picture** — Stacks and Grid, and not
+   * Table or Text (issue #844). It is what puts "Flip card" at the top of the menu for a card
+   * {@link turnsOver} admits; on a view that draws no picture there is nothing to see turn, so the
+   * row is absent there rather than greyed — the view's property, not the card's.
+   *
+   * Optional, and absent is "no picture": every caller that predates the flip draws none.
+   */
+  flips?: boolean;
   /**
    * **Every category the deck has, in `sortOrder`** — `DeckEditor`'s own array and never the
    * drawn groups. That array is deliberately unfiltered, and for an emptied `auto` pile it is
@@ -413,7 +423,10 @@ export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuI
     // the reader's binder or wishlist rather than to this deck's list, so they are one group — the
     // deck's own rows start at the rule below.
     ...withCollectionLink(
-      buildCardMenu(deckCardTarget(card), { ...deps.card, picked: rows.map(deckCardTarget) }),
+      buildCardMenu(
+        { ...deckCardTarget(card), flip: deps.flips === true && turnsOver(card) },
+        { ...deps.card, picked: rows.map(deckCardTarget) },
+      ),
       collectionItems(card, deps),
     ),
     // The rule is where "this card" stops and "this card in this deck" starts. Everything above

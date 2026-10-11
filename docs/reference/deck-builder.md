@@ -18,6 +18,11 @@ Validation is executed entirely in TypeScript:
 1. **`validateDeck`**: Evaluates the whole deck for overall legality and format compliance.
 2. **`validateForMarks`**: Evaluates individual cards to display error marks/warnings in the UI. Crucially, cards placed in disabled category piles (e.g., Sideboard, Maybeboard, or custom excluded piles) are excluded from deck copy and legality counts.
 
+### A format that judges nothing (`unspecified`)
+- `format_specs.validates` (corpus schema 7) is whether the engine judges a deck in that format **at all**. It is false on one row, `unspecified` (`UNSPECIFIED_FORMAT` in `FormatSelect.tsx`): a deck whose format nobody has chosen yet, which the ManaBox CSV import creates and the "New deck" picker also offers. It is not the default — new decks stay `casual`.
+- Both entry points return `[]` when `!spec.validates`, read from the cell and never the key. `casual` is not the same thing: it is still judged (commander zone, companion condition).
+- Every surface that would otherwise read an empty list as a pass says **Not checked** instead: `ValidationPanel`'s chip (grey `CircleDashed`, `Not checked · Unspecified`) and its findings sentence, and the phone rail's Check section. `companionRefusal` refuses nothing in such a format, so `Set as companion` never refuses what the panel accepts.
+
 ### Commander Bracket Estimation
 - `estimateBracket` calculates a **floor**, never an absolute bracket.
 - Commander bracket rules are formulated as negative prohibitions (e.g., Bracket 2 may not run mass land denial; Bracket 3 may run at most three Game Changers).

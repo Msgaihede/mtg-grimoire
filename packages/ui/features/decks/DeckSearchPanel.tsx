@@ -385,13 +385,18 @@ export interface DeckSearchPanelProps {
    *
    * Absent is a panel with no menu, which is what a story or `DeckSearchPanel.test.tsx` mounts.
    */
-  cardMenu?: (card: CardSummary, picked: readonly CardSummary[]) => (e: ReactMouseEvent) => void;
+  cardMenu?: (
+    card: CardSummary,
+    picked: readonly CardSummary[],
+    flip: boolean,
+  ) => (e: ReactMouseEvent) => void;
   /** The same menu from the keyboard — Shift+F10 and the ContextMenu key, anchored at the
    *  tile's own corner. Its own slot rather than something derived from the one above, because
    *  a keypress has no coordinates; see `CardGrid`'s `cardMenuKey`. */
   cardMenuKey?: (
     card: CardSummary,
     picked: readonly CardSummary[],
+    flip: boolean,
   ) => (e: ReactKeyboardEvent) => void;
   /**
    * The widest this panel may be drawn or dragged, in px — the editor's answer, because the

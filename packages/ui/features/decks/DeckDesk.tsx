@@ -309,7 +309,9 @@ export interface DeckDeskProps {
   showStack: (categoryId: number) => void;
   setQuantity: (card: DeckCard, quantity: number) => void;
   applyDrops: (writes: DeckWrite[]) => void;
-  deckCardMenu: (card: DeckCard) => DeckCardMenuHandlers;
+  /** One deck card's right-click; `flips` is whether the view on screen draws the card's picture,
+   *  which is when its menu offers "Flip card" (issue #844). */
+  deckCardMenuFor: (card: DeckCard, flips: boolean) => DeckCardMenuHandlers;
   /** One pile's right-click; `stacks` is whether the Stacks view is the one drawn, which is the
    *  only view `Hide` / `Unhide` is offered in. */
   categoryMenuFor: (categoryId: number, stacks: boolean) => DeckCardMenuHandlers | undefined;
@@ -363,7 +365,7 @@ export function DeckDesk({
   showStack,
   setQuantity,
   applyDrops,
-  deckCardMenu,
+  deckCardMenuFor,
   categoryMenuFor,
   renameCategoryField,
   moveCategory,
@@ -658,6 +660,16 @@ export function DeckDesk({
   const categoryMenu = useCallback(
     (categoryId: number) => categoryMenuFor(categoryId, view === "stacks"),
     [categoryMenuFor, view],
+  );
+
+  /**
+   * One deck card's right-click, for the view on screen — the editor's builder told whether that
+   * view draws the card's picture, which is when the menu offers "Flip card" (issue #844): Stacks
+   * and Grid do, Table and Text draw none. A memo over `view` for `categoryMenu`'s reason.
+   */
+  const deckCardMenu = useCallback(
+    (card: DeckCard) => deckCardMenuFor(card, view === "stacks" || view === "grid"),
+    [deckCardMenuFor, view],
   );
 
   /**

@@ -7,6 +7,7 @@ import { Dialog } from "@/components/Dialog";
 import { ClearDeck } from "./ClearDeck";
 import { deckKind, deckKindPatch, tracksCollection } from "./deckKind";
 import { DeckSettingsForm, folderPaths, type DeckSettingsValue } from "./DeckSettingsForm";
+import { tagsInUse } from "./deckTags";
 import { listName } from "./listNames";
 import { RowAction } from "./metaRows";
 import { PullFromCollectionDialog } from "./PullFromCollectionDialog";
@@ -17,6 +18,10 @@ import { useDeckCore as useDeck, usePullPlan } from "./useDeckCore";
 import { useDeckField } from "./useDeckField";
 import { useDeckFolders } from "./useDeckFolders";
 import { ANY_GAME, pickerFormats, useFormatSpecs } from "./useFormatSpecs";
+
+/** Stable identity for "no row yet", so the form's `value` does not change on every render of
+ *  a dialog that is still loading. */
+const NO_TAGS: readonly string[] = [];
 
 export interface DeckSettingsDialogProps {
   deckId: number;
@@ -135,6 +140,25 @@ function Settings({ deckId }: { deckId: number }) {
    */
   const setFolder = useMutation({
     mutationFn: (folderId: number | null) => ipc.deckSetFolder(deckId, folderId),
+    onSuccess: invalidate,
+    onError: invalidate,
+  });
+
+  /**
+   * The deck's tags (issue #834) — `deck_update` like every other field here, and **a mutation
+   * of its own rather than `deck.update`** for one reason: what `mutate`'s per-call callbacks
+   * mean. They fire for an observer's *latest* call only, and `deck.update` is one observer
+   * shared by every control on this screen. {@link sentTags} is let go by exactly those
+   * callbacks, so on the shared observer a switch pressed while a tag write was still out would
+   * orphan them — and the chips would go on drawing a list nothing was ever told had landed, or
+   * had been refused. On its own observer, "the latest call" is the latest **tag** write, which
+   * is the one the held list is about.
+   *
+   * `setFolder`'s shape otherwise: the `["decks"]` root on success and on refusal, and a seat in
+   * {@link writeFailure}'s list so a refused tag says so in the dialog's one banner.
+   */
+  const writeTags = useMutation({
+    mutationFn: (tags: string[]) => ipc.deckUpdate(deckId, { tags }),
     onSuccess: invalidate,
     onError: invalidate,
   });
@@ -306,7 +330,7 @@ function Settings({ deckId }: { deckId: number }) {
    *  clear is, so a refused clear draws the sentence this dialog already had rather than a
    *  second one of its own. Read the array; a count written out here is a number no build
    *  answers. */
-  const bannerFailure = writeFailure([deck.update, setFolder, deck.clearDeck]);
+  const bannerFailure = writeFailure([deck.update, setFolder, deck.clearDeck, writeTags]);
 
   /**
    * The question actually on screen, which is not always the one that was opened.
@@ -352,6 +376,62 @@ function Settings({ deckId }: { deckId: number }) {
    */
   const name = useDeckField(row?.name ?? "", writeName, { blankIsNoop: true });
   const description = useDeckField(row?.description ?? "", writeDescription);
+
+  /**
+   * Every tag some deck already wears — what the Tags field suggests (issue #834).
+   *
+   * `["decks", "list"]`, the gallery's own key (`useDecks`), so over the gallery this is the
+   * answer already on screen and costs no read; over the editor it is one `deck_list` per
+   * opening of the dialog. It sits under the `["decks"]` root every write here invalidates, so
+   * a tag added to this deck is on offer for the next one without anything being told.
+   *
+   * **A failed or pending read is an empty list, not a missing field.** The suggestions are a
+   * help with spelling and the field works without them, so there is no state of this query
+   * worth a sentence on screen.
+   */
+  const everyDeck = useQuery({ queryKey: ["decks", "list"], queryFn: () => ipc.deckList() });
+  const inUse = useMemo(() => tagsInUse(everyDeck.data ?? []), [everyDeck.data]);
+
+  /**
+   * The tag list as the reader last left it, held over the row until the row has caught up.
+   *
+   * **A tag write sends the whole list, so the next one must be built on the last one sent
+   * rather than on the last one read.** {@link writeTags} answers by invalidating, and the row
+   * this dialog draws is the refetch — a beat behind. Two tags added inside that beat would each be
+   * `row.tags` plus one, and the second write would take the first tag back off. The form's
+   * `value.tags` is this list, so the field builds every next list on it.
+   *
+   * **It stands until the newest tag write has settled _and_ the row has been read since.** Both
+   * halves are needed, and the first one was missing for an afternoon: this dropped the held
+   * list as soon as the row changed at all, and the refetch behind write one lands while write
+   * two is still in flight — carrying tag one and not tag two. The chips lost the second tag for
+   * a beat, and a third tag typed in that beat was built on a list without it (three tags typed
+   * briskly in Storybook, 2026-10-11: the middle one was gone). So:
+   *
+   * - `settledAt: null` is a write still out, and the held list stands whatever arrives.
+   * - Once it settles, the list becomes the write's own **readback** — the list as stored — and
+   *   stands until `deck_get` has answered again. Any read that lands after the settle began
+   *   after it too: {@link writeTags} invalidates on success, which cancels a refetch still in
+   *   flight, and that runs before the per-call `onSuccess` that stamps the time.
+   * - A refused write lets go at once, and the row is the truth again.
+   *
+   * `mutate`'s own callbacks fire for the **latest** call only, which is exactly the write this
+   * is about: an earlier one settling says nothing about whether the list on screen is saved.
+   * That is also why the tags have a mutation to themselves — see {@link writeTags}.
+   *
+   * Derived during render from the stamp and the query's own `dataUpdatedAt`, so there is no
+   * effect reconciling two copies. `<=` and not `<`: a read landing in the same millisecond as
+   * the settle keeps the held list, which by then *is* the stored one — the other spelling's
+   * tie would trust a read from before the write.
+   */
+  const [sentTags, setSentTags] = useState<{
+    tags: readonly string[];
+    settledAt: number | null;
+  } | null>(null);
+  const holdingTags =
+    sentTags !== null &&
+    (sentTags.settledAt === null || deck.query.dataUpdatedAt <= sentTags.settledAt);
+  const tags = row == null ? NO_TAGS : holdingTags ? sentTags.tags : row.tags;
 
   const formatKey = row?.formatKey ?? null;
   const formatName = row?.formatName ?? null;
@@ -434,6 +514,20 @@ function Settings({ deckId }: { deckId: number }) {
     // number the patch can carry, so "back to filing by what the card does" is an ordinary
     // write. See `DeckPatch.defaultCategoryId`.
     if (patch.defaultCategoryId !== undefined) update({ defaultCategoryId: patch.defaultCategoryId });
+    // The whole list, one write per tag added or removed — the field never reports a no-op, so
+    // every call here is a change. **`[]` is a value**: a deck whose last chip was removed sends
+    // an empty list, which `deck_update` reads as "no tags" and not as "leave it". The list is
+    // held in {@link sentTags} before it is sent, so a second press builds on it.
+    if (patch.tags !== undefined && row != null) {
+      const next = [...patch.tags];
+      setSentTags({ tags: next, settledAt: null });
+      writeTags.mutate(next, {
+          // The readback is the list as stored — tidied by Rust — so the chips show that
+          // rather than what was sent, from the moment the write lands.
+        onSuccess: (saved) => setSentTags({ tags: saved.tags, settledAt: Date.now() }),
+        onError: () => setSentTags(null),
+      });
+    }
     // `undefined` is "not in this patch" and `null` is the top level, which is why the guard is
     // `!== undefined` rather than a truthiness test — see this file's doc for what `null` costs
     // when it is sent as a patch instead.
@@ -491,6 +585,7 @@ function Settings({ deckId }: { deckId: number }) {
               managedWishlistTokens: row.managedWishlistTokens,
               folderId: row.folderId,
               defaultCategoryId: row.defaultCategoryId,
+              tags,
             }}
             onChange={change}
             onCommit={commit}
@@ -505,6 +600,9 @@ function Settings({ deckId }: { deckId: number }) {
             // the mark switches are answerable here — which the create dialog's are not. Drawn
             // only where the deck also keeps a plan; the form owns that second half.
             canSetTheoryMarks
+            // Passing the list is what draws the Tags field: this host has a deck row to write
+            // them to, which the create dialog has not.
+            tagsInUse={inUse}
             folders={{
               paths,
               unread: folders.query.isError ? ipcError(folders.query.error) : null,

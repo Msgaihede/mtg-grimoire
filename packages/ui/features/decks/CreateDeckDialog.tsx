@@ -73,6 +73,10 @@ const BLANK: DeckSettingsValue = {
   // is passed no `categories`, so no "Add cards to" row is drawn, and the create sends nothing
   // for it: `decks.default_category_id` has `DEFAULT 0`, which is this same value.
   defaultCategoryId: AUTO_CATEGORY,
+  // `decks.tags` (user schema v62, issue #834) is `NOT NULL DEFAULT '[]'` and `DeckInput` has no
+  // field for it, so — the marks' arrangement again — the draft holds the default and sends
+  // nothing. This dialog passes no `tagsInUse`, so no Tags field is drawn here.
+  tags: [],
   // No token mode: the value stopped carrying one on 2026-09-27 (managed tokens spec §3.9), when
   // the control went from both hosts. `decks.token_mode`'s `DEFAULT 'managed'` still answers for
   // a new deck and nothing reads it.

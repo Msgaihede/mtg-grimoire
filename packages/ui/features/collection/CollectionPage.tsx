@@ -30,6 +30,7 @@ import { QuantityStepper } from "@/components/QuantityStepper";
 import { buildCardMenu, type CardMenuDeps, type CardMenuTarget } from "@/features/card/cardMenu";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
+import { rowHasBackFace } from "@/features/card/printings";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { dragData } from "@/features/decks/dnd";
 import { CONFIRM_CANCEL } from "@/features/decks/metaRows";
@@ -1974,14 +1975,19 @@ export function CollectionPage() {
     },
     [menuDeps, removeCopies, allCountEditable, copiesByTile, entryIdsOf],
   );
+  // `flip` is the wall's word that this tile turns over (issue #844) — `CardGrid`'s `flips`.
   const tileMenu = useCallback(
-    (tile: CollectionTile, picked: readonly CollectionTile[] = []) =>
-      menu(() => buildCardMenu(tileTarget(tile, entryIdsOf(tile)), tileDeps(tile, picked))),
+    (tile: CollectionTile, picked: readonly CollectionTile[] = [], flip = false) =>
+      menu(() =>
+        buildCardMenu({ ...tileTarget(tile, entryIdsOf(tile)), flip }, tileDeps(tile, picked)),
+      ),
     [menu, tileDeps, entryIdsOf],
   );
   const tileMenuKey = useCallback(
-    (tile: CollectionTile, picked: readonly CollectionTile[] = []) =>
-      menuKey(() => buildCardMenu(tileTarget(tile, entryIdsOf(tile)), tileDeps(tile, picked))),
+    (tile: CollectionTile, picked: readonly CollectionTile[] = [], flip = false) =>
+      menuKey(() =>
+        buildCardMenu({ ...tileTarget(tile, entryIdsOf(tile)), flip }, tileDeps(tile, picked)),
+      ),
     [menuKey, tileDeps, entryIdsOf],
   );
 
@@ -2997,6 +3003,10 @@ export function CollectionPage() {
                 // The whole tile is the target: the art, its badge and the caption.
                 cardMenu={tileMenu}
                 cardMenuKey={tileMenuKey}
+                // A two-sided card turns over from its tile: the flip button under the stepper
+                // and the menu's "Flip card" (issue #844). The table draws no picture and has
+                // neither.
+                flips={rowHasBackFace}
               />
             ) : (
               <>

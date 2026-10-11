@@ -618,19 +618,19 @@ export function WishlistPage() {
   const { menu, menuKey, menuClick } = useContextMenu();
   const { deps: menuDeps, error: menuFailure } = useCardMenuDeps();
   const rowMenu = useCallback(
-    (row: WishRow) =>
+    (row: WishRow, flip = false) =>
       row.cardId === null
         ? undefined
-        : menu(() => buildCardMenu(wishTarget(row, row.cardId!), menuDeps)),
+        : menu(() => buildCardMenu({ ...wishTarget(row, row.cardId!), flip }, menuDeps)),
     [menu, menuDeps],
   );
   /** The same menu on Shift+F10 and the ContextMenu key, gated on the same `cardId`: a menu only
    *  a mouse can open is a menu half this app's readers do not have. */
   const rowMenuKey = useCallback(
-    (row: WishRow) =>
+    (row: WishRow, flip = false) =>
       row.cardId === null
         ? undefined
-        : menuKey(() => buildCardMenu(wishTarget(row, row.cardId!), menuDeps)),
+        : menuKey(() => buildCardMenu({ ...wishTarget(row, row.cardId!), flip }, menuDeps)),
     [menuKey, menuDeps],
   );
 

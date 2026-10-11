@@ -144,6 +144,10 @@ export interface CollectionTile extends GridCard {
   /** Carried for the right-click menu alone — nothing on the wall draws it. A menu add is
    *  filed by what the card *does*, exactly as a drag of the same card is. */
   typeLine: string | null;
+  /** The printing's layout, which is what says whether the tile turns over — its flip button
+   *  and the menu's "Flip card" (issue #844). `null` where the entries behind this tile are
+   *  orphans, which have no picture to turn. */
+  layout: string | null;
   /** Also the menu's alone: which oracle card this is, so "View all printings" can reach it.
    *  `null` where the entries behind this tile are orphans. */
   oracleId: string | null;
@@ -280,6 +284,7 @@ export function collectionTiles(rows: readonly CollectionRow[]): CollectionTile[
       // and would price a plain copy at foil rates.
       unitPrice: row.unitPrice,
       typeLine: row.typeLine,
+      layout: row.layout,
       oracleId: row.oracleId,
       finishes: ownedFinishes(finishes.get(key) ?? new Set()),
       folderId: row.folderId,

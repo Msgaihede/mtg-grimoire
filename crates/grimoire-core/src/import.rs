@@ -79,13 +79,21 @@ use serde_json::json;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
-/// The largest decklist file this app will read, in bytes.
+/// The largest import file this app will read, in bytes — 8 MiB.
 ///
-/// A megabyte is roughly 25 000 lines — two orders of magnitude past any real decklist, and
-/// small enough that reading it into memory to parse it is never a question. It lives here
-/// rather than beside the file-reading command because the limit is a fact about *imports*,
-/// and the paste path and the file path must not be able to disagree about it.
-pub const MAX_IMPORT_BYTES: u64 = 1024 * 1024;
+/// **It was one megabyte until issue #873**, sized as "two orders of magnitude past any real
+/// decklist" — and a decklist stopped being the largest thing imported the day the collection
+/// learnt to read a whole ManaBox export. A real one (2026-10-11: 9,583 rows, 30,656 copies,
+/// nine binders) is **1.76 MB**, about 185 bytes a row, so the old cap refused it before a line
+/// was parsed. Eight is ~45,000 such rows, several times a large collection, and still small
+/// enough that reading it into memory to parse it is never a question: the same export parses
+/// and plans in a quarter of a second. What the fence was for is unchanged — a 200 MB file the
+/// reader pointed at by mistake still costs only the bounded read below.
+///
+/// It lives here rather than beside the file-reading command because the limit is a fact about
+/// *imports*, and the paste path and the file path must not be able to disagree about it.
+/// `packages/ui/lib/core/browserFiles.ts`' `MAX_DECKLIST_BYTES` is the browser face's copy.
+pub const MAX_IMPORT_BYTES: u64 = 8 * 1024 * 1024;
 
 /// What an import may do to the deck it lands in: fold into what is there, or replace it.
 ///
@@ -1506,7 +1514,7 @@ pub fn read_bounded(mut reader: impl std::io::Read) -> Result<ImportFile, String
     // **A bounded read rather than a `metadata()` check.** `take(MAX + 1)` then a length test is
     // the whole of it — one byte over the limit is read and refused, and nothing larger is ever
     // in memory, which keeps what the fence was for: a 200 MB file the reader pointed at by
-    // mistake costs a megabyte, not two hundred.
+    // mistake costs eight megabytes, not two hundred.
     let mut bytes = Vec::new();
     reader
         .by_ref()
@@ -1514,9 +1522,11 @@ pub fn read_bounded(mut reader: impl std::io::Read) -> Result<ImportFile, String
         .read_to_end(&mut bytes)
         .map_err(|e| format!("That file could not be read — {e}"))?;
     if bytes.len() as u64 > MAX_IMPORT_BYTES {
+        // The one figure, twice, so the sentence cannot name two different caps — it did, as
+        // "over 1 MB … at most 1 MB" from a decimal division that only agreed by rounding.
+        let mb = MAX_IMPORT_BYTES / (1024 * 1024);
         return Err(format!(
-            "That file is over {} MB. A decklist is text; this reads at most 1 MB.",
-            MAX_IMPORT_BYTES / 1_000_000
+            "That file is over {mb} MB. An import is text; this reads at most {mb} MB."
         ));
     }
     Ok(decode(&bytes))

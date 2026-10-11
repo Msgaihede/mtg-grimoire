@@ -192,6 +192,11 @@ pub struct WishRow {
     /// orphan, no pinned printing in `cards` and no oracle match. That tile draws the no-art
     /// frame with the name, as the deck's Grid view does for the same state.
     pub art_card_id: Option<String>,
+    /// The layout of the printing [`Self::art_card_id`] names — the fact the wall reads to
+    /// decide whether a tile turns over (issue #844: a transforming or modal double-faced card
+    /// gets a flip button and a "Flip card" row). Off the same join, so it is always the layout
+    /// of the picture on screen, and `None` exactly where that id is.
+    pub layout: Option<String>,
     pub quantity: i64,
     pub preferred_finish: Option<String>,
     /// The cheapest way to satisfy this wish, per copy, at the marketplace the query named:
@@ -1445,7 +1450,10 @@ fn list_statements(q: &WishlistQuery) -> crate::collection::ListStatements {
                 (SELECT count(*) FROM wishlist_entries o
                   WHERE o.id <> w.id AND o.oracle_id IS NOT NULL
                     AND o.oracle_id = w.oracle_id) AS elsewhere,
-                w.folder_id
+                w.folder_id,
+                -- Appended for the reason the three above were: the drawn printing's layout,
+                -- off the same join as `c.id`, so the flip a tile offers is about its picture.
+                c.layout
          FROM {from} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?"
     );
     params.push(Box::new(limit));
@@ -1485,6 +1493,7 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
                     mana_cost: r.get(8)?,
                     type_line: r.get(15)?,
                     art_card_id: r.get(16)?,
+                    layout: r.get(20)?,
                     quantity: r.get(9)?,
                     preferred_finish: r.get(10)?,
                     unit_price: r.get(11)?,
@@ -2306,6 +2315,45 @@ mod tests {
         assert_eq!(of(pinned.id).legalities, None);
     }
 
+    /// **A wish row carries the drawn printing's `layout`, at the index the appended column put
+    /// it at** — issue #844, the fact the wall reads to offer a flip on a two-sided card's tile.
+    /// Off the same join as `art_card_id`, so an any-printing wish carries the layout of the
+    /// printing it is drawn as, and the folder id it was appended after is undisturbed.
+    #[test]
+    fn a_wish_row_carries_the_drawn_printings_layout() {
+        let conn = seeded();
+        conn.execute(
+            "UPDATE cards SET layout = 'transform' WHERE id = 'bolt-2ed'",
+            [],
+        )
+        .unwrap();
+        let any = add_wish(
+            &conn,
+            &WishInput {
+                oracle_id: Some("o1".into()),
+                quantity: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let pinned = add_wish(
+            &conn,
+            &WishInput {
+                card_id: Some("bolt-lea".into()),
+                quantity: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let rows = list_wishes(&conn, &WishlistQuery::default()).unwrap();
+        let of = |id: i64| rows.items.iter().find(|r| r.id == id).unwrap();
+        assert_eq!(of(any.id).art_card_id.as_deref(), Some("bolt-2ed"));
+        assert_eq!(of(any.id).layout.as_deref(), Some("transform"));
+        assert_ne!(of(pinned.id).layout.as_deref(), Some("transform"));
+        assert_eq!(of(pinned.id).folder_id, None);
+    }
+
     /// An any-printing wish is not for a printing, so it must not quietly claim one: the
     /// set, the collector number and the language stay NULL even though a name was read
     /// from a printing to make the row sayable.
@@ -2580,6 +2628,7 @@ mod tests {
             mana_cost: Some("{R}".into()),
             type_line: Some("Instant".into()),
             art_card_id: Some("bolt-2ed".into()),
+            layout: Some("normal".into()),
             quantity: 4,
             preferred_finish: Some("foil".into()),
             unit_price: Some(40.0),
@@ -2597,7 +2646,7 @@ mod tests {
                 "id": 3, "oracleId": "o1", "cardId": null, "name": "Lightning Bolt",
                 "setCode": null, "collectorNumber": null, "lang": null, "rarity": "common",
                 "manaCost": "{R}", "typeLine": "Instant", "artCardId": "bolt-2ed",
-                "quantity": 4, "preferredFinish": "foil",
+                "layout": "normal", "quantity": 4, "preferredFinish": "foil",
                 "unitPrice": 40.0, "notes": null,
                 "needsReview": null, "updatedAt": 1800000000,
                 "legalities": "{\"timeless\":\"legal\"}",

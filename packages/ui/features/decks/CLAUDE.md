@@ -24,6 +24,7 @@ Pure TypeScript engine analyzing deck rules:
   - Two validation entry points:
     - `validateDeck`: Evaluates the whole deck (deck size floors/ceilings, copy limits, overall legality).
     - `validateForMarks`: Evaluates individual cards rendered in views to render rule-break marks on card tiles. Inactive piles are evaluated for mark warnings but excluded from deck totals.
+    - Both return `[]` when `spec.validates` is false — the `unspecified` format (corpus schema 7), for decks whose format nobody has chosen yet (the ManaBox import). Read the cell, never the key; surfaces say **Not checked**, never "No issues".
   - `singleton.ts`: Evaluates exceptions derived from oracle text rules (e.g. Relentless Rats, Seven Dwarves), never static card name lists.
   - `commanders.ts` & `companions.ts`: Enforces eligibility, partner combinations (Partner, Friends Forever, Choose a Background), color identity rules, and companion deck constraints.
   - `bracket.ts` (`estimateBracket`): Advisory Commander power floor calculation (ranks 2–4). Returns `BASE_FLOOR = 2`; never returns 1 or 5 (which represent player intent). Does not invalidate decks.
@@ -84,6 +85,11 @@ Normalized via `deckKind.ts` (`regular`, `theory`, `virtual`):
   - `NoteEditor.tsx` (both bands' editor) passes `injectCSS: false`: Tiptap's default appends a runtime stylesheet the shipped CSP refuses. Its header has what that sheet carried and why no rule replaced it.
   - To-do band: Structured deck checklists (`deck_todo_lists`) supporting item completion and ordering.
 - **Keyboard focus handling**: Floating toolbars automatically avoid intercepting typing gestures while text inputs or note editors have active focus.
+- **Deck tags (`deckTags.ts`, `DeckTagsField.tsx`)**: The reader's free text about a whole deck (`decks.tags`, user schema v62) — not Scryfall tags and not deck labels ([DOMAIN_VOCABULARY.md](../../../../docs/agent/DOMAIN_VOCABULARY.md)).
+  - Edited in Deck settings only; `DeckSettingsForm` draws the field when a host passes `tagsInUse`, so the create dialog draws none.
+  - A tag write sends the whole list (`deckUpdate({ tags })`, `[]` clears). `DeckSettingsDialog` holds the list it last sent until the row catches up, so a second tag is built on the first.
+  - Suggestions are `tagsInUse(deck_list)` — there is no table of tags. Compare two tags with `tagKey`/`hasTag`, which fold capitals exactly as Rust's `clean_tags` does.
+  - `DeckTile` draws them in one row on the art: above the badge and bracket marks, or on the art's bottom edge when the deck has neither. Outside the tile's `<button>`, like the marks.
 
 ---
 

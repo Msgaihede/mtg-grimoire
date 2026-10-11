@@ -2113,9 +2113,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * not an extra here: the per-card `Move…` select was removed on 2026-08-14 and took the only
    * keyboard path to moving a card with it (a caret cannot drag). This menu is that path, so a
    * menu only a mouse could open would restore nothing.
+   *
+   * **`flips` arrives as an argument**, `categoryMenuFor`'s arrangement: whether the view on screen
+   * draws the card's picture is a question about the view, which is `DeckDesk`'s state since issue
+   * #557. The desk binds it to the view it is drawing, so a switch of view rebuilds the menu and a
+   * filter keystroke does not.
    */
-  const deckCardMenu = useCallback(
-    (card: DeckCard) => {
+  const deckCardMenuFor = useCallback(
+    (card: DeckCard, flips: boolean) => {
       const build = () =>
         buildDeckCardMenu(card, {
           // **The slot, not a destination.** The row used to re-anchor the card pane onto this
@@ -2129,6 +2134,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           // printings — which the modal is and a deck card is not, so the row stays live here on
           // every card including the one the pane happens to be open on.
           card: { ...cardMenuDeps, printingsDeck: deckSlotOf(card) },
+          // "Flip card" on the two views that draw the card's picture (issue #844). Table and
+          // Text draw none, so the row would turn a card nobody can see.
+          flips,
           categories,
           cards: deck.cards,
           spec,
@@ -2378,24 +2386,26 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * which is what a reader who is not editing this row asked for.
    */
   const panelCardBuild = useCallback(
-    (card: CardSummary, picked: readonly CardSummary[] = []) =>
+    (card: CardSummary, picked: readonly CardSummary[] = [], flip = false) =>
       () =>
-        buildCardMenu(searchCardTarget(card), {
-          ...cardMenuDeps,
-          picked: picked.map(searchCardTarget),
-        }),
+        // `flip` is the wall's: the tile turns over (issue #844), so the menu offers "Flip card".
+        buildCardMenu(
+          { ...searchCardTarget(card), flip },
+          { ...cardMenuDeps, picked: picked.map(searchCardTarget) },
+        ),
     [cardMenuDeps],
   );
   const panelCardMenu = useCallback(
-    (card: CardSummary, picked: readonly CardSummary[] = []) => menu(panelCardBuild(card, picked)),
+    (card: CardSummary, picked: readonly CardSummary[] = [], flip = false) =>
+      menu(panelCardBuild(card, picked, flip)),
     [menu, panelCardBuild],
   );
   /** The keyboard's own door to the same rows. `CardGrid` takes it in a slot of its own because
    *  a keypress has no coordinates — the panel is anchored at the tile's corner rather than at a
    *  pointer that was never there. */
   const panelCardMenuKey = useCallback(
-    (card: CardSummary, picked: readonly CardSummary[] = []) =>
-      menuKey(panelCardBuild(card, picked)),
+    (card: CardSummary, picked: readonly CardSummary[] = [], flip = false) =>
+      menuKey(panelCardBuild(card, picked, flip)),
     [menuKey, panelCardBuild],
   );
 
@@ -3715,7 +3725,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         showStack={showStack}
         setQuantity={setQuantity}
         applyDrops={applyDrops}
-        deckCardMenu={deckCardMenu}
+        deckCardMenuFor={deckCardMenuFor}
         categoryMenuFor={categoryMenuFor}
         renameCategoryField={renameCategoryField}
         moveCategory={moveCategory}

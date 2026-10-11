@@ -7,6 +7,7 @@
 import { memo, useRef } from "react";
 import { CardChin } from "@/components/CardChin";
 import { useTooltip } from "@/components/tooltip/useTooltip";
+import { useShownFace } from "@/features/card/shownFace";
 import { atLeast, cardScaleVars, scaled } from "@/lib/cardZoom";
 import { DROP_MARK_ROOM, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { playedFinish } from "@/lib/finish";
@@ -34,6 +35,7 @@ import {
   deckGroupRename,
   REVEALED_ON_CARD,
   SELECTED_CARD,
+  turnsOver,
   useCategoryDrop,
   useDeckCardDrag,
   type DeckCardActions,
@@ -464,6 +466,9 @@ function GridCard({
   // they sit in, the chin was a stacked card's height under a smaller face, and the stepper
   // column took half the card. The zoom still decides the width; it no longer decides the marks.
   const scale = deckCardScale(width);
+  // The side the reader turned this card to — issue #844's flip button under the stepper and the
+  // card menu's row, both of which write `shownFace` for a card {@link turnsOver} admits.
+  const shownFace = useShownFace(turnsOver(card) ? card.cardId : null);
 
   return (
     <li
@@ -551,6 +556,7 @@ function GridCard({
         <DeckCardFace
           card={card}
           width={width}
+          face={shownFace}
           ruleBreakText={ruleBreakText}
           theoryMark={theoryMark}
           noted={noted}

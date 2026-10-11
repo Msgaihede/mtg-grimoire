@@ -1,9 +1,11 @@
 /**
- * The four writes an import makes, and the one rule that only lives here.
+ * The five writes an import makes, and the one rule that only lives here.
  *
  * Three of them are `ipc.ts`'s import commands wrapped in a mutation apiece. The fourth,
  * {@link useImport}'s `importIntoNewDeck`, is two commands with a rollback between them and
- * is the whole reason this file exists rather than a `useMutation` at the call site.
+ * is the whole reason this file exists rather than a `useMutation` at the call site. The fifth,
+ * `importBinders` (issue #873), is a ManaBox export split by binder — a sequence of the other
+ * writes, one folder or deck at a time.
  *
  * **It is the shell's hook and the deck destinations', both** — `resolve` and `readFile` belong
  * to the source step, which every destination shares, and `commit`/`importIntoNewDeck` belong to
@@ -15,6 +17,7 @@ import { useMutation, useQueryClient, type QueryKey } from "@tanstack/react-quer
 import {
   ipc,
   ipcError,
+  type CollectionFolder,
   type CollectionImportItem,
   type DeckGame,
   type DeckRow,
@@ -29,7 +32,9 @@ import {
 } from "@/lib/ipc";
 import { OWNED_WRITE_KEYS } from "@/lib/query";
 import { DEFAULT_VARIANT } from "@/features/decks/deckQuery";
+import { UNSPECIFIED_FORMAT } from "@/features/decks/FormatSelect";
 import { chooseDecklist } from "../files";
+import type { BinderGroup } from "./destinations/binders";
 
 /**
  * The reader saying they have physically built this deck — the same lines a second time, at the
@@ -367,23 +372,8 @@ export function useImport() {
   });
 
   /**
-   * A decklist as a deck of its own: `deck_create`, then the same commit, then the deck.
-   *
-   * **A refused import must not leave a deck behind.** The reader asked for "this list as a
-   * deck"; half of that is not a smaller version of it, it is a mess in their gallery — and the
-   * dialog is still open holding the text they pasted, so the retry is one press. So the create
-   * is rolled back by hand, because the two commands are two transactions and nothing else can
-   * roll them back together.
-   *
-   * **The commit's refusal is what the caller hears**, never the delete's. The delete is
-   * clean-up: if it fails too, the reader is owed the sentence explaining why their import did
-   * not land, not a second one about the tidying up afterwards — and the deck they can see in
-   * the gallery is one they can remove themselves. Its own failure is swallowed for exactly
-   * that reason and for no other.
-   *
-   * `live` and `merge` are the only sensible pair into a deck made one line ago: there is
-   * nothing to merge with and nothing to replace, and `merge` is the mode that cannot clear
-   * anything if that ever stops being true.
+   * A decklist as a deck of its own: `deck_create`, then the same commit, then the deck —
+   * {@link createDeckFromList}, whose doc carries the rollback and why it is there.
    *
    * **The collection half runs after the rollback window closes, and the rollback deliberately
    * does not cover it.** A refused `deck_import_commit` deletes the deck and never reaches the
@@ -392,37 +382,188 @@ export function useImport() {
    * and deleting it over the *second* statement would throw away the first.
    */
   const importIntoNewDeck = useMutation({
-    mutationFn: async ({
-      name,
-      formatKey,
-      gameKey,
-      folderId,
-      items,
-      collectionItems,
-    }: ImportAsNewDeck): Promise<DeckImportResult & { deck: DeckRow }> => {
-      const deck = await ipc.deckCreate({ name, formatKey, gameKey, folderId });
-      let outcome: ImportOutcome;
-      try {
-        outcome = await ipc.deckImportCommit(deck.id, DEFAULT_VARIANT, "merge", items);
-      } catch (refusal) {
-        try {
-          await ipc.deckDelete(deck.id);
-        } catch {
-          // See above: the import's refusal is the news, and this one would bury it.
-        }
-        throw refusal;
-      }
-      // Outside the `try` on purpose, and not merely because {@link ownCopies} swallows its own
-      // refusal: the rollback's whole scope is the deck that was made one line ago, and a
-      // `catch` that reached this call would be a delete of a landed deck over a second
+    mutationFn: async (args: ImportAsNewDeck): Promise<DeckImportResult & { deck: DeckRow }> => {
+      const { deck, outcome } = await createDeckFromList(args);
+      // After the rollback window on purpose, and not merely because {@link ownCopies} swallows
+      // its own refusal: the rollback's whole scope is the deck that was made one statement ago,
+      // and a `catch` that reached this call would be a delete of a landed deck over a second
       // statement about the reader's box.
-      return { deck, outcome, ...(await ownCopies(collectionItems, deck.id)) };
+      return { deck, outcome, ...(await ownCopies(args.collectionItems, deck.id)) };
     },
     onSuccess: (_result, variables) => invalidate(variables.collectionItems),
     onError: (_refusal, variables) => invalidate(variables.collectionItems),
   });
 
-  return { resolve, commit, readFile, importIntoNewDeck };
+  /**
+   * A ManaBox export, binder by binder (issue #873) — {@link importBinderGroups}, with the whole
+   * owned union fired afterwards whichever way it went: every group is a `collection_entries`
+   * write, the deck groups are `["decks"]` writes too, and a press that stopped part-way has
+   * still changed whatever landed before it stopped.
+   */
+  const importBinders = useMutation({
+    mutationFn: (groups: readonly BinderGroup[]) => importBinderGroups(groups),
+    onSettled: () => {
+      for (const queryKey of OWNED_WRITE_KEYS) void queryClient.invalidateQueries({ queryKey });
+    },
+  });
+
+  return { resolve, commit, readFile, importIntoNewDeck, importBinders };
+}
+
+/**
+ * `deck_create`, then the list into it — and the deck deleted again if the list is refused.
+ *
+ * {@link useImport}'s `importIntoNewDeck` and {@link importBinderGroups} both make a deck out of
+ * a list, and both owe the reader the same promise: a refused import leaves no deck behind.
+ *
+ * **A refused import must not leave a deck behind.** The reader asked for "this list as a deck";
+ * half of that is not a smaller version of it, it is a mess in their gallery — and the dialog is
+ * still open holding the text they pasted, so the retry is one press. So the create is rolled
+ * back by hand, because the two commands are two transactions and nothing else can roll them
+ * back together.
+ *
+ * **The commit's refusal is what the caller hears**, never the delete's. The delete is clean-up:
+ * if it fails too, the reader is owed the sentence explaining why their import did not land, not
+ * a second one about the tidying up afterwards — and the deck they can see in the gallery is one
+ * they can remove themselves. Its own failure is swallowed for exactly that reason and for no
+ * other.
+ *
+ * `live` and `merge` are the only sensible pair into a deck made one line ago: there is nothing to
+ * merge with and nothing to replace, and `merge` is the mode that cannot clear anything if that
+ * ever stops being true.
+ *
+ * The copies ({@link ImportAsNewDeck.collectionItems}) are **not** written here: what a refusal
+ * of that second write means differs between the two callers, so each makes it itself.
+ */
+async function createDeckFromList({
+  name,
+  formatKey,
+  gameKey,
+  folderId,
+  items,
+}: ImportAsNewDeck): Promise<{ deck: DeckRow; outcome: ImportOutcome }> {
+  const deck = await ipc.deckCreate({ name, formatKey, gameKey, folderId });
+  try {
+    return { deck, outcome: await ipc.deckImportCommit(deck.id, DEFAULT_VARIANT, "merge", items) };
+  } catch (refusal) {
+    try {
+      await ipc.deckDelete(deck.id);
+    } catch {
+      // See above: the import's refusal is the news, and this one would bury it.
+    }
+    throw refusal;
+  }
+}
+
+/** What a binder import wrote, for the dialog's closing sentence. */
+export interface BinderImportResult {
+  /** Folders filed into, the ones it had to make included. The root is not a folder. */
+  folders: number;
+  /** Of {@link folders}, how many did not exist before the press. */
+  foldersCreated: number;
+  /** The decks it made, in the file's order. */
+  decks: DeckRow[];
+  /** Copies written, over every group. */
+  copies: number;
+}
+
+/**
+ * The folder a binder's copies are filed into: a **top-level folder of the reader's own** whose
+ * name matches, or a new one made at the top level.
+ *
+ * **Matched case-insensitively and trimmed**, because the issue's rule is "a folder with that
+ * name" and `Bulk` against `bulk` is the same drawer to the person who named both. **Top level
+ * only**: a folder nested three deep that happens to share a binder's name is somewhere the
+ * reader filed on purpose, and ManaBox's binders are flat — so a match is looked for exactly
+ * where a new one would be made. **`user` folders only**: a deck's group is named after its deck,
+ * and filing a binder into it would put copies in a deck that does not play them — the very
+ * placement `set_entry_folder` refuses.
+ *
+ * `folders` is the press's own census and is extended as folders are made, so two groups naming
+ * one folder (`Bulk`, `bulk`) find the one the first of them created rather than making two.
+ */
+async function folderFor(
+  name: string,
+  folders: CollectionFolder[],
+): Promise<{ id: number; created: boolean }> {
+  const key = name.trim().toLocaleLowerCase();
+  const found = folders.find(
+    (f) => f.kind === "user" && f.parentId === null && f.name.trim().toLocaleLowerCase() === key,
+  );
+  if (found !== undefined) return { id: found.id, created: false };
+  const made = await ipc.collectionFolderCreate(null, name.trim());
+  folders.push(made);
+  return { id: made.id, created: true };
+}
+
+/**
+ * Every group of a {@link planBinderImport} plan, written in the file's order: a folder group's
+ * copies into its folder (or the root), a deck group as a new {@link UNSPECIFIED_FORMAT} deck with
+ * its copies filed into the deck's own group.
+ *
+ * **One group is one or two transactions, and the press is a sequence of them** — not the one
+ * transaction a single-destination import is. That is deliberate rather than a gap: each write is
+ * the command the single-destination import already makes (`collection_import_commit` into a
+ * folder, `importIntoNewDeck`'s pair), so the rules that guard them — the folder fence, the deck
+ * rollback, the merge on the eleven-term grain — are the ones that have already shipped, rather
+ * than a new command re-stating all of them across N folders and M decks.
+ *
+ * **What that costs is a press that can stop part-way, and it stops loudly.** The first refusal
+ * ends the press — a database that refused one write is not one to keep writing into — and is
+ * thrown with the groups that had already landed named in the same sentence, so the reader knows
+ * which drawers to look in before they press Import again. A deck whose list was refused leaves
+ * no deck behind ({@link createDeckFromList}); a deck whose *copies* were refused stays, because
+ * the list landed and is the deck they asked for, and the sentence says so.
+ *
+ * Always `add`, never `set`: a `set` is collection-wide — it counts every folder's copies toward
+ * the file's number — so run once per binder it would have each group rewrite the others'.
+ */
+export async function importBinderGroups(
+  groups: readonly BinderGroup[],
+): Promise<BinderImportResult> {
+  const result: BinderImportResult = { folders: 0, foldersCreated: 0, decks: [], copies: 0 };
+  const landed: string[] = [];
+  // One read for the whole press, extended by {@link folderFor} as it makes folders.
+  const folders = groups.some((g) => g.target === "folder" && g.name !== null)
+    ? await ipc.collectionFolderList()
+    : [];
+  for (const group of groups) {
+    const label = group.name === null ? "cards with no binder" : `“${group.name}”`;
+    try {
+      if (group.target === "deck") {
+        const name = group.name ?? "";
+        const { deck } = await createDeckFromList({
+          name,
+          formatKey: UNSPECIFIED_FORMAT,
+          items: group.deckItems,
+        });
+        result.decks.push(deck);
+        try {
+          const folderId = await deckGroupId(deck.id);
+          await ipc.collectionImportCommit(group.collectionItems, "add", folderId);
+        } catch (refusal) {
+          throw new Error(
+            `the deck ${label} was made, but its cards couldn't be added to your collection — ` +
+              ipcError(refusal),
+            { cause: refusal },
+          );
+        }
+      } else if (group.name === null) {
+        await ipc.collectionImportCommit(group.collectionItems, "add", null);
+      } else {
+        const folder = await folderFor(group.name, folders);
+        await ipc.collectionImportCommit(group.collectionItems, "add", folder.id);
+        result.folders += 1;
+        if (folder.created) result.foldersCreated += 1;
+      }
+    } catch (refusal) {
+      const already = landed.length === 0 ? "" : ` Already imported: ${landed.join(", ")}.`;
+      throw new Error(`Stopped at ${label}: ${ipcError(refusal)}.${already}`, { cause: refusal });
+    }
+    result.copies += group.totalCards;
+    landed.push(label);
+  }
+  return result;
 }
 
 /** The whole of what the import dialog consumes, named so the surface and the hook agree. */
