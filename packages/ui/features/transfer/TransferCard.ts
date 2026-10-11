@@ -13,7 +13,14 @@
  * every row is ungraded, and every writer already spells the value `c.condition ?? ""`.
  */
 import { CONDITION_NOT_SET } from "@/lib/conditions";
-import type { CategoryKind, CollectionRow, DeckCard, DeckFinish, WishRow } from "@/lib/ipc";
+import type {
+  CategoryKind,
+  CollectionRow,
+  DeckCard,
+  DeckFinish,
+  TradeLine,
+  WishRow,
+} from "@/lib/ipc";
 
 export interface TransferCard {
   name: string;
@@ -218,5 +225,27 @@ export function fromWishRow(row: WishRow): TransferCard {
     typeLine: row.typeLine,
     unitPrice: row.unitPrice,
     legalities: row.legalities,
+  };
+}
+
+/**
+ * One line of a trade's side (issue #903). `unitPrice` is the line's own — live while the trade
+ * is open, the figure it closed with once it is not — and at 100%: a side's percentage is a fact
+ * about this trade, not about the card, and a file carries the card.
+ */
+export function fromTradeLine(line: TradeLine): TransferCard {
+  return {
+    ...NOTHING,
+    name: line.name,
+    quantity: line.quantity,
+    setCode: line.setCode,
+    collectorNumber: line.collectorNumber,
+    finish: finishOf(line.finish),
+    lang: line.lang,
+    setName: line.setName,
+    rarity: line.rarity,
+    typeLine: line.typeLine,
+    unitPrice: line.unitPrice,
+    legalities: line.legalities,
   };
 }

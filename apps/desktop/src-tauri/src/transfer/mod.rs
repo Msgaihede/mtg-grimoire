@@ -36,12 +36,17 @@ pub enum Surface {
     Deck,
     Collection,
     Wishlist,
+    /// One side of a trade. **Exported from the page and never mirrored** — no file under the
+    /// mirror's root is a trade, so `Dirty::covers` answers `false` for it — and here only so
+    /// the field registry this crate keeps in step with TypeScript's has the same rows
+    /// (`__golden__/fields.json`, issue #903).
+    Trade,
 }
 
 impl Surface {
     /// Every surface. A sweep over this is how a suite covers all three without a list of
     /// three written down at each call site and forgotten when a fourth arrives.
-    pub const ALL: [Self; 3] = [Self::Deck, Self::Collection, Self::Wishlist];
+    pub const ALL: [Self; 4] = [Self::Deck, Self::Collection, Self::Wishlist, Self::Trade];
 
     /// The surface's wire word — the one `#[serde(rename_all = "lowercase")]` reads above, and
     /// what `__golden__/fields.json` keys its rows by. Written out rather than derived from the
@@ -51,6 +56,7 @@ impl Surface {
             Self::Deck => "deck",
             Self::Collection => "collection",
             Self::Wishlist => "wishlist",
+            Self::Trade => "trade",
         }
     }
 }

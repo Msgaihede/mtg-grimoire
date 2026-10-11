@@ -338,7 +338,8 @@ their overlap:
   printing-hint-free position for a `Condition` column at all; **CSV alone offers the whole of
   `TRANSFER_FIELD_IDS`**, which is literally how it is written (`optional: TRANSFER_FIELD_IDS`).
 - **A *surface* says what facts it holds** — `SURFACE_FIELDS[surface]`. A deck has no purchase
-  history; a wishlist has no piles.
+  history; a wishlist has no piles. A trade's side (`trade`, issue #903) is a printing, a finish,
+  a count and a price — exported from the page and never mirrored.
 
 `availableFields(format, surface)` is the intersection, filtered back into `TRANSFER_FIELD_IDS`'
 own order (which is also CSV's column order, unconditionally). `defaultFields` is the same
@@ -372,7 +373,7 @@ the wishlist ever offers — a collection row is filed nowhere at all, so there 
 no checkbox for one. **A wish has been filed somewhere since schema v23 and still does not offer
 it**, which is a decision rather than an oversight: a wishlist folder is not a deck category, no
 format has a channel that means "the reader's own drawer", and the rule is the one stated with
-[the four import destinations](#the-four-import-destinations) below — folders are not carried in
+[the import destinations](#the-import-destinations) below — folders are not carried in
 either direction.
 
 **The `csvHeader` column is the CSV vocabulary, both ways.** The writer reads it to name a column;
@@ -635,10 +636,11 @@ the preview lists the line: `the file says Japanese; added as English`. A langua
 recognise is listed separately. `@/lib/languages`' `languageCode` reads the spellings (`Japanese`,
 `JP`, `Chinese Simplified`, `zh-TW`, the code itself).
 
-## The four import destinations
+## The import destinations
 
 `import/destination.ts`'s `ImportDestination` is what the dialog's second step draws; four exist,
-one per surface plus the deck's "start a new one":
+one per surface plus the deck's "start a new one" — and a fifth, `trade`, one side of an open
+trade (issue #903), which only adds and is described in [trades.md](trades.md#7-a-side-in-and-out-of-a-file--issue-903):
 
 | Destination | Modes | Grain the write folds on | Notes |
 | --- | --- | --- | --- |

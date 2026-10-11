@@ -29,11 +29,21 @@ describe("availableFields", () => {
 
   it("always offers quantity and name, in every format on every surface", () => {
     for (const format of EXPORT_FORMATS) {
-      for (const surface of ["deck", "collection", "wishlist"] as const) {
+      for (const surface of ["deck", "collection", "wishlist", "trade"] as const) {
         expect(availableFields(format, surface)).toEqual(
           expect.arrayContaining(["quantity", "name"]),
         );
       }
+    }
+  });
+
+  it("offers a trade's side its printing facts and price, and nothing a trade line lacks", () => {
+    const offered = availableFields("csv", "trade");
+    expect(offered).toEqual(
+      expect.arrayContaining(["setCode", "collectorNumber", "finish", "setName", "unitPrice"]),
+    );
+    for (const missing of ["condition", "notes", "category", "purchasePrice"] as const) {
+      expect(offered, missing).not.toContain(missing);
     }
   });
 
@@ -65,7 +75,7 @@ describe("the deck label's fields", () => {
   });
 
   it("offers neither to a surface with no labels", () => {
-    for (const surface of ["collection", "wishlist"] as const) {
+    for (const surface of ["collection", "wishlist", "trade"] as const) {
       const offered = availableFields("csv", surface);
       expect(offered, surface).not.toContain("label");
       expect(offered, surface).not.toContain("labelColor");
@@ -77,7 +87,7 @@ describe("the deck label's fields", () => {
    *  one-letter gap between `Tag` and `Tags` safe rather than merely survived, and is still what
    *  keeps the two apart now the words are further off. */
   it("never offers the collection's Tags beside the deck's Label", () => {
-    for (const surface of ["deck", "collection", "wishlist"] as const) {
+    for (const surface of ["deck", "collection", "wishlist", "trade"] as const) {
       const offered = new Set(availableFields("csv", surface));
       expect(offered.has("label") && offered.has("tags"), surface).toBe(false);
     }
@@ -108,7 +118,7 @@ describe("defaultFields", () => {
 
   it("is a subset of what is available, in every pair", () => {
     for (const format of EXPORT_FORMATS) {
-      for (const surface of ["deck", "collection", "wishlist"] as const) {
+      for (const surface of ["deck", "collection", "wishlist", "trade"] as const) {
         const available = availableFields(format, surface);
         for (const id of defaultFields(format, surface)) expect(available).toContain(id);
       }
@@ -148,14 +158,24 @@ describe("SURFACE_HAS_PILES", () => {
    * the pair a new surface has to answer *both* of.
    */
   it("answers for every surface SURFACE_FIELDS knows, and for no other", () => {
-    expect(Object.keys(SURFACE_HAS_PILES).sort()).toEqual(["collection", "deck", "wishlist"]);
+    expect(Object.keys(SURFACE_HAS_PILES).sort()).toEqual([
+      "collection",
+      "deck",
+      "trade",
+      "wishlist",
+    ]);
     expect(Object.keys(SURFACE_HAS_PILES).sort()).toEqual(Object.keys(SURFACE_FIELDS).sort());
   });
 
   /** Only the deck. Written as the whole record rather than three lookups so that a surface
    *  gaining piles cannot be half-declared — the answer is one object and it is read as one. */
   it("gives the piles to the deck and to nothing else", () => {
-    expect(SURFACE_HAS_PILES).toEqual({ deck: true, collection: false, wishlist: false });
+    expect(SURFACE_HAS_PILES).toEqual({
+      deck: true,
+      collection: false,
+      wishlist: false,
+      trade: false,
+    });
   });
 
   /** The coincidence stated as a measurement rather than left implied: today the derived
@@ -164,7 +184,7 @@ describe("SURFACE_HAS_PILES", () => {
    *  a surface with piles and no category column is legal, and this test is then the thing to
    *  delete rather than the thing to fix. */
   it("agrees with the category field today, which is the coincidence it exists to outlive", () => {
-    for (const surface of ["deck", "collection", "wishlist"] as const) {
+    for (const surface of ["deck", "collection", "wishlist", "trade"] as const) {
       expect(SURFACE_HAS_PILES[surface], surface).toBe(
         SURFACE_FIELDS[surface].includes("category"),
       );

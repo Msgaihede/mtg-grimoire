@@ -228,6 +228,13 @@ pub struct TradeLine {
     pub layout: Option<String>,
     /// `cards.finishes` as stored: a JSON array, as text.
     pub finishes: Option<String>,
+    /// The printing's language, type line and `legalities` blob as `cards` stores them — `None`
+    /// when the printing has left the database. Read by nothing on the page but a side's export
+    /// (issue #903): the language and type line are columns a file can carry, and the blob is
+    /// what the export's Arena filter reads.
+    pub lang: Option<String>,
+    pub type_line: Option<String>,
+    pub legalities: Option<String>,
     pub finish: String,
     pub quantity: i64,
     pub source: String,
@@ -496,7 +503,8 @@ fn lines_sql(market: Marketplace, open: bool) -> String {
                 {nonfoil}, {foil}, {etched},
                 coalesce((SELECT sum(w.quantity) FROM wishlist_entries w
                             LEFT JOIN wishlist_folders wf ON wf.id = w.folder_id
-                           WHERE {wished}), 0)
+                           WHERE {wished}), 0),
+                c.lang, c.type_line, c.legalities
            FROM trade_lines l
            LEFT JOIN cards c ON c.id = l.card_id
           WHERE l.trade_id = ?1
@@ -660,6 +668,9 @@ pub fn get_trade(conn: &Connection, id: i64) -> Result<Option<Trade>, String> {
                 rarity: r.get(8)?,
                 layout: r.get(9)?,
                 finishes: r.get(10)?,
+                lang: r.get(19)?,
+                type_line: r.get(20)?,
+                legalities: r.get(21)?,
                 finish: r.get(11)?,
                 quantity: r.get(12)?,
                 source: r.get(13)?,

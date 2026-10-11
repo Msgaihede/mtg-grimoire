@@ -1,4 +1,5 @@
 import { SquareArrowRightEnter, SquareArrowRightExit } from "lucide-react";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FOCUS } from "@/lib/focus";
 import { cn } from "@/lib/utils";
 
@@ -29,18 +30,42 @@ export function ImportExportPair({
   onExport,
   importLabel,
   exportLabel,
+  compact = false,
   className,
 }: {
-  onImport: () => void;
-  onExport: () => void;
+  /**
+   * Absent on a list that can be read and not written — a finished or archived trade's side
+   * (issue #903) — and then the group is the Export button alone, in the same frame: a greyed
+   * Import would be a control over nothing, and the pair's shape is still what the reader
+   * recognises from every other list.
+   */
+  onImport?: (opener: HTMLElement) => void;
+  onExport: (opener: HTMLElement) => void;
   /** The accessible name for the left button. Names *what is being moved*, so it is never a bare
-   *  `Import` — see the component's own note. */
-  importLabel: string;
+   *  `Import` — see the component's own note. Read only when {@link onImport} is passed. */
+  importLabel?: string;
   exportLabel: string;
+  /**
+   * The glyphs alone, each with its accessible name as a tooltip — for a heading that has other
+   * things to say in the same row, which is a trade side's (issue #903): its name, its count and
+   * its percentage, in half of a page that is capped in width. With the words the side's own name
+   * went onto two lines at every window width, so this is not a breakpoint.
+   */
+  compact?: boolean;
   className?: string;
 }) {
+  const tip = useTooltip();
   const buttons = [
-    { label: importLabel, word: "Import", Icon: SquareArrowRightEnter, onClick: onImport },
+    ...(onImport === undefined
+      ? []
+      : [
+          {
+            label: importLabel ?? "Import cards",
+            word: "Import",
+            Icon: SquareArrowRightEnter,
+            onClick: onImport,
+          },
+        ]),
     { label: exportLabel, word: "Export", Icon: SquareArrowRightExit, onClick: onExport },
   ];
   return (
@@ -56,22 +81,24 @@ export function ImportExportPair({
         <button
           key={label}
           type="button"
-          onClick={onClick}
+          // The pressed button, so a host whose dialog closes can hand the caret back to it.
+          onClick={(e) => onClick(e.currentTarget)}
           aria-haspopup="dialog"
           aria-label={label}
+          {...(compact ? tip(label, { describes: false }) : {})}
           className={cn(
             "inline-flex h-9 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap",
-            "px-2.5 text-xs text-dim",
+            compact ? "w-9 text-dim" : "px-2.5 text-xs text-dim",
             // The hairline between them, and it is the second button's own border rather than a
             // divider element: a `<div>` between two flex children would be a third child for the
             // group's `aria-label` to have to be about.
-            at === 1 && "border-l border-border",
+            at > 0 && "border-l border-border",
             "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
             FOCUS,
           )}
         >
           <Icon className="size-4 shrink-0" aria-hidden="true" />
-          {word}
+          {!compact && word}
         </button>
       ))}
     </div>

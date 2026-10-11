@@ -189,7 +189,7 @@ export const FORMAT_FIELDS: Record<ExportFormat, FormatFields> = {
   },
 };
 
-export type TransferSurface = "deck" | "collection" | "wishlist";
+export type TransferSurface = "deck" | "collection" | "wishlist" | "trade";
 
 export const SURFACE_FIELDS: Record<TransferSurface, readonly TransferFieldId[]> = {
   deck: [
@@ -205,6 +205,12 @@ export const SURFACE_FIELDS: Record<TransferSurface, readonly TransferFieldId[]>
   // No `setName`: a `WishRow` carries a set code and nothing about the set.
   wishlist: [
     "quantity", "name", "setCode", "collectorNumber", "finish", "lang", "notes",
+    "rarity", "typeLine", "unitPrice",
+  ],
+  // One side of a trade (issue #903): a printing, a finish and a count, and what `cards` says
+  // about the printing. No notes, no condition, no pile — a trade line has none of the three.
+  trade: [
+    "quantity", "name", "setCode", "collectorNumber", "finish", "lang", "setName",
     "rarity", "typeLine", "unitPrice",
   ],
 };
@@ -229,6 +235,7 @@ export const SURFACE_HAS_PILES: Record<TransferSurface, boolean> = {
   deck: true,
   collection: false,
   wishlist: false,
+  trade: false,
 };
 
 /** The intersection, in registry order — which is what makes a CSV's columns stable. */

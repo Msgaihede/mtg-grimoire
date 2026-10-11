@@ -56,6 +56,8 @@ const ipcMock = vi.hoisted(() => ({
   cardPrintings: vi.fn(),
   getMarketplace: vi.fn(),
   marketplaceFeedStatus: vi.fn(),
+  importResolve: vi.fn(),
+  oracleTagsForPrintings: vi.fn(),
 }));
 vi.mock("@/lib/ipc", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/lib/ipc")>();
@@ -88,6 +90,10 @@ vi.mock("./TradeScanDialog", () => ({
     ) : null,
 }));
 
+/** The clipboard, so an export's text can be read where Copy put it — `ExportDialog.test`'s seam. */
+const copyText = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/clipboard", () => ({ copyText }));
+
 import { TradePage } from "./TradePage";
 
 /** Midday UTC, so the day is the same day in every time zone a suite runs in. */
@@ -106,6 +112,9 @@ function line(over: Partial<TradeLine> & Pick<TradeLine, "side" | "name">): Trad
     rarity: "rare",
     layout: "normal",
     finishes: '["nonfoil","foil"]',
+    lang: "en",
+    typeLine: "Instant",
+    legalities: '{"vintage":"legal"}',
     finish: "nonfoil",
     quantity: 1,
     source: "search",
@@ -398,6 +407,9 @@ beforeEach(() => {
   m.cardPrintings.mockReset().mockResolvedValue({ items: [], total: 0 });
   m.getMarketplace.mockReset().mockResolvedValue("tcgplayer");
   m.marketplaceFeedStatus.mockReset().mockResolvedValue([]);
+  m.importResolve.mockReset().mockResolvedValue([]);
+  m.oracleTagsForPrintings.mockReset().mockResolvedValue([]);
+  copyText.mockReset().mockResolvedValue(undefined);
 });
 
 describe("which trade the page opens on", () => {
@@ -1240,6 +1252,109 @@ describe("an open trade", () => {
 
     expect(screen.queryByRole("dialog", { name: /Scanner/ })).not.toBeInTheDocument();
     expect(camera).toHaveFocus();
+  });
+});
+
+/**
+ * Each side in and out of a file (issue #903): the app's own import and export dialogs, onto and
+ * off the one side whose button was pressed, and an export on a closed trade too.
+ */
+describe("a side's import and export", () => {
+  it("imports a pasted list onto the side whose Import was pressed, and takes the caret back", async () => {
+    const user = userEvent.setup();
+    backend.trades = [canvasTrade()];
+    ipcMock.importResolve.mockResolvedValue([
+      {
+        index: 0,
+        hintMissed: false,
+        matched: { cardId: "ring-ltc", name: "Sol Ring", setCode: "ltc", collectorNumber: "285" },
+      },
+      {
+        index: 1,
+        hintMissed: false,
+        matched: { cardId: "bolt-sta", name: "Lightning Bolt", setCode: "sta", collectorNumber: "42" },
+      },
+    ]);
+    wrap(<TradePage />);
+    await tradeSection("Trade 5");
+
+    const opener = screen.getByRole("button", { name: "Import cards to their side" });
+    await user.click(opener);
+    const dialog = await screen.findByRole("dialog", { name: "Import cards" });
+    expect(dialog).toHaveTextContent("Onto their side of “Trade 5”");
+    await user.click(within(dialog).getByLabelText("Card list"));
+    await user.paste("2 Sol Ring\n1 Lightning Bolt *F*");
+    await user.click(within(dialog).getByRole("button", { name: "Preview" }));
+    expect(await within(dialog).findByText("3 cards will be put on their side.")).toBeVisible();
+    await user.click(within(dialog).getByRole("button", { name: "Import" }));
+
+    await waitFor(() =>
+      expect(ipcMock.tradeAddLines).toHaveBeenCalledExactlyOnceWith(5, "theirs", [
+        { cardId: "ring-ltc", finish: "nonfoil", quantity: 2, source: "search" },
+        { cardId: "bolt-sta", finish: "foil", quantity: 1, source: "search" },
+      ]),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Import cards" })).not.toBeInTheDocument(),
+    );
+    expect(opener).toHaveFocus();
+  });
+
+  it("keeps the dialog up and says why when the side refuses the list", async () => {
+    const user = userEvent.setup();
+    backend.trades = [canvasTrade()];
+    ipcMock.importResolve.mockResolvedValue([
+      {
+        index: 0,
+        hintMissed: false,
+        matched: { cardId: "ring-ltc", name: "Sol Ring", setCode: "ltc", collectorNumber: "285" },
+      },
+    ]);
+    ipcMock.tradeAddLines.mockRejectedValue("a trade line holds at most 9999 copies");
+    wrap(<TradePage />);
+    await tradeSection("Trade 5");
+
+    await user.click(screen.getByRole("button", { name: "Import cards to your side" }));
+    const dialog = await screen.findByRole("dialog", { name: "Import cards" });
+    await user.click(within(dialog).getByLabelText("Card list"));
+    await user.paste("1 Sol Ring");
+    await user.click(within(dialog).getByRole("button", { name: "Preview" }));
+    await user.click(await within(dialog).findByRole("button", { name: "Import" }));
+
+    expect(
+      await within(dialog).findByText(
+        "Couldn't import the list — a trade line holds at most 9999 copies",
+      ),
+    ).toBeVisible();
+    expect(ipcMock.tradeAddLines).toHaveBeenCalledWith(5, "mine", expect.any(Array));
+  });
+
+  it("exports one side of an archived trade, with no way to import onto it", async () => {
+    const user = userEvent.setup();
+    backend.trades = [canvasTrade({ status: "archived", closedAt: day(10, 4) })];
+    wrap(<TradePage />);
+    const section = await tradeSection("Trade 5");
+
+    expect(within(section).queryByRole("button", { name: /^Import cards/ })).not.toBeInTheDocument();
+    const opener = within(section).getByRole("button", { name: "Export their side" });
+    await user.click(opener);
+    const dialog = await screen.findByRole("dialog", { name: "Export \"Trade 5 — They give\"" });
+    await user.click(within(dialog).getByRole("button", { name: /Copy/ }));
+
+    await waitFor(() => expect(copyText).toHaveBeenCalledOnce());
+    const text = copyText.mock.calls[0][0] as string;
+    // Their four lines, and none of the reader's own.
+    for (const name of ["Lightning Bolt", "Urza's Saga", "Tarmogoyf", "Sol Ring"]) {
+      expect(text).toContain(name);
+    }
+    expect(text).not.toContain("Counterspell");
+    expect(text).not.toContain("Boros Charm");
+
+    await user.keyboard("{Escape}");
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: /^Export/ })).not.toBeInTheDocument(),
+    );
+    expect(opener).toHaveFocus();
   });
 });
 

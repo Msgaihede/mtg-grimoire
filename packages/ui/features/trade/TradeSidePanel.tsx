@@ -1,4 +1,5 @@
 import type { JSX } from "react";
+import { ImportExportPair } from "@/features/transfer/ImportExportPair";
 import type { Trade, TradeSide } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { cardCount, isOpen, linesOf, rateOf } from "./trade";
@@ -6,7 +7,7 @@ import { TradeAddRow } from "./TradeAddRow";
 import { FIGURE } from "./tradeControls";
 import { TradeLineCard } from "./TradeLineCard";
 import { TradeRate } from "./TradeRate";
-import { rateLabel, sideHeading } from "./tradeWords";
+import { rateLabel, sideHeading, sideWords } from "./tradeWords";
 
 /**
  * One side of a trade: what is on it, at what percentage, and — while the trade is open — the row
@@ -24,15 +25,27 @@ import { rateLabel, sideHeading } from "./tradeWords";
  *
  * **Closed, the same panel with two bands**: no add row, and the percentage is a dim label rather
  * than a button — a control that opens a slider nobody may move would be a lie about the trade.
+ *
+ * **Each side has its own transfer pair** (issue #903), the joined Import and Export every list
+ * in the app carries, at the end of the heading: a side is a list of its own, and the reader
+ * pasting what the other trader sent is filling one side, never both. Closed, the pair is Export
+ * alone — a finished or archived trade is still a list somebody may want in a file, and nothing
+ * may be put on it. The dialogs are the view's, for the scanner's reason: a `fixed` modal belongs
+ * at its host's top level, and this panel is a grid cell.
  */
 export function TradeSidePanel({
   trade,
   side,
   onScan,
+  onImport,
+  onExport,
 }: {
   trade: Trade;
   side: TradeSide;
   onScan: (side: TradeSide, opener: HTMLElement) => void;
+  /** Open the import dialog onto this side. Only asked while the trade is open. */
+  onImport: (side: TradeSide, opener: HTMLElement) => void;
+  onExport: (side: TradeSide, opener: HTMLElement) => void;
 }): JSX.Element {
   const lines = linesOf(trade.lines, side);
   const copies = lines.reduce((sum, line) => sum + line.quantity, 0);
@@ -56,6 +69,13 @@ export function TradeSidePanel({
             {rateLabel(rateOf(trade, side))}
           </span>
         )}
+        <ImportExportPair
+          onImport={editable ? (opener) => onImport(side, opener) : undefined}
+          onExport={(opener) => onExport(side, opener)}
+          importLabel={`Import cards to ${sideWords(side)}`}
+          exportLabel={`Export ${sideWords(side)}`}
+          compact
+        />
       </div>
 
       {editable && <TradeAddRow trade={trade} side={side} onScan={(opener) => onScan(side, opener)} />}

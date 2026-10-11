@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { CONDITION_NOT_SET } from "@/lib/conditions";
-import type { CollectionRow, DeckCard, WishRow } from "@/lib/ipc";
+import type { CollectionRow, DeckCard, TradeLine, WishRow } from "@/lib/ipc";
 import { TRANSFER_FIELDS } from "./fields";
-import { fromCollectionRow, fromDeckCard, fromWishRow } from "./TransferCard";
+import { fromCollectionRow, fromDeckCard, fromTradeLine, fromWishRow } from "./TransferCard";
 
 describe("fromDeckCard", () => {
   it("carries the three category facts and leaves the collection's fields null", () => {
@@ -98,5 +98,30 @@ describe("fromWishRow", () => {
     expect(t.setName).toBeNull();
     expect(t.finish).toBeNull();
     expect(t.condition).toBeNull();
+  });
+});
+
+describe("fromTradeLine", () => {
+  const line = (over: Partial<TradeLine> = {}) =>
+    ({ name: "Sol Ring", quantity: 2, setCode: "ltc", collectorNumber: "285",
+      setName: "Tales of Middle-earth Commander", rarity: "uncommon", lang: "en",
+      typeLine: "Artifact", legalities: '{"vintage":"restricted"}', finish: "nonfoil",
+      unitPrice: 1.5, ...over }) as unknown as TradeLine;
+
+  it("carries the printing, the finish, the price and the Arena blob, and nothing a trade lacks", () => {
+    const t = fromTradeLine(line());
+
+    expect(t).toMatchObject({ name: "Sol Ring", quantity: 2, setCode: "ltc",
+      collectorNumber: "285", setName: "Tales of Middle-earth Commander", lang: "en",
+      typeLine: "Artifact", unitPrice: 1.5, legalities: '{"vintage":"restricted"}' });
+    expect(t.condition).toBeNull();
+    expect(t.notes).toBeNull();
+    expect(t.categoryName).toBeNull();
+  });
+
+  it("spells the regular copy null, as every surface but the collection's storage does", () => {
+    expect(fromTradeLine(line()).finish).toBeNull();
+    expect(fromTradeLine(line({ finish: "foil" })).finish).toBe("foil");
+    expect(fromTradeLine(line({ finish: "etched" })).finish).toBe("etched");
   });
 });

@@ -192,6 +192,8 @@ impl Dirty {
             Surface::Deck => self.decks,
             Surface::Collection => self.collection,
             Surface::Wishlist => self.wishlist,
+            // The mirror writes no trade.
+            Surface::Trade => false,
         }
     }
 }

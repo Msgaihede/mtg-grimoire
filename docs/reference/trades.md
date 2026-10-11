@@ -189,9 +189,40 @@ calls `trade_add_lines` with `source: "scan"`.
   side. The surface says so in a note, and *Clear all…* is the way out.
 - Scanner preferences changed there — mode, filters, camera — are the Scanner view's too.
 
-## 7. Not built
+## 7. A side in and out of a file — issue #903
+
+Each side's heading ends in the app's joined **Import · Export** pair (`ImportExportPair`),
+`compact` — the two glyphs, each named in a tooltip, because with the words the side's own name
+went onto two lines in a page capped in width — and the two dialogs are the app's own (`ImportDialog`, `ExportDialog`), mounted at `TradeView`'s top
+level for the scanner's reason. Every way out of either hands the caret back to the button that
+opened it.
+
+- **Import is one side of an open trade.** The destination is
+  `transfer/import/destinations/TradePreview.tsx` (`tradeDestination({ tradeId, side })`) over the
+  pure planner `destinations/trade.ts`: every resolved line becomes a `TradeLineInput` for the
+  printing `import_resolve` answered, in the line's own finish or the regular copy, with
+  `source: "search"` — the word for a card named by text, which is what the side's own field does;
+  `collection` stays the mark for a card picked from what the reader owns. Lines naming one
+  printing and finish fold, and the whole list is **one `trade_add_lines` call**, so a refusal
+  (a trade closed elsewhere, a line past 9999 copies) leaves the side as it was and is said in the
+  dialog. No mode: an import only adds, as every way onto a side does.
+- **Export is every side of every trade** — open, finished or archived. A closed trade's pair is
+  Export alone; nothing may be put on it, and a greyed Import would be a control over nothing.
+  The cards are `fromTradeLine` over the side's lines, priced at the line's own `unitPrice` (live
+  while open, the figure it closed with after) at 100%: a side's percentage is a fact about this
+  trade, not about the card a file carries.
+- **`trade` is a transfer surface of its own** (`fields.ts`' `SURFACE_FIELDS`): quantity, name,
+  set, number, finish, language, set name, rarity, type line and price — no condition, no notes,
+  no pile. `TradeLine` carries `lang`, `typeLine` and `legalities` for it, the last because the
+  dialog's Arena filter reads it. Rust's `transfer::Surface` has the `Trade` row too, so
+  `__golden__/fields.json`'s fence covers it, and the mirror's `Dirty::covers` answers `false`:
+  no file under the mirror's root is a trade.
+- **Desktop only.** The phone's trade page has no transfer sheet yet.
+
+## 8. Not built
 
 - **Sync.** A trade made on one device is on no other.
+- **Import and export on the phone's trade page.**
 - **A cash line.** A balance is shown and never settled.
 - **Undo for a finish.** Reopen puts the trade back, not the cards — and not a copy into the
   deck it came out of.

@@ -73,6 +73,11 @@ export interface TradeLine {
   layout: string | null;
   /** The printing's finishes as `cards.finishes` stores them: a JSON array, as text. */
   finishes: string | null;
+  /** The printing's language, type line and `legalities` blob, as `cards` stores them; `null`
+   *  when the printing has left the database. Only a side's export reads them (issue #903). */
+  lang: string | null;
+  typeLine: string | null;
+  legalities: string | null;
   finish: Finish;
   quantity: number;
   source: TradeSource;

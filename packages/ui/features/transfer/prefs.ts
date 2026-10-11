@@ -91,6 +91,12 @@ export const INITIAL_EXPORT_PREFS: Readonly<Record<TransferSurface, ExportPrefs>
     arenaOnly: false,
     includeInactive: false,
   },
+  trade: {
+    format: "plain",
+    fields: defaultFields("plain", "trade"),
+    arenaOnly: false,
+    includeInactive: false,
+  },
 };
 
 /**

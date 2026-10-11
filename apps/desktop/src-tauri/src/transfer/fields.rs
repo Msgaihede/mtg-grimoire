@@ -364,7 +364,7 @@ fn format_fields(format: Format) -> FormatFields {
     }
 }
 
-/// `SURFACE_FIELDS` — what facts each of the app's three lists holds.
+/// `SURFACE_FIELDS` — what facts each of the app's three lists, and a trade's side, holds.
 pub fn surface_fields(surface: Surface) -> &'static [FieldId] {
     match surface {
         Surface::Deck => &[
@@ -417,6 +417,19 @@ pub fn surface_fields(surface: Surface) -> &'static [FieldId] {
             FieldId::Finish,
             FieldId::Lang,
             FieldId::Notes,
+            FieldId::Rarity,
+            FieldId::TypeLine,
+            FieldId::UnitPrice,
+        ],
+        // One side of a trade: no notes, no condition, no pile.
+        Surface::Trade => &[
+            FieldId::Quantity,
+            FieldId::Name,
+            FieldId::SetCode,
+            FieldId::CollectorNumber,
+            FieldId::Finish,
+            FieldId::Lang,
+            FieldId::SetName,
             FieldId::Rarity,
             FieldId::TypeLine,
             FieldId::UnitPrice,
@@ -691,14 +704,14 @@ mod tests {
     /// CSV alone, whose header row *is* the field list spelled out.
     ///
     /// So the tables themselves are committed, in the shape that already works: written from
-    /// TypeScript by `pnpm golden`, asserted here and in `golden.test.ts`. All 21 pairs on
+    /// TypeScript by `pnpm golden`, asserted here and in `golden.test.ts`. All 28 pairs on
     /// both axes, plus `SURFACE_FIELDS` — which is not recoverable from the intersections,
     /// because a field no format offers drops out of every one of them.
     #[test]
     fn every_format_and_surface_offers_the_fields_typescript_says() {
         let golden = fields_golden();
-        assert_eq!(golden.available.len(), 21, "7 formats × 3 surfaces");
-        assert_eq!(golden.default.len(), 21);
+        assert_eq!(golden.available.len(), 28, "7 formats × 4 surfaces");
+        assert_eq!(golden.default.len(), 28);
 
         for surface in Surface::ALL {
             assert_eq!(
