@@ -249,6 +249,7 @@ import type {
   QrMatrix,
   PrintingPrices,
   PrintingTags,
+  QueryPredicate,
   RecentCard,
   RelayOutcome,
   RelayStatus,
@@ -11467,47 +11468,73 @@ export function readHandlers(db: FakeDb) {
      * **A partial reading, and the one simplification is stated rather than hidden**: this fake
      * answers `search_cards` without reading its predicates at all, so there is no second
      * evaluator here to share. What it reads is enough for a story to watch the deck narrow —
-     * the three text fields as a case-folded substring and `cmc` as a number — and every other
-     * term, and every tag, passes. The crate's `filters` SQL is the one implementation; the
-     * answer here only has to be the right *shape*, and it never narrows away a card the real
-     * one would keep for a field it does not read.
+     * the text fields as a case-folded substring (`!` exact names as equality), `cmc` as a
+     * number, and Scryfall's `or` and parentheses as the `anyOf`/`allOf` they arrive as — and
+     * every other term, and every tag, passes. The crate's `filters` SQL is the one
+     * implementation; the answer here only has to be the right *shape*, and it never narrows away
+     * a card the real one would keep for a field it does not read.
      */
     deck_query_cards: (args: {
       deckId: number;
       filters: Pick<CardFilters, "predicates" | "oracleTags" | "artTags">;
     }): string[] => {
-      const holds = (card: FakeCard | null, row: FakeDeckCard): boolean =>
-        (args.filters.predicates ?? []).every((p) => {
-          const text = (s: string | null | undefined) =>
-            (s ?? "").toLowerCase().includes(p.value.toLowerCase());
-          let hit: boolean;
-          switch (p.field) {
-            case "name":
-              hit = text(card?.name ?? row.name);
-              break;
-            case "typeLine":
-              hit = card !== null && text(card.typeLine);
-              break;
-            case "oracleText":
-              hit = card !== null && text(card.oracleText);
-              break;
-            case "cmc": {
-              const want = Number(p.value);
-              const have = card?.cmc ?? null;
-              if (have === null || Number.isNaN(want)) hit = false;
-              else if (p.op === "gt") hit = have > want;
-              else if (p.op === "gte") hit = have >= want;
-              else if (p.op === "lt") hit = have < want;
-              else if (p.op === "lte") hit = have <= want;
-              else if (p.op === "ne") hit = have !== want;
-              else hit = have === want;
-              break;
-            }
-            default:
-              return true;
+      // Three answers rather than two: `undefined` is a term this fake does not read, which
+      // passes at the top and inside a group stays unknown — so an `or` with one unread branch
+      // never narrows away a card its real answer might keep, and a negated group of unread
+      // terms is not turned into "nothing matches" by the `!` (issue #909).
+      const answer = (
+        card: FakeCard | null,
+        row: FakeDeckCard,
+        p: QueryPredicate,
+      ): boolean | undefined => {
+        const text = (s: string | null | undefined) =>
+          (s ?? "").toLowerCase().includes(p.value.toLowerCase());
+        let hit: boolean | undefined;
+        switch (p.field) {
+          case "anyOf":
+          case "allOf": {
+            const each = (p.terms ?? []).map((t) => answer(card, row, t));
+            const decisive = p.field === "anyOf";
+            if (each.includes(decisive)) hit = decisive;
+            else if (each.every((a) => a === !decisive)) hit = !decisive;
+            break;
           }
-          return p.negated ? !hit : hit;
-        });
+          case "name":
+            hit =
+              p.op === "eq"
+                ? (card?.name ?? row.name).toLowerCase() === p.value.toLowerCase()
+                : text(card?.name ?? row.name);
+            break;
+          case "text":
+            hit =
+              text(card?.name ?? row.name) ||
+              (card !== null && (text(card.typeLine) || text(card.oracleText)));
+            break;
+          case "typeLine":
+            hit = card !== null && text(card.typeLine);
+            break;
+          case "oracleText":
+            hit = card !== null && text(card.oracleText);
+            break;
+          case "cmc": {
+            const want = Number(p.value);
+            const have = card?.cmc ?? null;
+            if (have === null || Number.isNaN(want)) hit = false;
+            else if (p.op === "gt") hit = have > want;
+            else if (p.op === "gte") hit = have >= want;
+            else if (p.op === "lt") hit = have < want;
+            else if (p.op === "lte") hit = have <= want;
+            else if (p.op === "ne") hit = have !== want;
+            else hit = have === want;
+            break;
+          }
+          default:
+            return undefined;
+        }
+        return hit === undefined ? undefined : p.negated ? !hit : hit;
+      };
+      const holds = (card: FakeCard | null, row: FakeDeckCard): boolean =>
+        (args.filters.predicates ?? []).every((p) => answer(card, row, p) !== false);
       const ids = new Set<string>();
       for (const dc of db.deckCards) {
         if (dc.deckId === args.deckId && holds(cardById(db, dc.cardId), dc)) ids.add(dc.cardId);

@@ -1,7 +1,15 @@
 # Scryfall query syntax in the card search boxes
 
-`t:goblin`, `o:"draw a card"`, `c>=rg`, `cmc>=3`, `-kw:flying`, `otag:"spot removal"` — typed
-into any box in this app that searches cards, and meaning what they mean on Scryfall.
+`t:goblin`, `o:"draw a card"`, `c>=rg`, `cmc>=3`, `-kw:flying`, `otag:"spot removal"`,
+`(t:goblin or t:elf) is:commander`, `!"lightning bolt"` — typed into any box in this app that
+searches cards, and meaning what they mean on Scryfall.
+
+**Since 2026-10-11 (issue [#909](https://github.com/Msgaihede/mtg-grimoire/issues/909)) that is
+Scryfall's whole language** — `or`, parentheses, `is:`/`not:`/`has:`, exact names and some forty
+more keywords — and the fourteen-keyword table below is the first half of it. The second half,
+and the handful of Scryfall features that are still refused, are in
+[The whole language](#the-whole-language-issue-909) at the foot of this file; read that section
+before you trust any sentence above it that says "no `or`".
 
 Two measurement dates run through this document and neither is a guess.
 
@@ -40,8 +48,9 @@ Fourteen of them. `:` is each keyword's **default operator**, and the defaults a
 A leading `-` negates any term, and terms **AND** together — this app's rule and Scryfall's
 alike (`t:goblin t:creature` = **557** there, measured). On a bare word or a quoted phrase the
 same `-` excludes a card **by name** — `-bolt`, `-"lightning bolt"` — which has its own
-section below, because no keyword in the table produces it. There is still **no `or` and no
-parentheses**; the refusal and its reason are both unchanged and are two sections down.
+section below, because no keyword in the table produces it. **`or` and parentheses exist since
+2026-10-11** and ride beside this table rather than through it — see
+[The whole language](#the-whole-language-issue-909).
 
 The keyword is matched with separators dropped and case folded (`queryLanguage.ts`'s
 `keywordKey`), which is why each tag row lists three keys where five spellings work:
@@ -117,10 +126,12 @@ departure accepted, now paid in the other direction.
 - **Unless it starts with `-`**, in which case it is a name to exclude rather than free text:
   `-bolt`, `-"lightning bolt"`. See [A `-` on plain words excludes a name](#a---on-plain-words-excludes-a-name).
 
-**No `or`, no parentheses.** The backend cannot express them: predicates are composed by
-conjunction and every included tag becomes its own `EXISTS`, so boolean grouping would need new
-SQL in `filters.rs` *and* a matching change in `index/facets.rs` — more work than the rest of
-this feature combined. A reader who types `or` gets it as a word to search for.
+**`or` and parentheses were refused here until 2026-10-11**, on the ground that predicates are
+composed by conjunction and grouping would need new SQL in `filters.rs` *and* in
+`index/facets.rs`. Issue #909 paid the first half and declined the second: a group is one
+self-contained SQL clause, and the facet index leaves it out and counts wide, which is the
+direction this file already accepts for every predicate but `t:` and `o:`. See
+[Groups](#groups-or-and-parentheses).
 
 **A keyword with nothing after it is neither a term nor free text.** Every keystroke on the way
 to `cmc>=3` passes through `cmc`, `cmc>` and `cmc>=`, and none of those three should narrow
@@ -756,14 +767,134 @@ panel sits inside the window (`right` 1769 of 1920, `bottom` 726 of 1080).
 
 ## Refused, and named so it is a decision
 
-- **`or`, parentheses and nested boolean grouping.** The refusal is unchanged and so is its
-  reason.
+- ~~**`or`, parentheses and nested boolean grouping.**~~ Built 2026-10-11 — see
+  [Groups](#groups-or-and-parentheses).
 - **A clean `oracle_all` FTS column.** The 4% over-match above is what would buy it.
-- **`name:` as a keyword.** Scryfall's, and the long spelling of `-bolt`; the reason it is not a
-  fifteenth row is in the name section above.
-- **`is:`, `ft:`, `game:`, `year:`, `border:`, `frame:` and the rest of Scryfall's long tail.**
-  Each is a separate predicate with separate data questions; the fourteen in the table are the
-  ones with a column behind them or one cheap rung.
+- ~~**`name:` as a keyword.**~~ Built 2026-10-11, with `!` for an exact name.
+- ~~**`is:`, `ft:`, `game:`, `year:`, `border:`, `frame:` and the rest of Scryfall's long tail.**~~
+  Built 2026-10-11, over the columns that were already there plus corpus schema 8. What is still
+  refused is listed under [Still refused](#still-refused).
 - **Growing the in-memory facet index**, so every predicate but `t:` and `o:` could narrow a
   facet count.
 - **The four client-side array filters.**
+
+## The whole language (issue #909)
+
+[Issue #909](https://github.com/Msgaihede/mtg-grimoire/issues/909), 2026-10-11: *support every
+filter in Scryfall's syntax documentation*. The fourteen keywords above are unchanged in meaning;
+everything here is added beside them. The vocabulary is too long to restate in prose and has one
+home — `QUERY_KEYWORDS` in `queryLanguage.ts` (what the parser reads and the F1 panel draws) and
+`filters::PredicateField` in Rust (what the SQL answers), held to each other by `ipc.test.ts`.
+
+⚠️ **No figure in this section was measured against Scryfall.** The session that built it could
+not reach `scryfall.com` or `api.scryfall.com`, so the vocabulary is Scryfall's documented one as
+the implementer knew it, and every count in the sections above remains the only measured one.
+The first live pass that checks a keyword here against Scryfall should write its number down
+beside it.
+
+### Groups: `or` and parentheses
+
+- **`or` between two terms is a disjunction, `and` is an explicit conjunction, and AND binds
+  tighter than OR** — `t:goblin t:creature or t:elf` is `(goblin AND creature) OR elf`, which is
+  Scryfall's precedence. A dangling `or` — first, last, doubled — is dropped, because every
+  keystroke on the way to `t:goblin or t:elf` passes through `t:goblin or`.
+- **`(` opens a group at the start of a chunk, after an optional `-`; `)` closes one at the end
+  of a chunk when one is open.** An unclosed group runs to the end of the box (the state it is in
+  while the reader types), and a `)` with nothing open is a character of its word. A quote
+  swallows both, so `o:"(this ability)"` is one value.
+- **The top level stays the flat conjunction it always was.** A plain term there — free text, a
+  tag, a predicate — takes exactly the path it took before #909: the FTS `MATCH`, `tag_resolve`
+  with its fail-closed gate and its chips, `push_card_filters`. A parenthesised AND group that is
+  not negated is flattened into that top level (`(t:goblin cmc>=3)` is two ordinary terms). Only
+  **an `or`, or a negated group `-( … )`**, survives as a group, and it travels as **one
+  predicate** — field `anyOf` or `allOf`, its members in `terms` — so it rides every caller's
+  existing `predicates` list with no new plumbing, and draws one chip labelled with its own
+  source text, removable and negatable like any other.
+- **Inside a group every member must be one self-contained SQL clause**, because SQL's `OR`
+  cannot reach into a single `MATCH` string. So a name, type-line, rules-text or free-text member
+  becomes `c.rowid IN (SELECT rowid FROM cards_fts WHERE cards_fts MATCH ?)` — still FTS, still
+  the measured index, one subquery per member — and a tag member is resolved **in SQL** by its
+  normalised name (`slug_norm`, through the same `slug::normalize` `tag_resolve` uses) rather than
+  through the round trip. An unknown tag inside an `or` therefore matches nothing in that branch
+  and the other branches still answer; it does not blank the wall, because blanking it would
+  refuse the branches the reader also asked for.
+- **The facet index does not see groups and counts wide**, the direction
+  [How this fails](#how-this-fails--one-arm-closed-everything-else-open) already accepts for
+  every predicate but `t:` and `o:`.
+
+### Exact names, `name:`, `not:`, and what is ignored
+
+- **`!fire` and `!"sift through sands"`** are an exact name — case-folded, and equal to the whole
+  name or to either face of `A // B`. It is SQL rather than FTS, because a prefix index cannot say
+  "and nothing else". `name:` is the positive substring-ish form (the FTS prefix, name column
+  only) that `-bolt` was always the negation of. The wishlist answers both from its own
+  denormalised name, so an orphaned wish still answers.
+- **`not:x` is `-is:x`.**
+- **`unique:`, `order:`, `direction:`, `prefer:`, `display:` and `include:extras` are recognised
+  and ignored** — neither a term nor free text. They ask Scryfall how to *present* results, never
+  which cards match, and this app's sort and collapse controls already own that question; read as
+  free text they would have searched the corpus for the word `prints`.
+
+### The keyword families
+
+| family | keywords |
+| --- | --- |
+| text | `name` `!` `fo` `fulloracle` (aliases of `o:` — `search_text` already holds reminder text) `ft` `flavor` `wm` `watermark` |
+| mana | `m` `mana` (symbol multiset), `devotion`, `produces`, `cmc:even`/`cmc:odd` |
+| stats | `loy` `loyalty`, `pt` `powtou`, and `pow>tou`-style comparisons between two stats |
+| colours | guild, college, shard, wedge and four-colour names, `m`/`multicolor`, and a bare number as a colour *count* (`c=2`, `id>=3`), on both `c:` and `id:` |
+| printing | `cn` `number`, `st` `settype`, `b` `block`, `in`, `game`, `lang`, `year`, `date`, `border`, `frame`, `stamp`, `new` |
+| prices | `usd`, `eur`, `tix` |
+| legality | `banned`, `restricted` |
+| reprints | `prints`, `paperprints`, `sets`, `papersets` |
+| flags | `is` / `not` (114 values — layouts, card kinds, printing flags, frame effects, promo types and land nicknames; `filters::IS_VALUES` is the list) and `has` (`watermark` `indicator` `flavor` `stamp`) |
+
+**An unknown value is free text, the rule this file has always had** — `is:banana` searches for
+the words, exactly as `cmc>=banana` does. The TS parser and Rust's `IS_VALUES` hold the same
+list, and a test reads the Rust file to keep them equal.
+
+**The land nicknames, `is:modal` and `is:frenchvanilla` are rules-text patterns, not lists of
+cards** — `is:fetchland` is "`{T}, Pay 1 life, Sacrifice` … `Search your library for`" over a
+land, not 10 names. That is cheaper to keep right than a list Scryfall's own grows, and it errs
+at the edges: a land templated unlike its cycle is missed. `is:spell`, `is:permanent`,
+`is:commander` and `is:brawler` read the front face's type line.
+
+**`m:` compares symbols, not quantities.** `{3}` is one symbol, so `m<={3}{R}` does not find
+`{1}{R}`, and hybrid symbols match as Scryfall writes them (`{W/U}`), not in either order.
+
+### Corpus schema 8
+
+Most of the families above read columns `cards` already had — `released_at`, `lang`, `games`,
+`prices`, `legalities`, `border_color`, `frame_effects`, `promo_types`, `finishes`,
+`image_status`, `produced_mana`, `layout`, `collector_number`. The rest needed **corpus schema
+8**: one `cards.print_facts` column and `sets.block_code`/`sets.block`.
+
+- **`print_facts` is one compact JSON object rather than thirteen columns** — `loyalty`,
+  `flavor_text`, `watermark`, `frame`, `security_stamp`, `color_indicator` and the booleans
+  `reserved`, `reprint`, `textless`, `oversized`, `story_spotlight`, `booster`, `variation`. They
+  are read only by the long-tail keywords, always ANDed beside something narrower, so a
+  `json_extract` per row is affordable where an index-backed column was not owed; and one column
+  is one rung, one `STAGING_INSERT` slot and one ingest key rather than thirteen. Keys are written
+  in alphabetical order so the stored text does not depend on serde's `preserve_order`.
+- **It is the `keywords` rung's shape** — gated on `PRAGMA table_info`, schema-qualified, a
+  missing table owes nothing, no backfill (the facts live in the gzip `raw`), and `{}` rather
+  than NULL for a card with none, so **NULL means one thing: the row predates schema 8**. There
+  is no bridge: until the next full ingest — at most a day — every `print_facts` term answers
+  nothing on such a row. Unlike `kw:` there is no superset to fall back to.
+- **The face fallback is the first face that has the key**, not face 0: a colour indicator and
+  often a loyalty live on a transform's *back* (Insectile Aberration, Jace, Telepath Unbound), so
+  face 0 alone would make `has:indicator` miss nearly every card it exists for.
+- **`sets.block_code` and `sets.block` are written by the `/sets` fetch**, and
+  `sync::sets_need_fetch` asks for one when the table holds rows and not one block — corpus schema
+  4's `printed_size` bridge exactly, so `b:` works from the next sync rather than the next bulk
+  rotation.
+
+### Still refused
+
+- **Regular expressions** (`o:/^{T}:/`). SQLite has no `REGEXP` until one is registered, and
+  registering one means a new dependency and a function installed on every connection of three
+  hosts, one of them a single-threaded WASM Worker. A slash-delimited value is free text.
+- **`~` as the card's own name** inside `o:`. It tokenises to nothing and is dropped, so
+  `o:"~ deals 3"` matches "deals 3".
+- **`cube:`, `cheapest:`, `artists>`, `illustrations>`.** No data behind them in this corpus; each
+  is free text.

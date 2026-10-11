@@ -25,10 +25,13 @@ import {
 import { useCardFacets, type FacetRequest } from "./useCardFacets";
 import {
   parseQuery,
+  predicateKey,
+  predicateLabel,
   removeToken,
   setTokenNegated,
   setTokenValue,
   tokenKey,
+  wirePredicate,
   type PredicateToken,
   type TagToken,
 } from "./queryLanguage";
@@ -51,19 +54,6 @@ export const PAGE_SIZE = 50;
 export const DEBOUNCE_MS = 300;
 
 /**
- * One parsed term as the **wire** carries it: the span dropped.
- *
- * `start`/`end` are the box's business — they exist so a chip can splice the term back out of
- * the text — and the backend has no use for them at all. Sending them would be worse than
- * useless: the payload is what every query key here is hashed from, so `t:goblin bolt` and
- * `bolt t:goblin` are one search that would cost two cache entries, and the same query typed
- * two characters further along the box would miss its own cached pages.
- */
-function bare({ field, op, value, negated }: PredicateToken): QueryPredicate {
-  return { field, op, value, negated };
-}
-
-/**
  * A search box with **no tag wiring**, read into the two fields a card query takes.
  *
  * The collection, the wishlist, the deck editor's collection column, `QuickAdd` and
@@ -83,6 +73,12 @@ function bare({ field, op, value, negated }: PredicateToken): QueryPredicate {
  * to refuse. The reader can see the word did not do what they meant; they cannot see a term that
  * was never sent.
  *
+ * **Only the top-level tags fold.** A tag inside a group — `(otag:removal or otag:counterspell)`
+ * — is already an `oracleTag`/`artTag` term of that group's predicate, which Rust resolves by
+ * name in SQL with no `tag_resolve` round trip (issue #909), so it narrows these boxes exactly as
+ * it narrows the search wall and has nothing to fold back from. The groups ride in `predicates`
+ * with every other term, their `terms` intact ({@link wirePredicate}).
+ *
  * Absent rather than empty on both fields, which is the rule every other filter in this app
  * follows: a blank `text` and an empty `predicates` are read as unset at the far end, and
  * sending them would make the payload lie about intent — and mint a second query key for the
@@ -93,7 +89,7 @@ export function searchTerms(input: string): { text?: string; predicates?: QueryP
   const text = [parsed.text, ...parsed.tags.map((t) => t.value)].filter(Boolean).join(" ");
   return {
     ...(text ? { text } : {}),
-    ...(parsed.predicates.length > 0 ? { predicates: parsed.predicates.map(bare) } : {}),
+    ...(parsed.predicates.length > 0 ? { predicates: parsed.predicates.map(wirePredicate) } : {}),
   };
 }
 
@@ -107,21 +103,18 @@ export function searchTerms(input: string): { text?: string; predicates?: QueryP
  * word swap the root `CLAUDE.md` spends a paragraph refusing.
  */
 export interface PredicateChip {
-  /** `field|op|value`, case-folded — what the row dedupes on and what the ✕ names. Two terms
+  /** `field|op|value`, case-folded, and a group's terms after it (`queryLanguage.ts`'
+   *  `predicateKey`) — what the row dedupes on and what the ✕ names. Two terms
    *  that ask the same question are one chip, for the tag row's reason: a chip's identity is the
    *  filter, while a token's is where it sits in the string. */
   key: string;
-  /** The term exactly as the reader typed it, minus any leading `-` — `cmc>=3`, `mv>=3`,
-   *  `o:"draw a card"`. Their spelling and not a canonical one, because the chip stands over
-   *  their own sentence and the ✕ edits that sentence. */
+  /** The term as the reader typed it, minus any leading `-` — `cmc>=3`, `mv>=3`,
+   *  `o:"draw a card"`, and a group without its parentheses, `t:goblin or t:elf`. Their spelling
+   *  and not a canonical one, because the chip stands over their own sentence and the ✕ edits
+   *  that sentence; `queryLanguage.ts`' `predicateLabel` is the rule and names the two
+   *  punctuation spellings it words instead (`!fire`, `is:`/`not:`). */
   label: string;
   mode: "include" | "exclude";
-}
-
-/** A predicate's identity, for {@link PredicateChip.key}. Case-folded because Rust folds the
- *  value too, so `c:RG` and `c:rg` are one question and must not be two chips. */
-function predicateKey(p: QueryPredicate): string {
-  return `${p.field}|${p.op}|${p.value.toLowerCase()}`;
 }
 
 /**
@@ -908,7 +901,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   const parsed = useMemo(() => parseQuery(debouncedText), [debouncedText]);
 
   /**
-   * The typed predicates, as the wire carries them — spans dropped ({@link bare}).
+   * The typed predicates, as the wire carries them — spans dropped ({@link wirePredicate}).
    *
    * **Absent rather than empty**, so a box with no syntax in it sends exactly the payload it
    * always did: `filters::push_card_filters` reads an empty list as no filter, and React Query
@@ -919,7 +912,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
    * changing would be a parser that is not a function.
    */
   const predicates = useMemo(
-    () => (parsed.predicates.length > 0 ? parsed.predicates.map(bare) : undefined),
+    () => (parsed.predicates.length > 0 ? parsed.predicates.map(wirePredicate) : undefined),
     [parsed],
   );
 
@@ -999,6 +992,9 @@ export function useCardSearch(options: CardSearchOptions = {}) {
    * source slice rather than a reconstruction from `field`/`op`/`value`: a reader who typed
    * `mv>=3` should read `mv>=3` back, not the canonical `cmc>=3`, because the ✕ edits *their*
    * sentence and a chip naming a term they cannot find in the box is a control that lies.
+   * `predicateLabel` is that rule, and it is why an `or` gets **one** chip reading
+   * `t:goblin or t:elf`: the group is one predicate with one span, so its ✕ takes the whole
+   * group out and its press negates the whole group (`-(t:goblin or t:elf)`).
    *
    * **Deduplicated by the filter and not by the spelling**, which is the tag row's rule one
    * field over: `cmc>=3 mv>=3` asks one question twice, so it is one chip — and its ✕ then
@@ -1020,7 +1016,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
         key,
         // The `-` is the chip's `mode` rather than part of its name, exactly as a tag chip
         // draws `not Forest` rather than carrying the dash in its label.
-        label: debouncedText.slice(token.start, token.end).replace(/^-/, ""),
+        label: predicateLabel(debouncedText, token),
         mode: token.negated ? "exclude" : "include",
       });
     }
@@ -1057,7 +1053,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
    * assigns a field only when there is one, so the empty case is an empty object and this is
    * the one place that is spelled `null`.
    */
-  const tagKey = JSON.stringify(tagTerms.artTags ?? tagTerms.oracleTags ? tagTerms : null);
+  const tagKey = JSON.stringify((tagTerms.artTags ?? tagTerms.oracleTags) ? tagTerms : null);
 
   /**
    * Whether a **tag** was picked — the reader asking something, from either gesture.

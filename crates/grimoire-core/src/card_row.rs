@@ -149,6 +149,37 @@ pub struct CardRow {
     /// `keywords` as a whole-card property and a face read would be a second source for one
     /// fact.
     pub keywords: Option<String>,
+    /// The facts about this printing that the search box's newer terms ask and no column holds —
+    /// corpus schema 8 — as **one compact JSON object**, built by [`print_facts`].
+    ///
+    /// Thirteen keys, each **written only when the bulk line carries it** with the type below:
+    ///
+    /// - strings: `loyalty` (`loy:`, text for [`CardRow::power`]'s reason — `"X"` and `"*"`
+    ///   ship), `flavor_text` (`ft:`), `watermark` (`wm:`), `frame` (`frame:1993` … `future`),
+    ///   `security_stamp` (`stamp:`), and `color_indicator` (`has:indicator`), the last as
+    ///   concatenated letters, [`CardRow::colors`]' form (`["G"]` -> `"G"`);
+    /// - booleans, copied as sent whichever way they point: `reserved`, `reprint`, `textless`,
+    ///   `oversized`, `story_spotlight`, `booster`, `variation` (the `is:` words).
+    ///
+    /// `frame`, `security_stamp` and the booleans are whole-printing properties and read the top
+    /// level only. **`loyalty`, `watermark`, `color_indicator` and `flavor_text` fall back to the
+    /// faces**, because on a multi-faced printing that is where Scryfall puts them: the first three
+    /// take the top level, then the **first face that carries one** — a colour indicator is almost
+    /// always on a transform's *back* face (Insectile Aberration's `U`), and a planeswalker's
+    /// loyalty can be too (Jace, Telepath Unbound behind Jace, Vryn's Prodigy), so a front-face-only
+    /// read would make `has:indicator` miss nearly every card it exists for. `flavor_text` takes the
+    /// top level, else **every** face's joined with `"\n"`, since an `ft:` term over a split card
+    /// should find a word on either half. An empty string is a fact nobody printed and is left out,
+    /// so `has:flavor` and its siblings read *key present*.
+    ///
+    /// ⚠️ **`Some("{}")` at the least, never `None`** — [`CardRow::keywords`]' fence, and NULL in
+    /// the column therefore means one thing only: *this row predates corpus schema 8*. A bare card
+    /// with none of the thirteen is the object `{}`, a fact about the card and not a missing row.
+    ///
+    /// **Keys are inserted in alphabetical order**, so the stored text is one string whether
+    /// `serde_json`'s map sorts (its default) or keeps insertion order (its `preserve_order`
+    /// feature, which any crate in the build could turn on for everyone).
+    pub print_facts: Option<String>,
 }
 
 /// A bulk line, gzipped for storage.
@@ -238,6 +269,68 @@ fn delimited_keywords(v: &Value) -> String {
     } else {
         format!("|{}|", words.join("|"))
     }
+}
+
+/// A string field, if present, a string, and not empty — [`print_facts`]' read, where an empty
+/// string is a fact nobody printed.
+fn printed(v: &Value, k: &str) -> Option<String> {
+    s(v, k).filter(|t| !t.is_empty())
+}
+
+/// The [`CardRow::print_facts`] object for one bulk line — corpus schema 8.
+///
+/// Every key is optional and written only when the line carries a value of the right type; see
+/// the field's doc for the thirteen keys, their sources and why four of them fall back to the
+/// faces. The map is filled in **alphabetical key order** so its text does not depend on which
+/// `serde_json` map is compiled in.
+///
+/// Always a `String` and at least `{}`: the caller stores it as `Some`, so a NULL in the column
+/// keeps exactly the meaning "predates the column".
+fn print_facts(v: &Value, faces: Option<&Vec<Value>>) -> String {
+    let faces: &[Value] = faces.map_or(&[], Vec::as_slice);
+    // Top level, then the first face that carries the key — not `card_faces[0]` alone: a
+    // transform's colour indicator, and sometimes its loyalty, live on the back face.
+    let top_then_faces =
+        |read: &dyn Fn(&Value) -> Option<String>| read(v).or_else(|| faces.iter().find_map(read));
+    let flavor = printed(v, "flavor_text").or_else(|| {
+        let each: Vec<String> = faces
+            .iter()
+            .filter_map(|f| printed(f, "flavor_text"))
+            .collect();
+        (!each.is_empty()).then(|| each.join("\n"))
+    });
+    let indicator =
+        top_then_faces(&|o: &Value| joined_letters(o, "color_indicator").filter(|l| !l.is_empty()));
+
+    let text = |t: Option<String>| t.map(Value::String);
+    let flag = |k: &str| v.get(k).and_then(Value::as_bool).map(Value::Bool);
+    // Alphabetical, so insertion order and sorted order are one order — see the doc above.
+    let facts = [
+        ("booster", flag("booster")),
+        ("color_indicator", text(indicator)),
+        ("flavor_text", text(flavor)),
+        ("frame", text(printed(v, "frame"))),
+        (
+            "loyalty",
+            text(top_then_faces(&|o: &Value| printed(o, "loyalty"))),
+        ),
+        ("oversized", flag("oversized")),
+        ("reprint", flag("reprint")),
+        ("reserved", flag("reserved")),
+        ("security_stamp", text(printed(v, "security_stamp"))),
+        ("story_spotlight", flag("story_spotlight")),
+        ("textless", flag("textless")),
+        ("variation", flag("variation")),
+        (
+            "watermark",
+            text(top_then_faces(&|o: &Value| printed(o, "watermark"))),
+        ),
+    ];
+    let out: serde_json::Map<String, Value> = facts
+        .into_iter()
+        .filter_map(|(k, val)| val.map(|x| (k.to_owned(), x)))
+        .collect();
+    Value::Object(out).to_string()
 }
 
 /// The names a printing carries on the cardboard that are not its Oracle name.
@@ -461,6 +554,9 @@ impl CardRow {
             // column must mean "predates corpus schema 5" and nothing else, because the
             // `kw:` bridge reads it that way.
             keywords: Some(delimited_keywords(v)),
+            // `Some` unconditionally and `{}` at the least, the fence `keywords` keeps one line
+            // up: NULL in this column must mean "predates corpus schema 8" and nothing else.
+            print_facts: Some(print_facts(v, faces)),
         })
     }
 }
@@ -978,5 +1074,116 @@ mod tests {
         assert_eq!(raw_json(line.as_bytes()).as_deref(), Some(line));
         assert_eq!(raw_json(&gzip_raw(line)).as_deref(), Some(line));
         assert_eq!(raw_json(&[0x1f, 0x8b, 0x00, 0x01]), None, "truncated gzip");
+    }
+
+    /// The `print_facts` object of a line, parsed back, so a test compares values rather than
+    /// a spelling.
+    fn facts(line: &str) -> serde_json::Value {
+        serde_json::from_str(parse(line).print_facts.as_deref().expect("always Some")).unwrap()
+    }
+
+    /// Corpus schema 8: every top-level key lands under its own name with its own type —
+    /// strings as strings, the colour indicator as concatenated letters, and the seven booleans
+    /// copied as sent, `false` included, because Scryfall sending `false` is a fact too.
+    #[test]
+    fn print_facts_carries_every_top_level_value_under_its_own_name() {
+        let got = facts(
+            r#"{"object":"card","id":"liliana","name":"Liliana","lang":"en","layout":"normal","set":"x","collector_number":"1","loyalty":"3","flavor_text":"FLAVOUR","watermark":"phyrexian","frame":"2015","security_stamp":"oval","color_indicator":["B","G"],"reserved":true,"reprint":false,"textless":true,"oversized":false,"story_spotlight":true,"booster":true,"variation":false}"#,
+        );
+        assert_eq!(
+            got,
+            serde_json::json!({
+                "loyalty": "3",
+                "flavor_text": "FLAVOUR",
+                "watermark": "phyrexian",
+                "frame": "2015",
+                "security_stamp": "oval",
+                "color_indicator": "BG",
+                "reserved": true,
+                "reprint": false,
+                "textless": true,
+                "oversized": false,
+                "story_spotlight": true,
+                "booster": true,
+                "variation": false,
+            })
+        );
+    }
+
+    /// The stored text is compact and its keys alphabetical, whichever `serde_json` map is
+    /// compiled in — the builder inserts in that order, so sorted and insertion order agree.
+    #[test]
+    fn print_facts_is_compact_with_its_keys_in_alphabetical_order() {
+        let c = parse(
+            r#"{"object":"card","id":"x","name":"X","lang":"en","layout":"normal","set":"x","collector_number":"1","watermark":"set","booster":true,"frame":"1997","loyalty":"X"}"#,
+        );
+        assert_eq!(
+            c.print_facts.as_deref(),
+            Some(r#"{"booster":true,"frame":"1997","loyalty":"X","watermark":"set"}"#)
+        );
+    }
+
+    /// A multi-faced printing keeps loyalty, watermark and colour indicator on its faces, and
+    /// the read falls back to **the first face that carries one** — the back face, for a
+    /// transform's indicator (Insectile Aberration's `U`) and for a flip-walker's loyalty, which
+    /// a front-face-only read would miss. The top level still wins when it has the key.
+    #[test]
+    fn print_facts_falls_back_to_the_first_face_that_carries_a_value() {
+        let got = facts(
+            r#"{"object":"card","id":"delver","name":"Jace, Vryn's Prodigy // Jace, Telepath Unbound","lang":"en","layout":"transform","set":"ori","collector_number":"60","card_faces":[{"name":"Jace, Vryn's Prodigy","watermark":"FRONTMARK"},{"name":"Jace, Telepath Unbound","loyalty":"5","color_indicator":["U"],"watermark":"BACKMARK"}]}"#,
+        );
+        assert_eq!(got["loyalty"], "5", "{got}");
+        assert_eq!(got["color_indicator"], "U", "{got}");
+        assert_eq!(
+            got["watermark"], "FRONTMARK",
+            "the first face that has one, in face order"
+        );
+
+        let top_wins = facts(
+            r#"{"object":"card","id":"t","name":"T","lang":"en","layout":"transform","set":"x","collector_number":"1","watermark":"TOP","loyalty":"4","card_faces":[{"name":"A","watermark":"FACE","loyalty":"9"},{"name":"B"}]}"#,
+        );
+        assert_eq!(top_wins["watermark"], "TOP");
+        assert_eq!(top_wins["loyalty"], "4");
+    }
+
+    /// Flavour text with none at the top level is **every** face's, joined by a newline, so an
+    /// `ft:` term finds a word on either half of a split card; a face with none adds nothing.
+    #[test]
+    fn print_facts_joins_flavour_text_across_the_faces() {
+        let got = facts(
+            r#"{"object":"card","id":"s","name":"Fire // Ice","lang":"en","layout":"split","set":"apc","collector_number":"128","card_faces":[{"name":"Fire","flavor_text":"HOT"},{"name":"Middle"},{"name":"Ice","flavor_text":"COLD"}]}"#,
+        );
+        assert_eq!(got["flavor_text"], "HOT\nCOLD");
+
+        let top = facts(
+            r#"{"object":"card","id":"t","name":"T","lang":"en","layout":"adventure","set":"x","collector_number":"1","flavor_text":"TOP","card_faces":[{"name":"A","flavor_text":"FACE"}]}"#,
+        );
+        assert_eq!(
+            top["flavor_text"], "TOP",
+            "the top level answers alone when it has one"
+        );
+    }
+
+    /// ⚠️ **A bare card is `Some("{}")`, never `None`** — [`CardRow::keywords`]' fence, so a NULL
+    /// in the column means only *this row predates corpus schema 8*. Values of the wrong type and
+    /// empty strings are facts nobody printed and are left out rather than stored.
+    #[test]
+    fn a_card_with_no_print_facts_is_an_empty_object_rather_than_null() {
+        for (label, json) in [
+            (
+                "no key at all",
+                r#"{"object":"card","id":"bear","name":"Grizzly Bears","lang":"en","layout":"normal","set":"lea","collector_number":"162"}"#,
+            ),
+            (
+                "wrong types and empty values",
+                r#"{"object":"card","id":"junk","name":"Nothing","lang":"en","layout":"normal","set":"lea","collector_number":"163","loyalty":3,"flavor_text":"","reserved":"yes","color_indicator":[],"frame":null}"#,
+            ),
+        ] {
+            assert_eq!(
+                parse(json).print_facts.as_deref(),
+                Some("{}"),
+                "{label}: NULL is reserved for a row that predates the column"
+            );
+        }
     }
 }

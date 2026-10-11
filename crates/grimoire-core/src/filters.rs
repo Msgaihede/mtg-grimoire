@@ -7,12 +7,17 @@
 //! is the invariant the whole builder rests on: `?` binds by position, so a fragment and
 //! its parameter must never be separated.
 //!
-//! Only four kinds of thing are ever interpolated into the SQL — a colour letter from
-//! [`COLORS`], a `?`-placeholder list whose *length* is all it carries, the literal `0` an
-//! unrecognised format collapses to, and the fixed `AND … <> 'weak'` fragment a `strong`
-//! [`CardFilters::art_weight_floor`] switches on. No user text reaches the parser: even the
-//! format key is looked up in [`crate::legalities`] and bound as the integer bit it names,
-//! and a tag slug is bound even though it never leaves this app's own tag search.
+//! Only **this module's own constants** are ever interpolated into the SQL — a colour letter
+//! from [`COLORS`] or [`PRODUCED_LETTERS`], a `?`-placeholder list whose *length* is all it
+//! carries, the literal `0` an unrecognised value collapses to ([`NO_MATCH`]), the fixed
+//! `AND … <> 'weak'` fragment a `strong` [`CardFilters::art_weight_floor`] switches on, a
+//! `print_facts` key out of [`fact`]'s closed callers, and the fixed punctuation of a
+//! double-faced name (`' // '`) or a mana symbol (`'{'`). No user text reaches the parser:
+//! even the format key is looked up in [`crate::legalities`] and bound as the integer bit it
+//! names, a tag slug is bound even though it never leaves this app's own tag search, and every
+//! word an [`IS_VALUES`] arm compares against — a layout, a promo type, a land's rules-text
+//! pattern — is bound as a parameter although it comes out of a `const`. A closed vocabulary
+//! decides *which* fragment is emitted; it never writes one.
 
 use serde::Deserialize;
 
@@ -104,22 +109,36 @@ pub const ART_WEIGHT_FLOOR_STRONG: &str = "strong";
 /// What one [`QueryPredicate`] is a statement about.
 ///
 /// **[`Self::Name`], [`Self::TypeLine`] and [`Self::OracleText`] ride in the same list as the
-/// other ten and are emitted by [`fts_match`], never by [`push_card_filters`].** `LIKE` over
-/// either text column measured **80x to 250x** slower than the FTS5 column filter they take
-/// instead, on the real corpus (spec §5.2), and a box that fires on a debounce cannot pay that.
-/// So the match in `push_card_filters` names all thirteen variants and has no `_` arm: **a
-/// field handled by neither side is a filter that silently does nothing**, which is the one
-/// failure this split can produce and the reason there is a test per side.
+/// other fields and are emitted by [`fts_match`], never by [`push_card_filters`] — at the top
+/// level.** `LIKE` over either text column measured **80x to 250x** slower than the FTS5
+/// column filter they take instead, on the real corpus (spec §5.2), and a box that fires on a
+/// debounce cannot pay that. So the match in [`predicate_clause`] names every variant and has
+/// no `_` arm: **a field handled by neither side is a filter that silently does nothing**,
+/// which is the one failure this split can produce and the reason there is a census test over
+/// both sides.
+///
+/// Two exceptions to "the three ride the MATCH", and both are about where the term *stands*
+/// rather than what it says (issue #909):
+///
+/// * **Inside a group** ([`Self::AnyOf`] / [`Self::AllOf`]) an FTS field cannot join the one
+///   top-level `MATCH`: `t:goblin or t:elf` is a disjunction of two index lookups, and the
+///   statement's single `MATCH` is a conjunction with everything beside it. So a grouped FTS
+///   term is its own `{alias}.rowid IN (SELECT rowid FROM cards_fts WHERE cards_fts MATCH ?)`
+///   — the same lookup the collection already makes for its free text, one term at a time.
+/// * **`!name` is SQL, not FTS.** An exact name is equality on `cards.name` (or on either face
+///   of an `A // B`), which FTS's prefix tokens cannot spell — `name : ("lightning"* +
+///   "bolt"*)` also answers *Lightning Bolt Elemental*.
 ///
 /// Closed, so the boundary is type-checked rather than stringly typed; the camelCase serde
 /// names are the contract `packages/ui/lib/ipc.ts` mirrors and `ipc.test.ts` fences.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PredicateField {
-    /// The card's name and nothing else — Scryfall's `-bolt` and `-"lightning bolt"` (issue
-    /// #571). **No keyword produces it**: the grammar sends it only for a leading `-` on free
-    /// text, so it arrives negated, while a *positive* bare word stays [`CardFilters::text`] and
-    /// matches every FTS column. The two directions differ on purpose — see [`fts_match`].
+    /// The card's name and nothing else — Scryfall's `-bolt`, `-"lightning bolt"` (issue #571)
+    /// and `name:bolt`; with [`PredicateOp::Eq`] it is Scryfall's `!"lightning bolt"`, an exact
+    /// name answered in SQL rather than through the index (issue #909). A *positive* bare word
+    /// stays [`CardFilters::text`] and matches every FTS column. The two directions differ on
+    /// purpose — see [`fts_match`].
     Name,
     TypeLine,
     OracleText,
@@ -133,6 +152,84 @@ pub enum PredicateField {
     Rarity,
     SetCode,
     Format,
+    /// Scryfall's `or`: at least one of [`QueryPredicate::terms`] holds. The op is ignored and
+    /// the value is `""`. See [`group_clause`] for what a blank child means here.
+    AnyOf,
+    /// A parenthesised conjunction — sent only where it cannot be flattened into the top level:
+    /// negated (`-(t:goblin t:creature)`) or nested inside an [`Self::AnyOf`].
+    AllOf,
+    /// A bare word **inside a group**: FTS over every column, exactly as the free text is at
+    /// the top level. The grammar never sends one at the top level, where free text keeps its
+    /// own path; one that arrives there is answered by the same subquery.
+    Text,
+    /// An oracle tag *named* (`otag:ramp`) inside a group, resolved in SQL by its normalised
+    /// name — the top level resolves tags through `tag_resolve` and the chip row instead.
+    OracleTag,
+    /// [`Self::OracleTag`]'s art twin, over the illustration.
+    ArtTag,
+    /// `ft:` — the flavour text, over `print_facts` (corpus schema 8).
+    Flavor,
+    /// `wm:` — the watermark's name, over `print_facts`.
+    Watermark,
+    /// `m:` — the printed mana cost as a multiset of symbols.
+    ManaCost,
+    /// `devotion:` — how many of one colour's (or one hybrid pair's) symbols the cost holds.
+    Devotion,
+    /// `produces:` — the colours of mana the card can add, as a letter set over WUBRGC.
+    Produces,
+    /// `loy:` — starting loyalty, over `print_facts`.
+    Loyalty,
+    /// `pt:` — power plus toughness.
+    PowTou,
+    /// `cn:` — the collector number, numeric when the value is a number.
+    CollectorNumber,
+    /// `st:` — the set's type (`expansion`, `masters`, `funny`, …), through `sets`.
+    SetType,
+    /// `b:` — a block, by its code, its name, or any set in it.
+    Block,
+    /// `in:` — some printing of this card answers it (a game, a rarity, a language, a set).
+    InPrinting,
+    /// `game:` — `paper`, `arena` or `mtgo`.
+    Game,
+    /// `lang:` — the printing's language, by code or by name.
+    Language,
+    /// `year:` — the printing's release year.
+    Year,
+    /// `date:` — the printing's release date, or a set's.
+    Date,
+    /// `usd:` — the printing's dollar price.
+    Usd,
+    /// `eur:` — the printing's euro price.
+    Eur,
+    /// `tix:` — the printing's MTGO ticket price.
+    Tix,
+    /// `border:` — `cards.border_color`'s own word, which the border *chips* deliberately are
+    /// not ([`BORDER_KEYS`]).
+    Border,
+    /// `frame:` — a frame year (`print_facts`) or a frame effect (`cards.frame_effects`).
+    Frame,
+    /// `stamp:` — the security stamp, over `print_facts`.
+    Stamp,
+    /// `banned:` — banned in a format, from the `legalities` JSON (the mask folds banned and
+    /// not-legal together, so it cannot answer this).
+    Banned,
+    /// `restricted:` — [`Self::Banned`]'s twin.
+    Restricted,
+    /// `prints:` — how many printings this card has.
+    Prints,
+    /// `paperprints:` — how many paper printings this card has.
+    PaperPrints,
+    /// `sets:` — how many sets this card was printed in.
+    Sets,
+    /// `papersets:` — how many sets this card was printed in on paper.
+    PaperSets,
+    /// `new:` — this printing is the first with its art, artist, flavour, frame, language or
+    /// rarity, or the card's first printing at all.
+    NewFeature,
+    /// `is:` and `not:` — a closed vocabulary, [`IS_VALUES`].
+    Is,
+    /// `has:` — `watermark`, `indicator`, `flavor` or `stamp` is present.
+    Has,
 }
 
 /// One [`QueryPredicate`]'s comparison.
@@ -175,6 +272,15 @@ pub struct QueryPredicate {
     pub value: String,
     #[serde(default)]
     pub negated: bool,
+    /// The children of an [`PredicateField::AnyOf`] or [`PredicateField::AllOf`] — empty, and
+    /// absent on the wire, for every other field.
+    ///
+    /// **Recursive, and bounded by the deserialiser rather than here**: `serde_json` refuses a
+    /// payload nested past its own recursion limit (128) before this crate sees it, so a
+    /// hand-built request cannot walk [`group_clause`] off the stack. The grammar unwraps a
+    /// single-child group and drops an empty one, so what a reader types is far shallower.
+    #[serde(default)]
+    pub terms: Vec<QueryPredicate>,
 }
 
 /// Every filter that is a statement about a *card*, as the UI sends it.
@@ -295,8 +401,9 @@ pub struct CardFilters {
     /// field is two terms rather than one overwriting the other — which is the whole reason
     /// this is a list. See [`QueryPredicate`].
     ///
-    /// **Three of the thirteen fields add no SQL here at all** and are picked up by
-    /// [`fts_match`] instead; [`PredicateField`] says which and why.
+    /// **Three fields add no SQL here at the top level** (and `name` only when it is not an
+    /// exact name) and are picked up by [`fts_match`] instead; [`PredicateField`] says which,
+    /// why, and why a group is the exception.
     pub predicates: Option<Vec<QueryPredicate>>,
 }
 
@@ -399,6 +506,14 @@ fn fts_tokens(text: &str) -> Vec<String> {
 /// every column would make `-goblin` remove 2,224 printings on the dev corpus rather than the
 /// 969 actually called Goblin, taking every Goblin creature and every card that makes one with
 /// them.
+///
+/// **Three kinds of term are skipped here and answered by [`push_card_filters`] instead**
+/// (issue #909): a group ([`PredicateField::AnyOf`] / [`PredicateField::AllOf`]), whose FTS
+/// children cannot join a `MATCH` that is a conjunction with everything beside it; an exact
+/// name (`name` with [`PredicateOp::Eq`]), which is equality and not a token prefix; and
+/// [`PredicateField::Text`], which the grammar sends only inside a group. The facet index
+/// calls this same function and so skips them too — its counts read wider under a group,
+/// which is the documented direction for every predicate the index has no dimension for.
 pub fn fts_match(text: Option<&str>, preds: &[QueryPredicate]) -> (Option<String>, Vec<String>) {
     let mut positive: Vec<String> = Vec::new();
     let mut negative: Vec<String> = Vec::new();
@@ -410,20 +525,13 @@ pub fn fts_match(text: Option<&str>, preds: &[QueryPredicate]) -> (Option<String
     }
 
     for pred in preds {
-        let (column, query) = match pred.field {
-            PredicateField::Name => ("name", fts_phrase(&pred.value)),
-            PredicateField::TypeLine => ("type_line", fts_query(&pred.value)),
-            PredicateField::OracleText => ("search_text", fts_query(&pred.value)),
-            // Every other field is SQL, and `push_card_filters` is where it is emitted.
-            _ => continue,
-        };
-        let Some(query) = query else {
+        if !rides_the_match(pred) {
+            // SQL, and `push_card_filters` is where it is emitted.
+            continue;
+        }
+        let Some(term) = fts_column_term(pred) else {
             continue;
         };
-        // FTS5's column filter, over the prefix-matched phrase list `fts_query` builds (or the
-        // one phrase `fts_phrase` does). The parentheses are what make `type_line : ("a"* "b"*)`
-        // two terms *in that column* rather than one term in it and one anywhere.
-        let term = format!("{column} : ({query})");
         if pred.negated {
             negative.push(term);
         } else {
@@ -442,6 +550,56 @@ pub fn fts_match(text: Option<&str>, preds: &[QueryPredicate]) -> (Option<String
         (!positive.is_empty()).then(|| positive.join(" AND ")),
         negative,
     )
+}
+
+/// Whether a **top-level** term joins [`fts_match`]'s `MATCH` rather than becoming SQL: the
+/// three FTS fields, less an exact name.
+///
+/// The one place that split is written, so [`fts_match`] and [`predicate_clause`] cannot
+/// disagree about it — a term both sides claimed would be applied twice (harmless), and a term
+/// neither claimed would be a filter that silently does nothing (the failure the census test
+/// exists for).
+fn rides_the_match(pred: &QueryPredicate) -> bool {
+    match pred.field {
+        PredicateField::Name => pred.op != PredicateOp::Eq,
+        PredicateField::TypeLine | PredicateField::OracleText => true,
+        _ => false,
+    }
+}
+
+/// One FTS term's column-filtered `MATCH` fragment — `type_line : ("goblin"*)` — or `None`
+/// when the value tokenises to nothing or the field is not an FTS field.
+///
+/// The column is `name` (an ordered phrase, [`fts_phrase`]), `type_line` or `search_text`;
+/// [`fts_match`]'s doc carries why each. The parentheses are what make
+/// `type_line : ("a"* "b"*)` two terms *in that column* rather than one term in it and one
+/// anywhere. Shared by the top-level `MATCH` and by a grouped term's own subquery
+/// ([`fts_subquery`]), so the two spell a term identically.
+fn fts_column_term(pred: &QueryPredicate) -> Option<String> {
+    let (column, query) = match pred.field {
+        PredicateField::Name => ("name", fts_phrase(&pred.value)),
+        PredicateField::TypeLine => ("type_line", fts_query(&pred.value)),
+        PredicateField::OracleText => ("search_text", fts_query(&pred.value)),
+        _ => return None,
+    };
+    query.map(|query| format!("{column} : ({query})"))
+}
+
+/// One `MATCH` string as a clause of its own over `{alias}.rowid` — how an FTS term is
+/// answered where it cannot join the statement's one `MATCH` (inside a group, or a top-level
+/// [`PredicateField::Text`]).
+///
+/// A subquery over the rowid rather than a join, for the collection's reason
+/// (`collection::scope`): over a LEFT JOIN an orphan's rowid is NULL, a joined FTS5 constraint
+/// *drops* a NULL rowid rather than failing it, and `NULL IN (…)` is the answer an orphan is
+/// owed. `None` when there is nothing to match — the blank-child rule [`group_clause`] reads.
+fn fts_subquery(alias: &str, query: Option<String>) -> Option<Clause> {
+    query.map(|query| {
+        (
+            format!("{alias}.rowid IN (SELECT rowid FROM cards_fts WHERE cards_fts MATCH ?)"),
+            vec![Box::new(query) as Box<dyn rusqlite::ToSql>],
+        )
+    })
 }
 
 /// The `ESCAPE` character for a `LIKE` pattern built from a user's text.
@@ -908,7 +1066,7 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
     // The typed query terms, ANDed with each other and with everything above — `t:goblin
     // cmc>=3 -a:rebecca` is three of them and all three must hold.
     //
-    // **Three of the thirteen fields come out of here as nothing at all**, because the FTS builder
+    // **The top-level FTS terms come out of here as nothing at all**, because the FTS builder
     // owns them; [`predicate_clause`] returns `None` for those and [`PredicateField`] says
     // why. Every other `None` it can answer is a blank value, which is [`nonblank`]'s rule
     // one shape along: a term with nothing after its operator is no filter, never a filter
@@ -916,9 +1074,14 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
     //
     // `wheres` and `params` are pushed together per predicate rather than through
     // [`Predicates::push`], because several arms bind more than one parameter (the keyword
-    // bridge binds two, an ordered rarity binds up to four) and `?` binds by position.
+    // bridge binds two, an ordered rarity binds up to four, a group binds all of its
+    // children's) and `?` binds by position.
+    debug_assert!(
+        !INNER_ALIASES.contains(&alias),
+        "a caller alias equal to a predicate subquery's alias uncorrelates it"
+    );
     for pred in f.predicates.iter().flatten() {
-        if let Some((sql, params)) = predicate_clause(pred, alias, &set_code) {
+        if let Some((sql, params)) = predicate_clause(pred, alias, &set_code, false) {
             p.wheres.push(sql);
             p.params.extend(params);
         }
@@ -927,13 +1090,32 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
 
 /// A clause that is syntactically a predicate and matches no row, for the values that name
 /// nothing this build knows — an unrecognised format, a rarity outside the ordered four, a
-/// mana value that is not a number.
+/// mana value that is not a number, an `is:` word outside [`IS_VALUES`].
 ///
 /// Spelled `0` rather than "push no clause at all", which is the choice the format arm of
 /// [`push_card_filters`] made first and for the same reason: leaving it out turns an unknown
 /// term into *no filter* and quietly returns the whole corpus, which is a search that answers
 /// more than it was asked and says nothing about it.
 const NO_MATCH: &str = "0";
+
+/// One predicate's SQL and the parameters it binds, in the order its `?`s stand.
+///
+/// A pair rather than a [`Predicates`], because a clause is built to be *nested* — inside a
+/// group, inside `NOT (…)`, beside another clause in an `AND` — and only the outermost one is
+/// pushed. Every combinator below ([`join`], [`not`]) concatenates the parameters in the same
+/// order it concatenates the text, which is the module's one invariant carried down a level.
+type Clause = (String, Vec<Box<dyn rusqlite::ToSql>>);
+
+/// The aliases this module's predicate subqueries give an inner table: `pr` (another printing
+/// of the same card, for the counts and `new:`), `pi` (a printing `in:` asks about), `ss` and
+/// `sb` (`sets`), `otg`/`atg` (the tag tables a grouped tag name resolves through), and the
+/// two closure aliases the chip arms already used.
+///
+/// **A caller alias equal to one of them uncorrelates its subquery**, for the reason the tag
+/// arms' `debug_assert` gives: SQLite resolves a qualified name against the innermost `FROM`
+/// first, so `pr.oracle_id = pr.oracle_id` is no longer a correlation and a print count would
+/// count the whole corpus. [`push_card_filters`] asserts against this list.
+const INNER_ALIASES: [&str; 8] = ["pr", "pi", "ss", "sb", "otg", "atg", "ati", "otc"];
 
 /// The rarities `cards.rarity` can be compared *in order*, weakest first.
 ///
@@ -943,26 +1125,161 @@ const NO_MATCH: &str = "0";
 /// ordered operator naming one answers [`NO_MATCH`] while `r:special` still works as equality.
 const RARITY_ORDER: [&str; 4] = ["common", "uncommon", "rare", "mythic"];
 
+/// Every rarity word `cards.rarity` holds — the ladder plus the two off it. `in:` reads a value
+/// against this list before it decides the value is a set code.
+const ALL_RARITIES: [&str; 6] = ["common", "uncommon", "rare", "mythic", "special", "bonus"];
+
+/// The games Scryfall's `games` array names. `in:` reads a value against this list first.
+const GAMES: [&str; 5] = ["paper", "arena", "mtgo", "astral", "sega"];
+
+/// The frame *years* `frame:` reads from `print_facts`; any other `frame:` word is a frame
+/// effect (`legendary`, `showcase`, `extendedart`, …) and reads `cards.frame_effects`.
+const FRAME_YEARS: [&str; 5] = ["1993", "1997", "2003", "2015", "future"];
+
+/// Scryfall's language codes and the names `lang:` also accepts for each, folded the way
+/// [`language_code`] folds a value (lower case, separators dropped).
+const LANGUAGES: [(&str, &[&str]); 18] = [
+    ("en", &["english"]),
+    ("es", &["spanish"]),
+    ("fr", &["french"]),
+    ("de", &["german"]),
+    ("it", &["italian"]),
+    ("pt", &["portuguese"]),
+    ("ja", &["japanese"]),
+    ("ko", &["korean"]),
+    ("ru", &["russian"]),
+    ("zhs", &["simplifiedchinese", "chinese"]),
+    ("zht", &["traditionalchinese"]),
+    ("he", &["hebrew"]),
+    ("la", &["latin"]),
+    ("grc", &["ancientgreek", "greek"]),
+    ("ar", &["arabic"]),
+    ("sa", &["sanskrit"]),
+    ("ph", &["phyrexian"]),
+    ("qya", &["quenya"]),
+];
+
+/// The letters `cards.produced_mana` can hold — [`COLORS`] and `C`, which Scryfall emits for
+/// colourless mana and which is a real answer to `produces:` where it is no colour at all.
+/// Interpolated into SQL, so it must stay a hard-coded list.
+const PRODUCED_LETTERS: [&str; 6] = ["W", "U", "B", "R", "G", "C"];
+
+/// The colour *names* a `c:`/`id:` value may be, and the WUBRG letters each names (issue
+/// #909). The empty string is colourless.
+///
+/// **Checked before the letters, and that is not a nicety** — see [`color_value`]: `grixis`
+/// scanned letter by letter is G and R, `bant` is B, and `green` is G *and* R. The guilds, the
+/// Strixhaven colleges, the shards, the wedges and the four-colour Nephilim names (short and
+/// long) are Scryfall's own list; `packages/ui/features/search/queryLanguage.ts` validates
+/// against the same names and resolves none of them, so this table is the one place a name
+/// becomes letters.
+const COLOR_NAMES: [(&str, &str); 45] = [
+    ("white", "W"),
+    ("blue", "U"),
+    ("black", "B"),
+    ("red", "R"),
+    ("green", "G"),
+    ("c", ""),
+    ("colorless", ""),
+    ("colourless", ""),
+    ("azorius", "WU"),
+    ("dimir", "UB"),
+    ("rakdos", "BR"),
+    ("gruul", "RG"),
+    ("selesnya", "GW"),
+    ("orzhov", "WB"),
+    ("izzet", "UR"),
+    ("golgari", "BG"),
+    ("boros", "RW"),
+    ("simic", "GU"),
+    ("silverquill", "WB"),
+    ("prismari", "UR"),
+    ("witherbloom", "BG"),
+    ("lorehold", "RW"),
+    ("quandrix", "GU"),
+    ("bant", "GWU"),
+    ("esper", "WUB"),
+    ("grixis", "UBR"),
+    ("jund", "BRG"),
+    ("naya", "RGW"),
+    ("abzan", "WBG"),
+    ("jeskai", "URW"),
+    ("sultai", "BGU"),
+    ("mardu", "RWB"),
+    ("temur", "GUR"),
+    ("glint", "UBRG"),
+    ("glinteye", "UBRG"),
+    ("dune", "WBRG"),
+    ("dunebrood", "WBRG"),
+    ("ink", "WURG"),
+    ("inktreader", "WURG"),
+    ("witch", "WUBG"),
+    ("witchmaw", "WUBG"),
+    ("yore", "WUBR"),
+    ("yoretiller", "WUBR"),
+    ("wubrg", "WUBRG"),
+    ("fivecolor", "WUBRG"),
+];
+
 /// What `:` means on a given field.
 ///
 /// The one-line version of [`PredicateOp`]'s note: `c:rg` is `c>=rg` and `id:rg` is `id<=rg`,
-/// so a single rule for `:` would get one of the two wrong by a factor of twenty. The four
-/// fields whose default really is `:` return it unchanged and are matched by their own arms.
+/// so a single rule for `:` would get one of the two wrong by a factor of twenty. The fields
+/// whose default really is `:` (contains) return it unchanged and are matched by their own
+/// arms; the letter-set and multiset fields default to "at least"; everything that names one
+/// value — a set type, an `is:` word, a number — defaults to equality.
+///
+/// **Every variant, and no `_` arm**, for [`predicate_clause`]'s reason.
 fn default_op(field: PredicateField) -> PredicateOp {
     match field {
         PredicateField::Name
         | PredicateField::TypeLine
         | PredicateField::OracleText
         | PredicateField::Keyword
-        | PredicateField::Artist => PredicateOp::Colon,
-        PredicateField::Colors => PredicateOp::Gte,
+        | PredicateField::Artist
+        | PredicateField::AnyOf
+        | PredicateField::AllOf
+        | PredicateField::Text
+        | PredicateField::OracleTag
+        | PredicateField::ArtTag
+        | PredicateField::Flavor => PredicateOp::Colon,
+        PredicateField::Colors
+        | PredicateField::ManaCost
+        | PredicateField::Devotion
+        | PredicateField::Produces => PredicateOp::Gte,
         PredicateField::ColorIdentity => PredicateOp::Lte,
         PredicateField::Cmc
         | PredicateField::Power
         | PredicateField::Toughness
         | PredicateField::Rarity
         | PredicateField::SetCode
-        | PredicateField::Format => PredicateOp::Eq,
+        | PredicateField::Format
+        | PredicateField::Watermark
+        | PredicateField::Loyalty
+        | PredicateField::PowTou
+        | PredicateField::CollectorNumber
+        | PredicateField::SetType
+        | PredicateField::Block
+        | PredicateField::InPrinting
+        | PredicateField::Game
+        | PredicateField::Language
+        | PredicateField::Year
+        | PredicateField::Date
+        | PredicateField::Usd
+        | PredicateField::Eur
+        | PredicateField::Tix
+        | PredicateField::Border
+        | PredicateField::Frame
+        | PredicateField::Stamp
+        | PredicateField::Banned
+        | PredicateField::Restricted
+        | PredicateField::Prints
+        | PredicateField::PaperPrints
+        | PredicateField::Sets
+        | PredicateField::PaperSets
+        | PredicateField::NewFeature
+        | PredicateField::Is
+        | PredicateField::Has => PredicateOp::Eq,
     }
 }
 
@@ -983,31 +1300,123 @@ fn comparison(op: PredicateOp) -> &'static str {
     }
 }
 
-/// The WUBRG letters a colour value names, in [`COLORS`] order and deduplicated.
+// -------------------------------------------------------------------------------------
+// Clause combinators. Each keeps text and parameters in one order.
+// -------------------------------------------------------------------------------------
+
+/// A clause with nothing to bind.
+fn plain(sql: String) -> Clause {
+    (sql, Vec::new())
+}
+
+/// [`NO_MATCH`] as a clause.
+fn no_match() -> Clause {
+    plain(NO_MATCH.to_owned())
+}
+
+/// A clause with one parameter.
+fn bound<T: rusqlite::ToSql + 'static>(sql: String, value: T) -> Clause {
+    (sql, vec![Box::new(value)])
+}
+
+/// Clauses joined by `sep` inside one pair of parentheses, their parameters concatenated in
+/// the same order — so an `OR` inside cannot reach across the `AND` the result stands in.
+fn join(parts: Vec<Clause>, sep: &str) -> Clause {
+    let mut sql: Vec<String> = Vec::with_capacity(parts.len());
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    for (s, p) in parts {
+        sql.push(s);
+        params.extend(p);
+    }
+    (format!("({})", sql.join(sep)), params)
+}
+
+fn all_of(parts: Vec<Clause>) -> Clause {
+    join(parts, " AND ")
+}
+
+fn any_of(parts: Vec<Clause>) -> Clause {
+    join(parts, " OR ")
+}
+
+fn not((sql, params): Clause) -> Clause {
+    (format!("NOT ({sql})"), params)
+}
+
+/// `!=` on a field whose every other operator means equality: the equality, negated.
+/// Wrapped rather than inverted per arm, for the leading `-`'s reason — an arm that inverted
+/// itself would have to get every NULL right twice.
+fn negate_if(ne: bool, clause: Clause) -> Clause {
+    if ne {
+        not(clause)
+    } else {
+        clause
+    }
+}
+
+/// `expr LIKE p1 OR expr LIKE p2 …`, every pattern bound.
+///
+/// **The patterns are this module's constants, and their `%` and `_` are wildcards on
+/// purpose** — `{_}` in a land's pattern is "any one mana symbol's letter" — so there is no
+/// `ESCAPE` clause here, unlike every `LIKE` built from a reader's text ([`escape_like`]).
+fn like_any(expr: &str, patterns: &[&'static str]) -> Clause {
+    any_of(
+        patterns
+            .iter()
+            .map(|p| bound(format!("{expr} LIKE ?"), *p))
+            .collect(),
+    )
+}
+
+// -------------------------------------------------------------------------------------
+// Colours, letters and symbols
+// -------------------------------------------------------------------------------------
+
+/// What a `c:`/`id:` value names.
+enum ColorValue {
+    /// A set of WUBRG letters, in [`COLORS`] order; empty is colourless.
+    Letters(Vec<&'static str>),
+    /// `m` / `multicolor`: two colours or more.
+    Multicolor,
+    /// A bare number — how *many* colours (`c=2`, `id>=3`).
+    Count(f64),
+}
+
+/// The letters a colour *name* in [`COLOR_NAMES`] stands for, or `None` for a value that is
+/// not one. `value` is already trimmed and lower-cased.
+fn color_name_letters(value: &str) -> Option<&'static str> {
+    COLOR_NAMES
+        .iter()
+        .find(|(name, _)| *name == value)
+        .map(|(_, letters)| *letters)
+}
+
+/// Read a colour value: a count, `m`, a name, or letters — in that order.
 ///
 /// **The whole-word colour names are checked before the letters, and that is not a nicety**:
 /// `green` scanned letter by letter is `G` *and* `R`, which is a two-colour question the
-/// reader did not ask. An empty answer is colourless — `c`, `colorless`, `colourless`, and
-/// anything else with no WUBRG letter in it at all.
+/// reader did not ask, and `grixis` would be the same mistake with a different answer. An
+/// empty answer is colourless — `c`, `colorless`, `colourless`, and anything else with no
+/// WUBRG letter in it at all.
 ///
 /// **Case-folded here because nothing folds it earlier.** The grammar canonicalises a rarity
 /// before it sends one and canonicalises nothing else, so `c:RG` and `c:rg` both arrive
 /// exactly as typed — a comparison that assumed either case would answer zero rows silently,
 /// which reads as "no cards" rather than as a bug.
-fn color_letters(value: &str) -> Vec<&'static str> {
+fn color_value(value: &str) -> ColorValue {
     let value = value.trim().to_ascii_lowercase();
-    let word = match value.as_str() {
-        "white" => Some("W"),
-        "blue" => Some("U"),
-        "black" => Some("B"),
-        "red" => Some("R"),
-        "green" => Some("G"),
-        "c" | "colorless" | "colourless" => Some(""),
-        _ => None,
-    };
-    let letters: Vec<&'static str> = match word {
-        Some("") => Vec::new(),
-        Some(letter) => COLORS.iter().filter(|c| **c == letter).copied().collect(),
+    if matches!(value.as_str(), "m" | "multi" | "multicolor" | "multicolour") {
+        return ColorValue::Multicolor;
+    }
+    if let Ok(n) = value.parse::<f64>() {
+        return ColorValue::Count(n);
+    }
+    let letters = match color_name_letters(&value) {
+        Some(named) => COLORS
+            .iter()
+            .filter(|c| named.contains(**c))
+            .copied()
+            .collect(),
         None => {
             let upper = value.to_ascii_uppercase();
             COLORS
@@ -1017,40 +1426,37 @@ fn color_letters(value: &str) -> Vec<&'static str> {
                 .collect()
         }
     };
-    letters
+    ColorValue::Letters(letters)
 }
 
-/// A letter-set comparison over `column` — `cards.colors` or `cards.color_identity`.
+/// How many WUBRG letters `column` holds, as an integer expression — five `instr` booleans
+/// summed, so a stray character or a repeated letter cannot inflate it.
+fn color_count(column: &str) -> String {
+    let terms: Vec<String> = COLORS
+        .iter()
+        .map(|ch| format!("(instr(coalesce({column},''), '{ch}') > 0)"))
+        .collect();
+    format!("({})", terms.join(" + "))
+}
+
+/// A letter-set comparison over `column` — `cards.colors`, `cards.color_identity` or
+/// `cards.produced_mana`, against `alphabet` ([`COLORS`] or [`PRODUCED_LETTERS`]).
 ///
 /// **`gte` is "has at least these letters" and `lte` is "has no letter outside them"**, which
-/// are Scryfall's `c:` and `id:` respectively. The subset arm is
-/// [`push_card_filters`]' existing exclusion idiom reused rather than re-derived, down to its
-/// `coalesce(…,'')` — so it inherits that arm's behaviour on a NULL column, where a row with
-/// no colours is inside every identity and outside every "has at least" test.
+/// are Scryfall's `c:` and `id:` respectively. The subset arm is [`push_card_filters`]'
+/// existing exclusion idiom reused rather than re-derived, down to its `coalesce(…,'')` — so it
+/// inherits that arm's behaviour on a NULL column, where a row with no letters is inside every
+/// set and outside every "has at least" test.
 ///
 /// The letters are interpolated, never bound, and that is safe for [`COLORS`]' reason: they
-/// come out of a five-element `const` and nothing a reader types can reach the SQL text.
-fn color_clause(
+/// come out of a `const` and nothing a reader types can reach the SQL text. `named` must not
+/// be empty — the colourless question is [`color_clause`]'s, asked before this.
+fn letters_clause(
     column: &str,
     op: PredicateOp,
-    value: &str,
-) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
-    let named = color_letters(value);
-    let colorless = format!("({column} = '' OR {column} IS NULL)");
-
-    // **Colourless is its own question and every operator collapses onto it**, because the
-    // empty set is the bottom of this lattice: `c:c`, `c=c` and `c<=c` all mean "is
-    // colourless", and reading `c:c` as `c>=(nothing)` would answer the whole corpus — which
-    // is the one wrong answer a reader would not recognise as one.
-    if named.is_empty() {
-        let sql = match op {
-            PredicateOp::Colon | PredicateOp::Eq | PredicateOp::Gte | PredicateOp::Lte => colorless,
-            PredicateOp::Ne | PredicateOp::Gt => format!("NOT {colorless}"),
-            PredicateOp::Lt => NO_MATCH.to_owned(),
-        };
-        return (sql, Vec::new());
-    }
-
+    named: &[&'static str],
+    alphabet: &[&'static str],
+) -> Clause {
     let at_least = {
         let terms: Vec<String> = named
             .iter()
@@ -1059,13 +1465,13 @@ fn color_clause(
         format!("({})", terms.join(" AND "))
     };
     let within = {
-        let terms: Vec<String> = COLORS
+        let terms: Vec<String> = alphabet
             .iter()
             .filter(|ch| !named.contains(ch))
             .map(|ch| format!("instr(coalesce({column},''), '{ch}') = 0"))
             .collect();
         if terms.is_empty() {
-            // All five letters named: every colour combination is inside it.
+            // Every letter named: every combination is inside it.
             "1".to_owned()
         } else {
             format!("({})", terms.join(" AND "))
@@ -1073,7 +1479,7 @@ fn color_clause(
     };
     let exactly = format!("({at_least} AND {within})");
 
-    let sql = match op {
+    plain(match op {
         PredicateOp::Colon => at_least,
         PredicateOp::Eq => exactly,
         PredicateOp::Ne => format!("NOT {exactly}"),
@@ -1081,14 +1487,265 @@ fn color_clause(
         PredicateOp::Gt => format!("({at_least} AND NOT {exactly})"),
         PredicateOp::Lte => within,
         PredicateOp::Lt => format!("({within} AND NOT {exactly})"),
+    })
+}
+
+/// A colour comparison over `column` — `cards.colors` or `cards.color_identity` — for any of
+/// the four things a value can be ([`color_value`]).
+///
+/// * **Colourless is its own question and every operator collapses onto it**, because the
+///   empty set is the bottom of this lattice: `c:c`, `c=c` and `c<=c` all mean "is
+///   colourless", and reading `c:c` as `c>=(nothing)` would answer the whole corpus — which is
+///   the one wrong answer a reader would not recognise as one.
+/// * **`m` is a count, not a set**: two colours or more, under every operator that asks "at
+///   least" or "is", and fewer than two under the ones that ask the opposite. A set of letters
+///   cannot spell it — there is no fixed pair that every multicoloured card holds.
+/// * **A number is how many colours** (`c=2`, `id>=3`) — [`color_count`] compared with the
+///   operator as written, so `c:2` reads through the field's own default (`>=` for `c:`).
+fn color_clause(column: &str, op: PredicateOp, value: &str) -> Clause {
+    match color_value(value) {
+        ColorValue::Multicolor => {
+            let n = color_count(column);
+            plain(match op {
+                PredicateOp::Colon | PredicateOp::Eq | PredicateOp::Gte | PredicateOp::Gt => {
+                    format!("{n} >= 2")
+                }
+                PredicateOp::Ne | PredicateOp::Lt | PredicateOp::Lte => format!("{n} < 2"),
+            })
+        }
+        ColorValue::Count(n) => bound(format!("{} {} ?", color_count(column), comparison(op)), n),
+        ColorValue::Letters(named) if named.is_empty() => {
+            let colorless = format!("({column} = '' OR {column} IS NULL)");
+            match op {
+                PredicateOp::Colon | PredicateOp::Eq | PredicateOp::Gte | PredicateOp::Lte => {
+                    plain(colorless)
+                }
+                PredicateOp::Ne | PredicateOp::Gt => plain(format!("NOT {colorless}")),
+                PredicateOp::Lt => no_match(),
+            }
+        }
+        ColorValue::Letters(named) => letters_clause(column, op, &named, &COLORS),
+    }
+}
+
+/// `produces:` — [`letters_clause`] over `cards.produced_mana` and [`PRODUCED_LETTERS`].
+///
+/// A colour name reads as its letters, and colourless (`c`, `colorless`) as **`C`** — the
+/// letter Scryfall writes for a land that adds `{C}`, which is a real answer here where it is
+/// no colour at all on `c:`. A value naming no letter of the six is [`NO_MATCH`]: "produces
+/// nothing in particular" is not a question the field can be asked.
+///
+/// `produced_mana` is `""` for a card that adds no mana and NULL only on a row that predates
+/// corpus schema 3 ([`crate::card_row::CardRow::produced_mana`]); the `coalesce` in
+/// [`letters_clause`] reads both as "adds nothing".
+fn produces_clause(column: &str, op: PredicateOp, value: &str) -> Clause {
+    let value = value.trim().to_ascii_lowercase();
+    let named: Vec<&'static str> = match color_name_letters(&value) {
+        Some("") => vec!["C"],
+        Some(letters) => COLORS
+            .iter()
+            .filter(|c| letters.contains(**c))
+            .copied()
+            .collect(),
+        None => {
+            let upper = value.to_ascii_uppercase();
+            PRODUCED_LETTERS
+                .iter()
+                .filter(|c| upper.contains(**c))
+                .copied()
+                .collect()
+        }
     };
-    (sql, Vec::new())
+    if named.is_empty() {
+        return no_match();
+    }
+    letters_clause(column, op, &named, &PRODUCED_LETTERS)
+}
+
+/// A typed mana cost as Scryfall's symbols, upper-cased and braced: `2WW` and `{2}{w}{w}` are
+/// both `["{2}", "{W}", "{W}"]`, `{r/g}` is `["{R/G}"]`.
+///
+/// A run of digits outside braces is **one** generic symbol (`10` is `{10}`, never `{1}{0}`),
+/// each letter outside braces is one symbol, and everything else outside braces — spaces, a
+/// stray `/` — is dropped. The symbols are **bound**, never interpolated, so nothing in them
+/// can reach the SQL text whatever a reader puts between the braces.
+fn mana_symbols(value: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut chars = value.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '{' {
+            let mut inner = String::new();
+            for d in chars.by_ref() {
+                if d == '}' {
+                    break;
+                }
+                if !d.is_whitespace() && d != '{' {
+                    inner.push(d);
+                }
+            }
+            if !inner.is_empty() {
+                out.push(format!("{{{}}}", inner.to_uppercase()));
+            }
+        } else if c.is_ascii_digit() {
+            let mut n = String::from(c);
+            while let Some(d) = chars.peek().copied().filter(char::is_ascii_digit) {
+                n.push(d);
+                chars.next();
+            }
+            out.push(format!("{{{n}}}"));
+        } else if c.is_alphabetic() {
+            out.push(format!("{{{}}}", c.to_uppercase()));
+        }
+    }
+    out
+}
+
+/// `m:` — the printed cost as a **multiset of symbols**, compared by counting.
+///
+/// Each distinct symbol's occurrences in `cards.mana_cost` are counted by the `replace`
+/// idiom, `(length(cost) - length(replace(cost, sym, ''))) / length(sym)`; the braces are
+/// what keep `{W}` from counting inside `{W/U}`, so the count is exact without a parser in SQL.
+/// The card's own symbol total is its count of `{`. Then:
+///
+/// * `:` and `>=` — **at least these symbols**: every count reaches the query's.
+/// * `=` — **exactly these**: every count equals the query's and the totals agree.
+/// * `!=` — not exactly; `>` — at least, and not exactly.
+/// * `<=` — **every symbol of the card is within the query**: no count exceeds the query's,
+///   and the counts over the query's symbols add up to the card's whole total (so the card
+///   holds no symbol the query does not name). `<` is that and not exactly.
+///
+/// **Generic mana is a symbol here, not a quantity** — `m<={3}{R}` does not answer `{1}{R}`,
+/// where Scryfall's would. And hybrid symbols compare as written, so `{u/w}` (upper-cased to
+/// `{U/W}`) finds nothing where the card prints `{W/U}`. Both are accepted costs of counting
+/// rather than parsing. `cards.mana_cost` is the front face's (`card_row`'s `pick`), and a NULL
+/// cost — an orphan — fails every operator.
+fn mana_cost_clause(column: &str, op: PredicateOp, value: &str) -> Clause {
+    let mut counted: Vec<(String, i64)> = Vec::new();
+    for symbol in mana_symbols(value) {
+        match counted.iter_mut().find(|(s, _)| *s == symbol) {
+            Some(entry) => entry.1 += 1,
+            None => counted.push((symbol, 1)),
+        }
+    }
+    if counted.is_empty() {
+        return no_match();
+    }
+    let total: i64 = counted.iter().map(|(_, k)| k).sum();
+    let symbols_in = format!("(length({column}) - length(replace({column}, '{{', '')))");
+    let occurrences = |symbol: &str| -> Clause {
+        (
+            format!("((length({column}) - length(replace({column}, ?, ''))) / ?)"),
+            vec![
+                Box::new(symbol.to_owned()),
+                Box::new(symbol.chars().count() as i64),
+            ],
+        )
+    };
+    let each = |cmp: &str| -> Vec<Clause> {
+        counted
+            .iter()
+            .map(|(symbol, k)| {
+                let (sql, mut params) = occurrences(symbol);
+                params.push(Box::new(*k));
+                (format!("{sql} {cmp} ?"), params)
+            })
+            .collect()
+    };
+    let at_least = || all_of(each(">="));
+    let exactly = || {
+        let mut parts = each("=");
+        parts.push(bound(format!("{symbols_in} = ?"), total));
+        all_of(parts)
+    };
+    let within = || {
+        let mut parts = each("<=");
+        let (sum, params) = join(
+            counted
+                .iter()
+                .map(|(symbol, _)| occurrences(symbol))
+                .collect(),
+            " + ",
+        );
+        parts.push((format!("{sum} = {symbols_in}"), params));
+        all_of(parts)
+    };
+    match op {
+        PredicateOp::Colon | PredicateOp::Gte => at_least(),
+        PredicateOp::Eq => exactly(),
+        PredicateOp::Ne => not(exactly()),
+        PredicateOp::Gt => all_of(vec![at_least(), not(exactly())]),
+        PredicateOp::Lte => within(),
+        PredicateOp::Lt => all_of(vec![within(), not(exactly())]),
+    }
+}
+
+/// `devotion:` — how many of the cost's symbols carry one colour, or either colour of one
+/// hybrid pair, compared with how many symbols the value spells (`devotion:{g}{g}{g}` and
+/// `devotion:ggg` are both "at least three").
+///
+/// One colour counts its letter in `cards.mana_cost`: every symbol holds a colour's letter at
+/// most once, so `{G}`, `{G/U}`, `{2/G}` and `{G/P}` each count one — which is the rule for
+/// devotion. A **pair** (`{u/b}`) counts symbols holding *either* letter, so a `{U/B}` (or a
+/// `{U/B/P}`) that holds both is subtracted once to be counted once. The letters come out of
+/// [`COLORS`] and are interpolated; the threshold is bound. A value whose first symbol names no
+/// colour, or three of them, is [`NO_MATCH`].
+fn devotion_clause(column: &str, op: PredicateOp, value: &str) -> Clause {
+    let symbols = mana_symbols(value);
+    let Some(first) = symbols.first() else {
+        return no_match();
+    };
+    let letters: Vec<&'static str> = COLORS
+        .iter()
+        .filter(|c| first.contains(**c))
+        .copied()
+        .collect();
+    let count = |l: &str| format!("(length({column}) - length(replace({column}, '{l}', '')))");
+    let pair = |x: &str, y: &str| {
+        format!("((length({column}) - length(replace({column}, '{x}/{y}', ''))) / 3)")
+    };
+    let expr = match letters.as_slice() {
+        [one] => count(one),
+        [a, b] => format!(
+            "({} + {} - {} - {})",
+            count(a),
+            count(b),
+            pair(a, b),
+            pair(b, a)
+        ),
+        _ => return no_match(),
+    };
+    bound(format!("{expr} {} ?", comparison(op)), symbols.len() as i64)
+}
+
+// -------------------------------------------------------------------------------------
+// Numbers
+// -------------------------------------------------------------------------------------
+
+/// The column a canonicalised `@name` value names, for a comparison between two of the card's
+/// own numbers (`pow>tou` arrives as `{field: power, op: gt, value: "@toughness"}`).
+///
+/// The grammar sends the four canonical names; the short spellings are accepted too, because
+/// a hand-built payload that writes `@tou` means exactly that. Anything else is `None`, and
+/// the caller answers [`NO_MATCH`].
+fn stat_column(alias: &str, name: &str) -> Option<String> {
+    Some(match name.to_ascii_lowercase().as_str() {
+        "power" | "pow" => format!("{alias}.power"),
+        "toughness" | "tou" | "tough" => format!("{alias}.toughness"),
+        "cmc" | "mv" | "manavalue" => format!("{alias}.cmc"),
+        "loyalty" | "loy" => loyalty_expr(alias),
+        _ => return None,
+    })
+}
+
+/// Starting loyalty, out of `print_facts` — a string like power, because it can be `X`.
+fn loyalty_expr(alias: &str) -> String {
+    format!("json_extract({alias}.print_facts, '$.loyalty')")
 }
 
 /// A numeric comparison over a column that may not hold a number.
 ///
-/// `star` is on for `power` and `toughness`, which are **TEXT** because a power can be `*`,
-/// `1+`, `X` or `∞`. Two rules, both of them measured on Scryfall 2026-09-22:
+/// `star` is on for `power`, `toughness` and loyalty, which are **TEXT** because a power can
+/// be `*`, `1+`, `X` or `∞`. Two rules, both of them measured on Scryfall 2026-09-22:
 ///
 /// * **`pow:*` is a string equality**, answering 1 059 — a literal star is the only way to ask
 ///   the question at all, and no cast can express it.
@@ -1096,6 +1753,11 @@ fn color_clause(
 ///   participates rather than being excluded, which is exactly what `CAST('*' AS REAL)` = 0.0
 ///   already does. The comparison is therefore a cast on both sides of the operator and the
 ///   star is simply the number zero.
+///
+/// `cross` is the alias when the field may be compared with another of the card's numbers
+/// (`pow>tou`, `cmc<@power`): a value beginning `@` names that column ([`stat_column`]) and
+/// both sides are cast — so a star still reads as zero, and a NULL on either side fails. The
+/// prices pass `None`; `usd>@power` is not a question.
 ///
 /// A value that is neither a number nor a star is [`NO_MATCH`]. The grammar never sends one —
 /// `cmc>=banana` is handed to FTS as the words a reader typed (spec §3) — so this arm answers
@@ -1108,13 +1770,23 @@ fn numeric_clause(
     op: PredicateOp,
     value: &str,
     star: bool,
-) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
+    cross: Option<&str>,
+) -> Clause {
+    if let Some(name) = value.strip_prefix('@') {
+        let Some(other) = cross.and_then(|alias| stat_column(alias, name)) else {
+            return no_match();
+        };
+        return plain(format!(
+            "CAST({column} AS REAL) {} CAST({other} AS REAL)",
+            comparison(op)
+        ));
+    }
     if star && value == "*" {
         match op {
             PredicateOp::Colon | PredicateOp::Eq => {
-                return (format!("{column} = ?"), vec![Box::new("*".to_owned())])
+                return bound(format!("{column} = ?"), "*".to_owned())
             }
-            PredicateOp::Ne => return (format!("{column} <> ?"), vec![Box::new("*".to_owned())]),
+            PredicateOp::Ne => return bound(format!("{column} <> ?"), "*".to_owned()),
             _ => {}
         }
     }
@@ -1125,12 +1797,850 @@ fn numeric_clause(
         value.parse::<f64>().ok()
     };
     let Some(number) = number else {
-        return (NO_MATCH.to_owned(), Vec::new());
+        return no_match();
+    };
+    bound(
+        format!("CAST({column} AS REAL) {} ?", comparison(op)),
+        number,
+    )
+}
+
+/// `cmc:even` / `cmc:odd` — a whole mana value with that remainder. A fractional one (the
+/// un-sets' `½`) is neither. `!=` is the negation; an ordered operator on a parity is
+/// [`NO_MATCH`], there being no order to ask about.
+fn parity_clause(alias: &str, op: PredicateOp, remainder: i64) -> Clause {
+    let is = plain(format!(
+        "({alias}.cmc = CAST({alias}.cmc AS INTEGER) AND CAST({alias}.cmc AS INTEGER) % 2 = {remainder})"
+    ));
+    match op {
+        PredicateOp::Colon | PredicateOp::Eq => is,
+        PredicateOp::Ne => not(is),
+        _ => no_match(),
+    }
+}
+
+/// `cn:` — numeric when the value is a number (`cn>=100`, through a cast that reads `123a` as
+/// 123), and otherwise **exact string equality, case-folded** (`cn:12a`, `cn:★1`), because a
+/// collector number that is not a number is a name for one printing rather than a position.
+/// An ordered operator on a non-number is [`NO_MATCH`].
+fn collector_number_clause(alias: &str, op: PredicateOp, value: &str) -> Clause {
+    let column = format!("{alias}.collector_number");
+    if value.parse::<f64>().is_ok() {
+        return numeric_clause(&column, op, value, false, None);
+    }
+    match op {
+        PredicateOp::Colon | PredicateOp::Eq => {
+            bound(format!("lower({column}) = lower(?)"), value.to_owned())
+        }
+        PredicateOp::Ne => bound(format!("lower({column}) <> lower(?)"), value.to_owned()),
+        _ => no_match(),
+    }
+}
+
+/// A `YYYY`, `YYYY-MM` or `YYYY-MM-DD` value, or `None` for anything else (which `date:` then
+/// reads as a set code).
+fn date_prefix(value: &str) -> Option<&str> {
+    let parts: Vec<&str> = value.split('-').collect();
+    if parts.len() > 3 {
+        return None;
+    }
+    let shaped = parts
+        .iter()
+        .zip([4usize, 2, 2])
+        .all(|(part, width)| part.len() == width && part.bytes().all(|b| b.is_ascii_digit()));
+    shaped.then_some(value)
+}
+
+/// `date:` — the printing's `released_at` against a date or against a set's release.
+///
+/// **A partial date compares the same-length prefix**, `substr(released_at, 1, n) <op> ?`, and
+/// that is what makes every operator mean what it says: `date>2020` excludes all of 2020 (a
+/// bare string comparison would let `2020-01-01` through, being longer than `2020`), and
+/// `date=2020-05` is the whole of May. The length is bound beside the value.
+///
+/// Anything that is not a date is a **set code** (`date>=neo`), compared with that set's own
+/// `released_at`; an unknown code is a NULL subquery, which fails every row rather than
+/// matching all of them.
+fn date_clause(alias: &str, op: PredicateOp, value: &str) -> Clause {
+    let cmp = comparison(op);
+    match date_prefix(value) {
+        Some(date) => (
+            format!("substr({alias}.released_at, 1, ?) {cmp} ?"),
+            vec![Box::new(date.len() as i64), Box::new(date.to_owned())],
+        ),
+        None => bound(
+            format!(
+                "{alias}.released_at {cmp} (SELECT ss.released_at FROM sets ss WHERE ss.code = ?)"
+            ),
+            value.to_ascii_lowercase(),
+        ),
+    }
+}
+
+/// `prints:`, `paperprints:`, `sets:` and `papersets:` — a correlated count over the other
+/// printings of this card (`idx_cards_oracle` seeks it), compared with a number.
+///
+/// **An orphan is NULL, not zero**: `CASE WHEN oracle_id IS NULL THEN NULL` keeps a collection
+/// row whose printing has left the corpus out of `prints=0` *and* out of `-prints=0`, which is
+/// the orphan rule every card-row claim here follows — a bare count would have answered 0 for
+/// it and let it through the negation. A value that is not a number is [`NO_MATCH`].
+fn print_count_clause(
+    alias: &str,
+    op: PredicateOp,
+    value: &str,
+    distinct_sets: bool,
+    paper: bool,
+) -> Clause {
+    let Ok(n) = value.parse::<f64>() else {
+        return no_match();
+    };
+    let what = if distinct_sets {
+        "count(DISTINCT pr.set_code)"
+    } else {
+        "count(*)"
+    };
+    let paper = if paper { " AND pr.is_paper = 1" } else { "" };
+    bound(
+        format!(
+            "(CASE WHEN {alias}.oracle_id IS NULL THEN NULL ELSE \
+             (SELECT {what} FROM cards pr WHERE pr.oracle_id = {alias}.oracle_id{paper}) END) {} ?",
+            comparison(op)
+        ),
+        n,
+    )
+}
+
+// -------------------------------------------------------------------------------------
+// Print facts, names, tags, sets, printings
+// -------------------------------------------------------------------------------------
+
+/// One `print_facts` string key as an expression: the value, `''` when the printing has none,
+/// and **NULL when the row has no `print_facts` at all** — an orphan, or a row that predates
+/// corpus schema 8.
+///
+/// The three states are what make a negation honest. `-wm:orzhov` must keep the printings with
+/// no watermark (`NOT ('' = 'orzhov')` is true), which a bare `json_extract` would lose
+/// (`NOT (NULL = …)` is NULL); and it must still drop an orphan and a pre-rung row, which a bare
+/// `coalesce` would let through. `key` is one of this module's string literals — every caller
+/// passes a constant, which is the module note's rule.
+fn fact(alias: &str, key: &'static str) -> String {
+    format!(
+        "(CASE WHEN {alias}.print_facts IS NULL THEN NULL \
+         ELSE coalesce(json_extract({alias}.print_facts, '$.{key}'), '') END)"
+    )
+}
+
+/// One `print_facts` boolean as a clause — true, false when the key is false or absent, NULL
+/// when the row has none ([`fact`]'s three states, for its reason).
+fn fact_flag(alias: &str, key: &'static str) -> Clause {
+    plain(format!(
+        "(CASE WHEN {alias}.print_facts IS NULL THEN NULL \
+         ELSE coalesce(json_extract({alias}.print_facts, '$.{key}'), 0) END) = 1"
+    ))
+}
+
+/// An **exact name** — Scryfall's `!"lightning bolt"` — over `column`: the whole name
+/// case-folded, or either face of an `A // B` name, so `!"fire"` finds *Fire // Ice* and
+/// `!"delver of secrets"` finds the transforming card whose name carries both faces.
+///
+/// **SQL, not FTS**: the index's prefix tokens cannot spell equality, and the phrase
+/// `name : ("lightning"* + "bolt"*)` also answers *Lightning Bolt Elemental*. `lower` folds
+/// ASCII only, which is the fold every other case-insensitive arm here uses. The value is bound
+/// three times, once per comparison. A name with more than one ` // ` (*Who // What // When //
+/// Where // Why*) is matched whole or by its first face; its later faces are not split apart.
+///
+/// `pub(crate)` because the wishlist answers a top-level exact name from its own
+/// `wishlist_entries.name`, through this same expression, so an orphaned wish still answers it.
+pub(crate) fn exact_name_clause(column: &str, value: &str) -> Clause {
+    let front = format!("lower(substr({column}, 1, instr({column}, ' // ') - 1))");
+    let back = format!("lower(substr({column}, instr({column}, ' // ') + 4))");
+    (
+        format!(
+            "(lower({column}) = lower(?) OR (instr({column}, ' // ') > 0 \
+             AND ({front} = lower(?) OR {back} = lower(?))))"
+        ),
+        vec![
+            Box::new(value.to_owned()),
+            Box::new(value.to_owned()),
+            Box::new(value.to_owned()),
+        ],
+    )
+}
+
+/// An oracle or art tag **named inside a group** (`otag:ramp or otag:removal`), resolved in
+/// SQL by its normalised name.
+///
+/// The top level resolves a tag through `tags::query::run_tag_resolve` and hands this module
+/// a slug ([`picked_tags`]), so the chip row can name an unknown tag; a group has no chip per
+/// child to name it on, so the name is matched here against `slug_norm` with the same
+/// [`crate::slug::normalize`] that command uses — Scryfall's rule, exact after folding. Against
+/// the **closure** tables, for the chip arms' reason. An unknown name matches nothing, so
+/// inside an `or` the other branches still answer, and a name that normalises to nothing is no
+/// clause at all (the blank-child rule) — never `slug_norm = ''`, for `run_tag_resolve`'s
+/// reason. The art weight floor is a chip-row setting and is not applied here.
+///
+/// **`IS NOT NULL AND … IN (…)`, so a printing with no illustration is *false*, not NULL** —
+/// which is what lets `-atag:dragon` keep the 4 977 printings that have no `illustration_id`,
+/// as the chip exclude's `NOT EXISTS` keeps them (`NOT (NULL IN …)` would drop them, the trap
+/// that arm's comment names). The `IN` stays a conjunct of its own, so the planner can still
+/// drive from the closure when the term stands alone.
+fn tag_clause(alias: &str, value: &str, art: bool) -> Option<Clause> {
+    let needle = crate::slug::normalize(value);
+    if needle.is_empty() {
+        return None;
+    }
+    let sql = if art {
+        format!(
+            "({alias}.illustration_id IS NOT NULL AND {alias}.illustration_id IN \
+             (SELECT ati.illustration_id FROM art_tag_illustrations ati \
+             WHERE ati.slug IN (SELECT atg.slug FROM art_tags atg WHERE atg.slug_norm = ?)))"
+        )
+    } else {
+        format!(
+            "({alias}.oracle_id IS NOT NULL AND {alias}.oracle_id IN \
+             (SELECT otc.oracle_id FROM oracle_tag_cards otc \
+             WHERE otc.slug IN (SELECT otg.slug FROM oracle_tags otg WHERE otg.slug_norm = ?)))"
+        )
+    };
+    Some(bound(sql, needle))
+}
+
+/// A language code for a `lang:`/`in:` value — the code itself or one of its names, folded
+/// to lower case with separators dropped (`Simplified Chinese` is `zhs`).
+fn language_code(value: &str) -> Option<&'static str> {
+    let key: String = value
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    LANGUAGES
+        .iter()
+        .find(|(code, names)| *code == key || names.contains(&key.as_str()))
+        .map(|(code, _)| *code)
+}
+
+/// `b:` — a block by its code (`b:rtr`), its name (`b:"return to ravnica"`), or **any set in
+/// it** (`b:gtc` is every set sharing Gatecrash's `block_code`). Three comparisons over
+/// `sets.block_code` / `sets.block` (corpus schema 8), the value bound three times; a set with
+/// no block has a NULL `block_code` and is in no block, `NULL IN (…)` being NULL.
+fn block_clause(set_code: &str, value: &str) -> Clause {
+    let v = value.to_ascii_lowercase();
+    (
+        format!(
+            "{set_code} IN (SELECT ss.code FROM sets ss WHERE lower(ss.block_code) = ? \
+             OR lower(ss.block) = ? \
+             OR ss.block_code IN (SELECT sb.block_code FROM sets sb WHERE sb.code = ?))"
+        ),
+        vec![Box::new(v.clone()), Box::new(v.clone()), Box::new(v)],
+    )
+}
+
+/// `in:` — **some printing of this card** answers the value: a game ([`GAMES`]), a rarity
+/// ([`ALL_RARITIES`]), a language (code or name, [`language_code`]), and otherwise a set code
+/// — read in that order, so `in:rare` is a rarity and not a set called `rare`. One uncorrelated
+/// `oracle_id IN (…)`, read once per statement.
+fn in_printing_clause(alias: &str, value: &str) -> Clause {
+    let v = value.to_ascii_lowercase();
+    let (condition, param): (&str, Box<dyn rusqlite::ToSql>) = if GAMES.contains(&v.as_str()) {
+        ("instr(pi.games, ?) > 0", Box::new(format!("\"{v}\"")))
+    } else if ALL_RARITIES.contains(&v.as_str()) {
+        ("pi.rarity = ?", Box::new(v))
+    } else if let Some(code) = language_code(&v) {
+        ("pi.lang = ?", Box::new(code))
+    } else {
+        ("pi.set_code = ?", Box::new(v))
     };
     (
-        format!("CAST({column} AS REAL) {} ?", comparison(op)),
-        vec![Box::new(number)],
+        format!("{alias}.oracle_id IN (SELECT pi.oracle_id FROM cards pi WHERE {condition})"),
+        vec![param],
     )
+}
+
+/// `frame:` — a frame year out of `print_facts`, or a frame effect out of
+/// `cards.frame_effects` (a JSON array, matched by its quoted word as the finish chips are).
+fn frame_clause(alias: &str, value: &str) -> Clause {
+    let v = value.to_ascii_lowercase();
+    if FRAME_YEARS.contains(&v.as_str()) {
+        bound(format!("{} = ?", fact(alias, "frame")), v)
+    } else {
+        bound(
+            format!("instr({alias}.frame_effects, ?) > 0"),
+            format!("\"{v}\""),
+        )
+    }
+}
+
+/// `banned:` / `restricted:` — the card's status in one format, read from the `legalities`
+/// JSON rather than the mask, because the mask folds `banned` and `not_legal` into one zero
+/// bit and cannot tell them apart.
+///
+/// The format key is validated by [`crate::legalities::bit`] first, exactly as `f:` is, so an
+/// unknown format is [`NO_MATCH`] and the JSON path bound beside the status is always one of
+/// [`crate::legalities::LEGALITY_KEYS`]. This scans — `json_extract` cannot be indexed — and is
+/// acceptable for `a:`'s reason: it is ANDed into a statement something else has narrowed.
+fn legality_clause(alias: &str, value: &str, status: &'static str) -> Clause {
+    let key = value.to_ascii_lowercase();
+    if crate::legalities::bit(&key).is_none() {
+        return no_match();
+    }
+    (
+        format!("json_extract({alias}.legalities, ?) = ?"),
+        vec![Box::new(format!("$.{key}")), Box::new(status)],
+    )
+}
+
+/// `new:` — this printing is the first of its card with that value: no **earlier**
+/// (`released_at <`) printing of the same oracle card shares it.
+///
+/// `card` asks for the card's first printing at all; `art` compares the illustration across
+/// every printing that carries it; `artist`, `flavor`, `frame`, `language` and `rarity`
+/// compare that column among the card's own printings. One correlated `NOT EXISTS` over
+/// `cards pr`, seeked by `idx_cards_oracle` (`idx_cards_illustration` for `art`).
+///
+/// Three outcomes, not two: an orphan or a printing with no release date is **NULL** (fails
+/// the term and its negation, the orphan rule); a printing with no value of its own (no
+/// flavour text, no illustration) is **false** — a card without flavour has no *new* flavour —
+/// so `-new:flavor` keeps it; otherwise the `NOT EXISTS`. Same-day printings are each new. A
+/// value outside the seven is [`NO_MATCH`].
+fn new_feature_clause(alias: &str, value: &str) -> Clause {
+    let a = alias;
+    let same_card = format!("pr.oracle_id = {a}.oracle_id");
+    let (own, same) = match value.to_ascii_lowercase().as_str() {
+        "card" => (format!("{a}.oracle_id"), same_card),
+        "art" => (
+            format!("{a}.illustration_id"),
+            format!("pr.illustration_id = {a}.illustration_id"),
+        ),
+        "artist" => (
+            format!("{a}.artist"),
+            format!("{same_card} AND pr.artist = {a}.artist"),
+        ),
+        "flavor" | "flavour" => (
+            format!("json_extract({a}.print_facts, '$.flavor_text')"),
+            format!(
+                "{same_card} AND json_extract(pr.print_facts, '$.flavor_text') \
+                 = json_extract({a}.print_facts, '$.flavor_text')"
+            ),
+        ),
+        "frame" => (
+            format!("json_extract({a}.print_facts, '$.frame')"),
+            format!(
+                "{same_card} AND json_extract(pr.print_facts, '$.frame') \
+                 = json_extract({a}.print_facts, '$.frame')"
+            ),
+        ),
+        "language" => (
+            format!("{a}.lang"),
+            format!("{same_card} AND pr.lang = {a}.lang"),
+        ),
+        "rarity" => (
+            format!("{a}.rarity"),
+            format!("{same_card} AND pr.rarity = {a}.rarity"),
+        ),
+        _ => return no_match(),
+    };
+    plain(format!(
+        "(CASE WHEN {a}.oracle_id IS NULL OR {a}.released_at IS NULL THEN NULL \
+         WHEN {own} IS NULL THEN 0 \
+         ELSE NOT EXISTS (SELECT 1 FROM cards pr WHERE {same} AND pr.released_at < {a}.released_at) END)"
+    ))
+}
+
+/// `has:` — a `print_facts` key is present and not empty: `watermark`, `indicator` (the colour
+/// indicator), `flavor`, `stamp`. Anything else is [`NO_MATCH`].
+fn has_clause(alias: &str, value: &str) -> Clause {
+    let key = match value.to_ascii_lowercase().as_str() {
+        "watermark" => "watermark",
+        "indicator" => "color_indicator",
+        "flavor" | "flavour" => "flavor_text",
+        "stamp" => "security_stamp",
+        _ => return no_match(),
+    };
+    plain(format!("{} <> ''", fact(alias, key)))
+}
+
+// -------------------------------------------------------------------------------------
+// `is:`
+// -------------------------------------------------------------------------------------
+
+/// **The `is:` vocabulary, and the one source of it** (issue #909). `not:x` is `is:x` negated.
+///
+/// `packages/ui/features/search/queryLanguage.ts` holds the same list so it can tell a word it
+/// should send from one that is free text, and a TypeScript test reads *this* constant out of
+/// this file to hold the two together, `ipc.test.ts`-style — so keep it a flat literal list of
+/// strings, and add a word here and in [`is_clause`] in one change (the test
+/// `every_is_value_has_its_own_sql` fails on a word with no arm).
+///
+/// Five families, in this order: layouts and faces; card kinds; printing facts; Scryfall's
+/// promo types (each matched by its own word in `cards.promo_types`); and the land nicknames,
+/// which are **rules-text heuristics** — a pattern or two over `search_text` beside the land
+/// type, each documented at its arm — not a list of card names, so a new cycle that reuses the
+/// template is found without a release.
+pub const IS_VALUES: &[&str] = &[
+    // Layout / faces
+    "split",
+    "flip",
+    "transform",
+    "meld",
+    "leveler",
+    "adventure",
+    "mdfc",
+    "dfc",
+    "saga",
+    "class",
+    "case",
+    "prototype",
+    "battle",
+    "token",
+    "emblem",
+    "artseries",
+    "reversible",
+    // Card kinds
+    "spell",
+    "permanent",
+    "historic",
+    "party",
+    "outlaw",
+    "vanilla",
+    "frenchvanilla",
+    "bear",
+    "modal",
+    "hybrid",
+    "phyrexian",
+    "commander",
+    "brawler",
+    "companion",
+    "funny",
+    "masterpiece",
+    // Printing
+    "promo",
+    "digital",
+    "reprint",
+    "reserved",
+    "foil",
+    "nonfoil",
+    "etched",
+    "glossy",
+    "full",
+    "fullart",
+    "hires",
+    "textless",
+    "oversized",
+    "spotlight",
+    "booster",
+    "variation",
+    "gamechanger",
+    "showcase",
+    "extendedart",
+    "borderless",
+    "colorshifted",
+    "inverted",
+    "nyxtouched",
+    // Promo types
+    "datestamped",
+    "prerelease",
+    "buyabox",
+    "bundle",
+    "boosterfun",
+    "planeswalkerdeck",
+    "promopack",
+    "release",
+    "gameday",
+    "intropack",
+    "judgegift",
+    "league",
+    "convention",
+    "fnm",
+    "openhouse",
+    "setpromo",
+    "stamped",
+    "serialized",
+    "surgefoil",
+    "galaxyfoil",
+    "textured",
+    "halofoil",
+    "confettifoil",
+    "doublerainbow",
+    "neonink",
+    "oilslick",
+    "rainbowfoil",
+    "stepandcompleat",
+    "embossed",
+    "gilded",
+    "ripplefoil",
+    "raisedfoil",
+    "poster",
+    // Land nicknames
+    "dual",
+    "fetchland",
+    "shockland",
+    "checkland",
+    "fastland",
+    "slowland",
+    "painland",
+    "gainland",
+    "scryland",
+    "surveilland",
+    "bounceland",
+    "karoo",
+    "filterland",
+    "canopyland",
+    "bikeland",
+    "cycleland",
+    "triland",
+    "triome",
+    "shadowland",
+    "storageland",
+    "tangoland",
+    "battleland",
+    "creatureland",
+    "manland",
+    "pathway",
+];
+
+/// `{alias}.layout IN (…)`, every layout bound.
+fn layout_in(alias: &str, layouts: &[&'static str]) -> Clause {
+    let holes = vec!["?"; layouts.len()].join(",");
+    (
+        format!("{alias}.layout IN ({holes})"),
+        layouts
+            .iter()
+            .map(|l| Box::new(*l) as Box<dyn rusqlite::ToSql>)
+            .collect(),
+    )
+}
+
+/// The card has `key` ([`crate::cardtypes::TYPE_KEYS`]) on any face — one bit of
+/// `cards.type_mask`, the type chips' own test.
+fn has_type(alias: &str, key: &str) -> Clause {
+    bound(
+        format!("({alias}.type_mask & ?) != 0"),
+        i64::from(crate::cardtypes::mask_of(&[key.to_owned()])),
+    )
+}
+
+/// The **front face's** type line, padded with spaces so `LIKE '% Creature %'` is a whole-word
+/// test: everything before the first ` // `, or the whole line when there is none.
+///
+/// The front, not [`has_type`]'s every face, wherever a card's *kind* turns on how it is cast:
+/// an adventurer (`Creature — Knight // Sorcery — Adventure`) is a permanent and an MDFC
+/// (`Sorcery // Land`) is a spell, and the mask, holding both faces, would say both are both.
+fn front_face(alias: &str) -> String {
+    format!(
+        "(' ' || substr({alias}.type_line, 1, instr({alias}.type_line || ' // ', ' // ') - 1) || ' ')"
+    )
+}
+
+/// A `"word"` inside a JSON-array column — `finishes`, `frame_effects`, `promo_types` — by its
+/// quoted form, so `"foil"` cannot match inside `"nonfoil"` (the finish chips' argument).
+fn json_word(alias: &str, column: &'static str, word: &'static str) -> Clause {
+    bound(
+        format!("instr({alias}.{column}, ?) > 0"),
+        format!("\"{word}\""),
+    )
+}
+
+/// A land whose rules text matches **every** pattern — the shape of each land nickname.
+/// `search_text` rather than `oracle_text`, because the latter is NULL on a double-faced card.
+fn land_text(alias: &str, patterns: &[&'static str]) -> Clause {
+    let mut parts = vec![has_type(alias, "Land")];
+    parts.extend(
+        patterns
+            .iter()
+            .map(|p| bound(format!("{alias}.search_text LIKE ?"), *p)),
+    );
+    all_of(parts)
+}
+
+/// The SQL for one `is:` word — [`NO_MATCH`] for a word outside [`IS_VALUES`].
+///
+/// One arm per word (or per family of synonyms). Every word compared against is **bound**, and
+/// the only text interpolated is this module's column names and the [`front_face`] / `fact`
+/// expressions. The rules-text patterns are ASCII-case-insensitive (`LIKE`), read Scryfall's
+/// current Oracle wording (`enters tapped`, not `enters the battlefield tapped`, since the 2024
+/// update), and are deliberately loose in one direction: a nickname that also catches the odd
+/// non-cycle land is a near miss a reader can see and refine, where a pattern too tight to
+/// catch the cycle is a wall that silently lacks it.
+fn is_clause(alias: &str, set_code: &str, value: &str) -> Clause {
+    let lower = value.to_ascii_lowercase();
+    let Some(word) = IS_VALUES.iter().copied().find(|w| *w == lower) else {
+        return no_match();
+    };
+    let a = alias;
+    let type_line = format!("{a}.type_line");
+    let search_text = format!("{a}.search_text");
+    let front = front_face(a);
+    match word {
+        // ---- Layout / faces: Scryfall's `layout` word, or the type that defines the kind.
+        "split" => layout_in(a, &["split"]),
+        "flip" => layout_in(a, &["flip"]),
+        "transform" => layout_in(a, &["transform"]),
+        "meld" => layout_in(a, &["meld"]),
+        "leveler" => layout_in(a, &["leveler"]),
+        "adventure" => layout_in(a, &["adventure"]),
+        "mdfc" => layout_in(a, &["modal_dfc"]),
+        // Every layout whose card has a second face printed on its back.
+        "dfc" => layout_in(a, &["transform", "modal_dfc", "meld", "double_faced_token"]),
+        // The type rather than the layout: Scryfall moved Sagas to a layout of their own only
+        // in 2023, and older bulk lines still read `normal`.
+        "saga" => like_any(&type_line, &["%Saga%"]),
+        "class" => layout_in(a, &["class"]),
+        "case" => layout_in(a, &["case"]),
+        "prototype" => layout_in(a, &["prototype"]),
+        "battle" => has_type(a, "Battle"),
+        "token" => layout_in(a, &["token", "double_faced_token"]),
+        "emblem" => layout_in(a, &["emblem"]),
+        "artseries" => layout_in(a, &["art_series"]),
+        "reversible" => layout_in(a, &["reversible_card"]),
+
+        // ---- Card kinds.
+        // Cast from the hand: a spell type on the front face, and the front face is no land.
+        "spell" => all_of(vec![
+            like_any(
+                &front,
+                &[
+                    "% Artifact %",
+                    "% Battle %",
+                    "% Creature %",
+                    "% Enchantment %",
+                    "% Instant %",
+                    "% Planeswalker %",
+                    "% Sorcery %",
+                ],
+            ),
+            not(like_any(&front, &["% Land %"])),
+        ]),
+        "permanent" => like_any(
+            &front,
+            &[
+                "% Artifact %",
+                "% Battle %",
+                "% Creature %",
+                "% Enchantment %",
+                "% Land %",
+                "% Planeswalker %",
+            ],
+        ),
+        // Dominaria's rule: legendary, an artifact, or a Saga.
+        "historic" => any_of(vec![
+            like_any(&type_line, &["%Legendary%", "%Saga%"]),
+            has_type(a, "Artifact"),
+        ]),
+        "party" => all_of(vec![
+            has_type(a, "Creature"),
+            like_any(
+                &type_line,
+                &["%Cleric%", "%Rogue%", "%Warrior%", "%Wizard%"],
+            ),
+        ]),
+        "outlaw" => all_of(vec![
+            has_type(a, "Creature"),
+            like_any(
+                &type_line,
+                &[
+                    "%Assassin%",
+                    "%Mercenary%",
+                    "%Pirate%",
+                    "%Rogue%",
+                    "%Warlock%",
+                ],
+            ),
+        ]),
+        // A single-faced creature with no rules text at all.
+        "vanilla" => all_of(vec![
+            layout_in(a, &["normal"]),
+            has_type(a, "Creature"),
+            plain(format!("coalesce({a}.oracle_text, '') = ''")),
+        ]),
+        // Only keyword abilities: it has keywords, and no sentence ends outside reminder text —
+        // a period is allowed only as the last character inside the parentheses (`.)`), which
+        // is where every keyword's reminder puts it. NULL `keywords` (pre-schema-5) fails.
+        "frenchvanilla" => all_of(vec![
+            layout_in(a, &["normal"]),
+            has_type(a, "Creature"),
+            plain(format!(
+                "{a}.keywords <> '' AND coalesce({a}.oracle_text, '') <> '' \
+                 AND instr(replace({a}.oracle_text, '.)', ')'), '.') = 0"
+            )),
+        ]),
+        "bear" => all_of(vec![
+            has_type(a, "Creature"),
+            plain(format!(
+                "{a}.cmc = 2 AND {a}.power = '2' AND {a}.toughness = '2'"
+            )),
+        ]),
+        // "Choose one —" and its siblings, the em dash included so "choose one of them" in
+        // ordinary rules text is not modal.
+        "modal" => like_any(
+            &search_text,
+            &[
+                "%choose one —%",
+                "%choose one or more —%",
+                "%choose one or both —%",
+                "%choose two —%",
+                "%choose three —%",
+                "%choose four —%",
+                "%choose any number —%",
+            ],
+        ),
+        // A hybrid symbol in the cost: a slash before a colour (`{W/U}`, `{2/W}`), or a
+        // Phyrexian hybrid (`{G/U/P}`). A plain Phyrexian `{W/P}` ends `/P}` and is not hybrid.
+        "hybrid" => like_any(
+            &format!("{a}.mana_cost"),
+            &["%/W}%", "%/U}%", "%/B}%", "%/R}%", "%/G}%", "%/_/P}%"],
+        ),
+        "phyrexian" => any_of(vec![
+            like_any(&format!("{a}.mana_cost"), &["%/P}%"]),
+            like_any(&search_text, &["%/P}%"]),
+        ]),
+        "commander" => any_of(vec![
+            all_of(vec![
+                like_any(&front, &["% Legendary %"]),
+                like_any(&front, &["% Creature %"]),
+            ]),
+            like_any(&search_text, &["%can be your commander%"]),
+        ]),
+        "brawler" => any_of(vec![
+            all_of(vec![
+                like_any(&front, &["% Legendary %"]),
+                like_any(&front, &["% Creature %", "% Planeswalker %"]),
+            ]),
+            like_any(&search_text, &["%can be your commander%"]),
+        ]),
+        "companion" => like_any(&search_text, &["%Companion —%"]),
+        // The un-sets by type, and the acorn-stamped cards wherever they were printed.
+        "funny" => any_of(vec![
+            bound(
+                format!("{set_code} IN (SELECT ss.code FROM sets ss WHERE ss.set_type = ?)"),
+                "funny",
+            ),
+            bound(format!("{} = ?", fact(a, "security_stamp")), "acorn"),
+        ]),
+        "masterpiece" => bound(
+            format!("{set_code} IN (SELECT ss.code FROM sets ss WHERE ss.set_type = ?)"),
+            "masterpiece",
+        ),
+
+        // ---- Printing facts.
+        "promo" => plain(format!("{a}.promo = 1")),
+        "digital" => plain(format!("{a}.digital = 1")),
+        "reprint" => fact_flag(a, "reprint"),
+        "reserved" => fact_flag(a, "reserved"),
+        "foil" => json_word(a, "finishes", "foil"),
+        "nonfoil" => json_word(a, "finishes", "nonfoil"),
+        "etched" => json_word(a, "finishes", "etched"),
+        "glossy" => any_of(vec![
+            json_word(a, "finishes", "glossy"),
+            json_word(a, "promo_types", "glossy"),
+        ]),
+        "full" | "fullart" => plain(format!("{a}.full_art = 1")),
+        "hires" => bound(format!("{a}.image_status = ?"), "highres_scan"),
+        "textless" => fact_flag(a, "textless"),
+        "oversized" => fact_flag(a, "oversized"),
+        "spotlight" => fact_flag(a, "story_spotlight"),
+        "booster" => fact_flag(a, "booster"),
+        "variation" => fact_flag(a, "variation"),
+        "gamechanger" => plain(format!("{a}.game_changer = 1")),
+        "showcase" => json_word(a, "frame_effects", "showcase"),
+        "extendedart" => json_word(a, "frame_effects", "extendedart"),
+        "borderless" => bound(format!("{a}.border_color = ?"), BORDERLESS),
+        "colorshifted" => json_word(a, "frame_effects", "colorshifted"),
+        "inverted" => json_word(a, "frame_effects", "inverted"),
+        "nyxtouched" => json_word(a, "frame_effects", "nyxtouched"),
+
+        // ---- Promo types: the word is Scryfall's own `promo_types` entry.
+        "datestamped" | "prerelease" | "buyabox" | "bundle" | "boosterfun" | "planeswalkerdeck"
+        | "promopack" | "release" | "gameday" | "intropack" | "judgegift" | "league"
+        | "convention" | "fnm" | "openhouse" | "setpromo" | "stamped" | "serialized"
+        | "surgefoil" | "galaxyfoil" | "textured" | "halofoil" | "confettifoil"
+        | "doublerainbow" | "neonink" | "oilslick" | "rainbowfoil" | "stepandcompleat"
+        | "embossed" | "gilded" | "ripplefoil" | "raisedfoil" | "poster" => {
+            json_word(a, "promo_types", word)
+        }
+
+        // ---- Land nicknames: rules-text templates, each on a land.
+        // The ten originals: two basic types and nothing but the reminder of what they tap for.
+        "dual" => all_of(vec![
+            like_any(&type_line, &["Land — % %"]),
+            like_any(&format!("{a}.oracle_text"), &["({T}: Add {_} or {_}.)"]),
+        ]),
+        // Pay 1 life, sacrifice, search — the Onslaught/Zendikar cycles, Mirage's, and Vista.
+        "fetchland" => land_text(a, &["%Pay 1 life, Sacrifice%Search your library for a%"]),
+        "shockland" => land_text(a, &["%you may pay 2 life. If you don't%tapped%"]),
+        // "… enters tapped unless you control a Plains or an Island."
+        "checkland" => land_text(a, &["%tapped unless you control a %or a%"]),
+        "fastland" => land_text(a, &["%tapped unless you control two or fewer other lands%"]),
+        "slowland" => land_text(a, &["%tapped unless you control two or more other lands%"]),
+        // Colourless for free, coloured for 1 damage.
+        "painland" => land_text(a, &["%{T}: Add {C}%", "%deals 1 damage to you%"]),
+        "gainland" => land_text(a, &["%tapped%you gain 1 life%"]),
+        "scryland" => land_text(a, &["%tapped%scry 1%"]),
+        "surveilland" => land_text(a, &["%tapped%surveil 1%"]),
+        "bounceland" | "karoo" => {
+            land_text(a, &["%return a land you control to its owner's hand%"])
+        }
+        // Shadowmoor's: `{W/U}, {T}: Add {W}{W}, {W}{U}, or {U}{U}.`
+        "filterland" => land_text(a, &["%{T}: Add {_}{_}, {_}{_}, or {_}{_}%"]),
+        // Horizon lands: pay 1 life for colour, sacrifice to draw.
+        "canopyland" => land_text(a, &["%Pay 1 life: Add%", "%Sacrifice%Draw a card%"]),
+        // Amonkhet's two-colour cycling lands.
+        "bikeland" | "cycleland" => land_text(a, &["%{T}: Add {_} or {_}%", "%Cycling {2}%"]),
+        // Shards' three-colour taplands — typeless, which is what tells them from a triome.
+        "triland" => all_of(vec![
+            bound(format!("{a}.type_line = ?"), "Land"),
+            land_text(a, &["%{T}: Add {_}, {_}, or {_}%"]),
+        ]),
+        "triome" => all_of(vec![
+            like_any(&type_line, &["Land — % % %"]),
+            land_text(a, &["%Cycling {3}%"]),
+        ]),
+        "shadowland" => land_text(a, &["%you may reveal a % or % card from your hand%"]),
+        "storageland" => land_text(a, &["%storage counter%"]),
+        "tangoland" | "battleland" => {
+            land_text(a, &["%tapped unless you control two or more basic lands%"])
+        }
+        "creatureland" | "manland" => land_text(a, &["%becomes a %/% %creature%"]),
+        "pathway" => bound(format!("{a}.type_line = ?"), "Land // Land"),
+
+        // A word in `IS_VALUES` with no arm above. Unreachable while the two agree, and
+        // `every_is_value_has_its_own_sql` is what fails when they do not.
+        _ => no_match(),
+    }
+}
+
+// -------------------------------------------------------------------------------------
+// Groups, and the one function every term goes through
+// -------------------------------------------------------------------------------------
+
+/// An `or` ([`PredicateField::AnyOf`], `any`) or a parenthesised `and`
+/// ([`PredicateField::AllOf`]) as **one** parenthesised clause, its children's parameters in
+/// their order — or `None` when it is no filter at all.
+///
+/// Every child is answered by [`predicate_clause`] with `nested` on, so an FTS child becomes
+/// its own `rowid IN (…)` subquery rather than a term of the top-level `MATCH` — an `OR`
+/// cannot live inside a conjunction it is not part of — and a group inside a group recurses.
+///
+/// **A blank child is "no filter", which is *true*, and the two connectives read that
+/// differently.** An `and` drops it: `(t:goblin otag:)` is `t:goblin`. An `or` containing one
+/// is true outright — `t:goblin or otag:` is "goblins, or anything" — so the whole group is no
+/// clause, rather than an `OR` of the other children that would narrow more than was asked. A
+/// group with no usable child is no clause either way, which is [`nonblank`]'s rule one level
+/// up. A child that is *unknown* (an `is:` word this build lacks, an unknown tag name) is not
+/// blank: it is [`NO_MATCH`] or a subquery that matches nothing, so inside an `or` the other
+/// branches still answer.
+fn group_clause(pred: &QueryPredicate, alias: &str, set_code: &str, any: bool) -> Option<Clause> {
+    let mut parts: Vec<Clause> = Vec::with_capacity(pred.terms.len());
+    for term in &pred.terms {
+        match predicate_clause(term, alias, set_code, true) {
+            Some(clause) => parts.push(clause),
+            None if any => return None,
+            None => {}
+        }
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    Some(if any { any_of(parts) } else { all_of(parts) })
 }
 
 /// The SQL one [`QueryPredicate`] becomes, and the parameters it binds — or `None` when it
@@ -1138,24 +2648,28 @@ fn numeric_clause(
 ///
 /// There are exactly **two** ways to get `None` and they are different facts:
 ///
-/// * [`PredicateField::Name`], [`PredicateField::TypeLine`] and [`PredicateField::OracleText`]
-///   are the FTS builder's, and [`fts_match`] emits them. This is the `None` that is a
-///   hand-off rather than a gap.
+/// * A top-level FTS term ([`rides_the_match`]) is the FTS builder's, and [`fts_match`] emits
+///   it. This is the `None` that is a hand-off rather than a gap. With `nested` on — inside a
+///   group — the same term is answered here instead, by [`fts_subquery`].
 /// * A **blank** value is no filter, which is [`nonblank`]'s rule and every other arm of
 ///   [`push_card_filters`] follows it: a term the reader has not finished typing must not
-///   empty the wall under them.
+///   empty the wall under them. A value that *means* "no filter" is blank too (`lang:any`, a
+///   tag name that normalises to nothing, a group with no usable child — [`group_clause`]).
 ///
 /// `set_code` is the caller's already-built expression rather than `{alias}.set_code`, so
 /// `s:lea` reads through to a collection entry's own copy exactly as the chip picker does —
 /// see [`push_card_filters`]' doc comment for the asymmetry that makes that the one filter
-/// with two places to read from.
+/// with two places to read from. Every set-shaped question (`st:`, `b:`, `date:<set>`,
+/// `is:funny`) reads through the same expression.
 fn predicate_clause(
     pred: &QueryPredicate,
     alias: &str,
     set_code: &str,
-) -> Option<(String, Vec<Box<dyn rusqlite::ToSql>>)> {
+    nested: bool,
+) -> Option<Clause> {
+    let group = matches!(pred.field, PredicateField::AnyOf | PredicateField::AllOf);
     let value = pred.value.trim();
-    if value.is_empty() {
+    if value.is_empty() && !group {
         return None;
     }
     let op = if matches!(pred.op, PredicateOp::Colon) {
@@ -1163,14 +2677,31 @@ fn predicate_clause(
     } else {
         pred.op
     };
+    let ne = op == PredicateOp::Ne;
+    let a = alias;
 
-    // **All thirteen, and no `_` arm.** A fourteenth field added to the enum must fail this
-    // match to compile rather than fall through into a filter that quietly does nothing.
-    let (sql, params): (String, Vec<Box<dyn rusqlite::ToSql>>) = match pred.field {
-        // The FTS builder's three — see [`PredicateField`] and [`fts_match`].
-        PredicateField::Name | PredicateField::TypeLine | PredicateField::OracleText => {
-            return None
+    // **Every field, and no `_` arm.** A new field added to the enum must fail this match to
+    // compile rather than fall through into a filter that quietly does nothing.
+    let (sql, params): Clause = match pred.field {
+        PredicateField::AnyOf => group_clause(pred, alias, set_code, true)?,
+        PredicateField::AllOf => group_clause(pred, alias, set_code, false)?,
+
+        // `!name` — equality, not the index. See [`exact_name_clause`].
+        PredicateField::Name if pred.op == PredicateOp::Eq => {
+            exact_name_clause(&format!("{a}.name"), value)
         }
+        // The FTS builder's three at the top level — see [`PredicateField`] and
+        // [`fts_match`]; inside a group, a subquery of their own.
+        PredicateField::Name | PredicateField::TypeLine | PredicateField::OracleText => {
+            if !nested {
+                return None;
+            }
+            fts_subquery(a, fts_column_term(pred))?
+        }
+        // Free text inside a group: every column, as the top-level free text reads them.
+        PredicateField::Text => fts_subquery(a, fts_query(value))?,
+        PredicateField::OracleTag => tag_clause(a, value, false)?,
+        PredicateField::ArtTag => tag_clause(a, value, true)?,
 
         // **The two-arm bridge, and the measurement is what licenses it.** `cards.keywords`
         // is corpus schema 5 and reads NULL on every row until the next full ingest, so a
@@ -1200,8 +2731,8 @@ fn predicate_clause(
         // `WHERE` beside every other one — unwrapped, the `OR` would reach across it.
         PredicateField::Keyword => (
             format!(
-                "(({alias}.keywords IS NOT NULL AND instr({alias}.keywords, ?) > 0) \
-                 OR ({alias}.keywords IS NULL AND instr(lower({alias}.search_text), lower(?)) > 0))"
+                "(({a}.keywords IS NOT NULL AND instr({a}.keywords, ?) > 0) \
+                 OR ({a}.keywords IS NULL AND instr(lower({a}.search_text), lower(?)) > 0))"
             ),
             vec![
                 Box::new(format!("|{}|", value.to_ascii_lowercase())),
@@ -1220,13 +2751,10 @@ fn predicate_clause(
         // `instr(NULL, …)` is NULL, so an orphan fails this exactly as it fails the format and
         // rarity arms.
         PredicateField::Artist => match op {
-            PredicateOp::Eq => (
-                format!("lower({alias}.artist) = lower(?)"),
-                vec![Box::new(value.to_owned())],
-            ),
-            _ => (
-                format!("instr(lower({alias}.artist), lower(?)) > 0"),
-                vec![Box::new(value.to_owned())],
+            PredicateOp::Eq => bound(format!("lower({a}.artist) = lower(?)"), value.to_owned()),
+            _ => bound(
+                format!("instr(lower({a}.artist), lower(?)) > 0"),
+                value.to_owned(),
             ),
         },
 
@@ -1234,14 +2762,27 @@ fn predicate_clause(
         // `c:rg` answer 13 399 where Scryfall answers 676. The app's existing `colors` filter
         // is colour *identity* with subset semantics, which is Scryfall's `id:`; card colours
         // have never been filtered on before.
-        PredicateField::Colors => color_clause(&format!("{alias}.colors"), op, value),
-        PredicateField::ColorIdentity => {
-            color_clause(&format!("{alias}.color_identity"), op, value)
-        }
+        PredicateField::Colors => color_clause(&format!("{a}.colors"), op, value),
+        PredicateField::ColorIdentity => color_clause(&format!("{a}.color_identity"), op, value),
 
-        PredicateField::Cmc => numeric_clause(&format!("{alias}.cmc"), op, value, false),
-        PredicateField::Power => numeric_clause(&format!("{alias}.power"), op, value, true),
-        PredicateField::Toughness => numeric_clause(&format!("{alias}.toughness"), op, value, true),
+        PredicateField::Cmc => match value.to_ascii_lowercase().as_str() {
+            "even" => parity_clause(a, op, 0),
+            "odd" => parity_clause(a, op, 1),
+            _ => numeric_clause(&format!("{a}.cmc"), op, value, false, Some(a)),
+        },
+        PredicateField::Power => numeric_clause(&format!("{a}.power"), op, value, true, Some(a)),
+        PredicateField::Toughness => {
+            numeric_clause(&format!("{a}.toughness"), op, value, true, Some(a))
+        }
+        PredicateField::Loyalty => numeric_clause(&loyalty_expr(a), op, value, true, Some(a)),
+        // Power plus toughness: a NULL either side (a non-creature) fails, a star is zero.
+        PredicateField::PowTou => numeric_clause(
+            &format!("(CAST({a}.power AS REAL) + CAST({a}.toughness AS REAL))"),
+            op,
+            value,
+            false,
+            Some(a),
+        ),
 
         // Ordered — see [`RARITY_ORDER`]. **This is the one field the grammar canonicalises
         // before it sends one**: `r:c` arrives as `common` and `r:Rare` as `rare`, so there is
@@ -1249,17 +2790,16 @@ fn predicate_clause(
         // caller can reach. The lower-casing stays for [`picked_rarities`]' reason, against a
         // hand-built payload: `cards.rarity` holds Scryfall's own lower-case word and SQLite's
         // `=` on text is case-sensitive, so a `Rare` bound as sent matches nothing and reads
-        // as an empty corpus rather than as a mistake.
+        // as an empty corpus rather than as a mistake. `special` and `bonus` compare by
+        // equality and have no place in the order.
         PredicateField::Rarity => {
             let value = value.to_ascii_lowercase();
             match op {
-                PredicateOp::Colon | PredicateOp::Eq => {
-                    (format!("{alias}.rarity = ?"), vec![Box::new(value)])
-                }
-                PredicateOp::Ne => (format!("{alias}.rarity <> ?"), vec![Box::new(value)]),
+                PredicateOp::Colon | PredicateOp::Eq => bound(format!("{a}.rarity = ?"), value),
+                PredicateOp::Ne => bound(format!("{a}.rarity <> ?"), value),
                 _ => {
                     let Some(i) = RARITY_ORDER.iter().position(|r| *r == value) else {
-                        return Some((NO_MATCH.to_owned(), Vec::new()));
+                        return Some(no_match());
                     };
                     let picked: &[&str] = match op {
                         PredicateOp::Gte => &RARITY_ORDER[i..],
@@ -1268,11 +2808,11 @@ fn predicate_clause(
                         _ => &RARITY_ORDER[..i],
                     };
                     if picked.is_empty() {
-                        return Some((NO_MATCH.to_owned(), Vec::new()));
+                        return Some(no_match());
                     }
                     let holes = vec!["?"; picked.len()].join(",");
                     (
-                        format!("{alias}.rarity IN ({holes})"),
+                        format!("{a}.rarity IN ({holes})"),
                         picked
                             .iter()
                             .map(|r| Box::new((*r).to_owned()) as Box<dyn rusqlite::ToSql>)
@@ -1285,29 +2825,133 @@ fn predicate_clause(
         // The caller's expression, so the collection's coalesce rule is not bypassed.
         //
         // **Lower-cased here because nothing lower-cases it earlier**, which is the same trap
-        // [`color_letters`] names: the grammar sends `s:NEO` exactly as the reader typed it,
+        // [`color_value`] names: the grammar sends `s:NEO` exactly as the reader typed it,
         // `cards.set_code` holds Scryfall's lower-case code, and SQLite's `=` on text is
         // case-sensitive — so the unfolded comparison is an empty wall with no error.
-        PredicateField::SetCode => (
-            format!("{set_code} = ?"),
-            vec![Box::new(value.to_ascii_lowercase())],
-        ),
+        PredicateField::SetCode => bound(format!("{set_code} = ?"), value.to_ascii_lowercase()),
 
         // [`crate::legalities::bit`], exactly as the `format` field's own arm does it — and an
         // unrecognised key is [`NO_MATCH`] there too.
         PredicateField::Format => match crate::legalities::bit(&value.to_ascii_lowercase()) {
-            Some(bit) => (
-                format!("({alias}.legal_mask & ?) != 0"),
-                vec![Box::new(bit as i64)],
-            ),
-            None => (NO_MATCH.to_owned(), Vec::new()),
+            Some(bit) => bound(format!("({a}.legal_mask & ?) != 0"), bit as i64),
+            None => no_match(),
         },
+
+        // `ft:` contains, `ft=` is the whole text; a printing with none is `''`, so `-ft:x`
+        // keeps it. Case-folded like `a:`.
+        PredicateField::Flavor => {
+            let flavor = fact(a, "flavor_text");
+            match op {
+                PredicateOp::Eq => bound(format!("lower({flavor}) = lower(?)"), value.to_owned()),
+                PredicateOp::Ne => not(bound(
+                    format!("lower({flavor}) = lower(?)"),
+                    value.to_owned(),
+                )),
+                _ => bound(
+                    format!("instr(lower({flavor}), lower(?)) > 0"),
+                    value.to_owned(),
+                ),
+            }
+        }
+        PredicateField::Watermark => negate_if(
+            ne,
+            bound(
+                format!("lower({}) = lower(?)", fact(a, "watermark")),
+                value.to_owned(),
+            ),
+        ),
+        PredicateField::Stamp => negate_if(
+            ne,
+            bound(
+                format!("lower({}) = lower(?)", fact(a, "security_stamp")),
+                value.to_owned(),
+            ),
+        ),
+        PredicateField::ManaCost => mana_cost_clause(&format!("{a}.mana_cost"), op, value),
+        PredicateField::Devotion => devotion_clause(&format!("{a}.mana_cost"), op, value),
+        PredicateField::Produces => produces_clause(&format!("{a}.produced_mana"), op, value),
+        PredicateField::CollectorNumber => collector_number_clause(a, op, value),
+
+        // Through `sets`, by the caller's set-code expression.
+        PredicateField::SetType => negate_if(
+            ne,
+            bound(
+                format!("{set_code} IN (SELECT ss.code FROM sets ss WHERE ss.set_type = ?)"),
+                value.to_ascii_lowercase(),
+            ),
+        ),
+        PredicateField::Block => negate_if(ne, block_clause(set_code, value)),
+        PredicateField::InPrinting => negate_if(ne, in_printing_clause(a, value)),
+
+        // `games` is a JSON array stored as text; the quoted word is the delimiter, the finish
+        // chips' argument.
+        PredicateField::Game => negate_if(
+            ne,
+            bound(
+                format!("instr({a}.games, ?) > 0"),
+                format!("\"{}\"", value.to_ascii_lowercase()),
+            ),
+        ),
+        // `lang:any` asks for every language, which is no filter — the blank rule.
+        PredicateField::Language => {
+            if value.eq_ignore_ascii_case("any") {
+                return None;
+            }
+            let code = language_code(value)
+                .map(str::to_owned)
+                .unwrap_or_else(|| value.to_ascii_lowercase());
+            negate_if(ne, bound(format!("{a}.lang = ?"), code))
+        }
+        PredicateField::Year => match value.parse::<i64>() {
+            Ok(year) => bound(
+                format!(
+                    "CAST(substr({a}.released_at, 1, 4) AS INTEGER) {} ?",
+                    comparison(op)
+                ),
+                year,
+            ),
+            Err(_) => no_match(),
+        },
+        PredicateField::Date => date_clause(a, op, value),
+
+        // A NULL price — no market for that printing — fails every comparison, as a land's
+        // power does.
+        PredicateField::Usd => numeric_clause(&format!("{a}.price_usd"), op, value, false, None),
+        PredicateField::Eur => numeric_clause(&format!("{a}.price_eur"), op, value, false, None),
+        PredicateField::Tix => numeric_clause(
+            &format!("json_extract({a}.prices, '$.tix')"),
+            op,
+            value,
+            false,
+            None,
+        ),
+
+        // The column's own word — `black`, `white`, `borderless`, `silver`, `gold`, `yellow`.
+        PredicateField::Border => negate_if(
+            ne,
+            bound(
+                format!("lower({a}.border_color) = lower(?)"),
+                value.to_owned(),
+            ),
+        ),
+        PredicateField::Frame => negate_if(ne, frame_clause(a, value)),
+        PredicateField::Banned => negate_if(ne, legality_clause(a, value, "banned")),
+        PredicateField::Restricted => negate_if(ne, legality_clause(a, value, "restricted")),
+
+        PredicateField::Prints => print_count_clause(a, op, value, false, false),
+        PredicateField::PaperPrints => print_count_clause(a, op, value, false, true),
+        PredicateField::Sets => print_count_clause(a, op, value, true, false),
+        PredicateField::PaperSets => print_count_clause(a, op, value, true, true),
+
+        PredicateField::NewFeature => negate_if(ne, new_feature_clause(a, value)),
+        PredicateField::Is => negate_if(ne, is_clause(a, set_code, value)),
+        PredicateField::Has => negate_if(ne, has_clause(a, value)),
     };
 
     // A leading `-` in the box. Wrapped rather than inverted per arm, because an arm that
     // inverted itself would have to get every NULL right twice.
     Some(if pred.negated {
-        (format!("NOT ({sql})"), params)
+        not((sql, params))
     } else {
         (sql, params)
     })
@@ -2126,6 +3770,16 @@ mod tests {
             op,
             value: value.to_owned(),
             negated: false,
+            terms: Vec::new(),
+        }
+    }
+
+    /// An `or` / parenthesised `and` over `terms` — op `colon` and value `""`, as the grammar
+    /// sends one.
+    fn group(field: PredicateField, terms: Vec<QueryPredicate>) -> QueryPredicate {
+        QueryPredicate {
+            terms,
+            ..pred(field, PredicateOp::Colon, "")
         }
     }
 
@@ -2136,8 +3790,10 @@ mod tests {
         }
     }
 
-    /// Every one of the thirteen, so a census can walk them without naming them twice.
-    const EVERY_FIELD: [PredicateField; 13] = [
+    /// Every field, so a census can walk them without naming them twice — and the `match` in
+    /// [`sample`] has no `_` arm, so a field added to the enum and not here fails to compile
+    /// there rather than slipping past every census below.
+    const EVERY_FIELD: [PredicateField; 48] = [
         PredicateField::Name,
         PredicateField::TypeLine,
         PredicateField::OracleText,
@@ -2151,7 +3807,103 @@ mod tests {
         PredicateField::Rarity,
         PredicateField::SetCode,
         PredicateField::Format,
+        PredicateField::AnyOf,
+        PredicateField::AllOf,
+        PredicateField::Text,
+        PredicateField::OracleTag,
+        PredicateField::ArtTag,
+        PredicateField::Flavor,
+        PredicateField::Watermark,
+        PredicateField::ManaCost,
+        PredicateField::Devotion,
+        PredicateField::Produces,
+        PredicateField::Loyalty,
+        PredicateField::PowTou,
+        PredicateField::CollectorNumber,
+        PredicateField::SetType,
+        PredicateField::Block,
+        PredicateField::InPrinting,
+        PredicateField::Game,
+        PredicateField::Language,
+        PredicateField::Year,
+        PredicateField::Date,
+        PredicateField::Usd,
+        PredicateField::Eur,
+        PredicateField::Tix,
+        PredicateField::Border,
+        PredicateField::Frame,
+        PredicateField::Stamp,
+        PredicateField::Banned,
+        PredicateField::Restricted,
+        PredicateField::Prints,
+        PredicateField::PaperPrints,
+        PredicateField::Sets,
+        PredicateField::PaperSets,
+        PredicateField::NewFeature,
+        PredicateField::Is,
+        PredicateField::Has,
     ];
+
+    /// A term each field really answers, with `op` — a value the field reads (a number for a
+    /// count, a word from its vocabulary), and for a group two children, so the census asks
+    /// every field a question it has an answer to.
+    fn sample(field: PredicateField, op: PredicateOp) -> QueryPredicate {
+        let value = match field {
+            PredicateField::AnyOf | PredicateField::AllOf => {
+                return QueryPredicate {
+                    op,
+                    ..group(
+                        field,
+                        vec![
+                            pred(PredicateField::TypeLine, PredicateOp::Colon, "goblin"),
+                            pred(PredicateField::Cmc, PredicateOp::Gte, "3"),
+                        ],
+                    )
+                }
+            }
+            PredicateField::Name
+            | PredicateField::TypeLine
+            | PredicateField::OracleText
+            | PredicateField::Keyword
+            | PredicateField::Artist
+            | PredicateField::Text
+            | PredicateField::Flavor => "goblin",
+            PredicateField::OracleTag | PredicateField::ArtTag => "spot removal",
+            PredicateField::Colors | PredicateField::ColorIdentity => "rg",
+            PredicateField::Produces => "wc",
+            PredicateField::ManaCost => "{2}{R}{R}",
+            PredicateField::Devotion => "{G}{G}",
+            PredicateField::Cmc
+            | PredicateField::Power
+            | PredicateField::Toughness
+            | PredicateField::Loyalty
+            | PredicateField::PowTou
+            | PredicateField::CollectorNumber
+            | PredicateField::Prints
+            | PredicateField::PaperPrints
+            | PredicateField::Sets
+            | PredicateField::PaperSets => "3",
+            PredicateField::Usd | PredicateField::Eur | PredicateField::Tix => "1.5",
+            PredicateField::Rarity => "rare",
+            PredicateField::SetCode | PredicateField::Block | PredicateField::InPrinting => "zen",
+            PredicateField::Format | PredicateField::Banned | PredicateField::Restricted => {
+                "modern"
+            }
+            PredicateField::Watermark => "boros",
+            PredicateField::SetType => "expansion",
+            PredicateField::Game => "paper",
+            PredicateField::Language => "japanese",
+            PredicateField::Year => "2020",
+            PredicateField::Date => "2020-05",
+            PredicateField::Border => "black",
+            PredicateField::Frame => "2015",
+            PredicateField::Stamp => "oval",
+            PredicateField::NewFeature => "art",
+            PredicateField::Is => "foil",
+            PredicateField::Has => "watermark",
+        };
+        pred(field, op, value)
+    }
 
     /// The clauses one list of predicates pushes, with [`CardFilters::paper_only`]'s standing
     /// term dropped: every assertion below is about the predicates, and that one is always
@@ -2224,8 +3976,14 @@ mod tests {
     /// and forgetting one of them is a red test rather than a quiet wrong answer.
     #[test]
     fn every_predicate_field_is_emitted_by_exactly_one_of_the_two_sides() {
-        for field in EVERY_FIELD {
-            let term = pred(field, PredicateOp::Colon, "goblin");
+        let mut terms: Vec<QueryPredicate> = EVERY_FIELD
+            .iter()
+            .map(|field| sample(*field, PredicateOp::Colon))
+            .collect();
+        // `name` is the one field with a foot on each side: `!name` is SQL.
+        terms.push(pred(PredicateField::Name, PredicateOp::Eq, "goblin guide"));
+        for term in terms {
+            let field = term.field;
             let sql = predicate_wheres(vec![term.clone()]);
             let (positive, negatives) = fts_match(None, std::slice::from_ref(&term));
             let rides_fts = positive.is_some() || !negatives.is_empty();
@@ -2233,6 +3991,10 @@ mod tests {
                 !sql.is_empty(),
                 rides_fts,
                 "{field:?} is emitted by both sides or by neither: sql={sql:?} fts={positive:?}"
+            );
+            assert!(
+                !sql.iter().any(|w| w == NO_MATCH),
+                "{field:?}'s sample is a value it can read, not a NO_MATCH: {sql:?}"
             );
         }
     }
@@ -2814,12 +4576,73 @@ mod tests {
                 {"field":"colors","op":"gte","value":"rg"},
                 {"field":"rarity","op":"eq","value":"rare"},
                 {"field":"format","op":"eq","value":"modern"},
-                {"field":"name","op":"colon","value":"lightning bolt","negated":true}
+                {"field":"name","op":"colon","value":"lightning bolt","negated":true},
+                {"field":"anyOf","op":"colon","value":"","terms":[
+                    {"field":"typeLine","op":"colon","value":"goblin"},
+                    {"field":"allOf","op":"colon","value":"","terms":[
+                        {"field":"text","op":"colon","value":"bolt"},
+                        {"field":"oracleTag","op":"colon","value":"removal"}
+                    ]}
+                ]},
+                {"field":"allOf","op":"colon","value":"","negated":true,"terms":[
+                    {"field":"artTag","op":"colon","value":"dragon"}
+                ]},
+                {"field":"text","op":"colon","value":"bolt"},
+                {"field":"oracleTag","op":"colon","value":"ramp"},
+                {"field":"artTag","op":"colon","value":"dog"},
+                {"field":"flavor","op":"colon","value":"sparkmage"},
+                {"field":"watermark","op":"eq","value":"boros"},
+                {"field":"manaCost","op":"gte","value":"{R}"},
+                {"field":"devotion","op":"gte","value":"{G}{G}"},
+                {"field":"produces","op":"gte","value":"wu"},
+                {"field":"loyalty","op":"gte","value":"4"},
+                {"field":"powTou","op":"gt","value":"5"},
+                {"field":"collectorNumber","op":"eq","value":"161"},
+                {"field":"setType","op":"eq","value":"masters"},
+                {"field":"block","op":"eq","value":"zen"},
+                {"field":"inPrinting","op":"eq","value":"lea"},
+                {"field":"game","op":"eq","value":"arena"},
+                {"field":"language","op":"eq","value":"ja"},
+                {"field":"year","op":"lt","value":"2000"},
+                {"field":"date","op":"gte","value":"2020-01-01"},
+                {"field":"usd","op":"lt","value":"1"},
+                {"field":"eur","op":"lt","value":"1"},
+                {"field":"tix","op":"lt","value":"1"},
+                {"field":"border","op":"eq","value":"white"},
+                {"field":"frame","op":"eq","value":"future"},
+                {"field":"stamp","op":"eq","value":"acorn"},
+                {"field":"banned","op":"eq","value":"modern"},
+                {"field":"restricted","op":"eq","value":"vintage"},
+                {"field":"prints","op":"eq","value":"1"},
+                {"field":"paperPrints","op":"gte","value":"2"},
+                {"field":"sets","op":"eq","value":"1"},
+                {"field":"paperSets","op":"gte","value":"2"},
+                {"field":"newFeature","op":"eq","value":"art"},
+                {"field":"is","op":"eq","value":"foil","negated":true},
+                {"field":"has","op":"eq","value":"watermark"}
             ]"#,
         )
         .expect("every name here is what the TypeScript mirror sends");
 
+        // One payload per field: the 13 originals, then the two groups, then the 33 others.
         assert_eq!(parsed.len(), EVERY_FIELD.len(), "one payload per field");
+        let fields: Vec<PredicateField> = parsed.iter().map(|p| p.field).collect();
+        for field in EVERY_FIELD {
+            assert!(
+                fields.contains(&field),
+                "{field:?} has no wire payload here"
+            );
+        }
+        // `terms` is `#[serde(default)]` and recursive: absent on a plain term, a list on a
+        // group, and a group inside a group parses all the way down.
+        assert!(parsed[0].terms.is_empty());
+        assert_eq!(parsed[13].field, PredicateField::AnyOf);
+        assert_eq!(parsed[13].terms.len(), 2);
+        assert_eq!(
+            parsed[13].terms[1].terms[1].field,
+            PredicateField::OracleTag
+        );
+        assert!(parsed[14].negated);
         assert!(parsed[0].negated);
         assert!(
             !parsed[1].negated,
@@ -3594,5 +5417,1136 @@ mod tests {
                 .unwrap();
         assert_eq!(f.borders, Some(vec!["fullart".to_owned()]));
         assert_eq!(f.printed_finishes, Some(vec!["etched".to_owned()]));
+    }
+
+    // ---------------------------------------------------------------------------------
+    // The full syntax (issue #909): groups, exact names, and the long tail
+    // ---------------------------------------------------------------------------------
+
+    /// One printing for [`corpus_for_the_full_syntax`]: every column the new fields read, with
+    /// a default for each, so a row names only what it is about.
+    struct Printing {
+        id: &'static str,
+        oracle_id: Option<&'static str>,
+        name: &'static str,
+        lang: &'static str,
+        released_at: &'static str,
+        set_code: &'static str,
+        collector_number: &'static str,
+        rarity: &'static str,
+        layout: &'static str,
+        mana_cost: Option<&'static str>,
+        cmc: f64,
+        type_line: &'static str,
+        oracle_text: Option<&'static str>,
+        /// What `cards_fts` indexes beside the name and type line — the oracle text unless a
+        /// double-faced row says otherwise, as `card_row` builds it.
+        search_text: Option<&'static str>,
+        colors: &'static str,
+        color_identity: &'static str,
+        legalities: &'static str,
+        games: &'static str,
+        finishes: &'static str,
+        prices: &'static str,
+        price_usd: Option<f64>,
+        illustration_id: Option<&'static str>,
+        frame_effects: Option<&'static str>,
+        border_color: &'static str,
+        promo_types: Option<&'static str>,
+        artist: &'static str,
+        power: Option<&'static str>,
+        toughness: Option<&'static str>,
+        produced_mana: &'static str,
+        keywords: &'static str,
+        /// `None` is a row that predates corpus schema 8.
+        print_facts: Option<&'static str>,
+    }
+
+    impl Default for Printing {
+        fn default() -> Self {
+            Printing {
+                id: "",
+                oracle_id: None,
+                name: "",
+                lang: "en",
+                released_at: "2000-01-01",
+                set_code: "tst",
+                collector_number: "1",
+                rarity: "common",
+                layout: "normal",
+                mana_cost: None,
+                cmc: 0.0,
+                type_line: "",
+                oracle_text: None,
+                search_text: None,
+                colors: "",
+                color_identity: "",
+                legalities: "{}",
+                games: r#"["paper"]"#,
+                finishes: r#"["nonfoil"]"#,
+                prices: "{}",
+                price_usd: None,
+                illustration_id: None,
+                frame_effects: None,
+                border_color: "black",
+                promo_types: None,
+                artist: "Nobody",
+                power: None,
+                toughness: None,
+                produced_mana: "",
+                keywords: "",
+                print_facts: Some("{}"),
+            }
+        }
+    }
+
+    /// Sixteen printings of fourteen cards, the sets they sit in, and two tag taxonomies — each
+    /// row there to make one family of the new syntax answer something a wrong arm would not.
+    ///
+    /// * **Three Lightning Bolts** (`lea` 1993, `m10` 2009, `2xm` 2020): one oracle card with
+    ///   two illustrations, two rarities, two languages and one flavour text between them — so
+    ///   `prints:`, `new:`, `in:`, `!name` and the printing facts each have a card whose
+    ///   printings disagree.
+    /// * **`Fire // Ice` and `Delver of Secrets // Insectile Aberration`**: an exact name must
+    ///   find either face.
+    /// * **`Tundra` and `Flooded Strand`**: the two land templates `is:dual` and `is:fetchland`
+    ///   must tell apart.
+    /// * **`Old Card` has no `print_facts`** — a row that predates corpus schema 8 — and is the
+    ///   row every negated print fact must still drop.
+    #[rustfmt::skip]
+    fn corpus_for_the_full_syntax() -> rusqlite::Connection {
+        let conn = crate::schema::memory_pair();
+        let rows = [
+            Printing { id: "bolt", oracle_id: Some("o-bolt"), name: "Lightning Bolt", released_at: "1993-08-05",
+                set_code: "lea", collector_number: "161", mana_cost: Some("{R}"), cmc: 1.0, type_line: "Instant",
+                oracle_text: Some("Lightning Bolt deals 3 damage to any target."), colors: "R", color_identity: "R",
+                legalities: r#"{"modern":"legal","vintage":"legal"}"#, games: r#"["paper","mtgo"]"#,
+                prices: r#"{"usd":"1.50","tix":"0.02"}"#, price_usd: Some(1.5), illustration_id: Some("i-bolt"),
+                artist: "Christopher Rush", print_facts: Some(r#"{"frame":"1993","reprint":false,"reserved":false}"#),
+                ..Printing::default() },
+            Printing { id: "bolt-m10", oracle_id: Some("o-bolt"), name: "Lightning Bolt", released_at: "2009-07-17",
+                set_code: "m10", collector_number: "146", mana_cost: Some("{R}"), cmc: 1.0, type_line: "Instant",
+                oracle_text: Some("Lightning Bolt deals 3 damage to any target."), colors: "R", color_identity: "R",
+                legalities: r#"{"modern":"legal","vintage":"legal"}"#, finishes: r#"["nonfoil","foil"]"#,
+                price_usd: Some(2.0), illustration_id: Some("i-bolt"), artist: "Christopher Moeller",
+                print_facts: Some(r#"{"frame":"2003","reprint":true,"flavor_text":"The sparkmage shrieked."}"#),
+                ..Printing::default() },
+            Printing { id: "bolt-2xm", oracle_id: Some("o-bolt"), name: "Lightning Bolt", lang: "ja",
+                released_at: "2020-08-07", set_code: "2xm", collector_number: "117", rarity: "uncommon",
+                mana_cost: Some("{R}"), cmc: 1.0, type_line: "Instant",
+                oracle_text: Some("Lightning Bolt deals 3 damage to any target."), colors: "R", color_identity: "R",
+                legalities: r#"{"modern":"legal","vintage":"legal"}"#, games: r#"["paper","arena","mtgo"]"#,
+                finishes: r#"["foil"]"#, illustration_id: Some("i-bolt-2xm"), frame_effects: Some(r#"["extendedart"]"#),
+                border_color: "borderless", promo_types: Some(r#"["boosterfun"]"#),
+                print_facts: Some(r#"{"frame":"2015","reprint":true}"#), ..Printing::default() },
+            Printing { id: "goblin", name: "Goblin Guide", released_at: "2009-10-02", set_code: "zen",
+                collector_number: "126", rarity: "rare", mana_cost: Some("{R}"), cmc: 1.0,
+                type_line: "Creature — Goblin Scout",
+                oracle_text: Some("Haste\nWhenever Goblin Guide attacks, defending player reveals the top card of their library."),
+                colors: "R", color_identity: "R", price_usd: Some(3.0), power: Some("2"), toughness: Some("2"),
+                keywords: "|haste|", print_facts: Some(r#"{"frame":"2003","watermark":"boros"}"#),
+                ..Printing::default() },
+            Printing { id: "fireice", name: "Fire // Ice", released_at: "2001-06-04", set_code: "apc",
+                layout: "split", rarity: "uncommon", mana_cost: Some("{1}{R}"), cmc: 4.0, type_line: "Instant // Instant",
+                search_text: Some("Fire Instant Fire deals 2 damage divided as you choose. Ice Instant Tap target permanent. Draw a card."),
+                colors: "UR", color_identity: "UR", ..Printing::default() },
+            Printing { id: "delver", name: "Delver of Secrets // Insectile Aberration", released_at: "2011-09-30",
+                set_code: "isd", layout: "transform", mana_cost: Some("{U}"), cmc: 1.0,
+                type_line: "Creature — Human Wizard // Creature — Human Insect",
+                search_text: Some("Delver of Secrets Creature — Human Wizard At the beginning of your upkeep, look at the top card of your library. Insectile Aberration Creature — Human Insect Flying"),
+                colors: "U", color_identity: "U", power: Some("1"), toughness: Some("1"), keywords: "|transform|",
+                ..Printing::default() },
+            Printing { id: "tundra", name: "Tundra", released_at: "1993-08-05", set_code: "lea",
+                collector_number: "283", rarity: "rare", type_line: "Land — Plains Island",
+                oracle_text: Some("({T}: Add {W} or {U}.)"), color_identity: "WU", produced_mana: "WU",
+                print_facts: Some(r#"{"frame":"1993","reserved":true}"#), ..Printing::default() },
+            Printing { id: "strand", name: "Flooded Strand", released_at: "2002-10-07", set_code: "ons",
+                rarity: "rare", type_line: "Land",
+                oracle_text: Some("{T}, Pay 1 life, Sacrifice Flooded Strand: Search your library for a Plains or Island card, put it onto the battlefield, then shuffle."),
+                ..Printing::default() },
+            Printing { id: "niv", name: "Niv-Mizzet Reborn", released_at: "2019-05-03", set_code: "war",
+                rarity: "mythic", mana_cost: Some("{W}{U}{B}{R}{G}"), cmc: 5.0,
+                type_line: "Legendary Creature — Dragon Avatar",
+                oracle_text: Some("Flying\nWhen Niv-Mizzet Reborn enters, reveal the top ten cards of your library."),
+                colors: "WUBRG", color_identity: "WUBRG", illustration_id: Some("i-niv"), power: Some("6"),
+                toughness: Some("6"), keywords: "|flying|", ..Printing::default() },
+            Printing { id: "bears", name: "Grizzly Bears", released_at: "1993-08-05", set_code: "lea",
+                mana_cost: Some("{1}{G}"), cmc: 2.0, type_line: "Creature — Bear", oracle_text: Some(""),
+                colors: "G", color_identity: "G", power: Some("2"), toughness: Some("2"), ..Printing::default() },
+            Printing { id: "serra", name: "Serra Angel", released_at: "1993-08-05", set_code: "lea",
+                rarity: "uncommon", mana_cost: Some("{3}{W}{W}"), cmc: 5.0, type_line: "Creature — Angel",
+                oracle_text: Some("Flying, vigilance"), colors: "W", color_identity: "W", power: Some("4"),
+                toughness: Some("4"), keywords: "|flying|vigilance|", ..Printing::default() },
+            Printing { id: "finks", name: "Kitchen Finks", released_at: "2008-05-02", set_code: "shm",
+                rarity: "uncommon", mana_cost: Some("{1}{G/W}{G/W}"), cmc: 3.0, type_line: "Creature — Ouphe",
+                oracle_text: Some("When Kitchen Finks enters, you gain 2 life.\nPersist (When this creature dies, return it.)"),
+                colors: "GW", color_identity: "GW", power: Some("3"), toughness: Some("2"), keywords: "|persist|",
+                ..Printing::default() },
+            Printing { id: "ugin", name: "Ugin, the Spirit Dragon", released_at: "2014-11-07", set_code: "frf",
+                rarity: "mythic", mana_cost: Some("{8}"), cmc: 8.0, type_line: "Legendary Planeswalker — Ugin",
+                oracle_text: Some("+2: Ugin deals 3 damage to any target."), print_facts: Some(r#"{"loyalty":"7"}"#),
+                ..Printing::default() },
+            Printing { id: "unhinged", name: "Infinity Elemental", released_at: "2004-11-19", set_code: "unh",
+                rarity: "rare", mana_cost: Some("{4}{R}{R}{R}"), cmc: 7.0, type_line: "Creature — Elemental",
+                oracle_text: Some("When Infinity Elemental dies, you lose the game."), colors: "R", color_identity: "R", power: Some("∞"), toughness: Some("5"), ..Printing::default() },
+            Printing { id: "old", name: "Old Card", mana_cost: Some("{3}"), cmc: 3.0, type_line: "Artifact",
+                legalities: r#"{"modern":"banned","vintage":"restricted"}"#, print_facts: None,
+                ..Printing::default() },
+        ];
+        for r in rows {
+            let legal_mask = crate::legalities::legal_mask(&serde_json::from_str(r.legalities).unwrap());
+            let search_text = r.search_text.or(r.oracle_text).unwrap_or("");
+            conn.execute(
+                "INSERT INTO cards (id, oracle_id, name, lang, released_at, set_code, collector_number, rarity,
+                    layout, mana_cost, cmc, type_line, oracle_text, colors, color_identity, legalities, games,
+                    finishes, prices, price_usd, illustration_id, frame_effects, border_color, promo_types,
+                    is_paper, search_text, raw, artist, power, toughness, legal_mask, produced_mana, type_mask,
+                    keywords, print_facts)
+                 VALUES (?1, coalesce(?2, ?1), ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+                    ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, 1, ?25, '{}', ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33)",
+                rusqlite::params![
+                    r.id, r.oracle_id, r.name, r.lang, r.released_at, r.set_code, r.collector_number, r.rarity,
+                    r.layout, r.mana_cost, r.cmc, r.type_line, r.oracle_text, r.colors, r.color_identity,
+                    r.legalities, r.games, r.finishes, r.prices, r.price_usd, r.illustration_id, r.frame_effects,
+                    r.border_color, r.promo_types, search_text, r.artist, r.power, r.toughness,
+                    legal_mask as i64, r.produced_mana, i64::from(crate::cardtypes::type_mask(r.type_line)),
+                    r.keywords, r.print_facts,
+                ],
+            ).unwrap();
+        }
+        // code, type, released, block_code, block — `wwk` shares Zendikar's block and holds no
+        // card here, which is what makes `b:wwk` a question about the block and not the set.
+        let sets = [
+            ("lea", "core",      "1993-08-05", None,        None),
+            ("m10", "core",      "2009-07-17", None,        None),
+            ("2xm", "masters",   "2020-08-07", None,        None),
+            ("zen", "expansion", "2009-10-02", Some("zen"), Some("Zendikar")),
+            ("wwk", "expansion", "2010-02-05", Some("zen"), Some("Zendikar")),
+            ("apc", "expansion", "2001-06-04", Some("inv"), Some("Invasion")),
+            ("isd", "expansion", "2011-09-30", Some("isd"), Some("Innistrad")),
+            ("ons", "expansion", "2002-10-07", Some("ons"), Some("Onslaught")),
+            ("war", "expansion", "2019-05-03", None,        None),
+            ("shm", "expansion", "2008-05-02", Some("shm"), Some("Shadowmoor")),
+            ("frf", "expansion", "2014-11-07", Some("ktk"), Some("Khans of Tarkir")),
+            ("unh", "funny",     "2004-11-19", None,        None),
+            ("tst", "expansion", "2000-01-01", None,        None),
+        ];
+        for (code, set_type, released, block_code, block) in sets {
+            conn.execute(
+                "INSERT INTO sets (code, name, set_type, released_at, block_code, block) VALUES (?1, ?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![code, set_type, released, block_code, block],
+            ).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO oracle_tags (slug, label, id, slug_norm) VALUES
+                 ('removal', 'Removal', 'r', 'removal'), ('spot-removal', 'Spot Removal', 's', 'spotremoval');
+             INSERT INTO oracle_tag_cards (oracle_id, slug) VALUES
+                 ('o-bolt', 'removal'), ('o-bolt', 'spot-removal'), ('fireice', 'removal');
+             INSERT INTO art_tags (slug, id, label, slug_norm) VALUES ('dragon', 'd', 'Dragon', 'dragon');
+             INSERT INTO art_tag_illustrations (illustration_id, slug, weight) VALUES ('i-niv', 'dragon', 'strong');
+             INSERT INTO cards_fts(cards_fts) VALUES('rebuild');",
+        ).unwrap();
+        conn
+    }
+
+    /// The ids a predicate list leaves standing through **both** halves — [`fts_match`] the way
+    /// the collection applies it (a `rowid IN` per side) and [`push_card_filters`] — in id order.
+    fn full_ids(conn: &rusqlite::Connection, preds: Vec<QueryPredicate>) -> Vec<String> {
+        let mut p = Predicates::default();
+        let (matched, negatives) = fts_match(None, &preds);
+        if let Some(query) = matched {
+            p.push(
+                "c.rowid IN (SELECT rowid FROM cards_fts WHERE cards_fts MATCH ?)".to_owned(),
+                Box::new(query),
+            );
+        }
+        for negative in negatives {
+            p.push(
+                "c.rowid NOT IN (SELECT rowid FROM cards_fts WHERE cards_fts MATCH ?)".to_owned(),
+                Box::new(negative),
+            );
+        }
+        push_card_filters(
+            &mut p,
+            &CardFilters {
+                predicates: Some(preds),
+                ..Default::default()
+            },
+            "c",
+            None,
+        );
+        let sql = format!(
+            "SELECT c.id FROM cards c WHERE {} ORDER BY c.id",
+            p.where_sql()
+        );
+        let mut stmt = conn.prepare(&sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
+        let rows = stmt
+            .query_map(
+                rusqlite::params_from_iter(p.params.iter().map(|b| b.as_ref())),
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap_or_else(|e| panic!("{e}: {sql}"))
+            .collect::<Result<Vec<String>, _>>()
+            .unwrap();
+        rows
+    }
+
+    /// `ids` sorted the way [`full_ids`] orders its answer, so an expectation can be written in
+    /// whatever order reads best.
+    fn sorted(ids: &[&str]) -> Vec<String> {
+        let mut v: Vec<String> = ids.iter().map(|s| (*s).to_owned()).collect();
+        v.sort();
+        v
+    }
+
+    /// One predicate's ids.
+    fn one(conn: &rusqlite::Connection, term: QueryPredicate) -> Vec<String> {
+        full_ids(conn, vec![term])
+    }
+
+    /// Every id [`corpus_for_the_full_syntax`] seeds.
+    const ALL: [&str; 15] = [
+        "bears", "bolt", "bolt-2xm", "bolt-m10", "delver", "fireice", "finks", "goblin", "niv",
+        "old", "serra", "strand", "tundra", "ugin", "unhinged",
+    ];
+
+    /// Every id but these.
+    fn all_but(excluded: &[&str]) -> Vec<String> {
+        sorted(
+            &ALL.iter()
+                .copied()
+                .filter(|id| !excluded.contains(id))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    /// **`t:goblin or t:land` is two index lookups ORed, which the one top-level `MATCH` cannot
+    /// spell** — it is a conjunction with everything beside it. So each grouped FTS term is its
+    /// own `rowid IN (…)`, and the group is one parenthesised clause the top level ANDs.
+    #[test]
+    fn an_or_of_two_index_terms_answers_either() {
+        let conn = corpus_for_the_full_syntax();
+        let either = group(
+            PredicateField::AnyOf,
+            vec![
+                pred(PredicateField::TypeLine, PredicateOp::Colon, "goblin"),
+                pred(PredicateField::TypeLine, PredicateOp::Colon, "land"),
+            ],
+        );
+        // Nothing reaches the MATCH: the group is SQL, top level or not.
+        assert_eq!(
+            fts_match(None, std::slice::from_ref(&either)),
+            (None, Vec::new())
+        );
+        let sql = one_clause(either.clone());
+        assert_eq!(sql.matches("cards_fts MATCH ?").count(), 2, "{sql}");
+        assert!(sql.starts_with('(') && sql.contains(" OR "), "{sql}");
+        assert_eq!(one(&conn, either), sorted(&["goblin", "tundra", "strand"]));
+
+        // And a name term inside a group is the ordered phrase on `name`, through its own
+        // subquery — `-bolt`'s spelling, one level down.
+        assert_eq!(
+            one(
+                &conn,
+                group(
+                    PredicateField::AnyOf,
+                    vec![
+                        pred(PredicateField::Name, PredicateOp::Colon, "lightning bolt"),
+                        pred(PredicateField::OracleText, PredicateOp::Colon, "vigilance"),
+                    ],
+                )
+            ),
+            sorted(&["bolt", "bolt-m10", "bolt-2xm", "serra"])
+        );
+    }
+
+    /// An index term ORed with a SQL term — the shape no earlier build could express at all.
+    #[test]
+    fn an_or_of_an_index_term_and_a_sql_term() {
+        let conn = corpus_for_the_full_syntax();
+        assert_eq!(
+            one(
+                &conn,
+                group(
+                    PredicateField::AnyOf,
+                    vec![
+                        pred(PredicateField::TypeLine, PredicateOp::Colon, "goblin"),
+                        pred(PredicateField::Cmc, PredicateOp::Gte, "7"),
+                    ],
+                )
+            ),
+            sorted(&["goblin", "ugin", "unhinged"])
+        );
+    }
+
+    /// `-(t:creature cmc<=1)` — a negated conjunction, which the grammar sends as an `allOf`
+    /// because flattening it would distribute the `-` wrongly (`-t:creature -cmc<=1`).
+    #[test]
+    fn a_negated_group_removes_exactly_what_the_group_matches() {
+        let conn = corpus_for_the_full_syntax();
+        let both = group(
+            PredicateField::AllOf,
+            vec![
+                pred(PredicateField::TypeLine, PredicateOp::Colon, "creature"),
+                pred(PredicateField::Cmc, PredicateOp::Lte, "1"),
+            ],
+        );
+        assert_eq!(one(&conn, both.clone()), sorted(&["goblin", "delver"]));
+        assert_eq!(
+            one(
+                &conn,
+                QueryPredicate {
+                    negated: true,
+                    ..both
+                }
+            ),
+            all_but(&["goblin", "delver"])
+        );
+    }
+
+    /// An `or` beside a plain term (`c:r (t:goblin or t:instant)`), and an `and` inside an `or`
+    /// (`(t:creature c:g) or t:land`) — the two nestings the grammar produces.
+    #[test]
+    fn groups_nest_inside_conjunctions_and_conjunctions_inside_groups() {
+        let conn = corpus_for_the_full_syntax();
+        assert_eq!(
+            full_ids(
+                &conn,
+                vec![
+                    pred(PredicateField::Colors, PredicateOp::Colon, "r"),
+                    group(
+                        PredicateField::AnyOf,
+                        vec![
+                            pred(PredicateField::TypeLine, PredicateOp::Colon, "goblin"),
+                            pred(PredicateField::TypeLine, PredicateOp::Colon, "instant"),
+                        ],
+                    ),
+                ]
+            ),
+            sorted(&["bolt", "bolt-m10", "bolt-2xm", "goblin", "fireice"])
+        );
+        assert_eq!(
+            one(
+                &conn,
+                group(
+                    PredicateField::AnyOf,
+                    vec![
+                        group(
+                            PredicateField::AllOf,
+                            vec![
+                                pred(PredicateField::TypeLine, PredicateOp::Colon, "creature"),
+                                pred(PredicateField::Colors, PredicateOp::Colon, "g"),
+                            ],
+                        ),
+                        pred(PredicateField::TypeLine, PredicateOp::Colon, "land"),
+                    ],
+                )
+            ),
+            sorted(&["bears", "finks", "niv", "tundra", "strand"])
+        );
+    }
+
+    /// Bare words and tag names inside a group: `insectile or otag:"spot removal"`. The tag is
+    /// resolved here by its normalised name — the same fold `tag_resolve` uses — and an unknown
+    /// tag matches nothing, so the other branch of an `or` still answers. A top-level `text` or
+    /// tag term, which the grammar never sends, is answered by the same SQL.
+    #[test]
+    fn a_group_holds_free_text_and_tags() {
+        let conn = corpus_for_the_full_syntax();
+        let mixed = group(
+            PredicateField::AnyOf,
+            vec![
+                pred(PredicateField::Text, PredicateOp::Colon, "insectile"),
+                pred(
+                    PredicateField::OracleTag,
+                    PredicateOp::Colon,
+                    "Spot Removal",
+                ),
+            ],
+        );
+        assert_eq!(
+            one(&conn, mixed),
+            sorted(&["delver", "bolt", "bolt-m10", "bolt-2xm"])
+        );
+        assert_eq!(
+            one(
+                &conn,
+                group(
+                    PredicateField::AnyOf,
+                    vec![
+                        pred(PredicateField::ArtTag, PredicateOp::Colon, "dragon"),
+                        pred(PredicateField::OracleTag, PredicateOp::Colon, "no-such-tag"),
+                    ],
+                )
+            ),
+            vec!["niv"]
+        );
+        // Top level, as a hand-built payload would send them.
+        assert_eq!(
+            one(
+                &conn,
+                pred(PredicateField::Text, PredicateOp::Colon, "insectile")
+            ),
+            vec!["delver"]
+        );
+        assert_eq!(
+            one(
+                &conn,
+                pred(PredicateField::OracleTag, PredicateOp::Colon, "removal")
+            ),
+            sorted(&["bolt", "bolt-m10", "bolt-2xm", "fireice"])
+        );
+        assert_eq!(
+            one(
+                &conn,
+                negated(PredicateField::ArtTag, PredicateOp::Colon, "dragon")
+            ),
+            all_but(&["niv"])
+        );
+    }
+
+    /// **A blank child is "no filter" — true — and the two connectives read that differently.**
+    /// An `and` drops it; an `or` containing one is true outright, so the whole group is no
+    /// clause rather than an `OR` of the rest that would narrow more than was asked. A group
+    /// with nothing usable in it is no clause either way.
+    #[test]
+    fn a_blank_child_is_true_so_an_or_holding_one_is_no_clause() {
+        let blank = pred(PredicateField::OracleTag, PredicateOp::Colon, "---");
+        let goblin = pred(PredicateField::TypeLine, PredicateOp::Colon, "goblin");
+        assert!(
+            predicate_wheres(vec![group(
+                PredicateField::AnyOf,
+                vec![goblin.clone(), blank.clone()]
+            )])
+            .is_empty(),
+            "goblins, or anything, is anything"
+        );
+        let and = one_clause(group(
+            PredicateField::AllOf,
+            vec![goblin.clone(), blank.clone()],
+        ));
+        assert_eq!(
+            and.matches("MATCH").count(),
+            1,
+            "the blank child is dropped: {and}"
+        );
+        for field in [PredicateField::AnyOf, PredicateField::AllOf] {
+            assert!(predicate_wheres(vec![group(field, vec![])]).is_empty());
+            assert!(predicate_wheres(vec![group(field, vec![blank.clone()])]).is_empty());
+            assert!(
+                predicate_wheres(vec![group(
+                    field,
+                    vec![pred(PredicateField::TypeLine, PredicateOp::Colon, "!!!")]
+                )])
+                .is_empty(),
+                "a term that tokenises to nothing is blank too"
+            );
+        }
+        // And `lang:any` is blank by meaning rather than by spelling.
+        assert!(
+            predicate_wheres(vec![pred(PredicateField::Language, PredicateOp::Eq, "any")])
+                .is_empty()
+        );
+    }
+
+    /// **`!name` is SQL, never FTS**: equality on the whole name, case-folded, or on either face
+    /// of an `A // B`. The prefix phrase would also have answered *Lightning Bolt Elemental*.
+    #[test]
+    fn an_exact_name_is_equality_on_the_name_or_either_face() {
+        let conn = corpus_for_the_full_syntax();
+        let exact = |v: &str| pred(PredicateField::Name, PredicateOp::Eq, v);
+        assert_eq!(
+            fts_match(None, &[exact("lightning bolt")]),
+            (None, Vec::new()),
+            "an exact name never reaches the MATCH"
+        );
+        assert_eq!(
+            one(&conn, exact("LIGHTNING BOLT")),
+            sorted(&["bolt", "bolt-m10", "bolt-2xm"])
+        );
+        assert!(
+            one(&conn, exact("lightning")).is_empty(),
+            "a prefix is not the name"
+        );
+        assert_eq!(one(&conn, exact("fire")), vec!["fireice"], "the front face");
+        assert_eq!(one(&conn, exact("Ice")), vec!["fireice"], "the back face");
+        assert_eq!(
+            one(&conn, exact("fire // ice")),
+            vec!["fireice"],
+            "the whole name"
+        );
+        assert_eq!(one(&conn, exact("insectile aberration")), vec!["delver"]);
+        assert!(one(&conn, exact("fire // ice // fire")).is_empty());
+        assert_eq!(
+            one(
+                &conn,
+                QueryPredicate {
+                    negated: true,
+                    ..exact("lightning bolt")
+                }
+            ),
+            all_but(&["bolt", "bolt-m10", "bolt-2xm"])
+        );
+        // Inside a group, too.
+        assert_eq!(
+            one(
+                &conn,
+                group(PredicateField::AnyOf, vec![exact("tundra"), exact("ice")])
+            ),
+            sorted(&["tundra", "fireice"])
+        );
+    }
+
+    /// `is:` across its five families — a layout, a card kind, a printing fact, a promo type and
+    /// a land nickname — against rows built so each family's wrong arm would answer a
+    /// different list. `not:reprint` is `is:reprint` negated, and the row with no `print_facts`
+    /// fails it both ways.
+    #[test]
+    fn is_answers_every_family() {
+        let conn = corpus_for_the_full_syntax();
+        let is = |v: &str| one(&conn, pred(PredicateField::Is, PredicateOp::Colon, v));
+        // Layouts and faces.
+        assert_eq!(is("split"), vec!["fireice"]);
+        assert_eq!(is("transform"), vec!["delver"]);
+        assert_eq!(is("dfc"), vec!["delver"]);
+        // Card kinds.
+        assert_eq!(is("vanilla"), vec!["bears"]);
+        assert_eq!(is("frenchvanilla"), vec!["serra"]);
+        assert_eq!(is("bear"), vec!["bears"]);
+        assert_eq!(is("hybrid"), vec!["finks"]);
+        assert_eq!(is("commander"), vec!["niv"]);
+        assert_eq!(is("brawler"), sorted(&["niv", "ugin"]));
+        assert_eq!(is("historic"), sorted(&["niv", "ugin", "old"]));
+        assert_eq!(is("funny"), vec!["unhinged"]);
+        assert_eq!(
+            is("permanent"),
+            all_but(&["bolt", "bolt-m10", "bolt-2xm", "fireice"])
+        );
+        assert_eq!(is("spell"), all_but(&["tundra", "strand"]));
+        // Printing facts.
+        assert_eq!(is("foil"), sorted(&["bolt-m10", "bolt-2xm"]));
+        assert_eq!(is("reserved"), vec!["tundra"]);
+        assert_eq!(is("reprint"), sorted(&["bolt-m10", "bolt-2xm"]));
+        assert_eq!(
+            one(
+                &conn,
+                negated(PredicateField::Is, PredicateOp::Colon, "reprint")
+            ),
+            all_but(&["bolt-m10", "bolt-2xm", "old"]),
+            "`not:reprint`, and the row that predates schema 8 answers neither"
+        );
+        assert_eq!(is("extendedart"), vec!["bolt-2xm"]);
+        assert_eq!(is("borderless"), vec!["bolt-2xm"]);
+        // A promo type.
+        assert_eq!(is("boosterfun"), vec!["bolt-2xm"]);
+        // Land nicknames: two templates, each finding its own land and not the other.
+        assert_eq!(is("dual"), vec!["tundra"]);
+        assert_eq!(is("fetchland"), vec!["strand"]);
+        // Case is the reader's; a word outside the vocabulary matches nothing.
+        assert_eq!(is("SPLIT"), vec!["fireice"]);
+        assert_eq!(
+            one_clause(pred(PredicateField::Is, PredicateOp::Colon, "shiny")),
+            NO_MATCH
+        );
+    }
+
+    /// **Every word in [`IS_VALUES`] has its own SQL**, and every one of them prepares and runs
+    /// against a real corpus. A word added to the list without an arm falls to `is_clause`'s
+    /// last arm, which is [`NO_MATCH`], and this is what goes red for it. The list itself is
+    /// pinned in order, because a TypeScript test reads it out of this file.
+    #[test]
+    fn every_is_value_has_its_own_sql() {
+        let conn = corpus_for_the_full_syntax();
+        assert_eq!(IS_VALUES.len(), 114);
+        let mut seen: Vec<&str> = Vec::new();
+        for value in IS_VALUES {
+            assert!(!seen.contains(value), "{value} is listed twice");
+            seen.push(value);
+            let sql = one_clause(pred(PredicateField::Is, PredicateOp::Colon, value));
+            assert_ne!(sql, NO_MATCH, "is:{value} has no arm");
+            one(&conn, pred(PredicateField::Is, PredicateOp::Colon, value));
+            one(
+                &conn,
+                negated(PredicateField::Is, PredicateOp::Colon, value),
+            );
+        }
+        assert_eq!(&IS_VALUES[..3], &["split", "flip", "transform"]);
+        assert_eq!(IS_VALUES[IS_VALUES.len() - 1], "pathway");
+    }
+
+    /// **Every field prepares under every operator** — top level, negated, and nested in a
+    /// group beside another term — against a corpus with every column the arms read. A syntax
+    /// error is a *prepare* failure rather than a wrong answer, so only running the statement
+    /// can catch one; the census above only proves that *something* was emitted.
+    #[test]
+    fn every_field_prepares_under_every_operator() {
+        let conn = corpus_for_the_full_syntax();
+        let ops = [
+            PredicateOp::Colon,
+            PredicateOp::Eq,
+            PredicateOp::Ne,
+            PredicateOp::Gt,
+            PredicateOp::Gte,
+            PredicateOp::Lt,
+            PredicateOp::Lte,
+        ];
+        for field in EVERY_FIELD {
+            for op in ops {
+                let term = sample(field, op);
+                full_ids(&conn, vec![term.clone()]);
+                full_ids(
+                    &conn,
+                    vec![QueryPredicate {
+                        negated: true,
+                        ..term.clone()
+                    }],
+                );
+                full_ids(
+                    &conn,
+                    vec![group(
+                        PredicateField::AnyOf,
+                        vec![
+                            term.clone(),
+                            pred(PredicateField::Cmc, PredicateOp::Eq, "1"),
+                        ],
+                    )],
+                );
+                full_ids(
+                    &conn,
+                    vec![QueryPredicate {
+                        negated: true,
+                        ..group(PredicateField::AllOf, vec![term, sample(field, op)])
+                    }],
+                );
+            }
+        }
+        // And the cross-column, the parity and the off-vocabulary values on top of the samples.
+        for (field, value) in [
+            (PredicateField::Power, "@toughness"),
+            (PredicateField::Cmc, "@power"),
+            (PredicateField::Loyalty, "@cmc"),
+            (PredicateField::PowTou, "@loyalty"),
+            (PredicateField::Cmc, "even"),
+            (PredicateField::Colors, "m"),
+            (PredicateField::ColorIdentity, "2"),
+            (PredicateField::CollectorNumber, "12a"),
+            (PredicateField::Date, "neo"),
+            (PredicateField::Frame, "showcase"),
+        ] {
+            for op in ops {
+                full_ids(&conn, vec![pred(field, op, value)]);
+            }
+        }
+    }
+
+    /// Colour names, `m` and counts: `c=izzet` is exactly blue-red, `c:green` is G alone (never
+    /// G and R), `c:m` is two colours or more, and a bare number is how many.
+    #[test]
+    fn colour_names_multicolour_and_counts() {
+        let conn = corpus_for_the_full_syntax();
+        let c = |op: PredicateOp, v: &str| one(&conn, pred(PredicateField::Colors, op, v));
+        assert_eq!(c(PredicateOp::Eq, "izzet"), vec!["fireice"]);
+        assert_eq!(c(PredicateOp::Eq, "Selesnya"), vec!["finks"]);
+        assert_eq!(
+            c(PredicateOp::Colon, "green"),
+            sorted(&["bears", "finks", "niv"])
+        );
+        assert_eq!(c(PredicateOp::Colon, "fivecolor"), vec!["niv"]);
+        assert_eq!(
+            c(PredicateOp::Colon, "grixis"),
+            vec!["niv"],
+            "UBR, not G and R"
+        );
+        assert_eq!(
+            c(PredicateOp::Colon, "m"),
+            sorted(&["fireice", "finks", "niv"])
+        );
+        assert_eq!(c(PredicateOp::Eq, "2"), sorted(&["fireice", "finks"]));
+        assert_eq!(c(PredicateOp::Gte, "3"), vec!["niv"]);
+        assert_eq!(
+            c(PredicateOp::Eq, "0"),
+            sorted(&["tundra", "strand", "ugin", "old"])
+        );
+        assert_eq!(
+            one(
+                &conn,
+                pred(PredicateField::ColorIdentity, PredicateOp::Eq, "azorius")
+            ),
+            vec!["tundra"]
+        );
+        assert_eq!(
+            one(
+                &conn,
+                negated(PredicateField::Colors, PredicateOp::Colon, "multicolor")
+            ),
+            all_but(&["fireice", "finks", "niv"])
+        );
+    }
+
+    /// `pow>tou`, `pt>=8`, `loy>=7`, `cmc:odd`/`cmc:even` — the numbers that are not one column
+    /// compared with one value.
+    #[test]
+    fn numbers_compare_with_each_other_and_with_parity() {
+        let conn = corpus_for_the_full_syntax();
+        assert_eq!(
+            one(
+                &conn,
+                pred(PredicateField::Power, PredicateOp::Gt, "@toughness")
+            ),
+            vec!["finks"]
+        );
+        assert_eq!(
+            one(
+                &conn,
+                pred(PredicateField::Toughness, PredicateOp::Gt, "@power")
+            ),
+            vec!["unhinged"],
+            "∞ casts to zero, as `*` does"
+        );
+        assert_eq!(
+            one(&conn, pred(PredicateField::PowTou, PredicateOp::Gte, "8")),
+            sorted(&["niv", "serra"])
+        );
+        assert_eq!(
+            one(&conn, pred(PredicateField::Loyalty, PredicateOp::Gte, "7")),
+            vec!["ugin"]
+        );
+        assert_eq!(
+            one(&conn, pred(PredicateField::Cmc, PredicateOp::Colon, "odd")),
+            sorted(&[
+                "bolt", "bolt-m10", "bolt-2xm", "delver", "finks", "goblin", "niv", "old", "serra",
+                "unhinged"
+            ])
+        );
+        assert_eq!(
+            one(&conn, pred(PredicateField::Cmc, PredicateOp::Colon, "even")),
+            sorted(&["bears", "fireice", "strand", "tundra", "ugin"])
+        );
+        assert_eq!(
+            one_clause(pred(PredicateField::Cmc, PredicateOp::Gt, "odd")),
+            NO_MATCH,
+            "a parity has no order"
+        );
+        assert_eq!(
+            one_clause(pred(PredicateField::Usd, PredicateOp::Gt, "@power")),
+            NO_MATCH,
+            "a price is not compared with a stat"
+        );
+    }
+
+    /// `m:`, `devotion:` and `produces:` — a multiset, a count and a letter set over three
+    /// columns the old fields never read.
+    #[test]
+    fn mana_cost_devotion_and_produces() {
+        let conn = corpus_for_the_full_syntax();
+        let m = |op: PredicateOp, v: &str| one(&conn, pred(PredicateField::ManaCost, op, v));
+        assert_eq!(
+            m(PredicateOp::Colon, "{R}"),
+            sorted(&["bolt", "bolt-m10", "bolt-2xm", "goblin", "fireice", "niv", "unhinged"])
+        );
+        assert_eq!(
+            m(PredicateOp::Eq, "r"),
+            sorted(&["bolt", "bolt-m10", "bolt-2xm", "goblin"])
+        );
+        assert_eq!(m(PredicateOp::Colon, "rr"), vec!["unhinged"]);
+        assert_eq!(
+            m(PredicateOp::Lte, "{1}{R}"),
+            sorted(&["bolt", "bolt-m10", "bolt-2xm", "goblin", "fireice"])
+        );
+        assert_eq!(
+            m(PredicateOp::Gt, "{R}"),
+            sorted(&["fireice", "niv", "unhinged"])
+        );
+        assert_eq!(m(PredicateOp::Eq, "{1}{g/w}{G/W}"), vec!["finks"]);
+        assert_eq!(
+            m(PredicateOp::Colon, "10"),
+            Vec::<String>::new(),
+            "one {{10}}, not {{1}}{{0}}"
+        );
+
+        let devotion = |v: &str| one(&conn, pred(PredicateField::Devotion, PredicateOp::Colon, v));
+        assert_eq!(devotion("{G}{G}"), vec!["finks"]);
+        assert_eq!(devotion("{g/w}{g/w}"), sorted(&["finks", "serra", "niv"]));
+
+        let produces = |op: PredicateOp, v: &str| one(&conn, pred(PredicateField::Produces, op, v));
+        assert_eq!(produces(PredicateOp::Colon, "w"), vec!["tundra"]);
+        assert_eq!(produces(PredicateOp::Eq, "wu"), vec!["tundra"]);
+        assert!(produces(PredicateOp::Eq, "w").is_empty());
+        assert!(produces(PredicateOp::Colon, "c").is_empty());
+    }
+
+    /// The print facts, and **the three states they read in**: a value, `''` for a printing
+    /// with none (so `-wm:boros` keeps it), and NULL for a row with no `print_facts` at all —
+    /// which fails the term *and* its negation, the orphan rule.
+    #[test]
+    fn print_facts_answer_and_a_row_before_schema_8_answers_neither_way() {
+        let conn = corpus_for_the_full_syntax();
+        assert_eq!(
+            one(
+                &conn,
+                pred(PredicateField::Flavor, PredicateOp::Colon, "SPARKMAGE")
+            ),
+            vec!["bolt-m10"]
+        );
+        assert_eq!(
+            one(
+                &conn,
+                negated(PredicateField::Flavor, PredicateOp::Colon, "sparkmage")
+            ),
+            all_but(&["bolt-m10", "old"])
+        );
+        assert_eq!(
+            one(
+                &conn,
+                pred(PredicateField::Watermark, PredicateOp::Eq, "Boros")
+            ),
+            vec!["goblin"]
+        );
+        assert_eq!(
+            one(
+                &conn,
+                negated(PredicateField::Watermark, PredicateOp::Eq, "boros")
+            ),
+            all_but(&["goblin", "old"])
+        );
+        assert_eq!(
+            one(
+                &conn,
+                pred(PredicateField::Has, PredicateOp::Colon, "watermark")
+            ),
+            vec!["goblin"]
+        );
+        assert_eq!(
+            one(
+                &conn,
+                pred(PredicateField::Has, PredicateOp::Colon, "flavor")
+            ),
+            vec!["bolt-m10"]
+        );
+        assert_eq!(
+            one(&conn, pred(PredicateField::Frame, PredicateOp::Eq, "1993")),
+            sorted(&["bolt", "tundra"])
+        );
+        assert_eq!(
+            one(
+                &conn,
+                pred(PredicateField::Frame, PredicateOp::Eq, "ExtendedArt")
+            ),
+            vec!["bolt-2xm"]
+        );
+        assert_eq!(
+            one(
+                &conn,
+                pred(PredicateField::Border, PredicateOp::Eq, "borderless")
+            ),
+            vec!["bolt-2xm"]
+        );
+    }
+
+    /// `banned:` and `restricted:` read the legalities JSON (the mask cannot tell banned from
+    /// not legal); an unknown format is [`NO_MATCH`], exactly as `f:` answers one.
+    #[test]
+    fn banned_and_restricted_read_the_legalities() {
+        let conn = corpus_for_the_full_syntax();
+        assert_eq!(
+            one(
+                &conn,
+                pred(PredicateField::Banned, PredicateOp::Colon, "Modern")
+            ),
+            vec!["old"]
+        );
+        assert_eq!(
+            one(
+                &conn,
+                pred(PredicateField::Restricted, PredicateOp::Colon, "vintage")
+            ),
+            vec!["old"]
+        );
+        assert!(one(
+            &conn,
+            pred(PredicateField::Banned, PredicateOp::Colon, "vintage")
+        )
+        .is_empty());
+        assert_eq!(
+            one_clause(pred(PredicateField::Banned, PredicateOp::Colon, "nonesuch")),
+            NO_MATCH
+        );
+    }
+
+    /// `prints:` and `sets:` count the card's other printings; `new:` asks whether this one is
+    /// the first with its art, flavour, language, rarity — or at all.
+    #[test]
+    fn print_counts_and_firsts() {
+        let conn = corpus_for_the_full_syntax();
+        let bolts = ["bolt", "bolt-m10", "bolt-2xm"];
+        assert_eq!(
+            one(&conn, pred(PredicateField::Prints, PredicateOp::Eq, "3")),
+            sorted(&bolts)
+        );
+        assert_eq!(
+            one(&conn, pred(PredicateField::Sets, PredicateOp::Gte, "2")),
+            sorted(&bolts)
+        );
+        assert_eq!(
+            one(
+                &conn,
+                pred(PredicateField::PaperPrints, PredicateOp::Eq, "1")
+            ),
+            all_but(&bolts)
+        );
+        let new = |v: &str| {
+            one(
+                &conn,
+                pred(PredicateField::NewFeature, PredicateOp::Colon, v),
+            )
+        };
+        assert_eq!(new("art"), sorted(&["bolt", "bolt-2xm", "niv"]));
+        assert_eq!(new("card"), all_but(&["bolt-m10", "bolt-2xm"]));
+        assert_eq!(new("language"), all_but(&["bolt-m10"]));
+        assert_eq!(new("rarity"), all_but(&["bolt-m10"]));
+        assert_eq!(new("flavor"), vec!["bolt-m10"]);
+        assert_eq!(
+            one_clause(pred(PredicateField::NewFeature, PredicateOp::Colon, "hat")),
+            NO_MATCH
+        );
+    }
+
+    /// `date:` against a date compares the same-length prefix (so `date>2009` excludes the whole
+    /// of 2009), and against anything else compares a set's release; `year:` is the first four
+    /// characters.
+    #[test]
+    fn date_reads_a_date_or_a_set_code() {
+        let conn = corpus_for_the_full_syntax();
+        let date = |op: PredicateOp, v: &str| one(&conn, pred(PredicateField::Date, op, v));
+        assert_eq!(date(PredicateOp::Gte, "2020"), vec!["bolt-2xm"]);
+        assert_eq!(
+            date(PredicateOp::Eq, "2009"),
+            sorted(&["bolt-m10", "goblin"])
+        );
+        assert_eq!(date(PredicateOp::Eq, "2009-10"), vec!["goblin"]);
+        assert_eq!(
+            date(PredicateOp::Gt, "2009"),
+            sorted(&["bolt-2xm", "delver", "niv", "ugin"])
+        );
+        assert_eq!(
+            date(PredicateOp::Lt, "ZEN"),
+            sorted(&[
+                "bears", "bolt", "bolt-m10", "fireice", "finks", "old", "serra", "strand",
+                "tundra", "unhinged"
+            ])
+        );
+        assert!(
+            date(PredicateOp::Lt, "nosuchset").is_empty(),
+            "an unknown set fails every row"
+        );
+        assert_eq!(
+            one(&conn, pred(PredicateField::Year, PredicateOp::Eq, "2009")),
+            sorted(&["bolt-m10", "goblin"])
+        );
+        assert_eq!(
+            one(&conn, pred(PredicateField::Year, PredicateOp::Lt, "1995")),
+            sorted(&["bears", "bolt", "serra", "tundra"])
+        );
+    }
+
+    /// `b:` by a block's code, its name, or any set in it — `wwk` holds no card here and still
+    /// finds Zendikar's — and `st:` by the set's type.
+    #[test]
+    fn block_and_set_type_read_the_sets_table() {
+        let conn = corpus_for_the_full_syntax();
+        let block = |v: &str| one(&conn, pred(PredicateField::Block, PredicateOp::Colon, v));
+        assert_eq!(block("zen"), vec!["goblin"]);
+        assert_eq!(block("WWK"), vec!["goblin"], "any set in the block");
+        assert_eq!(block("Zendikar"), vec!["goblin"]);
+        assert_eq!(block("innistrad"), vec!["delver"]);
+        assert!(block("lea").is_empty(), "a set with no block is in none");
+        assert_eq!(
+            one(
+                &conn,
+                pred(PredicateField::SetType, PredicateOp::Colon, "masters")
+            ),
+            vec!["bolt-2xm"]
+        );
+        assert_eq!(
+            one(
+                &conn,
+                pred(PredicateField::SetType, PredicateOp::Colon, "core")
+            ),
+            sorted(&["bears", "bolt", "bolt-m10", "serra", "tundra"])
+        );
+    }
+
+    /// `in:`, `game:`, `lang:`, `cn:` and the prices — the printing-level facts.
+    #[test]
+    fn printings_games_languages_numbers_and_prices() {
+        let conn = corpus_for_the_full_syntax();
+        let bolts = sorted(&["bolt", "bolt-m10", "bolt-2xm"]);
+        let inp = |v: &str| {
+            one(
+                &conn,
+                pred(PredicateField::InPrinting, PredicateOp::Colon, v),
+            )
+        };
+        assert_eq!(
+            inp("2xm"),
+            bolts,
+            "a set: every printing of a card printed there"
+        );
+        assert_eq!(inp("japanese"), bolts, "a language, by name");
+        assert_eq!(inp("arena"), bolts, "a game");
+        assert_eq!(
+            inp("uncommon"),
+            sorted(&["bolt", "bolt-m10", "bolt-2xm", "fireice", "finks", "serra"])
+        );
+        assert_eq!(
+            one(
+                &conn,
+                pred(PredicateField::Game, PredicateOp::Colon, "arena")
+            ),
+            vec!["bolt-2xm"]
+        );
+        assert_eq!(
+            one(
+                &conn,
+                pred(PredicateField::Language, PredicateOp::Colon, "Japanese")
+            ),
+            vec!["bolt-2xm"]
+        );
+        assert_eq!(
+            one(
+                &conn,
+                pred(PredicateField::CollectorNumber, PredicateOp::Colon, "161")
+            ),
+            vec!["bolt"]
+        );
+        assert_eq!(
+            one(
+                &conn,
+                pred(PredicateField::CollectorNumber, PredicateOp::Gte, "200")
+            ),
+            vec!["tundra"]
+        );
+        assert_eq!(
+            one(&conn, pred(PredicateField::Usd, PredicateOp::Lt, "2")),
+            vec!["bolt"]
+        );
+        assert_eq!(
+            one(&conn, pred(PredicateField::Usd, PredicateOp::Gte, "2")),
+            sorted(&["bolt-m10", "goblin"])
+        );
+        assert_eq!(
+            one(&conn, pred(PredicateField::Tix, PredicateOp::Gt, "0")),
+            vec!["bolt"]
+        );
+    }
+
+    /// The subquery aliases are a closed list a caller must not collide with — the tag arms'
+    /// `debug_assert`, extended to every inner alias this module uses.
+    #[test]
+    #[should_panic(expected = "uncorrelates")]
+    #[cfg(debug_assertions)]
+    fn a_caller_alias_equal_to_an_inner_alias_is_refused() {
+        let mut p = Predicates::default();
+        push_card_filters(&mut p, &CardFilters::default(), "pr", None);
     }
 }

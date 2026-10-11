@@ -1457,6 +1457,7 @@ mod tests {
                         op: filters::PredicateOp::Colon,
                         value: excluded.to_owned(),
                         negated: true,
+                        terms: Vec::new(),
                     }]),
                     limit: 50,
                     ..Default::default()

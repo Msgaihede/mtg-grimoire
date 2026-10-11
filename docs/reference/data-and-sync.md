@@ -560,7 +560,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   bulk rotation — **corpus schema 5** is `cards.type_mask` (2026-09-22), the rung with its
   own paragraph below, **corpus schema 6** is `cards.keywords` (2026-09-22), and **corpus
   schema 7** is `format_specs.validates` with the `unspecified` row it exists for (2026-10-11),
-  described in [decks-storage.md](decks-storage.md).) This page names that rung rather than parking
+  described in [decks-storage.md](decks-storage.md), and **corpus schema 8** is
+  `cards.print_facts` with `sets.block_code`/`sets.block` (2026-10-11, issue #909), the facts the
+  search box's `ft:`, `wm:`, `loy:`, `frame:`, `stamp:`, `b:` and a dozen `is:` values read —
+  described in [search-syntax.md](search-syntax.md).) This page names that rung rather than parking
   the head number beside it, for the reason the next two sentences give about the other half of
   the pair — and note the two scales are **deliberately incomparable**, so nothing may subtract
   one from the other: a user version says what has been done to rows that exist nowhere else, a

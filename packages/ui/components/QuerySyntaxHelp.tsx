@@ -1,5 +1,5 @@
 import { Fragment } from "react";
-import { QUERY_KEYWORDS, type KeywordSpec, type PredicateOp } from "@/features/search/queryLanguage";
+import { QUERY_KEYWORDS, QUERY_SECTIONS } from "@/features/search/queryLanguage";
 import { cn } from "@/lib/utils";
 
 /**
@@ -31,42 +31,24 @@ const SECTION = "text-[0.6875rem] uppercase tracking-[0.08em] text-dim";
 const LITERAL = "whitespace-nowrap rounded bg-bg px-1 font-mono text-text";
 
 /**
- * The operators that make a keyword a *comparison* rather than a match.
+ * The sections, in the order they are drawn, each with the rows that name it.
  *
- * `ne` is deliberately absent: `!=` is a negation of whatever the keyword already does, and no
- * row in the table carries it without also carrying the four below. Typed as
- * {@link PredicateOp}, so a misspelling here is a compile error rather than a group that
- * silently never matches.
- */
-const RANGE_OPS: readonly PredicateOp[] = ["gt", "gte", "lt", "lte"];
-
-/**
- * Which of the three groups a keyword belongs in — **derived from the row, never listed.**
- *
- * A second table naming which keyword goes where would be the drift `QUERY_KEYWORDS` exists to
- * end, one step removed: the parser would read one list and the panel another, and a keyword
- * added to the vocabulary would go missing from the panel with nothing red. So the question is
- * asked of the row itself. A tag names a taxonomy; a keyword that accepts `<` or `>` is
- * something you can put a range on; everything else is matched as text. Every row lands in
- * exactly one of the three by construction, which is why there is no fallback group and no way
- * for a row to be dropped — `KeyMap.test.tsx` draws the whole table and counts.
- */
-function groupOf(spec: KeywordSpec): number {
-  if (typeof spec.target !== "string") return 2;
-  return spec.ops.some((op) => RANGE_OPS.includes(op)) ? 1 : 0;
-}
-
-/**
- * The groups, in the order they are drawn, each with the rows {@link groupOf} put in it.
- *
- * Computed once at module scope: {@link QUERY_KEYWORDS} is a constant, so re-bucketing it on
- * every open of the panel would be work with no input that can change. An empty group draws
+ * **Read off each row's own `section`, never listed here.** Until issue #909 the panel derived
+ * three groups from a row's shape — a tag, a keyword that takes `<`, or neither — and that was
+ * the right answer for fourteen rows. At forty-five it put prices beside power and `game:` beside
+ * `t:`, so each row now says where it goes; the point the derivation was making survives,
+ * because the section is still on the row the parser reads and there is no second table to
+ * drift. Computed once at module scope: {@link QUERY_KEYWORDS} is a constant, so re-bucketing it
+ * on every open of the panel would be work with no input that can change. An empty section draws
  * nothing at all rather than a heading over a gap — `KeyMap`'s rule for a scope with no
- * shortcuts, met here for the same reason.
+ * shortcuts, met here for the same reason. Every row names a section the compiler holds to
+ * {@link QUERY_SECTIONS}, so no row can fall between them — `KeyMap.test.tsx` draws the whole
+ * table and counts.
  */
-const GROUPS = ["Text and names", "Numbers and colors", "Tags"]
-  .map((heading, at) => ({ heading, specs: QUERY_KEYWORDS.filter((spec) => groupOf(spec) === at) }))
-  .filter((group) => group.specs.length > 0);
+const GROUPS = QUERY_SECTIONS.map((heading) => ({
+  heading,
+  specs: QUERY_KEYWORDS.filter((spec) => spec.section === heading),
+})).filter((group) => group.specs.length > 0);
 
 /**
  * What a reader may type into any card search box in this app, drawn from the parser's own
@@ -75,9 +57,8 @@ const GROUPS = ["Text and names", "Numbers and colors", "Tags"]
  * **One table, two readers** — `packages/ui/lib/shortcuts.ts`'s principle one module over. Every row
  * here is a row of {@link QUERY_KEYWORDS}, which is also what `parseQuery` matches against, so
  * this panel cannot advertise a keyword the search box ignores. Nothing about a keyword is
- * written down twice: the spellings, the example and the sentence all come off the row, the
- * grouping is derived from it, and the single paragraph of prose says only the thing no row
- * can — how two terms combine.
+ * written down twice: the spellings, the example, the sentence and the section all come off the
+ * row, and the two short paragraphs of prose say only what no row can — how terms combine.
  *
  * **A dictionary rather than the other tab's caps**, and that is why this is a tab and not a
  * fifth section of the shortcuts list. A chord is a legend printed on a key, drawn as a key;
@@ -91,15 +72,26 @@ const GROUPS = ["Text and names", "Numbers and colors", "Tags"]
 export function QuerySyntaxHelp() {
   return (
     <>
-      {/* The one thing the table cannot say: what happens when a reader types two terms. It is
-          first because it is true of every row under it, and it is the only prose here — a
-          second paragraph restating the keywords in sentences is the drift this component's
-          whole shape refuses. The name exclusion is here rather than in the table because it
-          has no keyword to be a row under: it is a `-` on plain words and nothing else. */}
+      {/* The things the table cannot say, because no row is them: how two terms combine. They
+          are first because they are true of every row under them, and they are the only prose
+          here — a paragraph restating the keywords in sentences is the drift this component's
+          whole shape refuses. The name exclusion and `!` are here rather than in the table
+          because they have no keyword to be a row under; `or` and parentheses join rows rather
+          than being one (issue #909). Two short paragraphs rather than one long one, so the
+          second — the grammar a reader reaches for less often — can be skipped at a glance.
+          No literal here may equal a row's example exactly: `KeyMap.test.tsx` finds each row
+          by its example text, and a twin in the prose would make that lookup ambiguous. */}
       <p className="text-xs leading-5 text-dim">
         All terms must match. Put <code className={LITERAL}>-</code> in front of a term to exclude
         it: <code className={LITERAL}>-t:land</code>,{" "}
         <code className={LITERAL}>{'-"lightning bolt"'}</code>
+      </p>
+      <p className="mt-1.5 text-xs leading-5 text-dim">
+        <code className={LITERAL}>or</code> matches either side, and parentheses group:{" "}
+        <code className={LITERAL}>(t:goblin or t:elf) c:r</code>.{" "}
+        <code className={LITERAL}>{'!"lightning bolt"'}</code> is the exact name,{" "}
+        <code className={LITERAL}>not:reprint</code> is <code className={LITERAL}>-is:reprint</code>
+        , and numbers compare with each other: <code className={LITERAL}>pow&gt;tou</code>
       </p>
 
       <div className="mt-3">
