@@ -1,10 +1,10 @@
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { Settings } from "lucide-react";
 import { ManaLine } from "@grimoire/ui/components/ManaLine";
 import type { ManaLineSync } from "@grimoire/ui/lib/mana";
 import { FOCUS_INSET } from "@grimoire/ui/lib/focus";
 import { cn } from "@grimoire/ui/lib/utils";
-import { linkTo, usePlace } from "./router";
+import { tabLinkTo, usePlace } from "./router";
 import { TabBar } from "./TabBar";
 
 /**
@@ -46,15 +46,20 @@ export function Shell({
 }) {
   const place = usePlace();
   const onSettings = place.view === "settings";
+  // Found by id when pressed rather than held in a ref: the press is wired up during render, and a
+  // ref handed to it there is one the compiler's rules cannot tell is read only later.
+  const mainId = useId();
+  const toTop = () => scrollToTop(document.getElementById(mainId));
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-bg text-text select-none">
       <header className="shrink-0 bg-surface pt-[env(safe-area-inset-top)]">
         <div className="flex h-12 items-center gap-3 pr-[calc(1rem+env(safe-area-inset-right))] pl-[calc(1rem+env(safe-area-inset-left))]">
           <h1 className="min-w-0 flex-1 truncate font-heading text-lg">{title}</h1>
-          {/* A link, for the tab bar's reason: it changes the URL. */}
+          {/* A link, for the tab bar's reason: it changes the URL. A destination of its own, so it
+              is switched to as a tab is (`switchTo`), and a second press scrolls it up. */}
           <a
-            {...linkTo({ view: "settings", deckId: null, cardId: null })}
+            {...tabLinkTo({ view: "settings", deckId: null, cardId: null }, toTop)}
             aria-label="Settings"
             aria-current={onSettings ? "page" : undefined}
             className={cn(
@@ -73,6 +78,7 @@ export function Shell({
 
       <div className="flex min-h-0 flex-1 flex-col min-[600px]:flex-row-reverse">
         <main
+          id={mainId}
           className={cn(
             "relative flex min-h-0 min-w-0 flex-1 flex-col",
             "pr-[env(safe-area-inset-right)] pl-[env(safe-area-inset-left)]",
@@ -83,8 +89,24 @@ export function Shell({
           {children}
         </main>
 
-        <TabBar view={place.view} />
+        <TabBar view={place.view} onReselect={toTop} />
       </div>
     </div>
   );
+}
+
+/**
+ * Every scroller on the page that is not at its top, back to its top — what a second press on
+ * the tab the reader is on does.
+ *
+ * **Asked of the page rather than handed a ref**: each page owns its own scroller (a wall, a
+ * list, the Scanner's two columns), and a ref threaded through seven pages to answer one press
+ * would be seven places to forget it. A wall's virtualiser hears the scroll like any other.
+ */
+export function scrollToTop(page: HTMLElement | null): void {
+  if (page === null) return;
+  const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+  for (const el of page.querySelectorAll<HTMLElement>("*")) {
+    if (el.scrollTop > 0) el.scrollTo({ top: 0, behavior: reduce ? "auto" : "smooth" });
+  }
 }

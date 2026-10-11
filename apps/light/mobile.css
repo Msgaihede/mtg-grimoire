@@ -11,3 +11,15 @@
    could take for class names. */
 @source not "./vite.config.ts";
 @source not "./vite.sw.ts";
+
+/* The phone face's touch rules, on while it is mounted (`phone/touchShell.ts`): no page zoom
+   (Safari ignores the viewport tag's lock and honours this), no double-tap zoom, no
+   pull-to-refresh, and no grey flash on a tap. `touch-action` is not inherited but an element's
+   effective value is cut down by every ancestor's, so the root's holds for the whole page; a
+   surface that zooms on its own (`card/PinchZoom.tsx`) handles the pinch itself. */
+html.phone-touch,
+html.phone-touch body {
+  overscroll-behavior: none;
+  touch-action: pan-x pan-y;
+  -webkit-tap-highlight-color: transparent;
+}

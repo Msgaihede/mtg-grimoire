@@ -2,7 +2,7 @@ import { NAV } from "@grimoire/ui/components/nav";
 import { LIGHT_VIEWS, type LightView } from "@grimoire/ui/lib/edition";
 import { FOCUS_INSET } from "@grimoire/ui/lib/focus";
 import { cn } from "@grimoire/ui/lib/utils";
-import { linkTo } from "./router";
+import { tabLinkTo } from "./router";
 
 /**
  * The six destinations a thumb reaches for. Settings is the top bar's.
@@ -18,7 +18,7 @@ const TABS = NAV.filter(
 /**
  * **Each tab is a link, not a button.** A tab changes the URL, so in a browser it has to answer
  * what a link answers — a middle click, "open in new tab", "copy link" — and a screen reader has
- * to hear *link*. `linkTo` keeps a plain press inside the page.
+ * to hear *link*. `tabLinkTo` keeps a plain press inside the page.
  *
  * **Below 600px it is a bar along the bottom; from 600px it is a rail down the left** (decided
  * 2026-10-03, `docs/reference/light-app.md` §7.8). The band between 600 and the desktop face's
@@ -33,7 +33,14 @@ const TABS = NAV.filter(
  * indicator) and the sides (a cutout in landscape) as a bar, the left inset and the bottom as a
  * rail.
  */
-export function TabBar({ view }: { view: LightView }) {
+export function TabBar({
+  view,
+  onReselect = () => {},
+}: {
+  view: LightView;
+  /** A press on the tab whose root the reader is already on — the shell scrolls the page up. */
+  onReselect?: () => void;
+}) {
   return (
     <nav
       aria-label="Views"
@@ -48,7 +55,10 @@ export function TabBar({ view }: { view: LightView }) {
       {TABS.map(({ id, label, Icon }) => (
         <a
           key={id}
-          {...linkTo({ view: id, deckId: null, cardId: null })}
+          // `switchTo`, not a push: a tab sits one step above the start view however many the
+          // reader has pressed, and a tab pressed from inside it (a deck, a trade) lands on its
+          // root — see `router.ts`.
+          {...tabLinkTo({ view: id, deckId: null, cardId: null }, onReselect)}
           aria-current={id === view ? "page" : undefined}
           className={cn(
             // 52px: over the 44px touch floor in both directions at six tabs on 360px, where each

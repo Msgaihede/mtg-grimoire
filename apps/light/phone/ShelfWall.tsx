@@ -22,14 +22,8 @@ import {
 import type { Shelf } from "@grimoire/ui/lib/shelves";
 import { useElementWidth } from "@grimoire/ui/lib/useElementWidth";
 import type { WallItem } from "./CardWall";
-import {
-  columnsFor,
-  GAP,
-  rowHeightFor,
-  SHELF_INDENT_PX,
-  shelfRowHeight,
-  tileWidthFor,
-} from "./wall";
+import { GAP, rowHeightFor, SHELF_INDENT_PX, shelfRowHeight, tileWidthFor } from "./wall";
+import { useKeepPlace, useWallColumns } from "./wallDensity";
 import { WallTile } from "./WallTile";
 
 /** One answer for "this shelf has nothing loaded", so an empty shelf is one object every render. */
@@ -126,7 +120,8 @@ export function ShelfWall({
   const scroller = useRef<HTMLDivElement>(null);
   const [measure, width] = useElementWidth<HTMLDivElement>();
   const [measureHeader, headerHeight] = useElementHeight<HTMLDivElement>();
-  const columns = columnsFor(width);
+  // `CardWall`'s: the width's count, moved by the reader's pinch (`wallDensity.ts`).
+  const columns = useWallColumns(scroller, width);
   const tileWidth = tileWidthFor(width, columns);
   const tileRowHeight = rowHeightFor(tileWidth);
 
@@ -156,6 +151,7 @@ export function ShelfWall({
   useLayoutEffect(() => {
     rows.measure();
   }, [rows, tileRowHeight, layout]);
+  useKeepPlace(scroller, columns, rows.getTotalSize());
 
   // A different list starts at its top, before paint — `CardWall`'s rule.
   useLayoutEffect(() => {

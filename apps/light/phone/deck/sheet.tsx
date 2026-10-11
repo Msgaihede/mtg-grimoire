@@ -16,7 +16,9 @@ import { cn } from "@grimoire/ui/lib/utils";
  * centred panel every other dialog is.
  *
  * **Not a place.** A row's actions are the page's own state, like the filters sheet: nothing about
- * them is worth sending to somebody, so opening one pushes no history entry.
+ * them is worth sending to somebody, so the URL does not change. It is still one Back step — the
+ * entry `Dialog` claims for every open dialog on this face (`sheetHistory.ts`), at the address
+ * the reader is already on.
  */
 export function ActionSheet({
   open,

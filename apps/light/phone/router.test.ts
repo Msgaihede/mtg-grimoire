@@ -2,7 +2,16 @@ import { createElement } from "react";
 import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OVERLAID, PUSHED, type Place } from "../routes";
-import { adoptOverlay, back, BACK_WAIT_MS, linkTo, navigate, usePlace } from "./router";
+import {
+  adoptOverlay,
+  back,
+  BACK_WAIT_MS,
+  linkTo,
+  navigate,
+  switchTo,
+  tabLinkTo,
+  usePlace,
+} from "./router";
 
 // `null` for the state as well as the path: an entry an earlier test pushed carries this router's
 // mark, and a test must start on one that does not.
@@ -204,7 +213,7 @@ describe("adoptOverlay", () => {
 
     // The address bar has not moved, and the entry is now one this router pushed...
     expect(url()).toBe("/collection?card=abc");
-    expect(window.history.state).toEqual(PUSHED);
+    expect(window.history.state).toEqual({ ...PUSHED, depth: 1 });
     expect(pushState).toHaveBeenCalledTimes(1);
 
     // ...so the ✕ is a Back, and lands on the page — which is also where Android's back gesture,
@@ -399,7 +408,7 @@ describe("a history write the browser refuses", () => {
     expect(url()).toBe("/decks");
     // The dropped push and this one: one entry, over the page the card was never written onto.
     expect(pushState).toHaveBeenCalledTimes(2);
-    expect(pushState).toHaveBeenLastCalledWith(PUSHED, "", "/decks");
+    expect(pushState).toHaveBeenLastCalledWith(expect.objectContaining(PUSHED), "", "/decks");
   });
 
   it("pays a held page its entry before a card is pushed over it", async () => {
@@ -421,7 +430,7 @@ describe("a history write the browser refuses", () => {
       "/decks/7",
       "/decks/7?card=abc",
     ]);
-    expect(window.history.state).toEqual(PUSHED);
+    expect(window.history.state).toEqual({ ...PUSHED, depth: 2 });
 
     const closed = popped();
     act(() => back(deck));
@@ -586,5 +595,60 @@ describe("a Back the browser never makes", () => {
     expect(() => back(collection)).not.toThrow();
 
     expect(url()).toBe("/collection");
+  });
+});
+
+describe("a tab, as an Android app's bottom navigation", () => {
+  const tab = (view: Place["view"]): Place => ({ view, deckId: null, cardId: null });
+
+  it("stands one step above the start view, however many tabs were pressed", async () => {
+    window.history.replaceState(null, "", "/search");
+    switchTo(tab("decks"));
+    expect(url()).toBe("/decks");
+    expect(window.history.state).toEqual({ ...PUSHED, depth: 1 });
+
+    // From one tab to another: the walk back to the start view, then the push over it.
+    const walked = popped();
+    switchTo(tab("collection"));
+    await walked;
+    expect(url()).toBe("/collection");
+    expect(window.history.state).toEqual({ ...PUSHED, depth: 1 });
+
+    // Back from any tab is the start view.
+    const left = popped();
+    window.history.back();
+    await left;
+    expect(url()).toBe("/search");
+  });
+
+  it("walks out of a deck to the tab's root when the tab is pressed from inside it", async () => {
+    window.history.replaceState(null, "", "/search");
+    switchTo(tab("decks"));
+    navigate({ view: "decks", deckId: 5, cardId: null });
+    expect(window.history.state).toEqual({ ...PUSHED, depth: 2 });
+
+    const walked = popped();
+    switchTo(tab("decks"));
+    await walked;
+    expect(url()).toBe("/decks");
+    expect(window.history.state).toEqual({ ...PUSHED, depth: 1 });
+  });
+
+  it("renames an entry that is not the start view's, so a link's first page invents no start", () => {
+    window.history.replaceState(null, "", "/collection");
+    const length = window.history.length;
+    switchTo(tab("wishlist"));
+    expect(url()).toBe("/wishlist");
+    expect(window.history.length).toBe(length);
+    expect(window.history.state).toBeNull();
+  });
+
+  it("is the reader's to scroll up when they press the tab they are on", () => {
+    window.history.replaceState(null, "", "/decks");
+    const onReselect = vi.fn();
+    render(createElement("a", { ...tabLinkTo(tab("decks"), onReselect) }, "Decks"));
+    fireEvent.click(screen.getByRole("link", { name: "Decks" }));
+    expect(onReselect).toHaveBeenCalledOnce();
+    expect(url()).toBe("/decks");
   });
 });
