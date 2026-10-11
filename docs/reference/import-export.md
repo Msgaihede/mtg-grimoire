@@ -554,8 +554,9 @@ them rather than defaulting them.
 **The fold key is every grain term the importer can vary, and the two it omits it omits for a
 reason.** `lang` is a function of `cardId` — `add_entry` copies it, `set_code` and
 `collector_number` off `cards` at write time and never takes them from the file — so two items
-sharing a `cardId` can never disagree about it. `folder_id` is always the root, because an imported
-file says nothing about this reader's filing. Neither can separate two items that the other nine
+sharing a `cardId` can never disagree about it. `folder_id` is one folder for the whole file — the
+root, or the one the step's `Import into` names (issue #872) — because an imported file says
+nothing about this reader's filing. Neither can separate two items that the other nine
 terms fold together, which is what makes leaving them out exact rather than a second narrow key.
 
 **What it was, until the collection's folders shipped.** The honest description was worse than
@@ -643,7 +644,7 @@ one per surface plus the deck's "start a new one":
 | --- | --- | --- | --- |
 | `deck` (existing) | `merge` / `replace` | `deck_id, variant, category_id, card_id, coalesce(finish,'')` (`schema::DECK_CARD_GRAIN`) | `replace` clears one **variant** first, named before it does; the mode radio says how many cards that would cost, and on a `live` list a note under the radios says where the cardboard goes — since 2026-09-01 (issue #336) the commit calls `deck::release_live_copies` before that clear, so every copy the deck's group held lands in `Recently removed` instead of being stranded under a deck that no longer lists it. Since 2026-08-23 it also draws the optional ["Add cards to collection" box](#the-deck-arms-add-cards-to-collection-box), which makes the press two writes. **A [Virtual deck](#a-virtual-deck-moves-two-sentences-and-takes-one-control-away) names no variant, gets no note, and is offered no "Add cards to collection" box** |
 | `newDeck` | `merge` only | same grain, on the deck just created | No mode radios at all — there is nothing to replace one line after `deck_create`, and `merge` is the mode that cannot clear anything if that ever stops being true. Draws the same "Add cards to collection" box, from the **same** exported `OwnCopies` rather than a second one written here |
-| `collection` | `add` / `set` | Every term of the storage grain (`schema::COLLECTION_GRAIN` — `card_id, finish, condition, lang, altered, signed, proxy, misprint, coalesce(serial_number,''), coalesce(grading,''), coalesce(folder_id, 0)`) the importer can vary, so nine of the eleven. `lang` follows `cardId` and `folder_id` is always the root. It was `cardId, finish, condition` alone until 2026-08-23 — see the fold section above for what that cost | No `replace`: the deck's version would empty a multi-thousand-row collection from a 40-line paste with the file that caused it looking ordinary. **A root `set` treats the file's number as the total at that grain across every folder** (issue #555): it counts the copies filed elsewhere — deck groups and `Recently removed` included — and writes the root row `max(0, file − elsewhere)`, never touching a folder's row, and reports any surplus as `leftInFolders`. It used to write the file's number into a second root row beside the filed copies, doubling them |
+| `collection` | `add` / `set` | Every term of the storage grain (`schema::COLLECTION_GRAIN` — `card_id, finish, condition, lang, altered, signed, proxy, misprint, coalesce(serial_number,''), coalesce(grading,''), coalesce(folder_id, 0)`) the importer can vary, so nine of the eleven. `lang` follows `cardId` and `folder_id` is one folder for the whole file (`Import into`, issue #872). It was `cardId, finish, condition` alone until 2026-08-23 — see the fold section above for what that cost | No `replace`: the deck's version would empty a multi-thousand-row collection from a 40-line paste with the file that caused it looking ordinary. **A root `set` treats the file's number as the total at that grain across every folder** (issue #555): it counts the copies filed elsewhere — deck groups and `Recently removed` included — and writes the root row `max(0, file − elsewhere)`, never touching a folder's row, and reports any surplus as `leftInFolders`. It used to write the file's number into a second root row beside the filed copies, doubling them |
 | `wishlist` | `add` / `set` | `oracleId, cardId, finish` (`destinations/wishlist.ts`) — the storage grain is `coalesce(oracle_id,''), coalesce(card_id,''), coalesce(preferred_finish,''), coalesce(folder_id,0)` (`schema::WISHLIST_GRAIN`) | `wishlist_set_quantity(id, 0)` **deletes** the wish — a wish for nothing is not a wish (`CHECK (quantity > 0)`) — but an import can never reach it: `parse.ts` refuses a quantity below 1 before a plan is even built (`csvQuantity` for a CSV row, the per-line reader's own zero check for every other — grep `A count of zero is not an import`), so `set` through this dialog never carries a 0 |
 
 **Every one of the four commits in one transaction for the whole file** — `deck_import_commit`,
@@ -763,10 +764,11 @@ Four rules the pair holds, each with a reason that is not obvious:
   a refetch answering what is already on screen is cheaper than a collection left wrong for the
   30 s `packages/ui/lib/query.ts` caches.
 
-**The copies land in the deck's own group, and a plain collection import still lands at the
-root.** `collection_import_commit` is `(items, mode, folderId)` since 2026-08-23 — `folderId`
-defaults to `null`, which is the root and is what the collection's own import step sends, because
-a file says nothing about a reader's filing. The deck arms are the one caller that names a folder:
+**The copies land in the deck's own group, and a plain collection import lands where the reader
+said.** `collection_import_commit` is `(items, mode, folderId)` since 2026-08-23 — `folderId`
+defaults to `null`, which is the root, because a file says nothing about a reader's filing. Since
+issue #872 the collection's own step asks (see [Importing into a folder](#importing-into-a-folder)
+below). The deck arms are the other caller that names a folder:
 `useImport` reads the deck's `kind: "deck"` group out of `collection_folder_list` **at press
 time** — a query would be `undefined` while it loaded, and `importIntoNewDeck`'s deck did not
 exist a statement earlier — and sends it, so the decklist and the group agree the moment the
@@ -903,6 +905,29 @@ including collapsed and locked folders. It ignores the page's search and filter 
 the selected marketplace, and never offers the whole-collection toggle. Its separate sweep keeps
 a previous collection export's "everything" choice from widening the folder export; loading,
 failure, Retry, Copy and Save as… retain the existing dialog's guards.
+
+### Importing into a folder
+
+The collection's import step opens with **Import into** (issue #872): `Not sorted` (the root), every
+folder the reader made — by full path, in the wall's tree order — and `New folder…`. Deck groups and
+`Recently removed` are never offered (`DECK_WRITE_FOLDERS` would accept a deck group, but a file
+saying *this deck holds these copies* is the deck arm's to say, not a collection import's).
+
+- **Where it opens is the entry point's.** The header's `Import cards` opens on the folder the
+  reader is standing in — opened from its heading's arrow — and on Not sorted at the root or inside
+  a shelf the app owns. A folder heading's `⋯` and right-click carry **Import…** above Export…,
+  which opens on that folder and hands the caret back to the `⋯` on Escape. Live on a locked folder:
+  a lock refuses a delete and holds copies back from decks; adding to it disturbs nothing.
+- **The whole file goes into that one folder**, its subfolders untouched — `folderId` on
+  `collection_import_commit`, and on `collection_import_preview` so a `set` dry run counts the same
+  rows the press writes. A folder's `set` writes the file's number into that folder's rows and
+  counts nothing filed elsewhere, unlike the root's (above), so its radio says so (`FOLDER_MODES`).
+- **New folder…** asks for a name in the step and makes a top-level folder at the press, then
+  imports into it. Import is greyed while the name is empty. A refused import after the folder
+  landed keeps the folder, and pressing again reuses it rather than making a second one under the
+  same name.
+- **The phone face draws no selector** — `CollectionPreviewBody`'s `folders` is absent there, and
+  every row lands at the root as before.
 
 **Archidekt's pile names are rewritten on the way out**, because the format has no way to say `,`
 `{` `}` `[` `]` inside a bracket: `,` → `;`, `{`/`[` → `<`, `}`/`]` → `>`, in the heading and the

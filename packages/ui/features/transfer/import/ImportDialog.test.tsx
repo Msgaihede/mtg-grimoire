@@ -1237,6 +1237,7 @@ describe("the import dialog", () => {
       expect(collectionImportCommit).toHaveBeenCalledWith(
         expect.arrayContaining([expect.objectContaining({ condition: "LP", finish: "foil" })]),
         "add",
+        null,
       ),
     );
   });

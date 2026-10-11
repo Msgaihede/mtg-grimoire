@@ -19,11 +19,24 @@ import { parseDecklist } from "../parse";
 
 const collectionImportPreview = vi.hoisted(() => vi.fn());
 const collectionImportCommit = vi.hoisted(() => vi.fn());
+const collectionFolderList = vi.hoisted(() => vi.fn());
+const collectionFolderCreate = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/ipc")>();
-  return { ...actual, ipc: { ...actual.ipc, collectionImportPreview, collectionImportCommit } };
+  return {
+    ...actual,
+    ipc: {
+      ...actual.ipc,
+      collectionImportPreview,
+      collectionImportCommit,
+      collectionFolderList,
+      collectionFolderCreate,
+    },
+  };
 });
 
+import { pickOption } from "@/test-dropdown";
+import type { CollectionFolder } from "@/lib/ipc";
 import { CollectionPreview } from "./CollectionPreview";
 
 /**
@@ -56,10 +69,21 @@ const outcome = (over: Partial<ImportCommitOutcome> = {}): ImportCommitOutcome =
   ...over,
 });
 
-function mount(csv: string) {
+/**
+ * Mount the step. `folders` is the folder list **already answered**, which is how the collection
+ * page hands it over — its own wall read the same cache entry long before a preview mounted — and
+ * `folderId` is the one the entry point named.
+ */
+function mount(
+  csv: string,
+  { folders = [], folderId }: { folders?: CollectionFolder[]; folderId?: number | null } = {},
+) {
   const list = parseDecklist(csv);
   const onDone = vi.fn();
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  client.setQueryData(["collection", "folders"], folders);
+  // …and answers the same on the refetch a mount makes of a stale entry.
+  collectionFolderList.mockResolvedValue(folders);
   render(
     <QueryClientProvider client={client}>
       <CollectionPreview
@@ -68,11 +92,27 @@ function mount(csv: string) {
         tags={[]}
         onDone={onDone}
         onBack={vi.fn()}
+        folderId={folderId}
       />
     </QueryClientProvider>,
   );
   return { onDone };
 }
+
+const folder = (over: Partial<CollectionFolder> & Pick<CollectionFolder, "id" | "name">) =>
+  ({
+    parentId: null,
+    kind: "user",
+    deckId: null,
+    sortOrder: 0,
+    locked: false,
+    ...over,
+  }) as CollectionFolder;
+const BINDER = folder({ id: 1, name: "Trade binder" });
+const FOILS = folder({ id: 2, name: "Foils", parentId: BINDER.id });
+const SEALED = folder({ id: 3, name: "Sealed", sortOrder: 1 });
+const DECK_GROUP = folder({ id: 4, name: "Burn", kind: "deck", deckId: 9 });
+const FOLDERS = [BINDER, FOILS, SEALED, DECK_GROUP];
 
 /** The radio's name is its label alone — `ModeRadios` makes the hint its description. */
 const setRadio = () => screen.getByRole("radio", { name: "Set these quantities" });
@@ -83,6 +123,8 @@ const CAPTION =
 beforeEach(() => {
   collectionImportPreview.mockReset().mockResolvedValue(outcome());
   collectionImportCommit.mockReset().mockResolvedValue(outcome({ added: 1 }));
+  collectionFolderList.mockReset().mockResolvedValue([]);
+  collectionFolderCreate.mockReset();
   resetBulkUndo();
 });
 
@@ -141,6 +183,8 @@ describe("CollectionPreview under set", () => {
         expect.objectContaining({ cardId: "c-Lightning Bolt", quantity: 2 }),
       ],
       "set",
+      // Not sorted: the root, which is what a step handed no folder opens on.
+      null,
     );
   });
 
@@ -209,7 +253,7 @@ describe("CollectionPreview under set", () => {
     expect(importButton).toBeEnabled();
     await user.click(importButton);
     await waitFor(() => expect(onDone).toHaveBeenCalled());
-    expect(collectionImportCommit).toHaveBeenCalledWith(expect.any(Array), "set");
+    expect(collectionImportCommit).toHaveBeenCalledWith(expect.any(Array), "set", null);
   });
 
   /** On the radio itself, as its description — the sentence a reader hears after the name. */
@@ -326,5 +370,126 @@ describe("CollectionPreview's undo offer", () => {
 
     await waitFor(() => expect(onDone).toHaveBeenCalled());
     expect(useBulkUndo.getState().offers.collection).toBeNull();
+  });
+});
+
+/**
+ * **Which folder the file lands in** (issue #872). The step opens on the folder its entry point
+ * named — the drawer the reader stands in, or the one whose menu they pressed — and on Not sorted
+ * otherwise; it offers every drawer the reader made and a new one; and the press sends that
+ * folder to `collection_import_commit`, which files the whole file into it.
+ */
+describe("CollectionPreview's Import into", () => {
+  const trigger = () => screen.getByRole("button", { name: "Import into" });
+
+  it("opens on Not sorted and files at the root when no folder was named", async () => {
+    const user = userEvent.setup();
+    mount("1 Sol Ring\n", { folders: FOLDERS });
+
+    expect(trigger()).toHaveTextContent("Not sorted");
+    expect(screen.getByText("1 card will be added to your collection.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Import" }));
+
+    await waitFor(() => expect(collectionImportCommit).toHaveBeenCalled());
+    expect(collectionImportCommit.mock.calls[0]?.[2]).toBeNull();
+  });
+
+  it("opens on the folder it was handed, and files the import there", async () => {
+    const user = userEvent.setup();
+    collectionImportCommit.mockResolvedValue(outcome({ added: 1, undoId: 7 }));
+    mount("2 Sol Ring\n", { folders: FOLDERS, folderId: FOILS.id });
+
+    expect(trigger()).toHaveTextContent("Trade binder / Foils");
+    expect(screen.getByText("2 cards will be added to Foils.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Import" }));
+
+    await waitFor(() => expect(collectionImportCommit).toHaveBeenCalled());
+    expect(collectionImportCommit.mock.calls[0]?.[1]).toBe("add");
+    expect(collectionImportCommit.mock.calls[0]?.[2]).toBe(FOILS.id);
+    expect(useBulkUndo.getState().offers.collection?.label).toBe("Imported 2 cards into Foils.");
+  });
+
+  /** A deck's group is no place for a file to land, so an entry point naming one opens on the
+   *  root rather than on a value the selector cannot offer. */
+  it("offers the reader's own drawers by path, in the wall's order, and nothing the app owns", async () => {
+    const user = userEvent.setup();
+    mount("1 Sol Ring\n", { folders: FOLDERS, folderId: DECK_GROUP.id });
+
+    expect(trigger()).toHaveTextContent("Not sorted");
+    await user.click(trigger());
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Not sorted",
+      "Trade binder",
+      "Trade binder / Foils",
+      "Sealed",
+      "New folder…",
+    ]);
+  });
+
+  it("files into a folder picked in the step", async () => {
+    const user = userEvent.setup();
+    mount("1 Sol Ring\n", { folders: FOLDERS });
+
+    await pickOption(user, "Import into", "Sealed");
+    expect(screen.getByText("1 card will be added to Sealed.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Import" }));
+
+    await waitFor(() => expect(collectionImportCommit).toHaveBeenCalled());
+    expect(collectionImportCommit.mock.calls[0]?.[2]).toBe(SEALED.id);
+  });
+
+  /** Under `set` the dry run is asked about the same folder the press will write, and the radio's
+   *  hint stops promising the root's rule — a folder's `set` counts nothing filed elsewhere. */
+  it("asks the dry run about the chosen folder, and says what a folder's set does", async () => {
+    const user = userEvent.setup();
+    mount("1 Sol Ring\n", { folders: FOLDERS, folderId: BINDER.id });
+
+    expect(setRadio()).toHaveAccessibleDescription(
+      "Replaces the quantities in this folder with the file's. Copies elsewhere stay.",
+    );
+    await user.click(setRadio());
+
+    await waitFor(() => expect(collectionImportPreview).toHaveBeenCalled());
+    expect(collectionImportPreview.mock.calls[0]?.[1]).toBe("set");
+    expect(collectionImportPreview.mock.calls[0]?.[2]).toBe(BINDER.id);
+  });
+
+  it("makes a new folder at the top level and files into it", async () => {
+    const user = userEvent.setup();
+    collectionFolderCreate.mockResolvedValue(folder({ id: 11, name: "Box 3" }));
+    mount("1 Sol Ring\n", { folders: FOLDERS, folderId: BINDER.id });
+
+    await pickOption(user, "Import into", "New folder…");
+    // A folder with no name is not a folder yet.
+    expect(screen.getByRole("button", { name: "Import" })).toBeDisabled();
+    expect(screen.getByText("1 card will be added to a new folder.")).toBeInTheDocument();
+    await user.type(screen.getByRole("textbox", { name: "New folder name" }), " Box 3 ");
+    expect(screen.getByText("1 card will be added to a new folder, Box 3.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Import" }));
+
+    await waitFor(() => expect(collectionImportCommit).toHaveBeenCalled());
+    expect(collectionFolderCreate).toHaveBeenCalledWith(null, "Box 3");
+    expect(collectionImportCommit.mock.calls[0]?.[2]).toBe(11);
+  });
+
+  /** The folder landed and the import was refused: pressing again files into that folder rather
+   *  than making a second one beside it. */
+  it("makes the new folder once across a refused import and a retry", async () => {
+    const user = userEvent.setup();
+    collectionFolderCreate.mockResolvedValue(folder({ id: 11, name: "Box 3" }));
+    collectionImportCommit
+      .mockRejectedValueOnce("The database is busy.")
+      .mockResolvedValue(outcome({ added: 1 }));
+    const { onDone } = mount("1 Sol Ring\n", { folders: FOLDERS });
+
+    await pickOption(user, "Import into", "New folder…");
+    await user.type(screen.getByRole("textbox", { name: "New folder name" }), "Box 3");
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    expect(await screen.findByText(/The database is busy/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Import" }));
+
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(collectionFolderCreate).toHaveBeenCalledTimes(1);
+    expect(collectionImportCommit.mock.calls.map((call) => call[2])).toEqual([11, 11]);
   });
 });
