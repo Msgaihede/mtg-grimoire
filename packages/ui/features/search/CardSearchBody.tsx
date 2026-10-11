@@ -11,6 +11,7 @@ import { FilterBar, type FilterLabels } from "@/features/search/FilterBar";
 import { summaryOf } from "@/features/search/SearchPage";
 import type { CardSearch } from "@/features/search/useCardSearch";
 import type { ZoomSection } from "@/lib/cardZoom";
+import type { Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { ipcError, type CardSummary } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
@@ -48,8 +49,8 @@ export const TILE_BASE = 150;
  * it is not a slot** — three surfaces each deciding whether to crown is three chances to
  * disagree about one fact.
  *
- * The chip is shared with the finish mark and holds the crown alone here, because this wall
- * passes no `finish` — its tiles are 150px and the sheen is the search view's.
+ * The chip is shared with the finish mark, which a caller draws through {@link
+ * CardSearchBodyProps.finish} — the deck panel does, the two sidebars do not.
  *
  * Module scope, which is what `CardGrid` asks of every per-card callback it takes: a tile
  * re-registers its drag when a callback in its ref's dependency list changes identity, and these
@@ -115,6 +116,14 @@ export interface CardSearchBodyProps {
   /** The tile's drag registration at `CardGrid`'s own seam — a flat record of one or more marks,
    *  which is what the collection and the wishlist sidebars pass. See {@link tileRef}. */
   dragRecord?: (card: CardSummary) => Record<string, unknown> | null;
+  /**
+   * The finish a tile's card is drawn as — `CardGrid`'s `finish` slot, handed straight through.
+   *
+   * A slot rather than built in, because the answer is the surface's: the deck panel draws the
+   * finish its Finish filter commits an add to (issue #933), which is a claim about what *its*
+   * press writes. Absent draws no sheen, which is the two sidebars. Hold it still.
+   */
+  finish?: (card: CardSummary) => Finish | null;
   /** What rides the tile's caption — the owned/wishlisted pair on every surface that draws one. */
   badge?: (card: CardSummary) => ReactNode;
   /** The tile's one control: `Add to <pile>` on the deck, `AddToCollectionButton` on the other
@@ -177,6 +186,7 @@ export function CardSearchBody({
   addFailure = null,
   tileRef,
   dragRecord,
+  finish,
   badge,
   action,
   cardMenu,
@@ -284,6 +294,7 @@ export function CardSearchBody({
           // The crown in a tile's top-right chip: the same fact the search view's wall marks,
           // marked the same way here — see `tileGameChanger`.
           gameChanger={tileGameChanger}
+          finish={finish}
           // What the chin says one copy costs — the **spread**, through `priceRange`, which is
           // the search page's own helper over the same rows. This *is* the card search in a
           // narrow column: same hook, same collapse, so a card that costs one thing on the search
