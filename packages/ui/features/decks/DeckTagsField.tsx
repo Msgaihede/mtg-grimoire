@@ -31,6 +31,12 @@ export interface DeckTagsFieldProps {
    */
   onChange: (tags: string[]) => void;
   id: string;
+  /**
+   * Take the caret as the field mounts, which opens the suggestions as any focus does. A host
+   * asks for it when the reader came to type a tag — the gallery menu's **New tag…** — and never
+   * otherwise: dropping the caret into a box makes the first keystroke an edit.
+   */
+  autoFocus?: boolean;
 }
 
 /**
@@ -72,7 +78,13 @@ export interface DeckTagsFieldProps {
  * and a panel placed from numbers taken when it opened would then sit over the line being typed
  * on; one that hangs off the box's own bottom edge cannot.
  */
-export function DeckTagsField({ tags, inUse, onChange, id }: DeckTagsFieldProps): JSX.Element {
+export function DeckTagsField({
+  tags,
+  inUse,
+  onChange,
+  id,
+  autoFocus = false,
+}: DeckTagsFieldProps): JSX.Element {
   const [draft, setDraft] = useState("");
   const [open, setOpen] = useState(false);
   /** The highlighted row, or `-1` for none. Read through `active` below, never directly: the
@@ -181,6 +193,10 @@ export function DeckTagsField({ tags, inUse, onChange, id }: DeckTagsFieldProps)
             aria-autocomplete="list"
             aria-activedescendant={active >= 0 ? optionId(active) : undefined}
             autoComplete="off"
+            // In Deck settings the form mounts once the deck row is read: with the panel when the
+            // row is cached — `Dialog`'s mount effect then leaves the caret where a body put it —
+            // or a beat later, taking it from the panel. Either way it lands here.
+            autoFocus={autoFocus}
             maxLength={MAX_TAG_LENGTH}
             value={draft}
             placeholder={tags.length === 0 ? "Add a tag…" : undefined}
