@@ -1831,10 +1831,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * removal landing and the next render the keys can address rows that are gone — and a
    * `Remove 4 cards` that removes three is worse than one that says three.
    */
-  const cardSelection = useAppStore((s) => s.cardSelection);
+  // **Another surface's set is `null` here, at the selector** (issue #910): a Ctrl+A in the docked
+  // search column writes its set once per page it fetches, and read whole each of those writes was
+  // a render of this editor for a set it does not draw.
+  const cardSelection = useAppStore((s) =>
+    s.cardSelection?.scope === `deck:${deckId}` ? s.cardSelection : null,
+  );
   const pickedCards = useMemo(() => {
-    const scope = `deck:${deckId}`;
-    if (cardSelection === null || cardSelection.scope !== scope) return [];
+    if (cardSelection === null) return [];
     const bySlot = new Map(
       cards.map((card) => [deckCardSlot(card.categoryId, card.cardId, card.finish), card]),
     );
@@ -1842,7 +1846,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       const card = bySlot.get(slot);
       return card ? [card] : [];
     });
-  }, [cardSelection, cards, deckId]);
+  }, [cardSelection, cards]);
 
   /**
    * The same list read at a moment rather than at a render — the Delete key's and a drag's copy.

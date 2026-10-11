@@ -96,7 +96,7 @@ For global repo workflow, style, and testing conventions, refer to:
   - Global chords catalogued in `packages/ui/lib/shortcuts.ts`.
   - Focus outlines are gated on `data-kbd` (`keyboardModality.ts`).
   - `tabIndex={-1}` landing pad containers carry no focus ring.
-  - Multi-selection: `Ctrl/Cmd` toggles, `Shift` selects range (`packages/ui/lib/multiSelect.ts`).
+  - Multi-selection: `Ctrl/Cmd` toggles, `Shift` selects range (`packages/ui/lib/multiSelect.ts`). `Ctrl+A` picks every card a wall's filters match, unloaded pages included, and `Escape` puts a picked set down — a wall with a `selectionScope` registers itself (`features/search/selectAllSurface.ts`); a docked search column takes the chord only from inside it. See [keyboard-shortcuts.md](../../docs/reference/keyboard-shortcuts.md#selectall).
 
 ---
 

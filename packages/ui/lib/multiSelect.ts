@@ -33,6 +33,23 @@ export interface Selection {
    * range and starting a new one on every press.
    */
   anchor: string | null;
+  /**
+   * **The list this set is *all of*** — written by Ctrl+A ({@link selectEverything}) and by
+   * nothing else, so it is absent on every set a reader built one press at a time.
+   *
+   * It is what makes "everything" a standing instruction rather than a list of keys. Every wall in
+   * this app pages, so the keys on a surface at the moment of the press are a **scroll position**:
+   * a set of them would be the first hundred cards of three thousand, drawn as if it were all of
+   * them. With this set, {@link settleSelection} answers with the surface's whole order every time
+   * it is asked, so a page that lands later is in the set the moment it is drawn.
+   *
+   * The value is the list's identity — a wall's `listKey` — and not a bare flag, because the
+   * instruction is about *that* list. A filter that changes is a different list, and "all of the
+   * forty goblins" must not become "all three thousand cards" because the reader cleared the box.
+   *
+   * Any press ends it: {@link applySelect} builds a fresh set and does not carry this across.
+   */
+  allOf?: string;
 }
 
 /** Nothing picked. A `const` rather than a literal at each call site so identity is stable and a
@@ -181,6 +198,72 @@ export function pruneSelection(selection: Selection, order: readonly string[]): 
   const anchor = selection.anchor !== null && live.has(selection.anchor) ? selection.anchor : null;
   if (keys.length === selection.keys.length && anchor === selection.anchor) return selection;
   return { keys, anchor };
+}
+
+/**
+ * Everything on the surface, and everything that joins it — what Ctrl+A does to the selection.
+ *
+ * `list` names the list being drawn (a wall's `listKey`) and is kept on the set as
+ * {@link Selection.allOf}; `order` is what of that list the surface has in hand right now.
+ *
+ * **The anchor stays where it was** when its row is still there, and is the first key otherwise:
+ * a Shift-click after Ctrl+A then measures from the card the reader last pressed, which is what
+ * Explorer does, rather than from wherever the top of the wall happens to be.
+ *
+ * **Nothing to select answers with the selection it was given**, the same object. An empty surface
+ * told to hold "all of this list" would pick every card that later arrived on it — a set the
+ * reader never saw being made. **So does a set that is already all of it**, which is what makes a
+ * second press, and every render of a settled wall, free.
+ */
+export function selectEverything(
+  selection: Selection,
+  order: readonly string[],
+  list: string,
+): Selection {
+  if (order.length === 0) return selection;
+  const anchor =
+    selection.anchor !== null && order.includes(selection.anchor) ? selection.anchor : order[0];
+  if (selection.allOf === list && anchor === selection.anchor && sameKeys(selection.keys, order)) {
+    return selection;
+  }
+  return { keys: [...order], anchor, allOf: list };
+}
+
+/**
+ * The selection as a surface may act on it this render — {@link pruneSelection}, plus the one
+ * case pruning cannot answer: a set that is {@link Selection.allOf} a list.
+ *
+ * | The set is… | Answer |
+ * | --- | --- |
+ * | built by presses | pruned to `order` |
+ * | all of **this** list | the whole of `order`, as it stands now |
+ * | all of **another** list | pruned to `order`, and no longer "all of" anything |
+ *
+ * The third row is a filter changing under a Ctrl+A. What survives is what pruning has always
+ * left — the picked cards still on the surface — and the instruction is dropped, so widening the
+ * filter again does not sweep in cards the reader never selected. An emptied surface drops it for
+ * {@link selectEverything}'s reason.
+ *
+ * **Returns the same object when nothing changed**, which is {@link pruneSelection}'s promise and
+ * is load-bearing for the same reader: `useCardSelection` writes the answer back to the store
+ * whenever it is a new object, so an answer that was new every time would be a render loop.
+ */
+export function settleSelection(
+  selection: Selection,
+  order: readonly string[],
+  list: string,
+): Selection {
+  if (selection.allOf === undefined) return pruneSelection(selection, order);
+  if (selection.allOf !== list || order.length === 0) {
+    const { keys, anchor } = pruneSelection(selection, order);
+    return { keys, anchor };
+  }
+  return selectEverything(selection, order, list);
+}
+
+/** The same keys in the same order. */
+function sameKeys(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((key, i) => key === b[i]);
 }
 
 /**

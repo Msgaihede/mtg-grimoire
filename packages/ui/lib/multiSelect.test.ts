@@ -6,6 +6,8 @@ import {
   PLAIN_PICK,
   pruneSelection,
   readModifiers,
+  selectEverything,
+  settleSelection,
   type Selection,
 } from "./multiSelect";
 
@@ -153,6 +155,102 @@ describe("pruneSelection", () => {
   it("returns the same object when nothing changed", () => {
     const before = sel(["a", "b"], "a");
     expect(pruneSelection(before, ORDER)).toBe(before);
+  });
+});
+
+describe("selectEverything — Ctrl+A", () => {
+  it("picks every key on the surface, in screen order, and says which list they are all of", () => {
+    expect(selectEverything(EMPTY_SELECTION, ORDER, "goblins")).toEqual({
+      keys: ["a", "b", "c", "d", "e"],
+      anchor: "a",
+      allOf: "goblins",
+    });
+  });
+
+  // Explorer's rule: a Shift-click after Ctrl+A measures from the card last pressed.
+  it("leaves the anchor where the reader put it", () => {
+    expect(selectEverything(sel(["c"], "c"), ORDER, "goblins").anchor).toBe("c");
+  });
+
+  it("anchors on the first key when the old anchor has left the surface", () => {
+    expect(selectEverything(sel(["z"], "z"), ORDER, "goblins").anchor).toBe("a");
+  });
+
+  // An empty surface told to hold "all of this list" would pick whatever arrived on it later.
+  it("does nothing at all on an empty surface", () => {
+    const before = sel([], null);
+    expect(selectEverything(before, [], "goblins")).toBe(before);
+  });
+
+  // A second press, and every render of a settled wall, writes nothing.
+  it("answers with the same object for a set that is already all of the list", () => {
+    const all = selectEverything(sel(["c"], "c"), ORDER, "goblins");
+    expect(selectEverything(all, ORDER, "goblins")).toBe(all);
+    expect(selectEverything(all, ORDER, "elves")).not.toBe(all);
+  });
+
+  it("is ended by any press, because a press builds a fresh set", () => {
+    const all = selectEverything(EMPTY_SELECTION, ORDER, "goblins");
+    expect(applySelect(all, "b", ORDER, TOGGLE)).toEqual(sel(["a", "c", "d", "e"], "b"));
+    expect(applySelect(all, "b", ORDER, PLAIN_PICK)).toEqual(sel(["b"], "b"));
+    expect(applySelect(all, "c", ORDER, RANGE)).toEqual(sel(["a", "b", "c"], "a"));
+  });
+});
+
+describe("settleSelection", () => {
+  const all = (keys: string[], anchor: string | null, allOf: string): Selection => ({
+    keys,
+    anchor,
+    allOf,
+  });
+
+  it("prunes a set built by presses, exactly as pruneSelection does", () => {
+    expect(settleSelection(sel(["a", "z", "c"], "a"), ORDER, "goblins")).toEqual(
+      sel(["a", "c"], "a"),
+    );
+    const untouched = sel(["a", "b"], "a");
+    expect(settleSelection(untouched, ORDER, "goblins")).toBe(untouched);
+  });
+
+  // The whole reason `allOf` exists: a wall pages, so the keys at the press are a scroll position.
+  it("grows a set that is all of this list to a page that landed after the press", () => {
+    const pressed = all(["a", "b", "c"], "a", "goblins");
+    expect(settleSelection(pressed, ORDER, "goblins")).toEqual(
+      all(["a", "b", "c", "d", "e"], "a", "goblins"),
+    );
+  });
+
+  it("shrinks it to a list that lost a row, and moves an anchor that left with it", () => {
+    const pressed = all(["a", "b", "c", "d", "e"], "a", "goblins");
+    expect(settleSelection(pressed, ["b", "c", "d", "e"], "goblins")).toEqual(
+      all(["b", "c", "d", "e"], "b", "goblins"),
+    );
+  });
+
+  // Identity — the hook writes back whatever comes out as a new object, so this is a render loop
+  // if it is ever new for a set that did not move.
+  it("returns the same object when the set is already the whole of the list", () => {
+    const whole = all([...ORDER], "c", "goblins");
+    expect(settleSelection(whole, ORDER, "goblins")).toBe(whole);
+  });
+
+  // "All forty goblins" must not become "all three thousand cards" when the box is cleared.
+  it("stops being all of anything once the list is a different list", () => {
+    const pressed = all(["a", "b"], "a", "goblins");
+    const settled = settleSelection(pressed, ORDER, "everything");
+    expect(settled).toEqual(sel(["a", "b"], "a"));
+    expect(settled.allOf).toBeUndefined();
+  });
+
+  it("prunes on the way out of a list, like any other set", () => {
+    const pressed = all(["a", "b", "z"], "z", "goblins");
+    expect(settleSelection(pressed, ORDER, "everything")).toEqual(sel(["a", "b"], null));
+  });
+
+  it("drops the instruction when the surface empties", () => {
+    const settled = settleSelection(all(["a", "b"], "a", "goblins"), [], "goblins");
+    expect(settled).toEqual(sel([], null));
+    expect(settled.allOf).toBeUndefined();
   });
 });
 

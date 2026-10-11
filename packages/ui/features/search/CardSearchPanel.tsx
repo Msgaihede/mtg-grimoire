@@ -15,6 +15,7 @@ import { FOCUS } from "@/lib/focus";
 import { TRANSITION } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
+import { SEARCH_DOCK_ATTR } from "./selectAllSurface";
 
 /** Why the disclosure will not open, said where it is refused. */
 const NO_ROOM = "Not enough room. Close the card details or widen the window.";
@@ -498,6 +499,8 @@ export function CardSearchPanel({
       <section
         id={bodyId}
         aria-label={sectionLabel}
+        // What tells Ctrl+A this column's wall from the page's own — `selectAllSurface.ts`.
+        {...{ [SEARCH_DOCK_ATTR]: "" }}
         {...(overlaid ? { [SEARCH_OVER_ATTR]: surface } : {})}
         // One hairline down the left edge, and it is the only chrome the panel adds: what sits
         // beside it is the page's own list, and without the line these controls read as part of
