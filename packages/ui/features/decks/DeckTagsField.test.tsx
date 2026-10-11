@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { boxed, startPointerDrag } from "@/test-drag";
 import { DeckTagsField } from "./DeckTagsField";
 import type { TagInUse } from "./deckTags";
 
@@ -358,5 +359,72 @@ describe("DeckTagsField", () => {
     expect(suggestions()).toEqual([]);
     expect(box).toHaveAttribute("aria-expanded", "false");
     expect(onChange).toHaveBeenCalledExactlyOnceWith(["First"]);
+  });
+
+  /* ------------------------------------------------------------------ reorder ------- */
+
+  it("offers no reorder with a single tag", () => {
+    field({ initial: ["Budget"] });
+    expect(screen.queryByRole("button", { name: /^Move/ })).not.toBeInTheDocument();
+  });
+
+  it("moves a chip with the arrow keys on its word, keeping the caret on it", async () => {
+    const user = userEvent.setup();
+    const { onChange } = field({ initial: ["Budget", "Meme", "Combo"] });
+
+    screen.getByRole("button", { name: "Move Combo, 3 of 3" }).focus();
+    await user.keyboard("{ArrowLeft}");
+    expect(chips()).toEqual(["Budget", "Combo", "Meme"]);
+    expect(screen.getByRole("button", { name: "Move Combo, 2 of 3" })).toHaveFocus();
+
+    await user.keyboard("{ArrowLeft}");
+    expect(chips()).toEqual(["Combo", "Budget", "Meme"]);
+    // At the front already: nothing moves, and nothing is reported.
+    await user.keyboard("{ArrowLeft}");
+    await user.keyboard("{ArrowRight}");
+    expect(chips()).toEqual(["Budget", "Combo", "Meme"]);
+
+    expect(onChange.mock.calls).toEqual([
+      [["Budget", "Combo", "Meme"]],
+      [["Combo", "Budget", "Meme"]],
+      [["Budget", "Combo", "Meme"]],
+    ]);
+  });
+
+  it("moves a chip dropped on another into its place", async () => {
+    const { onChange } = field({ initial: ["Budget", "Meme", "Combo"] });
+    const items = within(screen.getByRole("list", { name: "Tags on this deck" })).getAllByRole(
+      "listitem",
+    );
+    items.forEach((chip, index) => boxed(chip, index * 60));
+    const [budget, , combo] = items;
+
+    const held = await startPointerDrag(combo, {
+      pressOn: within(combo).getByRole("button", { name: "Move Combo, 3 of 3" }),
+    });
+    try {
+      expect(held.started).toBe(true);
+      await held.over(budget);
+      await held.drop();
+    } finally {
+      await held.cancel();
+    }
+
+    expect(onChange).toHaveBeenCalledExactlyOnceWith(["Combo", "Budget", "Meme"]);
+  });
+
+  it("starts no drag from a chip's remove control", async () => {
+    const { onChange } = field({ initial: ["Budget", "Meme"] });
+    const items = within(screen.getByRole("list", { name: "Tags on this deck" })).getAllByRole(
+      "listitem",
+    );
+    items.forEach((chip, index) => boxed(chip, index * 60));
+
+    const held = await startPointerDrag(items[1], {
+      pressOn: within(items[1]).getByRole("button", { name: "Remove the Meme tag" }),
+    });
+    expect(held.started).toBe(false);
+    await held.cancel();
+    expect(onChange).not.toHaveBeenCalled();
   });
 });

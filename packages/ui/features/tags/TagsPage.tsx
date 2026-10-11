@@ -18,6 +18,7 @@ import { useDockHeight } from "@/lib/useDockHeight";
 import { useFilterQuickBar } from "@/lib/useFilterQuickBar";
 import { ORACLE_TAGS_STATUS_KEY } from "@/lib/useOracleTagProgress";
 import { cn } from "@/lib/utils";
+import { viewMemory } from "@/lib/viewMemory";
 import { TAG_NAMESPACE_LABEL } from "./namespaces";
 import { TagChips } from "./TagChips";
 import { TagResults } from "./TagResults";
@@ -156,6 +157,12 @@ function settleFloor(next: TagSelection): TagSelection {
 const NO_RAIL: RefObject<HTMLElement | null> = { current: null };
 
 /**
+ * Where the page leaves its chips and the tag box when the reader switches views, and finds them
+ * again on the way back (issue #908). Window-lifetime memory — see `@/lib/viewMemory`.
+ */
+const TAGS_MEMORY = viewMemory<{ selection: TagSelection; text: string }>("tagsPage");
+
+/**
  * Browse the corpus by what a card **is of** rather than by what it is called.
  *
  * ## The page in one sentence
@@ -203,17 +210,21 @@ export function TagsPage() {
   /**
    * What the reader has picked, and which taxonomy the box is searching.
    *
-   * **Page state rather than the app store**, which the other three walls' *layout* is in but
-   * none of their filters are: `useCardSearch` holds the search view's filters and the collection
-   * holds its own, so a trip to another view and back opens a fresh query everywhere in this app.
-   * The store is also `lib/`, and a selection type belongs to this feature — a `lib` module
-   * importing `features/tags` would invert the app's one layering rule to buy a consistency
-   * nothing else here has.
+   * **Page state rather than the app store**: the store is `lib/`, and a selection type belongs
+   * to this feature — a `lib` module importing `features/tags` would invert the app's one
+   * layering rule. It still **outlives the page** (issue #908): seeded from {@link TAGS_MEMORY}
+   * and written back to it below, so a trip to another view and back finds the chips where the
+   * reader left them, as `useCardSearch`'s `rememberAs` does for the filter row under them.
    */
-  const [selection, setSelection] = useState<TagSelection>(EMPTY_SELECTION);
+  const [remembered] = useState(() => TAGS_MEMORY.recall());
+  const [selection, setSelection] = useState<TagSelection>(
+    remembered?.selection ?? EMPTY_SELECTION,
+  );
   /** What is in the tag box. Its own state, because {@link useTagSearch} owns the debounce and
-   *  the query and this is only the characters. */
-  const [text, setText] = useState("");
+   *  the query and this is only the characters. Remembered with the chips, so the rail a reader
+   *  was picking from is the rail they come back to. */
+  const [text, setText] = useState(remembered?.text ?? "");
+  useEffect(() => TAGS_MEMORY.keep({ selection, text }), [selection, text]);
   /** A refused `tag_mute`, said where the reader asked for it. See {@link hideTag}. */
   const [muteFailure, setMuteFailure] = useState<string | null>(null);
   const queryClient = useQueryClient();
@@ -255,7 +266,7 @@ export function TagsPage() {
    * because the filter row still draws All printings and a reader narrowed to an oracle tag is
    * asking "which cards do this", where one row per card is the right answer.
    */
-  const search = useCardSearch({ tagTerms, defaultAllPrintings: true });
+  const search = useCardSearch({ tagTerms, defaultAllPrintings: true, rememberAs: "tags" });
 
   /**
    * Which layout the wall is in — and on this page it decides the **page's** arrangement as well

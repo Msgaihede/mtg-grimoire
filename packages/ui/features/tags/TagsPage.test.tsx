@@ -678,6 +678,40 @@ it("sends the card text box and the tag chips to the facet index together", asyn
   expect(lastFacetRequest().artTags?.include).toEqual(["landscape"]);
 });
 
+/**
+ * Issue #908: switching views unmounts this page, and it used to open fresh on the way back — the
+ * chips gone, the box empty, the reader picking their tags again. A second mount in the same
+ * test is the view switch.
+ */
+describe("coming back to the page", () => {
+  it("opens on the chips, the tag box and the filters the reader left", async () => {
+    const user = userEvent.setup();
+    const first = wrap(<TagsPage />);
+    await user.click(await railRow("Landscape"));
+    await screen.findByRole("button", { name: /^Landscape, art tag, included/ });
+    await user.type(screen.getByPlaceholderText(/search tags/i), "landsca");
+    await user.click(screen.getByRole("button", { name: /^Show filters/ }));
+    await user.click(screen.getByRole("button", { name: "All printings" }));
+    await waitFor(() => expect(lastRequest().collapse).toBe(true));
+    first.unmount();
+    searchCards.mockClear();
+
+    wrap(<TagsPage />);
+
+    expect(
+      screen.getByRole("button", { name: /^Landscape, art tag, included/ }),
+    ).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/search tags/i)).toHaveValue("landsca");
+    // The page's very first request is the remembered one — the chips *and* the filter row's
+    // collapse, which the page seeds off and the reader had turned on.
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    expect(searchCards.mock.calls[0][0]).toMatchObject({
+      artTags: { include: ["landscape"], exclude: [] },
+      collapse: true,
+    });
+  });
+});
+
 describe("hiding a tag", () => {
   /** The rail's menu is on the tag button, which is what a right-click has to reach. */
   const openRowMenu = async (label: string) => {
@@ -813,7 +847,7 @@ describe("the results wall", () => {
 
   /** A view mode and not a lock: a reader narrowed to an oracle tag is asking "which cards do
    *  this", and one row per card is the right answer to that. */
-  it("collapses again when the reader presses All printings", async () => {
+  it("collapses again when the reader presses Show all printings", async () => {
     const user = userEvent.setup();
     wrap(<TagsPage />);
     await screen.findByRole("button", { name: "Lightning Bolt" });
@@ -821,7 +855,7 @@ describe("the results wall", () => {
     // A view mode, and it lives in the filter row's tray with the other five since the row was
     // redesigned — only the box, the colours, the mana values and the sort stay on the bar.
     await user.click(screen.getByRole("button", { name: /^Show filters/ }));
-    await user.click(screen.getByRole("button", { name: "All printings" }));
+    await user.click(screen.getByRole("button", { name: "Show all printings" }));
 
     await waitFor(() => expect(lastRequest().collapse).toBe(true));
   });

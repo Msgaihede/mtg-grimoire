@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeckFolder, DeckRow } from "@/lib/ipc";
-import type { MenuAction, MenuItem, MenuLazy } from "@/components/menu/types";
+import type { MenuAction, MenuItem, MenuLazy, MenuSubmenu } from "@/components/menu/types";
 
 /** The one command either menu can reach, and only from an expanded "Move to". Everything else
  *  a menu does arrives as a callback, which is what keeps these builders pure. */
@@ -14,6 +14,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import { buildDeckMenu, type DeckMenuDeps } from "./deckMenu";
+import type { TagInUse } from "./deckTags";
 import {
   buildFolderMenu,
   folderDestinations,
@@ -74,6 +75,8 @@ function deps(over: Partial<DeckMenuDeps> = {}): DeckMenuDeps {
     startRename: vi.fn(),
     openSettings: vi.fn(),
     moveToFolder: vi.fn(),
+    tagsInUse: [],
+    setTags: vi.fn(),
     duplicate: vi.fn(),
     askDelete: vi.fn(),
     ...over,
@@ -143,11 +146,13 @@ beforeEach(() => {
 });
 
 describe("buildDeckMenu", () => {
-  it("offers open, rename, move, settings, duplicate and delete", () => {
+  it("offers open, rename, move, the two tag rows, settings, duplicate and delete", () => {
     expect(labels(buildDeckMenu(ATRAXA, deps()))).toEqual([
       "Open deck",
       "Rename…",
       "Move to",
+      "Add tag",
+      "Remove tag",
       "Deck settings…",
       "Duplicate",
       "Delete…",
@@ -173,6 +178,82 @@ describe("buildDeckMenu", () => {
     (find(menu, "Deck settings…") as MenuAction).onSelect();
     expect(openSettings).toHaveBeenCalledWith(ATRAXA.id);
     expect(setOpenDeckId).not.toHaveBeenCalled();
+  });
+
+  describe("deck tags (issue #914)", () => {
+    /** `Budget` is on two decks and `Meme` on one; the deck under test wears `Meme`. */
+    const IN_USE: TagInUse[] = [
+      { tag: "Budget", count: 2 },
+      { tag: "Meme", count: 1 },
+      { tag: "Spicy", count: 1 },
+    ];
+    const TAGGED: DeckRow = { ...ATRAXA, tags: ["Meme", "Combo"] };
+
+    const submenu = (items: MenuItem[], label: string) => find(items, label) as MenuSubmenu;
+
+    it("offers the tags other decks wear and this one does not, then New tag…", () => {
+      const add = submenu(buildDeckMenu(TAGGED, deps({ tagsInUse: IN_USE })), "Add tag");
+      expect(add.kind).toBe("submenu");
+      expect(labels(add.items)).toEqual(["Budget", "Spicy", "New tag…"]);
+    });
+
+    it("puts a picked tag on the end of the deck's list, sending the whole list", () => {
+      const setTags = vi.fn();
+      const add = submenu(buildDeckMenu(TAGGED, deps({ tagsInUse: IN_USE, setTags })), "Add tag");
+      (find(add.items, "Spicy") as MenuAction).onSelect();
+      expect(setTags).toHaveBeenCalledWith(TAGGED.id, ["Meme", "Combo", "Spicy"]);
+    });
+
+    /** Capitals are folded exactly as Rust's `clean_tags` folds them, so `meme` on another deck is
+     *  the tag this deck already wears and is not offered again. */
+    it("does not offer a tag the deck wears under other capitals", () => {
+      const add = submenu(
+        buildDeckMenu(TAGGED, deps({ tagsInUse: [{ tag: "meme", count: 3 }] })),
+        "Add tag",
+      );
+      expect(labels(add.items)).toEqual(["New tag…"]);
+      // Nothing above New tag…, so no rule above it either.
+      expect(add.items.map((item) => item.kind)).toEqual(["action"]);
+    });
+
+    it("opens Deck settings with the caret in the Tags field for a tag no deck wears yet", () => {
+      const openSettings = vi.fn();
+      const setOpenDeckId = vi.fn();
+      const add = submenu(buildDeckMenu(ATRAXA, deps({ openSettings, setOpenDeckId })), "Add tag");
+      (find(add.items, "New tag…") as MenuAction).onSelect();
+      expect(openSettings).toHaveBeenCalledWith(ATRAXA.id, "tags");
+      expect(setOpenDeckId).not.toHaveBeenCalled();
+    });
+
+    it("offers the deck's own tags to remove, in the deck's order", () => {
+      const setTags = vi.fn();
+      const remove = submenu(buildDeckMenu(TAGGED, deps({ setTags })), "Remove tag");
+      expect(remove.kind).toBe("submenu");
+      expect(labels(remove.items)).toEqual(["Meme", "Combo"]);
+
+      (find(remove.items, "Meme") as MenuAction).onSelect();
+      expect(setTags).toHaveBeenCalledWith(TAGGED.id, ["Combo"]);
+    });
+
+    /** The last tag off is `[]`, which `deck_update` reads as "no tags" — never as "leave it". */
+    it("clears the list when the last tag is removed", () => {
+      const setTags = vi.fn();
+      const remove = submenu(
+        buildDeckMenu({ ...ATRAXA, tags: ["Budget"] }, deps({ setTags })),
+        "Remove tag",
+      );
+      (find(remove.items, "Budget") as MenuAction).onSelect();
+      expect(setTags).toHaveBeenCalledWith(ATRAXA.id, []);
+    });
+
+    it("greys Remove tag on a deck with no tags, rather than leaving it out", () => {
+      const setTags = vi.fn();
+      const remove = find(buildDeckMenu(ATRAXA, deps({ setTags })), "Remove tag") as MenuAction;
+      expect(remove.kind).toBe("action");
+      expect(remove.disabled).toBe(true);
+      remove.onSelect();
+      expect(setTags).not.toHaveBeenCalled();
+    });
   });
 
   it("duplicates the deck", () => {

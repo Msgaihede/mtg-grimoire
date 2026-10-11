@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   cleanTag,
   hasTag,
+  movedTag,
   suggestTags,
   tagsInUse,
   withoutTag,
@@ -67,6 +68,30 @@ describe("withoutTag", () => {
 
   it("answers the list whole when the tag is not on it", () => {
     expect(withoutTag(["Budget"], "Meme")).toEqual(["Budget"]);
+  });
+});
+
+describe("movedTag", () => {
+  it("moves the tag to the position, the rest closing up in order", () => {
+    expect(movedTag(["Budget", "Meme", "Combo"], "Combo", 0)).toEqual(["Combo", "Budget", "Meme"]);
+    expect(movedTag(["Budget", "Meme", "Combo"], "Budget", 1)).toEqual(["Meme", "Budget", "Combo"]);
+  });
+
+  it("matches as hasTag matches, and keeps the stored spelling", () => {
+    expect(movedTag(["Budget", "Meme"], "MEME", 0)).toEqual(["Meme", "Budget"]);
+  });
+
+  it("clamps a position off either end", () => {
+    expect(movedTag(["Budget", "Meme"], "Budget", 9)).toEqual(["Meme", "Budget"]);
+    expect(movedTag(["Budget", "Meme"], "Meme", -4)).toEqual(["Meme", "Budget"]);
+  });
+
+  /** The field's "never a no-op": a drag let go where it started, or an arrow at an end. */
+  it("answers null when nothing moves", () => {
+    expect(movedTag(["Budget", "Meme"], "Budget", 0)).toBeNull();
+    expect(movedTag(["Budget", "Meme"], "Budget", -1)).toBeNull();
+    expect(movedTag(["Budget", "Meme"], "Meme", 2)).toBeNull();
+    expect(movedTag(["Budget"], "Combo", 0)).toBeNull();
   });
 });
 
