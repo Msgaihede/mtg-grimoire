@@ -30,8 +30,11 @@
 // **The key is never printed**, nor the assertion signed with it, nor the token it buys. A
 // refusal is reported as the step, the status and Google's answer — never the request. No
 // answer at all is reported as the step and `fetch`'s reason, without its `cause`. A success
-// that is not what was asked for — no token in it, no edit id, not JSON — is reported by name
-// and never quoted. And no request follows a redirect, which would send its body again.
+// that is not what was asked for — no token in it, no edit id, not JSON, not an object, a list
+// that is no list — is reported by name and never quoted: the lists are what step 4's guard
+// reads, and an answer nobody could read is not "nothing held". The commit's answer alone is
+// not read at all: a 2xx there is the commit. And no request follows a redirect, which would
+// send its body again.
 //
 // **What it says at the end depends on what happened** (`summaryOf`): "upload it by hand" is
 // sound advice after most failures, and wrong after an older release was refused or after a
@@ -62,8 +65,17 @@ const COMMIT_MS = 120_000;
 const PRINTED = 2_000;
 
 const b64url = (value) => Buffer.from(value).toString("base64url");
-/** A list out of an answer, or none: Play leaves out what is empty. */
-const listOf = (value) => (Array.isArray(value) ? value : []);
+/**
+ * A list out of an answer. **None when Play left it out** — it leaves out what is empty — **and
+ * a refusal when it is there and is not a list**: the lists are what the older-release guard
+ * reads, and "this is not a list, so nothing is held" would let an older build through on an
+ * answer nobody could read.
+ */
+function listAt(step, value) {
+  if (value === undefined || value === null) return [];
+  if (Array.isArray(value)) return value;
+  throw new Error(`Google's answer to "${step}" held no list where one belongs`);
+}
 
 /** The JWT Google exchanges for an access token, good for ten minutes. */
 export function assertionFor(account, nowSeconds) {
@@ -210,7 +222,10 @@ export async function upload({
   send = fetch,
   nowSeconds = Math.floor(Date.now() / 1000),
 }) {
-  const call = async (step, url, init = {}, deadline = CALL_MS) => {
+  // `unread` is for the two requests whose answer says nothing this run needs: the commit and
+  // the discard. **A 2xx at the commit is the commit**, whatever came back with it — reading
+  // it could only turn an upload that landed into a failure that says to upload it again.
+  const call = async (step, url, init = {}, deadline = CALL_MS, unread = false) => {
     let response;
     let text;
     try {
@@ -234,9 +249,11 @@ export async function upload({
       );
     }
     if (!response.ok) throw new Refused(step, response.status, text);
-    if (text === "") return {};
+    if (unread) return {};
+    let answer = null;
     try {
-      return JSON.parse(text) ?? {};
+      // An empty answer is no object either, and is refused as one below.
+      if (text !== "") answer = JSON.parse(text);
     } catch {
       // Not the `SyntaxError`'s own words: V8 quotes the text it could not read, and a token
       // answer cut short is a slice of a credential.
@@ -244,6 +261,15 @@ export async function upload({
         `Google's answer to "${step}" was not JSON (${response.status}, ${text.length} characters)`,
       );
     }
+    // Every answer that is read is an object, an empty list's among them. Anything else — a
+    // bare list, a word, `null` — has none of the fields this run goes on by, and reading their
+    // absence as "nothing there" is how a guard is walked past.
+    if (answer === null || typeof answer !== "object" || Array.isArray(answer)) {
+      throw new Error(
+        `Google's answer to "${step}" was not a JSON object (${response.status}, ${text.length} characters)`,
+      );
+    }
+    return answer;
   };
 
   const { access_token: token } = await call("get a token", hosts.token, {
@@ -273,20 +299,25 @@ export async function upload({
   // A courtesy, and best effort: an edit that is never committed expires by itself, so a
   // discard that is refused or unanswered changes nothing about what this run found.
   const discard = () =>
-    call("discard the edit", at, { method: "DELETE", headers: auth }).catch(() => {});
+    call("discard the edit", at, { method: "DELETE", headers: auth }, CALL_MS, true).catch(
+      () => {},
+    );
 
-  const held = await call("list the bundles Play holds", `${at}/bundles`, { headers: auth });
-  const bundles = listOf(held.bundles);
-  if (bundles.some((known) => known?.versionCode === versionCode)) {
+  const BUNDLES = "list the bundles Play holds";
+  const held = await call(BUNDLES, `${at}/bundles`, { headers: auth });
+  const bundles = listAt(BUNDLES, held.bundles);
+  // By its number, however Play spelled it: a code that came as text is still the one held.
+  if (bundles.some((known) => Number(known?.versionCode) === versionCode)) {
     await discard();
     return { uploaded: false, versionCode };
   }
 
   // Not held, so it would go up — unless Play has moved on. A build can be on a track and
   // gone from the list of bundles, so both are read; a track's `versionCodes` are strings.
-  const listed = await call("list the tracks", `${at}/tracks`, { headers: auth });
-  const onTracks = listOf(listed.tracks).flatMap((track) =>
-    listOf(track?.releases).flatMap((release) => listOf(release?.versionCodes)),
+  const TRACKS = "list the tracks";
+  const listed = await call(TRACKS, `${at}/tracks`, { headers: auth });
+  const onTracks = listAt(TRACKS, listed.tracks).flatMap((track) =>
+    listAt(TRACKS, track?.releases).flatMap((release) => listAt(TRACKS, release?.versionCodes)),
   );
   const highest = [...bundles.map((known) => known?.versionCode), ...onTracks]
     .map(Number)
@@ -317,7 +348,7 @@ export async function upload({
       releases: [{ versionCodes: [String(versionCode)], status: "completed" }],
     }),
   });
-  await call("commit the edit", `${at}:commit`, { method: "POST", headers: auth }, COMMIT_MS);
+  await call("commit the edit", `${at}:commit`, { method: "POST", headers: auth }, COMMIT_MS, true);
   return { uploaded: true, versionCode };
 }
 

@@ -350,7 +350,13 @@ What the final review of the whole branch changed, the same day:
   commit has a deadline of its own, two minutes, and no request follows a redirect.
 - **A success that is not what was asked for is refused and not quoted**: an answer that is
   not JSON (V8's own message quotes the text, which on a token answer is a slice of a
-  credential), a token answer with no token, an edit with no id.
+  credential), a token answer with no token, an edit with no id. **And, at the owner's ask the
+  same day, three edges the last review had left**: an answer that is JSON and no object, or
+  a list of bundles, tracks, releases or `versionCodes` that came as something other than a
+  list, stops the run — the guard above had read either as "nothing held"; a 2xx at the commit
+  is the commit and its answer is not read, where a page in place of JSON had ended red with
+  "upload it by hand"; and the test's stand-in token is long, because the suite searches a
+  failure's stack for it and `at-1` is in the path of an unluckily named checkout.
 - **The script knows six refusals, not four**: a `versionCode` Play has used somewhere the
   bundle list does not show, read before the permission hint because Play says it with a 403;
   and an app Play does not know for the account (a 404 at the edit). A 401 or a 403 reads as a

@@ -1068,8 +1068,12 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     - **What a failure says** (the final review, 2026-10-11). No answer at all — a dropped
       connection, a deadline (30 s a request, 10 minutes for the upload, 2 for the commit) —
       names its step: `No answer from Google while trying to commit the edit: …`. A success
-      that is not what was asked for (not JSON, no token in it, no edit id) is named and never
-      quoted. No request follows a redirect. And the summary's last line depends on what
+      that is not what was asked for (not JSON, not an object, no token in it, no edit id, a
+      list that came as something else) is named and never quoted — **the lists are what the
+      older-release guard reads, so one it cannot read stops the run** rather than counting as
+      nothing held; a list Play left out is still an empty one. **The commit's answer is not
+      read**: a 2xx there is the commit, whatever came back with it. No request follows a
+      redirect. And the summary's last line depends on what
       happened: the bundle is offered for upload by hand after most failures, not after an
       older release, a `versionCode` mismatch or a `versionCode` Play has used, and after a
       commit that got no answer or a 5xx it says the commit may have landed and to re-run the

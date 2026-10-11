@@ -41,6 +41,13 @@ const bundle = new Uint8Array([80, 75, 3, 4, 1, 2, 3]);
  * it with instead, and `fail` maps one to what the request throws with no answer at all (an
  * error, or a function of the request that makes one).
  */
+/**
+ * The access token the stand-in gives. Long and unlikely on purpose: the last suite here looks
+ * for it in everything a failure prints, a stack's file paths among them, and a short one
+ * (`at-1`, once) is in the path of any checkout whose folder happens to hold those letters.
+ */
+const TOKEN = "stand-in-access-token-5d1c7e9a";
+
 function google({ held = [], tracks = [], readsAs = 43001, refuse = {}, fail = {} } = {}) {
   const calls = [];
   const json = (value, status = 200) => new Response(JSON.stringify(value), { status });
@@ -61,7 +68,7 @@ function google({ held = [], tracks = [], readsAs = 43001, refuse = {}, fail = {
     if (staged) return Promise.resolve(new Response(staged[1], { status: staged[0] }));
     switch (`${method} ${path}`) {
       case "POST /token":
-        return Promise.resolve(json({ access_token: "at-1", expires_in: 3600 }));
+        return Promise.resolve(json({ access_token: TOKEN, expires_in: 3600 }));
       case `POST ${APP}/edits`:
         return Promise.resolve(json({ id: "e1" }));
       case `GET ${APP}/edits/e1/bundles`:
@@ -159,7 +166,7 @@ describe("upload", () => {
     const form = new URLSearchParams(String(token.body));
     expect(form.get("grant_type")).toBe("urn:ietf:params:oauth:grant-type:jwt-bearer");
     expect(form.get("assertion")).toBe(assertionFor(account, 1_800_000_000));
-    for (const call of rest) expect(call.headers.authorization, call.path).toBe("Bearer at-1");
+    for (const call of rest) expect(call.headers.authorization, call.path).toBe(`Bearer ${TOKEN}`);
     // Every request has a deadline: a host that accepts and never answers ends the step.
     for (const call of fake.calls) expect(call.signal, call.path).toBeInstanceOf(AbortSignal);
   });
@@ -290,6 +297,75 @@ describe("upload", () => {
     expect(await run(fake)).toEqual({ uploaded: true, versionCode: 43001 });
   });
 
+  // **The guard reads Play's answer, or the run does not go on.** A list Play left out is an
+  // empty one. A list that came as something else is an answer this script cannot read, and
+  // reading it as "nothing held" would let an older release through on a malformed 200.
+  it.each([
+    ["tracks that are not a list", "list the tracks", "tracks", '{"tracks":"none"}'],
+    [
+      "releases that are not a list",
+      "list the tracks",
+      "tracks",
+      '{"tracks":[{"track":"internal","releases":{"0":{"versionCodes":["44000"]}}}]}',
+    ],
+    [
+      "versionCodes that are not a list",
+      "list the tracks",
+      "tracks",
+      '{"tracks":[{"track":"internal","releases":[{"versionCodes":"44000"}]}]}',
+    ],
+    [
+      "bundles that are not a list",
+      "list the bundles Play holds",
+      "bundles",
+      '{"bundles":{"0":{"versionCode":44000}}}',
+    ],
+  ])("refuses %s, and uploads nothing", async (_what, step, route, body) => {
+    const fake = google({ refuse: { [`GET ${APP}/edits/e1/${route}`]: [200, body] } });
+    await expect(run(fake)).rejects.toThrow(
+      `Google's answer to "${step}" held no list where one belongs`,
+    );
+    expect(fake.asked()).not.toContain(UPLOAD);
+    expect(fake.asked().some((line) => line.startsWith("PUT") || line.endsWith(":commit"))).toBe(false);
+  });
+
+  it.each([
+    ["a list", "[]"],
+    ["a word", '"ok"'],
+    ["null", "null"],
+    ["nothing", ""],
+  ])("refuses %s where a list's answer should be an object", async (_what, body) => {
+    for (const [step, route] of [
+      ["list the bundles Play holds", "bundles"],
+      ["list the tracks", "tracks"],
+    ]) {
+      const fake = google({ refuse: { [`GET ${APP}/edits/e1/${route}`]: [200, body] } });
+      await expect(run(fake), step).rejects.toThrow(
+        `Google's answer to "${step}" was not a JSON object (200, ${body.length} characters)`,
+      );
+      expect(fake.asked(), step).not.toContain(UPLOAD);
+    }
+  });
+
+  it("takes a versionCode Play spells as text for the one it holds", async () => {
+    const body = '{"bundles":[{"versionCode":"43001"}]}';
+    const fake = google({ refuse: { [`GET ${APP}/edits/e1/bundles`]: [200, body] } });
+    expect(await run(fake)).toEqual({ uploaded: false, versionCode: 43001 });
+    expect(fake.asked()).not.toContain(UPLOAD);
+  });
+
+  // **A 2xx at the commit is the commit.** What the answer says changes nothing, so it is not
+  // read: a page where JSON was due must not turn an upload that landed into "the upload
+  // failed; it can be uploaded by hand".
+  it.each([
+    ["a page", "<!DOCTYPE html><html><body>committed</body></html>"],
+    ["nothing", ""],
+    ["a list", "[]"],
+  ])("counts a commit answered 2xx with %s as landed", async (_what, body) => {
+    const fake = google({ refuse: { [COMMIT]: [200, body] } });
+    expect(await run(fake)).toEqual({ uploaded: true, versionCode: 43001 });
+  });
+
   it("stops when Play reads another versionCode out of the bundle", async () => {
     const fake = google({ readsAs: 43000 });
     await expect(run(fake)).rejects.toThrow(
@@ -316,7 +392,6 @@ describe("upload", () => {
     ["nothing in it", "{}"],
     ["an empty token", '{"access_token":""}'],
     ["a token that is not text", '{"access_token":{"value":"ya29.SLICE-OF-A-CREDENTIAL"}}'],
-    ["null", "null"],
   ])("stops at a token answer with %s", async (_what, body) => {
     const fake = google({ refuse: { "POST /token": [200, body] } });
     const error = await run(fake).catch((thrown) => thrown);
@@ -348,7 +423,24 @@ describe("upload", () => {
     expect(fake.asked()).toEqual(["POST /token"]);
   });
 
-  it.each(["{}", '{"id":""}', '{"id":7}', "null"])("stops at an edit opened as %s", async (body) => {
+  // An answer that is JSON and no object — `null`, a bare list, a word — has no field to go on
+  // by, at any step that reads one. Refused by name, and none of it quoted.
+  it.each([
+    ["get a token", "POST /token", "null", ["POST /token"]],
+    ["get a token", "POST /token", '"ya29.SLICE-OF-A-CREDENTIAL"', ["POST /token"]],
+    ["open an edit", `POST ${APP}/edits`, "null", ["POST /token", `POST ${APP}/edits`]],
+    ["open an edit", `POST ${APP}/edits`, "[]", ["POST /token", `POST ${APP}/edits`]],
+  ])("stops when the answer to %s is not an object (%s: %s)", async (step, route, body, asked) => {
+    const fake = google({ refuse: { [route]: [200, body] } });
+    const error = await run(fake).catch((thrown) => thrown);
+    expect(error.message).toBe(
+      `Google's answer to "${step}" was not a JSON object (200, ${body.length} characters)`,
+    );
+    expect(error.message).not.toMatch(/ya29|SLICE/);
+    expect(fake.asked()).toEqual(asked);
+  });
+
+  it.each(["{}", '{"id":""}', '{"id":7}'])("stops at an edit opened as %s", async (body) => {
     const fake = google({ refuse: { [`POST ${APP}/edits`]: [200, body] } });
     const error = await run(fake).catch((thrown) => thrown);
     expect(error.message).toBe("Google opened an edit without an id");
@@ -554,7 +646,7 @@ describe("what a failure can print", () => {
     ...privateKey.split("\n").filter((line) => line !== "" && !line.startsWith("-----")),
     assertion,
     ...assertion.split(".").slice(1),
-    "at-1",
+    TOKEN,
     // The start of it is enough: V8 quotes the first ten characters of JSON it cannot read.
     SLICE.slice(0, 4),
   ];
@@ -589,7 +681,8 @@ describe("what a failure can print", () => {
     ["a token answer cut short", { refuse: { "POST /token": [200, `{"access_token":"${SLICE}","expi`] } }],
     ["a token no header can carry", { refuse: { "POST /token": [200, JSON.stringify({ access_token: `${SLICE}\n` })] } }],
     ["an edit with no id", { refuse: { [`POST ${APP}/edits`]: [200, "{}"] } }],
-    ["an answer cut short after the token", { refuse: { [COMMIT]: [200, '{"id":"e1"'] } }],
+    // At the last step whose answer is read: the commit's is not.
+    ["an answer cut short after the token", { refuse: { [`PUT ${APP}/edits/e1/tracks/internal`]: [200, '{"track":"inter'] } }],
     ["an older release", { held: [44000] }],
     ["an older release whose discard is dropped", { held: [44000], fail: { [`DELETE ${APP}/edits/e1`]: droppedWith } }],
     ["another versionCode in the bundle", { readsAs: 43000 }],
