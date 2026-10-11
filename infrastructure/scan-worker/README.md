@@ -261,6 +261,16 @@ this Worker's CORS answer — with the relay's deploy token (`CLOUDFLARE_INFRA_A
 `release` environment), and then asks the live address the probes below. Without that token the
 job deploys nothing, says so in the run's summary and ends green.
 
+**Deployed, and asked, on 2026-10-11** — by hand, by the owner, with the secret set after it.
+At 18:03 UTC `node scripts/scan-deploy-probe.ts` was answered seven of seven on its first
+asking, twice (the owner's terminal, then an agent's): the route is at
+`scans.mtg-grimoire.app`; a `POST` with `authorization: Bearer nonsense` is
+`{"error":"unauthorized","code":"unauthorized"}`, 401 and not 500, so the Worker holds a key;
+and `https://mtg-grimoire-scans.denmark-east.workers.dev/scan` answers 404 — there is no
+second address. **What that leaves unseen is what no probe holds a token for**: that the key
+is the relay's, and that the bucket takes a write. Nobody has sent a scan, and no release has
+run the job.
+
 ⚠️ **No agent may run `wrangler deploy` or create the bucket unasked.** Between releases a
 deploy is by hand and asked for, each time, as for every Worker. `wrangler dev --local` is the
 only wrangler command an agent may run on its own.

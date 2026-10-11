@@ -1442,7 +1442,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     `npx wrangler r2 bucket create mtg-grimoire-scans --location weur`. **And its secret**,
     before that release too: `RELAY_HMAC_KEY`, with the value the relay and the share Worker
     hold, put on the scan Worker after a first deploy by hand
-    (`infrastructure/scan-worker/README.md`, *Deploying* — three steps, in order).
+    (`infrastructure/scan-worker/README.md`, *Deploying* — three steps, in order). **Both done
+    2026-10-11, as read off the host**: the Worker answers at `scans.mtg-grimoire.app` and its
+    door refuses a nonsense token with a 401, which a Worker with no key cannot do. Whether the
+    key is the relay's is still unseen.
   - **Is `schema.sql` what production holds? Compared 2026-10-11: it is.** The baseline is
     frozen on the claim that it is, so an agent compared it at the owner's word. One read of
     the live database's `sqlite_master` (`SELECT type, name, tbl_name, sql … ORDER BY type,

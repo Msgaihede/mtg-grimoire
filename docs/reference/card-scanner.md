@@ -4520,9 +4520,12 @@ second, captioned with how long before the press it was taken.
 could span a reset the session makes itself — a mode switch, an accepted filter — and be
 labelled with the new mode or filter throughout. *The run*, above, is what it does now.
 
-**No release has deployed the inbox yet, and nobody has sent a scan through it.** Past the page, every
-wire is held by tests on each side of it — the engine over a mock server, the Worker over fakes
-of its two bindings — and by nothing that crosses a real network. What only real use can show:
+**The inbox is deployed — by hand, by the owner, on 2026-10-11 — and nobody has sent a scan
+through it.** Its address and its door were asked that evening and answered as the suite
+answers them (`infrastructure/scan-worker/README.md`, *Deploying*: seven probes of seven, a
+nonsense token a 401, no second address). Past that, every wire is held by tests on each side
+of it — the engine over a mock server, the Worker over fakes of its two bindings — and no scan
+has crossed a real network. What only real use can show:
 
 - **What twenty real frames weigh.** Chromium's test pattern is some 7 kB a frame and says
   nothing about it; forty to ninety kilobytes for a 960-pixel frame of a desk is an estimate,
@@ -4538,10 +4541,10 @@ of its two bindings — and by nothing that crosses a real network. What only re
   device*, and no probe can tell the two apart — and that a token minted by the live relay
   verifies there, are shown by the first scan a supporter sends. Nor has the membership been
   read on the desktop page with a camera live; both pages' tests hold it over mocks.
-- **The edge**: that the bucket binding takes a write, that a browser's pre-flight is answered
-  as the suite answers it, that the deploy states `scans.mtg-grimoire.app` as the relay's and
-  the share Worker's names were, and whether 500 waiting runs is a ceiling a real week ever
-  meets.
+- **The edge**: that the bucket binding takes a write, that a browser — and not only the
+  probe's own pre-flight, which was answered — is let through as the suite says, that a
+  release's `scan-deploy` does under the CI token what the owner's deploy did by hand, and
+  whether 500 waiting runs is a ceiling a real week ever meets.
   `infrastructure/scan-worker/README.md` has the deploy — a release's `scan-deploy` job, since
   2026-10-11 — and the probes that job asks of the live address.
 
