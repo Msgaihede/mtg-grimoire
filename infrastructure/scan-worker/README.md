@@ -292,7 +292,9 @@ only wrangler command an agent may run on its own.
    Custom Domains do (added 2026-10-11, by the owner's word —
    `docs/reference/ci-and-releases.md`, *What only the owner can do*). With it the deploy
    states `scans.mtg-grimoire.app`'s DNS record and certificate itself. A deploy by hand uses
-   the owner's own login, which has it.
+   the owner's own login, which has it. (This Worker was added to the token's permissions on
+   2026-10-11 as well, by the owner's word; the first release to run `scan-deploy` is what
+   shows it reaches.)
 
 3. **Set the one secret, after the first deploy** — from this folder, in a terminal of the
    owner's own, never an agent's:

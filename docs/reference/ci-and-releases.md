@@ -1435,7 +1435,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     **Used once, as read off the host on 2026-10-11**: the release run of 0.44.0 (run
     38143404661) ended `relay (deploy)` and `share (deploy)` green with no step skipped, so the
     token is set and deployed both — the share Worker with its bucket bound, which is what
-    `scan-deploy` asks of it too. If a run fails on a permission, its log names it. Without the
+    `scan-deploy` asks of it too. **The scan inbox was added to this token's permissions on
+    2026-10-11, by the owner's word** (the token is `mtg-grimoire-gh-infra` on the account); no
+    release has deployed that Worker with it yet, so that it reaches far enough is still unseen.
+    If a run fails on a permission, its log names it. Without the
     token the three jobs end green having deployed nothing, and each says so in the run's
     summary. **The scan inbox's bucket** (`mtg-grimoire-scans`) is the owner's to create, once,
     before the first release that carries `scan-deploy`:
