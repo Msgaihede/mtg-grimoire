@@ -102,6 +102,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 import {
   DECK_SEARCH_TAB_KEY,
   DeckSearchPanel,
+  filteredFinish,
   SEARCH_OVER_ATTR,
   type DeckSearchTab,
 } from "./DeckSearchPanel";
@@ -837,6 +838,51 @@ describe("DeckSearchPanel", () => {
     expect(
       await screen.findByRole("button", { name: "Add Lightning Bolt to Main deck" }),
     ).toHaveClass(...BUTTON_OVER_ART.split(" "));
+  });
+
+  /**
+   * Issue #933: a card found under the Finish filter's `Foil` is the foil copy — on the deck row
+   * the press writes, and on the tile the reader pressed it from. Bolt is published in both
+   * finishes, so before the chip its tile wears no mark and an add is the regular copy.
+   */
+  it("adds the foil copy, and draws the sheen, when the Finish filter is Foil alone", async () => {
+    await openPanel();
+    await screen.findByRole("button", { name: "Add Lightning Bolt to Main deck" });
+    expect(screen.queryByRole("img", { name: "Foil" })).toBeNull();
+
+    await openFilterTray();
+    await userEvent.click(screen.getByRole("button", { name: "Foil" }));
+
+    expect(await screen.findByRole("img", { name: "Foil" })).toBeInTheDocument();
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Add Lightning Bolt to Main deck" }),
+    );
+    expect(deckAddCard).toHaveBeenLastCalledWith(4, "1", MAIN.id, null, "live", "foil", 1);
+  });
+
+  /** And a drag off that wall is the same object the button adds. */
+  it("carries the filtered finish on a tile's drag", async () => {
+    const { container } = await openPanel();
+    await screen.findByRole("button", { name: "Lightning Bolt" });
+    await openFilterTray();
+    await userEvent.click(screen.getByRole("button", { name: "Etched" }));
+    await screen.findByRole("img", { name: "Etched" });
+
+    const tile = container.querySelector(`[${DND_SOURCE_ATTR}]`) as HTMLElement;
+    const drags = recordDrags();
+    const held = await startPointerDrag(boxed(tile, 0));
+    await held.cancel();
+    drags.stop();
+
+    expect(drags.records.map(readDragData)).toEqual([
+      {
+        kind: "search-card",
+        cardId: BOLT.id,
+        name: BOLT.name,
+        typeLine: BOLT.typeLine,
+        finish: "etched",
+      },
+    ]);
   });
 
   it("adds to whichever category is picked, and says so on the button", async () => {
@@ -2072,5 +2118,17 @@ describe("DeckSearchPanel resizing", () => {
     await openPanel({ roomy: false });
 
     expect(screen.queryByRole("separator", { name: "Resize card search" })).not.toBeInTheDocument();
+  });
+});
+
+describe("filteredFinish", () => {
+  /** One premium chip is a promise about every row on the wall; anything else promises nothing. */
+  it("answers the one premium finish picked alone, and null otherwise", () => {
+    expect(filteredFinish([])).toBeNull();
+    expect(filteredFinish(["foil"])).toBe("foil");
+    expect(filteredFinish(["etched"])).toBe("etched");
+    expect(filteredFinish(["nonfoil"])).toBeNull();
+    expect(filteredFinish(["foil", "etched"])).toBeNull();
+    expect(filteredFinish(["nonfoil", "foil"])).toBeNull();
   });
 });

@@ -95,12 +95,15 @@ export function useDeckDrops({
        * somewhere. With the pair deleted every add means the same thing, so there is nothing
        * left to say on the way past. See {@link DeckSearchPanelProps}.
        */
+      // Which object goes in — the regular copy unless a docked-panel tile dragged under a
+      // one-finish filter said otherwise (issue #933).
+      finish: DeckFinish = null,
     ) =>
       handled(
         writeAdd(
           categoryId === AUTO_CATEGORY
-            ? { cardId, typeLine: typeLine ?? null, quantity: 1 }
-            : { cardId, categoryId, quantity: 1 },
+            ? { cardId, typeLine: typeLine ?? null, finish, quantity: 1 }
+            : { cardId, categoryId, finish, quantity: 1 },
         ).then(
           // **`change.id` is the `deck_cards` row this write landed in**, which the editor marks
           // for five seconds so the reader can find it in a deck they are not looking at. It was
@@ -271,11 +274,13 @@ export function useDeckDrops({
    */
   const applyDrop = useCallback(
     (write: DeckWrite): Promise<unknown> => {
-      if (write.write === "add") return addTo(write.cardId, write.categoryId);
+      if (write.write === "add")
+        return addTo(write.cardId, write.categoryId, undefined, write.finish);
       // The quick zones' `Auto`, and the same call the toolbar's `Add to → Auto (by what it
       // does)` makes: the type line goes and the pile does not, because `useDeck.addCard` names
       // it. The one drop in this editor that points at no column — see {@link QuickZones}.
-      if (write.write === "auto-add") return addTo(write.cardId, AUTO_CATEGORY, write.typeLine);
+      if (write.write === "auto-add")
+        return addTo(write.cardId, AUTO_CATEGORY, write.typeLine, write.finish);
       // The same zone for a card the deck already holds, and the same rule — see {@link refile}.
       if (write.write === "auto-refile") return refile(write.cardId, write.from, write.finish);
       if (write.write === "move") return moveTo(write.cardId, write.from, write.to, write.finish);
