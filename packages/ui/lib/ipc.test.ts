@@ -117,7 +117,7 @@ import detectRs from "../../../crates/card-scanner/src/detect.rs?raw";
 import cardnessRs from "../../../crates/card-scanner/src/cardness.rs?raw";
 import trimRs from "../../../crates/card-scanner/src/trim.rs?raw";
 import ocrRs from "../../../crates/card-scanner/src/ocr.rs?raw";
-import ipcSource from "./ipc.ts?raw";
+import ipcBarrel from "./ipc.ts?raw";
 import { CONDITIONS, CONDITION_NOT_SET } from "@/lib/conditions";
 import { DEFAULT_SCANNER_OPTIONS } from "@/features/scanner/scannerOptions";
 import { DEFAULT_SCANNER_PREFS, TRAY_ROWS } from "@/features/scanner/fixtures";
@@ -147,6 +147,21 @@ import {
   type SyncProgressEvent,
   type TheorySlot,
 } from "@/lib/ipc";
+
+/**
+ * **The mirror as one text: the barrel and every domain file under `./ipc/`** (issue #557).
+ * `ipc.ts` was one 11,000-line file until 2026-10-11; it is now the barrel, and the interfaces and
+ * wrappers every check below reads are in thirteen domain files beside the transport. Read with a
+ * glob rather than one import each, so a fourteenth domain is read the day it is added — a file
+ * this test did not read would be a file no fence covered. The order is the glob's; nothing below
+ * depends on where in the text a declaration sits.
+ */
+const IPC_DOMAINS = import.meta.glob<string>("./ipc/*.ts", {
+  query: "?raw",
+  import: "default",
+  eager: true,
+});
+const ipcSource = [ipcBarrel, ...Object.values(IPC_DOMAINS)].join("\n");
 
 // **A module the core extraction split in two is read as both halves** — the engine's file in
 // `crates/grimoire-core` and the desktop's command wrappers, which stayed in `src-tauri` — under
@@ -6366,5 +6381,40 @@ describe("the condition scale agrees with the crate that enforces it", () => {
     expect(m, "`collection.rs` no longer declares `CONDITION_NOT_SET`").not.toBeNull();
     expect((m as RegExpExecArray)[1]).toBe(CONDITION_NOT_SET);
     expect(CONDITIONS).toContain(CONDITION_NOT_SET);
+  });
+});
+
+/**
+ * **The barrel and its domains agree** (issue #557). `ipc` is the domains' commands objects spread
+ * together, and a spread is quiet in both of the ways that matter: a method two domains both
+ * name keeps whichever was spread last, and a domain file nobody spread is a set of wrappers no
+ * page can reach. Neither is a type error. So both are held here, against the modules themselves
+ * rather than their text.
+ */
+describe("the ipc domain split", () => {
+  const modules = import.meta.glob<Record<string, unknown>>("./ipc/*.ts", { eager: true });
+
+  it("puts every domain's commands in ipc, and no method in two domains", () => {
+    const owner = new Map<string, string>();
+    for (const [path, mod] of Object.entries(modules)) {
+      for (const [name, value] of Object.entries(mod)) {
+        if (!name.endsWith("Commands")) continue;
+        for (const method of Object.keys(value as object)) {
+          expect(owner.get(method), `${method} is in ${path} and ${owner.get(method)}`).toBe(
+            undefined,
+          );
+          owner.set(method, path);
+        }
+      }
+    }
+    expect(Object.keys(ipc).sort()).toEqual([...owner.keys()].sort());
+  });
+
+  it("re-exports every domain's types from the barrel", () => {
+    const domains = Object.keys(modules)
+      .map((path) => path.replace(/^\.\/ipc\/(.*)\.ts$/, "$1"))
+      .filter((name) => name !== "invoke");
+    expect(domains.length).toBeGreaterThan(10);
+    for (const name of domains) expect(ipcBarrel).toContain(`export type * from "./ipc/${name}";`);
   });
 });
