@@ -412,7 +412,7 @@ const FORBIDDEN_FILES = [
   "/packages/ui/App.tsx",
   "/packages/ui/components/AppShell.tsx",
   "/packages/ui/components/TitleBar.tsx",
-  "/packages/ui/components/Ribbon.tsx",
+  "/packages/ui/components/ChromeStatus.tsx",
   "/packages/ui/lib/window.ts",
 ];
 // The desktop's boot lived in `src/boot/` until `DesktopBoot` and `StartupScreen` moved, with

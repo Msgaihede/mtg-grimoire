@@ -652,7 +652,7 @@ export const GameChangerOnTheWall: Story = {
  * until the reader opens it, which is when the taxonomies are first read; a picked tag is chipped
  * over the filter row and ANDed into the search, and stays there when the sidebar is shut again.
  * Whether it is open and how wide it was dragged are both remembered (`app_meta.search_open`,
- * `app_meta.search_width`).
+ * `app_meta.panel_width`).
  */
 export const TagSidebar: Story = {
   args: { view: "grid" },

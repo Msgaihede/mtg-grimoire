@@ -41,6 +41,8 @@ const folder = (id: number, name: string, parentId: number | null = null): Wishl
   sortOrder: id,
   managedDeckId: null,
   managedTokens: false,
+  syncUid: null,
+  managedDeckUid: null,
 });
 
 /**

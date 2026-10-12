@@ -11,14 +11,14 @@ Wrap every tree in `GrimoirePreviewProvider`. The name says "preview" but it is 
 provider, and designs need it as much as cards do:
 
 ```jsx
-const { GrimoirePreviewProvider, Ribbon } = window.MtgGrimoire;
+const { GrimoirePreviewProvider, ChromeStatus } = window.MtgGrimoire;
 <GrimoirePreviewProvider>{/* your UI */}</GrimoirePreviewProvider>
 ```
 
 It supplies three things this app cannot run without: a TanStack `QueryClient`, a seeded local
 backend standing in for the desktop IPC layer, and `class="dark"` on `<html>`. It also installs
 the keyboard-modality listener every focus ring is gated on, so without it Tab draws no outline. Without it,
-`AppShell`, `Ribbon` and `SyncProgress` throw or render permanently empty — they read live sync
+`AppShell` and `SyncProgress` throw or render permanently empty — they read live sync
 state, not props alone. Pure presentational components (`RarityGem`, `ManaText`, `OwnedBadge`,
 `QuantityStepper`, `Figure`, `SortableHeader`) render fine unwrapped, but wrap anyway: it costs
 nothing and the surface tokens come with it. `GrimoireWorld` takes `seed` / `fault` props if you

@@ -55,7 +55,7 @@ The Android app and the Web app share identical client-side code; the phone face
 
 ### The Phone Import Fence
 `phone/fence.test.ts` verifies that `apps/light/phone/` never imports:
-- `@grimoire/ui/lib/store`, `@grimoire/ui/App`, `@grimoire/ui/components/{AppShell,TitleBar,Ribbon}`, `@grimoire/ui/boot/*`, `@grimoire/ui/lib/window`, or `@tauri-apps/*` (except via `@grimoire/ui/lib/core`).
+- `@grimoire/ui/lib/store`, `@grimoire/ui/App`, `@grimoire/ui/components/{AppShell,TitleBar,ChromeStatus}`, `@grimoire/ui/boot/*`, `@grimoire/ui/lib/window`, or `@tauri-apps/*` (except via `@grimoire/ui/lib/core`).
 - When a phone component needs state from a desktop store-backed component, refactor the desktop component in `packages/ui/` to accept props rather than duplicating code.
 - Clean hooks (`useCardSearch`, `useDecks`, `useCollection`, `useWishlist`) and presentational components in `packages/ui/` are shared.
 - Type imports must always use `import type`.

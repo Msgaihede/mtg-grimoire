@@ -231,7 +231,9 @@ everything not on it stays where its window put it.
 
 | Follows live | Stays per window |
 | --- | --- |
-| `["startView"]`, `["homeLayout"]`, `["marketplace"]`, `["markColors"]`, `["recentCards"]`, `["decks","lastFormat"]`, `["mirror"]`, `["scanner","trayCount"]` | `["navCollapsed"]`, `["searchOpen"]`, `["deckFolderPane"]`, `["deckSort"]`, `["deckSearchTab"]`, `["printingGroupBy"]`, `["shelfFolds"]`, `["hiddenStacks"]` |
+| `["startView"]`, `["homeLayout"]`, `["marketplace"]`, `["markColors"]`, `["recentCards"]`, `["decks","lastFormat"]`, `["mirror"]`, `["scanner","trayCount"]` | `["navCollapsed"]`, `["searchOpen"]`, `["deckFolderPane"]`, `["deckSort"]`, `["deckSearchTab"]`, `["printingGroupBy"]`, `["shelfFolds"]`, `["hiddenStacks"]`, `["deckSearchWidth"]` |
+
+**`["deckSearchWidth"]` joined it on 2026-10-11** (issue #932) — the `deck_search_width` row, the width a reader dragged a deck's card search column to, keyed `["deckSearchWidth", deckId]` by `useDeckSearchWidth`, for the stacks' reason: how wide a deck's column is drawn is a view preference.
 
 **`["hiddenStacks"]` joined it on 2026-09-28** (issue #618) — the `hidden_stacks` row, the stacks a reader hid in a deck's Stacks view, keyed `["hiddenStacks", deckId]` by `useHiddenStacks`, for the folds' reason below: which stacks a deck hides is a view preference.
 

@@ -13,8 +13,8 @@ const oracleTagsStatus = vi.hoisted(() => vi.fn());
 const onArtTagProgress = vi.hoisted(() => vi.fn());
 const searchOpen = vi.hoisted(() => vi.fn());
 const setSearchOpen = vi.hoisted(() => vi.fn());
-const searchWidth = vi.hoisted(() => vi.fn());
-const setSearchWidth = vi.hoisted(() => vi.fn());
+const panelWidth = vi.hoisted(() => vi.fn());
+const setPanelWidth = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -41,8 +41,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     onArtTagProgress,
     searchOpen,
     setSearchOpen,
-    searchWidth,
-    setSearchWidth,
+    panelWidth,
+    setPanelWidth,
   },
 }));
 
@@ -51,7 +51,7 @@ import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { CardToDeckProvider } from "@/features/card/cardMenu";
 import { SearchPage } from "@/features/search/SearchPage";
 import { SEARCH_OPEN_KEY } from "@/features/search/useSearchOpen";
-import { SEARCH_WIDTH_KEY, SEARCH_WIDTH_WRITE_DELAY_MS } from "@/features/search/useSearchWidth";
+import { PANEL_WIDTH_KEY, PANEL_WIDTH_WRITE_DELAY_MS } from "@/features/search/usePanelWidth";
 import { HIDDEN_TAGS_KEY } from "@/features/settings/useHiddenTags";
 import { useAppStore } from "@/lib/store";
 import { HIDE_BACKGROUND_LABEL } from "./TagChips";
@@ -129,7 +129,7 @@ let artProgress: ((e: TagProgressEvent) => void) | null = null;
 function renderPage({ open = true, width }: { open?: boolean; width?: number } = {}) {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   client.setQueryData(SEARCH_OPEN_KEY, { tags: open });
-  client.setQueryData(SEARCH_WIDTH_KEY, width === undefined ? {} : { tags: width });
+  client.setQueryData(PANEL_WIDTH_KEY, width === undefined ? {} : { tags: width });
   return render(
     <QueryClientProvider client={client}>
       <TooltipProvider>
@@ -172,8 +172,8 @@ beforeEach(() => {
   oracleTagsStatus.mockReset().mockResolvedValue(INGESTED);
   searchOpen.mockReset().mockResolvedValue({});
   setSearchOpen.mockReset().mockResolvedValue(undefined);
-  searchWidth.mockReset().mockResolvedValue({});
-  setSearchWidth.mockReset().mockResolvedValue(undefined);
+  panelWidth.mockReset().mockResolvedValue({});
+  setPanelWidth.mockReset().mockResolvedValue(undefined);
   artProgress = null;
   onArtTagProgress.mockReset().mockImplementation((cb: (e: TagProgressEvent) => void) => {
     artProgress = cb;
@@ -250,15 +250,15 @@ describe("the sidebar", () => {
     fireEvent.keyDown(handle, { key: "ArrowLeft" });
     fireEvent.keyDown(handle, { key: "ArrowLeft" });
 
-    expect(setSearchWidth).not.toHaveBeenCalled();
+    expect(setPanelWidth).not.toHaveBeenCalled();
     await act(async () => {
-      vi.advanceTimersByTime(SEARCH_WIDTH_WRITE_DELAY_MS);
+      vi.advanceTimersByTime(PANEL_WIDTH_WRITE_DELAY_MS);
     });
     // The mutation itself is scheduled by the query client; let it run on real timers.
     vi.useRealTimers();
 
-    await waitFor(() => expect(setSearchWidth).toHaveBeenCalledTimes(1));
-    const [section, width] = setSearchWidth.mock.calls[0] as [string, number];
+    await waitFor(() => expect(setPanelWidth).toHaveBeenCalledTimes(1));
+    const [section, width] = setPanelWidth.mock.calls[0] as [string, number];
     expect(section).toBe("tags");
     expect(width).toBeGreaterThan(300);
     expect(sidebar()).toHaveStyle({ width: `${width}px` });
@@ -293,7 +293,9 @@ describe("picking a tag", () => {
     renderPage();
 
     await user.click(await railRow("Landscape"));
-    await waitFor(() => expect(lastRequest().artTags).toEqual({ include: ["landscape"], exclude: [] }));
+    await waitFor(() =>
+      expect(lastRequest().artTags).toEqual({ include: ["landscape"], exclude: [] }),
+    );
     await user.click(await railRow("Landscape"));
 
     await waitFor(() => expect(lastRequest().artTags).toBeUndefined());
@@ -307,11 +309,15 @@ describe("picking a tag", () => {
     const user = userEvent.setup();
     renderPage();
     await user.click(await railRow("Landscape"));
-    await waitFor(() => expect(lastRequest().artTags).toEqual({ include: ["landscape"], exclude: [] }));
+    await waitFor(() =>
+      expect(lastRequest().artTags).toEqual({ include: ["landscape"], exclude: [] }),
+    );
 
     await user.click(screen.getByRole("button", { name: "Collapse tag search" }));
 
-    expect(screen.getByRole("button", { name: /^Landscape, art tag, included/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /^Landscape, art tag, included/ }),
+    ).toBeInTheDocument();
     expect(lastRequest().artTags).toEqual({ include: ["landscape"], exclude: [] });
 
     await user.click(screen.getByRole("button", { name: "Remove Landscape, art tag" }));
@@ -381,7 +387,9 @@ describe("picking a tag", () => {
       await screen.findByRole("button", { name: /^Landscape, art tag, included/ }),
     ).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/search tags/i)).toHaveValue("land");
-    await waitFor(() => expect(lastRequest().artTags).toEqual({ include: ["landscape"], exclude: [] }));
+    await waitFor(() =>
+      expect(lastRequest().artTags).toEqual({ include: ["landscape"], exclude: [] }),
+    );
   });
 });
 

@@ -18,10 +18,11 @@ use crate::{
     deck, deck_audit, deck_completion, deck_meta, deck_missing, deck_notes, deck_pull, deck_query,
     deck_quick_add, deck_theory, deck_todos, deck_tokens, deck_undo, deckpane, decksort, errors,
     export, home, images, import, index, listview, markcolors, marketplace, marketplace_feed,
-    mirror, nav, new_printings, paths, price_history, recent_cards, reset, scanner, schema,
-    scryfall, search, searchopen, searchwidth, set_completion, share, shelffolds, stackhide,
-    startup, startview, sticky_notes, sync, sync_engine, sync_pair, tags, trade, upcoming_sets,
-    update, value_history, window, wishlist, wishlist_folders, wishlist_optimize, zoom,
+    mirror, nav, new_printings, panelwidth, paths, price_history, recent_cards, reset, scanner,
+    schema, scryfall, search, searchopen, searchwidth, set_completion, share, shelffolds,
+    stackhide, startup, startview, sticky_notes, sync, sync_engine, sync_pair, tags, trade,
+    upcoming_sets, update, value_history, window, wishlist, wishlist_folders, wishlist_optimize,
+    zoom,
 };
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -601,14 +602,17 @@ pub fn run() {
             searchopen::search_open,
             searchopen::set_search_open,
             // How wide each docked panel was dragged — `search_open`'s pair with a width.
-            searchwidth::search_width,
-            searchwidth::set_search_width,
+            panelwidth::panel_width,
+            panelwidth::set_panel_width,
             // Which shelves the reader folded — `search_open`'s pair, one level deeper.
             shelffolds::shelf_folds,
             shelffolds::set_shelf_folds,
             // Which stacks the reader hid in a deck — `shelf_folds`' pair, keyed by deck.
             stackhide::hidden_stacks,
             stackhide::set_stack_hidden,
+            // How wide a deck's card search column was dragged — keyed by deck, like the stacks.
+            searchwidth::deck_search_width,
+            searchwidth::set_deck_search_width,
             markcolors::mark_colors,
             markcolors::set_mark_color,
             decksort::deck_sort,
@@ -631,8 +635,8 @@ pub fn run() {
             sticky_notes::sticky_note_update,
             sticky_notes::sticky_note_delete,
             sticky_notes::sticky_note_reorder,
-            // The Trade page's thirteen (user schema v63): two reads on the read-only
-            // connection and eleven writes, of which only `trade_finish` reaches the
+            // The Trade page's fourteen (user schema v63): two reads on the read-only
+            // connection and twelve writes, of which only `trade_finish` reaches the
             // collection and the wishlist — so it alone goes through `with_write_owned`.
             trade::trade_list,
             trade::trade_get,
@@ -642,6 +646,7 @@ pub fn run() {
             trade::trade_add_lines,
             trade::trade_update_line,
             trade::trade_remove_line,
+            trade::trade_swap_sides,
             trade::trade_finish,
             trade::trade_archive,
             trade::trade_reopen,

@@ -182,9 +182,7 @@ function TaxonomyGaps() {
     >
       {/* One string per line, so `getByText` can find the sentence a reader reads. */}
       {missing.map((namespace) => (
-        <p
-          key={namespace}
-        >{`${TAG_NAMESPACE_LABEL[namespace]} tags are still downloading.`}</p>
+        <p key={namespace}>{`${TAG_NAMESPACE_LABEL[namespace]} tags are still downloading.`}</p>
       ))}
     </div>
   );

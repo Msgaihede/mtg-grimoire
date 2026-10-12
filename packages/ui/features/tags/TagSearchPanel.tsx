@@ -1,6 +1,6 @@
 import { CardSearchPanel } from "@/features/search/CardSearchPanel";
 import { useSearchOpen } from "@/features/search/useSearchOpen";
-import { useSearchWidth } from "@/features/search/useSearchWidth";
+import { usePanelWidth } from "@/features/search/usePanelWidth";
 import { TagPicker } from "./TagPicker";
 import type { TagFilter } from "./useTagSelection";
 
@@ -19,7 +19,7 @@ export interface TagSearchPanelProps {
  *
  * Chrome from `CardSearchPanel`, body from {@link TagPicker}, and the two answers the reader gives
  * it remembered across restarts: whether it is open (`useSearchOpen("tags")`, a fourth entry in
- * the `search_open` map) and how wide they dragged it (`useSearchWidth("tags")`). Unlike the three
+ * the `search_open` map) and how wide they dragged it (`usePanelWidth("tags")`). Unlike the three
  * card-search columns the width *is* stored: the rail's width is an answer about tag names, not
  * about the list beside it, so it is the same answer on every visit.
  *
@@ -30,7 +30,7 @@ export interface TagSearchPanelProps {
  */
 export function TagSearchPanel({ tags, roomy, overWidth, maxWidth }: TagSearchPanelProps) {
   const { open, setOpen } = useSearchOpen("tags");
-  const { width, setWidth } = useSearchWidth("tags");
+  const { width, setWidth } = usePanelWidth("tags");
   return (
     <CardSearchPanel
       surface="tags"

@@ -75,8 +75,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // reads nothing about tags. `TagSearchPanel.test.tsx` is where it is opened.
     searchOpen: vi.fn().mockResolvedValue({}),
     setSearchOpen: vi.fn().mockResolvedValue(undefined),
-    searchWidth: vi.fn().mockResolvedValue({}),
-    setSearchWidth: vi.fn().mockResolvedValue(undefined),
+    panelWidth: vi.fn().mockResolvedValue({}),
+    setPanelWidth: vi.fn().mockResolvedValue(undefined),
   },
 }));
 

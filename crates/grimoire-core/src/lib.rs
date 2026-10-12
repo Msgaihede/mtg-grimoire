@@ -141,6 +141,9 @@ pub mod marketplace_feed;
 pub mod nav;
 pub mod new_printings;
 /// **The one place this crate knows which machine it is on.**
+/// **How wide each docked side panel was last dragged** (issue #937) — [`searchopen`]'s shape
+/// with a width: one `app_meta` row, section → width.
+pub mod panelwidth;
 pub mod platform;
 pub mod price_history;
 pub mod recent_cards;
@@ -169,6 +172,8 @@ pub mod scratch;
 pub mod scryfall;
 pub mod search;
 pub mod searchopen;
+/// **How wide the reader dragged a deck's card search column** (issue #932) — [`stackhide`]'s
+/// shape with [`deckpane`]'s band: one `app_meta` row, deck id → width.
 pub mod searchwidth;
 pub mod set_completion;
 pub mod shelffolds;

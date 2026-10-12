@@ -15,6 +15,8 @@ const folder = (over: Partial<WishlistFolder> & Pick<WishlistFolder, "id" | "nam
   sortOrder: 0,
   managedDeckId: null,
   managedTokens: false,
+  syncUid: null,
+  managedDeckUid: null,
   ...over,
 });
 
@@ -32,6 +34,8 @@ describe("a managed wishlist's Tokens child", () => {
     name: "Tokens",
     managedDeckId: 4,
     managedTokens: true,
+    syncUid: null,
+    managedDeckUid: null,
   });
   const KENRITH = folder({ id: 11, name: "Kenrith", managedDeckId: 2 });
   const KENRITH_TOKENS = folder({
@@ -40,6 +44,8 @@ describe("a managed wishlist's Tokens child", () => {
     name: "Tokens",
     managedDeckId: 2,
     managedTokens: true,
+    syncUid: null,
+    managedDeckUid: null,
   });
   const WANTS = folder({ id: 1, name: "Wants" });
   const ALL = [TESTBED_TOKENS, WANTS, KENRITH_TOKENS, TESTBED, KENRITH];

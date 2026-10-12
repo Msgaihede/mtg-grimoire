@@ -6,12 +6,12 @@ import type { SearchSection } from "./useSearchOpen";
 
 /**
  * Where the reader's dragged widths for the docked panels are kept for the life of the window —
- * `SEARCH_OPEN_KEY`'s sibling, over `app_meta.search_width` (one map, keyed by section).
+ * `SEARCH_OPEN_KEY`'s sibling, over `app_meta.panel_width` (one map, keyed by section).
  *
  * Exported so a test or a story that wants a panel to open at a width seeds the cache rather than
  * mocking the command.
  */
-export const SEARCH_WIDTH_KEY = ["searchWidth"];
+export const PANEL_WIDTH_KEY = ["panelWidth"];
 
 /**
  * How long a drag has to go quiet before the width is written, in ms — `useFolderPane`'s
@@ -19,13 +19,13 @@ export const SEARCH_WIDTH_KEY = ["searchWidth"];
  * write per event would be a run of read-modify-writes of one row for values that were obsolete
  * before they committed. The tail it costs is a width settled on in the last 400ms before exit.
  */
-export const SEARCH_WIDTH_WRITE_DELAY_MS = 400;
+export const PANEL_WIDTH_WRITE_DELAY_MS = 400;
 
 /** Read once per app run: nothing else writes this row, and every change goes through the
  *  mutation below, which writes the answer straight into the cache. */
 const QUERY = {
-  queryKey: SEARCH_WIDTH_KEY,
-  queryFn: () => ipc.searchWidth(),
+  queryKey: PANEL_WIDTH_KEY,
+  queryFn: () => ipc.panelWidth(),
   staleTime: Infinity,
   gcTime: Infinity,
 };
@@ -33,9 +33,9 @@ const QUERY = {
 /**
  * Ask for the stored widths **at launch**, so a panel never draws at the default and then jumps
  * to the reader's width — `usePrefetchSearchOpen`'s measured 700ms flash, one row over.
- * `AppShell` is the one caller; a failure is swallowed, and {@link useSearchWidth} asks again.
+ * `AppShell` is the one caller; a failure is swallowed, and {@link usePanelWidth} asks again.
  */
-export function usePrefetchSearchWidth(): void {
+export function usePrefetchPanelWidth(): void {
   const queryClient = useQueryClient();
   useEffect(() => {
     void queryClient.prefetchQuery(QUERY).catch(() => {});
@@ -52,14 +52,14 @@ export function usePrefetchSearchWidth(): void {
  * not applied here**: they are facts about the row the panel is drawn in, which `CardSearchPanel`
  * clamps at draw time — clamping the stored value would make one narrow window permanent.
  */
-export function useSearchWidth(section: SearchSection): {
+export function usePanelWidth(section: SearchSection): {
   width: number;
   setWidth: (width: number) => void;
 } {
   const queryClient = useQueryClient();
   const query = useQuery(QUERY);
   const write = useMutation({
-    mutationFn: (width: number) => ipc.setSearchWidth(section, width),
+    mutationFn: (width: number) => ipc.setPanelWidth(section, width),
   });
   const startWrite = write.mutate;
   const pending = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -69,7 +69,7 @@ export function useSearchWidth(section: SearchSection): {
       const px = Math.round(width);
       // Only this section is touched, so a drag here never carries a stale answer for another
       // panel back into the cache — `useSearchOpen`'s spread, for its reason.
-      queryClient.setQueryData(SEARCH_WIDTH_KEY, (stored: Record<string, number> | undefined) => ({
+      queryClient.setQueryData(PANEL_WIDTH_KEY, (stored: Record<string, number> | undefined) => ({
         ...stored,
         [section]: px,
       }));
@@ -77,11 +77,9 @@ export function useSearchWidth(section: SearchSection): {
       pending.current = setTimeout(() => {
         pending.current = undefined;
         // Read at the moment of the write, never captured when it was scheduled.
-        const latest = queryClient.getQueryData<Record<string, number>>(SEARCH_WIDTH_KEY)?.[
-          section
-        ];
+        const latest = queryClient.getQueryData<Record<string, number>>(PANEL_WIDTH_KEY)?.[section];
         if (typeof latest === "number") startWrite(latest);
-      }, SEARCH_WIDTH_WRITE_DELAY_MS);
+      }, PANEL_WIDTH_WRITE_DELAY_MS);
     },
     [queryClient, section, startWrite],
   );

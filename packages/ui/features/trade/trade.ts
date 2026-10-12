@@ -241,6 +241,45 @@ export function fromDecks(line: Holding): number {
   return Math.max(0, takeable(line) - Math.max(0, line.owned));
 }
 
+/** What {@link holdingOf} reads of a line and the lines beside it. */
+type Drawn = Holding & Pick<TradeLine, "id" | "side" | "cardId" | "finish" | "source">;
+
+/**
+ * A line with the facts **its own share** of the collection: what is left once the lines a finish
+ * serves before it on the reader's side have taken theirs.
+ *
+ * `owned` and `ownedInDecks` are facts about a printing and finish, and the reader's side can hold
+ * two lines for one (issue #935): the one drawn from the collection, and the copies asked for past
+ * it. A finish takes for the collection's line first and each other line in its place after
+ * (`trade::take_given`), so a later line's figures are the same facts less what the earlier ones
+ * take — outside every deck first, then in one. Read raw, the second line would claim the copies
+ * the first already holds, and warn about a deck it never reaches.
+ *
+ * A line with no such neighbour, and every line on their side, is answered as it is.
+ */
+export function holdingOf<Line extends Drawn>(line: Line, lines: readonly Drawn[]): Line {
+  if (line.side !== "mine") return line;
+  const rank = (l: Drawn) => (l.source === "collection" ? 0 : 1);
+  const at = lines.findIndex((l) => l.id === line.id);
+  const ahead = lines.filter(
+    (l, i) =>
+      l.id !== line.id &&
+      l.side === "mine" &&
+      l.cardId === line.cardId &&
+      l.finish === line.finish &&
+      (rank(l) < rank(line) || (rank(l) === rank(line) && i < at)),
+  );
+  if (ahead.length === 0) return line;
+  let owned = Math.max(0, line.owned);
+  let ownedInDecks = Math.max(0, line.ownedInDecks);
+  for (const l of ahead) {
+    const outside = Math.min(l.quantity, owned);
+    owned -= outside;
+    ownedInDecks -= Math.min(l.quantity - outside, ownedInDecks);
+  }
+  return { ...line, owned, ownedInDecks };
+}
+
 /**
  * What Finish trade opens with.
  *
@@ -261,12 +300,27 @@ export function defaultFinishOptions(trade: Pick<Trade, "finishedBefore">): Trad
 
 type FinishLine = Pick<
   TradeLine,
-  "side" | "quantity" | "owned" | "ownedInDecks" | "deckNames" | "wished" | "name"
+  | "id"
+  | "side"
+  | "cardId"
+  | "finish"
+  | "source"
+  | "quantity"
+  | "owned"
+  | "ownedInDecks"
+  | "deckNames"
+  | "wished"
+  | "name"
 >;
+
+/** The reader's side, each line with {@link holdingOf}'s share of the collection. */
+function givenShares(lines: readonly FinishLine[]): FinishLine[] {
+  return linesOf(lines, "mine").map((line) => holdingOf(line, lines));
+}
 
 /** Under *Take the cards you gave out of your collection*: how many it can actually take. */
 export function givenNote(lines: readonly FinishLine[]): string {
-  const mine = linesOf(lines, "mine");
+  const mine = givenShares(lines);
   const copies = mine.reduce((sum, line) => sum + line.quantity, 0);
   if (copies === 0) return "There is nothing on your side.";
   const held = mine.reduce((sum, line) => sum + takeable(line), 0);
@@ -284,7 +338,7 @@ export function givenNote(lines: readonly FinishLine[]): string {
  * `null` when none do, so the dialog draws no line at all rather than a reassurance.
  */
 export function deckNote(lines: readonly FinishLine[]): string | null {
-  const mine = linesOf(lines, "mine").filter((line) => fromDecks(line) > 0);
+  const mine = givenShares(lines).filter((line) => fromDecks(line) > 0);
   const copies = mine.reduce((sum, line) => sum + fromDecks(line), 0);
   if (copies === 0) return null;
   // `deckNames` is in the order a finish takes from them, so the first few are the ones it reaches:

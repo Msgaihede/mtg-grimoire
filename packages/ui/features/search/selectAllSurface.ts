@@ -16,7 +16,9 @@
  * it — and taking it there would throw away the set the reader had picked on their own list to
  * select a catalogue search they were not looking at.
  *
- * `features/search` rather than `lib`, beside `CardGrid`, which is the one thing that registers.
+ * `features/search` rather than `lib`, beside `CardGrid`, which registers every wall. The deck
+ * editor's desk registers too (issue #938), and widens the set to its stacks rather than picking a
+ * whole list — `DeckDesk`'s `selectStacks`.
  */
 import { isTextField } from "@/components/menu/useContextMenu";
 import { matchesShortcut, shortcut } from "@/lib/shortcuts";
@@ -183,8 +185,8 @@ function onKeyDown(event: KeyboardEvent) {
   const caret =
     event.target instanceof Element && event.target !== document.body ? event.target : null;
   const surface = target(caret);
-  // No wall this press is about — the deck's own cards, a table — and the chord stays the
-  // browser's, as it is on a view with no wall at all.
+  // No wall this press is about — a table — and the chord stays the browser's, as it is on a
+  // view with no wall at all.
   if (surface === null) return;
   event.preventDefault();
   if (!event.repeat) surface.selectAll();

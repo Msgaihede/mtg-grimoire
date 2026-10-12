@@ -111,8 +111,8 @@ function forgetTrade(client: QueryClient, id: number): void {
  * Every write a trade has. Each answers a promise that rejects with the backend's own sentence,
  * so the caller decides where a refusal is drawn.
  *
- * Three of them patch the cache before they are answered — the percentage, a line's change and a
- * line's removal — because each sits under a control the reader is still holding.
+ * Four of them patch the cache before they are answered — the percentage, a line's change, a
+ * line's removal and the swap — because each sits under a control the reader is still holding.
  */
 export interface TradeWrites {
   create(trade: TradeCreate): Promise<number>;
@@ -122,6 +122,8 @@ export interface TradeWrites {
   /** `tradeId` is whose cache to patch; the write itself names only the line. */
   updateLine(tradeId: number, lineId: number, change: TradeLineChange): Promise<void>;
   removeLine(tradeId: number, lineId: number): Promise<void>;
+  /** Every line onto the other side. */
+  swapSides(id: number): Promise<void>;
   finish(id: number, options: TradeFinishOptions): Promise<TradeOutcome>;
   archive(id: number): Promise<void>;
   reopen(id: number): Promise<void>;
@@ -175,6 +177,17 @@ export function tradeWrites(client: QueryClient): TradeWrites {
           patchTrade(client, tradeId, (trade) => ({
             ...trade,
             lines: trade.lines.filter((line) => line.id !== lineId),
+          })),
+      }),
+    swapSides: (id) =>
+      write(client, () => ipc.tradeSwapSides(id), {
+        patch: () =>
+          patchTrade(client, id, (trade) => ({
+            ...trade,
+            lines: trade.lines.map((line) => ({
+              ...line,
+              side: line.side === "mine" ? "theirs" : "mine",
+            })),
           })),
       }),
     // The one write that reaches past the trade: it moves cards in the collection and the wishlist.

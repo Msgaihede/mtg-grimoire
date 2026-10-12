@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { TOOLTIP_OPEN_MS, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { RANK, type Activity } from "@/lib/activity";
-import { Ribbon, type RibbonProps } from "./Ribbon";
+import { ChromeStatus, type ChromeStatusProps } from "./ChromeStatus";
 
 const mount = (ui: React.ReactNode) => render(<TooltipProvider>{ui}</TooltipProvider>);
 const advance = (ms: number) => act(() => void vi.advanceTimersByTime(ms));
@@ -13,8 +13,7 @@ const fireHover = (el: HTMLElement) => {
 };
 const fireLeave = (el: HTMLElement) => fireEvent.pointerLeave(el);
 
-const props = (over: Partial<RibbonProps> = {}): RibbonProps => ({
-  title: "Search",
+const props = (over: Partial<ChromeStatusProps> = {}): ChromeStatusProps => ({
   statusLine: "116,568 cards · data from 2026-08-03",
   dataDir: "D:\\app\\data",
   busy: false,
@@ -34,12 +33,15 @@ const importing: Activity = {
   value: 0.5,
 };
 
-describe("Ribbon", () => {
-  /** Global actions live here now, not in a view — that is the whole point of the row. */
-  it("carries the view title, the status line and Refresh", () => {
-    render(<Ribbon {...props()} />);
+describe("ChromeStatus", () => {
+  /**
+   * Global actions live in the window header, not in a view — and no page heading rides with
+   * them since the ribbon went (2026-10-11).
+   */
+  it("carries the status line and Refresh, and no page heading", () => {
+    render(<ChromeStatus {...props()} />);
 
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Search");
+    expect(screen.queryByRole("heading")).not.toBeInTheDocument();
     // The status line's own role, not a bare text lookup — the tooltip sweep left this at a
     // mere `toBeInTheDocument()` once the `title="D:\\app\\data"` assertion it replaced no
     // longer applied, which stopped checking that this text lives in the live region
@@ -48,6 +50,38 @@ describe("Ribbon", () => {
     // (as the failures test below shows it can) would still pass a substring check.
     expect(screen.getByRole("status").textContent).toBe("116,568 cards · data from 2026-08-03");
     expect(screen.getByRole("button", { name: /refresh/i })).toBeEnabled();
+  });
+
+  /** An icon button now: its name is its `aria-label`, and it carries no visible words. */
+  it("draws Refresh as an icon alone", () => {
+    render(<ChromeStatus {...props()} />);
+    const refresh = screen.getByRole("button", { name: "Refresh data" });
+    expect(refresh).toHaveTextContent("");
+    expect(refresh.querySelector("svg")).not.toBeNull();
+  });
+
+  /**
+   * Right to left from the keyboard map: Refresh, then the sync marker, then the status line —
+   * document order is the reverse.
+   */
+  it("puts the status line before the sync marker and the marker before Refresh", () => {
+    render(<ChromeStatus {...props({ deviceSync: "live" })} />);
+    const line = screen.getByRole("status");
+    const marker = screen.getByLabelText("Sync is live");
+    const refresh = screen.getByRole("button", { name: "Refresh data" });
+    expect(line.compareDocumentPosition(marker) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(marker.compareDocumentPosition(refresh) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  /** The light edition draws no window verbs, and so claims no drag region either. */
+  it("marks its sentences draggable only where there is a window to drag", () => {
+    const { rerender } = render(<ChromeStatus {...props()} />);
+    expect(screen.getByRole("status")).toHaveAttribute("data-tauri-drag-region");
+    expect(screen.getByRole("button", { name: "Refresh data" })).not.toHaveAttribute(
+      "data-tauri-drag-region",
+    );
+    rerender(<ChromeStatus {...props({ drag: false })} />);
+    expect(screen.getByRole("status")).not.toHaveAttribute("data-tauri-drag-region");
   });
 
   /**
@@ -61,7 +95,7 @@ describe("Ribbon", () => {
    */
   it("says so in the tooltip when images could not be cached, and stays quiet when they could", () => {
     vi.useFakeTimers();
-    const { rerender } = mount(<Ribbon {...props({ imageStoreFailures: 12 })} />);
+    const { rerender } = mount(<ChromeStatus {...props({ imageStoreFailures: 12 })} />);
 
     const line = () => screen.getByText("116,568 cards · data from 2026-08-03");
     // `normalizeWhitespace: false`, so the literal `\n` the tooltip joins its two sentences with
@@ -78,7 +112,7 @@ describe("Ribbon", () => {
     // the number beside it.
     rerender(
       <TooltipProvider>
-        <Ribbon {...props({ imageStoreFailures: 1 })} />
+        <ChromeStatus {...props({ imageStoreFailures: 1 })} />
       </TooltipProvider>,
     );
     fireHover(line());
@@ -90,7 +124,7 @@ describe("Ribbon", () => {
 
     rerender(
       <TooltipProvider>
-        <Ribbon {...props({ imageStoreFailures: 0 })} />
+        <ChromeStatus {...props({ imageStoreFailures: 0 })} />
       </TooltipProvider>,
     );
     fireHover(line());
@@ -106,36 +140,26 @@ describe("Ribbon", () => {
 
   it("runs and then refuses a second sync while one is in flight", async () => {
     const onRefresh = vi.fn();
-    const { rerender } = render(<Ribbon {...props({ onRefresh })} />);
+    const { rerender } = render(<ChromeStatus {...props({ onRefresh })} />);
 
     await userEvent.click(screen.getByRole("button", { name: /refresh/i }));
     expect(onRefresh).toHaveBeenCalledTimes(1);
 
-    rerender(<Ribbon {...props({ onRefresh, busy: true })} />);
+    rerender(<ChromeStatus {...props({ onRefresh, busy: true })} />);
     expect(screen.getByRole("button", { name: /refresh/i })).toBeDisabled();
   });
 
   it("says a Refresh found nothing, and only when there is nothing louder to say", async () => {
-    const { rerender } = render(<Ribbon {...props({ upToDate: true })} />);
+    const { rerender } = render(<ChromeStatus {...props({ upToDate: true })} />);
     expect(screen.getByText(/already up to date/i)).toBeInTheDocument();
 
     // An error banner is showing below; repeating a cheerful line beside it is noise.
-    rerender(<Ribbon {...props({ upToDate: true, hasError: true })} />);
+    rerender(<ChromeStatus {...props({ upToDate: true, hasError: true })} />);
     // `waitFor` and not a bare assertion, because the line **fades out** rather than
     // vanishing: `AnimatePresence` holds the element until its exit finishes, so it is still
     // in the document for the frame after the rerender. The claim is unchanged — a line that
     // never left would still time out here — only the moment it is read.
     await waitFor(() => expect(screen.queryByText(/already up to date/i)).not.toBeInTheDocument());
-  });
-
-  it("hands the job to the mana line, whether or not the row has room to say so", () => {
-    render(<Ribbon {...props({ busy: true, activity: importing })} />);
-
-    // The line reacts to the job immediately; only the sentence waits.
-    expect(screen.getByRole("progressbar", { name: "Importing cards" })).toHaveAttribute(
-      "aria-valuenow",
-      "50",
-    );
   });
 
   /**
@@ -144,13 +168,13 @@ describe("Ribbon", () => {
    */
   it("says what the app is doing, and gives the summary back when it stops", () => {
     const { rerender } = render(
-      <Ribbon {...props({ busy: true, activity: importing, activityVisible: true })} />,
+      <ChromeStatus {...props({ busy: true, activity: importing, activityVisible: true })} />,
     );
 
     expect(screen.getByRole("status")).toHaveTextContent("Importing cards · 83,000 cards");
     expect(screen.queryByText(/116,568 cards/)).not.toBeInTheDocument();
 
-    rerender(<Ribbon {...props()} />);
+    rerender(<ChromeStatus {...props()} />);
 
     expect(screen.getByRole("status")).toHaveTextContent("116,568 cards · data from 2026-08-03");
   });
@@ -161,7 +185,7 @@ describe("Ribbon", () => {
    * times during the ingest alone, and the mana line's `aria-valuenow` already carries it.
    */
   it("announces the phase and not the number", () => {
-    render(<Ribbon {...props({ busy: true, activity: importing, activityVisible: true })} />);
+    render(<ChromeStatus {...props({ busy: true, activity: importing, activityVisible: true })} />);
 
     expect(screen.getByText(/83,000 cards/, { selector: "span" })).toHaveAttribute(
       "aria-hidden",
@@ -175,13 +199,13 @@ describe("Ribbon", () => {
    * line is mounted from the start and is merely empty.
    */
   it("keeps the status line mounted before it has anything to say", () => {
-    render(<Ribbon {...props({ statusLine: null })} />);
+    render(<ChromeStatus {...props({ statusLine: null })} />);
 
     expect(screen.getByRole("status")).toBeEmptyDOMElement();
   });
 
   it("stays out of the way when there is no update", () => {
-    render(<Ribbon {...props()} />);
+    render(<ChromeStatus {...props()} />);
     expect(screen.queryByRole("button", { name: /update|available/i })).not.toBeInTheDocument();
   });
 
@@ -193,11 +217,11 @@ describe("Ribbon", () => {
    */
   it("promises an update only where one can actually be installed", () => {
     const { rerender } = render(
-      <Ribbon {...props({ updateVersion: "0.3.0", updateInstallable: true })} />,
+      <ChromeStatus {...props({ updateVersion: "0.3.0", updateInstallable: true })} />,
     );
     expect(screen.getByRole("button", { name: "Update to 0.3.0" })).toBeInTheDocument();
 
-    rerender(<Ribbon {...props({ updateVersion: "0.3.0", updateInstallable: false })} />);
+    rerender(<ChromeStatus {...props({ updateVersion: "0.3.0", updateInstallable: false })} />);
     expect(screen.queryByRole("button", { name: /^Update to/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "0.3.0 available" })).toBeInTheDocument();
   });
@@ -206,7 +230,7 @@ describe("Ribbon", () => {
     const onOpenUpdate = vi.fn();
     const onRefresh = vi.fn();
     render(
-      <Ribbon
+      <ChromeStatus
         {...props({ updateVersion: "0.3.0", updateInstallable: true, onOpenUpdate, onRefresh })}
       />,
     );
@@ -224,7 +248,9 @@ describe("Ribbon", () => {
    * sync is writing.
    */
   it("stays available while a sync is running", () => {
-    render(<Ribbon {...props({ updateVersion: "0.3.0", updateInstallable: true, busy: true })} />);
+    render(
+      <ChromeStatus {...props({ updateVersion: "0.3.0", updateInstallable: true, busy: true })} />,
+    );
     expect(screen.getByRole("button", { name: /refresh/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Update to 0.3.0" })).toBeEnabled();
   });
@@ -234,7 +260,7 @@ describe("Ribbon", () => {
    * nothing rather than drawing a marker for a feature that does not apply.
    */
   it("says nothing about device sync when there is no group", () => {
-    render(<Ribbon {...props({ deviceSync: null })} />);
+    render(<ChromeStatus {...props({ deviceSync: null })} />);
     expect(screen.queryByLabelText(/sync/i)).not.toBeInTheDocument();
   });
 
@@ -245,7 +271,7 @@ describe("Ribbon", () => {
    * is actually on.
    */
   it("says nothing when the socket is off", () => {
-    render(<Ribbon {...props({ deviceSync: "off" })} />);
+    render(<ChromeStatus {...props({ deviceSync: "off" })} />);
     expect(screen.queryByLabelText(/sync/i)).not.toBeInTheDocument();
   });
 
@@ -254,7 +280,7 @@ describe("Ribbon", () => {
    * nothing to sync, and offline is the state a reader has to be told about.
    */
   it("shows an offline marker when the socket is down", () => {
-    render(<Ribbon {...props({ deviceSync: "offline" })} />);
+    render(<ChromeStatus {...props({ deviceSync: "offline" })} />);
     expect(screen.getByLabelText("Sync is offline")).toBeInTheDocument();
   });
 
@@ -269,7 +295,7 @@ describe("Ribbon", () => {
     ["live", "Sync is live"],
     ["offline", "Sync is offline"],
   ] as const)("names the %s marker in English", (state, label) => {
-    render(<Ribbon {...props({ deviceSync: state })} />);
+    render(<ChromeStatus {...props({ deviceSync: state })} />);
     expect(screen.getByLabelText(label)).toBeInTheDocument();
   });
 
@@ -285,7 +311,7 @@ describe("Ribbon", () => {
    * region.
    */
   it("gives the live region a sentence to announce", () => {
-    render(<Ribbon {...props({ deviceSync: "offline" })} />);
+    render(<ChromeStatus {...props({ deviceSync: "offline" })} />);
     const marker = screen.getByLabelText("Sync is offline");
     expect(marker).toHaveAttribute("aria-live", "polite");
     const said = within(marker).getByText(/Sync disconnected/i);
@@ -299,7 +325,7 @@ describe("Ribbon", () => {
    * later edit gave it one.
    */
   it("adds no second live region", () => {
-    render(<Ribbon {...props({ deviceSync: "live" })} />);
+    render(<ChromeStatus {...props({ deviceSync: "live" })} />);
     expect(() => screen.getByRole("status")).not.toThrow();
   });
 });

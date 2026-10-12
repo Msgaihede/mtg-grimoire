@@ -465,8 +465,8 @@ const DECK_GROUP: CollectionFolder = {
   // Never anything but `false` for either of these two: `collection_folder_set_locked` calls
   // `user_folder` first, so the app's own folders refuse the write in words.
   locked: false,
-  // The app's own folders carry a uid like any other row — and are still unshareable, which is
-  // the point: `kind` is what refuses them, never the absence of a name to refuse.
+  // The app's own folders carry a uid like any other row, which is what makes them shareable by
+  // name since issue #941.
   syncUid: "uid-deck-group",
 };
 const REMOVED: CollectionFolder = {
@@ -4336,6 +4336,41 @@ describe("the wall at the root", () => {
     );
   });
 
+  /**
+   * **Ctrl+A picks what is drawn, and a fold does not add to it later** — issue #938. A shut
+   * folder's cards are not on the wall at the press, and opening it afterwards must not sweep them
+   * into a set the reader made without seeing them.
+   */
+  it("keeps a shut folder's cards out of a Ctrl+A, before and after it is opened", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionFolderList.mockResolvedValue([BINDER, FOILS, SEALED]);
+    collectionList.mockResolvedValue(
+      page([
+        { ...BOLT, folderId: 9, folderName: "Foils" },
+        { ...BOLT, id: 8, folderId: 4, folderName: "Sealed" },
+      ]),
+    );
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await findHeading("Foils");
+    await user.click(
+      within(heading("Trade binder")).getByRole("button", { name: "Collapse Trade binder" }),
+    );
+    await waitFor(() => expect(queryHeading("Foils")).toBeNull());
+
+    await user.keyboard("{Control>}a{/Control}");
+
+    await waitFor(() => expect(useAppStore.getState().cardSelection?.keys).toEqual(["c1:foil@4"]));
+
+    await user.click(
+      within(heading("Trade binder")).getByRole("button", { name: "Expand Trade binder" }),
+    );
+    await findHeading("Foils");
+    expect(await screen.findAllByRole("button", { name: "Lightning Bolt" })).toHaveLength(2);
+    await waitFor(() => expect(useAppStore.getState().cardSelection?.allOf).toBeUndefined());
+    expect(useAppStore.getState().cardSelection?.keys).toEqual(["c1:foil@4"]);
+  });
+
   /** Collapse all folds the app's own shelves too — to their default, which is shut. */
   it("folds every shelf on Collapse all, the app's own included", async () => {
     collectionFolderList.mockResolvedValue([BINDER, DECK_GROUP]);
@@ -7775,34 +7810,29 @@ describe("sharing from the cabinet", () => {
   });
 
   /**
-   * **The app's own two kinds get no Share control at all**, as they get no other folder write —
-   * the rule every app-owned shelf follows, and `share::snapshot::FOLDER_NOT_SHAREABLE` on the far
-   * side.
+   * **The app's own two kinds are shareable too** (issue #941) — the deck's group and
+   * `Recently removed` each offer the control under their own name. `share::snapshot` publishes a
+   * named one whole and still leaves both out of a whole-collection share.
    */
-  it("offers no Share control inside a deck group or Recently removed", async () => {
+  it("offers Share inside a deck group and Recently removed", async () => {
     collectionFolderList.mockResolvedValue([DECK_GROUP, REMOVED]);
     const user = userEvent.setup();
     wrap(<CollectionPage />);
 
-    // **The presence first, in this same case.** An absence asserted over a page that never drew
-    // the control passes for the wrong reason — the shape that has produced vacuous tests in
-    // this repo more than once — so the root's own control is what proves the mount, the
-    // membership read and the query all answered.
     await screen.findByRole("button", { name: "Share your collection" });
 
     await openShelf(user, "Mono-Red Aggro");
     await waitFor(() => expect(standingIn()).toBe(20));
-    await waitFor(() => expect(shareControl()).toBeNull());
-    // …and the way into somebody else's binder is still there, because viewing needs nothing.
+    expect(await screen.findByRole("button", { name: "Share Mono-Red Aggro" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open a shared collection" })).toBeInTheDocument();
 
-    // The other app-owned kind, from the same page rather than from a second case: they are one
-    // rule (`kind <> 'user'`), reached from the root's wall.
     await user.click(within(crumbs()).getByRole("button", { name: "Collection" }));
     await waitFor(() => expect(standingIn()).toBeNull());
     await openShelf(user, "Recently removed");
     await waitFor(() => expect(standingIn()).toBe(21));
-    await waitFor(() => expect(shareControl()).toBeNull());
+    expect(
+      await screen.findByRole("button", { name: "Share Recently removed" }),
+    ).toBeInTheDocument();
   });
 
   /**

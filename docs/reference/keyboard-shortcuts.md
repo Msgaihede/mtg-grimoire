@@ -296,9 +296,14 @@ Two limits on that, both the wall's own:
 - **Until the walk ends, the set is what has arrived.** A menu opened or a drag begun in that
   second or two acts on the tiles fetched so far — its label says how many — and nothing on the
   wall says the set is still growing.
-- **A folded shelf is not in it.** The collection's wall is its open shelves (`drawn`, in
-  `CardGrid`); a folded one fetched nothing, so it contributes nothing, exactly as it contributes
-  nothing to a Shift range. Folding or unfolding one re-keys the list and the walk starts over.
+- **A folded shelf is not in it, then or later.** The collection's and the wishlist's walls are
+  their open shelves (`drawn`, in `CardGrid`); a folded one fetched nothing, so it contributes
+  nothing, exactly as it contributes nothing to a Shift range. **The folds are part of the list a
+  `Ctrl+A` is about** (`selectionList`, in `CardGrid`, since
+  [issue #938](https://github.com/Msgaihede/mtg-grimoire/issues/938)): until then, unfolding a
+  shelf after the press swept every card in it into the set, cards the reader never saw being
+  picked. Folding or unfolding one now ends the instruction the way a filter does — what was
+  picked and is still drawn stays picked, and the walk stops.
 
 **The fetching ahead stops at 1 000 tiles on a catalogue wall** (`SELECT_ALL_LIMIT`,
 `CardGrid.tsx`). An unfiltered search is the whole database, and what a catalogue wall's menu does
@@ -317,7 +322,7 @@ the whole set.
 - **A page's own wall answers from anywhere on its page; a docked column's answers only from
   inside the column** (`CardSearchPanel`'s root carries `data-search-dock`). The column is a tool
   beside what the reader is working on. So in the deck editor the chord is the column's once the
-  reader has pressed or focused something in the column, and is nobody's over the deck — it
+  reader has pressed or focused something in the column, and the deck's anywhere else — it
   would otherwise throw the deck's own picked set away to select a search the reader was not
   looking at. The same holds over the collection's and the wishlist's **tables**, which have no
   picked set.
@@ -329,9 +334,14 @@ the whole set.
 - **A wall that is not drawn takes nothing** — a column railed for want of room keeps its wall
   mounted under `hidden`.
 
-**The deck's own cards are not a surface for it**, deliberately: `Delete` removes a picked set
-there and undo is one press per card, so `Ctrl+A`, `Delete` would be a deck emptied in two keys and
-put back in a hundred.
+**On the deck's own cards it widens a set to its stacks rather than picking the deck**
+([issue #938](https://github.com/Msgaihede/mtg-grimoire/issues/938), `DeckDesk`'s
+`selectStacks`, the rule in `lib/multiSelect.ts`): every card of each stack that holds a picked
+card, and nothing in a stack that holds none. A stack is a group as the view on screen draws it,
+and one hidden in Stacks view is skipped. **With nothing picked it picks nothing**, deliberately:
+`Delete` removes a picked set there and undo is one press per card, so a `Ctrl+A` that took the
+whole deck from nothing would be a deck emptied in two keys and put back in a hundred. A press
+inside the docked column is still the column's; anywhere else on the desk it is the deck's.
 
 It yields three ways, each at the call site for the reason the next section gives: to a **text
 field** (`Ctrl+A` in a search box means its text, and every one of these pages has a search box),
@@ -370,7 +380,7 @@ move a browser makes; the chords themselves were real key events.
 | Press | Result |
 | --- | --- |
 | `Ctrl+A`, nothing touched, caret on the editor's root | Nothing picked. |
-| A deck card pressed, then `Ctrl+A` | Nothing picked. |
+| A deck card pressed, then `Ctrl+A` | Nothing picked. (Since issue #938: that card's whole stack.) |
 | The column's wall pressed — the caret lands on the editor's root, **outside** the column — then `Ctrl+A` | `deck-collection`, 6 of 6 ringed. |
 | `Escape` | The set is gone and the deck is still open. |
 
