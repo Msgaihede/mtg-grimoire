@@ -12842,7 +12842,9 @@ describe("the busy fault", () => {
     // 139 → 140 on 2026-10-11 with `set_deck_search_width` (issue #932), a plain
     // `sync::with_write` `app_meta` write; its read half, `deck_search_width`, sits in
     // `readHandlers`. Read from `left` on this tree. Count again after a merge.
-    expect(names).toHaveLength(140);
+    // 140 → 141 on 2026-10-11 with `trade_swap_sides` (issue #936), a plain `sync::with_write`
+    // that reaches `refuseIfBusy` first. Count again after a merge.
+    expect(names).toHaveLength(141);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -22248,7 +22250,7 @@ describe("shelves", () => {
 });
 
 /**
- * The trade builder's thirteen commands, held to the rules the crate's own tests hold `trade.rs`
+ * The trade builder's fourteen commands, held to the rules the crate's own tests hold `trade.rs`
  * to — the folds, the refusals, which price a line quotes and what a finish really moves.
  *
  * Every refusal below is matched on a **word of its meaning** rather than on the whole sentence.
@@ -22644,6 +22646,55 @@ describe("trades", () => {
     // A line that is already gone is a success: the caller has what it asked for.
     w.trade_remove_line({ lineId: 99 });
     expect(get().lines).toHaveLength(3);
+  });
+
+  it("swaps every line onto the other side, and leaves the percentages where they were", () => {
+    const { w, id, get, add } = trading();
+    add("mine", RAGAVAN, "nonfoil", 2);
+    add("theirs", CHARM, "nonfoil");
+    // One printing and finish on both sides: the swap must not fold them.
+    add("theirs", RAGAVAN, "nonfoil", 3);
+    w.trade_set_rate({ id, side: "mine", rate: 80 });
+    const before = get().lines;
+
+    w.trade_swap_sides({ id });
+    const after = get();
+    expect(after.lines.map((l) => [l.id, l.side, l.quantity])).toEqual(
+      before.map((l) => [l.id, l.side === "mine" ? "theirs" : "mine", l.quantity]),
+    );
+    expect(after).toMatchObject({ rateMine: 80, rateTheirs: 100 });
+
+    w.trade_archive({ id });
+    expect(() => w.trade_swap_sides({ id })).toThrow(/no longer open/);
+    w.trade_delete({ id });
+    expect(() => w.trade_swap_sides({ id })).toThrow(/not there/);
+  });
+
+  /** Issue #936 over #935: their side is one grain whatever the source. */
+  it("folds the reader's collection line and the copies past it into one line on their side", () => {
+    const { w, id, get } = trading({
+      collectionEntries: [entry({ id: 1, cardId: RAGAVAN.id, quantity: 2 })],
+    });
+    w.trade_add_lines({
+      id,
+      side: "mine",
+      lines: [input(RAGAVAN, "nonfoil", 3, "collection")],
+    });
+    w.trade_add_lines({ id, side: "theirs", lines: [input(CHARM, "nonfoil", 1)] });
+    const rows = () => get().lines.map((l) => [l.side, l.cardId, l.quantity]);
+    expect(rows()).toEqual([
+      ["mine", RAGAVAN.id, 2],
+      ["mine", RAGAVAN.id, 1],
+      ["theirs", CHARM.id, 1],
+    ]);
+    const first = get().lines[0].id;
+
+    w.trade_swap_sides({ id });
+    expect(rows()).toEqual([
+      ["theirs", RAGAVAN.id, 3],
+      ["mine", CHARM.id, 1],
+    ]);
+    expect(get().lines[0].id).toBe(first);
   });
 
   it("holds a side's percentage to 50–150 in steps of 5", () => {

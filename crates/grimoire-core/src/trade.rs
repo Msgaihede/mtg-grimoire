@@ -2,7 +2,7 @@
 //! and the wishlist when one is finished. User schema v63,
 //! [issue #363](https://github.com/Msgaihede/mtg-grimoire/issues/363).
 //!
-//! [`crate::sticky_notes`]' file shape: pure functions over a [`Connection`], the thirteen
+//! [`crate::sticky_notes`]' file shape: pure functions over a [`Connection`], the fourteen
 //! commands' bodies and nothing of a window. The wrappers are the desktop host's
 //! (`apps/desktop/src-tauri/src/trade/mod.rs`) and the table's (`crate::commands`).
 //!
@@ -1315,6 +1315,76 @@ pub fn remove_trade_line(conn: &Connection, line_id: i64) -> Result<(), String> 
     conn.execute("DELETE FROM trade_lines WHERE id = ?1", params![line_id])
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Put every line of an open trade on the other side: what the reader gave is what they are
+/// given, and the other way round (issue #936).
+///
+/// **The lines move and nothing else does.** Each keeps its printing, finish, quantity, source
+/// and place in the trade's order, and the percentages stay with the sides they were set on —
+/// a rate describes a side of the table, not the cards that happen to be on it. Like a single
+/// line carried across ([`update_trade_line`]), nothing is split against the collection.
+///
+/// **One fold, on their side.** The reader's side can hold two lines for one printing and
+/// finish — the collection's and the copies past it ([`drawn`], issue #935) — and their side
+/// is one grain whatever the source, so a pair carried across becomes one line: the first in
+/// the trade's order takes the other's copies, under [`MAX_QUANTITY`] ([`TOO_MANY`]). Their
+/// lines arriving on the reader's side meet nothing: their side held one line per printing and
+/// finish, and each lands in the class its source puts it in.
+///
+/// One savepoint, so a refused fold leaves both sides as they were.
+pub fn swap_trade_sides(conn: &Connection, id: i64) -> Result<(), String> {
+    crate::db::in_savepoint(conn, "trade_swap_sides", || {
+        open_trade(conn, id)?;
+        conn.execute(
+            "UPDATE trade_lines
+                SET side = CASE side WHEN ?2 THEN ?3 ELSE ?2 END
+              WHERE trade_id = ?1",
+            params![id, MINE, THEIRS],
+        )
+        .map_err(|e| e.to_string())?;
+
+        let mut statement = conn
+            .prepare(
+                "SELECT id, card_id, finish, quantity FROM trade_lines
+                  WHERE trade_id = ?1 AND side = ?2
+                  ORDER BY position, id",
+            )
+            .map_err(|e| e.to_string())?;
+        let theirs = statement
+            .query_map(params![id, THEIRS], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            })
+            .and_then(Iterator::collect::<Result<Vec<_>, _>>)
+            .map_err(|e| e.to_string())?;
+
+        // The first line of each printing and finish, and what it holds once the rest are in.
+        let mut kept: Vec<(i64, &str, &str, i64)> = Vec::new();
+        for (line, card_id, finish, quantity) in &theirs {
+            match kept
+                .iter_mut()
+                .find(|(_, card, fin, _)| card == card_id && fin == finish)
+            {
+                Some(first) => {
+                    first.3 = folded(first.3, *quantity)?;
+                    conn.execute("DELETE FROM trade_lines WHERE id = ?1", params![line])
+                        .map_err(|e| e.to_string())?;
+                    conn.execute(
+                        "UPDATE trade_lines SET quantity = ?2 WHERE id = ?1",
+                        params![first.0, first.3],
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                None => kept.push((*line, card_id, finish, *quantity)),
+            }
+        }
+        Ok(())
+    })
 }
 
 // ---------------------------------------------------------------------------------------
@@ -2740,6 +2810,92 @@ mod tests {
         assert_eq!(line_id(&conn, id, MINE, "goyf", "nonfoil"), theirs);
     }
 
+    /// A swap puts every line on the other side whole — the same printing, finish, quantity and
+    /// place — leaves the percentages where they were, and needs the trade open and there.
+    #[test]
+    fn swapping_sides_moves_every_line_across_and_nothing_else() {
+        let conn = seeded();
+        let id = new_trade(&conn);
+        put(&conn, id, MINE, "bolt", "foil", 2);
+        put(&conn, id, THEIRS, "goyf", "nonfoil", 1);
+        put(&conn, id, MINE, "charm", "foil", 3);
+        // The same printing and finish on both sides: a swap must not fold them.
+        put(&conn, id, THEIRS, "bolt", "foil", 4);
+        set_trade_rate(&conn, id, MINE, 80).unwrap();
+        let before = trade(&conn, id);
+
+        swap_trade_sides(&conn, id).unwrap();
+        let after = trade(&conn, id);
+        assert_eq!(
+            side(&conn, id, MINE),
+            [
+                ("goyf".to_owned(), "nonfoil".to_owned(), 1),
+                ("bolt".to_owned(), "foil".to_owned(), 4),
+            ]
+        );
+        assert_eq!(
+            side(&conn, id, THEIRS),
+            [
+                ("bolt".to_owned(), "foil".to_owned(), 2),
+                ("charm".to_owned(), "foil".to_owned(), 3),
+            ]
+        );
+        assert_eq!(
+            after.lines.iter().map(|l| l.id).collect::<Vec<_>>(),
+            before.lines.iter().map(|l| l.id).collect::<Vec<_>>(),
+            "the same lines, in the same order"
+        );
+        assert_eq!((after.rate_mine, after.rate_theirs), (80, 100));
+
+        swap_trade_sides(&conn, id).unwrap();
+        assert_eq!(
+            trade(&conn, id)
+                .lines
+                .iter()
+                .map(|l| (l.id, l.side.clone()))
+                .collect::<Vec<_>>(),
+            before
+                .lines
+                .iter()
+                .map(|l| (l.id, l.side.clone()))
+                .collect::<Vec<_>>(),
+            "twice is where it started"
+        );
+
+        // The reader's collection line and their line past it for one printing and finish are
+        // one line on their side: the first in the order takes the other's copies.
+        let pair = new_trade(&conn);
+        put(&conn, pair, THEIRS, "goyf", "nonfoil", 1);
+        own(&conn, "bolt", "foil", 2, None);
+        add_trade_lines(&conn, pair, MINE, &[input("bolt", "foil", 2, "collection")]).unwrap();
+        put(&conn, pair, MINE, "bolt", "foil", 3);
+        assert_eq!(
+            side(&conn, pair, MINE).len(),
+            2,
+            "two lines on the reader's side"
+        );
+        let first = line_id(&conn, pair, MINE, "bolt", "foil");
+        swap_trade_sides(&conn, pair).unwrap();
+        assert_eq!(
+            side(&conn, pair, THEIRS),
+            [("bolt".to_owned(), "foil".to_owned(), 5)]
+        );
+        assert_eq!(line_id(&conn, pair, THEIRS, "bolt", "foil"), first);
+        assert_eq!(
+            side(&conn, pair, MINE),
+            [("goyf".to_owned(), "nonfoil".to_owned(), 1)]
+        );
+
+        let empty = new_trade(&conn);
+        swap_trade_sides(&conn, empty).unwrap();
+        assert!(trade(&conn, empty).lines.is_empty());
+
+        archive_trade(&conn, id).unwrap();
+        assert_eq!(swap_trade_sides(&conn, id).unwrap_err(), NOT_OPEN);
+        delete_trade(&conn, id).unwrap();
+        assert_eq!(swap_trade_sides(&conn, id).unwrap_err(), GONE);
+    }
+
     /// 50 to 150 in steps of 5, per side, and nothing is rounded into range.
     #[test]
     fn a_rate_is_fifty_to_one_fifty_in_fives_on_one_side() {
@@ -3778,6 +3934,7 @@ mod tests {
             remove_trade_line(&conn, line).unwrap_err(),
             finish_trade(&conn, id, &ALL).unwrap_err(),
             archive_trade(&conn, id).unwrap_err(),
+            swap_trade_sides(&conn, id).unwrap_err(),
         ];
         for refusal in refusals {
             assert_eq!(refusal, NOT_OPEN);

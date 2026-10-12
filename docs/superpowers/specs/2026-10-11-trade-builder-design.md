@@ -108,7 +108,8 @@ finish already did them, and a second pass would do them twice.
 Desktop: a trades pane on the left (New trade, Open, Archived), and the trade beside it — a
 header (name, rename, when it was opened and whose prices it uses, More, Archive), the two sides
 as two panels with a divider in the gap between them, and a balance panel underneath holding both
-totals, the balance and **Finish trade**. New trade, Finish trade and the scanner are dialogs; the
+totals, the balance and **Finish trade**. On an open trade the divider's arrows are a button that
+swaps every card to the other side (issue #936). New trade, Finish trade and the scanner are dialogs; the
 percentage is a popover with one slider.
 
 Phone: a trades list, then the trade as two columns with the balance and Finish trade above the

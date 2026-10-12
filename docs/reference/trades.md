@@ -34,11 +34,11 @@ finish) and two timestamps. `trade_lines` is one printing in one finish on one s
   them: absent from `SYNCED_TABLES`, no `sync_uid`, on the mirror's ignored list. The full backup
   carries them, since it walks every user table.
 
-## 2. Thirteen commands
+## 2. Fourteen commands
 
 `trade_list`, `trade_get`, `trade_create`, `trade_rename`, `trade_set_rate`, `trade_add_lines`,
-`trade_update_line`, `trade_remove_line`, `trade_finish`, `trade_archive`, `trade_reopen`,
-`trade_duplicate`, `trade_delete` — `crates/grimoire-core/src/trade.rs`, in the core's command
+`trade_update_line`, `trade_remove_line`, `trade_swap_sides`, `trade_finish`, `trade_archive`,
+`trade_reopen`, `trade_duplicate`, `trade_delete` — `crates/grimoire-core/src/trade.rs`, in the core's command
 table, so the Android and web hosts answer them with no code of their own.
 
 - **Any write to a trade that is not open is refused**, except reopen, duplicate and delete.
@@ -158,6 +158,11 @@ after a trade*. No bulk-undo ticket is filed for a finish.
 
 Desktop is `packages/ui/features/trade/`: a trades pane beside the open trade, the two sides as
 panels with a divider in the gap, and a balance panel holding both totals and **Finish trade**.
+On an open trade the divider's arrows are a **Swap sides** button (issue #936): `trade_swap_sides`
+moves every line to the other side in one statement, keeping each line's printing, finish,
+quantity and place, and leaves the percentages with their sides. The one fold is on their side:
+the reader's collection line and their line past it for one printing and finish (issue #935)
+become one line there, the first in the order taking the other's copies.
 The phone is `apps/light/phone/pages/TradePage.tsx` and `apps/light/phone/trade/`: Trade is a
 seventh light view and a sixth tab, the open trade is in the URL as `/trade/5`, and adding,
 editing, the percentage, finishing and New trade are bottom sheets. Both faces word a fact through

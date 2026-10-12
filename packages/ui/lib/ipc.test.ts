@@ -3683,8 +3683,9 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
-   * **The trade builder's thirteen** (user schema v63, issue #363), pinned on the day they were
-   * written — one case, because they are one page's worth of commands.
+   * **The trade builder's fourteen** (user schema v63, issue #363; `trade_swap_sides`, issue
+   * #936), pinned on the day they were written — one case, because they are one page's worth of
+   * commands.
    *
    * **`trade_update_line` and `trade_remove_line` are the two worth the case.** Every other
    * command here names a *trade* and sends `id`; these two name a *line* and send `lineId`,
@@ -3770,6 +3771,8 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(invoke).toHaveBeenLastCalledWith("trade_finish", { id: 4, options });
 
     invoke.mockResolvedValue(undefined);
+    await ipc.tradeSwapSides(4);
+    expect(invoke).toHaveBeenLastCalledWith("trade_swap_sides", { id: 4 });
     await ipc.tradeArchive(4);
     expect(invoke).toHaveBeenLastCalledWith("trade_archive", { id: 4 });
     await ipc.tradeReopen(4);
@@ -3802,6 +3805,7 @@ describe("ipc argument names match the Rust command signatures", () => {
       "trade_add_lines",
       "trade_update_line",
       "trade_remove_line",
+      "trade_swap_sides",
       "trade_finish",
       "trade_archive",
       "trade_reopen",

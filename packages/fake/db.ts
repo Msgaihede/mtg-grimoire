@@ -24496,6 +24496,37 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
+     * `trade::swap_trade_sides` — every line of an open trade onto the other side, whole: its
+     * printing, finish, quantity and place in the order. The percentages stay with their sides.
+     *
+     * **One fold, on their side**: the reader's collection line and their line past it for one
+     * printing and finish (issue #935) arrive as one line — the first in the order takes the
+     * other's copies, under {@link TRADE_TOO_MANY}. Worked out before anything is written, so a
+     * refused fold leaves both sides as they were.
+     */
+    trade_swap_sides: (args: { id: number }): void => {
+      refuseIfBusy(db);
+      const trade = openTrade(db, args.id);
+      const lines = linesOfTrade(db, trade.id);
+      const flipped = (l: FakeTradeLine): TradeSide => (l.side === "mine" ? "theirs" : "mine");
+      const kept = new Map<string, { line: FakeTradeLine; quantity: number }>();
+      const gone = new Set<number>();
+      for (const line of lines) {
+        if (flipped(line) !== "theirs") continue;
+        const key = `${line.cardId}|${line.finish}`;
+        const first = kept.get(key);
+        if (first === undefined) kept.set(key, { line, quantity: line.quantity });
+        else {
+          first.quantity = tradeFolded(first.quantity, line.quantity);
+          gone.add(line.id);
+        }
+      }
+      for (const line of lines) line.side = flipped(line);
+      for (const { line, quantity } of kept.values()) line.quantity = quantity;
+      db.tradeLines = db.tradeLines.filter((l) => !gone.has(l.id));
+    },
+
+    /**
      * `trade::finish_trade` — run the steps the reader ticked, freeze the prices and file the
      * trade as finished, **in one savepoint**. Answers what **this** finish did, in copies.
      *
