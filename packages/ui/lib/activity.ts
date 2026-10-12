@@ -1,9 +1,9 @@
 /**
  * What the app is doing, when it is doing something long enough to say so.
  *
- * The ribbon has one place for this — the line beside Refresh, and the 2px mana line
+ * The window header has one place for this — the line beside Refresh, and the 2px mana line
  * beneath it — and more than one thing in the app can be running. So a job is registered
- * here rather than plumbed to the ribbon by whoever started it: a sync, an update download,
+ * here rather than plumbed to the header by whoever started it: a sync, an update download,
  * and whatever comes next, all described the same way and ranked against each other.
  */
 import { createStore } from "zustand/vanilla";
@@ -21,14 +21,14 @@ import { COMBO_PHASE_LABEL } from "@/lib/useComboProgress";
 import { ORACLE_TAG_PHASE_LABEL } from "@/lib/useOracleTagProgress";
 import { PHASE_LABEL } from "@/lib/useSyncProgress";
 
-/** One long-running job, as the ribbon needs to describe it. */
+/** One long-running job, as the header needs to describe it. */
 export interface Activity extends ManaLineSync {
   /** One job per key — registering the same key again replaces it. */
   key: string;
   /**
    * Which job wins when two are running. Lower is louder; see {@link RANK}.
    *
-   * On the job rather than in a table here, because the ribbon must be able to rank a job
+   * On the job rather than in a table here, because the header must be able to rank a job
    * from a feature this module has never heard of.
    */
   rank: number;
@@ -37,7 +37,7 @@ export interface Activity extends ManaLineSync {
    * for a phase that counts nothing.
    *
    * Separate from `label` because the two are read by different audiences: the label is
-   * announced and the detail is looked at. See `Ribbon`, where the detail is `aria-hidden`.
+   * announced and the detail is looked at. See `ChromeStatus`, where the detail is `aria-hidden`.
    */
   detail: string | null;
 }
@@ -90,7 +90,7 @@ export const RANK = {
   combos: 20,
 } as const;
 
-/** How long a job must run before the ribbon puts a sentence on screen. See `Ribbon`. */
+/** How long a job must run before the header puts a sentence on screen. See `ChromeStatus`. */
 export const ACTIVITY_DELAY_MS = 400;
 
 export interface ActivityState {
@@ -136,7 +136,7 @@ export function createActivityStore() {
 }
 
 /**
- * The job the ribbon describes: the lowest rank, ties broken by insertion order.
+ * The job the header describes: the lowest rank, ties broken by insertion order.
  *
  * Strictly lower, so the first job to arrive keeps the row — two hooks' effects run in an
  * order nobody chose, and an answer that depended on it would be a bug that reproduced
@@ -178,7 +178,7 @@ function downloaded(done: number, total: number): string | null {
 }
 
 /**
- * Fold a sync into the job the ribbon describes.
+ * Fold a sync into the job the header describes.
  *
  * `busy` decides whether anything is running, never the event: a run inside the 24 h check
  * window emits nothing at all, and Tauri drops the events emitted before the webview started
@@ -221,7 +221,7 @@ function syncDetail(phase: SyncPhase, e: SyncProgressEvent): string | null {
 }
 
 /**
- * Fold a price-feed download into the job the ribbon describes.
+ * Fold a price-feed download into the job the header describes.
  *
  * Takes the marketplace's label and the event rather than a hook's return type —
  * `updateActivity`'s arrangement, for its reason. `label` is `null` when nothing is being
@@ -262,7 +262,7 @@ function feedDetail(progress: FeedProgressEvent | null): string | null {
 }
 
 /**
- * Fold an Oracle tag refresh into the job the ribbon describes.
+ * Fold an Oracle tag refresh into the job the header describes.
  *
  * `refreshing` decides whether anything is running and the event never does — `syncActivity`'s
  * rule, and the case for it here is the strongest of the three. `oracle_tags::refresh_if_due`
@@ -303,7 +303,7 @@ export function oracleTagActivity(
 }
 
 /**
- * Fold a combo-feed refresh into the job the ribbon describes.
+ * Fold a combo-feed refresh into the job the header describes.
  *
  * `refreshing` decides whether anything is running and the event never does — `syncActivity`'s
  * rule, kept here in the shape all four siblings have even though this is the one feed whose
@@ -351,7 +351,7 @@ export function comboActivity(
  * Takes the two values it needs rather than the whole `Update`, so this module stays free of
  * a hook's return type and a test can name the case in two arguments. `progress` is non-null
  * only while a download is in flight — `useUpdate` clears it in the call's `finally` — which
- * is what keeps a *check*, and a staged build waiting to install, out of the ribbon.
+ * is what keeps a *check*, and a staged build waiting to install, out of the header.
  */
 export function updateActivity(
   progress: UpdateProgressEvent | null,

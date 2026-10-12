@@ -45,7 +45,7 @@ function Rail({ text, namespace }: { text: string; namespace: TagNamespace | "bo
 
   return (
     // The rail is `min-h-0 flex-1` inside a 256px column, so it needs a parent with a height or
-    // its own scroller is handed nothing. `w-64` is `TagsPage`'s own width for it.
+    // its own scroller is handed nothing. `w-64` is near the tag sidebar's narrower widths.
     <div className="flex h-[420px] w-64 flex-col border-r border-border pr-4">
       <TagTree
         namespace={namespace}

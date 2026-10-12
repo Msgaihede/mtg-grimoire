@@ -70,10 +70,11 @@ const BOLT: CardSummary = {
   priceLow: 400.5,
   priceHigh: 400.5,
   gameChanger: false,
+  releasedAt: null,
 };
 
-const ORDERED: WishlistFolder = { id: 1, parentId: null, name: "Ordered", sortOrder: 0, managedDeckId: null, managedTokens: false };
-const SOMEDAY: WishlistFolder = { id: 3, parentId: null, name: "Someday", sortOrder: 1, managedDeckId: null, managedTokens: false };
+const ORDERED: WishlistFolder = { id: 1, parentId: null, name: "Ordered", sortOrder: 0, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };
+const SOMEDAY: WishlistFolder = { id: 3, parentId: null, name: "Someday", sortOrder: 1, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };
 const FOLDERS = [ORDERED, SOMEDAY];
 /** `buildFolderTree(folders, [])` — the page's own call, with no members, because a picker is a
  *  list of destinations rather than a picture of what is in them. */

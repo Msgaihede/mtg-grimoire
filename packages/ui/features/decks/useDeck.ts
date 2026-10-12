@@ -249,6 +249,8 @@ export function useSwapFromPane(
   const deck = useDeck(context?.deckId ?? null, variant);
   return {
     swap: deck.swapPrinting,
+    /** `Split to new printing` (issue #934) — the swap for part of a row, from the same mount. */
+    split: deck.splitPrinting,
     /**
      * The pane's foil button, for a card that **is** a row of the open deck.
      *

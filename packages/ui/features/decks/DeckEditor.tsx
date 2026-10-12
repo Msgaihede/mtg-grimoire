@@ -65,6 +65,7 @@ import { notedOracleIds } from "./deckNotes";
 import { useDeckNotes } from "./useDeckNotes";
 import { useHiddenStacks } from "./useHiddenStacks";
 import { DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
+import { usePrefetchDeckSearchWidth } from "./useDeckSearchWidth";
 import { DeckStats } from "./DeckStats";
 import { DeckTokensPanel, tokenWallDrawn } from "./DeckTokensPanel";
 import { TokenArtPicker } from "./TokenArtPicker";
@@ -311,6 +312,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // surfaces of one deck can name two marketplaces.
   const { marketplace } = useMarketplace();
   const deck = useDeck(deckId, variant);
+  // The search column's remembered width (issue #932), asked for beside `deck_get` rather than
+  // when the column mounts after it — see `usePrefetchDeckSearchWidth`.
+  usePrefetchDeckSearchWidth(deckId);
   /*
    * **`useAddMode` was read here from 2026-08-23 to 2026-08-25 and is deleted.**
    *
@@ -2128,6 +2132,27 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   );
 
   /**
+   * **Split to new printing…** (issue #934): the printings modal on this row, asked to split
+   * rather than swap. The write is the modal's — a press on a tile — so this opens and nothing
+   * more. An orphan printing never reaches it: the menu greys the row on `oracleId === null`.
+   */
+  const openAllPrintings = useAppStore((s) => s.openAllPrintings);
+  const openSplit = useCallback(
+    (card: DeckCard) => {
+      if (card.oracleId === null) return;
+      openAllPrintings({
+        cardId: card.cardId,
+        oracleId: card.oracleId,
+        name: card.name,
+        deck: deckSlotOf(card),
+        wish: null,
+        split: { held: card.quantity },
+      });
+    },
+    [openAllPrintings, deckSlotOf],
+  );
+
+  /**
    * One deck card's right-click, **built here and handed to the four views as one function**.
    *
    * A view that assembled its own would be four copies of one rule, and the rule reads three
@@ -2234,6 +2259,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           // the printing this row plays. `undefined` only before the deck row has loaded, when no
           // card is drawn to right-click.
           cover: coverCardId === undefined ? undefined : { cardId: coverCardId, set: setCoverFrom },
+          // **Split to new printing…** (issue #934) — the modal on this row, splitting.
+          split: openSplit,
           // **Only when this card is in the set** — `dragsWholeSelection`'s rule for a press
           // instead of a drag. A right-click on a card the reader has not picked is about that
           // card, so `[]` goes over and the menu is the singular one it has always been.
@@ -2253,6 +2280,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       menuKey,
       cardMenuDeps,
       deckSlotOf,
+      openSplit,
       categories,
       deck.cards,
       deck.labels,

@@ -17,7 +17,15 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   Implementers execute that direction (palette, type, mana line, filter chips) — they do not
   invent their own. Mana/set symbols come from the bundled `mana-font`/`keyrune` npm packages,
   never a CDN.
-- Global actions (Refresh, sync status, future settings) live in the top ribbon, not in views.
+- Global actions (Refresh, sync status, future settings) live in the window header, not in views.
+  **There is no page header since 2026-10-11**: the 56px ribbon and its view title were removed
+  on every page. `TitleBar` carries the app's status (`ChromeStatus`) right-aligned before the
+  keyboard map — reading right to left: Refresh (an icon button, no words), the device-sync
+  marker, then the card count and data date — with the mana line directly under the header and
+  the page directly under that. The view title survives only as an `sr-only` `<h1>` in `main`.
+  The light edition's desktop face (the web app) draws the same row as a 34px header band
+  without the window verbs or drag regions (`TitleBar windowControls={false}`), and `F1` opens
+  the keyboard map there too. The notes below about the ribbon's sizes are history.
 - **The shell's scale is one step above the content's, and the sidebar's _width_ is not part of
   it** (2026-08-14). The ribbon is **56px** (was 48), a nav entry **44px** (was 36), the view
   title and app mark **20px** Cinzel (was 18), nav labels and both ribbon buttons **16px** (was

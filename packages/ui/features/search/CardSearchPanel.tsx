@@ -28,7 +28,7 @@ const NO_ROOM = "Not enough room. Close the card details or widen the window.";
  * that one is the key a preference is stored under, this one is what is stamped on the DOM. They
  * are equal today and they answer to different things, so neither is derived from the other.
  */
-export type SearchSurface = "deck" | "collection" | "wishlist";
+export type SearchSurface = "deck" | "collection" | "wishlist" | "tags";
 
 /**
  * Stamped on this panel while it is drawn **over** the list rather than docked beside it — the
@@ -208,6 +208,18 @@ export interface CardSearchPanelProps {
    */
   tabs?: ReactNode;
   /**
+   * The reader's width, in px, when a surface remembers it — **both or neither** with {@link
+   * onWidthChange}. The deck column passes them (issue #932, `useDeckSearchWidth`, one width per
+   * deck); the collection and the wishlist pass neither and keep the width in this component's own
+   * state, forgotten when the page unmounts. The search page's tag sidebar passes them too (issue #937, `usePanelWidth("tags")`).
+   *
+   * Either way it is the *reader's* width and is clamped again where it is drawn: only a drag
+   * writes it, never a narrowing window.
+   */
+  width?: number;
+  /** Called with each width a drag settles on, already inside the drag's clamp. See {@link width}. */
+  onWidthChange?: (width: number) => void;
+  /**
    * The wall and its furniture — `CardSearchBody`, or whatever a surface draws in its place.
    *
    * **Mounted on {@link open}, hidden on `!roomy`**, and the two are not the same gate. The press
@@ -252,6 +264,8 @@ export function CardSearchPanel({
   overWidth,
   maxWidth = Number.POSITIVE_INFINITY,
   tabs,
+  width: widthProp,
+  onWidthChange,
   children,
 }: CardSearchPanelProps): ReactElement {
   const tip = useTooltip();
@@ -288,15 +302,18 @@ export function CardSearchPanel({
    * the edge the reader is pushing against rather than something that happened to the window while
    * they were not looking.
    *
-   * `useState` and deliberately not remembered. A width is an answer about *this page's* row: how
-   * much room the list beside it needs is a fact about what is in the list, and a column dragged
-   * wide for a 17-pile Commander deck is the wrong column for a 60-card Standard one. Whether the
-   * reader works with a search column at all is not like that, which is why exactly one of the two
-   * is stored. It **does** survive a collapse and a railing, because it lives in this root rather
-   * than in the body: the disclosure and the reader's width outlast the search they were pointed
-   * at, so reopening gives back the column they had rather than the one the app ships.
+   * A width is an answer about *this page's* row: how much room the list beside it needs is a
+   * fact about what is in the list, and a column dragged wide for a 17-pile Commander deck is the
+   * wrong column for a 60-card Standard one. **So it is never one global setting**: the deck
+   * column remembers one width per deck (issue #932, {@link CardSearchPanelProps.width}), and the
+   * two list pages keep it in this `useState`, forgotten with the page. It **does** survive a
+   * collapse and a railing either way, because it lives in this root (or above it) rather than in
+   * the body: the disclosure and the reader's width outlast the search they were pointed at, so
+   * reopening gives back the column they had rather than the one the app ships.
    */
-  const [width, setWidth] = useState(DEFAULT_PANEL_WIDTH_PX);
+  const [ownWidth, setOwnWidth] = useState(DEFAULT_PANEL_WIDTH_PX);
+  const width = widthProp ?? ownWidth;
+  const setWidth = onWidthChange ?? setOwnWidth;
 
   // What is actually drawn: the reader's width inside the page's cap, and never below the one
   // card `MIN_PANEL_WIDTH_PX` is measured from. The `max` around the cap matters at exactly one
@@ -314,7 +331,7 @@ export function CardSearchPanel({
       setWidth(
         Math.min(Math.max(next, MIN_PANEL_WIDTH_PX), Math.max(maxWidth, MIN_PANEL_WIDTH_PX)),
       ),
-    [maxWidth],
+    [maxWidth, setWidth],
   );
 
   const selectedCardId = useAppStore((s) => s.selectedCardId);

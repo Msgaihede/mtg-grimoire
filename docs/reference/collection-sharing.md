@@ -292,8 +292,9 @@ So `share::snapshot` is its own read, and its shape is the inverse of `Collectio
 2. drop every folder that is locked **or has a locked ancestor**, through
    `collection_folders::LOCKED_FOLDER_IDS` — the app's single copy of the inheritance rule, so
    there is never a second opinion about what "locked" means;
-3. drop every folder whose `kind <> 'user'` — deck groups and `Recently removed` are never
-   shareable;
+3. **for a whole-collection share only**, drop every folder whose `kind <> 'user'` — deck groups
+   and `Recently removed` travel when they are **named**, and only then (issue #941; see
+   [below](#issue-941--every-folder-kind-and-the-wishlist));
 4. read the entries of what survives, join `cards` for the name and image, and price through
    `sorting::price_expr` **only if `value` is in `fields`**;
 5. emit.
@@ -306,9 +307,10 @@ The recursive CTE uses `UNION` and never `UNION ALL`, `delete_folder`'s reason f
 the duplicate-row check is what makes a `parent_id` cycle — a hand-edited database, a restored
 backup — converge instead of running forever.
 
-### The three refusals, in order, before a row is read
+### The two refusals, in order, before a row is read
 
-`FOLDER_NOT_FOUND` → `FOLDER_NOT_SHAREABLE` → `FOLDER_IS_LOCKED`, and the order is asserted.
+`FOLDER_NOT_FOUND` → `FOLDER_IS_LOCKED`, and the order is asserted. (`FOLDER_NOT_SHAREABLE`, the
+`kind <> 'user'` refusal that sat between them, was removed by issue #941.)
 A folder that is not there can never report as locked, because *"unlock it"* is advice nobody can
 act on for a drawer that does not exist.
 
@@ -317,6 +319,40 @@ worth keeping: replacing `effectively_locked` with a plain `locked <> 0` produce
 `ShareSnapshot { title: "Top shelf", folders: [], cards: [] }` — a **success** carrying nothing,
 which is precisely spec §4's *"an empty snapshot that reads as this person owns nothing"*. That is
 why the **refusal** had to be fenced and not merely the exclusion.
+
+### Issue #941 — every folder kind, and the wishlist
+
+**A deck's group and `Recently removed` are shareable when named.** The app owns both and nothing
+may be filed into them by hand, but publishing one is a read, and the reader standing in it is
+choosing what to show. `shareTargetFor` offers the control on every kind; `SUBTREE`'s kind term is
+`(?1 IS NOT NULL OR f.kind = 'user')`, so a **whole-collection** share still leaves both out — the
+unasked question still publishes less, and a share made before #941 does not grow by every deck the
+reader owns on its next refresh. The lock still applies to every kind.
+
+**The wishlist is shared through the same pipe, as a key.** `folderUid` is opaque to the relay and
+the share Worker (they key one live share per group on it and read nothing else), so a wishlist
+share is a string in that namespace — no schema rung, no new column, no Worker deploy.
+`share::wishlist` reads it; `packages/ui/features/wishlist/wishlistShare.ts` builds it:
+
+| Key | Publishes |
+| --- | --- |
+| `wishlist:` | The whole wishlist — the root and every folder the reader made |
+| `wishlist:folder:<sync_uid>` | One folder the reader made, and everything under it |
+| `wishlist:deck:<decks.sync_uid>` | A deck's managed wishlist, its Tokens child included |
+| `wishlist:deck-tokens:<decks.sync_uid>` | A deck's managed Tokens folder alone |
+
+- **A managed folder is named by its deck**, because `managed_wishlist` derives the folder per
+  device under `capture::suppressed`: its own `sync_uid` is NULL or per-device and is gone whenever
+  the deck's mode goes off and back. The deck's uid syncs, so a second device resolves the same key
+  and *Update* works there. `WishlistFolder` carries `syncUid` and `managedDeckUid` for this.
+- A whole-wishlist share leaves the managed folders out, for the collection's reason.
+- **A wish is not a copy.** An any-printing wish travels as the printing the wishlist itself draws
+  and prices it as (cheapest at the marketplace, then newest); `f` is `preferred_finish` or
+  `nonfoil`; there is never a `c`, and `condition` is dropped from `fields` (and the dialog's
+  switch is not drawn) so the snapshot does not claim a column it never fills. A managed folder
+  with no uid gets a random one for that snapshot alone — never its row id.
+- The snapshot format is unchanged (`v` stays 1); both viewers draw a wishlist share as they draw a
+  binder.
 
 ### The root arm, and the leak that sixteen green tests did not see
 

@@ -341,7 +341,7 @@ interface Gesture {
  * The home page.
  *
  * The title is the ribbon's — `NAV` names the view — so the `<h2>` here is `sr-only`, which is
- * `DecksPage`'s and `TagsPage`'s arrangement: a second visible "Home" under the ribbon's own would be
+ * `DecksPage`'s arrangement: a second visible "Home" under the ribbon's own would be
  * a subheading repeating its heading.
  */
 export function HomePage(): ReactElement {

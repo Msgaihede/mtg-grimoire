@@ -64,7 +64,7 @@ Normalized via `deckKind.ts` (`regular`, `theory`, `virtual`):
   - All deck modifications route through transactional backend functions wrapped in `state::with_write`.
   - Deck updates trigger per-deck undo journaling (`deck_undo`), allowing scoped rollback via `Ctrl+Z`.
   - Batch modifications (imports, bulk category operations) execute in single transactions rather than per-line loops.
-  - Card mutations support adding, removing, updating counts, moving piles, swapping printings, and tagging labels (`deck_labels`).
+  - Card mutations support adding, removing, updating counts, moving piles, swapping printings, splitting part of a row onto another printing (`deck_split_printing`, issue #934 — one write, never a quantity step plus an add), and tagging labels (`deck_labels`).
 
 ---
 

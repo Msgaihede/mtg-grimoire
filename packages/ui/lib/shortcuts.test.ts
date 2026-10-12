@@ -472,7 +472,6 @@ describe("the catalogue's shape", () => {
   it("has an entry for every scope, and every view is honestly empty", () => {
     expect(SHORTCUTS.home).toEqual([]);
     expect(SHORTCUTS.search).toEqual([]);
-    expect(SHORTCUTS.tags).toEqual([]);
     expect(SHORTCUTS.decks).toEqual([]);
     expect(SHORTCUTS.collection).toEqual([]);
     expect(SHORTCUTS.wishlist).toEqual([]);

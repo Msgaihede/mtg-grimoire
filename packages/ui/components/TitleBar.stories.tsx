@@ -1,8 +1,10 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, waitFor, within } from "storybook/test";
+import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import { emitFake } from "@grimoire/fake/event";
 import { setMaximized, windowCalls } from "@grimoire/fake/window";
 import { SNAP_HOVER_EVENTS } from "@/lib/window";
+import { ChromeStatus } from "./ChromeStatus";
+import { ManaLine } from "./ManaLine";
 import { TitleBar } from "./TitleBar";
 
 /**
@@ -35,6 +37,59 @@ type Story = StoryObj<typeof meta>;
 
 /** A restored window: the middle button offers Maximize and draws one frame. */
 export const Default: Story = {};
+
+/** The status run every shell draws: card count and data date, the sync marker, and Refresh. */
+const status = (drag: boolean) => (
+  <ChromeStatus
+    statusLine="116,590 cards · data from 2026-08-08"
+    dataDir="D:\\MTG Grimoire\\data"
+    busy={false}
+    upToDate={false}
+    hasError={false}
+    onRefresh={fn()}
+    activity={null}
+    activityVisible={false}
+    deviceSync="live"
+    drag={drag}
+  />
+);
+
+/**
+ * The row as the shell draws it since the page header went (2026-10-11): the app's status
+ * right-aligned against the keyboard map, then the mana line directly under it.
+ */
+export const WithStatus: Story = {
+  render: () => (
+    <>
+      <TitleBar>{status(true)}</TitleBar>
+      <ManaLine sync={null} />
+    </>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByRole("button", { name: "Refresh data" })).toBeEnabled();
+    await expect(canvas.getByLabelText("Sync is live")).toBeInTheDocument();
+  },
+};
+
+/**
+ * The light edition's header band — the web app's, and a tablet's. The same height, lockup,
+ * status and keyboard map; no window verbs and no drag region, because a browser or an OS owns
+ * that frame.
+ */
+export const HeaderBand: Story = {
+  render: () => (
+    <>
+      <TitleBar windowControls={false}>{status(false)}</TitleBar>
+      <ManaLine sync={null} />
+    </>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.queryByRole("button", { name: "Close" })).toBeNull();
+    await expect(canvas.getByRole("button", { name: "Keyboard shortcuts" })).toBeInTheDocument();
+  },
+};
 
 /**
  * The lockup in the top-left: `GrimoireMark` at 20px in gold, then the name in Cinzel.

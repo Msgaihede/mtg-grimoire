@@ -7,6 +7,7 @@ import {
   pruneSelection,
   readModifiers,
   selectEverything,
+  selectStacks,
   settleSelection,
   type Selection,
 } from "./multiSelect";
@@ -155,6 +156,37 @@ describe("pruneSelection", () => {
   it("returns the same object when nothing changed", () => {
     const before = sel(["a", "b"], "a");
     expect(pruneSelection(before, ORDER)).toBe(before);
+  });
+});
+
+/** Issue #938: the deck editor's Ctrl+A, over three stacks. */
+describe("selectStacks — Ctrl+A on a desk of stacks", () => {
+  const STACKS = [["a", "b"], ["c", "d"], ["e"]];
+
+  it("picks every card of the stack a picked card is in", () => {
+    expect(selectStacks(sel(["b"], "b"), STACKS)).toEqual(sel(["b", "a"], "b"));
+  });
+
+  it("widens each stack that has a pick and leaves the others alone", () => {
+    expect(selectStacks(sel(["e", "a"], "a"), STACKS)).toEqual(sel(["e", "a", "b"], "a"));
+  });
+
+  // `Ctrl+A`, `Delete` must not be a deck emptied in two keys.
+  it("picks nothing when nothing is picked", () => {
+    expect(selectStacks(EMPTY_SELECTION, STACKS)).toBe(EMPTY_SELECTION);
+  });
+
+  it("never reaches a key no visible stack holds", () => {
+    expect(selectStacks(sel(["z"], "z"), STACKS)).toEqual(sel(["z"], "z"));
+  });
+
+  it("answers with the same object when every picked stack is already whole", () => {
+    const whole = sel(["c", "d"], "c");
+    expect(selectStacks(whole, STACKS)).toBe(whole);
+  });
+
+  it("is never all of a list", () => {
+    expect(selectStacks(sel(["a"], "a"), STACKS).allOf).toBeUndefined();
   });
 });
 

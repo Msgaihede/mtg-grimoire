@@ -30,6 +30,35 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.47.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.46.0...v0.47.0) (2026-10-12)
+
+
+### Features
+
+* **decks:** split a deck row onto a new printing ([#934](https://github.com/Msgaihede/mtg-grimoire/issues/934)) ([b9ea92c](https://github.com/Msgaihede/mtg-grimoire/commit/b9ea92c3eff6ae0b5b81caa98e90da4708e64171))
+* **decks:** split a deck row onto a new printing ([#934](https://github.com/Msgaihede/mtg-grimoire/issues/934)) ([6bdcafe](https://github.com/Msgaihede/mtg-grimoire/commit/6bdcafe4a69918bd0c085d9db0e8b935d4897f03))
+* fold the page header into the window header ([ca8b0c0](https://github.com/Msgaihede/mtg-grimoire/commit/ca8b0c02ab1b912138e699252627603f4e2b2d12))
+* fold the page header into the window header ([bc79c98](https://github.com/Msgaihede/mtg-grimoire/commit/bc79c9850046c96abca6aa35c484a41f5a419aeb))
+* move tag search into a collapsible sidebar on the search page ([71c2f00](https://github.com/Msgaihede/mtg-grimoire/commit/71c2f00f6e670ccfa71b13ebbddec3e83b3e785b))
+* move tag search into a collapsible sidebar on the search page ([a85eb33](https://github.com/Msgaihede/mtg-grimoire/commit/a85eb3364fb9ec6c68ebf2d767fba0414c9b761c)), closes [#937](https://github.com/Msgaihede/mtg-grimoire/issues/937)
+* remember the deck editor's card search width per deck ([1fa3de1](https://github.com/Msgaihede/mtg-grimoire/commit/1fa3de1cb210605975d5cbc86237d8f6afe20b05))
+* remember the deck editor's card search width per deck ([67553e1](https://github.com/Msgaihede/mtg-grimoire/commit/67553e1804741cdab05e6a738cbfab2a4249d5ba)), closes [#932](https://github.com/Msgaihede/mtg-grimoire/issues/932)
+* **search:** show unreleased cards and stamp them with set and release date ([70c55d9](https://github.com/Msgaihede/mtg-grimoire/commit/70c55d900bf8d5214a36579142d08ce73bc768a0))
+* **search:** show unreleased cards and stamp them with set and release date ([92d643f](https://github.com/Msgaihede/mtg-grimoire/commit/92d643fc80db66cc0ba2adced723ff0a27423691)), closes [#940](https://github.com/Msgaihede/mtg-grimoire/issues/940)
+* share deck groups, Recently removed, and wishlists ([d0a7256](https://github.com/Msgaihede/mtg-grimoire/commit/d0a72568c889f0ed2e14424803a9522b0f6f5e69))
+* share deck groups, Recently removed, and wishlists ([#941](https://github.com/Msgaihede/mtg-grimoire/issues/941)) ([fe02cbd](https://github.com/Msgaihede/mtg-grimoire/commit/fe02cbdb4f4dd92240346a44f9a43f8f9fac32af))
+* **trade:** put copies past the collection on a line of their own ([840005d](https://github.com/Msgaihede/mtg-grimoire/commit/840005d0e0523c23eeaa493ae014b075337e8b25))
+* **trade:** put copies past the collection on a line of their own ([e3ddc2a](https://github.com/Msgaihede/mtg-grimoire/commit/e3ddc2a85f4cd508674ca88bd685d55b40671c50)), closes [#935](https://github.com/Msgaihede/mtg-grimoire/issues/935)
+* **trade:** swap every card between sides from the divider's arrows ([#946](https://github.com/Msgaihede/mtg-grimoire/issues/946)) ([c521221](https://github.com/Msgaihede/mtg-grimoire/commit/c5212218db28e807840820f8c2a21e80152426f3)), closes [#936](https://github.com/Msgaihede/mtg-grimoire/issues/936)
+
+
+### Bug Fixes
+
+* add the filtered finish from the deck editor's search ([401549b](https://github.com/Msgaihede/mtg-grimoire/commit/401549bb83461def9a7178fb624d77c50a1e083c))
+* add the filtered finish from the deck editor's search ([243228c](https://github.com/Msgaihede/mtg-grimoire/commit/243228c6f021fb1dc067abbd29e83112a3cf0e54)), closes [#933](https://github.com/Msgaihede/mtg-grimoire/issues/933)
+* keep Select all to visible folders and widen it to selected deck stacks ([5168c79](https://github.com/Msgaihede/mtg-grimoire/commit/5168c79471241f0659c516994517f9bae77fdc87))
+* keep Select all to visible folders and widen it to selected deck stacks ([296ec98](https://github.com/Msgaihede/mtg-grimoire/commit/296ec98f482f2ef7349f568f79b13e2fa9393413)), closes [#938](https://github.com/Msgaihede/mtg-grimoire/issues/938)
+
 ## [0.46.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.45.0...v0.46.0) (2026-10-11)
 
 

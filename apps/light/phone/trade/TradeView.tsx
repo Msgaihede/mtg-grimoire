@@ -14,6 +14,7 @@ import { TOUCH_FLOOR } from "@grimoire/ui/features/settings/controls";
 import { BalanceBar } from "@grimoire/ui/features/trade/BalanceBar";
 import {
   cardCount,
+  holdingOf,
   isOpen,
   isSettled,
   lineMoney,
@@ -589,6 +590,7 @@ function Column({
               <LineItem
                 key={line.id}
                 line={line}
+                lines={lines}
                 rate={sideMoney.rate}
                 currency={currency}
                 onEdit={live ? (from) => onEdit(line, from) : null}
@@ -639,11 +641,14 @@ function Column({
  */
 function LineItem({
   line,
+  lines,
   rate,
   currency,
   onEdit,
 }: {
   line: TradeLine;
+  /** The side's lines, for the share of the collection this one can claim (`holdingOf`). */
+  lines: readonly TradeLine[];
   rate: number;
   currency: Currency;
   /** `null` on a closed trade: the line is a record. */
@@ -654,7 +659,7 @@ function LineItem({
   const code = printingLine(line.setCode, line.collectorNumber, line.finish);
   // Only the deck's mark, and only on an open trade (`givenMark`): the gold *from your
   // collection* is the edit sheet's to say, and a 180px column has no line to spare for it.
-  const mark = givenMark(line, onEdit !== null);
+  const mark = givenMark(holdingOf(line, lines), onEdit !== null);
   const fromDeck = mark?.place === "deck" ? mark.words : null;
   const box =
     "mx-1.5 mt-1.5 grid grid-cols-[2.25rem_minmax(0,1fr)] gap-2 rounded-lg border border-border bg-surface p-2 text-left text-text";

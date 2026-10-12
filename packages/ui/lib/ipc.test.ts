@@ -75,8 +75,12 @@ import searchRsDesktop from "../../../apps/desktop/src-tauri/src/search/mod.rs?r
 import setCompletionRsCore from "../../../crates/grimoire-core/src/set_completion.rs?raw";
 import setCompletionRsDesktop from "../../../apps/desktop/src-tauri/src/set_completion/mod.rs?raw";
 import shareRs from "../../../apps/desktop/src-tauri/src/share/commands.rs?raw";
+import panelwidthRsCore from "../../../crates/grimoire-core/src/panelwidth.rs?raw";
+import panelwidthRsDesktop from "../../../apps/desktop/src-tauri/src/panelwidth/mod.rs?raw";
 import shelffoldsRsCore from "../../../crates/grimoire-core/src/shelffolds.rs?raw";
 import shelffoldsRsDesktop from "../../../apps/desktop/src-tauri/src/shelffolds/mod.rs?raw";
+import searchwidthRsCore from "../../../crates/grimoire-core/src/searchwidth.rs?raw";
+import searchwidthRsDesktop from "../../../apps/desktop/src-tauri/src/searchwidth/mod.rs?raw";
 import stackhideRsCore from "../../../crates/grimoire-core/src/stackhide.rs?raw";
 import stackhideRsDesktop from "../../../apps/desktop/src-tauri/src/stackhide/mod.rs?raw";
 // The goldfish board: the desktop's three commands, and the engine crate's actions they carry.
@@ -208,8 +212,10 @@ const resetRs = resetRsCore + "\n" + resetRsDesktop;
 const scannerRs = scannerRsCore + "\n" + scannerRsDesktop;
 const searchRs = searchRsCore + "\n" + searchRsDesktop;
 const setCompletionRs = setCompletionRsCore + "\n" + setCompletionRsDesktop;
+const panelwidthRs = panelwidthRsCore + "\n" + panelwidthRsDesktop;
 const shelffoldsRs = shelffoldsRsCore + "\n" + shelffoldsRsDesktop;
 const stackhideRs = stackhideRsCore + "\n" + stackhideRsDesktop;
+const searchwidthRs = searchwidthRsCore + "\n" + searchwidthRsDesktop;
 const startviewRs = startviewRsCore + "\n" + startviewRsDesktop;
 const stickyNotesRs = stickyNotesRsCore + "\n" + stickyNotesRsDesktop;
 const syncCommandsRs = syncCommandsRsCore + "\n" + syncCommandsRsDesktop;
@@ -825,6 +831,34 @@ describe("ipc argument names match the Rust command signatures", () => {
    * pile and the state. Tauri maps each camelCase key onto its snake_case parameter, so the Rust
    * parameter names are read rather than trusted.
    */
+  /**
+   * The docked panels' widths — `searchOpen`'s pair with a number where the `boolean` is. The
+   * section and the width ride by name, so the Rust parameter names are read rather than trusted,
+   * and the bounds the wrapper's doc quotes are `panelwidth.rs`'s own.
+   */
+  it("sends the panel widths under the names their commands declare", async () => {
+    expect(panelwidthRs.length, "panelwidth.rs was not read").toBeGreaterThan(1_000);
+
+    invoke.mockResolvedValue({ tags: 320 });
+    await expect(ipc.panelWidth()).resolves.toEqual({ tags: 320 });
+    expect(invoke).toHaveBeenLastCalledWith("panel_width");
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.setPanelWidth("tags", 300);
+    expect(invoke).toHaveBeenLastCalledWith("set_panel_width", { section: "tags", width: 300 });
+
+    expect(panelwidthRs).toMatch(
+      /fn panel_width\(\s*state: tauri::State<'_, Arc<AppState>>,?\s*\)/,
+    );
+    expect(panelwidthRs).toMatch(/fn set_panel_width\([^)]*\bsection\s*:\s*String/s);
+    expect(panelwidthRs).toMatch(/fn set_panel_width\([^)]*\bwidth\s*:\s*u32/s);
+    expect(panelwidthRs).toContain("pub const MIN_PANEL_WIDTH: u32 = 80;");
+    expect(panelwidthRs).toContain("pub const MAX_PANEL_WIDTH: u32 = 4000;");
+    for (const registered of ["panelwidth::panel_width,", "panelwidth::set_panel_width,"]) {
+      expect(desktopRs).toContain(registered);
+    }
+  });
+
   it("sends the hidden stacks under the names their commands declare", async () => {
     expect(stackhideRs.length, "stackhide.rs was not read").toBeGreaterThan(1_000);
 
@@ -917,6 +951,36 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(variants("Happened").length, "view.rs' facts were not read").toBeGreaterThan(10);
     expect(tsVariants("GoldfishAction")).toEqual(variants("GoldfishAction"));
     expect(tsVariants("Happened")).toEqual(variants("Happened"));
+  });
+
+  /**
+   * The deck search column's width (issue #932) — the deck's id rides both commands, and the
+   * write names the width. Read from the Rust source rather than trusted, like the hidden stacks.
+   */
+  it("sends the deck search width under the names its commands declare", async () => {
+    expect(searchwidthRs.length, "searchwidth.rs was not read").toBeGreaterThan(1_000);
+
+    invoke.mockResolvedValue(512);
+    await expect(ipc.deckSearchWidth(4)).resolves.toBe(512);
+    expect(invoke).toHaveBeenLastCalledWith("deck_search_width", { deckId: 4 });
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.setDeckSearchWidth(4, 512);
+    expect(invoke).toHaveBeenLastCalledWith("set_deck_search_width", { deckId: 4, width: 512 });
+
+    const declares = (command: string, param: string) =>
+      expect(searchwidthRs, `\`${command}\` declares no \`${param}\``).toMatch(
+        new RegExp(`fn ${command}\\([^)]*\\b${param}\\s*:`, "s"),
+      );
+    declares("deck_search_width", "deck_id");
+    declares("set_deck_search_width", "deck_id");
+    declares("set_deck_search_width", "width");
+    for (const registered of [
+      "searchwidth::deck_search_width,",
+      "searchwidth::set_deck_search_width,",
+    ]) {
+      expect(desktopRs).toContain(registered);
+    }
   });
 
   it("sends a prefetch batch under `cardIds` and `variant`", async () => {
@@ -1402,6 +1466,21 @@ describe("ipc argument names match the Rust command signatures", () => {
       finish: null,
     });
     expect(swapped).toEqual({ folded: true, quantity: 5 });
+
+    // The split is the swap with a count (issue #934), and the count is the one key the swap
+    // does not send.
+    invoke.mockResolvedValue({ folded: false, quantity: 2 });
+    const split = await ipc.deckSplitPrinting(4, "p1", "p2", 7, "live", "foil", 2);
+    expect(invoke).toHaveBeenCalledWith("deck_split_printing", {
+      deckId: 4,
+      fromCardId: "p1",
+      toCardId: "p2",
+      categoryId: 7,
+      variant: "live",
+      finish: "foil",
+      quantity: 2,
+    });
+    expect(split).toEqual({ folded: false, quantity: 2 });
 
     invoke.mockResolvedValue(2);
     const wishes = await ipc.deckMissingToWishlist(4);
@@ -3719,8 +3798,9 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
-   * **The trade builder's thirteen** (user schema v63, issue #363), pinned on the day they were
-   * written — one case, because they are one page's worth of commands.
+   * **The trade builder's fourteen** (user schema v63, issue #363; `trade_swap_sides`, issue
+   * #936), pinned on the day they were written — one case, because they are one page's worth of
+   * commands.
    *
    * **`trade_update_line` and `trade_remove_line` are the two worth the case.** Every other
    * command here names a *trade* and sends `id`; these two name a *line* and send `lineId`,
@@ -3806,6 +3886,8 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(invoke).toHaveBeenLastCalledWith("trade_finish", { id: 4, options });
 
     invoke.mockResolvedValue(undefined);
+    await ipc.tradeSwapSides(4);
+    expect(invoke).toHaveBeenLastCalledWith("trade_swap_sides", { id: 4 });
     await ipc.tradeArchive(4);
     expect(invoke).toHaveBeenLastCalledWith("trade_archive", { id: 4 });
     await ipc.tradeReopen(4);
@@ -3838,6 +3920,7 @@ describe("ipc argument names match the Rust command signatures", () => {
       "trade_add_lines",
       "trade_update_line",
       "trade_remove_line",
+      "trade_swap_sides",
       "trade_finish",
       "trade_archive",
       "trade_reopen",

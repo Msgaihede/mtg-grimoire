@@ -1915,6 +1915,19 @@ Halfling`, the one non-legendary creature among its 56 creatures, was correctly 
   Both surfaces address the row by the same five-part `PaneDeckContext`, and the modal's comes
   from the deck editor's own `deckSlotOf` — one definition shared with `openCard`, because a
   context naming four of five parts has twice rewritten the wrong row in this codebase.
+- **`deck_split_printing` is `deck_swap_printing` for part of a row**
+  ([issue #934](https://github.com/Msgaihede/mtg-grimoire/issues/934), 2026-10-11, behind the
+  deck card menu's `Split to new printing…`). `quantity` copies leave the row — which keeps its
+  printing, id and label — and land on `toCardId` in the same pile, variant and finish: a new row
+  wearing the old one's label, or a fold onto a row already there (`label_id = coalesce(…)`, the
+  swap's rule), answered as the same `SwapResult`. Every swap refusal applies, plus two of its
+  own: `SPLIT_NONE` for a quantity below one, and a quantity at or above the row's (*a split has
+  to leave at least one behind* — moving every copy is the swap). One transaction, one `swap`
+  history row whose payload carries `split: <copies>` (`AUDIT_KINDS` is CHECK-constrained, so
+  the count is what tells `auditText.ts`'s sentence apart), and one undo step over both cells.
+  It runs `release_unclaimed_copies` for the swap's reason. The page presses it from
+  `AllPrintingsDialog` with `printingsRequest.split` set: a quantity field above the wall, and a
+  press on a tile is the write. The menu row is greyed on a row of one copy (`only one copy`).
 - **`deck_set_card_finish` is `deck_swap_printing` one axis over**, and shares its shape for the
   reason it shares its `SwapResult`: the deck plays a different physical object of the same
   card. It **folds** the same way — setting a row to a finish the pile already holds adds the

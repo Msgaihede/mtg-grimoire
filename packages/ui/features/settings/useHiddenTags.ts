@@ -13,7 +13,7 @@ export const HIDDEN_TAGS_KEY = ["tags-muted"];
  * The rail draws `tag_children` and the type-ahead draws `tag_search`, and **a muted tag is
  * absent from both, from a parent's `childCount` and from anyone's `parents`** — so a Settings
  * press that only refreshed this panel would give the tag back to a page still holding a rail
- * that does not have it. `TagsPage`'s own hide names exactly these two roots for the same reason
+ * that does not have it. `TagPicker`'s hide names exactly these two roots for the same reason
  * in the other direction.
  */
 const RAIL_ROOTS = [["tag-children"], ["tag-search"]];
@@ -64,7 +64,7 @@ export interface HiddenTags {
  * *reads* `tags_muted`, so there is no second reader to race, and the panel stays a function of
  * its props.
  *
- * **There is a second writer, though, and it is on another page.** `TagsPage`'s `hideTag` adds
+ * **There is a second writer, though, and it is on another page.** `TagPicker`'s `hideTag` adds
  * rows to this table, so it invalidates {@link HIDDEN_TAGS_KEY} after its write for the mirror
  * of the reason this hook invalidates the rail's two keys after its own. Without that pair, each
  * side leaves the other holding a cached list for the app's 30 s `staleTime` — and the direction

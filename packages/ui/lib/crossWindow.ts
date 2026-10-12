@@ -60,6 +60,7 @@ export const FOLLOW_LIVE_APP_META: readonly QueryKey[] = [
 export const PER_WINDOW_KEYS: readonly QueryKey[] = [
   ["navCollapsed"],
   ["searchOpen"],
+  ["panelWidth"],
   ["deckFolderPane"],
   ["deckSort"],
   ["deckSearchTab"],
@@ -68,6 +69,9 @@ export const PER_WINDOW_KEYS: readonly QueryKey[] = [
   // `features/decks/useHiddenStacks.ts`' `HIDDEN_STACKS_KEY`, spelled here for `["shelfFolds"]`'s
   // reason above: which stacks a deck hides is a view preference, per window like the folds.
   ["hiddenStacks"],
+  // `features/decks/useDeckSearchWidth.ts`' `DECK_SEARCH_WIDTH_KEY` (issue #932): how wide a
+  // deck's search column was dragged is a view preference, per window like the stacks.
+  ["deckSearchWidth"],
 ];
 
 /**

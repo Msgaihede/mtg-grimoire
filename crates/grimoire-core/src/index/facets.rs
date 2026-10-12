@@ -1790,6 +1790,34 @@ mod tests {
         assert_eq!(explicit_off.total, 3, "false is the same as absent");
     }
 
+    /// An unreleased printing is legal nowhere until its release day, and `playableOnly` keeps it
+    /// anyway (issue #940) — the bitset has to say so too, or the chips grey out over the very
+    /// spoilers the wall is showing. Sol Ring, mask 0, dated a year out.
+    #[test]
+    fn playable_only_keeps_an_unreleased_printing() {
+        let conn = seeded();
+        conn.execute(
+            "UPDATE cards SET released_at = date('now', '+1 year') WHERE id = '3'",
+            [],
+        )
+        .unwrap();
+        let ix = crate::index::CardIndex::build(&conn).unwrap();
+
+        let on = compute(&ix, &req(|r| r.playable_only = Some(true)), None);
+        assert_eq!(on.total, 3, "Bolt, Helix and the unreleased Sol Ring");
+        assert_eq!(on.sets.get("lea").copied(), Some(2), "lea keeps both");
+
+        // Released yesterday and still legal nowhere: the mask decides again.
+        conn.execute(
+            "UPDATE cards SET released_at = date('now', '-1 day') WHERE id = '3'",
+            [],
+        )
+        .unwrap();
+        let ix = crate::index::CardIndex::build(&conn).unwrap();
+        let on = compute(&ix, &req(|r| r.playable_only = Some(true)), None);
+        assert_eq!(on.total, 2, "a released card with mask 0 is unplayable");
+    }
+
     /// The digital printing is behind `paperOnly`, which defaults on and is not a facet.
     #[test]
     fn the_paper_default_applies_to_every_base() {

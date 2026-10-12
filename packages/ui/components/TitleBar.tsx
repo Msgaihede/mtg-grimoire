@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { Copy, Keyboard, Minus, Square, X } from "lucide-react";
+import { CaptionButton } from "@/components/CaptionButton";
 import { GrimoireMark } from "@/components/GrimoireMark";
 import { KEY_MAP_LABEL, KeyMap } from "@/components/KeyMap";
-import { useTooltip } from "@/components/tooltip/useTooltip";
 import { LAYER } from "@/lib/layers";
 import { useAppStore } from "@/lib/store";
 import {
@@ -28,80 +28,6 @@ const BAR_H = "h-[34px]";
 export const BELOW_CAPTION = "top-[34px]";
 
 /**
- * A caption button: 46px wide, full-height, square, flush to the window's edge.
- *
- * **The one control family in this app that is not a rounded 8px chip with a press-scale**,
- * and every departure is deliberate. A radius would put a gap of window between the button and
- * the corner it must occupy, so a click landing on the last pixel of the screen — the whole
- * point of a corner button, and Fitts's law's oldest example — would miss. `PRESS`'s
- * `active:scale-[0.97]` is left off for the neighbouring reason: a target that shrinks away
- * from the pointer at the moment of the press reads as a misclick, and at the screen's edge
- * the reader has nowhere to correct to.
- *
- * The focus ring is `ring-inset` for the same geometry: an outset ring on an element flush
- * with the window's top-right corner is drawn outside the window and simply is not there.
- */
-function CaptionButton({
-  label,
-  Icon,
-  onSelect,
-  id,
-  danger = false,
-  forceHover = false,
-  expanded,
-}: {
-  label: string;
-  Icon: typeof Minus;
-  onSelect: () => void;
-  id?: string;
-  /** Close. The only red control in the chrome, and it fills rather than tints. */
-  danger?: boolean;
-  /** Draw the hover state regardless of the pointer — see {@link TitleBar}'s snap overlay. */
-  forceHover?: boolean;
-  /**
-   * Whether what this button opens is open — `aria-expanded`, and the same wash `forceHover`
-   * draws.
-   *
-   * **The open state reuses that branch rather than adding a third styling path**, and the two
-   * really are one thing: "this button is lit for a reason that is not the pointer". Left
-   * `undefined` by default, not `false`, because `aria-expanded="false"` on Minimize would
-   * announce a button that opens something and never does.
-   */
-  expanded?: boolean;
-}) {
-  const tip = useTooltip();
-  return (
-    <button
-      type="button"
-      id={id}
-      onClick={onSelect}
-      aria-label={label}
-      aria-expanded={expanded}
-      // `describes: false`: `label` is this button's whole `aria-label` already, so a wired
-      // `aria-describedby` would have a screen reader hear "Minimize, Minimize". This is also
-      // the one anchor in the app pinned to the window's top edge, so its tooltip is the one
-      // `placeTooltip` always has to flip downward rather than open above the window.
-      {...tip(label, { describes: false })}
-      className={cn(
-        "inline-flex h-full w-[46px] shrink-0 items-center justify-center",
-        "text-dim transition-colors duration-150 motion-reduce:transition-none",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent",
-        danger ? "hover:bg-destructive hover:text-white" : "hover:bg-accent/10 hover:text-accent",
-        // The same two declarations the `hover:` variants carry, applied by state instead of
-        // by the pointer. Tailwind cannot express "hover, or this flag", so the flag restates
-        // them — and they are restated rather than extracted because a shared constant would
-        // put the danger/normal branch in two places. Two flags reach it now and there is still
-        // one branch: the snap overlay's hover, and a panel this button has open.
-        (forceHover || expanded === true) &&
-          (danger ? "bg-destructive text-white" : "bg-accent/10 text-accent"),
-      )}
-    >
-      <Icon className="size-4" aria-hidden="true" />
-    </button>
-  );
-}
-
-/**
  * The window's own title bar, drawn by the app rather than by Windows.
  *
  * `decorations: false` in `tauri.conf.json` is what makes this necessary rather than
@@ -110,7 +36,7 @@ function CaptionButton({
  * argument for the wrapper in `packages/ui/lib/window.ts` and for this component being testable at
  * all.
  *
- * **The wordmark is here because it stopped being anywhere else.** `Ribbon` drew a dim `MTG`
+ * **The wordmark is here because it stopped being anywhere else.** The ribbon (gone since 2026-10-11) drew a dim `MTG`
  * and said why in a comment — "the window title bar already says that in full" — which was
  * true of Windows' caption and is now this component's job. So the mark moved up and grew to
  * the full name, and the ribbon's first slot is the view title. It is a *lockup* now rather
@@ -132,41 +58,31 @@ function CaptionButton({
  * Close has always been. The 46px square, the missing radius and the missing press-scale all
  * stay — a rounded chip in a row of three square full-height buttons reads as foreign, and the
  * coherence of the row outranks a corner rule written about Fitts's law.
+ *
+ * **The app's status rides here too, since 2026-10-11** — `children`, which `AppShell` fills
+ * with `ChromeStatus`: the status line, the device-sync marker and Refresh, right-aligned
+ * against the keyboard map. The 56px ribbon and its page heading that used to carry them are
+ * gone; the mana line sits directly under this row now, and the page directly under that.
+ *
+ * **`windowControls` is false wherever a browser or an OS owns the frame** — the light
+ * edition's desktop face, in a browser tab or on a tablet. There this row is a header band of
+ * the same height carrying the same lockup, status and keyboard map, minus the three window
+ * verbs, and minus every drag region (nothing there can be dragged, and nothing there should
+ * claim it can).
  */
-export function TitleBar() {
-  const [maximized, setMaximized] = useState(false);
+export function TitleBar({
+  children,
+  windowControls = true,
+}: {
+  /** The app's status run, drawn right-aligned before the keyboard map. */
+  children?: ReactNode;
+  windowControls?: boolean;
+}) {
   // Shared with `AppShell`, which binds `F1`, because the key and the panel are in two
   // components — see the store's own note on the flag.
   const keyMapOpen = useAppStore((s) => s.keyMapOpen);
   const setKeyMapOpen = useAppStore((s) => s.setKeyMapOpen);
-  // Whether the pointer is inside the native Snap Layouts overlay. See `SNAP_HOVER_EVENTS`:
-  // on Windows 11 the maximize button is underneath a transparent Win32 child window, so its
-  // CSS `:hover` never fires and this is the only signal that the pointer is on it.
-  const [snapHover, setSnapHover] = useState(false);
-
-  useEffect(() => {
-    let live = true;
-    const read = () => {
-      void isWindowMaximized().then((next) => {
-        if (live) setMaximized(next);
-      });
-    };
-    read();
-    // Every resize, not just a maximize — there is no `onMaximized`. Re-reading rather than
-    // toggling is what keeps an edge-drag from flipping the glyph to the wrong one.
-    const stop = onWindowResized(read);
-    return () => {
-      live = false;
-      void stop.then((off) => off());
-    };
-  }, []);
-
-  useEffect(() => {
-    const stop = onSnapHover(setSnapHover);
-    return () => {
-      void stop.then((off) => off());
-    };
-  }, []);
+  const dragRegion = windowControls ? { "data-tauri-drag-region": true } : {};
 
   return (
     // `LAYER.caption` is what keeps this row drawn, and it is not decoration: without it the
@@ -176,10 +92,12 @@ export function TitleBar() {
     // stacking context however small its number, so the bar was never competing. It needs no
     // `position` of its own: a z-index on a flex item creates a stacking context whatever its
     // position. The reasoning, and the measurement it came from, are on the rung itself.
+    // **No `border-b` since the mana line moved directly beneath it**: the line is the chrome's
+    // edge now, and a hairline over a 2px rule is two edges a pixel apart.
     <div
-      data-tauri-drag-region
+      {...dragRegion}
       className={cn(
-        "flex shrink-0 items-center justify-between border-b border-border bg-surface pl-3",
+        "flex shrink-0 items-center justify-between gap-4 bg-surface pl-3",
         BAR_H,
         LAYER.caption,
       )}
@@ -208,7 +126,7 @@ export function TitleBar() {
           began. And the sidebar directly below this row is `p-3`, so 12px is where that
           column's entries start: the mark and the first nav entry now share a left edge down
           the window instead of missing it by 4px. */}
-      <div data-tauri-drag-region className="flex items-center gap-2.5">
+      <div {...dragRegion} className="flex shrink-0 items-center gap-2.5">
         {/* `size={20}` for the wordmark's own arithmetic — a 34px row leaves 7px above and
             below — and that number does a second job: it is under `GrimoireMark`'s 24px
             detail floor, so the component picks the simplified variant here without being
@@ -248,14 +166,15 @@ export function TitleBar() {
             `select-none` because a title bar the reader can accidentally highlight while
             dragging the window is a title bar that fights them. */}
         <span
-          data-tauri-drag-region
+          {...dragRegion}
           className="select-none font-heading text-[13px] leading-none tracking-[0.2em] text-dim"
         >
           MTG GRIMOIRE
         </span>
       </div>
 
-      <div className="flex h-full shrink-0">
+      <div {...dragRegion} className="flex h-full min-w-0 items-center">
+        {children}
         {/* The panel is rendered inside `KeyMap`'s own box, immediately after the button it
             belongs to — which is what makes the pair a disclosure rather than a dialog, and
             what gives the placement something to measure. See {@link KeyMap}. */}
@@ -267,8 +186,52 @@ export function TitleBar() {
             onSelect={() => setKeyMapOpen(!keyMapOpen)}
           />
         </KeyMap>
-        <CaptionButton label="Minimize" Icon={Minus} onSelect={() => void minimizeWindow()} />
-        {/* `id` is read by the native overlay, which finds this button by DOM id and parks
+        {windowControls && <WindowControls />}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Minimize, Maximize/Restore and Close — the three window verbs, and the two window reads they
+ * need. A component of its own so the light edition, which draws none of them, never asks a
+ * window it does not own whether it is maximized.
+ */
+function WindowControls() {
+  const [maximized, setMaximized] = useState(false);
+  // Whether the pointer is inside the native Snap Layouts overlay. See `SNAP_HOVER_EVENTS`:
+  // on Windows 11 the maximize button is underneath a transparent Win32 child window, so its
+  // CSS `:hover` never fires and this is the only signal that the pointer is on it.
+  const [snapHover, setSnapHover] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    const read = () => {
+      void isWindowMaximized().then((next) => {
+        if (live) setMaximized(next);
+      });
+    };
+    read();
+    // Every resize, not just a maximize — there is no `onMaximized`. Re-reading rather than
+    // toggling is what keeps an edge-drag from flipping the glyph to the wrong one.
+    const stop = onWindowResized(read);
+    return () => {
+      live = false;
+      void stop.then((off) => off());
+    };
+  }, []);
+
+  useEffect(() => {
+    const stop = onSnapHover(setSnapHover);
+    return () => {
+      void stop.then((off) => off());
+    };
+  }, []);
+
+  return (
+    <>
+      <CaptionButton label="Minimize" Icon={Minus} onSelect={() => void minimizeWindow()} />
+      {/* `id` is read by the native overlay, which finds this button by DOM id and parks
             itself over its rectangle. The constant is shared with the Rust side through
             `SNAP_BUTTON_ID` because a mismatch fails silently in both directions.
 
@@ -276,15 +239,14 @@ export function TitleBar() {
             frames — the same 24-grid and the same 2px round-cap stroke as every other icon in
             this app, which is what "restore" has meant since Windows 3.1 drawn in the set the
             sidebar and the ribbon already use. */}
-        <CaptionButton
-          id={SNAP_BUTTON_ID}
-          label={maximized ? "Restore Down" : "Maximize"}
-          Icon={maximized ? Copy : Square}
-          forceHover={snapHover}
-          onSelect={() => void toggleMaximizeWindow()}
-        />
-        <CaptionButton label="Close" Icon={X} danger onSelect={() => void closeWindow()} />
-      </div>
-    </div>
+      <CaptionButton
+        id={SNAP_BUTTON_ID}
+        label={maximized ? "Restore Down" : "Maximize"}
+        Icon={maximized ? Copy : Square}
+        forceHover={snapHover}
+        onSelect={() => void toggleMaximizeWindow()}
+      />
+      <CaptionButton label="Close" Icon={X} danger onSelect={() => void closeWindow()} />
+    </>
   );
 }

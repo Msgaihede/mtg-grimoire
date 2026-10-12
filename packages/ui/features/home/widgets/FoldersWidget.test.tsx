@@ -79,9 +79,9 @@ const COLLECTION_ROWS: CollectionFolderSummary[] = [
   { folderId: 5, cards: 2, value: null },
 ];
 
-const BUY_SOON: WishlistFolder = { id: 10, parentId: null, name: "Buy soon", sortOrder: 0, managedDeckId: null, managedTokens: false };
-const STAPLES: WishlistFolder = { id: 11, parentId: 10, name: "Staples", sortOrder: 0, managedDeckId: null, managedTokens: false };
-const LATER: WishlistFolder = { id: 12, parentId: null, name: "Later", sortOrder: 1, managedDeckId: null, managedTokens: false };
+const BUY_SOON: WishlistFolder = { id: 10, parentId: null, name: "Buy soon", sortOrder: 0, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };
+const STAPLES: WishlistFolder = { id: 11, parentId: 10, name: "Staples", sortOrder: 0, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };
+const LATER: WishlistFolder = { id: 12, parentId: null, name: "Later", sortOrder: 1, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };
 const WISHES = [BUY_SOON, STAPLES, LATER];
 
 /**
@@ -92,8 +92,8 @@ const WISHES = [BUY_SOON, STAPLES, LATER];
 function deckWishFolders(id: number, name: string, deckId: number): WishlistFolder[] {
   const base = { sortOrder: 0, managedDeckId: deckId };
   return [
-    { ...base, id, parentId: null, name, managedTokens: false },
-    { ...base, id: id + 1, parentId: id, name: "Tokens", managedTokens: true },
+    { ...base, id, parentId: null, name, managedTokens: false, syncUid: null, managedDeckUid: null },
+    { ...base, id: id + 1, parentId: id, name: "Tokens", managedTokens: true, syncUid: null, managedDeckUid: null },
   ];
 }
 const TWO_DECKS = [...deckWishFolders(20, "Burn", 3), ...deckWishFolders(22, "Elves", 4)];
@@ -407,7 +407,7 @@ describe("FoldersWidget", () => {
         name: `Wish ${i + 1}`,
         sortOrder: i,
         managedDeckId: null,
-        managedTokens: false,
+        managedTokens: false, syncUid: null, managedDeckUid: null,
       }));
 
     /**

@@ -55,6 +55,17 @@ async function stored(id = 5): Promise<Trade> {
 const storedLine = async (lineId: number): Promise<TradeLine | undefined> =>
   (await stored()).lines.find((line) => line.id === lineId);
 
+/**
+ * One more copy of the line's printing and finish in the collection. A press on `+` past the
+ * copies the collection holds puts the extra copy on a line of its own (issue #935), so a test
+ * about stepping one line gives the collection the copy it steps onto.
+ */
+async function ownOneMore(lineId: number): Promise<void> {
+  const line = await storedLine(lineId);
+  if (!line) throw new Error(`line ${lineId} is gone`);
+  await ipc.collectionAdd({ cardId: line.cardId, finish: line.finish, quantity: 1 });
+}
+
 const side = (name: string) => screen.findByRole("region", { name }, SETTLE);
 const balance = () => screen.getByRole("region", { name: "Balance" });
 const sheetGone = () => waitFor(() => expect(screen.queryByRole("dialog")).toBeNull(), SETTLE);
@@ -324,6 +335,7 @@ describe("a side's percentage", () => {
 describe("a line's sheet", () => {
   it("steps the copies, and the page's figures follow", async () => {
     openTrade();
+    await ownOneMore(18);
     const sheet = await edit("Counterspell", "MH2 267 · Etched");
     expect(sheet).toHaveTextContent("Your side · from your collection");
 
@@ -335,6 +347,35 @@ describe("a line's sheet", () => {
     await sheetGone();
     const line = screen.getByRole("button", { name: "Edit Counterspell, MH2 267 · Etched" });
     await waitFor(() => expect(line).toHaveTextContent("3 × $3.25"));
+    expect(balance()).toHaveTextContent("$67.64");
+  });
+
+  /**
+   * Issue #935: the collection holds two of these, so a third is a card the reader does not have
+   * — a line of its own, without *from your collection*, and the same money on the side.
+   */
+  it("puts a copy stepped past the collection on a line of its own", async () => {
+    openTrade();
+    const sheet = await edit("Counterspell", "MH2 267 · Etched");
+    expect(sheet).toHaveTextContent("Your side · from your collection · 2 owned");
+
+    await userEvent.click(within(sheet).getByRole("button", { name: "One more Counterspell" }));
+
+    await waitFor(async () =>
+      expect((await stored()).lines.filter((l) => l.name === "Counterspell")).toHaveLength(2),
+    );
+    expect((await storedLine(18))?.quantity).toBe(2);
+    const past = (await stored()).lines.find((l) => l.name === "Counterspell" && l.id !== 18);
+    expect(past).toMatchObject({ side: "mine", quantity: 1, source: "search" });
+    await userEvent.click(within(sheet).getByRole("button", { name: "Close card" }));
+    await sheetGone();
+
+    const lines = await screen.findAllByRole(
+      "button",
+      { name: "Edit Counterspell, MH2 267 · Etched" },
+      SETTLE,
+    );
+    expect(lines).toHaveLength(2);
     expect(balance()).toHaveTextContent("$67.64");
   });
 
@@ -749,10 +790,12 @@ describe("the copies a deck is holding", () => {
         "Sol Ring": { ownedInDecks: 1, deckNames: ["Azula"] },
       }),
     });
+    // The facts above are laid over the trade; the copy a step reaches is the collection's own.
+    await ownOneMore(18);
     const sheet = await edit("Counterspell", "MH2 267 · Etched");
 
     // Two copies, and two are held outside every deck: the gold words, and an empty line in red.
-    expect(sheet).toHaveTextContent("Your side · from your collection");
+    expect(sheet).toHaveTextContent("Your side · from your collection · 3 owned");
     expect(deckMark(sheet)).toBeEmptyDOMElement();
 
     await userEvent.click(within(sheet).getByRole("button", { name: "One more Counterspell" }));
@@ -766,7 +809,7 @@ describe("the copies a deck is holding", () => {
 
     await userEvent.click(within(sheet).getByRole("button", { name: "One fewer Counterspell" }));
     await waitFor(() => expect(deckMark(sheet)).toBeEmptyDOMElement(), SETTLE);
-    expect(sheet).toHaveTextContent("Your side · from your collection");
+    expect(sheet).toHaveTextContent("Your side · from your collection · 3 owned");
 
     await userEvent.click(within(sheet).getByRole("button", { name: "One more Counterspell" }));
     await waitFor(() => expect(deckMark(sheet)).not.toBeEmptyDOMElement(), SETTLE);

@@ -15,8 +15,11 @@ pub mod publish;
 mod snapshot;
 #[cfg(test)]
 mod tests;
+/// A wishlist's share — the whole list, one folder, or a deck's managed wishlist (issue #941).
+mod wishlist;
 
 pub use snapshot::{
     gzip, snapshot, ShareCard, ShareFields, ShareFolder, ShareSnapshot, FOLDER_IS_LOCKED,
-    FOLDER_NOT_FOUND, FOLDER_NOT_SHAREABLE, SNAPSHOT_VERSION, WHOLE_COLLECTION_TITLE,
+    FOLDER_NOT_FOUND, SNAPSHOT_VERSION, WHOLE_COLLECTION_TITLE,
 };
+pub use wishlist::{WHOLE_WISHLIST_TITLE, WISHLIST_FOLDER_NOT_FOUND};

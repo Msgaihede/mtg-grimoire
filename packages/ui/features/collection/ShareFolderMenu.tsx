@@ -51,6 +51,7 @@ import { ConfirmDialog } from "@/features/settings/ConfirmDialog";
 import { BUTTON } from "@/features/settings/controls";
 import { OpenShareDialog } from "@/features/share/OpenShareDialog";
 import { SHARE_KEY, useShares } from "@/features/share/useShares";
+import { WHOLE_WISHLIST_KEY } from "@/features/wishlist/wishlistShare";
 import { copyText } from "@/lib/clipboard";
 import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type CollectionFolder, type ShareFields, type ShareRow } from "@/lib/ipc";
@@ -60,15 +61,20 @@ import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
 /**
- * What a Share press is *about* — the whole collection, or one drawer named by its sync uid.
+ * What a Share press is *about* — the whole collection, one drawer named by its sync uid, or a
+ * level of the wishlist named by its share key (issue #941).
  *
  * A discriminated union rather than a nullable uid, and the discriminant is load-bearing:
  * `share_create`'s `folderUid` is `null` for the **whole collection**, so "no folder" and "a
  * folder I cannot name" must never be the same value. See {@link folderShareUid}.
+ *
+ * `wishlist`'s `uid` is a key `features/wishlist/wishlistShare.ts` builds — the whole list
+ * included, which is a key of its own and never `null`. A wishlist has no lock to carry.
  */
 export type ShareTarget =
   | { kind: "collection"; title: string }
-  | { kind: "folder"; uid: string; title: string; locked: boolean };
+  | { kind: "folder"; uid: string; title: string; locked: boolean }
+  | { kind: "wishlist"; uid: string; title: string };
 
 /** `share::snapshot::WHOLE_COLLECTION_TITLE`, and what the viewer draws as the binder's name. */
 export const WHOLE_COLLECTION_TITLE = "Collection";
@@ -122,12 +128,13 @@ export function folderShareUid(folder: CollectionFolder): string | null {
  * `null` in is the root of the cabinet — a destination rather than an omission, which is the
  * same distinction `share_create` draws on the wire.
  *
- * `null` out is *no control*, and there are two ways to earn it. A folder whose `kind` is not
- * `user` is a deck group or `Recently removed`: the app owns those, neither is a binder, and
- * `share::snapshot::FOLDER_NOT_SHAREABLE` refuses them on the other side — so the control is
- * absent here exactly as it is for every other folder write, which is `CollectionPage`'s
- * `userFolders` split said one more time. The other is a folder the list named no uid for; see
- * {@link folderShareUid} for why that is an absence rather than a fallback.
+ * **Every kind of folder is shareable** (issue #941) — a deck's group and `Recently removed`
+ * included. The app owns both and nothing may be filed into them by hand, but *publishing* one is
+ * a read, and the reader standing in it is choosing what to show. `share::snapshot` publishes a
+ * named one whole and still leaves them out of a whole-collection share.
+ *
+ * `null` out is *no control*, and there is one way to earn it: a folder the list named no uid
+ * for. See {@link folderShareUid} for why that is an absence rather than a fallback.
  *
  * `locked` is the **effective** lock — `lockedFolderIds`' answer, ancestry included — and never
  * the folder's own flag, because `share::snapshot` drops a folder with a locked ancestor exactly
@@ -138,7 +145,6 @@ export function shareTargetFor(
   locked: boolean,
 ): ShareTarget | null {
   if (folder === null) return { kind: "collection", title: WHOLE_COLLECTION_TITLE };
-  if (folder.kind !== "user") return null;
   const uid = folderShareUid(folder);
   if (uid === null) return null;
   return { kind: "folder", uid, title: folder.name, locked };
@@ -149,7 +155,7 @@ function uidOf(target: ShareTarget): string | null {
   return target.kind === "collection" ? null : target.uid;
 }
 
-/** Whether this target's folder is set aside. The root is never locked. */
+/** Whether this target's folder is set aside. The root is never locked, nor is a wishlist. */
 function lockedOf(target: ShareTarget): boolean {
   return target.kind === "folder" && target.locked;
 }
@@ -176,6 +182,21 @@ export function shareFor(shares: readonly ShareRow[], target: ShareTarget): Shar
  */
 export function shareIsStale(share: ShareRow | null, target: ShareTarget): boolean {
   return share !== null && share.state === "live" && lockedOf(target);
+}
+
+/** The publish row's words — the whole cabinet is *your* collection or wishlist. */
+function publishLabel(target: ShareTarget): string {
+  if (target.kind === "collection") return "Share your collection…";
+  if (target.kind === "wishlist" && target.uid === WHOLE_WISHLIST_KEY)
+    return "Share your wishlist…";
+  return "Share this folder…";
+}
+
+/** The dialog's title and the button's accessible name. */
+function shareNameOf(target: ShareTarget): string {
+  if (target.kind === "collection") return "Share your collection";
+  if (target.kind === "wishlist" && target.uid === WHOLE_WISHLIST_KEY) return "Share your wishlist";
+  return `Share ${target.title}`;
 }
 
 /* ------------------------------------------------------------------- the control ---------- */
@@ -325,7 +346,7 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
     const publish: MenuItem = {
       kind: "action",
       id: "publish",
-      label: target.kind === "collection" ? "Share your collection…" : "Share this folder…",
+      label: publishLabel(target),
       Icon: Share2,
       disabled: locked ? true : undefined,
       reason: locked ? UNLOCK_FIRST : undefined,
@@ -413,12 +434,7 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
     [menuClick, rows],
   );
 
-  const shareName =
-    target === null
-      ? ""
-      : target.kind === "collection"
-        ? "Share your collection"
-        : `Share ${target.title}`;
+  const shareName = target === null ? "" : shareNameOf(target);
 
   return (
     <div className="flex flex-col items-end gap-1">
@@ -573,7 +589,7 @@ function PublishDialog({
   return (
     <Dialog
       open={open}
-      title={target.kind === "collection" ? "Share your collection" : `Share ${target.title}`}
+      title={shareNameOf(target)}
       subtitle="Anyone with the link can view a read-only snapshot. No account required."
       closeLabel="Close share"
       size="w-[32rem]"
@@ -672,17 +688,21 @@ function PublishForm({
       <fieldset className="flex flex-col gap-2">
         <legend className="text-sm text-dim">Also send</legend>
         <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm">
-          {FIELD_ROWS.map(({ key, label }) => (
-            <label key={key} className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={fields[key]}
-                onChange={(e) => setFields((f) => ({ ...f, [key]: e.target.checked }))}
-                className={cn("size-4 accent-accent", FOCUS)}
-              />
-              {label}
-            </label>
-          ))}
+          {/* A wish has no condition, so a wishlist share offers no switch for one —
+              `share::wishlist` drops it from the snapshot whatever is sent. */}
+          {FIELD_ROWS.filter(({ key }) => key !== "condition" || target.kind !== "wishlist").map(
+            ({ key, label }) => (
+              <label key={key} className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={fields[key]}
+                  onChange={(e) => setFields((f) => ({ ...f, [key]: e.target.checked }))}
+                  className={cn("size-4 accent-accent", FOCUS)}
+                />
+                {label}
+              </label>
+            ),
+          )}
         </div>
         {/* Spec decision 3: these six are absent from the format rather than switched off in it,
             so there is no switch that could ever turn one on. Saying so is the point — a reader

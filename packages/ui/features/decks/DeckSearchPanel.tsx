@@ -26,6 +26,7 @@ import { isTokenPrinting } from "./deckTokens";
 import { TOKENS_HEADING } from "./DeckTokensPanel";
 import { cardDraggable } from "./dnd";
 import type { Deck } from "./useDeck";
+import { useDeckSearchWidth } from "./useDeckSearchWidth";
 import { useWallOracleTags } from "./useWallOracleTags";
 
 /**
@@ -493,6 +494,10 @@ export function DeckSearchPanel({
   // second is only answerable against the first. See {@link tabsFor} and {@link drawnTab}.
   const tabs = tabsFor(tracksCollection);
   const { tab, setTab } = useDeckSearchTab(tabs);
+  // The width this deck's column was last dragged to (issue #932) — per deck, because the editor
+  // is keyed by deck id and each deck mounts its own panel. The editor starts the read beside
+  // `deck_get` (`usePrefetchDeckSearchWidth`) so the column's first paint is already this width.
+  const { width, setWidth } = useDeckSearchWidth(deckId);
 
   return (
     <CardSearchPanel
@@ -509,6 +514,8 @@ export function DeckSearchPanel({
       roomy={roomy}
       overWidth={overWidth}
       maxWidth={maxWidth}
+      width={width}
+      onWidthChange={setWidth}
       // **Above the body rather than inside it**, which is what makes it the panel's own chrome
       // rather than one tab's: it is drawn for both tabs, it does not move when they switch, and
       // it survives the railing that merely *hides* the body below — so a width change cannot take

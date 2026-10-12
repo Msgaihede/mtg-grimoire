@@ -27,7 +27,7 @@ import { openDropdown, pickOption } from "@/test-dropdown";
  * `useTrades`' `write` invalidates the whole `["trade"]` root when a write settles, so every
  * assertion made after a write is made against a *second read*. A `mockResolvedValue` fixture
  * would answer that read with the trade as it was before the press — and a quantity step would
- * look like it stepped back. So the thirteen commands below read and write one array, the way the
+ * look like it stepped back. So the fourteen commands below read and write one array, the way the
  * real ones read and write two tables, and what a test asserts after a press is what a reader
  * would see after it.
  *
@@ -45,6 +45,7 @@ const ipcMock = vi.hoisted(() => ({
   tradeAddLines: vi.fn(),
   tradeUpdateLine: vi.fn(),
   tradeRemoveLine: vi.fn(),
+  tradeSwapSides: vi.fn(),
   tradeFinish: vi.fn(),
   tradeArchive: vi.fn(),
   tradeReopen: vi.fn(),
@@ -371,6 +372,11 @@ beforeEach(() => {
   });
   m.tradeRemoveLine.mockReset().mockImplementation(async (lineId: number) => {
     changeLine(lineId, () => null);
+  });
+  m.tradeSwapSides.mockReset().mockImplementation(async (id: number) => {
+    change(id, (t) => ({
+      lines: t.lines.map((l) => ({ ...l, side: l.side === "mine" ? "theirs" : "mine" })),
+    }));
   });
   m.tradeFinish.mockReset().mockImplementation(async (id: number) => {
     const outcome = {
@@ -932,7 +938,8 @@ describe("an open trade", () => {
     const more = within(ring).getByRole("button", { name: "Increase Quantity of Sol Ring" });
 
     // One copy, and one is held outside every deck: the gold mark, and nothing in red.
-    const gold = within(ring).getByText("from your collection");
+    // The count is every copy the collection holds of it, a deck's included.
+    const gold = within(ring).getByText("from your collection · 3 owned");
     expect(gold.classList.contains("text-accent")).toBe(true);
     expect(gold.classList.contains("text-destructive")).toBe(false);
     expect(deckMark(ring)).toBeNull();
@@ -944,7 +951,7 @@ describe("an open trade", () => {
     expect(deckMark(ring)?.classList.contains("text-destructive")).toBe(true);
     expect(deckMark(ring)?.classList.contains("text-accent")).toBe(false);
     // Never both: a line that reaches into a deck does not also wear the gold.
-    expect(within(ring).queryByText("from your collection")).not.toBeInTheDocument();
+    expect(within(ring).queryByText(/from your collection/)).not.toBeInTheDocument();
 
     await user.click(more);
     await waitFor(() =>
@@ -956,9 +963,34 @@ describe("an open trade", () => {
 
     // Back to one copy, and back to gold.
     await waitFor(() => expect(deckMark(ring)).toBeNull());
-    expect(within(ring).getByText("from your collection").classList.contains("text-accent")).toBe(
-      true,
-    );
+    expect(
+      within(ring).getByText("from your collection · 3 owned").classList.contains("text-accent"),
+    ).toBe(true);
+  });
+
+  /**
+   * Issue #935: the copies asked for past the collection are a line of their own, which the
+   * backend makes. That line wears no gold and claims none of the copies the collection's line
+   * already holds — so it warns about no deck either.
+   */
+  it("draws the copies past the collection as a line without its mark, and no deck warning", async () => {
+    const held = { cardId: "ring", owned: 1, ownedInDecks: 1, deckNames: ["Serah"] };
+    backend.trades = [
+      trade({
+        id: 5,
+        lines: [
+          line({ side: "mine", name: "Sol Ring", source: "collection", quantity: 2, ...held }),
+          line({ side: "mine", name: "Sol Ring", source: "search", quantity: 3, ...held }),
+        ],
+      }),
+    ];
+    wrap(<TradePage />);
+    const section = await tradeSection("Trade 5");
+    const [own, past] = within(side(section, "You give")).getAllByRole("listitem");
+
+    expect(deckMark(own)).toHaveTextContent("1 from your deck Serah");
+    expect(within(past).queryByText(/from your collection/)).not.toBeInTheDocument();
+    expect(deckMark(past)).toBeNull();
   });
 
   it("marks a searched-for line whose only copy is a deck's, and never a card on their side", async () => {
@@ -1222,6 +1254,56 @@ describe("an open trade", () => {
 
     expect(ipcMock.tradeDuplicate).toHaveBeenCalledExactlyOnceWith(5);
     await tradeSection("Trade 5 copy");
+  });
+
+  it("swaps every card onto the other side from the arrows between the panels", async () => {
+    const user = userEvent.setup();
+    backend.trades = [canvasTrade()];
+    wrap(<TradePage />);
+    const section = await tradeSection("Trade 5");
+    expect(lineOf(side(section, "You give"), "Ragavan, Nimble Pilferer")).toBeDefined();
+
+    await user.click(within(section).getByRole("button", { name: "Swap sides" }));
+
+    expect(ipcMock.tradeSwapSides).toHaveBeenCalledExactlyOnceWith(5);
+    await waitFor(() =>
+      expect(lineOf(side(section, "They give"), "Ragavan, Nimble Pilferer")).toBeDefined(),
+    );
+    expect(lineOf(side(section, "You give"), "Lightning Bolt")).toBeDefined();
+    expect(lineOf(side(section, "You give"), "Ragavan, Nimble Pilferer")).toBeUndefined();
+  });
+
+  it("says why a swap was refused, under the name", async () => {
+    const user = userEvent.setup();
+    backend.trades = [canvasTrade()];
+    wrap(<TradePage />);
+    const section = await tradeSection("Trade 5");
+    ipcMock.tradeSwapSides.mockRejectedValueOnce("that trade is no longer open");
+
+    await user.click(within(section).getByRole("button", { name: "Swap sides" }));
+
+    expect(await within(section).findByRole("alert")).toHaveTextContent(
+      "Couldn't swap the sides — that trade is no longer open",
+    );
+    expect(lineOf(side(section, "You give"), "Ragavan, Nimble Pilferer")).toBeDefined();
+  });
+
+  it("offers no swap on a trade with no cards, nor on one that is closed", async () => {
+    const user = userEvent.setup();
+    backend.trades = [
+      trade({ id: 4 }),
+      { ...canvasTrade(), status: "archived", closedAt: day(10, 4) },
+    ];
+    wrap(<TradePage />);
+    const empty = await tradeSection("Trade 4");
+    const swap = within(empty).getByRole("button", { name: "Swap sides" });
+    expect(swap).toHaveAttribute("aria-disabled", "true");
+    await user.click(swap);
+    expect(ipcMock.tradeSwapSides).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: /Trade 5/ }));
+    const closed = await tradeSection("Trade 5");
+    expect(within(closed).queryByRole("button", { name: "Swap sides" })).not.toBeInTheDocument();
   });
 
   it("archives, and the same page stops being editable", async () => {

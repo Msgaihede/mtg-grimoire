@@ -71,6 +71,12 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     syncStatus: vi.fn(),
     syncRun: vi.fn(),
     onSyncProgress: vi.fn(),
+    // The tag sidebar's two remembered answers (issue #937) — railed and never dragged, so it
+    // reads nothing about tags. `TagSearchPanel.test.tsx` is where it is opened.
+    searchOpen: vi.fn().mockResolvedValue({}),
+    setSearchOpen: vi.fn().mockResolvedValue(undefined),
+    panelWidth: vi.fn().mockResolvedValue({}),
+    setPanelWidth: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -101,6 +107,7 @@ const BOLT: CardSummary = {
   // card is `false` rather than a third state to fence. The rows that wear the crown spread
   // `gameChanger: true` over this one.
   gameChanger: false,
+  releasedAt: null,
   ownedQuantity: 0,
   wishlisted: false,
   printings: 1,
@@ -126,6 +133,7 @@ const SPARSE: CardSummary = {
   // Not among the nullable columns, however sparse the rest of the row is: `search.rs` reads
   // `cards.game_changer` as an `Option` and flattens a NULL to `false` before it crosses.
   gameChanger: false,
+  releasedAt: null,
   ownedQuantity: 0,
   wishlisted: false,
   printings: 1,

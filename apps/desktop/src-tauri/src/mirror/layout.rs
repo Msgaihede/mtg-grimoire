@@ -701,6 +701,8 @@ mod tests {
         WishlistFolder {
             managed_deck_id: None,
             managed_tokens: false,
+            sync_uid: None,
+            managed_deck_uid: None,
             id,
             parent_id,
             name: name.to_owned(),

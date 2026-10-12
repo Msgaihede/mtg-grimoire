@@ -195,8 +195,8 @@ import { boxed, startPointerDrag } from "@/test-drag";
  * The shell's update state, in its resting position: nothing found, nothing running.
  *
  * These tests are about the sidebar, the sync and the drop targets, and `App` — not the
- * shell — is what actually calls `useUpdate`. The ribbon's update button has its own tests
- * in `Ribbon.test.tsx`, where the interesting values are.
+ * shell — is what actually calls `useUpdate`. The header's update button has its own tests
+ * in `ChromeStatus.test.tsx`, where the interesting values are.
  */
 const noUpdate: Update = {
   status: null,
@@ -338,10 +338,13 @@ it("renders nav and refresh button", async () => {
   // keeps the ribbon's own title out of the answer, and the collapse toggle at the rail's foot is
   // the last button inside it.
   const nav = screen.getByRole("navigation", { name: "Views" });
-  expect(within(nav).getAllByRole("button").map((b) => b.textContent)).toEqual([
+  expect(
+    within(nav)
+      .getAllByRole("button")
+      .map((b) => b.textContent),
+  ).toEqual([
     "Home",
     "Search",
-    "Tagger",
     "Decks",
     "Collection",
     "Wishlist",
@@ -394,8 +397,7 @@ describe("the Shared row", () => {
     expect(railButtons()).toEqual([
       "Home",
       "Search",
-      "Tagger",
-      "Decks",
+        "Decks",
       "Collection",
       "Wishlist",
       "Shared",
@@ -433,6 +435,39 @@ describe("the Shared row", () => {
  * cannot. Nothing else in the app draws a close button, so dropping this component is not a
  * cosmetic regression and would leave every other test in this file green.
  */
+/**
+ * No page header since 2026-10-11: the heading is for screen readers alone, inside `main` (the
+ * positioned scroller an `sr-only` needs), and the app's status rides the window header — so
+ * Refresh is an icon button there and the mana line is the next thing under it.
+ */
+it("draws no visible page header and carries Refresh in the window header", () => {
+  render(
+    <AppShell update={noUpdate}>
+      <div>content</div>
+    </AppShell>,
+  );
+
+  const heading = screen.getByRole("heading", { level: 1 });
+  expect(heading).toHaveClass("sr-only");
+  expect(heading.closest("main")).not.toBeNull();
+
+  const header = screen
+    .getByText("MTG GRIMOIRE")
+    .closest("[data-tauri-drag-region].shrink-0")?.parentElement;
+  const refresh = screen.getByRole("button", { name: "Refresh data" });
+  expect(header?.contains(refresh)).toBe(true);
+  expect(refresh).toHaveTextContent("");
+  // Refresh sits immediately before the keyboard map's button.
+  const keys = screen.getByRole("button", { name: "Keyboard shortcuts" });
+  expect(refresh.compareDocumentPosition(keys) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+  // The header, then the mana line, then the row the page lives in.
+  const root = document.querySelector("div.h-dvh");
+  expect(root?.children[0]).toBe(header);
+  expect(root?.children[1]).toHaveAttribute("aria-hidden", "true");
+  expect(root?.children[1]).toHaveClass("h-0.5");
+});
+
 it("draws the window's own caption, because Windows no longer does", () => {
   render(
     <AppShell update={noUpdate}>
@@ -820,15 +855,14 @@ describe("collapsing the sidebar", () => {
    * An `aria-label` would be a second place each word is written, and the first of the two to
    * change would be the one nothing tested.
    */
-  it("keeps the nine destinations named, and pressable, while they are drawn as icons", async () => {
+  it("keeps the eight destinations named, and pressable, while they are drawn as icons", async () => {
     navCollapsed.mockResolvedValue(true);
     render(<AppShell update={noUpdate}>{null}</AppShell>);
     await screen.findByRole("button", { name: "Expand sidebar" });
 
     for (const label of [
       "Search",
-      "Tagger",
-      "Decks",
+        "Decks",
       "Collection",
       "Wishlist",
       "Scanner",
@@ -846,8 +880,7 @@ describe("collapsing the sidebar", () => {
   });
 
   /** An entry's word, which is in the DOM in both states and `sr-only` in one of them. */
-  const word = (label: string) =>
-    screen.getByRole("button", { name: label }).querySelector("span");
+  const word = (label: string) => screen.getByRole("button", { name: label }).querySelector("span");
 
   /**
    * The first half of the 2026-08-22 report, as the rule rather than as the symptom.
@@ -938,7 +971,7 @@ describe("collapsing the sidebar", () => {
     render(<AppShell update={noUpdate}>{null}</AppShell>);
     const collapse = await screen.findByRole("button", { name: "Collapse sidebar" });
     const entries = () =>
-      ["Search", "Tagger", "Decks", "Collection", "Wishlist", "Settings"].map((label) =>
+      ["Search", "Decks", "Collection", "Wishlist", "Settings"].map((label) =>
         screen.getByRole("button", { name: label }),
       );
     for (const entry of [...entries(), collapse]) {
@@ -1449,7 +1482,7 @@ describe("the card menu's deck write", () => {
  * whatever is on screen.
  *
  * Both are asserted through the **store** rather than only through what is drawn, and that is
- * deliberate on either side: `activeView` is what the nine destinations, the ribbon's title and
+ * deliberate on either side: `activeView` is what the nine destinations, the page's `<h1>` and
  * `App`'s view swap all read, so it is the fact the binding is actually for; and `keyMapOpen`'s
  * panel is drawn by `TitleBar`, whose own file tests it — a shell test that went looking for the
  * panel would be asserting somebody else's component through this one. The first case checks the
@@ -1457,7 +1490,7 @@ describe("the card menu's deck write", () => {
  * a store-only assertion cannot see.
  */
 describe("the shell's keyboard bindings", () => {
-  it("switches view on Ctrl+4", async () => {
+  it("switches view on Ctrl+3", async () => {
     const user = userEvent.setup();
     render(
       <AppShell update={noUpdate}>
@@ -1465,15 +1498,15 @@ describe("the shell's keyboard bindings", () => {
       </AppShell>,
     );
 
-    await user.keyboard("{Control>}4{/Control}");
+    await user.keyboard("{Control>}3{/Control}");
 
-    // Decks and not something else, which is the whole of what "by index" buys: the fourth chord
-    // activates the fourth entry in `NAV`, so the rail's order is the binding rather than a list
-    // of nine ids restated in the handler. Written out as the word a reader would say rather
-    // than as `NAV[3].id`, per the rule that an assertion must not read its own constant.
+    // Decks and not something else, which is the whole of what "by index" buys: the third chord
+    // activates the third chorded entry in `NAV`, so the rail's order is the binding rather than a
+    // list of ids restated in the handler. Written out as the word a reader would say rather than
+    // as `NAV[2].id`, per the rule that an assertion must not read its own constant.
     //
-    // **It was `Ctrl+3` until the home page took the head of `NAV`**, which is the renumbering
-    // this file's next case is the fence around.
+    // **It was `Ctrl+4` while the Tagger row sat under Search** (issue #937 retired it), which is
+    // the renumbering this file's cases below are the fence around.
     expect(useAppStore.getState().activeView).toBe("decks");
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Decks");
   });
@@ -1481,23 +1514,15 @@ describe("the shell's keyboard bindings", () => {
   /**
    * ⚠️ **The Shared view has no chord, and this case is the fence around that.**
    *
-   * Eleven destinations against nine digits: `Ctrl+0` is not a tenth step of the run, so two
-   * entries go without — and this one goes without because it is the row the rail does not always
-   * draw. A digit bound to a row that appears and disappears would either shift every digit after
-   * it or point at a row half the readers do not have — one press meaning two things to two
-   * readers, which is the whole thing these chords binding against a *list* exists to prevent.
-   * (`settings` is the other, for the unrelated reason the next case pins: the run simply ends
-   * before it.)
+   * Ten destinations against nine digits: `Ctrl+0` is not a tenth step of the run, so one entry
+   * goes without — and it is this one, because it is the row the rail does not always draw. A
+   * digit bound to a row that appears and disappears would either shift every digit after it or
+   * point at a row half the readers do not have — one press meaning two things to two readers.
    *
-   * It cost that view its keyboard route and nothing else: the way in is the cabinet's own
-   * **Open a shared collection** button, which is what the chord was standing in for while
-   * nothing else reached the view.
-   *
-   * **`Ctrl+7` is Scanner**, and asserting that rather than merely asserting *not shared* is what
-   * makes this a test of the binding rather than of an absence. It was `Ctrl+6` until Home took
-   * the head of `NAV`.
+   * **`Ctrl+6` is Scanner**, and asserting that rather than merely asserting *not shared* is what
+   * makes this a test of the binding rather than of an absence.
    */
-  it("gives the Shared view no chord, and Ctrl+7 reaches Scanner instead", async () => {
+  it("gives the Shared view no chord, and Ctrl+6 reaches Scanner instead", async () => {
     const user = userEvent.setup();
     render(
       <AppShell update={noUpdate}>
@@ -1510,7 +1535,7 @@ describe("the shell's keyboard bindings", () => {
       }),
     ).toBeNull();
 
-    await user.keyboard("{Control>}7{/Control}");
+    await user.keyboard("{Control>}6{/Control}");
 
     expect(useAppStore.getState().activeView).toBe("scanner");
     // …and no digit reaches it: the run is nine long and this destination is not on it.
@@ -1521,20 +1546,14 @@ describe("the shell's keyboard bindings", () => {
   });
 
   /**
-   * ⚠️ **The renumbering, pinned end to end — and `Ctrl+9` no longer opens Settings.**
+   * ⚠️ **The renumbering, pinned end to end — and `Ctrl+9` opens Settings again.**
    *
-   * Home took the head of `NAV`, so every digit moved one row down the rail and the ninth digit
-   * stops at Playtesting. That is a deliberate break in a binding readers have in their fingers,
-   * and this is the case that makes putting it back a red build rather than a quiet merge: a
-   * count can only say *how many* destinations go without a chord, never *which*, and the which
-   * is the half a reader feels.
-   *
-   * The two absences are asserted differently on purpose. Shared is unreachable by **any** digit
-   * (the case above sweeps all nine), because its exclusion is a filter. Settings is unreachable
-   * because the run **ends** — so what is pinned here is the last digit landing one row short of
-   * it, which is the fact that would change the day a tenth digit existed.
+   * The Tagger row left the rail (issue #937 — tag search is the Search page's sidebar), so every
+   * digit after Search moved one row up and the ninth lands on Settings, the last row. A count can
+   * only say *how many* destinations a chord reaches, never *which*, and the which is the half a
+   * reader feels — so the ends and a middle are named.
    */
-  it("runs Ctrl+1 to Ctrl+9 from Home to Playtesting, leaving Settings off the end", async () => {
+  it("runs Ctrl+1 to Ctrl+9 from Home to Settings", async () => {
     const user = userEvent.setup();
     render(
       <AppShell update={noUpdate}>
@@ -1549,23 +1568,14 @@ describe("the shell's keyboard bindings", () => {
     expect(useAppStore.getState().activeView).toBe("search");
 
     await user.keyboard("{Control>}7{/Control}");
-    expect(useAppStore.getState().activeView).toBe("scanner");
-
-    await user.keyboard("{Control>}8{/Control}");
     expect(useAppStore.getState().activeView).toBe("trade");
 
-    // The end of the run, and the whole of the breaking change: this was Settings until the home
-    // page shipped.
-    await user.keyboard("{Control>}9{/Control}");
+    await user.keyboard("{Control>}8{/Control}");
     expect(useAppStore.getState().activeView).toBe("playtesting");
 
-    // …and no digit reaches Settings at all. Swept rather than asserted once, because the failure
-    // this guards against is a *shift* — a chord list grown to ten, or Home dropped back out of
-    // `NAV` — and either would land Settings on some digit rather than on the one it used to have.
-    for (const digit of ["1", "2", "3", "4", "5", "6", "7", "8", "9"]) {
-      await user.keyboard(`{Control>}${digit}{/Control}`);
-      expect(useAppStore.getState().activeView).not.toBe("settings");
-    }
+    // The end of the run: Settings, which Home had pushed off it until the Tagger row left.
+    await user.keyboard("{Control>}9{/Control}");
+    expect(useAppStore.getState().activeView).toBe("settings");
   });
 
   it("does not switch view while a modal is open", async () => {
@@ -1654,7 +1664,7 @@ describe("the shell's keyboard bindings", () => {
   });
 
   /**
-   * And the guard is `F1`'s alone — a held `Ctrl+4` goes on arriving.
+   * And the guard is `F1`'s alone — a held `Ctrl+3` goes on arriving.
    *
    * Selecting the view you are already on is idempotent, so there is no failure to guard against
    * here, and hoisting the check to the top of the handler would decide the question for every
@@ -1662,14 +1672,14 @@ describe("the shell's keyboard bindings", () => {
    * that placement a decision rather than an accident: it goes red on a handler that drops every
    * repeated press.
    */
-  it("keeps switching view while Ctrl+4 auto-repeats", () => {
+  it("keeps switching view while Ctrl+3 auto-repeats", () => {
     render(
       <AppShell update={noUpdate}>
         <div>content</div>
       </AppShell>,
     );
 
-    fireEvent.keyDown(document.body, { key: "4", ctrlKey: true, repeat: true });
+    fireEvent.keyDown(document.body, { key: "3", ctrlKey: true, repeat: true });
 
     expect(useAppStore.getState().activeView).toBe("decks");
   });
@@ -1875,9 +1885,9 @@ describe("the stored opening view", () => {
    * The behaviour the mount buys: a stored word lands the app on that view.
    *
    * The store is put on Home first — where `store.ts` really starts — so this is about a *move*
-   * rather than about the state the `beforeEach` already left behind. The ribbon's `<h1>` is the
+   * rather than about the state the `beforeEach` already left behind. The page's `<h1>` is the
    * observable rather than the store field, because a reader cannot see a zustand field: `NAV`'s
-   * label is both the rail's word and the ribbon's title, so one heading says which page the app
+   * label is both the rail's word and the page's heading, so one heading says which page the app
    * came up on.
    */
   it("lands the app on the stored view", async () => {
@@ -1965,9 +1975,10 @@ describe("the light edition", () => {
     ]);
   });
 
-  it("draws no window caption, and the full edition still does", () => {
+  it("draws no draggable caption, and the full edition still does", () => {
     // `TitleBar` is the only thing in the shell that carries a drag region, and the attribute
-    // does not inherit — so its presence is the caption's presence.
+    // does not inherit — so its presence is the caption's presence. The light edition's header
+    // band claims none.
     const { unmount } = renderLight();
     expect(document.querySelector("[data-tauri-drag-region]")).toBeNull();
     unmount();
@@ -2047,26 +2058,21 @@ describe("the light edition", () => {
   });
 
   /**
-   * The keyboard map's only mount is inside `TitleBar`, and this edition draws no `TitleBar` — so
-   * a shell that went on claiming `F1` would take the browser's own key and show nothing for it.
+   * The light edition draws the header as a band without window verbs (2026-10-11): the same
+   * lockup, the same status run and the same keyboard map. So `F1` is taken here too, and the
+   * band carries no drag region, because nothing in it can move the window.
    *
    * **Fired by hand** for the reason the auto-repeat cases above give in another form: what is
    * asserted is the event's own `defaultPrevented`, and `user.keyboard` does not hand it back.
    */
-  it("leaves F1 to the browser, because nothing here would draw the map", () => {
-    const { unmount } = renderLight();
-    expect(fireEvent.keyDown(document.body, { key: "F1" })).toBe(true);
-    expect(useAppStore.getState().keyMapOpen).toBe(false);
-    unmount();
-
-    // The control: the same press under the edition that draws a caption is taken and opens the
-    // map — so the two lines above are about the edition, and not about a keydown the handler
-    // never matched in the first place.
-    render(
-      <AppShell update={noUpdate}>
-        <div>content</div>
-      </AppShell>,
-    );
+  it("draws the header band without window verbs, and F1 opens its map", () => {
+    renderLight();
+    expect(screen.getByText("MTG GRIMOIRE")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Keyboard shortcuts" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refresh data" })).toBeInTheDocument();
+    for (const name of ["Minimize", "Maximize", "Close"]) {
+      expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+    }
     expect(fireEvent.keyDown(document.body, { key: "F1" })).toBe(false);
     expect(useAppStore.getState().keyMapOpen).toBe(true);
   });

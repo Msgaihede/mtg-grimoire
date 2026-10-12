@@ -5204,6 +5204,166 @@ pub fn swap_printing(
     })
 }
 
+/// What [`split_printing`] says when it is asked to split off no copies at all.
+pub const SPLIT_NONE: &str = "A split moves at least one copy.";
+
+/// What [`split_printing`] says when the split would take every copy the row holds.
+///
+/// A split leaves a row behind by definition; taking all of them is a swap, and the sentence
+/// says so rather than quietly doing the other write — the reader pressed *split*, and a line
+/// that vanished would read like a bug.
+fn split_leaves_none(held: i64) -> String {
+    format!(
+        "This row holds {held} — a split has to leave at least one behind. To move every copy, \
+         change the printing instead."
+    )
+}
+
+/// Split some of a deck row's copies onto **another printing of the same card**: same
+/// category, same variant, same finish — the deck editor's `Split to new printing` (issue #934).
+///
+/// [`swap_printing`] for part of a row. The row keeps `quantity − copies` of its own printing,
+/// and `copies` land on the printing pressed, folding into whatever that category already
+/// holds of it ([`SwapResult::folded`]). Every refusal is the swap's — the same printing, a
+/// printing `cards` no longer has, two printings of different cards, a row that is not in that
+/// pile — plus the two a quantity owes: none, and all of them.
+///
+/// **One transaction and one history row**, where the page could have made the two writes a
+/// split is made of (a quantity step and an add). Two writes would be two Ctrl+Z presses for
+/// one act, and a window between them in which the deck holds too many copies or too few.
+///
+/// **The new row wears the old one's label** — a split is the reader choosing which art some
+/// of the copies play, not filing them anew — and a fold keeps the survivor's own label, taking
+/// the split row's only where it has none: [`swap_printing`]'s rule.
+///
+/// It runs [`release_unclaimed_copies`] for the swap's reason, and the swap's bargain about
+/// undo holds here too: the history step restores `deck_cards` and no collection table.
+#[allow(clippy::too_many_arguments)]
+pub fn split_printing(
+    conn: &Connection,
+    deck_id: i64,
+    from_card_id: &str,
+    to_card_id: &str,
+    category_id: i64,
+    variant: &str,
+    finish: Option<&str>,
+    copies: i64,
+) -> Result<SwapResult, String> {
+    let variant = crate::deck_meta::valid_variant(variant)?;
+    let finish = normalise_finish(finish)?;
+    // Before the transaction, so a refusal does not move `updated_at`.
+    if from_card_id == to_card_id {
+        return Err(SAME_PRINTING.to_owned());
+    }
+    if copies < 1 {
+        return Err(SPLIT_NONE.to_owned());
+    }
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    touch_deck(&tx, deck_id)?;
+    let category = category_of_deck(&tx, deck_id, variant, category_id)?;
+
+    let (from_id, held, from_name, from_set, from_label): (i64, i64, String, String, Option<i64>) =
+        tx.query_row(
+            "SELECT id, quantity, name, set_code, label_id FROM deck_cards
+              WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4
+                AND coalesce(finish, '') = coalesce(?5, '')",
+            params![deck_id, from_card_id, category_id, variant, finish],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| card_gone(&category))?;
+    if copies >= held {
+        return Err(split_leaves_none(held));
+    }
+
+    let (set_code, collector_number, lang, name) =
+        printing_row(&tx, to_card_id)?.ok_or_else(|| PRINTING_GONE.to_owned())?;
+    // [`swap_printing`]'s fence, for its reason: the insert below carries copies onto whatever
+    // id it is handed.
+    if let (Some(from_oracle), Some(to_oracle)) =
+        (oracle_of(&tx, from_card_id)?, oracle_of(&tx, to_card_id)?)
+    {
+        if from_oracle != to_oracle {
+            return Err(not_the_same_card(&from_name, &name));
+        }
+    }
+
+    // Both printings' cells, so undoing a split that folded puts the target row back at the
+    // count it had rather than deleting a row the reader put there separately.
+    let cells = vec![
+        crate::deck_undo::Cell::card(variant, category_id, from_card_id),
+        crate::deck_undo::Cell::card(variant, category_id, to_card_id),
+    ];
+    let before = crate::deck_undo::read_cells(&tx, deck_id, &cells)?;
+
+    tx.execute(
+        "UPDATE deck_cards SET quantity = quantity - ?2, updated_at = unixepoch() WHERE id = ?1",
+        params![from_id, copies],
+    )
+    .map_err(|e| e.to_string())?;
+    // `needs_review` is not carried: the copies land on a printing that is in `cards`, which is
+    // the swap's cure. A fold leaves the target row's own flag alone.
+    let sql = format!(
+        "INSERT INTO deck_cards
+            (deck_id, category_id, variant, card_id, set_code, collector_number, lang, name,
+             label_id, finish, quantity, created_at, updated_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11, unixepoch(), unixepoch())
+         ON CONFLICT({grain}) DO UPDATE SET
+            quantity = deck_cards.quantity + excluded.quantity,
+            label_id = coalesce(deck_cards.label_id, excluded.label_id),
+            updated_at = unixepoch()
+         RETURNING quantity",
+        grain = crate::schema::DECK_CARD_GRAIN
+    );
+    let landed: i64 = tx
+        .query_row(
+            &sql,
+            params![
+                deck_id,
+                category_id,
+                variant,
+                to_card_id,
+                set_code,
+                collector_number,
+                lang,
+                name,
+                from_label,
+                finish,
+                copies,
+            ],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    // A fresh row holds exactly the copies split onto it; anything more was already there.
+    let folded = landed > copies;
+    release_unclaimed_copies(&tx, deck_id, variant)?;
+
+    // `swap`'s kind, because `AUDIT_KINDS` is CHECK-constrained and this is the same act on
+    // part of a row; `split` is what tells the history's sentence apart (`auditText.ts`).
+    let audit_id = crate::deck_audit::record(
+        &tx,
+        deck_id,
+        variant,
+        crate::deck_audit::SWAP,
+        Some((to_card_id, &name)),
+        &json!({
+            "category": category,
+            "fromSet": from_set,
+            "toSet": set_code,
+            "split": copies,
+            "folded": folded,
+        }),
+        0,
+    )?;
+    crate::deck_undo::record_cells(&tx, audit_id, deck_id, cells, before, None)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(SwapResult {
+        folded,
+        quantity: landed,
+    })
+}
+
 /// Change which object a deck row plays: the regular copy, the foil, or the etched one.
 ///
 /// **The same act as [`swap_printing`], one axis over** — the deck plays a different physical
@@ -9061,6 +9221,121 @@ mod tests {
         let swapped =
             swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", main, LIVE, None).unwrap();
         assert_eq!((swapped.folded, swapped.quantity), (false, 3));
+    }
+
+    /// `Split to new printing` (issue #934): part of the row moves onto the printing pressed and
+    /// the rest stays, as one edit, with the label carried onto the new row.
+    #[test]
+    fn a_split_leaves_the_rest_of_the_row_and_files_the_copies_on_the_new_printing() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let label = crate::deck_meta::create_label(&conn, Some(deck.id), "Flex", "amber").unwrap();
+        add(&conn, deck.id, "bolt-lea", main, 4);
+        crate::deck_meta::set_card_label(
+            &conn,
+            deck.id,
+            "bolt-lea",
+            main,
+            LIVE,
+            None,
+            Some(label.id),
+        )
+        .unwrap();
+        stop_the_clock(&conn, deck.id);
+
+        let split =
+            split_printing(&conn, deck.id, "bolt-lea", "bolt-m10", main, LIVE, None, 3).unwrap();
+
+        assert_eq!((split.folded, split.quantity), (false, 3));
+        assert!(touched_at(&conn, deck.id) > UNMOVED, "a split is an edit");
+        assert_eq!(
+            category_rows(&conn, deck.id),
+            vec![
+                ("bolt-lea".to_owned(), main, 1),
+                ("bolt-m10".to_owned(), main, 3),
+            ],
+        );
+        let (set, labelled): (String, Option<i64>) = conn
+            .query_row(
+                "SELECT set_code, label_id FROM deck_cards WHERE card_id = 'bolt-m10'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            set, "m10",
+            "the new row is denormalized from the printing split TO"
+        );
+        assert_eq!(
+            labelled,
+            Some(label.id),
+            "the split copies keep the row's label"
+        );
+    }
+
+    /// A split onto a printing the pile already holds folds into it, on the grain — the same
+    /// printing in another pile is not in the way.
+    #[test]
+    fn a_split_onto_an_existing_row_folds_and_says_so() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let side = kind_of(&conn, deck.id, "side");
+        add(&conn, deck.id, "bolt-lea", main, 3);
+        add(&conn, deck.id, "bolt-m10", main, 2);
+        add(&conn, deck.id, "bolt-m10", side, 1);
+
+        let split =
+            split_printing(&conn, deck.id, "bolt-lea", "bolt-m10", main, LIVE, None, 2).unwrap();
+
+        assert_eq!((split.folded, split.quantity), (true, 4));
+        assert_eq!(
+            category_rows(&conn, deck.id),
+            vec![
+                ("bolt-m10".to_owned(), side, 1),
+                ("bolt-lea".to_owned(), main, 1),
+                ("bolt-m10".to_owned(), main, 4),
+            ],
+        );
+    }
+
+    /// The refusals a quantity owes, on top of the swap's: none, and every copy — a split has to
+    /// leave a row behind, and moving all of them is the swap. Neither writes anything.
+    #[test]
+    fn a_split_refuses_none_all_and_the_same_printing_and_writes_nothing() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-lea", main, 3);
+        stop_the_clock(&conn, deck.id);
+
+        let none = split_printing(&conn, deck.id, "bolt-lea", "bolt-m10", main, LIVE, None, 0)
+            .unwrap_err();
+        assert_eq!(none, SPLIT_NONE);
+        let all = split_printing(&conn, deck.id, "bolt-lea", "bolt-m10", main, LIVE, None, 3)
+            .unwrap_err();
+        assert!(
+            all.contains("holds 3") && all.contains("change the printing"),
+            "{all}"
+        );
+        let same = split_printing(&conn, deck.id, "bolt-lea", "bolt-lea", main, LIVE, None, 1)
+            .unwrap_err();
+        assert_eq!(same, SAME_PRINTING);
+        let other = split_printing(&conn, deck.id, "bolt-lea", "serra-lea", main, LIVE, None, 1)
+            .unwrap_err();
+        assert!(other.contains("Serra Angel"), "{other}");
+
+        assert_eq!(
+            category_rows(&conn, deck.id),
+            vec![("bolt-lea".to_owned(), main, 3)]
+        );
+        assert_eq!(
+            touched_at(&conn, deck.id),
+            UNMOVED,
+            "a refusal is not an edit"
+        );
     }
 
     /// A copy is a copy of the whole deck: its cards in **both** variants, its categories —

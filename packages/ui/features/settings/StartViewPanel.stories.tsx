@@ -80,7 +80,6 @@ export const Default: Story = {
       "Scanner",
       "Search",
       "Settings",
-      "Tagger",
       "Trade",
       "Wishlist",
     ]);

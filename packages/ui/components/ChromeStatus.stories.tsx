@@ -4,7 +4,8 @@ import { TOOLTIP_OPEN_MS } from "@/components/tooltip/TooltipProvider";
 import { RANK } from "@/lib/activity";
 import type { SyncStatus } from "@/lib/ipc";
 import { statusLine } from "@/lib/useSync";
-import { Ribbon } from "./Ribbon";
+import { ManaLine } from "./ManaLine";
+import { ChromeStatus } from "./ChromeStatus";
 
 /**
  * One `sync_status` answer, of the shape `sync::status` returns.
@@ -34,11 +35,10 @@ function status(over: Partial<SyncStatus> = {}): SyncStatus {
 const IDLE_LINE = statusLine(status()) ?? "";
 
 const meta = {
-  title: "Chrome/Ribbon",
-  component: Ribbon,
+  title: "Chrome/Status",
+  component: ChromeStatus,
   tags: ["autodocs"],
   args: {
-    title: "Search",
     statusLine: IDLE_LINE,
     dataDir: status().dataDir,
     busy: false,
@@ -49,13 +49,15 @@ const meta = {
     activityVisible: false,
   },
   decorators: [
-    // The ribbon is `shrink-0` inside a flex column and stretches to whatever it is given, so a
-    // story needs a width to be a row rather than a stack. 1072px is the window's 1280 less the
-    // `w-52` sidebar it sits beside (`AppShell.tsx:92`) — this one is *not* inside `main`, so
-    // unlike the filter rows it keeps the `p-5` those lose.
-    (Story) => (
-      <div className="w-[1072px]">
-        <Story />
+    // The run is the window header's right-hand end, so a story draws it where it lives: in a
+    // 34px surface row at the 1280px window's width, right-aligned, with the mana line under it
+    // reading the same job `AppShell` hands both.
+    (Story, { args }) => (
+      <div className="w-[1280px]">
+        <div className="flex h-[34px] items-center justify-end bg-surface">
+          <Story />
+        </div>
+        <ManaLine sync={args.activity} />
       </div>
     ),
   ],
@@ -63,22 +65,18 @@ const meta = {
     docs: {
       description: {
         component:
-          "The global ribbon: one 56px row owning every action that is not about the view " +
-          "below it. Refresh and the sync status used to live in a per-view header, which made " +
-          "them look like properties of whatever was on screen; they are properties of the " +
-          "*app*, so they live in one place that never changes.\n\n" +
+          "The app's status, drawn in the window header's right-hand run: the update button " +
+          "when there is one, the status line, the device-sync marker and Refresh — an icon " +
+          "button against the keyboard map. It replaced the 56px ribbon and its page heading " +
+          "(2026-10-11); the window header is on screen in every view already.\n\n" +
           "**One line does two jobs.** Idle, it reports the card database; while something " +
           "long is running it reports that instead, and hands the row back the moment the " +
           'work stops. It is a single permanently mounted `role="status"` — a live region ' +
           "that first appears with its sentence already inside announces nothing — and the " +
-          "number beside the phase is `aria-hidden`, because the label changes about four " +
-          "times in a sync while an ingest's count changes fifty-eight.\n\n" +
+          "number beside the phase is `aria-hidden`.\n\n" +
           "**Every state here is an argument, not a world.** This component subscribes to " +
-          "nothing and polls nothing — `AppShell` owns the one `sync_status` poll and the one " +
-          "`sync:progress` listener and hands the answers down — so a story that emitted a " +
-          "sync event at it would be emitting into a component that is not listening. What a " +
-          "seeded backend *can* drive is `AppShell`, and `Chrome/AppShell` is where that is " +
-          "shown.\n\n" +
+          "nothing — `AppShell` owns the poll and the listeners and hands the answers down; " +
+          "`Chrome/AppShell` is where a seeded backend drives it.\n\n" +
           "The mana line below the row is `ManaLine`, and its own states — determinate fill, " +
           "indeterminate sweep, reduced motion — are storied at `Primitives/ManaLine`. What " +
           "these stories add is how the row and the line agree: the icon never spins, because " +
@@ -86,18 +84,13 @@ const meta = {
       },
     },
   },
-} satisfies Meta<typeof Ribbon>;
+} satisfies Meta<typeof ChromeStatus>;
 
 export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
- * Nothing running: a wordmark, the view's name, what is in the database, and Refresh.
- *
- * `MTG` is the mark rather than the product name — the window title bar already says that in
- * full, and 56px of vertical space is not where a five-word name earns its keep. It is dim
- * rather than gold, because gold means "you can act on this, or this is where you are", and a
- * wordmark is neither.
+ * Nothing running: what is in the database, and Refresh.
  *
  * The status line is the real `statusLine` over a real `SyncStatus`, so the separator, the
  * thousands comma and the date's truncation to `YYYY-MM-DD` are the app's and not this file's.
@@ -206,7 +199,7 @@ export const StartingUp: Story = {
  * The app's other long job, in the same row.
  *
  * The registry is what makes this the same code path as a sync: `updateActivity` produces an
- * `Activity` and the ribbon does not know or care which feature made it. Refresh stays
+ * `Activity` and the row does not know or care which feature made it. Refresh stays
  * **enabled** — a download says nothing about the card data, and the two really can overlap,
  * which is why an activity carries a rank at all (`RANK.sync` wins).
  */
@@ -246,7 +239,7 @@ export const AlreadyUpToDate: Story = {
 /**
  * The same Refresh, with an error banner showing underneath — and the cheerful line gone.
  *
- * **This is the whole of what `hasError` does.** The ribbon draws no banner of its own; the
+ * **This is the whole of what `hasError` does.** The row draws no banner of its own; the
  * banner is `AppShell`'s `role="alert"` (`AppShell.tsx:134-142`) and this prop only tells the
  * row to stay out of its way. Both flags are on here, which is the combination that would
  * otherwise put "Already up to date" beside a red sentence saying the opposite.
@@ -265,20 +258,19 @@ export const ErrorShowingBelow: Story = {
 };
 
 /**
- * First launch, before any sync has finished: the ribbon behind the first-run overlay.
+ * First launch, before any sync has finished: the header above the first-run overlay.
  *
  * `statusLine` answers `"No card data yet"` for a `cardCount` of exactly `0` and never a bare
  * zero, which would read as "your collection is empty" in a row that is talking about the card
  * *database*. `bulkUpdatedAt` is null too — nothing has been ingested to be dated — and the line
  * drops it rather than printing half a sentence.
  *
- * In the app this is mostly hidden: `SyncProgress` covers the whole window while `cardCount` is
- * 0, Refresh button and all, which is why that overlay carries a Retry of its own.
+ * In the app `SyncProgress` covers the page while `cardCount` is 0 and carries a Retry of its
+ * own; the header stays drawn above it.
  */
 export const FirstRun: Story = {
   args: {
     statusLine: statusLine(status({ cardCount: 0, bulkUpdatedAt: null })),
-    title: "Search",
   },
   play: async ({ canvasElement }) => {
     await expect(within(canvasElement).getByText("No card data yet")).toBeInTheDocument();
@@ -344,13 +336,13 @@ export const UpdateNotInstallable: Story = {
  * revisit re-downloads — so it rides the tooltip that already names the folder it is about.
  *
  * A tooltip is a thing no screenshot shows and no reader hovers by accident, so the assertion is
- * the story. The singular/plural is asserted in `Ribbon.test.tsx`; what is here is the join —
+ * the story. The singular/plural is asserted in `ChromeStatus.test.tsx`; what is here is the join —
  * two sentences about one folder, in that order, separated by a newline that
  * `whitespace-pre-line` on the panel keeps as a break.
  */
 /**
  * The socket is up. Quiet on purpose — this is the state every other story above is silently
- * in too, and a working connection is not news. `Ribbon`'s own comment is the argument in full.
+ * in too, and a working connection is not news. `ChromeStatus`' own comment is the argument in full.
  */
 export const SyncLive: Story = { args: { deviceSync: "live" } };
 
@@ -375,7 +367,9 @@ export const ImagesNotCached: Story = {
     const canvas = within(canvasElement);
     const line = canvas.getByText(IDLE_LINE);
     await userEvent.hover(line);
-    const panel = await canvas.findByRole("tooltip", undefined, { timeout: TOOLTIP_OPEN_MS + 1000 });
+    const panel = await canvas.findByRole("tooltip", undefined, {
+      timeout: TOOLTIP_OPEN_MS + 1000,
+    });
     await expect(panel).toHaveTextContent(
       "D:\\MTG Grimoire\\data\n12 card images couldn't be saved to the cache — the data folder may be read-only or full.",
       { normalizeWhitespace: false },

@@ -1,17 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import {
-  PanelLeftClose,
-  PanelLeftOpen,
-  TriangleAlert,
-  type LucideIcon,
-} from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen, TriangleAlert, type LucideIcon } from "lucide-react";
 import {
   ActivityProvider,
   useRegisterActivity,
   useTopActivity,
 } from "@/components/ActivityProvider";
-import { Ribbon } from "@/components/Ribbon";
+import { ChromeStatus } from "@/components/ChromeStatus";
+import { ManaLine } from "@/components/ManaLine";
 import { SyncProgress } from "@/components/SyncProgress";
 import { TitleBar } from "@/components/TitleBar";
 import { NAV } from "@/components/nav";
@@ -39,6 +35,7 @@ import { DURATION, statusLine as statusLineMotion } from "@/lib/motion";
 import { matchesChord, matchesShortcut, shortcut } from "@/lib/shortcuts";
 import { useAppStore, type ViewId } from "@/lib/store";
 import { usePrefetchSearchOpen } from "@/features/search/useSearchOpen";
+import { usePrefetchPanelWidth } from "@/features/search/usePanelWidth";
 import { usePrefetchShelfFolds } from "@/features/shelves/useShelfFolds";
 import { usePrefetchFolderPane } from "@/features/decks/useFolderPane";
 import { useCardZoomPersistence } from "@/lib/useCardZoomPersistence";
@@ -86,52 +83,38 @@ const NEW_WINDOW = shortcut("global", "newWindow");
  * The list `Ctrl+1…9` is bound against, by index — `NAV` minus the one row that is not always
  * drawn.
  *
- * **Eleven destinations against nine digits, so two go without a chord — and the two reasons are
- * different, which is why only one of them is a filter.** `Ctrl+0` is not a tenth step of that
- * run (`lib/shortcuts.ts` says why), so the shortfall has to be paid twice over:
+ * **Ten destinations against nine digits, and the one that goes without is `shared`, because
+ * its row is _conditional_.** Somebody else's binder appears on the rail only once a link has
+ * been opened, and a chord's whole value is that it does not move — a digit bound to a row that
+ * comes and goes would either shift every digit after it, one press meaning two things to two
+ * readers, or point at a row half the readers do not have. No amount of room would change that,
+ * which is what makes it a filter rather than arithmetic. `Ctrl+0` is not a tenth step of the run
+ * (`lib/shortcuts.ts` says why).
  *
- * - **`shared` is excluded here, because its row is _conditional_.** Somebody else's binder
- *   appears on the rail only once a link has been opened, and a chord's whole value is that it
- *   does not move — a digit bound to a row that comes and goes would either shift every digit
- *   after it, one press meaning two things to two readers, or point at a row half the readers do
- *   not have. No amount of room would change that, which is what makes it a filter rather than
- *   arithmetic.
- * - **`settings` is _not_ excluded here and goes without anyway, because the run simply ends
- *   before it.** It is this list's tenth and last entry, `SWITCH_VIEW.chords` is nine long, and
- *   the handler's `i >= CHORD_NAV.length` guard never even gets to refuse it — there is no tenth
- *   chord to look up. That is arithmetic and would reverse the day a tenth digit existed.
- *
- * **So `Ctrl+9` is Playtesting, and `Ctrl+9` is _not_ Settings.** This block said the opposite
- * until Home arrived at the head of the rail — "exactly one entry goes without a chord", and
- * "`Ctrl+9` is Settings for every reader, always" — and both halves of that were true of a
- * ten-row rail and are false of this one. The renumbering is deliberate and `nav.test.ts` pins
- * the ninth entry **by name**, because a length can only say how many rows go without and never
- * which, and it is the *which* a reader has in their fingers.
- *
- * Losing the digit costs Settings nothing else: unlike `shared`, its row is drawn on every screen
- * at a fixed place, so it was always one press away and still is. What `shared` lost was its only
- * keyboard route, and that route was a *fallback* written when nothing in the app offered a first
- * share — `features/collection/ShareFolderMenu.tsx` draws **Open a shared collection** beside the
- * Share control now, which is the signpost the chord was standing in for.
- * `docs/reference/keyboard-shortcuts.md` carries the record.
+ * **So `Ctrl+9` is Settings.** It was Playtesting from Home's arrival until the Tagger row left
+ * the rail (issue #937 — tag search is the Search page's sidebar now), which made this list nine
+ * long again. `nav.test.ts` pins the ninth entry **by name**, because a length can only say how
+ * many rows are reached and never which, and it is the *which* a reader has in their fingers.
+ * What `shared` lost was its only keyboard route, and that route was a *fallback* —
+ * `features/collection/ShareFolderMenu.tsx` draws **Open a shared collection** beside the Share
+ * control now. `docs/reference/keyboard-shortcuts.md` carries the record.
  *
  * Derived rather than written out, so a destination added to `NAV` joins the list by construction
- * and only a deliberate second *exclusion* could ever be a decision again — which is exactly what
- * did not happen to Settings.
+ * and only a deliberate second *exclusion* could ever be a decision again.
  */
 const CHORD_NAV = NAV.filter((n) => n.id !== "shared");
 
 /**
- * The window: sidebar, ribbon, and whatever view the store points at.
+ * The window: sidebar, header, and whatever view the store points at.
  *
- * Owns the sync status because everything that needs it lives here — the ribbon's summary
+ * Owns the sync status because everything that needs it lives here — the header's summary
  * line, Refresh button and mana line, and the first-run overlay — and one poll for the
  * whole app is the point of the arrangement.
  *
  * The activity provider is out here rather than inside `Shell`, because a store read by the
  * component that creates it is a store nothing else can be mounted above. Here it covers both
  * of today's writers *and* `children`, so a long job started from inside a view can describe
- * itself in the ribbon with no rewiring.
+ * itself in the header with no rewiring.
  */
 export function AppShell({ children, update }: { children: ReactNode; update: Update }) {
   return (
@@ -217,25 +200,20 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // are open, so a one-window session subscribes here and never hears it.
   useCrossWindowRefresh();
   // The relay socket's state, seeded and then kept live by one `sync:live` listener — the
-  // ribbon's whole reason for existing (see `Ribbon`'s own comment on `deviceSync`). Read here
-  // rather than in the ribbon itself so there is exactly one subscription for the life of the
+  // header marker's whole reason for existing (see `ChromeStatus`'s comment on the marker). Read here
+  // rather than in the header itself so there is exactly one subscription for the life of the
   // app.
   const deviceSync = useDeviceSyncLive();
   /**
-   * The app's three window-wide chords: `Ctrl+1`…`Ctrl+9` to jump between the first **nine** of
-   * the ten destinations {@link CHORD_NAV} names, `F1` to open the map that says so, and
-   * `Ctrl+Shift+N` to open another window onto the same app.
-   *
-   * **Nine of ten and not "the nine {@link CHORD_NAV} names"**, which is what this line said until
-   * Home joined the rail. That list is `NAV` minus `shared` — ten entries — and the run of digits
-   * is nine, so Settings sits on it and past the end of it at once. The digits reach Home through
-   * Playtesting; the tenth entry is reachable by every other means and by no chord.
+   * The app's three window-wide chords: `Ctrl+1`…`Ctrl+9` to jump between the nine destinations
+   * {@link CHORD_NAV} names, `F1` to open the map that says so, and `Ctrl+Shift+N` to open another
+   * window onto the same app.
    *
    * **Both matched against `@/lib/shortcuts` rather than compared by hand**, which is what makes
    * the panel's rows and these bindings one fact instead of two that drift silently past both CI
    * jobs. The `switchView` entry's chords are `NAV`'s own order, and the *index* is the binding —
    * so the rail stays the single list of destinations rather than being restated here as a
-   * second copy, exactly as `nav.ts` argues about the label being the ribbon's `<h1>`.
+   * second copy, exactly as `nav.ts` argues about the label being the page's `<h1>`.
    *
    * **The modal guard is `[aria-modal="true"]`, and it covers `Ctrl+1…9` alone.** `Dialog.tsx`
    * is the one modal chrome in this app and always sets the attribute, so asking the document is
@@ -261,11 +239,10 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
    */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      // **`edition.caption` first, because the map's only mount is the caption row** — `KeyMap`
-      // is drawn inside `TitleBar` and nowhere else. An edition without that row would be taking
-      // the press and showing nothing for it, so there the key is left to the browser: the
-      // digits' own rule below, one chord up.
-      if (edition.caption && matchesShortcut(KEY_MAP, e)) {
+      // The map's only mount is the header row — `KeyMap` is drawn inside `TitleBar` and nowhere
+      // else — and every edition draws that row since 2026-10-11 (the light edition as a band
+      // without window verbs), so the key is taken in every edition.
+      if (matchesShortcut(KEY_MAP, e)) {
         // The press is ours whether or not it does anything, so the browser never sees a held
         // `F1` either.
         e.preventDefault();
@@ -366,6 +343,8 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // for all three, because they share one `app_meta` row and one query key. It renders nothing:
   // the answer goes into the query cache, where `useSearchOpen` reads it.
   usePrefetchSearchOpen();
+  // The tag sidebar's dragged width, for the same reason one row over (issue #937).
+  usePrefetchPanelWidth();
   // The collection's and the wishlist's stored folds (spec §5.7), for the same measurement one
   // row up: asked by the page, the read would queue behind the page's own list read and every
   // shelf the reader had folded would draw open for a round trip and then snap shut, with the
@@ -382,7 +361,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   usePrefetchFolderPane();
   // The one `oracle-tags:progress` subscription, for the same reason again. Unlike the two
   // above it hands back what it heard: the taxonomy has no `useMarketplace`-shaped module of
-  // its own to read the event out of a cache entry, and the ribbon is its only consumer today.
+  // its own to read the event out of a cache entry, and the header is its only consumer today.
   const oracleTags = useOracleTagProgress();
   // And the one `combos:progress` subscription, mounted here for the same reason again. It is
   // the only consumer of that channel anywhere: Settings' combo panel and its progress bar are
@@ -396,7 +375,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
 
   // The five long jobs this window can be running. All are registered from here — the sync by
   // this component, the update by `App`, which hands it down — and the registry is what lets
-  // the ribbon describe any of them without knowing which.
+  // the header describe any of them without knowing which.
   //
   // **The feed fetch is started somewhere else entirely** — Settings, or the moment a reader
   // picks a marketplace whose prices are not downloaded yet — and is visible here because
@@ -489,8 +468,40 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
           what holds the two together.
 
           `edition.caption` is false wherever a browser or an OS owns the frame — the light
-          entry — and there this row is not drawn at all. */}
-      {edition.caption && <TitleBar />}
+          entry — and there this row is a header band of the same height without the window
+          verbs: the same lockup, the same status and the same keyboard map.
+
+          **The app's status is this row's right-hand run since 2026-10-11** — the status line,
+          the sync marker and Refresh, against the keyboard map. The 56px ribbon and the page
+          heading it carried are gone (the heading stays for screen readers, in `main`), so the
+          mana line is directly under this row and the page directly under that.
+
+          The data directory is the app's one piece of hidden state — it silently falls back to
+          AppData when the folder beside the exe is not writable, and spec §3 asks for an
+          indicator of which one is live. The status line hangs it as a tooltip on the sentence
+          that already summarises the database. */}
+      <TitleBar windowControls={edition.caption}>
+        <ChromeStatus
+          statusLine={statusLine(status)}
+          dataDir={status?.dataDir}
+          imageStoreFailures={status?.imageStoreFailures}
+          busy={busy}
+          upToDate={upToDate}
+          hasError={error !== null}
+          onRefresh={refresh}
+          activity={activity}
+          activityVisible={activityVisible}
+          updateVersion={update.status?.available?.version ?? null}
+          updateInstallable={update.action !== "unavailable"}
+          onOpenUpdate={() => setActiveView("settings")}
+          deviceSync={deviceSync}
+          onOpenSync={() => setActiveView("settings")}
+          drag={edition.caption}
+        />
+      </TitleBar>
+      {/* The app's signature and its only progress bar, spanning the window under the header —
+          the edge of the chrome rather than of any one view. */}
+      <ManaLine sync={activity} />
 
       <div className="flex min-h-0 flex-1">
         {/* **`w-52` is 208px and it is pinned, which is the one part of this shell that got
@@ -612,30 +623,8 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
         </nav>
 
         <div className="flex min-w-0 flex-1 flex-col">
-          {/* The data directory is the app's one piece of hidden state — it silently falls
-            back to AppData when the folder beside the exe is not writable, and spec §3
-            asks for an indicator of which one is live. The ribbon hangs it as a tooltip
-            on the line that already summarises the database. */}
-          <Ribbon
-            title={title}
-            statusLine={statusLine(status)}
-            dataDir={status?.dataDir}
-            imageStoreFailures={status?.imageStoreFailures}
-            busy={busy}
-            upToDate={upToDate}
-            hasError={error !== null}
-            onRefresh={refresh}
-            activity={activity}
-            activityVisible={activityVisible}
-            updateVersion={update.status?.available?.version ?? null}
-            updateInstallable={update.action !== "unavailable"}
-            onOpenUpdate={() => setActiveView("settings")}
-            deviceSync={deviceSync}
-            onOpenSync={() => setActiveView("settings")}
-          />
-
           {/* Given the whole screen when the database is empty, so it needs the error and
-            the retry action too: it covers the ribbon, Refresh button included. */}
+            the retry action too: it covers the page; the header above stays drawn. */}
           <SyncProgress
             progress={progress}
             cardCount={status?.cardCount ?? null}
@@ -683,6 +672,11 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
             removing it (measured: `main.scrollHeight` 742 → 1646). This line is the same rule
             applied to the outermost scroller, so a view that grows cannot reach the document. */}
           <main className="relative min-h-0 flex-1 overflow-auto p-5">
+            {/* The page's name, for the screen reader that navigates by headings and for nothing
+                else: the visible page header is gone (2026-10-11), and the rail's lit entry is
+                the sighted reader's copy. Inside `main` because `main` is `relative` — see
+                above for what an `sr-only` without a positioned ancestor costs. */}
+            <h1 className="sr-only">{title}</h1>
             <ReachContext.Provider value={reaches}>
               <PublishesContext.Provider value={edition.publishes}>
                 {children}
@@ -703,9 +697,9 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
  * them to miss.
  *
  * It was 36px, and the eight it gained is the sidebar's whole share of the shell's 2026-08-14
- * enlargement — the row grew, the column did not (see the `<nav>` above). The label is 16px
- * against the ribbon's 20px title, which keeps the two rungs of app › view distinguishable by
- * size rather than only by face.
+ * enlargement — the row grew, the column did not (see the `<nav>` above). The label is 16px;
+ * the lit entry is the only visible name the page has had since the page header went
+ * (2026-10-11).
  *
  * **Collapsed it is 43×44 and nothing else about it moves**: same height, same icon, same gold
  * hairline, same drop target. The word is still in the DOM, still the button's accessible name,

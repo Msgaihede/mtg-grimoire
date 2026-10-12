@@ -4,10 +4,13 @@ import { countOf } from "@grimoire/ui/features/search/resultCount";
 import { StatedFiltersLine } from "@grimoire/ui/features/search/StatedFiltersLine";
 import { TagQueryRow } from "@grimoire/ui/features/search/TagQueryRow";
 import { useCardSearch, type CardSearch } from "@grimoire/ui/features/search/useCardSearch";
+import { TagChips } from "@grimoire/ui/features/tags/TagChips";
+import { useTagSelection, type TagFilter } from "@grimoire/ui/features/tags/useTagSelection";
 import { useCardData } from "../cardData";
 import { CardWall, type WallItem } from "../CardWall";
 import { searchItem } from "../items";
 import { FiltersButton, FiltersSheet } from "../search/FiltersSheet";
+import { TagsButton, TagsSheet } from "../search/TagsSheet";
 import { NoCards } from "../search/NoCards";
 import { NextPageRefused, ReadError, useMore } from "./parts";
 
@@ -33,7 +36,9 @@ import { NextPageRefused, ReadError, useMore } from "./parts";
 export function SearchPage({ onOpen }: { onOpen: (item: WallItem) => void }) {
   // Under the desktop page's name, so a reader who crosses faces or comes back from another tab
   // finds the search they left (issue #908).
-  const search = useCardSearch({ rememberAs: "search" });
+  // The picked tags, shared with the desktop face's sidebar (issue #937) — a sheet here.
+  const tags = useTagSelection();
+  const search = useCardSearch({ rememberAs: "search", tagTerms: tags.tagTerms });
   const { query, marketplace } = search;
   const items = useMemo(
     () => search.rows.map((row) => searchItem(row, marketplace.currency)),
@@ -43,7 +48,7 @@ export function SearchPage({ onOpen }: { onOpen: (item: WallItem) => void }) {
 
   return (
     <>
-      <SearchLine search={search} label="Search cards" />
+      <SearchLine search={search} label="Search cards" tags={tags} />
       <SearchResults
         search={search}
         label="Search results"
@@ -103,10 +108,22 @@ export function SearchResults({
  * The sheet is mounted here, beside the line, for the page's reason: it is page state, opened from
  * this button, and `Dialog`'s scrim is `fixed` so where it sits in the tree is not where it draws.
  */
-export function SearchLine({ search, label }: { search: CardSearch; label: string }) {
+export function SearchLine({
+  search,
+  label,
+  tags,
+}: {
+  search: CardSearch;
+  label: string;
+  /** The card search's tag filter — drawn as a Tags button, its sheet and the picked chips. The
+   *  deck's Add cards passes none: its search has no tag filter. */
+  tags?: TagFilter;
+}) {
   const { query, marketplace } = search;
   const [sheetOpen, setSheetOpen] = useState(false);
   const opener = useRef<HTMLButtonElement>(null);
+  const [tagsOpen, setTagsOpen] = useState(false);
+  const tagsOpener = useRef<HTMLButtonElement>(null);
   // Not `activeCount`: the box's text is in that count and is no chip — it is on screen in the box.
   const chips = activeChips(search, marketplace.currency).length;
   // The count is worth a line once the reader has narrowed anything — a chip or a word. Over the
@@ -140,7 +157,26 @@ export function SearchLine({ search, label }: { search: CardSearch; label: strin
             expanded={sheetOpen}
             onClick={() => setSheetOpen(true)}
           />
+          {tags && (
+            <TagsButton
+              ref={tagsOpener}
+              tags={tags}
+              expanded={tagsOpen}
+              onClick={() => setTagsOpen(true)}
+            />
+          )}
         </div>
+
+        {/* The picked tags, while there are any — the sheet is shut, so this is where they are
+            seen and taken off. */}
+        {tags && tags.selection.chips.length > 0 && (
+          <TagChips
+            selection={tags.selection}
+            onRemove={tags.removeTag}
+            onToggleMode={tags.toggleTagMode}
+            onFloorChange={tags.setFloor}
+          />
+        )}
 
         {stating &&
           (chips > 0 ? (
@@ -169,6 +205,18 @@ export function SearchLine({ search, label }: { search: CardSearch; label: strin
         }}
         onClose={() => setSheetOpen(false)}
       />
+
+      {tags && (
+        <TagsSheet
+          open={tagsOpen}
+          tags={tags}
+          onDismiss={() => {
+            tagsOpener.current?.focus();
+            setTagsOpen(false);
+          }}
+          onClose={() => setTagsOpen(false)}
+        />
+      )}
     </>
   );
 }

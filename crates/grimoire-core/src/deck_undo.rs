@@ -3046,6 +3046,19 @@ mod tests {
                 )
                 .unwrap();
             }),
+            ("deck_split_printing", nothing, |c, id| {
+                crate::deck::split_printing(
+                    c,
+                    id,
+                    "bolt-lea",
+                    "bolt-m10",
+                    ramp(c, id),
+                    "live",
+                    None,
+                    1,
+                )
+                .unwrap();
+            }),
             (
                 // **The row comes back at the finish it had, or undo is a silent data loss.**
                 // `CardRow::finish` is the whole of what makes this pass; without it the row is

@@ -125,6 +125,8 @@ const setPrintingGroupBy = vi.fn();
  */
 const deckGet = vi.fn();
 const deckSwapPrinting = vi.fn();
+/** `Split to new printing` (issue #934): the swap for part of a row. */
+const deckSplitPrinting = vi.fn();
 const collectionAdd = vi.fn();
 const wishlistAdd = vi.fn();
 /**
@@ -176,6 +178,15 @@ vi.mock("@/lib/ipc", async (original) => ({
       variant: DeckVariant,
       finish: DeckFinish,
     ) => deckSwapPrinting(deckId, from, to, categoryId, variant, finish),
+    deckSplitPrinting: (
+      deckId: number,
+      from: string,
+      to: string,
+      categoryId: number,
+      variant: DeckVariant,
+      finish: DeckFinish,
+      quantity: number,
+    ) => deckSplitPrinting(deckId, from, to, categoryId, variant, finish, quantity),
     collectionAdd: (input: unknown) => collectionAdd(input),
     wishlistAdd: (input: unknown) => wishlistAdd(input),
     wishlistSetPrinting: (id: number, cardId: string | null) => wishlistSetPrinting(id, cardId),
@@ -224,6 +235,7 @@ beforeEach(() => {
   setPrintingGroupBy.mockReset().mockResolvedValue(undefined);
   deckGet.mockReset().mockResolvedValue({ deck: { id: 4, name: "Burn" }, cards: [] });
   deckSwapPrinting.mockReset().mockResolvedValue({ folded: false, quantity: 1 });
+  deckSplitPrinting.mockReset().mockResolvedValue({ folded: false, quantity: 1 });
   collectionAdd.mockReset();
   wishlistAdd.mockReset();
   // The shape `wishlist_set_printing` answers: an `EntryChange`, whose `id` is the row that now
@@ -700,6 +712,46 @@ describe("AllPrintingsDialog", () => {
       expect(deckSwapPrinting).toHaveBeenCalledWith(4, "card-1", "b", 9, "live", null),
     );
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  /**
+   * **Split, not swap** (issue #934): the field above the wall says how many copies move, and the
+   * press moves that many onto the printing pressed — never the whole row.
+   */
+  it("splits the chosen number of copies onto the printing pressed, and closes", async () => {
+    cardPrintings.mockResolvedValue(page([p("a", "lea"), p("b", "leb")]));
+    const user = userEvent.setup();
+    renderDialog();
+    open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: slot, split: { held: 4 } });
+
+    const field = await screen.findByRole("spinbutton", { name: "Copies to split" });
+    expect(field).toHaveValue(1);
+    expect(screen.getByText(/of 4 copies onto the printing you pick/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Increase Copies to split" }));
+    await user.click(screen.getByRole("button", { name: "Increase Copies to split" }));
+    // A split leaves a row behind: three of four is as far as the field goes.
+    expect(screen.getByRole("button", { name: "Increase Copies to split" })).toBeDisabled();
+
+    await user.click(await screen.findByRole("button", { name: /LEB/ }));
+
+    await waitFor(() =>
+      expect(deckSplitPrinting).toHaveBeenCalledWith(4, "card-1", "b", 9, "live", null, 3),
+    );
+    expect(deckSwapPrinting).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("refuses a split onto the printing the row already plays, in words", async () => {
+    cardPrintings.mockResolvedValue(page([p("card-1", "lea"), p("b", "leb")]));
+    const user = userEvent.setup();
+    renderDialog();
+    open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: slot, split: { held: 2 } });
+
+    await user.click(await screen.findByRole("button", { name: /LEA/ }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/already this printing/);
+    expect(deckSplitPrinting).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeVisible();
   });
 
   /**

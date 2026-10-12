@@ -1429,22 +1429,18 @@ function TrayField({
  */
 function ViewToggle({ section }: { section: ListSection }) {
   const searchView = useAppStore((s) => s.searchView);
-  const tagsView = useAppStore((s) => s.tagsView);
   const collectionView = useAppStore((s) => s.collectionView);
   const wishlistView = useAppStore((s) => s.wishlistView);
   const setSearchView = useAppStore((s) => s.setSearchView);
-  const setTagsView = useAppStore((s) => s.setTagsView);
   const setCollectionView = useAppStore((s) => s.setCollectionView);
   const setWishlistView = useAppStore((s) => s.setWishlistView);
   const view = {
     search: searchView,
-    tags: tagsView,
     collection: collectionView,
     wishlist: wishlistView,
   }[section];
   const onChange = {
     search: setSearchView,
-    tags: setTagsView,
     collection: setCollectionView,
     wishlist: setWishlistView,
   }[section];

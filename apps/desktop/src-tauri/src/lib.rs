@@ -195,6 +195,9 @@ use grimoire_core::scratch;
 /// one card image, behind the pacing gate and the 429 lockout. `grimoire-core`'s, re-exported,
 /// over its `platform::http`.
 pub use grimoire_core::scryfall;
+/// **How wide each docked side panel was last dragged** — [`searchopen`]'s shape with a width
+/// where the `bool` is (issue #937, the search page's tag sidebar).
+pub mod panelwidth;
 pub mod search;
 pub mod searchopen;
 /// **How much of each set the reader owns**, for the home page's Set completion widget. One
@@ -209,6 +212,9 @@ pub mod share;
 pub mod shelffolds;
 pub use grimoire_core::slug;
 pub use grimoire_core::sorting;
+/// **How wide the reader dragged a deck's card search column** (issue #932) — [`stackhide`]'s
+/// shape with a width per deck. No filesystem, no clock and no network.
+pub mod searchwidth;
 /// **A pre-27 single-file `mtg.db`, taken apart into `user.db` and `corpus.db`.** Its one
 /// caller, [`schema::prepare_data_dir`], is reached only from `desktop::init_state`.
 pub mod split;

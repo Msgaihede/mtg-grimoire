@@ -62,6 +62,11 @@
  *   gesture carried there — no way to look at a printing without committing to it — is not paid
  *   here, because the whole wall is art and looking is what a wall is for. A mis-press is
  *   covered by the deck's undo.
+ * * **From a deck row asked to split** (`printingsRequest.split`, issue #934) — the press moves
+ *   the number of copies the field above the wall holds onto that printing and leaves the rest of
+ *   the row where it is, through `deck_split_printing`, and the modal closes on success. The
+ *   printing the row already plays is refused in words rather than written: a split onto itself
+ *   moves nothing.
  * * **From anywhere else** — the press opens the card detail modal on that printing and closes
  *   this one, which is the "go and look at this one" the reader who is not building a deck
  *   asked for.
@@ -99,6 +104,7 @@ import { sameDeckSlot } from "@/features/decks/deckWalk";
 import { Dialog, type DialogFlanks } from "@/components/Dialog";
 import { useSwapFromPane } from "@/features/decks/useDeck";
 import { CardGrid } from "@/features/search/CardGrid";
+import { QuantityStepper } from "@/components/QuantityStepper";
 import { keepCaretForCard } from "@/lib/caretWalk";
 import { plural } from "@/lib/counts";
 import { soleFinish, type Finish } from "@/lib/finish";
@@ -709,7 +715,15 @@ function Body({
    * row, which either refuses or — where the same printing sits in the same category of both —
    * rewrites the wrong one and reports success.
    */
-  const { swap, deckGone } = useSwapFromPane(request.deck, request.deck?.variant);
+  const { swap, split: splitWrite, deckGone } = useSwapFromPane(
+    request.deck,
+    request.deck?.variant,
+  );
+  // A split names the row it splits, so a request that somehow carried one without a deck row
+  // is the plain wall rather than a press that cannot write.
+  const split = request.deck ? request.split : undefined;
+  const [copies, setCopies] = useState(1);
+  const [splitRefusal, setSplitRefusal] = useState<string | null>(null);
 
   /**
    * The other write a press can be: the **wish** this modal was opened about, repointed onto the
@@ -793,8 +807,14 @@ function Body({
     onSuccess: () => onDone(),
   });
 
-  const writing = swap.isPending || repoint.isPending || moveCopy.isPending || retrade.isPending;
+  const writing =
+    swap.isPending ||
+    splitWrite.isPending ||
+    repoint.isPending ||
+    moveCopy.isPending ||
+    retrade.isPending;
   const startSwap = swap.mutate;
+  const startSplit = splitWrite.mutate;
   const startRepoint = repoint.mutate;
   const startMove = moveCopy.mutate;
   const startRetrade = retrade.mutate;
@@ -914,6 +934,25 @@ function Body({
        * `deckGone` joins it: a deck another view has deleted has no slot to write to either, and
        * offering a write the backend can only refuse is worse than offering none.
        */
+      if (split && request.deck && !deckGone) {
+        setSplitRefusal(null);
+        if (cardId === request.cardId) {
+          setSplitRefusal("These copies are already this printing — pick another one.");
+          return;
+        }
+        const from = request.deck;
+        startSplit(
+          {
+            fromCardId: from.cardId,
+            toCardId: cardId,
+            categoryId: from.categoryId,
+            finish: from.finish,
+            quantity: copies,
+          },
+          { onSuccess: () => onDone() },
+        );
+        return;
+      }
       if (!request.deck || deckGone) {
         viewCard(cardId);
         onDone();
@@ -1001,6 +1040,9 @@ function Body({
       wish,
       startRepoint,
       request,
+      split,
+      copies,
+      startSplit,
       deckGone,
       startSwap,
       viewCard,
@@ -1081,6 +1123,26 @@ function Body({
           the shell's `countSlot` for why it is portalled rather than passed up. */}
       {query.data && countSlot && createPortal(countLine, countSlot)}
 
+      {/* **How many copies a split moves** (issue #934) — above the filters, because it is the
+          half of the question the wall cannot ask: the press below picks the printing, and this
+          is how much of the row goes to it. `held − 1` at most, since a split leaves a row. */}
+      {split && (
+        <div className="flex shrink-0 flex-wrap items-center gap-2 text-sm">
+          <span>Split</span>
+          <QuantityStepper
+            value={copies}
+            onChange={setCopies}
+            min={1}
+            max={Math.max(1, split.held - 1)}
+            label="Copies to split"
+            size="sm"
+          />
+          <span className="text-dim">
+            of {plural(split.held, "copy", "copies")} onto the printing you pick.
+          </span>
+        </div>
+      )}
+
       <div className="shrink-0">
         <PrintingsFilterBar
           filter={filter}
@@ -1133,6 +1195,13 @@ function Body({
       {swap.isError && (
         <p role="alert" className="shrink-0 text-xs text-destructive">
           Couldn't use that printing — {ipcError(swap.error)}
+        </p>
+      )}
+      {/* A refused **split** — the printing the row already plays, said here before writing, or
+          the backend's sentence. */}
+      {(splitRefusal !== null || splitWrite.isError) && (
+        <p role="alert" className="shrink-0 text-xs text-destructive">
+          {splitRefusal ?? `Couldn't split onto that printing — ${ipcError(splitWrite.error)}`}
         </p>
       )}
       {/* And a refused **repoint**, in the same place and for the same reason. Its own sentence

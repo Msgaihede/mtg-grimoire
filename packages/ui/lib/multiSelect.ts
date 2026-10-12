@@ -261,6 +261,43 @@ export function settleSelection(
   return selectEverything(selection, order, list);
 }
 
+/**
+ * What Ctrl+A does on a surface drawn as **stacks** — the deck editor's piles (issue #938).
+ *
+ * `stacks` are the keys of each stack the reader can see, in screen order; a key absent from all
+ * of them (a hidden pile's) is never added.
+ *
+ * | The set is… | Answer |
+ * | --- | --- |
+ * | empty | still empty |
+ * | some keys | those, and every key of each stack holding one of them |
+ *
+ * **A stack with nothing picked in it is left alone.** A reader who has picked two lands and a
+ * creature asked for the lands and the creatures, not the deck: the press widens each set *within*
+ * the stack it is in.
+ *
+ * **And nothing picked picks nothing**, deliberately: `Delete` removes a picked set in the deck
+ * editor and undo is one press per card, so a Ctrl+A that took the whole deck from nothing would
+ * make `Ctrl+A`, `Delete` a deck emptied in two keys (`docs/reference/keyboard-shortcuts.md`).
+ * The whole deck is still one press away, for a reader who has picked a card in every stack.
+ *
+ * What was picked keeps its place in the set and the anchor stays where it was, so a Shift-click
+ * after the press measures from the card the reader last pressed. Nothing to add answers with the
+ * selection it was given, the same object, for {@link selectEverything}'s reason.
+ *
+ * Never "all of" a list: a card added to the deck after the press is not picked by it.
+ */
+export function selectStacks(
+  selection: Selection,
+  stacks: readonly (readonly string[])[],
+): Selection {
+  const picked = new Set(selection.keys);
+  const widened = stacks.filter((stack) => stack.some((key) => picked.has(key))).flat();
+  const keys = dedupe([...selection.keys, ...widened]);
+  if (keys.length === selection.keys.length) return selection;
+  return { ...selection, keys };
+}
+
 /** The same keys in the same order. */
 function sameKeys(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((key, i) => key === b[i]);

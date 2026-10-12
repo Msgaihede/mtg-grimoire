@@ -437,6 +437,7 @@ export function CardGrid<T extends GridCard>({
   finish,
   treatment,
   gameChanger,
+  watermark,
   action,
   column,
   flips,
@@ -651,6 +652,16 @@ export function CardGrid<T extends GridCard>({
    * per render tears every tile's drag registration down and rebuilds it on every scrolled row.
    */
   gameChanger?: (card: T) => boolean;
+  /**
+   * The stamp across a tile whose printing is **not out yet** — its set code and release date,
+   * drawn diagonally over the art by `CardArt` (issue #940). `null` draws nothing.
+   *
+   * A callback for {@link finish}'s reason: only a row that carries `releasedAt` can answer, and
+   * absent means no tile is stamped.
+   *
+   * Hold it still (module scope, or a `useCallback`) — see {@link dragPayload}.
+   */
+  watermark?: (card: T) => { set: string; date: string } | null;
   /**
    * The one control a tile carries — **in a strip over the bottom of the art**, since 2026-08-26.
    * The search's quick-add.
@@ -1523,9 +1534,23 @@ export function CardGrid<T extends GridCard>({
     [shelfTiles, rows],
   );
   const selectionOrder = useMemo(() => drawn.map((card) => tileKey(card)), [drawn]);
-  // `listKey` is what a Ctrl+A is *about*: the same list while its pages arrive, a different one
-  // when the filter moves — see `Selection.allOf`.
-  const picked = useCardSelection(selectionScope ?? NO_SELECTION, selectionOrder, listKey);
+  /**
+   * What a Ctrl+A is *about*: `listKey` — the same list while its pages arrive, a different one
+   * when the filter moves (see `Selection.allOf`) — and, on a sectioned wall, **which shelves are
+   * shut** (issue #938).
+   *
+   * A shut shelf draws nothing, so a Ctrl+A picks none of it; but "all of this list" is a standing
+   * instruction, and with the folds left out of its identity, opening that shelf afterwards swept
+   * every card in it into the set — cards the reader never saw being picked. A fold is a different
+   * list, exactly as a filter is: what was picked and is still drawn stays picked, and the
+   * instruction is dropped. Keyed on the shut shelves rather than the open ones, so a placeholder
+   * heading or a card moved between open shelves leaves a Ctrl+A standing.
+   */
+  const selectionList = useMemo(() => {
+    const shut = sectionList?.filter((s) => s.shelf.collapsed).map((s) => s.shelf.id) ?? [];
+    return shut.length === 0 ? listKey : `${listKey}\u0000shut:${shut.join(",")}`;
+  }, [listKey, sectionList]);
+  const picked = useCardSelection(selectionScope ?? NO_SELECTION, selectionOrder, selectionList);
 
   /**
    * **Ctrl+A picks every tile on this wall** — issue #910.
@@ -2262,6 +2287,7 @@ export function CardGrid<T extends GridCard>({
       finish={finish}
       treatment={treatment}
       gameChanger={gameChanger}
+      watermark={watermark}
       action={action}
       column={column}
       flips={flips}
@@ -2483,6 +2509,7 @@ function Tile<T extends GridCard>({
   finish,
   treatment,
   gameChanger,
+  watermark,
   action,
   column,
   flips,
@@ -2545,6 +2572,7 @@ function Tile<T extends GridCard>({
   finish?: (card: T) => Finish | null;
   treatment?: (card: T) => readonly Treatment[];
   gameChanger?: (card: T) => boolean;
+  watermark?: (card: T) => { set: string; date: string } | null;
   action?: (card: T) => ReactNode;
   column?: (card: T) => ReactNode;
   flips?: (card: T) => boolean;
@@ -2568,6 +2596,7 @@ function Tile<T extends GridCard>({
   const tileFinish = finish?.(card) ?? null;
   const tileTreatments = treatment?.(card) ?? [];
   const crowned = gameChanger?.(card) ?? false;
+  const stamp = watermark?.(card) ?? null;
   const turnable = turnsOver(card, flips);
   const face = useShownFace(turnable ? card.id : null);
   const controls = column?.(card);
@@ -2838,6 +2867,7 @@ function Tile<T extends GridCard>({
             finish={tileFinish}
             treatments={tileTreatments}
             gameChanger={crowned}
+            watermark={stamp}
             hoverZoom
           />
         </button>

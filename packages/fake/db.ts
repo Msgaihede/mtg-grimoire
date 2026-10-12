@@ -110,13 +110,7 @@ import {
   scanStep,
   sentOptions,
 } from "./scannerScript";
-import {
-  CURRENT_VERSION,
-  NEXT_VERSION,
-  producedManaOf,
-  release,
-  releaseHistory,
-} from "./fixtures";
+import { CURRENT_VERSION, NEXT_VERSION, producedManaOf, release, releaseHistory } from "./fixtures";
 import {
   DEFAULT_PRINTING_GROUP_BY,
   PRINTING_GROUP_BY_OPTIONS,
@@ -513,6 +507,9 @@ export interface FakeWishlistFolder {
    * managed folders by name leaves these out, and an empty one says its own sentence.
    */
   managedTokens?: boolean;
+  /** `wishlist_folders.sync_uid`. Absent derives `wishlist-folder-uid-{id}` for a folder the
+   *  reader made and `null` for a managed one, which `capture::suppressed` leaves unminted. */
+  syncUid?: string | null;
 }
 
 /**
@@ -2106,6 +2103,12 @@ export interface FakeDb {
    */
   searchOpen: Record<string, boolean>;
   /**
+   * `app_meta.panel_width` — how wide each docked side panel was last dragged, as section name →
+   * CSS pixels. {@link FakeDb.searchOpen}'s field with a number where the `boolean` is; `{}` for
+   * "nothing stored", so every panel opens at the frontend's own default width.
+   */
+  panelWidth: Record<string, number>;
+  /**
    * `app_meta.shelf_folds` — the shelves the reader moved off their default fold, per page:
    * folder id (decimal) → collapsed.
    *
@@ -2123,6 +2126,13 @@ export interface FakeDb {
    * and {@link writeHandlers.set_stack_hidden}.
    */
   hiddenStacks: Record<string, number[]>;
+  /**
+   * `app_meta.deck_search_width` — how wide the reader dragged each deck's card search column
+   * (issue #932), as deck id (decimal) → px. **Empty to begin with**, which is every column at its
+   * default. See {@link readHandlers.deck_search_width} and
+   * {@link writeHandlers.set_deck_search_width}.
+   */
+  deckSearchWidths: Record<string, number>;
   /**
    * `app_meta.deck_sort` — how the deck gallery was last ordered, as `"<key>:<direction>"`.
    *
@@ -3588,10 +3598,16 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // `DEFAULT_SEARCH_OPEN` draws it: every column open, which is what the app ships. A story that
     // wants one railed passes that one section and leaves the others out.
     searchOpen: {},
+    // Every panel at the frontend's default width — `panel_width`'s answer for a row never
+    // written.
+    panelWidth: {},
     // Every shelf at its default on both pages — `shelf_folds`' answer for a row never written.
     shelfFolds: { collection: {}, wishlist: {} },
     // Every stack drawn in every deck — `hidden_stacks`' answer for a row never written.
     hiddenStacks: {},
+    // Every deck's search column at its default — `deck_search_width`'s answer for a row never
+    // written.
+    deckSearchWidths: {},
     // The gallery's order, and a `null` rather than a value again: `deck_sort` answers
     // `updated:desc` for a wall nobody has re-ordered, so every deck story that says nothing
     // about the picker is standing in the order the app ships — most recently touched first,
@@ -4470,37 +4486,34 @@ const ART_TAG_EDGES: readonly FakeTagEdge[] = [
  * `d20eda7b…`, so one row here would reach two printings. `db.test.ts` covers that join against
  * a store built for it rather than by inventing a motif for a picture nobody checked.
  */
-const ART_TAGGINGS: readonly (readonly [
-  string,
-  string,
-  readonly (readonly [string, string])[],
-])[] = [
-  ["Lightning Bolt", "lea", [["lightning", "median"]]],
-  ["Black Lotus", "lea", [["flower", "very_strong"]]],
-  ["Black Lotus", "vma", [["flower", "strong"]]],
-  ["Forest", "unf", [["forest", "median"]]],
+const ART_TAGGINGS: readonly (readonly [string, string, readonly (readonly [string, string])[]])[] =
   [
-    "Island",
-    "lea",
+    ["Lightning Bolt", "lea", [["lightning", "median"]]],
+    ["Black Lotus", "lea", [["flower", "very_strong"]]],
+    ["Black Lotus", "vma", [["flower", "strong"]]],
+    ["Forest", "unf", [["forest", "median"]]],
     [
-      ["water", "strong"],
-      ["landscape", "median"],
+      "Island",
+      "lea",
+      [
+        ["water", "strong"],
+        ["landscape", "median"],
+      ],
     ],
-  ],
-  ["Bruna, the Fading Light", "emn", [["angel", "median"]]],
-  ["Avacyn, Angel of Hope", "avr", [["angel", "strong"]]],
-  ["Consecrated Sphinx", "mp2", [["sphinx", "median"]]],
-  ["Lurrus of the Dream-Den", "iko", [["cat", "median"]]],
-  ["Ragavan, Nimble Pilferer", "mh2", [["monkey", "median"]]],
-  [
-    "Llanowar Elves",
-    "dom",
+    ["Bruna, the Fading Light", "emn", [["angel", "median"]]],
+    ["Avacyn, Angel of Hope", "avr", [["angel", "strong"]]],
+    ["Consecrated Sphinx", "mp2", [["sphinx", "median"]]],
+    ["Lurrus of the Dream-Den", "iko", [["cat", "median"]]],
+    ["Ragavan, Nimble Pilferer", "mh2", [["monkey", "median"]]],
     [
-      ["elf", "median"],
-      ["forest", "weak"],
+      "Llanowar Elves",
+      "dom",
+      [
+        ["elf", "median"],
+        ["forest", "weak"],
+      ],
     ],
-  ],
-];
+  ];
 
 /** The `"name setCode"` keys above, for a test that wants to prove every one of them still
  *  resolves against the generated corpus — {@link ORACLE_TAGGED_NAMES}, one taxonomy over, and
@@ -5838,11 +5851,7 @@ function cardCombosPage(
         (a, b) =>
           a.cardCount - b.cardCount ||
           // `matchCombos`' three-way, and the same reason `-1` is not used as a stand-in rank.
-          (a.popularity === null
-            ? 1
-            : b.popularity === null
-              ? -1
-              : b.popularity - a.popularity) ||
+          (a.popularity === null ? 1 : b.popularity === null ? -1 : b.popularity - a.popularity) ||
           cmp(a.id, b.id),
       )
       // `card_combos`' own clamp, both ends of it. **Clamped and never refused**, which is the
@@ -6214,8 +6223,7 @@ function derivedTokens(db: FakeDb, deckId: number, variant: DeckVariant): Derive
  *  {@link byPrintingRank}. */
 function defaultTokenPrinting(db: FakeDb, derived: DerivedToken): string {
   const ranked = tokenPrintings(db, derived.token.oracleId).sort(
-    (a, b) =>
-      (derived.refs.get(b.id) ?? 0) - (derived.refs.get(a.id) ?? 0) || byPrintingRank(a, b),
+    (a, b) => (derived.refs.get(b.id) ?? 0) - (derived.refs.get(a.id) ?? 0) || byPrintingRank(a, b),
   );
   return (ranked[0] ?? derived.token).id;
 }
@@ -6723,9 +6731,7 @@ function cardHasType(typeLine: string | null, type: string): boolean {
   if (typeLine === null) return false;
   return typeLine
     .split("//")
-    .some((face) =>
-      (face.split(/[—-]/)[0] ?? "").split(/\s+/).some((word) => word === type),
-    );
+    .some((face) => (face.split(/[—-]/)[0] ?? "").split(/\s+/).some((word) => word === type));
 }
 
 /** `filters::picked_from` — trim, lower-case, keep what the vocabulary names. */
@@ -6921,11 +6927,18 @@ function matchesCardFilters(
   // playable values the format filter above accepts, so asking the blob directly is the same
   // question: is this card legal or restricted *anywhere*. An orphan fails it, as it fails
   // format, because `NULL != 0` is NULL.
+  //
+  // **An unreleased printing passes too** (issue #940): Scryfall marks a previewed card legal
+  // nowhere until its release day, so `filters::unreleased_sql` ORs a date after today beside
+  // the mask. Today is the fake's clock, as `upcoming_sets` below reads it.
   if (f.playableOnly ?? false) {
+    const unreleased = card !== null && card.releasedAt > dayOf(CLOCK_BASE);
     const legalities = parseJson(card?.legalities ?? null);
-    if (typeof legalities !== "object" || legalities === null) return false;
-    const values = Object.values(legalities as Record<string, unknown>);
-    if (!values.some((v) => v === "legal" || v === "restricted")) return false;
+    const values =
+      typeof legalities === "object" && legalities !== null
+        ? Object.values(legalities as Record<string, unknown>)
+        : [];
+    if (!unreleased && !values.some((v) => v === "legal" || v === "restricted")) return false;
   }
 
   // **Both taxonomies are matched against the CLOSURE, never the direct taggings.** The bulk
@@ -7058,15 +7071,7 @@ const RARITY_KEYS = ["common", "uncommon", "rare", "mythic"];
  * but that set.
  */
 type FacetSkip =
-  | "colors"
-  | "mana"
-  | "sets"
-  | "formats"
-  | "rarities"
-  | "types"
-  | "borders"
-  | "finishes"
-  | "owned";
+  "colors" | "mana" | "sets" | "formats" | "rarities" | "types" | "borders" | "finishes" | "owned";
 
 /**
  * The picked-colour string after one chip is pressed — `facets::toggle_colors`, which is
@@ -7162,12 +7167,7 @@ function wishlisted(db: FakeDb, card: FakeCard): boolean {
   );
 }
 
-function toCardSummary(
-  db: FakeDb,
-  c: FakeCard,
-  mp: MarketplaceId,
-  forDeck?: number,
-): CardSummary {
+function toCardSummary(db: FakeDb, c: FakeCard, mp: MarketplaceId, forDeck?: number): CardSummary {
   // The display **column** at the marketplace the request named: a fallback chain across
   // finishes, never summed, and one number rather than a pair — the backend has already
   // decided whose price this is, so the row carries no second figure to pick between.
@@ -7194,6 +7194,7 @@ function toCardSummary(
     // with itself. A plain boolean, unlike `DeckCard.gameChanger`: a search row came back
     // from `cards`, so it can never be the orphan that field's `null` is for.
     gameChanger: c.gameChanger,
+    releasedAt: c.releasedAt,
     ownedQuantity: ownedOfPrinting(db, c.id, forDeck),
     wishlisted: wishlisted(db, c),
     // Uncollapsed, a row *is* a printing: it stands for one, and its "range" is its own
@@ -7392,8 +7393,7 @@ function toCollectionRow(
     folderId: e.folderId,
     // Joined on for the reader, and `null` at the root — the root is not a folder and has no
     // name. A **display string and never an identity**: two sibling folders may share one.
-    folderName:
-      e.folderId === null ? null : (collectionFolderById(db, e.folderId)?.name ?? null),
+    folderName: e.folderId === null ? null : (collectionFolderById(db, e.folderId)?.name ?? null),
     // Every `cards`-derived field is nullable; the entry's own three never are.
     name: card?.name ?? null,
     oracleId: card?.oracleId ?? null,
@@ -7481,9 +7481,7 @@ function entryKey(db: FakeDb, cardId: string, stored: DeckFinish | FakeEntry["fi
  * question counts it.
  */
 function ownsPrinting(db: FakeDb, cardId: string, forDeck?: number): boolean {
-  return db.collectionEntries.some(
-    (e) => e.cardId === cardId && availableToDeck(db, e, forDeck),
-  );
+  return db.collectionEntries.some((e) => e.cardId === cardId && availableToDeck(db, e, forDeck));
 }
 
 /* ------------------------------------------------------------------ scopes ------------ */
@@ -7778,14 +7776,28 @@ function wishlistScope(db: FakeDb, q: WishlistQuery): FakeWish[] {
  *  value it was handed back. `managedTokens` is `false` for every folder but a managed
  *  wishlist's Tokens child, which is the only row that stores it. */
 function toWishlistFolder(f: FakeWishlistFolder): WishlistFolder {
+  const managedDeckId = f.managedDeckId ?? null;
   return {
     id: f.id,
     parentId: f.parentId,
     name: f.name,
     sortOrder: f.sortOrder,
-    managedDeckId: f.managedDeckId ?? null,
+    managedDeckId,
     managedTokens: f.managedTokens ?? false,
+    syncUid: uidOfWishFolder(f),
+    managedDeckUid: managedDeckId === null ? null : fakeDeckUid(managedDeckId),
   };
+}
+
+/** {@link FakeWishlistFolder.syncUid}, derived. */
+function uidOfWishFolder(f: FakeWishlistFolder): string | null {
+  if (f.syncUid !== undefined) return f.syncUid;
+  return (f.managedDeckId ?? null) === null ? `wishlist-folder-uid-${f.id}` : null;
+}
+
+/** A deck's `decks.sync_uid` as this fake spells it — the decks here carry no uid column. */
+function fakeDeckUid(deckId: number): string {
+  return `deck-uid-${deckId}`;
 }
 
 /** `collection_folders::folder_row`, and a **copy** for {@link toWishlistFolder}'s reason.
@@ -8670,8 +8682,7 @@ function toDeckCard(
   mp: MarketplaceId,
 ): DeckCard {
   const card = cardById(db, dc.cardId);
-  const label =
-    dc.labelId === null ? undefined : db.deckLabels.find((l) => l.id === dc.labelId);
+  const label = dc.labelId === null ? undefined : db.deckLabels.find((l) => l.id === dc.labelId);
   return {
     id: dc.id,
     cardId: dc.cardId,
@@ -9184,8 +9195,7 @@ export function isNewer(candidate: string, current: string): boolean {
  * kind makes the compiler ask.
  */
 export function pickAsset(assets: UpdateAsset[], kind: InstallKind): UpdateAsset | null {
-  const suffix =
-    kind === "portable" ? PORTABLE_SUFFIX : kind === "nsis" ? NSIS_SUFFIX : null;
+  const suffix = kind === "portable" ? PORTABLE_SUFFIX : kind === "nsis" ? NSIS_SUFFIX : null;
   if (suffix === null) return null;
   return assets.find((a) => a.name.toLowerCase().endsWith(suffix)) ?? null;
 }
@@ -10030,12 +10040,10 @@ export function readHandlers(db: FakeDb) {
      */
     printing_prices: (args: { cardIds: string[]; marketplace?: string }): PrintingPrices[] => {
       const mp = marketplaceOf(args.marketplace);
-      return [...new Set(args.cardIds)]
-        .sort(cmp)
-        .flatMap((id) => {
-          const card = cardById(db, id);
-          return card ? [{ cardId: id, finishPrices: finishPricesAt(db, card, mp) }] : [];
-        });
+      return [...new Set(args.cardIds)].sort(cmp).flatMap((id) => {
+        const card = cardById(db, id);
+        return card ? [{ cardId: id, finishPrices: finishPricesAt(db, card, mp) }] : [];
+      });
     },
 
     /**
@@ -11121,13 +11129,15 @@ export function readHandlers(db: FakeDb) {
      */
     deck_notes: (args: { deckId: number }): DeckNote[] => {
       refuseIfNotesUnreadable(db, NOTES_UNREADABLE);
-      return db.deckNotes
-        .filter((n) => n.deckId === args.deckId)
-        // `sort_order, id` — the id is the second term rather than a tie-break nobody hits:
-        // {@link writeHandlers.deck_note_reorder} is the only writer of `sortOrder`, so two notes
-        // created and never dragged both sit at the end and the id is what orders them.
-        .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id)
-        .map((n) => toDeckNote(db, n));
+      return (
+        db.deckNotes
+          .filter((n) => n.deckId === args.deckId)
+          // `sort_order, id` — the id is the second term rather than a tie-break nobody hits:
+          // {@link writeHandlers.deck_note_reorder} is the only writer of `sortOrder`, so two notes
+          // created and never dragged both sit at the end and the id is what orders them.
+          .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id)
+          .map((n) => toDeckNote(db, n))
+      );
     },
 
     /**
@@ -11159,31 +11169,33 @@ export function readHandlers(db: FakeDb) {
       const named = new Set(
         db.deckNoteCards.filter((c) => c.oracleId === args.oracleId).map((c) => c.noteId),
       );
-      return db.deckNotes
-        .filter((n) => named.has(n.id))
-        // A note whose deck has gone cannot survive the cascade, so this drops nothing in a world
-        // the writes made — it is what stops a hand-written one drawing a note under a blank
-        // heading, which is `deck_tokens`' `flatMap` and its argument.
-        .flatMap((note) => {
-          const deck = db.decks.find((d) => d.id === note.deckId);
-          return deck === undefined ? [] : [{ note, deck }];
-        })
-        .sort(
-          (a, b) =>
-            cmp(a.deck.name, b.deck.name) ||
-            a.note.sortOrder - b.note.sortOrder ||
-            a.note.id - b.note.id,
-        )
-        .map(({ note, deck }) => ({
-          id: note.id,
-          deckId: deck.id,
-          // Denormalised at read time and not at write time, unlike `deck_audit`'s `cardName`:
-          // there is nothing durable about this row — it is a join, made fresh on every call —
-          // so a deck renamed while the modal is shut reads its new name the next time it opens.
-          deckName: deck.name,
-          title: note.title,
-          body: note.body,
-        }));
+      return (
+        db.deckNotes
+          .filter((n) => named.has(n.id))
+          // A note whose deck has gone cannot survive the cascade, so this drops nothing in a world
+          // the writes made — it is what stops a hand-written one drawing a note under a blank
+          // heading, which is `deck_tokens`' `flatMap` and its argument.
+          .flatMap((note) => {
+            const deck = db.decks.find((d) => d.id === note.deckId);
+            return deck === undefined ? [] : [{ note, deck }];
+          })
+          .sort(
+            (a, b) =>
+              cmp(a.deck.name, b.deck.name) ||
+              a.note.sortOrder - b.note.sortOrder ||
+              a.note.id - b.note.id,
+          )
+          .map(({ note, deck }) => ({
+            id: note.id,
+            deckId: deck.id,
+            // Denormalised at read time and not at write time, unlike `deck_audit`'s `cardName`:
+            // there is nothing durable about this row — it is a join, made fresh on every call —
+            // so a deck renamed while the modal is shut reads its new name the next time it opens.
+            deckName: deck.name,
+            title: note.title,
+            body: note.body,
+          }))
+      );
     },
 
     /**
@@ -11456,7 +11468,11 @@ export function readHandlers(db: FakeDb) {
         const key = theoryKey(db, dc);
         const held = wanted.get(key);
         if (held) held.quantity += dc.quantity;
-        else wanted.set(key, { nameKey: cardById(db, dc.cardId)?.name ?? null, quantity: dc.quantity });
+        else
+          wanted.set(key, {
+            nameKey: cardById(db, dc.cardId)?.name ?? null,
+            quantity: dc.quantity,
+          });
       }
       return [...wanted].map(([key, { nameKey, quantity }]) => ({ key, nameKey, quantity }));
     },
@@ -12169,6 +12185,24 @@ export function readHandlers(db: FakeDb) {
       Object.fromEntries(Object.entries(db.searchOpen).filter(([section]) => section !== "")),
 
     /**
+     * `panelwidth::panel_width` — every docked panel's remembered width. `panelwidth::stored`'s
+     * per-entry rule: a blank key, a non-integer and a width outside
+     * `PANEL_WIDTH_MIN..=PANEL_WIDTH_MAX` are dropped, so a story seeded with junk sees what the
+     * crate would answer. A copy, so a caller mutating it cannot reach the store. A read, so it
+     * answers through a sync.
+     */
+    panel_width: (): Record<string, number> =>
+      Object.fromEntries(
+        Object.entries(db.panelWidth).filter(
+          ([section, width]) =>
+            section !== "" &&
+            Number.isInteger(width) &&
+            width >= PANEL_WIDTH_MIN &&
+            width <= PANEL_WIDTH_MAX,
+        ),
+      ),
+
+    /**
      * `shelffolds::shelf_folds` — every folded-shelf override, both pages always present. A copy,
      * so a caller mutating the answer cannot reach the store. A read, so it answers through a sync.
      */
@@ -12183,6 +12217,13 @@ export function readHandlers(db: FakeDb) {
      */
     hidden_stacks: (args: { deckId: number }): number[] =>
       [...(db.hiddenStacks[String(args.deckId)] ?? [])].sort((a, b) => a - b),
+
+    /**
+     * `searchwidth::deck_search_width` — the width one deck's card search column was dragged to,
+     * or `null` for a deck nobody has dragged. A read, so it answers through a sync.
+     */
+    deck_search_width: (args: { deckId: number }): number | null =>
+      db.deckSearchWidths[String(args.deckId)] ?? null,
 
     /**
      * `decksort::deck_sort` — how the deck gallery was last ordered, or the default.
@@ -12608,8 +12649,7 @@ export function readHandlers(db: FakeDb) {
       // A held-but-unpriced row is no price to measure from, and reads exactly as no row: it
       // neither counts a day nor makes a baseline.
       const history = db.priceHistory.filter(
-        (s): s is FakePriceSnapshot & { price: number } =>
-          s.marketplace === mp && s.price !== null,
+        (s): s is FakePriceSnapshot & { price: number } => s.marketplace === mp && s.price !== null,
       );
       const days = new Set(history.map((s) => Math.floor(s.takenAt / 86_400))).size;
       const times = [...new Set(history.map((s) => s.takenAt))].sort((a, b) => a - b);
@@ -12620,9 +12660,7 @@ export function readHandlers(db: FakeDb) {
       if (since === null) return { movers: [], since: null, days };
 
       const then = new Map(
-        history
-          .filter((s) => s.takenAt === since)
-          .map((s) => [`${s.cardId}:${s.finish}`, s.price]),
+        history.filter((s) => s.takenAt === since).map((s) => [`${s.cardId}:${s.finish}`, s.price]),
       );
       const seen = new Set<string>();
       const movers: PriceMover[] = [];
@@ -13250,7 +13288,10 @@ export function readHandlers(db: FakeDb) {
           .slice(0, args.limit);
         scored.push(...own);
       }
-      return scored.sort(byTagRank).slice(0, args.limit).map((s) => s.hit);
+      return scored
+        .sort(byTagRank)
+        .slice(0, args.limit)
+        .map((s) => s.hit);
     },
 
     /**
@@ -13280,9 +13321,7 @@ export function readHandlers(db: FakeDb) {
      * here rather than left to the Rust: a fake that answered a tag where the app answers
      * nothing is a story that proves the wrong thing.
      */
-    tag_resolve: (args: {
-      asks: { namespace: string; value: string }[];
-    }): (TagRef | null)[] =>
+    tag_resolve: (args: { asks: { namespace: string; value: string }[] }): (TagRef | null)[] =>
       args.asks.map((ask) => {
         const [ds] = tagDatasets(db, ask.namespace);
         if (ds.namespace !== ask.namespace) throw refuse(`unknown tag namespace: ${ask.namespace}`);
@@ -13293,8 +13332,10 @@ export function readHandlers(db: FakeDb) {
           // The reader's own spelling wins a collision, then the lower slug — so one query
           // cannot answer two different tags on two runs. Only fires where two tags normalise
           // onto one needle (`spot-removal` and `spot_removal` would).
-          .sort((a, b) =>
-            Number(b.slug === ask.value) - Number(a.slug === ask.value) || a.slug.localeCompare(b.slug),
+          .sort(
+            (a, b) =>
+              Number(b.slug === ask.value) - Number(a.slug === ask.value) ||
+              a.slug.localeCompare(b.slug),
           )[0];
         return hit ? { slug: hit.slug, label: hit.label, namespace: ds.namespace } : null;
       }),
@@ -13354,8 +13395,7 @@ export function readHandlers(db: FakeDb) {
           mutedAt: m.mutedAt,
         }))
         .sort(
-          (a, b) =>
-            cmp(a.namespace, b.namespace) || cmp(a.slug, b.slug) || cmp(a.tagId, b.tagId),
+          (a, b) => cmp(a.namespace, b.namespace) || cmp(a.slug, b.slug) || cmp(a.tagId, b.tagId),
         ),
 
     /**
@@ -13530,6 +13570,8 @@ const DECK_GONE = "That deck is not there any more.";
 const ZERO_ADD = "Adding a card needs a quantity of at least one.";
 /** `deck::SAME_PRINTING`. */
 const SAME_PRINTING = "That is already this printing.";
+/** `deck::SPLIT_NONE`. */
+const SPLIT_NONE = "A split moves at least one copy.";
 /** `deck::PRINTING_GONE`. Deliberately not `printing_of`'s sentence: the printing was
  *  clicked out of a live list a moment ago, so the news is the sync, not the id. */
 const PRINTING_GONE =
@@ -13740,7 +13782,8 @@ const FOLDER_IS_LOCKED = "That folder is locked. Unlock it before deleting it.";
  * `collection_folders::FOLDER_HOLDS_LOCKED` — {@link FOLDER_IS_LOCKED} read downward: an unlocked
  * folder whose sub-tree holds a locked one, which the same delete would scatter.
  */
-const FOLDER_HOLDS_LOCKED = "A folder inside that one is locked. Unlock it before deleting this one.";
+const FOLDER_HOLDS_LOCKED =
+  "A folder inside that one is locked. Unlock it before deleting this one.";
 /**
  * `collection_folders::ENTRY_IN_A_DECK` — what {@link collection_set_folder} says about the row
  * it was **given**, when that row is sitting in a deck's group.
@@ -15144,9 +15187,7 @@ function nextSortOrder(db: FakeDb, deckId: number, variant: DeckVariant): number
 function ensurePredefinedCategories(db: FakeDb, deckId: number, variant: DeckVariant): void {
   for (const [kind, name, isActive] of PREDEFINED_CATEGORIES) {
     if (
-      db.deckCategories.some(
-        (c) => c.deckId === deckId && c.variant === variant && c.kind === kind,
-      )
+      db.deckCategories.some((c) => c.deckId === deckId && c.variant === variant && c.kind === kind)
     ) {
       continue;
     }
@@ -15606,9 +15647,7 @@ function isVirtual(db: FakeDb, deckId: number): boolean {
  * rather than about a folder it has no use for.
  */
 function deckGroup(db: FakeDb, deckId: number): FakeCollectionFolder | undefined {
-  return db.collectionFolders.find(
-    (f) => f.deckId === deckId && f.kind === COLLECTION_DECK_KIND,
-  );
+  return db.collectionFolders.find((f) => f.deckId === deckId && f.kind === COLLECTION_DECK_KIND);
 }
 
 /**
@@ -15872,12 +15911,7 @@ function foldEntry(db: FakeDb, target: FakeEntry, source: FakeEntry): EntryChang
  * `min(tradelist, quantity)` with them and the remainder keeps the rest, so the two halves sum
  * to what the one row held. Duplicating it would put a card on the trade list twice by moving it.
  */
-function moveCopies(
-  db: FakeDb,
-  entryId: number,
-  quantity: number,
-  dest: number | null,
-): number {
+function moveCopies(db: FakeDb, entryId: number, quantity: number, dest: number | null): number {
   const source = db.collectionEntries.find((e) => e.id === entryId);
   if (!source) throw refuse(ENTRY_GONE);
   if (quantity > source.quantity) throw refuse(NOT_THAT_MANY);
@@ -17553,8 +17587,13 @@ function importIntoCollection(
   return out;
 }
 
+/** `panelwidth::MIN_PANEL_WIDTH` and `MAX_PANEL_WIDTH`, the bounds a stored panel width keeps. */
+export const PANEL_WIDTH_MIN = 80;
+export const PANEL_WIDTH_MAX = 4000;
+
 /** `shelffolds::UNKNOWN_PAGE` and `shelffolds::NOT_A_SHELF`, verbatim. */
-const SHELF_PAGE_UNKNOWN = "Shelves are folded on the collection or the wishlist, and nowhere else.";
+const SHELF_PAGE_UNKNOWN =
+  "Shelves are folded on the collection or the wishlist, and nowhere else.";
 const NOT_A_SHELF = "A shelf is named by its folder id, or 0 for Not sorted.";
 
 /**
@@ -17898,10 +17937,7 @@ export function writeHandlers(db: FakeDb) {
      * `collectionFolderById(...)?.parentId ?? null` reads an id no folder has as "already at the
      * root" and lets it straight through.
      */
-    collection_folder_move: (args: {
-      id: number;
-      parentId: number | null;
-    }): CollectionFolder => {
+    collection_folder_move: (args: { id: number; parentId: number | null }): CollectionFolder => {
       refuseIfBusy(db);
       const folder = userCollectionFolder(db, args.id);
       if (args.parentId !== null) {
@@ -18034,7 +18070,7 @@ export function writeHandlers(db: FakeDb) {
       // The cascade is recursive, so it is walked to a fixed point rather than one level deep.
       // Nothing filters on `kind`: the CASCADE does not, so a walk that did would leave those
       // folders' cards to `SET NULL` and the very collision this exists to answer.
-      for (let grew = true; grew; ) {
+      for (let grew = true; grew;) {
         grew = false;
         for (const f of db.collectionFolders) {
           if (f.parentId !== null && doomed.has(f.parentId) && !doomed.has(f.id)) {
@@ -19638,8 +19674,7 @@ export function writeHandlers(db: FakeDb) {
       const name = patch.name === undefined ? undefined : validName(patch.name);
       const formatKey = patch.formatKey === undefined ? undefined : validFormat(patch.formatKey);
       const bracket = patch.bracket === undefined ? undefined : validBracket(patch.bracket);
-      const tokenMode =
-        patch.tokenMode === undefined ? undefined : validTokenMode(patch.tokenMode);
+      const tokenMode = patch.tokenMode === undefined ? undefined : validTokenMode(patch.tokenMode);
       // `managed_wishlist::valid_mode`, strict — four words since v57, `tokens` no longer one.
       const managedWishlist =
         patch.managedWishlist === undefined ? undefined : validManagedMode(patch.managedWishlist);
@@ -20756,6 +20791,73 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
+     * `deck::split_printing` — the deck card menu's `Split to new printing` (issue #934):
+     * {@link deck_swap_printing} for part of a row. `quantity` copies land on `toCardId` in the
+     * same pile, variant and finish, folding into a row already there, and the rest stay.
+     *
+     * The swap's refusals, in its order, plus the two a count owes: none, and every copy.
+     */
+    deck_split_printing: (args: {
+      deckId: number;
+      fromCardId: string;
+      toCardId: string;
+      categoryId: number;
+      variant: DeckVariant;
+      finish?: DeckFinish;
+      quantity: number;
+    }): SwapResult => {
+      refuseIfBusy(db);
+      const variant = validVariant(args.variant);
+      const finish = normaliseFinish(args.finish);
+      if (args.fromCardId === args.toCardId) throw refuse(SAME_PRINTING);
+      if (args.quantity < 1) throw refuse(SPLIT_NONE);
+      const deck = requireDeck(db, args.deckId);
+      const category = categoryOfDeck(db, args.deckId, variant, args.categoryId);
+      const row = deckCardAt(db, args.deckId, args.fromCardId, category.id, variant, finish);
+      if (!row) throw refuse(cardGone(category.name));
+      if (args.quantity >= row.quantity) {
+        throw refuse(
+          `This row holds ${row.quantity} — a split has to leave at least one behind. To move ` +
+            `every copy, change the printing instead.`,
+        );
+      }
+      const to = cardById(db, args.toCardId);
+      if (!to) throw refuse(PRINTING_GONE);
+      const fromOracle = cardById(db, args.fromCardId)?.oracleId ?? null;
+      if (fromOracle !== null && to.oracleId !== null && fromOracle !== to.oracleId) {
+        throw refuse(
+          `\`${to.name}\` is not another printing of \`${row.name}\`. Swapping a printing ` +
+            `changes which printing of a card this deck plays, never which card it plays.`,
+        );
+      }
+      row.quantity -= args.quantity;
+      const target = deckCardAt(db, args.deckId, args.toCardId, category.id, variant, finish);
+      let landed: number;
+      if (target) {
+        // The fold keeps the survivor's label, and takes the split row's only where it has none.
+        target.quantity += args.quantity;
+        target.labelId ??= row.labelId;
+        landed = target.quantity;
+      } else {
+        db.deckCards.push({
+          ...row,
+          id: nextId(db.deckCards),
+          cardId: args.toCardId,
+          name: to.name,
+          setCode: to.setCode,
+          collectorNumber: to.collectorNumber,
+          lang: to.lang,
+          needsReview: null,
+          quantity: args.quantity,
+        });
+        landed = args.quantity;
+      }
+      deck.updatedAt = stamp(db);
+      releaseUnclaimedCopies(db, args.deckId, variant);
+      return { folded: landed > args.quantity, quantity: landed };
+    },
+
+    /**
      * `deck::set_card_finish` — which **object** this row plays.
      *
      * `deck_swap_printing` one axis over, so it answers the same `SwapResult` and **folds** the
@@ -21649,7 +21751,8 @@ export function writeHandlers(db: FakeDb) {
         // crate asks about this list alone — where the other list makes the token, `auto` draws
         // there exactly as `manual` did. A token this list makes keeps whatever state it has — it
         // is still the deck's, and its implicit entry takes over at 0.
-        const derivedHere = derivedPrintingOf(db, args.deckId, variant, args.oracleId) !== undefined;
+        const derivedHere =
+          derivedPrintingOf(db, args.deckId, variant, args.oracleId) !== undefined;
         const left = VARIANTS.some(
           (list) => tokenEntries(db, args.deckId, list, args.oracleId).length > 0,
         );
@@ -21825,9 +21928,7 @@ export function writeHandlers(db: FakeDb) {
       const oracleId = validOracleId(args.oracleId);
       const note = requireNote(db, args.deckId, args.noteId);
       const deck = requireDeck(db, args.deckId);
-      const already = db.deckNoteCards.some(
-        (c) => c.noteId === note.id && c.oracleId === oracleId,
-      );
+      const already = db.deckNoteCards.some((c) => c.noteId === note.id && c.oracleId === oracleId);
       if (!already) {
         db.deckNoteCards.push({ id: nextId(db.deckNoteCards), noteId: note.id, oracleId });
         const at = stamp(db);
@@ -22589,6 +22690,27 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
+     * `panelwidth::set_panel_width` — remember one docked panel's width.
+     * {@link writeHandlers.set_search_open}'s handler with a number where the `bool` is: the lock
+     * first, then a blank section and a width outside the crate's bounds are refused in its words.
+     * A non-integer is refused too, standing in for Tauri's `u32` deserializer.
+     */
+    set_panel_width: (args: { section: string; width: number }): void => {
+      refuseIfBusy(db);
+      if (args.section === "") throw refuse("A search section cannot be blank.");
+      if (
+        !Number.isInteger(args.width) ||
+        args.width < PANEL_WIDTH_MIN ||
+        args.width > PANEL_WIDTH_MAX
+      ) {
+        throw refuse(
+          `A panel width must be between ${PANEL_WIDTH_MIN} and ${PANEL_WIDTH_MAX} pixels, not ${args.width}.`,
+        );
+      }
+      db.panelWidth = { ...db.panelWidth, [args.section]: args.width };
+    },
+
+    /**
      * `shelffolds::set_shelf_folds` — set (`true`/`false`) or remove (`null`) overrides on one
      * page. The lock first, like every write here; then the page, then **every** key, so a refused
      * change set writes nothing. `null` deletes the entry: the absence is the default.
@@ -22627,6 +22749,25 @@ export function writeHandlers(db: FakeDb) {
       if (ids.length === 0) delete next[key];
       else next[key] = ids;
       db.hiddenStacks = next;
+    },
+
+    /**
+     * `searchwidth::set_deck_search_width` — remember one deck's card search column width. The
+     * lock first, like every write here; then the crate's two refusals — an id that is not
+     * positive (`searchwidth::NOT_A_DECK` verbatim) and a width outside its storage band.
+     */
+    set_deck_search_width: (args: { deckId: number; width: number }): void => {
+      refuseIfBusy(db);
+      if (!(args.deckId > 0)) {
+        throw refuse("A card search width is stored for a deck, named by its id.");
+      }
+      if (!Number.isInteger(args.width) || args.width < 100 || args.width > 4000) {
+        throw refuse(
+          `${args.width} is not a card search width this app stores. ` +
+            "Expected a whole number of pixels between 100 and 4000.",
+        );
+      }
+      db.deckSearchWidths = { ...db.deckSearchWidths, [String(args.deckId)]: args.width };
     },
 
     /**
@@ -23708,7 +23849,12 @@ export function writeHandlers(db: FakeDb) {
       if (db.pairing.group === null) {
         db.pairing.group = { groupId: "0f1e2d3c4b5a69788796a5b4c3d2e1f0", epoch: 0 };
         db.pairing.devices = [
-          { deviceId: db.pairing.deviceId, name: db.pairing.deviceName, addedAt: now, revokedAt: null },
+          {
+            deviceId: db.pairing.deviceId,
+            name: db.pairing.deviceName,
+            addedAt: now,
+            revokedAt: null,
+          },
         ];
       }
       const joined = `b0${String(db.pairing.devices.length).padStart(2, "0")}`.padEnd(32, "f");
@@ -23775,8 +23921,18 @@ export function writeHandlers(db: FakeDb) {
       const now = Math.floor(Date.now() / 1000);
       db.pairing.group = { groupId: "0f1e2d3c4b5a69788796a5b4c3d2e1f0", epoch: 0 };
       db.pairing.devices = [
-        { deviceId: db.pairing.deviceId, name: db.pairing.deviceName, addedAt: now, revokedAt: null },
-        { deviceId: "b000ffffffffffffffffffffffffffff", name: "Paired device", addedAt: now, revokedAt: null },
+        {
+          deviceId: db.pairing.deviceId,
+          name: db.pairing.deviceName,
+          addedAt: now,
+          revokedAt: null,
+        },
+        {
+          deviceId: "b000ffffffffffffffffffffffffffff",
+          name: "Paired device",
+          addedAt: now,
+          revokedAt: null,
+        },
       ];
       pending.spent = true;
       return { stage: "complete", sas: null };
@@ -24139,7 +24295,8 @@ export function writeHandlers(db: FakeDb) {
       // refusal about *this drawer* is the more actionable of the two.
       const held = buildRelayShare(db, mintShareId(db), args.folderUid, ownerName, args.fields, at);
       refuseIfNotSharing(db);
-      return toShareRow(commitShare(db, held, args.folderUid, args.fields, at));
+      // `held.fields`, the crate's `snap.fields`: a wishlist share switches `condition` off.
+      return toShareRow(commitShare(db, held, args.folderUid, held.fields, at));
     },
 
     /**
@@ -24160,7 +24317,7 @@ export function writeHandlers(db: FakeDb) {
       const at = stamp(db);
       const fields = shareFieldsFromNames(row.fields);
       const held = buildRelayShare(db, row.id, row.folderUid, row.ownerName, fields, at);
-      return toShareRow(commitShare(db, held, row.folderUid, fields, at));
+      return toShareRow(commitShare(db, held, row.folderUid, held.fields, at));
     },
 
     /**
@@ -24301,6 +24458,11 @@ export function writeHandlers(db: FakeDb) {
      * fits is still refused when the line it would raise cannot take it, and that refusal takes
      * the batch back with it like any other.
      *
+     * **A collection input on the reader's side raises the collection's line only as far as the
+     * collection has copies** ({@link tradeSplit}, issue #935); the rest go onto the side's other
+     * line for that printing and finish ({@link tradePutExcess}). A searched or scanned input on
+     * the reader's side never raises the collection's line ({@link tradeDrawn}).
+     *
      * ⚠️ **The finish is checked as a word and not against the printing's own list**, where
      * {@link writeHandlers.trade_update_line} does check. A line arrives from the collection or
      * the scanner in the finish a real copy is in, and the collection can hold a finish
@@ -24319,39 +24481,43 @@ export function writeHandlers(db: FakeDb) {
       // must not be the one that throws once the first has landed. `raised` is what each
       // printing and finish will hold after the inputs so far — the standing line's copies and
       // every earlier input's — which is what the crate's later input finds in the table.
-      const raised = new Map<string, number>();
       const checked = args.lines.map((input) => {
         const finish = tradeFinish(input.finish);
         const source = tradeSource(input.source);
         const quantity = tradeCopies(input.quantity);
         const card = cardById(db, input.cardId);
         if (!card) throw refuse(TRADE_NO_SUCH_CARD);
-        const grain = JSON.stringify([card.id, finish]);
-        const held =
-          raised.get(grain) ?? tradeTwin(db, trade.id, side, card.id, finish, null)?.quantity;
-        raised.set(grain, held === undefined ? quantity : tradeFolded(held, quantity));
         return { card, finish, quantity, source };
       });
-      for (const input of checked) {
-        const standing = tradeTwin(db, trade.id, side, input.card.id, input.finish, null);
-        if (standing) {
-          standing.quantity += input.quantity;
-          continue;
+      // The fold's sums are refused at the write, as the crate refuses them inside its
+      // savepoint, and the lines as they were are put back — the savepoint's rollback.
+      const before = db.tradeLines.map((l) => ({ ...l }));
+      try {
+        for (const input of checked) {
+          const { card, finish, quantity, source } = input;
+          const drawn = tradeDrawn(side, source);
+          const standing = tradeTwin(db, trade.id, side, card.id, finish, drawn, null);
+          if (!drawn) {
+            if (standing) standing.quantity = tradeFolded(standing.quantity, quantity);
+            else
+              db.tradeLines.push(tradeNewLine(db, trade.id, side, card, finish, quantity, source));
+            continue;
+          }
+          const held = standing?.quantity ?? 0;
+          const [keep, excess] = tradeSplit(
+            held,
+            tradeFolded(held, quantity),
+            tradeAvailable(db, card.id, finish),
+          );
+          if (standing) standing.quantity = keep;
+          else if (keep > 0) {
+            db.tradeLines.push(tradeNewLine(db, trade.id, side, card, finish, keep, source));
+          }
+          if (excess > 0) tradePutExcess(db, trade.id, card, finish, excess);
         }
-        db.tradeLines.push({
-          id: nextId(db.tradeLines),
-          tradeId: trade.id,
-          side,
-          cardId: input.card.id,
-          name: input.card.name,
-          setCode: input.card.setCode,
-          collectorNumber: input.card.collectorNumber,
-          finish: input.finish,
-          quantity: input.quantity,
-          source: input.source,
-          position: nextTradePosition(db, trade.id),
-          unitPrice: null,
-        });
+      } catch (e) {
+        db.tradeLines = before;
+        throw e;
       }
     },
 
@@ -24381,7 +24547,10 @@ export function writeHandlers(db: FakeDb) {
      *    line survives**, with both quantities and in the place rules 1–4 left it, and the other
      *    is deleted: the caller is holding the edited line's id. Two lines that add up past
      *    {@link TRADE_MAX_QUANTITY} are refused rather than folded, whether or not the edit
-     *    named a quantity.
+     *    named a quantity. The other line is one of the same {@link tradeDrawn} class.
+     * 6. **The split** (issue #935): a line drawn from the collection raised past the copies the
+     *    collection has keeps those — or what it already held, if more — and the rest go onto
+     *    the side's other line for that printing and finish ({@link tradePutExcess}).
      *
      * A refusal at any rule writes nothing, which is why the rules run over a copy.
      */
@@ -24428,12 +24597,30 @@ export function writeHandlers(db: FakeDb) {
         }
       }
 
-      const twin = tradeTwin(db, trade.id, next.side, next.cardId, next.finish, line.id);
-      if (twin) {
-        next.quantity = tradeFolded(next.quantity, twin.quantity);
-        db.tradeLines = db.tradeLines.filter((l) => l.id !== twin.id);
+      const drawn = tradeDrawn(next.side, next.source);
+      const twin = tradeTwin(db, trade.id, next.side, next.cardId, next.finish, drawn, line.id);
+      if (twin) next.quantity = tradeFolded(next.quantity, twin.quantity);
+
+      let excess = 0;
+      if (drawn && change.quantity != null) {
+        [next.quantity, excess] = tradeSplit(
+          Math.min(line.quantity, next.quantity),
+          next.quantity,
+          tradeAvailable(db, next.cardId, next.finish),
+        );
       }
+      // The excess's fold is the last refusal, so it is checked before anything is written.
+      const other =
+        excess > 0 ? tradeTwin(db, trade.id, "mine", next.cardId, next.finish, false, null) : null;
+      if (other) tradeFolded(other.quantity, excess);
+
+      if (twin) db.tradeLines = db.tradeLines.filter((l) => l.id !== twin.id);
       Object.assign(line, next);
+      if (excess > 0) {
+        // The line's own words, as the crate copies them: its printing may have left `cards`.
+        const words = { ...next, id: next.cardId };
+        tradePutExcess(db, trade.id, words, next.finish, excess);
+      }
     },
 
     /**
@@ -24453,6 +24640,37 @@ export function writeHandlers(db: FakeDb) {
       if (!line) return;
       openTrade(db, line.tradeId);
       db.tradeLines = db.tradeLines.filter((l) => l.id !== line.id);
+    },
+
+    /**
+     * `trade::swap_trade_sides` — every line of an open trade onto the other side, whole: its
+     * printing, finish, quantity and place in the order. The percentages stay with their sides.
+     *
+     * **One fold, on their side**: the reader's collection line and their line past it for one
+     * printing and finish (issue #935) arrive as one line — the first in the order takes the
+     * other's copies, under {@link TRADE_TOO_MANY}. Worked out before anything is written, so a
+     * refused fold leaves both sides as they were.
+     */
+    trade_swap_sides: (args: { id: number }): void => {
+      refuseIfBusy(db);
+      const trade = openTrade(db, args.id);
+      const lines = linesOfTrade(db, trade.id);
+      const flipped = (l: FakeTradeLine): TradeSide => (l.side === "mine" ? "theirs" : "mine");
+      const kept = new Map<string, { line: FakeTradeLine; quantity: number }>();
+      const gone = new Set<number>();
+      for (const line of lines) {
+        if (flipped(line) !== "theirs") continue;
+        const key = `${line.cardId}|${line.finish}`;
+        const first = kept.get(key);
+        if (first === undefined) kept.set(key, { line, quantity: line.quantity });
+        else {
+          first.quantity = tradeFolded(first.quantity, line.quantity);
+          gone.add(line.id);
+        }
+      }
+      for (const line of lines) line.side = flipped(line);
+      for (const { line, quantity } of kept.values()) line.quantity = quantity;
+      db.tradeLines = db.tradeLines.filter((l) => !gone.has(l.id));
     },
 
     /**
@@ -24535,7 +24753,12 @@ export function writeHandlers(db: FakeDb) {
       const wishesBefore = db.wishlistEntries.map((w) => ({ ...w }));
       try {
         if (options.removeGiven) {
-          for (const line of mine) {
+          // The lines drawn from the collection first (`take_given`'s order, issue #935): the
+          // side's other line for the same printing and finish takes only what is left.
+          const given = [...mine].sort(
+            (a, b) => Number(!tradeDrawn(a.side, a.source)) - Number(!tradeDrawn(b.side, b.source)),
+          );
+          for (const line of given) {
             let left = line.quantity;
             for (const row of tradeableRows(db, line.cardId, line.finish)) {
               if (left === 0) break;
@@ -24838,11 +25061,78 @@ function tradeTwin(
   side: TradeSide,
   cardId: string,
   finish: FakeEntry["finish"],
+  drawn: boolean,
   except: number | null,
 ): FakeTradeLine | undefined {
   return linesOfTrade(db, tradeId).find(
-    (l) => l.id !== except && l.side === side && l.cardId === cardId && l.finish === finish,
+    (l) =>
+      l.id !== except &&
+      l.side === side &&
+      l.cardId === cardId &&
+      l.finish === finish &&
+      tradeDrawn(l.side, l.source) === drawn,
   );
+}
+
+/** `trade::drawn` — the reader's side, added from the collection: the one term of a side's grain
+ *  beyond the printing and finish (issue #935). Their side is one grain whatever the source. */
+function tradeDrawn(side: TradeSide, source: TradeSource): boolean {
+  return side === "mine" && source === "collection";
+}
+
+/** `trade::available` — every copy of a printing and finish a finish could take. */
+function tradeAvailable(db: FakeDb, cardId: string, finish: FakeEntry["finish"]): number {
+  return tradeableRows(db, cardId, finish).reduce((sum, row) => sum + row.quantity, 0);
+}
+
+/** `trade::split` — the copies a collection line asked for `asked` keeps, and the copies past
+ *  what the collection has. It never gives back what it already `held`. */
+function tradeSplit(held: number, asked: number, available: number): [number, number] {
+  const keep = Math.min(asked, Math.max(held, available));
+  return [keep, asked - keep];
+}
+
+/** A new line at the end of the trade, its printing's words copied off the card. */
+function tradeNewLine(
+  db: FakeDb,
+  tradeId: number,
+  side: TradeSide,
+  card: Pick<FakeCard, "id" | "name" | "setCode" | "collectorNumber">,
+  finish: FakeEntry["finish"],
+  quantity: number,
+  source: TradeSource,
+): FakeTradeLine {
+  return {
+    id: nextId(db.tradeLines),
+    tradeId,
+    side,
+    cardId: card.id,
+    name: card.name,
+    setCode: card.setCode,
+    collectorNumber: card.collectorNumber,
+    finish,
+    quantity,
+    source,
+    position: nextTradePosition(db, tradeId),
+    unitPrice: null,
+  };
+}
+
+/** `trade::put_excess` — copies the collection does not cover, on the reader's side's line that
+ *  is not drawn from it: raised where there is one, a new `search` line otherwise. */
+function tradePutExcess(
+  db: FakeDb,
+  tradeId: number,
+  card: Pick<FakeCard, "id" | "name" | "setCode" | "collectorNumber">,
+  finish: FakeEntry["finish"],
+  quantity: number,
+): void {
+  const standing = tradeTwin(db, tradeId, "mine", card.id, finish, false, null);
+  if (standing) {
+    standing.quantity = tradeFolded(standing.quantity, quantity);
+    return;
+  }
+  db.tradeLines.push(tradeNewLine(db, tradeId, "mine", card, finish, quantity, "search"));
 }
 
 /**
@@ -24854,10 +25144,7 @@ function tradeTwin(
  * them. One past the newest instant either clock holds, and never below `stamp`'s own answer.
  */
 function tradeStamp(db: FakeDb): number {
-  return db.trades.reduce(
-    (n, t) => Math.max(n, t.createdAt + 1, (t.closedAt ?? 0) + 1),
-    stamp(db),
-  );
+  return db.trades.reduce((n, t) => Math.max(n, t.createdAt + 1, (t.closedAt ?? 0) + 1), stamp(db));
 }
 
 /**
@@ -25022,7 +25309,8 @@ function tradeCopyIsSpecial(e: FakeEntry): boolean {
  * asked of a foil-only printing into `foil`, and the crate's trade compares the line's own word.
  */
 function tradeWishes(db: FakeDb, cardId: string, finish: FakeEntry["finish"]): FakeWish[] {
-  const folder = (w: FakeWish) => (w.folderId === null ? undefined : wishFolderById(db, w.folderId));
+  const folder = (w: FakeWish) =>
+    w.folderId === null ? undefined : wishFolderById(db, w.folderId);
   const rank = (w: FakeWish): number[] => [
     Number(w.cardId !== cardId),
     Number(w.preferredFinish !== null && w.preferredFinish !== finish),
@@ -25154,8 +25442,12 @@ const SHARE_NOT_READY = "That shared collection has not finished publishing yet.
 /** `share::snapshot::FOLDER_NOT_FOUND` — checked **first**, so a folder that is not there never
  *  reports as locked. */
 const SHARE_FOLDER_NOT_FOUND = "That folder is not in this collection.";
-/** `share::snapshot::FOLDER_NOT_SHAREABLE` — a deck's group or `Recently removed`. */
-const SHARE_FOLDER_NOT_SHAREABLE = "Only your own folders can be shared.";
+/** `share::wishlist::WISHLIST_FOLDER_NOT_FOUND` — a wishlist key nothing answers to. */
+const SHARE_WISHLIST_FOLDER_NOT_FOUND = "That folder is not in this wishlist.";
+/** `share::wishlist::WHOLE_WISHLIST_TITLE`. */
+const WHOLE_WISHLIST_TITLE = "Wishlist";
+/** `share::wishlist::PREFIX` — what every wishlist share key begins with (issue #941). */
+const WISHLIST_SHARE_PREFIX = "wishlist:";
 /** `share::snapshot::FOLDER_IS_LOCKED`. **Not {@link FOLDER_IS_LOCKED}**, which is the *delete*
  *  refusal one cabinet over and ends "before deleting it" — two presses, two sentences. */
 const SHARE_FOLDER_IS_LOCKED = "That folder is locked. Unlock it before sharing it.";
@@ -25256,13 +25548,16 @@ function shareIdIn(url: string): string | null {
  *
  * `share::snapshot::read_folders`' subtree, and it drops **locked** folders the same way that
  * query's `<LOCKED>` term does: a drawer set aside is not offered, and a sub-drawer of one is
- * not either. The `deck` and `removed` kinds never appear at all — those are the app's own
- * folders and are not the reader's to publish.
+ * not either. The `deck` and `removed` kinds travel only when **named** (issue #941) — a
+ * whole-collection share still leaves the app's own folders out.
  */
 function shareFolders(db: FakeDb, folderUid: string | null): FakeCollectionFolder[] {
   const locked = (f: FakeCollectionFolder) => collectionFolderLocked(db, f.id);
   const mine = db.collectionFolders.filter(
-    (f) => f.kind === COLLECTION_USER_KIND && !locked(f) && uidOfFolder(f) !== null,
+    (f) =>
+      (folderUid !== null || f.kind === COLLECTION_USER_KIND) &&
+      !locked(f) &&
+      uidOfFolder(f) !== null,
   );
   if (folderUid === null) return mine;
   const kept: FakeCollectionFolder[] = [];
@@ -25310,11 +25605,13 @@ function buildRelayShare(
   fields: ShareFieldsArg,
   at: number,
 ): FakeRelayShare {
+  if (folderUid?.startsWith(WISHLIST_SHARE_PREFIX) === true) {
+    return buildWishlistShare(db, id, folderUid, ownerName, fields, at);
+  }
   let title = WHOLE_COLLECTION_TITLE;
   if (folderUid !== null) {
     const named = db.collectionFolders.find((f) => uidOfFolder(f) === folderUid);
     if (named === undefined) throw refuse(SHARE_FOLDER_NOT_FOUND);
-    if (named.kind !== COLLECTION_USER_KIND) throw refuse(SHARE_FOLDER_NOT_SHAREABLE);
     // The **effective** lock, so a share and the folder's own badge cannot disagree about which
     // drawers are set aside.
     if (collectionFolderLocked(db, named.id)) throw refuse(SHARE_FOLDER_IS_LOCKED);
@@ -25344,9 +25641,7 @@ function buildRelayShare(
     copies: db.collectionEntries
       // The root's copies are members of a **whole-collection** share and of no other: a named
       // folder never carries them.
-      .filter((e) =>
-        e.folderId === null ? folderUid === null : ids.has(e.folderId),
-      )
+      .filter((e) => (e.folderId === null ? folderUid === null : ids.has(e.folderId)))
       .map((e) => ({
         cardId: e.cardId,
         finish: e.finish,
@@ -25355,6 +25650,92 @@ function buildRelayShare(
         condition: e.condition,
         lang: e.lang,
       })),
+    state: "live",
+  };
+}
+
+/**
+ * `share::wishlist::snapshot` — the wishlist's share, by key (issue #941).
+ *
+ * The whole list is the root and the reader's own folders; a folder key is that folder's subtree;
+ * a deck key is that deck's managed folder (and its Tokens child), found by the deck's uid. A
+ * wish has no condition, so `condition` is switched off whatever was sent, and an any-printing
+ * wish travels as the first printing of its card this fake holds.
+ */
+function buildWishlistShare(
+  db: FakeDb,
+  id: string,
+  key: string,
+  ownerName: string,
+  fields: ShareFieldsArg,
+  at: number,
+): FakeRelayShare {
+  const rest = key.slice(WISHLIST_SHARE_PREFIX.length);
+  const tail = (word: string) => (rest.startsWith(word) ? rest.slice(word.length) : null);
+  const managedBy = (deckUid: string, tokens: boolean) =>
+    db.wishlistFolders.find(
+      (f) =>
+        f.managedDeckId != null &&
+        fakeDeckUid(f.managedDeckId) === deckUid &&
+        (f.managedTokens ?? false) === tokens,
+    );
+  let root: FakeWishlistFolder | null = null;
+  let title = WHOLE_WISHLIST_TITLE;
+  if (rest !== "") {
+    const folderUid = tail("folder:");
+    const tokensOf = tail("deck-tokens:");
+    const deckOf = tokensOf === null ? tail("deck:") : null;
+    let named: FakeWishlistFolder | undefined;
+    if (folderUid) named = db.wishlistFolders.find((f) => uidOfWishFolder(f) === folderUid);
+    else if (tokensOf) named = managedBy(tokensOf, true);
+    else if (deckOf) named = managedBy(deckOf, false);
+    if (named === undefined) throw refuse(SHARE_WISHLIST_FOLDER_NOT_FOUND);
+    root = named;
+    const parent = tokensOf ? wishFolderById(db, named.parentId ?? -1) : undefined;
+    title = tokensOf ? `${parent?.name ?? named.name} tokens` : named.name;
+  }
+
+  const kept: FakeWishlistFolder[] = [];
+  for (const f of db.wishlistFolders) {
+    if (root === null ? f.parentId === null && f.managedDeckId == null : f.id === root.id) {
+      kept.push(f);
+    }
+  }
+  for (let pass = 0; pass < MAX_FOLDER_DEPTH; pass += 1) {
+    for (const f of db.wishlistFolders) {
+      if (!kept.includes(f) && f.parentId !== null && kept.some((k) => k.id === f.parentId)) {
+        kept.push(f);
+      }
+    }
+  }
+  const uidOf = (f: FakeWishlistFolder) => uidOfWishFolder(f) ?? `wishlist-managed-uid-${f.id}`;
+  const uids = new Map(kept.map((f) => [f.id, uidOf(f)]));
+  return {
+    id,
+    owner: ownerName,
+    title,
+    updatedAt: at,
+    marketplace: marketplaceOf(db.marketplace),
+    fields: { ...fields, condition: false },
+    folders: kept.map((f) => ({
+      uid: uidOf(f),
+      name: f.name,
+      parent: f.parentId === null ? null : (uids.get(f.parentId) ?? null),
+    })),
+    copies: db.wishlistEntries
+      .filter((w) => (w.folderId === null ? root === null : uids.has(w.folderId)))
+      .map((w) => {
+        const printing =
+          w.cardId ?? db.cards.find((c) => c.oracleId === w.oracleId)?.id ?? w.oracleId ?? "";
+        return {
+          cardId: printing,
+          finish: w.preferredFinish ?? "nonfoil",
+          quantity: w.quantity,
+          folderUid: w.folderId === null ? null : (uids.get(w.folderId) ?? null),
+          condition: "NONE",
+          lang: w.lang ?? cardById(db, printing)?.lang ?? "en",
+        };
+      }),
     state: "live",
   };
 }
@@ -25598,7 +25979,8 @@ const FAKE_STATE = "0123456789abcdef0123456789abcdef";
 
 /** Twelve Crockford characters in three groups, which is the shape the relay's landing page
  *  prints. The alphabet omits `I`, `L`, `O` and `U`, because this code is copied by a person. */
-const CLAIM_CODE = /^[0-9ABCDEFGHJKMNPQRSTVWXYZ]{4}-[0-9ABCDEFGHJKMNPQRSTVWXYZ]{4}-[0-9ABCDEFGHJKMNPQRSTVWXYZ]{4}$/;
+const CLAIM_CODE =
+  /^[0-9ABCDEFGHJKMNPQRSTVWXYZ]{4}-[0-9ABCDEFGHJKMNPQRSTVWXYZ]{4}-[0-9ABCDEFGHJKMNPQRSTVWXYZ]{4}$/;
 
 /** The crate's own sentence, from `entitlement::claim`. */
 const CLAIM_REFUSED = "the relay refused that claim code";
@@ -25795,7 +26177,8 @@ const NO_PRINTING_MATCHES = "No printing matches these filters.";
 const OPEN_ELSEWHERE = "The scanner is open in another window.";
 
 /** `scanner_submit.rs`' `INBOX_FULL`, verbatim; `ipc.test.ts` holds the two together. */
-export const SCAN_INBOX_FULL = "The scan inbox is full for now. Thank you — try again in a few days.";
+export const SCAN_INBOX_FULL =
+  "The scan inbox is full for now. Thank you — try again in a few days.";
 
 /** The reference every submission over the fake is answered with — an id in the inbox's shape. */
 export const FAKE_SCAN_ID = "20261011T101500Z-0123456789abcdef";
@@ -25846,7 +26229,8 @@ export function scannerHandlers(db: FakeDb) {
   const script = newScanScript();
   return {
     /** `scanner::scanner_status`. */
-    scanner_status: (): ScannerStatus => (db.fault === "scannerMissing" ? STATUS.missing : STATUS.present),
+    scanner_status: (): ScannerStatus =>
+      db.fault === "scannerMissing" ? STATUS.missing : STATUS.present,
     /** `scanner::scanner_elsewhere` — whether another window holds the scanner's lease. */
     scanner_elsewhere: (): boolean => db.fault === "scannerElsewhere",
     /**
@@ -26217,8 +26601,8 @@ const NO_UNDO_STEP: ReadonlySet<string> = new Set([
  *
  * **Known gap, and it is this fake's rather than this feature's**: the card writes
  * (`deck_add_card`, `deck_add_card_to_other_list`, `deck_set_card_quantity`, `deck_move_card`,
- * `deck_swap_printing`, `deck_set_card_finish`, `deck_category_clear` and `deck_clear`) record
- * no history row here, though their Rust twins do and `deck_audit.rs`'s
+ * `deck_swap_printing`, `deck_split_printing`, `deck_set_card_finish`, `deck_category_clear` and
+ * `deck_clear`) record no history row here, though their Rust twins do and `deck_audit.rs`'s
  * `every_deck_write_leaves_exactly_one_audit_row` pins the four of them that sweep drives. So
  * Storybook's history drawer has never listed a card add, and — consistently — its Undo button
  * does not offer to take one back. The app is unaffected; closing it means giving those
@@ -26476,9 +26860,7 @@ function deckState(db: FakeDb, deckId: number): FakeDeckState | null {
     notes: db.deckNotes.filter((n) => n.deckId === deckId).map((n) => ({ ...n })),
     noteCards: db.deckNoteCards.filter((c) => noteIds.has(c.noteId)).map((c) => ({ ...c })),
     tokens: db.deckTokens.filter((t) => t.deckId === deckId).map((t) => ({ ...t })),
-    tokenPrintings: db.deckTokenPrintings
-      .filter((e) => e.deckId === deckId)
-      .map((e) => ({ ...e })),
+    tokenPrintings: db.deckTokenPrintings.filter((e) => e.deckId === deckId).map((e) => ({ ...e })),
   };
 }
 
@@ -26586,9 +26968,7 @@ function undoHandlers(db: FakeDb) {
 
     deck_redo_apply: (args: { deckId: number; auditId: number }): void => {
       refuseIfBusy(db);
-      const step = db.deckUndo.find(
-        (s) => s.auditId === args.auditId && s.deckId === args.deckId,
-      );
+      const step = db.deckUndo.find((s) => s.auditId === args.auditId && s.deckId === args.deckId);
       if (!step || step.undoneAt === null) {
         throw refuse("That change has not been undone, so there is nothing to redo.");
       }
