@@ -86,6 +86,16 @@ pub struct WishlistFolder {
     /// deck can also have, and never `parent_id`, which says where the child hangs rather than
     /// what it is. `false` for every folder the reader made.
     pub managed_tokens: bool,
+    /// `wishlist_folders.sync_uid` — the folder's cross-device name, and `None` where none was
+    /// minted (a managed folder, which is derived per device and never captured).
+    ///
+    /// **On the wire for the share key** (issue #941): a share names what it publishes by a uid
+    /// and never by a row id, because a share outlives the device that made it.
+    pub sync_uid: Option<String>,
+    /// The `decks.sync_uid` of [`Self::managed_deck_id`], and `None` for every folder the reader
+    /// made. A managed folder's own uid is per device, so a share of it is named by its deck's —
+    /// which syncs — and a second device resolves the same key to its own copy of the folder.
+    pub managed_deck_uid: Option<String>,
 }
 
 /// What one folder tile is drawn from — the four numbers, per folder, in one round trip.
@@ -123,6 +133,11 @@ fn valid_name(name: &str) -> Result<&str, String> {
         .ok_or_else(|| "A folder needs a name.".to_owned())
 }
 
+/// What [`folder_row`] reads, in its order, off `wishlist_folders f`.
+const FOLDER_COLUMNS: &str = "f.id, f.parent_id, f.name, f.sort_order, f.managed_deck_id,
+     f.managed_tokens, f.sync_uid,
+     (SELECT d.sync_uid FROM decks d WHERE d.id = f.managed_deck_id)";
+
 fn folder_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<WishlistFolder> {
     Ok(WishlistFolder {
         id: r.get(0)?,
@@ -132,13 +147,14 @@ fn folder_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<WishlistFolder> {
         managed_deck_id: r.get(4)?,
         // `INTEGER NOT NULL DEFAULT 0`, read as SQLite's boolean: `0` false, anything else true.
         managed_tokens: r.get(5)?,
+        sync_uid: r.get(6)?,
+        managed_deck_uid: r.get(7)?,
     })
 }
 
 fn read_folder(conn: &Connection, id: i64) -> Result<Option<WishlistFolder>, String> {
     conn.query_row(
-        "SELECT id, parent_id, name, sort_order, managed_deck_id, managed_tokens
-           FROM wishlist_folders WHERE id = ?1",
+        &format!("SELECT {FOLDER_COLUMNS} FROM wishlist_folders f WHERE f.id = ?1"),
         params![id],
         folder_row,
     )
@@ -150,10 +166,9 @@ fn read_folder(conn: &Connection, id: i64) -> Result<Option<WishlistFolder>, Str
 /// belongs to no wish, it files them.
 pub fn list_folders(conn: &Connection) -> Result<Vec<WishlistFolder>, String> {
     let mut stmt = conn
-        .prepare(
-            "SELECT id, parent_id, name, sort_order, managed_deck_id, managed_tokens
-               FROM wishlist_folders ORDER BY sort_order, id",
-        )
+        .prepare(&format!(
+            "SELECT {FOLDER_COLUMNS} FROM wishlist_folders f ORDER BY f.sort_order, f.id"
+        ))
         .map_err(|e| e.to_string())?;
     let rows = stmt.query_map([], folder_row).map_err(|e| e.to_string())?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -1020,7 +1035,9 @@ mod tests {
     fn a_folder_says_whether_it_is_a_decks_tokens_subfolder() {
         let conn = conn();
         conn.execute_batch(
-            "INSERT INTO wishlist_folders (id, parent_id, name, sort_order, created_at, updated_at)
+            "INSERT INTO decks (id, name, created_at, updated_at, sync_uid)
+             VALUES (7, 'Izzet', 0, 0, 'deckuid-7');
+             INSERT INTO wishlist_folders (id, parent_id, name, sort_order, created_at, updated_at)
              VALUES (1, NULL, 'Tokens', 0, 0, 0);
              INSERT INTO wishlist_folders
                  (id, parent_id, name, sort_order, created_at, updated_at, managed_deck_id)
@@ -1046,7 +1063,10 @@ mod tests {
             serde_json::to_value(read_folder(&conn, 3).unwrap().unwrap()).unwrap(),
             serde_json::json!({
                 "id": 3, "parentId": 2, "name": "Tokens", "sortOrder": 0,
-                "managedDeckId": 7, "managedTokens": true
+                "managedDeckId": 7, "managedTokens": true,
+                // Issue #941's share key: a managed folder has no uid of its own here and names
+                // its deck's, which syncs.
+                "syncUid": null, "managedDeckUid": "deckuid-7"
             })
         );
     }

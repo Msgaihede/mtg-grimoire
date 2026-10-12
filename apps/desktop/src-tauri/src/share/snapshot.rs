@@ -13,9 +13,6 @@ pub const SNAPSHOT_VERSION: i64 = 1;
 /// is for. Refused **before** the read rather than published empty, which would read to a
 /// stranger as "this person owns nothing".
 pub const FOLDER_IS_LOCKED: &str = "That folder is locked. Unlock it before sharing it.";
-/// `kind <> 'user'` — a deck's group or `Recently removed`. Those two say something the app is
-/// responsible for, and neither is a binder.
-pub const FOLDER_NOT_SHAREABLE: &str = "Only your own folders can be shared.";
 /// No folder answers to that uid. Asked **first**, so a folder that is not there can never
 /// report as locked — "unlock it" is advice nobody can act on for a drawer that does not exist.
 pub const FOLDER_NOT_FOUND: &str = "That folder is not in this collection.";
@@ -40,7 +37,7 @@ pub struct ShareFields {
 impl ShareFields {
     /// The wire form — an array, so the viewer can tell "every card was NM" from "this snapshot
     /// carries no condition".
-    fn names(self) -> Vec<&'static str> {
+    pub(super) fn names(self) -> Vec<&'static str> {
         let mut v = Vec::new();
         if self.condition {
             v.push("condition");
@@ -107,8 +104,15 @@ pub struct ShareSnapshot {
 /// Every folder in the share, as `(id, uid, name, parent_uid)`.
 ///
 /// Two exclusions, and they are the feature: a folder that is locked or has a locked ancestor,
-/// and a folder the app owns. `LOCKED_FOLDER_IDS` is `crate::collection_folders`' single copy of
-/// the inheritance rule and binds nothing, so it drops straight into `NOT IN (…)`.
+/// and — **for a whole-collection share only** — a folder the app owns. `LOCKED_FOLDER_IDS` is
+/// `crate::collection_folders`' single copy of the inheritance rule and binds nothing, so it
+/// drops straight into `NOT IN (…)`.
+///
+/// **A deck's group and `Recently removed` travel when they are named, and only then** (issue
+/// #941). Shared by name, either is the reader's own choice of what to publish — a deck's copies,
+/// or what they recently let go of. Swept up by a whole-collection share, they would be the app
+/// publishing more than the reader asked for, and a refresh of a share made before #941 would
+/// quietly grow by every deck the reader owns. The unasked question still publishes less.
 ///
 /// **`UNION` and never `UNION ALL`**, `delete_folder`'s reason for the same word: the
 /// duplicate-row check is what makes a `parent_id` cycle — a hand-edited database, a restored
@@ -125,7 +129,7 @@ const SUBTREE: &str = "WITH RECURSIVE subtree(id) AS (
            (SELECT p.sync_uid FROM collection_folders p WHERE p.id = f.parent_id)
       FROM collection_folders f
      WHERE f.id IN (SELECT id FROM subtree)
-       AND f.kind = 'user'
+       AND (?1 IS NOT NULL OR f.kind = 'user')
        AND f.id NOT IN (<LOCKED>)
      ORDER BY f.sort_order, f.id";
 
@@ -150,23 +154,25 @@ pub fn snapshot(
     marketplace: crate::sorting::Marketplace,
     now: i64,
 ) -> Result<ShareSnapshot, String> {
-    // The three refusals, in this order, before a single row is read. `FOLDER_NOT_FOUND` first
-    // so a folder that is not there never reports as locked.
+    // A wishlist key is a different cabinet with a reader of its own — `super::wishlist`.
+    if let Some(key) = folder_uid.and_then(super::wishlist::WishlistKey::parse) {
+        return super::wishlist::snapshot(conn, id, owner, key, fields, marketplace, now);
+    }
+    // The two refusals, in this order, before a single row is read. `FOLDER_NOT_FOUND` first
+    // so a folder that is not there never reports as locked. **Any `kind` may be named** — a
+    // deck's group and `Recently removed` included, issue #941; see [`SUBTREE`].
     let title = match folder_uid {
         None => WHOLE_COLLECTION_TITLE.to_owned(),
         Some(uid) => {
-            let named: Option<(i64, String, String)> = conn
+            let named: Option<(i64, String)> = conn
                 .query_row(
-                    "SELECT id, kind, name FROM collection_folders WHERE sync_uid = ?1",
+                    "SELECT id, name FROM collection_folders WHERE sync_uid = ?1",
                     params![uid],
-                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                    |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .optional()
                 .map_err(|e| e.to_string())?;
-            let (row_id, kind, name) = named.ok_or_else(|| FOLDER_NOT_FOUND.to_owned())?;
-            if kind != "user" {
-                return Err(FOLDER_NOT_SHAREABLE.to_owned());
-            }
+            let (row_id, name) = named.ok_or_else(|| FOLDER_NOT_FOUND.to_owned())?;
             // The **effective** lock, `collection_folders`' own answer, so a share and the
             // page's own badge can never disagree about which drawers are set aside.
             if crate::collection_folders::effectively_locked(conn, row_id)? {
@@ -324,7 +330,7 @@ fn read_cards(
 /// The inverse of [`crate::sorting::Marketplace::from_id`], and lossy in exactly the way that
 /// one is: `cardtrader` has no feed and prices through TCGplayer, so a snapshot published under
 /// that setting says `tcgplayer` — which is the truth about where the numbers came from.
-fn marketplace_id(market: crate::sorting::Marketplace) -> &'static str {
+pub(super) fn marketplace_id(market: crate::sorting::Marketplace) -> &'static str {
     use crate::sorting::Marketplace::*;
     match market {
         Tcgplayer => "tcgplayer",
@@ -340,7 +346,7 @@ fn marketplace_id(market: crate::sorting::Marketplace) -> &'static str {
 /// that stands for the *app*. On the wire it is a fact about the number beside it: the euro arm
 /// of [`crate::sorting::price_expr`] reads `cards.prices`' `eur*` keys and every other arm
 /// reads dollars, so this is that `match` and not a second opinion about a marketplace.
-fn currency(market: crate::sorting::Marketplace) -> &'static str {
+pub(super) fn currency(market: crate::sorting::Marketplace) -> &'static str {
     match market {
         crate::sorting::Marketplace::Cardmarket => "EUR",
         _ => "USD",

@@ -3690,11 +3690,14 @@ describe("the wishlist's folders", () => {
     // and unscoped, and building the tree from `parentId` is `folderTree.ts`'s job.
     // `managedDeckId: null` on every one — user schema v48's column, which a folder the reader
     // made always answers `null` for — and `managedTokens: false`, v55's, for the same reason.
-    const mine = { managedDeckId: null, managedTokens: false };
+    // `syncUid` is the derived cross-device name and `managedDeckUid` is `null` off a deck
+    // (issue #941's share key).
+    const mine = { managedDeckId: null, managedTokens: false, managedDeckUid: null };
+    const uid = (id: number) => ({ syncUid: `wishlist-folder-uid-${id}` });
     expect(readHandlers(db).wishlist_folder_list()).toEqual([
-      { id: 1, parentId: null, name: "Ordered", sortOrder: 0, ...mine },
-      { id: 3, parentId: null, name: "Someday", sortOrder: 0, ...mine },
-      { id: 2, parentId: 1, name: "Backordered", sortOrder: 1, ...mine },
+      { id: 1, parentId: null, name: "Ordered", sortOrder: 0, ...mine, ...uid(1) },
+      { id: 3, parentId: null, name: "Someday", sortOrder: 0, ...mine, ...uid(3) },
+      { id: 2, parentId: 1, name: "Backordered", sortOrder: 1, ...mine, ...uid(2) },
     ]);
   });
 
@@ -18751,13 +18754,19 @@ describe("the managed wishlist's Tokens subfolder", () => {
     expect(wishesIn(db, parent.id).some((w) => w.oracleId === TOKEN_ORACLE.treasure)).toBe(false);
     // And the read says which is which — `managedTokens` on the child alone, both the deck's.
     const listed = readHandlers(db).wishlist_folder_list();
+    // Neither has a uid of its own — a managed folder is never captured — and both name their
+    // deck's, which is what a share of either is keyed on (issue #941).
     expect(listed.find((f) => f.id === child.id)).toMatchObject({
       managedDeckId: 4,
       managedTokens: true,
+      syncUid: null,
+      managedDeckUid: "deck-uid-4",
     });
     expect(listed.find((f) => f.id === parent.id)).toMatchObject({
       managedDeckId: 4,
       managedTokens: false,
+      syncUid: null,
+      managedDeckUid: "deck-uid-4",
     });
   });
 
@@ -18977,13 +18986,34 @@ describe("sharing a collection", () => {
     expect(() =>
       w.share_create({ folderUid: `folder-uid-${locked.id}`, ownerName: "Ada", fields }),
     ).toThrow(/Unlock it before sharing it/);
-    // A deck's group is the app's own and is not the reader's to publish.
-    const group = db.collectionFolders.find((f) => f.kind === "deck")!;
-    expect(() =>
-      w.share_create({ folderUid: `folder-uid-${group.id}`, ownerName: "Ada", fields }),
-    ).toThrow(/Only your own folders can be shared/);
-    // And nothing reached the relay for any of the three.
+    // And nothing reached the relay for either.
     expect(db.relayShares).toEqual([]);
+  });
+
+  /** Issue #941: a deck's group is shareable when named, and still out of a whole share. */
+  it("publishes a deck's group by name and leaves it out of the whole collection", () => {
+    const db = connected();
+    const w = writeHandlers(db);
+    const fields = { condition: false, lang: false, value: false };
+    const group = db.collectionFolders.find((f) => f.kind === "deck")!;
+    const row = w.share_create({ folderUid: `folder-uid-${group.id}`, ownerName: "Ada", fields });
+    expect(row.title).toBe(group.name);
+    const whole = w.share_create({ folderUid: null, ownerName: "Ada", fields });
+    const held = db.relayShares.find((s) => s.id === whole.id)!;
+    expect(held.folders.some((f) => f.uid === `folder-uid-${group.id}`)).toBe(false);
+  });
+
+  /** Issue #941: the wishlist is shared by key — the whole list, or one of its folders. */
+  it("publishes the wishlist and a wishlist folder by their keys", () => {
+    const db = connected();
+    const w = writeHandlers(db);
+    const fields = { condition: true, lang: false, value: false };
+    const whole = w.share_create({ folderUid: "wishlist:", ownerName: "Ada", fields });
+    expect(whole.title).toBe("Wishlist");
+    expect(whole.fields).not.toContain("condition");
+    expect(() =>
+      w.share_create({ folderUid: "wishlist:folder:nobody", ownerName: "Ada", fields }),
+    ).toThrow(/not in this wishlist/);
   });
 
   it("refuses a blank name before it asks about the membership", () => {

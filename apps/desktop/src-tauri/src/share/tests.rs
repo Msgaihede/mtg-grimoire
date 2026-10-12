@@ -250,11 +250,9 @@ fn an_unlocked_folder_under_a_locked_one_is_refused_rather_than_published_empty(
     assert_eq!(err, FOLDER_IS_LOCKED);
 }
 
-/// The two refusals beside [`FOLDER_IS_LOCKED`], and the **order** between them: a folder that
-/// is not there may never report as locked, because "unlock it" is advice a reader cannot act
-/// on for a drawer that does not exist.
+/// A folder that is not there is refused by name, before anything is read.
 #[test]
-fn a_missing_folder_and_an_app_owned_one_are_each_refused_by_name() {
+fn a_missing_folder_is_refused_by_name() {
     let conn = test_db();
     let err = snapshot(
         &conn,
@@ -267,30 +265,69 @@ fn a_missing_folder_and_an_app_owned_one_are_each_refused_by_name() {
     )
     .unwrap_err();
     assert_eq!(err, FOLDER_NOT_FOUND);
+}
 
+/// **Issue #941: a deck's group and `Recently removed` are shareable when named.** Each is
+/// published whole, under its own name, and carries nothing from anywhere else.
+#[test]
+fn a_named_deck_group_and_recently_removed_each_travel() {
+    let conn = test_db();
+    let removed = seeded_removed_folder(&conn);
     let group = deck_group(&conn, "Krenko");
-    let uid: String = conn
+    card(&conn, "c1", "Fury Sliver");
+    card(&conn, "c2", "Goblin Recruiter");
+    card(&conn, "c3", "Tundra");
+    entry(&conn, "c1", Some(removed), 1);
+    entry(&conn, "c2", Some(group), 1);
+    entry(&conn, "c3", None, 1);
+
+    let s = snap(&conn, Some("uid-deck-Krenko"));
+    assert_eq!(s.title, "Krenko");
+    let names: Vec<&str> = s.cards.iter().map(|c| c.n.as_str()).collect();
+    assert_eq!(names, vec!["Goblin Recruiter"]);
+    assert_eq!(s.folders.len(), 1);
+    assert_eq!(s.folders[0].parent, None);
+
+    let removed_uid: String = conn
         .query_row(
             "SELECT sync_uid FROM collection_folders WHERE id = ?1",
-            params![group],
+            params![removed],
             |r| r.get(0),
         )
         .unwrap();
+    let s = snap(&conn, Some(&removed_uid));
+    assert_eq!(s.title, "Recently removed");
+    let names: Vec<&str> = s.cards.iter().map(|c| c.n.as_str()).collect();
+    assert_eq!(names, vec!["Fury Sliver"]);
+}
+
+/// A locked deck group is still refused — the lock is the reader's, whatever the folder's kind.
+#[test]
+fn a_locked_deck_group_is_refused() {
+    let conn = test_db();
+    let group = deck_group(&conn, "Krenko");
+    conn.execute(
+        "UPDATE collection_folders SET locked = 1 WHERE id = ?1",
+        params![group],
+    )
+    .unwrap();
     let err = snapshot(
         &conn,
         "x",
         "Giradeli",
-        Some(&uid),
+        Some("uid-deck-Krenko"),
         all(false),
         crate::sorting::Marketplace::Tcgplayer,
         0,
     )
     .unwrap_err();
-    assert_eq!(err, FOLDER_NOT_SHAREABLE);
+    assert_eq!(err, FOLDER_IS_LOCKED);
 }
 
+/// **The unasked question still publishes less.** A whole-collection share leaves the app's own
+/// folders out, so a share made before #941 does not grow by every deck on its next refresh.
 #[test]
-fn a_deck_group_and_recently_removed_never_travel() {
+fn a_whole_collection_share_still_leaves_deck_groups_and_recently_removed_out() {
     let conn = test_db();
     // **The seeded row, not a second one.** `idx_collection_folder_removed` permits exactly one
     // `removed` folder per database and `memory_pair` already inserted it.
@@ -303,8 +340,233 @@ fn a_deck_group_and_recently_removed_never_travel() {
 
     let s = snap(&conn, None);
 
-    assert!(s.cards.is_empty(), "an app-owned folder is not a binder");
+    assert!(
+        s.cards.is_empty(),
+        "an app-owned folder travels only when named"
+    );
     assert!(s.folders.is_empty());
+}
+
+/* --------------------------------------------------------------- wishlists (#941) -------- */
+
+fn wish_folder(conn: &Connection, parent: Option<i64>, name: &str, uid: Option<&str>) -> i64 {
+    conn.execute(
+        "INSERT INTO wishlist_folders (parent_id, name, sort_order, created_at, updated_at, sync_uid)
+         VALUES (?1, ?2, 0, 0, 0, ?3)",
+        params![parent, name, uid],
+    )
+    .unwrap();
+    conn.last_insert_rowid()
+}
+
+/// A theory deck with a managed wishlist folder and its Tokens child, both with **no** uid — the
+/// shape `crate::managed_wishlist` leaves, since it writes under `capture::suppressed`.
+fn managed(conn: &Connection, deck: &str) -> (i64, i64) {
+    conn.execute(
+        "INSERT INTO decks (name, created_at, updated_at, sync_uid) VALUES (?1, 0, 0, ?2)",
+        params![deck, format!("deckuid-{deck}")],
+    )
+    .unwrap();
+    let deck_id = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO wishlist_folders
+           (parent_id, name, sort_order, created_at, updated_at, managed_deck_id, managed_tokens)
+         VALUES (NULL, ?1, 0, 0, 0, ?2, 0)",
+        params![deck, deck_id],
+    )
+    .unwrap();
+    let own = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO wishlist_folders
+           (parent_id, name, sort_order, created_at, updated_at, managed_deck_id, managed_tokens)
+         VALUES (?1, 'Tokens', 0, 0, 0, ?2, 1)",
+        params![own, deck_id],
+    )
+    .unwrap();
+    (own, conn.last_insert_rowid())
+}
+
+/// One wish, with a private marker in both free-text columns. `card_id` `None` is any printing.
+fn wish(
+    conn: &Connection,
+    card_id: Option<&str>,
+    oracle: &str,
+    folder: Option<i64>,
+    finish: Option<&str>,
+) {
+    conn.execute(
+        "INSERT INTO wishlist_entries
+           (oracle_id, card_id, name, quantity, preferred_finish, notes, needs_review,
+            created_at, updated_at, folder_id)
+         VALUES (?1, ?2, 'Wished-for name', 2, ?3, 'private-wish-note', 'private-wish-review',
+                 0, 0, ?4)",
+        params![oracle, card_id, finish, folder],
+    )
+    .unwrap();
+}
+
+fn oracle(conn: &Connection, card: &str, oracle: &str) {
+    conn.execute(
+        "UPDATE cards SET oracle_id = ?2 WHERE id = ?1",
+        params![card, oracle],
+    )
+    .unwrap();
+}
+
+#[test]
+fn wishlist_keys_parse_into_their_four_shapes() {
+    use super::wishlist::WishlistKey;
+    use super::wishlist::WishlistKey::*;
+    assert_eq!(WishlistKey::parse("wishlist:"), Some(Ok(Whole)));
+    assert_eq!(
+        WishlistKey::parse("wishlist:folder:abc"),
+        Some(Ok(Folder("abc")))
+    );
+    assert_eq!(
+        WishlistKey::parse("wishlist:deck:abc"),
+        Some(Ok(Deck("abc")))
+    );
+    assert_eq!(
+        WishlistKey::parse("wishlist:deck-tokens:abc"),
+        Some(Ok(DeckTokens("abc")))
+    );
+    assert_eq!(WishlistKey::parse("wishlist:folder:"), Some(Err(())));
+    assert_eq!(WishlistKey::parse("wishlist:later-shape:x"), Some(Err(())));
+    assert_eq!(WishlistKey::parse("0123456789abcdef0123456789abcdef"), None);
+}
+
+/// The whole wishlist: the root and the reader's own folders, never a managed one.
+#[test]
+fn a_whole_wishlist_share_carries_the_root_and_the_readers_folders() {
+    let conn = test_db();
+    card(&conn, "c1", "Fury Sliver");
+    card(&conn, "c2", "Tundra");
+    card(&conn, "c3", "Goblin Recruiter");
+    let buy = wish_folder(&conn, None, "Buy list", Some("wuid-buy"));
+    let (deck_folder, _) = managed(&conn, "Krenko");
+    wish(&conn, Some("c1"), "o1", None, None);
+    wish(&conn, Some("c2"), "o2", Some(buy), Some("foil"));
+    wish(&conn, Some("c3"), "o3", Some(deck_folder), None);
+
+    let s = snap(&conn, Some("wishlist:"));
+
+    assert_eq!(s.title, WHOLE_WISHLIST_TITLE);
+    assert_eq!(WHOLE_WISHLIST_TITLE, "Wishlist");
+    let names: Vec<&str> = s.cards.iter().map(|c| c.n.as_str()).collect();
+    assert_eq!(names, vec!["Fury Sliver", "Tundra"]);
+    let tundra = &s.cards[1];
+    assert_eq!(tundra.f, "foil");
+    assert_eq!(tundra.q, 2);
+    assert_eq!(tundra.fo.as_deref(), Some("wuid-buy"));
+    assert_eq!(s.cards[0].f, "nonfoil", "no preference is the regular copy");
+    assert!(
+        s.cards.iter().all(|c| c.c.is_none()),
+        "a wish has no condition"
+    );
+    assert!(!s.fields.contains(&"condition"));
+    assert_eq!(s.folders.len(), 1);
+    assert_eq!(s.folders[0].uid, "wuid-buy");
+}
+
+/// A deck's managed wishlist, by the deck's uid: its folder and its Tokens child, and the child
+/// alone under its own key. The folders have no uid of their own and still travel.
+#[test]
+fn a_managed_wishlist_is_shared_by_its_decks_uid() {
+    let conn = test_db();
+    card(&conn, "c1", "Goblin Recruiter");
+    card(&conn, "t1", "Goblin");
+    let (own, tokens) = managed(&conn, "Krenko");
+    wish(&conn, Some("c1"), "o1", Some(own), None);
+    wish(&conn, Some("t1"), "ot", Some(tokens), None);
+
+    let s = snap(&conn, Some("wishlist:deck:deckuid-Krenko"));
+    assert_eq!(s.title, "Krenko");
+    let names: Vec<&str> = s.cards.iter().map(|c| c.n.as_str()).collect();
+    assert_eq!(names, vec!["Goblin", "Goblin Recruiter"]);
+    assert_eq!(s.folders.len(), 2);
+    let root = s.folders.iter().find(|f| f.name == "Krenko").unwrap();
+    let child = s.folders.iter().find(|f| f.name == "Tokens").unwrap();
+    assert_eq!(root.parent, None);
+    assert_eq!(child.parent.as_deref(), Some(root.uid.as_str()));
+    assert_eq!(
+        root.uid.len(),
+        32,
+        "a minted uid, never a row id: {}",
+        root.uid
+    );
+
+    let s = snap(&conn, Some("wishlist:deck-tokens:deckuid-Krenko"));
+    assert_eq!(s.title, "Krenko tokens");
+    let names: Vec<&str> = s.cards.iter().map(|c| c.n.as_str()).collect();
+    assert_eq!(names, vec!["Goblin"]);
+}
+
+/// A folder the reader made, by its own uid — the root stays home.
+#[test]
+fn a_wishlist_folder_share_carries_its_subtree_and_not_the_root() {
+    let conn = test_db();
+    card(&conn, "c1", "Fury Sliver");
+    card(&conn, "c2", "Tundra");
+    let buy = wish_folder(&conn, None, "Buy list", Some("wuid-buy"));
+    let inner = wish_folder(&conn, Some(buy), "Soon", Some("wuid-soon"));
+    wish(&conn, Some("c1"), "o1", None, None);
+    wish(&conn, Some("c2"), "o2", Some(inner), None);
+
+    let s = snap(&conn, Some("wishlist:folder:wuid-buy"));
+    assert_eq!(s.title, "Buy list");
+    let names: Vec<&str> = s.cards.iter().map(|c| c.n.as_str()).collect();
+    assert_eq!(names, vec!["Tundra"]);
+    let soon = s.folders.iter().find(|f| f.uid == "wuid-soon").unwrap();
+    assert_eq!(soon.parent.as_deref(), Some("wuid-buy"));
+}
+
+/// An any-printing wish is drawn as a real printing of its card, so a viewer has art and a set.
+#[test]
+fn an_any_printing_wish_travels_as_a_printing_of_its_card() {
+    let conn = test_db();
+    card(&conn, "c1", "Fury Sliver");
+    oracle(&conn, "c1", "o1");
+    wish(&conn, None, "o1", None, None);
+
+    let s = snap(&conn, Some("wishlist:"));
+    assert_eq!(s.cards.len(), 1);
+    assert_eq!(s.cards[0].id, "c1");
+    assert_eq!(s.cards[0].s, "tsp");
+    assert_eq!(s.cards[0].cn, "157");
+    assert!(s.cards[0].img.is_some());
+    assert_eq!(s.cards[0].p, Some(0.34));
+}
+
+#[test]
+fn a_wishlist_key_nothing_answers_is_refused_by_name() {
+    let conn = test_db();
+    for key in [
+        "wishlist:folder:nobody",
+        "wishlist:deck:nobody",
+        "wishlist:later:x",
+    ] {
+        let err = snapshot(
+            &conn,
+            "x",
+            "Giradeli",
+            Some(key),
+            all(false),
+            crate::sorting::Marketplace::Tcgplayer,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(err, WISHLIST_FOLDER_NOT_FOUND, "{key}");
+    }
+}
+
+/// A wish's two free-text columns never reach the wire.
+#[test]
+fn no_private_wish_field_can_reach_the_wire() {
+    let conn = test_db();
+    card(&conn, "c1", "Fury Sliver");
+    wish(&conn, Some("c1"), "o1", None, None);
+    let json = serde_json::to_string(&snap(&conn, Some("wishlist:"))).unwrap();
+    assert!(!json.contains("private-"), "{json}");
 }
 
 #[test]
