@@ -13570,6 +13570,8 @@ const DECK_GONE = "That deck is not there any more.";
 const ZERO_ADD = "Adding a card needs a quantity of at least one.";
 /** `deck::SAME_PRINTING`. */
 const SAME_PRINTING = "That is already this printing.";
+/** `deck::SPLIT_NONE`. */
+const SPLIT_NONE = "A split moves at least one copy.";
 /** `deck::PRINTING_GONE`. Deliberately not `printing_of`'s sentence: the printing was
  *  clicked out of a live list a moment ago, so the news is the sync, not the id. */
 const PRINTING_GONE =
@@ -20789,6 +20791,73 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
+     * `deck::split_printing` — the deck card menu's `Split to new printing` (issue #934):
+     * {@link deck_swap_printing} for part of a row. `quantity` copies land on `toCardId` in the
+     * same pile, variant and finish, folding into a row already there, and the rest stay.
+     *
+     * The swap's refusals, in its order, plus the two a count owes: none, and every copy.
+     */
+    deck_split_printing: (args: {
+      deckId: number;
+      fromCardId: string;
+      toCardId: string;
+      categoryId: number;
+      variant: DeckVariant;
+      finish?: DeckFinish;
+      quantity: number;
+    }): SwapResult => {
+      refuseIfBusy(db);
+      const variant = validVariant(args.variant);
+      const finish = normaliseFinish(args.finish);
+      if (args.fromCardId === args.toCardId) throw refuse(SAME_PRINTING);
+      if (args.quantity < 1) throw refuse(SPLIT_NONE);
+      const deck = requireDeck(db, args.deckId);
+      const category = categoryOfDeck(db, args.deckId, variant, args.categoryId);
+      const row = deckCardAt(db, args.deckId, args.fromCardId, category.id, variant, finish);
+      if (!row) throw refuse(cardGone(category.name));
+      if (args.quantity >= row.quantity) {
+        throw refuse(
+          `This row holds ${row.quantity} — a split has to leave at least one behind. To move ` +
+            `every copy, change the printing instead.`,
+        );
+      }
+      const to = cardById(db, args.toCardId);
+      if (!to) throw refuse(PRINTING_GONE);
+      const fromOracle = cardById(db, args.fromCardId)?.oracleId ?? null;
+      if (fromOracle !== null && to.oracleId !== null && fromOracle !== to.oracleId) {
+        throw refuse(
+          `\`${to.name}\` is not another printing of \`${row.name}\`. Swapping a printing ` +
+            `changes which printing of a card this deck plays, never which card it plays.`,
+        );
+      }
+      row.quantity -= args.quantity;
+      const target = deckCardAt(db, args.deckId, args.toCardId, category.id, variant, finish);
+      let landed: number;
+      if (target) {
+        // The fold keeps the survivor's label, and takes the split row's only where it has none.
+        target.quantity += args.quantity;
+        target.labelId ??= row.labelId;
+        landed = target.quantity;
+      } else {
+        db.deckCards.push({
+          ...row,
+          id: nextId(db.deckCards),
+          cardId: args.toCardId,
+          name: to.name,
+          setCode: to.setCode,
+          collectorNumber: to.collectorNumber,
+          lang: to.lang,
+          needsReview: null,
+          quantity: args.quantity,
+        });
+        landed = args.quantity;
+      }
+      deck.updatedAt = stamp(db);
+      releaseUnclaimedCopies(db, args.deckId, variant);
+      return { folded: landed > args.quantity, quantity: landed };
+    },
+
+    /**
      * `deck::set_card_finish` — which **object** this row plays.
      *
      * `deck_swap_printing` one axis over, so it answers the same `SwapResult` and **folds** the
@@ -26532,8 +26601,8 @@ const NO_UNDO_STEP: ReadonlySet<string> = new Set([
  *
  * **Known gap, and it is this fake's rather than this feature's**: the card writes
  * (`deck_add_card`, `deck_add_card_to_other_list`, `deck_set_card_quantity`, `deck_move_card`,
- * `deck_swap_printing`, `deck_set_card_finish`, `deck_category_clear` and `deck_clear`) record
- * no history row here, though their Rust twins do and `deck_audit.rs`'s
+ * `deck_swap_printing`, `deck_split_printing`, `deck_set_card_finish`, `deck_category_clear` and
+ * `deck_clear`) record no history row here, though their Rust twins do and `deck_audit.rs`'s
  * `every_deck_write_leaves_exactly_one_audit_row` pins the four of them that sweep drives. So
  * Storybook's history drawer has never listed a card add, and — consistently — its Undo button
  * does not offer to take one back. The app is unaffected; closing it means giving those

@@ -14,6 +14,7 @@
  * Set as companion        (only where the format has a slot for one)
  * Set as foil             (or a `Finish ▸` submenu where the printing is sold in three)
  * Set as deck image       this printing's art crop becomes the deck's cover
+ * Split to new printing…  some of this row's copies onto another printing (greyed on one copy)
  * ─────────────────────
  * Add note…               opens the editor on a note this card will name — Save is the write
  * Notes                ▸  the notes that name this card — only where there are any
@@ -56,6 +57,7 @@ import {
   PackageOpen,
   Plus,
   Sparkles,
+  Split,
   StickyNote,
   Tag,
   UserRound,
@@ -372,6 +374,14 @@ export interface DeckCardMenuDeps {
    * a read-only mount) offers nothing rather than a press that cannot land. See {@link coverItem}.
    */
   cover?: { cardId: string | null; set: (card: DeckCard) => void };
+  /**
+   * **Split to new printing…** — open the printings wall on this row, asking how many of its
+   * copies move and onto which printing (issue #934). It writes nothing itself: the press on a
+   * tile is the write, `deck_split_printing`, made by `AllPrintingsDialog`.
+   *
+   * Optional, and absent takes the row with it — {@link cover}'s rule. See {@link splitItem}.
+   */
+  split?: (card: DeckCard) => void;
 }
 
 /**
@@ -389,6 +399,39 @@ function targets(card: DeckCard, deps: DeckCardMenuDeps): readonly DeckCard[] {
  *  as the singular sentence it always did. */
 function manyCards(n: number): string {
   return `${n} cards`;
+}
+
+/** Why `Split to new printing…` is greyed: a split leaves a row behind, so one copy has nothing
+ *  to split off. A phrase, `MenuAction.reason`'s rule. */
+export const SPLIT_ONE_COPY = "only one copy";
+
+/**
+ * **Split to new printing…** (issue #934) — some of this row's copies onto another printing of
+ * the same card, the rest left where they are. In the `Set as` group because, like the finish
+ * row, it is about which object the copies play.
+ *
+ * **Greyed on a row of one, with a reason**, rather than dropped: a reader who has learned the
+ * row is there looks for it on every card, and a split of one copy is the swap — `View all
+ * printings` above it. **Greyed wordlessly on an orphan printing** (`oracleId === null`), whose
+ * printings cannot be listed: {@link otherListItem}'s rule for a fact about the card.
+ *
+ * **About the right-clicked card under a picked set**, `Finish`'s reason: the count and the
+ * printings are this row's, and a set has no one of either.
+ */
+function splitItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
+  const { split } = deps;
+  if (split === undefined) return [];
+  const item = {
+    kind: "action",
+    id: "split-printing",
+    label: "Split to new printing…",
+    Icon: Split,
+  } as const;
+  if (card.quantity < 2) {
+    return [{ ...item, disabled: true, reason: SPLIT_ONE_COPY, onSelect: () => {} }];
+  }
+  if (card.oracleId === null) return [{ ...item, disabled: true, onSelect: () => {} }];
+  return [{ ...item, onSelect: () => split(card) }];
 }
 
 /**
@@ -486,6 +529,7 @@ export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuI
     ...zoneItems(card, deps),
     finishItem(card, deps),
     ...coverItem(card, deps),
+    ...splitItem(card, deps),
     // **Under a rule of their own, between the `Set as` rows and the removal** — the notes are
     // neither. Everything above them writes the *deck* (where the card goes, what it is called);
     // the row below takes the cardboard out. A note writes neither: it is something the reader

@@ -1398,6 +1398,21 @@ describe("ipc argument names match the Rust command signatures", () => {
     });
     expect(swapped).toEqual({ folded: true, quantity: 5 });
 
+    // The split is the swap with a count (issue #934), and the count is the one key the swap
+    // does not send.
+    invoke.mockResolvedValue({ folded: false, quantity: 2 });
+    const split = await ipc.deckSplitPrinting(4, "p1", "p2", 7, "live", "foil", 2);
+    expect(invoke).toHaveBeenCalledWith("deck_split_printing", {
+      deckId: 4,
+      fromCardId: "p1",
+      toCardId: "p2",
+      categoryId: 7,
+      variant: "live",
+      finish: "foil",
+      quantity: 2,
+    });
+    expect(split).toEqual({ folded: false, quantity: 2 });
+
     invoke.mockResolvedValue(2);
     const wishes = await ipc.deckMissingToWishlist(4);
     // **No destination named, so nothing about the folder is sent** — which is what every call
