@@ -87,6 +87,7 @@ Tesseract.
 | `detect-bench` | `builder` | Per-frame cost of detection before and after a lock, on `eval`'s own bursts, one card at a time (§3 *Track*). Added 2026-09-30. |
 | `ocr-bench` | `builder` | Both OCR readers timed and scored on `eval`'s synthetic bands — the old detection path and the current one back to back on every band (§4), added 2026-09-30. |
 | `bench-prep` | `builder` | Write the directory the frame bench reads — a bundle, labels, models and frames, from real files or invented (§11). Added 2026-10-07. |
+| `replay` | `builder` | Readers' scans replayed and scored (§10, *The replay*). Added 2026-10-13. |
 
 **The frame bench itself is not one of these**: `crates/card-scanner/bench/` is a package of its
 own with none of these features, because it is built for a browser and for a phone (§11).
@@ -109,6 +110,7 @@ gets HTTP/1.1 keep-alive and `Content-Length` right, and it is reachable **only*
 | `docs/scanner/card-scanner.md` | The original brief | Yes |
 | `.scanner-bundle/` | The reference bundle, the fetch cache, the OCR models | Ignored |
 | `.scanner-debug/` | `scan --debug-dir` output, ~50 MB a sweep | Ignored |
+| `.scanner-corpus/` | Readers' scans mirrored from the corpus bucket, and `replay`'s output (§10, *The replay*). In the main checkout | Ignored |
 | `crates/*/target/` | The standalone build dir | Ignored |
 
 The corpus was 43 photographs when every sweep below was run. It holds **44 JPEGs and one
@@ -3915,6 +3917,111 @@ evaluation on `main` at `0c3c1ce0` and on the merge, back to back, same machine,
 Basic lands go 90 → 100% decided in Fast, borderless/full-art 66.7 → 80%. The one card `main`
 decides that the merge does not is Super Shredder again. Mean ms is 3–7% higher, under load, and
 not separated from the noise of a shared machine.
+
+### The replay
+
+`replay` is `eval`'s sibling on real footage: where `eval` degrades Scryfall's renders in software,
+`replay` feeds the scans readers send to the scan inbox through the scanner and scores them
+against the printing the reader named (their finish is only a breakdown, never scored). It sits behind `builder`, in
+`crates/card-scanner/src/bin/replay.rs`, with the label reading and scoring in `src/replay.rs`
+(which builds no session and reads no file, so its tests run under any feature set). Those frames
+are the only labelled camera frames there are since the photographs were lost (§8). It reports
+and does not gate: exit 0 for a run that finished whatever the accuracy, 1 when nothing could be
+replayed.
+
+**Three passes a run, a fresh `Session` each**, every frame fed in order with `ResolveOn::Inline`
+so no clock decides anything: **As scanned** (the label's mode and filters), **Fast** with no
+filters and **Exact** with none. **A pass is judged on the decision the session holds at the last
+frame**, since the label names the card in the last frame. The five scores:
+
+| Score | When |
+| --- | --- |
+| `printing` | the decided printing is the reader's |
+| `card` | another printing of the same oracle card |
+| `wrong` | another card, which the result names |
+| `undecided` | no decision by the last frame |
+| `error` | a frame the scanner failed on: a panic, an undecodable JPEG, a failed resolve |
+
+An Exact answer of choices rather than one printing is `ambiguous`, judged on its first choice as
+`eval` does and recorded with whether the truth was among them. Each pass also records the frame
+of its first decision and of the decision it is scored on (`decision_frame`, with `decisions`, how
+many were made), `locked_frames`, and per frame `ok`, lock phase, confidence, best distance and
+the printing decided by then.
+
+**A replay is not the scan, three ways**: nothing came before the run's first frame, the `detail`
+pictures a camera larger than the frame sent are not stored, and the developer sliders are at
+their defaults. **`then` is the label's own `scanner.reported`, scored the same way**, and
+`decided_differs` counts the frames where the replay's decision differs from the label's, ignoring
+case. Together they say how far a replay strayed from the scan, apart from any change to the
+scanner. `null` when As scanned errored or fed another frame count.
+
+**The limit that follows from the missing detail pictures is the one to read the Exact column
+by.** An Exact resolve waits for `EXACT_STEADY_FRAMES` (3) steady locked frames and, with the
+readers on, for a `detail` frame, or `EXACT_DETAIL_WAIT` (4) frames more (`session.rs`). A replay
+has no detail frame, so it always waits the whole seven, after the lock itself has formed. **A
+run with fewer than seven steady frames after the lock cannot resolve in Exact at all.** Such a
+pass carries `resolve_ran: false` and scores `undecided`: it was too short to resolve, and it is
+not a scanner miss. The summary's columns, as printed, are `pass`, `n`, `printing ✓ %`,
+`card ✓ %`, `wrong card`, `undecided %`, `errors`, `ambiguous`, `median frames`,
+`never resolved` and `decided then lost`. **Exact's percentages keep the too-short runs in their
+denominator**, so read them beside `never resolved`, which counts exactly those; `decided then
+lost` counts the undecided passes that made a decision and no longer held one at the last frame.
+**Frame numbers differ by place**: the files are numbered from 00 (`frames/<id>/00.jpg`), while
+every frame number in the results, the report and the slice file names counts from 1.
+
+**The slices are kept once a run**, from the As scanned pass alone, in `out/slices/{id}/` as
+`NN-<kind>.jpg` named for the frame they came from: the `title` band as the recogniser read it,
+the `collector` band at the size it was read, the `rectified` card and the `binary` edge image
+(the last two from the deciding frame, or the last with a card when nothing was decided). The
+words go in `results.json` beside them: the title's raw and normalised read and what it matched,
+the collector's raw read, the pairings tried (set and number, each with what it matched) and the
+finish mark, and for an Exact resolve each tier's survivors and detail. **Keeping them changes no
+decision**: `keeping_the_pictures_changes_no_decision` replays one run with them on and off and
+asserts the same scores and the same frames of first and final decision, so the report cannot
+describe a second scanner.
+
+**Where the scans live, and what enters git.** `pnpm scanner:corpus pull` copies each complete
+pair from the inbox bucket to the private corpus bucket `mtg-grimoire-scan-corpus` and mirrors
+that bucket to `.scanner-corpus/` in the main checkout (`SCANNER_CORPUS_DIR` overrides): `labels/`,
+`runs/`, `frames/{id}/NN.jpg`, `baselines/` and `out/`. **Nothing of it enters git.** The frames
+are readers' photographs, and an id is the handle a deletion request has, which history could not
+honour. Only the summary's aggregate table belongs in this document. Before it copies a
+pair the sync checks that the label parses, that its frames' `bytes` add up to the run and that
+each frame is a JPEG; a pair that does not is left in the inbox and reported as "do not add up".
+It reads every copy back by size and reports one that is missing or differs as a failure. It
+takes ids only of `[A-Za-z0-9_-]+`, reports any other key as strange and leaves it, and **refuses
+to prune the mirror when the corpus bucket lists as empty beside a non-empty mirror**: that reads
+as an unreadable bucket, and a deletion request is honoured by deleting from the bucket, never by
+a listing that came back empty. **A full, deliberate purge of the corpus is therefore refused
+locally until the mirror folder is removed by hand**: the tool cannot tell it from an unreadable
+bucket. `--drain` deletes from the inbox every complete pair whose copy in the freshly listed
+corpus has the same two sizes, adopted by this pull or an earlier one, and is the owner's to run.
+
+**A deletion request names an id.** Delete both of its objects in both buckets (an undrained inbox
+would otherwise adopt it again); the next `pnpm scanner:corpus pull` removes it locally: its
+frames, its slices, the last report and its rows in every baseline, here and in the corpus bucket.
+**A baseline name is written once**: saving over a name replaces it locally, and a pull does not
+re-upload a baseline that changed by hand, so save a changed one under a new name. A pull does
+reconcile every local baseline against the corpus each time, dropping the rows of any scan the
+corpus no longer holds, and uploads one it rewrote; an upload that fails is listed in
+`baselines/.pending.json` and retried on the next pull.
+
+```text
+# R2_ACCOUNT_ID, R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY in the environment
+pnpm scanner:corpus pull [--drain]
+pnpm scanner:replay [--baseline <name>] [--save-baseline <name>] [--only <text>]...
+```
+
+`scanner:replay` finds the bundle, the models and `corpus.db` in the main checkout, builds the
+binary in release, replays the mirror and writes `results.json`, `summary.md` and `report.html`
+into `.scanner-corpus/out/`. `--corpus` is required of the binary: it reads its labels from
+`corpus.db` and has no `--bulk`, since only `eval`'s CI run needs that. `--save-baseline` takes a
+name of letters, digits, `_`, `.` and `-`, not starting with a dot. `scripts/scanner-replay/`
+computes every count once and both the summary and the page read it. The page draws, per scan, the
+frame strip, the expected card, each pass's answer and the slices.
+
+**Baseline**: None yet: no scan had been pulled when this was written. The first
+`pnpm scanner:replay --save-baseline` table goes here, with its date, commit and bundle.
 
 ### Measured in the app
 

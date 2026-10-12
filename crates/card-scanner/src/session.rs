@@ -518,7 +518,22 @@ pub struct Verdict {
     pub detail: Option<FrameSize>,
 }
 
+/// What a frame's `error` says when the detector panicked on it (see [`Session::guarded`]).
+pub const PANIC_ERROR: &str = "the detector panicked on this frame — see the log for the assertion";
+/// What a frame's `error` starts with when its JPEG could not be decoded.
+pub const DECODE_ERROR_PREFIX: &str = "decode: ";
+/// What a frame's `error` says when the Exact resolve failed on it.
+pub const RESOLVE_FAILED_ERROR: &str = "the Exact resolve failed on this card — see the log";
+
 impl Verdict {
+    /// The frame's `error` when it is a failure of the scanner — a panic, an undecodable
+    /// JPEG or a failed resolve — and not the ordinary "no card in this frame".
+    pub fn failure(&self) -> Option<&str> {
+        let e = self.error.as_deref()?;
+        (e == PANIC_ERROR || e == RESOLVE_FAILED_ERROR || e.starts_with(DECODE_ERROR_PREFIX))
+            .then_some(e)
+    }
+
     fn failed(
         error: String,
         frame: FrameSize,
@@ -1423,7 +1438,7 @@ impl Session {
         match host::guard(|| body(self)) {
             Ok(v) => v,
             Err(_) => Verdict::failed(
-                "the detector panicked on this frame — see the log for the assertion".into(),
+                PANIC_ERROR.into(),
                 FrameSize { w: 0, h: 0 },
                 0.0,
                 matcher,
@@ -1443,7 +1458,7 @@ impl Session {
             Ok(i) => i,
             Err(e) => {
                 return Verdict::failed(
-                    format!("decode: {e}"),
+                    format!("{DECODE_ERROR_PREFIX}{e}"),
                     FrameSize { w: 0, h: 0 },
                     0.0,
                     matcher,
@@ -2007,7 +2022,7 @@ impl Session {
             // The old inline resolve failed the whole frame here, through the guard, and the
             // next frame tried again. This keeps the frame and lets the burst refill and retry.
             self.attempted = false;
-            v.error = Some("the Exact resolve failed on this card — see the log".into());
+            v.error = Some(RESOLVE_FAILED_ERROR.into());
             return;
         };
         v.ocr = ocr;

@@ -146,6 +146,13 @@ name = "bench-prep"
 path = "src/bin/bench_prep.rs"
 required-features = ["builder"]
 
+# Readers' scans, replayed and scored (`docs/reference/card-scanner.md`, *The replay*). Beside
+# `eval`, which asks the same of synthetic frames.
+[[bin]]
+name = "replay"
+path = "src/bin/replay.rs"
+required-features = ["builder"]
+
 [profile.release]
 opt-level = 3
 

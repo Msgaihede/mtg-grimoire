@@ -221,6 +221,25 @@ fails every request.
 
 With the owner's own credentials — never through this Worker.
 
+**The usual way is `pnpm scanner:corpus pull`** (`scripts/scanner-corpus.ts`). It copies each
+complete pair from this bucket to the private corpus bucket `mtg-grimoire-scan-corpus` — but only
+once the label parses, its frames' `bytes` add up to the run and each frame is a JPEG; a pair that
+does not is left here untouched and reported as "do not add up" — reads each copy back by size,
+and mirrors that bucket to `.scanner-corpus/` in the main checkout with every run cut into
+`frames/<id>/NN.jpg`. **`--drain` then deletes from this bucket every complete pair whose copy in
+the corpus has the same two sizes**, whether this pull or an earlier one copied it, and nothing
+else: it is the one step that deletes, and the owner's to run. A read scan lives in the corpus bucket after, and
+`pnpm scanner:replay` replays the mirror (`docs/reference/card-scanner.md` §10, *The replay*).
+The credentials are `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`, from the
+environment only. **A deletion request names an id**: delete both of its objects in both buckets
+(an undrained inbox would otherwise copy it again), then `pnpm scanner:corpus pull` removes it
+locally — its frames, its slices, the last report and its rows in every baseline, here and in the
+corpus bucket. Every pull reconciles the baselines against the corpus, and retries an upload that
+failed on the one before. A full, deliberate purge of the corpus is refused locally until the mirror folder
+is removed by hand, because an empty listing is also what an unreadable bucket looks like.
+
+**By hand**, when the tool is not at hand:
+
 ```
 npx wrangler r2 object get mtg-grimoire-scans/labels/<id>.json --remote --file <id>.json
 npx wrangler r2 object get mtg-grimoire-scans/runs/<id>.bin --remote --file <id>.bin
@@ -320,6 +339,20 @@ only wrangler command an agent may run on its own.
 
 There is no schema to apply. Before the Android release that carries Send, the Play Console's
 Data safety form changes — `docs/play/README.md`, *Data safety*.
+
+**For the corpus** — two things more, once, for reading scans rather than for taking them:
+
+1. **Create the corpus bucket.**
+
+   ```
+   npx wrangler r2 bucket create mtg-grimoire-scan-corpus --location weur
+   ```
+
+   No Worker is bound to it; only `pnpm scanner:corpus` reads and writes it.
+
+2. **Make an R2 API token** with object read and write on this bucket and the corpus bucket, and
+   set `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY` in the terminal that runs
+   the tool. The token is never written to a file and never an agent's to hold.
 
 **By hand** — a first deploy that should not wait for a release, or one between releases —
 from this folder, with the pinned tool:

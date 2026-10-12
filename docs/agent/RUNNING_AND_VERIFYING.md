@@ -102,6 +102,16 @@ Related: the `running-the-app` skill (locks and ports), [live-ui-verification.md
   card at all, or when `--native`'s hosts disagree about a decision or a read: no lock, no
   network, and **`verify` and CI do not run it** — CI runs the package's own unit tests and
   compiles it for WASM and Android. [card-scanner.md](../reference/card-scanner.md) §11.
+- `pnpm scanner:corpus status|pull [--drain]` — readers' scans, from the scan inbox to the private
+  corpus bucket and down to `.scanner-corpus/` in the main checkout. Needs `R2_ACCOUNT_ID`,
+  `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`. **Never run `scanner:corpus pull` unasked**:
+  it writes to a bucket, and `--drain` deletes from the inbox. `status` changes nothing. An
+  argument it does not know is refused, before any network call.
+  `pnpm scanner:replay [--baseline <name>] [--save-baseline <name>] [--only <text>]` replays that
+  mirror through the scanner (release build of `replay`, a few minutes the first time) and writes
+  `summary.md` and `report.html` beside it; it asks no network and takes no lock. The mirror and
+  the report are readers' photographs: none of it goes in git. [card-scanner.md](../reference/card-scanner.md)
+  §10, *The replay*.
 - `pnpm web:deploy-guard` — may the web app be deployed from this tree, between releases?
   Compares `USER_SCHEMA_VERSION` here with the last release tag's (`git show`), in one sentence:
   exit 0 equal, 1 different, 2 could not tell. It also asks `gh` whether that release is

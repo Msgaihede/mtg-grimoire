@@ -81,6 +81,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+#[path = "support/labels.rs"]
+mod labels;
+use labels::{attach, labels_agree, open_corpus, rows_from_corpus, LabelRow};
+
 const USER_AGENT: &str = "MTGGrimoire-card-scanner/0.1 (+https://github.com/Msgaihede/mtg-grimoire)";
 const HEADLINE: &str = "Synthetic: Scryfall renders degraded in software — a regression fence, \
                         not an accuracy claim about a camera.";
@@ -212,14 +216,6 @@ struct Truth {
 /// Every wanted printing the source knew, by id.
 type Truths = HashMap<[u8; ID_LEN], Truth>;
 
-/// One printing's label, as `Reference::add_label` takes it.
-struct LabelRow {
-    id: [u8; ID_LEN],
-    oracle: Option<[u8; ID_LEN]>,
-    illustration: Option<[u8; ID_LEN]>,
-    label: Label,
-}
-
 /// The fields of a Scryfall card object the evaluation reads. Everything else is skipped by
 /// the parser without being built.
 #[derive(serde::Deserialize, Default)]
@@ -293,88 +289,6 @@ impl<'de> Visitor<'de> for Cards<'_> {
         }
         Ok(())
     }
-}
-
-/// Every label in the corpus, read once — the query `Reference::load_labels` runs.
-///
-/// **Not `load_labels` per session, because that is the evaluation's largest fixed cost**:
-/// measured 2026-09-15 on the dev corpus (release, 117,738 rows), `load_labels` took 883 ms, of
-/// which 526 ms was the query and 345 ms the `add_label` calls — and a fresh session per pass per
-/// card runs it 480 times. [`labels_agree`] is what keeps this copy of the query honest.
-fn rows_from_corpus(conn: &rusqlite::Connection) -> Result<Vec<LabelRow>, String> {
-    let fail = |e: rusqlite::Error| format!("corpus labels: {e}");
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, illustration_id, name, set_code, collector_number, lang, released_at,
-                    oracle_id
-             FROM cards",
-        )
-        .map_err(fail)?;
-    let rows = stmt
-        .query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, Option<String>>(1)?,
-                Label {
-                    name: r.get(2)?,
-                    set: r.get(3)?,
-                    number: r.get(4)?,
-                    lang: r.get(5)?,
-                    released: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
-                },
-                r.get::<_, Option<String>>(7)?,
-            ))
-        })
-        .map_err(fail)?;
-    Ok(rows
-        .flatten()
-        .filter_map(|(id, illustration, label, oracle)| {
-            Some(LabelRow {
-                id: parse_uuid(&id)?,
-                oracle: oracle.as_deref().and_then(parse_uuid),
-                illustration: illustration.as_deref().and_then(parse_uuid),
-                label,
-            })
-        })
-        .collect())
-}
-
-/// Does a reference built from `rows` answer as one built by `Reference::load_labels` does?
-/// Checked once per run, so a change to that query fails the evaluation instead of quietly
-/// evaluating against different labels.
-fn labels_agree(bundle: &[u8], rows: &[LabelRow], conn: &rusqlite::Connection) -> Result<(), String> {
-    let fresh = || Bundle::from_bytes(bundle).map(Reference::new).map_err(|e| format!("bundle: {e}"));
-    let mut loaded = fresh()?;
-    loaded.load_labels(conn).map_err(|e| format!("corpus labels: {e}"))?;
-    let mut ours = fresh()?;
-    attach(&mut ours, rows);
-    let shape = |r: &Reference| (r.label_count(), r.name_count(), r.printing_count());
-    if shape(&loaded) != shape(&ours) {
-        return Err(format!(
-            "the evaluation's label query no longer matches Reference::load_labels: \
-             (labels, names, printings) {:?} against {:?}",
-            shape(&ours),
-            shape(&loaded)
-        ));
-    }
-    Ok(())
-}
-
-fn attach(r: &mut Reference, rows: &[LabelRow]) {
-    for row in rows {
-        r.add_label(row.id, row.oracle, row.illustration, row.label.clone());
-    }
-}
-
-fn open_corpus(path: &Path) -> Result<rusqlite::Connection, String> {
-    if !path.exists() {
-        return Err(format!("no corpus at {}", path.display()));
-    }
-    rusqlite::Connection::open_with_flags(
-        path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
-    )
-    .map_err(|e| format!("cannot open corpus {}: {e}", path.display()))
 }
 
 fn render_of(image_uris: &str) -> Option<String> {
