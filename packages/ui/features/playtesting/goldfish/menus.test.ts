@@ -242,8 +242,17 @@ describe("gameMenu", () => {
     const mats = sub(gameMenu({ ...base, view: turnNineView(), onPlaymat }), "Playmat");
     expect(mats.map((m) => m.kind === "radio" && [m.label, m.checked])).toEqual([
       ["Felt", true],
+      ["Green felt", false],
+      ["Blue felt", false],
+      ["Red felt", false],
+      ["Purple felt", false],
+      ["Slate", false],
       ["Kenrith, the Returned King's art", false],
     ]);
+    const green = row(mats, "Green felt");
+    if (green.kind !== "radio") throw new Error("not a radio");
+    green.onSelect();
+    expect(onPlaymat).toHaveBeenCalledWith("green");
     const art = row(mats, "Kenrith, the Returned King's art");
     if (art.kind !== "radio") throw new Error("not a radio");
     art.onSelect();
@@ -253,7 +262,14 @@ describe("gameMenu", () => {
       gameMenu({ ...base, view: turnNineView(), commanderName: null }),
       "Playmat",
     );
-    expect(labels(noCommander)).toEqual(["Felt"]);
+    expect(labels(noCommander)).toEqual([
+      "Felt",
+      "Green felt",
+      "Blue felt",
+      "Red felt",
+      "Purple felt",
+      "Slate",
+    ]);
   });
 
   it("untaps everything, starts over and goes back", () => {

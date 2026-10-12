@@ -3,7 +3,7 @@ import type { GameCard, GoldfishAction, GoldfishPlace } from "@/lib/ipc";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { FOCUS } from "@/lib/focus";
 import { cn } from "@/lib/utils";
-import { CardFace, counterLabel, sideOf } from "./Inspect";
+import { CardFace, counterLabel, pointerAt } from "./Inspect";
 import { goldfishDraggable, useGoldfishDropTarget, type GoldfishDrag } from "./goldfishDrag";
 import {
   ASPECT,
@@ -59,7 +59,12 @@ export function Battlefield({
   className,
 }: BattlefieldProps): JSX.Element {
   const dropRef = useRef<HTMLElement | null>(null);
-  const over = useGoldfishDropTarget({ ref: dropRef, place: "battlefield", onDrop });
+  const over = useGoldfishDropTarget({
+    ref: dropRef,
+    place: "battlefield",
+    onDrop,
+    pointerOnly: true,
+  });
   const [box, setBox] = useState({ width: 0, height: 0 });
 
   // A callback ref, so the first measurement lands in the commit rather than one paint later
@@ -205,6 +210,7 @@ function PileView({
   return (
     <div
       ref={ref}
+      data-land={ids.join(" ")}
       className="relative flex-none cursor-grab"
       style={{ width: pileWidth(pile, w), height: pileHeight(pile, w) }}
     >
@@ -242,7 +248,7 @@ function PileView({
             ids,
             place: "battlefield",
             line: count > 1 ? `${word} on the battlefield` : card.name,
-            side: sideOf(e.clientX),
+            at: pointerAt(e),
           })
         }
         onMouseLeave={onUnpoint}

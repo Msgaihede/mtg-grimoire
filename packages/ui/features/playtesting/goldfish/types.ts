@@ -12,12 +12,16 @@ export interface Pointed {
   place: GoldfishPlace;
   /** The preview's caption: "Old Gnawbone", "3 Forests on the battlefield". */
   line: string;
-  /** Which half of the board the pointer is on, so the preview opens over the other. */
-  side: "left" | "right";
+  /** Where the pointer was when it came onto the card, so the preview can open beside it before
+   *  the pointer next moves. */
+  at: { x: number; y: number };
 }
 
-/** What is behind the table: felt, or the commander's art (the game menu's Playmat). */
-export type Playmat = "felt" | "commander";
+/**
+ * What is behind the table (the game menu's Playmat): the app's own background (`felt`), a felt
+ * of one colour, or the commander's art.
+ */
+export type Playmat = "felt" | "green" | "blue" | "red" | "purple" | "slate" | "commander";
 
 /**
  * A zone opened face up in a dialog: the library's top cards (look, scry, surveil), the whole

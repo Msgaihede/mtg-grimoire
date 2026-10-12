@@ -1,35 +1,50 @@
-import { useEffect, useRef, type JSX } from "react";
+import { useEffect, useRef, useState, type JSX } from "react";
 import type { GameCard, GoldfishAction, GoldfishPlace } from "@/lib/ipc";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
 import { DROP_GLOW } from "./Battlefield";
-import { CardFace, sideOf } from "./Inspect";
+import { CardFace, pointerAt } from "./Inspect";
 import { goldfishDraggable, useGoldfishDropTarget, type GoldfishDrag } from "./goldfishDrag";
-import { fanHand, type HandSlot } from "./layout";
+import { HAND_CARD_H, HAND_CARD_W, HAND_LIFT, arrangeHand, handRow } from "./layout";
 import { cardMenu } from "./menus";
 import type { Pointed } from "./types";
+
+/**
+ * How long a card in hand stays pointed at after the pointer leaves it. A card pulled out of the
+ * row moves under a still pointer; this, and the lifted card keeping its resting box as well as
+ * its lifted one, is what keeps an edge of a card from flickering in and out of the lift.
+ */
+const HAND_LINGER = 120;
+
+/** How far past the row the hand's drop band reaches either side. */
+const BAND_REACH = 80;
 
 export interface HandFanProps {
   cards: GameCard[];
   onAct: (action: GoldfishAction) => void;
   onDrop: (drag: GoldfishDrag, to: GoldfishPlace) => void;
   onPoint: (pointed: Pointed) => void;
-  onUnpoint: () => void;
-  /** The card pointed at, which is held up whole; `null` when it is not one of these. */
+  /** With an id, only that card is let go of — and only if it is still the one pointed at. */
+  onUnpoint: (id?: number) => void;
+  /** The card pointed at, which is pulled out of the row; `null` when it is not one of these. */
   pointedId: number | null;
 }
 
 /**
- * The reader's hand, held at the foot of the board: each card shows its top and rises whole when
- * pointed at (`fanHand`).
+ * The reader's hand, held in a straight row at the foot of the board: each card shows its top,
+ * the cards overlap when there are too many to sit side by side, and the card pointed at is
+ * pulled up out of the row and drawn over its neighbours (`handRow`).
  *
- * **The band is the hand's drop target and takes no pointer itself.** It is as tall as a lifted
- * card, so its empty upper corners lie over the back row of the table; a band that caught the
- * pointer would make the lands under it unclickable. Drops are found by geometry, not by what is
- * under the pointer (`useDndDropTarget`'s `overlay`), so the band still wins a card let go over
- * it.
+ * **The order is the reader's, not the engine's** (`arrangeHand`): the kept hand is held lands
+ * first, and a card drawn after that goes on the right.
+ *
+ * **The band is the hand's drop target and takes no pointer itself.** It reaches past the row
+ * either side and as high as a lifted card, so its empty corners lie over the back row of the
+ * table; a band that caught the pointer would make the lands under it unclickable. Drops are
+ * found by geometry, not by what is under the pointer (`useDndDropTarget`'s `overlay`), so the
+ * band still wins a card let go over it.
  */
 export function HandFan({
   cards,
@@ -41,8 +56,28 @@ export function HandFan({
 }: HandFanProps): JSX.Element {
   const ref = useRef<HTMLElement>(null);
   const over = useGoldfishDropTarget({ ref, place: "hand", onDrop, overlay: true });
-  const lifted = pointedId === null ? -1 : cards.findIndex((c) => c.id === pointedId);
-  const fan = fanHand(cards.length, lifted < 0 ? null : lifted);
+
+  // The held order, carried from render to render: adjusted while rendering when the hand
+  // changed, React's way to keep state that follows a prop without an effect.
+  const [order, setOrder] = useState<number[]>([]);
+  const arranged = arrangeHand(order, cards);
+  if (arranged.length !== order.length || arranged.some((id, i) => id !== order[i])) {
+    setOrder(arranged);
+  }
+  const byId = new Map(cards.map((c) => [c.id, c]));
+  const held = arranged.flatMap((id) => byId.get(id) ?? []);
+  const row = handRow(held.length);
+
+  const linger = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(linger.current), []);
+  const enter = (pointed: Pointed) => {
+    window.clearTimeout(linger.current);
+    onPoint(pointed);
+  };
+  const leave = (id: number) => {
+    window.clearTimeout(linger.current);
+    linger.current = window.setTimeout(() => onUnpoint(id), HAND_LINGER);
+  };
 
   return (
     <section
@@ -52,17 +87,22 @@ export function HandFan({
         "pointer-events-none absolute bottom-0 left-1/2 -translate-x-1/2 rounded-t-2xl",
         over && DROP_GLOW,
       )}
-      style={{ width: fan.width + 40, height: fan.height }}
+      style={{ width: row.width + 2 * BAND_REACH, height: row.height }}
     >
-      <div className="absolute top-0 left-5" style={{ width: fan.width, height: fan.height }}>
-        {cards.map((card, i) => (
+      <div
+        className="absolute top-0"
+        style={{ left: BAND_REACH, width: row.width, height: row.height }}
+      >
+        {held.map((card, i) => (
           <HandCard
             key={card.id}
             card={card}
-            slot={fan.slots[i]}
-            lifted={i === lifted}
+            left={row.lefts[i]}
+            top={row.restTop}
+            lifted={card.id === pointedId}
             onAct={onAct}
-            onPoint={onPoint}
+            onEnter={enter}
+            onLeave={leave}
             onUnpoint={onUnpoint}
           />
         ))}
@@ -73,17 +113,21 @@ export function HandFan({
 
 function HandCard({
   card,
-  slot,
+  left,
+  top,
   lifted,
   onAct,
-  onPoint,
+  onEnter,
+  onLeave,
   onUnpoint,
 }: {
   card: GameCard;
-  slot: HandSlot;
+  left: number;
+  top: number;
   lifted: boolean;
   onAct: (action: GoldfishAction) => void;
-  onPoint: (pointed: Pointed) => void;
+  onEnter: (pointed: Pointed) => void;
+  onLeave: (id: number) => void;
   onUnpoint: () => void;
 }): JSX.Element {
   const ref = useRef<HTMLButtonElement>(null);
@@ -105,9 +149,11 @@ function HandCard({
       ref={ref}
       type="button"
       aria-label={`${name}. Drag to play, or double-click`}
+      data-land={id}
       onDoubleClick={play}
-      // A double-click is a mouse's gesture; Enter or Space on the focused card is the keyboard's
-      // way to the same play. Their click carries no `detail`, a mouse's always does.
+      // A double-click is a mouse's gesture; Enter on the focused card is the keyboard's way to
+      // the same play (Space is the board's next turn). Their click carries no `detail`, a
+      // mouse's always does.
       onClick={(e) => {
         if (e.detail === 0) play();
       }}
@@ -117,24 +163,36 @@ function HandCard({
       }}
       onKeyDown={menuKey(build)}
       onMouseEnter={(e) =>
-        onPoint({
-          card,
-          ids: [id],
-          place: "hand",
-          line: `${name} · in hand`,
-          side: sideOf(e.clientX),
-        })
+        onEnter({ card, ids: [id], place: "hand", line: `${name} · in hand`, at: pointerAt(e) })
       }
-      onMouseLeave={onUnpoint}
+      onMouseLeave={() => onLeave(id)}
+      // **The button never moves; only its face does.** Its box is the card at rest, so pulling
+      // the face up cannot take the card out from under the pointer — and while it is up, the
+      // strip it rose into is the button's too, so the pointer can follow the face.
       className={cn(
-        "pointer-events-auto absolute h-[185px] w-[132px] origin-bottom cursor-grab rounded-md p-0",
-        "transition-[top,transform] duration-150 ease-out motion-reduce:transition-none",
+        "pointer-events-auto absolute cursor-grab rounded-md bg-transparent p-0",
         FOCUS,
         lifted && LAYER.raised,
       )}
-      style={{ left: slot.left, top: slot.top, transform: `rotate(${slot.rotate}deg)` }}
+      style={{ left, top, width: HAND_CARD_W, height: HAND_CARD_H }}
     >
-      <CardFace card={card} />
+      {lifted && (
+        <span
+          aria-hidden="true"
+          className="absolute inset-x-0"
+          style={{ top: -HAND_LIFT, height: HAND_LIFT }}
+        />
+      )}
+      <span
+        className={cn(
+          "pointer-events-none block h-full w-full rounded-md",
+          "transition-[translate,box-shadow] duration-150 ease-out motion-reduce:transition-none",
+          lifted && "shadow-lg",
+        )}
+        style={{ translate: lifted ? `0 -${HAND_LIFT}px` : "0 0" }}
+      >
+        <CardFace card={card} />
+      </span>
     </button>
   );
 }

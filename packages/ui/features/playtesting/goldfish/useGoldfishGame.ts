@@ -59,7 +59,7 @@ export function useGoldfishGame(deckId: number, variant: DeckVariant): GoldfishG
           (dealt) => {
             if (mine !== generation.current) return;
             setView(dealt);
-            setLog([{ turn: 0, text: "Shuffled and drew seven" }]);
+            setLog([{ turn: 0, text: "Shuffled and drew seven", kind: "deal" }]);
           },
           (e: unknown) => {
             if (mine === generation.current) setError(ipcError(e));

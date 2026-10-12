@@ -2123,7 +2123,12 @@ function Body({
                 value=""
                 onChange={(deckId) => {
                   if (target === null || addToDeck === null) return;
-                  addToDeck([target], Number(deckId), DEFAULT_VARIANT);
+                  addToDeck(
+                    [target],
+                    Number(deckId),
+                    DEFAULT_VARIANT,
+                    decks.find((d) => String(d.id) === deckId)?.name,
+                  );
                 }}
                 options={deckOptions}
                 placeholder="Add to deck"

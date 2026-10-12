@@ -96,6 +96,7 @@ import { useCallback, useId, useState, type JSX } from "react";
 import { ChevronRight } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { copyText } from "@/lib/clipboard";
+import { notify } from "@/lib/notifications";
 import { FOCUS } from "@/lib/focus";
 import { ipcError } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
@@ -319,7 +320,10 @@ function Body({
       // `../files` is the seam: one command, and Rust opens the save dialog *and* writes at the
       // path it answered, so no path reaches the page (issue #545). A cancel resolves `false`,
       // and there is nothing to say about it — the text is still here.
-      await saveExport(`${suggestedFileName}.${EXPORT_FORMAT_EXTENSION[format]}`, text);
+      const name = `${suggestedFileName}.${EXPORT_FORMAT_EXTENSION[format]}`;
+      // A receipt for the write, as a toast: the native save dialog has closed and nothing in this
+      // one changed, so without it a save and a cancel looked the same.
+      if (await saveExport(name, text)) notify.success("Export saved", { body: name });
     } catch (e) {
       // Reported, not fatal to the dialog: the reader's text is still on screen and still
       // copyable, so a refused write must not throw either away.
