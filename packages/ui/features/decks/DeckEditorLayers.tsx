@@ -288,7 +288,7 @@ export type Layer =
    * gave. The name rides along because the dialog's header says which card it is about, and a
    * card removed under the open dialog must not turn that sentence into a blank.
    */
-  | { kind: "addLabel"; slot: AddLabelSlot }
+  | { kind: "addLabel"; slots: readonly AddLabelSlot[] }
   | null;
 
 /** The card a label is being put on: the grain `deck_card_set_label` is addressed at, plus the
@@ -352,8 +352,8 @@ export interface DeckEditorLayersProps {
   deckName: string;
   categories: Deck["categories"];
   tracks: boolean;
-  setCardLabelOnSlot: (slot: AddLabelSlot, labelId: number) => void;
-  createLabelFor: (slot: AddLabelSlot, name: string, color: string) => void;
+  setCardLabelOnSlot: (slots: readonly AddLabelSlot[], labelId: number) => void;
+  createLabelFor: (slots: readonly AddLabelSlot[], name: string, color: string) => void;
   setCompareSent: (sent: WishesSent) => void;
   pullPlan: ReturnType<typeof usePullPlan>;
   missingPlan: ReturnType<typeof useMissingPlan>;
@@ -606,17 +606,18 @@ export function DeckEditorLayers({
           `deck_label_all`. */}
       <AddLabelDialog
         open={layer?.kind === "addLabel"}
-        cardName={layer?.kind === "addLabel" ? layer.slot.name : null}
+        cardName={layer?.kind === "addLabel" ? (layer.slots[0]?.name ?? null) : null}
+        cardCount={layer?.kind === "addLabel" ? layer.slots.length : 1}
         choices={addLabelChoices}
         pending={meta.createLabel.isPending}
         onPick={(labelId) => {
           if (layer?.kind !== "addLabel") return;
-          setCardLabelOnSlot(layer.slot, labelId);
+          setCardLabelOnSlot(layer.slots, labelId);
           dismiss();
         }}
         onCreate={(name, color) => {
           if (layer?.kind !== "addLabel") return;
-          createLabelFor(layer.slot, name, color);
+          createLabelFor(layer.slots, name, color);
           dismiss();
         }}
         onDismiss={dismiss}

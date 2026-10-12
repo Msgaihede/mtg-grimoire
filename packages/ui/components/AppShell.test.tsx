@@ -1405,15 +1405,17 @@ describe("the card menu's deck write", () => {
       <button
         onClick={() =>
           addToDeck(
-            {
-              cardId: "c-bolt",
-              name: "Lightning Bolt",
-              setCode: "lea",
-              collectorNumber: "161",
-              oracleId: "o-bolt",
-              finishes: '["nonfoil"]',
-              typeLine: "Instant",
-            },
+            [
+              {
+                cardId: "c-bolt",
+                name: "Lightning Bolt",
+                setCode: "lea",
+                collectorNumber: "161",
+                oracleId: "o-bolt",
+                finishes: '["nonfoil"]',
+                typeLine: "Instant",
+              },
+            ],
             4,
             "live",
           )

@@ -717,7 +717,7 @@ describe("buildCardMenu", () => {
 
     await user.click(screen.getByRole("menuitem", { name: /Mono-Red Aggro/ }));
     // The **deck** id, never the group's folder id — the row writes through the deck's own add.
-    expect(toDeck).toHaveBeenCalledWith(BOLT, 7);
+    expect(toDeck).toHaveBeenCalledWith([BOLT], 7);
   });
 
   /**
@@ -1752,7 +1752,7 @@ describe("useCardToDeck", () => {
 
   it("adds one copy, naming no category so the app's own rule files the card", async () => {
     const { result } = arm();
-    act(() => result.current.addToDeck({ ...BOLT, typeLine: "Instant" }, 7, "theory"));
+    act(() => result.current.addToDeck([{ ...BOLT, typeLine: "Instant" }], 7, "theory"));
 
     // No category id and a type line: `useDeck.addCard`'s `autoCategoryFor` arm, which is the
     // same rule a drag with no column under it and an imported line take.
@@ -1775,7 +1775,7 @@ describe("useCardToDeck", () => {
       ],
     });
     const { result } = arm();
-    act(() => result.current.addToDeck({ ...BOLT, typeLine: "Instant" }, 7, "live"));
+    act(() => result.current.addToDeck([{ ...BOLT, typeLine: "Instant" }], 7, "live"));
 
     await waitFor(() =>
       expect(deckAddCard).toHaveBeenCalledWith(7, "bolt-lea", 3, null, "live", null, 1),
@@ -1794,7 +1794,7 @@ describe("useCardToDeck", () => {
     );
     deckCategoryList.mockResolvedValue([{ id: 3, name: "Sideboard" }]);
     const { result } = arm();
-    act(() => result.current.addToDeck({ ...BOLT, typeLine: "Instant" }, 7, "theory"));
+    act(() => result.current.addToDeck([{ ...BOLT, typeLine: "Instant" }], 7, "theory"));
 
     await waitFor(() =>
       expect(deckAddCard).toHaveBeenCalledWith(7, "bolt-lea", 13, null, "theory", null, 1),
@@ -1804,7 +1804,7 @@ describe("useCardToDeck", () => {
   it("keeps what a refused add said, for the surface to draw", async () => {
     deckAddCard.mockRejectedValue(new Error("That deck is not there any more"));
     const { result } = arm();
-    act(() => result.current.addToDeck({ ...BOLT, typeLine: "Instant" }, 7, "live"));
+    act(() => result.current.addToDeck([{ ...BOLT, typeLine: "Instant" }], 7, "live"));
 
     await waitFor(() => expect(result.current.error).toBe("That deck is not there any more"));
     act(() => result.current.clearError());
@@ -1816,20 +1816,62 @@ describe("useCardToDeck", () => {
     // same deck again means a second copy.
     const { result } = arm();
     const target = { ...BOLT, typeLine: "Instant" };
-    act(() => result.current.addToDeck(target, 7, "live"));
+    act(() => result.current.addToDeck([target], 7, "live"));
     await waitFor(() => expect(deckAddCard).toHaveBeenCalledTimes(1));
-    act(() => result.current.addToDeck(target, 7, "live"));
+    act(() => result.current.addToDeck([target], 7, "live"));
     await waitFor(() => expect(deckAddCard).toHaveBeenCalledTimes(2));
+  });
+
+  /**
+   * Issue #954: a Shift-picked range added to a deck put only its **last** card there. The picker
+   * called this once per card, each call replaced the one armed add, and React batched the lot
+   * into one render — so one write went out, for whichever card came last.
+   */
+  it("adds every card of a picked set, in order, on one press (issue #954)", async () => {
+    const { result } = arm();
+    const helix = { ...BOLT, cardId: "helix-lea", name: "Lightning Helix", typeLine: "Instant" };
+    const ponder = { ...BOLT, cardId: "ponder-lea", name: "Ponder", typeLine: "Sorcery" };
+    act(() =>
+      result.current.addToDeck([{ ...BOLT, typeLine: "Instant" }, helix, ponder], 7, "live"),
+    );
+
+    await waitFor(() => expect(deckAddCard).toHaveBeenCalledTimes(3));
+    expect(deckAddCard.mock.calls.map((call) => call[1])).toEqual([
+      "bolt-lea",
+      "helix-lea",
+      "ponder-lea",
+    ]);
+  });
+
+  it("keeps writing the rest of a picked set past a refused card", async () => {
+    deckAddCard.mockRejectedValueOnce(new Error("That printing is not there any more"));
+    const { result } = arm();
+    const helix = { ...BOLT, cardId: "helix-lea", typeLine: "Instant" };
+    act(() => result.current.addToDeck([{ ...BOLT, typeLine: "Instant" }, helix], 7, "live"));
+
+    await waitFor(() => expect(deckAddCard).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.error).toBe("That printing is not there any more"));
+  });
+
+  it("queues a second press made while the first is still writing, rather than replacing it", async () => {
+    const { result } = arm();
+    act(() => {
+      result.current.addToDeck([{ ...BOLT, typeLine: "Instant" }], 7, "live");
+      result.current.addToDeck([{ ...BOLT, cardId: "helix-lea", typeLine: "Instant" }], 7, "live");
+    });
+
+    await waitFor(() => expect(deckAddCard).toHaveBeenCalledTimes(2));
+    expect(deckAddCard.mock.calls.map((call) => call[1])).toEqual(["bolt-lea", "helix-lea"]);
   });
 
   it("takes last time's refusal down as the next add is armed", async () => {
     deckAddCard.mockRejectedValue(new Error("That deck is not there any more"));
     const { result } = arm();
-    act(() => result.current.addToDeck({ ...BOLT, typeLine: "Instant" }, 7, "live"));
+    act(() => result.current.addToDeck([{ ...BOLT, typeLine: "Instant" }], 7, "live"));
     await waitFor(() => expect(result.current.error).not.toBeNull());
 
     deckAddCard.mockResolvedValue(undefined);
-    act(() => result.current.addToDeck({ ...BOLT, typeLine: "Instant" }, 7, "live"));
+    act(() => result.current.addToDeck([{ ...BOLT, typeLine: "Instant" }], 7, "live"));
     // Not after the answer -- at the press. A sentence about the last deck must not stand over
     // the whole of the next add's round trip.
     expect(result.current.error).toBeNull();
@@ -1844,7 +1886,7 @@ describe("useCardToDeck", () => {
      * `renderHook` unmounts at the end of a test and no other assertion counts a read.
      */
     const { result, client } = arm();
-    act(() => result.current.addToDeck({ ...BOLT, typeLine: "Instant" }, 7, "live"));
+    act(() => result.current.addToDeck([{ ...BOLT, typeLine: "Instant" }], 7, "live"));
     await waitFor(() => expect(deckAddCard).toHaveBeenCalled());
     await waitFor(() => expect(client.isMutating()).toBe(0));
 

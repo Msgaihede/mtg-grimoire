@@ -649,8 +649,19 @@ describe("buildDeckCardMenu", () => {
 
     item.onSelect();
 
-    expect(wired.addLabel).toHaveBeenCalledWith(target);
+    expect(wired.addLabel).toHaveBeenCalledWith([target]);
     expect(wired.setLabel).not.toHaveBeenCalled();
+  });
+
+  /** Issue #954: under `Label 2 cards` the dialog's label went on the right-clicked card alone. */
+  it("hands the whole picked set to the surface under Label N cards", () => {
+    const target = bolt();
+    const other = bolt({ cardId: "bear", name: "Bear" });
+    const wired = deps({ picked: [target, other] });
+    const row = find(buildDeckCardMenu(target, wired), "Label 2 cards") as MenuSubmenu;
+    (find(row.items, "More labels…") as MenuAction).onSelect();
+
+    expect(wired.addLabel).toHaveBeenCalledWith([target, other]);
   });
 
   /**
