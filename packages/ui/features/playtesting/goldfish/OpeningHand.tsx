@@ -7,6 +7,7 @@ import { cardImageUrl } from "@/lib/images";
 import { FOCUS } from "@/lib/focus";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
+import { landsFirst } from "./layout";
 
 /**
  * The opening hand — the artboard `Goldfish · opening hand` (2026-10-12): seven cards, the ones
@@ -97,9 +98,11 @@ function Deciding({
         <p className="m-0 text-sm text-dim">{instruction}</p>
       </div>
 
-      {/* 214px tall for a 196px card: the 14px a picked card rises, and room for its outline. */}
+      {/* 214px tall for a 196px card: the 14px a picked card rises, and room for its outline.
+          Lands first, the way a reader sorts a hand they have just picked up; the board's hand
+          keeps that order once it is kept (`arrangeHand`). */}
       <div role="group" aria-label="Opening hand" className="flex h-[214px] items-end gap-[14px]">
-        {hand.map((card) => (
+        {landsFirst(hand).map((card) => (
           <HandCard
             key={card.id}
             card={card}

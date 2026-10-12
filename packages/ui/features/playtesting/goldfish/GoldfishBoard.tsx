@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type JSX } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { ArrowRight, ChevronLeft, Menu } from "lucide-react";
 import type { GameCard, GoldfishAction, GoldfishPlace, GoldfishView } from "@/lib/ipc";
 import { CardImage } from "@/components/CardImage";
@@ -9,7 +9,7 @@ import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { Battlefield } from "./Battlefield";
 import { HandFan } from "./HandFan";
-import { Inspect } from "./Inspect";
+import { INSPECT_WIDTH, Inspect } from "./Inspect";
 import { LibraryDialog } from "./LibraryDialog";
 import { LifePlate } from "./LifePlate";
 import { gameMenu } from "./menus";
@@ -17,8 +17,10 @@ import { OpeningHand } from "./OpeningHand";
 import { HelpPanel, LogPanel } from "./Panels";
 import { CommandZone, ExileZone, GraveyardZone, LibraryZone } from "./ZonePile";
 import { dropAction, type GoldfishDrag } from "./goldfishDrag";
-import { fanHand } from "./layout";
+import { useLanding } from "./landing";
+import { handRow } from "./layout";
 import type { LogLine } from "./log";
+import { feltBackground } from "./playmats";
 import type { Playmat, Pointed, ZoneLook } from "./types";
 
 /**
@@ -38,6 +40,9 @@ import type { Playmat, Pointed, ZoneLook } from "./types";
  * **One card is "pointed at" for the whole board** (`hover`): it is what the inspect preview
  * shows, and what the T / G / E / H keys act on — the artboard's help says "point at a card and
  * press…".
+ *
+ * **A card that lands pops once where it landed** (`useLanding`): the table places a card by the
+ * rules rather than where it was let go, so the reader is shown where it went.
  */
 export interface GoldfishBoardProps {
   /** The deck's name, for the back button: "‹ Aerith  Esc". */
@@ -75,7 +80,11 @@ export function GoldfishBoard({
   const [panel, setPanel] = useState<"help" | "log" | null>(null);
   const [look, setLook] = useState<ZoneLook | null>(null);
   const [playmat, setPlaymat] = useState<Playmat>(initialPlaymat);
+  /** The preview's card width, which the wheel changes while it is open; kept for the game. */
+  const [previewWidth, setPreviewWidth] = useState(INSPECT_WIDTH);
   const { menuClick } = useContextMenu();
+  const root = useRef<HTMLDivElement>(null);
+  useLanding(root, view);
 
   // **What is pointed at, as the current view has it.** A tap keeps a card's id (only a zone
   // change mints a new one, CR 400.7) but not its state, and no new `mouseenter` fires on a card
@@ -94,9 +103,13 @@ export function GoldfishBoard({
 
   const commander = view?.command[0] ?? view?.battlefield.find((c) => c.isCommander) ?? null;
 
-  // **The board's own keys**, the artboard's help panel's: N for the next turn, and T, G, E, H
-  // on the card pointed at — tap it, bury it, exile it, return it to hand. Not while a field has
-  // the caret (the life steppers) or a menu or dialog is open over the board.
+  // **The board's own keys**, the artboard's help panel's: Space for the next turn, and T, G, E,
+  // H on the card pointed at — tap it, bury it, exile it, return it to hand. Not while a field
+  // has the caret (the life steppers) or a menu or dialog is open over the board.
+  //
+  // **Space is the board's even on a focused button**, and the `preventDefault` is what makes it
+  // so: a card clicked keeps the focus, and Space would otherwise press it — playing the card in
+  // hand the reader only meant to end the turn after. Enter still presses a focused control.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey || e.repeat || view === null) return;
@@ -104,7 +117,7 @@ export function GoldfishBoard({
         return;
       if (document.querySelector('[aria-modal="true"], [role="menu"]') !== null) return;
       const key = e.key.toLowerCase();
-      if (key === "n" && view.stage === "playing") {
+      if (key === " " && view.stage === "playing") {
         e.preventDefault();
         onAct({ type: "nextTurn" });
         return;
@@ -126,20 +139,46 @@ export function GoldfishBoard({
       setPointed(null);
       onAct(action);
     };
+    // A button presses on Space's keyup, so the keyup is held back too.
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key !== " " || view === null || view.stage !== "playing") return;
+      if (e.target instanceof HTMLElement && e.target.closest("input, textarea, [role=menu]"))
+        return;
+      if (document.querySelector('[aria-modal="true"], [role="menu"]') !== null) return;
+      e.preventDefault();
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKeyUp);
+    };
   }, [onAct, current, view]);
 
   const point = setPointed;
-  const unpoint = useCallback(() => setPointed(null), []);
+  /** Let go of what is pointed at — or, given an id, of that card only if it still is. */
+  const unpoint = useCallback(
+    (id?: number) => setPointed((was) => (id === undefined || was?.card.id === id ? null : was)),
+    [],
+  );
+  const felt = feltBackground(playmat);
   const dead = view !== null && view.opponentLife <= 0;
   const status = error ?? log[0]?.text ?? "";
 
   return (
     <div
+      ref={root}
       className="relative h-full w-full overflow-hidden bg-bg text-sm text-text"
       data-testid="goldfish-board"
     >
+      {felt !== null && (
+        <div
+          aria-hidden="true"
+          data-testid="goldfish-felt"
+          className="pointer-events-none absolute inset-0"
+          style={{ background: felt }}
+        />
+      )}
       {playmat === "commander" && commander?.cardId != null && (
         <CommanderMat cardId={commander.cardId} name={commander.name} />
       )}
@@ -282,7 +321,7 @@ export function GoldfishBoard({
         style={{
           left:
             view?.stage === "playing"
-              ? `max(16px, calc(50% - ${fanHand(view.hand.length, null).width / 2 + 20 + 236}px))`
+              ? `max(16px, calc(50% - ${handRow(view.hand.length).width / 2 + 20 + 236}px))`
               : "274px",
         }}
       >
@@ -316,24 +355,27 @@ export function GoldfishBoard({
           <button
             type="button"
             onClick={() => onAct({ type: "nextTurn" })}
+            aria-keyshortcuts="Space"
             className={cn(
-              "inline-flex h-12 items-center gap-2.5 rounded-full border border-accent bg-surface px-5",
+              "inline-flex flex-col items-center gap-1 rounded-2xl border border-accent bg-surface px-6 pt-2 pb-1.5",
               "text-[15px] font-semibold text-accent transition-colors motion-reduce:transition-none",
               "hover:bg-accent hover:text-accent-fg",
               PRESS,
               FOCUS,
             )}
           >
-            Next turn
-            <ArrowRight className="size-[18px]" aria-hidden="true" />
-            <kbd className="rounded border border-current px-1 font-mono text-[11px] font-normal opacity-70">
-              N
+            <span className="inline-flex items-center gap-2.5">
+              Next turn
+              <ArrowRight className="size-[18px]" aria-hidden="true" />
+            </span>
+            <kbd className="rounded border border-current px-1.5 font-mono text-[10px] leading-4 font-normal opacity-70">
+              Space
             </kbd>
           </button>
         </div>
       )}
 
-      {current !== null && <Inspect pointed={current} />}
+      <Inspect pointed={current} width={previewWidth} onResize={setPreviewWidth} />
 
       {panel === "help" && <HelpPanel onClose={() => setPanel(null)} />}
       {panel === "log" && <LogPanel log={log} onClose={() => setPanel(null)} />}

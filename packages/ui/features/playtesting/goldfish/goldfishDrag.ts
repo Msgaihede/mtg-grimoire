@@ -89,24 +89,40 @@ export function useGoldfishDragging(): GoldfishDrag | null {
 /**
  * One place a card can be let go. `overlay` for a target drawn over another (the zone columns
  * and the hand sit over the table's own box), so the smaller one wins the pointer.
+ *
+ * `pointerOnly` for the table: **a card is played only when the pointer is on the table.** The
+ * default detector falls back to the carried card's whole shape, and a card lifted out of the
+ * hand overlaps the table's bottom edge while the pointer is still in the hand or beside it — so
+ * a card let go there was played. Dropping a card to play it is a decision the pointer makes,
+ * not the card's corner.
+ *
+ * **A zone catches its own cards too**, and does nothing with them. A card from the hand let go
+ * over the hand asks nothing (`dropAction` is `null`), and a zone that refused it would leave the
+ * drop to whatever lies under it: the hand's band reaches up over the table's bottom edge, so a
+ * card put back in the hand there was played. Caught, it is simply put back. Only a zone a card
+ * could go to lights up for it, so the hand does not glow under a card carried out of it.
  */
 export function useGoldfishDropTarget({
   ref,
   place,
   onDrop,
   overlay = false,
+  pointerOnly = false,
 }: {
   ref: RefObject<HTMLElement | null>;
   place: GoldfishPlace;
   onDrop: (drag: GoldfishDrag, place: GoldfishPlace) => void;
   overlay?: boolean;
+  pointerOnly?: boolean;
 }): boolean {
+  const dragging = useGoldfishDragging();
   const { over } = useDndDropTarget({
     ref,
     read: readGoldfishDrag,
-    canDrop: (drag) => dropAction(drag, place) !== null,
+    canDrop: (drag) => drag.from === place || dropAction(drag, place) !== null,
     onDrop: (drag) => onDrop(drag, place),
     overlay,
+    pointerOnly,
   });
-  return over;
+  return over && dragging !== null && dropAction(dragging, place) !== null;
 }

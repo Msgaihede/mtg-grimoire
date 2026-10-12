@@ -6,14 +6,14 @@ import { useContextMenu } from "@/components/menu/useContextMenu";
 import { FOCUS } from "@/lib/focus";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
-import { CardFace, sideOf } from "./Inspect";
+import { CardFace, pointerAt } from "./Inspect";
 import { goldfishDraggable, useGoldfishDropTarget, type GoldfishDrag } from "./goldfishDrag";
 import { cardMenu, libraryMenu } from "./menus";
 import type { Pointed, ZoneLook } from "./types";
 
 /**
  * The four zones beside the table — command and exile on the left, graveyard and library on the
- * right — each one the artboard's 104 × 146 slot with its count under it.
+ * right — each one a 120 × 168 slot (the artboard's 104 × 146, grown) with its count under it.
  *
  * **Every zone is a drop target drawn over nothing but the board**, and `overlay` all the same:
  * the columns sit beside the table's box, and a card carried out of the table toward them is
@@ -32,7 +32,7 @@ function EmptySlot({ label, over }: { label: string; over: boolean }): JSX.Eleme
   return (
     <div
       className={cn(
-        "flex h-[146px] w-[104px] items-center justify-center rounded-lg border border-dashed bg-bg/60 text-[11px] text-dim",
+        "flex h-[168px] w-[120px] items-center justify-center rounded-lg border border-dashed bg-bg/60 text-[11px] text-dim",
         "transition-[border-color] duration-150 motion-reduce:transition-none",
         over ? "border-accent" : "border-border",
       )}
@@ -93,8 +93,8 @@ export function CommandZone({
         <EmptySlot label="Command" over={over} />
       ) : (
         <div
-          className={cn("relative w-[104px] rounded-lg", over && OVER_OUTLINE)}
-          style={{ height: 146 + (commanders.length - 1) * PARTNER_STEP }}
+          className={cn("relative w-[120px] rounded-lg", over && OVER_OUTLINE)}
+          style={{ height: 168 + (commanders.length - 1) * PARTNER_STEP }}
         >
           {commanders.map((card, i) => (
             <CommanderCard
@@ -156,11 +156,12 @@ function CommanderCard({
           ids: [card.id],
           place: "command",
           line: `${card.name} · in the command zone`,
-          side: sideOf(e.clientX),
+          at: pointerAt(e),
         })
       }
       onMouseLeave={onUnpoint}
-      className={cn("absolute left-0 h-[146px] w-[104px] cursor-grab rounded-md p-0", FOCUS)}
+      data-land={card.id}
+      className={cn("absolute left-0 h-[168px] w-[120px] cursor-grab rounded-md p-0", FOCUS)}
       style={{ top }}
     >
       <CardFace card={card} />
@@ -244,12 +245,13 @@ function FaceUpZone({
               ids: [top.id],
               place: zone,
               line: `Top of ${where} · ${cards.length} ${cards.length === 1 ? "card" : "cards"}`,
-              side: sideOf(e.clientX),
+              at: pointerAt(e),
             })
           }
           onMouseLeave={onUnpoint}
+          data-land={top.id}
           className={cn(
-            "relative h-[146px] w-[104px] cursor-grab rounded-lg p-0",
+            "relative h-[168px] w-[120px] cursor-grab rounded-lg p-0",
             FOCUS,
             over && OVER_OUTLINE,
           )}
@@ -287,12 +289,13 @@ export function LibraryZone({ view, onAct, onDrop, onLook }: LibraryZoneProps): 
       <button
         type="button"
         disabled={view === null}
+        data-land={libraryEnds(view)}
         aria-label={`Library, ${count} ${count === 1 ? "card" : "cards"}. Click to draw; right-click for more`}
         onClick={() => onAct({ type: "draw", count: 1 })}
         onContextMenu={menu(build)}
         onKeyDown={menuKey(build)}
         className={cn(
-          "flex h-[146px] w-[104px] cursor-pointer items-center justify-center rounded-lg border bg-surface text-accent disabled:cursor-default",
+          "flex h-[168px] w-[120px] cursor-pointer items-center justify-center rounded-lg border bg-surface text-accent disabled:cursor-default",
           // The edges of the cards under the top one, two of them, the way a deck sits.
           "shadow-[2px_2px_0_var(--color-bg),3px_3px_0_var(--color-border),5px_5px_0_var(--color-bg),6px_6px_0_var(--color-border)]",
           over ? "border-accent" : "border-border",
@@ -300,9 +303,19 @@ export function LibraryZone({ view, onAct, onDrop, onLook }: LibraryZoneProps): 
           FOCUS,
         )}
       >
-        <GrimoireMark size={42} className="text-accent" />
+        <GrimoireMark size={48} className="text-accent" />
       </button>
       <span className={ZONE_LABEL}>Library · {count}</span>
     </div>
   );
+}
+
+/**
+ * The library's cards a landing can show on (`useLanding`): its top and its bottom, the two ends
+ * a card is put on.
+ */
+function libraryEnds(view: GoldfishView | null): string | undefined {
+  const cards = view?.libraryCards ?? [];
+  if (cards.length === 0) return undefined;
+  return `${cards[0].id} ${cards[cards.length - 1].id}`;
 }

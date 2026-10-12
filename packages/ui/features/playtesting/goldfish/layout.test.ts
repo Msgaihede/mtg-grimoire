@@ -6,9 +6,17 @@ import {
   FLOOR,
   GAP,
   PILE,
-  fanHand,
+  HAND_CARD_W,
+  HAND_GAP,
+  HAND_LIFT,
+  HAND_MIN_STEP,
+  HAND_ROW_MAX,
+  arrangeHand,
   fitWidth,
+  handRow,
+  landsFirst,
   layoutTable,
+  pileHeight,
   pileWidth,
   pilesOf,
 } from "./layout";
@@ -63,9 +71,16 @@ describe("pilesOf", () => {
 });
 
 describe("fitWidth", () => {
-  it("draws a sparse row at its largest", () => {
+  it("draws a sparse row at its largest in a tall lane", () => {
     const piles = pilesOf([card("Forest")], "land");
-    expect(fitWidth(piles, { row: 1100, laneHeight: 296, max: BACK_MAX })).toBe(BACK_MAX);
+    expect(fitWidth(piles, { row: 1100, laneHeight: 600, max: BACK_MAX })).toBe(BACK_MAX);
+  });
+
+  it("draws a sparse row as tall as its lane allows", () => {
+    const piles = pilesOf([card("Forest")], "land");
+    const w = fitWidth(piles, { row: 1100, laneHeight: 296, max: BACK_MAX });
+    expect(w).toBeLessThan(BACK_MAX);
+    expect(pileHeight(piles[0], w)).toBeLessThanOrEqual(296);
   });
 
   it("shrinks a crowded row until every pile fits across it", () => {
@@ -99,7 +114,7 @@ describe("layoutTable", () => {
   it("lays creatures in front and lands with the rest behind, at sizes of their own", () => {
     const t = layoutTable(
       [card("Bear", { lane: "creature" }), card("Forest"), card("Sol Ring", { lane: "other" })],
-      { width: 1100, height: 600 },
+      { width: 1100, height: 1000 },
     );
     expect(t.creatures).toHaveLength(1);
     expect(t.lands).toHaveLength(1);
@@ -109,17 +124,58 @@ describe("layoutTable", () => {
   });
 });
 
-describe("fanHand", () => {
-  it("fans seven cards 96 px apart and closes up past seven", () => {
-    expect(fanHand(7, null).slots[1].left).toBe(96);
-    expect(fanHand(9, null).slots[1].left).toBe(70);
+describe("handRow", () => {
+  it("sits up to seven cards side by side, and overlaps more to stay the width of seven", () => {
+    expect(handRow(7).lefts[1]).toBe(HAND_CARD_W + HAND_GAP);
+    expect(handRow(7).width).toBe(HAND_ROW_MAX);
+    const ten = handRow(10);
+    expect(ten.lefts[1]).toBeLessThan(HAND_CARD_W);
+    expect(ten.width).toBeLessThanOrEqual(HAND_ROW_MAX);
   });
 
-  it("leans the edges out and lifts the card pointed at", () => {
-    const fan = fanHand(5, 0);
-    expect(fan.slots[0]).toEqual({ left: 0, top: 0, rotate: 0 });
-    expect(fan.slots[4].rotate).toBe(8);
-    expect(fan.slots[2].rotate).toBe(0);
-    expect(fan.slots[4].top).toBeGreaterThan(fan.slots[2].top);
+  it("never shows less than a sliver of a card, however many are held", () => {
+    expect(handRow(60).lefts[1]).toBe(HAND_MIN_STEP);
+  });
+
+  it("lifts a card by the lift, inside the band", () => {
+    const row = handRow(3);
+    expect(row.restTop - row.liftTop).toBe(HAND_LIFT);
+    expect(row.liftTop).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("arrangeHand", () => {
+  const forest = card("Forest");
+  const bolt = card("Bolt", { isLand: false, lane: "other" });
+  const island = card("Island");
+  const ponder = card("Ponder", { isLand: false, lane: "other" });
+
+  it("holds a hand picked up fresh lands first, each group in the order it came", () => {
+    expect(landsFirst([bolt, forest, ponder, island]).map((c) => c.name)).toEqual([
+      "Forest",
+      "Island",
+      "Bolt",
+      "Ponder",
+    ]);
+    expect(arrangeHand([], [bolt, forest, ponder, island])).toEqual([
+      forest.id,
+      island.id,
+      bolt.id,
+      ponder.id,
+    ]);
+  });
+
+  it("puts a card drawn later on the right, even a land, and closes up a gap", () => {
+    const drawn = card("Mountain");
+    expect(arrangeHand([forest.id, bolt.id, ponder.id], [bolt, ponder, forest, drawn])).toEqual([
+      forest.id,
+      bolt.id,
+      ponder.id,
+      drawn.id,
+    ]);
+    expect(arrangeHand([forest.id, bolt.id, ponder.id], [ponder, forest])).toEqual([
+      forest.id,
+      ponder.id,
+    ]);
   });
 });

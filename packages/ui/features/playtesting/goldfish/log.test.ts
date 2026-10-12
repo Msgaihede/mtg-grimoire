@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LOG_LIMIT, appendLog, lifeSentence, linesFor, sentence } from "./log";
+import { LOG_LIMIT, appendLog, byTurn, kindOf, lifeSentence, linesFor, sentence } from "./log";
 
 describe("sentence", () => {
   it("says a draw, a land drop and a cast the way the artboard's log does", () => {
@@ -53,8 +53,8 @@ describe("linesFor", () => {
       2,
     );
     expect(lines).toEqual([
-      { turn: 2, text: "Drew Forest" },
-      { turn: 2, text: "Untapped · turn 2 begins" },
+      { turn: 2, text: "Drew Forest", kind: "draw" },
+      { turn: 2, text: "Untapped · turn 2 begins", kind: "turn" },
     ]);
   });
 
@@ -63,5 +63,31 @@ describe("linesFor", () => {
     const log = appendLog(many, [{ turn: 2, text: "new" }]);
     expect(log).toHaveLength(LOG_LIMIT);
     expect(log[0].text).toBe("new");
+  });
+});
+
+describe("kindOf", () => {
+  it("tells a draw from any other move, and a placed spell from a placed permanent", () => {
+    expect(kindOf({ type: "moved", name: "Forest", from: "libraryTop", to: "hand" })).toBe("draw");
+    expect(kindOf({ type: "moved", name: "Forest", from: "hand", to: "graveyard" })).toBe("move");
+    expect(kindOf({ type: "put", name: "Ponder", from: "hand", to: "graveyard" })).toBe("cast");
+    expect(kindOf({ type: "put", name: "Sol Ring", from: "hand", to: "battlefield" })).toBe("move");
+  });
+});
+
+describe("byTurn", () => {
+  it("groups each turn's lines, newest turn first, and keeps their order", () => {
+    const turns = byTurn([
+      { turn: 3, text: "Drew Three Tree City" },
+      { turn: 3, text: "Untapped · turn 3 begins" },
+      { turn: 2, text: "Cast Ponder" },
+      { turn: 0, text: "Kept seven" },
+      { turn: 0, text: "Shuffled and drew seven" },
+    ]);
+    expect(turns.map((t) => [t.turn, t.lines.map((l) => l.text)])).toEqual([
+      [3, ["Drew Three Tree City", "Untapped · turn 3 begins"]],
+      [2, ["Cast Ponder"]],
+      [0, ["Kept seven", "Shuffled and drew seven"]],
+    ]);
   });
 });
