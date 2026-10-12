@@ -139,17 +139,24 @@ beforeEach(() => {
 
 describe("which level offers a Share control", () => {
   /**
-   * **Not on a deck group, not on `Recently removed`** — the app-owned kinds, which
-   * `CollectionPage.tsx`'s `userFolders` already separates and which
-   * `share::snapshot::FOLDER_NOT_SHAREABLE` refuses on the other side of the wire.
+   * **Every kind of folder offers Share** (issue #941) — a deck's group and `Recently removed`
+   * included, each under its own name. `share::snapshot` publishes a named one whole and still
+   * leaves both out of a whole-collection share.
    */
-  it("offers Share on a user folder and on the root, and on nothing else", () => {
+  it("offers Share on the root and on a folder of every kind", () => {
     expect(shareTargetFor(null, false)).toEqual(COLLECTION);
     expect(shareTargetFor(named(), false)).toEqual(BINDER);
     expect(shareTargetFor(named(), true)).toEqual(LOCKED);
 
-    expect(shareTargetFor(folder({ kind: "deck", deckId: 4, name: "Burn" }), false)).toBeNull();
-    expect(shareTargetFor(folder({ kind: "removed", name: "Recently removed" }), false)).toBeNull();
+    expect(
+      shareTargetFor(folder({ kind: "deck", deckId: 4, name: "Burn", syncUid: "uid-burn" }), false),
+    ).toEqual({ kind: "folder", uid: "uid-burn", title: "Burn", locked: false });
+    expect(
+      shareTargetFor(
+        folder({ kind: "removed", name: "Recently removed", syncUid: "uid-rm" }),
+        false,
+      ),
+    ).toEqual({ kind: "folder", uid: "uid-rm", title: "Recently removed", locked: false });
   });
 
   /**

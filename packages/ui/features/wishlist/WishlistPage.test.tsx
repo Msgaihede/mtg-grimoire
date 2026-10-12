@@ -284,9 +284,9 @@ const SEARCH_BOLT: CardSummary = {
  * and an empty folder has **no summary row at all** — the read groups the wishes — so it is the
  * one that catches a card fed a raw `Map.get`.
  */
-const ORDERED: WishlistFolder = { id: 1, parentId: null, name: "Ordered", sortOrder: 0, managedDeckId: null, managedTokens: false };
-const BACKORDERED: WishlistFolder = { id: 2, parentId: 1, name: "Backordered", sortOrder: 0, managedDeckId: null, managedTokens: false };
-const SOMEDAY: WishlistFolder = { id: 3, parentId: null, name: "Someday", sortOrder: 1, managedDeckId: null, managedTokens: false };
+const ORDERED: WishlistFolder = { id: 1, parentId: null, name: "Ordered", sortOrder: 0, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };
+const BACKORDERED: WishlistFolder = { id: 2, parentId: 1, name: "Backordered", sortOrder: 0, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };
+const SOMEDAY: WishlistFolder = { id: 3, parentId: null, name: "Someday", sortOrder: 1, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };
 const FOLDERS: WishlistFolder[] = [ORDERED, BACKORDERED, SOMEDAY];
 
 /** Direct per folder, and `Someday` is deliberately absent rather than zeroed. */
@@ -1239,7 +1239,12 @@ describe("WishlistPage", () => {
   it("holds the status line's one line open, so `Updating…` never moves the wall", async () => {
     const { client } = wrap(<WishlistPage />);
     await screen.findByText("Lightning Bolt");
-    const line = document.querySelector<HTMLElement>('p[role="status"]')!;
+    // The line beside the shelves — the Share group in the band above carries a status line of
+    // its own (issue #941), so the first one in the document is not necessarily this one.
+    const shelves = screen.getByRole("group", { name: "Shelves" });
+    const line = [...document.querySelectorAll<HTMLElement>('p[role="status"]')].find((p) =>
+      p.parentElement?.contains(shelves),
+    )!;
     await waitFor(() => expect(line.textContent).toBe(""));
     const silent = line.className;
 
@@ -2343,7 +2348,7 @@ describe("the shelves", () => {
       name: "Mana base",
       sortOrder: 0,
       managedDeckId: null,
-      managedTokens: false,
+      managedTokens: false, syncUid: null, managedDeckUid: null,
     };
     const FETCH: WishlistFolder = {
       id: 11,
@@ -2351,7 +2356,7 @@ describe("the shelves", () => {
       name: "Fetchlands",
       sortOrder: 0,
       managedDeckId: null,
-      managedTokens: false,
+      managedTokens: false, syncUid: null, managedDeckUid: null,
     };
     const SHOCK: WishlistFolder = {
       id: 12,
@@ -2359,7 +2364,7 @@ describe("the shelves", () => {
       name: "Shocks",
       sortOrder: 1,
       managedDeckId: null,
-      managedTokens: false,
+      managedTokens: false, syncUid: null, managedDeckUid: null,
     };
     const land = (id: number, name: string, folderId: number): WishRow => ({
       ...BOLT,
@@ -3313,7 +3318,7 @@ describe("the shelves", () => {
       name: "Signed",
       sortOrder: 0,
       managedDeckId: null,
-      managedTokens: false,
+      managedTokens: false, syncUid: null, managedDeckUid: null,
     };
     const INSIDE: WishRow = {
       ...FILED,
@@ -4556,7 +4561,7 @@ describe("the folders", () => {
       name: "Add folder",
       sortOrder: 0,
       managedDeckId: null,
-      managedTokens: false,
+      managedTokens: false, syncUid: null, managedDeckUid: null,
     };
     const INNER: WishlistFolder = {
       id: 21,
@@ -4564,7 +4569,7 @@ describe("the folders", () => {
       name: "Inner",
       sortOrder: 0,
       managedDeckId: null,
-      managedTokens: false,
+      managedTokens: false, syncUid: null, managedDeckUid: null,
     };
     const DEEP: WishlistFolder = {
       id: 22,
@@ -4572,7 +4577,7 @@ describe("the folders", () => {
       name: "Deep",
       sortOrder: 0,
       managedDeckId: null,
-      managedTokens: false,
+      managedTokens: false, syncUid: null, managedDeckUid: null,
     };
 
     it("hands the caret to the toolbar's Add folder, never to a trail segment of that name", async () => {
@@ -5174,7 +5179,7 @@ describe("a deck's managed wishlist", () => {
     name: "Rhystic Testbed",
     sortOrder: 2,
     managedDeckId: 4,
-    managedTokens: false,
+    managedTokens: false, syncUid: null, managedDeckUid: null,
   };
   /** What the deck's plan is short of — filed in the managed folder by the deck, not the reader. */
   const COPTER: WishRow = {
@@ -5333,7 +5338,7 @@ describe("a deck's managed wishlist", () => {
       name: "Tokens",
       sortOrder: 0,
       managedDeckId: MANAGED.managedDeckId,
-      managedTokens: true,
+      managedTokens: true, syncUid: null, managedDeckUid: null,
     };
     const TREASURE: WishRow = {
       ...COPTER,

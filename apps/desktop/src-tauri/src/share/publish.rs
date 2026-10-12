@@ -642,9 +642,9 @@ pub fn commit_publish(
 /// Publish a folder — or the whole collection, for `None` — and answer the row the page draws.
 ///
 /// The order is this module's header, and the one thing worth restating here is that the
-/// snapshot is read **before** the first request: the three refusals a locked, missing or
-/// app-owned folder earns are [`super::snapshot`]'s, and a folder about to be refused must never
-/// have left a row on the relay.
+/// snapshot is read **before** the first request: the refusals a locked or missing folder earns
+/// are [`super::snapshot`]'s, and a folder about to be refused must never have left a row on the
+/// relay. Any kind of folder may be named since issue #941, and a wishlist key too.
 pub async fn publish(
     conn: &Connection,
     tokens: &impl Store,
@@ -663,7 +663,7 @@ pub async fn publish(
     let mut snap = snapshot(conn, "", owner_name, folder_uid, fields, marketplace, at)?;
 
     // **Below the read and above the token, and both halves of that placement are decisions.**
-    // Below, because a refusal about *this folder* — locked, missing, not the reader's — is
+    // Below, because a refusal about *this folder* — locked or missing — is
     // the
     // more actionable of the two, and the read that produces it is local and free. Above,
     // because

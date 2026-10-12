@@ -422,6 +422,18 @@ export interface WishlistFolder {
    * by name leaves these out.
    */
   managedTokens: boolean;
+  /**
+   * `wishlist_folders.sync_uid` — the folder's cross-device name, or `null` where none was minted
+   * (a managed folder, derived per device and never synced). On the wire for the share key
+   * ([issue #941](https://github.com/Msgaihede/mtg-grimoire/issues/941)): a share names what it
+   * publishes by a uid and never by a row id. See `features/wishlist/wishlistShare.ts`.
+   */
+  syncUid: string | null;
+  /**
+   * The managed deck's `decks.sync_uid`, or `null` for a folder the reader made. A managed
+   * folder's share is named by its deck, which syncs, rather than by its own per-device uid.
+   */
+  managedDeckUid: string | null;
 }
 
 /**

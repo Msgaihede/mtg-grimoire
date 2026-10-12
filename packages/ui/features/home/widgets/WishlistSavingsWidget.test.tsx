@@ -124,7 +124,15 @@ function widget(config: unknown = null): HomeWidget {
 }
 
 function folder(over: Partial<WishlistFolder> & { id: number; name: string }): WishlistFolder {
-  return { parentId: null, sortOrder: over.id, managedDeckId: null, managedTokens: false, ...over };
+  return {
+    parentId: null,
+    sortOrder: over.id,
+    managedDeckId: null,
+    managedTokens: false,
+    syncUid: null,
+    managedDeckUid: null,
+    ...over,
+  };
 }
 
 /** A reader's own drawer with one inside it, and a deck's managed wishlist with its Tokens child. */
@@ -132,7 +140,15 @@ const FOLDERS: WishlistFolder[] = [
   folder({ id: 1, name: "Commander" }),
   folder({ id: 2, name: "Upgrades", parentId: 1 }),
   folder({ id: 5, name: "Burn", managedDeckId: 9 }),
-  folder({ id: 6, name: "Tokens", parentId: 5, managedDeckId: 9, managedTokens: true }),
+  folder({
+    id: 6,
+    name: "Tokens",
+    parentId: 5,
+    managedDeckId: 9,
+    managedTokens: true,
+    syncUid: null,
+    managedDeckUid: null,
+  }),
 ];
 
 function fitFor(w: number, h: number, cell = 104, density: Density = "comfortable"): WidgetFit {
