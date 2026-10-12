@@ -70,6 +70,7 @@ const BOLT: CardSummary = {
   priceLow: 400.5,
   priceHigh: 400.5,
   gameChanger: false,
+  releasedAt: null,
 };
 
 const ORDERED: WishlistFolder = { id: 1, parentId: null, name: "Ordered", sortOrder: 0, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };

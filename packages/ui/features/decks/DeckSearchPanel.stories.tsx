@@ -88,7 +88,7 @@ function Panel({
  *
  * **Every play that wants a wall of printings presses this first, and none of them used to**
  * (2026-08-23): this column offers two searches now and opens on the reader's own collection, so
- * a play reaching straight for `37 cards` would be asking about a body that is not mounted.
+ * a play reaching straight for `38 cards` would be asking about a body that is not mounted.
  *
  * A named helper rather than the press inlined thirty times, for `openPanel`'s reason in
  * `DeckSearchPanel.test.tsx`: "this story needs the wall" is what these call sites mean, and the
@@ -143,7 +143,7 @@ const meta = {
           "column beside the deck, with the wall's two slots pointed at this job: the badge " +
           "keeps telling the collection story, and the action becomes **Add to deck**.\n\n" +
           "Driven end to end by `packages/fake/`: the wall is `search_cards` over the seeded " +
-          "corpus (**37 cards** on the `starter` seed's default browse, measured 2026-08-22 — " +
+          "corpus (**38 cards** on the `starter` seed's default browse, measured 2026-08-22 — " +
           "52 printings less the two the fake's `paperOnly` default excludes and the four its " +
           "`playableOnly` default does, collapsed to one row per card), and the Add " +
           "button writes through `deck_add_card`.\n\n" +
@@ -227,7 +227,7 @@ export const Docked: Story = {
     // panel opens on is the subject rather than a press to get past.
     await expect(toggle).toHaveAttribute("aria-expanded", "true");
     await showAllCards(panel);
-    await expect(await within(panel).findByText("37 cards")).toBeInTheDocument();
+    await expect(await within(panel).findByText("38 cards")).toBeInTheDocument();
 
     // The pile is in every Add button's name, and it is the only part of the press a
     // screenshot cannot show: two tiles' buttons both called "Add" are two controls a screen
@@ -292,7 +292,7 @@ export const Tabs: Story = {
 
     await expect(cards).toHaveAttribute("aria-pressed", "true");
     await expect(collection).toHaveAttribute("aria-pressed", "false");
-    await expect(await within(panel).findByText("37 cards")).toBeInTheDocument();
+    await expect(await within(panel).findByText("38 cards")).toBeInTheDocument();
     // And the collection body went with the press, rather than being hidden under the wall.
     await expect(
       within(panel).queryByRole("searchbox", { name: "Search your collection" }),
@@ -300,7 +300,7 @@ export const Tabs: Story = {
 
     // And back, which is what says the strip switches a body rather than only marking itself.
     await userEvent.click(collection);
-    await expect(within(panel).queryByText("37 cards")).toBeNull();
+    await expect(within(panel).queryByText("38 cards")).toBeNull();
     await expect(within(panel).queryByRole("searchbox", { name: "Search cards" })).toBeNull();
   },
 };
@@ -344,7 +344,7 @@ export const Virtual: Story = {
     await expect(
       within(panel).queryByRole("searchbox", { name: "Search your collection" }),
     ).toBeNull();
-    await expect(await within(panel).findByText("37 cards")).toBeInTheDocument();
+    await expect(await within(panel).findByText("38 cards")).toBeInTheDocument();
   },
 };
 
@@ -455,7 +455,7 @@ export const DeckFormat: Story = {
     // which is what makes the deck's format a starting point rather than a pen.
     await userEvent.click(format);
     await userEvent.click(await within(panel).findByRole("option", { name: "Any format" }));
-    await expect(await within(panel).findByText("37 cards")).toBeInTheDocument();
+    await expect(await within(panel).findByText("38 cards")).toBeInTheDocument();
   },
 };
 
@@ -487,7 +487,7 @@ export const Collapsed: Story = {
     // At rest, before anything is pressed — open, and one tab press from the wall.
     await expect(toggle).toHaveAttribute("aria-expanded", "true");
     await showAllCards(panel);
-    await expect(await within(panel).findByText("37 cards")).toBeInTheDocument();
+    await expect(await within(panel).findByText("38 cards")).toBeInTheDocument();
 
     // Shut, which is what this story is named for, and then open again: the round trip out and
     // back is what asks the identity question below.
@@ -496,7 +496,7 @@ export const Collapsed: Story = {
     await userEvent.click(toggle);
     // Straight back to the wall with no second tab press: the tab is the app's answer rather than
     // this panel's, so a collapse cannot take it away.
-    await expect(await within(panel).findByText("37 cards")).toBeInTheDocument();
+    await expect(await within(panel).findByText("38 cards")).toBeInTheDocument();
     await userEvent.click(toggle);
 
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
@@ -505,7 +505,7 @@ export const Collapsed: Story = {
     // Everything below the rail is gone with it: the tab strip, the filters, the count and the
     // wall.
     await expect(within(panel).queryByRole("group", { name: "Search in" })).toBeNull();
-    await expect(within(panel).queryByText("37 cards")).toBeNull();
+    await expect(within(panel).queryByText("38 cards")).toBeNull();
     await expect(within(panel).queryByRole("searchbox")).toBeNull();
     await expect(within(panel).queryByLabelText("Add to")).toBeNull();
   },
@@ -608,7 +608,7 @@ export const NoMatch: Story = {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards" });
     await showAllCards(panel);
-    await expect(await within(panel).findByText("37 cards")).toBeInTheDocument();
+    await expect(await within(panel).findByText("38 cards")).toBeInTheDocument();
 
     // Addressed by role: the panel's disclosure carries the same name as this field's `sr-only`
     // label, "Search cards".
@@ -661,7 +661,7 @@ export const Busy: Story = {
       "Couldn't add that card — The card database is busy finishing a sync. " +
         "Try that again in a moment.",
     );
-    await expect(within(panel).getByText("37 cards")).toBeInTheDocument();
+    await expect(within(panel).getByText("38 cards")).toBeInTheDocument();
   },
 };
 

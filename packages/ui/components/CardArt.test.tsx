@@ -7,6 +7,29 @@ const mount = (ui: React.ReactNode) => render(<TooltipProvider>{ui}</TooltipProv
 const advance = (ms: number) => act(() => void vi.advanceTimersByTime(ms));
 
 describe("CardArt", () => {
+  /**
+   * Issue #940: a spoiler's art is the real card's, so the wall stamps it with its set and date.
+   * Hidden from the accessible name — the tile's button must still be called by the card.
+   */
+  it("stamps an unreleased printing with its set and date, out of the accessible name", () => {
+    const { container } = render(
+      <CardArt
+        cardId="dragon"
+        name="Spoiled Dragon"
+        watermark={{ set: "TLA", date: "2026-11-14" }}
+      />,
+    );
+    const stamp = container.querySelector("[data-unreleased-watermark]");
+    expect(stamp).not.toBeNull();
+    expect(stamp?.getAttribute("aria-hidden")).toBe("true");
+    expect(stamp?.textContent).toBe("TLA2026-11-14");
+  });
+
+  it("draws no stamp without one", () => {
+    const { container } = render(<CardArt cardId="bolt" name="Lightning Bolt" />);
+    expect(container.querySelector("[data-unreleased-watermark]")).toBeNull();
+  });
+
   it("draws the card's art, named by the card", () => {
     render(<CardArt cardId="bolt" name="Lightning Bolt" />);
     expect(screen.getByRole("img", { name: "Lightning Bolt" })).toBeInTheDocument();

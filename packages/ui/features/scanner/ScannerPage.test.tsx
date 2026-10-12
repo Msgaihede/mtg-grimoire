@@ -1143,6 +1143,7 @@ describe("ScannerPage sending a scan", () => {
     finishes: '["nonfoil","foil"]',
     promoTypes: null,
     gameChanger: false,
+    releasedAt: null,
     ownedQuantity: 0,
     wishlisted: false,
     printings: 1,

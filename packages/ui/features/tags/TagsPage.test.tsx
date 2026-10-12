@@ -178,6 +178,7 @@ const BOLT: CardSummary = {
   oracleId: "o-bolt",
   finishes: `["nonfoil","foil"]`,
   gameChanger: false,
+  releasedAt: null,
   ownedQuantity: 0,
   wishlisted: false,
   printings: 1,

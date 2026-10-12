@@ -8,7 +8,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { rowHasBackFace } from "@/features/card/printings";
 import { CardGrid } from "@/features/search/CardGrid";
 import { FilterBar, type FilterLabels } from "@/features/search/FilterBar";
-import { summaryOf } from "@/features/search/SearchPage";
+import { summaryOf, tileUnreleased } from "@/features/search/SearchPage";
 import type { CardSearch } from "@/features/search/useCardSearch";
 import type { ZoomSection } from "@/lib/cardZoom";
 import type { Finish } from "@/lib/finish";
@@ -294,6 +294,9 @@ export function CardSearchBody({
           // The crown in a tile's top-right chip: the same fact the search view's wall marks,
           // marked the same way here — see `tileGameChanger`.
           gameChanger={tileGameChanger}
+          // The search page's stamp across a printing not out yet — the same fact, marked the
+          // same way, for `tileGameChanger`'s reason.
+          watermark={tileUnreleased}
           finish={finish}
           // What the chin says one copy costs — the **spread**, through `priceRange`, which is
           // the search page's own helper over the same rows. This *is* the card search in a

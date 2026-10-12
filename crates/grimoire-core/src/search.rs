@@ -103,7 +103,9 @@ pub struct SearchRequest {
     /// Defaults to true: digital-only printings are hidden unless asked for.
     pub paper_only: Option<bool>,
     /// Narrow to printings that are legal or restricted in **at least one** format —
-    /// `legal_mask != 0`, which is what hides art series, tokens, emblems and memorabilia.
+    /// `legal_mask != 0`, which is what hides art series, tokens, emblems and memorabilia —
+    /// or that are **not released yet**, which Scryfall marks legal nowhere until the day
+    /// (issue #940; [`crate::filters::unreleased_sql`]).
     ///
     /// **Defaults to false**, unlike [`Self::paper_only`]: absent is what this command has
     /// always answered, so no existing caller changes. The search view sends `true` unless
@@ -314,6 +316,16 @@ pub struct CardSummary {
     /// third state every crown would have to fence. Same reading, and the same flattening, as
     /// [`crate::import::ImportMatch::game_changer`].
     pub game_changer: bool,
+    /// The printing's release date, `YYYY-MM-DD` as Scryfall writes it, or `None` where the
+    /// corpus has none.
+    ///
+    /// Here so a result row can be marked **unreleased** (issue #940) — the wall stamps a
+    /// previewed card with its set and this date. The fact travels; whether it is in the future
+    /// is the page's conclusion, drawn against the reader's own today. Collapsed, it is the
+    /// representative's own date, which is the printing whose art the tile shows: a card
+    /// reprinted in a set not out yet is represented by that reprint ([`collapse_rep`] takes
+    /// the latest release), and the stamp is then true of the picture it is drawn on.
+    pub released_at: Option<String>,
     /// Copies the collection holds of **this printing**, across every finish and
     /// condition. `0` rather than `Option`: "you own none of these" is a fact, not an
     /// absence, and a badge that has to distinguish `null` from `0` is a badge with a bug
@@ -1091,7 +1103,7 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
                     -- **both** branches — the two share one row mapping, so every column
                     -- either branch adds goes in both, at the same index, and the three
                     -- collapse-only aggregates stay last of all.
-                    c.game_changer,
+                    c.game_changer, c.released_at,
                     {marks},
                     g.printings, g.lo, g.hi
              FROM g JOIN cards c ON c.id = g.rep
@@ -1104,7 +1116,7 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
         format!(
             "SELECT c.id, c.name, c.set_code, c.set_name, c.collector_number, c.rarity,
                     c.type_line, c.mana_cost, {price} AS price, c.layout,
-                    c.oracle_id, c.finishes, c.promo_types, c.game_changer,
+                    c.oracle_id, c.finishes, c.promo_types, c.game_changer, c.released_at,
                     {marks}
              FROM {from_sql} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?"
         )
@@ -1125,7 +1137,7 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
     // added to both ahead of the aggregates moves this, and a number left behind reads the
     // wrong column as a price, which is an `InvalidColumnType` at best and a wrong number at
     // worst.
-    const COLLAPSE_COL: usize = 16;
+    const COLLAPSE_COL: usize = 17;
 
     let mut items = Vec::new();
     while let Some(row) = rows.next().map_err(|e| e.to_string())? {
@@ -1150,8 +1162,9 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
                 .get::<_, Option<bool>>(13)
                 .map_err(|e| e.to_string())?
                 .unwrap_or(false),
-            owned_quantity: row.get(14).map_err(|e| e.to_string())?,
-            wishlisted: row.get(15).map_err(|e| e.to_string())?,
+            released_at: row.get(14).map_err(|e| e.to_string())?,
+            owned_quantity: row.get(15).map_err(|e| e.to_string())?,
+            wishlisted: row.get(16).map_err(|e| e.to_string())?,
             // Uncollapsed, a row is a printing: it stands for one, and the "range" is its own
             // price. Collapsed, the three ride on the group step's aggregates.
             printings: if collapse {
@@ -1789,6 +1802,54 @@ mod tests {
         );
     }
 
+    /// A previewed card is legal nowhere until its set comes out, and the search view's
+    /// default row must still show it (issue #940). The row carries its date, so the page can
+    /// stamp it; a card released yesterday that is still legal nowhere stays hidden.
+    #[test]
+    fn playable_only_keeps_unreleased_printings_and_hands_over_their_date() {
+        let conn = seeded();
+        conn.execute(
+            "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,type_line,
+                is_paper,legalities,search_text,raw,released_at)
+             VALUES ('40','Spoiled Dragon','new','1','en','normal','Creature — Dragon',
+                     1,'{\"modern\":\"not_legal\"}','Spoiled Dragon','{}',
+                     date('now','+30 days')),
+                    ('41','Forgotten Acorn','unk','1','en','normal','Instant',
+                     1,'{\"modern\":\"not_legal\"}','Forgotten Acorn','{}',
+                     date('now','-1 day'))",
+            [],
+        )
+        .unwrap();
+        fill_legal_mask(&conn);
+
+        for collapse in [false, true] {
+            let r = run_search(
+                &conn,
+                &SearchRequest {
+                    playable_only: Some(true),
+                    collapse: Some(collapse),
+                    limit: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let names: Vec<&str> = r.items.iter().map(|c| c.name.as_str()).collect();
+            assert!(
+                names.contains(&"Spoiled Dragon"),
+                "collapse={collapse}: {names:?}"
+            );
+            assert!(
+                !names.contains(&"Forgotten Acorn"),
+                "collapse={collapse}: {names:?}"
+            );
+            let dragon = r.items.iter().find(|c| c.name == "Spoiled Dragon").unwrap();
+            let expected: String = conn
+                .query_row("SELECT date('now','+30 days')", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(dragon.released_at.as_deref(), Some(expected.as_str()));
+        }
+    }
+
     #[test]
     fn paper_only_default_excludes_digital() {
         let conn = seeded();
@@ -2032,6 +2093,7 @@ mod tests {
                 // letter apart on the wire and only one of them is on this DTO.
                 promo_types: Some(r#"["surgefoil"]"#.into()),
                 game_changer: true,
+                released_at: Some("1993-08-05".into()),
                 owned_quantity: 0,
                 wishlisted: false,
                 printings: 1,
@@ -2054,6 +2116,7 @@ mod tests {
                     "oracleId": "o-bolt", "finishes": "[\"nonfoil\",\"foil\"]",
                     "promoTypes": "[\"surgefoil\"]",
                     "gameChanger": true,
+                    "releasedAt": "1993-08-05",
                     "ownedQuantity": 0, "wishlisted": false,
                     "printings": 1,
                     "priceLow": 400.5, "priceHigh": 400.5

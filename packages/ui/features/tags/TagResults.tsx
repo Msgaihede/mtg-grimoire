@@ -19,6 +19,7 @@ import {
   tileFinish,
   tileTreatment,
   tileGameChanger,
+  tileUnreleased,
 } from "@/features/search/SearchPage";
 import type { CardSearch } from "@/features/search/useCardSearch";
 import { parseFinishes } from "@/lib/finish";
@@ -303,6 +304,7 @@ export function TagResults({ search }: { search: CardSearch }) {
             treatment={tileTreatment}
             // The crown, in the same chip as that mark.
             gameChanger={tileGameChanger}
+            watermark={tileUnreleased}
             // What the chin says one copy costs — the **spread**, through the same `priceRange`
             // the table beside it uses, so a wall and its table cannot quote different money
             // about one search.
