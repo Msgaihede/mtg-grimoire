@@ -30,6 +30,22 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.48.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.47.0...v0.48.0) (2026-10-12)
+
+
+### Features
+
+* **playtesting:** goldfish a deck on phase.rs's rules engine ([53e78c9](https://github.com/Msgaihede/mtg-grimoire/commit/53e78c9da2585a47c1c81e73d6522631deff9595))
+* **playtesting:** goldfish a deck on phase.rs's rules engine ([16d8df2](https://github.com/Msgaihede/mtg-grimoire/commit/16d8df250a5086dcef2688e923b47c6e50fb6ecb))
+
+
+### Bug Fixes
+
+* card menu writes act on the whole picked set ([#954](https://github.com/Msgaihede/mtg-grimoire/issues/954)) ([a4ec636](https://github.com/Msgaihede/mtg-grimoire/commit/a4ec636b82a08852c914e1038330665ce8150959))
+* card menu writes act on the whole picked set ([#954](https://github.com/Msgaihede/mtg-grimoire/issues/954)) ([8a2ab0c](https://github.com/Msgaihede/mtg-grimoire/commit/8a2ab0c384b4cb1fd13537fcccf938cb3d9094c4))
+* sort unpriced cards last and by name in collection and wishlist price sorts ([f14bf9e](https://github.com/Msgaihede/mtg-grimoire/commit/f14bf9e9856429cc32a0d99c7acaa77002b39b51))
+* sort unpriced cards last and by name in collection and wishlist price sorts ([5361fc1](https://github.com/Msgaihede/mtg-grimoire/commit/5361fc19b76c435023e3c351a6dfebda9dfdaf77)), closes [#939](https://github.com/Msgaihede/mtg-grimoire/issues/939)
+
 ## [0.47.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.46.0...v0.47.0) (2026-10-12)
 
 
