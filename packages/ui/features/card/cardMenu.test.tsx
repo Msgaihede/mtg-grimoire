@@ -6,6 +6,7 @@ import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import type { MenuAction, MenuItem, MenuSubmenu } from "@/components/menu/types";
 import { copyText } from "@/lib/clipboard";
+import { useNotifications } from "@/lib/notifications";
 import { resetShownFaces, showsBack } from "./shownFace";
 import { openExternal } from "@/lib/externalLinks";
 import {
@@ -22,6 +23,7 @@ import {
   buildDeckTargetItems,
   buildWishlistTargetItems,
   CardToDeckProvider,
+  deckAddReceipt,
   DeckTargetSubmenu,
   useCardToDeck,
   useCardToDeckRefusal,
@@ -321,6 +323,26 @@ describe("buildCardMenu", () => {
     const items = buildCardMenu(BOLT, deps());
     (find(items, "Copy card name") as MenuAction).onSelect();
     await waitFor(() => expect(vi.mocked(copyText)).toHaveBeenCalledWith("Lightning Bolt"));
+    // The menu has closed by the time the clipboard answers, so the receipt is a toast.
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Copied “Lightning Bolt”",
+        tone: "success",
+      }),
+    );
+  });
+
+  it("says so when a copy is refused, rather than swallowing it", async () => {
+    vi.mocked(copyText).mockRejectedValueOnce("clipboard unavailable");
+    const items = buildCardMenu(BOLT, deps());
+    (find(items, "Copy card name") as MenuAction).onSelect();
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Couldn't copy the card name",
+        body: "clipboard unavailable",
+        tone: "error",
+      }),
+    );
   });
 
   it("asks for the display variant's URL only when the item is pressed", async () => {
@@ -347,6 +369,7 @@ describe("buildCardMenu", () => {
     (find(items, "Copy card image") as MenuAction).onSelect();
     await waitFor(() => expect(vi.mocked(ipc.cardImageUri)).toHaveBeenCalled());
     expect(vi.mocked(copyText)).not.toHaveBeenCalled();
+    await waitFor(() => expect(useNotifications.getState().notices[0]?.tone).toBe("warning"));
   });
 
   it("offers Scryfall, EDHREC and exactly one marketplace, named for the setting", () => {
@@ -1137,6 +1160,14 @@ const folder = (
   parentId: number | null = null,
   sortOrder = 0,
 ): DeckFolder => ({ id, parentId, name, sortOrder });
+
+describe("deckAddReceipt", () => {
+  it("names one card, counts a set, and names the deck when it is known", () => {
+    expect(deckAddReceipt(1, [BOLT], "Burn")).toBe("Added “Lightning Bolt” to “Burn”");
+    expect(deckAddReceipt(2, [BOLT, BOLT, BOLT], undefined)).toBe("Added 2 cards to the deck");
+    expect(deckAddReceipt(1, [BOLT, BOLT], "Burn")).toBe("Added 1 card to “Burn”");
+  });
+});
 
 describe("buildDeckTargetItems", () => {
   it("keeps the reader's own folder order and sorts only the decks", () => {
