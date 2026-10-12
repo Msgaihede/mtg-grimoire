@@ -37,7 +37,7 @@
     "web:deploy-guard": "node scripts/web-deploy-guard.ts",
     "lint:claude": "node scripts/check-claude-md.ts",
     "lint": "eslint . --max-warnings 0 && pnpm lint:claude",
-    "lint:rust": "cargo fmt -p mtg-grimoire -p grimoire-core -p grimoire-light -p grimoire-web -p grimoire-scan --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo check -p mtg-grimoire -p grimoire-light --locked",
+    "lint:rust": "cargo fmt -p mtg-grimoire -p grimoire-core -p grimoire-light -p grimoire-web -p grimoire-scan -p grimoire-play --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo check -p mtg-grimoire -p grimoire-light --locked",
     "test": "vitest",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage --testTimeout=30000",

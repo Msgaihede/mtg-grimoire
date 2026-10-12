@@ -142,6 +142,7 @@ pub mod nav;
 pub mod new_printings;
 /// **The one place this crate knows which machine it is on.**
 pub mod platform;
+pub mod play;
 pub mod price_history;
 pub mod recent_cards;
 /// **Scryfall's id-migration log applied to the reader's rows, and the orphan sweep** — both

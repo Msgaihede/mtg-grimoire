@@ -1,5 +1,5 @@
 // The toolchain pins, held to the workflows that must read them. A pin nobody reads is a comment:
-// `rust-toolchain.toml` says 1.98.1 and a workflow that still installs `dtolnay/rust-toolchain@stable`
+// `rust-toolchain.toml` names one compiler and a workflow that still installs `dtolnay/rust-toolchain@stable`
 // builds with whatever stable is current — which is the drift the pin exists to stop, and the one
 // place it would go unnoticed is `release.yml`, whose binaries nobody lints.
 import { describe, expect, it } from "vitest";
@@ -7,6 +7,7 @@ import toolchainToml from "../rust-toolchain.toml?raw";
 import rustAction from "../.github/actions/rust-toolchain/action.yml?raw";
 import nvmrc from "../.nvmrc?raw";
 import packageJson from "../package.json?raw";
+import { NIGHTLY } from "./rust-fast.ts";
 import workspaceYaml from "../pnpm-workspace.yaml?raw";
 
 // Every workflow, so a new one is held to the same rules the day it lands.
@@ -17,9 +18,17 @@ const WORKFLOWS = import.meta.glob<string>("/.github/workflows/*.yml", {
 });
 
 describe("rust-toolchain.toml", () => {
-  it("pins an exact release, never a channel name", () => {
+  // An exact release, or a nightly with its date (since 2026-10-12, for the rules engine's git
+  // dependency — the file has why). Never `stable`, `beta` or a bare `nightly`.
+  it("pins an exact release or a dated nightly, never a channel name", () => {
     const channel = /^channel = "([^"]+)"$/m.exec(toolchainToml)?.[1];
-    expect(channel).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(channel).toMatch(/^(\d+\.\d+\.\d+|nightly-\d{4}-\d{2}-\d{2})$/);
+  });
+
+  // The fast dev build names the same nightly, so a checkout installs one compiler, not two.
+  it("is the fast build's nightly", () => {
+    const channel = /^channel = "([^"]+)"$/m.exec(toolchainToml)?.[1];
+    expect(channel).toBe(NIGHTLY);
   });
 
   // The composite action parses the file with `sed`; this is the shape that `sed` expects.

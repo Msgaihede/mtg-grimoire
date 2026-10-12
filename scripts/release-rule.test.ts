@@ -26,6 +26,7 @@ import coreToml from "../crates/grimoire-core/Cargo.toml?raw";
 import lightToml from "../apps/light/src-tauri/Cargo.toml?raw";
 import webToml from "../crates/grimoire-web/Cargo.toml?raw";
 import scanToml from "../crates/grimoire-scan/Cargo.toml?raw";
+import playToml from "../crates/grimoire-play/Cargo.toml?raw";
 import desktopConf from "../apps/desktop/src-tauri/tauri.conf.json?raw";
 import lightConf from "../apps/light/src-tauri/tauri.conf.json?raw";
 import appGradle from "../apps/light/src-tauri/gen/android/app/build.gradle.kts?raw";
@@ -64,6 +65,8 @@ const CRATES = [
   { name: "grimoire-web", dir: "crates/grimoire-web", toml: webToml, conf: null },
   // The browser's scanner: a module of its own, shipped beside the web host's from the same tag.
   { name: "grimoire-scan", dir: "crates/grimoire-scan", toml: scanToml, conf: null },
+  // The goldfish board's rules engine, linked by the desktop alone.
+  { name: "grimoire-play", dir: "crates/grimoire-play", toml: playToml, conf: null },
 ];
 
 /** A file with its `#` comment lines removed — these files explain themselves in prose. */

@@ -424,6 +424,14 @@ export const ARMS = [
     jobs: ["frontend", "rust", "web"],
   },
 
+  // **The rules engine's crate** (2026-10-12): `grimoire-play`, phase.rs's engine behind the
+  // goldfish board. A workspace member **only the desktop links**, so `rust` formats, lints and
+  // tests it and builds it into the app, and `frontend` because `ipc.test.ts` reads its `view.rs`
+  // as text (the wire mirror). **Not `core` and not `web`**: neither the engine nor a light host
+  // depends on it — the crate's manifest says why it must stay that way. Above `crates/*`, which
+  // would send it to both.
+  { match: ["crates/grimoire-play/*"], jobs: RUST_SIDE },
+
   // The engine: `grimoire-core`, a workspace member three hosts link. `rust` compiles it for
   // the desktop and runs its tests, `core` compiles it for the two targets `rust` never builds,
   // and `frontend` because a module that moves here takes its `?raw` readers with it —

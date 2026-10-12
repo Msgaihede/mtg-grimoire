@@ -26,7 +26,7 @@ Also supports a light app (Android via Tauri, distributed through Google Play, a
 
 ### Reference Docs
 
-- [`docs/reference/README.md`](docs/reference/README.md) — Index of all 36 reference deep-dives, live measurements, and design rationale documents.
+- [`docs/reference/README.md`](docs/reference/README.md) — Index of every reference deep-dive, live measurement, and design rationale document.
 - [`docs/reference/repository-layout.md`](docs/reference/repository-layout.md) — The four code folders (`apps/`, `packages/`, `crates/`, `infrastructure/`), build outputs, and where every path was before 2026-10-08.
 
 ---
@@ -37,7 +37,7 @@ Also supports a light app (Android via Tauri, distributed through Google Play, a
 - `pnpm tauri dev` — Run the desktop app (Vite HMR + Rust rebuild). Takes the `app` lock (see `running-the-app` skill).
 - `pnpm tauri:fast dev` / `pnpm cargo:fast <command>` — The same dev build on a dated nightly (parallel front end + `rust-lld`). Opt-in and never the gate: `pnpm verify` and CI stay on the pinned toolchain.
 - `pnpm test` / `test:run` — Run frontend tests via Vitest.
-- `cargo test --workspace` — Run Rust tests across all crates (`apps/desktop/src-tauri`, `crates/grimoire-core`, `apps/light/src-tauri`, `crates/grimoire-web`, `crates/grimoire-scan`).
+- `cargo test --workspace` — Run Rust tests across all crates (`apps/desktop/src-tauri`, `crates/grimoire-core`, `apps/light/src-tauri`, `crates/grimoire-web`, `crates/grimoire-scan`, `crates/grimoire-play`).
 - `pnpm storybook` / `build-storybook` — Component development workbench (`.storybook/`).
 - `pnpm mobile:dev` / `mobile:tauri` — Run the light app in a browser fake or in a phone-sized Tauri window.
 - `pnpm web:wasm` / `web:build` / `web:preview` — Build and preview the WASM web target.
@@ -52,6 +52,7 @@ _For complete command options, coverage caveats, and environment flags, see [`do
   - Rust owns data plumbing (SQLite/FTS5, Scryfall bulk ingestion, image caching).
   - TypeScript owns domain logic (deck validation, import/export parsing).
   - Keep this boundary clean: do not leak UI assumptions into Rust or storage plumbing into TypeScript.
+- **The rules engine is phase.rs's** (`phase-engine`, from git), wrapped by `crates/grimoire-play` and linked by the desktop alone. It is why `rust-toolchain.toml` pins a dated nightly — see [`docs/reference/goldfish.md`](docs/reference/goldfish.md).
 - **Crate Boundary (window awareness)**:
   - `crates/grimoire-core` is the engine with no window dependency. It contains schemas, database migrations, decks, collection, wishlist, search, and Scryfall clients. Compiles to native and WASM.
   - `apps/desktop/src-tauri` is the desktop application: windows, menus, native updater, IPC commands (`#[tauri::command]`), and filesystem mirror.
@@ -73,6 +74,7 @@ This file contains only global instructions. **The binding rules for any specifi
 | [`crates/grimoire-core/CLAUDE.md`](crates/grimoire-core/CLAUDE.md)                   | Shared headless engine (schema, decks, collection, wishlist, search, Scryfall client, platform abstraction) |
 | [`crates/grimoire-web/CLAUDE.md`](crates/grimoire-web/CLAUDE.md)                     | Web host — engine compiled to WASM module for browser execution                                             |
 | [`crates/grimoire-scan/CLAUDE.md`](crates/grimoire-scan/CLAUDE.md)                   | Web host's scanner — `card-scanner` as a WASM module of its own, for a Worker of its own                    |
+| [`crates/grimoire-play/CLAUDE.md`](crates/grimoire-play/CLAUDE.md)                   | Games on a deck over phase.rs's rules engine — the goldfish board's engine half, desktop-only, nightly pin  |
 | [`apps/light/CLAUDE.md`](apps/light/CLAUDE.md)                                       | Light app — Android and web UI faces and responsive boundary                                                |
 | [`packages/ui/CLAUDE.md`](packages/ui/CLAUDE.md)                                     | React frontend, design tokens, `CardImage` rules, Storybook MCP usage                                       |
 | [`packages/ui/features/decks/CLAUDE.md`](packages/ui/features/decks/CLAUDE.md)       | Deck validation, categories, deck editor views, and drag-and-drop interactions                              |

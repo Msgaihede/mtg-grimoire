@@ -271,8 +271,9 @@ jobs:
       #
       # **All three run from the repository root, over every workspace member** (2026-10-02):
       # the app in `apps/desktop/src-tauri`, the engine in `crates/grimoire-core`, the light app's Android
-      # host in `apps/light/src-tauri`, its web host in `crates/grimoire-web` and the browser's
-      # scanner in `crates/grimoire-scan`. This is the only job that runs the core's tests, and
+      # host in `apps/light/src-tauri`, its web host in `crates/grimoire-web`, the browser's
+      # scanner in `crates/grimoire-scan` and the goldfish board's rules engine in
+      # `crates/grimoire-play`. This is the only job that runs the core's tests, and
       # the only one that compiles it for Windows — `core` below builds it for the other two
       # targets and runs nothing.
       #
@@ -282,7 +283,7 @@ jobs:
       # **So a new member is a new `-p` here**, and in `pnpm lint:rust`, or nothing formats it.
       - name: cargo fmt
         if: matrix.os == 'ubuntu-22.04'
-        run: cargo fmt -p mtg-grimoire -p grimoire-core -p grimoire-light -p grimoire-web -p grimoire-scan --check
+        run: cargo fmt -p mtg-grimoire -p grimoire-core -p grimoire-light -p grimoire-web -p grimoire-scan -p grimoire-play --check
 
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings

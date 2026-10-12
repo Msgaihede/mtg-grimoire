@@ -24,6 +24,7 @@ import {
 import { statusLine } from "@/lib/motion";
 import { PLAIN_PRESS } from "./headerControls";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
+import { editionHas, useEdition } from "@/lib/edition";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
 import { nearestScroller, useDockHeight } from "@/lib/useDockHeight";
 import { useMarketplace } from "@/lib/useMarketplace";
@@ -363,6 +364,17 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * paths get it.
    */
   const closeDeck = useCallback(() => setOpenDeckId(null), [setOpenDeckId]);
+  /**
+   * **To the goldfish board**, dealt from the list on screen — the Decks view's third state
+   * (`store.ts`' `goldfish`), drawn by `App.tsx` in this editor's place until the reader comes
+   * back. Only where the edition has Playtesting: the light app's hosts have no rules engine.
+   */
+  const setGoldfish = useAppStore((s) => s.setGoldfish);
+  const playtests = editionHas(useEdition(), "playtesting");
+  const openGoldfish = useCallback(
+    () => setGoldfish({ deckId, variant }),
+    [setGoldfish, deckId, variant],
+  );
   /**
    * **Escape's floor on this screen: the deck closes.**
    *
@@ -3335,6 +3347,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         tightHeader={tightHeader}
         wideHeader={wideHeader}
         settingsIcon={settingsIcon}
+        openGoldfish={playtests ? openGoldfish : undefined}
       />
 
       {row && (

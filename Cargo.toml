@@ -58,7 +58,12 @@ resolver = "2"
 # `cargo build -p grimoire-scan` resolves the features of its own graph, while any build that
 # names the workspace unifies them with the engine's, which asks the scanner for `corpus` and
 # with it SQLite. `scripts/build-wasm.ts` builds it with `-p`, in a build tree of its own.
-members = ["apps/desktop/src-tauri", "crates/grimoire-core", "apps/light/src-tauri", "crates/grimoire-web", "crates/grimoire-scan"]
+#
+# **`crates/grimoire-play` is the goldfish board's rules engine** (2026-10-12): phase.rs's
+# `phase-engine`, from its git repository, behind a crate only the desktop links. That git
+# dependency is why `rust-toolchain.toml` is a dated nightly — its repository's root manifest has a
+# nightly-only `cargo-features` line — and `docs/reference/goldfish.md` has the rest.
+members = ["apps/desktop/src-tauri", "crates/grimoire-core", "apps/light/src-tauri", "crates/grimoire-web", "crates/grimoire-scan", "crates/grimoire-play"]
 exclude = ["crates/card-scanner"]
 
 # One version, edition and license for the five members, which inherit each with

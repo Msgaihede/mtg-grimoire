@@ -586,11 +586,13 @@ pub fn compute(ix: &CardIndex, req: &SearchRequest, narrow: Option<&BitSet>) -> 
     }
 
     let mana_base = base(Skip::Mana);
-    for bucket in 0..=usize::from(crate::filters::MANA_VALUE_OPEN_ENDED) {
-        out.mana_values.insert(
-            bucket.to_string(),
-            i64::from(mana_base.and_count(&ix.mana[bucket])),
-        );
+    // Buckets 0 to `MANA_VALUE_OPEN_ENDED`, the nine chips; the bucket after them is the one for
+    // a printing with no `cmc` (`MANA_UNKNOWN`), which no chip asks for. A `take` rather than an
+    // index loop for clippy (`needless_range_loop`, on the 2026-10-11 nightly).
+    let chips = usize::from(crate::filters::MANA_VALUE_OPEN_ENDED) + 1;
+    for (bucket, set) in ix.mana.iter().enumerate().take(chips) {
+        out.mana_values
+            .insert(bucket.to_string(), i64::from(mana_base.and_count(set)));
     }
     // The same base, so the X chip greys on the same rule as the nine beside it. It is *not*
     // a tenth entry in the map above: those partition the result set and this one overlaps

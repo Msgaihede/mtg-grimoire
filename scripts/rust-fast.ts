@@ -22,6 +22,12 @@
 // of dependencies in one build tree (3.4 GB for the desktop app, measured that day). And a
 // different compiler: a test that passes here has not passed the gate.
 //
+// **Since 2026-10-12 the pin is this same nightly** (`rust-toolchain.toml` has why: the rules
+// engine's git dependency), so what this script still adds is `.cargo/fast.toml` alone — the
+// linker and `-Zthreads` — and the paragraph above is about the pin it replaced, 1.98.1, which
+// refused `-Z` outright. The linker is still why the file is not `.cargo/config.toml`'s: it
+// would link the release too. `scripts/toolchain.test.ts` holds the two dates equal.
+//
 // The toolchain is installed on first use. The pure halves — the refusal and the two argument
 // lists — are what `rust-fast.test.ts` holds.
 import { spawn, spawnSync } from "node:child_process";
@@ -30,7 +36,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 /**
- * The nightly the fast build uses. **Dated, never `nightly`**, for `rust-toolchain.toml`'s
+ * The nightly the fast build uses, and since 2026-10-12 the pin's too. **Dated, never `nightly`**, for `rust-toolchain.toml`'s
  * reason: a floating channel is a different compiler after every `rustup update`, and a nightly
  * is allowed to break. Moving it is an edit here and one cold build.
  */

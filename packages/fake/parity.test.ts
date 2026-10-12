@@ -28,6 +28,12 @@ const ABSENT: Record<string, string> = {
   // Asked by `DesktopBoot` before `App` mounts. Storybook renders `App` and the boot screen
   // directly, so nothing in a story ever reaches this command.
   startup_status: "stories render past the desktop boot gate",
+  // The goldfish board's rules engine is phase.rs's, in Rust; the fake has no game to answer from.
+  // Its stories draw `GoldfishBoard` from a view and record what it asks (`goldfish/fixtures.ts`),
+  // and the page that calls these three is the one place a story does not reach.
+  goldfish_start: "the rules engine is Rust's; the board's stories feed it views directly",
+  goldfish_act: "the rules engine is Rust's; the board's stories feed it views directly",
+  goldfish_end: "the rules engine is Rust's; the board's stories feed it views directly",
 };
 
 /** Commands a plugin registers rather than `generate_handler!`; Tauri names them `plugin:…|…`. */
