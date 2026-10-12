@@ -13,7 +13,6 @@ describe("the navigation census", () => {
       // find. Its arrival is what renumbered every chord below it.
       "home",
       "search",
-      "tags",
       "decks",
       "collection",
       "wishlist",
@@ -62,21 +61,16 @@ describe("the navigation census", () => {
    * over a plain event and a runtime edge from it to a file of React components is the wrong
    * direction. A *test* importing both is the fence that costs nothing at runtime.
    *
-   * ⚠️ **Two destinations go without a chord and the reasons are different, which is why this is
-   * no longer a subtraction.** It used to read `NAV.length - 1` against a rail of ten, on the
-   * argument that a second exclusion should have to be *written* rather than arrive by
-   * arithmetic. It has been written: `shared` goes without because its row is **conditional**,
-   * and a digit bound to a row that appears and disappears would mean two things to two readers;
-   * `settings` goes without because the **run is nine long and the rail is eleven**, and Home
-   * belongs at the top in reading order. The first reason no amount of room would change; the
-   * second is arithmetic and would reverse the day a tenth digit existed.
+   * ⚠️ **One destination goes without a chord, and the run ends exactly at the rail's end.**
+   * `shared` goes without because its row is **conditional**, and a digit bound to a row that
+   * appears and disappears would mean two things to two readers. Settings was the second, pushed
+   * past `Ctrl+9` when Home arrived; the Tagger row leaving (issue #937, tag search is the search
+   * page's sidebar now) gave it back.
    *
-   * **The ninth entry is pinned by name, and that is the fence a renumbering needs.** A
-   * merge that quietly restored the old order would put Settings back on `Ctrl+9` with every
-   * count in this file still correct — a length can only say *how many* go without, never
-   * *which*, and it is the *which* that a reader has in their fingers.
+   * **The first and ninth entries are pinned by name**, because a length can only say *how many*
+   * are reached, never *which* — and it is the *which* a reader has in their fingers.
    */
-  it("puts nine destinations inside the run of digits, ending at Playtesting", () => {
+  it("puts nine destinations inside the run of digits, ending at Settings", () => {
     const chorded = NAV.filter((n) => n.id !== "shared");
     // The run itself: nine digits, `Ctrl+1` through `Ctrl+9`, as `shortcuts.test.ts` pins
     // literally. Read rather than restated, so the two files cannot disagree about the length.
@@ -85,18 +79,12 @@ describe("the navigation census", () => {
 
     // `Ctrl+1` is Home — the top of the column and the page the app opens on.
     expect(chorded[0].id).toBe("home");
-    // …and `Ctrl+9` is Playtesting, which is where the run stops. Written out as the word rather
-    // than as `chorded[digits - 1].id`, per the rule that an assertion must not read its own
-    // constant.
-    expect(chorded[8].id).toBe("playtesting");
+    // …and `Ctrl+9` is Settings, the last row. Written out as the word rather than as
+    // `chorded[digits - 1].id`, per the rule that an assertion must not read its own constant.
+    expect(chorded[8].id).toBe("settings");
+    expect(chorded).toHaveLength(digits);
 
-    // **Settings is past the end**, which is the half the two lines above cannot say: it is on
-    // the rail, it is not in the run, and `Ctrl+9` does not open it.
-    expect(chorded.slice(0, digits).map((n) => n.id)).not.toContain("settings");
-    expect(NAV.map((n) => n.id)).toContain("settings");
-
-    // And `shared` is left out of `CHORD_NAV` altogether — the other exclusion, for its own
-    // reason, and the one that is a filter rather than a run ending.
+    // And `shared` is left out of `CHORD_NAV` altogether, for its own reason.
     expect(NAV.map((n) => n.id)).toContain("shared");
     expect(chorded.map((n) => n.id)).not.toContain("shared");
     expect(chorded).toHaveLength(NAV.length - 1);

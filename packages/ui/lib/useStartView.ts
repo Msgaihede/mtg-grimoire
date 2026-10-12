@@ -43,7 +43,6 @@ export const DEFAULT_START_VIEW: StartView = "home";
 const VIEW_IDS: Record<StartView, true> = {
   home: true,
   search: true,
-  tags: true,
   collection: true,
   wishlist: true,
   decks: true,

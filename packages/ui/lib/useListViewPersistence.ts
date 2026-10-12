@@ -71,7 +71,6 @@ export function useListViewPersistence(): void {
       // is the one that caused the pulse rather than whatever a later press has since made true.
       const view = {
         search: state.searchView,
-        tags: state.tagsView,
         collection: state.collectionView,
         wishlist: state.wishlistView,
       }[section];

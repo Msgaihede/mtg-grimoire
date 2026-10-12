@@ -18,7 +18,7 @@ import {
  * a story of a control that does not work. `FilterChips.stories.tsx`' shape, for its reason: the
  * args *seed* this wrapper rather than driving it.
  *
- * **It deliberately does not apply the page's `settleFloor`.** `TagsPage` passes every write
+ * **It deliberately does not apply the page's `settleFloor`.** `useTagSelection` passes every write
  * through that guard, so the floor drops itself to `any` the moment the last art include leaves;
  * copying it here would make {@link FloorOnWithNothingToNarrow} unreachable, and that state is
  * exactly what `HIDE_BACKGROUND_LATENT` was written for. The page owns whether the state can
@@ -232,7 +232,7 @@ export const FloorOn: Story = {
  * art tag is picked”* while lit would be telling the reader their setting was off, so there is a
  * third sentence for exactly this state.
  *
- * **The page it ships inside never produces it** — `TagsPage`'s `settleFloor` drops the floor on
+ * **The page it ships inside never produces it** — `useTagSelection`'s `settleFloor` drops the floor on
  * every write that empties the art includes — and this wrapper leaves that guard out on purpose,
  * which is the only way to stand a story in the state.
  */

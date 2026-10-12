@@ -18,10 +18,11 @@ use crate::{
     deck, deck_audit, deck_completion, deck_meta, deck_missing, deck_notes, deck_pull, deck_query,
     deck_quick_add, deck_theory, deck_todos, deck_tokens, deck_undo, deckpane, decksort, errors,
     export, home, images, import, index, listview, markcolors, marketplace, marketplace_feed,
-    mirror, nav, new_printings, paths, price_history, recent_cards, reset, scanner, schema,
-    scryfall, search, searchopen, searchwidth, set_completion, share, shelffolds, stackhide,
-    startup, startview, sticky_notes, sync, sync_engine, sync_pair, tags, trade, upcoming_sets,
-    update, value_history, window, wishlist, wishlist_folders, wishlist_optimize, zoom,
+    mirror, nav, new_printings, panelwidth, paths, price_history, recent_cards, reset, scanner,
+    schema, scryfall, search, searchopen, searchwidth, set_completion, share, shelffolds,
+    stackhide, startup, startview, sticky_notes, sync, sync_engine, sync_pair, tags, trade,
+    upcoming_sets, update, value_history, window, wishlist, wishlist_folders, wishlist_optimize,
+    zoom,
 };
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -601,6 +602,9 @@ pub fn run() {
             listview::set_list_view,
             searchopen::search_open,
             searchopen::set_search_open,
+            // How wide each docked panel was dragged — `search_open`'s pair with a width.
+            panelwidth::panel_width,
+            panelwidth::set_panel_width,
             // Which shelves the reader folded — `search_open`'s pair, one level deeper.
             shelffolds::shelf_folds,
             shelffolds::set_shelf_folds,

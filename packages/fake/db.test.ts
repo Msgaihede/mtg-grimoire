@@ -16,6 +16,8 @@ import {
   COMBO_CARD_NAMES,
   ORACLE_TAGGED_NAMES,
   RELAY_BASE,
+  PANEL_WIDTH_MAX,
+  PANEL_WIDTH_MIN,
   SUPPORTING_SINCE,
   TOKEN_ORACLE,
   TOKEN_PRINTING,
@@ -12896,9 +12898,12 @@ describe("the busy fault", () => {
     // `readHandlers`. Read from `left` on this tree. Count again after a merge.
     // 140 → 141 on 2026-10-11 with `trade_swap_sides` (issue #936), a plain `sync::with_write`
     // that reaches `refuseIfBusy` first. Count again after a merge.
-    // 141 → 142 on 2026-10-12 with `deck_split_printing` (issue #934), the swap's plain
+    // 141 → 142 on 2026-10-12 with `set_panel_width` (issue #937), `set_search_open`'s sibling —
+    // an `app_meta` write through `sync::with_write`; its read half, `panel_width`, sits in
+    // `readHandlers`. Count again after a merge.
+    // 142 → 143 on 2026-10-12 with `deck_split_printing` (issue #934), the swap's plain
     // `sync::with_write` deck write for part of a row. Count again after a merge.
-    expect(names).toHaveLength(142);
+    expect(names).toHaveLength(143);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -22280,6 +22285,51 @@ describe("shelves", () => {
     expect(() =>
       writeHandlers(busy).set_shelf_folds({ page: "collection", changes: { "11": true } }),
     ).toThrow(/busy/i);
+  });
+
+  it("round-trips panel_width through set_panel_width, per section", () => {
+    const db = makeDb();
+    const r = readHandlers(db);
+    const w = writeHandlers(db);
+    expect(r.panel_width()).toEqual({});
+
+    w.set_panel_width({ section: "tags", width: 300 });
+    w.set_panel_width({ section: "deck", width: PANEL_WIDTH_MAX });
+    w.set_panel_width({ section: "tags", width: PANEL_WIDTH_MIN });
+    expect(r.panel_width()).toEqual({ tags: PANEL_WIDTH_MIN, deck: PANEL_WIDTH_MAX });
+
+    // A copy, not the store.
+    r.panel_width().tags = 999;
+    expect(db.panelWidth.tags).toBe(PANEL_WIDTH_MIN);
+  });
+
+  it("drops a junk panel_width entry and keeps its neighbour, as panelwidth::stored does", () => {
+    const db = makeDb();
+    db.panelWidth = { "": 300, a: 300.5, b: 79, c: 4001, d: -1, tags: 320 };
+    expect(readHandlers(db).panel_width()).toEqual({ tags: 320 });
+  });
+
+  it("refuses set_panel_width for a blank section, a width out of bounds, and under a sync", () => {
+    const db = makeDb();
+    const w = writeHandlers(db);
+    expect(() => w.set_panel_width({ section: "", width: 300 })).toThrow(
+      "A search section cannot be blank.",
+    );
+    expect(() => w.set_panel_width({ section: "tags", width: PANEL_WIDTH_MIN - 1 })).toThrow(
+      "A panel width must be between 80 and 4000 pixels, not 79.",
+    );
+    expect(() => w.set_panel_width({ section: "tags", width: PANEL_WIDTH_MAX + 1 })).toThrow(
+      /between 80 and 4000/,
+    );
+    expect(() => w.set_panel_width({ section: "tags", width: 300.5 })).toThrow(
+      /between 80 and 4000/,
+    );
+    expect(db.panelWidth).toEqual({});
+
+    const busy = makeDb({ fault: "busy" });
+    expect(() => writeHandlers(busy).set_panel_width({ section: "tags", width: 300 })).toThrow(
+      /busy/i,
+    );
   });
 
   it("round-trips deck_search_width through set_deck_search_width, per deck, inside the band", () => {

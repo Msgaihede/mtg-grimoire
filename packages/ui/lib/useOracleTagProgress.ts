@@ -131,7 +131,7 @@ export function useOracleTagProgress(): OracleTagRefresh {
           // ingest that lands while that page is open heals the "Oracle tags have not been
           // downloaded yet" notice and leaves the rail and the type-ahead empty for the client's
           // whole 30 s `staleTime` — half a fix, and the more visible half left undone.
-          // `TagsPage`'s `useArtTagStatus` does exactly this one taxonomy over; the keys are
+          // `TagPicker`'s `useArtTagStatus` does exactly this one taxonomy over; the keys are
           // shared by both namespaces (`["tag-children", ns, slug]`, `["tag-search", text, ns]`),
           // so a prefix is the only thing that reaches the oracle branch of either.
           void queryClient.invalidateQueries({ queryKey: ["tag-children"] });

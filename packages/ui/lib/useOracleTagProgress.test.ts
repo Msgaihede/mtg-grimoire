@@ -214,7 +214,7 @@ it("re-reads the status on a failed refresh too", async () => {
  * mounts no oracle equivalent. Without these two invalidations an oracle ingest landing while the
  * page is open takes the "Oracle tags have not been downloaded yet" notice down and leaves the
  * rail empty behind it for the client's whole 30 s `staleTime` — the half of the fix a reader can
- * actually see, left undone. `TagsPage`'s art hook does the same one taxonomy over.
+ * actually see, left undone. `TagPicker`'s art hook does the same one taxonomy over.
  *
  * Asserted through `getQueryState().isInvalidated` rather than by counting refetches: both keys
  * are prefixes over queries this hook never mounts, so there is nothing here to refetch and a

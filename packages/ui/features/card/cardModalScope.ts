@@ -9,7 +9,7 @@ import { useAppStore, type PaneCopy, type PaneDeckContext } from "@/lib/store";
  * word means the narrower thing (see {@link useCardModalScope}). And `settings` and the deck
  * *gallery* are not here at all, because no card can be open on either.
  */
-export type CardModalSurface = "search" | "collection" | "wishlist" | "tags" | "deck";
+export type CardModalSurface = "search" | "collection" | "wishlist" | "deck";
 
 /**
  * Everything the card modal's columns need to know about *where the card was opened from* —
@@ -71,9 +71,7 @@ export function useCardModalScope(): CardModalScope {
       ? "collection"
       : view === "wishlist"
         ? "wishlist"
-        : view === "tags"
-          ? "tags"
-          : "search";
+        : "search";
   // Only the two lists of things a reader *has* get a stepper, and it edits that list's own count.
   // The search wall and the tags wall are the corpus rather than a holding, so there is no number
   // on them to step — `Add to collection` and `Add to wishlist` in the action row are how a card

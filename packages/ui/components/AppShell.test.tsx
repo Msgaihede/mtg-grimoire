@@ -345,7 +345,6 @@ it("renders nav and refresh button", async () => {
   ).toEqual([
     "Home",
     "Search",
-    "Tagger",
     "Decks",
     "Collection",
     "Wishlist",
@@ -398,8 +397,7 @@ describe("the Shared row", () => {
     expect(railButtons()).toEqual([
       "Home",
       "Search",
-      "Tagger",
-      "Decks",
+        "Decks",
       "Collection",
       "Wishlist",
       "Shared",
@@ -857,15 +855,14 @@ describe("collapsing the sidebar", () => {
    * An `aria-label` would be a second place each word is written, and the first of the two to
    * change would be the one nothing tested.
    */
-  it("keeps the nine destinations named, and pressable, while they are drawn as icons", async () => {
+  it("keeps the eight destinations named, and pressable, while they are drawn as icons", async () => {
     navCollapsed.mockResolvedValue(true);
     render(<AppShell update={noUpdate}>{null}</AppShell>);
     await screen.findByRole("button", { name: "Expand sidebar" });
 
     for (const label of [
       "Search",
-      "Tagger",
-      "Decks",
+        "Decks",
       "Collection",
       "Wishlist",
       "Scanner",
@@ -974,7 +971,7 @@ describe("collapsing the sidebar", () => {
     render(<AppShell update={noUpdate}>{null}</AppShell>);
     const collapse = await screen.findByRole("button", { name: "Collapse sidebar" });
     const entries = () =>
-      ["Search", "Tagger", "Decks", "Collection", "Wishlist", "Settings"].map((label) =>
+      ["Search", "Decks", "Collection", "Wishlist", "Settings"].map((label) =>
         screen.getByRole("button", { name: label }),
       );
     for (const entry of [...entries(), collapse]) {
@@ -1493,7 +1490,7 @@ describe("the card menu's deck write", () => {
  * a store-only assertion cannot see.
  */
 describe("the shell's keyboard bindings", () => {
-  it("switches view on Ctrl+4", async () => {
+  it("switches view on Ctrl+3", async () => {
     const user = userEvent.setup();
     render(
       <AppShell update={noUpdate}>
@@ -1501,15 +1498,15 @@ describe("the shell's keyboard bindings", () => {
       </AppShell>,
     );
 
-    await user.keyboard("{Control>}4{/Control}");
+    await user.keyboard("{Control>}3{/Control}");
 
-    // Decks and not something else, which is the whole of what "by index" buys: the fourth chord
-    // activates the fourth entry in `NAV`, so the rail's order is the binding rather than a list
-    // of nine ids restated in the handler. Written out as the word a reader would say rather
-    // than as `NAV[3].id`, per the rule that an assertion must not read its own constant.
+    // Decks and not something else, which is the whole of what "by index" buys: the third chord
+    // activates the third chorded entry in `NAV`, so the rail's order is the binding rather than a
+    // list of ids restated in the handler. Written out as the word a reader would say rather than
+    // as `NAV[2].id`, per the rule that an assertion must not read its own constant.
     //
-    // **It was `Ctrl+3` until the home page took the head of `NAV`**, which is the renumbering
-    // this file's next case is the fence around.
+    // **It was `Ctrl+4` while the Tagger row sat under Search** (issue #937 retired it), which is
+    // the renumbering this file's cases below are the fence around.
     expect(useAppStore.getState().activeView).toBe("decks");
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Decks");
   });
@@ -1517,23 +1514,15 @@ describe("the shell's keyboard bindings", () => {
   /**
    * ⚠️ **The Shared view has no chord, and this case is the fence around that.**
    *
-   * Eleven destinations against nine digits: `Ctrl+0` is not a tenth step of the run, so two
-   * entries go without — and this one goes without because it is the row the rail does not always
-   * draw. A digit bound to a row that appears and disappears would either shift every digit after
-   * it or point at a row half the readers do not have — one press meaning two things to two
-   * readers, which is the whole thing these chords binding against a *list* exists to prevent.
-   * (`settings` is the other, for the unrelated reason the next case pins: the run simply ends
-   * before it.)
+   * Ten destinations against nine digits: `Ctrl+0` is not a tenth step of the run, so one entry
+   * goes without — and it is this one, because it is the row the rail does not always draw. A
+   * digit bound to a row that appears and disappears would either shift every digit after it or
+   * point at a row half the readers do not have — one press meaning two things to two readers.
    *
-   * It cost that view its keyboard route and nothing else: the way in is the cabinet's own
-   * **Open a shared collection** button, which is what the chord was standing in for while
-   * nothing else reached the view.
-   *
-   * **`Ctrl+7` is Scanner**, and asserting that rather than merely asserting *not shared* is what
-   * makes this a test of the binding rather than of an absence. It was `Ctrl+6` until Home took
-   * the head of `NAV`.
+   * **`Ctrl+6` is Scanner**, and asserting that rather than merely asserting *not shared* is what
+   * makes this a test of the binding rather than of an absence.
    */
-  it("gives the Shared view no chord, and Ctrl+7 reaches Scanner instead", async () => {
+  it("gives the Shared view no chord, and Ctrl+6 reaches Scanner instead", async () => {
     const user = userEvent.setup();
     render(
       <AppShell update={noUpdate}>
@@ -1546,7 +1535,7 @@ describe("the shell's keyboard bindings", () => {
       }),
     ).toBeNull();
 
-    await user.keyboard("{Control>}7{/Control}");
+    await user.keyboard("{Control>}6{/Control}");
 
     expect(useAppStore.getState().activeView).toBe("scanner");
     // …and no digit reaches it: the run is nine long and this destination is not on it.
@@ -1557,20 +1546,14 @@ describe("the shell's keyboard bindings", () => {
   });
 
   /**
-   * ⚠️ **The renumbering, pinned end to end — and `Ctrl+9` no longer opens Settings.**
+   * ⚠️ **The renumbering, pinned end to end — and `Ctrl+9` opens Settings again.**
    *
-   * Home took the head of `NAV`, so every digit moved one row down the rail and the ninth digit
-   * stops at Playtesting. That is a deliberate break in a binding readers have in their fingers,
-   * and this is the case that makes putting it back a red build rather than a quiet merge: a
-   * count can only say *how many* destinations go without a chord, never *which*, and the which
-   * is the half a reader feels.
-   *
-   * The two absences are asserted differently on purpose. Shared is unreachable by **any** digit
-   * (the case above sweeps all nine), because its exclusion is a filter. Settings is unreachable
-   * because the run **ends** — so what is pinned here is the last digit landing one row short of
-   * it, which is the fact that would change the day a tenth digit existed.
+   * The Tagger row left the rail (issue #937 — tag search is the Search page's sidebar), so every
+   * digit after Search moved one row up and the ninth lands on Settings, the last row. A count can
+   * only say *how many* destinations a chord reaches, never *which*, and the which is the half a
+   * reader feels — so the ends and a middle are named.
    */
-  it("runs Ctrl+1 to Ctrl+9 from Home to Playtesting, leaving Settings off the end", async () => {
+  it("runs Ctrl+1 to Ctrl+9 from Home to Settings", async () => {
     const user = userEvent.setup();
     render(
       <AppShell update={noUpdate}>
@@ -1585,23 +1568,14 @@ describe("the shell's keyboard bindings", () => {
     expect(useAppStore.getState().activeView).toBe("search");
 
     await user.keyboard("{Control>}7{/Control}");
-    expect(useAppStore.getState().activeView).toBe("scanner");
-
-    await user.keyboard("{Control>}8{/Control}");
     expect(useAppStore.getState().activeView).toBe("trade");
 
-    // The end of the run, and the whole of the breaking change: this was Settings until the home
-    // page shipped.
-    await user.keyboard("{Control>}9{/Control}");
+    await user.keyboard("{Control>}8{/Control}");
     expect(useAppStore.getState().activeView).toBe("playtesting");
 
-    // …and no digit reaches Settings at all. Swept rather than asserted once, because the failure
-    // this guards against is a *shift* — a chord list grown to ten, or Home dropped back out of
-    // `NAV` — and either would land Settings on some digit rather than on the one it used to have.
-    for (const digit of ["1", "2", "3", "4", "5", "6", "7", "8", "9"]) {
-      await user.keyboard(`{Control>}${digit}{/Control}`);
-      expect(useAppStore.getState().activeView).not.toBe("settings");
-    }
+    // The end of the run: Settings, which Home had pushed off it until the Tagger row left.
+    await user.keyboard("{Control>}9{/Control}");
+    expect(useAppStore.getState().activeView).toBe("settings");
   });
 
   it("does not switch view while a modal is open", async () => {
@@ -1690,7 +1664,7 @@ describe("the shell's keyboard bindings", () => {
   });
 
   /**
-   * And the guard is `F1`'s alone — a held `Ctrl+4` goes on arriving.
+   * And the guard is `F1`'s alone — a held `Ctrl+3` goes on arriving.
    *
    * Selecting the view you are already on is idempotent, so there is no failure to guard against
    * here, and hoisting the check to the top of the handler would decide the question for every
@@ -1698,14 +1672,14 @@ describe("the shell's keyboard bindings", () => {
    * that placement a decision rather than an accident: it goes red on a handler that drops every
    * repeated press.
    */
-  it("keeps switching view while Ctrl+4 auto-repeats", () => {
+  it("keeps switching view while Ctrl+3 auto-repeats", () => {
     render(
       <AppShell update={noUpdate}>
         <div>content</div>
       </AppShell>,
     );
 
-    fireEvent.keyDown(document.body, { key: "4", ctrlKey: true, repeat: true });
+    fireEvent.keyDown(document.body, { key: "3", ctrlKey: true, repeat: true });
 
     expect(useAppStore.getState().activeView).toBe("decks");
   });

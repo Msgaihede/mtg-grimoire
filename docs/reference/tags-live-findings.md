@@ -1,5 +1,7 @@
 # The Tags page, driven in the shipped window
 
+> **Historical.** Since 2026-10-11 ([issue #937](https://github.com/Msgaihede/mtg-grimoire/issues/937)) there is no Tags page: its rail is the Search page's collapsible tag sidebar (`features/tags/TagSearchPanel.tsx`, body `TagPicker.tsx`). The measurements below were taken on the old page.
+
 Its own file rather than a section of [decks-live-findings.md](decks-live-findings.md), which is
 763 lines about a different surface. Same contract: **every figure keeps the date and the build
 it was taken on**, and what is still broken is written down beside what was fixed.

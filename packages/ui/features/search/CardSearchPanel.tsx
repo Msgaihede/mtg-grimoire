@@ -28,7 +28,7 @@ const NO_ROOM = "Not enough room. Close the card details or widen the window.";
  * that one is the key a preference is stored under, this one is what is stamped on the DOM. They
  * are equal today and they answer to different things, so neither is derived from the other.
  */
-export type SearchSurface = "deck" | "collection" | "wishlist";
+export type SearchSurface = "deck" | "collection" | "wishlist" | "tags";
 
 /**
  * Stamped on this panel while it is drawn **over** the list rather than docked beside it — the
@@ -211,7 +211,7 @@ export interface CardSearchPanelProps {
    * The reader's width, in px, when a surface remembers it — **both or neither** with {@link
    * onWidthChange}. The deck column passes them (issue #932, `useDeckSearchWidth`, one width per
    * deck); the collection and the wishlist pass neither and keep the width in this component's own
-   * state, forgotten when the page unmounts.
+   * state, forgotten when the page unmounts. The search page's tag sidebar passes them too (issue #937, `usePanelWidth("tags")`).
    *
    * Either way it is the *reader's* width and is clamped again where it is drawn: only a drag
    * writes it, never a narrowing window.

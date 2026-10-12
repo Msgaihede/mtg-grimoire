@@ -11,7 +11,7 @@ file. This page is the full rule.
 say what a card _does_ (`removal`, `ramp`, `recursion`), which is what a deck add is filed by; a
 database that has never fetched them files by card type instead, and that fallback is the floor
 rather than an error. **Art Tags** say what an illustration _shows_ (`forest`, `dragon`, `dog`),
-which is what the Tags page browses by; a database that has never fetched them has a Tags page
+which is what the Search page's tag sidebar browses by; a database that has never fetched them has a tag sidebar
 that says so and still answers from the oracle side. (How and when they are fetched is in
 [EXTERNAL_SERVICES.md](EXTERNAL_SERVICES.md#scryfalls-tagger-datasets).)
 

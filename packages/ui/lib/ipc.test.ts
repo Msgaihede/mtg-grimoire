@@ -75,6 +75,8 @@ import searchRsDesktop from "../../../apps/desktop/src-tauri/src/search/mod.rs?r
 import setCompletionRsCore from "../../../crates/grimoire-core/src/set_completion.rs?raw";
 import setCompletionRsDesktop from "../../../apps/desktop/src-tauri/src/set_completion/mod.rs?raw";
 import shareRs from "../../../apps/desktop/src-tauri/src/share/commands.rs?raw";
+import panelwidthRsCore from "../../../crates/grimoire-core/src/panelwidth.rs?raw";
+import panelwidthRsDesktop from "../../../apps/desktop/src-tauri/src/panelwidth/mod.rs?raw";
 import shelffoldsRsCore from "../../../crates/grimoire-core/src/shelffolds.rs?raw";
 import shelffoldsRsDesktop from "../../../apps/desktop/src-tauri/src/shelffolds/mod.rs?raw";
 import searchwidthRsCore from "../../../crates/grimoire-core/src/searchwidth.rs?raw";
@@ -207,6 +209,7 @@ const resetRs = resetRsCore + "\n" + resetRsDesktop;
 const scannerRs = scannerRsCore + "\n" + scannerRsDesktop;
 const searchRs = searchRsCore + "\n" + searchRsDesktop;
 const setCompletionRs = setCompletionRsCore + "\n" + setCompletionRsDesktop;
+const panelwidthRs = panelwidthRsCore + "\n" + panelwidthRsDesktop;
 const shelffoldsRs = shelffoldsRsCore + "\n" + shelffoldsRsDesktop;
 const stackhideRs = stackhideRsCore + "\n" + stackhideRsDesktop;
 const searchwidthRs = searchwidthRsCore + "\n" + searchwidthRsDesktop;
@@ -825,6 +828,34 @@ describe("ipc argument names match the Rust command signatures", () => {
    * pile and the state. Tauri maps each camelCase key onto its snake_case parameter, so the Rust
    * parameter names are read rather than trusted.
    */
+  /**
+   * The docked panels' widths — `searchOpen`'s pair with a number where the `boolean` is. The
+   * section and the width ride by name, so the Rust parameter names are read rather than trusted,
+   * and the bounds the wrapper's doc quotes are `panelwidth.rs`'s own.
+   */
+  it("sends the panel widths under the names their commands declare", async () => {
+    expect(panelwidthRs.length, "panelwidth.rs was not read").toBeGreaterThan(1_000);
+
+    invoke.mockResolvedValue({ tags: 320 });
+    await expect(ipc.panelWidth()).resolves.toEqual({ tags: 320 });
+    expect(invoke).toHaveBeenLastCalledWith("panel_width");
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.setPanelWidth("tags", 300);
+    expect(invoke).toHaveBeenLastCalledWith("set_panel_width", { section: "tags", width: 300 });
+
+    expect(panelwidthRs).toMatch(
+      /fn panel_width\(\s*state: tauri::State<'_, Arc<AppState>>,?\s*\)/,
+    );
+    expect(panelwidthRs).toMatch(/fn set_panel_width\([^)]*\bsection\s*:\s*String/s);
+    expect(panelwidthRs).toMatch(/fn set_panel_width\([^)]*\bwidth\s*:\s*u32/s);
+    expect(panelwidthRs).toContain("pub const MIN_PANEL_WIDTH: u32 = 80;");
+    expect(panelwidthRs).toContain("pub const MAX_PANEL_WIDTH: u32 = 4000;");
+    for (const registered of ["panelwidth::panel_width,", "panelwidth::set_panel_width,"]) {
+      expect(desktopRs).toContain(registered);
+    }
+  });
+
   it("sends the hidden stacks under the names their commands declare", async () => {
     expect(stackhideRs.length, "stackhide.rs was not read").toBeGreaterThan(1_000);
 
