@@ -1,0 +1,38 @@
+[package]
+name = "grimoire-play"
+# **The app's version**, as every workspace member's is: inherited from `[workspace.package]`.
+version.workspace = true
+description = "MTG Grimoire: games played on a deck — the goldfish board — over phase.rs's rules engine"
+authors = ["Markus Seerup"]
+license.workspace = true
+edition.workspace = true
+publish = false
+
+# **What this crate is**: the one place the app touches a rules engine. It takes the facts the
+# app already stores about a deck's cards (Scryfall's name, cost, type line, rules text, P/T),
+# has phase.rs's oracle parser turn them into the engine's card faces, and runs a game on them —
+# today the goldfish board (one player against a target that does nothing), later a game against
+# phase's AI (`phase-ai`, which takes the same `GameState`). It knows nothing of SQLite, Tauri or
+# a window: facts in, a view and what happened out. `docs/reference/goldfish.md` has the design.
+#
+# **Linked by the desktop host alone** (the owner's decision, 2026-10-12). The light app's spec
+# leaves Playtesting out of the phone and the browser, and the engine is ~1.9 million lines of
+# Rust: through `grimoire-core` it would be several megabytes of the web host's module, a module
+# whose size is measured to the byte. So no other member depends on this one, and its commands
+# are on the desktop's `command_table::DESKTOP_ONLY`.
+#
+# ⚠️ **The engine needs a deep stack** — phase's own `.cargo/config.toml` sets 16 MiB, because its
+# recursion overflowed at 1 MiB. Every call into it goes through `on_engine_stack` (`lib.rs`),
+# never straight from a Tauri or tokio worker, whose stacks are 2 MiB.
+[dependencies]
+# **phase.rs's rules engine, from its git repository at a fixed commit.** Not on crates.io (its
+# workspace is `publish = false`). Taking it from git is why `rust-toolchain.toml` is a nightly:
+# that repository's root manifest has a nightly-only `cargo-features` line that a stable cargo
+# refuses the whole package over. The lib is named `engine`. **MIT OR Apache-2.0** — its
+# `NOTICE` is credited in `docs/reference/goldfish.md`; three of its dependencies (`im`,
+# `bitmaps`, `sized-chunks`) are MPL-2.0, file-level copyleft, unmodified and compatible with
+# this repository's AGPL. Move the `rev` by a commit that runs the whole gate: the engine
+# changes daily, and this crate's tests are what say a move kept the goldfish board playing.
+phase-engine = { git = "https://github.com/phase-rs/phase", rev = "b8d3b82c17f09d228b743bd762f3486a9be6d1ef" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

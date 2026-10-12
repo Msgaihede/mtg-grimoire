@@ -152,12 +152,7 @@ export interface PaneCopy {
  * once, when the Exact mode's resolve got a panel of its own.
  */
 export type ScannerPanelId =
-  | "controls"
-  | "pipeline"
-  | "budget"
-  | "rectified"
-  | "readouts"
-  | "tiers";
+  "controls" | "pipeline" | "budget" | "rectified" | "readouts" | "tiers";
 
 /** How the search results are laid out. */
 export type SearchView = "table" | "grid";
@@ -504,12 +499,7 @@ interface AppState {
    * for nothing else. A write whose `scope` differs from what is held throws the old set away
    * before applying, which is what makes the scoping above structural.
    */
-  pickCard: (
-    scope: string,
-    key: string,
-    order: readonly string[],
-    mods: SelectModifiers,
-  ) => void;
+  pickCard: (scope: string, key: string, order: readonly string[], mods: SelectModifiers) => void;
   /**
    * Replace a scope's set outright — what pruning calls, and what a surface calls to clear.
    *
@@ -655,6 +645,19 @@ interface AppState {
    */
   openDeckId: number | null;
   setOpenDeckId: (id: number | null) => void;
+  /**
+   * **The goldfish board, open over the deck editor** — the deck and the variant it deals from,
+   * or `null` when the editor is what is on screen.
+   *
+   * The Decks view's third state, and here for `openDeckId`'s reason: there is no router, and
+   * "the board is up" has to be a fact `App.tsx` can read. **Non-null means the board is on
+   * screen**: `App.tsx` draws it in place of the editor while this names the open deck, and every
+   * navigation that could leave it — a view change, opening or closing a deck — sets it back to
+   * `null`, so a reader who comes back to a deck finds the editor and not a game they left. The
+   * game itself is the engine's (`goldfish_start` deals a new one each time the board mounts).
+   */
+  goldfish: { deckId: number; variant: DeckVariant } | null;
+  setGoldfish: (goldfish: { deckId: number; variant: DeckVariant } | null) => void;
   /**
    * The deck an editor was on when the reader left the Decks view, kept so that coming back
    * lands them in it rather than on the gallery (issue #162).
@@ -1320,6 +1323,8 @@ export const useAppStore = create<AppState>((set) => ({
         // because asking for it moved nothing.
         viewPulse: s.viewPulse + 1,
         selectedCardId: null,
+        // A board left by a view change is a game put away: see {@link AppState.goldfish}.
+        goldfish: null,
         // And whatever the card modal had open over itself. It is a question *about* the card on
         // the line above, so it cannot outlive it — a legality grid left standing over an empty
         // Settings page would be a popup with no card behind it and no modal to close back to.
@@ -1497,8 +1502,7 @@ export const useAppStore = create<AppState>((set) => ({
   // No pulse, for the reason on the line above read one field along: this is a value arriving,
   // not a reader navigating. Writing `activeView` bare rather than calling `setActiveView` is the
   // other half of that — see the interface for why a seed must not park a deck it cannot have.
-  hydrateStartView: (view) =>
-    set((s) => (s.viewPulse !== 0 ? {} : { activeView: view })),
+  hydrateStartView: (view) => set((s) => (s.viewPulse !== 0 ? {} : { activeView: view })),
   selectedCardId: null,
   // **And forgets which deck row the last card came from.** Every surface in the app that
   // opens a card goes through here — search tiles, collection rows, wishlist rows, the docked
@@ -1603,9 +1607,13 @@ export const useAppStore = create<AppState>((set) => ({
   // affordance it carries writes to a deck the reader can see, and with the gallery on screen
   // there is no editor to answer for the write or to re-read after a refusal. The card itself
   // stays open — the pane belongs to the reader, not to the view behind it.
+  goldfish: null,
+  setGoldfish: (goldfish) => set({ goldfish }),
   setOpenDeckId: (openDeckId) =>
     set((s) => ({
       openDeckId,
+      // Opening or closing a deck puts any game on the board away — {@link AppState.goldfish}.
+      goldfish: null,
       // And the picked set, for `setActiveView`'s reason one floor down: opening or closing an
       // editor is a navigation, and a deck's set is addressed by slots that mean nothing outside
       // the deck they were picked in.

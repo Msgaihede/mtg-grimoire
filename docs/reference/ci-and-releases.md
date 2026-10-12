@@ -207,14 +207,16 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 - **Rust is pinned by `rust-toolchain.toml`, and no workflow may install its own** (issue #559,
   2026-09-27). Every workflow used `dtolnay/rust-toolchain@stable` with `clippy -D warnings`, so a
   new stable's lints could turn every PR red with no code change, and a release binary was built
-  by whatever stable was current. The file pins **1.98.1** (the current stable on the day) with
+  by whatever stable was current. The file pinned **1.98.1** (the current stable on the day) and,
+  since 2026-10-12, **a dated nightly** — the fast build's, for the rules engine's git dependency
+  (`rust-toolchain.toml` has the measurements) — with
   `rustfmt` and `clippy`; `.github/actions/rust-toolchain` reads the channel with `sed` and hands
   it to `dtolnay/rust-toolchain` — `@master` until 2026-09-28 and pinned by SHA since (next
   bullet) — which does not read the file itself.
   **`scripts/toolchain.test.ts` is the fence**:
   it globs every workflow and fails on a direct `dtolnay/rust-toolchain` use, a `rustup`
   install, or a `node-version:` that is not `node-version-file: .nvmrc`, and on a channel that is
-  not an exact `x.y.z`. **Node is pinned the same way**: `.nvmrc` (24, the version the app is
+  not an exact `x.y.z` or `nightly-YYYY-MM-DD`. **Node is pinned the same way**: `.nvmrc` (24, the version the app is
   developed on — CI ran 22 until this change) feeds every `setup-node`, and `package.json`'s
   `engines` floor is `>=22.18`, the newest any script here needs (`scripts/golden.ts`).
 - **The workspace is installed with pnpm, and the jobs that hold a secret install none**

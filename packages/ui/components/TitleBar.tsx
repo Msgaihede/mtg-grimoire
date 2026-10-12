@@ -20,6 +20,12 @@ import { cn } from "@/lib/utils";
  *  number is here rather than inline because the snap overlay's rectangle is derived from
  *  this element's box and a change to it moves a native child window. */
 const BAR_H = "h-[34px]";
+/**
+ * Where a full-window surface starts so the caption stays uncovered: {@link BAR_H}'s height, as a
+ * `top`. Written out whole beside it for Tailwind's scanner, and moved with it. The goldfish board
+ * is the one reader (`LAYER.stage`).
+ */
+export const BELOW_CAPTION = "top-[34px]";
 
 /**
  * The window's own title bar, drawn by the app rather than by Windows.

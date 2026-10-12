@@ -645,18 +645,19 @@ it("draws the search view", async () => {
 });
 
 /**
- * **The five occasional views stay out of the first chunk** (issue #557). Nothing goes red when a
+ * **The occasional views stay out of the first chunk** (issue #557), the goldfish board with them. Nothing goes red when a
  * view is imported statically again — the app works, it only starts slower, and on the web app
  * that is the whole cost of a first visit. A static import of any of them anywhere in `App.tsx`
  * pulls its chunk, and the scanner's and Settings' dependencies with it, back into `index-*.js`.
  * Read as text because the build's chunk graph is not something a unit test can see.
  */
-it("loads the five occasional views on first open rather than with the app", () => {
+it("loads the occasional views on first open rather than with the app", () => {
   for (const view of [
     "scanner/ScannerPage",
     "settings/SettingsPage",
     "trade/TradePage",
     "playtesting/PlaytestingPage",
+    "playtesting/goldfish/GoldfishPage",
     "share/SharedPage",
   ]) {
     expect(appSource).toContain(`import("@/features/${view}")`);

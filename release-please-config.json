@@ -50,6 +50,11 @@
           "type": "toml",
           "path": "Cargo.lock",
           "jsonpath": "$.package[?(@.name.value=='grimoire-scan')].version"
+        },
+        {
+          "type": "toml",
+          "path": "Cargo.lock",
+          "jsonpath": "$.package[?(@.name.value=='grimoire-play')].version"
         }
       ]
     }

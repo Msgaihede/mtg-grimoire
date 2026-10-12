@@ -83,6 +83,9 @@ import searchwidthRsCore from "../../../crates/grimoire-core/src/searchwidth.rs?
 import searchwidthRsDesktop from "../../../apps/desktop/src-tauri/src/searchwidth/mod.rs?raw";
 import stackhideRsCore from "../../../crates/grimoire-core/src/stackhide.rs?raw";
 import stackhideRsDesktop from "../../../apps/desktop/src-tauri/src/stackhide/mod.rs?raw";
+// The goldfish board: the desktop's three commands, and the engine crate's actions they carry.
+import goldfishRs from "../../../apps/desktop/src-tauri/src/goldfish/mod.rs?raw";
+import goldfishViewRs from "../../../crates/grimoire-play/src/view.rs?raw";
 import startupRs from "../../../apps/desktop/src-tauri/src/startup.rs?raw";
 import startviewRsCore from "../../../crates/grimoire-core/src/startview.rs?raw";
 import startviewRsDesktop from "../../../apps/desktop/src-tauri/src/startview/mod.rs?raw";
@@ -882,6 +885,72 @@ describe("ipc argument names match the Rust command signatures", () => {
     for (const registered of ["stackhide::hidden_stacks,", "stackhide::set_stack_hidden,"]) {
       expect(desktopRs).toContain(registered);
     }
+  });
+
+  /**
+   * The goldfish board's three commands. `goldfish_act` carries one `GoldfishAction`, a Rust enum
+   * tagged `type` with camelCase variants and fields — so each variant this side can send is read
+   * out of `view.rs` rather than trusted, and so is each field a variant names.
+   */
+  it("sends the goldfish board's commands under the names their commands declare", async () => {
+    expect(goldfishRs.length, "goldfish/mod.rs was not read").toBeGreaterThan(1_000);
+
+    invoke.mockResolvedValue({});
+    await ipc.goldfishStart(4, "live", 99);
+    expect(invoke).toHaveBeenLastCalledWith("goldfish_start", {
+      deckId: 4,
+      variant: "live",
+      seed: 99,
+    });
+    await ipc.goldfishAct({ type: "move", id: 7, to: "libraryBottom" });
+    expect(invoke).toHaveBeenLastCalledWith("goldfish_act", {
+      action: { type: "move", id: 7, to: "libraryBottom" },
+    });
+    invoke.mockResolvedValue(undefined);
+    await ipc.goldfishEnd();
+    expect(invoke).toHaveBeenLastCalledWith("goldfish_end");
+
+    const declares = (command: string, param: string) =>
+      expect(goldfishRs, `\`${command}\` declares no \`${param}\``).toMatch(
+        new RegExp(`fn ${command}\\([^)]*\\b${param}\\s*:`, "s"),
+      );
+    declares("goldfish_start", "deck_id");
+    declares("goldfish_start", "variant");
+    declares("goldfish_start", "seed");
+    declares("goldfish_act", "action");
+    for (const registered of [
+      "goldfish::goldfish_start,",
+      "goldfish::goldfish_act,",
+      "goldfish::goldfish_end,",
+    ]) {
+      expect(desktopRs).toContain(registered);
+    }
+
+    // Every variant of `GoldfishAction` and `Happened`, with its fields, as Rust spells them
+    // once `rename_all` and `rename_all_fields` have made them camelCase.
+    const variants = (name: string): string[] => {
+      const body = goldfishViewRs.slice(goldfishViewRs.indexOf(`pub enum ${name} {`));
+      const block = body.slice(0, body.indexOf("\n}\n"));
+      return [...block.matchAll(/^ {4}([A-Z][A-Za-z]*)(?: \{([^}]*)\})?,?$/gm)].map((m) => {
+        const tag = m[1][0].toLowerCase() + m[1].slice(1);
+        const fields = [...(m[2] ?? "").matchAll(/(\w+):/g)].map((f) =>
+          f[1].replace(/_([a-z])/g, (_, c: string) => c.toUpperCase()),
+        );
+        return [tag, ...fields].join(" ");
+      });
+    };
+    const tsVariants = (name: string): string[] => {
+      const src = ipcSource.slice(ipcSource.indexOf(`export type ${name} =`));
+      const block = src.slice(0, src.indexOf(";\n"));
+      return [...block.matchAll(/\{ type: "(\w+)"([^}]*)\}/g)].map((m) => {
+        const fields = [...m[2].matchAll(/(\w+):/g)].map((f) => f[1]);
+        return [m[1], ...fields].join(" ");
+      });
+    };
+    expect(variants("GoldfishAction").length, "view.rs' actions were not read").toBeGreaterThan(10);
+    expect(variants("Happened").length, "view.rs' facts were not read").toBeGreaterThan(10);
+    expect(tsVariants("GoldfishAction")).toEqual(variants("GoldfishAction"));
+    expect(tsVariants("Happened")).toEqual(variants("Happened"));
   });
 
   /**

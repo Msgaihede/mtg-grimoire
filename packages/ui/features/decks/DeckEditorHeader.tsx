@@ -2,6 +2,7 @@ import { memo, type RefObject } from "react";
 import {
   ChevronLeft,
   Columns3Cog,
+  Fish,
   History,
   Scale,
   SquareArrowRightEnter,
@@ -147,6 +148,12 @@ export interface DeckEditorHeaderProps {
   tightHeader: boolean;
   wideHeader: boolean;
   settingsIcon: boolean;
+  /**
+   * Deal this list onto the goldfish board — a game against a target that does nothing, on the
+   * desktop's rules engine. **Absent where the edition has no Playtesting** (the light app's phone
+   * and browser faces, whose hosts have no engine), and then there is no button.
+   */
+  openGoldfish?: () => void;
 }
 
 export const DeckEditorHeader = memo(function DeckEditorHeader({
@@ -162,6 +169,7 @@ export const DeckEditorHeader = memo(function DeckEditorHeader({
   tightHeader,
   wideHeader,
   settingsIcon,
+  openGoldfish,
 }: DeckEditorHeaderProps) {
   const tip = useTooltip();
   return (
@@ -368,6 +376,29 @@ export const DeckEditorHeader = memo(function DeckEditorHeader({
                     {!tightHeader && "Compare"}
                   </button>
                 </>
+              )}
+
+              {/* **Goldfish** — the board, dealt from the list on screen. Ahead of the transfer
+                  pair: it is the one action here that is about *playing* the deck rather than
+                  filing it. Not a layer: it leaves the editor for the board, as Back leaves it
+                  for the gallery. **An icon button at every width**, the fish alone (the
+                  owner's call, 2026-10-12) — so its name is the tooltip, always bound, as the
+                  other actions bind theirs once their words have gone. */}
+              {openGoldfish !== undefined && (
+                <button
+                  type="button"
+                  onClick={openGoldfish}
+                  aria-label="Goldfish this deck"
+                  {...tip("Goldfish this deck", { describes: false })}
+                  className={cn(
+                    PLAIN_PRESS,
+                    FILTER_FOCUS,
+                    "inline-flex w-9 shrink-0 items-center justify-center px-0",
+                    "hover:text-text",
+                  )}
+                >
+                  <Fish className="size-4 shrink-0" aria-hidden="true" />
+                </button>
               )}
 
               {/* The joined pair — see {@link TRANSFER}, which is where both names are argued

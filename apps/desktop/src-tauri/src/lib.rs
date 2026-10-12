@@ -11,6 +11,13 @@
 //! wrapper names a window, so it cannot move. The doc comment on each line below describes the
 //! module, wherever its code now is; each `<module>/mod.rs` says what it kept and why.
 
+// **For the goldfish board's game**, held in Tauri's managed state (`goldfish::GoldfishSlot`), which
+// must be `Send + Sync`. phase.rs's `GameState` is deep enough that proving it `Send` overflows the
+// compiler's default limit of 128 — measured 2026-10-12: `overflow evaluating the requirement
+// tauri::State<'_, GoldfishSlot> well-formed`, through `Box<grimoire_play::Goldfish>: Send` — and
+// 256 is the bound rustc suggested and is enough.
+#![recursion_limit = "256"]
+
 /// **The collection's and the wishlist's history, and the feed that reads it beside
 /// [`deck_audit`].** A table, a `record` that takes the caller's `&Connection` so a row lands
 /// inside the transaction of the change it describes, and one query. No clock beyond SQLite's
@@ -109,6 +116,8 @@ pub use grimoire_core::filters;
 /// that validates the document's *shape* and never its vocabulary — a widget kind this build
 /// has never heard of survives a round trip, which is what stops an older build quietly
 /// emptying a newer one's row.
+/// The goldfish board's three commands, over phase.rs's rules engine (`grimoire-play`).
+pub mod goldfish;
 pub mod home;
 /// **The resolution rule under the image cache.** Two columns of `cards`, the precedence
 /// between them and one predicate over a string — no filesystem and no protocol handler.

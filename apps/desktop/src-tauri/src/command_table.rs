@@ -73,6 +73,19 @@ const DESKTOP_ONLY: &[(&str, &str)] = &[
         "startup_status",
         "the window this host draws before its state exists",
     ),
+    (
+        "goldfish_start",
+        "the goldfish board's rules engine is linked by this host alone — the light app leaves \
+         Playtesting out, and phase.rs's engine would be megabytes of the web module",
+    ),
+    (
+        "goldfish_act",
+        "the goldfish board's rules engine is this host's",
+    ),
+    (
+        "goldfish_end",
+        "the goldfish board's rules engine is this host's",
+    ),
 ];
 
 /// Commands the table has that this app does not register and never will, each with the

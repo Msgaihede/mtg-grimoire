@@ -55,6 +55,14 @@ const TradePage = lazy(() =>
 const PlaytestingPage = lazy(() =>
   import("@/features/playtesting/PlaytestingPage").then((m) => ({ default: m.PlaytestingPage })),
 );
+// **The goldfish board**, the Decks view's third state: a game of the open deck on phase.rs's
+// rules engine. Lazy for the reason the rest are — a session that never plays one never fetches
+// its board, its drag targets or its menus.
+const GoldfishPage = lazy(() =>
+  import("@/features/playtesting/goldfish/GoldfishPage").then((m) => ({
+    default: m.GoldfishPage,
+  })),
+);
 const SharedPage = lazy(() =>
   import("@/features/share/SharedPage").then((m) => ({ default: m.SharedPage })),
 );
@@ -62,6 +70,7 @@ const SharedPage = lazy(() =>
 function ActiveView({ update }: { update: Update }) {
   const activeView = useAppStore((s) => s.activeView);
   const openDeckId = useAppStore((s) => s.openDeckId);
+  const goldfish = useAppStore((s) => s.goldfish);
   // **The app opens on Home and swaps to the reader's stored view ~93 ms later, and that is
   // deliberate — the obvious fix was built, measured and backed out.** `useStartViewHydration`
   // carries the numbers and the reasoning; the short version is that gating this area on the read
@@ -104,6 +113,19 @@ function ActiveView({ update }: { update: Update }) {
   // red. Playtesting returns a page component that happens to draw one sentence, so the day it
   // grows a real one this file does not change and cannot be the thing that was forgotten. Trade
   // was the other, and is the proof: its page arrived and this branch was not touched.
+  //
+  // **The goldfish board is the third state**, drawn in place of the editor while the store names
+  // the open deck (`goldfish` is cleared by every navigation, so it never names another). Keyed
+  // by deck and variant: a board for the theory list is a different game from the live one.
+  if (goldfish !== null && goldfish.deckId === openDeckId) {
+    return (
+      <GoldfishPage
+        key={`${goldfish.deckId}:${goldfish.variant}`}
+        deckId={goldfish.deckId}
+        variant={goldfish.variant}
+      />
+    );
+  }
   return openDeckId === null ? <DecksPage /> : <DeckEditor key={openDeckId} deckId={openDeckId} />;
 }
 

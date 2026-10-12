@@ -57,7 +57,7 @@ For global repo workflow, style, and testing conventions, refer to:
 ## 3. Layers, Modality, & Dismissal
 
 - **Strict z-index ladder**: All z-indexes originate from `LAYER` in `packages/ui/lib/layers.ts`:
-  `raised (10) < header (20) < popup (30) < quickBar (35) < dragTray (40) < overlay (45) < overlayStacked (46) < tooltip (47) < gate (50) < caption (60)`. Enforced by `layers.test.ts`.
+  `raised (10) < header (20) < stage (25) < popup (30) < quickBar (35) < dragTray (40) < overlay (45) < overlayStacked (46) < tooltip (47) < gate (50) < caption (60)`. Enforced by `layers.test.ts`.
 - **Modal dialogs (`components/Dialog.tsx`)**:
   - Centered over scrim at `LAYER.overlay`.
   - Modals must be bounded to window (`grid-rows-[minmax(0,1fr)]`) with internal scrolling (`min-h-0 flex-1 overflow-y-auto`).
@@ -110,7 +110,7 @@ For global repo workflow, style, and testing conventions, refer to:
 | `packages/ui/features/` | Feature surfaces (`decks/`, `search/`, `collection/`, `wishlist/`, `transfer/`, `settings/`) |
 | `packages/ui/lib/` | Infrastructure (`ipc.ts`, `layers.ts`, `motion.ts`, `shortcuts.ts`, `tokens.ts`) |
 
-- **Occasional views are lazy**: `App.tsx` loads Scanner, Settings, Trade, Playtesting and Shared with `React.lazy` under one `Suspense`; a static import of any of them puts its chunk back in the first load (`App.test.tsx` fences it).
+- **Occasional views are lazy**: `App.tsx` loads Scanner, Settings, Trade, Playtesting, the goldfish board and Shared with `React.lazy` under one `Suspense`; a static import of any of them puts its chunk back in the first load (`App.test.tsx` fences it).
 
 Run verification tests only at the end of feature work:
 

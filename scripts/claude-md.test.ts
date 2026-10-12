@@ -12,6 +12,7 @@ describe("CLAUDE.md size budget gate", () => {
         ".storybook/CLAUDE.md",
         "crates/grimoire-core/CLAUDE.md",
         "crates/grimoire-scan/CLAUDE.md",
+        "crates/grimoire-play/CLAUDE.md",
         "crates/grimoire-web/CLAUDE.md",
         "apps/light/CLAUDE.md",
         "apps/desktop/src-tauri/CLAUDE.md",

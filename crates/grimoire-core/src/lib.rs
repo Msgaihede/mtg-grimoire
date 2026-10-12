@@ -145,6 +145,7 @@ pub mod new_printings;
 /// with a width: one `app_meta` row, section → width.
 pub mod panelwidth;
 pub mod platform;
+pub mod play;
 pub mod price_history;
 pub mod recent_cards;
 /// **Scryfall's id-migration log applied to the reader's rows, and the orphan sweep** — both

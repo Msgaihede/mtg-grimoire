@@ -212,6 +212,7 @@ export type * from "./ipc/trade";
 export type * from "./ipc/sync";
 export type * from "./ipc/prefs";
 export type * from "./ipc/app";
+export type * from "./ipc/goldfish";
 export { AUTO_BRACKET } from "./ipc/decks";
 
 import { cardCommands } from "./ipc/cards";
@@ -228,6 +229,7 @@ import { tradeCommands } from "./ipc/trade";
 import { syncCommands } from "./ipc/sync";
 import { prefCommands } from "./ipc/prefs";
 import { appCommands } from "./ipc/app";
+import { goldfishCommands } from "./ipc/goldfish";
 
 /**
  * Every command, as one object — the domains' objects spread together. **The order is not
@@ -249,4 +251,5 @@ export const ipc = {
   ...syncCommands,
   ...prefCommands,
   ...appCommands,
+  ...goldfishCommands,
 };

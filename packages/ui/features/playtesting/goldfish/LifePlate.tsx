@@ -1,0 +1,150 @@
+import { useEffect, useRef, useState, type JSX } from "react";
+import { User } from "lucide-react";
+import { CardImage } from "@/components/CardImage";
+import { QuantityStepper } from "@/components/QuantityStepper";
+import { cardImageUrl } from "@/lib/images";
+import { cn } from "@/lib/utils";
+
+/**
+ * How long the plate waits after the last change before it tells the game.
+ *
+ * **`QuantityStepper` reports every keystroke**, so typing "37" into the box would otherwise be
+ * two actions — life set to 3, then to 37 — and two lines in the log, the first of them a lie
+ * ("The opponent took 37, down to 3"). Waiting for the reader to stop is also what makes seven
+ * presses of `−` one hit rather than seven: the log reads "The opponent took 7, down to 12",
+ * which is how a reader says it. Blur and Enter commit at once, so leaving the box never strands
+ * a number that was not sent.
+ */
+const SETTLE_MS = 400;
+
+/**
+ * One player's life, the artboard's plate: a round portrait, the seat's name in small capitals
+ * and a stepper — top centre for the goldfish, at the foot for the reader.
+ *
+ * The number shown is the reader's draft while one is in flight, and the game's otherwise: it
+ * lets go of the draft only when the game's own number moves (the engine's answer arriving), so
+ * a committed change does not flash back to the old life for the length of the round trip.
+ */
+export function LifePlate({
+  seat,
+  title,
+  life,
+  onChange,
+  cardId,
+  highlight = false,
+  disabled = false,
+}: {
+  seat: "you" | "opponent";
+  title: string;
+  life: number;
+  onChange: (life: number) => void;
+  /** The reader's commander, drawn as their portrait. Absent or `null`: the same silhouette the
+   *  goldfish wears. */
+  cardId?: string | null;
+  /** The goldfish is dead: the plate's edge goes gold. */
+  highlight?: boolean;
+  disabled?: boolean;
+}): JSX.Element {
+  const [draft, setDraft] = useState<number | null>(null);
+  const [pending, setPending] = useState(false);
+  const [seen, setSeen] = useState(life);
+  // The game answered with a new number: it is the truth now, unless the reader has already
+  // started another change on top of it (`pending`), which will be sent in its turn.
+  if (seen !== life) {
+    setSeen(life);
+    if (!pending) setDraft(null);
+  }
+
+  const timer = useRef<number | null>(null);
+  const latest = useRef<number | null>(null);
+  const report = useRef(onChange);
+  const current = useRef(life);
+  useEffect(() => {
+    report.current = onChange;
+    current.current = life;
+  });
+  useEffect(
+    () => () => {
+      if (timer.current !== null) window.clearTimeout(timer.current);
+    },
+    [],
+  );
+
+  const commit = () => {
+    if (timer.current !== null) window.clearTimeout(timer.current);
+    timer.current = null;
+    setPending(false);
+    const next = latest.current;
+    latest.current = null;
+    if (next === null) return;
+    // Stepped down and back up again: nothing to tell the game, and no answer will come to
+    // clear the draft, so clear it here.
+    if (next === current.current) setDraft(null);
+    else report.current(next);
+  };
+
+  const change = (next: number) => {
+    setDraft(next);
+    setPending(true);
+    latest.current = next;
+    if (timer.current !== null) window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(commit, SETTLE_MS);
+  };
+
+  const label = seat === "opponent" ? "Opponent's life" : "Your life";
+  const portrait = seat === "you" && cardId != null ? cardId : null;
+
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-3 rounded-[14px] border bg-surface py-2 pl-2",
+        seat === "opponent" ? "pr-3" : "pr-4",
+        highlight ? "border-accent" : "border-border",
+      )}
+    >
+      {portrait !== null ? (
+        <span
+          aria-hidden="true"
+          className="size-11 flex-none overflow-hidden rounded-full border border-border"
+        >
+          <CardImage
+            src={cardImageUrl(portrait, 0, "art")}
+            alt=""
+            className="block h-full w-full object-cover"
+          />
+        </span>
+      ) : (
+        <span
+          aria-hidden="true"
+          className="inline-flex size-11 flex-none items-center justify-center rounded-full border border-border bg-bg text-dim"
+        >
+          <User className="size-[22px]" />
+        </span>
+      )}
+      {/* A `fieldset` because `disabled` on one reaches every control inside it, and the stepper
+          has no `disabled` of its own: while a game is being dealt there is no life to change. */}
+      <fieldset
+        disabled={disabled}
+        className="m-0 flex min-w-0 flex-col gap-1 border-0 p-0"
+        onBlur={(e) => {
+          // Leaving the box commits what was typed; moving between `−`, the box and `+` does
+          // not, so a run of presses stays one change.
+          if (e.target instanceof HTMLInputElement) commit();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit();
+        }}
+      >
+        <span className="text-[11px] tracking-[0.08em] text-dim uppercase">{title}</span>
+        <QuantityStepper
+          value={draft ?? life}
+          onChange={change}
+          min={0}
+          max={999}
+          label={label}
+          size="md"
+        />
+      </fieldset>
+    </div>
+  );
+}

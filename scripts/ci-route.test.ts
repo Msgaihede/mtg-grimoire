@@ -272,6 +272,9 @@ describe("the arms", () => {
     ["crates/grimoire-scan/src/scanner.rs", T, T, F, F, F, F, T],
     ["crates/grimoire-scan/src/glue.rs", T, T, F, F, F, F, T],
     ["crates/grimoire-scan/Cargo.toml", T, T, F, F, F, F, T],
+    // The rules engine's crate: the desktop's alone, and the page reads its wire as text.
+    ["crates/grimoire-play/src/view.rs", T, T, F, F, F, F, F],
+    ["crates/grimoire-play/Cargo.toml", T, T, F, F, F, F, F],
     ["crates/grimoire-core/src/lib.rs", T, T, T, F, F, F, T],
     // The schema since 2026-10-02. `apps/desktop/src-tauri/src/schema/mod.rs` above is what the desktop host
     // kept of it — the conversion from a single file — so both rows are true, and this is the

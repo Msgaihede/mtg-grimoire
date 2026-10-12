@@ -1,25 +1,37 @@
 # The Rust toolchain every build of this repo uses — `cargo` run anywhere under the root, every
 # CI job, every release leg and the scanner-bundle workflow alike.
 #
-# **Pinned, never `stable`.** CI runs `clippy -D warnings`, and a new stable ships new lints: with
-# a floating channel one Rust release could turn every open PR red with no change to the code,
-# and a release binary was built by whatever stable happened to be current that day. Moving the
-# pin is a deliberate commit that runs the whole gate — `rust-toolchain.toml` routes to every
-# job that compiles Rust in `scripts/ci-route.ts`.
+# **Pinned, never `stable` or `nightly`.** CI runs `clippy -D warnings`, and a new release ships
+# new lints: with a floating channel one Rust release could turn every open PR red with no change
+# to the code, and a release binary was built by whatever compiler happened to be current that
+# day. Moving the pin is a deliberate commit that runs the whole gate — `rust-toolchain.toml`
+# routes to every job that compiles Rust in `scripts/ci-route.ts`.
+#
+# **A dated nightly since 2026-10-12, where it was 1.98.1**, and the reason is a dependency: the
+# rules engine the goldfish board plays on (`crates/grimoire-play`, phase.rs's `phase-engine`)
+# is taken straight from its git repository, and that repository's root manifest declares
+# `cargo-features = ["codegen-backend"]`. Cargo reads a git dependency's workspace root to fill
+# in the keys the crate inherits, and a stable cargo refuses the whole package over that line —
+# measured that day on 1.98.1: `no matching package named 'phase-engine' found`, with
+# `skipping malformed package` under `CARGO_LOG`, and a path dependency into a clone stopped on
+# `the cargo feature 'codegen-backend' requires a nightly version of Cargo`. The crate itself has
+# no `#![feature]` and compiled on 1.98.1 once its four inherited keys were written in by hand;
+# the owner chose the nightly over a fork or a vendored copy. What moving cost, measured the same
+# day: `clippy --workspace --all-targets -D warnings` was clean on all five members after one
+# lint (`needless_range_loop`, `crates/grimoire-core/src/index/facets.rs`).
+#
+# **The date is the fast build's** (`scripts/rust-fast.ts`'s `NIGHTLY`), so one nightly is
+# installed, not two, and the fast build is now this compiler plus `.cargo/fast.toml`'s linker
+# and front-end flag. Move both together. ⚠️ A nightly is allowed to break: move the date only by
+# a commit that runs the whole gate, and never to "latest".
 #
 # Workflows never install a toolchain of their own: `.github/actions/rust-toolchain` reads the
-# channel below, and `scripts/toolchain.test.ts` fails if any workflow names one directly.
+# channel below, and `scripts/toolchain.test.ts` fails if any workflow names one directly, or if
+# the channel is not an exact release or a dated nightly.
 #
 # Locally, after moving the pin, re-add `llvm-tools-preview` (for `pnpm test:coverage:rust`)
 # with `rustup component add` — components are per-toolchain, so the old pin's do not carry over.
-#
-# **One command builds with another toolchain, and says so in its name**: `pnpm tauri:fast dev`
-# and `pnpm cargo:fast` (`scripts/rust-fast.ts`), a dated nightly for a faster dev build and
-# nothing else — never `pnpm verify`, CI or a release. **Measure the pin against it when the pin
-# moves** (`.cargo/fast.toml` has the table): on 2026-10-11 that nightly rebuilt the desktop app
-# after an edit in the core in 12 s where 1.98.1 and 1.99.0 both took 16 s, with no flag of its
-# own, so the release that brings that compiler makes most of the fast build redundant.
 [toolchain]
-channel = "1.98.1"
+channel = "nightly-2026-10-11"
 components = ["rustfmt", "clippy"]
 profile = "minimal"
