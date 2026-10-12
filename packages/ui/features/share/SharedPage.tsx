@@ -120,6 +120,14 @@ const MATCHES: readonly { id: Match; label: string }[] = [
 
 type Sort = "name" | "set" | "quantity" | "price";
 
+/** Two prices, dearest first, with an absent one after every quoted one — `undefined` is
+ *  *unquoted*, never zero, and never the cheapest card in the binder. */
+function byPrice(a: number | undefined, b: number | undefined): number {
+  if (a === undefined) return b === undefined ? 0 : 1;
+  if (b === undefined) return -1;
+  return b - a;
+}
+
 /** What a reader is told when this view threw where nothing else could catch it. */
 export const SHARED_UNDRAWABLE = "Couldn't display this shared collection.";
 
@@ -526,8 +534,10 @@ function Binder({
       set: (a, b) =>
         a.s.localeCompare(b.s) || a.cn.localeCompare(b.cn, undefined, { numeric: true }),
       quantity: (a, b) => b.q - a.q || a.n.localeCompare(b.n),
-      // Unquoted last, always: a card the marketplace never listed is not the cheapest one.
-      price: (a, b) => (b.p ?? -1) - (a.p ?? -1),
+      // Dearest first, unquoted last: a card the marketplace never listed is not the cheapest
+      // one. Ties — the whole unquoted block above all — read by name rather than in snapshot
+      // order, which no column on the page explains (issue #939).
+      price: (a, b) => byPrice(a.p, b.p) || a.n.localeCompare(b.n) || a.s.localeCompare(b.s),
     };
     return filtered.sort((a, b) => by[sort](a.card, b.card));
   }, [rows, tree, drawer, text, match, sort, index, figuresReady]);

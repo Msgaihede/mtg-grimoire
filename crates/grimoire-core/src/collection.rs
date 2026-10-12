@@ -2961,9 +2961,24 @@ const COLLECTION_PRICE_SORTS: &[crate::sorting::PricedSort] = &[
 const UNIT_PRICE_ALIAS: &str = "unit_price";
 
 /// Name order, with the orphans under their card id rather than at the top under an empty
-/// string. The `e.id` tiebreak is appended by [`crate::sorting::order_by`].
+/// string. It is also how every tie under an explicit sort reads — see [`collection_tiebreak`].
 const COLLECTION_DEFAULT_ORDER: &str =
     "coalesce(c.name, e.card_id) ASC, e.set_code ASC, CAST(e.collector_number AS INTEGER) ASC";
+
+/// What breaks every tie the reader's own terms leave: the view's name order, then `e.id`.
+///
+/// **The id alone was issue #939.** A money sort's `NULLS LAST` put every unpriced copy at the
+/// foot in both directions, but *inside* that block — and inside any run of equal prices — the
+/// rows came out by `e.id`, which is the order they were added in. A reader saw the foot of the
+/// list as a shuffle that no column on screen explained. Name order first makes the unpriced
+/// block read A→Z in either direction, the way a deck's price sort already breaks its ties
+/// (`sortCards`' `byName`); the id stays last, because the pager's `OFFSET` needs a total order.
+///
+/// After the reader's terms rather than inside a money clause, so a second term the reader
+/// chose still decides the ties of the first.
+fn collection_tiebreak() -> String {
+    format!("{COLLECTION_DEFAULT_ORDER}, e.id ASC")
+}
 
 /// The two statements a list reads, with every value they bind — [`list_entries`]' pair, and
 /// `wishlist::list_wishes`' one table over.
@@ -3012,7 +3027,7 @@ fn list_statements(q: &CollectionQuery) -> ListStatements {
         q.sort.as_deref(),
         &crate::sorting::sorts_for(COLLECTION_SORTS, COLLECTION_PRICE_SORTS, UNIT_PRICE_ALIAS),
         COLLECTION_DEFAULT_ORDER,
-        "e.id ASC",
+        &collection_tiebreak(),
     );
     // **Shelves order the page before the reader's sort does**, and the sort only ever reorders
     // inside a shelf. The position term binds the list a second time, as [`shelf_order`]'s comma
@@ -6805,6 +6820,47 @@ mod tests {
         add_entry(&conn, &input("dear-usd", "nonfoil", 1)).unwrap();
         add_entry(&conn, &input("etched", "etched", 3)).unwrap();
         conn
+    }
+
+    /// Issue #939: the unpriced copies sit at the foot in **both** directions, and read A→Z
+    /// there rather than in the order they were added. The three are added Zulu, Mike, Alpha
+    /// so that an id tiebreak and a name tiebreak cannot agree by accident.
+    #[test]
+    fn unpriced_copies_sort_last_and_by_name_in_both_directions() {
+        let conn = crate::schema::memory_pair();
+        for (id, prices) in [
+            ("Zulu", "{}"),
+            ("Mike", "{}"),
+            ("Alpha", "{}"),
+            ("Dear", r#"{"usd":"50.00"}"#),
+            ("Cheap", r#"{"usd":"1.00"}"#),
+        ] {
+            conn.execute(
+                "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                    finishes,prices,raw)
+                 VALUES (?1,?1,?1,'tst','1','en','normal','[\"nonfoil\"]',?2,'{}')",
+                rusqlite::params![id, prices],
+            )
+            .unwrap();
+            add_entry(&conn, &input(id, "nonfoil", 1)).unwrap();
+        }
+        for key in ["price", "value"] {
+            for (dir, priced) in [("asc", "Cheap,Dear"), ("desc", "Dear,Cheap")] {
+                let ids: Vec<String> = list_entries(
+                    &conn,
+                    &CollectionQuery {
+                        sort: Some(vec![term(key, dir)]),
+                        ..Default::default()
+                    },
+                )
+                .unwrap()
+                .items
+                .into_iter()
+                .map(|r| r.card_id)
+                .collect();
+                assert_eq!(ids, C(&format!("{priced},Alpha,Mike,Zulu")), "{key} {dir}");
+            }
+        }
     }
 
     /// Ordering happens inside SQLite, so the chosen marketplace is the one thing about it

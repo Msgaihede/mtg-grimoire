@@ -1439,7 +1439,11 @@ fn list_statements(q: &WishlistQuery) -> crate::collection::ListStatements {
         q.sort.as_deref(),
         &crate::sorting::sorts_for(WISHLIST_SORTS, WISHLIST_PRICE_SORTS, UNIT_PRICE_ALIAS),
         "w.name ASC",
-        "w.id ASC",
+        // Name before the unique id, so every tie the reader's terms leave — above all the
+        // unpriced block a money sort's `NULLS LAST` gathers at the foot — reads A→Z rather
+        // than in the order the wishes were added (issue #939). `collection_tiebreak` has the
+        // whole argument.
+        "w.name ASC, w.id ASC",
     );
     // Shelves first, `collection::list_statements`' rule and its parameter order: the position
     // binds the list a second time, after the scope's parameters the count binds and before
@@ -3439,6 +3443,58 @@ mod tests {
             .unwrap();
         }
         conn
+    }
+
+    /// Issue #939, one table over: the unpriced wishes sit at the foot in **both** directions
+    /// and read A→Z there, not in the order they were added (Zulu, Mike, Alpha).
+    #[test]
+    fn unpriced_wishes_sort_last_and_by_name_in_both_directions() {
+        let conn = crate::schema::memory_pair();
+        for (id, prices) in [
+            ("Zulu", "{}"),
+            ("Mike", "{}"),
+            ("Alpha", "{}"),
+            ("Dear", r#"{"usd":"50.00"}"#),
+            ("Cheap", r#"{"usd":"1.00"}"#),
+        ] {
+            conn.execute(
+                "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                    prices,raw)
+                 VALUES (?1,?1,?1,'tst','1','en','normal',?2,'{}')",
+                rusqlite::params![id, prices],
+            )
+            .unwrap();
+            add_wish(
+                &conn,
+                &WishInput {
+                    card_id: Some(id.to_owned()),
+                    quantity: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+        for key in ["price", "cost"] {
+            for (dir, priced) in [("asc", "Cheap,Dear"), ("desc", "Dear,Cheap")] {
+                let names: Vec<String> = list_wishes(
+                    &conn,
+                    &WishlistQuery {
+                        sort: Some(vec![term(key, dir)]),
+                        ..Default::default()
+                    },
+                )
+                .unwrap()
+                .items
+                .into_iter()
+                .map(|r| r.name)
+                .collect();
+                let want: Vec<String> = format!("{priced},Alpha,Mike,Zulu")
+                    .split(',')
+                    .map(str::to_owned)
+                    .collect();
+                assert_eq!(names, want, "{key} {dir}");
+            }
+        }
     }
 
     /// Ordering happens inside SQLite, so the chosen marketplace has to reach it. Both keys,

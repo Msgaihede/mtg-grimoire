@@ -1555,14 +1555,16 @@ describe("ordering", () => {
           entry({ id: 3, cardId: at("unf", "239").id, quantity: 5 }), // Forest
         ],
       });
-      // The two twos tie, and `e.id ASC` decides them.
-      expect(idsFor(db, [{ key: "quantity", dir: "desc" }])).toEqual([3, 1, 2]);
+      // The two twos tie, and `collection_tiebreak` decides them: name first (issue #939),
+      // which puts Ancestral Recall ahead of Sol Ring although it was added second.
+      expect(idsFor(db, [{ key: "quantity", dir: "desc" }])).toEqual([3, 2, 1]);
+      // A second term the reader chose still outranks that tiebreak.
       expect(
         idsFor(db, [
           { key: "quantity", dir: "desc" },
-          { key: "name", dir: "asc" },
+          { key: "name", dir: "desc" },
         ]),
-      ).toEqual([3, 2, 1]);
+      ).toEqual([3, 1, 2]);
     });
 
     it("orders `finish` by the finish, then by the condition's grade", () => {
