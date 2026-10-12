@@ -38,7 +38,6 @@ import type { MarketplaceId } from "./marketplace";
 export type ViewId =
   | "home"
   | "search"
-  | "tags"
   | "collection"
   | "wishlist"
   | "decks"
@@ -175,7 +174,7 @@ export function isSearchView(value: string): value is SearchView {
 }
 
 /**
- * The four lists that keep a layout of their own — and the keys the `list_view` `app_meta` row is
+ * The three lists that keep a layout of their own — and the keys the `list_view` `app_meta` row is
  * written under.
  *
  * **Deliberately not {@link ViewId}, which is longer, and not {@link ZoomSection}, which is
@@ -184,9 +183,9 @@ export function isSearchView(value: string): value is SearchView {
  * same argument `ZOOM_SECTIONS` makes about not being derived from `ViewId`. `FilterBar`'s
  * `layoutFor` prop is this union by hand for the reason written there.
  */
-export const LIST_SECTIONS = ["search", "tags", "collection", "wishlist"] as const;
+export const LIST_SECTIONS = ["search", "collection", "wishlist"] as const;
 
-/** One of the four lists a layout is remembered for — {@link LIST_SECTIONS}. */
+/** One of the three lists a layout is remembered for — {@link LIST_SECTIONS}. */
 export type ListSection = (typeof LIST_SECTIONS)[number];
 
 /**
@@ -201,15 +200,14 @@ export function isListSection(value: string): value is ListSection {
 /**
  * Which store field each section's layout lives in.
  *
- * The four fields stay four fields rather than becoming one map, because every reader of them is
+ * The three fields stay three fields rather than becoming one map, because every reader of them is
  * a component selecting exactly one — `useAppStore((s) => s.collectionView)` re-renders on that
- * string alone, where a map would re-render all four pages' subscribers on any press. This record
+ * string alone, where a map would re-render all three pages' subscribers on any press. This record
  * is the one place that needs them addressed by name, which is the seam between the store's shape
  * and the row's.
  */
 export const LIST_VIEW_FIELD = {
   search: "searchView",
-  tags: "tagsView",
   collection: "collectionView",
   wishlist: "wishlistView",
 } as const satisfies Record<ListSection, string>;
@@ -351,25 +349,12 @@ interface AppState {
   wishlistView: SearchView;
   setWishlistView: (view: SearchView) => void;
   /**
-   * How the Tags page's wall is laid out. A fourth field rather than a fourth reader of
-   * `searchView`, for the reason the other three split: a reader who put the search in a table
-   * to compare prices was not saying anything about a wall they browse *by motif*, and the two
-   * pages are read one after the other rather than instead of each other.
-   *
-   * The Tags page draws `FilterBar`, whose layout pair is bound to a stored preference — so
-   * without a field of its own that pair would move the **search's** while changing nothing the
-   * reader can see on the search page, which is the "control that lies" the deck panel's
-   * `layoutToggle={false}` exists to avoid.
-   */
-  tagsView: SearchView;
-  setTagsView: (view: SearchView) => void;
-  /**
-   * Bumped by each of the four setters above — **that a layout was chosen**, as distinct from what
+   * Bumped by each of the three setters above — **that a layout was chosen**, as distinct from what
    * it was chosen to be.
    *
    * {@link AppState.zoomPulse}'s shape and for a sharpened version of its reason. A value-watcher
-   * would be wrong in both directions here: it would write back all four layouts that
-   * {@link hydrateListViews} had just seeded, which is four round trips at launch to tell the
+   * would be wrong in both directions here: it would write back all three layouts that
+   * {@link hydrateListViews} had just seeded, which is three round trips at launch to tell the
    * database what it said a moment earlier, and it would miss the press that lands a list on the
    * layout it was already showing. A press is the thing worth remembering, so the press is what is
    * counted.
@@ -379,7 +364,7 @@ interface AppState {
    *  the first one. */
   listViewSection: ListSection | null;
   /**
-   * Seed the four layouts from the stored `list_view` row — **once, at launch**, from
+   * Seed the three layouts from the stored `list_view` row — **once, at launch**, from
    * `useListViewPersistence`.
    *
    * A section the row says nothing about, names a list this build does not draw, or holds a word
@@ -1411,7 +1396,7 @@ export const useAppStore = create<AppState>((set) => ({
   // Art by default: this is a card app, and the table is the view you switch to when you
   // are comparing prices rather than looking at cards.
   //
-  // **All four open on art now, and the pulse below is what makes that a starting point rather
+  // **All three open on art now, and the pulse below is what makes that a starting point rather
   // than an opinion**: the layout a reader last chose is read back at launch, so a default is
   // only ever what a list looks like before anybody has said.
   searchView: "grid",
@@ -1441,13 +1426,6 @@ export const useAppStore = create<AppState>((set) => ({
       listViewPulse: s.listViewPulse + 1,
       listViewSection: "wishlist",
     })),
-  // Art by default, and this is the one of the four where the grid is not merely the better
-  // opening but the whole point: the page's question is "what does this illustration show",
-  // and a table of set codes and prices answers none of it. The table is still a press away
-  // for the trip where the question is what a themed deck would cost.
-  tagsView: "grid",
-  setTagsView: (tagsView) =>
-    set((s) => ({ tagsView, listViewPulse: s.listViewPulse + 1, listViewSection: "tags" })),
   listViewPulse: 0,
   listViewSection: null,
   // No pulse and no section: this is a value arriving, not a press happening. See the interface
@@ -1463,7 +1441,6 @@ export const useAppStore = create<AppState>((set) => ({
       if (s.listViewPulse !== 0) return {};
       const next: {
         searchView?: SearchView;
-        tagsView?: SearchView;
         collectionView?: SearchView;
         wishlistView?: SearchView;
       } = {};

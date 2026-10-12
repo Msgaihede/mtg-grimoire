@@ -23,11 +23,11 @@ export const SEARCH_OPEN_KEY = ["searchOpen"];
  * a blank section and nothing else — which page has a column is a question about screens the
  * crate never draws, so a word it does not know is a row it stores rather than a row it refuses.
  *
- * `SearchSurface` in `CardSearchPanel.tsx` is the same three words for the `data-search-over`
+ * `SearchSurface` in `CardSearchPanel.tsx` is the same words for the `data-search-over`
  * attribute. Two names for one vocabulary is deliberate: one is the storage key and one is a DOM
  * value, and folding them would make a rename of either a change to the other.
  */
-export type SearchSection = "deck" | "collection" | "wishlist";
+export type SearchSection = "deck" | "collection" | "wishlist" | "tags";
 
 /**
  * What each column does before the stored answer has arrived, and on a database that has never
@@ -69,6 +69,9 @@ export const DEFAULT_SEARCH_OPEN: Readonly<Record<SearchSection, boolean>> = {
   deck: true,
   collection: false,
   wishlist: false,
+  // The search page's tag sidebar (issue #937) opens railed: its body is what reads the tag
+  // taxonomies, and a reader who has never asked for tags should not pay for them.
+  tags: false,
 };
 
 /**

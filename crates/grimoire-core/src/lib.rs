@@ -141,6 +141,9 @@ pub mod marketplace_feed;
 pub mod nav;
 pub mod new_printings;
 /// **The one place this crate knows which machine it is on.**
+/// **How wide each docked side panel was last dragged** (issue #937) — [`searchopen`]'s shape
+/// with a width: one `app_meta` row, section → width.
+pub mod panelwidth;
 pub mod platform;
 pub mod price_history;
 pub mod recent_cards;

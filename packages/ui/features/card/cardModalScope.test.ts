@@ -65,17 +65,4 @@ describe("the card modal's scope", () => {
     expect(result.current.quantity).toBe(edits);
     expect(result.current.deckControls).toBe(false);
   });
-
-  /**
-   * The Tags page is a wall of cards like the search page and holds no quantity of its own — it
-   * is browsing, not a list of anything the reader owns. It gets its own surface name because the
-   * rail can differ; it does not get a stepper.
-   */
-  it("names the tags wall without giving it a stepper", () => {
-    useAppStore.setState({ activeView: "tags", paneDeckContext: null });
-    const { result } = renderHook(() => useCardModalScope());
-
-    expect(result.current.surface).toBe("tags");
-    expect(result.current.quantity).toBeNull();
-  });
 });

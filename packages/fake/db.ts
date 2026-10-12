@@ -2103,6 +2103,12 @@ export interface FakeDb {
    */
   searchOpen: Record<string, boolean>;
   /**
+   * `app_meta.panel_width` — how wide each docked side panel was last dragged, as section name →
+   * CSS pixels. {@link FakeDb.searchOpen}'s field with a number where the `boolean` is; `{}` for
+   * "nothing stored", so every panel opens at the frontend's own default width.
+   */
+  panelWidth: Record<string, number>;
+  /**
    * `app_meta.shelf_folds` — the shelves the reader moved off their default fold, per page:
    * folder id (decimal) → collapsed.
    *
@@ -3592,6 +3598,9 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // `DEFAULT_SEARCH_OPEN` draws it: every column open, which is what the app ships. A story that
     // wants one railed passes that one section and leaves the others out.
     searchOpen: {},
+    // Every panel at the frontend's default width — `panel_width`'s answer for a row never
+    // written.
+    panelWidth: {},
     // Every shelf at its default on both pages — `shelf_folds`' answer for a row never written.
     shelfFolds: { collection: {}, wishlist: {} },
     // Every stack drawn in every deck — `hidden_stacks`' answer for a row never written.
@@ -12176,6 +12185,24 @@ export function readHandlers(db: FakeDb) {
       Object.fromEntries(Object.entries(db.searchOpen).filter(([section]) => section !== "")),
 
     /**
+     * `panelwidth::panel_width` — every docked panel's remembered width. `panelwidth::stored`'s
+     * per-entry rule: a blank key, a non-integer and a width outside
+     * `PANEL_WIDTH_MIN..=PANEL_WIDTH_MAX` are dropped, so a story seeded with junk sees what the
+     * crate would answer. A copy, so a caller mutating it cannot reach the store. A read, so it
+     * answers through a sync.
+     */
+    panel_width: (): Record<string, number> =>
+      Object.fromEntries(
+        Object.entries(db.panelWidth).filter(
+          ([section, width]) =>
+            section !== "" &&
+            Number.isInteger(width) &&
+            width >= PANEL_WIDTH_MIN &&
+            width <= PANEL_WIDTH_MAX,
+        ),
+      ),
+
+    /**
      * `shelffolds::shelf_folds` — every folded-shelf override, both pages always present. A copy,
      * so a caller mutating the answer cannot reach the store. A read, so it answers through a sync.
      */
@@ -17558,6 +17585,10 @@ function importIntoCollection(
   return out;
 }
 
+/** `panelwidth::MIN_PANEL_WIDTH` and `MAX_PANEL_WIDTH`, the bounds a stored panel width keeps. */
+export const PANEL_WIDTH_MIN = 80;
+export const PANEL_WIDTH_MAX = 4000;
+
 /** `shelffolds::UNKNOWN_PAGE` and `shelffolds::NOT_A_SHELF`, verbatim. */
 const SHELF_PAGE_UNKNOWN =
   "Shelves are folded on the collection or the wishlist, and nowhere else.";
@@ -22587,6 +22618,27 @@ export function writeHandlers(db: FakeDb) {
       refuseIfBusy(db);
       if (args.section === "") throw refuse("A search section cannot be blank.");
       db.searchOpen = { ...db.searchOpen, [args.section]: args.open };
+    },
+
+    /**
+     * `panelwidth::set_panel_width` — remember one docked panel's width.
+     * {@link writeHandlers.set_search_open}'s handler with a number where the `bool` is: the lock
+     * first, then a blank section and a width outside the crate's bounds are refused in its words.
+     * A non-integer is refused too, standing in for Tauri's `u32` deserializer.
+     */
+    set_panel_width: (args: { section: string; width: number }): void => {
+      refuseIfBusy(db);
+      if (args.section === "") throw refuse("A search section cannot be blank.");
+      if (
+        !Number.isInteger(args.width) ||
+        args.width < PANEL_WIDTH_MIN ||
+        args.width > PANEL_WIDTH_MAX
+      ) {
+        throw refuse(
+          `A panel width must be between ${PANEL_WIDTH_MIN} and ${PANEL_WIDTH_MAX} pixels, not ${args.width}.`,
+        );
+      }
+      db.panelWidth = { ...db.panelWidth, [args.section]: args.width };
     },
 
     /**

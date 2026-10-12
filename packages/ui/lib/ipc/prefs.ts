@@ -220,6 +220,19 @@ export const prefCommands = {
   setSearchOpen: (section: string, open: boolean) =>
     invoke<void>("set_search_open", { section, open }),
   /**
+   * Every docked panel's remembered width in CSS pixels, section → width — {@link searchOpen}'s
+   * contract with a number where the `boolean` is. A section is absent until the reader drags
+   * it, and an unreadable entry is dropped, so the default width is this side's. Infallible.
+   */
+  panelWidth: () => invoke<Record<string, number>>("panel_width"),
+  /**
+   * Remember one panel's width, leaving the other entries alone. Rejects a blank section and a
+   * width outside 80..=4000 (`searchwidth.rs`'s bounds), and answers BUSY under a sync — a
+   * refusal the caller swallows, {@link setSearchOpen}'s trade.
+   */
+  setPanelWidth: (section: string, width: number) =>
+    invoke<void>("set_panel_width", { section, width }),
+  /**
    * The folded-shelf overrides on both pages. {@link searchOpen}'s contract one level deeper:
    * **infallible by signature** — an unreadable row answers both pages empty, which is every
    * shelf at its default.

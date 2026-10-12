@@ -853,6 +853,12 @@ commands! {
     };
     write mark_new_printings_seen in new_printings(at: i64) = |conn| mark_seen(conn, at);
 
+    // panelwidth
+    read panel_width in panelwidth() = |conn| Ok(stored(conn));
+    write set_panel_width in panelwidth(section: String, width: u32) = |conn| {
+        store(conn, &section, width)
+    };
+
     // price_history
     read price_history in price_history(card_id: String, finish: String, marketplace: Option<Marketplace>) = |conn| {
         history(conn, &card_id, &finish, marketplace.unwrap_or_default())

@@ -38,7 +38,7 @@
  * argument had a hole in it: it was written when there was **one** number for the whole app, so
  * "the zoom" really was a momentary posture that a single card could set for every wall at once.
  * Split per section it is not that any more. A reader who sizes the deck editor so a 100-card pile
- * fits the desk, or the Tags wall up so an illustration is legible, has configured *that wall* —
+ * fits the desk, or the search wall up so an illustration is legible, has configured *that wall* —
  * and the app forgetting it on every launch was the complaint.
  *
  * What is left of the old worry is the 200% surprise, and the split answers that too: a size
@@ -143,7 +143,6 @@ export const MAX_ZOOM: number = ZOOM_STEPS[ZOOM_STEPS.length - 1];
  */
 export const ZOOM_SECTIONS = [
   "search",
-  "tags",
   "collection",
   "collectionSearch",
   "wishlist",
@@ -175,11 +174,6 @@ export type ZoomSection = (typeof ZOOM_SECTIONS)[number];
  */
 export const DEFAULT_SECTION_ZOOMS: Readonly<Record<ZoomSection, number>> = {
   search: DEFAULT_ZOOM,
-  // The Tags page's wall. Its own key rather than the search's for the reason every split on
-  // this list has: the two walls are never on screen together, but they are read for different
-  // reasons — one to find a card by name, one to look at what a motif's illustrations *are* —
-  // and a reader who sized the art up to read a picture was not resizing a search by name.
-  tags: DEFAULT_ZOOM,
   collection: DEFAULT_ZOOM,
   // The collection page's docked card search. Its own key rather than `collection`'s because the
   // two walls are on screen **together** — a 206px column of printings beside the binder it files

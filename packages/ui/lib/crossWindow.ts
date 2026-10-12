@@ -60,6 +60,7 @@ export const FOLLOW_LIVE_APP_META: readonly QueryKey[] = [
 export const PER_WINDOW_KEYS: readonly QueryKey[] = [
   ["navCollapsed"],
   ["searchOpen"],
+  ["panelWidth"],
   ["deckFolderPane"],
   ["deckSort"],
   ["deckSearchTab"],

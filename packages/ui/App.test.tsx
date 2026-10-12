@@ -645,17 +645,16 @@ it("draws the search view", async () => {
 });
 
 /**
- * **The six occasional views stay out of the first chunk** (issue #557). Nothing goes red when a
+ * **The five occasional views stay out of the first chunk** (issue #557). Nothing goes red when a
  * view is imported statically again — the app works, it only starts slower, and on the web app
  * that is the whole cost of a first visit. A static import of any of them anywhere in `App.tsx`
  * pulls its chunk, and the scanner's and Settings' dependencies with it, back into `index-*.js`.
  * Read as text because the build's chunk graph is not something a unit test can see.
  */
-it("loads the six occasional views on first open rather than with the app", () => {
+it("loads the five occasional views on first open rather than with the app", () => {
   for (const view of [
     "scanner/ScannerPage",
     "settings/SettingsPage",
-    "tags/TagsPage",
     "trade/TradePage",
     "playtesting/PlaytestingPage",
     "share/SharedPage",
@@ -768,21 +767,24 @@ it("closes the deck when Decks is picked from inside the editor", async () => {
 });
 
 /**
- * The sixth view, and the second way into the corpus. The sidebar entry has to reach the real
- * page: `TagsPage`'s own tests render it directly, so nothing there can see whether `ViewId`,
- * `NAV` and `ActiveView` actually agree about the word `tags`.
+ * **Tag search is the search page's sidebar now** (issue #937): the Tagger rail entry is gone, and
+ * the sidebar is on the page a reader reaches from the Search entry — railed, so no taxonomy is
+ * read until it is opened.
  */
-it("opens the tag browser on the tags entry", async () => {
+it("draws tag search as a sidebar on the search page, with no Tagger entry", async () => {
   render(<App />);
 
-  await userEvent.click(screen.getByRole("button", { name: "Tagger" }));
+  const sidebar = within(screen.getByRole("navigation", { name: "Views" }));
+  expect(sidebar.queryByRole("button", { name: "Tagger" })).not.toBeInTheDocument();
+  await userEvent.click(sidebar.getByRole("button", { name: "Search" }));
 
-  expect(
-    await screen.findByRole("heading", { name: "Browse cards by tag", level: 2 }),
-  ).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "Card search" })).toBeInTheDocument();
+  const toggle = await screen.findByRole("button", { name: "Expand tag search" });
+  expect(screen.queryByText(/art tags are still downloading/i)).not.toBeInTheDocument();
+
+  await userEvent.click(toggle);
   // And the honest empty state, since this file's database has never ingested either taxonomy.
   expect(await screen.findByText(/art tags are still downloading/i)).toBeInTheDocument();
-  expect(screen.queryByRole("heading", { name: "Card search" })).not.toBeInTheDocument();
 });
 
 /** The second live view. The sidebar entry has to reach the real thing, not the blurb that

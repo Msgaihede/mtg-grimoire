@@ -186,6 +186,9 @@ use grimoire_core::scratch;
 /// one card image, behind the pacing gate and the 429 lockout. `grimoire-core`'s, re-exported,
 /// over its `platform::http`.
 pub use grimoire_core::scryfall;
+/// **How wide each docked side panel was last dragged** — [`searchopen`]'s shape with a width
+/// where the `bool` is (issue #937, the search page's tag sidebar).
+pub mod panelwidth;
 pub mod search;
 pub mod searchopen;
 /// **How much of each set the reader owns**, for the home page's Set completion widget. One

@@ -7,7 +7,6 @@ import {
   Search,
   Settings,
   Swords,
-  Tags,
   type LucideIcon,
 } from "lucide-react";
 import { CabinetFiling, Cards } from "@/components/icons";
@@ -21,14 +20,14 @@ export interface NavEntry {
 }
 
 /**
- * The eleven destinations, in the order the column draws them — and the order is the point.
+ * The ten destinations, in the order the column draws them — and the order is the point.
  *
- * Home first, then two ways into the database, then the three lists the reader owns, then the
+ * Home first, then the way into the database, then the three lists the reader owns, then the
  * three things a reader *does* with them, then Settings. **Home is at the top because it is where
  * the app opens** and a reader reads a column downward: a landing page anywhere but the first row
- * would be a page the reader is on and cannot find. Search asks "which card is this"; Tagger asks
- * "what is this card of", which is why it sits directly under Search rather than among the lists.
- * Below the pair the run is by how often a reader is in it: Decks is where the app is used,
+ * would be a page the reader is on and cannot find. Search asks both "which card is this" and —
+ * through its tag sidebar, where the Tagger page went on 2026-10-11 (issue #937) — "what is this
+ * card of". Below it the run is by how often a reader is in it: Decks is where the app is used,
  * Collection is what backs a deck, Wishlist is what is not owned yet. Settings is last because it
  * is not a destination in the same sense.
  *
@@ -41,9 +40,7 @@ export interface NavEntry {
  * literally, and that `switchView`'s chords can go on binding against by index.
  *
  * **The label is also the ribbon's `<h1>`** — `Shell` looks the active view's title up in here,
- * so there is one word per view rather than two that can drift. "Tagger" is Scryfall's own name
- * for the taxonomy that view browses, and the page's own heading below it still says what it
- * does in a sentence.
+ * so there is one word per view rather than two that can drift.
  *
  * **This is a module rather than a const inside `AppShell` because the rail is not its only
  * reader.** The keyboard map (`KeyMap`) heads each view's shortcuts with this label, and Settings'
@@ -56,11 +53,11 @@ export const NAV: readonly NavEntry[] = [
   // The page the app opens on, and therefore the row a reader looks for first — `store.ts`'s
   // `activeView` starts here and `useStartView` is what may move it. **Its arrival renumbered the
   // whole run of chords**: it takes `Ctrl+1`, everything below shifts one digit, and Settings is
-  // pushed off the end of nine. `lib/shortcuts.ts`'s `switchView` is where that is argued and
+  // pushed off the end of nine — until the Tagger row left (issue #937) and handed it `Ctrl+9`
+  // back. `lib/shortcuts.ts`'s `switchView` is where that is argued and
   // `docs/reference/keyboard-shortcuts.md` carries the record.
   { id: "home", label: "Home", Icon: House },
   { id: "search", label: "Search", Icon: Search },
-  { id: "tags", label: "Tagger", Icon: Tags },
   { id: "decks", label: "Decks", Icon: Cards },
   { id: "collection", label: "Collection", Icon: CabinetFiling },
   { id: "wishlist", label: "Wishlist", Icon: Heart },
@@ -68,12 +65,10 @@ export const NAV: readonly NavEntry[] = [
   // a handshake rather than a share glyph is that the reader is here to *trade*, not to publish.
   // Publishing is the Collection's own control.
   //
-  // ⚠️ **One of the two destinations with no chord, and the one whose reason is its own.**
-  // Eleven entries against `Ctrl+1…9` is two too many (`Ctrl+0` is not a tenth step of that run —
-  // see `lib/shortcuts.ts`), and this is the row that is not always drawn: a chord's whole value
-  // is that it does not move, so binding a digit to a row that appears and disappears is what
-  // would make one press mean two things to two readers. Settings is the other, and it goes
-  // without for an unrelated reason — the run simply ends before it. The reason this entry *had*
+  // ⚠️ **The one destination with no chord, for a reason of its own.** This is the row that is
+  // not always drawn: a chord's whole value is that it does not move, so binding a digit to a
+  // row that appears and disappears is what would make one press mean two things to two readers
+  // — and that is why the other nine rows fit `Ctrl+1…9` exactly. The reason this entry *had*
   // `Ctrl+6` was that nothing else reached the view, and that is retired —
   // `features/collection/ShareFolderMenu.tsx` draws **Open a shared collection** beside the Share
   // control, which is a signpost where a chord was only a key.
@@ -87,17 +82,12 @@ export const NAV: readonly NavEntry[] = [
   // out what this app intends to be, and `WorkInProgress` says so in one line rather than leaving
   // a row that looks finished and does nothing. They sit here for Scanner's reason — Settings
   // stays the last row —
-  // so the chords after them moved again, and moved a second time when Home arrived at the head:
-  // Playtesting reads `Ctrl+9` now, and the keyboard doc has the whole record of why an insertion
-  // anywhere but the end renumbers.
+  // so the chords after them moved again, moved a second time when Home arrived at the head, and
+  // a third when the Tagger row left: Playtesting reads `Ctrl+8` now, and the keyboard doc has the
+  // whole record of why an insertion or a removal anywhere but the end renumbers.
   { id: "trade", label: "Trade", Icon: Receipt },
   { id: "playtesting", label: "Playtesting", Icon: Swords },
-  // ⚠️ **The second destination with no chord, and `Ctrl+9` no longer opens it.** The run is nine
-  // digits long against eleven rows, and the two that go without go without for two different
-  // reasons: Shared's row is conditional, and this one is simply past the end. Losing the digit is
-  // what buys Home the top of the column, which is where a reader looks for the page they are
-  // landed on. It costs this view its chord and nothing else — unlike Shared, whose row can be
-  // absent, this one is drawn on every screen at a fixed place, so it was always one press away
-  // and still is.
+  // `Ctrl+9` — Settings' chord from 2026-09-08 until Home pushed it off the end of the run, and
+  // again since the Tagger row left (issue #937): ten rows, Shared without a digit, nine chords.
   { id: "settings", label: "Settings", Icon: Settings },
 ];

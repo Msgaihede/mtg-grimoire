@@ -111,7 +111,7 @@ describe("the open deck", () => {
  * whether the editor is actually the thing on screen afterwards.
  */
 describe("the deck a reader parked on their way out", () => {
-  const park = (view: "collection" | "wishlist" | "search" | "settings" | "tags") => {
+  const park = (view: "collection" | "wishlist" | "search" | "settings") => {
     useAppStore.getState().setActiveView("decks");
     useAppStore.getState().setOpenDeckId(4);
     useAppStore.getState().setActiveView(view);
@@ -1146,14 +1146,13 @@ describe("the stops a removal moved the reader off", () => {
 });
 
 /**
- * Four layouts, four settings. Every one of them opens on the art — this is a card app — and a
+ * Three layouts, three settings. Every one of them opens on the art — this is a card app — and a
  * reader who switches one to compare prices has said nothing about the other three, which one
  * shared toggle would decide for them in a view they were not looking at.
  */
-describe("the four result layouts", () => {
+describe("the three result layouts", () => {
   it("opens every list on art", () => {
     expect(useAppStore.getState().searchView).toBe("grid");
-    expect(useAppStore.getState().tagsView).toBe("grid");
     // The one that used to open on the table, and the reversal is `store.ts`' own note: the
     // choice is remembered now, so a default is only what a list looks like before anybody
     // has said.
@@ -1250,7 +1249,6 @@ describe("hydrating the stored layouts", () => {
     expect(useAppStore.getState().collectionView).toBe("table");
     expect(useAppStore.getState().searchView).toBe("grid");
     expect(useAppStore.getState().wishlistView).toBe("grid");
-    expect(useAppStore.getState().tagsView).toBe("grid");
   });
 
   /**
