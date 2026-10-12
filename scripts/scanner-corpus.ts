@@ -4,6 +4,8 @@
 //   pnpm scanner:corpus status         count what is where; changes nothing
 //   pnpm scanner:corpus pull           copy new scans inbox → corpus, mirror the corpus here
 //   pnpm scanner:corpus pull --drain   the same, then delete from the inbox what verified
+//   pnpm scanner:corpus remove <id>... [--from-file <path>] [--yes]
+//                                      take named scans out of both buckets and the mirror
 //
 // **The inbox holds 500 runs and expects to be emptied** (`infrastructure/scan-worker/
 // README.md`); the corpus bucket is where a read scan lives after. Before a pair is copied its
@@ -15,20 +17,32 @@
 //
 // **A scan deleted from the corpus bucket is deleted here on the next pull**: frames, slices,
 // the last report and its rows in every baseline, here and in the bucket. That is how a
-// deletion request is honoured. Baselines (`baselines/*.json`) go both ways and are reconciled
-// against the corpus on every pull; an upload that fails is listed in `baselines/.pending.json`
-// and retried on the next. A baseline is written once: a changed one is not re-uploaded.
+// deletion request is honoured. **`remove` is the other way to delete, by name**, for a bad
+// scan, a wrongly tagged one or a general cleanup (remove only: a scan is never relabelled). It
+// is a dry run — what each id is, where — until `--yes`, which deletes exactly `labels/<id>.json`
+// and `runs/<id>.bin`, whichever are listed, from the inbox first and then the corpus (so the
+// next pull cannot adopt it again), then the mirror, then the ids' rows from every baseline. An
+// id found nowhere (and in no baseline) makes the exit code 1, and so does a step that fails: that
+// ends the id, whose later steps are left to a rerun, so a failed inbox delete never lets the
+// corpus copy go and the next pull adopt the inbox's again. `--yes` also runs the whole baseline
+// sync (downloads what is missing, uploads what is local-only or pending). Never run
+// `remove --yes` unasked.
+//
+// Baselines (`baselines/*.json`) go both ways and are reconciled against the corpus on every
+// pull; an upload that fails is listed in `baselines/.pending.json` and retried on the next. A
+// baseline is written once: a changed one is not re-uploaded.
 //
 // Credentials are `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`, from the
 // environment and nowhere else: an R2 API token with object read and write on the two buckets.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
-import { keepingRuns, parsePending, settlePending } from "./scanner-corpus/baselines.ts";
-import { parseArgs } from "./scanner-corpus/cli.ts";
+import { readFileSync } from "node:fs";
+import { keepingRuns } from "./scanner-corpus/baselines.ts";
+import { parseArgs, parseIdFile, removalIds } from "./scanner-corpus/cli.ts";
 import { checkPair, corpusDir, localIds, removePair, removeReport, sweepOrphans, writePair } from "./scanner-corpus/mirror.ts";
 import { drainable, pairs, plan, refusesPrune, unverified } from "./scanner-corpus/plan.ts";
+import { reconcileBaselines } from "./scanner-corpus/reconcile.ts";
+import { runRemove } from "./scanner-corpus/remove.ts";
 import { createS3, type Fetch } from "./scanner-corpus/s3.ts";
 
 const INBOX = "mtg-grimoire-scans";
@@ -40,8 +54,13 @@ function fail(message: string): never {
 }
 
 let parsed: ReturnType<typeof parseArgs>;
+let ids: string[] = [];
 try {
   parsed = parseArgs(process.argv.slice(2));
+  if (parsed.command === "remove") {
+    const fromFile = parsed.fromFile === null ? [] : parseIdFile(readFileSync(parsed.fromFile, "utf8"));
+    ids = removalIds(parsed.ids, fromFile);
+  }
 } catch (error) {
   fail((error as Error).message);
 }
@@ -62,6 +81,14 @@ const gitCommonDir = execFileSync("git", ["rev-parse", "--path-format=absolute",
   encoding: "utf8",
 }).trim();
 const dir = corpusDir(process.env, gitCommonDir);
+
+if (command === "remove") {
+  // A listing that fails throws before anything is deleted: a sentence, not a stack.
+  const code = await runRemove({ s3, dir, inbox: INBOX, corpus: CORPUS, ids, yes: parsed.yes, log: console.log }).catch(
+    (error: Error) => fail(`${error.message} — nothing was deleted`),
+  );
+  process.exit(code);
+}
 
 const listBoth = async (bucket: string) => [
   ...(await s3.list(bucket, "runs/")),
@@ -147,62 +174,17 @@ if (pruned.length && removeReport(dir)) {
 // Baselines, reconciled on every pull: down what the corpus has and this machine lacks; out of
 // every local one the rows of any scan the corpus no longer holds; then up what only this
 // machine has, what was just rewritten and what an earlier pull could not upload.
-const baselines = join(dir, "baselines");
-mkdirSync(baselines, { recursive: true });
-const safeName = (name: string) => name.endsWith(".json") && !name.startsWith(".");
-for (const key of todo.baselinesDown.filter((k) => safeName(basename(k)))) {
-  try {
-    const path = join(baselines, basename(key));
-    if (!existsSync(path)) writeFileSync(path, await s3.get(CORPUS, key));
-  } catch (error) {
-    failed.push(`${key}: ${(error as Error).message}`);
-  }
-}
-const remote = new Set(todo.baselinesDown.map((key) => basename(key)));
-const pendingPath = join(baselines, ".pending.json");
-const pending = parsePending(existsSync(pendingPath) ? readFileSync(pendingPath, "utf8") : null);
 const held = [...pairs(corpusAfter).keys()];
-const rewritten = new Set<string>();
-const unreadable = new Set<string>();
-for (const name of readdirSync(baselines).filter(safeName)) {
-  try {
-    const path = join(baselines, name);
-    const text = held.length ? keepingRuns(readFileSync(path, "utf8"), held) : null;
-    if (text === null) {
-      JSON.parse(readFileSync(path, "utf8"));
-      continue;
-    }
-    writeFileSync(path, text);
-    rewritten.add(name);
-    console.log(`baseline ${name} rewritten without the scans the corpus no longer holds`);
-  } catch (error) {
-    unreadable.add(name);
-    failed.push(`baselines/${name}: not uploaded, ${(error as Error).message}`);
-  }
-}
-const local = readdirSync(baselines).filter(safeName);
-const upload = local.filter(
-  (n) => !unreadable.has(n) && (!remote.has(n) || rewritten.has(n) || pending.includes(n)),
-);
-const uploaded: string[] = [];
-const notUploaded: string[] = [];
-for (const name of upload) {
-  try {
-    await s3.put(CORPUS, `baselines/${name}`, readFileSync(join(baselines, name)));
-    uploaded.push(name);
-  } catch (error) {
-    notUploaded.push(name);
-    failed.push(`baselines/${name}: ${(error as Error).message} — retried on the next pull`);
-  }
-}
-// A pending name that no longer exists, or cannot be read, has nothing to retry.
-const gone = pending.filter((n) => !local.includes(n) || unreadable.has(n));
-const nextPending = settlePending(pending, notUploaded, [...uploaded, ...gone]);
-if (nextPending.join() !== pending.join()) {
-  const tmp = `${pendingPath}.tmp`;
-  writeFileSync(tmp, JSON.stringify(nextPending));
-  renameSync(tmp, pendingPath);
-}
+await reconcileBaselines({
+  dir,
+  s3,
+  bucket: CORPUS,
+  down: todo.baselinesDown,
+  rewrite: (text) => (held.length ? keepingRuns(text, held) : null),
+  without: "the scans the corpus no longer holds",
+  failed,
+  log: console.log,
+});
 
 console.log(`adopted ${copied.length}, fetched ${fetched}, pruned ${pruned.length}`);
 if (wrong.length) {

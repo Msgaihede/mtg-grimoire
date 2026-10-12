@@ -107,6 +107,10 @@ Related: the `running-the-app` skill (locks and ports), [live-ui-verification.md
   `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`. **Never run `scanner:corpus pull` unasked**:
   it writes to a bucket, and `--drain` deletes from the inbox. `status` changes nothing. An
   argument it does not know is refused, before any network call.
+  `pnpm scanner:corpus remove <id>... [--from-file <path>] [--yes]` takes named scans out of both
+  buckets and the mirror (bad or mislabelled scans, cleanup; remove only, never a relabel). Without
+  `--yes` it is a dry run that lists where each id is and deletes nothing; **never run
+  `remove --yes` unasked**. The report's *Copy remove command* button builds the line.
   `pnpm scanner:replay [--baseline <name>] [--save-baseline <name>] [--only <text>]` replays that
   mirror through the scanner (release build of `replay`, a few minutes the first time) and writes
   `summary.md` and `report.html` beside it; it asks no network and takes no lock. The mirror and

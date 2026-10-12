@@ -68,13 +68,32 @@ export function checkPair(label: Uint8Array, run: Uint8Array): string | null {
   }
 }
 
+/** The four places a scan lives here. */
+const localPaths = (dir: string, id: string) => [
+  join(dir, "frames", id),
+  join(dir, "out", "slices", id),
+  join(dir, "runs", `${id}.bin`),
+  join(dir, "labels", `${id}.json`),
+];
+
+/** Whether any of a scan's four paths exists, a whole pair or not (unlike `localIds`, which needs both files). */
+export function hasLocal(dir: string, id: string): boolean {
+  return localPaths(dir, id).some((path) => existsSync(path));
+}
+
+/**
+ * Delete whichever of a scan's four paths exist: its frames, its slices, its run and its label.
+ * The label goes last, so a removal stopped before it leaves the label behind. `localIds` needs
+ * both files and so stops seeing the scan once the run is gone; a rerun of `remove` finds what is
+ * left by `hasLocal`, and a pull sweeps a frame or slice folder of no pair (`sweepOrphans`).
+ */
 export function removePair(dir: string, id: string): void {
   checked(id);
-  // The label last: `localIds` reads it, so a removal interrupted before it is seen and redone.
-  rmSync(join(dir, "frames", id), { recursive: true, force: true });
-  rmSync(join(dir, "out", "slices", id), { recursive: true, force: true });
-  rmSync(join(dir, "runs", `${id}.bin`), { force: true });
-  rmSync(join(dir, "labels", `${id}.json`), { force: true });
+  const [frames, slices, run, label] = localPaths(dir, id);
+  rmSync(frames, { recursive: true, force: true });
+  rmSync(slices, { recursive: true, force: true });
+  rmSync(run, { force: true });
+  rmSync(label, { force: true });
 }
 
 /** The frame and slice folders whose id is not a local pair (and is a safe id). */

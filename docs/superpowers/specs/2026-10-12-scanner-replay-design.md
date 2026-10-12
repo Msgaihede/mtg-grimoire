@@ -77,13 +77,40 @@ changing the inbox Worker.
   as empty beside a non-empty mirror**: that is an unreadable bucket more likely than a bucket
   emptied on purpose, so the sync refuses with a sentence before it adopts or prunes anything.
   A full, deliberate purge is therefore refused until the mirror folder is removed by hand.
-- **An id is `[A-Za-z0-9_-]+`**, because it becomes a file name and a folder. A key whose id is
+- **An id is `[A-Za-z0-9_][A-Za-z0-9_-]*`**, because it becomes a file name and a folder, and never starts with `-`, which would read as a flag in a command. A key whose id is
   anything else is reported as strange and never read, copied or removed.
 - **Transport**: R2's S3 API, SigV4 signed with `node:crypto` in one small module (no new
   dependency). Credentials from `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`
   in the environment only; missing ones are a sentence and exit 1. Never written to a file.
 - **Shape**: a pure planner (`plan(inbox, corpus, local) -> actions`) and a thin executor, so
   the plan is tested without a network.
+
+#### Removing scans: `remove` (added 2026-10-13)
+
+`pnpm scanner:corpus remove <id>... [--from-file <path>] [--yes]` is the cleanup for a bad scan,
+a wrongly tagged one or a general tidy-up. Decided with the owner: **remove only**, no relabel and
+no exclude list, so the corpus holds only labels a reader chose.
+
+- **Ids** come from the arguments and a file (one a line; blank lines and `#` lines skipped;
+  duplicates collapsed). Each must be a safe id; one that is not, or none at all, is a sentence
+  before any network call.
+- **Without `--yes` it is a dry run**: it lists both buckets and the mirror and says per id where
+  it was found (inbox, corpus: run, label or both; the mirror) and how many rows it has in each
+  local baseline, then that nothing was deleted. An id found nowhere is said so and makes the exit
+  code 1, in a dry run and a real one, without stopping the others.
+- **With `--yes`**, per id: the inbox's label, its run, the corpus's label, its run, then the local
+  pair; then, after all ids, the last report and the baselines. The inbox goes before the corpus
+  so an interrupted run cannot be adopted again; the label before the run as `--drain` does.
+  Only the four exact keys are deleted, and only those listed, so a half pair is removable. A
+  failed step ends that id (deleting the corpus copy after a failed inbox delete would let the
+  next pull re-adopt it), is listed, and makes the exit code 1.
+- **The empty-corpus refusal does not apply**: it guards pruning by absence and `remove` deletes
+  by name. For the same reason the baselines lose only the removed ids' rows (`withoutRuns`),
+  never "everything the corpus does not hold". The reconciliation is the pull's own
+  (`reconcileBaselines`), called by both.
+- **The report picks the ids**: a box on each scan, and a bar that shows how many are ticked and
+  copies `pnpm scanner:corpus remove <id> …` (or shows it in a box when the clipboard refuses).
+  The page deletes nothing and makes no request.
 
 ### 2. Replay: `crates/card-scanner/src/bin/replay.rs`, behind `builder`
 

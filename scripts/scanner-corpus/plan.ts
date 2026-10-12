@@ -18,10 +18,15 @@ export type Plan = {
   baselinesDown: string[];
 };
 
-/** A scan id: no dot and no slash, so it cannot name anything outside its folder. */
-export const ID = /^[A-Za-z0-9_-]+$/;
-const RUN = /^runs\/([A-Za-z0-9_-]+)\.bin$/;
-const LABEL = /^labels\/([A-Za-z0-9_-]+)\.json$/;
+/**
+ * A scan id: no dot and no slash, so it cannot name anything outside its folder, and no leading
+ * `-`, so it can never read as a flag in a command line. The one definition: the report's script
+ * and every key pattern here are made from it.
+ */
+export const ID_BODY = "[A-Za-z0-9_][A-Za-z0-9_-]*";
+export const ID = new RegExp(`^${ID_BODY}$`);
+const RUN = new RegExp(`^runs/(${ID_BODY})\\.bin$`);
+const LABEL = new RegExp(`^labels/(${ID_BODY})\\.json$`);
 
 /** A corpus that lists no scans beside a mirror that holds some is a bad listing, not a purge. */
 export function refusesPrune(corpusPairs: number, localCount: number): boolean {
@@ -82,4 +87,48 @@ export function drainable(candidates: string[], inbox: Entry[], corpusAfter: Ent
 export function unverified(adopted: string[], inbox: Entry[], corpusAfter: Entry[]): string[] {
   const ok = new Set(drainable(adopted, inbox, corpusAfter));
   return adopted.filter((id) => !ok.has(id));
+}
+
+/** Which of a scan's two objects a bucket holds. */
+export type Side = "both" | "run" | "label" | null;
+export type Deletion = { bucket: "inbox" | "corpus"; key: string };
+export type Removal = {
+  id: string;
+  inbox: Side;
+  corpus: Side;
+  /** The mirror holds the pair (`localIds`). */
+  local: boolean;
+  /** Found in neither bucket nor the mirror: nothing to delete, and the command exits 1. */
+  notFound: boolean;
+  /** Only objects that were listed, in the order they are deleted. */
+  deletions: Deletion[];
+};
+
+/**
+ * What `remove` would do to each id, from the listings alone. The order is the inbox before
+ * the corpus (so an interrupted run cannot be adopted again by the next pull) and, in each,
+ * the label before the run (so a half-deleted scan is litter, never a label with no run). An
+ * object that is not listed is not deleted, so a half pair or a lone run can be removed too;
+ * the keys are the exact two names a scan has, nothing matched by prefix.
+ */
+export function removalPlan(ids: string[], inbox: Entry[], corpus: Entry[], local: string[]): Removal[] {
+  const inboxKeys = new Set(inbox.map((e) => e.key));
+  const corpusKeys = new Set(corpus.map((e) => e.key));
+  const mirrored = new Set(local);
+  const side = (keys: Set<string>, id: string): Side => {
+    const run = keys.has(`runs/${id}.bin`);
+    const label = keys.has(`labels/${id}.json`);
+    return run && label ? "both" : run ? "run" : label ? "label" : null;
+  };
+  return ids.map((id) => {
+    const here = side(inboxKeys, id);
+    const there = side(corpusKeys, id);
+    const deletions: Deletion[] = [];
+    for (const [bucket, held] of [["inbox", here], ["corpus", there]] as const) {
+      if (held === "both" || held === "label") deletions.push({ bucket, key: `labels/${id}.json` });
+      if (held === "both" || held === "run") deletions.push({ bucket, key: `runs/${id}.bin` });
+    }
+    const local = mirrored.has(id);
+    return { id, inbox: here, corpus: there, local, notFound: !here && !there && !local, deletions };
+  });
 }

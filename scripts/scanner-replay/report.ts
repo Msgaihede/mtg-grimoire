@@ -5,6 +5,7 @@
 // from it is escaped on its way in, and every word that picks a class, a data attribute or
 // a lookup is checked against our own table first.
 
+import { ID } from "../scanner-corpus/plan.ts";
 import type { Pass, Results, Run, Score, Slice } from "./results.ts";
 import { compare, PASSES, percent, tally, type Flip, type Tally } from "./summary.ts";
 
@@ -186,8 +187,12 @@ function row(run: Run, changes: Flip[], paths: { frames: string; slices: string 
   ].filter(Boolean).join(" ");
   const changed = changes.map((f) => `<li>${esc(f.pass)}: ${esc(f.from)} → ${esc(f.to)}</li>`).join("");
   const card = run.card;
+  // A scan whose id the corpus tool would refuse cannot be removed by it, so it gets no box.
+  const pick = ID.test(String(run.id))
+    ? `<input type="checkbox" class="pick" value="${esc(run.id)}" aria-label="${esc(`Select ${card.name}, scan ${run.id}`)}">`
+    : "";
   return `<article class="run" data-flags="${flags}" data-changed="${changes.length ? "yes" : "no"}" data-search="${esc(`${card.name} ${run.id} ${card.set}`.toLowerCase())}">
-<header><h3>${esc(card.name)} <small>${printed(card.set, card.number)} · ${esc(run.finish)} · ${esc(run.platform)} ${esc(run.version)} · scanned in ${esc(run.mode)}${run.filtered ? ", filtered" : ""}${run.known ? "" : " · not in this card data"}</small></h3>
+<header>${pick}<h3>${esc(card.name)} <small>${printed(card.set, card.number)} · ${esc(run.finish)} · ${esc(run.platform)} ${esc(run.version)} · scanned in ${esc(run.mode)}${run.filtered ? ", filtered" : ""}${run.known ? "" : " · not in this card data"}</small></h3>
 <p class="id"><code>${esc(run.id)}</code> · then: ${wordOf(run.then?.score)}${run.decided_differs === null ? " · replay not comparable frame by frame" : run.decided_differs ? ` · ${esc(run.decided_differs)} frames replayed differently` : ""}</p>
 ${changed ? `<ul class="changed">${changed}</ul>` : ""}</header>
 <div class="strip">${filmstrip(run, paths)}</div>
@@ -230,7 +235,10 @@ figcaption{font-size:12px;color:var(--dim);margin-top:4px}.read{margin:2px 0 0;c
 dd .sub{display:block;font-size:12px;color:var(--dim)}.frame-error{position:relative;flex:none;display:block}.frame-error b{position:absolute;top:2px;right:2px;min-width:18px;height:18px;border-radius:9px;background:var(--bad);color:var(--on-chip);font-size:12px;line-height:18px;text-align:center}
 .tried,.mark,.edits{margin:2px 0 0;padding-left:16px;font-size:12px;overflow-wrap:anywhere}.mark,.edits{padding-left:0}
 .tiers{margin:10px 0 0;padding-left:18px;font-size:12px;color:var(--dim)}code{font-size:12px}
-.card.none,.read,.tiers li,.id,code{overflow-wrap:anywhere}`;
+.card.none,.read,.tiers li,.id,code{overflow-wrap:anywhere}
+.run{position:relative}.run header{padding-right:32px}.pick{position:absolute;top:14px;right:16px;width:20px;height:20px;margin:0;cursor:pointer}
+.picks{flex-basis:100%;display:flex;flex-wrap:wrap;gap:8px;align-items:center}.picks[hidden]{display:none}.picked{font-weight:600}
+.picks .note{margin:0;flex:1 1 280px}.bar .cmd{flex:1 1 100%}.said{color:var(--dim)}`;
 
 /**
  * Whether a scan shows, given the filter chosen, its flags (the results any pass had), whether
@@ -250,13 +258,48 @@ export const matchesFilter = new Function("filter", "flags", "changed", "search"
   q: string,
 ) => boolean;
 
+/**
+ * The command that removes the scans picked in the report, from the ids picked. An id the
+ * corpus tool would refuse (one with a dot, a slash, a space, or a leading `-` that would read
+ * as a flag) is left out: ids in `results.json` come from a file on disk. The pattern is the
+ * corpus tool's own; the page's script is made from this very source, and the tests call it.
+ */
+export const REMOVE_SRC =
+  `const safe=ids.filter(function(id){return typeof id==='string'&&/${ID.source}/.test(id)});` +
+  "return ['pnpm scanner:corpus remove'].concat(safe).join(' ');";
+export const removeCommand = new Function("ids", REMOVE_SRC) as (ids: string[]) => string;
+
+/** The bar's count of the scans ticked, and how many of them the filter hides. */
+export const PICKED_SRC =
+  "return n+' selected'+(hidden>0?' ('+hidden+' hidden by the filter)':'');";
+export const pickedText = new Function("n", "hidden", PICKED_SRC) as (n: number, hidden: number) => string;
+
+/** What the page says once the command is on the clipboard. */
+export const COPIED_SRC =
+  "return 'Copied a command for '+n+(n===1?' scan':' scans')+(hidden>0?', '+hidden+' of them hidden by the filter':'');";
+export const copiedText = new Function("n", "hidden", COPIED_SRC) as (n: number, hidden: number) => string;
+
+// The picks are read before the first filter pass, which reports how many the filter hides.
 const SCRIPT = `
 function matches(filter,flags,changed,search,q){${FILTER_SRC}}
-const runs=[...document.querySelectorAll('.run')],buttons=[...document.querySelectorAll('.bar button')],box=document.querySelector('.bar input'),count=document.querySelector('.count'),empty=document.querySelector('.empty');
+function removeCommand(ids){${REMOVE_SRC}}
+function pickedText(n,hidden){${PICKED_SRC}}
+function copiedText(n,hidden){${COPIED_SRC}}
+const runs=[...document.querySelectorAll('.run')],buttons=[...document.querySelectorAll('.bar button[data-filter]')],box=document.querySelector('.bar input[type=search]'),count=document.querySelector('.count'),empty=document.querySelector('.empty');
+const picks=[...document.querySelectorAll('input.pick')],group=document.querySelector('.picks'),picked=document.querySelector('.picked'),said=document.querySelector('.said'),cmd=document.querySelector('.cmd');
 let filter='all';
-function apply(){const q=box.value.trim().toLowerCase();let shown=0;for(const r of runs){const on=matches(filter,r.dataset.flags,r.dataset.changed,r.dataset.search,q);r.hidden=!on;if(on)shown++}count.textContent=shown+' of '+runs.length+' scans';empty.hidden=shown>0}
+const chosen=()=>picks.filter(p=>p.checked);
+const hiddenCount=()=>chosen().filter(p=>p.closest('.run').hidden).length;
+function sync(){const n=chosen().length;group.hidden=n===0;picked.textContent=pickedText(n,hiddenCount());said.textContent='';cmd.hidden=true}
+function apply(){const q=box.value.trim().toLowerCase();let shown=0;for(const r of runs){const on=matches(filter,r.dataset.flags,r.dataset.changed,r.dataset.search,q);r.hidden=!on;if(on)shown++}count.textContent=shown+' of '+runs.length+' scans';empty.hidden=shown>0;sync()}
 for(const b of buttons)b.addEventListener('click',()=>{filter=b.dataset.filter;for(const o of buttons)o.setAttribute('aria-pressed',String(o===b));apply()});
-box.addEventListener('input',apply);apply();`;
+box.addEventListener('input',apply);
+for(const p of picks)p.addEventListener('change',sync);
+document.querySelector('.clear').addEventListener('click',()=>{for(const p of picks)p.checked=false;sync()});
+document.querySelector('.copy').addEventListener('click',()=>{const ids=chosen().map(p=>p.value),text=removeCommand(ids),hidden=hiddenCount();
+const show=()=>{cmd.value=text;cmd.hidden=false;cmd.focus();cmd.select();said.textContent='Copy the command from the box'};
+try{navigator.clipboard.writeText(text).then(()=>{said.textContent=copiedText(ids.length,hidden)},show)}catch(e){show()}});
+apply();`;
 
 export function reportHtml(now: Results, base: Results | null, paths: { frames: string; slices: string }): string {
   const delta = base ? compare(now, base) : null;
@@ -286,7 +329,10 @@ export function reportHtml(now: Results, base: Results | null, paths: { frames: 
 <p class="meta">${now.runs.length} scans, ${now.skipped.length} skipped · commit <code>${esc(now.commit ?? "unknown")}</code> · bundle of ${esc(now.bundle_printings)} printings${against}</p>
 <div class="tiles">${tiles(now, base)}</div>${overlap}
 <div class="bar">${filters.map(([key, word], i) => `<button type="button" data-filter="${key}" aria-pressed="${i === 0}">${word}</button>`).join("")}
-<input type="search" placeholder="Card name, set or scan id" aria-label="Search scans"><span class="count" aria-live="polite"></span></div>
+<input type="search" placeholder="Card name, set or scan id" aria-label="Search scans"><span class="count" aria-live="polite"></span>
+<div class="picks" hidden><span class="picked"></span><button type="button" class="copy">Copy remove command</button><button type="button" class="clear">Clear</button>
+<p class="note">This page deletes nothing. Run the command yourself; it lists what it would delete, and deletes with --yes.</p></div>
+<input type="text" class="cmd" readonly hidden aria-label="Command to run"><span class="said" aria-live="polite"></span></div>
 <p class="note">A filter keeps a scan when any pass had that result.</p>
 ${legend}
 ${now.runs.map((run) => row(run, changes.get(run.id) ?? [], paths)).join("\n")}

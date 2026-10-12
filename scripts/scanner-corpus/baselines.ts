@@ -3,24 +3,50 @@
 // reads a file only as far as `runs[].id` and `skipped[].id`, so a change to the results schema
 // cannot break it.
 
-/**
- * The file's text with only the runs and skipped entries whose id is held, or null when that
- * is already all of them. Throws when the text is not JSON.
- */
-export function keepingRuns(resultsText: string, held: Iterable<string>): string | null {
-  const keep = new Set(held);
-  const results = JSON.parse(resultsText) as { runs?: { id: string }[]; skipped?: { id: string }[] };
+type Rows = { runs?: { id: string }[]; skipped?: { id: string }[] };
+
+/** The text with only the rows whose id passes `keep`, or null when that is all of them. */
+function filtered(resultsText: string, keep: (id: string) => boolean): string | null {
+  const results = JSON.parse(resultsText) as Rows;
   let changed = false;
   for (const key of ["runs", "skipped"] as const) {
     const list = results[key];
     if (!Array.isArray(list)) continue;
-    const kept = list.filter((entry) => keep.has(entry?.id));
+    const kept = list.filter((entry) => keep(entry?.id));
     if (kept.length !== list.length) {
       results[key] = kept;
       changed = true;
     }
   }
   return changed ? JSON.stringify(results) : null;
+}
+
+/**
+ * The file's text with only the runs and skipped entries whose id is held, or null when that
+ * is already all of them. Throws when the text is not JSON.
+ */
+export function keepingRuns(resultsText: string, held: Iterable<string>): string | null {
+  const keep = new Set(held);
+  return filtered(resultsText, (id) => keep.has(id));
+}
+
+/**
+ * The file's text without the runs and skipped entries of the named ids, or null when none is
+ * there. For `remove`, which names what goes: unlike `keepingRuns` it cannot strip a baseline
+ * against a corpus listing that came back empty. Throws when the text is not JSON.
+ */
+export function withoutRuns(resultsText: string, dropped: Iterable<string>): string | null {
+  const drop = new Set(dropped);
+  return filtered(resultsText, (id) => !drop.has(id));
+}
+
+/** How many runs and skipped entries of the file are this scan's. Throws when the text is not JSON. */
+export function rowsOf(resultsText: string, id: string): number {
+  const results = JSON.parse(resultsText) as Rows;
+  return [results.runs, results.skipped].reduce(
+    (sum, list) => sum + (Array.isArray(list) ? list.filter((entry) => entry?.id === id).length : 0),
+    0,
+  );
 }
 
 /** `baselines/.pending.json`: the names whose upload failed. A missing or corrupt file is empty. */

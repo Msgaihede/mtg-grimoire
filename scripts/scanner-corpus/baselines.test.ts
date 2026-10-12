@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { keepingRuns, parsePending, settlePending } from "./baselines.ts";
+import { keepingRuns, parsePending, rowsOf, settlePending, withoutRuns } from "./baselines.ts";
 
 const text = (over: object = {}) =>
   JSON.stringify({
@@ -67,5 +67,36 @@ describe("the pending list", () => {
   it("holds each name once, sorted", () => {
     expect(settlePending(["b.json"], ["c.json", "a.json", "c.json"], [])).toEqual(["a.json", "b.json", "c.json"]);
     expect(settlePending(["b.json"], [], ["a.json", "b.json"])).toEqual([]);
+  });
+});
+
+describe("removing named scans from a baseline", () => {
+  it("drops only the named ids' rows, in runs and skipped, and keeps the rest", () => {
+    const out = JSON.parse(withoutRuns(text(), ["b", "t"])!);
+    expect(out.runs.map((r: { id: string }) => r.id)).toEqual(["a", "c"]);
+    expect(out.skipped.map((r: { id: string }) => r.id)).toEqual(["s"]);
+    expect(out.extra).toEqual({ kept: [1, 2] });
+  });
+
+  it("is null when none of them is there, and with no ids at all", () => {
+    expect(withoutRuns(text(), ["zzz"])).toBeNull();
+    expect(withoutRuns(text(), [])).toBeNull();
+  });
+
+  it("never strips a baseline against what is held: an empty held list is not a purge here", () => {
+    // `keepingRuns(text, [])` would empty the file; `withoutRuns` of the same call's ids does not.
+    expect(JSON.parse(withoutRuns(text(), ["a"])!).runs).toHaveLength(2);
+  });
+
+  it("copes with a file that has no skipped list, and throws on text that is not JSON", () => {
+    expect(JSON.parse(withoutRuns(JSON.stringify({ runs: [{ id: "a" }] }), ["a"])!).runs).toEqual([]);
+    expect(() => withoutRuns("nope", ["a"])).toThrow();
+  });
+
+  it("counts a scan's rows", () => {
+    expect(rowsOf(text(), "a")).toBe(1);
+    expect(rowsOf(text(), "s")).toBe(1);
+    expect(rowsOf(text(), "zzz")).toBe(0);
+    expect(rowsOf(JSON.stringify({ v: 1 }), "a")).toBe(0);
   });
 });

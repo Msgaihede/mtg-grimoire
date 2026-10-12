@@ -231,12 +231,29 @@ the corpus has the same two sizes**, whether this pull or an earlier one copied 
 else: it is the one step that deletes, and the owner's to run. A read scan lives in the corpus bucket after, and
 `pnpm scanner:replay` replays the mirror (`docs/reference/card-scanner.md` §10, *The replay*).
 The credentials are `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`, from the
-environment only. **A deletion request names an id**: delete both of its objects in both buckets
-(an undrained inbox would otherwise copy it again), then `pnpm scanner:corpus pull` removes it
-locally — its frames, its slices, the last report and its rows in every baseline, here and in the
-corpus bucket. Every pull reconciles the baselines against the corpus, and retries an upload that
-failed on the one before. A full, deliberate purge of the corpus is refused locally until the mirror folder
-is removed by hand, because an empty listing is also what an unreadable bucket looks like.
+environment only. **A deletion request names an id**, and `pnpm scanner:corpus remove <id>...`
+(or `--from-file <path>`, one id a line) honours it. Without `--yes` it is a dry run: it lists
+where each id is — the inbox, the corpus, the local mirror — and how many rows it has in each local
+baseline, and deletes nothing; an id found nowhere is said so and makes the exit code 1. With
+`--yes` it deletes, id by id, the inbox's label and then its run, the corpus's label and then its
+run (the inbox first, so the next pull cannot copy the scan back; the label first, so a
+half-deleted scan is litter, never a label with no run), then the local pair (whichever of its
+four paths is there, so a half-removed one is finished), and after every id the last report and
+the baselines: the ids' rows go from every baseline, found or not, here and in the corpus bucket
+(an id held only by a baseline is not a failure). That is the pull's whole baseline sync, so it
+also downloads baselines the corpus has and this machine lacks and uploads those only here and
+any an earlier upload left pending. Only those exact objects, and only those that are listed: a
+half pair or a lone run is removable this way, which is the point. A step that fails ends that
+id, is listed at the end and makes the exit code 1; run it again to finish. **Only the owner runs it with `--yes`** — an agent runs the dry run and shows the
+owner the list. The hand-run way works too: delete both objects in both buckets
+(`npx wrangler r2 object delete mtg-grimoire-scans/labels/<id>.json --remote`, then
+`runs/<id>.bin`, then the same two in `mtg-grimoire-scan-corpus`; the inbox first, or an undrained
+inbox would copy it again), and `pnpm scanner:corpus pull` removes it locally — its frames, its
+slices, the last report and its rows in every baseline, here and in the corpus bucket. Every pull
+reconciles the baselines against the corpus, and retries an upload that failed on the one before.
+A full, deliberate purge of the corpus is refused locally until the mirror folder is removed by
+hand, because an empty listing is also what an unreadable bucket looks like (`remove` names what
+it deletes, so that refusal does not stop it).
 
 **By hand**, when the tool is not at hand:
 

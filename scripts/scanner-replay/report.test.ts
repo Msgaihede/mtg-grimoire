@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CARD_ID, gotId, pass, results, run, slice } from "./fixture.ts";
-import { cardImage, FILTER_SRC, matchesFilter, reportHtml } from "./report.ts";
+import { cardImage, FILTER_SRC, matchesFilter, removeCommand, reportHtml } from "./report.ts";
 import type { Results } from "./results.ts";
 
 const paths = { frames: "../frames", slices: "." };
@@ -439,5 +439,57 @@ describe("the replay's report", () => {
   it("keeps a missing frame picture the shape of a frame", () => {
     const style = styleOf(reportHtml(results([run()]), null, paths));
     expect(style).toContain("height:84px;aspect-ratio:16/9;object-fit:cover;background:var(--line)");
+  });
+
+  it("builds the command that removes the scans picked, in the order given", () => {
+    expect(removeCommand(["a-1", "b_2"])).toBe("pnpm scanner:corpus remove a-1 b_2");
+  });
+
+  it("leaves out an id the corpus tool would refuse: ids in results.json come from a file", () => {
+    const command = removeCommand(["ok", "x; rm -rf /", "../up", "a b", "", "$(id)", "fine-2"]);
+    expect(command).toBe("pnpm scanner:corpus remove ok fine-2");
+    expect(removeCommand([])).toBe("pnpm scanner:corpus remove");
+  });
+
+  it("leaves out an id that would read as a flag, and keeps the real shape of an id", () => {
+    expect(removeCommand(["a", "--yes", "--from-file", "-x"])).toBe("pnpm scanner:corpus remove a");
+    const real = "20261011T101500Z-9f8a0c1d2e3f4a5b";
+    expect(removeCommand([real])).toBe(`pnpm scanner:corpus remove ${real}`);
+    expect(reportHtml(results([run({ id: real })]), null, paths)).toContain(`class="pick" value="${real}"`);
+  });
+
+  it("draws no box on a scan whose id would read as a flag", () => {
+    const html = reportHtml(results([run({ id: "--yes" }), run({ id: "-x" }), run({ id: "fine" })]), null, paths);
+    expect(html.match(/class="pick"/g)).toHaveLength(1);
+    expect(html).not.toContain('value="--yes"');
+  });
+
+  it("gives each scan a labelled box, and the bar a count, a copy button, a clear button and the note", () => {
+    const html = reportHtml(
+      results([run({ id: "scan-1" }), run({ id: "scan-2", card: { id: CARD_ID, set: "2x2", number: "1", lang: "en", name: "Shock" } })]),
+      null,
+      paths,
+    );
+    expect(html).toContain('aria-label="Select Lightning Bolt, scan scan-1"');
+    expect(html).toContain('aria-label="Select Shock, scan scan-2"');
+    expect(html.match(/<input type="checkbox" class="pick"/g)).toHaveLength(2);
+    expect(html).toContain("Copy remove command");
+    expect(html).toContain(">Clear</button>");
+    expect(html).toContain("selected");
+    expect(html).toContain("This page deletes nothing. Run the command yourself; it lists what it would delete, and deletes with --yes.");
+    expect(html).toMatch(/<input type="text" class="cmd" readonly hidden/);
+    expect(html).toContain('class="said" aria-live="polite"');
+  });
+
+  it("gives no box to a scan whose id the tool would refuse, and escapes the name in the label", () => {
+    const html = reportHtml(results([run({ id: 'x"><b>', card: { id: CARD_ID, set: "s", number: "1", lang: "en", name: '<i>"N"' } }), run({ id: "fine" })]), null, paths);
+    expect(html.match(/class="pick"/g)).toHaveLength(1);
+    expect(html).toContain('value="fine"');
+    expect(html).not.toContain("<i>");
+  });
+
+  it("makes no request: the script only writes to the clipboard", () => {
+    const script = reportHtml(results([run()]), null, paths).match(/<script>([\s\S]*)<\/script>/)![1];
+    expect(script).not.toMatch(/fetch\(|XMLHttpRequest|sendBeacon|WebSocket|location\./);
   });
 });

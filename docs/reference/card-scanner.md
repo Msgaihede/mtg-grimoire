@@ -3989,7 +3989,7 @@ honour. Only the summary's aggregate table belongs in this document. Before it c
 pair the sync checks that the label parses, that its frames' `bytes` add up to the run and that
 each frame is a JPEG; a pair that does not is left in the inbox and reported as "do not add up".
 It reads every copy back by size and reports one that is missing or differs as a failure. It
-takes ids only of `[A-Za-z0-9_-]+`, reports any other key as strange and leaves it, and **refuses
+takes ids only of `[A-Za-z0-9_][A-Za-z0-9_-]*` (never a leading `-`, which would read as a flag), reports any other key as strange and leaves it, and **refuses
 to prune the mirror when the corpus bucket lists as empty beside a non-empty mirror**: that reads
 as an unreadable bucket, and a deletion request is honoured by deleting from the bucket, never by
 a listing that came back empty. **A full, deliberate purge of the corpus is therefore refused
@@ -3997,9 +3997,18 @@ locally until the mirror folder is removed by hand**: the tool cannot tell it fr
 bucket. `--drain` deletes from the inbox every complete pair whose copy in the freshly listed
 corpus has the same two sizes, adopted by this pull or an earlier one, and is the owner's to run.
 
-**A deletion request names an id.** Delete both of its objects in both buckets (an undrained inbox
-would otherwise adopt it again); the next `pnpm scanner:corpus pull` removes it locally: its
-frames, its slices, the last report and its rows in every baseline, here and in the corpus bucket.
+**A deletion request names an id.** `pnpm scanner:corpus remove <id>...` deletes it: the inbox's
+label and run, then the corpus's, then the local pair, the last report and the id's rows in every
+baseline, here and in the corpus bucket. It is a dry run until the owner adds `--yes`. By hand,
+delete both of its objects in both buckets (an undrained inbox would otherwise adopt it again);
+the next `pnpm scanner:corpus pull` removes it locally: its frames, its slices, the last report
+and its rows in every baseline, here and in the corpus bucket.
+
+**Cleaning up bad or mislabelled scans** is the same command, picked from the report: tick the
+scans in `report.html` (the box on each row), press *Copy remove command*, and run what it copied.
+The page loads card pictures from Scryfall and nothing else: it sends nothing about a scan and
+deletes nothing. The command lists what it would delete, and the owner adds `--yes`. **Removal only**: a mislabelled scan is deleted, never relabelled, so the
+corpus holds only labels a reader chose. Afterwards `pnpm scanner:replay` rewrites the report.
 **A baseline name is written once**: saving over a name replaces it locally, and a pull does not
 re-upload a baseline that changed by hand, so save a changed one under a new name. A pull does
 reconcile every local baseline against the corpus each time, dropping the rows of any scan the
