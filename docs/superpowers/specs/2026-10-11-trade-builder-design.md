@@ -15,7 +15,10 @@ neutral wording, so the app says _they_, _them_ and _their side_ everywhere.
 
 Each side is a list of **lines**. A line is one printing in one finish, a quantity, and where it
 came from (`collection`, `search` or `scan`). Adding a printing and finish a side already holds
-raises that line's quantity rather than making a second line.
+raises that line's quantity rather than making a second line — except that a line on your side
+added from the collection holds at most the copies the collection has; copies asked for past
+those go onto a second line for that printing and finish, without the collection's mark
+([issue #935](https://github.com/Msgaihede/mtg-grimoire/issues/935)).
 
 A trade also carries:
 
@@ -77,7 +80,8 @@ finish already did them, and a second pass would do them twice.
 
 - **Your side** adds from the **collection** (the default, and what the issue expects to be the
   common case) or from **all cards**. A line added from the collection is marked _from your
-  collection_.
+  collection_, and while the trade is open the mark says how many copies of that printing and
+  finish the collection holds: _from your collection · 3 owned_.
 - **A card that sits in a deck can be traded, and it is never quiet about it.** The owner's rule,
   set after the first run on his own data, where two thirds of the collection is filed in decks:
   the quick select lists deck copies in a section of their own, under the ordinary ones, with each

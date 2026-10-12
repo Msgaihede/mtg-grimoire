@@ -169,6 +169,9 @@ pub mod scratch;
 pub mod scryfall;
 pub mod search;
 pub mod searchopen;
+/// **How wide the reader dragged a deck's card search column** (issue #932) — [`stackhide`]'s
+/// shape with [`deckpane`]'s band: one `app_meta` row, deck id → width.
+pub mod searchwidth;
 pub mod set_completion;
 pub mod shelffolds;
 pub mod slug;

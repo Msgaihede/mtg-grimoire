@@ -991,6 +991,12 @@ commands! {
         store(conn, &section, open)
     };
 
+    // searchwidth
+    read deck_search_width in searchwidth(deck_id: i64) = |conn| Ok(stored(conn, deck_id));
+    write set_deck_search_width in searchwidth(deck_id: i64, width: u32) = |conn| {
+        store(conn, deck_id, width)
+    };
+
     // set_completion
     read set_completion in set_completion() = |conn| set_completion_of(conn);
 

@@ -19,9 +19,9 @@ use crate::{
     deck_quick_add, deck_theory, deck_todos, deck_tokens, deck_undo, deckpane, decksort, errors,
     export, home, images, import, index, listview, markcolors, marketplace, marketplace_feed,
     mirror, nav, new_printings, paths, price_history, recent_cards, reset, scanner, schema,
-    scryfall, search, searchopen, set_completion, share, shelffolds, stackhide, startup, startview,
-    sticky_notes, sync, sync_engine, sync_pair, tags, trade, upcoming_sets, update, value_history,
-    window, wishlist, wishlist_folders, wishlist_optimize, zoom,
+    scryfall, search, searchopen, searchwidth, set_completion, share, shelffolds, stackhide,
+    startup, startview, sticky_notes, sync, sync_engine, sync_pair, tags, trade, upcoming_sets,
+    update, value_history, window, wishlist, wishlist_folders, wishlist_optimize, zoom,
 };
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -607,6 +607,9 @@ pub fn run() {
             // Which stacks the reader hid in a deck — `shelf_folds`' pair, keyed by deck.
             stackhide::hidden_stacks,
             stackhide::set_stack_hidden,
+            // How wide a deck's card search column was dragged — keyed by deck, like the stacks.
+            searchwidth::deck_search_width,
+            searchwidth::set_deck_search_width,
             markcolors::mark_colors,
             markcolors::set_mark_color,
             decksort::deck_sort,

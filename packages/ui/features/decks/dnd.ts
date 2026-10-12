@@ -53,7 +53,20 @@ import type { DeckFinish } from "@/lib/ipc";
  * has left `cards`. `autoCategoryFor` answers `Uncategorized` for it, which is the honest pile.
  */
 export type DragPayload =
-  | { kind: "search-card"; cardId: string; name: string; typeLine: string | null }
+  /**
+   * `finish` is the docked panel's Finish filter, when it commits every result to one premium
+   * finish (issue #933, `filteredFinish`) — so a tile found under `Foil` drops as the foil copy,
+   * as its Add button adds it. **Optional and absent from every other source**, which is the
+   * regular copy: unlike `"deck-card"`'s it names no existing row, it only says which object
+   * the add puts in.
+   */
+  | {
+      kind: "search-card";
+      cardId: string;
+      name: string;
+      typeLine: string | null;
+      finish?: DeckFinish;
+    }
   /**
    * `finish` is part of the **address**, not extra information — a pile holds the regular copy
    * and the foil as two rows since schema v18, and a drag of one must not move the other. It is
@@ -90,7 +103,8 @@ export type DropTarget =
  * reader dropped and emptying one that has since been refilled.
  */
 export type DeckWrite =
-  | { write: "add"; cardId: string; categoryId: number }
+  /** `finish` is the payload's, when a `"search-card"` carried one — absent is the regular copy. */
+  | { write: "add"; cardId: string; categoryId: number; finish?: DeckFinish }
   /**
    * One copy, filed by what the card *does* — the quick zones' `Auto`, and the same write the
    * toolbar's `Add to → Auto (by what it does)` makes.
@@ -100,7 +114,7 @@ export type DeckWrite =
    * `autoCategoryFor`. The type line travels because the payload already has it — see
    * {@link DragPayload} — and `null` is a real answer that files under `Uncategorized`.
    */
-  | { write: "auto-add"; cardId: string; typeLine: string | null }
+  | { write: "auto-add"; cardId: string; typeLine: string | null; finish?: DeckFinish }
   /**
    * Re-file a card the deck already holds by what it *does* — the quick zones' `Auto` for a
    * `"deck-card"` drag.
@@ -385,7 +399,13 @@ export function readDragData(data: Record<string, unknown>): DragPayload | null 
     // dropped and a bad one has to stop the drop, while this only decides which pile the card
     // lands in — and `autoCategoryFor` already has an answer for not knowing. A source that
     // sends nothing (or sends rubbish) files under `Uncategorized` instead of failing to drop.
-    return { kind, cardId, name, typeLine: typeof typeLine === "string" ? typeLine : null };
+    // A finish only on the panel's own tiles, and through `readFinish` for the reason the
+    // `"deck-card"` arm below gives: anything that is not one of the two premium words is the
+    // regular copy, which is what leaving it out already says.
+    const read = { cardId, name, typeLine: typeof typeLine === "string" ? typeLine : null };
+    if (kind === "card") return { kind, ...read };
+    const premium = readFinish(finish);
+    return { kind, ...read, ...(premium && { finish: premium }) };
   }
   if (kind === "deck-card" && isCategoryId(fromCategoryId)) {
     // **Normalised rather than refused, and that puts it on `typeLine`'s side of this
@@ -546,14 +566,24 @@ export function dropWrite(payload: DragPayload, target: DropTarget): DeckWrite |
         finish: payload.finish,
       };
     }
-    return { write: "auto-add", cardId: payload.cardId, typeLine: payload.typeLine };
+    return {
+      write: "auto-add",
+      cardId: payload.cardId,
+      typeLine: payload.typeLine,
+      ...(payload.kind === "search-card" && payload.finish && { finish: payload.finish }),
+    };
   }
   if (payload.kind === "search-card" || payload.kind === "card") {
     // One copy, exactly as the panel's Add button sends — and `deck_add_card` folds, so
     // dropping the same card twice is two copies rather than a refusal. The two kinds are one
     // write here: where a printing was picked up does not change what putting it in a category
     // means.
-    return { write: "add", cardId: payload.cardId, categoryId: target.categoryId };
+    return {
+      write: "add",
+      cardId: payload.cardId,
+      categoryId: target.categoryId,
+      ...(payload.kind === "search-card" && payload.finish && { finish: payload.finish }),
+    };
   }
   // Back where it came from is not a move: it would touch the deck, reallocate and bump
   // `updated_at` to leave the list exactly as it was.

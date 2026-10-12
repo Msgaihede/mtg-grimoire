@@ -200,6 +200,9 @@ pub mod share;
 pub mod shelffolds;
 pub use grimoire_core::slug;
 pub use grimoire_core::sorting;
+/// **How wide the reader dragged a deck's card search column** (issue #932) — [`stackhide`]'s
+/// shape with a width per deck. No filesystem, no clock and no network.
+pub mod searchwidth;
 /// **A pre-27 single-file `mtg.db`, taken apart into `user.db` and `corpus.db`.** Its one
 /// caller, [`schema::prepare_data_dir`], is reached only from `desktop::init_state`.
 pub mod split;

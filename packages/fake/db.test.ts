@@ -12885,9 +12885,12 @@ describe("the busy fault", () => {
     // 138 → 139 on 2026-10-11 with `set_price_watch` (issue #906), a plain `sync::with_write`
     // `app_meta` write; the movers' read, `price_movers`, sits in `readHandlers`. Read from `left`
     // on this tree. Count again after a merge.
-    // 139 → 140 on 2026-10-11 with `deck_split_printing` (issue #934), the swap's plain
+    // 139 → 140 on 2026-10-11 with `set_deck_search_width` (issue #932), a plain
+    // `sync::with_write` `app_meta` write; its read half, `deck_search_width`, sits in
+    // `readHandlers`. Read from `left` on this tree. Count again after a merge.
+    // 140 → 141 on 2026-10-11 with `deck_split_printing` (issue #934), the swap's plain
     // `sync::with_write` deck write for part of a row. Count again after a merge.
-    expect(names).toHaveLength(140);
+    expect(names).toHaveLength(141);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -22244,6 +22247,29 @@ describe("shelves", () => {
     ).toThrow(/busy/i);
   });
 
+  it("round-trips deck_search_width through set_deck_search_width, per deck, inside the band", () => {
+    const db = makeDb();
+    const r = readHandlers(db);
+    const w = writeHandlers(db);
+    expect(r.deck_search_width({ deckId: 4 })).toBeNull();
+
+    w.set_deck_search_width({ deckId: 4, width: 512 });
+    w.set_deck_search_width({ deckId: 5, width: 260 });
+    w.set_deck_search_width({ deckId: 4, width: 480 });
+    expect(r.deck_search_width({ deckId: 4 })).toBe(480);
+    expect(r.deck_search_width({ deckId: 5 })).toBe(260);
+    expect(r.deck_search_width({ deckId: 6 })).toBeNull();
+
+    expect(() => w.set_deck_search_width({ deckId: 0, width: 400 })).toThrow(/deck/);
+    expect(() => w.set_deck_search_width({ deckId: 4, width: 99 })).toThrow(/between/);
+    expect(() => w.set_deck_search_width({ deckId: 4, width: 4001 })).toThrow(/between/);
+    expect(() => w.set_deck_search_width({ deckId: 4, width: 300.5 })).toThrow(/between/);
+    expect(r.deck_search_width({ deckId: 4 })).toBe(480);
+    expect(() =>
+      writeHandlers(makeDb({ fault: "busy" })).set_deck_search_width({ deckId: 4, width: 400 }),
+    ).toThrow(/busy/i);
+  });
+
   it("round-trips hidden_stacks through set_stack_hidden, per deck, and showing the last removes the entry", () => {
     const db = makeDb();
     const r = readHandlers(db);
@@ -22444,8 +22470,8 @@ describe("trades", () => {
         // Another finish, and the same finish on the other side, are other lines.
         input(COUNTERSPELL, "foil", 1, "scan"),
         // Twice in one call folds too.
-        input(CHARM, "nonfoil", 1, "collection"),
-        input(CHARM, "nonfoil", 2, "collection"),
+        input(CHARM, "nonfoil", 1, "scan"),
+        input(CHARM, "nonfoil", 2, "scan"),
       ],
     });
     add("theirs", COUNTERSPELL, "etched");
@@ -22454,7 +22480,7 @@ describe("trades", () => {
       // The standing line keeps the source it came with.
       ["mine", "Counterspell", "etched", 3, "search"],
       ["mine", "Counterspell", "foil", 1, "scan"],
-      ["mine", "Boros Charm", "nonfoil", 3, "collection"],
+      ["mine", "Boros Charm", "nonfoil", 3, "scan"],
       ["theirs", "Counterspell", "etched", 1, "search"],
     ]);
   });
@@ -22835,6 +22861,49 @@ describe("trades", () => {
     expect(r.trade_get({ id })).toMatchObject({ status: "open", closedAt: null });
     expect(prices()).toEqual([60, 9]);
     expect(db.tradeLines.map((l) => l.unitPrice)).toEqual([null, null]);
+  });
+
+  /** Issue #935, `trade.rs`' `stepping_a_collection_line_past_…` and `a_finish_takes_…`. */
+  it("keeps a collection line to the copies the collection has, and puts the rest on a line of its own", () => {
+    const { w, id, get, held } = trading({
+      collectionEntries: [entry({ id: 1, cardId: RAGAVAN.id, quantity: 2 })],
+    });
+    const rows = () => get().lines.map((l) => [l.side, l.quantity, l.source]);
+    w.trade_add_lines({
+      id,
+      side: "mine",
+      lines: [input(RAGAVAN, "nonfoil", 1, "search"), input(RAGAVAN, "nonfoil", 3, "collection")],
+    });
+    expect(rows()).toEqual([
+      ["mine", 2, "search"],
+      ["mine", 2, "collection"],
+    ]);
+
+    const own = get().lines[1].id;
+    w.trade_update_line({ lineId: own, change: { quantity: 4 } });
+    expect(rows()).toEqual([
+      ["mine", 4, "search"],
+      ["mine", 2, "collection"],
+    ]);
+    w.trade_update_line({ lineId: own, change: { quantity: 1 } });
+    expect(rows()).toEqual([
+      ["mine", 4, "search"],
+      ["mine", 1, "collection"],
+    ]);
+
+    // Their side is one grain whatever the source.
+    w.trade_add_lines({
+      id,
+      side: "theirs",
+      lines: [input(RAGAVAN, "nonfoil", 1, "scan"), input(RAGAVAN, "nonfoil", 1, "collection")],
+    });
+    expect(rows()[2]).toEqual(["theirs", 2, "scan"]);
+
+    // The collection's line is served first, though it stands second.
+    w.trade_update_line({ lineId: own, change: { quantity: 2 } });
+    const done = w.trade_finish({ id, options: { ...ALL_ON, addReceived: false } });
+    expect(done.removedFromCollection).toBe(2);
+    expect(held(RAGAVAN, "nonfoil")).toBe(0);
   });
 
   it("archives without touching the collection or the wishlist", () => {
@@ -23402,7 +23471,7 @@ describe("trades", () => {
     await invoke("trade_add_lines", {
       id,
       side: "mine",
-      lines: [input(RAGAVAN, "nonfoil", 2, "collection")],
+      lines: [input(RAGAVAN, "nonfoil", 2, "search")],
     });
     const trade = await invoke<Trade | null>("trade_get", { id });
     const lineId = trade?.lines[0].id;
