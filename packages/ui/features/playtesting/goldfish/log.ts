@@ -12,6 +12,56 @@ export interface LogLine {
   /** The reader's turn it happened on; 0 for the opening hand. */
   turn: number;
   text: string;
+  /** What kind of thing happened, for the line's glyph; a line without one gets a plain dot. */
+  kind?: LogKind;
+}
+
+/** The kinds of line the log draws a glyph for — coarser than `Happened`, and finer where a
+ *  reader's words are: a move from the library to the hand is a draw. */
+export type LogKind =
+  | "deal"
+  | "draw"
+  | "land"
+  | "cast"
+  | "move"
+  | "tap"
+  | "counter"
+  | "token"
+  | "shuffle"
+  | "life"
+  | "turn"
+  | "engine";
+
+/** The kind of line one fact makes. */
+export function kindOf(h: Happened): LogKind {
+  switch (h.type) {
+    case "mulliganed":
+    case "kept":
+      return "deal";
+    case "played":
+      return "land";
+    case "cast":
+      return "cast";
+    case "put":
+      return h.to === "graveyard" && (h.from === "hand" || h.from === "command") ? "cast" : "move";
+    case "moved":
+      return h.from === "libraryTop" && h.to === "hand" ? "draw" : "move";
+    case "tapped":
+    case "untappedAll":
+      return "tap";
+    case "counters":
+      return "counter";
+    case "tokensCreated":
+      return "token";
+    case "shuffled":
+      return "shuffle";
+    case "lifeSet":
+      return "life";
+    case "turnBegan":
+      return "turn";
+    case "chose":
+      return "engine";
+  }
 }
 
 /** How many lines the log keeps; the panel scrolls, but a long game is not a long list. */
@@ -105,7 +155,7 @@ export function linesFor(happened: readonly Happened[], turn: number): LogLine[]
   const out: LogLine[] = [];
   for (const h of happened) {
     const text = sentence(h);
-    if (text !== null) out.push({ turn, text });
+    if (text !== null) out.push({ turn, text, kind: kindOf(h) });
   }
   return out.reverse();
 }
@@ -113,4 +163,23 @@ export function linesFor(happened: readonly Happened[], turn: number): LogLine[]
 /** The log with an action's lines on top, kept to {@link LOG_LIMIT}. */
 export function appendLog(log: readonly LogLine[], lines: readonly LogLine[]): LogLine[] {
   return [...lines, ...log].slice(0, LOG_LIMIT);
+}
+
+/** One turn's lines in the log panel, newest first like the log itself. */
+export interface LogTurn {
+  turn: number;
+  lines: LogLine[];
+  /** Where in the whole log the group's first line is. */
+  from: number;
+}
+
+/** The log cut into turns, each run of lines of one turn its own group, newest turn first. */
+export function byTurn(log: readonly LogLine[]): LogTurn[] {
+  const out: LogTurn[] = [];
+  log.forEach((line, i) => {
+    const last = out[out.length - 1];
+    if (last !== undefined && last.turn === line.turn) last.lines.push(line);
+    else out.push({ turn: line.turn, lines: [line], from: i });
+  });
+  return out;
 }

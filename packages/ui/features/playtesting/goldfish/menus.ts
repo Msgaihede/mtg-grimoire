@@ -9,6 +9,7 @@
  */
 import type { MenuAction, MenuItem } from "@/components/menu/types";
 import type { GameCard, GoldfishAction, GoldfishPlace, GoldfishView } from "@/lib/ipc";
+import { FELTS } from "./playmats";
 import type { Playmat, ZoneLook } from "./types";
 
 type Act = (a: GoldfishAction) => void;
@@ -242,15 +243,13 @@ export function gameMenu({
   const playing = view !== null && view.stage === "playing";
   const tokens = view?.tokens ?? [];
 
-  const mats: MenuItem[] = [
-    {
-      kind: "radio",
-      id: "felt",
-      label: "Felt",
-      checked: playmat === "felt",
-      onSelect: () => onPlaymat("felt"),
-    },
-  ];
+  const mats: MenuItem[] = FELTS.map((felt): MenuItem => ({
+    kind: "radio",
+    id: felt.id,
+    label: felt.label,
+    checked: playmat === felt.id,
+    onSelect: () => onPlaymat(felt.id),
+  }));
   if (commanderName !== null) {
     mats.push({
       kind: "radio",

@@ -226,8 +226,37 @@ board's own menus and dialogs open over it. Escape is the way back.
 on. The artboard's fixed places are measured from the board's box, not from its 1440 × 900 frame:
 
 - the table is inset 150 px from either side, 92 px from the top and 108 px from the bottom;
-- the zone columns sit 22 px in, 250 px down;
+- the zone columns sit 22 px in, 250 px down, each card 120 × 168 (the artboard's 104 × 146,
+  grown);
 - the plates and the hand are at the foot.
+
+**Cards are drawn as big as the table allows.** A lane's card size is capped high (260 px for a
+creature, 220 for the back row) so a table of a few cards fills its lanes, and the lane's height
+and the row's width shrink it as the table fills.
+
+**The hand is one straight row**, not a fan. Up to seven cards sit side by side; more overlap so
+the row stays the width of seven. The card pointed at is pulled 44 px out of the row and drawn over
+its neighbours. Its button never moves, only its face does, and while it is up the strip it rose
+into is part of the button. So a lift cannot take the card out from under the pointer, and the
+card lingers 120 ms after the pointer leaves. The kept hand is held lands first, the same order the
+opening hand shows. After that, a card drawn or returned goes on the right (`arrangeHand`).
+
+**The preview follows the pointer.** It opens beside the cursor once the pointer has rested on a
+card for half a second, and it moves with the pointer, kept inside the board. Once open, it switches
+cards with the pointer at once. The wheel resizes it, from 200 to 640 px wide, while it is open; the
+size holds for the rest of the game.
+
+**A card that lands pops once.** When a card arrives in a zone it gets a new id (CR 400.7). The
+element that draws it names its ids in `data-land`, and the board scales and glows it once
+(`landing.ts`, the Web Animations API, off under reduced motion). A step with more than eight new
+ids is a deal, not a landing, and nothing pops.
+
+**Playmats.** The game menu's Playmat offers the plain background, five felts and the commander's
+art. A felt is a tint mixed into `--color-bg` (`playmats.ts`), so everything drawn for the
+background stays readable on it.
+
+**The log is cut into turns.** Each turn sits under a heading with a rule across it. The turn being
+played is in the accent, and each line has a glyph for its kind (`LogKind`: a draw, a land, a cast).
 
 **The table is laid out by the rules, not by where a card is let go.** Creatures are in front.
 Behind them, lands are on the left and every other permanent on the right. Each lane is one row,
@@ -238,12 +267,16 @@ and marked ×N.
 **Drags are dnd-kit, as everywhere in the app** (`goldfishDrag.ts`, with a mark of its own). A drop
 is a zone, never a coordinate:
 
-- from the hand or the command zone onto the table, the card is played (rules first);
+- from the hand or the command zone onto the table, the card is played (rules first) — and only
+  when the pointer itself is on the table (`pointerOnly`). A card carried out of the hand overlaps
+  the table's edge long before the pointer does, and a drop there was played by accident;
 - anywhere else, it is a move;
 - a pile dragged off the table moves its top card.
 
-**Keys:** N for the next turn; T, G, E and H tap, bury, exile or return the card under the pointer.
-They are off while a field has the caret or a menu or dialog is open.
+**Keys:** Space for the next turn; T, G, E and H tap, bury, exile or return the card under the
+pointer. They are off while a field has the caret or a menu or dialog is open. Space belongs to the
+board even when a button has the focus: a card clicked keeps the focus, and Space would press it.
+Enter still presses a focused card, and that plays it.
 
 ## What is not there yet
 

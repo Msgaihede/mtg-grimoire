@@ -29,18 +29,32 @@ export const ASPECT = 1.4;
 export const TAPPED = 1.4;
 /** Only a guard against a zero; in practice the piles keep a lane far above it. */
 export const FLOOR = 24;
-/** The largest a creature is drawn, and the largest a land or other permanent is. */
-export const CREATURE_MAX = 120;
-export const BACK_MAX = 100;
+/**
+ * The largest a creature is drawn, and the largest a land or other permanent is. Large on
+ * purpose: a table of a few cards draws them big, and the lane's height and the row's width
+ * shrink them as the table fills (`fitWidth`) — in practice the lane's height is what stops a
+ * sparse row, so these are only a ceiling for a very tall window.
+ */
+export const CREATURE_MAX = 260;
+export const BACK_MAX = 220;
 
 /** A card in hand, and how much of it shows above the window's edge while it rests. */
-export const HAND_CARD_W = 132;
-export const HAND_CARD_H = 185;
-export const HAND_PEEK = 112;
+export const HAND_CARD_W = 140;
+export const HAND_CARD_H = 196;
+export const HAND_PEEK = 124;
+/** How far a card pointed at in hand is pulled up out of the row. */
+export const HAND_LIFT = 44;
+/** The gap between two cards of a hand that fits without overlapping. */
+export const HAND_GAP = 8;
+/** The widest the hand's row grows before its cards overlap to stay inside it: seven cards
+ *  side by side. */
+export const HAND_ROW_MAX = 7 * HAND_CARD_W + 6 * HAND_GAP;
+/** However many cards are held, each shows at least this much of its left edge. */
+export const HAND_MIN_STEP = 36;
 
 /** The zone columns' cards: command, exile, graveyard, library. */
-export const ZONE_W = 104;
-export const ZONE_H = 146;
+export const ZONE_W = 120;
+export const ZONE_H = 168;
 
 /**
  * One pile: the cards of one name that look the same — same tapped state, same counters — and
@@ -152,40 +166,60 @@ export function layoutTable(
   };
 }
 
-/** One card of the hand as it is held: where it sits and how it leans. */
-export interface HandSlot {
-  left: number;
-  /** From the top of the hand's band; a lifted card is at 0. */
-  top: number;
-  rotate: number;
-}
-
-/** The band the hand is held in: how wide, and each card's place in it. */
-export interface HandFanLayout {
+/** The band the hand is held in: how wide, how tall, and each card's left edge in it. */
+export interface HandRowLayout {
   width: number;
   height: number;
-  slots: HandSlot[];
+  /** Each card's left edge, in hand order. */
+  lefts: number[];
+  /** From the top of the band: where a resting card's top edge is, and a lifted one's. */
+  restTop: number;
+  liftTop: number;
 }
 
 /**
- * The hand, held below the table: each card shows its top {@link HAND_PEEK} px and rises whole
- * when pointed at. Fanned around its middle — a card leans 4° a place out from the centre and
- * sinks by the square of its distance, so the edges dip the way held cards do. Seven or fewer
- * are 96 px apart; more close up to 70.
+ * The hand, held in one straight row below the table: each card shows its top
+ * {@link HAND_PEEK} px and is pulled {@link HAND_LIFT} px up out of the row when pointed at. Up
+ * to seven sit side by side; more overlap, each closer to the last, so the row never grows past
+ * {@link HAND_ROW_MAX} until every card shows only {@link HAND_MIN_STEP} of itself.
  */
-export function fanHand(count: number, lifted: number | null): HandFanLayout {
-  const step = count > 7 ? 70 : 96;
-  const mid = (count - 1) / 2;
-  const width = count > 0 ? HAND_CARD_W + (count - 1) * step : HAND_CARD_W;
-  const height = HAND_CARD_H + 16;
-  const slots = Array.from({ length: count }, (_, i) => {
-    const d = i - mid;
-    const up = lifted === i;
-    return {
-      left: i * step,
-      top: up ? 0 : height - HAND_PEEK + Math.round(d * d * 4),
-      rotate: up ? 0 : d * 4,
-    };
-  });
-  return { width, height, slots };
+export function handRow(count: number): HandRowLayout {
+  const step =
+    count <= 1
+      ? 0
+      : Math.max(
+          HAND_MIN_STEP,
+          Math.min(HAND_CARD_W + HAND_GAP, Math.floor((HAND_ROW_MAX - HAND_CARD_W) / (count - 1))),
+        );
+  const width = HAND_CARD_W + Math.max(0, count - 1) * step;
+  const height = HAND_PEEK + HAND_LIFT + 8;
+  return {
+    width,
+    height,
+    lefts: Array.from({ length: count }, (_, i) => i * step),
+    restTop: height - HAND_PEEK,
+    liftTop: height - HAND_PEEK - HAND_LIFT,
+  };
+}
+
+/** The cards with every land first, each group keeping the order it came in — how a reader
+ *  sorts an opening hand. */
+export function landsFirst<T extends { isLand: boolean }>(cards: readonly T[]): T[] {
+  return [...cards.filter((c) => c.isLand), ...cards.filter((c) => !c.isLand)];
+}
+
+/**
+ * The order the hand is held in, given the order it was held in a moment ago (`was`, ids).
+ *
+ * **A hand picked up fresh is sorted lands first** — the kept opening hand, which the reader has
+ * just seen that way (`OpeningHand`). After that the cards stay where they are: a card drawn or
+ * returned goes on the right, the way a card is added to a held hand, and a card played leaves a
+ * gap the rest close up.
+ */
+export function arrangeHand(was: readonly number[], cards: readonly GameCard[]): number[] {
+  if (was.length === 0) return landsFirst(cards).map((c) => c.id);
+  const here = new Set(cards.map((c) => c.id));
+  const kept = was.filter((id) => here.has(id));
+  const held = new Set(kept);
+  return [...kept, ...cards.filter((c) => !held.has(c.id)).map((c) => c.id)];
 }

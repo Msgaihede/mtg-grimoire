@@ -5,6 +5,7 @@ import type { GoldfishAction, GoldfishView } from "@/lib/ipc";
 import { GoldfishBoard } from "./GoldfishBoard";
 import { openingHandView, playLocally, turnNineView } from "./fixtures";
 import type { LogLine } from "./log";
+import type { Playmat } from "./types";
 
 /**
  * The board, played locally: each action goes to `onAct` (recorded) and to `playLocally`, the
@@ -15,10 +16,12 @@ function Played({
   start,
   onAct,
   log = [],
+  playmat,
 }: {
   start: GoldfishView;
   onAct: (a: GoldfishAction) => void;
   log?: LogLine[];
+  playmat?: Playmat;
 }): JSX.Element {
   const [view, setView] = useState(start);
   return (
@@ -33,17 +36,24 @@ function Played({
       }}
       onBack={() => {}}
       onNewGame={() => setView(start)}
+      initialPlaymat={playmat}
     />
   );
 }
 
 const TURN_NINE_LOG: LogLine[] = [
-  { turn: 9, text: "The opponent took 7, down to 12" },
-  { turn: 9, text: "Created 5 Treasure tokens" },
-  { turn: 9, text: "Cast Consecrated Sphinx" },
-  { turn: 9, text: "Played Urza's Saga" },
-  { turn: 9, text: "Drew Urza's Saga" },
-  { turn: 9, text: "Untapped · turn 9 begins" },
+  { turn: 9, text: "The opponent took 7, down to 12", kind: "life" },
+  { turn: 9, text: "Created 5 Treasure tokens", kind: "token" },
+  { turn: 9, text: "Cast Consecrated Sphinx", kind: "cast" },
+  { turn: 9, text: "Played Urza's Saga", kind: "land" },
+  { turn: 9, text: "Drew Urza's Saga", kind: "draw" },
+  { turn: 9, text: "Untapped · turn 9 begins", kind: "turn" },
+  { turn: 8, text: "Cast Sol Ring", kind: "cast" },
+  { turn: 8, text: "Played Command Tower", kind: "land" },
+  { turn: 8, text: "Drew Sol Ring", kind: "draw" },
+  { turn: 8, text: "Untapped · turn 8 begins", kind: "turn" },
+  { turn: 0, text: "Kept seven", kind: "deal" },
+  { turn: 0, text: "Shuffled and drew seven", kind: "deal" },
 ];
 
 const meta = {
@@ -88,6 +98,34 @@ export const NextTurn: Story = {
     await expect(args.onAct).toHaveBeenLastCalledWith({ type: "nextTurn" });
     await expect(canvas.getByText(/Turn 10 ·/)).toBeVisible();
   },
+};
+
+/** Space is the next turn's key, even with a card in hand focused from a click. */
+export const SpaceForNextTurn: Story = {
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByText(/Turn 9 ·/)).toBeVisible();
+    await userEvent.keyboard(" ");
+    await expect(args.onAct).toHaveBeenLastCalledWith({ type: "nextTurn" });
+    await expect(canvas.getByText(/Turn 10 ·/)).toBeVisible();
+  },
+};
+
+/** The log, cut into turns under a heading each, newest first. */
+export const LogByTurn: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "Log" }));
+    const log = canvas.getByRole("region", { name: "Game log" });
+    await expect(within(log).getByRole("heading", { name: "Turn 9" })).toBeVisible();
+    await expect(within(log).getByRole("heading", { name: "Turn 8" })).toBeVisible();
+    await expect(within(log).getByRole("heading", { name: "Opening hand" })).toBeVisible();
+  },
+};
+
+/** A coloured felt behind the table (the game menu's Playmat). */
+export const GreenFelt: Story = {
+  args: { playmat: "green" },
 };
 
 /** The artboard *Goldfish · opening hand*: mulligan 2, the first free, one card to the bottom. */
