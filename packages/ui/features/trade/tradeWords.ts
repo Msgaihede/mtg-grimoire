@@ -225,6 +225,16 @@ export interface GivenMark {
  * of the first `n` decks at most — one copy is exactly the first deck, and naming a second would
  * warn about a deck this line leaves alone.
  *
+ * **A line drawn from the collection says how many copies the collection has** while the trade is
+ * open (issue #935): `from your collection · 3 owned`, outside the reader's decks and in them, of
+ * that printing and finish. It is the figure a press on `+` stops at — past it the copies go onto
+ * a line of their own without this mark — and on a closed trade the facts are live, so the count
+ * would describe today's collection rather than the trade, and is left off.
+ *
+ * **A line beside another of the same printing and finish is read with its own share**: callers
+ * pass the line through `holdingOf` with the trade's lines, so the copies asked for past the
+ * collection's line do not claim the copies that line already holds.
+ *
  * **Only the reader's side, and only while the trade is open.** `owned` and `ownedInDecks` arrive
  * on their lines too — a card they give that the reader also holds in a deck — and nothing is ever
  * taken for those. On a closed trade the facts are still live, so they describe what *another*
@@ -246,7 +256,12 @@ export function givenMark(
     // The whole line, and the count would only repeat the quantity beside it.
     return { place: "deck", words: `${copies === line.quantity ? "" : `${copies} `}from ${where}` };
   }
-  return line.source === "collection" ? { place: "collection", words: "from your collection" } : null;
+  if (line.source !== "collection") return null;
+  const held = Math.max(0, line.owned) + Math.max(0, line.ownedInDecks);
+  return {
+    place: "collection",
+    words: open ? `from your collection · ${held} owned` : "from your collection",
+  };
 }
 
 /** One marketplace a new trade could be priced in — and, where it cannot be, why not. */

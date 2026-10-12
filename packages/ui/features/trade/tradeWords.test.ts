@@ -271,12 +271,15 @@ describe("givenMark", () => {
   });
 
   it("is the gold mark while every copy comes from outside the reader's decks", () => {
-    const gold = { place: "collection", words: "from your collection" };
-    expect(givenMark(given(), true)).toEqual(gold);
-    // A deck holds another copy, and the line does not ask for it.
-    expect(givenMark(given({ ownedInDecks: 1, deckNames: ["Serah"] }), true)).toEqual(gold);
+    const gold = (owned: number) => ({
+      place: "collection",
+      words: `from your collection · ${owned} owned`,
+    });
+    expect(givenMark(given(), true)).toEqual(gold(1));
+    // A deck holds another copy, and the line does not ask for it — it is counted all the same.
+    expect(givenMark(given({ ownedInDecks: 1, deckNames: ["Serah"] }), true)).toEqual(gold(2));
     // A line that asks for more than exists anywhere takes what there is, and no deck has any.
-    expect(givenMark(given({ quantity: 4 }), true)).toEqual(gold);
+    expect(givenMark(given({ quantity: 4 }), true)).toEqual(gold(1));
   });
 
   it("is nothing for a line that came from a search or a scan and touches no deck", () => {
