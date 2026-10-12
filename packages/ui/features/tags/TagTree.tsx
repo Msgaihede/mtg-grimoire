@@ -227,9 +227,9 @@ export function TagTree({
             with its sentence already inside it announces nothing. This line's entire audience is
             the reader who cannot see that a heading and everything filed under it has just left
             the rail — so mounting it with the news in it would fail exactly the person it exists
-            for. `Ribbon`, `AppShell` and `SyncProgress` are all this shape.
+            for. `ChromeStatus`, `AppShell` and `SyncProgress` are all this shape.
 
-            `sr-only` while empty, `Ribbon`'s reason: an element left in the flow with nothing in
+            `sr-only` while empty, `ChromeStatus`' reason: an element left in the flow with nothing in
             it grows the gap above it by a phantom row. */}
         <p role="status" className={hidSomething ? "px-1 text-[0.6875rem] text-dim" : "sr-only"}>
           {hidSomething

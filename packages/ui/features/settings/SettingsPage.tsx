@@ -419,7 +419,7 @@ export function SettingsPage({ update }: { update: Update }) {
         {shown("labels") && <LabelsPanel />}
 
         {/* **The two facts that reached the reader at exactly one place each, and that place was a
-            hover tooltip** on the ribbon's status line — `Ribbon.tsx:96` names the folder and
+            hover tooltip** on the ribbon's status line — `ChromeStatus.tsx` names the folder and
             `:97–98` appends the failure count. A phone has no hover, and 9a's touch census found
             by grep that there was no second door to either. This is that second door and not a
             move: the tooltip stays exactly as it was, so a pointer reader loses nothing.

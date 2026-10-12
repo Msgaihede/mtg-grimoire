@@ -1,6 +1,8 @@
 import {
   useCallback,
+  useEffect,
   useMemo,
+  useRef,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
@@ -12,8 +14,9 @@ import { CardSearchBody } from "@/features/search/CardSearchBody";
 import { CardSearchPanel } from "@/features/search/CardSearchPanel";
 import { useCardSearch, type FormatFilterOption } from "@/features/search/useCardSearch";
 import { useSearchOpen } from "@/features/search/useSearchOpen";
+import { soleFinish, type Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
-import { ipcError, type CardSummary, type DeckCategory } from "@/lib/ipc";
+import { ipcError, type CardSummary, type DeckCategory, type DeckFinish } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { ADD_BUTTON } from "./addButton";
@@ -23,6 +26,7 @@ import { isTokenPrinting } from "./deckTokens";
 import { TOKENS_HEADING } from "./DeckTokensPanel";
 import { cardDraggable } from "./dnd";
 import type { Deck } from "./useDeck";
+import { useDeckSearchWidth } from "./useDeckSearchWidth";
 import { useWallOracleTags } from "./useWallOracleTags";
 
 /**
@@ -37,6 +41,26 @@ import { useWallOracleTags } from "./useWallOracleTags";
  * way round.
  */
 export { MIN_PANEL_WIDTH_PX, SEARCH_OVER_ATTR } from "@/features/search/CardSearchPanel";
+
+/**
+ * **The finish the Finish filter commits every result to**, or `null` — what an add off this wall
+ * writes and what its tiles are drawn as (issue #933).
+ *
+ * The cell asks "is this printing published in this finish" (`printedFinishes`), so one premium
+ * chip pressed alone is a promise about every row on the wall: each of them comes in that finish,
+ * and the reader has said it is the one they are looking for. Adding the plain copy of a card
+ * found under `Foil` was the bug — the deck row read nonfoil and drew no sheen.
+ *
+ * **Exactly one chip, and only a premium one.** `Nonfoil` is the regular copy, which is `null`'s
+ * meaning already (`deck::normalise_finish`). Two chips pressed are an OR — a row may be published
+ * in one and not the other — so there is no single finish to promise, and the add falls back to
+ * the regular copy exactly as it did before the filter was touched.
+ */
+export function filteredFinish(picked: readonly Finish[]): DeckFinish {
+  if (picked.length !== 1) return null;
+  const [only] = picked;
+  return only === "nonfoil" ? null : only;
+}
 
 /**
  * Which of the two searches this column is showing.
@@ -470,6 +494,10 @@ export function DeckSearchPanel({
   // second is only answerable against the first. See {@link tabsFor} and {@link drawnTab}.
   const tabs = tabsFor(tracksCollection);
   const { tab, setTab } = useDeckSearchTab(tabs);
+  // The width this deck's column was last dragged to (issue #932) — per deck, because the editor
+  // is keyed by deck id and each deck mounts its own panel. The editor starts the read beside
+  // `deck_get` (`usePrefetchDeckSearchWidth`) so the column's first paint is already this width.
+  const { width, setWidth } = useDeckSearchWidth(deckId);
 
   return (
     <CardSearchPanel
@@ -486,6 +514,8 @@ export function DeckSearchPanel({
       roomy={roomy}
       overWidth={overWidth}
       maxWidth={maxWidth}
+      width={width}
+      onWidthChange={setWidth}
       // **Above the body rather than inside it**, which is what makes it the panel's own chrome
       // rather than one tab's: it is drawn for both tabs, it does not move when they switch, and
       // it survives the railing that merely *hides* the body below — so a width change cannot take
@@ -799,6 +829,31 @@ function OpenPanel({
   const wallTags = useWallOracleTags(wallIds, auto);
 
   /**
+   * The finish the reader filtered for — see {@link filteredFinish}. The Add button sends it, the
+   * tiles wear it, and a drag carries it, so a card found under `Foil` lands foil whichever of the
+   * three gestures put it in the deck.
+   */
+  const wanted = filteredFinish(search.finishes);
+  /**
+   * The sheen a tile wears: the filtered finish where there is one, else the printing's own sole
+   * finish (`tileFinish` on the search page). A memo on `wanted` so the callback `CardGrid` takes
+   * holds still between keystrokes — see its `finish` slot.
+   */
+  const tileFinish = useCallback(
+    (card: CardSummary): Finish | null => wanted ?? soleFinish(card.finishes),
+    [wanted],
+  );
+  /**
+   * The same answer, read at the moment a drag starts. Through a ref rather than in
+   * {@link tileRef}'s dependency list, because a new `tileRef` re-registers every tile's drag —
+   * and pressing a filter chip is not a reason to tear down the wall's drag sources.
+   */
+  const wantedRef = useRef(wanted);
+  useEffect(() => {
+    wantedRef.current = wanted;
+  }, [wanted]);
+
+  /**
    * Every drawn tile, as a card that can be dragged into a category.
    *
    * The wall builds its own tiles, so this is the only way to hand a library an element: one
@@ -834,6 +889,9 @@ function OpenPanel({
               // names itself: a tile can also be let go on the sidebar's Decks entry, which
               // names none. One payload shape, whichever target takes it (`dnd.ts`).
               typeLine: card.typeLine,
+              // Said only when the filter commits to one — see `filteredFinish`. Absent is the
+              // regular copy, which is what every other source of this payload sends.
+              ...(wantedRef.current && { finish: wantedRef.current }),
             }),
           })
         : undefined,
@@ -861,6 +919,7 @@ function OpenPanel({
       onSelect={selectCard}
       cardMenu={cardMenu}
       cardMenuKey={cardMenuKey}
+      finish={tileFinish}
       badge={(card) => <OwnedBadge owned={card.ownedQuantity} wishlisted={card.wishlisted} />}
       action={(card) => {
         // Where this card would land, named before the press rather than reported after it.
@@ -918,8 +977,14 @@ function OpenPanel({
             onClick={() =>
               add.mutate(
                 auto
-                  ? { cardId: card.id, typeLine: card.typeLine, oracleTags: tags, quantity: 1 }
-                  : { cardId: card.id, categoryId: targetCategoryId, quantity: 1 },
+                  ? {
+                      cardId: card.id,
+                      typeLine: card.typeLine,
+                      oracleTags: tags,
+                      finish: wanted,
+                      quantity: 1,
+                    }
+                  : { cardId: card.id, categoryId: targetCategoryId, finish: wanted, quantity: 1 },
                 { onSuccess: (change) => onAdded?.(change.id) },
               )
             }

@@ -19,13 +19,13 @@ import { AppShell } from "./AppShell";
  *
  * `App.tsx:15`'s `ActiveView` picks one of five real views out of the store, and four of them
  * are another file's to story — `SearchPage`, `CollectionPage` and `WishlistPage` have their
- * own. What this file is about is the frame: the sidebar, the ribbon, the banner, the overlay
+ * own. What this file is about is the frame: the sidebar, the header, the banner, the overlay
  * and the two entries a card can be dropped on. A dashed box says which view *would* be here
  * without pulling three connected pages into a story about their container.
  *
  * **Settings is the one exception, and it is not an inconsistency.** That view is the *other*
  * half of the thing this shell owns: `App.tsx` calls `useUpdate` once and hands the result to
- * both `AppShell` (for the ribbon's button) and `SettingsPage` (for the panel), because two
+ * both `AppShell` (for the header's button) and `SettingsPage` (for the panel), because two
  * calls would be two `update:progress` listeners racing to describe one download. A stand-in
  * there would hide the only arrangement in the app where one hook feeds two surfaces — so
  * {@link Shell} mirrors `App.tsx` exactly and lets the real page be the child.
@@ -103,7 +103,7 @@ function Shell({
   const update = useUpdate();
   // **The store, not the `view` arg**, which is `App.tsx:16`'s own choice: `ActiveView`
   // subscribes, so the body follows every way the view can change — a sidebar entry, and the
-  // ribbon's update button. Pinned to the arg instead, a story that pressed either would show
+  // header's update button. Pinned to the arg instead, a story that pressed either would show
   // the frame renaming itself over a body that had not moved, which is a bug this component
   // does not have.
   const activeView = useAppStore((s) => s.activeView);
@@ -323,17 +323,17 @@ const meta = {
       story: { inline: false, height: "840px" },
       description: {
         component:
-          "The window: sidebar, ribbon, and whatever view the store points at. It owns the " +
-          "sync status because everything that needs it lives here — the ribbon's summary " +
+          "The window: sidebar, header, and whatever view the store points at. It owns the " +
+          "sync status because everything that needs it lives here — the header's summary " +
           "line, its Refresh button and mana line, the first-run overlay and the error banner " +
           "— and one poll for the whole app is the point of the arrangement.\n\n" +
           "**This is the one component in the chrome that a seeded world really drives.** " +
-          "`Ribbon` and `SyncProgress` take everything as props; this polls `sync_status`, " +
+          "`ChromeStatus` and `SyncProgress` take everything as props; this polls `sync_status`, " +
           "registers the app's single `sync:progress` listener, and reads and writes the " +
           "collection through the sidebar's drop targets. So the stories below choose a `seed` " +
           "and a `fault` rather than arguments.\n\n" +
           "**It owns the update the same way it owns the sync**, one step removed: `App.tsx` " +
-          "calls `useUpdate` and hands the answer both to this shell — which draws the ribbon's " +
+          "calls `useUpdate` and hands the answer both to this shell — which draws the header's " +
           "gold button from it — and to `SettingsPage`, which draws the panel. One hook, " +
           "because two would be two `update:progress` listeners describing one download. The " +
           "wrapper below copies that arrangement, so `updateAvailable` is a world rather than " +
@@ -343,7 +343,7 @@ const meta = {
           "once; `update_status` answers `busy: false` always and `update_download` is " +
           "synchronous. So neither the mana line's fill, nor the first-run progress bar, nor " +
           "the update's download bar can be reached from here. All three are storied where they " +
-          "are arguments — `Chrome/Ribbon`, `Chrome/SyncProgress`, `Primitives/ManaLine` and " +
+          "are arguments — `Chrome/Status`, `Chrome/SyncProgress`, `Primitives/ManaLine` and " +
           "`Settings/UpdatePanel`.\n\n" +
           "The children are a dashed stand-in on every story but Settings, which is the one " +
           "view that is *about* something the shell holds. `App.tsx` puts one of five real " +
@@ -378,7 +378,7 @@ export const Search: Story = {
     await expect(canvas.getByRole("button", { name: "Collection" })).not.toHaveAttribute(
       "aria-current",
     );
-    // The ribbon's `h1` is the view's name, from the same `NAV` table the sidebar is drawn
+    // The (screen-reader-only) `h1` is the view's name, from the same `NAV` table the sidebar is drawn
     // from — one list, so the two can never disagree about what a view is called.
     await expect(canvas.getByRole("heading", { level: 1 })).toHaveTextContent("Search");
   },
@@ -468,7 +468,7 @@ export const Collapsed: Story = {
  *
  * `App.tsx:58` calls `useUpdate` once and gives it to the shell and to this page; {@link Shell}
  * does the same. So what is on screen here is one hook's answer rendered twice — and in the
- * default world that answer is "you are on the latest version", which is why the ribbon is
+ * default world that answer is "you are on the latest version", which is why the header is
  * quiet. {@link UpdateAvailable} is the other side of it.
  *
  * The check the panel reports was not made by this window: the fake's `lastCheckAt` is
@@ -485,7 +485,7 @@ export const Settings: Story = {
     // `available` is derived to null and the panel says so. Nothing was hard-coded to say it:
     // `db.ts`'s `isNewer` compared two strings.
     await expect(await canvas.findByText(/You’re on the latest version\./)).toBeInTheDocument();
-    // And the ribbon's gold button is the same fact from the other side — absent, so asserted.
+    // And the header's gold button is the same fact from the other side — absent, so asserted.
     await expect(canvas.queryByRole("button", { name: /^Update to/ })).toBeNull();
   },
 };
@@ -493,7 +493,7 @@ export const Settings: Story = {
 /**
  * A release published since the last check, as the whole window reports it.
  *
- * **The gold button is the only thing in the ribbon that is not about the card database**, and
+ * **The gold button is the only thing in the header that is not about the card database**, and
  * it is before the status line and Refresh because it is the rarer and more consequential thing
  * on the row. It borrows the accent the mana line two pixels below already owns rather than
  * inventing a colour for one button.
@@ -501,8 +501,8 @@ export const Settings: Story = {
  * Pressing it does not update anything: it opens Settings, where the release notes and the
  * actual controls are (`AppShell.tsx:125` — `onOpenUpdate` is `setActiveView("settings")` and
  * nothing else). That is the claim this story exists for, because it is wiring no other story
- * in the catalogue has: `Chrome/Ribbon` takes `onOpenUpdate` as a prop, and `Settings/Page`
- * never sees the ribbon.
+ * in the catalogue has: `Chrome/Status` takes `onOpenUpdate` as a prop, and `Settings/Page`
+ * never sees the header.
  *
  * The label is `Update to 0.4.0` rather than `0.4.0 available` because the seeded install kind
  * is `portable`, which `pick_asset` finds an asset for — a control says exactly what happens
@@ -526,16 +526,16 @@ export const UpdateAvailable: Story = {
       "aria-current",
       "page",
     );
-    // And the page that opened is the real one, with the release the ribbon was pointing at.
+    // And the page that opened is the real one, with the release the header was pointing at.
     await expect(await canvas.findByText("0.4.0")).toBeInTheDocument();
   },
 };
 
 /**
- * A sync that failed, as the shell reports it: one `role="alert"` band under the ribbon.
+ * A sync that failed, as the shell reports it: one `role="alert"` band under the header.
  *
  * The sentence comes from `sync_status.lastError`, which is where a failure survives long after
- * its event was dropped — and the ribbon reads the same fact as `hasError` and goes quiet with
+ * its event was dropped — and the header reads the same fact as `hasError` and goes quiet with
  * it rather than drawing a second, cheerful line beside a red one.
  *
  * The banner is the app's **one** alert. `SyncProgress` deliberately renders the same string as
@@ -554,7 +554,7 @@ export const SyncFailed: Story = {
 };
 
 /**
- * An empty database: the first-run overlay takes the whole window, ribbon included.
+ * An empty database: the first-run overlay takes the window below the header.
  *
  * `seed: "empty"` is the only seed whose `cards` table is empty, so `sync_status` answers a
  * `cardCount` of exactly `0` — which is the one value that means "nothing has been synced yet"
@@ -562,7 +562,7 @@ export const SyncFailed: Story = {
  *
  * Nothing is running here and nothing has been said, because the fake's `sync_run` is never in
  * flight, so what shows is the recovery branch: the sentence, and the Retry the overlay carries
- * *because* it covers the ribbon's own Refresh button. That is the same screen a run throttled
+ * *because* it is the screen's answer, beside the header's own Refresh. That is the same screen a run throttled
  * by the 24 h check window produces in the real app, which is storied as `Chrome/SyncProgress`'s
  * `Throttled`.
  */
@@ -647,9 +647,7 @@ export const DropTargetsLive: Story = {
         await expect(decks).toHaveClass(DROP_RING);
       });
       await expect(wishlist).toHaveClass(DROP_RING);
-      await expect(canvas.getByRole("button", { name: "Collection" })).not.toHaveClass(
-        DROP_RING,
-      );
+      await expect(canvas.getByRole("button", { name: "Collection" })).not.toHaveClass(DROP_RING);
 
       await held.over(decks);
       // The positive claim is the one that waits; the negative is read *after* it resolves, on a

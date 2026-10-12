@@ -239,4 +239,30 @@ describe("TitleBar", () => {
     render(<TitleBar />);
     expect(screen.getByText("MTG GRIMOIRE")).toBeInTheDocument();
   });
+
+  /**
+   * The light edition's header band: the same row and the same keyboard map, but no window
+   * verbs — a browser or an OS owns that frame — and no drag region, which nothing there honours.
+   */
+  it("draws a band without window verbs or drag regions when it owns no window", () => {
+    const { container } = render(<TitleBar windowControls={false} />);
+    expect(screen.getByText("MTG GRIMOIRE")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Keyboard shortcuts" })).toBeInTheDocument();
+    for (const name of ["Minimize", "Maximize", "Close"]) {
+      expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+    }
+    expect(container.querySelector("[data-tauri-drag-region]")).toBeNull();
+  });
+
+  /** The app's status run is drawn right-aligned, immediately before the keyboard map. */
+  it("draws its children before the keyboard map", () => {
+    render(
+      <TitleBar>
+        <button type="button">Refresh data</button>
+      </TitleBar>,
+    );
+    const refresh = screen.getByRole("button", { name: "Refresh data" });
+    const keys = screen.getByRole("button", { name: "Keyboard shortcuts" });
+    expect(refresh.compareDocumentPosition(keys) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
 });

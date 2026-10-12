@@ -25,6 +25,11 @@ finish) and two timestamps. `trade_lines` is one printing in one finish on one s
   the whole of "a closed trade keeps the prices it closed with".
 - **No CHECK on the rates and no UNIQUE over a side's lines.** The commands refuse a rate outside
   50–150 or off a step of 5 in words, and fold a printing and finish a side already holds.
+- **On the reader's side the grain has a third term: drawn from the collection or not**
+  (`trade::drawn`, [issue #935](https://github.com/Msgaihede/mtg-grimoire/issues/935)). So that
+  side can hold two lines for one printing and finish: the `collection` line, never more than the
+  copies the collection has (`owned + ownedInDecks`), and a line of any other source for the
+  copies asked for past those. Their side is one grain whatever the source.
 - **Neither table syncs and the mirror writes neither.** They are local to the device that made
   them: absent from `SYNCED_TABLES`, no `sync_uid`, on the mirror's ignored list. The full backup
   carries them, since it walks every user table.
@@ -37,6 +42,13 @@ finish) and two timestamps. `trade_lines` is one printing in one finish on one s
 table, so the Android and web hosts answer them with no code of their own.
 
 - **Any write to a trade that is not open is refused**, except reopen, duplicate and delete.
+- **A collection line stops at the collection's count, and the rest become a line of their own**
+  (`trade::split`, issue #935). `trade_add_lines` with a `collection` input, and
+  `trade_update_line` naming a quantity on a `collection` line of the reader's side, keep that
+  line at the copies the collection holds of the printing and finish — or at what it already
+  held, if more: a press never shrinks a line whose copies left the collection since — and put
+  the remainder on the side's other line for it (`put_excess`), raised or made as `search` at the
+  end of the trade. Stepping the collection line back down leaves that other line alone.
 - **`trade_update_line` applies printing, finish, quantity and side in that order, then folds.** A
   finish the printing does not come in is refused; a new printing keeps the finish when it has it
   and takes its first listed one otherwise. `trade_add_lines` checks the finish as a word only: a
@@ -57,6 +69,13 @@ table, so the Android and web hosts answer them with no code of their own.
 A line arrives with `unitPrice` (100%, the trade's marketplace: live while open, frozen after),
 `finishPrices` (always live), `owned`, `ownedInDecks`, `deckNames` and `wished`.
 
+- **Two lines for one printing are one claim on the collection, the collection's line first.**
+  The facts are per printing and finish, so both lines arrive with the same ones. A finish serves
+  the reader's `collection` lines before their other lines (`take_given`), each in position order
+  otherwise, and `holdingOf` (`trade.ts`) gives each line the facts less what the lines served
+  before it take — outside every deck first. `givenMark`, `givenNote` and `deckNote` read lines
+  through it, so the copies past the collection neither claim the copies the collection's line
+  holds nor warn about a deck they never reach.
 - **A line's copies are counted in two places, and Rust never adds them together.** `owned` is
   the copies of that printing and finish **outside any deck**: unfiled, or in a folder of the
   reader's own that is not locked. `ownedInDecks` is the copies filed in a **deck's group**, and
@@ -141,8 +160,9 @@ Desktop is `packages/ui/features/trade/`: a trades pane beside the open trade, t
 panels with a divider in the gap, and a balance panel holding both totals and **Finish trade**.
 On an open trade the divider's arrows are a **Swap sides** button (issue #936): `trade_swap_sides`
 moves every line to the other side in one statement, keeping each line's printing, finish,
-quantity and place, and leaves the percentages with their sides. Nothing folds — each side hands
-the other a set that already held one line a printing and finish.
+quantity and place, and leaves the percentages with their sides. The one fold is on their side:
+the reader's collection line and their line past it for one printing and finish (issue #935)
+become one line there, the first in the order taking the other's copies.
 The phone is `apps/light/phone/pages/TradePage.tsx` and `apps/light/phone/trade/`: Trade is a
 seventh light view and a sixth tab, the open trade is in the URL as `/trade/5`, and adding,
 editing, the percentage, finishing and New trade are bottom sheets. Both faces word a fact through
@@ -168,7 +188,10 @@ editing, the percentage, finishing and New trade are bottom sheets. Both faces w
   decks*, one row a printing, finish and deck. A line's mark is derived, never recorded:
   `givenMark` (`tradeWords.ts`) reads `fromDecks(line)`, so *from your collection* in gold turns
   to `1 from your deck Serah` in red on the press that steps the quantity past `owned`, on the
-  reader's side and an open trade only. Finish trade draws `deckNote` under its first question
+  reader's side and an open trade only. While the trade is open the gold mark carries the
+  collection's count, `from your collection · 3 owned` — every copy of that printing and finish,
+  a deck's included, which is where `+` stops adding to that line (issue #935). A closed trade
+  says *from your collection* alone: its facts are today's, not the trade's. Finish trade draws `deckNote` under its first question
   in the same colour, as part of that checkbox's description.
 - **New trade always offers TCGplayer and Cardmarket, and a feed marketplace only while the app is
   set to it** (`tradeWords.ts`, `tradeMarketplaceOffers`). Card Kingdom's and Mana Pool's prices

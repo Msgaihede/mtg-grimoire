@@ -938,7 +938,8 @@ describe("an open trade", () => {
     const more = within(ring).getByRole("button", { name: "Increase Quantity of Sol Ring" });
 
     // One copy, and one is held outside every deck: the gold mark, and nothing in red.
-    const gold = within(ring).getByText("from your collection");
+    // The count is every copy the collection holds of it, a deck's included.
+    const gold = within(ring).getByText("from your collection · 3 owned");
     expect(gold.classList.contains("text-accent")).toBe(true);
     expect(gold.classList.contains("text-destructive")).toBe(false);
     expect(deckMark(ring)).toBeNull();
@@ -950,7 +951,7 @@ describe("an open trade", () => {
     expect(deckMark(ring)?.classList.contains("text-destructive")).toBe(true);
     expect(deckMark(ring)?.classList.contains("text-accent")).toBe(false);
     // Never both: a line that reaches into a deck does not also wear the gold.
-    expect(within(ring).queryByText("from your collection")).not.toBeInTheDocument();
+    expect(within(ring).queryByText(/from your collection/)).not.toBeInTheDocument();
 
     await user.click(more);
     await waitFor(() =>
@@ -962,9 +963,34 @@ describe("an open trade", () => {
 
     // Back to one copy, and back to gold.
     await waitFor(() => expect(deckMark(ring)).toBeNull());
-    expect(within(ring).getByText("from your collection").classList.contains("text-accent")).toBe(
-      true,
-    );
+    expect(
+      within(ring).getByText("from your collection · 3 owned").classList.contains("text-accent"),
+    ).toBe(true);
+  });
+
+  /**
+   * Issue #935: the copies asked for past the collection are a line of their own, which the
+   * backend makes. That line wears no gold and claims none of the copies the collection's line
+   * already holds — so it warns about no deck either.
+   */
+  it("draws the copies past the collection as a line without its mark, and no deck warning", async () => {
+    const held = { cardId: "ring", owned: 1, ownedInDecks: 1, deckNames: ["Serah"] };
+    backend.trades = [
+      trade({
+        id: 5,
+        lines: [
+          line({ side: "mine", name: "Sol Ring", source: "collection", quantity: 2, ...held }),
+          line({ side: "mine", name: "Sol Ring", source: "search", quantity: 3, ...held }),
+        ],
+      }),
+    ];
+    wrap(<TradePage />);
+    const section = await tradeSection("Trade 5");
+    const [own, past] = within(side(section, "You give")).getAllByRole("listitem");
+
+    expect(deckMark(own)).toHaveTextContent("1 from your deck Serah");
+    expect(within(past).queryByText(/from your collection/)).not.toBeInTheDocument();
+    expect(deckMark(past)).toBeNull();
   });
 
   it("marks a searched-for line whose only copy is a deck's, and never a card on their side", async () => {

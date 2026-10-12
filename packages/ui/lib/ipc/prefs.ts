@@ -1,5 +1,5 @@
 /**
- * Stored preferences: the marketplace, zooms, list layouts, mark colours, search columns, shelf folds, hidden stacks, deck sorting and the folder pane, and the start view.
+ * Stored preferences: the marketplace, zooms, list layouts, mark colours, search columns, deck search widths, shelf folds, hidden stacks, deck sorting and the folder pane, and the start view.
  *
  * **One domain of `../ipc.ts`, split out on 2026-10-11 (issue #557).** Nothing outside
  * `packages/ui/lib/ipc*` imports this file: every page, hook, story and test goes through
@@ -91,8 +91,7 @@ export const prefCommands = {
    * would discard — but the *ladder* is not checked at the far end, deliberately: the backend
    * bounds the number and this side owns where the stops are.
    */
-  setCardZoom: (section: string, zoom: number) =>
-    invoke<void>("set_card_zoom", { section, zoom }),
+  setCardZoom: (section: string, zoom: number) => invoke<void>("set_card_zoom", { section, zoom }),
   /**
    * Whether the reader has collapsed the global navigation rail, stored so it opens the way
    * they left it.
@@ -137,8 +136,7 @@ export const prefCommands = {
    * deliberately does not undo the layout when it does — {@link setNavCollapsed}'s trade, for its
    * reason.
    */
-  setListView: (section: string, view: string) =>
-    invoke<void>("set_list_view", { section, view }),
+  setListView: (section: string, view: string) => invoke<void>("set_list_view", { section, view }),
   /**
    * What colour the reader has each card mark drawn in, as mark name → `#rrggbb`.
    *
@@ -252,6 +250,21 @@ export const prefCommands = {
    */
   setStackHidden: (deckId: number, categoryId: number, hidden: boolean) =>
     invoke<void>("set_stack_hidden", { deckId, categoryId, hidden }),
+  /**
+   * How wide the reader last dragged one deck's card search column, in px — or `null` for a deck
+   * nobody has dragged (issue #932). {@link hiddenStacks}' contract keyed by deck: **infallible by
+   * signature**, so an unreadable entry answers `null` and the column opens at its default.
+   * `app_meta` is not synced, so the width is this device's alone.
+   */
+  deckSearchWidth: (deckId: number) => invoke<number | null>("deck_search_width", { deckId }),
+  /**
+   * Remember one deck's card search column width. Refuses an id that is not positive and a width
+   * outside the crate's storage band (`searchwidth::MIN_SEARCH_WIDTH..=MAX_SEARCH_WIDTH`), and
+   * answers `collection::BUSY` under a running sync — all swallowed by the caller, which keeps the
+   * reader's width for this session either way.
+   */
+  setDeckSearchWidth: (deckId: number, width: number) =>
+    invoke<void>("set_deck_search_width", { deckId, width }),
   /**
    * How the decks page's folder tree was last left — how wide the reader dragged it, and whether
    * it is folded to its rail.

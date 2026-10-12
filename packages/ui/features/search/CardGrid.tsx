@@ -1523,9 +1523,23 @@ export function CardGrid<T extends GridCard>({
     [shelfTiles, rows],
   );
   const selectionOrder = useMemo(() => drawn.map((card) => tileKey(card)), [drawn]);
-  // `listKey` is what a Ctrl+A is *about*: the same list while its pages arrive, a different one
-  // when the filter moves — see `Selection.allOf`.
-  const picked = useCardSelection(selectionScope ?? NO_SELECTION, selectionOrder, listKey);
+  /**
+   * What a Ctrl+A is *about*: `listKey` — the same list while its pages arrive, a different one
+   * when the filter moves (see `Selection.allOf`) — and, on a sectioned wall, **which shelves are
+   * shut** (issue #938).
+   *
+   * A shut shelf draws nothing, so a Ctrl+A picks none of it; but "all of this list" is a standing
+   * instruction, and with the folds left out of its identity, opening that shelf afterwards swept
+   * every card in it into the set — cards the reader never saw being picked. A fold is a different
+   * list, exactly as a filter is: what was picked and is still drawn stays picked, and the
+   * instruction is dropped. Keyed on the shut shelves rather than the open ones, so a placeholder
+   * heading or a card moved between open shelves leaves a Ctrl+A standing.
+   */
+  const selectionList = useMemo(() => {
+    const shut = sectionList?.filter((s) => s.shelf.collapsed).map((s) => s.shelf.id) ?? [];
+    return shut.length === 0 ? listKey : `${listKey}\u0000shut:${shut.join(",")}`;
+  }, [listKey, sectionList]);
+  const picked = useCardSelection(selectionScope ?? NO_SELECTION, selectionOrder, selectionList);
 
   /**
    * **Ctrl+A picks every tile on this wall** — issue #910.

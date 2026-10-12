@@ -102,7 +102,8 @@ export interface Edition {
   /** The rail's rows. `null` is every destination `NAV` holds, so the full edition cannot fall
    *  behind a view added to the rail. */
   views: readonly ViewId[] | null;
-  /** Whether this window draws its own caption. False wherever a browser or an OS owns the frame. */
+  /** Whether this window draws its own window verbs (Minimize, Maximize, Close) and drag regions.
+   *  False wherever a browser or an OS owns the frame; the header band is drawn either way. */
   caption: boolean;
   /** The view a URL that names nothing opens on. The full edition's is the store's own default
    *  and nothing reads it there. */
