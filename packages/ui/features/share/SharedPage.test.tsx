@@ -216,6 +216,31 @@ describe("a shared collection, opened in the app", () => {
     expect(tile("Lightning Bolt").getAllByText(NOTHING)).toHaveLength(2);
   });
 
+  /** Issue #939: the unquoted copies trail the priced ones and read A→Z among themselves,
+   *  never in the order the snapshot happened to list them. */
+  it("sorts by price dearest first with the unquoted cards last, by name", async () => {
+    shareOpen.mockResolvedValue(
+      snapshot({
+        cards: [
+          card({ id: "z", n: "Zulu" }),
+          card({ id: "c", n: "Cheap", p: 1 }),
+          card({ id: "m", n: "Mike" }),
+          card({ id: "d", n: "Dear", p: 50 }),
+          card({ id: "a", n: "Alpha" }),
+        ],
+      }),
+    );
+    mount();
+
+    await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(5));
+    await userEvent.selectOptions(screen.getByLabelText("Sort"), "price");
+
+    const names = screen
+      .getAllByRole("listitem")
+      .map((item) => item.getAttribute("aria-label")?.match(/^\w+/)?.[0]);
+    expect(names).toEqual(["Dear", "Cheap", "Alpha", "Mike", "Zulu"]);
+  });
+
   it("narrows the wall to one drawer and counts what is in it", async () => {
     shareOpen.mockResolvedValue(
       snapshot({

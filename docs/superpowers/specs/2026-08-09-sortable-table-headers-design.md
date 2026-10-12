@@ -255,6 +255,14 @@ Two orders need an expression rather than a column:
 Nullable columns (`type_line`, `price_usd`, `released_at`) state their null rule explicitly
 in both directions rather than inheriting SQLite's default.
 
+**An unpriced row sorts last in both directions** (`… NULLS LAST` on every money clause): a
+price nobody quoted is unknown, not zero and not infinite, so it trails the priced rows
+whether the reader asked for cheapest or dearest first. Inside that block the collection and
+the wishlist break ties by **name** before the unique id (`collection_tiebreak`,
+`w.name ASC, w.id ASC`), so the unpriced cards read A→Z rather than in the order they were
+added — issue #939, where the id alone made the foot of the list look shuffled. The shared
+binder's client-side price sort follows the same rule.
+
 ---
 
 ## 4. The measurement that gates a fourth change

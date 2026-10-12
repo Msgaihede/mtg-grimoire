@@ -8844,6 +8844,13 @@ function collectionOrder(
    *  which is what stops a column being ordered in one marketplace's money while showing
    *  another's. */
   const unitPrice = (e: FakeEntry) => finishPriceAt(db, cards.get(e.id) ?? null, e.finish, mp);
+  /** `COLLECTION_DEFAULT_ORDER`, written out rather than composed from the `name` and `set`
+   *  columns below: it stops at the natural collector number and never reaches the raw string
+   *  those three terms end with. */
+  const defaultOrder: Compare<FakeEntry> = (a, b) =>
+    cmp(name(a), name(b)) ||
+    cmp(a.setCode, b.setCode) ||
+    castInteger(a.collectorNumber) - castInteger(b.collectorNumber);
   return orderBy(
     spec,
     {
@@ -8876,14 +8883,10 @@ function collectionOrder(
       // term in `collection.rs` — carries the whole answer, in whichever direction was asked.
       added: reversible((a, b) => a.id - b.id),
     } satisfies Record<CollectionSortKey, SortColumn<FakeEntry>>,
-    // `COLLECTION_DEFAULT_ORDER`, written out rather than composed from the `name` and `set`
-    // columns above: it stops at the natural collector number and never reaches the raw
-    // string those three terms end with.
-    (a, b) =>
-      cmp(name(a), name(b)) ||
-      cmp(a.setCode, b.setCode) ||
-      castInteger(a.collectorNumber) - castInteger(b.collectorNumber),
-    (a, b) => a.id - b.id,
+    defaultOrder,
+    // `collection_tiebreak`: the default order before the id, so the unpriced block a money
+    // sort gathers at the foot reads A→Z rather than in the order it was added (issue #939).
+    (a, b) => defaultOrder(a, b) || a.id - b.id,
   );
 }
 
@@ -8939,7 +8942,8 @@ function wishlistOrder(
       added: reversible((a, b) => a.id - b.id),
     } satisfies Record<WishlistSortKey, SortColumn<FakeWish>>,
     (a, b) => cmp(a.name, b.name),
-    (a, b) => a.id - b.id,
+    // `w.name ASC, w.id ASC` — the collection's tiebreak rule, one table over (issue #939).
+    (a, b) => cmp(a.name, b.name) || a.id - b.id,
   );
 }
 
