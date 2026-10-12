@@ -53,7 +53,7 @@ export * from "../packages/ui/components/tooltip/useTooltip";
 
 // ── Chrome ───────────────────────────────────────────────────────────────────
 export * from "../packages/ui/components/AppShell";
-export * from "../packages/ui/components/Ribbon";
+export * from "../packages/ui/components/ChromeStatus";
 export * from "../packages/ui/components/SyncProgress";
 export * from "../packages/ui/components/TitleBar";
 export * from "../packages/ui/components/CardZoomIndicator";

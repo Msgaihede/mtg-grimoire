@@ -92,8 +92,8 @@ for that line; the check under it is whether the bundled face is the one actuall
 >
   Cinzel, weights 500 and 600 (<code>--font-heading</code>, <code>packages/ui/index.css</code> line 31).
   View titles, the first-run hero, section headers — <strong>only</strong>. Never body text and
-  never below 18px, which is the whole of its brief. The sample is the ribbon's own size, spelled{" "}
-  <code>font-heading text-xl</code> in <code>packages/ui/components/Ribbon.tsx</code> at line 120 —{" "}
+  never below 18px, which is the whole of its brief. The sample is a dialog title's size, spelled{" "}
+  <code>font-heading text-xl</code> in <code>packages/ui/components/Dialog.tsx</code> (the ribbon's view title wore it until the page header was removed on 2026-10-11) —{" "}
   <strong>20px since the shell was enlarged on 2026-08-14</strong>, which moves the app's one
   display line further from the 18px floor rather than nearer it. The first-run hero is the one
   place it goes larger, at <code>text-2xl</code> in the file{" "}
@@ -182,7 +182,7 @@ either way.
 
 ## The mana line
 
-The signature: a 2px W→U→B→R→G rule under the global ribbon, present on every screen and never
+The signature: a 2px W→U→B→R→G rule under the window header, present on every screen and never
 repeated anywhere else in the app — which is what makes it a signature rather than a motif.
 During a sync it becomes the app's **only** progress bar, the one place where the identity
 element and a functional one are the same element (`packages/ui/components/ManaLine.tsx`, line 12).

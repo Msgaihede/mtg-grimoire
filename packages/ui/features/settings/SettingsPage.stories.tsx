@@ -107,7 +107,7 @@ const meta = {
           "ribbon's gold button — and to this page, for the panel. Two calls would be two " +
           "`update:progress` listeners racing to describe one download, so the hook is owned " +
           "one level up and this page never reaches the backend at all.\n\n" +
-          "That makes every story here an argument, exactly as `Chrome/Ribbon`'s are. " +
+          "That makes every story here an argument, exactly as `Chrome/Status`'s are. " +
           "`Chrome/AppShell`'s `Settings` and `UpdateAvailable` are the same page driven by a " +
           "**seeded world** instead, through the real hook — which is where the ribbon button " +
           "and this panel are shown agreeing with each other.\n\n" +
