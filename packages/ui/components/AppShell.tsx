@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { PanelLeftClose, PanelLeftOpen, TriangleAlert, type LucideIcon } from "lucide-react";
+import { Bell, PanelLeftClose, PanelLeftOpen, TriangleAlert, type LucideIcon } from "lucide-react";
 import {
   ActivityProvider,
   useRegisterActivity,
@@ -8,8 +8,10 @@ import {
 } from "@/components/ActivityProvider";
 import { ChromeStatus } from "@/components/ChromeStatus";
 import { ManaLine } from "@/components/ManaLine";
+import { NotificationsDialog } from "@/components/NotificationsDialog";
 import { SyncProgress } from "@/components/SyncProgress";
 import { TitleBar } from "@/components/TitleBar";
+import { Toaster } from "@/components/Toaster";
 import { NAV } from "@/components/nav";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import {
@@ -32,6 +34,7 @@ import { editionHas, useEdition } from "@/lib/edition";
 import { LAYER } from "@/lib/layers";
 import { PublishesContext, ReachContext } from "@/lib/reach";
 import { DURATION, statusLine as statusLineMotion } from "@/lib/motion";
+import { useUnreadCount } from "@/lib/notifications";
 import { matchesChord, matchesShortcut, shortcut } from "@/lib/shortcuts";
 import { useAppStore, type ViewId } from "@/lib/store";
 import { usePrefetchSearchOpen } from "@/features/search/useSearchOpen";
@@ -188,6 +191,8 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
    * owns the mount; this is the one place the sentence is drawn.
    */
   const cardToDeckRefusal = useCardToDeckRefusal();
+  /** The rail's inbox (`NotificationsDialog`) — open or not. Window state, never persisted. */
+  const [inboxOpen, setInboxOpen] = useState(false);
   // Here rather than in a view, because it is about the whole cache and this is the one
   // component that is always mounted — and it takes the progress event as a prop so the
   // app still registers exactly one `sync:progress` listener.
@@ -615,11 +620,18 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
             </div>
           )}
 
-          <NavToggle
-            collapsed={collapsed}
-            narrow={narrow}
-            onToggle={() => setCollapsed(!collapsed)}
-          />
+          {/* The rail's foot: the inbox, then the collapse toggle under it. **Full width, drawn
+              with negative margins against the `<nav>`'s own `p-3`**, so the rule above it runs
+              edge to edge rather than stopping 12px short either side; `mt-auto` is what pins the
+              pair to the bottom of a rail with room to spare. */}
+          <div className="-mx-3 -mb-3 mt-auto flex flex-col gap-1.5 border-t border-border p-3">
+            <NavInbox narrow={narrow} open={inboxOpen} onOpen={() => setInboxOpen(true)} />
+            <NavToggle
+              collapsed={collapsed}
+              narrow={narrow}
+              onToggle={() => setCollapsed(!collapsed)}
+            />
+          </div>
         </nav>
 
         <div className="flex min-w-0 flex-1 flex-col">
@@ -685,6 +697,12 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
           </main>
         </div>
       </div>
+
+      {/* **Once per window, here**, because the store behind both is module state: a second
+          `Toaster` would draw every toast twice. Both are `fixed`, and the shell's root is no
+          container-query context, so neither resolves against anything but the window. */}
+      <Toaster />
+      <NotificationsDialog open={inboxOpen} onClose={() => setInboxOpen(false)} />
     </div>
   );
 }
@@ -963,11 +981,12 @@ function NavNote({
  * for something that reshapes the frame rather than choosing what is in it: everything above
  * this hairline is a destination, and this is not one.
  *
- * **Full width, drawn with negative margins against the `<nav>`'s own `p-3`**, so the rule above
- * it reaches both edges of the rail. A hairline that stopped 12px short at each end would read
- * as a border belonging to the button rather than as the line between the destinations and the
- * control that reshapes them; the padding is then put back inside, so the icon still sits on the
- * same 12px as every entry above it.
+ * **The hairline above it is the rail foot's, which it shares with {@link NavInbox}** since
+ * 2026-10-12. The foot is full width, drawn with negative margins against the `<nav>`'s own
+ * `p-3`, so the rule reaches both edges of the rail. A hairline that stopped 12px short at each
+ * end would read as a border belonging to a button rather than as the line between the
+ * destinations and the controls under them; the padding is then put back inside, so the icon
+ * still sits on the same 12px as every entry above it.
  *
  * **The accessible name contains the visible word, and that is WCAG 2.5.3 rather than a
  * nicety.** Expanded, the button paints `Collapse` and is named `Collapse sidebar` — a reader
@@ -996,45 +1015,118 @@ function NavToggle({
   const name = collapsed ? "Expand sidebar" : "Collapse sidebar";
   const Icon = collapsed ? PanelLeftOpen : PanelLeftClose;
   return (
-    <div className="-mx-3 -mb-3 mt-auto border-t border-border p-3">
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-label={name}
-        // `aria-expanded` on the control and `aria-controls` at the region it acts on: the pair
-        // is what says *what* the press does, rather than only that a press happened. The rail
-        // is still in the tree collapsed — it is narrower, not hidden — so `expanded` is the
-        // honest word for it and `hidden` would not be.
-        aria-expanded={!collapsed}
-        aria-controls={NAV_ID}
-        // Expanded the word is on the button, so there is nothing for a hint to add; collapsed
-        // it is the only thing the eye has. `useTooltip` binds nothing for a falsy content, and
-        // `describes: false` because this sentence *is* the accessible name above — describing
-        // a button with its own name is the name said twice.
-        {...tip(narrow && name, { side: "right", describes: false })}
-        className={cn(
-          "flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-base text-dim",
-          // The entries' own geometry, for the entries' own reason: 44px is what a reader is
-          // aiming at everywhere else in this column, and a control that reshapes the whole
-          // window is not the one to make smaller. That includes holding its icon still through
-          // the tween — see `NavItem`, where the same two classes are the same fix.
-          narrow && "h-11",
-          "transition-colors duration-150 motion-reduce:transition-none",
-          "hover:bg-bg/60 hover:text-text",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
-        )}
-      >
-        <Icon className="size-5 shrink-0" aria-hidden="true" />
-        {/* Mounted rather than `sr-only`, unlike an entry's label: the button is named by its
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-label={name}
+      // `aria-expanded` on the control and `aria-controls` at the region it acts on: the pair
+      // is what says *what* the press does, rather than only that a press happened. The rail
+      // is still in the tree collapsed — it is narrower, not hidden — so `expanded` is the
+      // honest word for it and `hidden` would not be.
+      aria-expanded={!collapsed}
+      aria-controls={NAV_ID}
+      // Expanded the word is on the button, so there is nothing for a hint to add; collapsed
+      // it is the only thing the eye has. `useTooltip` binds nothing for a falsy content, and
+      // `describes: false` because this sentence *is* the accessible name above — describing
+      // a button with its own name is the name said twice.
+      {...tip(narrow && name, { side: "right", describes: false })}
+      className={cn(
+        "flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-base text-dim",
+        // The entries' own geometry, for the entries' own reason: 44px is what a reader is
+        // aiming at everywhere else in this column, and a control that reshapes the whole
+        // window is not the one to make smaller. That includes holding its icon still through
+        // the tween — see `NavItem`, where the same two classes are the same fix.
+        narrow && "h-11",
+        "transition-colors duration-150 motion-reduce:transition-none",
+        "hover:bg-bg/60 hover:text-text",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+      )}
+    >
+      <Icon className="size-5 shrink-0" aria-hidden="true" />
+      {/* Mounted rather than `sr-only`, unlike an entry's label: the button is named by its
             `aria-label` above, so this word is for the eye alone and there is nothing to keep in
             the tree for a reader who is not using one. The fade is `NavItem`'s, for `NavItem`'s
             reason — and it runs on mount here, which is the same moment. */}
-        {!narrow && (
-          <span className="animate-in fade-in duration-[var(--duration-instant)] motion-reduce:animate-none">
-            Collapse
+      {!narrow && (
+        <span className="animate-in fade-in duration-[var(--duration-instant)] motion-reduce:animate-none">
+          Collapse
+        </span>
+      )}
+    </button>
+  );
+}
+
+/**
+ * The rail's inbox entry, above the collapse toggle: a bell, the word, and how many notices have
+ * arrived since the inbox was last opened (`@/lib/notifications`).
+ *
+ * **Drawn like {@link NavToggle} rather than like a {@link NavItem}**: it opens a dialog over the
+ * view rather than switching to a view, so it carries no `aria-current` and never lights gold.
+ *
+ * **The count is in the name**, as an `sr-only` clause after the word, and the badge is
+ * `aria-hidden` — one number said once. Collapsed, the word goes `sr-only` exactly as an entry's
+ * does and the badge shrinks to a corner pip on the bell, so the rail still says "something new"
+ * at 68px.
+ */
+function NavInbox({
+  narrow,
+  open,
+  onOpen,
+}: {
+  /** Whether there is room for the word beside the icon — `Shell`'s `labels`, inverted. */
+  narrow: boolean;
+  /** Whether the inbox is open, for `aria-expanded`. */
+  open: boolean;
+  onOpen: () => void;
+}) {
+  const tip = useTooltip();
+  const unread = useUnreadCount();
+  const badge = unread > 99 ? "99+" : String(unread);
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-haspopup="dialog"
+      aria-expanded={open}
+      {...tip(narrow && "Notifications", { side: "right", describes: false })}
+      className={cn(
+        "relative flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-base text-dim",
+        narrow && "h-11",
+        "transition-colors duration-150 motion-reduce:transition-none",
+        "hover:bg-bg/60 hover:text-text",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+      )}
+    >
+      <span className="relative shrink-0">
+        <Bell className="size-5" aria-hidden="true" />
+        {narrow && unread > 0 && (
+          <span
+            aria-hidden="true"
+            data-testid="inbox-pip"
+            className="absolute -top-1.5 -right-2 min-w-4 rounded-full bg-accent px-1 text-center text-[0.625rem] leading-4 font-semibold text-accent-foreground"
+          >
+            {badge}
           </span>
         )}
-      </button>
-    </div>
+      </span>
+      <span
+        className={
+          narrow
+            ? "sr-only"
+            : "min-w-0 flex-1 animate-in fade-in duration-[var(--duration-instant)] motion-reduce:animate-none"
+        }
+      >
+        Notifications
+        {unread > 0 && <span className="sr-only">{`, ${unread} unread`}</span>}
+      </span>
+      {!narrow && unread > 0 && (
+        <span
+          aria-hidden="true"
+          className="shrink-0 rounded-full bg-accent px-1.5 text-xs leading-5 font-semibold text-accent-foreground"
+        >
+          {badge}
+        </span>
+      )}
+    </button>
   );
 }

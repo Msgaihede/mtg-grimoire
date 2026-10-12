@@ -187,6 +187,18 @@ export const LAYER = {
    */
   overlayStacked: "z-46",
   /**
+   * The toast stack in the window's bottom-right corner (`Toaster`, 2026-10-12).
+   *
+   * **Above every dialog rung, because a toast is often the answer to a press made inside one** —
+   * a copy from the export dialog, a save from a stacked modal — and a receipt drawn behind the
+   * scrim that prompted it is a receipt nobody reads. **Below {@link LAYER.menuOverDialog} and
+   * {@link LAYER.tooltip}**: both are opened by the reader on purpose and anchored to what they
+   * are pointing at, and a toast that happened to be up in the corner must never paint over the
+   * menu row or the hint the reader is reading. Below `gate`, for the tooltip's reason: the sync
+   * takeover hides the controls a toast could be about.
+   */
+  toast: "z-47",
+  /**
    * The context menu, when the element it was opened from is inside a dialog — the card detail
    * modal's picture (issue #846) and the printings wall's tiles.
    *
@@ -202,10 +214,11 @@ export const LAYER = {
    * Over a dialog there is no tray and no quick bar to lose to — both are drawn by views.
    *
    * Above {@link LAYER.overlayStacked}, because a rung is a claim about the highest thing the
-   * surface can be asked to cover and the printings wall is a stacked dialog. Below
+   * surface can be asked to cover and the printings wall is a stacked dialog — and above
+   * {@link LAYER.toast}, so a menu opened near the corner is never read through a receipt. Below
    * {@link LAYER.tooltip}, which a hint over a menu row must still clear, and so below `gate`.
    */
-  menuOverDialog: "z-47",
+  menuOverDialog: "z-48",
   /**
    * The app's one tooltip, over anything a view or a dialog draws.
    *
@@ -222,12 +235,13 @@ export const LAYER = {
    * control inside a modal, and its hint is exactly the one the old number would have lost.
    * It moved again, to `z-48`, on 2026-10-11 for the same reason one rung up: a menu opened from
    * a dialog ({@link LAYER.menuOverDialog}) is drawn over it, and a hint over a menu row is a
-   * hint over a dialog.
+   * hint over a dialog. And to `z-49` on 2026-10-12, when {@link LAYER.toast} took a rung below
+   * the menu: a hint over a toast's ✕ is a hint over the corner it sits in.
    *
    * One rung and one panel — the provider holds at most one open tooltip, so there is no second
    * one for a number to order against.
    */
-  tooltip: "z-48",
+  tooltip: "z-49",
   /**
    * `SyncProgress`'s full-window takeover, over everything the *app* draws.
    *

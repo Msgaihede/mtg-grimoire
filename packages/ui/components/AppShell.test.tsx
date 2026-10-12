@@ -174,6 +174,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import { AppShell } from "./AppShell";
+import { notify } from "@/lib/notifications";
 import { REPORT_MS } from "./useSidebarDrops";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { CardToDeckProvider, useAddCardToDeck } from "@/features/card/cardMenu";
@@ -335,8 +336,8 @@ it("renders nav and refresh button", async () => {
   // Scanner, then the two placeholders, then Settings.
   // Separate `getByRole` calls stayed green through any shuffle of the column, which is
   // the one thing about this list a reader would notice from across the room. `within` the rail
-  // keeps the ribbon's own title out of the answer, and the collapse toggle at the rail's foot is
-  // the last button inside it.
+  // keeps the ribbon's own title out of the answer, and the rail's foot — the notifications
+  // entry, then the collapse toggle — is the last two buttons inside it.
   const nav = screen.getByRole("navigation", { name: "Views" });
   expect(
     within(nav)
@@ -352,6 +353,7 @@ it("renders nav and refresh button", async () => {
     "Trade",
     "Playtesting",
     "Settings",
+    "Notifications",
     "Collapse",
   ]);
   expect(await screen.findByRole("button", { name: /refresh/i })).toBeInTheDocument();
@@ -405,6 +407,7 @@ describe("the Shared row", () => {
       "Trade",
       "Playtesting",
       "Settings",
+      "Notifications",
       "Collapse",
     ]);
   });
@@ -1973,6 +1976,7 @@ describe("the light edition", () => {
       "Scanner",
       "Trade",
       "Settings",
+      "Notifications",
       "Collapse",
     ]);
   });
@@ -2077,5 +2081,44 @@ describe("the light edition", () => {
     }
     expect(fireEvent.keyDown(document.body, { key: "F1" })).toBe(false);
     expect(useAppStore.getState().keyMapOpen).toBe(true);
+  });
+});
+
+/**
+ * The rail's inbox (2026-10-12): the entry above the collapse toggle, the count of what arrived
+ * since it was last opened, and the dialog it opens.
+ */
+describe("the notifications entry", () => {
+  it("sits above the collapse toggle, in the rail's foot", async () => {
+    render(<AppShell update={noUpdate}>{null}</AppShell>);
+    const collapse = await screen.findByRole("button", { name: "Collapse sidebar" });
+    const inbox = screen.getByRole("button", { name: "Notifications" });
+
+    expect(inbox.parentElement).toBe(collapse.parentElement);
+    expect(inbox.compareDocumentPosition(collapse) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("counts what is unread, and opening the inbox reads it", async () => {
+    render(<AppShell update={noUpdate}>{null}</AppShell>);
+    await screen.findByRole("button", { name: "Collapse sidebar" });
+
+    act(() => {
+      notify.success("Added “Sol Ring” to “Atraxa”");
+      notify.error("Couldn't open Scryfall");
+    });
+
+    const inbox = screen.getByRole("button", { name: "Notifications, 2 unread" });
+    // The toasts are drawn by the shell's own `Toaster`.
+    expect(screen.getByRole("region", { name: "Notifications" })).toHaveTextContent(
+      "Couldn't open Scryfall",
+    );
+
+    await userEvent.click(inbox);
+
+    const dialog = await screen.findByRole("dialog", { name: "Notifications" });
+    const rows = within(dialog).getAllByRole("listitem");
+    expect(rows[0]).toHaveTextContent("Couldn't open Scryfall");
+    expect(rows[1]).toHaveTextContent("Added “Sol Ring” to “Atraxa”");
+    expect(screen.getByRole("button", { name: "Notifications" })).toBeInTheDocument();
   });
 });
