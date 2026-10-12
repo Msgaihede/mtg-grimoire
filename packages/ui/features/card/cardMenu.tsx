@@ -67,6 +67,7 @@ import { userWishFolders } from "@/features/wishlist/managed";
 import { copyText } from "@/lib/clipboard";
 import { edhrecCardUrl, openExternal, scryfallCardUrl } from "@/lib/externalLinks";
 import { parseFinishes, type Finish } from "@/lib/finish";
+import { notify } from "@/lib/notifications";
 import {
   ipc,
   ipcError,
@@ -450,14 +451,25 @@ export function buildCardMenu(target: CardMenuTarget, deps: CardMenuDeps): MenuI
       id: "copy-name",
       label: "Copy card name",
       Icon: Copy,
-      onSelect: () => run(copyText(target.name)),
+      onSelect: () =>
+        run(copyText(target.name), {
+          done: `Copied “${target.name}”`,
+          failed: "Couldn't copy the card name",
+        }),
     },
     {
       kind: "action",
       id: "copy-image",
       label: "Copy card image",
       Icon: ImageIcon,
-      onSelect: () => run(copyCardImage(target.cardId)),
+      onSelect: () =>
+        run(
+          copyCardImage(target.cardId).then((copied) => {
+            if (copied) notify.success("Copied the card image link");
+            else notify.warning(`No image to copy for “${target.name}”`);
+          }),
+          { failed: "Couldn't copy the card image" },
+        ),
     },
     { kind: "separator", id: "sep-open" },
     {
@@ -485,14 +497,17 @@ export function buildCardMenu(target: CardMenuTarget, deps: CardMenuDeps): MenuI
           id: "open-scryfall",
           label: "Scryfall",
           onSelect: () =>
-            run(openExternal(scryfallCardUrl(target.setCode, target.collectorNumber))),
+            run(openExternal(scryfallCardUrl(target.setCode, target.collectorNumber)), {
+              failed: "Couldn't open Scryfall",
+            }),
         },
         {
           kind: "action",
           id: "open-edhrec",
           label: "EDHREC",
           // By name, to EDHREC's own router — `edhrecCardUrl` says why the name goes whole.
-          onSelect: () => run(openExternal(edhrecCardUrl(target.name))),
+          onSelect: () =>
+            run(openExternal(edhrecCardUrl(target.name)), { failed: "Couldn't open EDHREC" }),
         },
         {
           kind: "action",
@@ -530,6 +545,7 @@ export function buildCardMenu(target: CardMenuTarget, deps: CardMenuDeps): MenuI
                 finish: target.finish ?? null,
                 finishes: target.finishes,
               }),
+              { failed: `Couldn't open ${marketplace.label}` },
             ),
         },
       ],
@@ -1022,23 +1038,36 @@ function finishChoices(finishes: string | null): Finish[] {
  * nothing. A clipboard holding the *previous* card's URL because this one had no picture is
  * worse than a press that did nothing.
  */
-async function copyCardImage(cardId: string): Promise<void> {
+async function copyCardImage(cardId: string): Promise<boolean> {
   const uri = await ipc.cardImageUri(cardId, COPIED_IMAGE_VARIANT);
-  if (!uri) return;
+  if (!uri) return false;
   await copyText(uri);
+  return true;
 }
 
 /**
- * Start an item's asynchronous work and swallow its refusal.
+ * Start an item's asynchronous work and report how it went.
  *
  * `MenuItem.onSelect` is synchronous and the panel closes on the press, so there is nothing
- * left on screen for a rejection to be reported to. Every call routed through here is a
- * clipboard write, an `openUrl` or a local SQLite read — a failed one costs the reader a press
- * they can simply make again, and an unhandled rejection in the window costs a console error on
- * every one of them.
+ * left on screen for an answer to be reported to — which is what a toast is for
+ * (`@/lib/notifications`, 2026-10-12). Until then a refusal here was swallowed outright: every
+ * call routed through here is a clipboard write, an `openUrl` or a local SQLite read, a failed
+ * one costs a press the reader can simply make again, but a copy that silently did not happen is
+ * a paste of the *previous* clipboard into somebody's chat.
+ *
+ * `done` is said on success and `failed` (with the backend's sentence under it) on a refusal;
+ * either absent says nothing. The rejection is still caught either way, so it never reaches the
+ * window as an unhandled one.
  */
-function run(work: Promise<unknown>): void {
-  void work.catch(() => {});
+function run(work: Promise<unknown>, say: { done?: string; failed?: string } = {}): void {
+  void work.then(
+    () => {
+      if (say.done !== undefined) notify.success(say.done);
+    },
+    (failure: unknown) => {
+      if (say.failed !== undefined) notify.error(say.failed, { body: ipcError(failure) });
+    },
+  );
 }
 
 /* ------------------------------------------------------------------------------------------ *
@@ -1095,7 +1124,7 @@ export function DeckTargetSubmenu(props: {
   const items = useMemo(
     () =>
       buildDeckTargetItems(folders, decks, (deckId, variant) =>
-        addToDeck(targets, deckId, variant),
+        addToDeck(targets, deckId, variant, decks.find((d) => d.id === deckId)?.name),
       ),
     [folders, decks, addToDeck, targets],
   );
@@ -1114,7 +1143,13 @@ export interface CardToDeck {
    * call** — one copy of each target, written in order — never one call per card: see the queue in
    * {@link useCardToDeck} for what a loop of single calls cost (issue #954).
    */
-  addToDeck: (targets: readonly CardMenuTarget[], deckId: number, variant: DeckVariant) => void;
+  addToDeck: (
+    targets: readonly CardMenuTarget[],
+    deckId: number,
+    variant: DeckVariant,
+    /** The deck's name, for the receipt toast. */
+    deckName?: string,
+  ) => void;
   /** What the last refused add said, or `null`. Drawn by the one mount, and by nothing else. */
   error: string | null;
   clearError: () => void;
@@ -1289,6 +1324,7 @@ export function useCardToDeck(): CardToDeck {
        * keep one rule.
        */
       let refusal: string | null = null;
+      let added = 0;
       for (const target of head.targets) {
         try {
           await add({
@@ -1297,11 +1333,17 @@ export function useCardToDeck(): CardToDeck {
             typeLine: target.typeLine ?? null,
             quantity: 1,
           });
+          added += 1;
         } catch (failure) {
           refusal ??= ipcError(failure);
         }
       }
       if (refusal !== null) setError(refusal);
+      // **The receipt, as a toast** (`@/lib/notifications`): the menu that was pressed has closed
+      // and the deck is on another page, so until this the reader had no sign the add landed.
+      // The refusal stays the rail's alert above — its own region, with the lifetime that comment
+      // in `AppShell` argues for — so only what *did* go in is said here.
+      if (added > 0) notify.success(deckAddReceipt(added, head.targets, head.deckName));
       /**
        * **Dequeue, or this surface observes that deck for the rest of the session.**
        * `useDeck(id, …)` is a live `deck_get` — the deck, every card in it and its categories —
@@ -1317,7 +1359,12 @@ export function useCardToDeck(): CardToDeck {
   }, [head, add]);
 
   const addToDeck = useCallback(
-    (targets: readonly CardMenuTarget[], deckId: number, variant: DeckVariant) => {
+    (
+      targets: readonly CardMenuTarget[],
+      deckId: number,
+      variant: DeckVariant,
+      deckName?: string,
+    ) => {
       if (targets.length === 0) return;
       // Last time's refusal is not news about this add. Left standing, a sentence about a deck
       // that has been deleted survives the whole of the next add's round trip, over rows the
@@ -1325,7 +1372,7 @@ export function useCardToDeck(): CardToDeck {
       setError(null);
       // A fresh object every time, so pressing the same leaf twice is two adds rather than one:
       // the guard above is identity on this value and a reader who adds a second copy means it.
-      setQueue((waiting) => [...waiting, { targets, deckId, variant }]);
+      setQueue((waiting) => [...waiting, { targets, deckId, variant, deckName }]);
     },
     [],
   );
@@ -1338,6 +1385,24 @@ interface DeckAddBatch {
   targets: readonly CardMenuTarget[];
   deckId: number;
   variant: DeckVariant;
+  /** For the receipt alone; absent, it says "the deck". */
+  deckName?: string;
+}
+
+/**
+ * The toast an add answers with: the card by name when it was one, a count when it was a set, and
+ * the deck by name when the press knew it.
+ */
+export function deckAddReceipt(
+  added: number,
+  targets: readonly CardMenuTarget[],
+  deckName: string | undefined,
+): string {
+  const what =
+    targets.length === 1 && added === 1
+      ? `“${targets[0].name}”`
+      : `${added} ${added === 1 ? "card" : "cards"}`;
+  return `Added ${what} to ${deckName === undefined ? "the deck" : `“${deckName}”`}`;
 }
 
 /**

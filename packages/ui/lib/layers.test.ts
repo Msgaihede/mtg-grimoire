@@ -60,6 +60,8 @@ describe("the layer scale", () => {
     // the scrim (issue #846) — and a menu over a view stays under the drag tray, which is why
     // this is a rung of its own rather than a higher `popup`. A hint over a menu row still wins.
     expect(numberOf(LAYER.overlayStacked)).toBeLessThan(numberOf(LAYER.menuOverDialog));
+    expect(numberOf(LAYER.overlayStacked)).toBeLessThan(numberOf(LAYER.toast));
+    expect(numberOf(LAYER.toast)).toBeLessThan(numberOf(LAYER.menuOverDialog));
     expect(numberOf(LAYER.menuOverDialog)).toBeLessThan(numberOf(LAYER.tooltip));
     expect(numberOf(LAYER.tooltip)).toBeLessThan(numberOf(LAYER.gate));
     // And the window's own caption is above every one of them. `decorations: false` makes that

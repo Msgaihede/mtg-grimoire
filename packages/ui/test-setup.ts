@@ -3,6 +3,7 @@ import { cleanup } from "@testing-library/react";
 import { frame, frameData, MotionGlobalConfig } from "motion/react";
 import { afterAll, afterEach } from "vitest";
 import { resetBulkUndo } from "@/lib/bulkUndo";
+import { resetNotifications } from "@/lib/notifications";
 import { resetViewMemory } from "@/lib/viewMemory";
 
 /**
@@ -89,6 +90,10 @@ afterEach(resetBulkUndo);
 // `@/lib/viewMemory` is the same kind of module state (issue #908): a search page a test left
 // narrowed would otherwise open narrowed in the next test that mounts it.
 afterEach(resetViewMemory);
+
+// `@/lib/notifications` too: a toast one test raised would otherwise be on screen, and in the
+// inbox, of the next.
+afterEach(resetNotifications);
 
 /**
  * **A file that scrolled a virtualised list waits out the scroll's trailing timer before its

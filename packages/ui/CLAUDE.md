@@ -8,6 +8,7 @@ Detailed measurements, rationale, and design history are preserved in reference 
 - [Frontend Architecture Reference](../../docs/reference/frontend-architecture.md)
 - [Frontend Design Reference](../../docs/reference/frontend-design.md)
 - [Motion Reference](../../docs/reference/motion.md)
+- [Toasts & Notifications Reference](../../docs/reference/notifications.md)
 - [Keyboard Shortcuts Reference](../../docs/reference/keyboard-shortcuts.md)
 - [Image Cache Reference](../../docs/reference/image-cache.md)
 - [Search Syntax Reference](../../docs/reference/search-syntax.md)
@@ -57,7 +58,7 @@ For global repo workflow, style, and testing conventions, refer to:
 ## 3. Layers, Modality, & Dismissal
 
 - **Strict z-index ladder**: All z-indexes originate from `LAYER` in `packages/ui/lib/layers.ts`:
-  `raised (10) < header (20) < stage (25) < popup (30) < quickBar (35) < dragTray (40) < overlay (45) < overlayStacked (46) < tooltip (47) < gate (50) < caption (60)`. Enforced by `layers.test.ts`.
+  `raised (10) < header (20) < stage (25) < popup (30) < quickBar (35) < dragTray (40) < overlay (45) < overlayStacked (46) < toast (47) < menuOverDialog (48) < tooltip (49) < gate (50) < caption (60)`. Enforced by `layers.test.ts`.
 - **Modal dialogs (`components/Dialog.tsx`)**:
   - Centered over scrim at `LAYER.overlay`.
   - Modals must be bounded to window (`grid-rows-[minmax(0,1fr)]`) with internal scrolling (`min-h-0 flex-1 overflow-y-auto`).
@@ -66,6 +67,7 @@ For global repo workflow, style, and testing conventions, refer to:
 - **Escape dismissal protocol (`useDismissOnEscape`)**:
   - Inner dismissibles (dialogs, popups) register in the window capture phase (`preventDefault()`). Outer layers listen in bubble phase.
   - Search inputs clear on Escape when non-empty (`clearFieldOnEscape`) before dismissing parent views.
+- **Toasts & notifications (`lib/notifications.ts`)**: tell the reader what happened with `notify({ title, body?, tone?, duration? })` (or `notify.success/info/warning/error`) — callable from anywhere, no hook. Each call raises a bottom-right toast (`components/Toaster`, once in `AppShell`, `LAYER.toast`, ✕ to close, clock paused on hover/focus, `duration` in ms is the sender's, `null` = until closed) **and** files a notice in the rail's Notifications inbox (`components/NotificationsDialog`, newest first, kept per device in `localStorage` and **never synced** — never SQLite/`app_meta`). Never build a bespoke toast; an inline answer where the reader is still looking stays inline. See [notifications.md](../../docs/reference/notifications.md).
 - **Context menus (`packages/ui/components/menu/`)**:
   - Single instance mounted at root (`ContextMenuProvider`) at `LAYER.popup`.
   - Text fields retain native context menus (`isTextField`).
