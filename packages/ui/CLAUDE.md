@@ -78,7 +78,8 @@ For global repo workflow, style, and testing conventions, refer to:
 - **Query syntax (`features/search/queryLanguage.ts`)**:
   - Parses Scryfall's whole language (issue #909): keyword terms (`kw:`, `cmc>=3`, `is:fetchland`, `otag:`), `or`, parentheses, `!exact` names and `not:`. Top-level plain terms keep their own paths (free text, tag tokens, predicates); an `or` or a negated group travels as one `anyOf`/`allOf` predicate that Rust answers as a single SQL clause, and the facet index counts it wide.
   - Tag resolution is exact; queries fail closed on unresolved tags to prevent showing stale results.
-- **Filters outlive the page (issue #908)**: the Search and Tags pages open on the filters the reader left. `useCardSearch({ rememberAs })` and the Tags page's chips keep their state in `lib/viewMemory.ts` — window-lifetime module memory, never storage, so a restart opens fresh. The deck builder's docked panels pass no `rememberAs`. `test-setup.ts` and the fake's `installWorld` reset it.
+- **Tag search is the Search page's sidebar (issue #937)**: there is no Tags view. `features/tags/TagSearchPanel` docks `TagPicker` (box, taxonomy notice, rail) on the right through `CardSearchPanel` (surface `"tags"`); the picked tags are the page's (`useTagSelection`) and ride into `useCardSearch` as `tagTerms`, so they keep narrowing while the sidebar is railed. The body mounts only when opened, so no taxonomy is read before then. Open state is `useSearchOpen("tags")`, the dragged width `useSearchWidth("tags")` (`app_meta.search_width`). The light app's phone face draws the same `TagPicker` in a sheet (`apps/light/phone/search/TagsSheet.tsx`).
+- **Filters outlive the page (issue #908)**: the Search page opens on the filters the reader left. `useCardSearch({ rememberAs })` and the picked tags (`useTagSelection`) keep their state in `lib/viewMemory.ts` — window-lifetime module memory, never storage, so a restart opens fresh. The deck builder's docked panels pass no `rememberAs`. `test-setup.ts` and the fake's `installWorld` reset it.
 - **Pricing & marketplaces**:
   - Currency and pricing formatting strictly use `formatPrice(value, currency)` driven by `useMarketplace()`.
   - `null` prices render as an em dash; never fall back to another marketplace's price.
@@ -109,7 +110,7 @@ For global repo workflow, style, and testing conventions, refer to:
 | `packages/ui/features/` | Feature surfaces (`decks/`, `search/`, `collection/`, `wishlist/`, `transfer/`, `settings/`) |
 | `packages/ui/lib/` | Infrastructure (`ipc.ts`, `layers.ts`, `motion.ts`, `shortcuts.ts`, `tokens.ts`) |
 
-- **Occasional views are lazy**: `App.tsx` loads Scanner, Settings, Tags, Trade, Playtesting and Shared with `React.lazy` under one `Suspense`; a static import of any of them puts its chunk back in the first load (`App.test.tsx` fences it).
+- **Occasional views are lazy**: `App.tsx` loads Scanner, Settings, Trade, Playtesting and Shared with `React.lazy` under one `Suspense`; a static import of any of them puts its chunk back in the first load (`App.test.tsx` fences it).
 
 Run verification tests only at the end of feature work:
 

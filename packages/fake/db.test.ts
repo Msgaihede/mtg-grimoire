@@ -16,6 +16,8 @@ import {
   COMBO_CARD_NAMES,
   ORACLE_TAGGED_NAMES,
   RELAY_BASE,
+  SEARCH_WIDTH_MAX,
+  SEARCH_WIDTH_MIN,
   SUPPORTING_SINCE,
   TOKEN_ORACLE,
   TOKEN_PRINTING,
@@ -12839,7 +12841,10 @@ describe("the busy fault", () => {
     // 138 → 139 on 2026-10-11 with `set_price_watch` (issue #906), a plain `sync::with_write`
     // `app_meta` write; the movers' read, `price_movers`, sits in `readHandlers`. Read from `left`
     // on this tree. Count again after a merge.
-    expect(names).toHaveLength(139);
+    // 139 → 140 on 2026-10-11 with `set_search_width`, `set_search_open`'s sibling — an
+    // `app_meta` write through `sync::with_write`, whose read half `search_width` is not in this
+    // table. Count again after a merge.
+    expect(names).toHaveLength(140);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -22194,6 +22199,51 @@ describe("shelves", () => {
     expect(() =>
       writeHandlers(busy).set_shelf_folds({ page: "collection", changes: { "11": true } }),
     ).toThrow(/busy/i);
+  });
+
+  it("round-trips search_width through set_search_width, per section", () => {
+    const db = makeDb();
+    const r = readHandlers(db);
+    const w = writeHandlers(db);
+    expect(r.search_width()).toEqual({});
+
+    w.set_search_width({ section: "tags", width: 300 });
+    w.set_search_width({ section: "deck", width: SEARCH_WIDTH_MAX });
+    w.set_search_width({ section: "tags", width: SEARCH_WIDTH_MIN });
+    expect(r.search_width()).toEqual({ tags: SEARCH_WIDTH_MIN, deck: SEARCH_WIDTH_MAX });
+
+    // A copy, not the store.
+    r.search_width().tags = 999;
+    expect(db.searchWidth.tags).toBe(SEARCH_WIDTH_MIN);
+  });
+
+  it("drops a junk search_width entry and keeps its neighbour, as searchwidth::stored does", () => {
+    const db = makeDb();
+    db.searchWidth = { "": 300, a: 300.5, b: 79, c: 4001, d: -1, tags: 320 };
+    expect(readHandlers(db).search_width()).toEqual({ tags: 320 });
+  });
+
+  it("refuses set_search_width for a blank section, a width out of bounds, and under a sync", () => {
+    const db = makeDb();
+    const w = writeHandlers(db);
+    expect(() => w.set_search_width({ section: "", width: 300 })).toThrow(
+      "A search section cannot be blank.",
+    );
+    expect(() => w.set_search_width({ section: "tags", width: SEARCH_WIDTH_MIN - 1 })).toThrow(
+      "A panel width must be between 80 and 4000 pixels, not 79.",
+    );
+    expect(() => w.set_search_width({ section: "tags", width: SEARCH_WIDTH_MAX + 1 })).toThrow(
+      /between 80 and 4000/,
+    );
+    expect(() => w.set_search_width({ section: "tags", width: 300.5 })).toThrow(
+      /between 80 and 4000/,
+    );
+    expect(db.searchWidth).toEqual({});
+
+    const busy = makeDb({ fault: "busy" });
+    expect(() => writeHandlers(busy).set_search_width({ section: "tags", width: 300 })).toThrow(
+      /busy/i,
+    );
   });
 
   it("round-trips hidden_stacks through set_stack_hidden, per deck, and showing the last removes the entry", () => {

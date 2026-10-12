@@ -188,6 +188,9 @@ use grimoire_core::scratch;
 pub use grimoire_core::scryfall;
 pub mod search;
 pub mod searchopen;
+/// **How wide each docked side panel was last dragged** — [`searchopen`]'s shape with a width
+/// where the `bool` is.
+pub mod searchwidth;
 /// **How much of each set the reader owns**, for the home page's Set completion widget. One
 /// grouped `SELECT` over the collection, `cards` and `sets` — no table of its own.
 pub mod set_completion;

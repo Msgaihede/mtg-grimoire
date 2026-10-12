@@ -114,7 +114,6 @@ describe("StartViewPanel", () => {
       "Scanner",
       "Search",
       "Settings",
-      "Tagger",
       "Trade",
       "Wishlist",
     ]);

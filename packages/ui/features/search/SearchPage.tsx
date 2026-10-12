@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { useTooltip, type TooltipBinder } from "@/components/tooltip/useTooltip";
@@ -15,6 +15,9 @@ import { rowHasBackFace } from "@/features/card/printings";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import type { DragPayload } from "@/features/decks/dnd";
+import { TagChips } from "@/features/tags/TagChips";
+import { TagSearchPanel } from "@/features/tags/TagSearchPanel";
+import { useTagSelection } from "@/features/tags/useTagSelection";
 import { parseFinishes, soleFinish } from "@/lib/finish";
 import { finishTreatments } from "@/lib/treatment";
 import { WALL_CARD_VARIANT } from "@/lib/images";
@@ -23,7 +26,10 @@ import type { Marketplace } from "@/lib/marketplace";
 import { statusLine } from "@/lib/motion";
 import { pricesAsOf } from "@/lib/prices";
 import { priceRange } from "@/lib/priceRange";
+import { LAYER } from "@/lib/layers";
 import { useAppStore } from "@/lib/store";
+import { useDeskWidth } from "@/lib/useDeskWidth";
+import { useDockHeight } from "@/lib/useDockHeight";
 import { useFilterQuickBar } from "@/lib/useFilterQuickBar";
 import { cn } from "@/lib/utils";
 import { CardGrid } from "./CardGrid";
@@ -52,14 +58,8 @@ import { useCardSearch, type CardSearch } from "./useCardSearch";
  * the sentence in its header names the marketplace and the figures in its cells are read out
  * of that marketplace's currency. Rebuilt only when the marketplace changes — see the
  * `useMemo` in {@link Results}, which is what keeps this off the per-render path.
- *
- * **Exported, and the Tags page's table is the second caller.** That wall draws the same
- * `CardSummary` rows narrowed by a motif rather than by a name, so it is the same six columns
- * about the same printings — and a second copy would be six cells' worth of formatting, six
- * sort keys and one accessible price header free to drift from these. {@link summaryOf} below
- * is shared for the same reason and was shared first.
  */
-export function columnsFor(
+function columnsFor(
   marketplace: Marketplace,
   tip: TooltipBinder,
 ): TableColumn<CardSummary>[] {
@@ -209,12 +209,8 @@ export function columnsFor(
  * The tiles only. The table beside them is the view for *comparing* — five columns of facts
  * and a price — and a row there is read rather than picked up; the drag sources spec §1 names
  * are the wall's tiles, the two lists that are inventories, and the pane's printings.
- *
- * Exported for the Tags page's wall, which carries the same printing to the same places: a
- * tile there is a card the reader found by motif rather than by name, and what it *is* when it
- * lands on a deck column does not depend on how they found it.
  */
-export const tileDrag = (card: CardSummary): DragPayload => ({
+const tileDrag = (card: CardSummary): DragPayload => ({
   kind: "card",
   cardId: card.id,
   name: card.name,
@@ -227,11 +223,9 @@ export const tileDrag = (card: CardSummary): DragPayload => ({
  * The finish a result row's printing *is*, for the sheen over its art.
  *
  * Only the printings that leave no choice — foil-only and etched-only. Module scope for
- * `tileDrag`'s reason: the wall re-registers a tile when a callback's identity changes — and
- * an import satisfies that promise exactly as a local `const` would, which is what lets the
- * Tags page's wall share this one rather than hold a fourth copy.
+ * `tileDrag`'s reason: the wall re-registers a tile when a callback's identity changes.
  */
-export const tileFinish = (card: CardSummary) => soleFinish(card.finishes);
+const tileFinish = (card: CardSummary) => soleFinish(card.finishes);
 
 /**
  * What a result row's printing is *called* — Surge Foil, Halo Foil, Serialized — for the chip
@@ -243,10 +237,9 @@ export const tileFinish = (card: CardSummary) => soleFinish(card.finishes);
  * that fence, because the cardboard is that in either finish; those are what let a row with no
  * sole finish carry a mark at all.
  *
- * Module scope for {@link tileFinish}'s reason, and shared with the Tags page's wall the same
- * way.
+ * Module scope for {@link tileFinish}'s reason.
  */
-export const tileTreatment = (card: CardSummary) =>
+const tileTreatment = (card: CardSummary) =>
   finishTreatments(card.promoTypes, tileFinish(card));
 
 /**
@@ -259,11 +252,11 @@ export const tileTreatment = (card: CardSummary) =>
  * the same — the wall re-registers a tile's drag when a callback's identity changes, and this one
  * travels the same path.
  *
- * Exported for the Tags page's wall. The deck editor's docked panel keeps a copy of its own,
+ * The deck editor's docked panel keeps a copy of its own,
  * and says at its site why: that wall passes no `finish`, so its chip holds the crown alone
  * and the pair of callbacks there is genuinely a different pair.
  */
-export const tileGameChanger = (card: CardSummary) => card.gameChanger;
+const tileGameChanger = (card: CardSummary) => card.gameChanger;
 
 /**
  * The card a right-click on a result is about — the same object for a tile and for a table row,
@@ -277,11 +270,10 @@ export const tileGameChanger = (card: CardSummary) => card.gameChanger;
  * `typeLine` travels because `CardSummary` carries it and a menu add is filed by what the card
  * does — the same fact, from the same row, that {@link tileDrag} hands a drop.
  *
- * Exported for the Tags page, whose wall and table are the same list of printings reached by a
- * different question. **The `finish` omission is the whole content of this function**, so a
- * second copy of it is a second place for a surface to start choosing a finish nobody named.
+ * **The `finish` omission is the whole content of this function**, so a second copy of it is a
+ * second place for a surface to start choosing a finish nobody named.
  */
-export function cardTarget(card: CardSummary): CardMenuTarget {
+function cardTarget(card: CardSummary): CardMenuTarget {
   return {
     cardId: card.id,
     name: card.name,
@@ -294,10 +286,36 @@ export function cardTarget(card: CardSummary): CardMenuTarget {
 }
 
 /**
- * Card search: a filter bar, and every match in one scroll.
+ * The width the result list must keep beside the tag sidebar, in px — the collection's
+ * `CARD_FLOOR`/`TABLE_FLOOR` pair, for its reasons: one tile and its chrome in grid view, and the
+ * table's fixed columns plus a name column worth having in table view. Below it the sidebar is
+ * drawn over the results rather than beside them (`useDeskWidth`).
+ */
+const CARD_FLOOR = 192;
+const TABLE_FLOOR = 680;
+
+/**
+ * Card search: a filter bar, every match in one scroll — and, since issue #937, **tag search in a
+ * collapsible sidebar on the right**, where the separate Tagger page used to be.
  *
  * The result list is virtualised because an unfiltered search matches the whole database
  * — ~117 k rows — and the page opens on exactly that.
+ *
+ * ## The tag sidebar
+ *
+ * The deck editor's docked card search, reused: `CardSearchPanel` chrome around the Tagger page's
+ * rail (`TagSearchPanel`). Picked tags are **this page's filter**, held here by
+ * `useTagSelection` and ANDed into `useCardSearch` as `tagTerms`, so they keep narrowing the wall
+ * while the sidebar is a rail — and the chips row above the filter bar, drawn whenever a tag is
+ * picked, is where they are seen and taken off. The sidebar's body is what reads the taxonomies,
+ * and it mounts only once the reader opens it; whether it is open and how wide it was dragged are
+ * both remembered across restarts.
+ *
+ * The arrangement is the collection's docked column: a row (`deskRef`) holding the page's column
+ * and a `sticky self-start` dock, pinned at `quick.dockTop` while the wall scrolls `main` past it,
+ * its height written by `useDockHeight`. Too narrow for the list beside it, the sidebar is drawn
+ * over the results instead — the same rule, which is also what keeps it usable in the light app's
+ * desktop face at 1024px.
  */
 export function SearchPage() {
   /**
@@ -318,7 +336,12 @@ export function SearchPage() {
    */
   const pendingSet = useAppStore((s) => s.pendingSearchSet);
   const clearPendingSet = useAppStore((s) => s.clearPendingSearchSet);
-  const search = useCardSearch({ initialSet: pendingSet, rememberAs: "search" });
+  const tags = useTagSelection();
+  const search = useCardSearch({
+    initialSet: pendingSet,
+    rememberAs: "search",
+    tagTerms: tags.tagTerms,
+  });
   const { query, searchKey } = search;
   const view = useAppStore((s) => s.searchView);
   const [appliedSet, setAppliedSet] = useState(pendingSet);
@@ -346,6 +369,18 @@ export function SearchPage() {
   // to stand in for. The hook answers hidden there without building an observer at all.
   const [filterRow, setFilterRow] = useState<HTMLDivElement | null>(null);
   const quick = useFilterQuickBar(filterRow, view === "grid");
+
+  // **The tag sidebar's row and dock** — `CollectionPage`'s pair, for its reasons: the desk is the
+  // only width the sidebar can honestly be judged against, and the dock's height is the visible
+  // part of `main` below the row's top, inset by the quick bar while it is down.
+  const deskRef = useRef<HTMLDivElement>(null);
+  const dockRef = useRef<HTMLDivElement>(null);
+  const { maxPanelWidth, roomy, overWidth } = useDeskWidth(
+    deskRef,
+    view === "table" ? TABLE_FLOOR : CARD_FLOOR,
+  );
+  useDockHeight(dockRef, deskRef, quick.dockTop);
+  const picking = tags.selection.chips.length > 0;
 
   // Warm the images for the page that just landed, so its first paint is not a wall of
   // empty frames. The grid's own overscan mounts two rows of off-screen `<img>`s, which
@@ -417,17 +452,79 @@ export function SearchPage() {
           caret holds it, so without the margin the gap it brings would shove the whole page
           16px down at the moment the bar appears — the layout jump the `h-0` box exists to
           avoid. */}
-      <FilterQuickBar search={search} shown={quick.shown} className="-mb-4" />
+      {/* The picked tags lead the bar while there are any — the Tagger page's arrangement, and
+          its `widest` fold for the room they take. No floor control: it is set once, on the page
+          row. */}
+      <FilterQuickBar
+        search={search}
+        shown={quick.shown}
+        className="-mb-4"
+        manaValuesFrom={picking ? "widest" : "wide"}
+        lead={
+          picking ? (
+            <TagChips
+              selection={tags.selection}
+              onRemove={tags.removeTag}
+              onToggleMode={tags.toggleTagMode}
+              singleLine
+              emptyMessage={null}
+            />
+          ) : undefined
+        }
+      />
 
       {/* Not shown: the filter bar says what this view is far better than a title would,
           and the window is short. It is here to name the view for assistive tech. */}
       <h2 className="sr-only">Card search</h2>
 
-      {/* `rootRef` hands the hook above the whole block — row, tray, stated filters — whose
-          bottom edge is the quick bar's trigger. */}
-      <FilterBar search={search} rootRef={setFilterRow} />
+      <div ref={deskRef} className={cn("flex gap-4", view === "table" && "min-h-0 flex-1")}>
+        {/* `min-w-0`, or a long card name in the table pushes the column past its share and
+            takes the sidebar's width; `min-h-0 flex-1` is the table's height chain, one level
+            in, and exactly what a growing wall must not be given. */}
+        <div
+          className={cn(
+            "flex min-w-0 flex-1 flex-col gap-4",
+            view === "table" && "min-h-0",
+          )}
+        >
+          {/* The picked tags, over the filter row they refine — drawn only while there are any,
+              so a page nobody has used tag search on carries no row for it. Wiring
+              `onFloorChange` is what draws the art weight control at all. */}
+          {picking && (
+            <TagChips
+              selection={tags.selection}
+              onRemove={tags.removeTag}
+              onToggleMode={tags.toggleTagMode}
+              onFloorChange={tags.setFloor}
+            />
+          )}
 
-      <Results search={search} />
+          {/* `rootRef` hands the hook above the whole block — row, tray, stated filters — whose
+              bottom edge is the quick bar's trigger. */}
+          <FilterBar search={search} rootRef={setFilterRow} />
+
+          <Results search={search} />
+        </div>
+
+        {/* The dock: `sticky` so the sidebar stays put while the wall scrolls `main`,
+            `self-start` so the row's stretch does not draw it as tall as the wall, and
+            `LAYER.popup` only while it is drawn over the results — a `sticky` box is a stacking
+            context, so the number has to be here, and the table's sticky header would otherwise
+            paint through it. Its `top` is the quick bar's inset, the number `useDockHeight` is
+            handed, so the two cannot disagree. */}
+        <div
+          ref={dockRef}
+          className={cn("sticky flex shrink-0 self-start", overWidth !== undefined && LAYER.popup)}
+          style={{ top: quick.dockTop }}
+        >
+          <TagSearchPanel
+            tags={tags}
+            roomy={roomy}
+            overWidth={overWidth}
+            maxWidth={maxPanelWidth}
+          />
+        </div>
+      </div>
     </section>
   );
 }
@@ -614,8 +711,8 @@ function Results({ search }: { search: CardSearch }) {
             listKey={searchKey}
             // **This wall grows and `main` scrolls it — the page is one long page.** The first of
             // the four page-width walls to say so, on 2026-09-03; the collection's and the
-            // wishlist's followed on 2026-09-08, and the Tags page's grid view on 2026-09-29 with
-            // the filter quick bar, so all four grow in grid view now. The two bounded
+            // wishlist's followed on 2026-09-08 (and the retired Tags page's on 2026-09-29), so
+            // every page-width wall grows in grid view now. The two bounded
             // surfaces that must keep a scroller of their own are untouched — see `CardGrid`'s
             // `grow`, which carries why the deck editor's 206px docked panel and
             // `AllPrintingsDialog` are not this.

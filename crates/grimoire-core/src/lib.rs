@@ -169,6 +169,7 @@ pub mod scratch;
 pub mod scryfall;
 pub mod search;
 pub mod searchopen;
+pub mod searchwidth;
 pub mod set_completion;
 pub mod shelffolds;
 pub mod slug;

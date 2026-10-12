@@ -32,10 +32,10 @@ import { useUpdate, type Update } from "@/lib/useUpdate";
  * app, which is a page over the network rather than files on a disk, that whole file stood
  * between the reader and the first paint.
  *
- * **Which six, and why not the rest.** The five the reader works in every day — Home, Search,
+ * **Which five, and why not the rest.** The five the reader works in every day — Home, Search,
  * the Collection, the Wishlist and the Decks view — stay in the first chunk: the app opens on one
  * of them (`useStartView`), the sidebar's drop targets borrow their writes, and a fetch on a
- * press is a blank frame on the views a reader moves between most. Scanner, Settings, Tags,
+ * press is a blank frame on the views a reader moves between most. Scanner, Settings,
  * Trade, Playtesting and Shared are the ones a session can go without, and the scanner and
  * Settings are where the heavy dependencies are.
  *
@@ -48,9 +48,6 @@ const ScannerPage = lazy(() =>
 );
 const SettingsPage = lazy(() =>
   import("@/features/settings/SettingsPage").then((m) => ({ default: m.SettingsPage })),
-);
-const TagsPage = lazy(() =>
-  import("@/features/tags/TagsPage").then((m) => ({ default: m.TagsPage })),
 );
 const TradePage = lazy(() =>
   import("@/features/trade/TradePage").then((m) => ({ default: m.TradePage })),
@@ -75,7 +72,6 @@ function ActiveView({ update }: { update: Update }) {
   // arms are in `NAV`'s order, so the first arm and the first rail row are the same decision.
   if (activeView === "home") return <HomePage />;
   if (activeView === "search") return <SearchPage />;
-  if (activeView === "tags") return <TagsPage />;
   if (activeView === "collection") return <CollectionPage />;
   if (activeView === "wishlist") return <WishlistPage />;
   // Somebody else's collection, opened from a link. The rail may not be drawing a row for it —
@@ -194,7 +190,7 @@ export default function App() {
               <AppShell update={update}>
                 {/* No flank column beside the view any more: the card is a centred modal
                     mounted below, so nothing here reserves width for it. */}
-                {/* **The boundary for the six lazy views, and it draws nothing while one
+                {/* **The boundary for the five lazy views, and it draws nothing while one
                     arrives.** A view's chunk is a file read on the desktop and one request on
                     the web, so the wait is a frame or two; a spinner there would be a flash of
                     chrome longer than the wait it reports. Around the view and inside the shell,
@@ -261,7 +257,7 @@ export default function App() {
               {/* **The card itself, and the five overlays its rail opens — seven siblings of
             the shell, and not one of them may be a child of another.**
 
-            `AllPrintingsDialog` above and these six are all `fixed` scrims, and a `fixed` box
+            `AllPrintingsDialog` above and these five are all `fixed` scrims, and a `fixed` box
             is laid out against the window only while nothing between it and the root is a
             containing block for it. `CardDetailModal` asks `Dialog` for `container`, which puts
             `@container/card` on its panel — and `container-type` implies **layout

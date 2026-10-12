@@ -37,7 +37,7 @@ import {
 } from "./queryLanguage";
 
 /**
- * No tag chips — what a caller that has never heard of the Tags page passes.
+ * No tag chips — what a caller that has never heard of the tag sidebar passes.
  *
  * One shared frozen object rather than a fresh `{}` per render: it is spread into the
  * request payload and into the facet request, and a caller that hands back a new empty
@@ -586,9 +586,9 @@ export function needsNextPage(lastRenderedIndex: number, loadedCount: number): b
  * and default is the whole of what they are: the reader can always move either, including to a
  * format the deck they are building is not legal in, and `Any format` never leaves the list.
  * The third, {@link CardSearchOptions.tagTerms}, is not a default but a **narrowing the caller
- * owns**: the Tags page's chips are a filter this row has no control for, so they ride in from
- * outside and no control here can clear them. `SearchPage` passes nothing and gets exactly the
- * hook it always had.
+ * owns**: the search page's picked tags (its tag sidebar, issue #937) are a filter this row has
+ * no control for, so they ride in from outside and no control here can clear them. The deck
+ * builder's panels pass nothing and get exactly the hook they always had.
  */
 export interface CardSearchOptions {
   /**
@@ -608,7 +608,7 @@ export interface CardSearchOptions {
    * Which printings mode the view **opens** on — `false` (one row per card) unless a caller
    * says otherwise, which is what this hook has always answered.
    *
-   * `true` is the Tags page's, and the reason is the whole point of that page: an art tag is a
+   * `true` was the retired Tags page's, and the reason is worth keeping: an art tag is a
    * fact about **this illustration**, so collapsing folds five printings into one row drawn by
    * the newest — whose art may have nothing to do with the motif the reader searched for. Art
    * results are printings.
@@ -620,7 +620,7 @@ export interface CardSearchOptions {
    */
   defaultAllPrintings?: boolean;
   /**
-   * Tag chips to AND into every request — the Tags page's whole filter, and the one narrowing
+   * Tag chips to AND into every request — the search page's tag sidebar, and the one narrowing
    * on this hook that no control in `FilterBar` can reach.
    *
    * The fields are `SearchRequest`'s own, so a caller hands over what `termsFor` built and
@@ -634,7 +634,7 @@ export interface CardSearchOptions {
   tagTerms?: Pick<SearchRequest, "artTags" | "oracleTags" | "artWeightFloor">;
   /**
    * The deck this search is being run **for** — the deck builder's panel passes the open deck's
-   * id, `SearchPage` and the Tags page pass nothing.
+   * id, `SearchPage` passes nothing.
    *
    * The fourth thing a caller owns here, and unlike the other three it is not a default the
    * reader can move: no control in `FilterBar` reaches it, because it is not a filter. It
@@ -662,8 +662,8 @@ export interface CardSearchOptions {
   initialSet?: string | null;
   /**
    * Remember this search's filters under this name, so the view opens on them again when the
-   * reader comes back to it (issue #908) — `SearchPage` passes `"search"`, the Tags page
-   * `"tags"`. Absent remembers nothing, which is the deck builder's docked panels: they open on
+   * reader comes back to it (issue #908) — `SearchPage` and the light app's phone search pass
+   * `"search"`. Absent remembers nothing, which is the deck builder's docked panels: they open on
    * the deck's own format, and a narrowing left over from another deck would be the wrong answer.
    *
    * **Read once, by the `useState` seeds**, so the first request is already the remembered one —
@@ -714,7 +714,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   // inline, so it is a new identity on every render and nothing may depend on it.
   const defaultFormatValue = options.defaultFormat?.value ?? "";
   /**
-   * The caller's tag chips — the Tags page's whole filter, and half of what finally rides.
+   * The caller's tag chips — the search page's tag sidebar, and half of what finally rides.
    *
    * The other half is typed into the search box, and the two are merged into `tagTerms` further
    * down, once the typed names have been resolved. This is the raw caller half, kept apart so

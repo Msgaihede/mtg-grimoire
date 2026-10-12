@@ -106,7 +106,7 @@ describe("useHiddenTags", () => {
     expect(result.current.tags).toBeNull();
   });
 
-  /** The key is exported because `TagsPage`'s hide has to name it — a write on another page that
+  /** The key is exported because `TagPicker`'s hide has to name it — a write on another page that
    *  did not would leave this list one tag short for the length of the `staleTime`. */
   it("exports the key its other writer invalidates", () => {
     expect(HIDDEN_TAGS_KEY).toEqual(["tags-muted"]);

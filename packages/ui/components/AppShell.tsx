@@ -39,6 +39,7 @@ import { DURATION, statusLine as statusLineMotion } from "@/lib/motion";
 import { matchesChord, matchesShortcut, shortcut } from "@/lib/shortcuts";
 import { useAppStore, type ViewId } from "@/lib/store";
 import { usePrefetchSearchOpen } from "@/features/search/useSearchOpen";
+import { usePrefetchSearchWidth } from "@/features/search/useSearchWidth";
 import { usePrefetchShelfFolds } from "@/features/shelves/useShelfFolds";
 import { usePrefetchFolderPane } from "@/features/decks/useFolderPane";
 import { useCardZoomPersistence } from "@/lib/useCardZoomPersistence";
@@ -86,38 +87,24 @@ const NEW_WINDOW = shortcut("global", "newWindow");
  * The list `Ctrl+1…9` is bound against, by index — `NAV` minus the one row that is not always
  * drawn.
  *
- * **Eleven destinations against nine digits, so two go without a chord — and the two reasons are
- * different, which is why only one of them is a filter.** `Ctrl+0` is not a tenth step of that
- * run (`lib/shortcuts.ts` says why), so the shortfall has to be paid twice over:
+ * **Ten destinations against nine digits, and the one that goes without is `shared`, because
+ * its row is _conditional_.** Somebody else's binder appears on the rail only once a link has
+ * been opened, and a chord's whole value is that it does not move — a digit bound to a row that
+ * comes and goes would either shift every digit after it, one press meaning two things to two
+ * readers, or point at a row half the readers do not have. No amount of room would change that,
+ * which is what makes it a filter rather than arithmetic. `Ctrl+0` is not a tenth step of the run
+ * (`lib/shortcuts.ts` says why).
  *
- * - **`shared` is excluded here, because its row is _conditional_.** Somebody else's binder
- *   appears on the rail only once a link has been opened, and a chord's whole value is that it
- *   does not move — a digit bound to a row that comes and goes would either shift every digit
- *   after it, one press meaning two things to two readers, or point at a row half the readers do
- *   not have. No amount of room would change that, which is what makes it a filter rather than
- *   arithmetic.
- * - **`settings` is _not_ excluded here and goes without anyway, because the run simply ends
- *   before it.** It is this list's tenth and last entry, `SWITCH_VIEW.chords` is nine long, and
- *   the handler's `i >= CHORD_NAV.length` guard never even gets to refuse it — there is no tenth
- *   chord to look up. That is arithmetic and would reverse the day a tenth digit existed.
- *
- * **So `Ctrl+9` is Playtesting, and `Ctrl+9` is _not_ Settings.** This block said the opposite
- * until Home arrived at the head of the rail — "exactly one entry goes without a chord", and
- * "`Ctrl+9` is Settings for every reader, always" — and both halves of that were true of a
- * ten-row rail and are false of this one. The renumbering is deliberate and `nav.test.ts` pins
- * the ninth entry **by name**, because a length can only say how many rows go without and never
- * which, and it is the *which* a reader has in their fingers.
- *
- * Losing the digit costs Settings nothing else: unlike `shared`, its row is drawn on every screen
- * at a fixed place, so it was always one press away and still is. What `shared` lost was its only
- * keyboard route, and that route was a *fallback* written when nothing in the app offered a first
- * share — `features/collection/ShareFolderMenu.tsx` draws **Open a shared collection** beside the
- * Share control now, which is the signpost the chord was standing in for.
- * `docs/reference/keyboard-shortcuts.md` carries the record.
+ * **So `Ctrl+9` is Settings.** It was Playtesting from Home's arrival until the Tagger row left
+ * the rail (issue #937 — tag search is the Search page's sidebar now), which made this list nine
+ * long again. `nav.test.ts` pins the ninth entry **by name**, because a length can only say how
+ * many rows are reached and never which, and it is the *which* a reader has in their fingers.
+ * What `shared` lost was its only keyboard route, and that route was a *fallback* —
+ * `features/collection/ShareFolderMenu.tsx` draws **Open a shared collection** beside the Share
+ * control now. `docs/reference/keyboard-shortcuts.md` carries the record.
  *
  * Derived rather than written out, so a destination added to `NAV` joins the list by construction
- * and only a deliberate second *exclusion* could ever be a decision again — which is exactly what
- * did not happen to Settings.
+ * and only a deliberate second *exclusion* could ever be a decision again.
  */
 const CHORD_NAV = NAV.filter((n) => n.id !== "shared");
 
@@ -222,14 +209,9 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // app.
   const deviceSync = useDeviceSyncLive();
   /**
-   * The app's three window-wide chords: `Ctrl+1`…`Ctrl+9` to jump between the first **nine** of
-   * the ten destinations {@link CHORD_NAV} names, `F1` to open the map that says so, and
-   * `Ctrl+Shift+N` to open another window onto the same app.
-   *
-   * **Nine of ten and not "the nine {@link CHORD_NAV} names"**, which is what this line said until
-   * Home joined the rail. That list is `NAV` minus `shared` — ten entries — and the run of digits
-   * is nine, so Settings sits on it and past the end of it at once. The digits reach Home through
-   * Playtesting; the tenth entry is reachable by every other means and by no chord.
+   * The app's three window-wide chords: `Ctrl+1`…`Ctrl+9` to jump between the nine destinations
+   * {@link CHORD_NAV} names, `F1` to open the map that says so, and `Ctrl+Shift+N` to open another
+   * window onto the same app.
    *
    * **Both matched against `@/lib/shortcuts` rather than compared by hand**, which is what makes
    * the panel's rows and these bindings one fact instead of two that drift silently past both CI
@@ -366,6 +348,8 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // for all three, because they share one `app_meta` row and one query key. It renders nothing:
   // the answer goes into the query cache, where `useSearchOpen` reads it.
   usePrefetchSearchOpen();
+  // The tag sidebar's dragged width, for the same reason one row over (issue #937).
+  usePrefetchSearchWidth();
   // The collection's and the wishlist's stored folds (spec §5.7), for the same measurement one
   // row up: asked by the page, the read would queue behind the page's own list read and every
   // shelf the reader had folded would draw open for a round trip and then snap shut, with the

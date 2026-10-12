@@ -979,6 +979,12 @@ commands! {
         store(conn, &section, open)
     };
 
+    // searchwidth
+    read search_width in searchwidth() = |conn| Ok(stored(conn));
+    write set_search_width in searchwidth(section: String, width: u32) = |conn| {
+        store(conn, &section, width)
+    };
+
     // set_completion
     read set_completion in set_completion() = |conn| set_completion_of(conn);
 

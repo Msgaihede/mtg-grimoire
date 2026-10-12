@@ -71,6 +71,12 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     syncStatus: vi.fn(),
     syncRun: vi.fn(),
     onSyncProgress: vi.fn(),
+    // The tag sidebar's two remembered answers (issue #937) — railed and never dragged, so it
+    // reads nothing about tags. `TagSearchPanel.test.tsx` is where it is opened.
+    searchOpen: vi.fn().mockResolvedValue({}),
+    setSearchOpen: vi.fn().mockResolvedValue(undefined),
+    searchWidth: vi.fn().mockResolvedValue({}),
+    setSearchWidth: vi.fn().mockResolvedValue(undefined),
   },
 }));
 

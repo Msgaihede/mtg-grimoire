@@ -28,22 +28,20 @@ async function settleRead(): Promise<void> {
 /** The setter for one section, which is what the toggle presses. */
 const PRESS: Record<ListSection, (view: "grid" | "table") => void> = {
   search: (v) => useAppStore.getState().setSearchView(v),
-  tags: (v) => useAppStore.getState().setTagsView(v),
   collection: (v) => useAppStore.getState().setCollectionView(v),
   wishlist: (v) => useAppStore.getState().setWishlistView(v),
 };
 
 describe("the launch read", () => {
   it("seeds the store from the stored row", async () => {
-    listView.mockResolvedValue({ collection: "table", tags: "table" });
+    listView.mockResolvedValue({ collection: "table", search: "table" });
     renderHook(() => useListViewPersistence());
 
     await settleRead();
 
     expect(useAppStore.getState().collectionView).toBe("table");
-    expect(useAppStore.getState().tagsView).toBe("table");
+    expect(useAppStore.getState().searchView).toBe("table");
     // Untouched by the row, so still the default this app opens on.
-    expect(useAppStore.getState().searchView).toBe("grid");
     expect(useAppStore.getState().wishlistView).toBe("grid");
   });
 

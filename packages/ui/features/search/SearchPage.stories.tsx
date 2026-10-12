@@ -646,3 +646,26 @@ export const GameChangerOnTheWall: Story = {
     );
   },
 };
+
+/**
+ * **Tag search, in the sidebar on the right** (issue #937) — where the Tagger page went. Railed
+ * until the reader opens it, which is when the taxonomies are first read; a picked tag is chipped
+ * over the filter row and ANDed into the search, and stays there when the sidebar is shut again.
+ * Whether it is open and how wide it was dragged are both remembered (`app_meta.search_open`,
+ * `app_meta.search_width`).
+ */
+export const TagSidebar: Story = {
+  args: { view: "grid" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByText("37 cards");
+    await userEvent.click(await canvas.findByRole("button", { name: "Expand tag search" }));
+    await userEvent.click(
+      await canvas.findByRole("button", { name: /^Landscape, art tag, \d/ }, { timeout: 5000 }),
+    );
+    await expect(
+      await canvas.findByRole("button", { name: /^Landscape, art tag, included/ }),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(canvas.queryByText("37 cards")).not.toBeInTheDocument());
+  },
+};

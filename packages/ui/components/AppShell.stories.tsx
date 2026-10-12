@@ -429,7 +429,7 @@ export const Collapsed: Story = {
     await expect(rail).toHaveClass("w-17");
 
     // Every destination still answers to its own name, and the active one still says so.
-    for (const label of ["Search", "Tagger", "Decks", "Collection", "Wishlist", "Settings"]) {
+    for (const label of ["Search", "Decks", "Collection", "Wishlist", "Settings"]) {
       await expect(canvas.getByRole("button", { name: label })).toBeInTheDocument();
     }
     await expect(canvas.getByRole("button", { name: "Search" })).toHaveAttribute(

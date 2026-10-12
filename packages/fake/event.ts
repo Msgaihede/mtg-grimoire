@@ -12,7 +12,7 @@
  * `update:progress` (`UpdateProgressEvent`, subscribed by `useUpdate`),
  * `marketplace:progress` (`FeedProgressEvent`, subscribed once by `useMarketplaceProgress`),
  * `oracle-tags:progress` (`OracleTagProgressEvent`, subscribed once by `useOracleTagProgress`),
- * `art-tags:progress` (`ArtTagProgressEvent`, subscribed by `TagsPage`),
+ * `art-tags:progress` (`ArtTagProgressEvent`, subscribed by `TagPicker`),
  * `combos:progress` (`ComboProgress`, reached through `ipc.onCombosProgress` — the one entry
  * here that names its wrapper instead of a component, because the combo feed downloads at
  * launch since 2026-09-08 and the Settings panel this line used to name is gone with the press

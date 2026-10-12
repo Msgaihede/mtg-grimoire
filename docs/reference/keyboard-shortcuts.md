@@ -230,6 +230,31 @@ how a later edit puts the wrong one back:
 the first nine, so a merge cannot quietly restore the old numbering; the exclusions are still
 matched on **id** rather than counted. [home-page.md](home-page.md) is the rest of the record.
 
+### The Tagger row left, and Settings has `Ctrl+9` again
+
+**Tag search became the Search page's collapsible sidebar on 2026-10-11
+([issue #937](https://github.com/Msgaihede/mtg-grimoire/issues/937))**, so the `tags` view and its
+rail row are gone. `CHORD_NAV` is `NAV` minus `shared` — nine rows now — so every digit after
+Search moved one row up and the run ends exactly at the rail's end:
+
+| chord | before | after |
+| --- | --- | --- |
+| `Ctrl+1` | Home | Home |
+| `Ctrl+2` | Search | Search |
+| `Ctrl+3` | Tagger | **Decks** |
+| `Ctrl+4` | Decks | Collection |
+| `Ctrl+5` | Collection | Wishlist |
+| `Ctrl+6` | Wishlist | Scanner |
+| `Ctrl+7` | Scanner | Trade |
+| `Ctrl+8` | Trade | Playtesting |
+| `Ctrl+9` | Playtesting | **Settings** |
+| — | Shared, Settings | Shared |
+
+The prediction in the section above held: given back a ninth slot, Settings took it, and `shared`
+is again the one destination without a chord, for its own reason. `nav.test.ts` now pins the ninth
+entry as `settings`. Another breaking change to a binding readers have in their fingers, and it
+belongs in the release note as one.
+
 ## `newWindow`
 
 **`Ctrl+Shift+N` opens another window onto the same app** (2026-09-20). VS Code's chord, and

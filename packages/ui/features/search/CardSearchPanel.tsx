@@ -28,7 +28,7 @@ const NO_ROOM = "Not enough room. Close the card details or widen the window.";
  * that one is the key a preference is stored under, this one is what is stamped on the DOM. They
  * are equal today and they answer to different things, so neither is derived from the other.
  */
-export type SearchSurface = "deck" | "collection" | "wishlist";
+export type SearchSurface = "deck" | "collection" | "wishlist" | "tags";
 
 /**
  * Stamped on this panel while it is drawn **over** the list rather than docked beside it — the
@@ -215,6 +215,17 @@ export interface CardSearchPanelProps {
    * reader's search away — which is exactly what one folded gate did.
    */
   children: ReactNode;
+  /**
+   * The reader's dragged width, **when the caller remembers it** — the search page's tag sidebar
+   * (issue #937), which keeps it across restarts through `useSearchWidth`. Absent is the three
+   * card-search columns, which hold it in this component for the life of the page: their width is
+   * an answer about the list beside them, and the tag rail's is not (see the `width` state below).
+   *
+   * Given, it is still only what the reader *asked* for: the drawn width is clamped exactly as an
+   * internal one is, and {@link onWidthChange} hears the drag's own clamped value.
+   */
+  width?: number;
+  onWidthChange?: (width: number) => void;
 }
 
 /**
@@ -253,6 +264,8 @@ export function CardSearchPanel({
   maxWidth = Number.POSITIVE_INFINITY,
   tabs,
   children,
+  width: storedWidth,
+  onWidthChange,
 }: CardSearchPanelProps): ReactElement {
   const tip = useTooltip();
   /**
@@ -296,7 +309,10 @@ export function CardSearchPanel({
    * than in the body: the disclosure and the reader's width outlast the search they were pointed
    * at, so reopening gives back the column they had rather than the one the app ships.
    */
-  const [width, setWidth] = useState(DEFAULT_PANEL_WIDTH_PX);
+  const [ownWidth, setOwnWidth] = useState(DEFAULT_PANEL_WIDTH_PX);
+  // A caller that remembers the width owns it; otherwise this root does.
+  const width = storedWidth ?? ownWidth;
+  const setWidth = onWidthChange ?? setOwnWidth;
 
   // What is actually drawn: the reader's width inside the page's cap, and never below the one
   // card `MIN_PANEL_WIDTH_PX` is measured from. The `max` around the cap matters at exactly one
@@ -314,7 +330,7 @@ export function CardSearchPanel({
       setWidth(
         Math.min(Math.max(next, MIN_PANEL_WIDTH_PX), Math.max(maxWidth, MIN_PANEL_WIDTH_PX)),
       ),
-    [maxWidth],
+    [maxWidth, setWidth],
   );
 
   const selectedCardId = useAppStore((s) => s.selectedCardId);

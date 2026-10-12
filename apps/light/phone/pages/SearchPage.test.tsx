@@ -271,3 +271,33 @@ describe("a figure that cannot be read over an empty wall", () => {
     expect(screen.queryByText("Nothing on your wishlist yet.")).toBeNull();
   });
 });
+
+/**
+ * Tag search on the phone face (issue #937): the desktop search page's sidebar, as a sheet. The
+ * picked tags are the page's, so they keep narrowing the wall — and are drawn under the box — once
+ * the sheet is shut.
+ */
+describe("the Tags sheet", () => {
+  it("picks a tag from the rail and keeps it on the page once the sheet is shut", async () => {
+    renderPhone(<PhoneFace />, { path: "/search" });
+    const button = screen.getByRole("button", { name: /^Tags/ });
+    expect(button).toHaveAccessibleName("Tags");
+
+    await userEvent.click(button);
+    const sheet = await screen.findByRole("dialog", { name: "Tags" });
+    await userEvent.click(
+      await within(sheet).findByRole(
+        "button",
+        { name: /^Landscape, art tag, \d/ },
+        SETTLE,
+      ),
+    );
+    await userEvent.click(within(sheet).getByRole("button", { name: "Close tags" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByRole("button", { name: /^Tags/ })).toHaveAccessibleName("Tags — 1 picked");
+    expect(
+      screen.getByRole("button", { name: /^Landscape, art tag, included/ }),
+    ).toBeInTheDocument();
+  });
+});
