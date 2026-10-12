@@ -200,7 +200,7 @@ describe("the Updates panel", () => {
 
 /**
  * **9a's touch census found both of these reached the UI at exactly one place each, and that
- * place was a hover tooltip** on the ribbon's status line — `Ribbon.tsx:96` for the folder,
+ * place was a hover tooltip** on the ribbon's status line — `ChromeStatus.tsx` for the folder,
  * `:97–98` for the count. A phone reader has no hover, and there was no second door to either:
  * re-verified by grep on 2026-08-29, which found `imageStoreFailures` drawn in no other string
  * and `dataDir` in no other expression. This section is that second door, and the tooltip is

@@ -2,7 +2,7 @@
 //! and the wishlist when one is finished. User schema v63,
 //! [issue #363](https://github.com/Msgaihede/mtg-grimoire/issues/363).
 //!
-//! [`crate::sticky_notes`]' file shape: pure functions over a [`Connection`], the thirteen
+//! [`crate::sticky_notes`]' file shape: pure functions over a [`Connection`], the fourteen
 //! commands' bodies and nothing of a window. The wrappers are the desktop host's
 //! (`apps/desktop/src-tauri/src/trade/mod.rs`) and the table's (`crate::commands`).
 //!
@@ -31,6 +31,11 @@
 //! raises the line a side already holds, and an edit that makes a line identical to another on
 //! its side ([`update_trade_line`]) takes the other in. See the rung for why no `UNIQUE` backs
 //! it.
+//!
+//! **On the reader's side the grain has one more term: whether the line is drawn from the
+//! collection** ([`drawn`], issue #935). A line added from the collection holds at most the
+//! copies the collection has of it; copies asked for past those go onto a second line for the
+//! same printing and finish, without the collection's mark, rather than raising the first one.
 //!
 //! # Only an open trade can be written
 //!
@@ -823,25 +828,99 @@ fn next_position(conn: &Connection, trade_id: i64) -> Result<i64, String> {
     .map_err(|e| e.to_string())
 }
 
-/// The line a side already holds for a printing and finish, other than `except`.
+/// Whether a line on `side` with `source` is **drawn from the collection**: the reader's side,
+/// added from the collection. The one term of a side's grain beyond the printing and finish
+/// (issue #935) — such a line holds the copies the reader owns, and a line that is not holds
+/// the copies they asked for past those.
+///
+/// Their side is one grain whatever the source, so a collection line carried across folds into
+/// the line their side already holds, as it always has.
+fn drawn(side: &str, source: &str) -> bool {
+    side == MINE && source == SOURCES[0]
+}
+
+/// The line a side already holds for a printing and finish, in the same [`drawn`] class as
+/// `from_collection`, other than `except`.
 fn twin(
     conn: &Connection,
     trade_id: i64,
     side: &str,
     card_id: &str,
     finish: &str,
+    from_collection: bool,
     except: Option<i64>,
 ) -> Result<Option<(i64, i64)>, String> {
     conn.query_row(
         "SELECT id, quantity FROM trade_lines
           WHERE trade_id = ?1 AND side = ?2 AND card_id = ?3 AND finish = ?4
-            AND id IS NOT ?5
+            AND (side = 'mine' AND source = 'collection') = ?5
+            AND id IS NOT ?6
           ORDER BY position, id LIMIT 1",
-        params![trade_id, side, card_id, finish, except],
+        params![trade_id, side, card_id, finish, from_collection, except],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )
     .optional()
     .map_err(|e| e.to_string())
+}
+
+/// Every copy of a printing and finish a finish could take: [`tradeable`]'s rows, outside a
+/// deck and in one, added up.
+fn available(conn: &Connection, card_id: &str, finish: &str) -> Result<i64, String> {
+    Ok(tradeable(conn, card_id, finish)?
+        .iter()
+        .fold(0, |copies: i64, row| copies.saturating_add(row.quantity)))
+}
+
+/// How a line drawn from the collection that held `held` copies and is asked for `asked` splits:
+/// the copies it keeps, and the copies past what the collection has (`available`), which go
+/// onto the side's other line.
+///
+/// **It never gives back what it already held**: a line whose copies have since left the
+/// collection is not shrunk under the reader by a press on `+`. Only the copies the press
+/// *adds* past the collection's count move, and a line asked for fewer is simply lowered.
+fn split(held: i64, asked: i64, available: i64) -> (i64, i64) {
+    let keep = asked.min(held.max(available));
+    (keep, asked - keep)
+}
+
+/// Put `quantity` copies the collection does not cover on the reader's side, as a line that is
+/// not [`drawn`] from it: raised where the side already holds one for that printing and finish,
+/// and otherwise a new `search` line at the end of the trade — a card the reader named rather
+/// than picked out of their collection.
+fn put_excess(
+    conn: &Connection,
+    trade_id: i64,
+    card_id: &str,
+    finish: &str,
+    quantity: i64,
+    card: (&str, &str, &str),
+) -> Result<(), String> {
+    match twin(conn, trade_id, MINE, card_id, finish, false, None)? {
+        Some((standing, held)) => conn.execute(
+            "UPDATE trade_lines SET quantity = ?2 WHERE id = ?1",
+            params![standing, folded(held, quantity)?],
+        ),
+        None => conn.execute(
+            "INSERT INTO trade_lines
+                (trade_id, side, card_id, name, set_code, collector_number, finish,
+                 quantity, source, position)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                trade_id,
+                MINE,
+                card_id,
+                card.0,
+                card.1,
+                card.2,
+                finish,
+                quantity,
+                SOURCES[1],
+                next_position(conn, trade_id)?,
+            ],
+        ),
+    }
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------
@@ -925,6 +1004,12 @@ pub fn set_trade_rate(conn: &Connection, id: i64, side: &str, rate: i64) -> Resu
 /// second one, and the line keeps the source it was first added with. Two inputs naming the
 /// same printing and finish fold the same way, because the second finds the first.
 ///
+/// **Except across the collection's line on the reader's side** ([`drawn`], issue #935): a
+/// collection input raises the side's collection line only as far as the copies the collection
+/// has of that printing and finish, and the rest go onto the side's other line for it
+/// ([`put_excess`]). A searched or scanned input on the reader's side never raises the
+/// collection's line.
+///
 /// **All or nothing**: one savepoint, so a refused line — no copies or too many, a finish or a
 /// source that is not a word, a printing the database does not hold — leaves the side as it
 /// was. A scan that put eleven cards on and dropped the twelfth would be a list the reader has
@@ -952,7 +1037,56 @@ pub fn add_trade_lines(
             let source = valid_source(&line.source)?;
             let quantity = valid_copies(line.quantity)?;
             let card = printing(conn, &line.card_id)?.ok_or_else(|| NO_SUCH_CARD.to_owned())?;
-            match twin(conn, id, side, &line.card_id, finish, None)? {
+            if drawn(side, source) {
+                let standing = twin(conn, id, side, &line.card_id, finish, true, None)?;
+                let held = standing.map_or(0, |(_, held)| held);
+                let (keep, excess) = split(
+                    held,
+                    folded(held, quantity)?,
+                    available(conn, &line.card_id, finish)?,
+                );
+                let names = (
+                    card.name.as_str(),
+                    card.set_code.as_str(),
+                    card.collector_number.as_str(),
+                );
+                match standing {
+                    Some((standing, _)) => {
+                        conn.execute(
+                            "UPDATE trade_lines SET quantity = ?2 WHERE id = ?1",
+                            params![standing, keep],
+                        )
+                        .map_err(|e| e.to_string())?;
+                    }
+                    None if keep > 0 => {
+                        conn.execute(
+                            "INSERT INTO trade_lines
+                                (trade_id, side, card_id, name, set_code, collector_number,
+                                 finish, quantity, source, position)
+                             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                            params![
+                                id,
+                                side,
+                                line.card_id,
+                                card.name,
+                                card.set_code,
+                                card.collector_number,
+                                finish,
+                                keep,
+                                source,
+                                next_position(conn, id)?,
+                            ],
+                        )
+                        .map_err(|e| e.to_string())?;
+                    }
+                    None => {}
+                }
+                if excess > 0 {
+                    put_excess(conn, id, &line.card_id, finish, excess, names)?;
+                }
+                continue;
+            }
+            match twin(conn, id, side, &line.card_id, finish, false, None)? {
                 Some((standing, held)) => conn.execute(
                     "UPDATE trade_lines SET quantity = ?2 WHERE id = ?1",
                     params![standing, folded(held, quantity)?],
@@ -993,12 +1127,13 @@ struct LineRow {
     finish: String,
     quantity: i64,
     position: i64,
+    source: String,
 }
 
 fn line_row(conn: &Connection, line_id: i64) -> Result<Option<LineRow>, String> {
     conn.query_row(
         "SELECT trade_id, side, card_id, name, set_code, collector_number, finish, quantity,
-                position
+                position, source
            FROM trade_lines WHERE id = ?1",
         params![line_id],
         |r| {
@@ -1012,6 +1147,7 @@ fn line_row(conn: &Connection, line_id: i64) -> Result<Option<LineRow>, String> 
                 finish: r.get(6)?,
                 quantity: r.get(7)?,
                 position: r.get(8)?,
+                source: r.get(9)?,
             })
         },
     )
@@ -1040,7 +1176,14 @@ fn line_row(conn: &Connection, line_id: i64) -> Result<Option<LineRow>, String> 
 ///    two become one: **the edited line keeps its place** and takes the other's copies, and the
 ///    other is deleted. That is [`add_trade_lines`]'s grain, kept from the other direction —
 ///    and its ceiling: two lines that add up past [`MAX_QUANTITY`] are refused ([`TOO_MANY`])
-///    rather than folded, whether or not the edit named a quantity.
+///    rather than folded, whether or not the edit named a quantity. The other line is one of
+///    the same [`drawn`] class: the reader's collection line and their other line for the same
+///    printing and finish stay two.
+/// 6. **The split** (issue #935). A line drawn from the collection whose quantity is raised past
+///    the copies the collection has of its printing and finish keeps those copies — or what it
+///    already held, if that is more — and the rest go onto the side's other line for it
+///    ([`put_excess`]), raised or made. The edited line is the reader's collection; the copies
+///    past it are cards they do not have, and wear no mark that says they do.
 ///
 /// One savepoint, so a refusal at any step writes nothing.
 pub fn update_trade_line(
@@ -1051,6 +1194,7 @@ pub fn update_trade_line(
     crate::db::in_savepoint(conn, "trade_update_line", || {
         let mut line = line_row(conn, line_id)?.ok_or_else(|| LINE_GONE.to_owned())?;
         open_trade(conn, line.trade_id)?;
+        let held = line.quantity;
 
         // 1 — the printing, and the finish it leaves the line in.
         let asked_card = crate::filters::nonblank(&change.card_id).filter(|id| *id != line.card_id);
@@ -1100,17 +1244,29 @@ pub fn update_trade_line(
         }
 
         // 5 — the fold, before the write that would make the two rows identical.
+        let from_collection = drawn(&line.side, &line.source);
         if let Some((other, held)) = twin(
             conn,
             line.trade_id,
             &line.side,
             &line.card_id,
             &line.finish,
+            from_collection,
             Some(line_id),
         )? {
             line.quantity = folded(line.quantity, held)?;
             conn.execute("DELETE FROM trade_lines WHERE id = ?1", params![other])
                 .map_err(|e| e.to_string())?;
+        }
+
+        // 6 — the split, only for a quantity the edit named.
+        let mut excess = 0;
+        if from_collection && change.quantity.is_some() {
+            (line.quantity, excess) = split(
+                held.min(line.quantity),
+                line.quantity,
+                available(conn, &line.card_id, &line.finish)?,
+            );
         }
 
         conn.execute(
@@ -1131,6 +1287,16 @@ pub fn update_trade_line(
             ],
         )
         .map_err(|e| e.to_string())?;
+        if excess > 0 {
+            put_excess(
+                conn,
+                line.trade_id,
+                &line.card_id,
+                &line.finish,
+                excess,
+                (&line.name, &line.set_code, &line.collector_number),
+            )?;
+        }
         Ok(())
     })
 }
@@ -1149,6 +1315,76 @@ pub fn remove_trade_line(conn: &Connection, line_id: i64) -> Result<(), String> 
     conn.execute("DELETE FROM trade_lines WHERE id = ?1", params![line_id])
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Put every line of an open trade on the other side: what the reader gave is what they are
+/// given, and the other way round (issue #936).
+///
+/// **The lines move and nothing else does.** Each keeps its printing, finish, quantity, source
+/// and place in the trade's order, and the percentages stay with the sides they were set on —
+/// a rate describes a side of the table, not the cards that happen to be on it. Like a single
+/// line carried across ([`update_trade_line`]), nothing is split against the collection.
+///
+/// **One fold, on their side.** The reader's side can hold two lines for one printing and
+/// finish — the collection's and the copies past it ([`drawn`], issue #935) — and their side
+/// is one grain whatever the source, so a pair carried across becomes one line: the first in
+/// the trade's order takes the other's copies, under [`MAX_QUANTITY`] ([`TOO_MANY`]). Their
+/// lines arriving on the reader's side meet nothing: their side held one line per printing and
+/// finish, and each lands in the class its source puts it in.
+///
+/// One savepoint, so a refused fold leaves both sides as they were.
+pub fn swap_trade_sides(conn: &Connection, id: i64) -> Result<(), String> {
+    crate::db::in_savepoint(conn, "trade_swap_sides", || {
+        open_trade(conn, id)?;
+        conn.execute(
+            "UPDATE trade_lines
+                SET side = CASE side WHEN ?2 THEN ?3 ELSE ?2 END
+              WHERE trade_id = ?1",
+            params![id, MINE, THEIRS],
+        )
+        .map_err(|e| e.to_string())?;
+
+        let mut statement = conn
+            .prepare(
+                "SELECT id, card_id, finish, quantity FROM trade_lines
+                  WHERE trade_id = ?1 AND side = ?2
+                  ORDER BY position, id",
+            )
+            .map_err(|e| e.to_string())?;
+        let theirs = statement
+            .query_map(params![id, THEIRS], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            })
+            .and_then(Iterator::collect::<Result<Vec<_>, _>>)
+            .map_err(|e| e.to_string())?;
+
+        // The first line of each printing and finish, and what it holds once the rest are in.
+        let mut kept: Vec<(i64, &str, &str, i64)> = Vec::new();
+        for (line, card_id, finish, quantity) in &theirs {
+            match kept
+                .iter_mut()
+                .find(|(_, card, fin, _)| card == card_id && fin == finish)
+            {
+                Some(first) => {
+                    first.3 = folded(first.3, *quantity)?;
+                    conn.execute("DELETE FROM trade_lines WHERE id = ?1", params![line])
+                        .map_err(|e| e.to_string())?;
+                    conn.execute(
+                        "UPDATE trade_lines SET quantity = ?2 WHERE id = ?1",
+                        params![first.0, first.3],
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                None => kept.push((*line, card_id, finish, *quantity)),
+            }
+        }
+        Ok(())
+    })
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1186,13 +1422,16 @@ struct Closing {
     /// Whether `cards` still holds the printing. The two steps that *add* a row need it to; the
     /// two that take copies away do not.
     known: bool,
+    /// [`drawn`]: the reader's side, added from the collection. [`take_given`] serves these
+    /// first.
+    from_collection: bool,
 }
 
 fn closing_lines(conn: &Connection, id: i64) -> Result<Vec<Closing>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT l.side, l.card_id, coalesce(c.name, l.name), l.finish, l.quantity,
-                    c.id IS NOT NULL
+                    c.id IS NOT NULL, l.side = 'mine' AND l.source = 'collection'
                FROM trade_lines l
                LEFT JOIN cards c ON c.id = l.card_id
               WHERE l.trade_id = ?1
@@ -1208,6 +1447,7 @@ fn closing_lines(conn: &Connection, id: i64) -> Result<Vec<Closing>, String> {
                 finish: r.get(3)?,
                 quantity: r.get(4)?,
                 known: r.get(5)?,
+                from_collection: r.get(6)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -1314,7 +1554,12 @@ struct Given {
 fn take_given(conn: &Connection, lines: &[Closing]) -> Result<Given, String> {
     let mut moved = Vec::new();
     let mut from_decks: i64 = 0;
-    for line in lines.iter().filter(|line| line.side == MINE) {
+    // The lines drawn from the collection first, each in its place otherwise: a collection
+    // line is the reader's own copies, and the side's other line for the same printing and
+    // finish (issue #935) is what they asked for past those — it takes only what is left.
+    let mut given: Vec<&Closing> = lines.iter().filter(|line| line.side == MINE).collect();
+    given.sort_by_key(|line| !line.from_collection);
+    for line in given {
         let mut left = line.quantity;
         let mut places = Vec::new();
         for row in tradeable(conn, &line.card_id, &line.finish)? {
@@ -1966,18 +2211,14 @@ mod tests {
     }
 
     /// The grain: one line per printing and finish on a side. A second add raises the first
-    /// line and keeps its source; another finish, or the other side, is a line of its own.
+    /// line and keeps its source; another finish, or the other side, is a line of its own. (The
+    /// collection's line on the reader's side is the one exception, issue #935 — the tests
+    /// after `stepping_a_collection_line_past_…` hold it.)
     #[test]
     fn adding_a_printing_a_side_already_holds_raises_that_line() {
         let conn = seeded();
         let id = new_trade(&conn);
-        add_trade_lines(
-            &conn,
-            id,
-            MINE,
-            &[input("bolt", "nonfoil", 1, "collection")],
-        )
-        .unwrap();
+        add_trade_lines(&conn, id, MINE, &[input("bolt", "nonfoil", 1, "search")]).unwrap();
         add_trade_lines(
             &conn,
             id,
@@ -2008,10 +2249,7 @@ mod tests {
         );
         let after = trade(&conn, id);
         let raised = &after.lines[0];
-        assert_eq!(
-            raised.source, "collection",
-            "the line keeps where it came from"
-        );
+        assert_eq!(raised.source, "search", "the line keeps where it came from");
         assert_eq!(raised.name, "Lightning Bolt");
         assert_eq!(
             (raised.set_code.as_str(), raised.collector_number.as_str()),
@@ -2312,6 +2550,212 @@ mod tests {
     /// An edit that makes a line the same as another on its side folds the two: the edited line
     /// keeps its place and takes the other's copies. A move across sides folds the same way, and
     /// a move that folds into nothing goes to the end.
+    /// A side's lines as `(card, finish, quantity, source)`, in the order the page reads them.
+    fn sourced(conn: &Connection, id: i64, side: &str) -> Vec<(String, String, i64, String)> {
+        trade(conn, id)
+            .lines
+            .into_iter()
+            .filter(|line| line.side == side)
+            .map(|line| (line.card_id, line.finish, line.quantity, line.source))
+            .collect()
+    }
+
+    fn row(card: &str, finish: &str, quantity: i64, source: &str) -> (String, String, i64, String) {
+        (
+            card.to_owned(),
+            finish.to_owned(),
+            quantity,
+            source.to_owned(),
+        )
+    }
+
+    /// Issue #935: a line added from the collection holds what the collection has, and the
+    /// copies stepped past that go onto a line of their own without the collection's mark —
+    /// raised by the next press, left alone when the first is stepped back down.
+    #[test]
+    fn stepping_a_collection_line_past_the_copies_owned_puts_the_rest_on_a_line_of_its_own() {
+        let conn = seeded();
+        own(&conn, "bolt", "nonfoil", 2, None);
+        let id = new_trade(&conn);
+        add_trade_lines(
+            &conn,
+            id,
+            MINE,
+            &[input("bolt", "nonfoil", 1, "collection")],
+        )
+        .unwrap();
+        let line = line_id(&conn, id, MINE, "bolt", "nonfoil");
+        let step = |quantity| {
+            update_trade_line(
+                &conn,
+                line,
+                &TradeLineChange {
+                    quantity: Some(quantity),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        };
+
+        step(2);
+        assert_eq!(
+            sourced(&conn, id, MINE),
+            [row("bolt", "nonfoil", 2, "collection")],
+            "up to what the collection holds, the line is raised"
+        );
+
+        step(3);
+        assert_eq!(
+            sourced(&conn, id, MINE),
+            [
+                row("bolt", "nonfoil", 2, "collection"),
+                row("bolt", "nonfoil", 1, "search"),
+            ],
+            "the copy past it is a line of its own"
+        );
+
+        step(5);
+        assert_eq!(
+            sourced(&conn, id, MINE),
+            [
+                row("bolt", "nonfoil", 2, "collection"),
+                row("bolt", "nonfoil", 4, "search"),
+            ],
+            "and the next press raises that line rather than making a third"
+        );
+
+        step(1);
+        assert_eq!(
+            sourced(&conn, id, MINE),
+            [
+                row("bolt", "nonfoil", 1, "collection"),
+                row("bolt", "nonfoil", 4, "search"),
+            ],
+            "stepping down lowers the collection's line and leaves the other alone"
+        );
+    }
+
+    /// The same split for an add: a collection input past the copies the collection has, and a
+    /// searched input that would otherwise fold into the collection's line. A binder's copies
+    /// count with the root's. Their side has one grain whatever the source.
+    #[test]
+    fn an_add_keeps_the_collections_line_to_the_copies_the_collection_has() {
+        let conn = seeded();
+        let folder = binder(&conn, "Binder");
+        own(&conn, "bolt", "nonfoil", 1, None);
+        own(&conn, "bolt", "nonfoil", 1, Some(folder));
+        let id = new_trade(&conn);
+        add_trade_lines(
+            &conn,
+            id,
+            MINE,
+            &[
+                input("bolt", "nonfoil", 3, "collection"),
+                input("bolt", "nonfoil", 1, "search"),
+                input("bolt", "nonfoil", 1, "collection"),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            sourced(&conn, id, MINE),
+            [
+                row("bolt", "nonfoil", 2, "collection"),
+                row("bolt", "nonfoil", 3, "search"),
+            ]
+        );
+
+        // A copy the collection holds nothing of is no collection line at all.
+        add_trade_lines(
+            &conn,
+            id,
+            MINE,
+            &[input("goyf", "nonfoil", 1, "collection")],
+        )
+        .unwrap();
+        assert_eq!(
+            sourced(&conn, id, MINE)[2],
+            row("goyf", "nonfoil", 1, "search")
+        );
+
+        add_trade_lines(
+            &conn,
+            id,
+            THEIRS,
+            &[
+                input("bolt", "nonfoil", 1, "search"),
+                input("bolt", "nonfoil", 1, "scan"),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            side(&conn, id, THEIRS),
+            [("bolt".to_owned(), "nonfoil".to_owned(), 2)]
+        );
+    }
+
+    /// A line whose copies have since left the collection is not shrunk by a press on `+`: only
+    /// what the press adds moves to the other line.
+    #[test]
+    fn a_press_never_takes_back_what_the_collections_line_already_held() {
+        let conn = seeded();
+        own(&conn, "bolt", "nonfoil", 3, None);
+        let id = new_trade(&conn);
+        add_trade_lines(
+            &conn,
+            id,
+            MINE,
+            &[input("bolt", "nonfoil", 3, "collection")],
+        )
+        .unwrap();
+        let entry: i64 = conn
+            .query_row("SELECT id FROM collection_entries", [], |r| r.get(0))
+            .unwrap();
+        crate::collection::delete_entry(&conn, entry).unwrap();
+        update_trade_line(
+            &conn,
+            line_id(&conn, id, MINE, "bolt", "nonfoil"),
+            &TradeLineChange {
+                quantity: Some(4),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            sourced(&conn, id, MINE),
+            [
+                row("bolt", "nonfoil", 3, "collection"),
+                row("bolt", "nonfoil", 1, "search"),
+            ]
+        );
+    }
+
+    /// A finish serves the collection's line before the other line for the same printing and
+    /// finish, wherever the two stand: the copies past the collection take only what is left.
+    #[test]
+    fn a_finish_takes_for_the_collections_line_first() {
+        let conn = seeded();
+        own(&conn, "bolt", "nonfoil", 2, None);
+        let id = new_trade(&conn);
+        put(&conn, id, MINE, "bolt", "nonfoil", 1);
+        add_trade_lines(
+            &conn,
+            id,
+            MINE,
+            &[input("bolt", "nonfoil", 4, "collection")],
+        )
+        .unwrap();
+        assert_eq!(
+            sourced(&conn, id, MINE),
+            [
+                row("bolt", "nonfoil", 3, "search"),
+                row("bolt", "nonfoil", 2, "collection"),
+            ]
+        );
+        let done = finish_trade(&conn, id, &ALL).unwrap();
+        assert_eq!(done.removed_from_collection, 2);
+        assert_eq!(held(&conn, "bolt", "nonfoil", None), 0);
+    }
+
     #[test]
     fn an_edit_onto_another_line_folds_the_two_into_the_edited_one() {
         let conn = seeded();
@@ -2364,6 +2808,92 @@ mod tests {
             ]
         );
         assert_eq!(line_id(&conn, id, MINE, "goyf", "nonfoil"), theirs);
+    }
+
+    /// A swap puts every line on the other side whole — the same printing, finish, quantity and
+    /// place — leaves the percentages where they were, and needs the trade open and there.
+    #[test]
+    fn swapping_sides_moves_every_line_across_and_nothing_else() {
+        let conn = seeded();
+        let id = new_trade(&conn);
+        put(&conn, id, MINE, "bolt", "foil", 2);
+        put(&conn, id, THEIRS, "goyf", "nonfoil", 1);
+        put(&conn, id, MINE, "charm", "foil", 3);
+        // The same printing and finish on both sides: a swap must not fold them.
+        put(&conn, id, THEIRS, "bolt", "foil", 4);
+        set_trade_rate(&conn, id, MINE, 80).unwrap();
+        let before = trade(&conn, id);
+
+        swap_trade_sides(&conn, id).unwrap();
+        let after = trade(&conn, id);
+        assert_eq!(
+            side(&conn, id, MINE),
+            [
+                ("goyf".to_owned(), "nonfoil".to_owned(), 1),
+                ("bolt".to_owned(), "foil".to_owned(), 4),
+            ]
+        );
+        assert_eq!(
+            side(&conn, id, THEIRS),
+            [
+                ("bolt".to_owned(), "foil".to_owned(), 2),
+                ("charm".to_owned(), "foil".to_owned(), 3),
+            ]
+        );
+        assert_eq!(
+            after.lines.iter().map(|l| l.id).collect::<Vec<_>>(),
+            before.lines.iter().map(|l| l.id).collect::<Vec<_>>(),
+            "the same lines, in the same order"
+        );
+        assert_eq!((after.rate_mine, after.rate_theirs), (80, 100));
+
+        swap_trade_sides(&conn, id).unwrap();
+        assert_eq!(
+            trade(&conn, id)
+                .lines
+                .iter()
+                .map(|l| (l.id, l.side.clone()))
+                .collect::<Vec<_>>(),
+            before
+                .lines
+                .iter()
+                .map(|l| (l.id, l.side.clone()))
+                .collect::<Vec<_>>(),
+            "twice is where it started"
+        );
+
+        // The reader's collection line and their line past it for one printing and finish are
+        // one line on their side: the first in the order takes the other's copies.
+        let pair = new_trade(&conn);
+        put(&conn, pair, THEIRS, "goyf", "nonfoil", 1);
+        own(&conn, "bolt", "foil", 2, None);
+        add_trade_lines(&conn, pair, MINE, &[input("bolt", "foil", 2, "collection")]).unwrap();
+        put(&conn, pair, MINE, "bolt", "foil", 3);
+        assert_eq!(
+            side(&conn, pair, MINE).len(),
+            2,
+            "two lines on the reader's side"
+        );
+        let first = line_id(&conn, pair, MINE, "bolt", "foil");
+        swap_trade_sides(&conn, pair).unwrap();
+        assert_eq!(
+            side(&conn, pair, THEIRS),
+            [("bolt".to_owned(), "foil".to_owned(), 5)]
+        );
+        assert_eq!(line_id(&conn, pair, THEIRS, "bolt", "foil"), first);
+        assert_eq!(
+            side(&conn, pair, MINE),
+            [("goyf".to_owned(), "nonfoil".to_owned(), 1)]
+        );
+
+        let empty = new_trade(&conn);
+        swap_trade_sides(&conn, empty).unwrap();
+        assert!(trade(&conn, empty).lines.is_empty());
+
+        archive_trade(&conn, id).unwrap();
+        assert_eq!(swap_trade_sides(&conn, id).unwrap_err(), NOT_OPEN);
+        delete_trade(&conn, id).unwrap();
+        assert_eq!(swap_trade_sides(&conn, id).unwrap_err(), GONE);
     }
 
     /// 50 to 150 in steps of 5, per side, and nothing is rounded into range.
@@ -3404,6 +3934,7 @@ mod tests {
             remove_trade_line(&conn, line).unwrap_err(),
             finish_trade(&conn, id, &ALL).unwrap_err(),
             archive_trade(&conn, id).unwrap_err(),
+            swap_trade_sides(&conn, id).unwrap_err(),
         ];
         for refusal in refusals {
             assert_eq!(refusal, NOT_OPEN);

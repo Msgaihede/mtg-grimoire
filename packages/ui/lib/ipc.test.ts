@@ -77,6 +77,8 @@ import setCompletionRsDesktop from "../../../apps/desktop/src-tauri/src/set_comp
 import shareRs from "../../../apps/desktop/src-tauri/src/share/commands.rs?raw";
 import shelffoldsRsCore from "../../../crates/grimoire-core/src/shelffolds.rs?raw";
 import shelffoldsRsDesktop from "../../../apps/desktop/src-tauri/src/shelffolds/mod.rs?raw";
+import searchwidthRsCore from "../../../crates/grimoire-core/src/searchwidth.rs?raw";
+import searchwidthRsDesktop from "../../../apps/desktop/src-tauri/src/searchwidth/mod.rs?raw";
 import stackhideRsCore from "../../../crates/grimoire-core/src/stackhide.rs?raw";
 import stackhideRsDesktop from "../../../apps/desktop/src-tauri/src/stackhide/mod.rs?raw";
 import startupRs from "../../../apps/desktop/src-tauri/src/startup.rs?raw";
@@ -207,6 +209,7 @@ const searchRs = searchRsCore + "\n" + searchRsDesktop;
 const setCompletionRs = setCompletionRsCore + "\n" + setCompletionRsDesktop;
 const shelffoldsRs = shelffoldsRsCore + "\n" + shelffoldsRsDesktop;
 const stackhideRs = stackhideRsCore + "\n" + stackhideRsDesktop;
+const searchwidthRs = searchwidthRsCore + "\n" + searchwidthRsDesktop;
 const startviewRs = startviewRsCore + "\n" + startviewRsDesktop;
 const stickyNotesRs = stickyNotesRsCore + "\n" + stickyNotesRsDesktop;
 const syncCommandsRs = syncCommandsRsCore + "\n" + syncCommandsRsDesktop;
@@ -846,6 +849,36 @@ describe("ipc argument names match the Rust command signatures", () => {
     declares("set_stack_hidden", "category_id");
     declares("set_stack_hidden", "hidden");
     for (const registered of ["stackhide::hidden_stacks,", "stackhide::set_stack_hidden,"]) {
+      expect(desktopRs).toContain(registered);
+    }
+  });
+
+  /**
+   * The deck search column's width (issue #932) — the deck's id rides both commands, and the
+   * write names the width. Read from the Rust source rather than trusted, like the hidden stacks.
+   */
+  it("sends the deck search width under the names its commands declare", async () => {
+    expect(searchwidthRs.length, "searchwidth.rs was not read").toBeGreaterThan(1_000);
+
+    invoke.mockResolvedValue(512);
+    await expect(ipc.deckSearchWidth(4)).resolves.toBe(512);
+    expect(invoke).toHaveBeenLastCalledWith("deck_search_width", { deckId: 4 });
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.setDeckSearchWidth(4, 512);
+    expect(invoke).toHaveBeenLastCalledWith("set_deck_search_width", { deckId: 4, width: 512 });
+
+    const declares = (command: string, param: string) =>
+      expect(searchwidthRs, `\`${command}\` declares no \`${param}\``).toMatch(
+        new RegExp(`fn ${command}\\([^)]*\\b${param}\\s*:`, "s"),
+      );
+    declares("deck_search_width", "deck_id");
+    declares("set_deck_search_width", "deck_id");
+    declares("set_deck_search_width", "width");
+    for (const registered of [
+      "searchwidth::deck_search_width,",
+      "searchwidth::set_deck_search_width,",
+    ]) {
       expect(desktopRs).toContain(registered);
     }
   });
@@ -3650,8 +3683,9 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
-   * **The trade builder's thirteen** (user schema v63, issue #363), pinned on the day they were
-   * written — one case, because they are one page's worth of commands.
+   * **The trade builder's fourteen** (user schema v63, issue #363; `trade_swap_sides`, issue
+   * #936), pinned on the day they were written — one case, because they are one page's worth of
+   * commands.
    *
    * **`trade_update_line` and `trade_remove_line` are the two worth the case.** Every other
    * command here names a *trade* and sends `id`; these two name a *line* and send `lineId`,
@@ -3737,6 +3771,8 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(invoke).toHaveBeenLastCalledWith("trade_finish", { id: 4, options });
 
     invoke.mockResolvedValue(undefined);
+    await ipc.tradeSwapSides(4);
+    expect(invoke).toHaveBeenLastCalledWith("trade_swap_sides", { id: 4 });
     await ipc.tradeArchive(4);
     expect(invoke).toHaveBeenLastCalledWith("trade_archive", { id: 4 });
     await ipc.tradeReopen(4);
@@ -3769,6 +3805,7 @@ describe("ipc argument names match the Rust command signatures", () => {
       "trade_add_lines",
       "trade_update_line",
       "trade_remove_line",
+      "trade_swap_sides",
       "trade_finish",
       "trade_archive",
       "trade_reopen",

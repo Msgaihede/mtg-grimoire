@@ -32,6 +32,7 @@ import {
   EMPTY_SELECTION,
   readModifiers,
   selectEverything,
+  selectStacks as widenToStacks,
   settleSelection,
   type Selection,
 } from "./multiSelect";
@@ -103,6 +104,13 @@ export interface CardSelectionApi {
    * press ends any other set.
    */
   selectAll: () => void;
+  /**
+   * Ctrl+A on a surface drawn as stacks — every card of each stack that holds a picked one, and
+   * nothing when nothing is picked. `multiSelect.ts`'s `selectStacks` is the rule.
+   *
+   * `stacks` are the keys of each stack the reader can see, in screen order.
+   */
+  selectStacks: (stacks: readonly (readonly string[])[]) => void;
   /**
    * Whether the set is "all of this list" rather than a list of presses.
    *
@@ -189,6 +197,14 @@ export function useCardSelection(
     if (whole !== mine) setCardSelection({ scope, ...whole });
   }, [mine, order, list, scope, setCardSelection]);
 
+  const selectStacks = useCallback(
+    (stacks: readonly (readonly string[])[]) => {
+      const widened = widenToStacks(mine, stacks);
+      if (widened !== mine) setCardSelection({ scope, ...widened });
+    },
+    [mine, scope, setCardSelection],
+  );
+
   return {
     selected,
     keys,
@@ -197,6 +213,7 @@ export function useCardSelection(
     dragsAll,
     clear,
     selectAll,
+    selectStacks,
     all: mine.allOf !== undefined,
   };
 }

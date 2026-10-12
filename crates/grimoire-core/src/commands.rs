@@ -979,6 +979,12 @@ commands! {
         store(conn, &section, open)
     };
 
+    // searchwidth
+    read deck_search_width in searchwidth(deck_id: i64) = |conn| Ok(stored(conn, deck_id));
+    write set_deck_search_width in searchwidth(deck_id: i64, width: u32) = |conn| {
+        store(conn, deck_id, width)
+    };
+
     // set_completion
     read set_completion in set_completion() = |conn| set_completion_of(conn);
 
@@ -1164,6 +1170,7 @@ commands! {
         update_trade_line(conn, line_id, &change)
     };
     write trade_remove_line in trade(line_id: i64) = |conn| remove_trade_line(conn, line_id);
+    write trade_swap_sides in trade(id: i64) = |conn| swap_trade_sides(conn, id);
     owned trade_finish in trade(id: i64, options: TradeFinishOptions) = |conn| {
         finish_trade(conn, id, &options)
     };

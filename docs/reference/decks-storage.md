@@ -171,6 +171,11 @@ preferred_finish`'s nullability one table over.
     foil — the reader moved a card, or chose a printing, not an object. `deck_set_card_finish` is
     the one command whose subject it is, and the only one that checks the target against
     `cards.finishes`.
+  - **An add writes one when the docked search's Finish filter promises it** (issue #933). One
+    premium chip alone (`Foil` or `Etched`) means every row on that wall is published in that
+    finish, so the panel's Add button and a tile's drag both send it (`filteredFinish` in
+    `DeckSearchPanel.tsx`), and the tiles wear its sheen. `Nonfoil`, no chip, or two chips send
+    the regular copy. The sidebar's Decks entry still adds the regular copy.
   - **One thing did not change and one did, and the second looked as though it never would.**
     `engine.ts` still counts copies by card **name** and sums across rows, so a foil row and a
     plain row are two copies of one card. Owned/missing is the one that moved: through

@@ -9,6 +9,7 @@ import {
   defaultFinishOptions,
   fromDecks,
   givenNote,
+  holdingOf,
   outcomeSentence,
   receivedNote,
   unwishNote,
@@ -186,10 +187,13 @@ describe("words", () => {
 });
 
 describe("finishing", () => {
+  let nextId = 1;
   const fl = (
     side: "mine" | "theirs",
     quantity: number,
     over: Partial<{
+      cardId: string;
+      source: "collection" | "search" | "scan";
       owned: number;
       ownedInDecks: number;
       deckNames: string[];
@@ -197,6 +201,11 @@ describe("finishing", () => {
       name: string;
     }> = {},
   ) => ({
+    id: nextId,
+    // A printing of its own unless the test names one: two lines share a printing only on purpose.
+    cardId: `card-${nextId++}`,
+    finish: "nonfoil" as const,
+    source: "search" as const,
     side,
     quantity,
     owned: 0,
@@ -297,6 +306,36 @@ describe("finishing", () => {
     expect(givenNote([fl("mine", 1, { ownedInDecks: 1, deckNames: ["Serah"] })])).toBe(
       "1 card. It is in your collection.",
     );
+  });
+
+  /**
+   * Issue #935: the copies asked for past the collection are a second line for the same printing
+   * and finish, carrying the same facts. Read raw, it would claim the copies the collection's line
+   * already holds; a finish serves the collection's line first, and so does every figure.
+   */
+  it("counts two lines for one printing as one claim on the collection, the collection's first", () => {
+    const facts = { cardId: "ring", owned: 1, ownedInDecks: 1, deckNames: ["Serah"] };
+    // Written after the line it is past, and before it: the order a finish serves is the same.
+    const past = fl("mine", 3, facts);
+    const own = fl("mine", 2, { ...facts, source: "collection" });
+    const lines = [past, own];
+
+    expect(holdingOf(own, lines)).toBe(own);
+    expect(holdingOf(past, lines)).toMatchObject({ owned: 0, ownedInDecks: 0 });
+    expect(givenNote(lines)).toBe(
+      "5 cards. 2 of them are in your collection; the rest are left alone.",
+    );
+    expect(deckNote(lines)).toBe(
+      "1 of them comes out of a deck: Serah. That deck will be short of it.",
+    );
+
+    // Two lines of one source are served in their order on the page.
+    const first = fl("mine", 1, { ...facts, owned: 2 });
+    const second = fl("mine", 2, { ...facts, owned: 2 });
+    expect(holdingOf(second, [first, second])).toMatchObject({ owned: 1, ownedInDecks: 1 });
+    // Their side claims nothing, and is claimed from by nothing.
+    const theirs = fl("theirs", 1, facts);
+    expect(holdingOf(theirs, [own, theirs])).toBe(theirs);
   });
 
   it("says when a finish took cards out of decks", () => {

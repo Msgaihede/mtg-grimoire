@@ -128,6 +128,19 @@ describe("dragData / readDragData", () => {
     }
   });
 
+  /**
+   * Issue #933: the docked panel's tile carries the finish its Finish filter commits to, and
+   * anything that is not one of the two premium words reads as the regular copy — absent, as
+   * every other source sends it. A `"card"` never carries one.
+   */
+  it("carries a search payload's premium finish, and drops anything else", () => {
+    const foil: DragPayload = { ...SEARCH, finish: "foil" };
+    expect(readDragData(dragData(foil))).toEqual(foil);
+    expect(readDragData({ ...dragData(SEARCH), finish: "nonfoil" })).toEqual(SEARCH);
+    expect(readDragData({ ...dragData(SEARCH), finish: "shiny" })).toEqual(SEARCH);
+    expect(readDragData({ ...dragData(CARD), finish: "foil" })).toEqual(CARD);
+  });
+
   /** A search payload carries no category, and one that arrives with a `fromCategoryId` is
    *  still a search payload — the kind decides what is read, so a stray field cannot change a
    *  write. */
@@ -144,6 +157,23 @@ describe("dropWrite", () => {
       write: "add",
       cardId: "c-bolt",
       categoryId: SIDE,
+    });
+  });
+
+  /** A search result that carried a finish adds that object, into a pile or under `Auto`. */
+  it("adds the finish a search result carried", () => {
+    const etched: DragPayload = { ...SEARCH, finish: "etched" };
+    expect(dropWrite(etched, { kind: "category", categoryId: SIDE })).toEqual({
+      write: "add",
+      cardId: "c-bolt",
+      categoryId: SIDE,
+      finish: "etched",
+    });
+    expect(dropWrite(etched, { kind: "auto" })).toEqual({
+      write: "auto-add",
+      cardId: "c-bolt",
+      typeLine: "Instant",
+      finish: "etched",
     });
   });
 

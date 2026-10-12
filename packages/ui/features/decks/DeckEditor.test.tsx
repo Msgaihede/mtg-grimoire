@@ -8379,6 +8379,45 @@ describe("DeckEditor multi-select", () => {
     expect(useAppStore.getState().selectedCardId).toBe("c-Lightning Bolt");
   });
 
+  /**
+   * **Ctrl+A widens the set to its stacks** — issue #938. A picked card in the main deck brings
+   * the rest of its stack with it and leaves the Sideboard, which holds no pick, alone.
+   */
+  it("picks every card of each stack holding a pick on Ctrl+A", async () => {
+    deckGet.mockResolvedValue(
+      detail({}, [
+        bolt(),
+        card({ name: "Bear", typeLine: "Creature — Bear", quantity: 2 }),
+        card({ name: "Sol Ring", categoryId: SIDE, quantity: 1 }),
+      ]),
+    );
+    await open();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    expect(marked()).toHaveLength(1);
+
+    await user.keyboard("{Control>}a{/Control}");
+
+    await waitFor(() => expect(useAppStore.getState().cardSelection?.keys).toHaveLength(2));
+    expect(useAppStore.getState().cardSelection?.keys).toEqual([
+      deckCardSlot(MAIN, "c-Lightning Bolt", null),
+      deckCardSlot(MAIN, "c-Bear", null),
+    ]);
+
+    // A pick in the Sideboard too, and the press takes that stack as well.
+    await pressWith("Sol Ring", { ctrl: true });
+    await user.keyboard("{Control>}a{/Control}");
+    await waitFor(() => expect(useAppStore.getState().cardSelection?.keys).toHaveLength(3));
+  });
+
+  /** And from nothing it picks nothing: `Ctrl+A`, `Delete` must not be a deck emptied in two keys. */
+  it("picks nothing on Ctrl+A when nothing is picked", async () => {
+    await open();
+    await userEvent.setup().keyboard("{Control>}a{/Control}");
+    expect(useAppStore.getState().cardSelection?.keys ?? []).toEqual([]);
+    expect(marked()).toHaveLength(0);
+  });
+
   /** And a plain click puts the set back down to one, which is what keeps the ring and the pane
    *  agreeing after a reader has finished with a selection. */
   it("collapses the set on a plain click", async () => {
