@@ -6927,11 +6927,18 @@ function matchesCardFilters(
   // playable values the format filter above accepts, so asking the blob directly is the same
   // question: is this card legal or restricted *anywhere*. An orphan fails it, as it fails
   // format, because `NULL != 0` is NULL.
+  //
+  // **An unreleased printing passes too** (issue #940): Scryfall marks a previewed card legal
+  // nowhere until its release day, so `filters::unreleased_sql` ORs a date after today beside
+  // the mask. Today is the fake's clock, as `upcoming_sets` below reads it.
   if (f.playableOnly ?? false) {
+    const unreleased = card !== null && card.releasedAt > dayOf(CLOCK_BASE);
     const legalities = parseJson(card?.legalities ?? null);
-    if (typeof legalities !== "object" || legalities === null) return false;
-    const values = Object.values(legalities as Record<string, unknown>);
-    if (!values.some((v) => v === "legal" || v === "restricted")) return false;
+    const values =
+      typeof legalities === "object" && legalities !== null
+        ? Object.values(legalities as Record<string, unknown>)
+        : [];
+    if (!unreleased && !values.some((v) => v === "legal" || v === "restricted")) return false;
   }
 
   // **Both taxonomies are matched against the CLOSURE, never the direct taggings.** The bulk
@@ -7187,6 +7194,7 @@ function toCardSummary(db: FakeDb, c: FakeCard, mp: MarketplaceId, forDeck?: num
     // with itself. A plain boolean, unlike `DeckCard.gameChanger`: a search row came back
     // from `cards`, so it can never be the orphan that field's `null` is for.
     gameChanger: c.gameChanger,
+    releasedAt: c.releasedAt,
     ownedQuantity: ownedOfPrinting(db, c.id, forDeck),
     wishlisted: wishlisted(db, c),
     // Uncollapsed, a row *is* a printing: it stands for one, and its "range" is its own

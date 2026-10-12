@@ -20,6 +20,7 @@ import { TagSearchPanel } from "@/features/tags/TagSearchPanel";
 import { useTagSelection } from "@/features/tags/useTagSelection";
 import { parseFinishes, soleFinish } from "@/lib/finish";
 import { finishTreatments } from "@/lib/treatment";
+import { unreleasedLabel, unreleasedStamp } from "@/lib/unreleased";
 import { WALL_CARD_VARIANT } from "@/lib/images";
 import { ipc, ipcError, type CardSummary } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
@@ -94,6 +95,15 @@ function columnsFor(
             annotates. Unlike the finish it needs no `soleFinish`-style derivation — the
             backend has already flattened the column's NULL into `false`. */}
           {card.gameChanger && <GameChangerMark />}
+          {/* The words the wall's stamp stands for — the table has no art to stamp. */}
+          {tileUnreleased(card) && (
+            <span
+              className="shrink-0 rounded-sm border border-accent/60 px-1 text-[10px] font-semibold uppercase leading-4 tracking-wide text-accent"
+              {...tip(unreleasedLabel(card.releasedAt ?? ""))}
+            >
+              Unreleased
+            </span>
+          )}
           {/* What a collapsed row stands for. Drawn only past one, because "×1 printings" on
             the 17 588 cards that have a single printing — and on *every* row once All
             printings is on — would be a column of noise saying nothing. */}
@@ -257,6 +267,17 @@ const tileTreatment = (card: CardSummary) =>
  * and the pair of callbacks there is genuinely a different pair.
  */
 const tileGameChanger = (card: CardSummary) => card.gameChanger;
+
+/**
+ * The stamp across a result whose printing is **not out yet** — its set code and release date,
+ * diagonally over the art (issue #940). The search's default row keeps these printings, which
+ * are legal nowhere until their release day, so the wall has to say which ones they are.
+ *
+ * Module scope for {@link tileGameChanger}'s reason, and shared with
+ * the deck builder's search panel: a spoiler stamped on one wall and bare on another would be
+ * the mark meaning something about the wall rather than the card.
+ */
+export const tileUnreleased = (card: CardSummary) => unreleasedStamp(card.setCode, card.releasedAt);
 
 /**
  * The card a right-click on a result is about — the same object for a tile and for a table row,
@@ -794,6 +815,8 @@ function Results({ search }: { search: CardSearch }) {
             // The crown, in the same chip as that mark. Held still at module scope like every
             // other callback this wall is handed.
             gameChanger={tileGameChanger}
+            // A spoiler's set and release date, stamped across its art.
+            watermark={tileUnreleased}
             // What the chin says one copy costs — **the spread**, because a collapsed row stands
             // for every printing that got past the filters and one figure would be a claim about
             // one of them. `priceRange` is the helper the table's Price column is built from, so

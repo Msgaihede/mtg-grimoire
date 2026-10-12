@@ -87,6 +87,20 @@ using it.
   build time from the stored integer rather than folded out of `CardIndex::formats`, so it stays
   right for a bit this build has no name for. It cannot move a **format** count in either
   direction: every `formats[k]` is a subset of it.
+- **An unreleased printing is playable** (issue #940). Scryfall marks a previewed card legal
+  nowhere until its release day, so the mask alone kept every spoiler off the search view's
+  default row. Both halves now read `legal_mask != 0 OR released_at > date('now')`
+  (`filters::unreleased_sql`, one spelling): the SQL clause, and the `playable` bitset, which
+  evaluates the same expression in SQLite at build time. `released_at` is in
+  `idx_cards_collapse`, so the browse stays a covering scan. Two consequences, both accepted:
+  "today" in the index is the build's, so a printing that comes out between two builds is counted
+  until the next one (by which time a sync has given it a mask); and an upcoming set's **tokens**
+  are legal nowhere *and* future-dated, so they appear too — excluding them needs `layout`, which
+  is in no index. The rows carry `releasedAt` (`CardSummary`), and the walls stamp an unreleased
+  printing with its set code and date diagonally over the art (`UnreleasedWatermark` in
+  `components/CardArt.tsx`, `tileUnreleased` in `SearchPage.tsx`); the table's Name cell says
+  *Unreleased*. Whether a date is in the future is the page's call, against the reader's local
+  day (`lib/unreleased.ts`).
 - **What `playableOnly` hides, measured in the shipped window 2026-08-14** (`pnpm tauri dev`,
   a **debug** build, live 116 703-printing corpus): of **107 346** paper printings, **9 032** are
   legal in no format — 8.4% — leaving **98 314** the search offers by default. Both figures are

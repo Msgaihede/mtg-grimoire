@@ -54,6 +54,7 @@ function printing(
     finishes: '["nonfoil"]',
     promoTypes: null,
     gameChanger: false,
+    releasedAt: null,
     ownedQuantity: 0,
     wishlisted: false,
     printings: 1,

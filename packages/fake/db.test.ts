@@ -705,9 +705,11 @@ describe("the playable filter", () => {
     expect(seen({})).toHaveLength(57);
     expect(seen({ playableOnly: false })).toHaveLength(57);
 
-    // 57 paper rows less eleven legal nowhere: the four named above and the seven tokens.
+    // 57 paper rows less eleven legal nowhere — the four named above and the seven tokens — and
+    // one of those tokens back: the Treasure is dated after the fake's today, and a printing not
+    // out yet is kept whatever its legality says (issue #940; `filters::unreleased_sql`).
     const playable = seen({ playableOnly: true });
-    expect(playable).toHaveLength(46);
+    expect(playable).toHaveLength(47);
     for (const name of UNPLAYABLE) expect(playable).not.toContain(name);
     // `restricted` counts as playable — a Vintage search that hid Black Lotus would be wrong.
     expect(playable).toContain("Black Lotus");
@@ -799,7 +801,8 @@ describe("facet counts", () => {
     const on = facets(makeDb(), { playableOnly: true });
 
     expect(off.total).toBe(57);
-    expect(on.total).toBe(46);
+    // 46 playable, and the Treasure that is not out yet (issue #940).
+    expect(on.total).toBe(47);
     // Chip 8 is open-ended and loses `Kozilek, Compleated` (cmc 10), the one of the eleven
     // unplayable rows with a cost at all — every token is mana value 0.
     expect(on.manaValues["8"]).toBe(off.manaValues["8"] - 1);

@@ -347,6 +347,14 @@ export interface CardSummary {
    */
   gameChanger: boolean;
   /**
+   * The printing's release date, `YYYY-MM-DD`, or `null` where the corpus has none.
+   *
+   * Here so the wall can stamp a card that is **not out yet** (issue #940) with its set and
+   * this date — `unreleasedStamp` in `@/lib/unreleased` draws the conclusion. Collapsed, it is
+   * the representative printing's, which is the one whose art the tile shows.
+   */
+  releasedAt: string | null;
+  /**
    * Copies the collection holds of **this printing, across every finish and condition** —
    * a badge on a search result, and finish-*blind*.
    *

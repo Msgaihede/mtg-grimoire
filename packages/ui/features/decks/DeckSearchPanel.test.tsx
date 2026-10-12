@@ -137,6 +137,7 @@ const BOLT: CardSummary = {
   priceLow: 400.5,
   priceHigh: 400.5,
   gameChanger: false,
+  releasedAt: null,
 };
 
 /**

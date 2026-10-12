@@ -84,6 +84,7 @@ const BOLT: CardSummary = {
   printings: 1,
   priceLow: 400.5,
   priceHigh: 400.5,
+  releasedAt: null,
 };
 
 const hit = (over: Partial<TagHit> & Pick<TagHit, "slug" | "label">): TagHit => ({

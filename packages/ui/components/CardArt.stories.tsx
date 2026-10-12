@@ -222,6 +222,27 @@ export const GameChangerFoil: Story = {
  * image lands in, so a throttled screen reads as a list of cards rather than a wall of
  * broken-image icons.
  */
+/**
+ * A printing **not out yet** (issue #940): its set code and release date stamped corner to corner
+ * over the art, under the finish chip. Drawn here over `mp2 8`, a foil-only printing, so the
+ * stamp is seen beside the sheen and the chip it must not hide; the stamp's text is the story's,
+ * not the printing's — the search derives it with `unreleasedStamp` from a row's `releasedAt`.
+ */
+export const Unreleased: Story = {
+  args: {
+    cardId: printing("mp2", "8").id,
+    name: "Consecrated Sphinx",
+    finish: soleFinish(printing("mp2", "8").finishes),
+    watermark: { set: "TLA", date: "2026-11-14" },
+  },
+  play: async ({ canvasElement }) => {
+    const stamp = canvasElement.querySelector("[data-unreleased-watermark]");
+    await expect(stamp).toHaveTextContent("TLA2026-11-14");
+    await expect(stamp).toHaveAttribute("aria-hidden", "true");
+    await expect(canvasElement.querySelector("[data-card-marks]")).not.toBeNull();
+  },
+};
+
 export const NoCard: Story = {
   args: { cardId: null, name: "Lightning Bolt" },
   play: async ({ canvasElement }) => {
