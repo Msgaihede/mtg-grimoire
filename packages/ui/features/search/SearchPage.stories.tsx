@@ -660,7 +660,7 @@ export const TagSidebar: Story = {
   args: { view: "grid" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await canvas.findByText("37 cards");
+    await canvas.findByText("38 cards");
     await userEvent.click(await canvas.findByRole("button", { name: "Expand tag search" }));
     await userEvent.click(
       await canvas.findByRole("button", { name: /^Landscape, art tag, \d/ }, { timeout: 5000 }),
@@ -668,6 +668,6 @@ export const TagSidebar: Story = {
     await expect(
       await canvas.findByRole("button", { name: /^Landscape, art tag, included/ }),
     ).toBeInTheDocument();
-    await waitFor(() => expect(canvas.queryByText("37 cards")).not.toBeInTheDocument());
+    await waitFor(() => expect(canvas.queryByText("38 cards")).not.toBeInTheDocument());
   },
 };
