@@ -77,6 +77,7 @@ export function CardArt({
   finish = null,
   treatments,
   gameChanger = false,
+  watermark = null,
   loading,
   className,
 }: {
@@ -160,6 +161,15 @@ export function CardArt({
    * column (a deck row is one, an orphan is another) must draw nothing rather than guess.
    */
   gameChanger?: boolean;
+  /**
+   * The stamp across a printing that is **not out yet** — its set code and release date,
+   * diagonally, from {@link UnreleasedWatermark}. `null` (the default) draws nothing.
+   *
+   * Derived by the caller with `unreleasedStamp` from `@/lib/unreleased`, for `finish`'s reason:
+   * only a printing-shaped row knows its date, and a frame that guessed would stamp the wrong
+   * cards (issue #940).
+   */
+  watermark?: { set: string; date: string } | null;
   /**
    * The browser's own intersection gate on this frame's `<img>`. **Absent by default, which
    * emits no attribute at all** — the argued position, not an omission; see where it is passed
@@ -263,8 +273,68 @@ export function CardArt({
         </span>
       )}
 
+      {/* Under the overlay, so the finish chip stays readable over the stamp's letters. */}
+      {watermark && <UnreleasedWatermark set={watermark.set} date={watermark.date} />}
       <FoilOverlay finish={finish} treatments={treatments} gameChanger={gameChanger} />
     </span>
+  );
+}
+
+/**
+ * The diagonal angle of a 5:7 card, corner to corner — `atan(7 / 5)`, in degrees.
+ *
+ * The stamp runs bottom-left to top-right along it, so the longest line the frame holds is the
+ * one it is drawn on, at every size.
+ */
+const CARD_DIAGONAL_DEG = (Math.atan2(7, 5) * 180) / Math.PI;
+
+/**
+ * The stamp across an **unreleased** printing (issue #940): its set code, large, and its release
+ * date under it, corner to corner in semi-transparent heavy type.
+ *
+ * Loud on purpose, as the foil sheen is: a previewed card's art is the real card's art, and a
+ * reader scanning a wall must not take a spoiler for something they can buy today. The fill is
+ * white at half strength over a dark outline at about the same, so it reads on bright art and on
+ * dark — the sheen's `screen` trick only lightens, and vanishes on a white frame.
+ *
+ * **An SVG with a 5:7 `viewBox`, not text sized in CSS.** The frame is drawn from 60px deck rows
+ * to a 340px zoomed tile, and an SVG scales its letters with it for free — no container query,
+ * no `--mark-scale` arithmetic, and the same proportions everywhere. A long set code is squeezed
+ * into the diagonal by `textLength` rather than spilling off the corners.
+ *
+ * `aria-hidden` and `pointer-events-none` for {@link FoilOverlay}'s reasons: this sits inside the
+ * tile's button, whose accessible name must stay the card's, and must not swallow its clicks.
+ * The fact is said in words where there is room for them — the search table's Name cell.
+ */
+export function UnreleasedWatermark({ set, date }: { set: string; date: string }) {
+  // The diagonal is ~860 units long; the band near the corners is narrower than the middle,
+  // so a code past four letters is held to 620 rather than allowed its natural width.
+  const squeeze = set.length > 4 ? { textLength: 620, lengthAdjust: "spacingAndGlyphs" } : {};
+  return (
+    <svg
+      aria-hidden="true"
+      data-unreleased-watermark
+      viewBox="0 0 500 700"
+      className="pointer-events-none absolute inset-0 size-full select-none"
+    >
+      <g
+        transform={`rotate(${-CARD_DIAGONAL_DEG} 250 350)`}
+        textAnchor="middle"
+        fontWeight={900}
+        fill="rgba(255,255,255,.5)"
+        stroke="rgba(0,0,0,.45)"
+        strokeWidth={6}
+        strokeLinejoin="round"
+        paintOrder="stroke"
+      >
+        <text x={250} y={372} fontSize={190} letterSpacing={8} {...squeeze}>
+          {set}
+        </text>
+        <text x={250} y={450} fontSize={66} letterSpacing={6} strokeWidth={4}>
+          {date}
+        </text>
+      </g>
+    </svg>
   );
 }
 

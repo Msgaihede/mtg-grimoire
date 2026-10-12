@@ -153,6 +153,18 @@ pub async fn trade_finish(
     .map_err(unfinished)?
 }
 
+/// Every line onto the other side. The percentages stay where they were.
+#[tauri::command]
+pub async fn trade_swap_sides(
+    state: tauri::State<'_, Arc<AppState>>,
+    id: i64,
+) -> Result<(), String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || with_write(&state, |c| swap_trade_sides(c, id)))
+        .await
+        .map_err(unfinished)?
+}
+
 #[tauri::command]
 pub async fn trade_archive(state: tauri::State<'_, Arc<AppState>>, id: i64) -> Result<(), String> {
     let state = state.inner().clone();

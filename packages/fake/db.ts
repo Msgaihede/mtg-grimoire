@@ -507,6 +507,9 @@ export interface FakeWishlistFolder {
    * managed folders by name leaves these out, and an empty one says its own sentence.
    */
   managedTokens?: boolean;
+  /** `wishlist_folders.sync_uid`. Absent derives `wishlist-folder-uid-{id}` for a folder the
+   *  reader made and `null` for a managed one, which `capture::suppressed` leaves unminted. */
+  syncUid?: string | null;
 }
 
 /**
@@ -6915,11 +6918,18 @@ function matchesCardFilters(
   // playable values the format filter above accepts, so asking the blob directly is the same
   // question: is this card legal or restricted *anywhere*. An orphan fails it, as it fails
   // format, because `NULL != 0` is NULL.
+  //
+  // **An unreleased printing passes too** (issue #940): Scryfall marks a previewed card legal
+  // nowhere until its release day, so `filters::unreleased_sql` ORs a date after today beside
+  // the mask. Today is the fake's clock, as `upcoming_sets` below reads it.
   if (f.playableOnly ?? false) {
+    const unreleased = card !== null && card.releasedAt > dayOf(CLOCK_BASE);
     const legalities = parseJson(card?.legalities ?? null);
-    if (typeof legalities !== "object" || legalities === null) return false;
-    const values = Object.values(legalities as Record<string, unknown>);
-    if (!values.some((v) => v === "legal" || v === "restricted")) return false;
+    const values =
+      typeof legalities === "object" && legalities !== null
+        ? Object.values(legalities as Record<string, unknown>)
+        : [];
+    if (!unreleased && !values.some((v) => v === "legal" || v === "restricted")) return false;
   }
 
   // **Both taxonomies are matched against the CLOSURE, never the direct taggings.** The bulk
@@ -7175,6 +7185,7 @@ function toCardSummary(db: FakeDb, c: FakeCard, mp: MarketplaceId, forDeck?: num
     // with itself. A plain boolean, unlike `DeckCard.gameChanger`: a search row came back
     // from `cards`, so it can never be the orphan that field's `null` is for.
     gameChanger: c.gameChanger,
+    releasedAt: c.releasedAt,
     ownedQuantity: ownedOfPrinting(db, c.id, forDeck),
     wishlisted: wishlisted(db, c),
     // Uncollapsed, a row *is* a printing: it stands for one, and its "range" is its own
@@ -7756,14 +7767,28 @@ function wishlistScope(db: FakeDb, q: WishlistQuery): FakeWish[] {
  *  value it was handed back. `managedTokens` is `false` for every folder but a managed
  *  wishlist's Tokens child, which is the only row that stores it. */
 function toWishlistFolder(f: FakeWishlistFolder): WishlistFolder {
+  const managedDeckId = f.managedDeckId ?? null;
   return {
     id: f.id,
     parentId: f.parentId,
     name: f.name,
     sortOrder: f.sortOrder,
-    managedDeckId: f.managedDeckId ?? null,
+    managedDeckId,
     managedTokens: f.managedTokens ?? false,
+    syncUid: uidOfWishFolder(f),
+    managedDeckUid: managedDeckId === null ? null : fakeDeckUid(managedDeckId),
   };
+}
+
+/** {@link FakeWishlistFolder.syncUid}, derived. */
+function uidOfWishFolder(f: FakeWishlistFolder): string | null {
+  if (f.syncUid !== undefined) return f.syncUid;
+  return (f.managedDeckId ?? null) === null ? `wishlist-folder-uid-${f.id}` : null;
+}
+
+/** A deck's `decks.sync_uid` as this fake spells it — the decks here carry no uid column. */
+function fakeDeckUid(deckId: number): string {
+  return `deck-uid-${deckId}`;
 }
 
 /** `collection_folders::folder_row`, and a **copy** for {@link toWishlistFolder}'s reason.
@@ -24218,7 +24243,8 @@ export function writeHandlers(db: FakeDb) {
       // refusal about *this drawer* is the more actionable of the two.
       const held = buildRelayShare(db, mintShareId(db), args.folderUid, ownerName, args.fields, at);
       refuseIfNotSharing(db);
-      return toShareRow(commitShare(db, held, args.folderUid, args.fields, at));
+      // `held.fields`, the crate's `snap.fields`: a wishlist share switches `condition` off.
+      return toShareRow(commitShare(db, held, args.folderUid, held.fields, at));
     },
 
     /**
@@ -24239,7 +24265,7 @@ export function writeHandlers(db: FakeDb) {
       const at = stamp(db);
       const fields = shareFieldsFromNames(row.fields);
       const held = buildRelayShare(db, row.id, row.folderUid, row.ownerName, fields, at);
-      return toShareRow(commitShare(db, held, row.folderUid, fields, at));
+      return toShareRow(commitShare(db, held, row.folderUid, held.fields, at));
     },
 
     /**
@@ -24562,6 +24588,37 @@ export function writeHandlers(db: FakeDb) {
       if (!line) return;
       openTrade(db, line.tradeId);
       db.tradeLines = db.tradeLines.filter((l) => l.id !== line.id);
+    },
+
+    /**
+     * `trade::swap_trade_sides` — every line of an open trade onto the other side, whole: its
+     * printing, finish, quantity and place in the order. The percentages stay with their sides.
+     *
+     * **One fold, on their side**: the reader's collection line and their line past it for one
+     * printing and finish (issue #935) arrive as one line — the first in the order takes the
+     * other's copies, under {@link TRADE_TOO_MANY}. Worked out before anything is written, so a
+     * refused fold leaves both sides as they were.
+     */
+    trade_swap_sides: (args: { id: number }): void => {
+      refuseIfBusy(db);
+      const trade = openTrade(db, args.id);
+      const lines = linesOfTrade(db, trade.id);
+      const flipped = (l: FakeTradeLine): TradeSide => (l.side === "mine" ? "theirs" : "mine");
+      const kept = new Map<string, { line: FakeTradeLine; quantity: number }>();
+      const gone = new Set<number>();
+      for (const line of lines) {
+        if (flipped(line) !== "theirs") continue;
+        const key = `${line.cardId}|${line.finish}`;
+        const first = kept.get(key);
+        if (first === undefined) kept.set(key, { line, quantity: line.quantity });
+        else {
+          first.quantity = tradeFolded(first.quantity, line.quantity);
+          gone.add(line.id);
+        }
+      }
+      for (const line of lines) line.side = flipped(line);
+      for (const { line, quantity } of kept.values()) line.quantity = quantity;
+      db.tradeLines = db.tradeLines.filter((l) => !gone.has(l.id));
     },
 
     /**
@@ -25333,8 +25390,12 @@ const SHARE_NOT_READY = "That shared collection has not finished publishing yet.
 /** `share::snapshot::FOLDER_NOT_FOUND` — checked **first**, so a folder that is not there never
  *  reports as locked. */
 const SHARE_FOLDER_NOT_FOUND = "That folder is not in this collection.";
-/** `share::snapshot::FOLDER_NOT_SHAREABLE` — a deck's group or `Recently removed`. */
-const SHARE_FOLDER_NOT_SHAREABLE = "Only your own folders can be shared.";
+/** `share::wishlist::WISHLIST_FOLDER_NOT_FOUND` — a wishlist key nothing answers to. */
+const SHARE_WISHLIST_FOLDER_NOT_FOUND = "That folder is not in this wishlist.";
+/** `share::wishlist::WHOLE_WISHLIST_TITLE`. */
+const WHOLE_WISHLIST_TITLE = "Wishlist";
+/** `share::wishlist::PREFIX` — what every wishlist share key begins with (issue #941). */
+const WISHLIST_SHARE_PREFIX = "wishlist:";
 /** `share::snapshot::FOLDER_IS_LOCKED`. **Not {@link FOLDER_IS_LOCKED}**, which is the *delete*
  *  refusal one cabinet over and ends "before deleting it" — two presses, two sentences. */
 const SHARE_FOLDER_IS_LOCKED = "That folder is locked. Unlock it before sharing it.";
@@ -25435,13 +25496,16 @@ function shareIdIn(url: string): string | null {
  *
  * `share::snapshot::read_folders`' subtree, and it drops **locked** folders the same way that
  * query's `<LOCKED>` term does: a drawer set aside is not offered, and a sub-drawer of one is
- * not either. The `deck` and `removed` kinds never appear at all — those are the app's own
- * folders and are not the reader's to publish.
+ * not either. The `deck` and `removed` kinds travel only when **named** (issue #941) — a
+ * whole-collection share still leaves the app's own folders out.
  */
 function shareFolders(db: FakeDb, folderUid: string | null): FakeCollectionFolder[] {
   const locked = (f: FakeCollectionFolder) => collectionFolderLocked(db, f.id);
   const mine = db.collectionFolders.filter(
-    (f) => f.kind === COLLECTION_USER_KIND && !locked(f) && uidOfFolder(f) !== null,
+    (f) =>
+      (folderUid !== null || f.kind === COLLECTION_USER_KIND) &&
+      !locked(f) &&
+      uidOfFolder(f) !== null,
   );
   if (folderUid === null) return mine;
   const kept: FakeCollectionFolder[] = [];
@@ -25489,11 +25553,13 @@ function buildRelayShare(
   fields: ShareFieldsArg,
   at: number,
 ): FakeRelayShare {
+  if (folderUid?.startsWith(WISHLIST_SHARE_PREFIX) === true) {
+    return buildWishlistShare(db, id, folderUid, ownerName, fields, at);
+  }
   let title = WHOLE_COLLECTION_TITLE;
   if (folderUid !== null) {
     const named = db.collectionFolders.find((f) => uidOfFolder(f) === folderUid);
     if (named === undefined) throw refuse(SHARE_FOLDER_NOT_FOUND);
-    if (named.kind !== COLLECTION_USER_KIND) throw refuse(SHARE_FOLDER_NOT_SHAREABLE);
     // The **effective** lock, so a share and the folder's own badge cannot disagree about which
     // drawers are set aside.
     if (collectionFolderLocked(db, named.id)) throw refuse(SHARE_FOLDER_IS_LOCKED);
@@ -25532,6 +25598,92 @@ function buildRelayShare(
         condition: e.condition,
         lang: e.lang,
       })),
+    state: "live",
+  };
+}
+
+/**
+ * `share::wishlist::snapshot` — the wishlist's share, by key (issue #941).
+ *
+ * The whole list is the root and the reader's own folders; a folder key is that folder's subtree;
+ * a deck key is that deck's managed folder (and its Tokens child), found by the deck's uid. A
+ * wish has no condition, so `condition` is switched off whatever was sent, and an any-printing
+ * wish travels as the first printing of its card this fake holds.
+ */
+function buildWishlistShare(
+  db: FakeDb,
+  id: string,
+  key: string,
+  ownerName: string,
+  fields: ShareFieldsArg,
+  at: number,
+): FakeRelayShare {
+  const rest = key.slice(WISHLIST_SHARE_PREFIX.length);
+  const tail = (word: string) => (rest.startsWith(word) ? rest.slice(word.length) : null);
+  const managedBy = (deckUid: string, tokens: boolean) =>
+    db.wishlistFolders.find(
+      (f) =>
+        f.managedDeckId != null &&
+        fakeDeckUid(f.managedDeckId) === deckUid &&
+        (f.managedTokens ?? false) === tokens,
+    );
+  let root: FakeWishlistFolder | null = null;
+  let title = WHOLE_WISHLIST_TITLE;
+  if (rest !== "") {
+    const folderUid = tail("folder:");
+    const tokensOf = tail("deck-tokens:");
+    const deckOf = tokensOf === null ? tail("deck:") : null;
+    let named: FakeWishlistFolder | undefined;
+    if (folderUid) named = db.wishlistFolders.find((f) => uidOfWishFolder(f) === folderUid);
+    else if (tokensOf) named = managedBy(tokensOf, true);
+    else if (deckOf) named = managedBy(deckOf, false);
+    if (named === undefined) throw refuse(SHARE_WISHLIST_FOLDER_NOT_FOUND);
+    root = named;
+    const parent = tokensOf ? wishFolderById(db, named.parentId ?? -1) : undefined;
+    title = tokensOf ? `${parent?.name ?? named.name} tokens` : named.name;
+  }
+
+  const kept: FakeWishlistFolder[] = [];
+  for (const f of db.wishlistFolders) {
+    if (root === null ? f.parentId === null && f.managedDeckId == null : f.id === root.id) {
+      kept.push(f);
+    }
+  }
+  for (let pass = 0; pass < MAX_FOLDER_DEPTH; pass += 1) {
+    for (const f of db.wishlistFolders) {
+      if (!kept.includes(f) && f.parentId !== null && kept.some((k) => k.id === f.parentId)) {
+        kept.push(f);
+      }
+    }
+  }
+  const uidOf = (f: FakeWishlistFolder) => uidOfWishFolder(f) ?? `wishlist-managed-uid-${f.id}`;
+  const uids = new Map(kept.map((f) => [f.id, uidOf(f)]));
+  return {
+    id,
+    owner: ownerName,
+    title,
+    updatedAt: at,
+    marketplace: marketplaceOf(db.marketplace),
+    fields: { ...fields, condition: false },
+    folders: kept.map((f) => ({
+      uid: uidOf(f),
+      name: f.name,
+      parent: f.parentId === null ? null : (uids.get(f.parentId) ?? null),
+    })),
+    copies: db.wishlistEntries
+      .filter((w) => (w.folderId === null ? root === null : uids.has(w.folderId)))
+      .map((w) => {
+        const printing =
+          w.cardId ?? db.cards.find((c) => c.oracleId === w.oracleId)?.id ?? w.oracleId ?? "";
+        return {
+          cardId: printing,
+          finish: w.preferredFinish ?? "nonfoil",
+          quantity: w.quantity,
+          folderUid: w.folderId === null ? null : (uids.get(w.folderId) ?? null),
+          condition: "NONE",
+          lang: w.lang ?? cardById(db, printing)?.lang ?? "en",
+        };
+      }),
     state: "live",
   };
 }

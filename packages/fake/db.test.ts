@@ -703,9 +703,11 @@ describe("the playable filter", () => {
     expect(seen({})).toHaveLength(57);
     expect(seen({ playableOnly: false })).toHaveLength(57);
 
-    // 57 paper rows less eleven legal nowhere: the four named above and the seven tokens.
+    // 57 paper rows less eleven legal nowhere — the four named above and the seven tokens — and
+    // one of those tokens back: the Treasure is dated after the fake's today, and a printing not
+    // out yet is kept whatever its legality says (issue #940; `filters::unreleased_sql`).
     const playable = seen({ playableOnly: true });
-    expect(playable).toHaveLength(46);
+    expect(playable).toHaveLength(47);
     for (const name of UNPLAYABLE) expect(playable).not.toContain(name);
     // `restricted` counts as playable — a Vintage search that hid Black Lotus would be wrong.
     expect(playable).toContain("Black Lotus");
@@ -797,7 +799,8 @@ describe("facet counts", () => {
     const on = facets(makeDb(), { playableOnly: true });
 
     expect(off.total).toBe(57);
-    expect(on.total).toBe(46);
+    // 46 playable, and the Treasure that is not out yet (issue #940).
+    expect(on.total).toBe(47);
     // Chip 8 is open-ended and loses `Kozilek, Compleated` (cmc 10), the one of the eleven
     // unplayable rows with a cost at all — every token is mana value 0.
     expect(on.manaValues["8"]).toBe(off.manaValues["8"] - 1);
@@ -3690,11 +3693,14 @@ describe("the wishlist's folders", () => {
     // and unscoped, and building the tree from `parentId` is `folderTree.ts`'s job.
     // `managedDeckId: null` on every one — user schema v48's column, which a folder the reader
     // made always answers `null` for — and `managedTokens: false`, v55's, for the same reason.
-    const mine = { managedDeckId: null, managedTokens: false };
+    // `syncUid` is the derived cross-device name and `managedDeckUid` is `null` off a deck
+    // (issue #941's share key).
+    const mine = { managedDeckId: null, managedTokens: false, managedDeckUid: null };
+    const uid = (id: number) => ({ syncUid: `wishlist-folder-uid-${id}` });
     expect(readHandlers(db).wishlist_folder_list()).toEqual([
-      { id: 1, parentId: null, name: "Ordered", sortOrder: 0, ...mine },
-      { id: 3, parentId: null, name: "Someday", sortOrder: 0, ...mine },
-      { id: 2, parentId: 1, name: "Backordered", sortOrder: 1, ...mine },
+      { id: 1, parentId: null, name: "Ordered", sortOrder: 0, ...mine, ...uid(1) },
+      { id: 3, parentId: null, name: "Someday", sortOrder: 0, ...mine, ...uid(3) },
+      { id: 2, parentId: 1, name: "Backordered", sortOrder: 1, ...mine, ...uid(2) },
     ]);
   });
 
@@ -12888,9 +12894,11 @@ describe("the busy fault", () => {
     // 139 → 140 on 2026-10-11 with `set_deck_search_width` (issue #932), a plain
     // `sync::with_write` `app_meta` write; its read half, `deck_search_width`, sits in
     // `readHandlers`. Read from `left` on this tree. Count again after a merge.
-    // 140 → 141 on 2026-10-11 with `deck_split_printing` (issue #934), the swap's plain
+    // 140 → 141 on 2026-10-11 with `trade_swap_sides` (issue #936), a plain `sync::with_write`
+    // that reaches `refuseIfBusy` first. Count again after a merge.
+    // 141 → 142 on 2026-10-12 with `deck_split_printing` (issue #934), the swap's plain
     // `sync::with_write` deck write for part of a row. Count again after a merge.
-    expect(names).toHaveLength(141);
+    expect(names).toHaveLength(142);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -18802,13 +18810,19 @@ describe("the managed wishlist's Tokens subfolder", () => {
     expect(wishesIn(db, parent.id).some((w) => w.oracleId === TOKEN_ORACLE.treasure)).toBe(false);
     // And the read says which is which — `managedTokens` on the child alone, both the deck's.
     const listed = readHandlers(db).wishlist_folder_list();
+    // Neither has a uid of its own — a managed folder is never captured — and both name their
+    // deck's, which is what a share of either is keyed on (issue #941).
     expect(listed.find((f) => f.id === child.id)).toMatchObject({
       managedDeckId: 4,
       managedTokens: true,
+      syncUid: null,
+      managedDeckUid: "deck-uid-4",
     });
     expect(listed.find((f) => f.id === parent.id)).toMatchObject({
       managedDeckId: 4,
       managedTokens: false,
+      syncUid: null,
+      managedDeckUid: "deck-uid-4",
     });
   });
 
@@ -19028,13 +19042,34 @@ describe("sharing a collection", () => {
     expect(() =>
       w.share_create({ folderUid: `folder-uid-${locked.id}`, ownerName: "Ada", fields }),
     ).toThrow(/Unlock it before sharing it/);
-    // A deck's group is the app's own and is not the reader's to publish.
-    const group = db.collectionFolders.find((f) => f.kind === "deck")!;
-    expect(() =>
-      w.share_create({ folderUid: `folder-uid-${group.id}`, ownerName: "Ada", fields }),
-    ).toThrow(/Only your own folders can be shared/);
-    // And nothing reached the relay for any of the three.
+    // And nothing reached the relay for either.
     expect(db.relayShares).toEqual([]);
+  });
+
+  /** Issue #941: a deck's group is shareable when named, and still out of a whole share. */
+  it("publishes a deck's group by name and leaves it out of the whole collection", () => {
+    const db = connected();
+    const w = writeHandlers(db);
+    const fields = { condition: false, lang: false, value: false };
+    const group = db.collectionFolders.find((f) => f.kind === "deck")!;
+    const row = w.share_create({ folderUid: `folder-uid-${group.id}`, ownerName: "Ada", fields });
+    expect(row.title).toBe(group.name);
+    const whole = w.share_create({ folderUid: null, ownerName: "Ada", fields });
+    const held = db.relayShares.find((s) => s.id === whole.id)!;
+    expect(held.folders.some((f) => f.uid === `folder-uid-${group.id}`)).toBe(false);
+  });
+
+  /** Issue #941: the wishlist is shared by key — the whole list, or one of its folders. */
+  it("publishes the wishlist and a wishlist folder by their keys", () => {
+    const db = connected();
+    const w = writeHandlers(db);
+    const fields = { condition: true, lang: false, value: false };
+    const whole = w.share_create({ folderUid: "wishlist:", ownerName: "Ada", fields });
+    expect(whole.title).toBe("Wishlist");
+    expect(whole.fields).not.toContain("condition");
+    expect(() =>
+      w.share_create({ folderUid: "wishlist:folder:nobody", ownerName: "Ada", fields }),
+    ).toThrow(/not in this wishlist/);
   });
 
   it("refuses a blank name before it asks about the membership", () => {
@@ -22296,7 +22331,7 @@ describe("shelves", () => {
 });
 
 /**
- * The trade builder's thirteen commands, held to the rules the crate's own tests hold `trade.rs`
+ * The trade builder's fourteen commands, held to the rules the crate's own tests hold `trade.rs`
  * to — the folds, the refusals, which price a line quotes and what a finish really moves.
  *
  * Every refusal below is matched on a **word of its meaning** rather than on the whole sentence.
@@ -22692,6 +22727,55 @@ describe("trades", () => {
     // A line that is already gone is a success: the caller has what it asked for.
     w.trade_remove_line({ lineId: 99 });
     expect(get().lines).toHaveLength(3);
+  });
+
+  it("swaps every line onto the other side, and leaves the percentages where they were", () => {
+    const { w, id, get, add } = trading();
+    add("mine", RAGAVAN, "nonfoil", 2);
+    add("theirs", CHARM, "nonfoil");
+    // One printing and finish on both sides: the swap must not fold them.
+    add("theirs", RAGAVAN, "nonfoil", 3);
+    w.trade_set_rate({ id, side: "mine", rate: 80 });
+    const before = get().lines;
+
+    w.trade_swap_sides({ id });
+    const after = get();
+    expect(after.lines.map((l) => [l.id, l.side, l.quantity])).toEqual(
+      before.map((l) => [l.id, l.side === "mine" ? "theirs" : "mine", l.quantity]),
+    );
+    expect(after).toMatchObject({ rateMine: 80, rateTheirs: 100 });
+
+    w.trade_archive({ id });
+    expect(() => w.trade_swap_sides({ id })).toThrow(/no longer open/);
+    w.trade_delete({ id });
+    expect(() => w.trade_swap_sides({ id })).toThrow(/not there/);
+  });
+
+  /** Issue #936 over #935: their side is one grain whatever the source. */
+  it("folds the reader's collection line and the copies past it into one line on their side", () => {
+    const { w, id, get } = trading({
+      collectionEntries: [entry({ id: 1, cardId: RAGAVAN.id, quantity: 2 })],
+    });
+    w.trade_add_lines({
+      id,
+      side: "mine",
+      lines: [input(RAGAVAN, "nonfoil", 3, "collection")],
+    });
+    w.trade_add_lines({ id, side: "theirs", lines: [input(CHARM, "nonfoil", 1)] });
+    const rows = () => get().lines.map((l) => [l.side, l.cardId, l.quantity]);
+    expect(rows()).toEqual([
+      ["mine", RAGAVAN.id, 2],
+      ["mine", RAGAVAN.id, 1],
+      ["theirs", CHARM.id, 1],
+    ]);
+    const first = get().lines[0].id;
+
+    w.trade_swap_sides({ id });
+    expect(rows()).toEqual([
+      ["theirs", RAGAVAN.id, 3],
+      ["mine", CHARM.id, 1],
+    ]);
+    expect(get().lines[0].id).toBe(first);
   });
 
   it("holds a side's percentage to 50–150 in steps of 5", () => {

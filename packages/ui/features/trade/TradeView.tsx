@@ -20,8 +20,10 @@ import { ExportDialog } from "@/features/transfer/export/ExportDialog";
 import { tradeDestination } from "@/features/transfer/import/destinations/TradePreview";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import { fromTradeLine } from "@/features/transfer/TransferCard";
+import { FOCUS } from "@/lib/focus";
 import { ipcError } from "@/lib/ipc";
 import type { Trade, TradeSide, TradeSummary } from "@/lib/ipc";
+import { PRESS } from "@/lib/motion";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { FinishTradeDialog } from "./FinishTradeDialog";
@@ -66,6 +68,12 @@ import { TRADE_LIST_KEY, tradeKey, useTradeWrites } from "./useTrades";
  * **A trade that was just made lands the same way, from the other end** (`land`): the press that
  * made it — Create trade in a dialog that has closed, Duplicate on a trade that is no longer the
  * one drawn — has nothing left to hand the caret back to, so the new trade takes it as it mounts.
+ *
+ * ## The divider swaps the sides
+ *
+ * On an open trade the arrows between the two panels are a button (issue #936): every line goes
+ * to the other side in one write, and the percentages stay with the sides they were set on. Its
+ * refusal is a header write's, under the name. A closed trade keeps the arrows as a drawing.
  *
  * ## A side in and out of a file
  *
@@ -168,6 +176,13 @@ export function TradeView({
     if (wasRenaming.current && !renaming) renameRef.current?.focus();
     wasRenaming.current = renaming;
   }, [renaming]);
+
+  /** Every line onto the other side. A trade with no lines has nothing to move, so the press
+   *  writes nothing; the percentages stay with their sides. */
+  const swap = () => {
+    if (trade.lines.length === 0) return;
+    run("swap the sides", () => writes.swapSides(trade.id));
+  };
 
   const duplicate = () =>
     run("duplicate the trade", () => writes.duplicate(trade.id).then(onSelect));
@@ -334,11 +349,35 @@ export function TradeView({
           onImport={(at, opener) => openTransfer("import", at, opener)}
           onExport={(at, opener) => openTransfer("export", at, opener)}
         />
-        <div aria-hidden="true" className="relative grid place-items-center">
-          <span className="absolute inset-y-0 left-1/2 w-px bg-border" />
-          <span className="relative grid size-6 place-items-center rounded-full border border-border bg-bg text-dim">
-            <ArrowLeftRight className="size-3" />
-          </span>
+        <div className="relative grid place-items-center">
+          <span aria-hidden="true" className="absolute inset-y-0 left-1/2 w-px bg-border" />
+          {editable ? (
+            <button
+              type="button"
+              aria-label="Swap sides"
+              aria-disabled={busy || trade.lines.length === 0 || undefined}
+              onClick={swap}
+              className={cn(
+                "relative grid size-6 place-items-center rounded-full border border-border bg-bg text-dim",
+                "hover:border-accent hover:text-accent",
+                "aria-disabled:cursor-not-allowed aria-disabled:opacity-50",
+                "aria-disabled:hover:border-border aria-disabled:hover:text-dim",
+                "aria-disabled:active:scale-100",
+                PRESS,
+                FOCUS,
+              )}
+              {...tip("Swap sides", { describes: false })}
+            >
+              <ArrowLeftRight className="size-3" aria-hidden="true" />
+            </button>
+          ) : (
+            <span
+              aria-hidden="true"
+              className="relative grid size-6 place-items-center rounded-full border border-border bg-bg text-dim"
+            >
+              <ArrowLeftRight className="size-3" />
+            </span>
+          )}
         </div>
         <TradeSidePanel
           trade={trade}

@@ -69,11 +69,15 @@ pub struct CardIndex {
     pub mana_x: BitSet,
     /// One per [`crate::legalities::LEGALITY_KEYS`] entry, same order.
     pub formats: Vec<BitSet>,
-    /// Printings with a **non-zero** `legal_mask` — playable in at least one format.
+    /// Printings with a **non-zero** `legal_mask` — playable in at least one format — or not
+    /// released yet, which Scryfall marks legal nowhere until the day (issue #940).
     ///
     /// Not a facet dimension and not offered as one: it is
     /// [`crate::filters::CardFilters::playable_only`]'s bitset, mirroring that filter's
-    /// `legal_mask != 0` so it can ride every facet base the way `paper` does.
+    /// `legal_mask != 0 OR released_at > date('now')` so it can ride every facet base the way
+    /// `paper` does. "Today" is read once, when the index is built: a printing that comes out
+    /// between two builds is counted until the next one, by which time the sync that follows
+    /// a release has given it a mask of its own.
     ///
     /// Set per row rather than folded out of [`Self::formats`] afterwards, because the SQL it
     /// has to agree with tests the stored integer and not the 23 bits this build knows how to
@@ -247,11 +251,13 @@ impl CardIndex {
             .collect();
 
         let mut seen: std::collections::HashMap<String, u16> = std::collections::HashMap::new();
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare(&format!(
             "SELECT rowid, set_code, cmc, color_identity, legal_mask, is_paper, mana_cost,
-                    rarity, type_mask, border_color, full_art, finishes
-               FROM cards",
-        )?;
+                        rarity, type_mask, border_color, full_art, finishes,
+                        coalesce({}, 0)
+                   FROM cards",
+            crate::filters::unreleased_sql("cards")
+        ))?;
         let mut rows = stmt.query([])?;
         while let Some(row) = rows.next()? {
             let doc: i64 = row.get(0)?;
@@ -279,6 +285,9 @@ impl CardIndex {
             let full_art: bool = row.get(10)?;
             // Nullable JSON text; a NULL is in no finish bitset.
             let finishes: Option<String> = row.get(11)?;
+            // `filters::unreleased_sql`, evaluated by the same engine the search's clause is,
+            // so the two cannot disagree about what "today" or a malformed date means.
+            let unreleased: bool = row.get(12)?;
 
             ix.all.set(doc);
             if paper {
@@ -397,8 +406,9 @@ impl CardIndex {
 
             let mask = mask.unwrap_or(0) as u64;
             // The whole integer, before it is picked apart into bits — `legal_mask != 0`, the
-            // predicate `push_card_filters` emits for `playable_only`.
-            if mask != 0 {
+            // predicate `push_card_filters` emits for `playable_only`, unreleased printings
+            // included as that predicate includes them.
+            if mask != 0 || unreleased {
                 ix.playable.set(doc);
             }
             for (k, set) in ix.formats.iter_mut().enumerate() {

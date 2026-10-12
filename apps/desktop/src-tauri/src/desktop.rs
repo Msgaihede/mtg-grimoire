@@ -632,8 +632,8 @@ pub fn run() {
             sticky_notes::sticky_note_update,
             sticky_notes::sticky_note_delete,
             sticky_notes::sticky_note_reorder,
-            // The Trade page's thirteen (user schema v63): two reads on the read-only
-            // connection and eleven writes, of which only `trade_finish` reaches the
+            // The Trade page's fourteen (user schema v63): two reads on the read-only
+            // connection and twelve writes, of which only `trade_finish` reaches the
             // collection and the wishlist — so it alone goes through `with_write_owned`.
             trade::trade_list,
             trade::trade_get,
@@ -643,6 +643,7 @@ pub fn run() {
             trade::trade_add_lines,
             trade::trade_update_line,
             trade::trade_remove_line,
+            trade::trade_swap_sides,
             trade::trade_finish,
             trade::trade_archive,
             trade::trade_reopen,

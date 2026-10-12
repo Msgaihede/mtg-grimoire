@@ -15,6 +15,7 @@ import { useContextMenu } from "@/components/menu/useContextMenu";
 import { UndoNotice } from "@/components/UndoNotice";
 import { ViewAllToggle } from "@/components/ViewAllToggle";
 import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
+import { ShareFolderMenu } from "@/features/collection/ShareFolderMenu";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
@@ -80,6 +81,7 @@ import { WishlistTable, type WishTableBands } from "./WishlistTable";
 import { OptimizeWishlistDialog } from "./OptimizeWishlistDialog";
 import { useWishlist, WISHLIST_TRAY, type Wishlist } from "./useWishlist";
 import { useWishlistFolders } from "./useWishlistFolders";
+import { wishlistShareTarget } from "./wishlistShare";
 import { useWishlistOptimize } from "./useWishlistOptimize";
 import { wholeWishlistQuery, type SweepScope } from "./wholeWishlistQuery";
 import {
@@ -656,6 +658,18 @@ export function WishlistPage() {
    * that {@link trailOf} applies from the other end.
    */
   const nodes = useMemo(() => buildFolderTree(folders.folders, []), [folders.folders]);
+  /**
+   * What the Share control publishes from this level — `wishlistShareTarget` says which key.
+   *
+   * A `folderId` naming a folder the list no longer carries is the root, `CollectionPage`'s
+   * `shareTarget` rule and {@link trailOf}'s: the breadcrumb and the wall already say the reader
+   * is standing there.
+   */
+  const shareTarget = useMemo(() => {
+    const here =
+      folderId === null ? null : (folders.folders.find((f) => f.id === folderId) ?? null);
+    return wishlistShareTarget(here, folders.folders);
+  }, [folderId, folders.folders]);
   const trail = useMemo(() => trailOf(folders.folders, folderId), [folders.folders, folderId]);
   const subtotals = useMemo(() => subtotalsOf(nodes, folders.summary), [nodes, folders.summary]);
 
@@ -1873,6 +1887,11 @@ export function WishlistPage() {
               <TrendingDown className="size-4 shrink-0" aria-hidden="true" />
               Optimize
             </button>
+
+            {/* The same Share group the collection's band draws (issue #941) — the whole list
+                at the root, the folder on screen below it, a deck's managed wishlist by its
+                deck. Hidden where nothing can publish, by the control itself. */}
+            <ShareFolderMenu target={shareTarget} />
 
             <ImportExportPair
               onImport={() => setImporting(true)}

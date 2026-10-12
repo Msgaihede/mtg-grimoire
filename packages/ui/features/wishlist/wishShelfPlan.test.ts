@@ -64,6 +64,8 @@ describe("toShelfFolder", () => {
     sortOrder: 2,
     managedDeckId: null,
     managedTokens: false,
+    syncUid: null,
+    managedDeckUid: null,
   };
 
   it("reads a reader's folder as a folder and a deck's as managed, and locks neither", () => {
@@ -395,6 +397,8 @@ describe("subtotalsOf and folderFigures", () => {
     sortOrder: 0,
     managedDeckId: null,
     managedTokens: false,
+    syncUid: null,
+    managedDeckUid: null,
   });
   const tree = buildFolderTree([folder(1, null), folder(2, 1), folder(3, null)], []);
   const subtotals = subtotalsOf(

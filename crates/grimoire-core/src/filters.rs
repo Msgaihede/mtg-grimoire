@@ -375,6 +375,10 @@ pub struct CardFilters {
     /// "legal or restricted in none of the 23 formats" — art series, tokens, emblems,
     /// memorabilia, and the acorn half of the un-sets. It is a fact about the card rather
     /// than a layout guess, which is why this filter reads the mask and not `layout`.
+    ///
+    /// **A printing that has not been released yet counts as playable** (issue #940): Scryfall
+    /// marks a previewed card legal nowhere until its release day, so the mask alone hid every
+    /// spoiler. See [`unreleased_sql`].
     pub playable_only: Option<bool>,
     /// Scryfall art tags, matched against the **closure** on `cards.illustration_id` — what
     /// the picture shows, which is what a Tags-page deck is built around.
@@ -628,6 +632,17 @@ pub fn escape_like(text: &str) -> String {
     text.replace(LIKE_ESCAPE, &format!("{LIKE_ESCAPE}{LIKE_ESCAPE}"))
         .replace('%', &format!("{LIKE_ESCAPE}%"))
         .replace('_', &format!("{LIKE_ESCAPE}_"))
+}
+
+/// "This printing is not out yet": its `released_at` is after SQLite's UTC `date('now')`.
+///
+/// The one spelling of the test, shared by [`CardFilters::playable_only`] and the facet index's
+/// `playable` bitset ([`crate::index::CardIndex::build`]) so the counts and the wall agree. UTC
+/// and the engine's clock rather than a bound parameter, the same "today" the home page's
+/// Coming soon window ([`crate::upcoming_sets`]) measures from. A NULL date is never in the
+/// future, so an undated printing is decided by its mask alone.
+pub fn unreleased_sql(alias: &str) -> String {
+    format!("{alias}.released_at > date('now')")
 }
 
 /// Push every non-text card predicate onto `p`, qualified with `alias`.
@@ -930,8 +945,17 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
     // An orphan fails it, exactly as it fails the format filter: the collection's LEFT JOIN
     // gives it a NULL alias and `NULL != 0` is NULL. The column is `NOT NULL DEFAULT 0` so a
     // *card* row can never be that NULL.
+    //
+    // **An unreleased printing passes too** (issue #940). Scryfall marks a previewed card legal
+    // nowhere until its set's release day, so the mask alone hid every spoiler from the
+    // search view's default row. `released_at` is in the same covering index, so the `OR`
+    // costs the scan nothing; a NULL date is not in the future and adds nothing. See
+    // [`unreleased_sql`] for why "today" is SQLite's.
     if f.playable_only.unwrap_or(false) {
-        p.wheres.push(format!("{alias}.legal_mask != 0"));
+        p.wheres.push(format!(
+            "({alias}.legal_mask != 0 OR {})",
+            unreleased_sql(alias)
+        ));
     }
 
     // Tag terms. **One subquery per included tag, because includes INTERSECT**: a themed deck
@@ -3168,6 +3192,12 @@ mod tests {
             ..Default::default()
         });
         assert!(on.contains("c.legal_mask != 0"), "{on}");
+        // An unreleased printing is legal nowhere until its release day, and still a card a
+        // reader is looking for (issue #940) — so the clause admits it beside the mask.
+        assert!(
+            on.contains("(c.legal_mask != 0 OR c.released_at > date('now'))"),
+            "{on}"
+        );
     }
 
     /// The X chip is an **alternative inside the mana group**, not a term beside it — which is

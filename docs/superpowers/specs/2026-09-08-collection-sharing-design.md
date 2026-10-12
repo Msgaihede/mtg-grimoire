@@ -181,7 +181,8 @@ and its shape is the inverse of `CollectionQuery`'s:
    there is no second opinion about what "locked" means;
 3. **drop every folder whose `kind <> 'user'`** — deck groups and `Recently removed` are never
    shareable, which is the rule `CollectionPage.tsx:1358`'s `userFolders` already applies on
-   screen;
+   screen; *(superseded by issue #941: both are shareable when named, and still left out of a
+   whole-collection share — see `docs/reference/collection-sharing.md`)*
 4. read the entries of what survives, join `cards` for name and image, and price through
    `sorting::price_expr` at the owner's marketplace **only if `value` is in `fields`**;
 5. emit.
@@ -604,6 +605,7 @@ take their number from the message, not from the binding.
 * **Server-side paging and search.** Decision 2 makes them possible; §3.1's arithmetic says they
   are not yet needed. The format does not foreclose them.
 * **Sharing decks or wishlists.** Same machinery would serve, and neither is what #360 asked for.
+  *(Wishlists shipped under issue #941, as keys in the same namespace.)*
 * **Reclaiming R2 storage from long-lapsed shares.** A sweep for the day it matters.
 * **A wishlist folder bound to a share id** — §8.
 

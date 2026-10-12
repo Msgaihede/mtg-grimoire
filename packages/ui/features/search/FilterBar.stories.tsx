@@ -342,10 +342,10 @@ export const SomeUnavailable: Story = {
     // **The exact settled count, not a prefix.** The count rides in the accessible name, so
     // waiting on one is how a story waits for the facets — but the row wears the *previous*
     // search's counts while the next answer is in flight (`keepPreviousData`), and every
-    // state this passes through is also called "Red — N printings". 46 is the answer for a
+    // state this passes through is also called "Red — N printings". 47 is the answer for a
     // red search: pressing Red again would clear the filter, so its own chip counts the whole
     // searchable corpus — paper and playable — rather than the red part of it.
-    await canvas.findByRole("button", { name: "Red — 46 printings" }, { timeout: 5000 });
+    await canvas.findByRole("button", { name: "Red — 47 printings" }, { timeout: 5000 });
 
     // Empty over a red search, and saying so where a reader can hover it. The count rides in
     // the accessible name as well as the tooltip (`ValueChip`'s own rule), so the exact name —
