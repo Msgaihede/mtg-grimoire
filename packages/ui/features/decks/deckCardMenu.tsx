@@ -189,8 +189,12 @@ export interface DeckCardMenuDeps {
    * observer unmounts. A create started in a panel and chained to `setLabel` there loses its
    * second half to an Escape landing during the round trip: the label made and silently never
    * attached. The editor's observer outlives both the menu and the dialog.
+   *
+   * **The whole picked set, like every other row under `Label N cards`** (issue #954): the head
+   * says how many cards the label goes on, so the dialog behind it has to put it on all of them.
+   * One card is a set of one.
    */
-  addLabel: (card: DeckCard) => void;
+  addLabel: (cards: readonly DeckCard[]) => void;
   /**
    * **Remove card** — take this row out of the pile it is in.
    *
@@ -518,7 +522,7 @@ export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuI
           // making a genuinely new one, which is what the row used to be for alone.
           label: "More labels…",
           Icon: Plus,
-          onSelect: () => deps.addLabel(card),
+          onSelect: () => deps.addLabel(rows),
         },
       ],
     },

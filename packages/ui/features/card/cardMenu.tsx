@@ -222,7 +222,7 @@ export interface CardMenuDeps {
    * above it** — see {@link useOptionalAddCardToDeck}. Absent means the `Decks` rows are not
    * offered, the same absence `moveToFolder` and `collectionFolders` already express.
    */
-  toDeck?: (target: CardMenuTarget, deckId: number) => void;
+  toDeck?: (targets: readonly CardMenuTarget[], deckId: number) => void;
   /**
    * Ask which copies, then file the ones the reader chose.
    *
@@ -713,7 +713,7 @@ function collectionItem(
     deps.toDeck === undefined
       ? undefined
       : {
-          toDeck: (deckId: number) => rows.forEach((row) => deps.toDeck?.(row, deckId)),
+          toDeck: (deckId: number) => deps.toDeck?.(rows, deckId),
           // **The same `rows` the write loops over, and that identity is the whole point.** The
           // deck rows are greyed unless the deck plays every one of these, so a `targets` naming a
           // different set than the loop would grey against one list and write another — a fence
@@ -1094,9 +1094,9 @@ export function DeckTargetSubmenu(props: {
 
   const items = useMemo(
     () =>
-      buildDeckTargetItems(folders, decks, (deckId, variant) => {
-        for (const target of targets) addToDeck(target, deckId, variant);
-      }),
+      buildDeckTargetItems(folders, decks, (deckId, variant) =>
+        addToDeck(targets, deckId, variant),
+      ),
     [folders, decks, addToDeck, targets],
   );
 
@@ -1109,8 +1109,12 @@ export function DeckTargetSubmenu(props: {
 
 /** Where a card the reader picked in the menu is written, and what a refusal left behind. */
 export interface CardToDeck {
-  /** Called by {@link DeckTargetSubmenu}, through {@link useAddCardToDeck}. */
-  addToDeck: (target: CardMenuTarget, deckId: number, variant: DeckVariant) => void;
+  /**
+   * Called by {@link DeckTargetSubmenu}, through {@link useAddCardToDeck}. **The whole set in one
+   * call** — one copy of each target, written in order — never one call per card: see the queue in
+   * {@link useCardToDeck} for what a loop of single calls cost (issue #954).
+   */
+  addToDeck: (targets: readonly CardMenuTarget[], deckId: number, variant: DeckVariant) => void;
   /** What the last refused add said, or `null`. Drawn by the one mount, and by nothing else. */
   error: string | null;
   clearError: () => void;
@@ -1227,92 +1231,113 @@ function useMountedCardToDeck(): CardToDeck {
  */
 export function useCardToDeck(): CardToDeck {
   /**
-   * The add the reader asked for. Setting it is what mounts the deck's own hook below.
+   * The adds the reader asked for, oldest first. The head is what mounts the deck's own hook below.
    *
    * **One `useDeck`, armed by the press rather than by the row**, because `useDeck` is the single
    * definition of the add rule *and* it carries the deck's own `deck_get`. A hook per deck row
-   * would read every deck in the gallery to offer a menu; `null` until a leaf is taken leaves
-   * that query disabled (`enabled: id !== null`), and the one read that does happen is for the
-   * deck the card is going into.
+   * would read every deck in the gallery to offer a menu; an empty queue leaves that query
+   * disabled (`enabled: id !== null`), and the one read that does happen is for the deck the
+   * cards are going into.
+   *
+   * **A queue of batches, never one slot per card** — issue #954. Until it was, this held a single
+   * `{ target, deckId, variant }` and a picked set's press called `addToDeck` once per card: React
+   * batched the `setPending` calls into one render and only the **last** card of a Shift-picked
+   * range reached the deck. A press now hands its whole set over as one batch, and a second press
+   * made while the first is still writing waits behind it rather than replacing it.
    */
-  const [pending, setPending] = useState<{
-    target: CardMenuTarget;
-    deckId: number;
-    variant: DeckVariant;
-  } | null>(null);
+  const [queue, setQueue] = useState<readonly DeckAddBatch[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const head = queue[0] ?? null;
 
-  const { addCard } = useDeck(pending?.deckId ?? null, pending?.variant ?? DEFAULT_VARIANT);
-  const add = addCard.mutate;
+  const { addCard } = useDeck(head?.deckId ?? null, head?.variant ?? DEFAULT_VARIANT);
+  const add = addCard.mutateAsync;
   /**
-   * Which add has already been sent, so it happens exactly once.
+   * Which batch has already been sent, so it is written exactly once.
    *
    * Load-bearing under `StrictMode`, which mounts an effect twice on purpose — without it a
    * single press would put two copies in the deck in development and one in the shipped window,
    * which is the worst shape a bug can have.
    */
-  const written = useRef<{ target: CardMenuTarget; deckId: number; variant: DeckVariant } | null>(
-    null,
-  );
+  const written = useRef<DeckAddBatch | null>(null);
 
   useEffect(() => {
-    if (pending === null || written.current === pending) return;
-    written.current = pending;
-    /**
-     * **No `categoryId`, and `deckDefault`, so the card lands where the deck says its adds land**
-     * — `decks.default_category_id`, the pile the editor's own Add button files into (issue
-     * #693). Only a deck on Auto, which is what every deck is born on, falls through to
-     * `autoCategoryFor` and files the card by what it does — the app's one rule, shared by a plain
-     * add, a drag with no column under it and an imported line. Until #693 this sent no
-     * `deckDefault`, so a deck pointed at its Sideboard had every menu add filed as though it were
-     * on Auto. The type line travels as the fallback (`null` where the surface has none); it is
-     * deliberately not *absent*, which is the arm that files everything under
-     * `DEFAULT_CATEGORY_NAME` without consulting the card at all.
-     *
-     * The per-call callbacks are this surface's reporting, exactly as `dropOnDecks` attaches
-     * its sentences; the `["decks"]` invalidation that carries a `GONE` back to the editor's
-     * columns stays on `useDeck.addCard`'s single definition, because two definitions would be
-     * two places to keep one rule.
-     */
-    add(
-      {
-        cardId: pending.target.cardId,
-        deckDefault: true,
-        typeLine: pending.target.typeLine ?? null,
-        quantity: 1,
-      },
-      {
-        onError: (refusal) => setError(ipcError(refusal)),
-        /**
-         * **Disarm, or this surface observes that deck for the rest of the session.**
-         * `useDeck(id, …)` is a live `deck_get` — the deck, every card in it and its categories —
-         * and `addCard`'s own `onSuccess` invalidates the whole `["decks"]` prefix, which that
-         * key is under. A `pending` left set therefore leaves the mount re-reading a deck nothing
-         * on screen draws, on every add, quantity change or rename anywhere in the app. Clearing
-         * it puts `useDeck` back to `null`, where its query is disabled.
-         *
-         * `onSettled` rather than a clear in each of the two arms above, because it is one line
-         * that cannot be half-applied, and it runs after both — so the sentence is already set
-         * when the observer goes away. The in-flight mutation does not care: it belongs to the
-         * mutation cache, and only the *observer's* per-call callbacks are at stake here, which
-         * have both already run.
-         */
-        onSettled: () => setPending(null),
-      },
-    );
-  }, [pending, add]);
+    if (head === null || written.current === head) return;
+    written.current = head;
+    void (async () => {
+      /**
+       * **One card at a time, in the order the wall draws them.** Each add may make the auto pile
+       * it files into (`Ramp`, `Land`, …), and two adds racing to make the same pile is a refusal
+       * the reader did nothing to earn; one after another is also the order the undo journal
+       * then replays. `mutateAsync` rather than `mutate`, because `mutate`'s per-call callbacks
+       * fire for the **latest** call only — a loop of them reports on its last card and nothing
+       * else, which is this issue again one layer down.
+       *
+       * **No `categoryId`, and `deckDefault`, so each card lands where the deck says its adds
+       * land** — `decks.default_category_id`, the pile the editor's own Add button files into
+       * (issue #693). Only a deck on Auto, which is what every deck is born on, falls through to
+       * `autoCategoryFor` and files the card by what it does — the app's one rule, shared by a
+       * plain add, a drag with no column under it and an imported line. The type line travels as
+       * the fallback (`null` where the surface has none); it is deliberately not *absent*, which is
+       * the arm that files everything under `DEFAULT_CATEGORY_NAME` without consulting the card.
+       *
+       * A refused card does not stop the rest: the reader asked for every card in the set, and a
+       * printing that has left `cards` says nothing about its neighbours. The **first** refusal is
+       * the sentence kept — a deck deleted under the press refuses every card in the same words.
+       *
+       * The `["decks"]` invalidation that carries a `GONE` back to the editor's columns stays on
+       * `useDeck.addCard`'s single definition, because two definitions would be two places to
+       * keep one rule.
+       */
+      let refusal: string | null = null;
+      for (const target of head.targets) {
+        try {
+          await add({
+            cardId: target.cardId,
+            deckDefault: true,
+            typeLine: target.typeLine ?? null,
+            quantity: 1,
+          });
+        } catch (failure) {
+          refusal ??= ipcError(failure);
+        }
+      }
+      if (refusal !== null) setError(refusal);
+      /**
+       * **Dequeue, or this surface observes that deck for the rest of the session.**
+       * `useDeck(id, …)` is a live `deck_get` — the deck, every card in it and its categories —
+       * and `addCard`'s own `onSuccess` invalidates the whole `["decks"]` prefix, which that key
+       * is under. A batch left at the head therefore leaves the mount re-reading a deck nothing on
+       * screen draws, on every add, quantity change or rename anywhere in the app. An empty queue
+       * puts `useDeck` back to `null`, where its query is disabled.
+       *
+       * By identity rather than `slice(1)`, so the line says which batch it is done with.
+       */
+      setQueue((waiting) => waiting.filter((batch) => batch !== head));
+    })();
+  }, [head, add]);
 
-  const addToDeck = useCallback((target: CardMenuTarget, deckId: number, variant: DeckVariant) => {
-    // Last time's refusal is not news about this add. Left standing, a sentence about a deck
-    // that has been deleted survives the whole of the next add's round trip, over rows the
-    // reader has already moved on from.
-    setError(null);
-    // A fresh object every time, so pressing the same leaf twice is two adds rather than one:
-    // the guard above is identity on this value and a reader who adds a second copy means it.
-    setPending({ target, deckId, variant });
-  }, []);
+  const addToDeck = useCallback(
+    (targets: readonly CardMenuTarget[], deckId: number, variant: DeckVariant) => {
+      if (targets.length === 0) return;
+      // Last time's refusal is not news about this add. Left standing, a sentence about a deck
+      // that has been deleted survives the whole of the next add's round trip, over rows the
+      // reader has already moved on from.
+      setError(null);
+      // A fresh object every time, so pressing the same leaf twice is two adds rather than one:
+      // the guard above is identity on this value and a reader who adds a second copy means it.
+      setQueue((waiting) => [...waiting, { targets, deckId, variant }]);
+    },
+    [],
+  );
   const clearError = useCallback(() => setError(null), []);
   return { addToDeck, error, clearError };
+}
+
+/** One press of a deck leaf: the cards it is about, and the list they go into. */
+interface DeckAddBatch {
+  targets: readonly CardMenuTarget[];
+  deckId: number;
+  variant: DeckVariant;
 }
 
 /**

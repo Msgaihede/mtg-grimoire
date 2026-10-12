@@ -716,16 +716,21 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // The clear's write and its pending flag are read where the confirmation is drawn —
   // `DeckEditorLayers` (issue #557).
   const createLabelFor = useCallback(
-    (slot: AddLabelSlot, name: string, color: string) => {
+    (slots: readonly AddLabelSlot[], name: string, color: string) => {
       void startLabelCreate({ name, color })
-        .then((label) =>
-          setLabelOnSlot({
-            cardId: slot.cardId,
-            categoryId: slot.categoryId,
-            finish: slot.finish,
-            labelId: label.id,
-          }),
-        )
+        // One label, then every slot the press was about — a picked set's `More labels…` (issue
+        // #954). `setLabel`'s invalidation is the hook's own rather than a per-call callback, so
+        // a loop of `mutate` loses none of them.
+        .then((label) => {
+          for (const slot of slots) {
+            setLabelOnSlot({
+              cardId: slot.cardId,
+              categoryId: slot.categoryId,
+              finish: slot.finish,
+              labelId: label.id,
+            });
+          }
+        })
         // The refusal is already on the observer, and the observer is in the banner family above.
         // Swallowed here so a refused create is a sentence rather than an unhandled rejection.
         .catch(() => {});
@@ -737,13 +742,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    *  rather than two, and the same `deck_card_set_label` grain, which is the whole reason the
    *  slot is frozen rather than looked back up. */
   const setCardLabelOnSlot = useCallback(
-    (slot: AddLabelSlot, labelId: number) => {
-      setLabelOnSlot({
-        cardId: slot.cardId,
-        categoryId: slot.categoryId,
-        finish: slot.finish,
-        labelId,
-      });
+    (slots: readonly AddLabelSlot[], labelId: number) => {
+      for (const slot of slots) {
+        setLabelOnSlot({
+          cardId: slot.cardId,
+          categoryId: slot.categoryId,
+          finish: slot.finish,
+          labelId,
+        });
+      }
     },
     [setLabelOnSlot],
   );
@@ -1639,17 +1646,17 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * for all four views at once.
    */
   const openAddLabel = useCallback(
-    (card: DeckCard) => {
+    (cards: readonly DeckCard[]) => {
       const opener = document.activeElement;
       openLayer(
         {
           kind: "addLabel",
-          slot: {
+          slots: cards.map((card) => ({
             cardId: card.cardId,
             categoryId: card.categoryId,
             finish: card.finish,
             name: card.name,
-          },
+          })),
         },
         () => {
           if (opener instanceof HTMLElement) opener.focus();

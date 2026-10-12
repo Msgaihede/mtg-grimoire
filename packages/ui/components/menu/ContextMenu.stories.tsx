@@ -285,7 +285,7 @@ function deckCardDeps(act: Act): DeckCardMenuDeps {
     setLabel: (card, labelId) => act(`label:${card.cardId}:${labelId ?? "none"}`),
     setFinish: (card, to) => act(`finish:${card.cardId}:${to ?? "regular"}`),
     labels: LABELS,
-    addLabel: (card) => act(`add-label:${card.cardId}`),
+    addLabel: (cards) => act(`add-label:${cards.map((card) => card.cardId).join(",")}`),
     // The stepper's zero by another road — there is no `remove` mutation in this app, because
     // zero is what removes a deck row. No confirmation, unlike a **pile's** `Clear stack…`: one
     // card is one add to put back.

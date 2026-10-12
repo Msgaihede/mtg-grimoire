@@ -337,9 +337,17 @@ export const WishlistGrid = memo(function WishlistGrid({
    * wish names no cardboard to ask a question about, so the menu is not offered — the answer must
    * not differ between two drawings of one list.
    */
-  rowMenu?: (row: WishRow, flip?: boolean) => ((e: ReactMouseEvent) => void) | undefined;
+  rowMenu?: (
+    row: WishRow,
+    flip?: boolean,
+    picked?: readonly WishRow[],
+  ) => ((e: ReactMouseEvent) => void) | undefined;
   /** The same menu from the keyboard, on exactly the wishes its pointer twin is. */
-  rowMenuKey?: (row: WishRow, flip?: boolean) => ((e: ReactKeyboardEvent) => void) | undefined;
+  rowMenuKey?: (
+    row: WishRow,
+    flip?: boolean,
+    picked?: readonly WishRow[],
+  ) => ((e: ReactKeyboardEvent) => void) | undefined;
   /** Which marketplace the cost mark quotes. Passed rather than read here so the wall and the
    *  header above it cannot disagree about what they are pricing in. */
   marketplace: Marketplace;
@@ -688,9 +696,27 @@ export const WishlistGrid = memo(function WishlistGrid({
         )
       }
       // The wall's third argument is whether the tile turns over, handed on so the menu offers
-      // "Flip card" here and not on the table's row of the same wish (issue #844).
-      cardMenu={rowMenu && ((tile, _picked, flip) => rowMenu(tile.wish, flip))}
-      cardMenuKey={rowMenuKey && ((tile, _picked, flip) => rowMenuKey(tile.wish, flip))}
+      // "Flip card" here and not on the table's row of the same wish (issue #844). The picked set
+      // travels too, so a menu opened on a member of it acts on every picked wish rather than on
+      // the one under the pointer (issue #954).
+      cardMenu={
+        rowMenu &&
+        ((tile, picked, flip) =>
+          rowMenu(
+            tile.wish,
+            flip,
+            picked.map((each) => each.wish),
+          ))
+      }
+      cardMenuKey={
+        rowMenuKey &&
+        ((tile, picked, flip) =>
+          rowMenuKey(
+            tile.wish,
+            flip,
+            picked.map((each) => each.wish),
+          ))
+      }
       // The drawn printing's layout, which is the picture the flip turns — see `WishRow.layout`.
       flips={wishFlips}
       // `dragRecord` rather than `dragPayload`, because a wish tile's drag is two marks in one

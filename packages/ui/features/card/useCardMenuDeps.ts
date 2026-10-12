@@ -262,7 +262,8 @@ export function useCardMenuDeps(): CardMenuWiring {
     () =>
       addToDeck === null
         ? undefined
-        : (target: CardMenuTarget, deckId: number) => addToDeck(target, deckId, DEFAULT_VARIANT),
+        : (targets: readonly CardMenuTarget[], deckId: number) =>
+            addToDeck(targets, deckId, DEFAULT_VARIANT),
     [addToDeck],
   );
 

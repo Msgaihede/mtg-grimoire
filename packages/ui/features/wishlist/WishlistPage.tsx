@@ -14,7 +14,7 @@ import type { MenuItem } from "@/components/menu/types";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { UndoNotice } from "@/components/UndoNotice";
 import { ViewAllToggle } from "@/components/ViewAllToggle";
-import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
+import { buildCardMenu, type CardMenuDeps, type CardMenuTarget } from "@/features/card/cardMenu";
 import { ShareFolderMenu } from "@/features/collection/ShareFolderMenu";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
@@ -629,21 +629,40 @@ export function WishlistPage() {
    */
   const { menu, menuKey, menuClick } = useContextMenu();
   const { deps: menuDeps, error: menuFailure } = useCardMenuDeps();
+  /**
+   * The deps a press builds on: the page's own, plus the wall's picked set when the right-clicked
+   * wish is a member of it (issue #954), so `Add N cards to` files every picked wish. A wish with
+   * no printing names no cardboard and is left out of the set, as it is left out of the menu.
+   */
+  const depsFor = useCallback(
+    (picked: readonly WishRow[]): CardMenuDeps =>
+      picked.length > 1
+        ? {
+            ...menuDeps,
+            picked: picked.flatMap((each) =>
+              each.cardId === null ? [] : [wishTarget(each, each.cardId)],
+            ),
+          }
+        : menuDeps,
+    [menuDeps],
+  );
   const rowMenu = useCallback(
-    (row: WishRow, flip = false) =>
+    (row: WishRow, flip = false, picked: readonly WishRow[] = []) =>
       row.cardId === null
         ? undefined
-        : menu(() => buildCardMenu({ ...wishTarget(row, row.cardId!), flip }, menuDeps)),
-    [menu, menuDeps],
+        : menu(() => buildCardMenu({ ...wishTarget(row, row.cardId!), flip }, depsFor(picked))),
+    [menu, depsFor],
   );
   /** The same menu on Shift+F10 and the ContextMenu key, gated on the same `cardId`: a menu only
    *  a mouse can open is a menu half this app's readers do not have. */
   const rowMenuKey = useCallback(
-    (row: WishRow, flip = false) =>
+    (row: WishRow, flip = false, picked: readonly WishRow[] = []) =>
       row.cardId === null
         ? undefined
-        : menuKey(() => buildCardMenu({ ...wishTarget(row, row.cardId!), flip }, menuDeps)),
-    [menuKey, menuDeps],
+        : menuKey(() =>
+            buildCardMenu({ ...wishTarget(row, row.cardId!), flip }, depsFor(picked)),
+          ),
+    [menuKey, depsFor],
   );
 
   /**

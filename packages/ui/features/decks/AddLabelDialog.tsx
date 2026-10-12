@@ -56,6 +56,9 @@ export interface AddLabelDialogProps {
   /** The card the label will be put on, for the header's line. `null` while the dialog is
    *  closed, which is the only time the shell draws nothing at all. */
   cardName: string | null;
+  /** How many cards the label goes on — a picked set's `More labels…` (issue #954). Above one the
+   *  header counts them instead of naming the right-clicked card, which is not the whole act. */
+  cardCount?: number;
   /** Every label **not already in this list**, most-used first — the app-wide list minus the
    *  rows the context menu already offered. The editor narrows it, because the editor is what
    *  knows both halves. */
@@ -80,6 +83,7 @@ export interface AddLabelDialogProps {
 export function AddLabelDialog({
   open,
   cardName,
+  cardCount = 1,
   choices,
   pending,
   onPick,
@@ -91,7 +95,13 @@ export function AddLabelDialog({
     <Dialog
       open={open}
       title="Add label"
-      subtitle={cardName === null ? undefined : `Put a label on “${cardName}”.`}
+      subtitle={
+        cardName === null
+          ? undefined
+          : cardCount > 1
+            ? `Put a label on ${cardCount} cards.`
+            : `Put a label on “${cardName}”.`
+      }
       closeLabel="Close"
       size="w-[26rem]"
       onDismiss={onDismiss}
