@@ -63,6 +63,7 @@ export function openingHandView(): GoldfishView {
     stage: "mulligan",
     turn: 0,
     mulligan: { mulligans: 2, bottom: 1, freeFirst: true },
+    discard: 0,
     life: 40,
     opponentLife: 40,
     hand: [
@@ -92,6 +93,7 @@ export function turnNineView({ extraLands = 0 }: { extraLands?: number } = {}): 
     stage: "playing",
     turn: 9,
     mulligan: null,
+    discard: 0,
     life: 37,
     opponentLife: 12,
     hand: [
@@ -141,6 +143,32 @@ export function turnNineView({ extraLands = 0 }: { extraLands?: number } = {}): 
   };
 }
 
+/** The engine's default maximum hand size (CR 402.2), which the stories' outline of it uses. */
+const HAND_SIZE = 7;
+
+/** Turn 9's cleanup step with `over` cards too many in hand: the reader picks which are discarded. */
+export function discardView(over = 2): GoldfishView {
+  const names = [
+    "Swords to Plowshares",
+    "Forest",
+    "Island",
+    "Sol Ring",
+    "Counterspell",
+    "Rhystic Study",
+    "Tarmogoyf",
+    "Llanowar Elves",
+    "Ancient Tomb",
+    "Consecrated Sphinx",
+    "Smuggler's Copter",
+  ];
+  return {
+    ...turnNineView(),
+    stage: "discard",
+    discard: over,
+    hand: names.slice(0, HAND_SIZE + over).map((name) => gameCard(name)),
+  };
+}
+
 const ZONE_OF: Record<GoldfishPlace, keyof GoldfishView | null> = {
   hand: "hand",
   battlefield: "battlefield",
@@ -156,8 +184,8 @@ const ZONES: Zone[] = ["hand", "battlefield", "graveyard", "exile", "command", "
 
 /**
  * What a story's board does with an action — the engine's answer in outline, for clicking
- * through a story. Moves, taps, draws, life and the next turn; a play is a placement; anything
- * else is ignored. Never used outside stories and tests.
+ * through a story. Moves, taps, draws, life, the next turn and its discard to seven; a play is a
+ * placement; anything else is ignored. Never used outside stories and tests.
  */
 export function playLocally(view: GoldfishView, action: GoldfishAction): GoldfishView {
   const v: GoldfishView = {
@@ -223,14 +251,29 @@ export function playLocally(view: GoldfishView, action: GoldfishAction): Goldfis
       return action.seat === "you"
         ? { ...v, life: action.life }
         : { ...v, opponentLife: action.life };
-    case "nextTurn": {
-      v.battlefield = v.battlefield.map((c) => ({ ...c, tapped: false }));
-      const top = v.libraryCards.shift();
-      if (top) v.hand.push(top);
-      return { ...v, turn: v.turn + 1, library: v.libraryCards.length };
+    case "nextTurn":
+      if (v.hand.length > HAND_SIZE) {
+        return { ...v, stage: "discard", discard: v.hand.length - HAND_SIZE };
+      }
+      return nextTurn(v);
+    case "discard": {
+      if (v.stage !== "discard" || action.ids.length !== v.discard) return view;
+      for (const id of action.ids) {
+        const c = take(id);
+        if (c) put(c, "graveyard");
+      }
+      return nextTurn({ ...v, stage: "playing", discard: 0 });
     }
     default:
       break;
   }
   return { ...v, library: v.libraryCards.length };
+}
+
+/** Untap, draw, and the turn's number: `v` is {@link playLocally}'s own copy, changed in place. */
+function nextTurn(v: GoldfishView): GoldfishView {
+  v.battlefield = v.battlefield.map((c) => ({ ...c, tapped: false }));
+  const top = v.libraryCards.shift();
+  if (top) v.hand.push(top);
+  return { ...v, turn: v.turn + 1, library: v.libraryCards.length };
 }

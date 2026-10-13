@@ -13,8 +13,11 @@
  */
 import { invoke } from "./invoke";
 
-/** Whose decision the game is waiting on: the opening hand, or the reader's main phase. */
-export type GoldfishStage = "mulligan" | "playing";
+/**
+ * Whose decision the game is waiting on: the opening hand, the reader's main phase, or — a turn
+ * passed with too many cards in hand — the cleanup step's discard, which only `discard` answers.
+ */
+export type GoldfishStage = "mulligan" | "playing" | "discard";
 
 /** Where a permanent sits: creatures toward the opponent; lands left and the rest right behind. */
 export type GoldfishLane = "creature" | "land" | "other";
@@ -31,6 +34,8 @@ export interface GoldfishView {
   /** The reader's own turns, from 1; 0 while the opening hand is decided. */
   turn: number;
   mulligan: MulliganView | null;
+  /** How many cards the reader has to discard before the turn ends; 0 unless `stage` is `discard`. */
+  discard: number;
   life: number;
   opponentLife: number;
   hand: GameCard[];
@@ -114,7 +119,8 @@ export type GoldfishAction =
   | { type: "mill"; count: number }
   | { type: "shuffle" }
   | { type: "setLife"; seat: GoldfishSeat; life: number }
-  | { type: "nextTurn" };
+  | { type: "nextTurn" }
+  | { type: "discard"; ids: number[] };
 
 /** What an action did, one fact a row. */
 export type Happened =
