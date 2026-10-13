@@ -18,11 +18,32 @@
 import type { GameCard, GoldfishPlace, GoldfishSeat, MulliganView, TokenOffer } from "./goldfish";
 import { invoke } from "./invoke";
 
-/** What the game waits on the reader for — the board's mode. */
-export type PlaytestStage = "mulligan" | "main" | "attack" | "block" | "prompt" | "over";
+/**
+ * What the game waits on the reader for — the board's mode. `respond` is priority with something
+ * to answer (the opponent's spell, combat after blocks, a step the reader asked to stop at);
+ * `watching` appears only in a replay frame, while the game moves on by itself.
+ */
+export type PlaytestStage =
+  "mulligan" | "main" | "attack" | "block" | "respond" | "prompt" | "watching" | "over";
 
 /** Where the turn is, coarse. */
 export type PlaytestPhase = "beginning" | "main1" | "combat" | "main2" | "ending";
+
+/** What picking a card does: kept on top (scry, surveil), discarded, found, kept, revealed… */
+export type PlaytestPickPurpose =
+  "scry" | "surveil" | "discard" | "search" | "dig" | "reveal" | "targets" | "choose";
+
+/** A step the reader can ask the game to stop at. */
+export type PlaytestStopStep =
+  | "upkeep"
+  | "draw"
+  | "main1"
+  | "beginCombat"
+  | "attackers"
+  | "blockers"
+  | "damage"
+  | "main2"
+  | "end";
 
 /** What the AI opponent plays like: phase's presets, random to strong. */
 export type PlaytestDifficulty = "veryEasy" | "easy" | "medium" | "hard" | "veryHard";
@@ -36,6 +57,8 @@ export interface PlaytestView {
   /** Who played first (the seed's coin flip). */
   started: GoldfishSeat;
   phase: PlaytestPhase;
+  /** The step within `phase` where a player gets priority; `null` in untap, end of combat, cleanup. */
+  step: PlaytestStopStep | null;
   mulligan: MulliganView | null;
   you: PlaytestSeat;
   /** `hand` and `libraryCards` are always empty: the counts are what the reader may know. */
@@ -53,6 +76,16 @@ export interface PlaytestView {
   winner: GoldfishSeat | null;
   /** The tokens the reader's deck makes. */
   tokens: TokenOffer[];
+  /** The steps the reader asked to stop at, as `setStops` set them. */
+  stops: PlaytestStop[];
+  /** The reader is ending the turn: until it changes, only a block or a question stops it. */
+  endingTurn: boolean;
+}
+
+/** A step to stop at, on whose turn. */
+export interface PlaytestStop {
+  seat: GoldfishSeat;
+  step: PlaytestStopStep;
 }
 
 export interface PlaytestSeat {
@@ -73,9 +106,15 @@ export interface PlaytestSeat {
 }
 
 export interface PlaytestCombat {
-  /** The attacking creatures' ids, whichever seat attacks. */
-  attackers: number[];
+  /** Every attacker, whichever seat attacks, and what it attacks. */
+  attacks: PlaytestAttackPair[];
   blocks: PlaytestBlockPair[];
+}
+
+/** An attacker and what it attacks: a planeswalker's or battle's id, `null` for the player. */
+export interface PlaytestAttackPair {
+  attacker: number;
+  target: number | null;
 }
 
 export interface PlaytestBlockPair {
@@ -84,7 +123,18 @@ export interface PlaytestBlockPair {
 }
 
 export interface PlaytestAttack {
-  attackers: number[];
+  /** The reader's creatures that can attack, and what each can attack. */
+  attackers: PlaytestAttacker[];
+  /** The planeswalkers and battles any of them can attack, to name them. */
+  targets: PlaytestCardRef[];
+}
+
+export interface PlaytestAttacker {
+  id: number;
+  /** It can attack the opponent. */
+  player: boolean;
+  /** The planeswalkers and battles it can attack. */
+  targets: number[];
 }
 
 export interface PlaytestBlock {
@@ -109,6 +159,20 @@ export interface PlaytestPrompt {
   options: PlaytestOption[];
   /** It came out of the reader's own cast or activation, which `cancel` takes back. */
   cancellable: boolean;
+  /** The answer is a set of cards (scry, surveil, a discard, a search): `pickCards` answers. */
+  pick: PlaytestPick | null;
+}
+
+export interface PlaytestPick {
+  purpose: PlaytestPickPurpose;
+  /** The cards looked at, in order (a scry's top first). */
+  cards: PlaytestCardRef[];
+  /** The ids among them that may be picked. */
+  eligible: number[];
+  min: number;
+  max: number;
+  /** Order counts: for scry and surveil the picked cards stay on top, first picked on top. */
+  ordered: boolean;
 }
 
 export interface PlaytestOption {
@@ -146,9 +210,11 @@ export type PlaytestAction =
   | { type: "activate"; id: number }
   | { type: "pass" }
   | { type: "endTurn" }
-  | { type: "attack"; attackers: number[] }
+  | { type: "setStops"; stops: PlaytestStop[] }
+  | { type: "attack"; attacks: PlaytestAttackPair[] }
   | { type: "block"; blocks: PlaytestBlockPair[] }
   | { type: "choose"; index: number }
+  | { type: "pickCards"; ids: number[] }
   | { type: "auto" }
   | { type: "cancel" }
   | { type: "move"; id: number; to: GoldfishPlace }
@@ -174,8 +240,16 @@ export type PlaytestHappened =
   | { type: "drew"; seat: GoldfishSeat; name: string | null }
   | { type: "attacked"; seat: GoldfishSeat; names: string[] }
   | { type: "blocked"; seat: GoldfishSeat; blocker: string; attacker: string }
-  | { type: "dealt"; source: string; target: string; amount: number }
-  | { type: "life"; seat: GoldfishSeat; amount: number }
+  | {
+      type: "dealt";
+      source: string;
+      target: string;
+      /** The permanent hit and whose it is, so the board finds the very card. */
+      targetId: number;
+      seat: GoldfishSeat;
+      amount: number;
+    }
+  | { type: "life"; seat: GoldfishSeat; amount: number; total: number }
   | { type: "tokensCreated"; seat: GoldfishSeat; name: string; count: number }
   | { type: "put"; name: string; from: GoldfishPlace; to: GoldfishPlace }
   | { type: "tapped"; name: string; count: number; tapped: boolean }
@@ -187,6 +261,18 @@ export type PlaytestHappened =
   | { type: "gameOver"; winner: GoldfishSeat | null };
 
 export interface PlaytestStep {
+  view: PlaytestView;
+  /** Everything, in order — the frames' facts included. */
+  happened: PlaytestHappened[];
+  /**
+   * The table after each thing worth showing on the way (an opponent's land, cast, attack or
+   * block, a spell resolving, combat damage), oldest first, for the page to replay before it
+   * settles on `view`. Every frame's stage is `watching`.
+   */
+  frames: PlaytestFrame[];
+}
+
+export interface PlaytestFrame {
   view: PlaytestView;
   happened: PlaytestHappened[];
 }

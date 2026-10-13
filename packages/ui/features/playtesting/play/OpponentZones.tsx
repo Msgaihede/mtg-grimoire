@@ -1,5 +1,6 @@
 import type { JSX } from "react";
 import type { GameCard, PlaytestSeat } from "@/lib/ipc";
+import { CountTag } from "@/components/CountTag";
 import { GrimoireMark } from "@/components/GrimoireMark";
 import { FOCUS } from "@/lib/focus";
 import { cn } from "@/lib/utils";
@@ -17,9 +18,33 @@ import { markSize } from "../goldfish/ZonePile";
  * is a drag source or a drop target and nothing has a menu: a face-up card can be pointed at (the
  * preview) and a face-up zone opened to look through, and that is all. What the reader may not
  * see is not on the wire (`ipc/playtest.ts`): their hand and library are counts, drawn as backs.
+ *
+ * **Compact, always**: each zone's count is a `CountTag` on its card rather than a line under it,
+ * so a column is the card's width and no more.
  */
 
-const LABEL = "font-mono text-xs text-dim";
+/** A zone's count on its card. */
+function Count({ count, title }: { count: number; title: string }): JSX.Element {
+  return (
+    <CountTag
+      count={count}
+      title={title}
+      className="pointer-events-none absolute right-1 bottom-1"
+    />
+  );
+}
+
+/** An empty zone: a dashed slot naming itself. */
+function Empty({ label, size }: { label: string; size: ZoneSize }): JSX.Element {
+  return (
+    <div
+      className="flex items-center justify-center rounded-lg border border-dashed border-border bg-bg/60 text-[10px] text-dim"
+      style={{ width: size.width, height: size.height }}
+    >
+      <span>{label}</span>
+    </div>
+  );
+}
 
 /** A face-down card: the back every library and every hidden hand shows. */
 function Back({ size, className }: { size: ZoneSize; className?: string }): JSX.Element {
@@ -50,13 +75,13 @@ export function OpponentLibrary({
     <div
       role="img"
       aria-label={`The opponent's library, ${count} ${count === 1 ? "card" : "cards"}`}
-      className="flex flex-col gap-1.5"
+      className="relative"
     >
       <Back
         size={size}
         className="shadow-[2px_2px_0_var(--color-bg),3px_3px_0_var(--color-border),5px_5px_0_var(--color-bg),6px_6px_0_var(--color-border)]"
       />
-      <span className={LABEL}>Library · {count}</span>
+      <Count count={count} title={`${count} ${count === 1 ? "card" : "cards"} in their library`} />
     </div>
   );
 }
@@ -85,14 +110,9 @@ export function OpponentPile({
   const where = zone === "graveyard" ? "their graveyard" : "their exile";
   const n = `${cards.length} ${cards.length === 1 ? "card" : "cards"}`;
   return (
-    <div className={cn("flex flex-col gap-1.5", className)}>
+    <div className={cn("flex flex-col", className)}>
       {top === null ? (
-        <div
-          className="flex items-center justify-center rounded-lg border border-dashed border-border bg-bg/60 text-[11px] text-dim"
-          style={{ width: size.width, height: size.height }}
-        >
-          <span>{title}</span>
-        </div>
+        <Empty label={title} size={size} />
       ) : (
         <button
           type="button"
@@ -118,11 +138,9 @@ export function OpponentPile({
           style={{ width: size.width, height: size.height }}
         >
           <CardFace card={top} />
+          <Count count={cards.length} title={`${n} in ${where}`} />
         </button>
       )}
-      <span className={LABEL}>
-        {title} · {cards.length}
-      </span>
     </div>
   );
 }
@@ -146,14 +164,9 @@ export function OpponentCommand({
 }): JSX.Element {
   const commanders = seat?.command ?? [];
   return (
-    <div className={cn("flex flex-col gap-1.5", className)}>
+    <div className={cn("flex flex-col", className)}>
       {commanders.length === 0 ? (
-        <div
-          className="flex items-center justify-center rounded-lg border border-dashed border-border bg-bg/60 text-[11px] text-dim"
-          style={{ width: size.width, height: size.height }}
-        >
-          <span>Command</span>
-        </div>
+        <Empty label="Command" size={size} />
       ) : (
         <div
           className="relative"
@@ -174,7 +187,6 @@ export function OpponentCommand({
           ))}
         </div>
       )}
-      <span className={LABEL}>Command</span>
     </div>
   );
 }
@@ -217,12 +229,13 @@ function CommanderBack({
 }
 
 /** A face-down card of the hand: narrower than a zone's, since only its bottom shows. */
-const HAND_BACK: ZoneSize = { width: 56, height: 78 };
+const HAND_BACK: ZoneSize = { width: 40, height: 56 };
 /** How much of each back shows below the board's top edge. */
-export const HAND_BACK_PEEK = 40;
+export const HAND_BACK_PEEK = 28;
 /** The step between two backs: side by side up to seven, then closer. */
 function backStep(count: number): number {
-  return count <= 7 ? HAND_BACK.width + 6 : Math.max(14, Math.floor((7 * 62 - 56) / (count - 1)));
+  const side = HAND_BACK.width + 5;
+  return count <= 7 ? side : Math.max(12, Math.floor((6 * side) / (count - 1)));
 }
 
 /** The width the opponent's hand takes along the top edge. */
@@ -257,7 +270,7 @@ export function OpponentHand({ count }: { count: number }): JSX.Element {
           </span>
         ))}
       </div>
-      <span className="pt-2 font-mono text-xs text-dim">Hand · {count}</span>
+      <span className="pt-1.5 font-mono text-xs text-dim">Hand · {count}</span>
     </div>
   );
 }

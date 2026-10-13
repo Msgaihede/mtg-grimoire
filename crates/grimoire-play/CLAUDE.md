@@ -38,10 +38,15 @@ the pin, the goldfish) and [playtest.md](../../docs/reference/playtest.md) (the 
   counts in `PlaytestSeat`, and its draws are `Drew` with no name (`playtest/session.rs`' `tell`).
 - **A playtest plays on by itself until the reader decides** (`advance`): the AI takes its own
   decisions through phase's `run_ai_actions`, and the reader's priority is passed for them except
-  in their main phase with an empty stack. The reader is stopped only at a `PlaytestStage`. A new
-  stop is a new stage, never a pause inside `advance`.
+  where `stops_here` stops them (their main phase, a step they asked for, the opponent's spell or
+  combat after blocks when they could respond). The reader is stopped only at a `PlaytestStage`.
+  A new stop is a new stage or a new `stops_here` rule, never a pause elsewhere in `advance`.
 - **A prompt is the engine's legal answers, read generically** (`option_of`), never a match on
-  `WaitingFor`'s hundred-odd variants. `auto` must answer any prompt (phase-ai for the reader).
+  `WaitingFor`'s hundred-odd variants. The one exception is `pick`: the few questions answered by
+  a set of cards, whose fields give the count. `auto` must answer any prompt (phase-ai for the
+  reader).
+- **A replay frame shows, it never offers.** Every `PlaytestFrame` view is `watching`, with no
+  prompt, attack or block (`view_as(true)`), so the AI's own questions never reach the page.
 - **A refused action changes nothing.** Both games' `act` restore a checkpoint on any `Err`. On
   the goldfish, a rules play the engine answers with a question is taken back and placed by hand
   (`session.rs`' module doc); in a playtest the question is asked, and the cast's checkpoint

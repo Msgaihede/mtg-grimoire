@@ -33,6 +33,7 @@ export function LifePlate({
   cardId,
   highlight = false,
   disabled = false,
+  compact = false,
 }: {
   seat: "you" | "opponent";
   title: string;
@@ -44,6 +45,12 @@ export function LifePlate({
   /** The goldfish is dead: the plate's edge goes gold. */
   highlight?: boolean;
   disabled?: boolean;
+  /**
+   * One row, 38 px tall: a small portrait, the name beside a small stepper — the playtest
+   * board's opponent, whose plate shares a thin band with their hand. Absent, the goldfish's
+   * plate is drawn exactly as it was.
+   */
+  compact?: boolean;
 }): JSX.Element {
   const [draft, setDraft] = useState<number | null>(null);
   const [pending, setPending] = useState(false);
@@ -100,12 +107,16 @@ export function LifePlate({
         "flex items-center gap-3 rounded-[14px] border bg-surface py-2 pl-2",
         seat === "opponent" ? "pr-3" : "pr-4",
         highlight ? "border-accent" : "border-border",
+        compact && "gap-2 rounded-full py-1 pr-1.5 pl-1",
       )}
     >
       {portrait !== null ? (
         <span
           aria-hidden="true"
-          className="size-11 flex-none overflow-hidden rounded-full border border-border"
+          className={cn(
+            "size-11 flex-none overflow-hidden rounded-full border border-border",
+            compact && "size-7",
+          )}
         >
           <CardImage
             src={cardImageUrl(portrait, 0, "art")}
@@ -116,16 +127,22 @@ export function LifePlate({
       ) : (
         <span
           aria-hidden="true"
-          className="inline-flex size-11 flex-none items-center justify-center rounded-full border border-border bg-bg text-dim"
+          className={cn(
+            "inline-flex size-11 flex-none items-center justify-center rounded-full border border-border bg-bg text-dim",
+            compact && "size-7",
+          )}
         >
-          <User className="size-[22px]" />
+          <User className={cn("size-[22px]", compact && "size-4")} />
         </span>
       )}
       {/* A `fieldset` because `disabled` on one reaches every control inside it, and the stepper
           has no `disabled` of its own: while a game is being dealt there is no life to change. */}
       <fieldset
         disabled={disabled}
-        className="m-0 flex min-w-0 flex-col gap-1 border-0 p-0"
+        className={cn(
+          "m-0 flex min-w-0 flex-col gap-1 border-0 p-0",
+          compact && "flex-row items-center gap-2",
+        )}
         onBlur={(e) => {
           // Leaving the box commits what was typed; moving between `−`, the box and `+` does
           // not, so a run of presses stays one change.
@@ -135,14 +152,21 @@ export function LifePlate({
           if (e.key === "Enter") commit();
         }}
       >
-        <span className="text-[11px] tracking-[0.08em] text-dim uppercase">{title}</span>
+        <span
+          className={cn(
+            "text-[11px] tracking-[0.08em] text-dim uppercase",
+            compact && "max-w-[180px] truncate",
+          )}
+        >
+          {title}
+        </span>
         <QuantityStepper
           value={draft ?? life}
           onChange={change}
           min={0}
           max={999}
           label={label}
-          size="md"
+          size={compact ? "sm" : "md"}
         />
       </fieldset>
     </div>

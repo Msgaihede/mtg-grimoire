@@ -8,7 +8,12 @@ import { CardFace } from "../goldfish/Inspect";
 import { cardOfRef, optionLabel, promptTitle } from "./prompt";
 
 /**
- * The engine's question, beside the table — `stage: "prompt"`.
+ * The engine's question, docked at the foot of the board over the reader's hand — `stage:
+ * "prompt"`. **Docked where nothing the question lights can be**: the prompt makes cards on the
+ * two tables clickable, and a panel floating over a table would sooner or later cover the one it
+ * asks for. The foot holds only the reader's hand, whose cards an answer names in its row (with
+ * the card's picture), so the answers lie in one wrapping row of chips there, and scroll inside
+ * the panel's 104 px when there are many.
  *
  * **A panel, not a dialog.** A target is chosen by looking at the table: the panel takes no scrim
  * and holds no focus trap, the board under it stays pointable (a row hovered points its card, and
@@ -44,90 +49,120 @@ export function PromptPanel({
     <section
       aria-label={title}
       className={cn(
-        "flex w-[300px] flex-col overflow-hidden rounded-xl border border-accent bg-surface shadow-lg",
+        "flex flex-col overflow-hidden rounded-xl border border-accent bg-surface shadow-lg",
         LAYER.raised,
         className,
       )}
     >
-      <header className="flex flex-col gap-0.5 border-b border-border px-3.5 py-2.5">
-        <h2 className="m-0 text-[15px] font-semibold">{title}</h2>
-        {prompt.source !== null && <span className="text-xs text-dim">{prompt.source}</span>}
+      <header className="flex flex-none items-center gap-2 border-b border-border py-1.5 pr-1.5 pl-3">
+        <h2 className="m-0 flex-none text-[14px] font-semibold">{title}</h2>
+        {prompt.source !== null && (
+          <span className="min-w-0 truncate text-xs text-dim">{prompt.source}</span>
+        )}
+        <span className="ml-auto flex flex-none gap-1.5">
+          {prompt.cancellable && (
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => onAct({ type: "cancel" })}
+              className={cn(FOOTER_BUTTON, "border-border text-text hover:border-accent")}
+            >
+              Cancel
+            </button>
+          )}
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => onAct({ type: "auto" })}
+            className={cn(
+              FOOTER_BUTTON,
+              "border-accent text-accent hover:bg-accent hover:text-accent-fg",
+            )}
+          >
+            Let the engine choose
+          </button>
+        </span>
       </header>
 
       {prompt.options.length === 0 ? (
-        <p className="m-0 px-3.5 py-3 text-[13px] text-dim">
+        <p className="m-0 px-3 py-2 text-[13px] text-dim">
           The board can’t show this choice. Let the engine choose for you
           {prompt.cancellable ? ", or cancel." : "."}
         </p>
       ) : (
-        <ul className="m-0 flex min-h-0 list-none flex-col gap-1 overflow-y-auto p-2">
-          {prompt.options.map((option) => {
-            const { text, hint } = optionLabel(option, prompt);
-            const cards = option.cards.map((ref) => cardOfRef(ref, table));
-            const first = cards[0];
-            return (
-              <li key={option.index}>
-                <button
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => {
-                    onUnpoint();
-                    onAct({ type: "choose", index: option.index });
-                  }}
-                  onMouseEnter={first === undefined ? undefined : (e) => onPoint(first, e)}
-                  onMouseLeave={first === undefined ? undefined : onUnpoint}
-                  data-point={first?.id}
-                  className={cn(
-                    "flex w-full items-center gap-2.5 rounded-lg border border-transparent px-2 py-1.5 text-left text-[13px]",
-                    "transition-colors motion-reduce:transition-none hover:border-accent disabled:opacity-45",
-                    FOCUS,
-                  )}
-                >
-                  {cards.slice(0, 3).map((card) => (
-                    <span key={card.id} aria-hidden="true" className="h-[42px] w-[30px] flex-none">
-                      <CardFace card={card} />
-                    </span>
-                  ))}
-                  <span className="flex min-w-0 flex-col">
-                    <span className="truncate">{text}</span>
-                    {hint !== null && <span className="text-xs text-dim">{hint}</span>}
-                  </span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-
-      <footer className="flex flex-wrap justify-end gap-2 border-t border-border px-3 py-2.5">
-        {prompt.cancellable && (
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => onAct({ type: "cancel" })}
-            className={cn(FOOTER_BUTTON, "border-border text-text hover:border-accent")}
-          >
-            Cancel
-          </button>
-        )}
-        <button
-          type="button"
+        <OptionChips
+          prompt={prompt}
+          table={table}
           disabled={disabled}
-          onClick={() => onAct({ type: "auto" })}
-          className={cn(
-            FOOTER_BUTTON,
-            "border-accent text-accent hover:bg-accent hover:text-accent-fg",
-          )}
-        >
-          Let the engine choose
-        </button>
-      </footer>
+          onAct={onAct}
+          onPoint={onPoint}
+          onUnpoint={onUnpoint}
+        />
+      )}
     </section>
   );
 }
 
+/** The prompt's answers as one wrapping row of chips — the panel's body, and the picker's
+ *  "Other answers". */
+export function OptionChips({
+  prompt,
+  table,
+  disabled,
+  onAct,
+  onPoint,
+  onUnpoint,
+}: {
+  prompt: PlaytestPrompt;
+  table: readonly GameCard[];
+  disabled: boolean;
+  onAct: (action: PlaytestAction) => void;
+  onPoint: (card: GameCard, e: MouseEvent) => void;
+  onUnpoint: () => void;
+}): JSX.Element {
+  return (
+    <ul className="m-0 flex min-h-0 list-none flex-wrap gap-1.5 overflow-y-auto p-1.5">
+      {prompt.options.map((option) => {
+        const { text, hint } = optionLabel(option, prompt);
+        const cards = option.cards.map((ref) => cardOfRef(ref, table));
+        const first = cards[0];
+        return (
+          <li key={option.index} className="min-w-0">
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => {
+                onUnpoint();
+                onAct({ type: "choose", index: option.index });
+              }}
+              onMouseEnter={first === undefined ? undefined : (e) => onPoint(first, e)}
+              onMouseLeave={first === undefined ? undefined : onUnpoint}
+              data-point={first?.id}
+              className={cn(
+                "flex h-11 max-w-[260px] items-center gap-2 rounded-lg border border-border px-1.5 text-left text-[13px]",
+                "transition-colors motion-reduce:transition-none hover:border-accent disabled:opacity-45",
+                FOCUS,
+              )}
+            >
+              {cards.slice(0, 3).map((card) => (
+                <span key={card.id} aria-hidden="true" className="h-[34px] w-6 flex-none">
+                  <CardFace card={card} />
+                </span>
+              ))}
+              <span className={cn("flex min-w-0 flex-col", cards.length === 0 && "px-1.5")}>
+                <span className="truncate">{text}</span>
+                {hint !== null && <span className="truncate text-[11px] text-dim">{hint}</span>}
+              </span>
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 const FOOTER_BUTTON = cn(
-  "inline-flex h-8 items-center rounded-full border bg-surface px-3.5 text-[13px]",
+  "inline-flex h-7 items-center rounded-full border bg-surface px-3 text-[12px]",
   "transition-colors motion-reduce:transition-none disabled:opacity-45",
   PRESS,
   FOCUS,

@@ -4,15 +4,19 @@
 //! **The rules decide, and the reader decides only what a player at a table would** — the owner's
 //! choices of 2026-10-13. After every action the session plays on by itself (`advance`): the AI
 //! takes each of its decisions, and the reader's priority is passed for them, Arena-style, until
-//! the game next needs the reader. That is one of five places (`PlaytestStage`): the opening hand,
-//! the reader's main phase with an empty stack, the reader's declare-attackers step, the reader's
-//! declare-blockers step, and any question the engine asks the reader (a target, a mode, a "may",
-//! a card to discard). Everything else — the AI's whole turn, a spell resolving, combat damage —
-//! happens inside the one call, and comes back as what happened.
+//! the game next needs the reader (`PlaytestStage`): the opening hand, their main phase with an
+//! empty stack, their declare-attackers and declare-blockers steps, a question the engine asks
+//! them, and — `stops_here`'s smart stops and toggles — a moment to respond: the opponent's spell
+//! on the stack or combat after blocks when they could answer it, or a step they asked to stop
+//! at. Everything else — most of the AI's turn, a spell resolving, combat damage — happens inside
+//! the one call, and comes back as what happened and as replay frames (`PlaytestFrame`), the
+//! table after each thing worth showing.
 //!
 //! **A prompt is the engine's question as its legal answers.** phase has well over a hundred kinds
 //! of question, so no board draws each one: the view lists `legal_actions` with the facts in each
-//! (`option_of`), and `auto` answers any of them with the AI's choice for the reader.
+//! (`option_of`), and `auto` answers any of them with the AI's choice for the reader. A question
+//! answered by a set of cards — a scry, a discard, a search — also carries a `pick` (`pick`): the
+//! enumeration offers only a few of its answers.
 //!
 //! **The goldfish's sandbox stays, on the reader's own cards.** Moving a card by hand, tapping,
 //! counters, tokens, draws and life totals are phase's debug actions, as on the goldfish board: the
@@ -27,7 +31,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
-use engine::ai_support::legal_actions;
+use engine::ai_support::{has_meaningful_priority_action, legal_actions};
 use engine::game::combat::AttackTarget;
 use engine::game::engine::apply;
 use engine::game::mana_sources::max_mana_yield;
@@ -57,9 +61,11 @@ use crate::session::{game_card, place_of};
 use crate::view::{GameCard, MulliganView, Place, Seat, TokenOffer};
 
 use super::view::{
-    Difficulty, PlaytestAction, PlaytestAttack, PlaytestBlock, PlaytestBlockPair, PlaytestBlocker,
-    PlaytestCardRef, PlaytestCombat, PlaytestHappened, PlaytestOption, PlaytestPhase,
-    PlaytestPrompt, PlaytestSeat, PlaytestStackItem, PlaytestStage, PlaytestStep, PlaytestView,
+    Difficulty, PlaytestAction, PlaytestAttack, PlaytestAttackPair, PlaytestAttacker,
+    PlaytestBlock, PlaytestBlockPair, PlaytestBlocker, PlaytestCardRef, PlaytestCombat,
+    PlaytestFrame, PlaytestHappened, PlaytestOption, PlaytestPhase, PlaytestPick,
+    PlaytestPickPurpose, PlaytestPrompt, PlaytestSeat, PlaytestStackItem, PlaytestStage,
+    PlaytestStep, PlaytestStop, PlaytestStopStep, PlaytestView,
 };
 
 const YOU: PlayerId = PlayerId(0);
@@ -69,6 +75,10 @@ const AI: PlayerId = PlayerId(1);
 /// before the session gives up on it. A whole turn cycle is a few dozen; the bound is what stops a
 /// loop in the engine, the AI or here from hanging the board, and a game never reaches it.
 const STEP_LIMIT: usize = 2000;
+
+/// The most replay frames one action answers with. A long AI turn is a few dozen things to show;
+/// past this the rest is the final view, so a runaway loop of triggers cannot make a step huge.
+const FRAME_LIMIT: usize = 80;
 
 const NOT_IN_GAME: &str = "That card is no longer where it was. The board has been refreshed.";
 const NOT_NOW: &str = "Keep or mulligan the opening hand first.";
@@ -132,6 +142,15 @@ pub struct Playtest {
     choice: Option<BoardChoice>,
     /// The game's end has been put in the log.
     over_told: bool,
+    /// The steps the reader asked to stop at (`setStops`).
+    stops: Vec<PlaytestStop>,
+    /// The turn the reader is ending (`endTurn`): until it changes, nothing but a block or a
+    /// question stops the game.
+    ending: Option<u32>,
+    /// The last step a stop of `stops` stopped at, so passing there does not stop there again.
+    stopped_at: Option<(u32, Phase)>,
+    /// The current action's replay frames, taken by `act`.
+    frames: Vec<PlaytestFrame>,
 }
 
 impl Playtest {
@@ -263,14 +282,26 @@ impl Playtest {
             pending: None,
             choice: None,
             over_told: false,
+            stops: Vec::new(),
+            ending: None,
+            stopped_at: None,
+            frames: Vec::new(),
         };
         game.assign_printings(you, YOU);
         game.assign_printings(opponent, AI);
         start_game_with_starting_player(&mut game.state, started);
         let mut happened = Vec::new();
-        game.advance(&mut happened, None)?;
+        game.advance(&mut happened)?;
         let view = game.view();
-        Ok((game, PlaytestStep { view, happened }))
+        let frames = std::mem::take(&mut game.frames);
+        Ok((
+            game,
+            PlaytestStep {
+                view,
+                happened,
+                frames,
+            },
+        ))
     }
 
     /// Each of a seat's objects gets a printing: the deck's entries handed out by name, so a deck
@@ -355,8 +386,18 @@ impl Playtest {
     // ── The view ──────────────────────────────────────────────────────────────────────────
 
     pub fn view(&self) -> PlaytestView {
+        self.view_as(false)
+    }
+
+    /// The view; `watching`, a replay frame's: the stage is `Watching` and no question, attack or
+    /// block is offered — the board only shows the moment, and whose question it was stays hidden.
+    fn view_as(&self, watching: bool) -> PlaytestView {
         let s = &self.state;
-        let stage = self.stage();
+        let stage = if watching {
+            PlaytestStage::Watching
+        } else {
+            self.stage()
+        };
         let combat = s.combat.as_ref().map(|c| {
             let mut blocks: Vec<PlaytestBlockPair> = c
                 .blocker_to_attacker
@@ -370,7 +411,14 @@ impl Playtest {
                 .collect();
             blocks.sort_by_key(|b| (b.attacker, b.blocker));
             PlaytestCombat {
-                attackers: c.attackers.iter().map(|a| a.object_id.0).collect(),
+                attacks: c
+                    .attackers
+                    .iter()
+                    .map(|a| PlaytestAttackPair {
+                        attacker: a.object_id.0,
+                        target: target_id(&a.attack_target),
+                    })
+                    .collect(),
                 blocks,
             }
         });
@@ -378,10 +426,40 @@ impl Playtest {
             WaitingFor::DeclareAttackers {
                 player,
                 valid_attacker_ids,
+                valid_attack_targets,
+                valid_attack_targets_by_attacker,
                 ..
-            } if *player == YOU => Some(PlaytestAttack {
-                attackers: valid_attacker_ids.iter().map(|id| id.0).collect(),
-            }),
+            } if *player == YOU && !watching => {
+                let mut named: Vec<u64> = Vec::new();
+                let attackers = valid_attacker_ids
+                    .iter()
+                    .map(|id| {
+                        // phase's per-attacker map is the authority; a state without it falls
+                        // back to the step's aggregate list, as phase's own client does.
+                        let targets = valid_attack_targets_by_attacker
+                            .as_ref()
+                            .map_or(valid_attack_targets.as_slice(), |m| {
+                                m.get(id).map_or(&[][..], Vec::as_slice)
+                            });
+                        let ids: Vec<u64> = targets.iter().filter_map(target_id).collect();
+                        named.extend(ids.iter().copied());
+                        PlaytestAttacker {
+                            id: id.0,
+                            player: targets.iter().any(|t| matches!(t, AttackTarget::Player(_))),
+                            targets: ids,
+                        }
+                    })
+                    .collect();
+                named.sort();
+                named.dedup();
+                Some(PlaytestAttack {
+                    attackers,
+                    targets: named
+                        .into_iter()
+                        .filter_map(|id| self.card_ref(ObjectId(id)))
+                        .collect(),
+                })
+            }
             _ => None,
         };
         let block = match &s.waiting_for {
@@ -390,7 +468,7 @@ impl Playtest {
                 valid_blocker_ids,
                 valid_block_targets,
                 ..
-            } if *player == YOU => Some(PlaytestBlock {
+            } if *player == YOU && !watching => Some(PlaytestBlock {
                 blockers: valid_blocker_ids
                     .iter()
                     .map(|id| {
@@ -424,6 +502,7 @@ impl Playtest {
             active: seat_of(s.active_player),
             started: seat_of(self.started),
             phase: phase_of(s.phase),
+            step: stop_step(s.phase),
             mulligan: self.mulligan(),
             you: self.seat(YOU),
             opponent: self.seat(AI),
@@ -456,6 +535,8 @@ impl Playtest {
                 .collect(),
             winner,
             tokens: self.tokens.clone(),
+            stops: self.stops.clone(),
+            ending_turn: self.ending == Some(s.turn_number),
         }
     }
 
@@ -537,7 +618,13 @@ impl Playtest {
             WaitingFor::MulliganDecision { .. } | WaitingFor::OpeningHandBottomCards { .. } => {
                 PlaytestStage::Mulligan
             }
-            WaitingFor::Priority { player } if *player == YOU => PlaytestStage::Main,
+            WaitingFor::Priority { player } if *player == YOU => {
+                if self.at_home() {
+                    PlaytestStage::Main
+                } else {
+                    PlaytestStage::Respond
+                }
+            }
             WaitingFor::DeclareAttackers { player, .. } if *player == YOU => PlaytestStage::Attack,
             WaitingFor::DeclareBlockers { player, .. } if *player == YOU => PlaytestStage::Block,
             _ => PlaytestStage::Prompt,
@@ -584,6 +671,7 @@ impl Playtest {
                     .map(|(i, a)| self.option_of(i, a))
                     .collect(),
                 cancellable: true,
+                pick: None,
             };
         }
         let source = self.pending.as_ref().map(|p| p.source.clone()).or_else(|| {
@@ -605,7 +693,195 @@ impl Playtest {
                 .map(|(i, a)| self.option_of(i, a))
                 .collect(),
             cancellable: self.pending.is_some(),
+            pick: self.pick().map(|(pick, _)| pick),
         }
+    }
+
+    /// The question's answer as a set of cards, for the few kinds of question whose answers
+    /// `legal_actions` cannot list (it offers none, all and each one alone — a scry of three has
+    /// sixteen answers). Each kind's fields say which cards, how many and whether order counts;
+    /// the answer is `SelectCards`, or `SelectTargets` for `ChooseObjectsSelection`. The second
+    /// value says which.
+    fn pick(&self) -> Option<(PlaytestPick, bool)> {
+        let all = |ids: &[ObjectId]| ids.iter().map(|id| id.0).collect::<Vec<u64>>();
+        let (purpose, shown, eligible, min, max, ordered, targets) = match &self.state.waiting_for {
+            WaitingFor::ScryChoice { player, cards } if *player == YOU => (
+                PlaytestPickPurpose::Scry,
+                all(cards),
+                all(cards),
+                0,
+                cards.len(),
+                true,
+                false,
+            ),
+            WaitingFor::SurveilChoice { player, cards } if *player == YOU => (
+                PlaytestPickPurpose::Surveil,
+                all(cards),
+                all(cards),
+                0,
+                cards.len(),
+                true,
+                false,
+            ),
+            WaitingFor::DiscardChoice {
+                player,
+                count,
+                cards,
+                up_to,
+                ..
+            } if *player == YOU => (
+                PlaytestPickPurpose::Discard,
+                all(cards),
+                all(cards),
+                if *up_to { 0 } else { *count },
+                *count,
+                false,
+                false,
+            ),
+            WaitingFor::DiscardToHandSize {
+                player,
+                count,
+                cards,
+            } if *player == YOU => (
+                PlaytestPickPurpose::Discard,
+                all(cards),
+                all(cards),
+                *count,
+                *count,
+                false,
+                false,
+            ),
+            WaitingFor::SearchChoice {
+                player,
+                cards,
+                count,
+                up_to,
+                allows_partial_find,
+                ..
+            } if *player == YOU => (
+                PlaytestPickPurpose::Search,
+                all(cards),
+                all(cards),
+                if *up_to || *allows_partial_find {
+                    0
+                } else {
+                    (*count).min(cards.len())
+                },
+                *count,
+                false,
+                false,
+            ),
+            WaitingFor::DigChoice {
+                player,
+                cards,
+                keep_count,
+                up_to,
+                selectable_cards,
+                ..
+            } if *player == YOU => {
+                let eligible = if selectable_cards.is_empty() {
+                    all(cards)
+                } else {
+                    all(selectable_cards)
+                };
+                let most = (*keep_count).min(eligible.len());
+                (
+                    PlaytestPickPurpose::Dig,
+                    all(cards),
+                    eligible,
+                    if *up_to { 0 } else { most },
+                    most,
+                    false,
+                    false,
+                )
+            }
+            WaitingFor::ChooseFromZoneChoice {
+                player,
+                cards,
+                count,
+                up_to,
+                ..
+            } if *player == YOU => (
+                PlaytestPickPurpose::Choose,
+                all(cards),
+                all(cards),
+                if *up_to { 0 } else { (*count).min(cards.len()) },
+                *count,
+                false,
+                false,
+            ),
+            WaitingFor::RevealChoice {
+                player,
+                cards,
+                optional,
+                ..
+            } if *player == YOU => (
+                PlaytestPickPurpose::Reveal,
+                all(cards),
+                all(cards),
+                usize::from(!*optional),
+                1,
+                false,
+                false,
+            ),
+            WaitingFor::MultiTargetSelection {
+                player,
+                legal_targets,
+                min_targets,
+                max_targets,
+                ..
+            } if *player == YOU => (
+                PlaytestPickPurpose::Targets,
+                all(legal_targets),
+                all(legal_targets),
+                *min_targets,
+                *max_targets,
+                false,
+                false,
+            ),
+            // Only while every eligible choice is a card: a player among them is a question the
+            // generic options answer.
+            WaitingFor::ChooseObjectsSelection {
+                player,
+                eligible,
+                min,
+                max,
+                ..
+            } if *player == YOU && eligible.iter().all(|t| matches!(t, TargetRef::Object(_))) => {
+                let ids: Vec<u64> = eligible
+                    .iter()
+                    .filter_map(|t| match t {
+                        TargetRef::Object(id) => Some(id.0),
+                        TargetRef::Player(_) => None,
+                    })
+                    .collect();
+                let most = max.map_or(ids.len(), |m| m as usize);
+                (
+                    PlaytestPickPurpose::Choose,
+                    ids.clone(),
+                    ids,
+                    *min as usize,
+                    most,
+                    false,
+                    true,
+                )
+            }
+            _ => return None,
+        };
+        Some((
+            PlaytestPick {
+                purpose,
+                cards: shown
+                    .iter()
+                    .filter_map(|id| self.card_ref(ObjectId(*id)))
+                    .collect(),
+                eligible,
+                min: min as u32,
+                max: max as u32,
+                ordered,
+            },
+            targets,
+        ))
     }
 
     /// The answers the engine accepts to the question it is asking the reader.
@@ -674,15 +950,18 @@ impl Playtest {
         let checkpoint = self.checkpoint();
         let mut happened = Vec::new();
         let choice = self.choice.take();
+        self.frames.clear();
         match self.run(action, choice, &mut happened) {
             Ok(()) => {
                 self.follow_printings();
                 Ok(PlaytestStep {
                     view: self.view(),
                     happened,
+                    frames: std::mem::take(&mut self.frames),
                 })
             }
             Err(e) => {
+                self.frames.clear();
                 self.restore(checkpoint);
                 Err(e)
             }
@@ -700,6 +979,15 @@ impl Playtest {
         } else {
             self.stage()
         };
+        if let PlaytestAction::SetStops { stops } = action {
+            // A setting, not a move: taken at any stage, and nothing plays on after it.
+            self.choice = choice;
+            let mut stops = stops;
+            stops.sort_by_key(|s| (s.seat == Seat::Opponent, s.step as u8));
+            stops.dedup();
+            self.stops = stops;
+            return Ok(());
+        }
         if stage == PlaytestStage::Over {
             return Err(OVER.into());
         }
@@ -719,7 +1007,7 @@ impl Playtest {
                 out.push(PlaytestHappened::Mulliganed {
                     mulligans: self.mulligans,
                 });
-                self.advance(out, None)
+                self.advance(out)
             }
             PlaytestAction::Keep { bottom } => {
                 if stage != PlaytestStage::Mulligan {
@@ -752,7 +1040,7 @@ impl Playtest {
                     bottomed: owed as u32,
                 });
                 let kept_at = out.len();
-                self.advance(out, None)?;
+                self.advance(out)?;
                 // The first turn began inside `start_game`, before the hands were kept, and its
                 // event went nowhere: it is told here, once the game is past the opening hands.
                 let first =
@@ -786,7 +1074,7 @@ impl Playtest {
                     self.begin(c.source);
                 }
                 self.apply(YOU, answer, out)?;
-                self.advance(out, None)
+                self.advance(out)
             }
             PlaytestAction::Auto => {
                 if stage != PlaytestStage::Prompt {
@@ -806,7 +1094,48 @@ impl Playtest {
                 let answer = answer.ok_or("The rules engine has no answer to offer here.")?;
                 out.push(PlaytestHappened::Chose { what });
                 self.apply(YOU, answer, out)?;
-                self.advance(out, None)
+                self.advance(out)
+            }
+            PlaytestAction::PickCards { ids } => {
+                if stage != PlaytestStage::Prompt || choice.is_some() {
+                    return Err(NO_PROMPT.into());
+                }
+                let (pick, targets) = self
+                    .pick()
+                    .ok_or("This question is not answered with a set of cards.")?;
+                let count = ids.len() as u32;
+                if count < pick.min || count > pick.max {
+                    return Err(if pick.min == pick.max {
+                        format!(
+                            "Pick {} card{}.",
+                            pick.min,
+                            if pick.min == 1 { "" } else { "s" }
+                        )
+                    } else {
+                        format!("Pick from {} to {} cards.", pick.min, pick.max)
+                    });
+                }
+                let mut seen = HashSet::new();
+                if ids
+                    .iter()
+                    .any(|id| !pick.eligible.contains(id) || !seen.insert(*id))
+                {
+                    return Err(NOT_IN_GAME.into());
+                }
+                let answer = if targets {
+                    GameAction::SelectTargets {
+                        targets: ids
+                            .into_iter()
+                            .map(|id| TargetRef::Object(ObjectId(id)))
+                            .collect(),
+                    }
+                } else {
+                    GameAction::SelectCards {
+                        cards: ids.into_iter().map(ObjectId).collect(),
+                    }
+                };
+                self.apply(YOU, answer, out)?;
+                self.advance(out)
             }
             PlaytestAction::Cancel => {
                 if choice.is_some() {
@@ -826,39 +1155,50 @@ impl Playtest {
                 Err("Answer the question first, or cancel it.".into())
             }
 
-            PlaytestAction::Attack { attackers } => {
+            PlaytestAction::Attack { attacks } => {
                 let WaitingFor::DeclareAttackers {
                     valid_attacker_ids,
                     valid_attack_targets,
+                    valid_attack_targets_by_attacker,
                     ..
                 } = &self.state.waiting_for
                 else {
                     return Err("It is not your declare-attackers step.".into());
                 };
-                if attackers
-                    .iter()
-                    .any(|id| !valid_attacker_ids.contains(&ObjectId(*id)))
-                {
-                    return Err(NOT_IN_GAME.into());
+                let mut declared = Vec::with_capacity(attacks.len());
+                for pair in attacks {
+                    let attacker = ObjectId(pair.attacker);
+                    if !valid_attacker_ids.contains(&attacker) {
+                        return Err(NOT_IN_GAME.into());
+                    }
+                    let open = valid_attack_targets_by_attacker
+                        .as_ref()
+                        .map_or(valid_attack_targets.as_slice(), |m| {
+                            m.get(&attacker).map_or(&[][..], Vec::as_slice)
+                        });
+                    let at = match pair.target {
+                        None => open
+                            .iter()
+                            .find(|t| matches!(t, AttackTarget::Player(_)))
+                            .copied()
+                            .unwrap_or(AttackTarget::Player(AI)),
+                        Some(id) => open
+                            .iter()
+                            .find(|t| target_id(t) == Some(id))
+                            .copied()
+                            .ok_or("That creature can't attack that.")?,
+                    };
+                    declared.push((attacker, at));
                 }
-                let at = if valid_attack_targets.contains(&AttackTarget::Player(AI)) {
-                    AttackTarget::Player(AI)
-                } else {
-                    valid_attack_targets
-                        .first()
-                        .cloned()
-                        .unwrap_or(AttackTarget::Player(AI))
-                };
-                let attacks = attackers.into_iter().map(|id| (ObjectId(id), at)).collect();
                 self.apply(
                     YOU,
                     GameAction::DeclareAttackers {
-                        attacks,
+                        attacks: declared,
                         bands: Vec::new(),
                     },
                     out,
                 )?;
-                self.advance(out, None)
+                self.advance(out)
             }
             PlaytestAction::Block { blocks } => {
                 if stage != PlaytestStage::Block {
@@ -869,28 +1209,32 @@ impl Playtest {
                     .map(|b| (ObjectId(b.blocker), ObjectId(b.attacker)))
                     .collect();
                 self.apply(YOU, GameAction::DeclareBlockers { assignments }, out)?;
-                self.advance(out, None)
+                self.advance(out)
             }
-            _ if stage != PlaytestStage::Main => Err(match stage {
-                PlaytestStage::Attack => "Declare your attackers first.".to_string(),
-                PlaytestStage::Block => "Declare your blockers first.".to_string(),
-                _ => MAIN_ONLY.to_string(),
-            }),
+            _ if !matches!(stage, PlaytestStage::Main | PlaytestStage::Respond) => {
+                Err(match stage {
+                    PlaytestStage::Attack => "Declare your attackers first.".to_string(),
+                    PlaytestStage::Block => "Declare your blockers first.".to_string(),
+                    _ => MAIN_ONLY.to_string(),
+                })
+            }
 
+            // With priority: the main phase's, or a response's.
             PlaytestAction::Play { id } => self.play(ObjectId(id), out),
             PlaytestAction::Activate { id } => self.activate(ObjectId(id), out),
             PlaytestAction::Pass => {
                 self.apply(YOU, GameAction::PassPriority, out)?;
-                self.advance(out, None)
+                self.advance(out)
             }
             PlaytestAction::EndTurn => {
-                let turn = self.state.turn_number;
+                self.ending = Some(self.state.turn_number);
                 self.apply(YOU, GameAction::PassPriority, out)?;
-                self.advance(out, Some(turn))
+                self.advance(out)
             }
+            _ if stage == PlaytestStage::Respond => Err(MAIN_ONLY.into()),
             sandbox => {
                 self.sandbox(sandbox, out)?;
-                self.advance(out, None)
+                self.advance(out)
             }
         }
     }
@@ -954,7 +1298,7 @@ impl Playtest {
             1 => {
                 self.begin(source);
                 self.apply(YOU, ways.remove(0), out)?;
-                self.advance(out, None)
+                self.advance(out)
             }
             _ => {
                 self.choice = Some(BoardChoice {
@@ -1200,14 +1544,9 @@ impl Playtest {
     // ── Playing on ────────────────────────────────────────────────────────────────────────
 
     /// Play on until the reader next decides: the AI takes every decision of its own, and the
-    /// reader's priority is passed for them except in their own main phase with an empty stack.
-    /// `end_turn` is a turn of the reader's being played out: its main phases are passed and it
-    /// declares no attackers.
-    fn advance(
-        &mut self,
-        out: &mut Vec<PlaytestHappened>,
-        end_turn: Option<u32>,
-    ) -> Result<(), String> {
+    /// reader's priority is passed for them except where `stops_here` says otherwise. While the
+    /// reader ends a turn (`ending`), their main phases are passed and they declare no attackers.
+    fn advance(&mut self, out: &mut Vec<PlaytestHappened>) -> Result<(), String> {
         for _ in 0..STEP_LIMIT {
             if let WaitingFor::GameOver { winner } = &self.state.waiting_for {
                 if !self.over_told {
@@ -1219,6 +1558,12 @@ impl Playtest {
                 self.pending = None;
                 return Ok(());
             }
+            if self
+                .ending
+                .is_some_and(|turn| turn != self.state.turn_number)
+            {
+                self.ending = None;
+            }
             let actors = authorized_submitters(&self.state);
             if actors.iter().any(|p| self.ai_seats.contains(p)) && self.run_ai(out)? > 0 {
                 continue;
@@ -1229,31 +1574,25 @@ impl Playtest {
                     self.state.waiting_for.variant_name()
                 ));
             }
-            let skipping =
-                end_turn == Some(self.state.turn_number) && self.state.active_player == YOU;
+            let ending = self.ending == Some(self.state.turn_number);
+            let from = out.len();
             match &self.state.waiting_for {
                 WaitingFor::MulliganDecision { .. } | WaitingFor::OpeningHandBottomCards { .. } => {
                     return Ok(());
                 }
                 WaitingFor::Priority { .. } => {
-                    let home = self.state.stack.is_empty()
-                        && self.state.active_player == YOU
-                        && matches!(
-                            self.state.phase,
-                            Phase::PreCombatMain | Phase::PostCombatMain
-                        );
-                    if home && !skipping {
-                        self.pending = None;
+                    // A cast is made once its spell is on the stack and the reader has priority
+                    // again: whether they stop here or pass, it can no longer be taken back.
+                    self.pending = None;
+                    if !ending && self.stops_here() {
                         return Ok(());
                     }
-                    // A cast is made once its spell is on the stack and priority moves on.
-                    self.pending = None;
                     self.apply(YOU, GameAction::PassPriority, out)?;
                 }
                 WaitingFor::DeclareAttackers {
                     valid_attacker_ids, ..
                 } => {
-                    if !(skipping || valid_attacker_ids.is_empty()) {
+                    if !(ending || valid_attacker_ids.is_empty()) {
                         return Ok(());
                     }
                     self.apply(
@@ -1282,8 +1621,65 @@ impl Playtest {
                 // A question for the reader.
                 _ => return Ok(()),
             }
+            self.frame(from, out);
         }
         Err("The rules engine did not come back to you. Start a new game.".into())
+    }
+
+    /// The reader's own main phase with an empty stack: where the board waits for them.
+    fn at_home(&self) -> bool {
+        self.state.stack.is_empty()
+            && self.state.active_player == YOU
+            && matches!(
+                self.state.phase,
+                Phase::PreCombatMain | Phase::PostCombatMain
+            )
+    }
+
+    /// Whether the reader, with priority, is stopped here rather than passed for — the owner's
+    /// "smart stops and toggles" (2026-10-13):
+    ///
+    /// - always in their own main phase with an empty stack;
+    /// - at a step they asked to stop at (`setStops`), once per step, the stack empty;
+    /// - and, when they have something they could do (phase's `has_meaningful_priority_action`:
+    ///   an instant, an ability, not a mana ability), whenever the opponent's spell or ability
+    ///   is on top of the stack, and in combat once blockers are declared — the combat trick's
+    ///   moment.
+    ///
+    /// Their own spell on top never stops them: it resolves, as Arena has it.
+    fn stops_here(&mut self) -> bool {
+        if self.at_home() {
+            return true;
+        }
+        let s = &self.state;
+        if s.stack.is_empty() {
+            let here = (s.turn_number, s.phase);
+            let asked = stop_step(s.phase).is_some_and(|step| {
+                self.stops.contains(&PlaytestStop {
+                    seat: seat_of(s.active_player),
+                    step,
+                })
+            });
+            if asked && self.stopped_at != Some(here) {
+                self.stopped_at = Some(here);
+                return true;
+            }
+        }
+        let theirs = s.stack.last().is_some_and(|top| top.controller != YOU);
+        let after_blocks = s.stack.is_empty()
+            && s.phase == Phase::DeclareBlockers
+            && s.combat.as_ref().is_some_and(|c| !c.attackers.is_empty());
+        (theirs || after_blocks) && has_meaningful_priority_action(s, &legal_actions(s))
+    }
+
+    /// A replay frame of the table now, with the facts since `from`, when there are any.
+    fn frame(&mut self, from: usize, out: &[PlaytestHappened]) {
+        if out.len() > from && self.frames.len() < FRAME_LIMIT {
+            self.frames.push(PlaytestFrame {
+                view: self.view_as(true),
+                happened: out[from..].to_vec(),
+            });
+        }
     }
 
     /// Every decision the AI can take now, in one batch: how many it took.
@@ -1299,8 +1695,17 @@ impl Playtest {
             &mut self.rng,
             &session,
         );
-        for result in &run.results {
+        let taken = run.results.len();
+        for mut result in run.results {
+            let from = out.len();
             tell(&result.state, &result.events, out);
+            if out.len() > from && self.frames.len() < FRAME_LIMIT {
+                // The table as it was right after this decision: its state is swapped in for the
+                // view and straight back out (both are persistent, so a swap is two pointers).
+                std::mem::swap(&mut self.state, &mut result.state);
+                self.frame(from, out);
+                std::mem::swap(&mut self.state, &mut result.state);
+            }
         }
         match run.stop {
             AiActionsStop::ChooseActionNone { .. } => {
@@ -1312,7 +1717,7 @@ impl Playtest {
             AiActionsStop::MissingAiConfig { .. } => {
                 Err("The AI opponent is not set up. Start a new game.".into())
             }
-            _ => Ok(run.results.len()),
+            _ => Ok(taken),
         }
     }
 
@@ -1350,6 +1755,30 @@ impl Playtest {
             .map_err(|e| e.to_string())
     }
 
+    /// Tests only: put a card of `seat`'s from its library onto the battlefield, as if it had
+    /// been played — the AI cannot be told what to cast.
+    #[cfg(test)]
+    pub(super) fn put_for_test(&mut self, seat: Seat, name: &str) {
+        let player = if seat == Seat::You { YOU } else { AI };
+        let id = self.state.players[player.0 as usize]
+            .library
+            .iter()
+            .copied()
+            .find(|id| self.state.objects[id].name == name)
+            .expect("the card is in the library");
+        apply(
+            &mut self.state,
+            YOU,
+            GameAction::Debug(DebugAction::MoveToZone {
+                object_id: id,
+                to_zone: Zone::Battlefield,
+                library_position: None,
+                simulate: false,
+            }),
+        )
+        .expect("the engine moves it");
+    }
+
     fn checkpoint(&self) -> Checkpoint {
         Checkpoint {
             state: self.state.clone(),
@@ -1373,6 +1802,30 @@ fn seat_of(player: PlayerId) -> Seat {
     } else {
         Seat::Opponent
     }
+}
+
+/// What an attack is at, by id: a planeswalker's or a battle's, `None` for a player.
+fn target_id(target: &AttackTarget) -> Option<u64> {
+    match target {
+        AttackTarget::Player(_) => None,
+        AttackTarget::Planeswalker(id) | AttackTarget::Battle(id) => Some(id.0),
+    }
+}
+
+/// The step a stop names, for the steps a player gets priority in.
+fn stop_step(phase: Phase) -> Option<PlaytestStopStep> {
+    Some(match phase {
+        Phase::Upkeep => PlaytestStopStep::Upkeep,
+        Phase::Draw => PlaytestStopStep::Draw,
+        Phase::PreCombatMain => PlaytestStopStep::Main1,
+        Phase::BeginCombat => PlaytestStopStep::BeginCombat,
+        Phase::DeclareAttackers => PlaytestStopStep::Attackers,
+        Phase::DeclareBlockers => PlaytestStopStep::Blockers,
+        Phase::CombatDamage => PlaytestStopStep::Damage,
+        Phase::PostCombatMain => PlaytestStopStep::Main2,
+        Phase::End => PlaytestStopStep::End,
+        _ => return None,
+    })
 }
 
 fn phase_of(phase: Phase) -> PlaytestPhase {
@@ -1554,19 +2007,30 @@ fn tell(state: &GameState, events: &[GameEvent], out: &mut Vec<PlaytestHappened>
                 amount,
                 ..
             } => {
-                if let (Some(source), Some(target)) = (name(source_id), name(target)) {
+                if let (Some(source), Some(name_of), Some(whose)) =
+                    (name(source_id), name(target), seat(target))
+                {
                     out.push(PlaytestHappened::Dealt {
                         source,
-                        target,
+                        target: name_of,
+                        target_id: target.0,
+                        seat: whose,
                         amount: *amount,
                     });
                 }
             }
             GameEvent::LifeChanged {
-                player_id, amount, ..
+                player_id,
+                amount,
+                new_total,
             } => out.push(PlaytestHappened::Life {
                 seat: seat_of(*player_id),
                 amount: *amount,
+                // phase reports the total with the change when it can; the life after the
+                // action is the fallback, the same unless one action changed it twice.
+                total: new_total
+                    .0
+                    .unwrap_or(state.players[player_id.0 as usize].life),
             }),
             GameEvent::TokenCreated {
                 object_id, name, ..

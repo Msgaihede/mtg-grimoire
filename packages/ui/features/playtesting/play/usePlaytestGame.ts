@@ -5,10 +5,13 @@ import {
   type DeckVariant,
   type PlaytestAction,
   type PlaytestDifficulty,
+  type PlaytestHappened,
+  type PlaytestStep,
   type PlaytestView,
 } from "@/lib/ipc";
 import { appendLog, type LogLine } from "../goldfish/log";
 import { playtestLines } from "./log";
+import { framesOf, replayEntries, useReplay, type ReplayEntry } from "./useReplay";
 
 /** What a game is dealt from: the reader's deck and the opponent's, each in one of its lists,
  *  and how well the AI plays. */
@@ -30,7 +33,14 @@ export interface PlaytestPicks {
  * has played everything up to the reader's next decision — its whole turn, often. So `busy` is
  * also true while a game is being dealt (the coin flip may hand the opponent the first turn), and
  * the board says the opponent is thinking for as long as it is.
+ *
+ * **And an answer is played back, not jumped to** (`useReplay`): a step that carries the views in
+ * between the AI's actions shows them one by one before it settles, each beat's facts going to the
+ * log and to the board's pops (`lastHappened`) as it is shown. While one plays the board is
+ * read-only (`replaying`), and `skip` shows the end at once.
  */
+const NONE: readonly PlaytestHappened[] = [];
+
 export interface PlaytestGame {
   /** `null` until the first deal answers, and while a new game is being dealt. */
   view: PlaytestView | null;
@@ -41,6 +51,13 @@ export interface PlaytestGame {
   busy: boolean;
   act: (action: PlaytestAction) => void;
   newGame: () => void;
+  /** What the view on the board has just had happen — the step's facts, or one replay beat's —
+   *  for the damage and life pops. A new list for every beat; empty after a skip. */
+  lastHappened: readonly PlaytestHappened[];
+  /** A replay of the opponent's actions is being shown. */
+  replaying: boolean;
+  /** Show the end of the replay now. */
+  skip: () => void;
 }
 
 function freshSeed(): number {
@@ -56,11 +73,25 @@ export function usePlaytestGame(picks: PlaytestPicks): PlaytestGame {
   const [log, setLog] = useState<LogLine[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [lastHappened, setLastHappened] = useState<readonly PlaytestHappened[]>(NONE);
   /** The chain every action waits its turn on. */
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   /** Which deal the page is on; an answer from an older one is dropped rather than drawn. */
   const generation = useRef(0);
   const pending = useRef(0);
+
+  /** One beat on the board: its view drawn, its facts logged and (unless skipped past) popped. */
+  const apply = useCallback((entry: ReplayEntry) => {
+    setView(entry.view);
+    setLastHappened(entry.quiet ? NONE : entry.happened);
+    setLog((old) => appendLog(old, playtestLines(entry.happened, entry.view.turn)));
+  }, []);
+  const replay = useReplay(apply);
+  const { play, skip, cancel } = replay;
+  const show = useCallback(
+    (step: PlaytestStep) => play(replayEntries(step, framesOf(step))),
+    [play],
+  );
 
   /** Queue `work`, counting it toward `busy` until it settles. */
   const enqueue = useCallback((work: () => Promise<unknown>) => {
@@ -84,13 +115,8 @@ export function usePlaytestGame(picks: PlaytestPicks): PlaytestGame {
           .then(
             (step) => {
               if (mine !== generation.current) return;
-              setView(step.view);
-              setLog(
-                appendLog(
-                  [{ turn: 0, text: "Shuffled both decks and drew seven", kind: "deal" }],
-                  playtestLines(step.happened, step.view.turn),
-                ),
-              );
+              setLog([{ turn: 0, text: "Shuffled both decks and drew seven", kind: "deal" }]);
+              show(step);
             },
             (e: unknown) => {
               if (mine === generation.current) setError(ipcError(e));
@@ -98,17 +124,19 @@ export function usePlaytestGame(picks: PlaytestPicks): PlaytestGame {
           ),
       );
     },
-    [enqueue, deckId, variant, opponentDeckId, opponentVariant, difficulty],
+    [enqueue, show, deckId, variant, opponentDeckId, opponentVariant, difficulty],
   );
 
   /** The game menu's New game, and the result banner's: clear the board, then deal. */
   const newGame = useCallback(() => {
     const mine = ++generation.current;
+    cancel();
+    setLastHappened(NONE);
     setView(null);
     setError(null);
     setLog([]);
     request(mine);
-  }, [request]);
+  }, [request, cancel]);
 
   useEffect(() => {
     // The ref object, not its value: the cleanup must bump the counter the next deal reads.
@@ -122,14 +150,16 @@ export function usePlaytestGame(picks: PlaytestPicks): PlaytestGame {
 
   const act = useCallback(
     (action: PlaytestAction) => {
+      // The board is read-only while a replay plays; an action that reaches here anyway is made
+      // on the view the replay ends on, so that view is shown first.
+      skip();
       const mine = generation.current;
       enqueue(() =>
         ipc.playtestAct(action).then(
           (step) => {
             if (mine !== generation.current) return;
             setError(null);
-            setView(step.view);
-            setLog((old) => appendLog(old, playtestLines(step.happened, step.view.turn)));
+            show(step);
           },
           (e: unknown) => {
             if (mine === generation.current) setError(ipcError(e));
@@ -137,8 +167,18 @@ export function usePlaytestGame(picks: PlaytestPicks): PlaytestGame {
         ),
       );
     },
-    [enqueue],
+    [enqueue, show, skip],
   );
 
-  return { view, log, error, busy, act, newGame };
+  return {
+    view,
+    log,
+    error,
+    busy,
+    act,
+    newGame,
+    lastHappened,
+    replaying: replay.replaying,
+    skip,
+  };
 }

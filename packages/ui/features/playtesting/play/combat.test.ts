@@ -9,14 +9,19 @@ import {
   tableMarks,
   tablePicks,
   toggleAttacker,
+  aimAttacker,
 } from "./combat";
-import { attackStep, blockStep, turnFive } from "./fixtures";
+import { attackStep, blockStep, respondStep, turnFive } from "./fixtures";
 
 describe("phaseLine", () => {
   it("says whose turn and where in it", () => {
     const { view } = turnFive();
     expect(phaseLine(view)).toBe("Turn 5 · Your main phase");
-    expect(phaseLine({ ...view, active: "opponent", turn: 6, phase: "combat" })).toBe(
+    expect(
+      phaseLine({ ...view, active: "opponent", turn: 6, phase: "combat", step: "blockers" }),
+    ).toBe("Turn 6 · Opponent's turn · Declare blockers step");
+    // No step where nobody gets priority (the end of combat): the phase names it.
+    expect(phaseLine({ ...view, active: "opponent", turn: 6, phase: "combat", step: null })).toBe(
       "Turn 6 · Opponent's turn · Combat",
     );
     expect(phaseLine({ ...view, turn: 0, stage: "mulligan" })).toBe("Opening hands");
@@ -39,9 +44,28 @@ describe("stageButtons", () => {
   it("counts the attackers picked", () => {
     const { view, goyf } = attackStep();
     expect(stageButtons(view, NO_PICKS).primary?.label).toBe("No attack");
-    expect(stageButtons(view, toggleAttacker(NO_PICKS, goyf.id)).primary).toEqual({
+    expect(stageButtons(view, toggleAttacker(NO_PICKS, view, goyf.id)).primary).toEqual({
       label: "Attack with 1",
-      action: { type: "attack", attackers: [goyf.id] },
+      action: { type: "attack", attacks: [{ attacker: goyf.id, target: null }] },
+    });
+  });
+
+  it("passes once or passes the turn when responding, and says when it is passing", () => {
+    const { view } = respondStep();
+    expect(stageButtons(view, NO_PICKS)).toEqual({
+      primary: { label: "Pass", action: { type: "pass" } },
+      secondary: { label: "Pass turn", action: { type: "endTurn" } },
+    });
+    expect(stageButtons({ ...view, endingTurn: true }, NO_PICKS).secondary).toMatchObject({
+      label: "Passing turn…",
+      disabled: true,
+    });
+  });
+
+  it("offers nothing in a replay frame", () => {
+    expect(stageButtons({ ...turnFive().view, stage: "watching" }, NO_PICKS)).toEqual({
+      primary: null,
+      secondary: null,
     });
   });
 
@@ -91,5 +115,49 @@ describe("blocking", () => {
       badge: "1·2",
       word: "attacking, blocked 1 and 2",
     });
+  });
+});
+
+describe("attacking", () => {
+  it("attacks the opponent first, then re-aims at a planeswalker clicked", () => {
+    const { view, goyf, jace } = attackStep();
+    let picks = toggleAttacker(NO_PICKS, view, goyf.id);
+    expect(picks).toEqual({
+      ...NO_PICKS,
+      attacks: [{ attacker: goyf.id, target: null }],
+      aiming: goyf.id,
+    });
+    expect(tablePicks(view, picks).opponent).toEqual(new Set([jace.id]));
+    picks = aimAttacker(picks, view, jace.id);
+    expect(picks.attacks).toEqual([{ attacker: goyf.id, target: jace.id }]);
+    expect(picks.aiming).toBeNull();
+    // Clicked again it waits to be aimed; clicked a third time it is put back.
+    picks = toggleAttacker(picks, view, goyf.id);
+    expect(picks.aiming).toBe(goyf.id);
+    picks = aimAttacker(picks, view, null);
+    expect(picks.attacks).toEqual([{ attacker: goyf.id, target: null }]);
+    picks = toggleAttacker(toggleAttacker(picks, view, goyf.id), view, goyf.id);
+    expect(picks).toEqual(NO_PICKS);
+  });
+
+  it("toggles an attacker with nothing to aim at in one click", () => {
+    const { view, elves } = attackStep();
+    const picks = toggleAttacker(NO_PICKS, view, elves.id);
+    expect(picks.aiming).toBeNull();
+    expect(toggleAttacker(picks, view, elves.id)).toEqual(NO_PICKS);
+  });
+
+  it("refuses a target the attacker cannot attack", () => {
+    const { view, goyf, ragavan } = attackStep();
+    const picks = toggleAttacker(NO_PICKS, view, goyf.id);
+    expect(aimAttacker(picks, view, ragavan.id)).toBe(picks);
+  });
+});
+
+describe("phaseLine when responding", () => {
+  it("says the reader may respond", () => {
+    expect(phaseLine(respondStep().view)).toBe(
+      "Turn 6 · Opponent's turn · Upkeep — you may respond",
+    );
   });
 });

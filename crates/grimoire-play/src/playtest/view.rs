@@ -27,6 +27,9 @@ pub struct PlaytestView {
     /// Who played first (the seed's coin flip).
     pub started: Seat,
     pub phase: PlaytestPhase,
+    /// The step within `phase`, for the steps a player gets priority in (`None` in the untap step,
+    /// at the end of combat and in cleanup) — the stops' names for them.
+    pub step: Option<PlaytestStopStep>,
     /// Present while the reader's opening hand is being decided.
     pub mulligan: Option<MulliganView>,
     pub you: PlaytestSeat,
@@ -48,6 +51,12 @@ pub struct PlaytestView {
     pub winner: Option<Seat>,
     /// The tokens the reader's deck makes, for the game menu's "Create a token".
     pub tokens: Vec<TokenOffer>,
+    /// The steps the reader asked to be stopped at (the game menu's stops), as `setStops` set
+    /// them.
+    pub stops: Vec<PlaytestStop>,
+    /// The reader is ending the turn (`endTurn`): until it changes, the game stops only to block
+    /// or to answer a question.
+    pub ending_turn: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,8 +70,15 @@ pub enum PlaytestStage {
     Attack,
     /// The reader is the defending player: declare blockers.
     Block,
+    /// The reader has priority with something to answer: the opponent's spell or ability on the
+    /// stack, combat after blockers, or a step the reader asked to stop at — and an instant or an
+    /// ability they could use. Pass, or play something.
+    Respond,
     /// The engine asks the reader something: a target, a mode, a "may", a card to discard.
     Prompt,
+    /// Only in a replay frame (`PlaytestFrame`): the game is moving on by itself — the
+    /// opponent's turn, a spell resolving, combat damage — and the board watches.
+    Watching,
     /// The game is over (`winner` says how).
     Over,
 }
@@ -105,13 +121,22 @@ pub struct PlaytestSeat {
     pub mana_open: u32,
 }
 
-/// The creatures in combat: each attacker, and each block.
+/// The creatures in combat: each attacker and what it attacks, and each block.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaytestCombat {
-    /// The attacking creatures' ids, whichever seat attacks.
-    pub attackers: Vec<u64>,
+    /// Every attacker, whichever seat attacks.
+    pub attacks: Vec<PlaytestAttackPair>,
     pub blocks: Vec<PlaytestBlockPair>,
+}
+
+/// One attacker and what it attacks: `target` is a planeswalker's or a battle's id, or `None`
+/// for the defending player.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaytestAttackPair {
+    pub attacker: u64,
+    pub target: Option<u64>,
 }
 
 /// One blocker on one attacker.
@@ -122,12 +147,25 @@ pub struct PlaytestBlockPair {
     pub attacker: u64,
 }
 
-/// The reader's declare-attackers step. Every attacker attacks the opponent.
+/// The reader's declare-attackers step.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaytestAttack {
-    /// The reader's creatures that can attack.
-    pub attackers: Vec<u64>,
+    /// The reader's creatures that can attack, and what each can attack.
+    pub attackers: Vec<PlaytestAttacker>,
+    /// The planeswalkers and battles any of them can attack, to name them.
+    pub targets: Vec<PlaytestCardRef>,
+}
+
+/// One creature that can attack.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaytestAttacker {
+    pub id: u64,
+    /// It can attack the opponent.
+    pub player: bool,
+    /// The planeswalkers and battles it can attack.
+    pub targets: Vec<u64>,
 }
 
 /// The reader's declare-blockers step.
@@ -164,6 +202,69 @@ pub struct PlaytestPrompt {
     pub options: Vec<PlaytestOption>,
     /// The question came out of the reader's own cast or activation, which `cancel` takes back.
     pub cancellable: bool,
+    /// Present when the answer is a set of cards — scry, surveil, a discard, a search — which
+    /// `options` cannot list (the engine offers only a few of the sets). `pickCards` answers it.
+    pub pick: Option<PlaytestPick>,
+}
+
+/// A question whose answer is some of a set of cards.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaytestPick {
+    pub purpose: PlaytestPickPurpose,
+    /// The cards being looked at, in order (a scry's top first).
+    pub cards: Vec<PlaytestCardRef>,
+    /// The ids among them that may be picked.
+    pub eligible: Vec<u64>,
+    pub min: u32,
+    pub max: u32,
+    /// The order of the picked cards counts: a scry's or a surveil's picked cards are the ones
+    /// kept on top, first picked on top.
+    pub ordered: bool,
+}
+
+/// What picking a card does, so the page can say it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PlaytestPickPurpose {
+    /// The picked cards stay on top, in order; the rest go to the bottom.
+    Scry,
+    /// The picked cards stay on top, in order; the rest go to the graveyard.
+    Surveil,
+    /// The picked cards are discarded.
+    Discard,
+    /// The picked cards are the ones found.
+    Search,
+    /// The picked cards are kept; the rest go where the card says.
+    Dig,
+    /// The picked cards are revealed.
+    Reveal,
+    /// The picked cards are the targets.
+    Targets,
+    /// The picked cards are the ones chosen.
+    Choose,
+}
+
+/// A step the reader asked the game to stop at, on whose turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaytestStop {
+    pub seat: Seat,
+    pub step: PlaytestStopStep,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PlaytestStopStep {
+    Upkeep,
+    Draw,
+    Main1,
+    BeginCombat,
+    Attackers,
+    Blockers,
+    Damage,
+    Main2,
+    End,
 }
 
 /// One answer to a prompt, by the facts in it. Every field but `index` and `kind` may be empty.
@@ -251,11 +352,16 @@ pub enum PlaytestAction {
     /// Pass priority on to the next place the reader decides something: from the first main
     /// phase to combat, from the second to the opponent's turn.
     Pass,
-    /// Play out the rest of this turn without attacking, and the opponent's turn after it.
+    /// Pass until this turn is over: the rest of the reader's own turn without attacking, or the
+    /// rest of the opponent's without stopping to respond. Blocks and questions still stop it.
     EndTurn,
-    /// Declare these attackers, every one at the opponent. Empty is no attack.
+    /// The steps to stop at from now on, replacing the last set. Taken at any stage.
+    SetStops {
+        stops: Vec<PlaytestStop>,
+    },
+    /// Declare these attacks. Empty is no attack.
     Attack {
-        attackers: Vec<u64>,
+        attacks: Vec<PlaytestAttackPair>,
     },
     /// Declare these blocks. Empty is no blocks.
     Block {
@@ -264,6 +370,10 @@ pub enum PlaytestAction {
     /// Answer the prompt with its option `index`.
     Choose {
         index: u32,
+    },
+    /// Answer the prompt's `pick` with these cards, in order.
+    PickCards {
+        ids: Vec<u64>,
     },
     /// Let the engine's AI answer the prompt for the reader.
     Auto,
@@ -358,16 +468,20 @@ pub enum PlaytestHappened {
         blocker: String,
         attacker: String,
     },
-    /// Damage dealt to a permanent (damage to a player is its `Life`).
+    /// Damage dealt to a permanent (damage to a player is its `Life`). `target_id` and `seat` are
+    /// the permanent's id and its controller's, so the board finds the very card that was hit.
     Dealt {
         source: String,
         target: String,
+        target_id: u64,
+        seat: Seat,
         amount: u32,
     },
-    /// A life total changed by the rules: damage, a drain, a gain.
+    /// A life total changed by the rules: damage, a drain, a gain. `total` is the life after it.
     Life {
         seat: Seat,
         amount: i32,
+        total: i32,
     },
     TokensCreated {
         seat: Seat,
@@ -411,6 +525,20 @@ pub enum PlaytestHappened {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaytestStep {
+    pub view: PlaytestView,
+    /// Everything, in order — the frames' facts included.
+    pub happened: Vec<PlaytestHappened>,
+    /// The table after each thing the board can show happening on the way — an opponent's land,
+    /// cast, attack or block, a spell resolving, combat damage — oldest first, for the page to
+    /// replay. Empty when nothing happened but the reader's own action. The last is not `view`:
+    /// the page settles on `view` after them.
+    pub frames: Vec<PlaytestFrame>,
+}
+
+/// One frame of a replay: the table at that moment, and the facts that led to it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaytestFrame {
     pub view: PlaytestView,
     pub happened: Vec<PlaytestHappened>,
 }

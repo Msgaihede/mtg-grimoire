@@ -83,6 +83,7 @@ describe("pickableCards", () => {
       kind: "TargetSelection",
       source: null,
       cancellable: false,
+      pick: null,
       options: [
         option({ index: 0, cards: [a] }),
         option({ index: 1, cards: [a, b] }),

@@ -81,13 +81,24 @@ const CASES: [PlaytestHappened, string | null, string][] = [
     "combat",
   ],
   [
-    { type: "dealt", source: "Lightning Bolt", target: "Tarmogoyf", amount: 3 },
+    {
+      type: "dealt",
+      source: "Lightning Bolt",
+      target: "Tarmogoyf",
+      targetId: 4,
+      seat: "you",
+      amount: 3,
+    },
     "Lightning Bolt dealt 3 damage to Tarmogoyf",
     "combat",
   ],
-  [{ type: "life", seat: "you", amount: -3 }, "You lost 3 life", "life"],
-  [{ type: "life", seat: "opponent", amount: 2 }, "The opponent gained 2 life", "life"],
-  [{ type: "life", seat: "you", amount: 0 }, null, "life"],
+  [{ type: "life", seat: "you", amount: -3, total: 17 }, "You lost 3, down to 17", "life"],
+  [
+    { type: "life", seat: "opponent", amount: 2, total: 22 },
+    "The opponent gained 2, up to 22",
+    "life",
+  ],
+  [{ type: "life", seat: "you", amount: 0, total: 20 }, null, "life"],
   [
     { type: "tokensCreated", seat: "you", name: "Treasure", count: 1 },
     "Created a Treasure token",

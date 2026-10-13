@@ -17,7 +17,9 @@ import { usePlaytestGame, type PlaytestPicks } from "./usePlaytestGame";
  * back, which puts the game away (`usePlaytestGame`'s `playtestEnd`).
  *
  * **Escape is the way back** (the `Esc` on the back button), on the navigation rung, so a menu or
- * a dialog open over the board takes the key first.
+ * a dialog open over the board takes the key first. **While the opponent's turn is being played
+ * back it skips the replay instead** — a reader pressing Escape then wants the animation gone,
+ * not the game.
  */
 export function PlaytestPage({
   picks,
@@ -32,7 +34,10 @@ export function PlaytestPage({
 }): JSX.Element {
   const game = usePlaytestGame(picks);
   const edition = useEdition();
-  useDismissOnEscape({ layer: "navigation", onDismiss: onBack });
+  useDismissOnEscape({
+    layer: "navigation",
+    onDismiss: game.replaying ? game.skip : onBack,
+  });
 
   return (
     <div
@@ -51,6 +56,9 @@ export function PlaytestPage({
         log={game.log}
         error={game.error}
         busy={game.busy}
+        happened={game.lastHappened}
+        replaying={game.replaying}
+        onSkip={game.skip}
         onAct={game.act}
         onBack={onBack}
         onNewGame={game.newGame}

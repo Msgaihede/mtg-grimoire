@@ -60,22 +60,45 @@ seconds. The board says "Opponent is thinking…" meanwhile.
 2. If the AI can act, it runs the AI's batch and loops.
 3. Otherwise the reader is the one to act, and it is decided by what the engine waits on:
    - **The opening hand.** It stops.
-   - **Priority.** It stops in the reader's own main phase (first or second) with an empty stack.
-     Anywhere else it passes for the reader: upkeep, draw, the AI's whole turn, a spell of
-     either seat's resolving.
+   - **Priority.** It stops where `stops_here` says (below). Anywhere else it passes for the
+     reader.
    - **Declare attackers.** It stops, unless the reader has no creature that can attack, or the
      turn is being ended (`endTurn`).
    - **Declare blockers.** It stops, unless the reader has no creature that can block.
    - **Anything else** is a question for the reader. It stops, as a prompt.
 
-That gives the six `PlaytestStage`s: `mulligan`, `main`, `attack`, `block`, `prompt` and `over`. A
-step limit of 2000 passes for one action stops a loop in the engine or the AI from hanging the
-board. A game never reaches it.
+That gives the stages a step can end on: `mulligan`, `main`, `attack`, `block`, `respond`,
+`prompt` and `over`. The eighth, `watching`, is a replay frame's only. A step limit of 2000 passes
+for one action stops a loop in the engine or the AI from hanging the board. A game never reaches
+it.
 
-**`pass` and `endTurn`.** `pass` in the first main phase goes on to combat, so it stops at
-declare attackers if there is a creature to attack with, and at the second main phase otherwise.
-`pass` in the second main phase ends the turn, plays the AI's turn, and stops at the reader's next
-decision. `endTurn` skips both: the rest of the reader's turn is passed with no attack.
+### Where the reader gets priority: smart stops and toggles
+
+The owner's choice of 2026-10-13, Arena's arrangement. With priority, the reader is stopped:
+
+| Where                                                      | Stage     | When                                 |
+| ---------------------------------------------------------- | --------- | ------------------------------------ |
+| Their own main phase, the stack empty                      | `main`    | Always                               |
+| A step they asked to stop at (`setStops`), the stack empty | `respond` | Once per step                        |
+| The opponent's spell or ability on top of the stack        | `respond` | If they have something they could do |
+| Combat, once blockers are declared, the stack empty        | `respond` | If they have something they could do |
+
+"Something they could do" is phase's `has_meaningful_priority_action`: a spell or ability other
+than a mana ability. Without one there is nothing to decide, and the stop would only cost a click.
+**The reader's own spell on top never stops them**: it resolves, as on Arena.
+
+**The stops** are `PlaytestStop { seat, step }`, a step of either seat's turn: upkeep, draw, first
+main, beginning of combat, after attackers, after blockers, damage, second main or end. They are
+set as a whole by `setStops`, at any stage, and come back in `view.stops`. "Once per step" is
+`stopped_at`: passing at a stop does not stop there again when priority comes back in the same
+step.
+
+**`pass` and `endTurn`.** `pass` passes priority once. In the first main phase it goes on to combat,
+so it stops at declare attackers if there is a creature to attack with, and at the second main
+phase otherwise. In the second main phase it ends the turn and plays the AI's. `endTurn`, from
+`main` or `respond`, passes until the turn changes: on the reader's turn with no attack and both
+main phases passed, and on the opponent's turn with no response or step stop. A block or a
+question still stops it. `view.endingTurn` says it is running.
 
 **Commander.** A commander on either side makes the game a Commander game: 40 life, the command
 zone and tax. Without one, the format is phase's `freeform` at 20 life.
@@ -105,6 +128,30 @@ generically, never matched variant by variant.
 - **`auto`** answers any prompt with `phase_ai::choose_action` for the reader, at Medium.
   `Happened::Chose` says so. It is also the answer to a prompt with no options the board can draw.
 - A card named alone by an option lights up on the table, and clicking it answers.
+
+**A pick: the answer that is a set of cards.** For a scry of three, `legal_actions` offers four
+answers (none, all, each card alone), and there are sixteen. So for the questions whose answer is
+a set of cards, the prompt carries a `pick` beside its options (`Playtest::pick`): the cards, which
+of them may be picked, a minimum and a maximum, and whether order counts. `pickCards` answers it.
+The answer is `SelectCards`, or `SelectTargets` for `ChooseObjectsSelection`. The meaning of the
+picked cards is phase's:
+
+| Question                                         | `purpose` | The picked cards                                            | Count                                               |
+| ------------------------------------------------ | --------- | ----------------------------------------------------------- | --------------------------------------------------- |
+| `ScryChoice`                                     | `scry`    | Stay on top, first picked on top; the rest go to the bottom | 0 to all, ordered                                   |
+| `SurveilChoice`                                  | `surveil` | Stay on top, in order; the rest go to the graveyard         | 0 to all, ordered                                   |
+| `DiscardChoice`, `DiscardToHandSize`             | `discard` | Are discarded                                               | `count`, or up to it                                |
+| `SearchChoice`                                   | `search`  | Are found                                                   | `count`, or up to it when a partial find is allowed |
+| `DigChoice`                                      | `dig`     | Are kept, from `selectable_cards`                           | `keep_count`, or up to it                           |
+| `ChooseFromZoneChoice`, `ChooseObjectsSelection` | `choose`  | Are chosen                                                  | as the question says                                |
+| `RevealChoice`                                   | `reveal`  | Is revealed                                                 | one, or none when optional                          |
+| `MultiTargetSelection`                           | `targets` | Are the targets                                             | `min_targets` to `max_targets`                      |
+
+The session checks the count, that each card is eligible and that none is picked twice. The engine
+checks the rest (a search's "different names", say), and its refusal is the sentence shown. This
+is the one place the session reads question kinds by name, because their fields say how many
+cards are wanted and the generic options cannot. Any other question is still its options, and
+`auto` still answers every one.
 
 **The board's own questions.** phase lists a cast once per way to make it, for example one
 `CastSpell` per target set. So a `play` with several ways becomes a `CastChoice` prompt, and an
@@ -174,11 +221,25 @@ each of the AI's actions. They become the log's facts:
 | `AbilityActivated` (not mana)            | `activated`                                                                                          |
 | `ZoneChanged`                            | `moved`, or `drew` (library to hand). A move to or from the stack is the cast, and is not told again |
 | `AttackersDeclared` / `BlockersDeclared` | `attacked` / `blocked`                                                                               |
-| `DamageDealt` to a permanent             | `dealt` (damage to a player is its `LifeChanged`)                                                    |
-| `LifeChanged`                            | `life` (a delta)                                                                                     |
+| `DamageDealt` to a permanent             | `dealt`, naming the permanent by id and seat (damage to a player is its `LifeChanged`)               |
+| `LifeChanged`                            | `life`: the change and the total after it                                                            |
 | `TokenCreated`                           | `tokensCreated`, with consecutive tokens of one name counted together                                |
 
 A sandbox action's events are not told. The action's own fact says what the reader did.
+
+**Replay frames.** A step's `frames` are the table after each thing worth showing on the way: each
+of the AI's decisions that the log tells, and each of the reader's auto-passes that led somewhere
+(a spell resolving, combat damage). Each frame is a view with the stage `watching` and no prompt,
+attack or block offered, so whose question it was stays hidden. The opponent's hand stays a count.
+An AI decision's frame is drawn from the state phase hands back with it (`AiActionResult.state`):
+it is swapped into the session for the view and straight back out, two pointers for persistent
+state. A step answers with at most 80 frames, and the final `view` comes after them.
+
+**Attacks name what they attack.** `attack` takes `{ attacker, target }` pairs: `target` is a
+planeswalker's or a battle's id, or `null` for the opponent. In the attack stage, each attacker's
+`targets` come from phase's per-attacker map (`valid_attack_targets_by_attacker`), falling back to
+the step's aggregate list. The combat view's `attacks` give every attacker's target, both seats',
+so the board can draw arrows.
 
 **A printing follows its card.** phase keeps an object's id across zones and bumps its
 `incarnation`. The session still re-homes a printing whose object is gone, by seat and name
@@ -200,57 +261,104 @@ kept for the window's life in `viewMemory("playtesting.setup")`, never in storag
 `PlaytestBoard` is presentational: a view in, actions out. `usePlaytestGame` is
 `useGoldfishGame`'s serial queue.
 
-**The opponent's half is the reader's, turned around.** The measurements below are from the
-board's box, and the board fits a 1280 × 800 window (a 766 px board):
+**The opponent's half is the reader's, turned around.** The cosmetic overhaul of 2026-10-13
+gave the tables most of the height: the chrome is thinner and the zone columns narrower. Measured
+in Storybook's Chromium, from the board's box:
 
-- **The opponent's band** is the top 72 px: their face-down hand (56 × 78 backs, 40 px showing,
-  "Hand · N"), their life plate, and the chrome.
-- **The reader's foot** is the bottom 108 px, as on the goldfish: the hand, the life plate, and the
-  stage button.
-- **The middle line** is 36 px high, centred. It shows "Turn 5 · Your main phase", the combat
-  ("You attack with 2 · 1 blocked"), the stack as chips (top first, gold edge for the reader's, red
-  for the opponent's), and the newest log line or the engine's refusal.
-- **The two tables** share the rest equally, each inset 112 px from either side. On the opponent's
-  table the creature lane is nearest the middle line and the back row is at the top.
-- **The zone columns** sit 16 px in, with 80 × 112 cards (the goldfish's are 180 × 252). The
-  opponent's side has library over graveyard on the left and exile over command on the right. The
-  reader's side has command over exile on the left and graveyard over library on the right.
+|                   | 1280 × 800 window (766 px board) | 1440 × 900 window (866 px board) |
+| ----------------- | -------------------------------- | -------------------------------- |
+| The opponent band | 48 px                            | 48 px                            |
+| The middle line   | 28 px                            | 28 px                            |
+| The reader's foot | 112 px                           | 112 px                           |
+| Each table        | 289 px                           | 339 px                           |
+| A card on a table | 70 × 98                          | 88 × 123                         |
+
+Before the overhaul, a table at 1280 was 275 px and its cards about 61 px wide.
+
+- **The opponent's band** holds their face-down hand ("Hand · N"), their life plate, and the
+  chrome.
+- **The tables** are inset 84 px from either side. On the opponent's table the creature lane is
+  nearest the middle line and the back row is at the top.
+- **The zone columns** sit 12 px in, with 60 × 84 cards (the goldfish's are 180 × 252), each zone's count on its card. On the
+  opponent's side, library over graveyard is on the left and exile over command on the right. On
+  the reader's side, command over exile is on the left and graveyard over library on the right.
+- **The stack** is real cards (52 × 73, up to three, then "+N") in the right gutter between the
+  zone columns, top first, with whose each is. It covers no table.
+- **The prompt** docks at the bottom over the hand, at most 640 × 104, and the reader's plate moves
+  to the edge while it is up. **The picker** sits centred over the middle, up to 820 px wide.
+
+**The middle line** is a turn tracker: Beginning · Main 1 · Combat · Main 2 · End, the current
+phase lit in the active seat's colour, and a caption that names the step, such as "Turn 6 ·
+Opponent's turn · Upkeep — you may respond". Beside it is the Stops button.
+
+**The plates.** The active seat's plate has a gold glow, and poison shows as a chip when it is
+above 0.
+
+**Combat is drawn.** Arrows run from each attacker to what it attacks (the plate for a player, the
+card for a planeswalker or battle) and from each blocker to its attacker. The reader's attacks are
+gold, the opponent's red, and blocks a dashed blue. They are measured from the DOM
+(`[data-table] [data-point]`, `[data-plate]`) on every view, 220 ms later, and on a resize. An
+attacker is ringed, slid 14 px toward the middle, lifted and shadowed.
+
+**Damage and life pop.** A `dealt` pops "−N" over the permanent it names (`targetId` on `seat`'s
+battlefield), and a `life` pops "−N" in red or "+N" in green by that seat's plate. The pops use the
+Web Animations API and are off under reduced motion. A creature the damage killed is already gone
+from the view, and pops nothing.
+
+**The AI's turn is replayed.** A step's `frames` play one by one, 450 ms apart, before the board
+settles on the step's view. The pops fire as each frame lands, and the board is read-only meanwhile.
+Skip (the chip, Space or Escape — Escape skips rather than leaving while a replay runs) jumps to the
+end. Under reduced motion the end is shown at once. The log takes every fact once: each frame's
+facts are found as a run of `step.happened`, and the end takes the rest.
 
 **The stage button**, bottom right. Space presses its primary action.
 
-| Stage                     | Primary                                                                                       | Also                 |
-| ------------------------- | --------------------------------------------------------------------------------------------- | -------------------- |
-| `main`, first main phase  | To combat (`pass`)                                                                            | End turn (`endTurn`) |
-| `main`, second main phase | End turn (`pass`)                                                                             |                      |
-| `attack`                  | Attack with N, or No attack                                                                   |                      |
-| `block`                   | Confirm blocks, or No blocks                                                                  |                      |
-| busy                      | A spinner and "Opponent is thinking…"                                                         |                      |
-| `over`                    | A centred banner ("You won", "You lost", "Draw"; "On turn N") with New game and Back to setup |                      |
+| Stage                     | Primary                                                                                       | Also                  |
+| ------------------------- | --------------------------------------------------------------------------------------------- | --------------------- |
+| `main`, first main phase  | To combat (`pass`)                                                                            | End turn (`endTurn`)  |
+| `main`, second main phase | End turn (`pass`)                                                                             |                       |
+| `respond`                 | Pass (`pass`)                                                                                 | Pass turn (`endTurn`) |
+| `attack`                  | Attack with N, or No attack                                                                   |                       |
+| `block`                   | Confirm blocks, or No blocks                                                                  |                       |
+| busy                      | A spinner and "Opponent is thinking…" ("Passing turn…" while `endTurn` runs)                  |                       |
+| `over`                    | A centred banner ("You won", "You lost", "Draw"; "On turn N") with New game and Back to setup |                       |
 
 **Interactions.**
 
 - **Your cards** work as on the goldfish, plus "Activate ability" at the head of a battlefield
-  card's menu.
+  card's menu. In `respond`, the hand and the abilities are playable as in the main phase; the
+  sandbox is not.
 - **The opponent's cards** can be pointed at for the preview, and their graveyard and exile open
   read-only. They cannot be dragged, tapped or right-clicked, and their table takes no drops.
-- **Attack:** a click toggles an eligible creature. An attacker gets a red ring and moves 14 px
-  toward the middle.
+- **Attack:** a click toggles a creature that can only attack the opponent. A creature with
+  planeswalkers or battles to choose from attacks the player by default (else its first target)
+  and waits to be aimed. While it waits, its targets light up (the opponent's plate too, when it
+  can attack the player), and a click on one aims it. Clicking it again while it waits removes it,
+  and clicking it later aims it again.
 - **Block:** click your blocker (a gold ring), then an attacker it can block. Both get the same
   number. Click an assigned blocker again to remove it.
-- **Prompt:** the panel floats bottom right and is not modal, so the table stays inspectable.
-  Hovering a row previews its card. "Let the engine choose" is always offered, and "Cancel" is
-  offered when the question came out of the reader's own cast. A card that an option names alone
-  lights up on the table.
+- **Stops:** the Stops button opens a row of step toggles for each seat's turn, Arena-style. Each
+  toggle sends the whole set (`setStops`). The reader's own main phases are drawn as fixed on.
+- **Prompt:** the docked panel is not modal, so the table stays inspectable. Hovering an answer
+  previews its card. "Let the engine choose" is always offered, and "Cancel" is offered when the
+  question came out of the reader's own cast. A card that an option names alone lights up on the
+  table.
+- **Picker:** a `pick` opens the cards at 92 × 129, with a counter ("2 of up to 3"). Confirm stays
+  `aria-disabled` until the count is within the pick's bounds. An ordered pick numbers its cards;
+  scry sorts into "Keep on top" and "Bottom", surveil into "Top" and "Graveyard". Cards that may
+  not be picked are dimmed. "Look at the table" folds the panel, "Other answers" shows the generic
+  options, and "Let the engine choose" and Cancel stay.
 - **Picks reset** with every new view.
 
 **The goldfish's pieces, widened rather than copied.** Several goldfish components gained optional
 props. When those props are absent, the goldfish draws exactly as before.
 
 - `Battlefield`: `flipped`, `readOnly`, `marks` (attack, block or chosen, with a badge), `pick`,
-  and `onActivate`.
+  `onActivate`, and `dense` (tighter padding).
+- `LifePlate`: `compact`, a one-row plate 38 px tall.
 - `layoutTable` and `pilesOf`: an `apart` key, so an attacking creature does not join a pile with
   its untouched twin.
-- The zone components: a `size`.
+- The zone components: a `size`, whose `compact` puts each zone's count on its card.
 - `useGoldfishDropTarget`: `refuse`.
 - `LibraryDialog`: `opponent`, for a read-only look.
 - `cardMenu`: `onActivate`.
@@ -261,12 +369,10 @@ The views these pieces take are narrowed to `Pick<…>`s of the fields they read
 
 ## What is not there yet
 
-- **Holding priority.** The reader cannot answer the AI's spell, or pump a blocker after blocks;
-  auto-pass passes those windows. phase's `auto_pass_recommended` and its phase stops are the way
-  in.
-- **Attacking a planeswalker or a battle.** Every attacker attacks the opponent.
+- **Holding priority over your own spell.** The reader's own spell on top never stops them, so
+  they cannot respond to it themselves (a second spell on top of their first).
 - **Choosing who plays first.** It is the seed's coin flip.
 - **Mana payment by hand.** Every cast is paid by phase's `Auto`.
-- **A rich prompt for multi-card picks.** A scry, a "choose any number" or a split is offered as
-  the engine enumerates it, or left to `auto`.
+- **A split or a pile.** A search that splits its finds between zones, separate piles and
+  distributions are still their generic options or `auto`.
 - **The light app.** Playtesting is not a destination there.

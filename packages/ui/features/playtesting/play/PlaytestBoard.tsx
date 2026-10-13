@@ -6,13 +6,15 @@ import {
   useState,
   type JSX,
   type MouseEvent,
+  type ReactNode,
 } from "react";
-import { ArrowRight, ChevronLeft, LoaderCircle, Menu } from "lucide-react";
+import { ArrowRight, ChevronLeft, LoaderCircle, Menu, Skull, SkipForward } from "lucide-react";
 import type {
   GameCard,
   GoldfishAction,
   GoldfishPlace,
   PlaytestAction,
+  PlaytestHappened,
   PlaytestSeat,
   PlaytestStackItem,
   PlaytestView,
@@ -41,6 +43,8 @@ import type { Playmat, Pointed, ZoneLook } from "../goldfish/types";
 import { fromGoldfish } from "./actions";
 import {
   NO_PICKS,
+  aimAttacker,
+  aimsAtPlayer,
   pickAttacker,
   pickBlocker,
   stageButtons,
@@ -49,7 +53,10 @@ import {
   toggleAttacker,
   type Picks,
 } from "./combat";
-import { MiddleLine } from "./MiddleLine";
+import { combatArrows } from "./arrows";
+import { CombatArrows } from "./CombatArrows";
+import { DamagePops } from "./DamagePops";
+import { MiddleLine, StackColumn } from "./MiddleLine";
 import {
   OpponentCommand,
   OpponentHand,
@@ -58,6 +65,7 @@ import {
   opponentHandWidth,
 } from "./OpponentZones";
 import { pickableCards } from "./prompt";
+import { PickPanel } from "./PickPanel";
 import { PromptPanel } from "./PromptPanel";
 
 /**
@@ -112,10 +120,17 @@ export interface PlaytestBoardProps {
   onBack: () => void;
   onNewGame: () => void;
   initialPlaymat?: Playmat;
+  /** What the view has just had happen, for the damage and life pops. A new list per step. */
+  happened?: readonly PlaytestHappened[];
+  /** The opponent's actions are being played back: the board is read-only, Skip ends it. */
+  replaying?: boolean;
+  onSkip?: () => void;
 }
 
-/** The zone columns' cards: smaller than the goldfish's 180 × 252, so two stand beside a table. */
-const ZONE: ZoneSize = { width: 80, height: 112 };
+/** The zone columns' cards: a third of the goldfish's 180 × 252, their counts drawn on them. */
+const ZONE: ZoneSize = { width: 60, height: 84, compact: true };
+
+const NONE: readonly PlaytestHappened[] = [];
 
 const CHROME_BUTTON = cn(
   "inline-flex items-center justify-center border border-border bg-surface text-text",
@@ -142,6 +157,9 @@ export function PlaytestBoard({
   onBack,
   onNewGame,
   initialPlaymat = "felt",
+  happened = NONE,
+  replaying = false,
+  onSkip,
 }: PlaytestBoardProps): JSX.Element {
   const [pointed, setPointed] = useState<{ pointed: Pointed; side: Side } | null>(null);
   const [panel, setPanel] = useState<"help" | "log" | null>(null);
@@ -169,12 +187,18 @@ export function PlaytestBoard({
     [],
   );
 
+  // **"Passing turn…" from the press, not only from the answer**: `endTurn` can play out the
+  // whole of a turn and the opponent's after it, and the busy state should say that is what it is
+  // doing rather than that the opponent is thinking. Held against the view it was pressed on.
+  const [ending, setEnding] = useState<PlaytestView | null>(null);
+  const passing = (ending !== null && ending === view) || (view?.endingTurn ?? false);
   const act = useCallback(
     (action: PlaytestAction) => {
       setPointed(null);
+      if (action.type === "endTurn") setEnding(view);
       onAct(action);
     },
-    [onAct],
+    [onAct, view],
   );
   /** The goldfish's pieces speak `GoldfishAction` (`actions.ts`). */
   const goldfishAct = useCallback(
@@ -254,8 +278,10 @@ export function PlaytestBoard({
     return () => window.removeEventListener("pointermove", onMove);
   }, [pointedId]);
 
+  /** Nothing new is offered while the engine is busy or the opponent's turn is played back. */
+  const locked = busy || replaying;
   const buttons = view === null ? null : stageButtons(view, picks);
-  const primary = busy ? null : (buttons?.primary ?? null);
+  const primary = locked ? null : (buttons?.primary ?? null);
 
   // **The board's keys**: Space presses the stage button (to combat, end the turn, declare), and
   // T, G, E, H act on the reader's own card under the pointer as on the goldfish. Not while a
@@ -269,12 +295,18 @@ export function PlaytestBoard({
       if (e.ctrlKey || e.metaKey || e.altKey || e.repeat || view === null || blocked(e)) return;
       const key = e.key.toLowerCase();
       if (key === " ") {
+        // Space skips a replay, as the Skip chip does; otherwise it presses the stage button.
+        if (replaying) {
+          e.preventDefault();
+          onSkip?.();
+          return;
+        }
         if (primary === null) return;
         e.preventDefault();
         act(primary.action);
         return;
       }
-      if (current === null || current.side !== "you") return;
+      if (current === null || current.side !== "you" || locked) return;
       if (view.stage === "mulligan" || view.stage === "over") return;
       const id = current.pointed.ids[0];
       const action: PlaytestAction | null =
@@ -302,7 +334,7 @@ export function PlaytestBoard({
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [act, current, view, primary]);
+  }, [act, current, view, primary, replaying, onSkip, locked]);
 
   // The picks the rules are asking for, by side — stable per view and picks, so the tables'
   // piles are not re-cut on every render.
@@ -311,11 +343,11 @@ export function PlaytestBoard({
   const answers = useMemo(() => pickableCards(view?.prompt ?? null), [view]);
   const stage = view?.stage ?? null;
   const yourPick = useMemo<TablePick | undefined>(() => {
-    if (pickable === null || pickable.you.size === 0 || busy) return undefined;
+    if (pickable === null || pickable.you.size === 0 || locked) return undefined;
     return {
       ids: pickable.you,
       onPick: (id) => {
-        if (stage === "attack") setPicks((p) => toggleAttacker(p, id));
+        if (stage === "attack" && view !== null) setPicks((p) => toggleAttacker(p, view, id));
         else if (stage === "block") setPicks((p) => pickBlocker(p, id));
         else if (stage === "prompt") {
           const index = answers.get(id);
@@ -323,22 +355,24 @@ export function PlaytestBoard({
         }
       },
     };
-  }, [pickable, busy, stage, answers, act, setPicks]);
+  }, [view, pickable, locked, stage, answers, act, setPicks]);
   const theirPick = useMemo<TablePick | undefined>(() => {
-    if (view === null || pickable === null || pickable.opponent.size === 0 || busy)
+    if (view === null || pickable === null || pickable.opponent.size === 0 || locked)
       return undefined;
     return {
       ids: pickable.opponent,
       onPick: (id) => {
-        if (stage === "block") setPicks((p) => pickAttacker(p, view, id));
+        if (stage === "attack") setPicks((p) => aimAttacker(p, view, id));
+        else if (stage === "block") setPicks((p) => pickAttacker(p, view, id));
         else if (stage === "prompt") {
           const index = answers.get(id);
           if (index !== undefined) act({ type: "choose", index });
         }
       },
     };
-  }, [view, pickable, busy, stage, answers, act, setPicks]);
+  }, [view, pickable, locked, stage, answers, act, setPicks]);
   const onActivate = useCallback((id: number) => act({ type: "activate", id }), [act]);
+  const arrows = useMemo(() => (view === null ? [] : combatArrows(view, picks)), [view, picks]);
 
   const you = view?.you ?? null;
   const opponent = view?.opponent ?? null;
@@ -347,6 +381,12 @@ export function PlaytestBoard({
   const status = error ?? log[0]?.text ?? "";
   const playing = view !== null && view.stage !== "mulligan" && view.stage !== "over";
   const handCount = opponent?.handCount ?? 0;
+  const prompting = view !== null && view.stage === "prompt" && view.prompt !== null;
+  const tabled = view !== null && view.stage !== "mulligan";
+  /** Whose turn it is, lit on their plate — not before the first turn or after the last. */
+  const active = playing && view.turn > 0 ? view.active : null;
+  const lookYou = (l: ZoneLook) => setLook({ look: l, side: "you" });
+  const lookOpponent = (l: ZoneLook) => setLook({ look: l, side: "opponent" });
 
   return (
     <div
@@ -369,19 +409,25 @@ export function PlaytestBoard({
       {/* The two tables' dashed edges, drawn under everything on them. */}
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-x-[112px] top-[72px] bottom-[calc(50%+36px)] rounded-[28px] border border-dashed border-border opacity-50"
+        className={cn(
+          OPPONENT_TABLE,
+          "pointer-events-none rounded-[22px] border border-dashed border-border opacity-50",
+        )}
       />
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-x-[112px] top-1/2 bottom-[108px] rounded-[28px] border border-dashed border-border opacity-70"
+        className={cn(
+          YOUR_TABLE,
+          "pointer-events-none rounded-[22px] border border-dashed border-border opacity-70",
+        )}
       />
 
       {view === null ? (
-        <div className="absolute inset-x-[112px] top-[72px] bottom-[108px] flex items-center justify-center text-dim">
+        <div className="absolute inset-x-[84px] top-[48px] bottom-[112px] flex items-center justify-center text-dim">
           {error ?? "Shuffling both decks…"}
         </div>
       ) : view.stage === "mulligan" ? (
-        <div className="absolute inset-x-[112px] top-[72px] bottom-4 flex flex-col items-center justify-center gap-3">
+        <div className="absolute inset-x-[84px] top-[48px] bottom-3 flex flex-col items-center justify-center gap-3">
           {/* The middle line is not drawn over an opening hand, so a refusal is said here. */}
           {error !== null && (
             <p role="status" className="m-0 text-xs text-text">
@@ -400,45 +446,63 @@ export function PlaytestBoard({
         </div>
       ) : (
         <>
-          <Battlefield
-            label="The opponent's battlefield"
-            cards={view.opponent.battlefield}
-            onAct={goldfishAct}
-            onDrop={drop}
-            onPoint={pointOpponent}
-            onUnpoint={unpoint}
-            flipped
-            readOnly
-            marks={marks?.opponent}
-            pick={theirPick}
-            className="absolute inset-x-[112px] top-[72px] bottom-[calc(50%+36px)]"
-          />
+          <div data-table="opponent" className={OPPONENT_TABLE}>
+            <Battlefield
+              label="The opponent's battlefield"
+              cards={view.opponent.battlefield}
+              onAct={goldfishAct}
+              onDrop={drop}
+              onPoint={pointOpponent}
+              onUnpoint={unpoint}
+              flipped
+              readOnly
+              dense
+              marks={marks?.opponent}
+              pick={theirPick}
+              className="h-full w-full"
+            />
+          </div>
           <MiddleLine
             view={view}
             picks={picks}
             status={status}
             failed={error !== null}
+            onStops={locked ? undefined : (stops) => act({ type: "setStops", stops })}
+            className="absolute inset-x-[84px] top-[calc(50%-46px)] h-7"
+          />
+          <div data-table="you" className={YOUR_TABLE}>
+            <Battlefield
+              label="Your battlefield"
+              cards={view.you.battlefield}
+              onAct={goldfishAct}
+              onDrop={drop}
+              onPoint={pointYou}
+              onUnpoint={unpoint}
+              dense
+              readOnly={replaying}
+              marks={marks?.you}
+              pick={yourPick}
+              onActivate={onActivate}
+              className="h-full w-full"
+            />
+          </div>
+          {/* The stack, in the right gutter between the two tables' zone columns. */}
+          <StackColumn
+            view={view}
+            prominent={view.stage === "respond"}
             onPoint={pointStack}
             onUnpoint={unpoint}
-            className="absolute inset-x-[112px] top-[calc(50%-36px)] h-9"
-          />
-          <Battlefield
-            label="Your battlefield"
-            cards={view.you.battlefield}
-            onAct={goldfishAct}
-            onDrop={drop}
-            onPoint={pointYou}
-            onUnpoint={unpoint}
-            marks={marks?.you}
-            pick={yourPick}
-            onActivate={onActivate}
-            className="absolute inset-x-[112px] top-1/2 bottom-[108px]"
+            className={cn(
+              "absolute top-[calc(50%-32px)] right-1.5 w-[72px] -translate-y-1/2",
+              LAYER.raised,
+            )}
           />
         </>
       )}
 
-      {/* Top left: the game menu and the way back. */}
-      <div className={cn("absolute top-[14px] left-4 flex items-center gap-2", LAYER.raised)}>
+      {/* The opponent's band, the top 48 px: the way back and the menu, their hand face down
+          hanging from the edge with their plate beside it, and help and the log. */}
+      <div className={cn("absolute top-1.5 left-3 flex items-center gap-2", LAYER.raised)}>
         <button
           type="button"
           aria-label="Game menu"
@@ -449,7 +513,7 @@ export function PlaytestBoard({
                 view === null
                   ? null
                   : { tokens: view.tokens, graveyard: view.you.graveyard, exile: view.you.exile },
-              playing,
+              playing: playing && !locked,
               backLabel: "Back to setup",
               playmat,
               commanderName: commander?.name ?? null,
@@ -457,7 +521,7 @@ export function PlaytestBoard({
               onPlaymat: setPlaymat,
               onNewGame,
               onBack,
-              onLook: (l) => setLook({ look: l, side: "you" }),
+              onLook: lookYou,
             }),
           )}
         >
@@ -477,27 +541,46 @@ export function PlaytestBoard({
         </button>
       </div>
 
-      {/* Top centre: the opponent's hand, face down, hanging from the edge; their plate beside it,
-          where the reader's own sits beside their hand at the foot — turned round. */}
       <div className="absolute top-0 left-1/2 -translate-x-1/2">
         <OpponentHand count={handCount} />
       </div>
       <div
-        className="absolute top-1"
-        style={{ left: `calc(50% + ${opponentHandWidth(handCount) / 2 + 96}px)` }}
+        className="absolute top-[5px]"
+        style={{ left: `calc(50% + ${opponentHandWidth(handCount) / 2 + 64}px)` }}
       >
-        <LifePlate
+        <PlateFrame
           seat="opponent"
-          title={plateTitle(`Opponent · ${opponentName}`, opponent)}
-          life={opponent?.life ?? 0}
-          highlight={view?.winner === "opponent"}
-          disabled={view === null}
-          onChange={(life) => act({ type: "setLife", seat: "opponent", life })}
-        />
+          active={active === "opponent"}
+          poison={opponent?.poison ?? 0}
+          compact
+        >
+          <LifePlate
+            seat="opponent"
+            title={`Opponent · ${opponentName}`}
+            life={opponent?.life ?? 0}
+            highlight={view?.winner === "opponent"}
+            disabled={view === null || locked}
+            onChange={(life) => act({ type: "setLife", seat: "opponent", life })}
+            compact
+          />
+          {/* An attacker waiting to be aimed, that may attack the opponent: their plate is the
+              target to click. */}
+          {view !== null && view.stage === "attack" && !locked && aimsAtPlayer(picks, view) && (
+            <button
+              type="button"
+              onClick={() => setPicks((p) => aimAttacker(p, view, null))}
+              className={cn(
+                "absolute inset-0 rounded-full bg-transparent outline-2 outline-offset-2 outline-accent outline-dashed",
+                FOCUS,
+              )}
+            >
+              <span className="sr-only">Attack the opponent</span>
+            </button>
+          )}
+        </PlateFrame>
       </div>
 
-      {/* Top right: help and the log. */}
-      <div className={cn("absolute top-[14px] right-4 flex gap-2", LAYER.raised)}>
+      <div className={cn("absolute top-1.5 right-3 flex gap-2", LAYER.raised)}>
         <button
           type="button"
           aria-label="How to play"
@@ -526,8 +609,8 @@ export function PlaytestBoard({
       </div>
 
       {/* The opponent's columns, the reader's turned round: library and graveyard on the left,
-          exile and the command zone on the right. */}
-      <div className="absolute top-[72px] left-4 flex flex-col gap-1.5">
+          exile and the command zone on the right — each centred on their table's height. */}
+      <div className={cn(OPPONENT_COLUMN, "left-3")}>
         <OpponentLibrary seat={opponent} size={ZONE} />
         <OpponentPile
           seat={opponent}
@@ -535,17 +618,17 @@ export function PlaytestBoard({
           size={ZONE}
           onPoint={pointOpponent}
           onUnpoint={unpoint}
-          onLook={(l) => setLook({ look: l, side: "opponent" })}
+          onLook={lookOpponent}
         />
       </div>
-      <div className="absolute top-[72px] right-4 flex flex-col items-end gap-1.5">
+      <div className={cn(OPPONENT_COLUMN, "right-3 items-end")}>
         <OpponentPile
           seat={opponent}
           zone="exile"
           size={ZONE}
           onPoint={pointOpponent}
           onUnpoint={unpoint}
-          onLook={(l) => setLook({ look: l, side: "opponent" })}
+          onLook={lookOpponent}
           className="items-end"
         />
         <OpponentCommand
@@ -559,7 +642,7 @@ export function PlaytestBoard({
 
       {/* The reader's columns, the goldfish's: command and exile left, graveyard and library
           right. */}
-      <div className="absolute top-1/2 left-4 flex flex-col gap-1.5">
+      <div className={cn(YOUR_COLUMN, "left-3")}>
         <CommandZone
           view={you}
           onAct={goldfishAct}
@@ -573,30 +656,24 @@ export function PlaytestBoard({
           onDrop={drop}
           onPoint={pointYou}
           onUnpoint={unpoint}
-          onLook={(l) => setLook({ look: l, side: "you" })}
+          onLook={lookYou}
           size={ZONE}
         />
       </div>
-      <div className="absolute top-1/2 right-4 flex flex-col items-end gap-1.5">
+      <div className={cn(YOUR_COLUMN, "right-3 items-end")}>
         <GraveyardZone
           view={you}
           onDrop={drop}
           onPoint={pointYou}
           onUnpoint={unpoint}
-          onLook={(l) => setLook({ look: l, side: "you" })}
+          onLook={lookYou}
           size={ZONE}
         />
-        <LibraryZone
-          view={you}
-          onAct={goldfishAct}
-          onDrop={drop}
-          onLook={(l) => setLook({ look: l, side: "you" })}
-          size={ZONE}
-        />
+        <LibraryZone view={you} onAct={goldfishAct} onDrop={drop} onLook={lookYou} size={ZONE} />
       </div>
 
       {/* The foot: the reader's hand, their plate beside it, and the stage button. */}
-      {view !== null && view.stage !== "mulligan" && (
+      {tabled && (
         <HandFan
           cards={view.you.hand}
           onAct={goldfishAct}
@@ -610,28 +687,32 @@ export function PlaytestBoard({
           }
         />
       )}
+      {/* Beside the hand, as on the goldfish — and at the very edge while a prompt is docked over
+          the hand, so the two never meet. */}
       <div
-        className="absolute bottom-4"
+        className="absolute bottom-3"
         style={{
           left:
-            view !== null && view.stage !== "mulligan"
-              ? `max(16px, calc(50% - ${handRow(view.you.hand.length).width / 2 + 20 + 236}px))`
-              : "16px",
+            tabled && !prompting
+              ? `max(12px, calc(50% - ${handRow(view.you.hand.length).width / 2 + 20 + 236}px))`
+              : "12px",
         }}
       >
-        <LifePlate
-          seat="you"
-          title={plateTitle(`You · ${deckName}`, you)}
-          life={you?.life ?? 0}
-          cardId={commander?.cardId ?? null}
-          highlight={view?.winner === "you"}
-          disabled={view === null}
-          onChange={(life) => act({ type: "setLife", seat: "you", life })}
-        />
+        <PlateFrame seat="you" active={active === "you"} poison={you?.poison ?? 0}>
+          <LifePlate
+            seat="you"
+            title={`You · ${deckName}`}
+            life={you?.life ?? 0}
+            cardId={commander?.cardId ?? null}
+            highlight={view?.winner === "you"}
+            disabled={view === null || locked}
+            onChange={(life) => act({ type: "setLife", seat: "you", life })}
+          />
+        </PlateFrame>
       </div>
 
-      {view !== null && view.stage !== "mulligan" && view.stage !== "over" && (
-        <div className="absolute right-4 bottom-4 flex flex-col items-end gap-2">
+      {view !== null && view.stage !== "mulligan" && view.stage !== "over" && !replaying && (
+        <div className="absolute right-3 bottom-3 flex flex-col items-end gap-2">
           <span className="text-xs text-dim">
             {view.you.manaOpen} mana open · hand {view.you.hand.length}
           </span>
@@ -644,7 +725,7 @@ export function PlaytestBoard({
                 className="size-[18px] animate-spin motion-reduce:animate-none"
                 aria-hidden="true"
               />
-              Opponent is thinking…
+              {passing ? "Passing turn…" : "Opponent is thinking…"}
             </span>
           ) : (
             buttons !== null &&
@@ -653,12 +734,19 @@ export function PlaytestBoard({
                 {buttons.secondary !== null && (
                   <button
                     type="button"
-                    onClick={() => buttons.secondary !== null && act(buttons.secondary.action)}
+                    aria-disabled={buttons.secondary.disabled === true}
+                    onClick={() =>
+                      buttons.secondary !== null &&
+                      buttons.secondary.disabled !== true &&
+                      act(buttons.secondary.action)
+                    }
                     className={cn(
                       "inline-flex h-11 items-center rounded-2xl border border-border bg-surface px-4",
                       "text-[13px] text-text transition-colors motion-reduce:transition-none hover:border-accent",
                       PRESS,
                       FOCUS,
+                      buttons.secondary.disabled === true &&
+                        "cursor-default text-dim hover:border-border active:scale-100",
                     )}
                   >
                     {buttons.secondary.label}
@@ -674,20 +762,63 @@ export function PlaytestBoard({
         </div>
       )}
 
-      {view !== null && view.stage === "prompt" && view.prompt !== null && (
-        <PromptPanel
-          prompt={view.prompt}
+      {prompting && view.prompt!.pick !== null && (
+        <PickPanel
+          key={view.prompt!.pick.cards.map((c) => c.id).join(",")}
+          prompt={{ ...view.prompt!, pick: view.prompt!.pick }}
           table={[...view.you.battlefield, ...view.opponent.battlefield, ...view.you.hand]}
-          disabled={busy}
+          disabled={locked}
           onAct={act}
           onPoint={pointCard}
           onUnpoint={unpoint}
-          className="absolute right-[112px] bottom-[120px] max-h-[calc(100%-216px)]"
+          className="absolute top-[calc(50%-32px)] left-1/2 max-h-[calc(100%-200px)] w-[min(820px,calc(100%-200px))] -translate-x-1/2 -translate-y-1/2"
+        />
+      )}
+      {prompting && view.prompt!.pick === null && (
+        <PromptPanel
+          prompt={view.prompt!}
+          table={[...view.you.battlefield, ...view.opponent.battlefield, ...view.you.hand]}
+          disabled={locked}
+          onAct={act}
+          onPoint={pointCard}
+          onUnpoint={unpoint}
+          className="absolute bottom-2 left-1/2 max-h-[104px] w-[min(640px,calc(100%-560px))] -translate-x-1/2"
         />
       )}
 
-      {view !== null && view.stage === "over" && (
+      {view !== null && view.stage === "over" && !replaying && (
         <GameOver winner={view.winner} turn={view.turn} onNewGame={onNewGame} onBack={onBack} />
+      )}
+
+      <CombatArrows root={root} arrows={arrows} />
+      <DamagePops root={root} view={view} happened={happened} />
+
+      {/* **Read-only while the opponent's turn is played back**: one sheet over the whole board
+          takes every press, and only the Skip chip above it answers one. */}
+      {replaying && (
+        <>
+          <div
+            aria-hidden="true"
+            data-testid="replay-shield"
+            className={cn("absolute inset-0", LAYER.raised)}
+          />
+          <button
+            type="button"
+            onClick={onSkip}
+            aria-keyshortcuts="Space Escape"
+            className={cn(
+              "absolute right-3 bottom-3 inline-flex h-11 items-center gap-2 rounded-full border border-mana-r bg-surface px-4",
+              "text-[13px] text-text transition-colors motion-reduce:transition-none hover:bg-mana-r hover:text-bg",
+              LAYER.raised,
+              PRESS,
+              FOCUS,
+            )}
+          >
+            <span className="text-dim">Opponent’s turn</span>
+            <span className="font-semibold">Skip</span>
+            <SkipForward className="size-4" aria-hidden="true" />
+          </button>
+        </>
       )}
 
       <Inspect pointed={current?.pointed ?? null} width={previewWidth} onResize={setPreviewWidth} />
@@ -707,6 +838,66 @@ export function PlaytestBoard({
           onAct={goldfishAct}
           onClose={() => setLook(null)}
         />
+      )}
+    </div>
+  );
+}
+
+/**
+ * **The frame**, measured from the board's box: the opponent's band is the top 48 px, the reader's
+ * foot the bottom 112, the middle line 28 px tall just above the centre, and the two tables share
+ * the rest equally — `calc(50% - 94px)` each, 289 px in a 766 px board (1280 × 800 less the
+ * caption), 339 in an 866 px one. The tables are 84 px in from either side: a 60 px zone column
+ * 12 px from the edge, and 12 px between it and the table.
+ */
+const OPPONENT_TABLE = "absolute inset-x-[84px] top-[48px] bottom-[calc(50%+46px)]";
+const YOUR_TABLE = "absolute inset-x-[84px] top-[calc(50%-18px)] bottom-[112px]";
+/** A zone column, centred on its table's height. */
+const OPPONENT_COLUMN =
+  "absolute top-[48px] bottom-[calc(50%+46px)] flex flex-col justify-center gap-2";
+const YOUR_COLUMN =
+  "absolute top-[calc(50%-18px)] bottom-[112px] flex flex-col justify-center gap-2";
+
+/**
+ * A plate's frame: `data-plate`, which the combat's arrows and the life pops find it by, a gold
+ * glow on the plate of the seat whose turn it is, and the seat's poison counters when it has any.
+ */
+function PlateFrame({
+  seat,
+  active,
+  poison,
+  compact = false,
+  children,
+}: {
+  seat: "you" | "opponent";
+  active: boolean;
+  poison: number;
+  compact?: boolean;
+  children: ReactNode;
+}): JSX.Element {
+  return (
+    <div
+      data-plate={seat}
+      data-active={active || undefined}
+      className={cn(
+        "relative flex items-center gap-2 transition-shadow duration-200 motion-reduce:transition-none",
+        compact ? "rounded-full" : "rounded-[14px]",
+        active &&
+          "shadow-[0_0_0_2px_var(--color-accent),0_0_18px_color-mix(in_oklch,var(--color-accent)_45%,transparent)]",
+      )}
+    >
+      {children}
+      {poison > 0 && (
+        <span
+          aria-label={`${poison} poison`}
+          className={cn(
+            "inline-flex flex-none items-center gap-1 rounded-full border border-mana-g bg-surface px-2 font-mono text-xs/6 font-semibold text-mana-g tabular-nums",
+            !compact && "absolute -top-3 right-2",
+          )}
+        >
+          <Skull className="size-3.5" aria-hidden="true" />
+          {poison}
+        </span>
       )}
     </div>
   );
@@ -819,11 +1010,6 @@ function PlaytestHelp(): JSX.Element {
       </span>
     </>
   );
-}
-
-/** "You", "You · 3 poison". */
-function plateTitle(name: string, seat: PlaytestSeat | null): string {
-  return seat !== null && seat.poison > 0 ? `${name} · ${seat.poison} poison` : name;
 }
 
 /** Every id a card can land as on this board: the reader's every zone, the opponent's open ones. */

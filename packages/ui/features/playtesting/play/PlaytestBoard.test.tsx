@@ -2,7 +2,15 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { PlaytestView } from "@/lib/ipc";
 import { goldfishDraggable } from "../goldfish/goldfishDrag";
-import { attackStep, blockStep, gameOver, targetPrompt, turnFive } from "./fixtures";
+import {
+  attackStep,
+  blockStep,
+  combatArrowsView,
+  gameOver,
+  respondStep,
+  targetPrompt,
+  turnFive,
+} from "./fixtures";
 import { PlaytestBoard } from "./PlaytestBoard";
 
 // Spied, not replaced: the board's cards still register as the goldfish's do, and the test can
@@ -12,10 +20,11 @@ vi.mock("../goldfish/goldfishDrag", async (importOriginal) => {
   return { ...actual, goldfishDraggable: vi.fn(actual.goldfishDraggable) };
 });
 
-function setup(view: PlaytestView | null, { busy = false } = {}) {
+function setup(view: PlaytestView | null, { busy = false, replaying = false } = {}) {
   const onAct = vi.fn();
   const onBack = vi.fn();
   const onNewGame = vi.fn();
+  const onSkip = vi.fn();
   render(
     <PlaytestBoard
       deckName="Simic Tempo"
@@ -27,9 +36,11 @@ function setup(view: PlaytestView | null, { busy = false } = {}) {
       onAct={onAct}
       onBack={onBack}
       onNewGame={onNewGame}
+      replaying={replaying}
+      onSkip={onSkip}
     />,
   );
-  return { onAct, onBack, onNewGame };
+  return { onAct, onBack, onNewGame, onSkip };
 }
 
 const yours = () => screen.getByRole("region", { name: "Your battlefield" });
@@ -38,7 +49,7 @@ const theirs = () => screen.getByRole("region", { name: "The opponent's battlefi
 describe("PlaytestBoard's stage button", () => {
   it("goes to combat or ends the turn in the first main phase, and Space presses the first", () => {
     const { onAct } = setup(turnFive().view);
-    expect(screen.getByText("Turn 5 · Your main phase")).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Turn 5 · Your main phase" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /To combat/ }));
     expect(onAct).toHaveBeenLastCalledWith({ type: "pass" });
     fireEvent.click(screen.getByRole("button", { name: "End turn" }));
@@ -83,16 +94,21 @@ describe("PlaytestBoard's attack step", () => {
     // Delver picked and then put back.
     fireEvent.click(within(yours()).getByRole("button", { name: /^Delver/ }));
     fireEvent.click(screen.getByRole("button", { name: /Attack with 1/ }));
-    expect(onAct).toHaveBeenCalledWith({ type: "attack", attackers: [goyf.id] });
+    expect(onAct).toHaveBeenCalledWith({
+      type: "attack",
+      attacks: [{ attacker: goyf.id, target: null }],
+    });
     expect(onAct).not.toHaveBeenCalledWith(
-      expect.objectContaining({ attackers: expect.arrayContaining([delver.id]) }),
+      expect.objectContaining({
+        attacks: expect.arrayContaining([expect.objectContaining({ attacker: delver.id })]),
+      }),
     );
   });
 
   it("declares no attack with nothing picked", () => {
     const { onAct } = setup(attackStep().view);
     fireEvent.keyDown(window, { key: " " });
-    expect(onAct).toHaveBeenCalledWith({ type: "attack", attackers: [] });
+    expect(onAct).toHaveBeenCalledWith({ type: "attack", attacks: [] });
   });
 });
 
@@ -161,5 +177,108 @@ describe("PlaytestBoard's opponent", () => {
   it("draws the opponent's hand face down, by its count", () => {
     setup(turnFive().view);
     expect(screen.getByRole("img", { name: "The opponent's hand, 5 cards" })).toBeInTheDocument();
+  });
+});
+
+describe("PlaytestBoard's aimed attacks", () => {
+  it("re-aims an attacker at a planeswalker clicked on the opponent's table", () => {
+    const { view, goyf, jace } = attackStep();
+    const { onAct } = setup(view);
+    fireEvent.click(within(yours()).getByRole("button", { name: /^Tarmogoyf/ }));
+    fireEvent.click(within(theirs()).getByRole("button", { name: /^Jace/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Attack with 1/ }));
+    expect(onAct).toHaveBeenCalledWith({
+      type: "attack",
+      attacks: [{ attacker: goyf.id, target: jace.id }],
+    });
+  });
+
+  it("aims back at the opponent through their plate", () => {
+    const { view, goyf, jace } = attackStep();
+    const { onAct } = setup(view);
+    fireEvent.click(within(yours()).getByRole("button", { name: /^Tarmogoyf/ }));
+    fireEvent.click(within(theirs()).getByRole("button", { name: /^Jace/ }));
+    // Waiting to be aimed again, then at the plate.
+    fireEvent.click(within(yours()).getByRole("button", { name: /^Tarmogoyf/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Attack the opponent" }));
+    fireEvent.keyDown(window, { key: " " });
+    expect(onAct).toHaveBeenCalledWith({
+      type: "attack",
+      attacks: [{ attacker: goyf.id, target: null }],
+    });
+    expect(jace.id).not.toBe(goyf.id);
+  });
+});
+
+describe("PlaytestBoard's respond stage", () => {
+  it("passes on Space, passes the turn on the second button, and calls out the stack", () => {
+    const { onAct } = setup(respondStep().view);
+    expect(screen.getByText("Respond?")).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: " " });
+    expect(onAct).toHaveBeenLastCalledWith({ type: "pass" });
+    fireEvent.click(screen.getByRole("button", { name: "Pass turn" }));
+    expect(onAct).toHaveBeenLastCalledWith({ type: "endTurn" });
+  });
+
+  it("says it is passing the turn while the engine plays it out", () => {
+    setup({ ...respondStep().view, endingTurn: true });
+    expect(screen.getByRole("button", { name: "Passing turn…" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+});
+
+describe("PlaytestBoard's stops", () => {
+  it("toggles a stop by sending the whole new set, with the reader's main phases fixed on", () => {
+    const { onAct } = setup(respondStep().view);
+    fireEvent.click(screen.getByRole("button", { name: "Stops" }));
+    const mine = screen.getByRole("group", { name: "Your turn" });
+    expect(within(mine).getByRole("button", { name: "Main 1" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.click(within(mine).getByRole("button", { name: "Main 1" }));
+    expect(onAct).not.toHaveBeenCalled();
+    const theirsRow = screen.getByRole("group", { name: "Opponent's turn" });
+    expect(within(theirsRow).getByRole("button", { name: "Upkeep" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.click(within(theirsRow).getByRole("button", { name: "End" }));
+    expect(onAct).toHaveBeenLastCalledWith({
+      type: "setStops",
+      stops: [
+        { seat: "opponent", step: "upkeep" },
+        { seat: "opponent", step: "end" },
+      ],
+    });
+    fireEvent.click(within(theirsRow).getByRole("button", { name: "Upkeep" }));
+    expect(onAct).toHaveBeenLastCalledWith({ type: "setStops", stops: [] });
+  });
+});
+
+describe("PlaytestBoard's replay", () => {
+  it("is read-only, and Skip or Space ends it", () => {
+    const { view, elves } = turnFive();
+    const { onAct, onSkip } = setup(view, { replaying: true });
+    expect(screen.getByTestId("replay-shield")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /To combat/ })).not.toBeInTheDocument();
+    fireEvent.click(within(yours()).getByRole("button", { name: /^Llanowar Elves/ }));
+    expect(onAct).not.toHaveBeenCalledWith(expect.objectContaining({ ids: [elves.id] }));
+    fireEvent.keyDown(window, { key: " " });
+    expect(onSkip).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: /Skip/ }));
+    expect(onSkip).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("PlaytestBoard's tracker", () => {
+  it("lights the phase the game is in, named in one sentence", () => {
+    setup(combatArrowsView().view);
+    const tracker = screen.getByRole("group", {
+      name: "Turn 5 · Your declare blockers step — you may respond",
+    });
+    expect(tracker.querySelector("[data-lit]")).toHaveTextContent("Combat");
   });
 });

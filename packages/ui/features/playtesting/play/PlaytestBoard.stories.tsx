@@ -1,18 +1,26 @@
-import type { JSX } from "react";
+import { useCallback, useEffect, useState, type JSX } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
-import type { PlaytestAction, PlaytestView } from "@/lib/ipc";
-import type { LogLine } from "../goldfish/log";
+import type { PlaytestAction, PlaytestHappened, PlaytestView } from "@/lib/ipc";
+import { appendLog, type LogLine } from "../goldfish/log";
 import {
   attackStep,
   blockStep,
   castChoicePrompt,
+  combatArrowsView,
+  damageHappened,
+  discardPick,
   gameOver,
   openingHand,
+  replayStep,
+  respondStep,
+  scryPick,
   targetPrompt,
   turnFive,
   withStack,
 } from "./fixtures";
+import { playtestLines } from "./log";
+import { replayEntries, useReplay, type ReplayEntry } from "./useReplay";
 import { PlaytestBoard } from "./PlaytestBoard";
 
 /**
@@ -26,13 +34,23 @@ function Board({
   busy = false,
   log = [],
   error = null,
+  happened,
 }: {
   view: PlaytestView | null;
   onAct: (a: PlaytestAction) => void;
   busy?: boolean;
   log?: LogLine[];
   error?: string | null;
+  /** Facts to pop once the board is drawn (the damage story). */
+  happened?: PlaytestHappened[];
 }): JSX.Element {
+  // Handed over a moment after the first paint, as a step's facts arrive after its view.
+  const [later, setLater] = useState<PlaytestHappened[] | undefined>(undefined);
+  useEffect(() => {
+    if (happened === undefined) return;
+    const t = window.setTimeout(() => setLater(happened), 300);
+    return () => window.clearTimeout(t);
+  }, [happened]);
   return (
     <PlaytestBoard
       deckName="Simic Tempo"
@@ -44,6 +62,51 @@ function Board({
       onAct={onAct}
       onBack={() => {}}
       onNewGame={() => {}}
+      happened={later}
+    />
+  );
+}
+
+/**
+ * The opponent's turn played back from fake frames (`replayStep`), as `usePlaytestGame` plays a
+ * step's frames: a beat every 450 ms, the log and the pops fed as it goes, Skip to end it.
+ * "Replay again" starts over.
+ */
+function Replayed({ onAct }: { onAct: (a: PlaytestAction) => void }): JSX.Element {
+  const [{ start, step }] = useState(replayStep);
+  const [view, setView] = useState<PlaytestView>(start);
+  const [log, setLog] = useState<LogLine[]>([]);
+  const [happened, setHappened] = useState<readonly PlaytestHappened[]>([]);
+  const apply = useCallback((e: ReplayEntry) => {
+    setView(e.view);
+    setHappened(e.quiet ? [] : e.happened);
+    setLog((old) => appendLog(old, playtestLines(e.happened, e.view.turn)));
+  }, []);
+  const replay = useReplay(apply);
+  const { play } = replay;
+  const again = useCallback(() => {
+    setView(start);
+    setLog([]);
+    window.setTimeout(() => play(replayEntries(step, step.frames)), 600);
+  }, [play, start, step]);
+  useEffect(() => {
+    const t = window.setTimeout(() => play(replayEntries(step, step.frames)), 600);
+    return () => window.clearTimeout(t);
+  }, [play, step]);
+  return (
+    <PlaytestBoard
+      deckName="Simic Tempo"
+      opponentName="Boros Aggro"
+      view={view}
+      log={log}
+      error={null}
+      busy={false}
+      onAct={onAct}
+      onBack={() => {}}
+      onNewGame={again}
+      happened={happened}
+      replaying={replay.replaying}
+      onSkip={replay.skip}
     />
   );
 }
@@ -65,9 +128,10 @@ const meta = {
   tags: ["autodocs"],
   args: { view: turnFive().view, onAct: fn(), log: LOG },
   decorators: [
-    // The smallest window the board is drawn for: 1280 × 800, less the 34 px caption.
+    // The whole canvas, as the board fills the window below the caption: measured at 1280 × 766
+    // (1280 × 800 less the 34 px caption) and 1440 × 866.
     (Story) => (
-      <div className="h-[766px] w-[1280px]">
+      <div className="h-screen w-screen">
         <Story />
       </div>
     ),
@@ -93,7 +157,7 @@ type Story = StoryObj<typeof meta>;
 export const YourMainPhase: Story = {
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement);
-    await expect(canvas.getByText("Turn 5 · Your main phase")).toBeVisible();
+    await expect(canvas.getByRole("group", { name: "Turn 5 · Your main phase" })).toBeVisible();
     await userEvent.click(canvas.getByRole("button", { name: /To combat/ }));
     await expect(args.onAct).toHaveBeenLastCalledWith({ type: "pass" });
   },
@@ -110,7 +174,7 @@ export const AttackStep: Story = {
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement);
     const yours = canvas.getByRole("region", { name: "Your battlefield" });
-    await userEvent.click(within(yours).getByRole("button", { name: /^Tarmogoyf/ }));
+    await userEvent.click(within(yours).getByRole("button", { name: /^Llanowar Elves/ }));
     await userEvent.click(canvas.getByRole("button", { name: /Attack with 1/ }));
     await expect(args.onAct).toHaveBeenLastCalledWith(expect.objectContaining({ type: "attack" }));
   },
@@ -157,4 +221,60 @@ export const GameOver: Story = {
 /** Before the engine has dealt. */
 export const Dealing: Story = {
   args: { view: null, busy: true, log: [] },
+};
+
+/** Combat after blocks: Tarmogoyf at the opponent, Delver at Jace, Ragavan blocking Delver —
+ *  arrows from each attacker to its target and from the blocker to its attacker. */
+export const CombatArrows: Story = {
+  args: { view: combatArrowsView().view },
+};
+
+/** Damage lands: "−3" over Tarmogoyf, "−4" over Ragavan, the opponent's −3 and your +2. */
+export const DamagePops: Story = {
+  args: (() => {
+    const t = turnFive();
+    return { view: t.view, happened: damageHappened(t) };
+  })(),
+};
+
+/** The opponent's turn played back from frames, a beat every 450 ms; Space, Escape or Skip ends it. */
+export const Replay: Story = {
+  render: (args) => <Replayed onAct={args.onAct} />,
+};
+
+/** The opponent's Lightning Bolt on the stack and the reader may respond: Pass, or Pass turn. */
+export const Respond: Story = {
+  args: { view: respondStep().view },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "Pass turn" }));
+    await expect(args.onAct).toHaveBeenLastCalledWith({ type: "endTurn" });
+  },
+};
+
+/** The stops popover, open: the opponent's upkeep is a stop, the reader's mains always are. */
+export const Stops: Story = {
+  args: { view: respondStep().view },
+  play: async ({ canvasElement }) => {
+    await userEvent.click(within(canvasElement).getByRole("button", { name: "Stops" }));
+  },
+};
+
+/** Aiming an attack: Tarmogoyf picked, Jace lit as what it may attack instead of the player. */
+export const AimAttack: Story = {
+  args: { view: attackStep().view },
+  play: async ({ canvasElement }) => {
+    const yours = within(canvasElement).getByRole("region", { name: "Your battlefield" });
+    await userEvent.click(within(yours).getByRole("button", { name: /^Tarmogoyf/ }));
+  },
+};
+
+/** Scry 3: Keep on top, in order, and Bottom. */
+export const ScryPick: Story = {
+  args: { view: scryPick().view },
+};
+
+/** Discard exactly two; the land cannot be picked. */
+export const DiscardPick: Story = {
+  args: { view: discardPick().view },
 };
