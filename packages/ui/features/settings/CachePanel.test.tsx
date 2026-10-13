@@ -8,7 +8,6 @@ function cache(over: Partial<LocalCache> = {}): LocalCache {
   return {
     clear: { run: vi.fn(), pending: false },
     combos: { run: vi.fn(), pending: false },
-    status: null,
     ...over,
   };
 }
@@ -54,34 +53,6 @@ describe("CachePanel", () => {
     expect(state.clear.run).not.toHaveBeenCalled();
     await user.click(within(dialog()).getByRole("button", { name: "Clear cache" }));
     expect(state.clear.run).toHaveBeenCalledOnce();
-  });
-
-  it("says what it freed once it has run", () => {
-    render(
-      <CachePanel cache={cache({ status: { tone: "plain", text: "Freed 330 MB across 5,540 files." } })} />,
-    );
-
-    expect(within(panel()).getByRole("alert")).toHaveTextContent("Freed 330 MB across 5,540 files.");
-  });
-
-  /**
-   * The one refusal this command has. It is a "not now" rather than a fault — the corpus
-   * download is mid-flight and reads its own file back — so the reader is told when to try
-   * again in the same sentence.
-   */
-  it("draws the mid-sync refusal it can be given", () => {
-    render(
-      <CachePanel
-        cache={cache({
-          status: {
-            tone: "problem",
-            text: "a card update is running — clear the cache once it has finished",
-          },
-        })}
-      />,
-    );
-
-    expect(within(panel()).getByRole("alert")).toHaveTextContent("once it has finished");
   });
 
   it("goes inert while the sweep is running", () => {
@@ -190,22 +161,6 @@ describe("CachePanel — the combo row", () => {
 
     expect(combos).toBeDisabled();
     expect(combos).toHaveAttribute("aria-busy", "true");
-  });
-
-  /** A refusal reaches the panel's one line in the destructive tone, and claims nothing. */
-  it("draws a failed re-download without reporting a count", () => {
-    render(
-      <CachePanel
-        cache={cache({
-          status: { tone: "problem", text: "Commander Spellbook could not be reached." },
-        })}
-      />,
-    );
-
-    const alert = within(panel()).getByRole("alert");
-    expect(alert).toHaveTextContent("Commander Spellbook could not be reached.");
-    expect(alert).not.toHaveTextContent(/combos,/);
-    expect(alert).toHaveClass("text-destructive");
   });
 
   /**

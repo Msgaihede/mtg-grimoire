@@ -12,6 +12,7 @@ import { cn } from "@grimoire/ui/lib/utils";
 import { PRINTING_ROW, PrintingFace, printingCode } from "../card/Printings";
 import { ReceiptBar } from "../deck/receipt";
 import { ActionSheet, SheetBack, SheetChoice, SheetRow, SheetStepper } from "../deck/sheet";
+import { toasted } from "../toasted";
 import type { ListReceipt } from "./receipt";
 
 /** What the wishlist's root is called — the desktop breadcrumb's word. */
@@ -44,6 +45,9 @@ type Page = "main" | "printing" | "folder";
  * **What a wish asks for in its finish is part of the wish** and no write changes it on either face
  * — `wishlist_entries` has no update command, so the preferred finish is drawn in the subtitle and
  * nowhere offered. Neither is a wish's note.
+ *
+ * **A removal and a move toast** (`CopyActions`' reason, the desktop wishlist page's words); the
+ * stepper's other steps, a printing pinned and `Any printing` are answered by the sheet's own line.
  *
  * **A wish a deck manages is never opened here** — its tile has no `⋯` — and if one is, the sheet
  * says why in the desktop's words and offers nothing.
@@ -142,7 +146,10 @@ function WishPages({
 
   const removeWish = () => {
     receipt.track(
-      writes.remove.mutateAsync(wish),
+      toasted(writes.remove.mutateAsync(wish), {
+        done: `Removed “${wish.name}” from the wishlist`,
+        failed: `Couldn't remove “${wish.name}” from the wishlist`,
+      }),
       () => `Removed ${wish.name} from your wishlist.`,
     );
     onGone();
@@ -182,9 +189,10 @@ function WishPages({
         onBack={back}
         onPick={(folderId, name) => {
           receipt.track(
-            writes.setFolder
-              .mutateAsync({ id: wish.id, folderId })
-              .then((change) => follow(change, { folderId })),
+            toasted(writes.setFolder.mutateAsync({ id: wish.id, folderId }), {
+              done: `Moved “${wish.name}” to “${name}”`,
+              failed: `Couldn't move “${wish.name}” to “${name}”`,
+            }).then((change) => follow(change, { folderId })),
             () => `Moved ${wish.name} to ${name}.`,
           );
           back();

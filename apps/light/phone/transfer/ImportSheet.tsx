@@ -10,6 +10,7 @@ import { FOCUS } from "@grimoire/ui/lib/focus";
 import { DECKLIST_ACCEPT, readDecklistFile } from "@grimoire/ui/lib/core/browserFiles";
 import { ipcError } from "@grimoire/ui/lib/ipc";
 import { PRESS_SOFT } from "@grimoire/ui/lib/motion";
+import { notify } from "@grimoire/ui/lib/notifications";
 import { cn } from "@grimoire/ui/lib/utils";
 
 /**
@@ -47,6 +48,11 @@ const PRIMARY = cn(
  * `Preview` — the desktop component, store-free, under a touch floor — so a list previews, files
  * and commits exactly as it does on the desktop.
  *
+ * **What landed is said as the desktop says it**: the preview is handed `report={notify}`, so a
+ * landing and a refusal are one toast per press in the destination's own words (`ImportDialog`'s
+ * half of the seam), and the sheet closes on a landing. The commit bar's refusal stays inline too —
+ * the sheet is still open there, and the retry is beside it.
+ *
  * **The whole window below 640px**, the add search's shape: a pasted list and a preview are both
  * taller than a bottom sheet leaves room for. A sheet over the page, not a place.
  */
@@ -63,7 +69,8 @@ export function ImportSheet({
   /** The line under the heading where the destination has no `Subtitle` of its own. */
   subtitle?: ReactNode;
   onClose: () => void;
-  /** The import landed, in the destination's own sentence. The host closes the sheet. */
+  /** The import landed, in the destination's own sentence. The host closes the sheet; the toast
+   *  has already said what landed, so no host needs to draw the sentence again. */
   onDone: (message: string) => void;
 }) {
   return (
@@ -136,6 +143,7 @@ function Body({
             resolved={resolved.rows}
             tags={resolved.tags}
             onDone={onDone}
+            report={notify}
             onBack={source.toSource}
           />
         </div>

@@ -2,8 +2,8 @@
  * The toast stack: every live toast `@/lib/notifications` holds, bottom-right, newest at the
  * bottom.
  *
- * **Mounted once per face**, in `AppShell` — the store is module state and a second `Toaster`
- * would draw every toast twice. Nothing else draws from `toasts`; anything that has something to
+ * **Mounted once per face** — in `AppShell` on the desktop, and in the light app's `PhoneFace` on
+ * the phone — the store is module state and a second `Toaster` would draw every toast twice. Nothing else draws from `toasts`; anything that has something to
  * say calls `notify` and is done.
  *
  * **The stack is a `role="region"` landmark and each toast its own live region**: an error is an
@@ -15,6 +15,12 @@
  *
  * **`pointer-events-none` on the column, `auto` on each toast**, so the 20rem strip of corner the
  * stack reserves never eats a click meant for the page under the gaps.
+ *
+ * **Where the stack stands is the face's call** (`className`): the desktop's bottom-right corner by
+ * default; the phone face lifts it over its tab bar, its receipt line and the safe-area insets and
+ * spans the width (`apps/light/phone/PhoneApp.tsx`'s `PHONE_TOASTS`). The layer is not a face's to
+ * change — every face keeps `LAYER.toast`. The ✕ takes a finger's size from `coarse:`, so under a
+ * mouse nothing moves.
  */
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
@@ -43,7 +49,12 @@ export const TONE: Record<NoticeTone, { Icon: LucideIcon; className: string }> =
 /** The ✕'s name. */
 export const CLOSE_TOAST = "Close notification";
 
-export function Toaster() {
+export function Toaster({
+  className,
+}: {
+  /** Where the stack stands — position, offsets and width only, merged over the corner default. */
+  className?: string;
+} = {}) {
   const toasts = useNotifications((s) => s.toasts);
   const notices = useNotifications((s) => s.notices);
 
@@ -52,6 +63,7 @@ export function Toaster() {
       aria-label="Notifications"
       className={cn(
         "pointer-events-none fixed right-4 bottom-4 flex w-80 max-w-[calc(100vw-2rem)] flex-col gap-2",
+        className,
         LAYER.toast,
       )}
     >
@@ -123,6 +135,8 @@ function Toast({ toast, notice }: { toast: LiveToast; notice: Notice }) {
         onClick={() => dismissToast(toast.id)}
         className={cn(
           "shrink-0 rounded-md p-1 text-dim",
+          // A finger's floor, `Dialog`'s ✕ recipe: the glyph stays 16px, the press grows to 44.
+          "coarse:-my-1.5 coarse:flex coarse:min-h-[var(--target-min)] coarse:min-w-[var(--target-min)] coarse:items-center coarse:justify-center",
           "transition-colors duration-[var(--duration-fast)] ease-standard hover:text-text",
           "motion-reduce:transition-none",
           FOCUS,

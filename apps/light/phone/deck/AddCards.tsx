@@ -8,6 +8,7 @@ import { searchItem } from "../items";
 import type { WallItem } from "../CardWall";
 import { SearchLine, SearchResults } from "../pages/SearchPage";
 import { useMore } from "../pages/parts";
+import { toasted } from "../toasted";
 import { ReceiptBar, type Receipt } from "./receipt";
 
 /**
@@ -28,7 +29,9 @@ import { ReceiptBar, type Receipt } from "./receipt";
  *
  * **A sheet over the page, not a place**: page state, as the filters sheet is. Its foot is the
  * write's receipt — what the deck's history filed, how many of that card the list now holds, and
- * `Undo`.
+ * `Undo`. **Each press also toasts** (`Added “Sol Ring” to “Atraxa”`): it is the desktop's docked
+ * search panel, whose adds the owner's rule counts — one press, one copy, one toast. Not Quick Add,
+ * which is a box typed into on the page, and not a stepper.
  *
  * The body is mounted only while the sheet is open (`Dialog` mounts children only then), so the
  * search asks nothing until a reader presses `Add cards`.
@@ -85,6 +88,7 @@ function Body({
   const { query, marketplace } = search;
   const more = useMore(query, query.hasNextPage);
   const [added, setAdded] = useState<string | null>(null);
+  const where = deck.deck === null ? "the deck" : `“${deck.deck.name}”`;
 
   // The tile's name says what its press does: this wall adds, where the Search page's opens.
   const items = useMemo(
@@ -101,12 +105,18 @@ function Body({
     if (row === undefined) return;
     setAdded(row.id);
     receipt.track(
-      deck.addCard.mutateAsync({
-        cardId: row.id,
-        deckDefault: true,
-        typeLine: row.typeLine,
-        quantity: 1,
-      }),
+      toasted(
+        deck.addCard.mutateAsync({
+          cardId: row.id,
+          deckDefault: true,
+          typeLine: row.typeLine,
+          quantity: 1,
+        }),
+        {
+          done: `Added “${row.name}” to ${where}`,
+          failed: `Couldn't add “${row.name}” to ${where}`,
+        },
+      ),
       () => `Added 1 \u00d7 ${row.name}.`,
     );
   };

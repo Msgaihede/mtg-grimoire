@@ -28,6 +28,7 @@ import {
 import { useMarketplace } from "@grimoire/ui/lib/useMarketplace";
 import { cn } from "@grimoire/ui/lib/utils";
 import { PRINTING_ROW, PrintingFace, printingCode } from "../card/Printings";
+import { toasted } from "../toasted";
 import type { Receipt } from "./receipt";
 import { ReceiptBar } from "./receipt";
 import { ActionSheet, SheetBack, SheetChoice, SheetRow, SheetStepper as Stepper } from "./sheet";
@@ -81,6 +82,13 @@ const finishWord = (finish: DeckFinish): string =>
  * sheet goes on drawing the row it was opened on rather than one that no longer exists. Stepping
  * to zero has no address to follow, so it closes the sheet — the page's receipt says what went and
  * offers it back.
+ *
+ * **What toasts is what the owner's rule names** — a card moved to another pile (a command zone's
+ * claim is a move too), added to the other list, or removed — in the desktop deck menu's words
+ * (`deckCardMenu.tsx`): `Moved “Sol Ring” to “Ramp”`, `Removed “Sol Ring” from the deck`. A step of
+ * the stepper says nothing but its number; its last step down is the removal and says so, because
+ * it closes the sheet. A label, a printing and a finish are edits to the row, answered by the line
+ * under the sheet that stays open on it.
  */
 export function CardActions({
   acting,
@@ -150,16 +158,20 @@ export function CardActions({
             onBack={() => setPage("main")}
             onPick={(to) => {
               receipt.track(
-                deck.moveCard
-                  .mutateAsync({
+                toasted(
+                  deck.moveCard.mutateAsync({
                     cardId: card.cardId,
                     from: card.categoryId,
                     to,
                     finish: card.finish,
-                  })
-                  .then(() =>
-                    moved(onMoved, card, { categoryId: to, categoryName: nameOf(categories, to) }),
-                  ),
+                  }),
+                  {
+                    done: `Moved “${card.name}” to “${nameOf(categories, to)}”`,
+                    failed: `Couldn't move “${card.name}” to “${nameOf(categories, to)}”`,
+                  },
+                ).then(() =>
+                  moved(onMoved, card, { categoryId: to, categoryName: nameOf(categories, to) }),
+                ),
                 () => `Moved ${card.name} to ${nameOf(categories, to)}.`,
               );
               setPage("main");
@@ -261,12 +273,19 @@ function MainPage({
    * routing is the mutation's, not this sheet's.
    */
   const setQuantity = (quantity: number) => {
+    const write = deck.setQuantity.mutateAsync({
+      ...slotOf(card),
+      quantity,
+      held: { deckCardId: card.id, quantity: card.quantity },
+    });
     receipt.track(
-      deck.setQuantity.mutateAsync({
-        ...slotOf(card),
-        quantity,
-        held: { deckCardId: card.id, quantity: card.quantity },
-      }),
+      // The removal toasts, the steps do not — see the sheet's own block.
+      quantity > 0
+        ? write
+        : toasted(write, {
+            done: `Removed “${card.name}” from the deck`,
+            failed: `Couldn't remove “${card.name}” from the deck`,
+          }),
       // A step up or down is said by the sheet's own count; a removal closes the sheet, so the
       // page says it — and, for a cut that moved copies, where they went, since that write files
       // no undo step (it is a collection write) and the line is the only record of it on screen.
@@ -304,14 +323,18 @@ function MainPage({
             reason={claim.refusal}
             onPress={() =>
               receipt.track(
-                deck.moveCard
-                  .mutateAsync({
+                toasted(
+                  deck.moveCard.mutateAsync({
                     cardId: card.cardId,
                     from: card.categoryId,
                     to: claim.categoryId,
                     finish: card.finish,
-                  })
-                  .then(() =>
+                  }),
+                  {
+                    done: `Set “${card.name}” as ${claim.zone}`,
+                    failed: `Couldn't set “${card.name}” as ${claim.zone}`,
+                  },
+                ).then(() =>
                     moved(onMoved, card, {
                       categoryId: claim.categoryId,
                       categoryName: nameOf(categories, claim.categoryId),
@@ -357,7 +380,10 @@ function MainPage({
             reason={card.oracleId === null ? "this printing has left the card database" : null}
             onPress={() =>
               receipt.track(
-                deck.addToOtherList.mutateAsync(slotOf(card)),
+                toasted(deck.addToOtherList.mutateAsync(slotOf(card)), {
+                  done: `Added “${card.name}” to the ${other} list`,
+                  failed: `Couldn't add “${card.name}” to the ${other} list`,
+                }),
                 () => `Added 1 \u00d7 ${card.name} to the ${other} list.`,
               )
             }
