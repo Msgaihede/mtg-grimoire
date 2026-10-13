@@ -30,6 +30,30 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.50.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.49.0...v0.50.0) (2026-10-13)
+
+
+### Features
+
+* **goldfish:** draw the zone cards half again as large ([93b601d](https://github.com/Msgaihede/mtg-grimoire/commit/93b601d2d726b299bb31110125cd0bd9b28cce30))
+* **goldfish:** draw the zone cards half again as large ([16612bc](https://github.com/Msgaihede/mtg-grimoire/commit/16612bcde61dd2f89f85799c7ddeca4f3fd72648))
+* **light:** toasts and the notifications inbox on the phone face ([14ba1db](https://github.com/Msgaihede/mtg-grimoire/commit/14ba1db77611e131d204a7ce637266ee9cd15fb7))
+* **light:** toasts and the notifications inbox on the phone face ([39687c3](https://github.com/Msgaihede/mtg-grimoire/commit/39687c3f9e440f88c0da9a9ea4f8edf3dc76c27c))
+* **playtesting:** play a deck against another, the opponent played by phase.rs's AI ([c64796a](https://github.com/Msgaihede/mtg-grimoire/commit/c64796a2cdd1ca4aa4e30aa62191996f088b4ca1))
+* **playtesting:** play a deck against another, the opponent played by phase.rs's AI ([fdc4bfb](https://github.com/Msgaihede/mtg-grimoire/commit/fdc4bfb04c411fbfbddcff36cdcd606bbde98948))
+* **playtesting:** respond to the AI, aim attacks, pick cards, and replay its turn ([a5c207a](https://github.com/Msgaihede/mtg-grimoire/commit/a5c207a0b731abc52f06f0795618111983f0d1a5))
+* **playtesting:** respond to the AI, aim attacks, pick cards, and replay its turn ([3892488](https://github.com/Msgaihede/mtg-grimoire/commit/3892488041c8235778b1025d0b75a0a769f03d0b))
+* replace the unreleased-card watermark with a release-date chip ([b0bd7f1](https://github.com/Msgaihede/mtg-grimoire/commit/b0bd7f15c71f3afc42fdeb4b800e9767a48c7e17))
+* replace the unreleased-card watermark with a release-date chip ([4734a10](https://github.com/Msgaihede/mtg-grimoire/commit/4734a10746295411f9ef4ecf9b228487ba48a36a)), closes [#965](https://github.com/Msgaihede/mtg-grimoire/issues/965)
+
+
+### Bug Fixes
+
+* **goldfish:** ask which cards to discard at the end of the turn ([4479caf](https://github.com/Msgaihede/mtg-grimoire/commit/4479caf009790b70a3cd584ac9733b57023965ef))
+* **goldfish:** ask which cards to discard at the end of the turn ([1abf8dd](https://github.com/Msgaihede/mtg-grimoire/commit/1abf8dd6013184f105033a502f818b7bdf8b76eb))
+* **goldfish:** close the hover preview when the pointer leaves a card ([b3ef2e1](https://github.com/Msgaihede/mtg-grimoire/commit/b3ef2e15cfefc17a7bbf5fd9e3fa165b2506d98b))
+* **goldfish:** close the hover preview when the pointer leaves a card ([4b57f73](https://github.com/Msgaihede/mtg-grimoire/commit/4b57f73166ca5f17d3add5b66dfd28adc1cc4f1e))
+
 ## [0.49.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.48.0...v0.49.0) (2026-10-13)
 
 
