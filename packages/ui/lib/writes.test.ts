@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { batchWrite, handled, newestWrite, NO_BATCH } from "./writes";
+import { batchWrite, handled, newestWrite, NO_BATCH, toasted, writeFailure } from "./writes";
 
 const ok = (value: unknown = null): PromiseSettledResult<unknown> => ({
   status: "fulfilled",
@@ -40,6 +40,27 @@ describe("batchWrite", () => {
   it("is outranked by any write that has ever run until a batch has", () => {
     const real = { submittedAt: 1, isError: false, error: null, isSuccess: true };
     expect(newestWrite([real, NO_BATCH])).toBe(real);
+  });
+});
+
+describe("toasted", () => {
+  const refused = { submittedAt: 5, isError: true, error: "Busy.", isSuccess: false };
+  const older = { submittedAt: 1, isError: true, error: "Gone.", isSuccess: false };
+
+  it("never draws its own refusal — the toast said it", () => {
+    expect(writeFailure([toasted(refused)])).toBeNull();
+  });
+
+  /** Kept in the list for its timing: a newer toasted write takes the banner off an older
+   *  refusal, the stale-alert rule `newestWrite` keeps. */
+  it("still outranks an older refusal", () => {
+    expect(writeFailure([older, toasted(refused)])).toBeNull();
+    expect(writeFailure([toasted({ ...refused, submittedAt: 0 }), older])).toBe("Gone.");
+  });
+
+  it("keeps when it ran and whether it landed", () => {
+    const landed = { submittedAt: 7, isError: false, error: null, isSuccess: true };
+    expect(toasted(landed)).toEqual(landed);
   });
 });
 

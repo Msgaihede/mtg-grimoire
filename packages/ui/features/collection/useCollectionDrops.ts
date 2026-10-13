@@ -19,7 +19,8 @@
  *
  * What it is handed is the page's census and the page's writes, held still: the folder rows, the
  * trees built from them, the effective lock, the name lookup, and the two writes a drop reuses
- * (`setFolder` and the folder reorder) as their `mutate`.
+ * (`setFolder` — twice, a silent observer and a reporting one — and the folder reorder) as their
+ * `mutate`.
  */
 import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -85,6 +86,7 @@ export function useCollectionDrops({
   treeParent,
   folderNameOf,
   setFolder,
+  moveCopy,
   reorder,
   setPicking,
 }: {
@@ -102,11 +104,16 @@ export function useCollectionDrops({
   treeParent: ReadonlyMap<number, number | null>;
   /** What to call a folder — the page's `folderNameOf`. */
   folderNameOf: (id: number | null) => string | null;
-  /** `useSetCollectionFolder`'s `mutate` — the drag's write and the row menu's, one mutation.
-   *  The options are `mutate`'s own, which a confirmed crossing hangs its receipt on. */
-  setFolder: (
+  /** `useSetCollectionFolder`'s `mutate` — a plain drag's write, which says nothing (the owner's
+   *  exemption for drags between shelves of the open wall); the page's banner is its report. */
+  setFolder: (variables: { entryId: number; folderId: number | null }) => void;
+  /** The same write on the page's **second** observer, for a drag whose crossing into a locked
+   *  drawer was asked and answered — that one toasts, and the page's banner, which can only tell
+   *  calls apart by observer, must not say its refusal again. The options are `mutate`'s own,
+   *  which the receipt hangs on. */
+  moveCopy: (
     variables: { entryId: number; folderId: number | null },
-    options?: { onSuccess?: () => void; onError?: (error: unknown) => void },
+    options: { onSuccess: () => void; onError: (error: unknown) => void },
   ) => void;
   /** The folder reorder's `mutate` — what a heading or a segment drop writes. */
   reorder: (plan: Placement) => void;
@@ -393,18 +400,18 @@ export function useCollectionDrops({
         return;
       }
       const file = (entryId: number, name: string) =>
-        setFolder(
-          { entryId, folderId: to },
-          answered
-            ? {
+        answered
+          ? moveCopy(
+              { entryId, folderId: to },
+              {
                 onSuccess: () => notify.success(movedReceipt(1, name, destination)),
                 onError: (error) =>
                   notify.error(`Couldn't move “${name || "that card"}” to “${destination}”`, {
                     body: ipcError(error),
                   }),
-              }
-            : undefined,
-        );
+              },
+            )
+          : setFolder({ entryId, folderId: to });
       if (drop.kind === "entry") {
         file(drop.entry.entryId, drop.entry.name);
         return;
@@ -416,7 +423,7 @@ export function useCollectionDrops({
       }
       setPicking({ cardName: name, entryIds: copies.map((copy) => copy.entryId), folderId: to });
     },
-    [addDroppedAsync, setFolder, setPicking, folderNameOf],
+    [addDroppedAsync, setFolder, moveCopy, setPicking, folderNameOf],
   );
 
   /**

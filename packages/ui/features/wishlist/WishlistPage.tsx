@@ -67,7 +67,7 @@ import { useDockHeight } from "@/lib/useDockHeight";
 import { useFilterQuickBar } from "@/lib/useFilterQuickBar";
 import { useReviewHandoff } from "@/lib/useReviewHandoff";
 import { cn } from "@/lib/utils";
-import { writeFailure } from "@/lib/writes";
+import { toasted, writeFailure } from "@/lib/writes";
 import { ManagedFolderNote } from "./ManagedFolderNote";
 import { WishlistSummaryHeader } from "./WishlistSummary";
 import { managedEmptySentence, managedIds, userWishFolders } from "./managed";
@@ -527,19 +527,22 @@ export function WishlistPage() {
    * light app's phone face presses the same four mutations with the same patches and the same
    * `settleWhole`; the doc for each is at its new home.
    */
-  const { settleWhole, setQuantity, remove, setFolder, anyPrinting } = useWishEntryWrites();
+  const { settleWhole, setQuantity, remove, setFolder, moveWish, anyPrinting } =
+    useWishEntryWrites();
   // The four writes' `mutate`, held still where the result objects around them are not (issue
   // #557) — the handlers below are what the memoised wall and table are handed.
   // `mutateAsync` for the two that say something when they land, and not `mutate` with a per-call
   // `onSuccess`: TanStack fires a call's own callbacks for the **newest** call alone, so a reader
   // crossing off three wishes in a row would be told about the third. The promise is the call's
-  // own. A refusal is said both ways — the banner below (`bannerFailure`) and a toast — because the
-  // owner's rule (2026-10-12) is that every wishlist edit toasts its outcome, failure included.
+  // own. Their refusal is said by the toast alone — the owner's rule (2026-10-12) is that every
+  // deliberate wishlist edit toasts its outcome, failure included, and the banner below seats them
+  // `toasted` (`bannerFailure`) so it does not say it a second time.
   const { mutate: setQuantityMutate } = setQuantity;
   const { mutateAsync: removeAsync } = remove;
-  // Both halves of the filing write: the drags' `mutate` (silent, `useWishDrops`) and the panel's
-  // promise (said, {@link onSetFolder}).
-  const { mutate: setFolderMutate, mutateAsync: setFolderAsync } = setFolder;
+  // Both halves of the filing write, on two observers so the banner can tell them apart: the
+  // drags' `mutate` (silent, `useWishDrops`) and the panel's promise (said, {@link onSetFolder}).
+  const { mutate: setFolderMutate } = setFolder;
+  const { mutateAsync: moveWishAsync } = moveWish;
   const { mutate: anyPrintingMutate } = anyPrinting;
 
   const onSetQuantity = useCallback(
@@ -575,13 +578,13 @@ export function WishlistPage() {
     (row: WishRow, to: number | null) => {
       const into =
         to === null ? ROOT_LABEL : (folders.folders.find((f) => f.id === to)?.name ?? "a folder");
-      void setFolderAsync({ id: row.id, folderId: to }).then(
+      void moveWishAsync({ id: row.id, folderId: to }).then(
         () => notify.success(`Moved “${row.name}” to “${into}”`),
         (error: unknown) =>
           notify.error(`Couldn't move “${row.name}” to “${into}”`, { body: ipcError(error) }),
       );
     },
-    [setFolderAsync, folders.folders],
+    [moveWishAsync, folders.folders],
   );
   const onAnyPrinting = useCallback((row: WishRow) => anyPrintingMutate(row), [anyPrintingMutate]);
 
@@ -1376,9 +1379,9 @@ export function WishlistPage() {
   // **Each says what it did once it lands** (`@/lib/notifications`): the strip that asked closes on
   // the answer, and a delete or a clear takes a drawer — or every wish in it — off the wall with
   // nothing left on screen to name what went. The names are read at the press, because a deleted
-  // folder has no name to look up afterwards. A refusal is said as well as left on the open strip
-  // and in the page's banner (`bannerFailure`): the owner's rule is that every edit that moves or
-  // removes wishes toasts its outcome. **Create and rename say nothing** — both are
+  // folder has no name to look up afterwards. A refusal is toasted and left on the open strip, and
+  // not drawn again in the page's banner (`bannerFailure` seats these `toasted`): the owner's rule
+  // is that every edit that moves or removes wishes toasts its outcome. **Create and rename say nothing** — both are
   // typed on a heading that stays on screen holding the answer — and nor do Move up / Move down,
   // the keyboard's drag, whose answer is the heading moving under the caret.
   const moveFolderTo = useCallback(
@@ -1812,26 +1815,31 @@ export function WishlistPage() {
       : null;
   // The *latest* write on the screen, not whichever is still holding an error: a refused stepper
   // press would otherwise leave "Couldn't change your wishlist" up while the reader went on to
-  // remove the row successfully — an alert about something already dealt with. The folder writes
-  // are in the list because they are writes this screen makes, and they share the banner because
-  // they share the sentence: everything here is a change to the reader's wishlist.
+  // remove the row successfully — an alert about something already dealt with.
+  //
+  // **Kept, for the writes no toast speaks for** (2026-10-13). The removal, the panel's filing, a
+  // card dropped out of the search column and the folder strip's move, delete and clear each raise
+  // their own `notify.error`, so they are seated `toasted`: newer than an older refusal they still
+  // take it down, and their own refusal is the toast's alone. What is drawn here is what the
+  // owner's rule exempts and so has nowhere else to be said — the stepper (whose number snaps
+  // back), a wish filed by dragging it onto a shelf, a folder made, renamed or reordered in place
+  // (by menu or drag) — and the Edit panel's `Any printing`, a setting drawn on the tile it was
+  // pressed on, which takes no toast. The panel's own `+` add is not here: that popup reports at
+  // its own site, beside the button that was pressed.
   const bannerFailure = writeFailure([
     setQuantity,
-    remove,
+    toasted(remove),
     setFolder,
-    // A card dropped out of the search column, refused. It shares the sentence for the reason
-    // every other write in this list does: it is a change to the reader's wishlist, made from
-    // this screen. The **panel's own** add — the `+` on a tile — does not, because that popup
-    // reports at its own site and its failure belongs beside the button that was pressed.
-    addWish,
+    toasted(moveWish),
+    toasted(addWish),
     anyPrinting,
     folders.create,
     folders.rename,
-    folders.move,
+    toasted(folders.move),
     folders.reorder,
-    folders.remove,
-    folders.removeWithWishes,
-    folders.clear,
+    toasted(folders.remove),
+    toasted(folders.removeWithWishes),
+    toasted(folders.clear),
   ]);
 
   /**

@@ -62,7 +62,8 @@ export function useWishDrops({
   treeParent: ReadonlyMap<number, number | null>;
   /** The decks' managed folders, which refuse every hand write. */
   managed: ReadonlySet<number>;
-  /** `useWishEntryWrites`' `setFolder`, as its `mutate` — the drag's write and the panel's. */
+  /** `useWishEntryWrites`' `setFolder`, as its `mutate` — the drags' write. The Edit panel's move
+   *  is `moveWish`, an observer of its own, because it toasts and a drag does not. */
   setFolder: (variables: { id: number; folderId: number | null }) => void;
   /** The folder reorder's `mutate` — what a heading or a segment drop writes. */
   reorder: (plan: Placement) => void;

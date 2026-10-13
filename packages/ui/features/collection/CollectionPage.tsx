@@ -88,7 +88,7 @@ import { useDockHeight } from "@/lib/useDockHeight";
 import { useFilterQuickBar } from "@/lib/useFilterQuickBar";
 import { useReviewHandoff } from "@/lib/useReviewHandoff";
 import { cn } from "@/lib/utils";
-import { writeFailure } from "@/lib/writes";
+import { toasted, writeFailure } from "@/lib/writes";
 import { CollectionBreadcrumb } from "./CollectionBreadcrumb";
 import type { CollectionFolderTotals } from "./CollectionFolderCard";
 import { CollectionSearchPanel } from "./CollectionSearchPanel";
@@ -780,8 +780,8 @@ export function CollectionPage() {
    * through**, so a merge behaves the same whichever hand made the gesture.
    *
    * The command, the settle set and the reason none of it is optimistic all live on
-   * {@link useSetCollectionFolder}; this page adds only its refusal surface, which is the banner
-   * under the header that every other write here shares (`bannerFailure` below). The menu's copy
+   * {@link useSetCollectionFolder}; this page adds only its refusal surface, which for a plain
+   * drag is the banner under the header (`bannerFailure` below). The menu's copy
    * of this hook raises a toast instead (`@/lib/notifications`), because a menu is already closing
    * by the time the answer arrives and has nothing left on screen to report to — that difference is the whole
    * of what the two callers do differently, and it is why the hook takes handlers rather than
@@ -795,12 +795,22 @@ export function CollectionPage() {
    * The same filing over several entries in **one** write (issue #555) — what the copy picker's
    * answer makes when the reader ticked more than one. It was `setFolder` once per tick: N
    * transactions and N feed lines, and a refusal part-way filed half the copies. The hook makes
-   * the undo offer itself, so this page and the card menu cannot differ about it; the refusal
-   * shares this page's banner with every other write here.
+   * the undo offer itself, so this page and the card menu cannot differ about it; the refusal is
+   * the picker's toast (`report`), and the banner seats this write `toasted`.
    */
   const setFolderMany = useSetCollectionFolderMany();
+  /**
+   * The same filing on an **observer of its own**, for the two filings that toast their outcome:
+   * the copy picker's single tick, and a drag whose crossing into a locked drawer was asked and
+   * answered. {@link setFolder} stays a plain drag's, which the owner's rule exempts. Every call
+   * sends the same `{ entryId, folderId }`, and an observer only knows its newest, so on one
+   * observer the banner could not tell a refused drag — which only it reports — from a refusal a
+   * toast has already said (`bannerFailure` below).
+   */
+  const moveCopy = useSetCollectionFolder();
   // Held still for the drops below, `removeMany`'s reason.
   const { mutate: setFolderMutate } = setFolder;
+  const { mutate: moveCopyMutate } = moveCopy;
 
   const onSetQuantity = useCallback(
     (row: CollectionRow, quantity: number) => setQuantityMutate({ row, quantity }),
@@ -1810,6 +1820,7 @@ export function CollectionPage() {
     treeParent,
     folderNameOf,
     setFolder: setFolderMutate,
+    moveCopy: moveCopyMutate,
     reorder: reorderMutate,
     setPicking,
   });
@@ -2122,26 +2133,31 @@ export function CollectionPage() {
   // reader went on to remove the row successfully — an alert about something that had already been
   // dealt with. Seen live, and the rule is `lib/writes.ts`' now rather than three lines here.
   //
-  // The folder writes are in the list because they are writes this screen makes, and they share
-  // the banner because they share the sentence: everything here is a change to the reader's
-  // collection.
+  // **Kept, for the writes no toast speaks for** (2026-10-13). Every deliberate edit here — the ✕,
+  // a bulk remove, `Recently removed`'s clear, the copy picker, a confirmed crossing into a locked
+  // drawer, a card dropped out of the search column, and the folder strip's move, delete and lock
+  // — raises its own `notify.error` through `report`, so those are seated `toasted`: newer than an
+  // older refusal they still take it down, and their own refusal is the toast's alone (a confirm
+  // strip they leave open stays open for another try). What is drawn here is what the owner's rule
+  // exempts and so has nowhere else to be said: the stepper, whose number snaps back; a copy
+  // dragged between shelves of the open wall; and a folder made, renamed or reordered in place,
+  // whose field or heading is still under the reader. Everything here is a change to the reader's
+  // collection, which is why they share one sentence.
   const bannerFailure = writeFailure([
     setQuantity,
-    remove,
-    removeMany,
-    clearRemoved,
+    toasted(remove),
+    toasted(removeMany),
+    toasted(clearRemoved),
     setFolder,
-    setFolderMany,
-    // The sidebar's drop, which is a write this screen makes and shares the banner for the
-    // reason the folder writes do: everything here is a change to the reader's collection. The
-    // `+` beside it reports for itself, inside its own popup.
-    addDropped,
+    toasted(moveCopy),
+    toasted(setFolderMany),
+    toasted(addDropped),
     folders.create,
     folders.rename,
-    folders.move,
+    toasted(folders.move),
     folders.reorder,
-    folders.remove,
-    folders.setLocked,
+    toasted(folders.remove),
+    toasted(folders.setLocked),
   ]);
   const empty = rows.length === 0;
   // The cabinet is drawn only where there is one. In a collection nobody has filed, a lone inert
@@ -3320,13 +3336,10 @@ export function CollectionPage() {
                   },
                 );
               } else if (entryIds.length === 1) {
-                report(
-                  setFolder.mutateAsync({ entryId: entryIds[0], folderId: picking.folderId }),
-                  {
-                    done: () => movedReceipt(1, cardName, destination),
-                    failed: `Couldn't move “${cardName}” to “${destination}”`,
-                  },
-                );
+                report(moveCopy.mutateAsync({ entryId: entryIds[0], folderId: picking.folderId }), {
+                  done: () => movedReceipt(1, cardName, destination),
+                  failed: `Couldn't move “${cardName}” to “${destination}”`,
+                });
               }
               setPicking(null);
             }}

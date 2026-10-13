@@ -958,10 +958,11 @@ export const NewDeck: Story = {
  * every write handler and by no read handler — which is why the wall underneath is untouched and
  * still holds every tile.
  *
- * The banner speaks for the **latest** of the three writes a tile makes (update, remove,
- * duplicate), not for whichever is still holding an error: a refused archive used to leave its
- * sentence up while the reader went on to duplicate something successfully, which is an alert
- * about a thing already dealt with. `DecksPage.tsx:161-163` picks by `submittedAt`.
+ * The banner speaks for the **latest** write the page makes, not for whichever is still holding
+ * an error — `lib/writes.ts`' rule. Since 2026-10-13 it draws only the refusals no toast speaks
+ * for: a rename, a folder made in place, a folder reordered within its level. A refused
+ * duplicate, move, archive or delete is said by its `notify.error` toast alone, so this story
+ * refuses a rename — whose field stays open over the sentence for another try.
  *
  * The create form's refusal is deliberately **not** here — it is drawn inside the form, beside
  * the button that was pressed, because reopening the form resets the mutation and a refused
@@ -972,16 +973,22 @@ export const Busy: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await userEvent.click(
-      await canvas.findByRole("button", { name: "Duplicate Modern Goodstuff" }),
+      await canvas.findByRole("button", { name: "Rename the Modern Goodstuff deck" }),
     );
+    const field = await canvas.findByLabelText("Rename Modern Goodstuff");
+    await userEvent.clear(field);
+    await userEvent.type(field, "Modern Goodstuff II");
+    await userEvent.click(canvas.getByRole("button", { name: "Save name" }));
 
     const alert = await canvas.findByRole("alert");
     await expect(alert).toHaveTextContent(
       "Couldn't change your decks — The card database is busy finishing a sync. " +
         "Try that again in a moment.",
     );
-    // Nothing was copied, and nothing else moved.
-    await expect(canvas.queryByText("Modern Goodstuff (copy)")).toBeNull();
+    // Nothing was renamed, and the field is still up with the reader's text in it.
+    await expect(canvas.getByLabelText("Rename Modern Goodstuff")).toHaveValue(
+      "Modern Goodstuff II",
+    );
     await expect(canvas.getByText("Kenrith Two-Drops")).toBeInTheDocument();
   },
 };
