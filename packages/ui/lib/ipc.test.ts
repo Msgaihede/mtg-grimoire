@@ -86,6 +86,9 @@ import stackhideRsDesktop from "../../../apps/desktop/src-tauri/src/stackhide/mo
 // The goldfish board: the desktop's three commands, and the engine crate's actions they carry.
 import goldfishRs from "../../../apps/desktop/src-tauri/src/goldfish/mod.rs?raw";
 import goldfishViewRs from "../../../crates/grimoire-play/src/view.rs?raw";
+// The playtest board: the desktop's three commands, and the actions and facts of its wire.
+import playtestRs from "../../../apps/desktop/src-tauri/src/playtest/mod.rs?raw";
+import playtestViewRs from "../../../crates/grimoire-play/src/playtest/view.rs?raw";
 import startupRs from "../../../apps/desktop/src-tauri/src/startup.rs?raw";
 import startviewRsCore from "../../../crates/grimoire-core/src/startview.rs?raw";
 import startviewRsDesktop from "../../../apps/desktop/src-tauri/src/startview/mod.rs?raw";
@@ -888,6 +891,31 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
+   * The variants of a Rust enum tagged `type`, each with its fields, as serde spells them once
+   * `rename_all` and `rename_all_fields` have made them camelCase: `"move id to"`.
+   */
+  const rustVariants = (source: string, name: string): string[] => {
+    const body = source.slice(source.indexOf(`pub enum ${name} {`));
+    const block = body.slice(0, body.indexOf("\n}\n"));
+    return [...block.matchAll(/^ {4}([A-Z][A-Za-z0-9]*)(?: \{([^}]*)\})?,?$/gm)].map((m) => {
+      const tag = m[1][0].toLowerCase() + m[1].slice(1);
+      const fields = [...(m[2] ?? "").matchAll(/(\w+):/g)].map((f) =>
+        f[1].replace(/_([a-z])/g, (_, c: string) => c.toUpperCase()),
+      );
+      return [tag, ...fields].join(" ");
+    });
+  };
+  /** The same for a TypeScript union of `{ type: "…"; … }` objects. */
+  const tsVariants = (name: string): string[] => {
+    const src = ipcSource.slice(ipcSource.indexOf(`export type ${name} =`));
+    const block = src.slice(0, src.indexOf(";\n"));
+    return [...block.matchAll(/\{ type: "(\w+)"([^}]*)\}/g)].map((m) => {
+      const fields = [...m[2].matchAll(/(\w+):/g)].map((f) => f[1]);
+      return [m[1], ...fields].join(" ");
+    });
+  };
+
+  /**
    * The goldfish board's three commands. `goldfish_act` carries one `GoldfishAction`, a Rust enum
    * tagged `type` with camelCase variants and fields — so each variant this side can send is read
    * out of `view.rs` rather than trusted, and so is each field a variant names.
@@ -928,29 +956,74 @@ describe("ipc argument names match the Rust command signatures", () => {
 
     // Every variant of `GoldfishAction` and `Happened`, with its fields, as Rust spells them
     // once `rename_all` and `rename_all_fields` have made them camelCase.
-    const variants = (name: string): string[] => {
-      const body = goldfishViewRs.slice(goldfishViewRs.indexOf(`pub enum ${name} {`));
-      const block = body.slice(0, body.indexOf("\n}\n"));
-      return [...block.matchAll(/^ {4}([A-Z][A-Za-z]*)(?: \{([^}]*)\})?,?$/gm)].map((m) => {
-        const tag = m[1][0].toLowerCase() + m[1].slice(1);
-        const fields = [...(m[2] ?? "").matchAll(/(\w+):/g)].map((f) =>
-          f[1].replace(/_([a-z])/g, (_, c: string) => c.toUpperCase()),
-        );
-        return [tag, ...fields].join(" ");
-      });
-    };
-    const tsVariants = (name: string): string[] => {
-      const src = ipcSource.slice(ipcSource.indexOf(`export type ${name} =`));
-      const block = src.slice(0, src.indexOf(";\n"));
-      return [...block.matchAll(/\{ type: "(\w+)"([^}]*)\}/g)].map((m) => {
-        const fields = [...m[2].matchAll(/(\w+):/g)].map((f) => f[1]);
-        return [m[1], ...fields].join(" ");
-      });
-    };
+    const variants = (name: string) => rustVariants(goldfishViewRs, name);
     expect(variants("GoldfishAction").length, "view.rs' actions were not read").toBeGreaterThan(10);
     expect(variants("Happened").length, "view.rs' facts were not read").toBeGreaterThan(10);
     expect(tsVariants("GoldfishAction")).toEqual(variants("GoldfishAction"));
     expect(tsVariants("Happened")).toEqual(variants("Happened"));
+  });
+
+  /**
+   * The playtest board's three commands — the goldfish's arrangement: `playtest_act` carries one
+   * `PlaytestAction`, and each variant and field this side can send, and each fact it reads back,
+   * is read out of `playtest/view.rs` rather than trusted.
+   */
+  it("sends the playtest board's commands under the names their commands declare", async () => {
+    expect(playtestRs.length, "playtest/mod.rs was not read").toBeGreaterThan(1_000);
+
+    invoke.mockResolvedValue({});
+    await ipc.playtestStart(4, "live", 9, "theory", "hard", 99);
+    expect(invoke).toHaveBeenLastCalledWith("playtest_start", {
+      deckId: 4,
+      variant: "live",
+      opponentDeckId: 9,
+      opponentVariant: "theory",
+      difficulty: "hard",
+      seed: 99,
+    });
+    await ipc.playtestAct({ type: "block", blocks: [{ blocker: 3, attacker: 8 }] });
+    expect(invoke).toHaveBeenLastCalledWith("playtest_act", {
+      action: { type: "block", blocks: [{ blocker: 3, attacker: 8 }] },
+    });
+    invoke.mockResolvedValue(undefined);
+    await ipc.playtestEnd();
+    expect(invoke).toHaveBeenLastCalledWith("playtest_end");
+
+    const declares = (command: string, param: string) =>
+      expect(playtestRs, `\`${command}\` declares no \`${param}\``).toMatch(
+        new RegExp(`fn ${command}\\([^)]*\\b${param}\\s*:`, "s"),
+      );
+    for (const param of [
+      "deck_id",
+      "variant",
+      "opponent_deck_id",
+      "opponent_variant",
+      "difficulty",
+      "seed",
+    ]) {
+      declares("playtest_start", param);
+    }
+    declares("playtest_act", "action");
+    for (const registered of [
+      "playtest::playtest_start,",
+      "playtest::playtest_act,",
+      "playtest::playtest_end,",
+    ]) {
+      expect(desktopRs).toContain(registered);
+    }
+
+    const variants = (name: string) => rustVariants(playtestViewRs, name);
+    expect(variants("PlaytestAction").length, "the actions were not read").toBeGreaterThan(15);
+    expect(variants("PlaytestHappened").length, "the facts were not read").toBeGreaterThan(15);
+    expect(tsVariants("PlaytestAction")).toEqual(variants("PlaytestAction"));
+    expect(tsVariants("PlaytestHappened")).toEqual(variants("PlaytestHappened"));
+    // The string unions: each is a Rust enum of unit variants, camelCased.
+    for (const name of ["PlaytestStage", "PlaytestPhase", "Difficulty"]) {
+      const ts = name === "Difficulty" ? "PlaytestDifficulty" : name;
+      const union = ipcSource.slice(ipcSource.indexOf(`export type ${ts} =`));
+      const words = [...union.slice(0, union.indexOf(";\n")).matchAll(/"(\w+)"/g)].map((m) => m[1]);
+      expect(words, name).toEqual(variants(name));
+    }
   });
 
   /**

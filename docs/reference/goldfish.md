@@ -28,9 +28,9 @@ The binding rules are in each area's `CLAUDE.md`. This page holds the reasons an
 [phase.rs](https://github.com/phase-rs/phase) is an open-source MTG rules engine in Rust. It covers
 turns, priority, the stack, combat, state-based actions, layers, triggers and replacement effects,
 and it parses rules text into abilities. It compiles to native code and to WASM. **The app takes one
-crate of it: `phase-engine`**, whose library is named `engine`. phase's other crates — the AI
-(`phase-ai`), a server, an LLM opponent and a draft — are not linked. The AI is the next one to
-take, for playtesting against an opponent. It compiled on stable and on `wasm32-unknown-unknown`
+crate of it for the goldfish: `phase-engine`**, whose library is named `engine`. The AI
+(`phase-ai`) was taken next, on 2026-10-13, for the playtest board ([playtest.md](playtest.md)).
+phase's other crates (a server, an LLM opponent and a draft) are not linked. It compiled on stable and on `wasm32-unknown-unknown`
 in the spike: `choose_action(&GameState, PlayerId, &AiConfig, &mut impl Rng)` takes the same state
 this board plays on.
 
@@ -289,7 +289,8 @@ Enter still presses a focused card, and that plays it.
   be cast rather than placed. phase's `WaitingFor` has every one of them.
 - **Phase-by-phase play.** A turn is "Next turn": end step, the goldfish's turn, then the reader's
   untap, upkeep and draw, and stop at the main phase.
-- **The AI opponent** (`phase-ai`).
+- **The AI opponent** is not the goldfish's: a game against phase's AI is the Playtesting page's,
+  [playtest.md](playtest.md).
 - **The light app.** Playtesting is not a destination there.
 
 ## Licences

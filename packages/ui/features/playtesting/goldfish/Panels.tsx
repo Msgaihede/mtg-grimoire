@@ -1,10 +1,11 @@
-import type { JSX } from "react";
+import type { JSX, ReactNode } from "react";
 import {
   ArrowDownToLine,
   ArrowRightLeft,
   Bot,
   Copy,
   Dot,
+  Flag,
   Hand,
   Heart,
   Mountain,
@@ -13,6 +14,7 @@ import {
   Shuffle,
   Sparkles,
   Sunrise,
+  Swords,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -35,8 +37,21 @@ import { byTurn, type LogKind, type LogLine } from "./log";
  * table header elsewhere in the app.
  */
 
-/** The help panel, open under the `?` button. Closed by that button, or by `onClose`. */
-export function HelpPanel({ onClose }: { onClose: () => void }): JSX.Element {
+/**
+ * The help panel, open under the `?` button. Closed by that button, or by `onClose`.
+ *
+ * `children` replaces the goldfish's lines with a board's own — the playtest board's, where a
+ * click on a creature can be a pick rather than a tap — under its own `heading`.
+ */
+export function HelpPanel({
+  onClose,
+  heading = "Moving cards",
+  children,
+}: {
+  onClose: () => void;
+  heading?: string;
+  children?: ReactNode;
+}): JSX.Element {
   return (
     <section
       aria-label="How to move cards"
@@ -47,11 +62,20 @@ export function HelpPanel({ onClose }: { onClose: () => void }): JSX.Element {
       )}
     >
       <div className="flex items-center justify-between">
-        <span className="text-xs text-dim">Moving cards</span>
+        <span className="text-xs text-dim">{heading}</span>
         {/* The artboard has no close of its own on this panel, but a panel that can only be
             closed from the button that opened it is one a keyboard reader has to go looking for. */}
         <CloseButton label="Close how to move cards" onClose={onClose} />
       </div>
+      {children ?? <GoldfishHelp />}
+    </section>
+  );
+}
+
+/** The goldfish board's own help: every card is the reader's to move. */
+function GoldfishHelp(): JSX.Element {
+  return (
+    <>
       <span>
         Drag any card to wherever it goes: the table, your hand, the library, graveyard, exile or
         command zone.
@@ -63,7 +87,7 @@ export function HelpPanel({ onClose }: { onClose: () => void }): JSX.Element {
         Point at a card and press T, G, E or H to tap it, bury it, exile it or return it to hand.
       </span>
       <span className="text-dim">Press Space for the next turn.</span>
-    </section>
+    </>
   );
 }
 
@@ -81,6 +105,8 @@ const GLYPH: Record<LogKind, { icon: LucideIcon; tone?: string }> = {
   life: { icon: Heart, tone: "text-mana-r" },
   turn: { icon: Sunrise },
   engine: { icon: Bot },
+  combat: { icon: Swords, tone: "text-mana-r" },
+  end: { icon: Flag, tone: "text-accent" },
 };
 
 /** A turn's heading: "Turn 3", and the opening hand's lines under a name rather than "Turn 0". */

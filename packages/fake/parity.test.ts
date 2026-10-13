@@ -34,6 +34,10 @@ const ABSENT: Record<string, string> = {
   goldfish_start: "the rules engine is Rust's; the board's stories feed it views directly",
   goldfish_act: "the rules engine is Rust's; the board's stories feed it views directly",
   goldfish_end: "the rules engine is Rust's; the board's stories feed it views directly",
+  // The playtest board's, likewise: phase.rs's engine and its AI, and `play/fixtures.ts`.
+  playtest_start: "the rules engine and its AI are Rust's; the board's stories feed it views",
+  playtest_act: "the rules engine and its AI are Rust's; the board's stories feed it views",
+  playtest_end: "the rules engine and its AI are Rust's; the board's stories feed it views",
 };
 
 /** Commands a plugin registers rather than `generate_handler!`; Tauri names them `plugin:…|…`. */

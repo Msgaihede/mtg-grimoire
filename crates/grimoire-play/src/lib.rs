@@ -1,11 +1,14 @@
-//! Games played on a deck, over phase.rs's rules engine. Today the goldfish board; the
-//! `Cargo.toml` says what this crate is and why only the desktop links it.
+//! Games played on a deck, over phase.rs's rules engine: the goldfish board (`session`, `view`)
+//! and a playtest against phase's AI (`playtest`). The `Cargo.toml` says what this crate is and
+//! why only the desktop links it.
 
 pub mod cards;
+pub mod playtest;
 pub mod session;
 pub mod view;
 
 pub use cards::{CardFacts, FaceFacts};
+pub use playtest::{Difficulty, Playtest, PlaytestAction, PlaytestStep, PlaytestView};
 pub use session::Goldfish;
 pub use view::{GoldfishAction, GoldfishStep, GoldfishView};
 

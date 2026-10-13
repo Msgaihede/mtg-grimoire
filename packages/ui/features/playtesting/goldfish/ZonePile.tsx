@@ -8,6 +8,7 @@ import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { CardFace, pointerAt } from "./Inspect";
 import { goldfishDraggable, useGoldfishDropTarget, type GoldfishDrag } from "./goldfishDrag";
+import { ZONE_H, ZONE_W, type ZoneSize } from "./layout";
 import { cardMenu, libraryMenu } from "./menus";
 import type { Pointed, ZoneLook } from "./types";
 
@@ -20,17 +21,42 @@ import type { Pointed, ZoneLook } from "./types";
  * still mostly over it, so without the priority the table would win the drop by shape.
  *
  * With no `view` (a game being dealt) each zone draws its empty slot and offers nothing.
+ *
+ * **What they read is narrowed to the zones they draw** (`ZoneView`), so the playtest board hands
+ * them the reader's seat as it is. `size` is the card's box there — the playtest board's two
+ * tables share the window's height — and absent, the goldfish's 120 × 168 is drawn exactly as it
+ * always was (the classes, no inline size).
  */
 
 type Drop = (drag: GoldfishDrag, to: GoldfishPlace) => void;
+
+/** What the zone columns read of a game: a goldfish view, or one seat of a playtest's. */
+export type ZoneView = Pick<
+  GoldfishView,
+  "command" | "battlefield" | "graveyard" | "exile" | "library" | "libraryCards"
+>;
+
+/** The inline box for a zone card of `size`, or nothing for the goldfish's own (its classes). */
+function boxOf(size: ZoneSize | undefined): { width: number; height: number } | undefined {
+  return size === undefined ? undefined : { width: size.width, height: size.height };
+}
 
 /** How far down each further commander is drawn, so the one under it still shows its name. */
 const PARTNER_STEP = 28;
 
 /** The empty zone: a dashed slot naming itself, its edge gold while a card is over it. */
-function EmptySlot({ label, over }: { label: string; over: boolean }): JSX.Element {
+function EmptySlot({
+  label,
+  over,
+  size,
+}: {
+  label: string;
+  over: boolean;
+  size?: ZoneSize;
+}): JSX.Element {
   return (
     <div
+      style={boxOf(size)}
       className={cn(
         "flex h-[168px] w-[120px] items-center justify-center rounded-lg border border-dashed bg-bg/60 text-[11px] text-dim",
         "transition-[border-color] duration-150 motion-reduce:transition-none",
@@ -63,11 +89,12 @@ function useZoneDraggable(
 }
 
 export interface CommandZoneProps {
-  view: GoldfishView | null;
+  view: ZoneView | null;
   onAct: (action: GoldfishAction) => void;
   onDrop: Drop;
   onPoint: (pointed: Pointed) => void;
   onUnpoint: () => void;
+  size?: ZoneSize;
 }
 
 /**
@@ -81,6 +108,7 @@ export function CommandZone({
   onDrop,
   onPoint,
   onUnpoint,
+  size,
 }: CommandZoneProps): JSX.Element {
   const ref = useRef<HTMLDivElement>(null);
   const over = useGoldfishDropTarget({ ref, place: "command", onDrop, overlay: true });
@@ -90,17 +118,21 @@ export function CommandZone({
   return (
     <div ref={ref} className="flex flex-col gap-1.5">
       {commanders.length === 0 ? (
-        <EmptySlot label="Command" over={over} />
+        <EmptySlot label="Command" over={over} size={size} />
       ) : (
         <div
           className={cn("relative w-[120px] rounded-lg", over && OVER_OUTLINE)}
-          style={{ height: 168 + (commanders.length - 1) * PARTNER_STEP }}
+          style={{
+            ...(size === undefined ? {} : { width: size.width }),
+            height: (size?.height ?? ZONE_H) + (commanders.length - 1) * PARTNER_STEP,
+          }}
         >
           {commanders.map((card, i) => (
             <CommanderCard
               key={card.id}
               card={card}
               top={i * PARTNER_STEP}
+              size={size}
               onAct={onAct}
               onPoint={onPoint}
               onUnpoint={onUnpoint}
@@ -118,12 +150,14 @@ export function CommandZone({
 function CommanderCard({
   card,
   top,
+  size,
   onAct,
   onPoint,
   onUnpoint,
 }: {
   card: GameCard;
   top: number;
+  size?: ZoneSize;
   onAct: (action: GoldfishAction) => void;
   onPoint: (pointed: Pointed) => void;
   onUnpoint: () => void;
@@ -163,7 +197,7 @@ function CommanderCard({
       data-point={card.id}
       data-land={card.id}
       className={cn("absolute left-0 h-[168px] w-[120px] cursor-grab rounded-md p-0", FOCUS)}
-      style={{ top }}
+      style={{ top, ...boxOf(size) }}
     >
       <CardFace card={card} />
     </button>
@@ -171,11 +205,12 @@ function CommanderCard({
 }
 
 export interface PileZoneProps {
-  view: GoldfishView | null;
+  view: ZoneView | null;
   onDrop: Drop;
   onPoint: (pointed: Pointed) => void;
   onUnpoint: () => void;
   onLook: (look: ZoneLook) => void;
+  size?: ZoneSize;
 }
 
 /** Exile, face up, its last card on top. */
@@ -210,6 +245,7 @@ function FaceUpZone({
   title,
   where,
   className,
+  size,
 }: PileZoneProps & {
   zone: "graveyard" | "exile";
   title: string;
@@ -232,7 +268,7 @@ function FaceUpZone({
   return (
     <div ref={ref} className={cn("flex flex-col gap-1.5", className)}>
       {top === null ? (
-        <EmptySlot label={title} over={over} />
+        <EmptySlot label={title} over={over} size={size} />
       ) : (
         <button
           ref={cardRef}
@@ -252,6 +288,7 @@ function FaceUpZone({
           onMouseLeave={onUnpoint}
           data-point={top.id}
           data-land={top.id}
+          style={boxOf(size)}
           className={cn(
             "relative h-[168px] w-[120px] cursor-grab rounded-lg p-0",
             FOCUS,
@@ -269,17 +306,18 @@ function FaceUpZone({
 }
 
 export interface LibraryZoneProps {
-  view: GoldfishView | null;
+  view: ZoneView | null;
   onAct: (action: GoldfishAction) => void;
   onDrop: Drop;
   onLook: (look: ZoneLook) => void;
+  size?: ZoneSize;
 }
 
 /**
  * The library, face down: a click draws, a right-click opens everything else it can do
  * (`libraryMenu`), and a card let go over it goes on top.
  */
-export function LibraryZone({ view, onAct, onDrop, onLook }: LibraryZoneProps): JSX.Element {
+export function LibraryZone({ view, onAct, onDrop, onLook, size }: LibraryZoneProps): JSX.Element {
   const ref = useRef<HTMLDivElement>(null);
   const over = useGoldfishDropTarget({ ref, place: "libraryTop", onDrop, overlay: true });
   const { menu, menuKey } = useContextMenu();
@@ -296,6 +334,7 @@ export function LibraryZone({ view, onAct, onDrop, onLook }: LibraryZoneProps): 
         onClick={() => onAct({ type: "draw", count: 1 })}
         onContextMenu={menu(build)}
         onKeyDown={menuKey(build)}
+        style={boxOf(size)}
         className={cn(
           "flex h-[168px] w-[120px] cursor-pointer items-center justify-center rounded-lg border bg-surface text-accent disabled:cursor-default",
           // The edges of the cards under the top one, two of them, the way a deck sits.
@@ -305,7 +344,7 @@ export function LibraryZone({ view, onAct, onDrop, onLook }: LibraryZoneProps): 
           FOCUS,
         )}
       >
-        <GrimoireMark size={48} className="text-accent" />
+        <GrimoireMark size={markSize(size)} className="text-accent" />
       </button>
       <span className={ZONE_LABEL}>Library · {count}</span>
     </div>
@@ -316,8 +355,13 @@ export function LibraryZone({ view, onAct, onDrop, onLook }: LibraryZoneProps): 
  * The library's cards a landing can show on (`useLanding`): its top and its bottom, the two ends
  * a card is put on.
  */
-function libraryEnds(view: GoldfishView | null): string | undefined {
+function libraryEnds(view: ZoneView | null): string | undefined {
   const cards = view?.libraryCards ?? [];
   if (cards.length === 0) return undefined;
   return `${cards[0].id} ${cards[cards.length - 1].id}`;
+}
+
+/** The library back's mark: the goldfish's 48 px on its 120 px card, in proportion on another. */
+export function markSize(size: ZoneSize | undefined): number {
+  return Math.round((48 * (size?.width ?? ZONE_W)) / ZONE_W);
 }

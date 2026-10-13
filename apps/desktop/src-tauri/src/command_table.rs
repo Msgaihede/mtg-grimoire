@@ -86,6 +86,18 @@ const DESKTOP_ONLY: &[(&str, &str)] = &[
         "goldfish_end",
         "the goldfish board's rules engine is this host's",
     ),
+    (
+        "playtest_start",
+        "the playtest board's rules engine and AI are linked by this host alone, as the goldfish's",
+    ),
+    (
+        "playtest_act",
+        "the playtest board's rules engine and AI are this host's",
+    ),
+    (
+        "playtest_end",
+        "the playtest board's rules engine and AI are this host's",
+    ),
 ];
 
 /// Commands the table has that this app does not register and never will, each with the

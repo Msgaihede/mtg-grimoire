@@ -77,8 +77,8 @@ export const NAV: readonly NavEntry[] = [
   // Before Settings so Settings stays the last row. **`Camera` and not `ScanLine`** (main,
   // 985b872e): that glyph drew a barcode scanner, and this view is a camera pointed at a card.
   { id: "scanner", label: "Scanner", Icon: Camera },
-  // **Trade is a page now; Playtesting is still a rail entry and a sentence, and nothing else.**
-  // Both went into the column ahead of their pages on purpose: the rail is where a reader finds
+  // **Trade and Playtesting are pages now** (Playtesting since 2026-10-13: a game against phase's
+  // AI). Both went into the column ahead of their pages on purpose: the rail is where a reader finds
   // out what this app intends to be, and `WorkInProgress` says so in one line rather than leaving
   // a row that looks finished and does nothing. They sit here for Scanner's reason — Settings
   // stays the last row —

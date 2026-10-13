@@ -21,17 +21,23 @@ import type { ZoneLook } from "./types";
  * gone to the bottom the fourth card down is not part of the decision — so `moved` counts the
  * cards sent out of the window and the dialog shows `count - moved` from the top. A card sent to
  * the top stays in it (it is reordering the window, not leaving it).
+ *
+ * **`opponent` turns it into a look and nothing more** — the playtest board's opponent's
+ * graveyard or exile: their cards are the rules' to move, never the reader's, so no card carries
+ * a place to go.
  */
 export function LibraryDialog({
   look,
   view,
   onAct,
   onClose,
+  opponent = false,
 }: {
   look: ZoneLook;
-  view: GoldfishView;
+  view: Pick<GoldfishView, "libraryCards" | "graveyard" | "exile" | "library">;
   onAct: (a: GoldfishAction) => void;
   onClose: () => void;
+  opponent?: boolean;
 }): JSX.Element {
   const [moved, setMoved] = useState(0);
   const [filter, setFilter] = useState("");
@@ -51,8 +57,8 @@ export function LibraryDialog({
   const cards =
     searching && needle !== "" ? shown.filter((c) => c.name.toLowerCase().includes(needle)) : shown;
 
-  const title = titleFor(look);
-  const places = placesFor(look);
+  const title = opponent ? opponentTitle(look) : titleFor(look);
+  const places = opponent ? [] : placesFor(look);
 
   const send = (card: GameCard, to: GoldfishPlace) => {
     // Out of the window unless it went back on top of it.
@@ -117,23 +123,25 @@ export function LibraryDialog({
                     {i === 0 ? "On top" : `${i + 1} from the top`}
                   </span>
                 )}
-                <div className="flex flex-wrap gap-1">
-                  {places.map(([to, label]) => (
-                    <button
-                      key={to}
-                      type="button"
-                      onClick={() => send(card, to)}
-                      className={cn(
-                        "h-6 rounded border border-border px-1.5 text-[11px] text-dim",
-                        "transition-colors motion-reduce:transition-none hover:border-accent hover:text-text",
-                        PRESS,
-                        FOCUS,
-                      )}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
+                {places.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {places.map(([to, label]) => (
+                      <button
+                        key={to}
+                        type="button"
+                        onClick={() => send(card, to)}
+                        className={cn(
+                          "h-6 rounded border border-border px-1.5 text-[11px] text-dim",
+                          "transition-colors motion-reduce:transition-none hover:border-accent hover:text-text",
+                          PRESS,
+                          FOCUS,
+                        )}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </li>
             ))}
           </ul>
@@ -194,7 +202,12 @@ function titleFor(look: ZoneLook): string {
   }
 }
 
-function subtitleFor(look: ZoneLook, view: GoldfishView): string {
+/** The opponent's zone, named as theirs. Only a graveyard or exile is ever opened for them. */
+function opponentTitle(look: ZoneLook): string {
+  return look.zone === "exile" ? "The opponent's exile" : "The opponent's graveyard";
+}
+
+function subtitleFor(look: ZoneLook, view: Pick<GoldfishView, "library">): string {
   switch (look.mode) {
     case "scry":
       return "Top first. Leave each on top or put it on the bottom.";

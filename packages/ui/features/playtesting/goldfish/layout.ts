@@ -56,6 +56,13 @@ export const HAND_MIN_STEP = 36;
 export const ZONE_W = 120;
 export const ZONE_H = 168;
 
+/** A zone card's box — the goldfish's {@link ZONE_W} × {@link ZONE_H} unless a board passes
+ *  another (the playtest board's two tables share the window's height, so its zones are smaller). */
+export interface ZoneSize {
+  width: number;
+  height: number;
+}
+
 /**
  * One pile: the cards of one name that look the same — same tapped state, same counters — and
  * so are drawn as one card with the rest edged under it. The ids are the engine's, in table order.
@@ -74,13 +81,21 @@ function pileKey(c: GameCard): string {
   return [c.cardId ?? "", c.name, c.tapped ? 1 : 0, counters, c.isToken ? "t" : ""].join("|");
 }
 
+/**
+ * Something beyond the look that keeps two cards apart — the playtest board's: a creature picked
+ * as an attacker, or one that can be, is its own pile, so a click on it picks that creature and
+ * not its untouched twin (`Battlefield`'s `pick`). Two cards with different answers are never one
+ * pile; the goldfish passes none, and its piles are the look alone.
+ */
+export type PileApart = (card: GameCard) => string;
+
 /** The cards of one lane, grouped into piles in the order each pile's first card arrived. */
-export function pilesOf(cards: readonly GameCard[], lane: GoldfishLane): Pile[] {
+export function pilesOf(cards: readonly GameCard[], lane: GoldfishLane, apart?: PileApart): Pile[] {
   const seen = new Map<string, Pile>();
   const out: Pile[] = [];
   for (const card of cards) {
     if (card.lane !== lane) continue;
-    const k = pileKey(card);
+    const k = apart === undefined ? pileKey(card) : `${pileKey(card)}|${apart(card)}`;
     const pile = seen.get(k);
     if (pile !== undefined) {
       pile.ids.push(card.id);
@@ -146,10 +161,11 @@ export interface TableLayout {
 export function layoutTable(
   battlefield: readonly GameCard[],
   { width, height }: { width: number; height: number },
+  apart?: PileApart,
 ): TableLayout {
-  const creatures = pilesOf(battlefield, "creature");
-  const lands = pilesOf(battlefield, "land");
-  const others = pilesOf(battlefield, "other");
+  const creatures = pilesOf(battlefield, "creature", apart);
+  const lands = pilesOf(battlefield, "land", apart);
+  const others = pilesOf(battlefield, "other", apart);
   const laneHeight = Math.max(0, height / 2);
   const both = lands.length > 0 && others.length > 0;
   return {

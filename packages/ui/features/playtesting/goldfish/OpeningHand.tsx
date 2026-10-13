@@ -18,12 +18,17 @@ import { landsFirst } from "./layout";
  * the London mulligan's count with Commander's free first one already taken off (`session.rs`),
  * and `keep` is refused unless it carries exactly that many ids — so Keep stays greyed until the
  * picks match, rather than letting the reader send an action the engine will only bounce.
+ *
+ * **It reads four fields of the view** (`OpeningHandView`), so the playtest board hands it the
+ * reader's seat and its mulligan as they are, rather than a second opening hand being drawn.
  */
+export type OpeningHandView = Pick<GoldfishView, "hand" | "mulligan" | "library" | "libraryLands">;
+
 export function OpeningHand({
   view,
   onAct,
 }: {
-  view: GoldfishView;
+  view: OpeningHandView;
   onAct: (a: GoldfishAction) => void;
 }): JSX.Element {
   // Keyed on the hand's ids so a mulligan's new seven start with nothing picked: the ids are new
@@ -40,7 +45,7 @@ function Deciding({
   view,
   onAct,
 }: {
-  view: GoldfishView;
+  view: OpeningHandView;
   onAct: (a: GoldfishAction) => void;
 }): JSX.Element {
   const mulligans = view.mulligan?.mulligans ?? 0;

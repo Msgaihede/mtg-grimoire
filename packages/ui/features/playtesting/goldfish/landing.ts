@@ -1,4 +1,4 @@
-import { useEffect, useRef, type RefObject } from "react";
+import { useEffect, useMemo, useRef, type RefObject } from "react";
 import { useReducedMotion } from "motion/react";
 import type { GoldfishView } from "@/lib/ipc";
 import { DURATION, EASE, cssEase } from "@/lib/motion";
@@ -45,14 +45,30 @@ const POP: Keyframe[] = [
 
 /** Play the landing on every card in `root` that is new in `view`. */
 export function useLanding(root: RefObject<HTMLElement | null>, view: GoldfishView | null): void {
+  const ids = useMemo(
+    () => (view === null || view.stage !== "playing" ? null : idsOf(view)),
+    [view],
+  );
+  useLandingOf(root, ids);
+}
+
+/**
+ * {@link useLanding} over the ids a board can see, however it gathers them — the playtest
+ * board's are both seats'. `null` while there is no table to land on (a deal, an opening hand):
+ * the next set of ids after it is a deal, not a landing.
+ */
+export function useLandingOf(
+  root: RefObject<HTMLElement | null>,
+  ids: ReadonlySet<number> | null,
+): void {
   const reduced = useReducedMotion() ?? false;
-  const seen = useRef<Set<number> | null>(null);
+  const seen = useRef<ReadonlySet<number> | null>(null);
   useEffect(() => {
-    if (view === null || view.stage !== "playing") {
+    if (ids === null) {
       seen.current = null;
       return;
     }
-    const now = idsOf(view);
+    const now = ids;
     const fresh = freshIds(seen.current, now);
     seen.current = now;
     const el = root.current;
@@ -63,5 +79,5 @@ export function useLanding(root: RefObject<HTMLElement | null>, view: GoldfishVi
       if (card === null || typeof card.animate !== "function") continue;
       card.animate(POP, { duration: DURATION.slow * 2, easing: cssEase(EASE.enter) });
     }
-  }, [root, view, reduced]);
+  }, [root, ids, reduced]);
 }

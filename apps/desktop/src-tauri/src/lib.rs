@@ -11,8 +11,8 @@
 //! wrapper names a window, so it cannot move. The doc comment on each line below describes the
 //! module, wherever its code now is; each `<module>/mod.rs` says what it kept and why.
 
-// **For the goldfish board's game**, held in Tauri's managed state (`goldfish::GoldfishSlot`), which
-// must be `Send + Sync`. phase.rs's `GameState` is deep enough that proving it `Send` overflows the
+// **For the goldfish board's game** (and the playtest board's, `playtest::PlaytestSlot`), held in
+// Tauri's managed state (`goldfish::GoldfishSlot`), which must be `Send + Sync`. phase.rs's `GameState` is deep enough that proving it `Send` overflows the
 // compiler's default limit of 128 — measured 2026-10-12: `overflow evaluating the requirement
 // tauri::State<'_, GoldfishSlot> well-formed`, through `Box<grimoire_play::Goldfish>: Send` — and
 // 256 is the bound rustc suggested and is enough.
@@ -164,6 +164,9 @@ pub mod nav;
 /// SQLite's `date('now')`.
 pub mod new_printings;
 pub mod paths;
+/// The playtest board's three commands: a deck against another, the opponent played by phase.rs's
+/// AI over the goldfish's rules engine (`grimoire-play`).
+pub mod playtest;
 /// **The home page's Price movers history** — user schema v45, a snapshot of today's price per
 /// owned printing and a read that compares against one. The day is SQLite's `date('now')`, never
 /// `SystemTime::now()`, and nothing in it reaches a filesystem or a network.

@@ -101,6 +101,9 @@ export function useGoldfishDragging(): GoldfishDrag | null {
  * drop to whatever lies under it: the hand's band reaches up over the table's bottom edge, so a
  * card put back in the hand there was played. Caught, it is simply put back. Only a zone a card
  * could go to lights up for it, so the hand does not glow under a card carried out of it.
+ *
+ * `refuse` for a zone that is not the reader's — the playtest board's opponent's table: it takes
+ * nothing, and a card let go over it falls through to whatever else is there (nothing).
  */
 export function useGoldfishDropTarget({
   ref,
@@ -108,21 +111,23 @@ export function useGoldfishDropTarget({
   onDrop,
   overlay = false,
   pointerOnly = false,
+  refuse = false,
 }: {
   ref: RefObject<HTMLElement | null>;
   place: GoldfishPlace;
   onDrop: (drag: GoldfishDrag, place: GoldfishPlace) => void;
   overlay?: boolean;
   pointerOnly?: boolean;
+  refuse?: boolean;
 }): boolean {
   const dragging = useGoldfishDragging();
   const { over } = useDndDropTarget({
     ref,
     read: readGoldfishDrag,
-    canDrop: (drag) => drag.from === place || dropAction(drag, place) !== null,
+    canDrop: (drag) => !refuse && (drag.from === place || dropAction(drag, place) !== null),
     onDrop: (drag) => onDrop(drag, place),
     overlay,
     pointerOnly,
   });
-  return over && dragging !== null && dropAction(dragging, place) !== null;
+  return !refuse && over && dragging !== null && dropAction(dragging, place) !== null;
 }

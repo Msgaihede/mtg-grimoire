@@ -402,8 +402,9 @@ export function GoldfishBoard({
   );
 }
 
-/** The commander's art across the whole board, dimmed to 28% under the cards. */
-function CommanderMat({ cardId, name }: { cardId: string; name: string }): JSX.Element {
+/** The commander's art across the whole board, dimmed to 28% under the cards. The playtest
+ *  board's Playmat draws it too. */
+export function CommanderMat({ cardId, name }: { cardId: string; name: string }): JSX.Element {
   return (
     <div aria-hidden="true" className="pointer-events-none absolute inset-0">
       <PlaymatArt cardId={cardId} />
