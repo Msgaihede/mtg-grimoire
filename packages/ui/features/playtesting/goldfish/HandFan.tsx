@@ -11,13 +11,6 @@ import { HAND_CARD_H, HAND_CARD_W, HAND_LIFT, arrangeHand, handRow } from "./lay
 import { cardMenu } from "./menus";
 import type { Pointed } from "./types";
 
-/**
- * How long a card in hand stays pointed at after the pointer leaves it. A card pulled out of the
- * row moves under a still pointer; this, and the lifted card keeping its resting box as well as
- * its lifted one, is what keeps an edge of a card from flickering in and out of the lift.
- */
-const HAND_LINGER = 120;
-
 /** How far past the row the hand's drop band reaches either side. */
 const BAND_REACH = 80;
 
@@ -26,8 +19,7 @@ export interface HandFanProps {
   onAct: (action: GoldfishAction) => void;
   onDrop: (drag: GoldfishDrag, to: GoldfishPlace) => void;
   onPoint: (pointed: Pointed) => void;
-  /** With an id, only that card is let go of — and only if it is still the one pointed at. */
-  onUnpoint: (id?: number) => void;
+  onUnpoint: () => void;
   /** The card pointed at, which is pulled out of the row; `null` when it is not one of these. */
   pointedId: number | null;
 }
@@ -68,17 +60,6 @@ export function HandFan({
   const held = arranged.flatMap((id) => byId.get(id) ?? []);
   const row = handRow(held.length);
 
-  const linger = useRef<number | undefined>(undefined);
-  useEffect(() => () => window.clearTimeout(linger.current), []);
-  const enter = (pointed: Pointed) => {
-    window.clearTimeout(linger.current);
-    onPoint(pointed);
-  };
-  const leave = (id: number) => {
-    window.clearTimeout(linger.current);
-    linger.current = window.setTimeout(() => onUnpoint(id), HAND_LINGER);
-  };
-
   return (
     <section
       ref={ref}
@@ -101,8 +82,7 @@ export function HandFan({
             top={row.restTop}
             lifted={card.id === pointedId}
             onAct={onAct}
-            onEnter={enter}
-            onLeave={leave}
+            onPoint={onPoint}
             onUnpoint={onUnpoint}
           />
         ))}
@@ -117,8 +97,7 @@ function HandCard({
   top,
   lifted,
   onAct,
-  onEnter,
-  onLeave,
+  onPoint,
   onUnpoint,
 }: {
   card: GameCard;
@@ -126,8 +105,7 @@ function HandCard({
   top: number;
   lifted: boolean;
   onAct: (action: GoldfishAction) => void;
-  onEnter: (pointed: Pointed) => void;
-  onLeave: (id: number) => void;
+  onPoint: (pointed: Pointed) => void;
   onUnpoint: () => void;
 }): JSX.Element {
   const ref = useRef<HTMLButtonElement>(null);
@@ -163,9 +141,10 @@ function HandCard({
       }}
       onKeyDown={menuKey(build)}
       onMouseEnter={(e) =>
-        onEnter({ card, ids: [id], place: "hand", line: `${name} · in hand`, at: pointerAt(e) })
+        onPoint({ card, ids: [id], place: "hand", line: `${name} · in hand`, at: pointerAt(e) })
       }
-      onMouseLeave={() => onLeave(id)}
+      onMouseLeave={() => onUnpoint()}
+      data-point={id}
       // **The button never moves; only its face does.** Its box is the card at rest, so pulling
       // the face up cannot take the card out from under the pointer — and while it is up, the
       // strip it rose into is the button's too, so the pointer can follow the face.

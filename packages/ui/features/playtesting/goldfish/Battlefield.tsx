@@ -252,6 +252,7 @@ function PileView({
           })
         }
         onMouseLeave={onUnpoint}
+        data-point={card.id}
         className={cn(
           "absolute cursor-pointer rounded-md p-0",
           "transition-[left,transform] duration-150 ease-out motion-reduce:transition-none",

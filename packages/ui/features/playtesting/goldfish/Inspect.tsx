@@ -8,9 +8,6 @@ import type { Pointed } from "./types";
 
 /** How long the pointer rests on a card before its preview opens. */
 export const INSPECT_DELAY = 500;
-/** How long the preview stays open after the pointer leaves a card, so the next one it reaches
- *  shows at once rather than after another {@link INSPECT_DELAY}. */
-const INSPECT_LINGER = 150;
 /** The preview's card width: where it starts, and how far the wheel takes it either way. */
 export const INSPECT_WIDTH = 320;
 export const INSPECT_MIN = 200;
@@ -49,8 +46,8 @@ export function placePreview(
  *
  * **It follows the pointer, and only once the pointer has rested** ({@link INSPECT_DELAY}): a
  * reader sweeping across the hand to reach a card does not get a preview flashing under every
- * card on the way. Once open it moves from card to card with the pointer, and lingers
- * {@link INSPECT_LINGER} after the pointer leaves one, so the next card shows at once.
+ * card on the way. It closes the moment the pointer leaves the card, and every card — the next
+ * one, or the same one again — has to be rested on anew.
  *
  * **The wheel resizes it while it is open** (`onResize`), and the size is the board's, so it is
  * kept for the next card. It takes no pointer at all: it sits beside the cursor, over table
@@ -70,32 +67,28 @@ export function Inspect({
 }): JSX.Element | null {
   const ref = useRef<HTMLDivElement>(null);
   const pointer = useRef({ x: 0, y: 0 });
-  const [shown, setShown] = useState(false);
-  const pointing = pointed !== null;
-
-  // Open after the rest, close after the linger — both on a clock, never in the effect itself.
+  // **One hover, one rest.** `at` is minted when the pointer comes onto a card and kept through
+  // every view after it, so it names the hover: the preview is open only for the hover that has
+  // rested, and a hover that ended can never be the one a later card is shown for.
+  const enteredAt = pointed?.at ?? null;
+  const [rested, setRested] = useState<Pointed["at"] | null>(null);
   useEffect(() => {
-    if (pointing === shown) return;
-    const timer = window.setTimeout(
-      () => setShown(pointing),
-      pointing ? INSPECT_DELAY : INSPECT_LINGER,
-    );
+    if (enteredAt === null) return;
+    const timer = window.setTimeout(() => setRested(enteredAt), INSPECT_DELAY);
     return () => window.clearTimeout(timer);
-  }, [pointing, shown]);
-
-  // The pointer as the card first saw it, then as it moves; the preview is placed straight from
-  // the event rather than through a render, so it keeps up with the cursor.
-  const enteredAt = pointed?.at;
-  useEffect(() => {
-    if (enteredAt !== undefined) pointer.current = enteredAt;
   }, [enteredAt]);
 
-  const visible = shown && pointed !== null;
+  const visible = pointed !== null && rested === enteredAt;
 
+  // The pointer as the card first saw it, then as it moves — followed from the moment it comes
+  // onto the card, so the preview opens where the pointer is. It is placed straight from the
+  // event rather than through a render, so it keeps up with the cursor.
   useLayoutEffect(() => {
-    const el = ref.current;
-    if (!visible || el === null) return;
+    if (enteredAt === null) return;
+    if (!visible) pointer.current = enteredAt;
     const place = () => {
+      const el = ref.current;
+      if (el === null) return;
       const parent = el.offsetParent;
       if (!(parent instanceof HTMLElement)) return;
       const box = parent.getBoundingClientRect();
@@ -113,7 +106,7 @@ export function Inspect({
     };
     window.addEventListener("pointermove", onMove);
     return () => window.removeEventListener("pointermove", onMove);
-  }, [visible, width, pointed?.card.id]);
+  }, [enteredAt, visible, width, pointed?.card.id]);
 
   // The wheel resizes the open preview, and only the preview: the table under it does not scroll.
   useEffect(() => {
