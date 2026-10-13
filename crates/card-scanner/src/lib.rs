@@ -19,6 +19,7 @@ pub mod labels;
 pub mod lock;
 pub mod ocr;
 pub mod reference;
+pub mod replay;
 pub mod resolve;
 pub mod session;
 #[cfg(feature = "builder")]

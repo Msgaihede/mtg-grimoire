@@ -46,6 +46,8 @@
     "changelog": "node scripts/changelog/cli.ts",
     "scanner:assets": "node scripts/scanner-assets.ts",
     "scanner:bench": "node scripts/scanner-bench.ts",
+    "scanner:corpus": "node scripts/scanner-corpus.ts",
+    "scanner:replay": "node scripts/scanner-replay.ts",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
     "verify": "pnpm build && vite build --config apps/light/vite.config.ts && pnpm lint && pnpm lint:rust && pnpm test:run && cargo test --workspace && cargo test --manifest-path crates/card-scanner/Cargo.toml --target-dir crates/card-scanner/target --features cli"
