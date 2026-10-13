@@ -223,22 +223,23 @@ export const GameChangerFoil: Story = {
  * broken-image icons.
  */
 /**
- * A printing **not out yet** (issue #940): its set code and release date stamped corner to corner
- * over the art, under the finish chip. Drawn here over `mp2 8`, a foil-only printing, so the
- * stamp is seen beside the sheen and the chip it must not hide; the stamp's text is the story's,
- * not the printing's — the search derives it with `unreleasedStamp` from a row's `releasedAt`.
+ * A printing **not out yet** (issue #965, replacing #940's diagonal stamp): a red "Releases <date>"
+ * chip in the art's bottom-left corner, where it leaves the art and the rules text readable. Drawn
+ * here over `mp2 8`, a foil-only printing, so the chip is seen beside the sheen and the finish
+ * chip; the date is the story's, not the printing's — the search derives it with
+ * `unreleasedStamp` from a row's `releasedAt`.
  */
 export const Unreleased: Story = {
   args: {
     cardId: printing("mp2", "8").id,
     name: "Consecrated Sphinx",
     finish: soleFinish(printing("mp2", "8").finishes),
-    watermark: { set: "TLA", date: "2026-11-14" },
+    unreleased: { set: "TLA", date: "2026-11-14" },
   },
   play: async ({ canvasElement }) => {
-    const stamp = canvasElement.querySelector("[data-unreleased-watermark]");
-    await expect(stamp).toHaveTextContent("TLA2026-11-14");
-    await expect(stamp).toHaveAttribute("aria-hidden", "true");
+    const chip = canvasElement.querySelector("[data-unreleased-chip]");
+    await expect(chip).toHaveTextContent("Releases 2026-11-14");
+    await expect(chip).toHaveAttribute("aria-hidden", "true");
     await expect(canvasElement.querySelector("[data-card-marks]")).not.toBeNull();
   },
 };

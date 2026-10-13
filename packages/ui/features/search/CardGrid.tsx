@@ -437,7 +437,7 @@ export function CardGrid<T extends GridCard>({
   finish,
   treatment,
   gameChanger,
-  watermark,
+  unreleased,
   action,
   column,
   flips,
@@ -653,15 +653,16 @@ export function CardGrid<T extends GridCard>({
    */
   gameChanger?: (card: T) => boolean;
   /**
-   * The stamp across a tile whose printing is **not out yet** — its set code and release date,
-   * drawn diagonally over the art by `CardArt` (issue #940). `null` draws nothing.
+   * A tile whose printing is **not out yet** — its set code and release date, drawn by `CardArt`
+   * as a red "Releases <date>" chip in the art's bottom-left corner (issues #940, #965). `null`
+   * draws nothing. The {@link badge} shares that corner and lifts itself above the chip.
    *
    * A callback for {@link finish}'s reason: only a row that carries `releasedAt` can answer, and
-   * absent means no tile is stamped.
+   * absent means no tile is marked.
    *
    * Hold it still (module scope, or a `useCallback`) — see {@link dragPayload}.
    */
-  watermark?: (card: T) => { set: string; date: string } | null;
+  unreleased?: (card: T) => { set: string; date: string } | null;
   /**
    * The one control a tile carries — **in a strip over the bottom of the art**, since 2026-08-26.
    * The search's quick-add.
@@ -2287,7 +2288,7 @@ export function CardGrid<T extends GridCard>({
       finish={finish}
       treatment={treatment}
       gameChanger={gameChanger}
-      watermark={watermark}
+      unreleased={unreleased}
       action={action}
       column={column}
       flips={flips}
@@ -2509,7 +2510,7 @@ function Tile<T extends GridCard>({
   finish,
   treatment,
   gameChanger,
-  watermark,
+  unreleased,
   action,
   column,
   flips,
@@ -2572,7 +2573,7 @@ function Tile<T extends GridCard>({
   finish?: (card: T) => Finish | null;
   treatment?: (card: T) => readonly Treatment[];
   gameChanger?: (card: T) => boolean;
-  watermark?: (card: T) => { set: string; date: string } | null;
+  unreleased?: (card: T) => { set: string; date: string } | null;
   action?: (card: T) => ReactNode;
   column?: (card: T) => ReactNode;
   flips?: (card: T) => boolean;
@@ -2596,7 +2597,7 @@ function Tile<T extends GridCard>({
   const tileFinish = finish?.(card) ?? null;
   const tileTreatments = treatment?.(card) ?? [];
   const crowned = gameChanger?.(card) ?? false;
-  const stamp = watermark?.(card) ?? null;
+  const stamp = unreleased?.(card) ?? null;
   const turnable = turnsOver(card, flips);
   const face = useShownFace(turnable ? card.id : null);
   const controls = column?.(card);
@@ -2867,7 +2868,7 @@ function Tile<T extends GridCard>({
             finish={tileFinish}
             treatments={tileTreatments}
             gameChanger={crowned}
-            watermark={stamp}
+            unreleased={stamp}
             hoverZoom
           />
         </button>
@@ -2914,9 +2915,17 @@ function Tile<T extends GridCard>({
             // the branch is the corner: where it sits, that it disappears when it has nothing to
             // say, that it takes its own pointer events and opens the card. What `"bare"` drops is
             // the three classes that make a chip, because the marks inside it bring their own.
+            //
+            // **Lifted over an unreleased printing's chip**, which `CardArt` draws in this same
+            // corner (issue #965). The chip is this box's height — 1rem of line and 0.125rem of
+            // padding either side — so 0.25rem of inset, 1.25rem of chip and 0.25rem of gap put
+            // the badge exactly one row up, at every zoom.
             className={cn(
               "pointer-events-auto absolute empty:hidden",
-              "bottom-[calc(0.25rem*var(--mark-scale,1))] left-[calc(0.25rem*var(--mark-scale,1))]",
+              "left-[calc(0.25rem*var(--mark-scale,1))]",
+              stamp
+                ? "bottom-[calc(1.75rem*var(--mark-scale,1))]"
+                : "bottom-[calc(0.25rem*var(--mark-scale,1))]",
               badgeChrome === "chip" && [
                 "bg-bg/85",
                 "rounded-[calc(0.25rem*var(--mark-scale,1))]",

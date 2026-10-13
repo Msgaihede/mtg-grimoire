@@ -5,6 +5,7 @@ import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
 import { CARD_ASPECT, cardImageUrl, WALL_CARD_VARIANT, type ImageVariant } from "@/lib/images";
 import { type Treatment, treatmentTitle } from "@/lib/treatment";
+import { releaseChipLabel, unreleasedLabel } from "@/lib/unreleased";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
 
@@ -77,7 +78,7 @@ export function CardArt({
   finish = null,
   treatments,
   gameChanger = false,
-  watermark = null,
+  unreleased = null,
   loading,
   className,
 }: {
@@ -162,14 +163,15 @@ export function CardArt({
    */
   gameChanger?: boolean;
   /**
-   * The stamp across a printing that is **not out yet** — its set code and release date,
-   * diagonally, from {@link UnreleasedWatermark}. `null` (the default) draws nothing.
+   * A printing that is **not out yet** — its set code and release date, drawn as the red
+   * "Releases <date>" chip in the art's bottom-left corner by {@link UnreleasedChip}. `null` (the
+   * default) draws nothing.
    *
    * Derived by the caller with `unreleasedStamp` from `@/lib/unreleased`, for `finish`'s reason:
-   * only a printing-shaped row knows its date, and a frame that guessed would stamp the wrong
-   * cards (issue #940).
+   * only a printing-shaped row knows its date, and a frame that guessed would mark the wrong
+   * cards (issues #940, #965).
    */
-  watermark?: { set: string; date: string } | null;
+  unreleased?: { set: string; date: string } | null;
   /**
    * The browser's own intersection gate on this frame's `<img>`. **Absent by default, which
    * emits no attribute at all** — the argued position, not an omission; see where it is passed
@@ -273,68 +275,52 @@ export function CardArt({
         </span>
       )}
 
-      {/* Under the overlay, so the finish chip stays readable over the stamp's letters. */}
-      {watermark && <UnreleasedWatermark set={watermark.set} date={watermark.date} />}
+      {unreleased && <UnreleasedChip set={unreleased.set} date={unreleased.date} />}
       <FoilOverlay finish={finish} treatments={treatments} gameChanger={gameChanger} />
     </span>
   );
 }
 
 /**
- * The diagonal angle of a 5:7 card, corner to corner — `atan(7 / 5)`, in degrees.
+ * The chip on an **unreleased** printing (issue #965, replacing #940's diagonal stamp): a small red
+ * "Releases <date>" box in the art's bottom-left corner, sitting on the chin.
  *
- * The stamp runs bottom-left to top-right along it, so the longest line the frame holds is the
- * one it is drawn on, at every size.
+ * Issue #940 drew this fact as the set code and date corner to corner in heavy type, and it hid the
+ * very thing a reader opens a spoiler for — the art and the rules text. The fact still has to be
+ * seen at a glance on a wall, so it is red rather than the felt the other corners use, but it is
+ * one line in a corner: the card stays the card.
+ *
+ * Bottom-left because it is a fact about *when*, which sits with the rest of what the chin says
+ * about the printing, and because the top two corners are the printing count's and the finish
+ * chip's. The search wall's owned badge shares this corner and lifts itself above the chip when
+ * both are drawn — see `CardGrid`.
+ *
+ * Every size is one at 100% zoom multiplied by `--mark-scale`, like {@link FoilOverlay}'s chip, so
+ * it stays proportionate from a 0.5× wall to a 2× one. Its height (`py` 0.125rem twice plus a
+ * 1rem line) is the owned badge's, which is what lets `CardGrid` stack the two exactly.
+ *
+ * `aria-hidden` for {@link FoilOverlay}'s reason: this sits inside the tile's button, whose
+ * accessible name must stay the card's. Its words are still reachable — the tooltip names the set
+ * too, and the search table's Name cell says it in text. `pointer-events-auto` on the chip alone,
+ * for the tooltip; a click on it bubbles to the tile's button and opens the card.
  */
-const CARD_DIAGONAL_DEG = (Math.atan2(7, 5) * 180) / Math.PI;
-
-/**
- * The stamp across an **unreleased** printing (issue #940): its set code, large, and its release
- * date under it, corner to corner in semi-transparent heavy type.
- *
- * Loud on purpose, as the foil sheen is: a previewed card's art is the real card's art, and a
- * reader scanning a wall must not take a spoiler for something they can buy today. The fill is
- * white at half strength over a dark outline at about the same, so it reads on bright art and on
- * dark — the sheen's `screen` trick only lightens, and vanishes on a white frame.
- *
- * **An SVG with a 5:7 `viewBox`, not text sized in CSS.** The frame is drawn from 60px deck rows
- * to a 340px zoomed tile, and an SVG scales its letters with it for free — no container query,
- * no `--mark-scale` arithmetic, and the same proportions everywhere. A long set code is squeezed
- * into the diagonal by `textLength` rather than spilling off the corners.
- *
- * `aria-hidden` and `pointer-events-none` for {@link FoilOverlay}'s reasons: this sits inside the
- * tile's button, whose accessible name must stay the card's, and must not swallow its clicks.
- * The fact is said in words where there is room for them — the search table's Name cell.
- */
-export function UnreleasedWatermark({ set, date }: { set: string; date: string }) {
-  // The diagonal is ~860 units long; the band near the corners is narrower than the middle,
-  // so a code past four letters is held to 620 rather than allowed its natural width.
-  const squeeze = set.length > 4 ? { textLength: 620, lengthAdjust: "spacingAndGlyphs" } : {};
+export function UnreleasedChip({ set, date }: { set: string; date: string }) {
+  const tip = useTooltip();
   return (
-    <svg
+    <span
       aria-hidden="true"
-      data-unreleased-watermark
-      viewBox="0 0 500 700"
-      className="pointer-events-none absolute inset-0 size-full select-none"
+      data-unreleased-chip
+      {...tip(`${set} · ${unreleasedLabel(date)}`, { describes: false })}
+      className={cn(
+        "pointer-events-auto absolute select-none whitespace-nowrap bg-destructive/90 font-semibold text-white",
+        "bottom-[calc(0.25rem*var(--mark-scale,1))] left-[calc(0.25rem*var(--mark-scale,1))]",
+        "rounded-[calc(0.25rem*var(--mark-scale,1))]",
+        "px-[calc(0.375rem*var(--mark-scale,1))] py-[calc(0.125rem*var(--mark-scale,1))]",
+        "text-[calc(0.75rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
+      )}
     >
-      <g
-        transform={`rotate(${-CARD_DIAGONAL_DEG} 250 350)`}
-        textAnchor="middle"
-        fontWeight={900}
-        fill="rgba(255,255,255,.5)"
-        stroke="rgba(0,0,0,.45)"
-        strokeWidth={6}
-        strokeLinejoin="round"
-        paintOrder="stroke"
-      >
-        <text x={250} y={372} fontSize={190} letterSpacing={8} {...squeeze}>
-          {set}
-        </text>
-        <text x={250} y={450} fontSize={66} letterSpacing={6} strokeWidth={4}>
-          {date}
-        </text>
-      </g>
-    </svg>
+      {releaseChipLabel(date)}
+    </span>
   );
 }
 

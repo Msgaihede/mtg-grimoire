@@ -96,9 +96,10 @@ using it.
   "today" in the index is the build's, so a printing that comes out between two builds is counted
   until the next one (by which time a sync has given it a mask); and an upcoming set's **tokens**
   are legal nowhere *and* future-dated, so they appear too — excluding them needs `layout`, which
-  is in no index. The rows carry `releasedAt` (`CardSummary`), and the walls stamp an unreleased
-  printing with its set code and date diagonally over the art (`UnreleasedWatermark` in
-  `components/CardArt.tsx`, `tileUnreleased` in `SearchPage.tsx`); the table's Name cell says
+  is in no index. The rows carry `releasedAt` (`CardSummary`), and the walls mark an unreleased
+  printing with a red "Releases <date>" chip in the art's bottom-left corner (`UnreleasedChip` in
+  `components/CardArt.tsx`, `tileUnreleased` in `SearchPage.tsx`; it replaced issue #940's
+  diagonal stamp, which hid the art, in issue #965); the table's Name cell says
   *Unreleased*. Whether a date is in the future is the page's call, against the reader's local
   day (`lib/unreleased.ts`).
 - **What `playableOnly` hides, measured in the shipped window 2026-08-14** (`pnpm tauri dev`,

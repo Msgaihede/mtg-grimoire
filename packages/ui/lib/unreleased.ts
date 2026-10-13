@@ -1,12 +1,12 @@
 /**
- * Whether a printing is **not out yet**, and the stamp the wall draws across one (issue #940).
+ * Whether a printing is **not out yet**, and the chip the wall draws on one (issues #940, #965).
  *
  * The backend hands every result row its `releasedAt` and draws no conclusion: "unreleased" is a
  * comparison against today, and today is the reader's. The search's `playableOnly` keeps these
  * printings in the corpus by the engine's own UTC date (`filters::unreleased_sql`), so for a few
  * hours either side of midnight the two can disagree by a day — a card that is out in the
  * reader's evening and not yet in UTC, or the other way round. Neither direction hides a card
- * that exists; at worst a stamp is a day early or late.
+ * that exists; at worst a chip is a day early or late.
  */
 
 /** `YYYY-MM-DD` in the reader's own time zone — the format Scryfall writes `released_at` in. */
@@ -28,7 +28,7 @@ export function isUnreleased(releasedAt: string | null, today: string = localDay
 }
 
 /**
- * What an unreleased printing is stamped with: its set code and its release date, `null` for a
+ * What an unreleased printing is marked with: its set code and its release date, `null` for a
  * printing that is out. Upper-case code, as the table's Set column and the chin print it.
  */
 export function unreleasedStamp(
@@ -40,7 +40,12 @@ export function unreleasedStamp(
   return { set: setCode.toUpperCase(), date: releasedAt };
 }
 
-/** The words a stamp stands for, for a tooltip or a screen reader. */
+/** The words a chip stands for, for a tooltip or a screen reader. */
 export function unreleasedLabel(releasedAt: string): string {
   return `Unreleased — out ${releasedAt}`;
+}
+
+/** The words on the card's own chip — short enough for a 0.5× tile's bottom-left corner. */
+export function releaseChipLabel(releasedAt: string): string {
+  return `Releases ${releasedAt}`;
 }
