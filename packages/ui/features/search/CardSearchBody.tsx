@@ -294,9 +294,9 @@ export function CardSearchBody({
           // The crown in a tile's top-right chip: the same fact the search view's wall marks,
           // marked the same way here — see `tileGameChanger`.
           gameChanger={tileGameChanger}
-          // The search page's stamp across a printing not out yet — the same fact, marked the
-          // same way, for `tileGameChanger`'s reason.
-          watermark={tileUnreleased}
+          // The search page's chip on a printing not out yet — the same fact, marked the same
+          // way, for `tileGameChanger`'s reason.
+          unreleased={tileUnreleased}
           finish={finish}
           // What the chin says one copy costs — the **spread**, through `priceRange`, which is
           // the search page's own helper over the same rows. This *is* the card search in a

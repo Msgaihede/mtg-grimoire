@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { isUnreleased, localDay, unreleasedLabel, unreleasedStamp } from "./unreleased";
+import {
+  isUnreleased,
+  localDay,
+  releaseChipLabel,
+  unreleasedLabel,
+  unreleasedStamp,
+} from "./unreleased";
 
 describe("unreleased", () => {
   it("reads today in the reader's own zone, zero-padded", () => {
@@ -25,5 +31,9 @@ describe("unreleased", () => {
 
   it("says the date in words", () => {
     expect(unreleasedLabel("2026-11-14")).toBe("Unreleased — out 2026-11-14");
+  });
+
+  it("says the chip's words", () => {
+    expect(releaseChipLabel("2026-11-14")).toBe("Releases 2026-11-14");
   });
 });

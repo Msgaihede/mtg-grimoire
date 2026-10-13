@@ -8,26 +8,31 @@ const advance = (ms: number) => act(() => void vi.advanceTimersByTime(ms));
 
 describe("CardArt", () => {
   /**
-   * Issue #940: a spoiler's art is the real card's, so the wall stamps it with its set and date.
-   * Hidden from the accessible name — the tile's button must still be called by the card.
+   * Issue #965 (replacing #940's diagonal stamp): a spoiler's art is the real card's, so the wall
+   * says it is not out yet — in a red chip in the art's bottom-left corner, which leaves the art
+   * readable. Hidden from the accessible name — the tile's button must still be called by the card.
    */
-  it("stamps an unreleased printing with its set and date, out of the accessible name", () => {
-    const { container } = render(
+  it("marks an unreleased printing with a release-date chip, out of the accessible name", () => {
+    const { container } = mount(
       <CardArt
         cardId="dragon"
         name="Spoiled Dragon"
-        watermark={{ set: "TLA", date: "2026-11-14" }}
+        unreleased={{ set: "TLA", date: "2026-11-14" }}
       />,
     );
-    const stamp = container.querySelector("[data-unreleased-watermark]");
-    expect(stamp).not.toBeNull();
-    expect(stamp?.getAttribute("aria-hidden")).toBe("true");
-    expect(stamp?.textContent).toBe("TLA2026-11-14");
+    const chip = container.querySelector("[data-unreleased-chip]");
+    expect(chip).not.toBeNull();
+    expect(chip?.getAttribute("aria-hidden")).toBe("true");
+    expect(chip?.textContent).toBe("Releases 2026-11-14");
+    expect(chip?.className).toContain("bottom-[");
+    expect(chip?.className).toContain("left-[");
+    expect(chip?.className).toContain("bg-destructive");
+    expect(container.querySelector("svg")).toBeNull();
   });
 
-  it("draws no stamp without one", () => {
-    const { container } = render(<CardArt cardId="bolt" name="Lightning Bolt" />);
-    expect(container.querySelector("[data-unreleased-watermark]")).toBeNull();
+  it("draws no chip without one", () => {
+    const { container } = mount(<CardArt cardId="bolt" name="Lightning Bolt" />);
+    expect(container.querySelector("[data-unreleased-chip]")).toBeNull();
   });
 
   it("draws the card's art, named by the card", () => {

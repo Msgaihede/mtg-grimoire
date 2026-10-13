@@ -94,7 +94,7 @@ function columnsFor(
             annotates. Unlike the finish it needs no `soleFinish`-style derivation — the
             backend has already flattened the column's NULL into `false`. */}
           {card.gameChanger && <GameChangerMark />}
-          {/* The words the wall's stamp stands for — the table has no art to stamp. */}
+          {/* The words the wall's chip stands for — the table has no art to mark. */}
           {tileUnreleased(card) && (
             <span
               className="shrink-0 rounded-sm border border-accent/60 px-1 text-[10px] font-semibold uppercase leading-4 tracking-wide text-accent"
@@ -812,8 +812,8 @@ function Results({ search }: { search: CardSearch }) {
             // The crown, in the same chip as that mark. Held still at module scope like every
             // other callback this wall is handed.
             gameChanger={tileGameChanger}
-            // A spoiler's set and release date, stamped across its art.
-            watermark={tileUnreleased}
+            // A spoiler's release date, as a red chip in its art's bottom-left corner.
+            unreleased={tileUnreleased}
             // What the chin says one copy costs — **the spread**, because a collapsed row stands
             // for every printing that got past the filters and one figure would be a claim about
             // one of them. `priceRange` is the helper the table's Price column is built from, so

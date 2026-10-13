@@ -507,11 +507,11 @@ describe("CardGrid", () => {
   });
 
   /**
-   * Issue #940: a printing not out yet is stamped across its art with its set and date — through
-   * the search page's own callback, so the rule tested is the one the wall runs — and the stamp
-   * stays out of the tile button's name.
+   * Issue #965: a printing not out yet carries a "Releases <date>" chip on its art — through the
+   * search page's own callback, so the rule tested is the one the wall runs — the chip stays out
+   * of the tile button's name, and the owned badge that shares its corner lifts above it.
    */
-  it("stamps an unreleased printing's tile, and leaves a released one alone", () => {
+  it("chips an unreleased printing's tile, and leaves a released one alone", () => {
     const { container } = render(
       <CardGrid
         rows={[
@@ -522,18 +522,25 @@ describe("CardGrid", () => {
         onNeedNextPage={vi.fn()}
         listKey="k"
         zoomSection="search"
-        watermark={tileUnreleased}
+        badge={(row) => <span data-testid={`badge-${row.id}`}>×1</span>}
+        unreleased={tileUnreleased}
       />,
     );
 
-    const stamps = container.querySelectorAll("[data-unreleased-watermark]");
-    expect(stamps).toHaveLength(1);
-    expect(stamps[0]?.textContent).toBe("TLA2999-01-01");
+    const chips = container.querySelectorAll("[data-unreleased-chip]");
+    expect(chips).toHaveLength(1);
+    expect(chips[0]?.textContent).toBe("Releases 2999-01-01");
     expect(screen.getByRole("button", { name: "Spoiled Dragon" })).toContainElement(
-      stamps[0] as HTMLElement,
+      chips[0] as HTMLElement,
     );
     expect(screen.getByRole("button", { name: "Spoiled Dragon" })).toHaveAccessibleName(
       "Spoiled Dragon",
+    );
+    expect(screen.getByTestId("badge-aaa").parentElement?.className).toContain(
+      "bottom-[calc(1.75rem*var(--mark-scale,1))]",
+    );
+    expect(screen.getByTestId("badge-bbb").parentElement?.className).toContain(
+      "bottom-[calc(0.25rem*var(--mark-scale,1))]",
     );
   });
 
