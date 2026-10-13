@@ -908,8 +908,11 @@ describe("ipc argument names match the Rust command signatures", () => {
   /** The same for a TypeScript union of `{ type: "…"; … }` objects. */
   const tsVariants = (name: string): string[] => {
     const src = ipcSource.slice(ipcSource.indexOf(`export type ${name} =`));
-    const block = src.slice(0, src.indexOf(";\n"));
-    return [...block.matchAll(/\{ type: "(\w+)"([^}]*)\}/g)].map((m) => {
+    // The union ends at the first `;` that ends a line of its own: a member Prettier spread over
+    // lines has `;` at the end of its indented field lines too.
+    const block = src.slice(0, src.search(/;\n(?![ \t])/));
+    // `\s*`: Prettier puts a long member on lines of its own (`| {\n  type: "dealt"; …`).
+    return [...block.matchAll(/\{\s*type: "(\w+)"([^}]*)\}/g)].map((m) => {
       const fields = [...m[2].matchAll(/(\w+):/g)].map((f) => f[1]);
       return [m[1], ...fields].join(" ");
     });
@@ -1018,7 +1021,13 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(tsVariants("PlaytestAction")).toEqual(variants("PlaytestAction"));
     expect(tsVariants("PlaytestHappened")).toEqual(variants("PlaytestHappened"));
     // The string unions: each is a Rust enum of unit variants, camelCased.
-    for (const name of ["PlaytestStage", "PlaytestPhase", "Difficulty"]) {
+    for (const name of [
+      "PlaytestStage",
+      "PlaytestPhase",
+      "PlaytestPickPurpose",
+      "PlaytestStopStep",
+      "Difficulty",
+    ]) {
       const ts = name === "Difficulty" ? "PlaytestDifficulty" : name;
       const union = ipcSource.slice(ipcSource.indexOf(`export type ${ts} =`));
       const words = [...union.slice(0, union.indexOf(";\n")).matchAll(/"(\w+)"/g)].map((m) => m[1]);

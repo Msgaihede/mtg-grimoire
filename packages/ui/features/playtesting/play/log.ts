@@ -107,7 +107,8 @@ export function playtestSentence(h: PlaytestHappened): string | null {
       if (h.amount === 0) return null;
       const n = Math.abs(h.amount);
       const verb = h.amount < 0 ? "lost" : "gained";
-      return h.seat === "you" ? `You ${verb} ${n} life` : `The opponent ${verb} ${n} life`;
+      const to = h.amount < 0 ? `down to ${h.total}` : `up to ${h.total}`;
+      return h.seat === "you" ? `You ${verb} ${n}, ${to}` : `The opponent ${verb} ${n}, ${to}`;
     }
     case "tokensCreated": {
       const what = h.count === 1 ? `a ${h.name} token` : `${h.count} ${h.name} tokens`;

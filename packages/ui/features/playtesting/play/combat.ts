@@ -4,30 +4,90 @@
  * and the marks they leave.
  *
  * **The engine decides, the board only collects.** `view.attack` names the creatures that may
- * attack and `view.block` what each blocker may block; the reader's picks are kept here
- * ({@link Picks}) until the one action that declares them all, because a declaration is one
- * decision in the rules (CR 508.1, 509.1) and the engine takes it whole.
+ * attack and what each may attack, and `view.block` what each blocker may block; the reader's
+ * picks are kept here ({@link Picks}) until the one action that declares them all, because a
+ * declaration is one decision in the rules (CR 508.1, 509.1) and the engine takes it whole.
  */
-import type { GoldfishSeat, PlaytestAction, PlaytestBlockPair, PlaytestView } from "@/lib/ipc";
+import type {
+  GoldfishSeat,
+  PlaytestAction,
+  PlaytestAttackPair,
+  PlaytestBlockPair,
+  PlaytestStage,
+  PlaytestStopStep,
+  PlaytestView,
+} from "@/lib/ipc";
 import type { CardMark } from "../goldfish/Battlefield";
 import { pickableCards } from "./prompt";
 
 /** The reader's combat picks, until they are declared. */
 export interface Picks {
-  /** The creatures picked to attack, in the order they were picked. */
-  attackers: number[];
+  /** The creatures picked to attack and what each attacks, in the order they were picked. */
+  attacks: PlaytestAttackPair[];
+  /**
+   * An attacker picked and waiting to be aimed — one that can attack a planeswalker or a battle
+   * as well as (or instead of) the player. A click on one of its targets, or on the opponent's
+   * plate, aims it there.
+   */
+  aiming: number | null;
   blocks: PlaytestBlockPair[];
   /** A blocker picked and waiting for the attacker it is to block. */
   chosen: number | null;
 }
 
-export const NO_PICKS: Picks = { attackers: [], blocks: [], chosen: null };
+export const NO_PICKS: Picks = { attacks: [], aiming: null, blocks: [], chosen: null };
 
-/** An attacker picked or put back. */
-export function toggleAttacker(picks: Picks, id: number): Picks {
-  return picks.attackers.includes(id)
-    ? { ...picks, attackers: picks.attackers.filter((a) => a !== id) }
-    : { ...picks, attackers: [...picks.attackers, id] };
+/**
+ * One of the reader's creatures clicked in the declare-attackers step.
+ *
+ * - **Not attacking**: it attacks — the opponent when it can, else its first target — and, when
+ *   it has anything else it could attack, it waits to be aimed.
+ * - **Waiting to be aimed**: clicked again, it is put back.
+ * - **Attacking, not waiting**: one with targets waits to be aimed again; one without is put back.
+ */
+export function toggleAttacker(picks: Picks, view: PlaytestView, id: number): Picks {
+  const can = view.attack?.attackers.find((a) => a.id === id);
+  if (can === undefined) return picks;
+  const aimable = can.targets.length > 0;
+  const has = picks.attacks.some((a) => a.attacker === id);
+  const without = {
+    ...picks,
+    attacks: picks.attacks.filter((a) => a.attacker !== id),
+    aiming: null,
+  };
+  if (!has) {
+    const target = can.player ? null : (can.targets[0] ?? null);
+    return {
+      ...picks,
+      attacks: [...picks.attacks, { attacker: id, target }],
+      aiming: aimable ? id : null,
+    };
+  }
+  if (picks.aiming === id || !aimable) return without;
+  return { ...picks, aiming: id };
+}
+
+/**
+ * Where the attacker waiting to be aimed attacks: a planeswalker's or battle's id, or `null` for
+ * the opponent — taken only when the rules allow that attacker to attack it.
+ */
+export function aimAttacker(picks: Picks, view: PlaytestView, target: number | null): Picks {
+  const id = picks.aiming;
+  if (id === null) return picks;
+  const can = view.attack?.attackers.find((a) => a.id === id);
+  if (can === undefined) return picks;
+  if (target === null ? !can.player : !can.targets.includes(target)) return picks;
+  return {
+    ...picks,
+    attacks: picks.attacks.map((a) => (a.attacker === id ? { attacker: id, target } : a)),
+    aiming: null,
+  };
+}
+
+/** Whether the attacker waiting to be aimed could attack the opponent themselves. */
+export function aimsAtPlayer(picks: Picks, view: PlaytestView): boolean {
+  if (picks.aiming === null) return false;
+  return view.attack?.attackers.find((a) => a.id === picks.aiming)?.player ?? false;
 }
 
 /**
@@ -61,14 +121,33 @@ const PHASE: Record<PlaytestView["phase"], string> = {
   ending: "end step",
 };
 
-/** "Turn 5 · Your main phase", "Turn 6 · Opponent's turn · Combat". */
+/** The step a reader names, where the engine says which one it is: "upkeep", "declare blockers". */
+const STEP: Record<PlaytestStopStep, string> = {
+  upkeep: "upkeep",
+  draw: "draw step",
+  main1: "main phase",
+  beginCombat: "beginning of combat",
+  attackers: "declare attackers step",
+  blockers: "declare blockers step",
+  damage: "combat damage step",
+  main2: "second main phase",
+  end: "end step",
+};
+
+/**
+ * "Turn 5 · Your main phase", "Turn 6 · Opponent's turn · Upkeep", and — when the reader holds
+ * priority with something to answer — "… — you may respond". The step when the view names one,
+ * the phase otherwise (the untap step, the end of combat, cleanup).
+ */
 export function phaseLine(view: PlaytestView): string {
   if (view.turn === 0) return "Opening hands";
   if (view.stage === "over") return `Turn ${view.turn} · Game over`;
-  const phase = PHASE[view.phase];
-  return view.active === "you"
-    ? `Turn ${view.turn} · Your ${phase}`
-    : `Turn ${view.turn} · Opponent's turn · ${phase.charAt(0).toUpperCase()}${phase.slice(1)}`;
+  const phase = view.step === null ? PHASE[view.phase] : STEP[view.step];
+  const line =
+    view.active === "you"
+      ? `Turn ${view.turn} · Your ${phase}`
+      : `Turn ${view.turn} · Opponent's turn · ${phase.charAt(0).toUpperCase()}${phase.slice(1)}`;
+  return view.stage === "respond" ? `${line} — you may respond` : line;
 }
 
 /** Whose creature `id` is. */
@@ -78,27 +157,44 @@ export function seatOf(view: PlaytestView, id: number): GoldfishSeat | null {
   return null;
 }
 
+/** The attacks on the table: the reader's picks while they declare, the engine's otherwise. */
+export function attacksOf(view: PlaytestView, picks: Picks): readonly PlaytestAttackPair[] {
+  return view.stage === "attack" ? picks.attacks : (view.combat?.attacks ?? []);
+}
+
+/** The blocks on the table: the reader's picks while they declare, the engine's otherwise. */
+export function blocksOf(view: PlaytestView, picks: Picks): readonly PlaytestBlockPair[] {
+  return view.stage === "block" ? picks.blocks : (view.combat?.blocks ?? []);
+}
+
 /**
  * The combat as one line — "You attack with 2 · 1 blocked", "The opponent attacks with 3 · you
- * block 1" — or `null` with no combat on. In the block step it counts the reader's picks, which
- * are the blocks that will be.
+ * block 1" — or `null` with no combat on. While the reader declares, it counts their picks.
  */
 export function combatLine(view: PlaytestView, picks: Picks): string | null {
-  const attackers = view.combat?.attackers ?? [];
-  if (attackers.length === 0) return null;
-  const blocks = view.stage === "block" ? picks.blocks : (view.combat?.blocks ?? []);
-  const blocked = new Set(blocks.map((b) => b.attacker)).size;
-  if (seatOf(view, attackers[0]) === "you") {
-    return `You attack with ${attackers.length}${blocked > 0 ? ` · ${blocked} blocked` : ""}`;
+  const attacks = attacksOf(view, picks);
+  if (attacks.length === 0) return null;
+  const blocked = new Set(blocksOf(view, picks).map((b) => b.attacker)).size;
+  if (seatOf(view, attacks[0].attacker) === "you") {
+    return `You attack with ${attacks.length}${blocked > 0 ? ` · ${blocked} blocked` : ""}`;
   }
-  return `The opponent attacks with ${attackers.length}${blocked > 0 ? ` · you block ${blocked}` : ""}`;
+  return `The opponent attacks with ${attacks.length}${blocked > 0 ? ` · you block ${blocked}` : ""}`;
 }
 
 /** One of the foot's buttons: what it says, and what it asks. */
 export interface StageButton {
   label: string;
   action: PlaytestAction;
+  /** Drawn but not pressable: "Passing turn…" while the game passes on the reader's behalf. */
+  disabled?: boolean;
 }
+
+/** The second button while the reader is already ending the turn: it says so, and waits. */
+const PASSING: StageButton = {
+  label: "Passing turn…",
+  action: { type: "endTurn" },
+  disabled: true,
+};
 
 /**
  * The foot's buttons for the stage the game is in — the goldfish's "Next turn", grown into the
@@ -106,35 +202,45 @@ export interface StageButton {
  *
  * - **Main phase one**: on to combat, or skip the attack and end the turn.
  * - **Main phase two**: end the turn.
+ * - **Respond**: pass priority once, or pass until the turn changes.
  * - **Declare attackers**: attack with the creatures picked, or with none.
  * - **Declare blockers**: the blocks picked, or none.
  *
- * Nothing in the opening hand, a prompt (its panel answers it) or a game that is over.
+ * Nothing in the opening hand, a prompt (its panel answers it), a replay frame or a game that is
+ * over. While the reader is ending the turn (`endingTurn`) the second button says so.
  */
 export function stageButtons(
   view: PlaytestView,
   picks: Picks,
 ): { primary: StageButton | null; secondary: StageButton | null } {
-  switch (view.stage) {
+  const stage: PlaytestStage = view.stage;
+  switch (stage) {
     case "main":
       return view.phase === "main1"
         ? {
             primary: { label: "To combat", action: { type: "pass" } },
-            secondary: { label: "End turn", action: { type: "endTurn" } },
+            secondary: view.endingTurn
+              ? PASSING
+              : { label: "End turn", action: { type: "endTurn" } },
           }
         : {
             primary: {
               label: view.phase === "main2" ? "End turn" : "Pass",
               action: { type: "pass" },
             },
-            secondary: null,
+            secondary: view.endingTurn ? PASSING : null,
           };
+    case "respond":
+      return {
+        primary: { label: "Pass", action: { type: "pass" } },
+        secondary: view.endingTurn ? PASSING : { label: "Pass turn", action: { type: "endTurn" } },
+      };
     case "attack": {
-      const n = picks.attackers.length;
+      const n = picks.attacks.length;
       return {
         primary: {
           label: n === 0 ? "No attack" : `Attack with ${n}`,
-          action: { type: "attack", attackers: picks.attackers },
+          action: { type: "attack", attacks: picks.attacks },
         },
         secondary: null,
       };
@@ -147,7 +253,10 @@ export function stageButtons(
         },
         secondary: null,
       };
-    default:
+    case "mulligan":
+    case "prompt":
+    case "watching":
+    case "over":
       return { primary: null, secondary: null };
   }
 }
@@ -160,11 +269,11 @@ export interface SideMarks {
 
 /**
  * What combat looks like on the table: every attacker ringed and pushed forward, each block one
- * number on the blocker and the same number on its attacker, and the blocker waiting for its
- * attacker ringed gold.
+ * number on the blocker and the same number on its attacker, and a blocker waiting for its
+ * attacker — or an attacker waiting to be aimed — ringed gold.
  *
- * In the attack step the attackers are the reader's picks; in the block step the blocks are; at
- * any other time both are the engine's (`view.combat`).
+ * In the attack step the attacks are the reader's picks; in the block step the blocks are; at any
+ * other time both are the engine's (`view.combat`).
  */
 export function tableMarks(view: PlaytestView, picks: Picks): SideMarks {
   const out: SideMarks = { you: new Map(), opponent: new Map() };
@@ -172,15 +281,13 @@ export function tableMarks(view: PlaytestView, picks: Picks): SideMarks {
     const seat = seatOf(view, id);
     if (seat !== null) out[seat].set(id, mark);
   };
-  const attackers = view.stage === "attack" ? picks.attackers : (view.combat?.attackers ?? []);
-  const blocks = view.stage === "block" ? picks.blocks : (view.combat?.blocks ?? []);
   const numbers = new Map<number, string[]>();
-  blocks.forEach((b, i) => {
+  blocksOf(view, picks).forEach((b, i) => {
     const n = String(i + 1);
     numbers.set(b.attacker, [...(numbers.get(b.attacker) ?? []), n]);
     put(b.blocker, { tone: "block", badge: n, word: `blocking ${n}` });
   });
-  for (const id of attackers) {
+  for (const { attacker: id } of attacksOf(view, picks)) {
     const by = numbers.get(id);
     put(
       id,
@@ -192,6 +299,9 @@ export function tableMarks(view: PlaytestView, picks: Picks): SideMarks {
   if (view.stage === "block" && picks.chosen !== null) {
     put(picks.chosen, { tone: "chosen", word: "picked to block" });
   }
+  if (view.stage === "attack" && picks.aiming !== null) {
+    put(picks.aiming, { tone: "chosen", word: "attacking, pick what it attacks" });
+  }
   return out;
 }
 
@@ -202,9 +312,10 @@ export interface SidePicks {
 }
 
 /**
- * Which cards a click picks rather than taps: the creatures that may attack, the creatures that
- * may block and — once one is waiting — the attackers it may block, and a prompt's one-card
- * answers wherever on the table they are.
+ * Which cards a click picks rather than taps: the creatures that may attack and — while one waits
+ * to be aimed — the planeswalkers and battles it may attack; the creatures that may block and —
+ * once one is waiting — the attackers it may block; and a prompt's one-card answers wherever on
+ * the table they are.
  */
 export function tablePicks(view: PlaytestView, picks: Picks): SidePicks {
   const out: SidePicks = { you: new Set(), opponent: new Set() };
@@ -212,7 +323,12 @@ export function tablePicks(view: PlaytestView, picks: Picks): SidePicks {
     const seat = seatOf(view, id);
     if (seat !== null) out[seat].add(id);
   };
-  if (view.stage === "attack") (view.attack?.attackers ?? []).forEach(add);
+  if (view.stage === "attack") {
+    const attackers = view.attack?.attackers ?? [];
+    attackers.forEach((a) => add(a.id));
+    if (picks.aiming !== null)
+      (attackers.find((a) => a.id === picks.aiming)?.targets ?? []).forEach(add);
+  }
   if (view.stage === "block") {
     const blockers = view.block?.blockers ?? [];
     blockers.forEach((b) => add(b.id));

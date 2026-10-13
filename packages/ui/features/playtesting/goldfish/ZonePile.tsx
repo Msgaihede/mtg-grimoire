@@ -6,6 +6,7 @@ import { useContextMenu } from "@/components/menu/useContextMenu";
 import { FOCUS } from "@/lib/focus";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
+import { CountTag } from "@/components/CountTag";
 import { CardFace, pointerAt } from "./Inspect";
 import { goldfishDraggable, useGoldfishDropTarget, type GoldfishDrag } from "./goldfishDrag";
 import { ZONE_H, ZONE_W, type ZoneSize } from "./layout";
@@ -61,10 +62,22 @@ function EmptySlot({
         "flex h-[252px] w-[180px] items-center justify-center rounded-lg border border-dashed bg-bg/60 text-[11px] text-dim",
         "transition-[border-color] duration-150 motion-reduce:transition-none",
         over ? "border-accent" : "border-border",
+        size?.compact && "text-[10px]",
       )}
     >
       <span>{label}</span>
     </div>
+  );
+}
+
+/** A compact zone's count, drawn on its card where the goldfish writes a label under it. */
+function CardCount({ count, title }: { count: number; title: string }): JSX.Element {
+  return (
+    <CountTag
+      count={count}
+      title={title}
+      className="pointer-events-none absolute right-1 bottom-1"
+    />
   );
 }
 
@@ -140,9 +153,17 @@ export function CommandZone({
           ))}
         </div>
       )}
-      <span className="flex items-center gap-1 text-xs text-dim">
-        Command · tax <ManaText source={`{${tax}}`} />
-      </span>
+      {size?.compact ? (
+        tax > 0 && (
+          <span className="flex items-center gap-1 text-[11px] text-dim">
+            tax <ManaText source={`{${tax}}`} />
+          </span>
+        )
+      ) : (
+        <span className="flex items-center gap-1 text-xs text-dim">
+          Command · tax <ManaText source={`{${tax}}`} />
+        </span>
+      )}
     </div>
   );
 }
@@ -296,11 +317,19 @@ function FaceUpZone({
           )}
         >
           <CardFace card={top} />
+          {size?.compact && (
+            <CardCount
+              count={cards.length}
+              title={`${cards.length} ${cards.length === 1 ? "card" : "cards"} in ${where}`}
+            />
+          )}
         </button>
       )}
-      <span className={ZONE_LABEL}>
-        {title} · {cards.length}
-      </span>
+      {!size?.compact && (
+        <span className={ZONE_LABEL}>
+          {title} · {cards.length}
+        </span>
+      )}
     </div>
   );
 }
@@ -342,11 +371,18 @@ export function LibraryZone({ view, onAct, onDrop, onLook, size }: LibraryZonePr
           over ? "border-accent" : "border-border",
           PRESS,
           FOCUS,
+          size?.compact && "relative",
         )}
       >
         <GrimoireMark size={markSize(size)} className="text-accent" />
+        {size?.compact && (
+          <CardCount
+            count={count}
+            title={`${count} ${count === 1 ? "card" : "cards"} in the library`}
+          />
+        )}
       </button>
-      <span className={ZONE_LABEL}>Library · {count}</span>
+      {!size?.compact && <span className={ZONE_LABEL}>Library · {count}</span>}
     </div>
   );
 }

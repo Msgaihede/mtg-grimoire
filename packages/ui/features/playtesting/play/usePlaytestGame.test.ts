@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PlaytestStep } from "@/lib/ipc";
-import { openingHand, turnFive } from "./fixtures";
+import { openingHand, replayStep, turnFive } from "./fixtures";
 import { usePlaytestGame, type PlaytestPicks } from "./usePlaytestGame";
 
 // Hoisted with the mock below, which runs before this file's own top level.
@@ -28,6 +28,7 @@ beforeEach(() => {
   playtestStart.mockReset().mockResolvedValue({
     view: openingHand(),
     happened: [{ type: "drew", seat: "opponent", name: null }],
+    frames: [],
   });
   playtestAct.mockReset();
   playtestEnd.mockReset().mockResolvedValue(undefined);
@@ -62,6 +63,7 @@ describe("usePlaytestGame", () => {
           type === "endTurn"
             ? [{ type: "turnBegan", turn: 5, seat: "you" }]
             : [{ type: "cast", seat: "you", name: "Sol Ring" }],
+        frames: [],
       };
     });
     const { result } = renderHook(() => usePlaytestGame(PICKS));
@@ -95,7 +97,7 @@ describe("usePlaytestGame", () => {
     let release: () => void = () => {};
     playtestAct.mockImplementation(async () => {
       await new Promise<void>((r) => (release = r));
-      return { view: turnFive().view, happened: [] };
+      return { view: turnFive().view, happened: [], frames: [] };
     });
     const { result } = renderHook(() => usePlaytestGame(PICKS));
     await waitFor(() => expect(result.current.view).not.toBeNull());
@@ -106,5 +108,33 @@ describe("usePlaytestGame", () => {
     await waitFor(() => expect(playtestStart).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(result.current.busy).toBe(false));
     expect(result.current.view?.stage).toBe("mulligan");
+  });
+
+  it("plays a step's frames back, logs each fact once, and skips to the end", async () => {
+    const { step } = replayStep();
+    playtestAct.mockResolvedValue(step);
+    const { result } = renderHook(() => usePlaytestGame(PICKS));
+    await waitFor(() => expect(result.current.view).not.toBeNull());
+    const before = result.current.log.length;
+    act(() => result.current.act({ type: "endTurn" }));
+    await waitFor(() => expect(result.current.replaying).toBe(true));
+    expect(result.current.view).toBe(step.frames[0].view);
+    expect(result.current.lastHappened).toEqual(step.frames[0].happened);
+    act(() => result.current.skip());
+    expect(result.current.replaying).toBe(false);
+    expect(result.current.view).toBe(step.view);
+    expect(result.current.lastHappened).toEqual([]);
+    const said = result.current.log.slice(0, result.current.log.length - before);
+    expect(said.map((l) => l.text)).toEqual([
+      "Drew Island",
+      "Your turn 7 begins",
+      "You lost 2, down to 15",
+      "The opponent attacked with Ragavan, Nimble Pilferer",
+      "Lightning Bolt dealt 3 damage to Tarmogoyf",
+      "The opponent cast Lightning Bolt",
+      "The opponent played Mountain",
+      "The opponent drew a card",
+      "The opponent's turn 6 begins",
+    ]);
   });
 });

@@ -6,7 +6,14 @@
  * as the engine answers them. There is no rules engine here and no AI; a story that is clicked
  * through records what the board asks rather than playing it.
  */
-import type { GameCard, PlaytestSeat, PlaytestView } from "@/lib/ipc";
+import type {
+  GameCard,
+  PlaytestHappened,
+  PlaytestPick,
+  PlaytestSeat,
+  PlaytestStep,
+  PlaytestView,
+} from "@/lib/ipc";
 import { gameCard } from "../goldfish/fixtures";
 
 /** A Mountain: not among the fake's rows, so named and typed by hand (drawn as a plain tile). */
@@ -52,6 +59,8 @@ export interface TurnFive {
   /** The opponent's creatures: Ragavan and Boros Reckoner. */
   ragavan: GameCard;
   reckoner: GameCard;
+  /** The opponent's planeswalker, which Tarmogoyf may attack. */
+  jace: GameCard;
 }
 
 /** Turn 5, the reader's first main phase: both tables populated, nothing on the stack. */
@@ -61,10 +70,15 @@ export function turnFive(): TurnFive {
   const delver = gameCard("Delver of Secrets // Insectile Aberration", { power: 1, toughness: 1 });
   const ragavan = gameCard("Ragavan, Nimble Pilferer", { power: 2, toughness: 1 });
   const reckoner = gameCard("Boros Reckoner", { power: 3, toughness: 3, tapped: true });
+  const jace = gameCard("Jace, the Mind Sculptor", {
+    lane: "other",
+    counters: [{ kind: "loyalty", count: 3 }],
+  });
   const view: PlaytestView = {
     stage: "main",
     turn: 5,
     active: "you",
+    step: "main1",
     started: "you",
     phase: "main1",
     mulligan: null,
@@ -98,6 +112,7 @@ export function turnFive(): TurnFive {
         ragavan,
         reckoner,
         gameCard("Smuggler's Copter"),
+        jace,
         mountain({ tapped: true }),
         mountain(),
         gameCard("Ancient Tomb"),
@@ -114,8 +129,10 @@ export function turnFive(): TurnFive {
     stack: [],
     winner: null,
     tokens: [],
+    stops: [],
+    endingTurn: false,
   };
-  return { view, goyf, elves, delver, ragavan, reckoner };
+  return { view, goyf, elves, delver, ragavan, reckoner, jace };
 }
 
 /** The reader's declare-attackers step on turn 5: three creatures that may attack. */
@@ -127,7 +144,14 @@ export function attackStep(): TurnFive {
       ...t.view,
       stage: "attack",
       phase: "combat",
-      attack: { attackers: [t.goyf.id, t.elves.id, t.delver.id] },
+      attack: {
+        attackers: [
+          { id: t.goyf.id, player: true, targets: [t.jace.id] },
+          { id: t.elves.id, player: true, targets: [] },
+          { id: t.delver.id, player: true, targets: [] },
+        ],
+        targets: [{ id: t.jace.id, name: t.jace.name, cardId: t.jace.cardId }],
+      },
     },
   };
 }
@@ -151,7 +175,7 @@ export function blockStep(): TurnFive {
         ...t.view.opponent,
         battlefield: t.view.opponent.battlefield.map((c) => (c.id === ragavan.id ? ragavan : c)),
       },
-      combat: { attackers: [ragavan.id], blocks: [] },
+      combat: { attacks: [{ attacker: ragavan.id, target: null }], blocks: [] },
       block: {
         blockers: [
           { id: t.goyf.id, attackers: [ragavan.id] },
@@ -188,6 +212,7 @@ export function targetPrompt(): TurnFive {
         source: "Swords to Plowshares",
         options: [option(0, t.ragavan), option(1, t.reckoner), option(2, t.goyf)],
         cancellable: true,
+        pick: null,
       },
       stack: [],
     },
@@ -229,6 +254,7 @@ export function castChoicePrompt(): TurnFive {
           },
         ],
         cancellable: true,
+        pick: null,
       },
     },
   };
@@ -300,6 +326,201 @@ export function openingHand(): PlaytestView {
       graveyard: [],
       exile: [],
       handCount: 7,
+    },
+  };
+}
+
+/**
+ * Combat on the reader's turn 5 after blocks: Tarmogoyf at the opponent, Delver at Jace, and the
+ * opponent's Ragavan blocking Delver — the arrows' story.
+ */
+export function combatArrowsView(): TurnFive {
+  const t = turnFive();
+  const tapped = (c: GameCard) => ({ ...c, tapped: true });
+  return {
+    ...t,
+    view: {
+      ...t.view,
+      stage: "respond",
+      phase: "combat",
+      step: "blockers",
+      you: {
+        ...t.view.you,
+        battlefield: t.view.you.battlefield.map((c) =>
+          c.id === t.goyf.id || c.id === t.delver.id ? tapped(c) : c,
+        ),
+      },
+      combat: {
+        attacks: [
+          { attacker: t.goyf.id, target: null },
+          { attacker: t.delver.id, target: t.jace.id },
+        ],
+        blocks: [{ blocker: t.ragavan.id, attacker: t.delver.id }],
+      },
+    },
+  };
+}
+
+/** The opponent's Lightning Bolt on top of the stack, and the reader holding priority. */
+export function respondStep(): TurnFive {
+  const t = withStack();
+  return {
+    ...t,
+    view: {
+      ...t.view,
+      stage: "respond",
+      turn: 6,
+      active: "opponent",
+      phase: "beginning",
+      step: "upkeep",
+      stack: t.view.stack.filter((s) => s.seat === "opponent"),
+      stops: [{ seat: "opponent", step: "upkeep" }],
+    },
+  };
+}
+
+/** The facts of a combat-damage step, for the pops: Goyf hit for 3, Ragavan hit, life lost. */
+export function damageHappened(t: TurnFive): PlaytestHappened[] {
+  return [
+    {
+      type: "dealt",
+      source: t.reckoner.name,
+      target: t.goyf.name,
+      targetId: t.goyf.id,
+      seat: "you",
+      amount: 3,
+    },
+    {
+      type: "dealt",
+      source: t.goyf.name,
+      target: t.ragavan.name,
+      targetId: t.ragavan.id,
+      seat: "opponent",
+      amount: 4,
+    },
+    { type: "life", seat: "opponent", amount: -3, total: 11 },
+    { type: "life", seat: "you", amount: 2, total: 19 },
+  ];
+}
+
+/** A prompt answered by a set of cards. */
+function pickPrompt(t: TurnFive, kind: string, source: string, pick: PlaytestPick): TurnFive {
+  return {
+    ...t,
+    view: {
+      ...t.view,
+      stage: "prompt",
+      prompt: { kind, source, options: [], cancellable: false, pick },
+    },
+  };
+}
+
+/** Scry 3: the top three of the reader's library, any of them kept on top, in order. */
+export function scryPick(): TurnFive {
+  const t = turnFive();
+  const cards = t.view.you.libraryCards
+    .slice(0, 3)
+    .map((c) => ({ id: c.id, name: c.name, cardId: c.cardId }));
+  return pickPrompt(t, "ScryChoice", "Opt", {
+    purpose: "scry",
+    cards,
+    eligible: cards.map((c) => c.id),
+    min: 0,
+    max: 3,
+    ordered: true,
+  });
+}
+
+/** Discard exactly two of the hand; the land cannot be picked (a "discard a nonland card"). */
+export function discardPick(): TurnFive {
+  const t = turnFive();
+  const cards = t.view.you.hand.map((c) => ({ id: c.id, name: c.name, cardId: c.cardId }));
+  return pickPrompt(t, "DiscardChoice", "Thoughtseize", {
+    purpose: "discard",
+    cards,
+    eligible: t.view.you.hand.filter((c) => !c.isLand).map((c) => c.id),
+    min: 2,
+    max: 2,
+    ordered: false,
+  });
+}
+
+/**
+ * The opponent's whole turn 6 as a step with frames, the way the engine answers an `endTurn`:
+ * they play a Mountain, cast Lightning Bolt at Tarmogoyf (which takes 3), attack with Ragavan for 2,
+ * and the reader's turn 7 begins.
+ */
+export function replayStep(): { step: PlaytestStep; start: PlaytestView } {
+  const t = turnFive();
+  const start = t.view;
+  const theirs = (v: PlaytestView, battlefield: GameCard[], over: Partial<PlaytestView> = {}) => ({
+    ...v,
+    stage: "watching" as const,
+    active: "opponent" as const,
+    turn: 6,
+    opponent: { ...v.opponent, battlefield },
+    ...over,
+  });
+  const played = mountain();
+  const f1Bf = [...start.opponent.battlefield, played];
+  const f1 = theirs(start, f1Bf, { phase: "main1" });
+  const bolt = { id: 9001, name: "Lightning Bolt", cardId: gameCard("Lightning Bolt").cardId };
+  const f2 = {
+    ...theirs(start, f1Bf, { phase: "main1" }),
+    stack: [{ ...bolt, seat: "opponent" as const, ability: false }],
+  };
+  const ragavan = { ...t.ragavan, tapped: true };
+  const f3Bf = f1Bf.map((c) => (c.id === ragavan.id ? ragavan : c));
+  const f3 = theirs(start, f3Bf, {
+    phase: "combat",
+    combat: { attacks: [{ attacker: ragavan.id, target: null }], blocks: [] },
+  });
+  const f4 = theirs(start, f3Bf, {
+    phase: "combat",
+    combat: { attacks: [{ attacker: ragavan.id, target: null }], blocks: [] },
+    you: { ...start.you, life: start.you.life - 2 },
+  });
+  const h1: PlaytestHappened[] = [
+    { type: "turnBegan", turn: 6, seat: "opponent" },
+    { type: "drew", seat: "opponent", name: null },
+    { type: "played", seat: "opponent", name: "Mountain" },
+  ];
+  const h2: PlaytestHappened[] = [{ type: "cast", seat: "opponent", name: "Lightning Bolt" }];
+  const h3: PlaytestHappened[] = [
+    {
+      type: "dealt",
+      source: "Lightning Bolt",
+      target: t.goyf.name,
+      targetId: t.goyf.id,
+      seat: "you",
+      amount: 3,
+    },
+    { type: "attacked", seat: "opponent", names: [ragavan.name] },
+  ];
+  const h4: PlaytestHappened[] = [
+    { type: "life", seat: "you", amount: -2, total: start.you.life - 2 },
+  ];
+  const after: PlaytestHappened[] = [
+    { type: "turnBegan", turn: 7, seat: "you" },
+    { type: "drew", seat: "you", name: "Island" },
+  ];
+  const final: PlaytestView = {
+    ...start,
+    turn: 7,
+    you: { ...start.you, life: start.you.life - 2 },
+    opponent: { ...start.opponent, battlefield: f3Bf.map((c) => ({ ...c, tapped: false })) },
+  };
+  return {
+    start,
+    step: {
+      view: final,
+      happened: [...h1, ...h2, ...h3, ...h4, ...after],
+      frames: [
+        { view: f1, happened: h1 },
+        { view: f2, happened: h2 },
+        { view: f3, happened: h3 },
+        { view: f4, happened: h4 },
+      ],
     },
   };
 }

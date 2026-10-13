@@ -61,6 +61,9 @@ export const ZONE_H = 252;
 export interface ZoneSize {
   width: number;
   height: number;
+  /** Each zone's count drawn on its card, rather than its name and count in a line under it —
+   *  for a column too narrow for the line. */
+  compact?: boolean;
 }
 
 /**

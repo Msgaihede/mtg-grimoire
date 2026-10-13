@@ -22,6 +22,9 @@ import type { Pointed } from "./types";
 /** The section's own padding, 16 px top and bottom and 20 either side (`py-4 px-5`). */
 const PAD_X = 20;
 const PAD_Y = 16;
+/** A `dense` table's: 12 either side and 8 top and bottom (`py-2 px-3`). */
+const DENSE_X = 12;
+const DENSE_Y = 8;
 /**
  * What the lanes' chrome takes out of the table's height before `layoutTable` halves it: the
  * 10 px between the two lanes, and the back lane's 12 px of padding and 1 px rule — counted
@@ -75,6 +78,11 @@ export interface BattlefieldProps {
   pick?: TablePick;
   /** Heads a permanent's menu with "Activate ability" (`cardMenu`'s `onActivate`). */
   onActivate?: (id: number) => void;
+  /**
+   * Less padding round the lanes (`py-2 px-3`), so the cards take the room — the playtest board,
+   * whose two tables share the window's height.
+   */
+  dense?: boolean;
 }
 
 /**
@@ -104,6 +112,7 @@ export function Battlefield({
   marks,
   pick,
   onActivate,
+  dense = false,
 }: BattlefieldProps): JSX.Element {
   const dropRef = useRef<HTMLElement | null>(null);
   const over = useGoldfishDropTarget({
@@ -117,22 +126,27 @@ export function Battlefield({
 
   // A callback ref, so the first measurement lands in the commit rather than one paint later
   // (`PriceChart`'s `useMeasuredWidth`, for its reasons). React 19 runs the returned cleanup.
-  const measure = useCallback((el: HTMLElement | null) => {
-    dropRef.current = el;
-    if (el === null) return undefined;
-    const read = () => {
-      const width = Math.max(0, el.clientWidth - 2 * PAD_X);
-      const height = Math.max(0, el.clientHeight - 2 * PAD_Y);
-      setBox((was) => (was.width === width && was.height === height ? was : { width, height }));
-    };
-    read();
-    const observer = new ResizeObserver(read);
-    observer.observe(el);
-    return () => {
-      observer.disconnect();
-      dropRef.current = null;
-    };
-  }, []);
+  const padX = dense ? DENSE_X : PAD_X;
+  const padY = dense ? DENSE_Y : PAD_Y;
+  const measure = useCallback(
+    (el: HTMLElement | null) => {
+      dropRef.current = el;
+      if (el === null) return undefined;
+      const read = () => {
+        const width = Math.max(0, el.clientWidth - 2 * padX);
+        const height = Math.max(0, el.clientHeight - 2 * padY);
+        setBox((was) => (was.width === width && was.height === height ? was : { width, height }));
+      };
+      read();
+      const observer = new ResizeObserver(read);
+      observer.observe(el);
+      return () => {
+        observer.disconnect();
+        dropRef.current = null;
+      };
+    },
+    [padX, padY],
+  );
 
   const apart = useMemo<PileApart | undefined>(
     () =>
@@ -213,6 +227,7 @@ export function Battlefield({
       aria-label={label}
       className={cn(
         "flex flex-col justify-center gap-2.5 overflow-y-auto rounded-[28px] px-5 py-4",
+        dense && "px-3 py-2",
         over && DROP_GLOW,
         className,
       )}
@@ -247,7 +262,10 @@ const FORWARD = 14;
 
 /** A mark's ring, on the card as it lies. */
 const MARK_RING: Record<CardMark["tone"], string> = {
-  attack: "outline-2 outline-offset-2 outline-solid outline-mana-r",
+  // Lifted off the table as well as pushed forward (`FORWARD`): the shadow is what says "this one
+  // is in the air" at a glance, where a ring alone reads as one more mark.
+  attack:
+    "outline-2 outline-offset-2 outline-solid outline-mana-r scale-[1.04] shadow-[0_12px_22px_rgb(0_0_0/0.5)]",
   block: "outline-2 outline-offset-2 outline-solid outline-accent",
   chosen: "outline-3 outline-offset-2 outline-solid outline-accent",
 };
