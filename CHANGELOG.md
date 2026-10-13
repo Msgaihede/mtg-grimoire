@@ -30,6 +30,21 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.49.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.48.0...v0.49.0) (2026-10-13)
+
+
+### Features
+
+* goldfish board polish — straight hand row, cursor preview, bigger table cards ([ca24017](https://github.com/Msgaihede/mtg-grimoire/commit/ca24017e03a13a5c14168fdbf15df23e58e393fc))
+* goldfish board polish — straight hand row, cursor preview, bigger table cards ([a9f6a82](https://github.com/Msgaihede/mtg-grimoire/commit/a9f6a8239638269a62a09bd3f1e4c285ed455781))
+* **scanner:** remove scans from the inbox and the corpus ([b781fab](https://github.com/Msgaihede/mtg-grimoire/commit/b781fab027df1f275623adbd6399dc7079d31643))
+* **scanner:** replay readers' scans and report what matched ([36b96a2](https://github.com/Msgaihede/mtg-grimoire/commit/36b96a2f3c178dcdb218048712d0d72d3179b7c4))
+* **scanner:** replay readers' scans and report what matched ([f09fe27](https://github.com/Msgaihede/mtg-grimoire/commit/f09fe277785d025f0ca58b935051dd57dafaddcb))
+* **ui:** put every user-data action on toasts and notifications ([5b893f2](https://github.com/Msgaihede/mtg-grimoire/commit/5b893f2e0a1b91b67c1fe32ce5be058a97ed7ec8))
+* **ui:** put every user-data action on toasts and notifications ([2a523fa](https://github.com/Msgaihede/mtg-grimoire/commit/2a523fa44574523adb288274c7d06ce82f231151))
+* **ui:** toast and notification system ([2fe7497](https://github.com/Msgaihede/mtg-grimoire/commit/2fe7497a42b39dc7bb9415d675966eb888e9eaa3))
+* **ui:** toast and notification system ([225e0eb](https://github.com/Msgaihede/mtg-grimoire/commit/225e0ebcb850b1b87d539e23219e41825010112c))
+
 ## [0.48.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.47.0...v0.48.0) (2026-10-12)
 
 
