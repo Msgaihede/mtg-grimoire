@@ -7,6 +7,7 @@ import { PRESS_SOFT } from "@grimoire/ui/lib/motion";
 import { cn } from "@grimoire/ui/lib/utils";
 import { shownList } from "../deck/list";
 import { ReceiptBar, useReceipt } from "../deck/receipt";
+import { toasted } from "../toasted";
 import type { ActionContext } from "./Actions";
 
 /**
@@ -20,7 +21,8 @@ import type { ActionContext } from "./Actions";
  * (`shownList`, the one rule both read), so a reader looking at the plan adds to the plan.
  *
  * Under the press, the write's receipt — the history's own sentence, how many the list now holds,
- * and `Undo`, which is the deck's own undo.
+ * and `Undo`, which is the deck's own undo. Over it, a toast in the desktop picker's words
+ * (`deckAddReceipt`: `Added “Sol Ring” to “Atraxa”`) — every deck add says so (the owner's rule).
  */
 export function AddToDeck({ card, place, deckPicked }: ActionContext) {
   const deckId = place.deckId as number;
@@ -30,6 +32,9 @@ export function AddToDeck({ card, place, deckPicked }: ActionContext) {
   const deck = useDeckCore(deckId, list);
   const receipt = useReceipt(deckId);
   const name = row?.name ?? deck.deck?.name ?? "deck";
+  // The toast's deck: by its name in quotes, or plainly "the deck" before either read has answered.
+  const into = row?.name ?? deck.deck?.name;
+  const where = into === undefined ? "the deck" : `“${into}”`;
   const theory = row?.theoryEnabled === true;
   const held = deck.cards.reduce((sum, c) => (c.cardId === card.id ? sum + c.quantity : sum), 0);
 
@@ -39,12 +44,18 @@ export function AddToDeck({ card, place, deckPicked }: ActionContext) {
         type="button"
         onClick={() =>
           receipt.track(
-            deck.addCard.mutateAsync({
-              cardId: card.id,
-              deckDefault: true,
-              typeLine: card.typeLine,
-              quantity: 1,
-            }),
+            toasted(
+              deck.addCard.mutateAsync({
+                cardId: card.id,
+                deckDefault: true,
+                typeLine: card.typeLine,
+                quantity: 1,
+              }),
+              {
+                done: `Added “${card.name}” to ${where}`,
+                failed: `Couldn't add to ${where}`,
+              },
+            ),
             () => `Added 1 \u00d7 ${card.name}.`,
           )
         }

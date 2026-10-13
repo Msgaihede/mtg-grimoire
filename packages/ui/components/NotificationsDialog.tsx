@@ -1,6 +1,6 @@
 /**
  * The inbox: every notice this device has kept, newest first — opened from the rail's
- * Notifications entry.
+ * Notifications entry on the desktop, and from the bell in the light app's phone header.
  *
  * **Opening it reads everything in it**, and so does a notice that arrives while it is open: the
  * rail's count is "arrived since you last looked", and a reader looking at the list has looked.
@@ -13,7 +13,7 @@ import { Trash2, X } from "lucide-react";
 import { Dialog } from "@/components/Dialog";
 import { TONE } from "@/components/Toaster";
 import { useTooltip } from "@/components/tooltip/useTooltip";
-import { BUTTON } from "@/features/settings/controls";
+import { PANEL_BUTTON } from "@/features/settings/controls";
 import { FOCUS } from "@/lib/focus";
 import { clearNotices, markAllRead, removeNotice, useNotifications } from "@/lib/notifications";
 import { cn } from "@/lib/utils";
@@ -108,6 +108,8 @@ function Body() {
                     onClick={() => removeNotice(notice.id)}
                     className={cn(
                       "shrink-0 rounded-md p-1 text-dim",
+                      // The phone face draws this list too: a finger's floor, `Toaster`'s ✕.
+                      "coarse:-my-1 coarse:flex coarse:min-h-[var(--target-min)] coarse:min-w-[var(--target-min)] coarse:items-center coarse:justify-center",
                       "transition-colors duration-[var(--duration-fast)] ease-standard hover:text-text",
                       "motion-reduce:transition-none",
                       FOCUS,
@@ -123,7 +125,7 @@ function Body() {
             <button
               type="button"
               onClick={clearNotices}
-              className={cn(BUTTON, "border-border text-dim hover:text-text")}
+              className={cn(PANEL_BUTTON, "border-border text-dim hover:text-text")}
             >
               <Trash2 className="size-4" aria-hidden="true" />
               Clear all

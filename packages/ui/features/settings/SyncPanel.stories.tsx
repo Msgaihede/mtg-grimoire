@@ -3,6 +3,7 @@ import { expect, userEvent, waitFor, within } from "storybook/test";
 import { emitFake } from "@grimoire/fake/event";
 import { PAIR_ONLY_SENTENCE } from "@grimoire/fake/world";
 import { SITE_DATA_WARNING } from "@/lib/core/web/storage";
+import { useNotifications } from "@/lib/notifications";
 import { SyncPanel } from "./SyncPanel";
 
 const meta = {
@@ -189,7 +190,8 @@ export const JoiningShowsItsOwnDigits: Story = {
  * **The flow returns to `"idle"` rather than sitting on a "done" screen**, which is
  * `SyncPanel`'s own doc comment on the render-time `if` that watches for `"complete"`: nothing
  * is left to show once the group key has moved, so the panel goes back to offering the same two
- * presses it started with, with one line saying what just happened.
+ * presses it started with. What just happened is a toast, and the Toaster is the shell's, so
+ * the story reads the store.
  */
 export const CeremonyCompletes: Story = {
   play: async ({ canvasElement }) => {
@@ -207,12 +209,15 @@ export const CeremonyCompletes: Story = {
     );
     await userEvent.click(confirm);
 
-    const note = await canvas.findByText(
-      /paired\. the other device is now in this group/i,
-      {},
+    await waitFor(
+      () =>
+        expect(useNotifications.getState().notices[0]).toMatchObject({
+          tone: "success",
+          title: "Device paired",
+          body: "The other device is now in this group.",
+        }),
       { timeout: 5000 },
     );
-    await expect(note).toBeInTheDocument();
     await expect(canvas.queryByRole("button", { name: /codes match/i })).not.toBeInTheDocument();
     await expect(canvas.getByRole("button", { name: /pair a device/i })).toBeInTheDocument();
   },

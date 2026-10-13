@@ -4,6 +4,7 @@ import { FolderInput, Gauge, Layers, Sparkles, Trash2 } from "lucide-react";
 import { cardDetailKey } from "@grimoire/ui/features/card/cardDetailKey";
 import { cardPrintingsKey } from "@grimoire/ui/features/card/cardKeys";
 import { copyOption, finishRefusal } from "@grimoire/ui/features/card/copyEdit";
+import { movedReceipt, removedReceipt } from "@grimoire/ui/features/collection/collectionReceipts";
 import { countEditableIn, quantityRefusal } from "@grimoire/ui/features/collection/entryFences";
 import { useCollectionEntryWrites } from "@grimoire/ui/features/collection/useCollectionEntryWrites";
 import { useSetCollectionFolder } from "@grimoire/ui/features/collection/useCollectionFolders";
@@ -19,6 +20,7 @@ import { cn } from "@grimoire/ui/lib/utils";
 import { PRINTING_ROW, PrintingFace, printingCode } from "../card/Printings";
 import { ReceiptBar } from "../deck/receipt";
 import { ActionSheet, SheetBack, SheetChoice, SheetRow, SheetStepper } from "../deck/sheet";
+import { toasted } from "../toasted";
 import type { ListReceipt } from "./receipt";
 
 /** What the collection's root is called — the desktop breadcrumb's word, and `EditCopy`'s. */
@@ -87,6 +89,16 @@ const nameOf = (row: CollectionRow): string =>
  * are all grain columns, so each can land on a row already there and answer its id — the sheet
  * re-points at that id and keeps the row last seen, carrying what the write changed, until the
  * re-read arrives. A removal has nothing to follow and closes the sheet.
+ *
+ * # What is said
+ *
+ * **A removal and a move toast**, in the desktop collection page's words (`collectionReceipts.ts`),
+ * because they are the edits the owner's rule names — a copy leaving the collection or changing
+ * drawer — and the removal closes the sheet it was pressed in. The stepper's `−` at one copy is that
+ * same removal and says so the same way; any other step says nothing (the rule's exemption). The
+ * receipt line under the sheet keeps the `Undo` beside both. A grade, a finish or a printing is an
+ * edit to the copy, not a move of it: the sheet stays open on the row that changed, and its line is
+ * the answer.
  */
 export function CopyActions({
   acting,
@@ -239,7 +251,10 @@ function RowPages({
   /** `Remove from collection` — the menu's one write, and its ticket offered back. */
   const removeRow = () => {
     receipt.track(
-      removeMany.mutateAsync({ entryIds: [row.id], name: row.name }),
+      toasted(removeMany.mutateAsync({ entryIds: [row.id], name: row.name }), {
+        done: removedReceipt(1, row.name),
+        failed: `Couldn't remove “${name}” from the collection`,
+      }),
       () => `Removed ${row.quantity} × ${name} from your collection.`,
       (outcome) => {
         const ticket = outcome.undoId;
@@ -322,9 +337,10 @@ function RowPages({
         onBack={back}
         onPick={(folderId, folderName) => {
           receipt.track(
-            move
-              .mutateAsync({ entryId: row.id, folderId })
-              .then((change) =>
+            toasted(move.mutateAsync({ entryId: row.id, folderId }), {
+              done: movedReceipt(1, name, folderName),
+              failed: `Couldn't move “${name}” to “${folderName}”`,
+            }).then((change) =>
                 follow(row, change, { folderId, folderName: folderId === null ? null : folderName }),
               ),
             () => `Moved ${name} to ${folderName}.`,

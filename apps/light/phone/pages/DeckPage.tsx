@@ -389,16 +389,17 @@ function DeckColumn({
         onClose={() => setSettings(false)}
       />
       {/* A decklist into the list on screen: the paste or a file, then the desktop's own preview —
-          the piles, the commander, Merge or Replace — and its commit. What landed is said in the
-          page's receipt line, in the preview's own sentence, where the deck's undo is offered as
-          for any other write once the deck's history answers with a newer step. */}
+          the piles, the commander, Merge or Replace — and its commit. What landed is the sheet's
+          toast (`report={notify}`); the page's receipt line is tracked with nothing of its own to
+          say, so it is the deck's undo — the history step's sentence and `Undo` — once the
+          deck's history answers with a newer step, as for any other write. */}
       <ImportSheet
         open={importing}
         destination={importInto}
         onClose={() => setImporting(false)}
-        onDone={(message) => {
+        onDone={() => {
           setImporting(false);
-          receipt.track(Promise.resolve(message), (said) => said);
+          receipt.track(Promise.resolve(null), () => null);
         }}
       />
       <ExportSheet

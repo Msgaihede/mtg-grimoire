@@ -16,7 +16,6 @@ function danger(over: Partial<DangerZone> = {}): DangerZone {
     collection: action(),
     wishlist: action(),
     decks: action(),
-    status: null,
     ...over,
   };
 }
@@ -112,28 +111,6 @@ describe("DangerZonePanel", () => {
     expect(screen.getByRole("textbox")).toHaveValue("");
     expect(within(dialog()).getByRole("button", { name: "Clear decks" })).toBeDisabled();
     expect(state.collection.run).not.toHaveBeenCalled();
-  });
-
-  it("says what the last clear did, plainly rather than in the destructive red", () => {
-    render(
-      <DangerZonePanel
-        danger={danger({ status: { tone: "plain", text: "Cleared 12 collection entries." } })}
-      />,
-    );
-
-    const line = within(panel()).getByRole("alert");
-    expect(line).toHaveTextContent("Cleared 12 collection entries.");
-    expect(line).toHaveClass("text-text");
-  });
-
-  it("draws a refusal in the destructive red", () => {
-    render(
-      <DangerZonePanel
-        danger={danger({ status: { tone: "problem", text: "The card database is busy." } })}
-      />,
-    );
-
-    expect(within(panel()).getByRole("alert")).toHaveClass("text-destructive");
   });
 
   /** A clear in flight takes its own row's button out of reach and leaves its siblings alone. */

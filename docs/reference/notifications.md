@@ -29,13 +29,13 @@ callback, a `then` handler or a module function alike — no hook and no provide
 
 ## What the reader sees
 
-- **Toasts** — `components/Toaster.tsx`, mounted once in `AppShell`, `fixed` in the window's
-  bottom-right corner at `LAYER.toast` (above every dialog rung, below `menuOverDialog`, the tooltip
+- **Toasts** — `components/Toaster.tsx`, mounted once per face (`AppShell` on the desktop,
+  `PhoneFace` on the light app's phone), `fixed` in the window's bottom-right corner at `LAYER.toast` (above every dialog rung, below `menuOverDialog`, the tooltip
   and the sync gate). Newest at the bottom, at most `TOAST_CAP` (4) at once — the oldest closes
   first and stays in the inbox. Each has a ✕. The clock **pauses while the pointer or the caret
   is on the toast** and resumes with only the time it had left.
 - **The inbox** — `components/NotificationsDialog.tsx`, opened from the rail's **Notifications**
-  entry above the collapse toggle. Every notice this device has kept, newest first, with when it
+  entry above the collapse toggle (the bell in the header on the phone). Every notice this device has kept, newest first, with when it
   arrived; a row can be removed, or the whole list cleared. The entry carries an unread count
   (a pip on the bell when the rail is collapsed); opening the inbox reads everything in it.
 
@@ -80,9 +80,37 @@ toast per click would fill the corner. Undo bars (`UndoNotice`) stay inline next
   a dialog's own refusal line (`ExportDialog`, `UndoNotice`) stays where it is. A toast is for an
   answer whose surface has closed (a context menu) or is somewhere else (a deck on another page),
   and for the receipt a write never gave.
-- **Not on the light app's phone face yet.** `notify` is safe to call there — it only writes the
-  store — but `PhoneApp` mounts no `Toaster`, so nothing is drawn. Shared surfaces that the phone
-  also draws keep an inline line beside the toast until it does.
+
+## On the light app's phone face
+
+Since 2026-10-13 the phone face (`apps/light/phone/PhoneApp.tsx`) mounts its own `Toaster` and
+`NotificationsDialog`, once each, as siblings of its `Shell` — the store is module state, so the
+same `notify` reaches both faces and no shared surface asks which one it is on.
+
+- **Where the stack stands** is the face's `className` on `Toaster` (`PHONE_TOASTS`): across the
+  width, 8px in from each side plus the side's safe-area inset, and **lifted over the tab bar
+  (52px), one receipt line (48px) and the bottom inset**. Every card write on the phone also draws
+  its receipt line (`phone/deck/receipt.tsx`) with that write's `Undo` at the foot of the page or
+  sheet it came from, and a toast standing on the line would cover the `Undo` for its whole stay.
+  Over a deck (`/decks/<id>`) it stands one strip higher again, over the deck page's action bar
+  (`PHONE_TOASTS_OVER_DECK`). From 600px the tab bar is a rail on the left, so the stack goes back
+  to a 320px column on the right, lifted over a receipt line and the bottom inset. The layer stays
+  `LAYER.toast`, above every sheet.
+- **A finger's floor**: the toast's ✕ and the inbox's row ✕ grow to `--target-min` under
+  `coarse:` (`Dialog`'s ✕ recipe); *Clear all* is `PANEL_BUTTON`. Under a mouse nothing moves.
+- **The inbox is the header's bell**, beside the Settings gear: a 44px button with the unread
+  count as a pip and in its name (`Notifications, 2 unread`). The dialog is lent a Back step by the
+  face's dialog host like any other sheet.
+- **The receipt lines stay.** They are the phone's undo bars — the `UndoNotice` of this face — and
+  the surfaces that draw them are still open. The toast is the receipt the inbox keeps.
+- **What the phone's own write sites say** is the desktop's words for the same write, at the press
+  (`phone/toasted.ts` hands the write back to the receipt line): the card sheet's adds to the
+  collection, the wishlist and the deck below it; a copy or a wish removed or moved from its
+  sheet; a deck row moved to another pile (a command-zone claim included), added to the other list,
+  or removed; each press of the deck's *Add cards* search; and an import (`ImportSheet` passes
+  `report={notify}`). A step of a stepper says nothing — but the last step down *is* the removal,
+  closes the sheet, and toasts as the removal does. A grade, a finish, a printing or a label is an
+  edit to the row in a sheet that stays open on it, and its line answers.
 
 ## Who calls it today
 
@@ -96,13 +124,14 @@ The sweep of 2026-10-12 put every surface on it. By area:
 | Wishlist (`features/wishlist/`) | Removes, panel moves, search-column drops, folder move/delete/clear | Steppers, drags inside the list, folder reorders, rename/create in place |
 | Deck gallery (`features/decks/` gallery side, `useDecks.ts`'s `receipt`) | Deck/folder move, duplicate, archive/restore, delete, menu tags, create (`CreateDeckDialog`, one receipt for every host — `receipt` prop to override), settings folder move, Clear list | Autosaving settings fields, renames, folder reorders |
 | Deck editor (`features/decks/`, wording and bulk folding in `receipts.ts`) | Card menu category/label/finish/commander/deck image/remove/add-to-other-list (one per press over a picked set), Delete key over a picked set, missing-copies quick add and pull, Clear stack, quick unwish, delete category, auto-categorize, label remove/delete, pull and add-missing dialogs, Compare sends, Stats send-missing, note/to-do deletes, token add/swap/remove, docked search panel adds, Collection tab moves; Quick zones' `already in` line is now an info toast | Steppers, Quick Add, drags/reorders in the open deck |
-| Import (`features/transfer/import/`, `ImportDialog` passes `report={notify}`) | One toast per import with counts, partial binder imports as one warning | The commit bar's refusal line stays too; the phone's `ImportSheet` keeps its own receipt line |
+| Import (`features/transfer/import/`, `ImportDialog` and the phone's `ImportSheet` pass `report={notify}`) | One toast per import with counts, partial binder imports as one warning | The commit bar's refusal line stays too (the sheet is still open there); the phone deck page's receipt line is only the deck's undo after an import, no longer its sentence |
 | Export | `Export saved` | `Copied` stays inline (the dialog stays open) |
 | Scanner | One toast per tray Add (never per scan — the camera overlay already says each), tray clear, create deck from the tray, scan sent (inbox only) | Per-scan landings, pre-write tray refusals |
 | Trade | Create, finish, delete, archive, duplicate | Rename, reopen, swap sides, line edits |
-| Settings (`features/settings/`) | Complete backup save/restore, clear collection/wishlist/decks, clear cache, refresh combos, device paired/removed, leave group, delete label, clear error log, marketplace refresh, start view save failure | Switches and fields whose state is drawn. Danger-zone, cache and pairing lines stay inline too, because the phone face draws those panels with no `Toaster` |
+| Settings (`features/settings/`) | Complete backup save/restore, clear collection/wishlist/decks, clear cache, refresh combos, device paired/removed, leave group, delete label, clear error log, marketplace refresh, start view save failure | Switches and fields whose state is drawn; a pairing that ran out of time and a pairing step's refusal. The danger-zone, cache and *Paired* lines are gone (2026-10-13): they stood only because the phone face had no `Toaster` |
 | Undo (`components/UndoNotice.tsx`) | `Undone` once an Undo lands | The bar and its refusal |
 | Shared page, sticky notes, tag rail | Add to wishlist from a share, note deleted, tag hidden | — |
+| Light app phone face (`apps/light/phone/`) | Card sheet adds (collection, wishlist, deck), copy/wish remove and move, deck row pile move/claim/add to other list/remove, *Add cards* presses, imports — see *On the light app's phone face* | Steppers (bar the last step down), grade/finish/printing/label edits, every receipt line and its `Undo` |
 
 **Inline failure banners that a toast now repeats.** The gallery's, collection's and wishlist's
 page banners and Deck settings' banner still draw a refusal under the owner's "failure is

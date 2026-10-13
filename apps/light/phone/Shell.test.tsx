@@ -7,6 +7,7 @@ vi.mock("@tauri-apps/api/event", () => import("@grimoire/fake/event"));
 vi.mock("@tauri-apps/api/window", () => import("@grimoire/fake/window"));
 
 import { listeningScopes } from "@grimoire/fake/scope";
+import { notify, useNotifications } from "@grimoire/ui/lib/notifications";
 import { OVERLAID, PUSHED, placeHref } from "../routes";
 import { PhoneFace } from "./PhoneApp";
 import { installLayout, renderPhone } from "./testing";
@@ -192,5 +193,62 @@ describe("the harness", () => {
     renderPhone(<PhoneFace />);
     // One world: this test's. A world left mounted is offered every event a later test emits.
     expect(listeningScopes()).toHaveLength(1);
+  });
+});
+
+describe("the phone's toasts and inbox", () => {
+  const stack = () => screen.getByRole("region", { name: "Notifications" });
+
+  it("draws a notice raised anywhere as a toast in the face's own stack", async () => {
+    renderPhone(<PhoneFace />);
+    notify.success("Added “Sol Ring” to your collection");
+
+    expect(
+      await within(stack()).findByText("Added “Sol Ring” to your collection"),
+    ).toBeInTheDocument();
+    // One stack for the face: a second would draw every toast twice.
+    expect(screen.getAllByRole("region", { name: "Notifications" })).toHaveLength(1);
+  });
+
+  it("stands across the width, over the tab bar, a receipt line and the bottom inset", () => {
+    renderPhone(<PhoneFace />);
+    const at = stack().className;
+    expect(at).toContain("left-[calc(0.5rem+env(safe-area-inset-left))]");
+    expect(at).toContain("right-[calc(0.5rem+env(safe-area-inset-right))]");
+    expect(at).toContain("bottom-[calc(6.25rem+2px+0.5rem+env(safe-area-inset-bottom))]");
+    // The desktop's corner is merged away, never stacked beside the phone's place.
+    expect(at).not.toMatch(/(^| )(right-4|bottom-4|w-80)( |$)/);
+  });
+
+  it("stands higher over a deck, whose action bar is one strip more", () => {
+    renderPhone(<PhoneFace />, { path: "/decks/1" });
+    expect(stack().className).toContain(
+      "bottom-[calc(10rem+3px+0.5rem+env(safe-area-inset-bottom))]",
+    );
+  });
+
+  it("opens the inbox from the bell, which carries the unread count", async () => {
+    renderPhone(<PhoneFace />);
+    expect(screen.getByRole("button", { name: "Notifications" })).toBeInTheDocument();
+    expect(screen.queryByTestId("inbox-pip")).toBeNull();
+
+    notify.info("Prices refreshed", { toast: false });
+    notify.success("Moved “Tarmogoyf” to “Binder”");
+    const bell = await screen.findByRole("button", { name: "Notifications, 2 unread" });
+    expect(screen.getByTestId("inbox-pip")).toHaveTextContent("2");
+
+    await userEvent.click(bell);
+    const inbox = await screen.findByRole("dialog", { name: "Notifications" });
+    expect(within(inbox).getByText("Prices refreshed")).toBeInTheDocument();
+    expect(within(inbox).getByText("Moved “Tarmogoyf” to “Binder”")).toBeInTheDocument();
+    // Opening it reads it.
+    expect(useNotifications.getState().notices.every((n) => n.read)).toBe(true);
+    expect(screen.queryByTestId("inbox-pip")).toBeNull();
+
+    await userEvent.click(within(inbox).getByRole("button", { name: "Close notifications" }));
+    expect(await screen.findByRole("button", { name: "Notifications" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
   });
 });

@@ -3,7 +3,7 @@ import { Eraser, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { PANEL_BUTTON } from "./controls";
-import { PanelAlert, SettingsSection } from "./panelChrome";
+import { SettingsSection } from "./panelChrome";
 import type { LocalCache } from "./useDataReset";
 
 /** Which of the two questions is open. `DangerZonePanel`'s union one panel up, for its reason:
@@ -33,7 +33,7 @@ type Asking = "images" | "combos" | null;
  * **The size is reported after the fact rather than before**, which is a deliberate absence: a
  * "Cached: 314 MB" line would need a directory walk over 5 540 files every time this page is
  * opened, and it would be a number nobody acts on until they press the button anyway. The
- * outcome sentence says what was freed.
+ * toast `useLocalCache` raises says what was freed.
  *
  * **The combo row is a debugging affordance and its copy is sized to that.** It says what goes,
  * that it comes straight back, and that nobody needs to press it — and deliberately not what a
@@ -89,12 +89,6 @@ export function CachePanel({ cache }: { cache: LocalCache }): JSX.Element {
           Refresh combos
         </button>
       </div>
-
-      {/* `plain`, like `ErrorLogPanel`'s and unlike the danger zone's: the sentence here is
-          usually good news, and the one refusal it can carry — a sync in flight — is a "not
-          now" rather than a fault. One line for both rows, because `useLocalCache` has already
-          settled which write owns it. */}
-      <PanelAlert tone={cache.status?.tone ?? "plain"}>{cache.status?.text ?? null}</PanelAlert>
 
       <ConfirmDialog
         open={asking === "images"}

@@ -15,6 +15,7 @@ import {
   type WishlistQuery,
   type WishRow,
 } from "@grimoire/ui/lib/ipc";
+import { useNotifications } from "@grimoire/ui/lib/notifications";
 import { PhoneFace } from "../PhoneApp";
 import { installLayout, renderPhone } from "../testing";
 
@@ -39,6 +40,13 @@ async function wishes(): Promise<WishRow[]> {
 }
 const wish = async (id: number) => (await wishes()).find((row) => row.id === id);
 
+/** Every notice raised so far, oldest first, as `tone: title` — the toasts the presses made. */
+const said = () =>
+  useNotifications
+    .getState()
+    .notices.map((n) => `${n.tone}: ${n.title}`)
+    .reverse();
+
 /** Open a tile's `⋯` and hand back its sheet. */
 async function act(name: string): Promise<HTMLElement> {
   await userEvent.click(await screen.findByRole("button", { name: `Edit ${name}` }, SETTLE));
@@ -61,6 +69,8 @@ describe("a collection tile's actions", () => {
 
     await waitFor(async () => expect((await copy(8))?.quantity).toBe(4));
     expect(await within(sheet).findByLabelText("Copies")).toHaveTextContent("4");
+    // A step is the rule's exemption: its own number says it, and no toast does.
+    expect(said()).toEqual([]);
   });
 
   it("removes a copy, and puts it back on Undo", async () => {
@@ -78,6 +88,13 @@ describe("a collection tile's actions", () => {
       SETTLE,
     );
     expect(line).toBeInTheDocument();
+    // …and the toast, once, in the desktop collection page's words — drawn by the face's own stack.
+    expect(said()).toEqual(["success: Removed “Urza's Saga” from the collection"]);
+    expect(
+      within(screen.getByRole("region", { name: "Notifications" })).getByText(
+        "Removed “Urza's Saga” from the collection",
+      ),
+    ).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Undo — put back Urza's Saga" }));
 
@@ -101,6 +118,8 @@ describe("a collection tile's actions", () => {
     expect(
       await screen.findByRole("button", { name: "Undo — put back Lightning Bolt" }, SETTLE),
     ).toBeInTheDocument();
+    // The stepper's last step is the removal, and closes the sheet: it toasts as the row does.
+    expect(said()).toEqual(["success: Removed “Lightning Bolt” from the collection"]);
   });
 
   it("asks which copy when a tile stands for several rows, and writes to that one alone", async () => {
@@ -152,6 +171,7 @@ describe("a collection tile's actions", () => {
 
     await waitFor(async () => expect((await copy(8))?.folderId).toBe(1));
     expect(await screen.findByText("Moved Tarmogoyf to Binder.", undefined, SETTLE)).toBeInTheDocument();
+    expect(said()).toEqual(["success: Moved “Tarmogoyf” to “Binder”"]);
   });
 
   it("says a refused move in the backend's words, and moves nothing", async () => {
@@ -170,6 +190,13 @@ describe("a collection tile's actions", () => {
       await within(sheet).findByText("That folder is not there any more.", undefined, SETTLE),
     ).toBeInTheDocument();
     expect((await copy(8))?.folderId).toBeNull();
+    expect(useNotifications.getState().notices).toMatchObject([
+      {
+        tone: "error",
+        title: "Couldn't move “Tarmogoyf” to “Binder”",
+        body: "That folder is not there any more.",
+      },
+    ]);
   });
 
   it("fences a deck's copies as the desktop does, and the backend refuses moving them out", async () => {
@@ -257,6 +284,7 @@ describe("a wish's actions", () => {
       await screen.findByText("Removed Sol Ring from your wishlist.", undefined, SETTLE),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Undo/ })).toBeNull();
+    expect(said()).toEqual(["success: Removed “Sol Ring” from the wishlist"]);
   });
 
   it("offers no edit on a wish a deck manages", async () => {
@@ -291,10 +319,14 @@ describe("the card sheet's adds", () => {
       await within(sheet).findByText(/Added 1 × Lightning Bolt.* to your collection\./, undefined, SETTLE),
     ).toBeInTheDocument();
 
+    // The toast is the add's; taking it back on the receipt's Undo is a stepper's write, and quiet.
+    expect(said()).toEqual(["success: Added “Lightning Bolt” to your collection"]);
+
     await userEvent.click(
       within(sheet).getByRole("button", { name: "Undo — take back the copy of Lightning Bolt" }),
     );
     await waitFor(async () => expect(await held()).toBe(before));
+    expect(said()).toHaveLength(1);
   });
 
   it("adds in the finish chosen, where the printing is sold in several", async () => {
@@ -330,6 +362,11 @@ describe("the card sheet's adds", () => {
     expect(
       await within(sheet).findByText("Added Lightning Bolt (any printing) to your wishlist.", undefined, SETTLE),
     ).toBeInTheDocument();
+    // Two presses, two toasts.
+    expect(said()).toEqual([
+      "success: Added “Lightning Bolt” to your wishlist",
+      "success: Added “Lightning Bolt” to your wishlist",
+    ]);
   });
 });
 

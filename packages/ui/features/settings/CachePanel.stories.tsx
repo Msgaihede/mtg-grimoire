@@ -7,7 +7,6 @@ function cache(over: Partial<LocalCache> = {}): LocalCache {
   return {
     clear: { run: fn(), pending: false },
     combos: { run: fn(), pending: false },
-    status: null,
     ...over,
   };
 }
@@ -92,50 +91,6 @@ export const Confirming: Story = {
   },
 };
 
-/** What it freed, at the size a real library's cache actually reaches. */
-export const Freed: Story = {
-  args: {
-    cache: cache({ status: { tone: "plain", text: "Freed 330 MB across 5,540 files." } }),
-  },
-  play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-    await expect(canvas.getByRole("alert")).toHaveTextContent("Freed 330 MB across 5,540 files.");
-  },
-};
-
-/**
- * A file another thread had open, which on Windows cannot be unlinked.
- *
- * Its own sentence rather than a parenthesis: the first says what happened, the second says
- * what did not. Pressing again a moment later usually takes it.
- */
-export const SomeFilesWereInUse: Story = {
-  args: {
-    cache: cache({
-      status: {
-        tone: "plain",
-        text: "Freed 314 MB across 5,537 files. 3 files were in use and stayed.",
-      },
-    }),
-  },
-};
-
-/**
- * The one refusal the image sweep has, and the reason it is fenced at all: `data/tmp/` is where
- * the corpus download puts 77 MB that the ingest then reads back, so a sweep landing between
- * the two would fail a 90-second job the reader is watching a progress bar for.
- */
-export const RefusedMidSync: Story = {
-  args: {
-    cache: cache({
-      status: {
-        tone: "problem",
-        text: "a card update is running — clear the cache once it has finished",
-      },
-    }),
-  },
-};
-
 /** The sweep in flight. 5,540 files is a walk, not an instant. */
 export const Working: Story = {
   args: { cache: cache({ clear: { run: fn(), pending: true } }) },
@@ -181,49 +136,5 @@ export const CombosDownloading: Story = {
 
     await expect(canvas.getByRole("button", { name: "Refresh combos" })).toBeDisabled();
     await expect(canvas.getByRole("button", { name: "Clear cache" })).toBeEnabled();
-  },
-};
-
-/**
- * What came back, which is what the reader pressed this for.
- *
- * The only outcome sentence on the page that reports arrivals rather than departures — the
- * figures are the *new* table's, and they are Spellbook's own published scale.
- */
-export const CombosRefilled: Story = {
-  args: {
-    cache: cache({
-      status: {
-        tone: "plain",
-        text: "Cleared and downloaded again: 105,478 combos, naming 7,310 cards between them.",
-      },
-    }),
-  },
-  play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-    await expect(canvas.getByRole("alert")).toHaveTextContent("105,478 combos");
-  },
-};
-
-/**
- * The clear landed and the download did not, which is the one state this press can leave that is
- * worse than the one it started from.
- *
- * It is drawn as a refusal and never as a count: `combosOutcome` refuses to print a zero as
- * though it were an answer, and a rejection never reaches it at all — `writeFailure` takes the
- * line and turns it red.
- */
-export const CombosDownloadFailed: Story = {
-  args: {
-    cache: cache({
-      status: { tone: "problem", text: "Commander Spellbook could not be reached." },
-    }),
-  },
-  play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-    const alert = canvas.getByRole("alert");
-
-    await expect(alert).toHaveTextContent("could not be reached");
-    await expect(alert).toHaveClass("text-destructive");
   },
 };

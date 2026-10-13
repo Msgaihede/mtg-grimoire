@@ -73,12 +73,12 @@ export interface DestinationPreviewProps {
    * refusal, with what moved where and how many (the owner's rule: a deck, collection or wishlist
    * edit always toasts, and one action is one toast).
    *
-   * **Separate from {@link onDone}, and optional**, because the two are not the same sentence and
-   * not every face has a toast. `onDone`'s message is the destination's own words for a host that
-   * draws them — the light app's phone page puts it in its receipt line — while this is the
-   * desktop shell's (`ImportDialog`), which hands it to `notify`. The phone sheet passes nothing,
-   * so a phone import is said once, in its own line. A refusal is reported here **as well as** in
-   * the commit bar: the bar is where the retry is, the toast is the rule's record of it.
+   * **Separate from {@link onDone}, and optional**, because the two are not the same sentence:
+   * `onDone`'s message is the destination's own words for a host that wants to draw them, while
+   * this is the toast. Both shells pass `notify` — the desktop's `ImportDialog` and the light app's
+   * phone `ImportSheet` — so an import is said once, as a toast, on either face; absent (a story, a
+   * test), the press says nothing. A refusal is reported here **as well as** in the commit bar: the
+   * bar is where the retry is, the toast is the rule's record of it.
    */
   report?: (notice: ImportNotice) => void;
   /**

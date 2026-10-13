@@ -43,6 +43,7 @@ import { fromCollectionRow, fromDeckCard } from "@grimoire/ui/features/transfer/
 import { resetBulkUndo } from "@grimoire/ui/lib/bulkUndo";
 import { ipc, type CollectionRow, type DeckCard } from "@grimoire/ui/lib/ipc";
 import { DEFAULT_MARKETPLACE } from "@grimoire/ui/lib/marketplace";
+import { useNotifications } from "@grimoire/ui/lib/notifications";
 import { PhoneFace } from "../PhoneApp";
 import { installLayout, renderPhone } from "../testing";
 import { CollectionTransfer } from "./CollectionTransfer";
@@ -135,8 +136,16 @@ describe("a deck's import, on the phone", () => {
     );
     expect(held(await deckRows(), "Lightning Bolt")).toBe(4);
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull(), SETTLE);
-    // The preview's own sentence, in the page's receipt line.
-    expect(await screen.findByText("2 cards imported.", undefined, SETTLE)).toBeInTheDocument();
+    // Said once, as a toast — the sheet hands the preview `report={notify}`, as the desktop's
+    // dialog does — and not again in the page's receipt line.
+    await waitFor(() => expect(useNotifications.getState().notices).toHaveLength(1), SETTLE);
+    expect(useNotifications.getState().notices[0]).toMatchObject({ tone: "success" });
+    expect(
+      within(screen.getByRole("region", { name: "Notifications" })).getByText(
+        useNotifications.getState().notices[0].title,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("2 cards imported.")).toBeNull();
   });
 
   it("reads a file picked through the input into the box, and says when it guessed the encoding", async () => {
@@ -278,6 +287,9 @@ describe("CollectionTransfer", () => {
     expect(
       await within(notice).findByText("Imported 3 cards into your collection.", undefined, SETTLE),
     ).toBeInTheDocument();
+    // The undo bar stays inline; the import's receipt is one toast beside it.
+    expect(useNotifications.getState().notices).toHaveLength(1);
+    expect(useNotifications.getState().notices[0]).toMatchObject({ tone: "success" });
 
     await user.click(within(notice).getByRole("button", { name: /^Undo/ }));
     await waitFor(
