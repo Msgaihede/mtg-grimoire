@@ -41,6 +41,7 @@ import { useBulkUndo, useUndoOffer, type UndoOffer, type UndoScope } from "@/lib
 import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type BulkUndoOutcome } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
+import { notify } from "@/lib/notifications";
 import { invalidateOwnedWrite, refreshCardSearches } from "@/lib/searchMarks";
 import { cn } from "@/lib/utils";
 
@@ -96,16 +97,29 @@ export function useBulkUndoAction(scope: UndoScope): {
   }
 
   const undo = useMutation({
-    mutationFn: (id: number) => ipc.bulkUndo(id),
+    mutationFn: ({ id }: { id: number; label?: string }) => ipc.bulkUndo(id),
     onMutate: () => setRefusal(null),
-    onSuccess: (outcome) => settleUndo(queryClient, outcome.scope),
+    /**
+     * **A landed undo is a toast** (`@/lib/notifications`), because the bar that offered it is
+     * taken down by the same answer — the region goes empty, and the only other sign is rows
+     * coming back somewhere in a list that may be scrolled away from them. An undo moves cards
+     * back into or out of the collection or a wishlist, which the app always answers (owner's
+     * rule, 2026-10-12), and the body names what was taken back, in the offer's own words.
+     *
+     * **A refusal is not**: it stays the bar's own alert below, on the page the reader pressed
+     * Undo on — an inline answer where they are still looking, which a toast would only repeat.
+     */
+    onSuccess: (outcome, { label }) => {
+      settleUndo(queryClient, outcome.scope);
+      notify.success("Undone", label === undefined ? undefined : { body: label });
+    },
     onError: (error) => {
       setRefusal(`Couldn't undo — ${ipcError(error)}`);
       settleUndo(queryClient, scope);
     },
     // **`drop` names the ticket that was pressed**, so an answer arriving after a newer write has
     // replaced the offer cannot take that newer one down — the store's own `id` guard.
-    onSettled: (_outcome, _error, id) => drop(scope, id),
+    onSettled: (_outcome, _error, { id }) => drop(scope, id),
   });
   const pending = undo.isPending;
   return {
@@ -114,9 +128,11 @@ export function useBulkUndoAction(scope: UndoScope): {
     pending,
     undo: () => {
       if (offer === null || pending) return;
-      undo.mutate(offer.id);
+      undo.mutate({ id: offer.id, label: offer.label });
     },
-    take: (id) => undo.mutateAsync(id),
+    // The offer's sentence when the ticket is the one on offer; a caller naming another one gets
+    // a receipt without a body rather than another write's words.
+    take: (id) => undo.mutateAsync({ id, label: offer?.id === id ? offer.label : undefined }),
     dismiss: () => {
       if (offer !== null) drop(scope, offer.id);
     },

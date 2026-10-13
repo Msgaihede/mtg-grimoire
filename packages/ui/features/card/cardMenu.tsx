@@ -198,8 +198,12 @@ export interface CardMenuDeps {
    * The backend **merges** rather than refusing when the destination already holds the same
    * printing at the same grain, so the id it answers is not always the id it was given — which
    * is why nothing here holds on to one.
+   *
+   * `name` is the card's, for the receipt toast (`Moved “Sol Ring” to “Binder”`) — the one fact
+   * about the copy the host's write cannot look up from an id. Passed where the press was about one
+   * card; absent, the receipt counts instead.
    */
-  moveToFolder?: (entryId: number, folderId: number | null) => void;
+  moveToFolder?: (entryId: number, folderId: number | null, name?: string) => void;
   /**
    * Aim a card at a **deck's** group — the one destination in the collection's cabinet that is
    * not a folder write.
@@ -840,7 +844,8 @@ function moveItem(rows: readonly CardMenuTarget[], deps: CardMenuDeps): MenuItem
        * working row off a surface that never had the question to ask.
        */
       if (entryIds.length === 1) {
-        move(entryIds[0], folderId);
+        // The name rides along for the receipt toast where the press was about one card.
+        move(entryIds[0], folderId, rows.length === 1 ? rows[0].name : undefined);
         return;
       }
       if (pick !== undefined) {
@@ -851,6 +856,8 @@ function moveItem(rows: readonly CardMenuTarget[], deps: CardMenuDeps): MenuItem
         moveMany(entryIds, folderId);
         return;
       }
+      // Per-entry calls, but still one toast: the host batches a press's writes into one receipt
+      // (`useCardMenuDeps`, through `./menuReceipts`).
       for (const entryId of entryIds) move(entryId, folderId);
     }),
   };
@@ -1150,9 +1157,6 @@ export interface CardToDeck {
     /** The deck's name, for the receipt toast. */
     deckName?: string,
   ) => void;
-  /** What the last refused add said, or `null`. Drawn by the one mount, and by nothing else. */
-  error: string | null;
-  clearError: () => void;
 }
 
 /**
@@ -1167,12 +1171,12 @@ const CardToDeckContext = createContext<CardToDeck | null>(null);
  * The app's single {@link useCardToDeck}, and the context every card menu reaches it through.
  *
  * Mounted **once**: `cardMenu.tsx` serves every card surface, TypeScript can force a callback but
- * cannot force anybody to *render* a string, and a rule that lives at every call site is a rule
- * that drifts. One mount is one place to forget, and it is the same place the sentence is drawn
- * ({@link useCardToDeckRefusal}).
+ * cannot force anybody to *report* an answer, and a rule that lives at every call site is a rule
+ * that drifts. One mount is one place to forget, and it is where both answers — the receipt and
+ * the refusal — are raised as toasts.
  *
- * **It calls the hook itself rather than taking the value as a prop**, so the state and the
- * sentence cannot end up owned in two different components.
+ * **It calls the hook itself rather than taking the value as a prop**, so the queue cannot end up
+ * owned in two different components.
  *
  * ## Where to mount it, and the trap
  *
@@ -1199,17 +1203,6 @@ export function CardToDeckProvider({ children }: { children: ReactNode }) {
  */
 export function useAddCardToDeck(): CardToDeck["addToDeck"] {
   return useMountedCardToDeck().addToDeck;
-}
-
-/**
- * The sentence a refused add left, for the **one** place that draws it.
- *
- * Read through the same context as the write rather than out of a second `useCardToDeck`, so
- * there is exactly one piece of state: a component that mounted its own hook to get the sentence
- * would be reporting on adds nobody made through it.
- */
-export function useCardToDeckRefusal(): string | null {
-  return useMountedCardToDeck().error;
 }
 
 /**
@@ -1260,9 +1253,9 @@ function useMountedCardToDeck(): CardToDeck {
  * would be a second piece of state reporting on adds nobody made through it. It is exported for
  * the tests that drive the write directly, and for nothing else.
  *
- * Its `error` reaches the one place that draws it through {@link useCardToDeckRefusal}. Nothing
- * is invented for it: there is no toast in this app, and a menu that has already closed is not a
- * place to put one.
+ * Both of its answers are toasts (`@/lib/notifications`): the menu that was pressed has closed
+ * and the deck is on another page, so a receipt or a refusal has nowhere else to be said. The
+ * rail's alert line that used to draw the refusal was a bespoke toast and is gone (2026-10-12).
  */
 export function useCardToDeck(): CardToDeck {
   /**
@@ -1281,7 +1274,6 @@ export function useCardToDeck(): CardToDeck {
    * made while the first is still writing waits behind it rather than replacing it.
    */
   const [queue, setQueue] = useState<readonly DeckAddBatch[]>([]);
-  const [error, setError] = useState<string | null>(null);
   const head = queue[0] ?? null;
 
   const { addCard } = useDeck(head?.deckId ?? null, head?.variant ?? DEFAULT_VARIANT);
@@ -1338,12 +1330,18 @@ export function useCardToDeck(): CardToDeck {
           refusal ??= ipcError(failure);
         }
       }
-      if (refusal !== null) setError(refusal);
-      // **The receipt, as a toast** (`@/lib/notifications`): the menu that was pressed has closed
-      // and the deck is on another page, so until this the reader had no sign the add landed.
-      // The refusal stays the rail's alert above — its own region, with the lifetime that comment
-      // in `AppShell` argues for — so only what *did* go in is said here.
-      if (added > 0) notify.success(deckAddReceipt(added, head.targets, head.deckName));
+      // **One press, one toast** (`@/lib/notifications`): the menu that was pressed has closed and
+      // the deck is on another page, so until this the reader had no sign the add landed — and
+      // the refusal was a line under the rail, a hand-rolled toast. A partly refused set is one
+      // warning, `Added 2 of 3 cards to …`, carrying the first refusal; none landing is an error.
+      const deck = head.deckName === undefined ? "the deck" : `“${head.deckName}”`;
+      if (refusal === null) notify.success(deckAddReceipt(added, head.targets, head.deckName));
+      else if (added === 0) notify.error(`Couldn't add to ${deck}`, { body: refusal });
+      else {
+        notify.warning(`Added ${added} of ${head.targets.length} cards to ${deck}`, {
+          body: refusal,
+        });
+      }
       /**
        * **Dequeue, or this surface observes that deck for the rest of the session.**
        * `useDeck(id, …)` is a live `deck_get` — the deck, every card in it and its categories —
@@ -1366,18 +1364,13 @@ export function useCardToDeck(): CardToDeck {
       deckName?: string,
     ) => {
       if (targets.length === 0) return;
-      // Last time's refusal is not news about this add. Left standing, a sentence about a deck
-      // that has been deleted survives the whole of the next add's round trip, over rows the
-      // reader has already moved on from.
-      setError(null);
       // A fresh object every time, so pressing the same leaf twice is two adds rather than one:
       // the guard above is identity on this value and a reader who adds a second copy means it.
       setQueue((waiting) => [...waiting, { targets, deckId, variant, deckName }]);
     },
     [],
   );
-  const clearError = useCallback(() => setError(null), []);
-  return { addToDeck, error, clearError };
+  return { addToDeck };
 }
 
 /** One press of a deck leaf: the cards it is about, and the list they go into. */

@@ -2,6 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { DeckMissingRow, DeckQuickAddWish } from "@/lib/ipc";
+import { useNotifications } from "@/lib/notifications";
 import {
   AddMissingToCollectionDialog,
   type AddMissingWrite,
@@ -224,12 +225,31 @@ describe("AddMissingToCollectionDialog", () => {
     expect(tally().textContent).toBe("5 copies across 2 cards");
 
     await userEvent.click(screen.getByRole("button", { name: "Add 5 copies to collection" }));
-    expect(add.mutate).toHaveBeenCalledWith({
+    expect(vi.mocked(add.mutate).mock.lastCall?.[0]).toEqual({
       picks: [
         { cardId: "bolt-m10", finish: null, quantity: 3 },
         { cardId: "ring-c21", finish: null, quantity: 2 },
       ],
       clearWishes: true,
+    });
+  });
+
+  /** **The press is a toast too** (the owner's rule: every collection add says so), with the
+   *  wishlist half as its second line — through the call's own options. */
+  it("says what the press recorded as a toast", async () => {
+    const { add } = open({ rows: [row(), SOL_RING] });
+    await screen.findByText("Lightning Bolt");
+    await userEvent.click(screen.getByRole("button", { name: "Add 5 copies to collection" }));
+
+    vi.mocked(add.mutate).mock.lastCall?.[1]?.onSuccess?.({
+      copies: 5,
+      cards: 2,
+      wishCopies: 2,
+    });
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Added 5 copies of 2 cards to the collection",
+      body: "2 copies taken off your wishlist",
+      tone: "success",
     });
   });
 
@@ -244,7 +264,7 @@ describe("AddMissingToCollectionDialog", () => {
 
     expect(tally().textContent).toBe("2 copies across 1 card");
     await userEvent.click(screen.getByRole("button", { name: "Add 2 copies to collection" }));
-    expect(add.mutate).toHaveBeenCalledWith({
+    expect(vi.mocked(add.mutate).mock.lastCall?.[0]).toEqual({
       picks: [{ cardId: "ring-c21", finish: null, quantity: 2 }],
       clearWishes: true,
     });
@@ -290,7 +310,7 @@ describe("AddMissingToCollectionDialog", () => {
 
     expect(tally().textContent).toBe("2 copies across 1 card");
     await userEvent.click(screen.getByRole("button", { name: "Add 2 copies to collection" }));
-    expect(add.mutate).toHaveBeenCalledWith({
+    expect(vi.mocked(add.mutate).mock.lastCall?.[0]).toEqual({
       picks: [{ cardId: "bolt-m10", finish: null, quantity: 2 }],
       clearWishes: true,
     });
@@ -415,7 +435,7 @@ describe("AddMissingToCollectionDialog", () => {
     await userEvent.click(screen.getByRole("button", { name: "Add 6 copies to collection" }));
     // The picks are unchanged — the flag is the whole of what this control decides, and a
     // checkbox that also dropped rows would be one control doing two things.
-    expect(add.mutate).toHaveBeenCalledWith(
+    expect(vi.mocked(add.mutate).mock.lastCall?.[0]).toEqual(
       expect.objectContaining({ clearWishes: false, picks: expect.any(Array) }),
     );
   });

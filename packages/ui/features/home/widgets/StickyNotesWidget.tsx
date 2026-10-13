@@ -91,10 +91,12 @@ import { ChevronLeft, ChevronRight, Files, Plus } from "lucide-react";
 import { parseNoteBody, type Block, type Inline } from "@/features/decks/noteMarkdown";
 import { plural } from "@/lib/counts";
 import { DROP_EDGE } from "@/lib/dropMarks";
+import { refusedOpen } from "@/features/card/refusedOpen";
 import { openExternal } from "@/lib/externalLinks";
 import { FOCUS, FOCUS_INSET } from "@/lib/focus";
 import { ipcError, type StickyNote, type StickyNotePatch } from "@/lib/ipc";
 import { PRESS, PRESS_SOFT } from "@/lib/motion";
+import { notify } from "@/lib/notifications";
 import { ago } from "@/lib/relativeTime";
 import { cn } from "@/lib/utils";
 import type { Tier, WidgetFit } from "../fit";
@@ -472,10 +474,17 @@ export function StickyNotesWidget({
     },
     [openId, update],
   );
+  // **A receipt toast, because the dialog it was confirmed in closes on the press** and a board
+  // one tile shorter is easy to miss — a deletion is the one write here with no way back. A
+  // refusal needs none: the footer below already says a refused write (`writeError`).
   const onDelete = useCallback(() => {
-    if (openId !== null) remove(openId);
+    if (openId !== null) {
+      const gone = api.notes.find((note) => note.id === openId);
+      const name = gone === undefined ? "" : stickyTitle(gone);
+      remove(openId, () => notify.success(name === "" ? "Note deleted" : `Note “${name}” deleted`));
+    }
     setOpenId(null);
-  }, [openId, remove]);
+  }, [openId, remove, api.notes]);
   const onClose = useCallback(() => setOpenId(null), []);
   /**
    * A blank note, last in the order — **and the editor opens on it**.
@@ -1391,7 +1400,8 @@ function Inlines({ inlines }: { inlines: readonly Inline[] }): ReactElement {
             <button
               key={i}
               type="button"
-              onClick={() => void openExternal(run.href)}
+              // A refused open is said rather than swallowed — see `refusedOpen`.
+              onClick={() => refusedOpen(openExternal(run.href), "the link")}
               className={cn("rounded-sm text-accent underline-offset-2 hover:underline", FOCUS)}
             >
               {run.text}

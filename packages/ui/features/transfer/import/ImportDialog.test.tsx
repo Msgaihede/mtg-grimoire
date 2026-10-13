@@ -14,6 +14,7 @@ import type {
   SyncStatus,
 } from "@/lib/ipc";
 import { spec } from "@/features/decks/validation/fixtures";
+import { useNotifications } from "@/lib/notifications";
 import { openDropdown, pickOption } from "@/test-dropdown";
 import { ARENA_LIST } from "./fixtures";
 
@@ -1265,6 +1266,97 @@ describe("the import dialog", () => {
         expect.arrayContaining([expect.objectContaining({ preferredFinish: "etched" })]),
         "add",
       ),
+    );
+  });
+});
+
+/**
+ * The shell's `report`: an import is said once as a toast — the landing with its count and where
+ * it went, or the refusal — whatever the destination and however long the list (the owner's rule
+ * for collection, wishlist and deck writes, and its "one action, one toast" half).
+ */
+describe("the import dialog's toast", () => {
+  const notices = () => useNotifications.getState().notices;
+
+  it("says a list imported into a deck once, with its count and the deck's name", async () => {
+    wrap(<Harness into={INTO_DECK} />);
+    const go = await preview("1 Captain Sisay\n1 Kenrith, the Returned King\n1 Sol Ring");
+    await userEvent.click(go);
+
+    await waitFor(() => expect(notices()).toHaveLength(1));
+    expect(notices()[0]).toMatchObject({ title: "Imported 6 cards into “Sisay”", tone: "success" });
+  });
+
+  it("names the deck a list became", async () => {
+    wrap(<Harness />);
+    await userEvent.click(await screen.findByLabelText("Card list"));
+    await userEvent.paste(ARENA_LIST);
+    await userEvent.click(screen.getByRole("button", { name: "Preview" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Import" }));
+
+    await waitFor(() =>
+      expect(notices()[0]).toMatchObject({
+        title: "Imported 6 cards into a new deck, “Burn”",
+        tone: "success",
+      }),
+    );
+    expect(notices()).toHaveLength(1);
+  });
+
+  it("says a refused import as an error, and stays open with the inline line too", async () => {
+    deckImportCommit.mockRejectedValue("The card database is busy finishing a sync.");
+    wrap(<Harness into={INTO_DECK} />);
+    await userEvent.click(await preview("1 Sol Ring"));
+
+    await waitFor(() =>
+      expect(notices()[0]).toMatchObject({
+        title: "Couldn't import into “Sisay”",
+        body: "The card database is busy finishing a sync.",
+        tone: "error",
+      }),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent("Couldn't import the list");
+  });
+
+  it("says a collection import with its copies and what the write counted", async () => {
+    collectionImportCommit.mockResolvedValue({ added: 2, updated: 1, removed: 0 });
+    wrap(
+      <ImportDialog
+        destinations={[collectionDestination]}
+        open
+        onDismiss={onDismiss}
+        onClose={onClose}
+        onDone={vi.fn()}
+      />,
+    );
+    await userEvent.click(await preview("4 Sol Ring\n1 Lightning Bolt"));
+
+    await waitFor(() => expect(notices()).toHaveLength(1));
+    expect(notices()[0]).toMatchObject({
+      title: "Imported 5 cards into your collection",
+      body: "2 added, 1 updated",
+      tone: "success",
+    });
+  });
+
+  it("says a wishlist import", async () => {
+    wrap(
+      <ImportDialog
+        destinations={[wishlistDestination]}
+        open
+        onDismiss={onDismiss}
+        onClose={onClose}
+        onDone={vi.fn()}
+      />,
+    );
+    await userEvent.click(await preview("1 Sol Ring"));
+
+    await waitFor(() =>
+      expect(notices()[0]).toMatchObject({
+        title: "Imported 1 card into your wishlist",
+        body: "1 added, 0 updated",
+        tone: "success",
+      }),
     );
   });
 });

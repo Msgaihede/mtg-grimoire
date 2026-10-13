@@ -351,6 +351,7 @@ import {
   NOTES_TODOS_COLUMN,
 } from "./DeckEditor";
 import { useAppStore, type CardWalkStop } from "@/lib/store";
+import { useNotifications } from "@/lib/notifications";
 
 /** The change the Undo button would reverse — a history row like any other, because that is
  *  what the state command answers and what `auditText` words the button's name from. */
@@ -4712,12 +4713,9 @@ describe("DeckEditor", () => {
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(deckTheoryMissingToWishlist).toHaveBeenCalledTimes(1);
+    // A toast (the dialog's own `notifyWishesSent`), where the editor drew a self-clearing line.
     await waitFor(() =>
-      expect(
-        screen
-          .getAllByRole("status")
-          .some((region) => region.textContent?.startsWith("Added to your wishlist")),
-      ).toBe(true),
+      expect(useNotifications.getState().notices[0]?.title).toMatch(/^Sent .* to the wishlist$/),
     );
   });
 
@@ -5290,8 +5288,7 @@ describe("DeckEditor", () => {
     await open();
 
     expect(screen.getByText(CUT_CARDS_NOTE)).toBeInTheDocument();
-    // Every live region in this view speaks for a press — the refile note, the wishlist
-    // sentence. A standing fact is in none of them.
+    // Every live region in this view speaks for a press. A standing fact is in none of them.
     for (const region of screen.queryAllByRole("status")) {
       expect(region).not.toHaveTextContent(CUT_CARDS_NOTE);
     }
@@ -5736,11 +5733,15 @@ describe("DeckEditor drag and drop", () => {
       await held.over(boxedZone("Auto"));
       await held.drop();
 
-      // By its text, not by its role: the quick-add field keeps a `role="status"` mounted for
-      // the life of the toolbar (a live region that first appears with its sentence already
-      // inside announces nothing), so this view has two and `getByRole` finds both.
-      const note = await screen.findByText(/already in Instant/);
-      expect(note).toHaveAttribute("role", "status");
+      // A toast since 2026-10-12, where it was a self-clearing line over the desk: `info`,
+      // because nothing failed — the card was simply home already.
+      await waitFor(() =>
+        expect(useNotifications.getState().notices[0]).toMatchObject({
+          title: "“Lightning Bolt” is already in “Instant”",
+          tone: "info",
+        }),
+      );
+      expect(screen.queryByText(/already in Instant/)).not.toBeInTheDocument();
       expect(deckMoveCard).not.toHaveBeenCalled();
     });
 
@@ -6017,6 +6018,12 @@ describe("DeckEditor — a card's menu", () => {
     expect(deckSetCardQuantity).not.toHaveBeenCalled();
     await waitFor(() =>
       expect(document.querySelector(`[${DECK_GROUP_ATTR}="${MAIN}"]`)).toHaveFocus(),
+    );
+    // The menu has closed, so the receipt is a toast.
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]?.title).toBe(
+        "Removed “Lightning Bolt” from the deck",
+      ),
     );
   });
 
@@ -6625,7 +6632,7 @@ describe("DeckEditor — a card's menu", () => {
   });
 
   /**
-   * **A refused collection add from the menu has to be said somewhere, and this is the somewhere.**
+   * **A refused collection add from the menu has to be said somewhere** — a toast now.
    *
    * `useCardMenuDeps` states it plainly: a page that ignores that sentence is a page where a card
    * silently fails to be added. The menu cannot draw it — `ctx.run` closes the panel before the
@@ -6648,7 +6655,14 @@ describe("DeckEditor — a card's menu", () => {
       await within(addTo as HTMLElement).findByRole("menuitem", { name: "Collection" }),
     );
 
-    expect(await screen.findByText(/Couldn't add to your collection/)).toBeInTheDocument();
+    // A toast since 2026-10-12 (`useCardMenuDeps`' receipts): the menu's refusal used to be a
+    // banner this editor drew, and is now the app's one way of saying it.
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        tone: "error",
+        body: "The database is busy",
+      }),
+    );
   });
 
   /**
@@ -7690,6 +7704,12 @@ describe("DeckEditor — a category's menu", () => {
 
     await userEvent.click(within(dialog).getByRole("button", { name: "Remove 4 cards" }));
     await waitFor(() => expect(deckCategoryClear).toHaveBeenCalledWith(DECK.id, MAIN, "live"));
+    // The question closes on the write, so the receipt is a toast with the count it answered.
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]?.title).toBe(
+        "Removed 4 cards from “Main deck”",
+      ),
+    );
   });
 
   /** "Keep them" is the way out that writes nothing — the safe answer being the one a reader
@@ -7794,6 +7814,9 @@ describe("DeckEditor — a category's menu", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: "Deactivate" }));
 
     expect(deckCategorySetActive).toHaveBeenCalledWith(MAIN, false);
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]?.title).toBe("Deactivated “Main deck”"),
+    );
   });
 
   /** The row says what the write does rather than toggling a value read a moment earlier — a
@@ -8509,6 +8532,14 @@ describe("DeckEditor multi-select", () => {
     await userEvent.keyboard("{Delete}");
 
     await waitFor(() => expect(deckToCollection).toHaveBeenCalledTimes(2));
+    // **One press, one toast** (the owner's rule): two writes, said once with the count.
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Removed 2 cards from the deck",
+        tone: "success",
+      }),
+    );
+    expect(useNotifications.getState().notices).toHaveLength(1);
   });
 
   /**
@@ -8528,6 +8559,15 @@ describe("DeckEditor multi-select", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "1 of 2 cards wasn't changed — The database is busy with a sync.",
     );
+    // The toast folds the partial outcome into one warning, naming the first refusal.
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Removed 1 of 2 cards from the deck",
+        body: "The database is busy with a sync.",
+        tone: "warning",
+      }),
+    );
+    expect(useNotifications.getState().notices).toHaveLength(1);
   });
 
   /** The drop's half of the same fault: a two-card drag onto a pile where the first move is

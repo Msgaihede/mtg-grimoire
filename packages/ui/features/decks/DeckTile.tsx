@@ -27,6 +27,7 @@ import type { DeckRow } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import type { PipCounts } from "@/lib/mana";
 import { PRESS } from "@/lib/motion";
+import { notify } from "@/lib/notifications";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
 import { DeckColorBar } from "./DeckColorBar";
@@ -36,7 +37,7 @@ import { deckColorsLabel } from "./deckPips";
 import { deckDraggable, MoveToFolder, type FolderNode } from "./FolderTree";
 import type { Panel } from "./panels";
 import { useTagOverflow } from "./tagRow";
-import type { Decks } from "./useDecks";
+import { receipt, type Decks } from "./useDecks";
 import { ANY_GAME, gameLabel } from "./useFormatSpecs";
 
 // The badge moved to `deckCover.ts` with the cover rules, so the phone gallery can draw both
@@ -327,6 +328,19 @@ export function DeckTile({
   const build = () => buildDeckMenu(deck, menuDeps);
   const openMenu = menu(build);
   const openMenuByKey = menuKey(build);
+
+  /**
+   * Archive or restore, from the tray — **with a receipt, because the tile leaves the wall it
+   * was pressed on.** An archived deck goes behind the `Archived` disclosure, which is usually
+   * shut, so the only thing on screen afterwards is a gap; a restored one jumps back to the live
+   * wall from the filed one. Either way the reader is no longer looking at the result.
+   */
+  const archive = (archived: boolean) =>
+    receipt(
+      decks.update.mutateAsync({ id, patch: { archived } }),
+      () => notify.success(archived ? `Deck “${name}” archived` : `Deck “${name}” restored`),
+      archived ? `Couldn't archive “${name}”` : `Couldn't restore “${name}”`,
+    );
 
   // The gesture half of filing. The whole tile is the handle — the art is the deck — and the
   // controls in the corner mark themselves `data-no-drag` so a press on Delete is a press on
@@ -920,7 +934,9 @@ export function DeckTile({
               data-no-drag=""
               aria-label={`Duplicate ${deck.name}`}
               {...tip("Duplicate", { describes: false })}
-              onClick={() => decks.duplicate.mutate(deck.id)}
+              // The menu's own `Duplicate`, so the press and the row raise one receipt from one
+              // place — `DecksPage`'s `duplicateDeck`, which names the copy it made.
+              onClick={() => menuDeps.duplicate(deck.id)}
               className={ICON_BUTTON}
             >
               <Copy className={ICON} aria-hidden="true" />
@@ -930,7 +946,7 @@ export function DeckTile({
               data-no-drag=""
               aria-label={`${deck.archived ? "Restore" : "Archive"} ${deck.name}`}
               {...tip(deck.archived ? "Restore" : "Archive", { describes: false })}
-              onClick={() => decks.update.mutate({ id: deck.id, patch: { archived: !deck.archived } })}
+              onClick={() => archive(!deck.archived)}
               className={ICON_BUTTON}
             >
               {deck.archived ? (

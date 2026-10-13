@@ -19,6 +19,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import type { WishlistFolder } from "@/lib/ipc";
+import { useNotifications } from "@/lib/notifications";
 import type { ShareCard } from "@/lib/shareSnapshot";
 import { AddToWishlist } from "./AddToWishlist";
 import { EMPTY_INDEX, wishGrainKey, type OwnedIndex } from "./useOwnedIndex";
@@ -115,8 +116,12 @@ describe("adding picked rows from somebody else's binder", () => {
     // carries no oracle id, so an any-printing wish is not expressible from here at all.
     expect(wishlistAdd).toHaveBeenCalledWith({ cardId: "bolt", quantity: 1, folderId: 1 });
     expect(wishlistAdd).toHaveBeenCalledWith({ cardId: "sol", quantity: 1, folderId: 1 });
-    // The report names the destination the reader chose, and the host closes the dialog.
-    await waitFor(() => expect(onAdded).toHaveBeenCalledWith("Added 2 cards to Trade targets."));
+    // The receipt is a toast naming the destination the reader chose — the dialog closes on it.
+    await waitFor(() => expect(onAdded).toHaveBeenCalled());
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Added 2 cards to “Trade targets”",
+      tone: "success",
+    });
     expect(onClose).toHaveBeenCalled();
   });
 
@@ -280,6 +285,13 @@ describe("adding picked rows from somebody else's binder", () => {
     // them that is now half added, and closing over it would hide which half.
     expect(onAdded).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
+    // And one notice for the press, a warning carrying the count and the refusal.
+    expect(useNotifications.getState().notices).toHaveLength(1);
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Added 1 of 2 cards to your wishlist",
+      body: "The card database is busy finishing a sync.",
+      tone: "warning",
+    });
   });
 
   /**

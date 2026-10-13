@@ -87,6 +87,7 @@ import {
   type MissingChoice,
   type PlannedMissingRow,
 } from "./addMissingPlan";
+import { notifyMissingAdded, notifyRefusal } from "./receipts";
 
 /**
  * Stable identity for "the read has not answered", so {@link planAddMissing} is not re-run over a
@@ -158,7 +159,15 @@ const CLEAR_WISHES_LABEL = "Also take these off my wishlist";
  * would be sending a boolean where an array belongs.
  */
 export interface AddMissingWrite {
-  mutate: (input: { picks: DeckMissingPick[]; clearWishes: boolean }) => void;
+  /** The per-call options carry the press's toast (`./receipts`) — a call's own, so a write
+   *  that lands after the dialog closed still says what it did. */
+  mutate: (
+    input: { picks: DeckMissingPick[]; clearWishes: boolean },
+    options?: {
+      onSuccess?: (outcome: DeckMissingOutcome) => void;
+      onError?: (error: unknown) => void;
+    },
+  ) => void;
   isPending: boolean;
   isSuccess: boolean;
   isError: boolean;
@@ -517,7 +526,18 @@ function AddMissingBody({
             // screen were counted from. `planAddMissing` already builds a fresh object per pick
             // for exactly this reason, so the spread copies the array and shares nothing a caller
             // downstream could reach back into.
-            add.mutate({ picks: [...plan.picks], clearWishes });
+            //
+            // **The toast is on top of the readout, not instead of it** (the owner's rule: every
+            // collection add says so): the dialog may be shut before the answer, and the inbox
+            // keeps a record the readout does not.
+            add.mutate(
+              { picks: [...plan.picks], clearWishes },
+              {
+                onSuccess: notifyMissingAdded,
+                onError: (error) =>
+                  notifyRefusal("Couldn't add the missing copies to the collection", error),
+              },
+            );
           }}
           className={CONFIRM}
         >

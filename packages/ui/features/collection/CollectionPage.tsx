@@ -29,7 +29,6 @@ import { OwnedBadge } from "@/components/OwnedBadge";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { ViewAllToggle } from "@/components/ViewAllToggle";
 import { buildCardMenu, type CardMenuDeps, type CardMenuTarget } from "@/features/card/cardMenu";
-import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
 import { rowHasBackFace } from "@/features/card/printings";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
@@ -59,7 +58,7 @@ import { collectionDestinationInto } from "@/features/transfer/import/destinatio
 import { ImportExportPair } from "@/features/transfer/ImportExportPair";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import { CONDITION_LABEL, CONDITIONS } from "@/lib/conditions";
-import { count } from "@/lib/counts";
+import { count, plural } from "@/lib/counts";
 import { reorderedLevel } from "@/lib/folderOrder";
 import { FINISH_LABEL, finishLabel, isFinish, type Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
@@ -76,6 +75,7 @@ import {
   type CollectionRow,
 } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
+import { notify } from "@/lib/notifications";
 import { statusLine } from "@/lib/motion";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { layoutShelves, type ShelfSection } from "@/lib/shelfLayout";
@@ -94,6 +94,7 @@ import type { CollectionFolderTotals } from "./CollectionFolderCard";
 import { CollectionSearchPanel } from "./CollectionSearchPanel";
 import { CollectionSummaryHeader } from "./CollectionSummary";
 import { CollectionTable, type CollectionTableShelves } from "./CollectionTable";
+import { movedReceipt, removedReceipt, report } from "./collectionReceipts";
 import {
   collectionTiles,
   NO_CARDS,
@@ -484,10 +485,10 @@ export function CollectionPage() {
   // objects where they are drawn.
   const { mutate: createMutate, reset: createReset } = folders.create;
   const { mutate: renameMutate, reset: renameReset } = folders.rename;
-  const { mutate: moveMutate, reset: moveReset } = folders.move;
+  const { mutateAsync: moveAsync, reset: moveReset } = folders.move;
   const { mutate: reorderMutate } = folders.reorder;
-  const { mutate: removeFolderMutate, reset: removeFolderReset } = folders.remove;
-  const { mutate: setLockedMutate, reset: setLockedReset } = folders.setLocked;
+  const { mutateAsync: removeFolderAsync, reset: removeFolderReset } = folders.remove;
+  const { mutateAsync: setLockedAsync, reset: setLockedReset } = folders.setLocked;
 
   /**
    * **The folder another surface asked this page to open on its way in** — `store.ts`'s
@@ -752,9 +753,9 @@ export function CollectionPage() {
   // `mutate` and `reset` are stable across renders and the result object around them is not, so
   // the menu deps below are rebuilt only when something they carry actually changed — and, since
   // issue #557, so are the stepper and removal handlers the memoised wall and table are handed.
-  const { mutate: removeManyMutate, reset: removeManyReset } = removeMany;
+  const { mutateAsync: removeManyAsync, reset: removeManyReset } = removeMany;
   const { mutate: setQuantityMutate } = setQuantity;
-  const { mutate: removeMutate } = remove;
+  const { mutateAsync: removeAsync } = remove;
 
   /**
    * `Clear…` inside `Recently removed` — every copy in the holding area, gone in one transaction
@@ -772,7 +773,7 @@ export function CollectionPage() {
     mutationFn: () => ipc.collectionRemovedClear(),
     onSettled: settleFailure,
   });
-  const { mutate: clearRemovedMutate } = clearRemoved;
+  const { mutateAsync: clearRemovedAsync } = clearRemoved;
 
   /**
    * Filing a copy — the drag's write, and **the same mutation the row's own context menu makes it
@@ -781,8 +782,8 @@ export function CollectionPage() {
    * The command, the settle set and the reason none of it is optimistic all live on
    * {@link useSetCollectionFolder}; this page adds only its refusal surface, which is the banner
    * under the header that every other write here shares (`bannerFailure` below). The menu's copy
-   * of this hook draws `CardMenuRefusal` instead, because a menu is already closing by the time
-   * the answer arrives and has nothing left on screen to report to — that difference is the whole
+   * of this hook raises a toast instead (`@/lib/notifications`), because a menu is already closing
+   * by the time the answer arrives and has nothing left on screen to report to — that difference is the whole
    * of what the two callers do differently, and it is why the hook takes handlers rather than
    * owning one.
    *
@@ -805,7 +806,16 @@ export function CollectionPage() {
     (row: CollectionRow, quantity: number) => setQuantityMutate({ row, quantity }),
     [setQuantityMutate],
   );
-  const onRemove = useCallback((row: CollectionRow) => removeMutate(row), [removeMutate]);
+  // The row's ✕ is a deliberate removal, so it toasts (`collectionReceipts.ts`) — the row it
+  // names has left the table by the time the answer lands, and the stepper beside it does not.
+  const onRemove = useCallback(
+    (row: CollectionRow) =>
+      report(removeAsync(row), {
+        done: () => removedReceipt(1, row.name),
+        failed: `Couldn't remove “${row.name ?? row.cardId}” from the collection`,
+      }),
+    [removeAsync],
+  );
   // Not while the previous level is still drawn (`levelHeld`): the rows the wall is asking to page
   // past are that level's, and `query` is already the next level's list.
   const { levelHeld } = collection;
@@ -1070,7 +1080,7 @@ export function CollectionPage() {
   }, [panel, rows]);
 
   const { menu, menuKey, menuClick } = useContextMenu();
-  const { deps: baseMenuDeps, error: menuFailure } = useCardMenuDeps();
+  const { deps: baseMenuDeps } = useCardMenuDeps();
   /**
    * The app-wide deps plus the two writes only this page can offer.
    *
@@ -1493,6 +1503,10 @@ export function CollectionPage() {
           { parentId: panel.parentId, name },
           {
             onSuccess: (made) => {
+              // A receipt although the heading is drawn right where the field was: the reader's
+              // cabinet changed and the inbox should say so. A refusal keeps the field open with
+              // the banner's sentence, so it adds no toast of its own.
+              notify.success(`Folder “${name}” created`);
               if (storedFolds[String(made.id)] !== undefined) setFold(made.id, null);
               if (!pathRow) {
                 dismiss();
@@ -1504,10 +1518,30 @@ export function CollectionPage() {
           },
         );
       } else if (panel?.kind === "renameFolder") {
-        renameMutate({ id: panel.folderId, name }, { onSuccess: dismiss });
+        const was = folderNameOf(panel.folderId);
+        renameMutate(
+          { id: panel.folderId, name },
+          {
+            onSuccess: () => {
+              notify.success(
+                was === null ? `Renamed to “${name}”` : `Renamed “${was}” to “${name}”`,
+              );
+              dismiss();
+            },
+          },
+        );
       }
     },
-    [panel, headingAddedIn, createMutate, renameMutate, storedFolds, setFold, dismiss],
+    [
+      panel,
+      headingAddedIn,
+      createMutate,
+      renameMutate,
+      storedFolds,
+      setFold,
+      dismiss,
+      folderNameOf,
+    ],
   );
 
   /**
@@ -1660,9 +1694,15 @@ export function CollectionPage() {
             Icon: folder.locked ? LockOpen : Lock,
             disabled: inherited ? true : undefined,
             reason: inherited ? ancestorReason : undefined,
+            // A menu row that writes, so it toasts: the badge behind the menu changes, but the
+            // menu has closed and a refusal would otherwise be only the banner at the top.
             onSelect: () => {
               setLockedReset();
-              setLockedMutate({ id: folder.id, locked: !folder.locked });
+              const locking = !folder.locked;
+              report(setLockedAsync({ id: folder.id, locked: locking }), {
+                done: () => `${locking ? "Locked" : "Unlocked"} “${folder.name}”`,
+                failed: `Couldn't ${locking ? "lock" : "unlock"} “${folder.name}”`,
+              });
             },
           },
           { kind: "separator", id: "before-delete" },
@@ -1731,7 +1771,7 @@ export function CollectionPage() {
       removeFolderReset,
       reorderMutate,
       setLockedReset,
-      setLockedMutate,
+      setLockedAsync,
       askCaret,
       recordCaret,
     ],
@@ -1973,14 +2013,19 @@ export function CollectionPage() {
     (entryIds: readonly number[]) => {
       if (entryIds.length === 1) {
         const name = rows.find((row) => row.id === entryIds[0])?.name ?? null;
-        removeManyMutate({ entryIds, name });
+        // Asked nothing, from a menu that has already closed — so the toast is the receipt, with
+        // the `UndoNotice` under the header as the way back.
+        report(removeManyAsync({ entryIds, name }), {
+          done: (outcome) => removedReceipt(outcome.removed, name),
+          failed: `Couldn't remove “${name ?? "that card"}” from the collection`,
+        });
         return;
       }
       // A refusal left standing from the last press must not read as this question's answer.
       removeManyReset();
       open({ kind: "removeCopies", entryIds }, focusedElement());
     },
-    [rows, removeManyMutate, removeManyReset, open],
+    [rows, removeManyAsync, removeManyReset, open],
   );
 
   /**
@@ -2204,40 +2249,58 @@ export function CollectionPage() {
   const moveFolderTo = useCallback(
     (id: number, parentId: number | null) => {
       const land = caretAfterLeaving(id, parentId);
-      moveMutate(
-        { id, parentId },
-        {
-          onSuccess: () => {
-            setPanel(null);
-            land();
-          },
+      // A folder carries its cards with it, so the move is a move of cards and toasts — and the
+      // strip that asked has gone, and the heading has left this part of the wall.
+      const name = folderNameOf(id) ?? "the folder";
+      report(moveAsync({ id, parentId }), {
+        then: () => {
+          setPanel(null);
+          land();
         },
-      );
+        done: () => `Moved “${name}” to “${folderNameOf(parentId) ?? ROOT_LABEL}”`,
+        failed: `Couldn't move “${name}”`,
+      });
     },
-    [caretAfterLeaving, moveMutate],
+    [caretAfterLeaving, moveAsync, folderNameOf],
   );
   const deleteFolder = useCallback(
     (id: number) => {
       const land = caretAfterLeaving(id);
-      removeFolderMutate(id, {
-        onSuccess: () => {
+      // Destructive, and it re-files every card inside to the root — a receipt that says where
+      // they went, since the heading that held them is gone.
+      const name = folderNameOf(id) ?? "the folder";
+      report(removeFolderAsync(id), {
+        then: () => {
           setPanel(null);
           land();
         },
+        done: () => `Folder “${name}” deleted`,
+        failed: `Couldn't delete “${name}”`,
       });
     },
-    [caretAfterLeaving, removeFolderMutate],
+    [caretAfterLeaving, removeFolderAsync, folderNameOf],
   );
   /** `Clear…` and `Remove N cards…`, answered — the two strip questions whose write is a
-   *  mutation of this page's rather than a folder's. Held still for the memoised panel. */
+   *  mutation of this page's rather than a folder's. Held still for the memoised panel. Both are
+   *  destructive bulk writes, so both toast with their count, once, off the one write's answer;
+   *  the bulk removal's `UndoNotice` stays the inline way back. */
   const confirmClearRemoved = useCallback(
-    () => clearRemovedMutate(undefined, { onSuccess: dismiss }),
-    [clearRemovedMutate, dismiss],
+    () =>
+      report(clearRemovedAsync(), {
+        then: dismiss,
+        done: (entries) => `Cleared ${plural(entries, "card")} from “Recently removed”`,
+        failed: "Couldn't clear “Recently removed”",
+      }),
+    [clearRemovedAsync, dismiss],
   );
   const confirmRemoveCopies = useCallback(
     (entryIds: readonly number[]) =>
-      removeManyMutate({ entryIds, name: null }, { onSuccess: dismiss }),
-    [removeManyMutate, dismiss],
+      report(removeManyAsync({ entryIds, name: null }), {
+        then: dismiss,
+        done: (outcome) => removedReceipt(outcome.removed, null),
+        failed: `Couldn't remove ${plural(entryIds.length, "card")} from the collection`,
+      }),
+    [removeManyAsync, dismiss],
   );
 
   /** One section per shelf, sized by its count — none while shut (its cards were never fetched)
@@ -2936,7 +2999,9 @@ export function CollectionPage() {
                 <LockedMoveConfirm
                   move={crossing}
                   onConfirm={() => {
-                    commitFile(crossing.drop, crossing.to);
+                    // `answered`: a question was asked and has closed, so this filing toasts
+                    // where a plain drag between shelves does not (`collectionReceipts.ts`).
+                    commitFile(crossing.drop, crossing.to, true);
                     setCrossing(null);
                   }}
                   onCancel={() => setCrossing(null)}
@@ -2972,12 +3037,6 @@ export function CollectionPage() {
               so the sentence arriving in it is announced. `empty:-mt-2` gives back this
               column's gap while it says nothing, the *Needs review* region's arrangement. */}
           <UndoNotice scope="collection" className="empty:-mt-2" />
-
-          {/* A write the right-click menu started and the backend refused, beside the banner
-              above rather than folded into it: that one is about this list's own controls — a
-              stepper press, a removal — and this one is about a card the reader filed somewhere
-              from a menu that has already closed. */}
-          <CardMenuRefusal error={menuFailure} />
 
           {wallDrawn &&
             (view === "grid" ? (
@@ -3241,14 +3300,33 @@ export function CollectionPage() {
               // the quantities summed, which is what happens when the reader does it by hand.
               // One tick is the single write it always was: there is nothing to batch, and no
               // offer to take back one card's filing.
+              //
+              // **A toast either way**, whichever door asked — a drop or the menu's `Move to`:
+              // the dialog closes on the answer, so it is the receipt, once for the whole press
+              // and counted off the one write. The bulk move's `UndoNotice` stays the way back.
+              const destination = folderNameOf(picking.folderId) ?? ROOT_LABEL;
+              const { cardName } = picking;
               if (entryIds.length > 1) {
-                setFolderMany.mutate({
-                  entryIds,
-                  folderId: picking.folderId,
-                  destination: folderNameOf(picking.folderId) ?? ROOT_LABEL,
-                });
+                report(
+                  setFolderMany.mutateAsync({ entryIds, folderId: picking.folderId, destination }),
+                  {
+                    done: (outcome) =>
+                      movedReceipt(
+                        outcome.changes.length || entryIds.length,
+                        cardName,
+                        destination,
+                      ),
+                    failed: `Couldn't move ${plural(entryIds.length, "card")} to “${destination}”`,
+                  },
+                );
               } else if (entryIds.length === 1) {
-                setFolder.mutate({ entryId: entryIds[0], folderId: picking.folderId });
+                report(
+                  setFolder.mutateAsync({ entryId: entryIds[0], folderId: picking.folderId }),
+                  {
+                    done: () => movedReceipt(1, cardName, destination),
+                    failed: `Couldn't move “${cardName}” to “${destination}”`,
+                  },
+                );
               }
               setPicking(null);
             }}

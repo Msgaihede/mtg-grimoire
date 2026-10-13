@@ -13,6 +13,9 @@ vi.mock("@/lib/ipc", async (original) => ({
 }));
 
 import { FullBackupPanel } from "./FullBackupPanel";
+import { useNotifications } from "@/lib/notifications";
+
+const newest = () => useNotifications.getState().notices[0];
 
 function setup() {
   const restored = vi.fn();
@@ -36,7 +39,10 @@ describe("complete backup", () => {
     const { user, restored } = setup();
     expect(screen.getByText(/Import replaces all current app data/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Export ZIP…" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Complete backup saved.");
+    // A toast, since the ZIP is on disk where the panel cannot show it.
+    await waitFor(() =>
+      expect(newest()).toMatchObject({ tone: "success", title: "Complete backup saved" }),
+    );
     expect(archiveExport).toHaveBeenCalledWith();
     expect(restored).not.toHaveBeenCalled();
   });
@@ -46,6 +52,8 @@ describe("complete backup", () => {
     await user.click(screen.getByRole("button", { name: "Import ZIP…" }));
     await waitFor(() => expect(restored).toHaveBeenCalledOnce());
     expect(archiveImport).toHaveBeenCalledWith();
+    // Raised before the reload, so the inbox (kept in `localStorage`) still has it after.
+    expect(newest()).toMatchObject({ tone: "success", title: "Backup restored" });
   });
 
   it.each(["export", "import"] as const)(
@@ -58,6 +66,8 @@ describe("complete backup", () => {
       );
       expect(await screen.findByRole("alert")).toHaveTextContent(/cancelled/);
       expect(restored).not.toHaveBeenCalled();
+      // A closed picker changed nothing, so it is not news worth keeping.
+      expect(useNotifications.getState().notices).toHaveLength(0);
     },
   );
 
@@ -76,20 +86,34 @@ describe("complete backup", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Import ZIP…" })).toBeEnabled());
   });
 
-  it("shows a refused import and allows retry without stale failure text", async () => {
+  it("says a refused import in a toast and allows a retry", async () => {
     archiveImport
       .mockRejectedValueOnce("The backup is not a valid ZIP archive.")
       .mockResolvedValueOnce(true);
     const { user, restored } = setup();
     await user.click(screen.getByRole("button", { name: "Import ZIP…" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "The backup is not a valid ZIP archive.",
+    await waitFor(() =>
+      expect(newest()).toMatchObject({
+        tone: "error",
+        title: "Couldn't restore the backup",
+        body: "The backup is not a valid ZIP archive.",
+      }),
     );
     expect(restored).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Import ZIP…" }));
     await waitFor(() => expect(restored).toHaveBeenCalledOnce());
+  });
+
+  it("says a refused export in a toast", async () => {
+    archiveExport.mockRejectedValueOnce("The disk is full.");
+    const { user } = setup();
+    await user.click(screen.getByRole("button", { name: "Export ZIP…" }));
     await waitFor(() =>
-      expect(screen.queryByText("The backup is not a valid ZIP archive.")).not.toBeInTheDocument(),
+      expect(newest()).toMatchObject({
+        tone: "error",
+        title: "Couldn't save the backup",
+        body: "The disk is full.",
+      }),
     );
   });
 });

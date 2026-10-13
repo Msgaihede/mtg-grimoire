@@ -38,7 +38,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import type { BinderGroup } from "./destinations/binders";
-import { NO_DECK_GROUP, importBinderGroups, useImport } from "./useImport";
+import { BinderImportStopped, NO_DECK_GROUP, importBinderGroups, useImport } from "./useImport";
 
 /**
  * The cabinet as `collection_folder_list` answers it: unfiltered by kind, so a **deck** group
@@ -812,6 +812,15 @@ describe("importBinderGroups", () => {
       importBinderGroups([folder("Binder"), folder("Bulk"), folder("Rares")]),
     ).rejects.toThrow("Stopped at “Bulk”: database is locked. Already imported: “Binder”.");
     expect(collectionImportCommit).toHaveBeenCalledTimes(2);
+  });
+
+  it("says how far a stopped press got, for the toast's count", async () => {
+    collectionImportCommit.mockResolvedValueOnce(OWNED).mockRejectedValueOnce("database is locked");
+    const stopped = await importBinderGroups([folder("Binder"), folder("Bulk"), folder("Rares")])
+      .then(() => null)
+      .catch((e: unknown) => e);
+    expect(stopped).toBeInstanceOf(BinderImportStopped);
+    expect(stopped).toMatchObject({ copies: 1, total: 3 });
   });
 
   it("deletes a deck whose list was refused, and says the deck's name", async () => {

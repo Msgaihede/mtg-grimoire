@@ -60,6 +60,7 @@ import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FOCUS } from "@/lib/focus";
 import { ipcError, type DeckCard, type DeckCategory, type DeckVariant } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
+import { notify } from "@/lib/notifications";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 import { PREDEFINED_CATEGORY_NAMES } from "./autoCategory";
@@ -674,10 +675,27 @@ export function DeleteCategory({
         <button
           type="button"
           disabled={meta.deleteCategory.isPending}
+          // **A receipt, both from this dialog and from the editor's `Delete…`** (one component,
+          // so one sentence): a delete is destructive, the question closes on it, and the cards
+          // that went with the pile — or moved out of it — are said with their count. The refusal
+          // stays the host's inline line and is a toast too (the owner's rule for card edits).
           onClick={() =>
             meta.deleteCategory.mutate(
               { id: category.id, moveToCategoryId: moveTo },
-              { onSuccess: onDeleted },
+              {
+                onSuccess: () => {
+                  notify.success(
+                    cards === 0
+                      ? `Deleted “${category.name}”`
+                      : target !== null
+                        ? `Deleted “${category.name}” and moved ${count} to “${target.name}”`
+                        : `Deleted “${category.name}” and removed its ${count}`,
+                  );
+                  onDeleted();
+                },
+                onError: (error) =>
+                  notify.error(`Couldn't delete “${category.name}”`, { body: ipcError(error) }),
+              },
             )
           }
           className={losing ? CONFIRM_DESTRUCTIVE : CONFIRM_MOVING}
@@ -735,7 +753,18 @@ function AutoCategorise({ meta, cards }: { meta: DeckMeta; cards: readonly DeckC
       <button
         type="button"
         disabled={autoCategorise.isPending}
-        onClick={() => autoCategorise.mutate(cards)}
+        // The count is said inline below, in a dialog that stays open — and as a toast too when
+        // cards moved, because a bulk re-file of the deck's piles is an edit the owner's rule
+        // says always reports. `0` moved nothing and stays the inline line's alone.
+        onClick={() =>
+          autoCategorise.mutate(cards, {
+            onSuccess: (n) => {
+              if (n > 0) notify.success(`Categorized ${n} ${n === 1 ? "card" : "cards"}`);
+            },
+            onError: (error) =>
+              notify.error("Couldn't categorize the cards", { body: ipcError(error) }),
+          })
+        }
         className={cn(
           "h-8 w-full rounded-md border border-dashed border-border px-3 text-xs text-dim",
           "transition-colors duration-150 hover:border-accent hover:text-accent",

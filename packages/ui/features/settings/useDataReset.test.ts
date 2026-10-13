@@ -16,6 +16,10 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import { useDangerZone, useLocalCache } from "./useDataReset";
+import { useNotifications } from "@/lib/notifications";
+
+/** The toast the last press raised — the inbox's newest notice. */
+const newest = () => useNotifications.getState().notices[0];
 
 /** What a settled combo table answers back. Only the two figures the sentence reads matter. */
 const COMBOS = {
@@ -117,6 +121,20 @@ describe("useDangerZone", () => {
         text: "Cleared 4 wishlist entries.",
       }),
     );
+    // …and as a toast, since the confirmation that asked has closed: the same sentence, in the
+    // toast's own voice (no full stop).
+    expect(newest()).toMatchObject({ tone: "success", title: "Cleared 4 wishlist entries" });
+  });
+
+  it("says a clear that found nothing as news rather than a success", async () => {
+    collectionClear.mockResolvedValueOnce({ entries: 0 });
+    const { result } = renderHook(() => useDangerZone(), { wrapper });
+
+    act(() => result.current.collection.run());
+
+    await waitFor(() =>
+      expect(newest()).toMatchObject({ tone: "info", title: "The collection was already empty" }),
+    );
   });
 
   /**
@@ -139,6 +157,11 @@ describe("useDangerZone", () => {
         text: "The card database is busy.",
       }),
     );
+    expect(newest()).toMatchObject({
+      tone: "error",
+      title: "Couldn't clear the decks",
+      body: "The card database is busy.",
+    });
   });
 
   /** And back the other way, which is the half a one-directional implementation gets wrong. */
@@ -190,6 +213,23 @@ describe("useLocalCache", () => {
       expect(result.current.status).toEqual({
         tone: "plain",
         text: "Freed 4 KB across 20 files.",
+      }),
+    );
+    expect(newest()).toMatchObject({ tone: "success", title: "Freed 4 KB across 20 files" });
+  });
+
+  /** Two sentences, and the toast splits them: what happened is the title, what did not the body. */
+  it("puts the files it could not delete under the receipt, as a warning", async () => {
+    cacheClear.mockResolvedValueOnce({ files: 20, bytes: 4_000, rows: 20, failed: 2 });
+    const { result } = renderHook(() => useLocalCache(), { wrapper });
+
+    act(() => result.current.clear.run());
+
+    await waitFor(() =>
+      expect(newest()).toMatchObject({
+        tone: "warning",
+        title: "Freed 4 KB across 20 files",
+        body: "2 files were in use and couldn't be deleted.",
       }),
     );
   });

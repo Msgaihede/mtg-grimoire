@@ -167,14 +167,17 @@ export const Review: Story = {
     // One pick per row, addressed by the printing **and** the finish — the row does not exist in
     // `collection_entries` yet, so there is no id to name.
     await userEvent.click(canvas.getByRole("button", { name: "Add 7 copies to collection" }));
-    await expect(args.add.mutate).toHaveBeenCalledWith({
-      picks: [
-        { cardId: BOLT.cardId, finish: null, quantity: 3 },
-        { cardId: BOROS_CHARM.cardId, finish: null, quantity: 2 },
-        { cardId: SWORDS.cardId, finish: "foil", quantity: 2 },
-      ],
-      clearWishes: true,
-    });
+    await expect(args.add.mutate).toHaveBeenCalledWith(
+      {
+        picks: [
+          { cardId: BOLT.cardId, finish: null, quantity: 3 },
+          { cardId: BOROS_CHARM.cardId, finish: null, quantity: 2 },
+          { cardId: SWORDS.cardId, finish: "foil", quantity: 2 },
+        ],
+        clearWishes: true,
+      },
+      expect.anything(),
+    );
   },
 };
 
@@ -199,10 +202,13 @@ export const LoweringACount: Story = {
 
     await expect(canvas.getByText(/ across /).textContent).toBe("2 copies across 1 card");
     await userEvent.click(canvas.getByRole("button", { name: "Add 2 copies to collection" }));
-    await expect(args.add.mutate).toHaveBeenCalledWith({
-      picks: [{ cardId: BOLT.cardId, finish: null, quantity: 2 }],
-      clearWishes: true,
-    });
+    await expect(args.add.mutate).toHaveBeenCalledWith(
+      {
+        picks: [{ cardId: BOLT.cardId, finish: null, quantity: 2 }],
+        clearWishes: true,
+      },
+      expect.anything(),
+    );
   },
 };
 

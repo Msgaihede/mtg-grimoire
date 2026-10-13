@@ -2,6 +2,7 @@ import { useMutation } from "@tanstack/react-query";
 import { Download, Upload } from "lucide-react";
 import { useState } from "react";
 import { ipc, ipcError } from "@/lib/ipc";
+import { notify } from "@/lib/notifications";
 import { cn } from "@/lib/utils";
 import { PANEL_BUTTON } from "./controls";
 import { PanelAlert } from "./panelChrome";
@@ -12,27 +13,45 @@ export function reloadAfterRestore(): void {
   window.location.reload();
 }
 
-/** The host owns both file pickers and the destructive confirmation; no path crosses IPC. */
+/**
+ * The host owns both file pickers and the destructive confirmation; no path crosses IPC.
+ *
+ * **What a finished export or restore did is a toast** (`@/lib/notifications`), and so a notice
+ * in the inbox. Both write somewhere the reader cannot see from here — a ZIP on disk, or every
+ * table in the database — and a restore then reloads the window, which takes any line drawn on
+ * this panel down with it: the inbox is kept in `localStorage`, so the receipt is still there
+ * after the reload. A refusal is a toast for the same reason. What stays on the panel is the one
+ * line that is about *this* moment: the reload in progress, or a picker the reader closed, which
+ * changed nothing and is not worth keeping.
+ */
 export function FullBackupPanel({ onRestored = reloadAfterRestore }: { onRestored?: () => void }) {
-  const [note, setNote] = useState<{ tone: "plain" | "problem"; text: string } | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const operation = useMutation({
     mutationFn: (action: "export" | "import") =>
       action === "export" ? ipc.archiveExport() : ipc.archiveImport(),
     onMutate: () => setNote(null),
     onSuccess: (completed, action) => {
-      setNote({
-        tone: "plain",
-        text: completed
-          ? action === "export"
-            ? "Complete backup saved."
-            : "Backup restored. Reloading your data…"
-          : action === "export"
-            ? "Export cancelled."
-            : "Import cancelled. Your data is unchanged.",
+      if (!completed) {
+        setNote(
+          action === "export" ? "Export cancelled." : "Import cancelled. Your data is unchanged.",
+        );
+        return;
+      }
+      if (action === "export") {
+        notify.success("Complete backup saved");
+        return;
+      }
+      notify.success("Backup restored", {
+        body: "All app data was replaced from the ZIP. Pair your devices again to resume sync.",
       });
-      if (completed && action === "import") onRestored();
+      setNote("Backup restored. Reloading your data…");
+      onRestored();
     },
-    onError: (error) => setNote({ tone: "problem", text: ipcError(error) }),
+    onError: (error, action) => {
+      const title =
+        action === "export" ? "Couldn't save the backup" : "Couldn't restore the backup";
+      notify.error(title, { body: ipcError(error) });
+    },
   });
 
   return (
@@ -73,7 +92,7 @@ export function FullBackupPanel({ onRestored = reloadAfterRestore }: { onRestore
           {operation.isPending && operation.variables === "import" ? "Importing…" : "Import ZIP…"}
         </button>
       </div>
-      <PanelAlert tone={note?.tone ?? "plain"}>{note?.text ?? null}</PanelAlert>
+      <PanelAlert tone="plain">{note}</PanelAlert>
     </div>
   );
 }

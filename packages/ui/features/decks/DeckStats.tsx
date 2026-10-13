@@ -35,6 +35,7 @@ import { ManaCurveChart } from "./stats/ManaCurveChart";
 import { ManaPips } from "./stats/ManaPips";
 import { DEFAULT_ODDS, type OddsQuestion } from "./stats/OpeningHandOdds";
 import { StatsCard } from "./stats/StatsCard";
+import { notifyRefusal, notifyWishesSent } from "./receipts";
 import { SIZE_KINDS } from "./validation/engine";
 
 /**
@@ -618,7 +619,11 @@ function emptyCurves(): Record<ManaKey, number[]> {
 export interface MissingWrite {
   /** The destination — a `wishlist_folders.id`, or `null` for the root. Required rather than
    *  optional, so a caller that has not thought about where the wishes go says so out loud. */
-  mutate: (variables: number | null) => void;
+  mutate: (
+    variables: number | null,
+    /** The press's own toast (`./receipts`), per call so a later press cannot replace it. */
+    options?: { onSuccess?: (wishes: number) => void; onError?: (error: unknown) => void },
+  ) => void;
   isPending: boolean;
   isSuccess: boolean;
   isError: boolean;
@@ -1055,9 +1060,17 @@ export function DeckStats({
         spent={spent}
         folderId={folderId}
         onFolderChange={setFolderId}
-        onSend={() => {
+        onSend={(destination) => {
           setSentFor({ missing: stats.missing, folderId });
-          send.mutate(folderId);
+          // **A toast as well as the band's own line** (the owner's rule: every wishlist add
+          // says so, and the inbox keeps it). `0` is the line's alone — it says why, in place.
+          send.mutate(folderId, {
+            onSuccess: (wishes) => {
+              if (wishes > 0) notifyWishesSent({ wishes, destination });
+            },
+            onError: (error) =>
+              notifyRefusal("Couldn't send the missing cards to the wishlist", error),
+          });
         }}
         onPull={onPull}
         onAddMissing={onAddMissing}
@@ -1223,7 +1236,8 @@ function Missing({
    *  {@link DeckStats} beside the latch it releases; see the state's own doc there. */
   folderId: number | null;
   onFolderChange: (folderId: number | null) => void;
-  onSend: () => void;
+  /** Handed the destination's name as the control shows it, for the press's toast. */
+  onSend: (destination: string | null) => void;
   /** Opens the pull dialog, or `null` where there is nothing to open — see the prop on
    *  {@link DeckStats}, which is where the theory list's absence is argued. */
   onPull: (() => void) | null;
@@ -1400,7 +1414,7 @@ function Missing({
               disabled={pending}
               aria-disabled={spent || undefined}
               onClick={() => {
-                if (!spent) onSend();
+                if (!spent) onSend(destination);
               }}
               {...tip(spent ? "Missing cards are already on your wishlist." : null)}
               className={cn(

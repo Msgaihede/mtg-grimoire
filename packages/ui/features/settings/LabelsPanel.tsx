@@ -79,6 +79,7 @@ import {
 } from "@/features/decks/metaRows";
 import { FOCUS } from "@/lib/focus";
 import { ipc, type GlobalLabel, type LabelColor } from "@/lib/ipc";
+import { notify } from "@/lib/notifications";
 import { cn } from "@/lib/utils";
 import { PanelAlert, SettingsSection } from "./panelChrome";
 
@@ -264,7 +265,18 @@ export function LabelsPanel(): JSX.Element {
               updatePending={updateLabel.isPending}
               deletePending={deleteLabel.isPending}
               onUpdate={(patch) => updateLabel.mutate(patch)}
-              onDelete={(id, done) => deleteLabel.mutate(id, { onSuccess: done })}
+              // **A receipt for the one destructive write here**, as a toast: the row goes from
+              // this list, but what went with it — the label on every card in every deck — is on
+              // pages the reader cannot see from Settings. A create and a rename are drawn in the
+              // list where the reader is looking, so they say nothing more.
+              onDelete={(id, done) =>
+                deleteLabel.mutate(id, {
+                  onSuccess: () => {
+                    done();
+                    notify.success(`Label “${label.name}” deleted`);
+                  },
+                })
+              }
               {...rowState(label.id)}
             />
           ))}

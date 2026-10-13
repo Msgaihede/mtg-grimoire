@@ -132,7 +132,7 @@
  * that separates the two Wurms, so a truncation short enough to fit a 150px tile would fold them
  * back together in exactly the case this exists for.
  */
-import { useCallback, useId, useRef, type JSX } from "react";
+import { useCallback, useId, useMemo, useRef, type JSX } from "react";
 import { ChevronRight, Plus, Trash2 } from "lucide-react";
 import { CardArt } from "@/components/CardArt";
 import { CardChin } from "@/components/CardChin";
@@ -177,6 +177,7 @@ import {
   useRemoveCaret,
 } from "./tokenCaret";
 import type { DeckTokens } from "./useDeckTokens";
+import { withTokenRemoveReceipt } from "./receipts";
 
 // The area's name lives in `deckTokens.ts` since 2026-10-03, so the history's sentences
 // (`auditText.ts`) can say it without reaching this component — and through it the app store,
@@ -380,9 +381,16 @@ export function DeckTokensPanel({
       focusable(sectionRef.current?.querySelector("button")),
     [],
   );
+  // **Remove printing says what it took** (the owner's rule: every deliberate removal from a deck
+  // toasts). Wrapped here, at the band's own button, rather than in `useDeckTokens`, which the
+  // light app's rail borrows too.
+  const removeSaid = useMemo(
+    () => withTokenRemoveReceipt(tokens.tokens, tokens.remove),
+    [tokens.tokens, tokens.remove],
+  );
   const removeAt = useRemoveCaret({
     views: tokens.tokens,
-    remove: tokens.remove,
+    remove: removeSaid,
     root: bandRoot,
     fallback: bandFloor,
   });
@@ -495,7 +503,7 @@ export function DeckTokensPanel({
             zoom={zoom}
             currency={marketplace.currency}
             onPick={onPick}
-            onRemove={removeAt ?? tokens.remove}
+            onRemove={removeAt ?? removeSaid}
           />
         )}
       </div>

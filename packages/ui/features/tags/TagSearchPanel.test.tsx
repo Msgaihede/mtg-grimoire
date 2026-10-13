@@ -53,6 +53,7 @@ import { SearchPage } from "@/features/search/SearchPage";
 import { SEARCH_OPEN_KEY } from "@/features/search/useSearchOpen";
 import { PANEL_WIDTH_KEY, PANEL_WIDTH_WRITE_DELAY_MS } from "@/features/search/usePanelWidth";
 import { HIDDEN_TAGS_KEY } from "@/features/settings/useHiddenTags";
+import { useNotifications } from "@/lib/notifications";
 import { useAppStore } from "@/lib/store";
 import { HIDE_BACKGROUND_LABEL } from "./TagChips";
 
@@ -407,9 +408,15 @@ describe("hiding a tag", () => {
     await waitFor(() => expect(tagMute).toHaveBeenCalledWith("art", "id-landscape", "landscape"));
     await waitFor(() => expect(tagChildren.mock.calls.length).toBeGreaterThan(1));
     await waitFor(() => expect(client.getQueryState(HIDDEN_TAGS_KEY)?.isInvalidated).toBe(true));
+    // The menu has closed, so the receipt is a toast — and it says where the tag comes back from.
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Hid “Landscape”",
+      body: "Unhide tags in Settings",
+      tone: "success",
+    });
   });
 
-  it("says a refused hide where the reader asked for it", async () => {
+  it("says a refused hide as a toast", async () => {
     tagMute.mockRejectedValue("the tag database is busy");
     const user = userEvent.setup();
     renderPage();
@@ -418,8 +425,12 @@ describe("hiding a tag", () => {
 
     await user.click(screen.getByRole("menuitem", { name: /^Hide this tag/ }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      /Couldn't hide Landscape — the tag database is busy/,
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Couldn't hide “Landscape”",
+        body: "the tag database is busy",
+        tone: "error",
+      }),
     );
   });
 });

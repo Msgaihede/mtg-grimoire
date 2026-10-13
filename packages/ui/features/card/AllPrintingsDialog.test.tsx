@@ -14,6 +14,7 @@ import type {
   PrintingsResponse,
 } from "@/lib/ipc";
 import { MARKETPLACES, type MarketplaceId } from "@/lib/marketplace";
+import { useNotifications } from "@/lib/notifications";
 import { pricesAsOf } from "@/lib/prices";
 // Type-only, so it is erased before the `vi.mock` below runs — the store's *value* import stays
 // under the mock, with the component's, where the hoisting order needs it.
@@ -712,6 +713,8 @@ describe("AllPrintingsDialog", () => {
       expect(deckSwapPrinting).toHaveBeenCalledWith(4, "card-1", "b", 9, "live", null),
     );
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // The wall has closed over the write, so the receipt is a toast naming the printing.
+    expect(useNotifications.getState().notices[0]?.title).toMatch(/^Changed “Sol Ring” to LEB #/);
   });
 
   /**
@@ -739,6 +742,9 @@ describe("AllPrintingsDialog", () => {
     );
     expect(deckSwapPrinting).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(useNotifications.getState().notices[0]?.title).toMatch(
+      /^Split 3 copies of “Sol Ring” onto LEB #/,
+    );
   });
 
   it("refuses a split onto the printing the row already plays, in words", async () => {
@@ -964,6 +970,9 @@ describe("AllPrintingsDialog", () => {
     // backend addresses the row, not the grain, so there is no `from` to send.
     await waitFor(() => expect(wishlistSetPrinting).toHaveBeenCalledWith(7, "b"));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(useNotifications.getState().notices[0]?.title).toMatch(
+      /^Changed the wish for “Sol Ring” to LEB #/,
+    );
     // And no deck was touched on the way through — the wish branch is taken *instead of*, not
     // as well as, and a request carrying both would otherwise write twice.
     expect(deckSwapPrinting).not.toHaveBeenCalled();

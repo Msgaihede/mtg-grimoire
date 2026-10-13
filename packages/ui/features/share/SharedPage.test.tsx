@@ -24,6 +24,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import type { CollectionRow, WishRow } from "@/lib/ipc";
+import { useNotifications } from "@/lib/notifications";
 import type { ShareCard, ShareSnapshot } from "@/lib/shareSnapshot";
 import { useAppStore } from "@/lib/store";
 import { NOTHING, SHARED_UNDRAWABLE, SharedPage } from "./SharedPage";
@@ -395,9 +396,13 @@ describe("building a want list out of somebody else's binder", () => {
 
     await waitFor(() => expect(wishlistAdd).toHaveBeenCalledTimes(2));
     expect(wishlistAdd).toHaveBeenCalledWith({ cardId: "bolt", quantity: 1, folderId: 7 });
-    // Said in the view rather than left in a dialog that has closed over it — the verb the
-    // button used, in the past tense, naming the destination the reader chose.
-    expect(await screen.findByText("Added 2 cards to Trade targets.")).toBeInTheDocument();
+    // Said as a toast, since the dialog has closed over it — the verb the button used, in the
+    // past tense, naming the destination the reader chose.
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]?.title).toBe(
+        "Added 2 cards to “Trade targets”",
+      ),
+    );
     // And the picks are put down, because they have been acted on: a bar still reading
     // *2 picked* over a wall whose cards are now on the wishlist invites the same press twice.
     expect(screen.queryByText("2 picked")).toBeNull();

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
+import { notify } from "@/lib/notifications";
 import { HIDDEN_TAGS_KEY } from "@/features/settings/useHiddenTags";
 import { ipc, ipcError, type ArtTagStatus, type TagHit, type TagNamespace } from "@/lib/ipc";
 import { ORACLE_TAGS_STATUS_KEY } from "@/lib/useOracleTagProgress";
@@ -85,8 +85,6 @@ function useArtTagStatus(): ArtTagStatus | null {
  */
 export function TagPicker({ tags }: { tags: TagFilter }) {
   const { selection, text, setText, picked, toggleTag, setNamespace } = tags;
-  /** A refused `tag_mute`, said where the reader asked for it. See {@link hideTag}. */
-  const [muteFailure, setMuteFailure] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
   const { hits, isPending } = useTagSearch(text, selection.namespace);
@@ -97,10 +95,15 @@ export function TagPicker({ tags }: { tags: TagFilter }) {
   /**
    * Hide a tag everywhere, and put the three lists that draw it out of date.
    *
-   * **It catches and then rethrows, and both halves are load-bearing.** The catch says a refusal
-   * where the reader asked (the rail has no idea why a write it did not make was refused); the
-   * rethrow keeps the rail honest, since it awaits this before writing "hidden tags come back
-   * from Settings". `TagTree`'s own wrapper catches, so nothing escapes unhandled.
+   * **It catches and then rethrows, and both halves are load-bearing.** The catch says the refusal
+   * (the rail has no idea why a write it did not make was refused); the rethrow keeps the rail
+   * honest, since it awaits this before writing "hidden tags come back from Settings". `TagTree`'s
+   * own wrapper catches, so nothing escapes unhandled.
+   *
+   * **Both answers are toasts** (`@/lib/notifications`): the press is a context-menu row, so the
+   * menu has closed by the time the backend answers, and the hide changes user data — the tag
+   * leaves every list until Settings brings it back. The refusal used to be a `CardMenuRefusal`
+   * line over the rail, a hand-rolled toast that stood until the next hide.
    *
    * `HIDDEN_TAGS_KEY` is the invalidation that is easy to forget, because Settings' list is not
    * on this surface — and the rail's answer to a hide is to point the reader at it.
@@ -110,10 +113,10 @@ export function TagPicker({ tags }: { tags: TagFilter }) {
       try {
         await ipc.tagMute(hit.namespace, hit.id, hit.slug);
       } catch (e) {
-        setMuteFailure(`Couldn't hide ${hit.label} — ${ipcError(e)}`);
+        notify.error(`Couldn't hide “${hit.label}”`, { body: ipcError(e) });
         throw e;
       }
-      setMuteFailure(null);
+      notify.success(`Hid “${hit.label}”`, { body: "Unhide tags in Settings" });
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["tag-children"] }),
         queryClient.invalidateQueries({ queryKey: ["tag-search"] }),
@@ -133,10 +136,6 @@ export function TagPicker({ tags }: { tags: TagFilter }) {
       />
 
       <TaxonomyGaps />
-
-      {/* A refused hide, said beside the rail the reader asked it of — the menu closes before
-          the answer arrives, so the surface carries the sentence. */}
-      <CardMenuRefusal error={muteFailure} className="shrink-0" />
 
       <TagTree
         namespace={selection.namespace}

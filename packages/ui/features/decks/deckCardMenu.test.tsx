@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { waitFor } from "@testing-library/react";
+import { useNotifications } from "@/lib/notifications";
 import type {
   MenuAction,
   MenuItem,
@@ -1561,5 +1563,75 @@ describe("the other list's row", () => {
     item.onSelect();
     expect(add).not.toHaveBeenCalled();
     expect(batch).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * **The receipts** (2026-10-12): the menu has closed by the time a write answers, so every row
+ * that writes says what it did as a toast — and a plural row says it **once**, with the count
+ * that landed (the owner's rule: one action, one toast).
+ */
+describe("the menu's receipts", () => {
+  const BOLT = bolt();
+  const BEAR = card({ name: "Bear", quantity: 2 });
+  const PONDER = card({ name: "Ponder", quantity: 1 });
+  const notices = () => useNotifications.getState().notices;
+
+  it("names the card and the pile a single move went to", async () => {
+    const moveTo = vi.fn(() => Promise.resolve());
+    const move = find(buildDeckCardMenu(bolt({ categoryId: 1 }), deps({ moveTo })), "Category");
+    (find((move as MenuSubmenu).items, "Recursion") as MenuAction).onSelect();
+    await waitFor(() =>
+      expect(notices()[0]).toMatchObject({
+        title: "Moved “Lightning Bolt” to “Recursion”",
+        tone: "success",
+      }),
+    );
+  });
+
+  it("says a plural removal once, with its count", async () => {
+    const remove = vi.fn(() => Promise.resolve());
+    const items = buildDeckCardMenu(BOLT, deps({ picked: [BOLT, BEAR, PONDER], remove }));
+    (find(items, "Remove 3 cards") as MenuAction).onSelect();
+    await waitFor(() => expect(notices()[0]?.title).toBe("Removed 3 cards from the deck"));
+    expect(notices()).toHaveLength(1);
+  });
+
+  it("folds a partly refused batch into one warning naming the first refusal", async () => {
+    const remove = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce("The database is busy.")
+      .mockResolvedValueOnce(undefined);
+    const items = buildDeckCardMenu(BOLT, deps({ picked: [BOLT, BEAR, PONDER], remove }));
+    (find(items, "Remove 3 cards") as MenuAction).onSelect();
+    await waitFor(() =>
+      expect(notices()[0]).toMatchObject({
+        title: "Removed 2 of 3 cards from the deck",
+        body: "The database is busy.",
+        tone: "warning",
+      }),
+    );
+    expect(notices()).toHaveLength(1);
+  });
+
+  it("says an error when nothing landed", async () => {
+    const setLabel = vi.fn(() => Promise.reject("Gone."));
+    const row = find(buildDeckCardMenu(BOLT, deps({ setLabel })), "Label card") as MenuSubmenu;
+    (find(row.items, "Budget swap") as MenuAction).onSelect();
+    await waitFor(() =>
+      expect(notices()[0]).toMatchObject({
+        title: "Couldn't label “Lightning Bolt” “Budget swap”",
+        body: "Gone.",
+        tone: "error",
+      }),
+    );
+  });
+
+  it("says nothing for a write that answers no promise", async () => {
+    const remove = vi.fn();
+    (find(buildDeckCardMenu(BOLT, deps({ remove })), "Remove card") as MenuAction).onSelect();
+    await Promise.resolve();
+    expect(notices()).toHaveLength(0);
   });
 });

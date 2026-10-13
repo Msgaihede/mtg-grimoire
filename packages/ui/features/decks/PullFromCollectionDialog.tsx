@@ -101,6 +101,7 @@ import {
   type PlannedRow,
   type PullChoice,
 } from "./pullPlan";
+import { notifyPulled, notifyRefusal } from "./receipts";
 
 /**
  * Stable identity for "the read has not answered", so {@link planPull} is not re-run over a fresh
@@ -168,7 +169,15 @@ const NOTHING_TO_PULL = {
  * the one write it makes is visible in its own signature.
  */
 export interface PullWrite {
-  mutate: (picks: DeckPullPick[]) => void;
+  /** The per-call options carry the press's toast (`./receipts`) — a call's own, so a write
+   *  that lands after the dialog closed still says what it did. */
+  mutate: (
+    picks: DeckPullPick[],
+    options?: {
+      onSuccess?: (outcome: DeckPullOutcome) => void;
+      onError?: (error: unknown) => void;
+    },
+  ) => void;
   isPending: boolean;
   isSuccess: boolean;
   isError: boolean;
@@ -579,7 +588,14 @@ function PullBody({
             // screen were counted from. `planPull` already builds a fresh object per pick for
             // exactly this reason, so the spread copies the array and shares nothing a caller
             // downstream could reach back into.
-            pull.mutate([...plan.picks]);
+            //
+            // **The toast is on top of the readout, not instead of it** (the owner's rule: every
+            // move of cardboard into a deck says so): the dialog may be shut before the answer,
+            // and the inbox keeps a record the readout does not.
+            pull.mutate([...plan.picks], {
+              onSuccess: (outcome) => notifyPulled(outcome, deckName),
+              onError: (error) => notifyRefusal("Couldn't pull from your collection", error),
+            });
           }}
           className={CONFIRM}
         >

@@ -7,6 +7,7 @@ import type { TheoryDiffRow } from "@/lib/ipc";
 import { cardImageUrl } from "@/lib/images";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
+import { useNotifications } from "@/lib/notifications";
 
 const deckTheoryDiff = vi.hoisted(() => vi.fn());
 const deckTheoryMissingToWishlist = vi.hoisted(() => vi.fn());
@@ -88,7 +89,8 @@ vi.mock("@/features/wishlist/WishDestination", () => ({
     folderId === null ? null : (FOLDER_NAMES[folderId] ?? null),
 }));
 
-import { diffTotals, TheoryDiffDialog, wishesSentNote } from "./TheoryDiffDialog";
+import { diffTotals, TheoryDiffDialog } from "./TheoryDiffDialog";
+import { notifyWishesSent } from "./receipts";
 
 /**
  * A row as `deck_theory_diff` answers one: one **exact card** — a printing in a finish — already
@@ -937,7 +939,7 @@ describe("the theory difference dialog", () => {
       props.onDismiss.mock.invocationCallOrder[0],
     );
     expect(props.onClose).not.toHaveBeenCalled();
-    // Nothing is said in the footer on the way out — the sentence is the host's now.
+    // Nothing is said in the footer on the way out — the sentence is a toast now.
     expect(screen.queryByText(/wishes updated/)).not.toBeInTheDocument();
     expect(deckTheoryMissingToWishlist).toHaveBeenCalledWith(
       4,
@@ -970,26 +972,55 @@ describe("the theory difference dialog", () => {
   });
 
   /**
-   * The sentence the host says for the footer's press, now that the dialog is gone by the time
-   * anyone could read it. It names **where from** as well as where to, because out on the editor
-   * a bare "Sent." is about nothing on screen; the folder clause is `filedIn`'s, so the root adds
-   * nothing. Zero is not "already wished for" — the fold never skips a wish that is already there
-   * — so it says the two things a zero can actually mean.
+   * The footer's answer, **as a toast** (2026-10-12) — said by the dialog itself, now that the
+   * editor's self-clearing line is gone. It names **where to**, because out on the editor a bare
+   * "Sent." is about nothing on screen; the root is `the wishlist`. Zero is not "already wished
+   * for" — the fold never skips a wish that is already there — so it says the two things a zero
+   * can actually mean, and names no drawer as having received anything.
    */
-  it("words the footer's answer for the host, at the root, in a folder and at zero", () => {
-    expect(wishesSentNote({ wishes: 3, destination: null })).toBe(
-      "Added to your wishlist: 3 items updated.",
-    );
-    expect(wishesSentNote({ wishes: 1, destination: "Ordered" })).toBe(
-      "Added to your wishlist: 1 item updated in Ordered.",
-    );
-    const zero = wishesSentNote({ wishes: 0, destination: "Ordered" });
-    expect(zero).toBe(
-      "Nothing sent. These cards are no longer missing or no longer in the card database.",
-    );
+  it("says the footer's answer as a toast, at the root, in a folder and at zero", () => {
+    notifyWishesSent({ wishes: 3, destination: null });
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Sent 3 cards to the wishlist",
+      tone: "success",
+    });
+    notifyWishesSent({ wishes: 1, destination: "Ordered" });
+    expect(useNotifications.getState().notices[0]?.title).toBe("Sent 1 card to “Ordered”");
+    notifyWishesSent({ wishes: 0, destination: "Ordered" });
+    const zero = useNotifications.getState().notices[0];
+    expect(zero).toMatchObject({
+      title: "Nothing sent to the wishlist",
+      body: "These cards are no longer missing or no longer in the card database",
+      tone: "info",
+    });
     // Nothing was filed, so no drawer is named as having received it.
-    expect(zero).not.toMatch(/Ordered/);
-    expect(zero).not.toMatch(/already/i);
+    expect(`${zero?.title} ${zero?.body}`).not.toMatch(/Ordered|already/i);
+  });
+
+  it("raises the toast itself when the footer's press lands, and a refusal as an error", async () => {
+    const user = userEvent.setup();
+    deckTheoryMissingToWishlist.mockResolvedValue(3);
+    wrap(<TheoryDiffDialog {...props} />);
+    await user.click(await screen.findByRole("button", { name: "Send 3 selected to wishlist" }));
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]?.title).toBe("Sent 3 cards to the wishlist"),
+    );
+    // One press, one notice.
+    expect(useNotifications.getState().notices).toHaveLength(1);
+  });
+
+  it("says a refused footer press as an error toast too", async () => {
+    const user = userEvent.setup();
+    deckTheoryMissingToWishlist.mockRejectedValue("the database is busy; try again");
+    wrap(<TheoryDiffDialog {...props} />);
+    await user.click(await screen.findByRole("button", { name: "Send 3 selected to wishlist" }));
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Couldn't send 3 cards to the wishlist",
+        body: "the database is busy; try again",
+        tone: "error",
+      }),
+    );
   });
 
   /**

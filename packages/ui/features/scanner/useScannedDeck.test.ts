@@ -16,6 +16,7 @@ vi.mock("@/lib/ipc", async (original) => ({
   ipc: calls,
 }));
 
+import { useNotifications } from "@/lib/notifications";
 import { useScannedDeck } from "./useScannedDeck";
 
 const INPUT: DeckInput = {
@@ -104,6 +105,12 @@ describe("useScannedDeck", () => {
       "no longer in the card database",
     );
     expect(calls.deckCreate).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Couldn't create a deck from the scanned cards",
+        tone: "error",
+      }),
+    );
   });
 
   it("files by type line when the taxonomy read fails", async () => {

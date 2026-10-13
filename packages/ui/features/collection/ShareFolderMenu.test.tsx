@@ -31,6 +31,7 @@ vi.mock("@/lib/clipboard", () => ({ copyText }));
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import type { CollectionFolder, ShareRow, SupporterStatus } from "@/lib/ipc";
+import { useNotifications } from "@/lib/notifications";
 import { SUPPORTER_KEY } from "@/lib/query";
 import { PublishesContext, ReachContext } from "@/lib/reach";
 import { useAppStore } from "@/lib/store";
@@ -314,7 +315,10 @@ describe("updating a share that already exists", () => {
     await waitFor(() => expect(shareRefresh).toHaveBeenCalledWith("testshareid00000"));
     expect(shareRefresh).toHaveBeenCalledTimes(1);
     await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent("Snapshot updated."),
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Updated the share of “Trade binder”",
+        tone: "success",
+      }),
     );
   });
 
@@ -330,8 +334,13 @@ describe("updating a share that already exists", () => {
     await user.click(await screen.findByRole("menuitem", { name: /Update now/ }));
 
     await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent(/old snapshot is still live/),
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Couldn't update the share of “Trade binder”",
+        body: expect.stringMatching(/old snapshot is still live/),
+        tone: "error",
+      }),
     );
+    expect(useNotifications.getState().notices).toHaveLength(1);
   });
 });
 
@@ -395,11 +404,14 @@ describe("the link", () => {
 
     expect(copyText).toHaveBeenCalledWith(LINK);
     await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent("Link copied."),
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Link copied",
+        tone: "success",
+      }),
     );
   });
 
-  /** A refused write is not a copied link, and the status line must not claim one. */
+  /** A refused write is not a copied link, and the toast must not claim one. */
   it("reports a refused clipboard write rather than claiming a copy", async () => {
     shareList.mockResolvedValue([share()]);
     copyText.mockRejectedValue(new Error("clipboard is not available"));
@@ -410,11 +422,13 @@ describe("the link", () => {
     await user.click(await screen.findByRole("menuitem", { name: /Copy link/ }));
 
     await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent(
-        /clipboard is not available/,
-      ),
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Couldn't copy the link",
+        body: expect.stringMatching(/clipboard is not available/),
+        tone: "error",
+      }),
     );
-    expect(screen.getByRole("status")).not.toHaveTextContent("Link copied.");
+    expect(useNotifications.getState().notices).toHaveLength(1);
   });
 });
 
@@ -478,6 +492,14 @@ describe("publishing", () => {
         condition: false,
         lang: false,
         value: false,
+      }),
+    );
+    // The dialog closed on the answer, so the receipt is a toast that says where the link is.
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Shared “Collection”",
+        body: "Copy the link from the Share menu.",
+        tone: "success",
       }),
     );
   });
@@ -565,6 +587,12 @@ describe("withdrawing", () => {
 
     await user.click(screen.getByRole("button", { name: "Stop sharing" }));
     await waitFor(() => expect(shareRevoke).toHaveBeenCalledWith("testshareid00000"));
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Stopped sharing “Trade binder”",
+        tone: "success",
+      }),
+    );
   });
 
   /**

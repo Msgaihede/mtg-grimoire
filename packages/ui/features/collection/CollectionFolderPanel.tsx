@@ -144,7 +144,8 @@ export const CollectionFolderPanel = memo(function CollectionFolderPanel({
         {/* The wishlist's `Clear…` (issue #471) one cabinet over, and in this strip for its
             reason: "clear this?" is a sentence about which cards go, and it fits on no tile.
             A refusal leaves the question open and the banner under the header says why —
-            the folder delete's behaviour, since the two share that banner. */}
+            the folder delete's behaviour, since the two share that banner — and the page raises
+            the toast for either answer (`collectionReceipts.ts`). */}
         {panel.kind === "clearRemoved" && (
           <ClearRemovedConfirm
             cards={removedCards}
@@ -158,7 +159,8 @@ export const CollectionFolderPanel = memo(function CollectionFolderPanel({
         {/* `Remove N cards from collection…` (issue #555) — the card menu's press over more
             than one entry, asked here for `Clear…`'s reason: "remove these?" is a sentence
             about which cards go, and the menu that raised it has already closed. A refusal
-            leaves the question open and the banner under the header says why. */}
+            leaves the question open and the banner under the header says why; the page toasts
+            either answer. */}
         {panel.kind === "removeCopies" && (
           <RemoveCopiesConfirm
             {...removalFacts(rows, panel.entryIds)}

@@ -11,6 +11,7 @@ import type {
   GlobalLabel,
 } from "@/lib/ipc";
 import { dndManager } from "@/lib/dndManager";
+import { useNotifications } from "@/lib/notifications";
 import { boxed, startPointerDrag } from "@/test-drag";
 import { pickOption } from "@/test-dropdown";
 
@@ -751,6 +752,12 @@ describe("categories", () => {
     await user.click(within(dialog).getByRole("button", { name: "Move 12 cards and delete" }));
 
     expect(deckCategoryDelete).toHaveBeenCalledWith(2, 1);
+    // The question closes on the write, so the receipt is a toast naming both piles and the count.
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]?.title).toMatch(
+        /^Deleted “.+” and moved 12 cards to “Commander”$/,
+      ),
+    );
   });
 
   /**

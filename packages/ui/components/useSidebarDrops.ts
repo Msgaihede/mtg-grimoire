@@ -1,22 +1,12 @@
-import { useCallback, useEffect, useState, type RefObject } from "react";
+import { useCallback, type RefObject } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { readCards, readDragData, type DragPayload } from "@/features/decks/dnd";
 import { useDeck } from "@/features/decks/useDeck";
-import { dndManager } from "@/lib/dndManager";
-import { useDndDropTarget } from "@/lib/dndTarget";
+import { useDndDragging, useDndDropTarget } from "@/lib/dndTarget";
 import { ipc, ipcError } from "@/lib/ipc";
+import { notify } from "@/lib/notifications";
 import { useAppStore } from "@/lib/store";
 import { refreshCardSearches } from "@/lib/searchMarks";
-
-/**
- * How long a drop's sentence stays up when nothing takes it down first.
- *
- * A timer, where almost nothing else in this app has one — and it is allowed here because it
- * is not a transition: the line appears and disappears instantly, and this only decides *when*
- * a sentence about something that already happened stops being news. Picking up the next card
- * clears it sooner, which is the case that actually happens.
- */
-export const REPORT_MS = 4000;
 
 /** What the Decks entry says while it cannot take a card, on the one gesture that asks. */
 const NO_OPEN_DECK = "Open a deck to drop cards into it";
@@ -33,11 +23,51 @@ export interface SidebarDrop {
   /** Why it cannot, for the entry's own tooltip while a card is in the air. `null` when it
    *  can: an entry that is working says so by lighting up, not in words. */
   inertReason: string | null;
-  /** What just happened here, for the entry's live region, or `null`. */
-  report: string | null;
-  /** Write it. Only ever called with a payload {@link readDragData} returned and this entry
-   *  accepted, so it needs no guard of its own beyond the open deck's id. */
-  onDrop: (payload: DragPayload) => void;
+  /** Write them — **every card of the gesture in one call**, so the drop answers with one
+   *  toast rather than one per card. Only ever called with payloads {@link readCards} returned
+   *  and this entry accepted, so it needs no guard of its own beyond the open deck's id. */
+  onDrop: (payloads: readonly DragPayload[]) => void;
+}
+
+/**
+ * The toast a drop answers with: the card by name when it was one, a count when it was a set.
+ * `where` is already worded — `“Burn”`, `the open deck`, `the wishlist`.
+ */
+export function dropReceipt(added: number, payloads: readonly DragPayload[], where: string) {
+  const what =
+    payloads.length === 1 && added === 1
+      ? `“${payloads[0].name}”`
+      : `${added} ${added === 1 ? "card" : "cards"}`;
+  return `Added ${what} to ${where}`;
+}
+
+/**
+ * Write every card of one drop, then say once what happened — **one gesture, one toast**, however
+ * many cards it carried. All landed: a receipt. Some refused: one warning, `Added 47 of 50 cards
+ * to …`, carrying the **first** refusal (a deck deleted under the drop refuses every card in the
+ * same words, so one is the sentence). None landed: the refusal, as an error.
+ *
+ * `mutateAsync` rather than `mutate`, because `mutate`'s per-call callbacks fire for the
+ * **latest** call only, and a multi-card drop reported on its last card alone (`cardMenu.tsx`'s
+ * deck queue learnt the same in issue #954). The writes go out together, as they always have from
+ * here; only the reporting waits for all of them.
+ */
+async function writeAndReport(
+  payloads: readonly DragPayload[],
+  write: (payload: DragPayload) => Promise<unknown>,
+  where: string,
+) {
+  const settled = await Promise.allSettled(payloads.map(write));
+  const added = settled.filter((s) => s.status === "fulfilled").length;
+  const refused = settled.find((s): s is PromiseRejectedResult => s.status === "rejected");
+  if (refused === undefined) notify.success(dropReceipt(added, payloads, where));
+  else if (added === 0)
+    notify.error(`Couldn't add to ${where}`, { body: ipcError(refused.reason) });
+  else {
+    notify.warning(`Added ${added} of ${payloads.length} cards to ${where}`, {
+      body: ipcError(refused.reason),
+    });
+  }
 }
 
 /**
@@ -58,9 +88,15 @@ export interface SidebarDrop {
  * to the editor's columns lives on the mutation's single definition rather than on this call
  * site: two definitions would be two places to keep one rule.
  *
- * What this surface owns is the **reporting** — which is why the sentences are attached as
- * per-call callbacks on `mutate` rather than folded into the definition. A drop reports where
- * the reader dropped it; the write and its refusal rule belong to the deck.
+ * What this surface owns is the **reporting** — which is why the sentences are said here, at
+ * the gesture, rather than folded into the definition. A drop reports what the reader dropped;
+ * the write and its refusal rule belong to the deck.
+ *
+ * **The report is a toast** (`@/lib/notifications`). It used to be a line under the entry that
+ * cleared itself after four seconds or on the next pickup — a hand-rolled toast in all but name,
+ * squeezed into a 183px column (a panel beside the rail when it was collapsed). A drop is a
+ * deliberate write to a list on another page, so it gets the app's receipt, and a refusal gets
+ * the app's refusal; both are then in the inbox for a reader who looked away.
  *
  * `null` mounts an idle mutation and a query that asks for nothing, the shape the gallery's
  * `useDeck(null)` already has.
@@ -69,11 +105,12 @@ export function useSidebarDrops() {
   const openDeckId = useAppStore((s) => s.openDeckId);
   const queryClient = useQueryClient();
   const deck = useDeck(openDeckId);
-  /** A card is in the air somewhere in the window — what raises the ring. */
-  const [dragging, setDragging] = useState(false);
-  /** The one sentence the sidebar is saying, and which entry is saying it. One at a time,
-   *  because one drop happens at a time. */
-  const [report, setReport] = useState<{ at: SidebarTargetId; text: string } | null>(null);
+  /**
+   * A card is in the air somewhere in the window — what raises the ring. `dragend` fires for a
+   * cancelled drag as well as a completed one, so the ring stands down on Escape without this
+   * hearing a keypress; a drag this app did not put in the air reads as `null` and raises none.
+   */
+  const dragging = useDndDragging(readDragData) !== null;
 
   const addWish = useMutation({
     // The printing that was dragged, pinned — the reader was looking at *this* one — and no
@@ -88,96 +125,66 @@ export function useSidebarDrops() {
       // A result row draws `wishlisted`, so the heart on every printing of this card has
       // just changed. No `["collection"]`: a wish moves no copies.
       void refreshCardSearches(queryClient);
-      setReport({ at: "wishlist", text: "Added to wishlist." });
     },
     // No invalidation on the way out, where the deck's write has one: a refused wish wrote
-    // nothing and deleted nothing, so there is no list on screen that has gone wrong.
-    onError: (error) => setReport({ at: "wishlist", text: ipcError(error) }),
+    // nothing and deleted nothing, so there is no list on screen that has gone wrong. The
+    // refusal is said by the drop that asked (`writeAndReport`).
   });
 
-  // A card in the air anywhere in the window, and the last sentence taken down as the next one
-  // is picked up. `dragend` fires for a cancelled drag as well as a completed one — the library
-  // ends both the same way — so the ring stands down on Escape without this hearing a keypress.
-  //
-  // **The manager's own listener rather than `useDndDragging`**, and the reason is the second
-  // write: picking a card up clears whatever the last drop said, and that is a fact about the
-  // *event* rather than about the payload. Derived from a `dragging` flag it would have to be a
-  // `setState` inside an effect keyed on that flag, which is the shape `no-setState-in-an-effect`
-  // exists to keep out — and two subscriptions where one says both things.
-  useEffect(() => {
-    const off = [
-      dndManager.monitor.addEventListener("dragstart", ({ operation }) => {
-        if (!operation.source || readDragData(operation.source.data) === null) return;
-        setDragging(true);
-        setReport(null);
-      }),
-      dndManager.monitor.addEventListener("dragend", () => setDragging(false)),
-    ];
-    return () => {
-      for (const stop of off) stop();
-    };
-  }, []);
-
-  // …and the other half of "whichever comes first". Keyed on the report object rather than on
-  // its text, so a second identical sentence restarts the clock instead of inheriting what was
-  // left of the first one's.
-  useEffect(() => {
-    if (report === null) return;
-    const timer = setTimeout(() => setReport(null), REPORT_MS);
-    return () => clearTimeout(timer);
-  }, [report]);
-
-  const writeToDeck = deck.addCard.mutate;
+  const writeToDeck = deck.addCard.mutateAsync;
   // Whatever the shared read last answered. `useSwapFromPane` reads `deckGone` off the same
   // query for the same reason: with an editor open there is always an answer here.
   const deckName = deck.deck?.name;
   const dropOnDecks = useCallback(
-    (payload: DragPayload) => {
+    (payloads: readonly DragPayload[]) => {
       // Unreachable: the entry refuses the drop with no deck open. A fence rather than a path,
       // and the alternative is `deck_add_card` addressed to deck `null` (which `opened` throws
       // on, into a mutation state nothing here draws).
       if (openDeckId === null) return;
-      writeToDeck(
-        // **One copy, and the pile is whatever the payload knows.** A sidebar entry is a
-        // destination rather than a form: it is a nav item several views away from the deck, so
-        // for a card off a wall there is no column here a reader could have pointed at. So that
-        // card names no category and lands where **the deck** says its adds land —
-        // `deckDefault`, the setting the editor's own Add button honours (issue #693) — and on a
-        // deck left on Auto it rides its **type line** instead, which `useDeck`'s `addCard`
-        // files through `autoCategoryFor` — a Ramp artifact dropped here lands under Artifact,
-        // found or created. The line comes from the payload rather than a lookup, which is what
-        // keeps this a gesture and not a query: every source that carries a `"card"` has it in
-        // hand when it registers its draggable (`dnd.ts`). `null` — an orphaned collection row
-        // whose printing has left `cards` — files under `Uncategorized`.
-        //
-        // **A card dragged out of the open deck keeps its own category**, because it has one:
-        // `fromCategoryId` is a pile of *this* deck (a deck card exists only while its editor is
-        // mounted), so the rule that a drag names its own destination holds here too. It used to
-        // land in a found-or-created "Main deck" instead, which quietly moved a Sideboard card's
-        // extra copy into the main deck.
-        payload.kind === "deck-card"
-          ? { cardId: payload.cardId, categoryId: payload.fromCategoryId, quantity: 1 }
-          : {
-              cardId: payload.cardId,
-              deckDefault: true,
-              typeLine: payload.typeLine,
-              quantity: 1,
-            },
-        {
-          // The fallback is the sliver where the editor's read has not landed yet — the drop
-          // still writes, and the sentence says what it can.
-          onSuccess: () =>
-            setReport({ at: "decks", text: `Added to ${deckName ?? "the open deck"}.` }),
-          onError: (error) => setReport({ at: "decks", text: ipcError(error) }),
-        },
+      // The fallback is the sliver where the editor's read has not landed yet — the drop
+      // still writes, and the sentence says what it can.
+      const where = deckName === undefined ? "the open deck" : `“${deckName}”`;
+      void writeAndReport(
+        payloads,
+        (payload) =>
+          writeToDeck(
+            // **One copy, and the pile is whatever the payload knows.** A sidebar entry is a
+            // destination rather than a form: it is a nav item several views away from the deck,
+            // so for a card off a wall there is no column here a reader could have pointed at. So
+            // that card names no category and lands where **the deck** says its adds land —
+            // `deckDefault`, the setting the editor's own Add button honours (issue #693) — and
+            // on a deck left on Auto it rides its **type line** instead, which `useDeck`'s
+            // `addCard` files through `autoCategoryFor` — a Ramp artifact dropped here lands
+            // under Artifact, found or created. The line comes from the payload rather than a
+            // lookup, which is what keeps this a gesture and not a query: every source that
+            // carries a `"card"` has it in hand when it registers its draggable (`dnd.ts`).
+            // `null` — an orphaned collection row whose printing has left `cards` — files under
+            // `Uncategorized`.
+            //
+            // **A card dragged out of the open deck keeps its own category**, because it has
+            // one: `fromCategoryId` is a pile of *this* deck (a deck card exists only while its
+            // editor is mounted), so the rule that a drag names its own destination holds here
+            // too. It used to land in a found-or-created "Main deck" instead, which quietly moved
+            // a Sideboard card's extra copy into the main deck.
+            payload.kind === "deck-card"
+              ? { cardId: payload.cardId, categoryId: payload.fromCategoryId, quantity: 1 }
+              : {
+                  cardId: payload.cardId,
+                  deckDefault: true,
+                  typeLine: payload.typeLine,
+                  quantity: 1,
+                },
+          ),
+        where,
       );
     },
     [openDeckId, writeToDeck, deckName],
   );
 
-  const writeWish = addWish.mutate;
+  const writeWish = addWish.mutateAsync;
   const dropOnWishlist = useCallback(
-    (payload: DragPayload) => writeWish(payload.cardId),
+    (payloads: readonly DragPayload[]) =>
+      void writeAndReport(payloads, (payload) => writeWish(payload.cardId), "the wishlist"),
     [writeWish],
   );
 
@@ -188,14 +195,12 @@ export function useSidebarDrops() {
     decks: {
       eligible: !noDeck,
       inertReason: noDeck ? NO_OPEN_DECK : null,
-      report: report?.at === "decks" ? report.text : null,
       onDrop: dropOnDecks,
     } satisfies SidebarDrop,
     wishlist: {
       // From anywhere, always: a shopping list needs nothing on screen to be added to.
       eligible: true,
       inertReason: null,
-      report: report?.at === "wishlist" ? report.text : null,
       onDrop: dropOnWishlist,
     } satisfies SidebarDrop,
   };
@@ -252,9 +257,9 @@ export function useSidebarDropTarget({
     ref,
     read: readCards,
     canDrop: () => drop?.eligible === true,
-    onDrop: (payloads) => {
-      for (const payload of payloads) drop?.onDrop(payload);
-    },
+    // The whole gesture in one call, so a picked set dropped here is one write-and-report rather
+    // than one toast per card.
+    onDrop: (payloads) => drop?.onDrop(payloads),
     // **Over only while the pointer is inside the entry.** dnd-kit's default detector falls back
     // to the carried card's whole rectangle when the pointer is in no target, and the rail sits
     // flush against the left edge of every page — so a card held on the wall's first tile column
