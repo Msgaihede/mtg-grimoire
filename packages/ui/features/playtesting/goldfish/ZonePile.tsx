@@ -14,7 +14,7 @@ import type { Pointed, ZoneLook } from "./types";
 
 /**
  * The four zones beside the table — command and exile on the left, graveyard and library on the
- * right — each one a 120 × 168 slot (the artboard's 104 × 146, grown) with its count under it.
+ * right — each one a 180 × 252 slot (the artboard's 104 × 146, grown) with its count under it.
  *
  * **Every zone is a drop target drawn over nothing but the board**, and `overlay` all the same:
  * the columns sit beside the table's box, and a card carried out of the table toward them is
@@ -24,7 +24,7 @@ import type { Pointed, ZoneLook } from "./types";
  *
  * **What they read is narrowed to the zones they draw** (`ZoneView`), so the playtest board hands
  * them the reader's seat as it is. `size` is the card's box there — the playtest board's two
- * tables share the window's height — and absent, the goldfish's 120 × 168 is drawn exactly as it
+ * tables share the window's height — and absent, the goldfish's 180 × 252 is drawn exactly as it
  * always was (the classes, no inline size).
  */
 
@@ -42,7 +42,7 @@ function boxOf(size: ZoneSize | undefined): { width: number; height: number } | 
 }
 
 /** How far down each further commander is drawn, so the one under it still shows its name. */
-const PARTNER_STEP = 28;
+const PARTNER_STEP = 42;
 
 /** The empty zone: a dashed slot naming itself, its edge gold while a card is over it. */
 function EmptySlot({
@@ -58,7 +58,7 @@ function EmptySlot({
     <div
       style={boxOf(size)}
       className={cn(
-        "flex h-[168px] w-[120px] items-center justify-center rounded-lg border border-dashed bg-bg/60 text-[11px] text-dim",
+        "flex h-[252px] w-[180px] items-center justify-center rounded-lg border border-dashed bg-bg/60 text-[11px] text-dim",
         "transition-[border-color] duration-150 motion-reduce:transition-none",
         over ? "border-accent" : "border-border",
       )}
@@ -121,7 +121,7 @@ export function CommandZone({
         <EmptySlot label="Command" over={over} size={size} />
       ) : (
         <div
-          className={cn("relative w-[120px] rounded-lg", over && OVER_OUTLINE)}
+          className={cn("relative w-[180px] rounded-lg", over && OVER_OUTLINE)}
           style={{
             ...(size === undefined ? {} : { width: size.width }),
             height: (size?.height ?? ZONE_H) + (commanders.length - 1) * PARTNER_STEP,
@@ -196,7 +196,7 @@ function CommanderCard({
       onMouseLeave={onUnpoint}
       data-point={card.id}
       data-land={card.id}
-      className={cn("absolute left-0 h-[168px] w-[120px] cursor-grab rounded-md p-0", FOCUS)}
+      className={cn("absolute left-0 h-[252px] w-[180px] cursor-grab rounded-md p-0", FOCUS)}
       style={{ top, ...boxOf(size) }}
     >
       <CardFace card={card} />
@@ -290,7 +290,7 @@ function FaceUpZone({
           data-land={top.id}
           style={boxOf(size)}
           className={cn(
-            "relative h-[168px] w-[120px] cursor-grab rounded-lg p-0",
+            "relative h-[252px] w-[180px] cursor-grab rounded-lg p-0",
             FOCUS,
             over && OVER_OUTLINE,
           )}
@@ -336,7 +336,7 @@ export function LibraryZone({ view, onAct, onDrop, onLook, size }: LibraryZonePr
         onKeyDown={menuKey(build)}
         style={boxOf(size)}
         className={cn(
-          "flex h-[168px] w-[120px] cursor-pointer items-center justify-center rounded-lg border bg-surface text-accent disabled:cursor-default",
+          "flex h-[252px] w-[180px] cursor-pointer items-center justify-center rounded-lg border bg-surface text-accent disabled:cursor-default",
           // The edges of the cards under the top one, two of them, the way a deck sits.
           "shadow-[2px_2px_0_var(--color-bg),3px_3px_0_var(--color-border),5px_5px_0_var(--color-bg),6px_6px_0_var(--color-border)]",
           over ? "border-accent" : "border-border",
@@ -361,7 +361,7 @@ function libraryEnds(view: ZoneView | null): string | undefined {
   return `${cards[0].id} ${cards[cards.length - 1].id}`;
 }
 
-/** The library back's mark: the goldfish's 48 px on its 120 px card, in proportion on another. */
+/** The library back's mark: the goldfish's 72 px on its 180 px card, in proportion on another. */
 export function markSize(size: ZoneSize | undefined): number {
-  return Math.round((48 * (size?.width ?? ZONE_W)) / ZONE_W);
+  return Math.round((72 * (size?.width ?? ZONE_W)) / ZONE_W);
 }

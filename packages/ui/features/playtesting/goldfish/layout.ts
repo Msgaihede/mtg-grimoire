@@ -53,8 +53,8 @@ export const HAND_ROW_MAX = 7 * HAND_CARD_W + 6 * HAND_GAP;
 export const HAND_MIN_STEP = 36;
 
 /** The zone columns' cards: command, exile, graveyard, library. */
-export const ZONE_W = 120;
-export const ZONE_H = 168;
+export const ZONE_W = 180;
+export const ZONE_H = 252;
 
 /** A zone card's box — the goldfish's {@link ZONE_W} × {@link ZONE_H} unless a board passes
  *  another (the playtest board's two tables share the window's height, so its zones are smaller). */

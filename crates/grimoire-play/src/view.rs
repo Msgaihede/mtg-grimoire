@@ -18,6 +18,10 @@ pub struct GoldfishView {
     pub turn: u32,
     /// Present while the opening hand is being decided.
     pub mulligan: Option<MulliganView>,
+    /// How many cards of the hand the reader has to discard before the turn can end (CR 514.1,
+    /// the cleanup step's discard to the maximum hand size). 0 at every stage but
+    /// [`Stage::Discard`].
+    pub discard: u32,
     pub life: i32,
     pub opponent_life: i32,
     pub hand: Vec<GameCard>,
@@ -52,6 +56,10 @@ pub enum Stage {
     /// The reader's main phase, with priority and nothing on the stack — where every action
     /// starts from and ends at.
     Playing,
+    /// The reader's cleanup step, with more cards in hand than their maximum hand size: the turn
+    /// was passed (`GoldfishAction::NextTurn`) and waits here until the reader says which cards
+    /// go (`GoldfishAction::Discard`). Everything else is refused meanwhile.
+    Discard,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -200,8 +208,15 @@ pub enum GoldfishAction {
         life: i32,
     },
     /// End this turn and play to the reader's next main phase: the goldfish's turn passes doing
-    /// nothing, the reader's untap, upkeep and draw happen as the rules have them.
+    /// nothing, the reader's untap, upkeep and draw happen as the rules have them. With more
+    /// cards in hand than the maximum hand size it stops at the cleanup step instead
+    /// (`Stage::Discard`), for the reader to choose what is discarded.
     NextTurn,
+    /// The cleanup step's discard: `ids` from the hand, as many as `GoldfishView::discard` says,
+    /// no more and no fewer. The turn then passes on to the reader's next main phase.
+    Discard {
+        ids: Vec<u64>,
+    },
 }
 
 /// What an action did, one fact a row, for the log.

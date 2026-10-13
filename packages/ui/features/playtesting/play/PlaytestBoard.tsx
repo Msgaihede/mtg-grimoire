@@ -79,7 +79,7 @@ import { PromptPanel } from "./PromptPanel";
  * foot the bottom 108 (the hand, the plate, the stage button), the middle line
  * 36 px tall just above the centre, and the two tables share what is left equally — 275 px
  * each in a 766 px board. The zone columns' cards are {@link ZONE} rather than the goldfish's
- * 120 × 168: two of them and their labels stand beside each table's height.
+ * 180 × 252: two of them and their labels stand beside each table's height.
  *
  * **The reader's cards are handled as on the goldfish** — drag between zones, a click taps, a
  * double-click plays, a right-click opens the goldfish's menus — and those are sandbox moves the
@@ -114,7 +114,7 @@ export interface PlaytestBoardProps {
   initialPlaymat?: Playmat;
 }
 
-/** The zone columns' cards: the goldfish's 120 × 168 at two-thirds. */
+/** The zone columns' cards: smaller than the goldfish's 180 × 252, so two stand beside a table. */
 const ZONE: ZoneSize = { width: 80, height: 112 };
 
 const CHROME_BUTTON = cn(
@@ -177,7 +177,13 @@ export function PlaytestBoard({
     [onAct],
   );
   /** The goldfish's pieces speak `GoldfishAction` (`actions.ts`). */
-  const goldfishAct = useCallback((action: GoldfishAction) => onAct(fromGoldfish(action)), [onAct]);
+  const goldfishAct = useCallback(
+    (action: GoldfishAction) => {
+      const mapped = fromGoldfish(action);
+      if (mapped !== null) onAct(mapped);
+    },
+    [onAct],
+  );
 
   const ids = useMemo(
     () => (view === null || view.stage === "mulligan" ? null : seen(view)),

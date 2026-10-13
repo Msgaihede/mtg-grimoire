@@ -212,7 +212,7 @@ board's box, and the board fits a 1280 × 800 window (a 766 px board):
   for the opponent's), and the newest log line or the engine's refusal.
 - **The two tables** share the rest equally, each inset 112 px from either side. On the opponent's
   table the creature lane is nearest the middle line and the back row is at the top.
-- **The zone columns** sit 16 px in, with 80 × 112 cards (the goldfish's are 120 × 168). The
+- **The zone columns** sit 16 px in, with 80 × 112 cards (the goldfish's are 180 × 252). The
   opponent's side has library over graveyard on the left and exile over command on the right. The
   reader's side has command over exile on the left and graveyard over library on the right.
 

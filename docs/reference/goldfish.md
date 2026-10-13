@@ -171,10 +171,21 @@ instead, so the game never holds half a cast.
 **A commander put down unpaid still raises its tax.** The reader cast it; they only skipped
 paying. `record_commander_cast` is called on that path too.
 
-**A question the engine asks while a turn passes takes its first answer.** Examples are an upkeep
-trigger's target, or a discard to hand size. `Happened::Chose` says so, and the log reads "The
-rules engine answered a … prompt for you". It is the one place the engine decides for the reader,
-because by then the thing that caused it cannot be taken back the way a cast can.
+**A question the engine asks while a turn passes takes its first answer.** An example is an
+upkeep trigger's target. `Happened::Chose` says so, and the log reads "The rules engine answered
+a … prompt for you". It is the one place the engine decides for the reader, because by then the
+thing that caused it cannot be taken back the way a cast can.
+
+**The discard to hand size is the exception: the reader chooses it.** A turn passed with more
+cards in hand than the maximum hand size stops at the reader's cleanup step
+(`WaitingFor::DiscardToHandSize`, CR 514.1). The view says `stage: "discard"` and how many cards
+are owed (`discard`), and every action but `Discard { ids }` is refused until it is answered. The
+board opens `DiscardDialog` over the table; closing it shows the table, and "Discard N" (where
+"Next turn" was) or Space opens it again. `Discard` then runs the same turn on to the reader's
+next main phase. Until 2026-10-13 this question took the engine's first answer too, which was
+always the cards drawn last. The count is the engine's, so a card that changes the maximum hand
+size changes it. The goldfish's own discard (it draws a card a turn and plays none) still takes
+the first answer.
 
 ## The goldfish never loses
 
@@ -225,9 +236,9 @@ board's own menus and dialogs open over it. Escape is the way back.
 `GoldfishBoard` is presentational: a view in, actions out, no `ipc`. That is what its stories stand
 on. The artboard's fixed places are measured from the board's box, not from its 1440 × 900 frame:
 
-- the table is inset 150 px from either side, 92 px from the top and 108 px from the bottom;
-- the zone columns sit 22 px in, 250 px down, each card 120 × 168 (the artboard's 104 × 146,
-  grown);
+- the table is inset 224 px from either side, 92 px from the top and 108 px from the bottom;
+- the zone columns sit 22 px in, level with the table's top, each card 180 × 252 (the artboard's
+  104 × 146, grown — large enough to read a commander's name and art without the preview);
 - the plates and the hand are at the foot.
 
 **Cards are drawn as big as the table allows.** A lane's card size is capped high (260 px for a

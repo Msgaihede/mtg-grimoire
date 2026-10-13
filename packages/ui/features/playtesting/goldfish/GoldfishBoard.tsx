@@ -8,6 +8,7 @@ import { FOCUS } from "@/lib/focus";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { Battlefield } from "./Battlefield";
+import { DiscardDialog } from "./DiscardDialog";
 import { HandFan } from "./HandFan";
 import { INSPECT_WIDTH, Inspect } from "./Inspect";
 import { LibraryDialog } from "./LibraryDialog";
@@ -32,8 +33,8 @@ import type { Playmat, Pointed, ZoneLook } from "./types";
  * one place that wires it to the engine.
  *
  * **The frame, and nothing drawn by itself**: the artboard's fixed places — a dashed table inset
- * 150 px from either side, 92 from the top and 108 from the bottom; the zone columns 22 px in at
- * 250 px down; the plates and the hand at the foot — each filled by a component of its own file.
+ * 224 px from either side, 92 from the top and 108 from the bottom; the zone columns 22 px in,
+ * level with its top; the plates and the hand at the foot — each filled by a component of its own file.
  * Positions are the artboard's, measured from this element's box rather than its 1440 × 900 frame,
  * so a wider window has a wider table and the same margins.
  *
@@ -43,6 +44,11 @@ import type { Playmat, Pointed, ZoneLook } from "./types";
  *
  * **A card that lands pops once where it landed** (`useLanding`): the table places a card by the
  * rules rather than where it was let go, so the reader is shown where it went.
+ *
+ * **A turn passed with too many cards in hand asks which are discarded** (`stage: "discard"`,
+ * `DiscardDialog`): the game waits in its cleanup step, the hand is in the dialog instead of the
+ * foot, and "Next turn" reads "Discard N" — which, like Space, opens the dialog again for a reader
+ * who closed it to look at the table.
  */
 export interface GoldfishBoardProps {
   /** The deck's name, for the back button: "‹ Aerith  Esc". */
@@ -79,6 +85,8 @@ export function GoldfishBoard({
   const [pointed, setPointed] = useState<Pointed | null>(null);
   const [panel, setPanel] = useState<"help" | "log" | null>(null);
   const [look, setLook] = useState<ZoneLook | null>(null);
+  /** The discard's dialog, closed to look at the table; the game still waits on the discard. */
+  const [peeking, setPeeking] = useState(false);
   const [playmat, setPlaymat] = useState<Playmat>(initialPlaymat);
   /** The preview's card width, which the wheel changes while it is open; kept for the game. */
   const [previewWidth, setPreviewWidth] = useState(INSPECT_WIDTH);
@@ -101,6 +109,12 @@ export function GoldfishBoard({
     [onAct],
   );
 
+  // Every pass of the turn opens the discard's dialog afresh, whatever an earlier one was left as.
+  const nextTurn = useCallback(() => {
+    setPeeking(false);
+    onAct({ type: "nextTurn" });
+  }, [onAct]);
+
   const commander = view?.command[0] ?? view?.battlefield.find((c) => c.isCommander) ?? null;
 
   // **The board's own keys**, the artboard's help panel's: Space for the next turn, and T, G, E,
@@ -119,7 +133,12 @@ export function GoldfishBoard({
       const key = e.key.toLowerCase();
       if (key === " " && view.stage === "playing") {
         e.preventDefault();
-        onAct({ type: "nextTurn" });
+        nextTurn();
+        return;
+      }
+      if (key === " " && view.stage === "discard") {
+        e.preventDefault();
+        setPeeking(false);
         return;
       }
       if (current === null || view.stage !== "playing") return;
@@ -141,7 +160,7 @@ export function GoldfishBoard({
     };
     // A button presses on Space's keyup, so the keyup is held back too.
     const onKeyUp = (e: KeyboardEvent) => {
-      if (e.key !== " " || view === null || view.stage !== "playing") return;
+      if (e.key !== " " || view === null || view.stage === "mulligan") return;
       if (e.target instanceof HTMLElement && e.target.closest("input, textarea, [role=menu]"))
         return;
       if (document.querySelector('[aria-modal="true"], [role="menu"]') !== null) return;
@@ -153,7 +172,7 @@ export function GoldfishBoard({
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [onAct, current, view]);
+  }, [onAct, nextTurn, current, view]);
 
   const point = setPointed;
   // **It takes no argument, and must not grow one**: every card hands it to `onMouseLeave` as it
@@ -201,15 +220,15 @@ export function GoldfishBoard({
       {/* The table's dashed edge, drawn under everything on it. */}
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-x-[150px] top-[92px] bottom-[108px] rounded-[28px] border border-dashed border-border opacity-70"
+        className="pointer-events-none absolute inset-x-[224px] top-[92px] bottom-[108px] rounded-[28px] border border-dashed border-border opacity-70"
       />
 
       {view === null ? (
-        <div className="absolute inset-x-[150px] top-[92px] bottom-[108px] flex items-center justify-center text-dim">
+        <div className="absolute inset-x-[224px] top-[92px] bottom-[108px] flex items-center justify-center text-dim">
           {error ?? "Shuffling…"}
         </div>
       ) : view.stage === "mulligan" ? (
-        <div className="absolute inset-x-[150px] top-[92px] bottom-[108px] flex items-center justify-center">
+        <div className="absolute inset-x-[224px] top-[92px] bottom-[108px] flex items-center justify-center">
           <OpeningHand view={view} onAct={onAct} />
         </div>
       ) : (
@@ -219,7 +238,7 @@ export function GoldfishBoard({
           onDrop={drop}
           onPoint={point}
           onUnpoint={unpoint}
-          className="absolute inset-x-[150px] top-[92px] bottom-[108px]"
+          className="absolute inset-x-[224px] top-[92px] bottom-[108px]"
         />
       )}
 
@@ -300,13 +319,13 @@ export function GoldfishBoard({
       </div>
 
       {/* The left column: command zone and exile. */}
-      <div className="absolute top-[250px] left-[22px] flex flex-col gap-[22px]">
+      <div className="absolute top-[92px] left-[22px] flex flex-col gap-[22px]">
         <CommandZone view={view} onAct={onAct} onDrop={drop} onPoint={point} onUnpoint={unpoint} />
         <ExileZone view={view} onDrop={drop} onPoint={point} onUnpoint={unpoint} onLook={setLook} />
       </div>
 
       {/* The right column: graveyard and library. */}
-      <div className="absolute top-[250px] right-[22px] flex flex-col items-end gap-[22px]">
+      <div className="absolute top-[92px] right-[22px] flex flex-col items-end gap-[22px]">
         <GraveyardZone
           view={view}
           onDrop={drop}
@@ -362,14 +381,14 @@ export function GoldfishBoard({
         </span>
       )}
 
-      {view !== null && view.stage === "playing" && (
+      {view !== null && view.stage !== "mulligan" && (
         <div className="absolute right-4 bottom-4 flex flex-col items-end gap-2">
           <span className="text-xs text-dim">
             Turn {view.turn} · {view.manaOpen} mana open · hand {view.hand.length}
           </span>
           <button
             type="button"
-            onClick={() => onAct({ type: "nextTurn" })}
+            onClick={() => (view.stage === "discard" ? setPeeking(false) : nextTurn())}
             aria-keyshortcuts="Space"
             className={cn(
               "inline-flex flex-col items-center gap-1 rounded-2xl border border-accent bg-surface px-6 pt-2 pb-1.5",
@@ -380,7 +399,7 @@ export function GoldfishBoard({
             )}
           >
             <span className="inline-flex items-center gap-2.5">
-              Next turn
+              {view.stage === "discard" ? `Discard ${view.discard}` : "Next turn"}
               <ArrowRight className="size-[18px]" aria-hidden="true" />
             </span>
             <kbd className="rounded border border-current px-1.5 font-mono text-[10px] leading-4 font-normal opacity-70">
@@ -397,6 +416,10 @@ export function GoldfishBoard({
 
       {look !== null && view !== null && (
         <LibraryDialog look={look} view={view} onAct={onAct} onClose={() => setLook(null)} />
+      )}
+
+      {view !== null && view.stage === "discard" && !peeking && (
+        <DiscardDialog view={view} onAct={onAct} onClose={() => setPeeking(true)} />
       )}
     </div>
   );
