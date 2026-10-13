@@ -26,7 +26,6 @@ import {
   deckAddReceipt,
   DeckTargetSubmenu,
   useCardToDeck,
-  useCardToDeckRefusal,
   type CardMenuDeps,
   type CardMenuTarget,
 } from "./cardMenu";
@@ -790,10 +789,10 @@ describe("buildCardMenu", () => {
     expect(labels(move.items)).toEqual(["Collection", "Binder"]);
 
     (move.items[2] as MenuAction).onSelect();
-    expect(moveToFolder).toHaveBeenCalledWith(42, 1);
+    expect(moveToFolder).toHaveBeenCalledWith(42, 1, BOLT.name);
     // The root is a destination and not an omission — the only way back out of a folder.
     (move.items[0] as MenuAction).onSelect();
-    expect(moveToFolder).toHaveBeenCalledWith(42, null);
+    expect(moveToFolder).toHaveBeenCalledWith(42, null, BOLT.name);
   });
 
   /**
@@ -859,7 +858,7 @@ describe("buildCardMenu", () => {
       const move = find(items, "Move to") as MenuSubmenu;
 
       (find(move.items, "Binder") as MenuAction).onSelect();
-      expect(moveToFolder).toHaveBeenCalledWith(4, 1);
+      expect(moveToFolder).toHaveBeenCalledWith(4, 1, BOLT.name);
       expect(pickCopies).not.toHaveBeenCalled();
     });
 
@@ -910,7 +909,7 @@ describe("buildCardMenu", () => {
         deps({ moveToFolder, moveCopies, collectionFolders: [binder(1, "Binder")] }),
       );
       (find((find(items, "Move to") as MenuSubmenu).items, "Binder") as MenuAction).onSelect();
-      expect(moveToFolder).toHaveBeenCalledWith(4, 1);
+      expect(moveToFolder).toHaveBeenCalledWith(4, 1, BOLT.name);
       expect(moveCopies).not.toHaveBeenCalled();
     });
 
@@ -1790,7 +1789,7 @@ describe("useCardToDeck", () => {
     await waitFor(() =>
       expect(deckAddCard).toHaveBeenCalledWith(7, "bolt-lea", null, "Instant", "theory", null, 1),
     );
-    expect(result.current.error).toBeNull();
+    expect(useNotifications.getState().notices[0]?.tone).toBe("success");
   });
 
   it("lands in the deck's own add location when the deck names one (issue #693)", async () => {
@@ -1832,14 +1831,19 @@ describe("useCardToDeck", () => {
     );
   });
 
-  it("keeps what a refused add said, for the surface to draw", async () => {
+  it("says a refused add as a toast, since the menu that asked has closed", async () => {
     deckAddCard.mockRejectedValue(new Error("That deck is not there any more"));
     const { result } = arm();
     act(() => result.current.addToDeck([{ ...BOLT, typeLine: "Instant" }], 7, "live"));
 
-    await waitFor(() => expect(result.current.error).toBe("That deck is not there any more"));
-    act(() => result.current.clearError());
-    expect(result.current.error).toBeNull();
+    // No name was passed, so "the deck".
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        tone: "error",
+        title: "Couldn't add to the deck",
+        body: "That deck is not there any more",
+      }),
+    );
   });
 
   it("adds a second copy when the same leaf is pressed twice", async () => {
@@ -1881,7 +1885,14 @@ describe("useCardToDeck", () => {
     act(() => result.current.addToDeck([{ ...BOLT, typeLine: "Instant" }, helix], 7, "live"));
 
     await waitFor(() => expect(deckAddCard).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(result.current.error).toBe("That printing is not there any more"));
+    await waitFor(() => expect(useNotifications.getState().notices).not.toHaveLength(0));
+    // One press, one toast: what landed and the first refusal, folded into one warning.
+    expect(useNotifications.getState().notices).toHaveLength(1);
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      tone: "warning",
+      title: "Added 1 of 2 cards to the deck",
+      body: "That printing is not there any more",
+    });
   });
 
   it("queues a second press made while the first is still writing, rather than replacing it", async () => {
@@ -1893,19 +1904,6 @@ describe("useCardToDeck", () => {
 
     await waitFor(() => expect(deckAddCard).toHaveBeenCalledTimes(2));
     expect(deckAddCard.mock.calls.map((call) => call[1])).toEqual(["bolt-lea", "helix-lea"]);
-  });
-
-  it("takes last time's refusal down as the next add is armed", async () => {
-    deckAddCard.mockRejectedValue(new Error("That deck is not there any more"));
-    const { result } = arm();
-    act(() => result.current.addToDeck([{ ...BOLT, typeLine: "Instant" }], 7, "live"));
-    await waitFor(() => expect(result.current.error).not.toBeNull());
-
-    deckAddCard.mockResolvedValue(undefined);
-    act(() => result.current.addToDeck([{ ...BOLT, typeLine: "Instant" }], 7, "live"));
-    // Not after the answer -- at the press. A sentence about the last deck must not stand over
-    // the whole of the next add's round trip.
-    expect(result.current.error).toBeNull();
   });
 
   it("stops observing the deck once the add has settled", async () => {
@@ -1935,12 +1933,6 @@ describe("useCardToDeck", () => {
 
 const KRENKO = deck({ id: 7, name: "Krenko", folderId: 1, theoryEnabled: true });
 const COMMANDER = folder(1, "Commander");
-
-/** `AppShell`'s job, in miniature: the one place the refusal sentence is drawn. */
-function Refusal() {
-  const error = useCardToDeckRefusal();
-  return error === null ? null : <p role="alert">{error}</p>;
-}
 
 /** One of the ten. It passes `DeckTargetSubmenu` straight through, with no glue at all. */
 function Surface() {
@@ -1972,12 +1964,7 @@ function openCardMenu(nesting: "app" | "under-the-menu" = "app") {
   });
   client.setQueryData(["decks", "list"], [KRENKO]);
   client.setQueryData(["decks", "folders"], [COMMANDER]);
-  const inner = (
-    <>
-      <Surface />
-      <Refusal />
-    </>
-  );
+  const inner = <Surface />;
   render(
     <QueryClientProvider client={client}>
       {nesting === "app" ? (
@@ -2115,7 +2102,7 @@ describe("the deck picker inside the real cascade", () => {
     quiet.mockRestore();
   });
 
-  it("leaves a refused add's sentence on the surface, which outlived the menu", async () => {
+  it("says a refused add in a toast, after the menu has gone", async () => {
     const user = userEvent.setup();
     deckAddCard.mockRejectedValue(new Error("That deck is not there any more"));
     openCardMenu();
@@ -2125,7 +2112,15 @@ describe("the deck picker inside the real cascade", () => {
     await user.keyboard("{ArrowRight}{ArrowRight}");
     await user.click(screen.getByRole("menuitem", { name: "Theory" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("That deck is not there any more");
+    // The menu is gone by the time the answer arrives, so the refusal is a toast — and the
+    // leaf's own deck name is what it is about.
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        tone: "error",
+        title: "Couldn't add to “Krenko”",
+        body: "That deck is not there any more",
+      }),
+    );
   });
 });
 

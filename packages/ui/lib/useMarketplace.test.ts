@@ -21,6 +21,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 
 import type { FeedProgressEvent, MarketplaceFeedStatus } from "@/lib/ipc";
 import { feedState, useMarketplace, useMarketplaceProgress } from "./useMarketplace";
+import { useNotifications } from "./notifications";
 
 const NOW = 1_800_000_000;
 
@@ -221,6 +222,12 @@ describe("useMarketplace", () => {
     await waitFor(() => expect(result.current.feeds[0].state).toBe("failed"));
     expect(result.current.feeds[0].error).toBe("Card Kingdom's price feed was empty.");
     expect(result.current.feeds[0].status?.rowCount).toBe(149_989);
+    // And in a toast: a feed takes long enough that the reader may have left Settings.
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      tone: "error",
+      title: "Couldn't update Card Kingdom prices",
+      body: "Card Kingdom's price feed was empty.",
+    });
   });
 
   /**
@@ -241,6 +248,10 @@ describe("useMarketplace", () => {
     await waitFor(() =>
       expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] }),
     );
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      tone: "success",
+      title: "Card Kingdom prices updated",
+    });
     for (const key of [["collection"], ["wishlist"], ["decks"]]) {
       expect(invalidate).toHaveBeenCalledWith({ queryKey: key });
     }

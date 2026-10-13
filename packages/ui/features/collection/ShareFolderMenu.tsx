@@ -55,6 +55,7 @@ import { WHOLE_WISHLIST_KEY } from "@/features/wishlist/wishlistShare";
 import { copyText } from "@/lib/clipboard";
 import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type CollectionFolder, type ShareFields, type ShareRow } from "@/lib/ipc";
+import { notify } from "@/lib/notifications";
 import { SUPPORTER_KEY, supporterState } from "@/lib/query";
 import { usePublishes, useReaches } from "@/lib/reach";
 import { useAppStore } from "@/lib/store";
@@ -267,8 +268,6 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
   const [publishing, setPublishing] = useState(false);
   const [withdrawing, setWithdrawing] = useState(false);
   const [opening, setOpening] = useState(false);
-  /** The one line under the buttons: what the last press did, or why it did not. */
-  const [note, setNote] = useState<string | null>(null);
   const shareRef = useRef<HTMLButtonElement | null>(null);
   /**
    * ⚠️ **A second ref, because `back()` cannot serve the Open button and the difference is not
@@ -297,17 +296,29 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
   /** Every surface that reads a share is under one prefix, so one invalidation reaches the list
    *  and every fetched snapshot below it. */
   const settle = useCallback(
-    (said: string) => {
-      setNote(said);
-      void client.invalidateQueries({ queryKey: SHARE_KEY });
-    },
+    () => void client.invalidateQueries({ queryKey: SHARE_KEY }),
     [client],
   );
+  /** What the reports call this level — `Collection` at the root, the drawer's name below it. */
+  const title = target?.title ?? WHOLE_COLLECTION_TITLE;
 
+  /**
+   * **Every answer below is a toast** (`@/lib/notifications`), where it was one status line under
+   * the buttons until 2026-10-12. Each press starts in a menu or a confirmation that has already
+   * closed by the time the relay answers — an upload can take seconds — so the line was a receipt
+   * for a surface that was gone, drawn in a corner of the figures band the reader may well have
+   * scrolled past. A refused publish is the exception and stays inline: that dialog is still open.
+   */
   const refresh = useMutation({
     mutationFn: (id: string) => ipc.shareRefresh(id),
-    onSuccess: () => settle("Snapshot updated."),
-    onError: (e: unknown) => setNote(ipcError(e)),
+    onSuccess: () => {
+      settle();
+      notify.success(`Updated the share of “${title}”`);
+    },
+    // A failed upload keeps the old snapshot serving and the link alive — the backend's sentence
+    // says so, and it is the body.
+    onError: (e: unknown) =>
+      notify.error(`Couldn't update the share of “${title}”`, { body: ipcError(e) }),
   });
   const revoke = useMutation({
     mutationFn: (id: string) => ipc.shareRevoke(id),
@@ -322,22 +333,23 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
     onSuccess: () => {
       setWithdrawing(false);
       back();
-      settle("Sharing stopped. The link no longer works.");
+      settle();
+      notify.success(`Stopped sharing “${title}”`, { body: "The link no longer works." });
     },
     onError: (e: unknown) => {
       setWithdrawing(false);
       back();
-      setNote(ipcError(e));
+      notify.error(`Couldn't stop sharing “${title}”`, { body: ipcError(e) });
     },
   });
 
   /** A claim about the clipboard's contents, so it is made only once the write has resolved —
-   *  and a refused write is reported rather than swallowed. `ExportDialog`'s rule. */
+   *  and a refused write is reported rather than swallowed. `ExportDialog`'s rule; the menu row
+   *  that asked has closed, so both answers are toasts — the card menu's copy rows' arrangement. */
   const copy = useCallback((url: string) => {
-    setNote(null);
     copyText(url).then(
-      () => setNote("Link copied."),
-      (e: unknown) => setNote(`Couldn't copy that link — ${ipcError(e)}`),
+      () => notify.success("Link copied"),
+      (e: unknown) => notify.error("Couldn't copy the link", { body: ipcError(e) }),
     );
   }, []);
 
@@ -427,10 +439,7 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
   }, [copy, existing, locked, refresh, stale, target]);
 
   const openMenu = useCallback(
-    (e: MouseEvent<HTMLButtonElement>) => {
-      setNote(null);
-      menuClick(rows)(e);
-    },
+    (e: MouseEvent<HTMLButtonElement>) => menuClick(rows)(e),
     [menuClick, rows],
   );
 
@@ -473,10 +482,7 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
               type="button"
               aria-label={OPEN_A_SHARE}
               aria-haspopup="dialog"
-              onClick={() => {
-                setNote(null);
-                setOpening(true);
-              }}
+              onClick={() => setOpening(true)}
               className={cn(SHARE_BUTTON, canShare && "border-l border-border")}
             >
               <Link2 className="size-4 shrink-0" aria-hidden="true" />
@@ -486,14 +492,6 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
         </div>
       )}
 
-      {/* Mounted for the life of the control and the sentence swapped into it: a live region
-          that appears together with its own text announces nothing, because there was no change
-          for a screen reader to notice. `empty:hidden` keeps it from holding a gap open while it
-          is saying nothing at all. */}
-      <p role="status" className="max-w-72 text-right text-xs text-dim empty:hidden">
-        {note}
-      </p>
-
       {target !== null && (
         <PublishDialog
           open={publishing}
@@ -502,7 +500,10 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
           onPublished={() => {
             setPublishing(false);
             back();
-            settle("Shared. Copy the link from the Share menu.");
+            settle();
+            // The dialog has closed on the answer, so the receipt is a toast — and it says where
+            // the link is, since nothing on screen has it yet.
+            notify.success(`Shared “${title}”`, { body: "Copy the link from the Share menu." });
           }}
           onClose={() => {
             setPublishing(false);

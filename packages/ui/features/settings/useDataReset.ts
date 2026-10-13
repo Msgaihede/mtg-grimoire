@@ -1,7 +1,8 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { useState } from "react";
-import { ipc } from "@/lib/ipc";
+import { ipc, ipcError } from "@/lib/ipc";
+import { notify, type NoticeTone } from "@/lib/notifications";
 import { COMBOS_KEY } from "@/lib/query";
 import { writeFailure, type Write } from "@/lib/writes";
 import {
@@ -38,6 +39,29 @@ export interface ClearAction {
 export interface ClearStatus {
   tone: "problem" | "plain";
   text: string;
+}
+
+/**
+ * A panel's outcome sentence, said again as a toast: its first sentence is the title (no full
+ * stop, the toast's own voice) and a second one, where there is one, the body.
+ *
+ * **Both, and the panel line is not the redundant one.** Every clear here is confirmed in a dialog
+ * that closes as the work starts, so the receipt arrives after the reader's attention has left
+ * the button — and a clear is the destructive act the app's rule gives a receipt every time, with
+ * the inbox keeping it (owner's rule, 2026-10-12: removing every card in the collection, the
+ * wishlist or the decks is the largest edit those lists have). The line under the buttons stays
+ * because the light app's phone face draws these same panels and mounts no `Toaster`, so it is the
+ * only place that face says anything.
+ */
+function receipt(sentence: string, tone: NoticeTone): void {
+  const cut = sentence.indexOf(". ");
+  const title = (cut === -1 ? sentence : sentence.slice(0, cut)).replace(/\.$/, "");
+  notify({ title, tone, ...(cut !== -1 && { body: sentence.slice(cut + 2) }) });
+}
+
+/** A refused clear, as a toast — {@link receipt}'s reason; the panel line says it too. */
+function refused(title: string) {
+  return (error: unknown) => void notify.error(title, { body: ipcError(error) });
 }
 
 /** Mark a set of roots stale; only the queries actually on screen pay for a refetch. */
@@ -134,7 +158,9 @@ export function useDangerZone(): {
     onSuccess: (r) => {
       invalidate(client, COLLECTION_ROOTS);
       setOutcome(collectionOutcome(r));
+      receipt(collectionOutcome(r), r.entries === 0 ? "info" : "success");
     },
+    onError: refused("Couldn't clear the collection"),
   });
 
   const wishlist = useMutation({
@@ -143,7 +169,9 @@ export function useDangerZone(): {
     onSuccess: (entries) => {
       invalidate(client, WISHLIST_ROOTS);
       setOutcome(wishlistOutcome(entries));
+      receipt(wishlistOutcome(entries), entries === 0 ? "info" : "success");
     },
+    onError: refused("Couldn't clear the wishlist"),
   });
 
   const decks = useMutation({
@@ -152,7 +180,9 @@ export function useDangerZone(): {
     onSuccess: (r) => {
       invalidate(client, DECK_ROOTS);
       setOutcome(decksOutcome(r));
+      receipt(decksOutcome(r), r.decks + r.folders === 0 ? "info" : "success");
     },
+    onError: refused("Couldn't clear the decks"),
   });
 
   return {
@@ -210,7 +240,11 @@ export function useLocalCache(): {
   const cache = useMutation({
     mutationFn: () => ipc.cacheClear(),
     onMutate: started,
-    onSuccess: (r) => setOutcome(cacheOutcome(r)),
+    onSuccess: (r) => {
+      setOutcome(cacheOutcome(r));
+      receipt(cacheOutcome(r), r.failed > 0 ? "warning" : r.files === 0 ? "info" : "success");
+    },
+    onError: refused("Couldn't clear the cache"),
   });
 
   const combos = useMutation({
@@ -222,7 +256,12 @@ export function useLocalCache(): {
     },
     onMutate: started,
     onSettled: () => invalidate(client, COMBO_ROOTS),
-    onSuccess: (r) => setOutcome(combosOutcome(r)),
+    onSuccess: (r) => {
+      setOutcome(combosOutcome(r));
+      // A refresh that landed nothing is the download failing after the clear succeeded.
+      receipt(combosOutcome(r), r.combos === 0 ? "warning" : "success");
+    },
+    onError: refused("Couldn't refresh combos"),
   });
 
   return {

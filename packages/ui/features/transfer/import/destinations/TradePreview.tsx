@@ -35,6 +35,7 @@ function TradePreview({
   list,
   resolved,
   onDone,
+  report,
   onBack,
 }: DestinationPreviewProps & { into: TradeImportInto }): JSX.Element {
   const writes = useTradeWrites();
@@ -45,8 +46,21 @@ function TradePreview({
 
   const runImport = () => {
     if (plan.items.length === 0 || commit.isPending) return;
+    // One write, so one notice either way: the whole list landed or none of it did.
     commit.mutate(undefined, {
-      onSuccess: () => onDone(`${cards(plan.totalCards)} put on ${sideWords(into.side)}.`),
+      onSuccess: () => {
+        report?.({
+          title: `Put ${cards(plan.totalCards)} on ${sideWords(into.side)}`,
+          tone: "success",
+        });
+        onDone(`${cards(plan.totalCards)} put on ${sideWords(into.side)}.`);
+      },
+      onError: (e) =>
+        report?.({
+          title: `Couldn't import onto ${sideWords(into.side)}`,
+          body: ipcError(e),
+          tone: "error",
+        }),
     });
   };
 

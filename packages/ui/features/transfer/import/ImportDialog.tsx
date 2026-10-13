@@ -4,6 +4,7 @@ import { plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import { ipcError } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
+import { notify } from "@/lib/notifications";
 import { cn } from "@/lib/utils";
 import { Dialog } from "@/components/Dialog";
 import type { ImportDestination } from "./destination";
@@ -248,6 +249,11 @@ function ImportBody({
           resolved={resolved.rows}
           tags={resolved.tags}
           onDone={onDone}
+          // The desktop's half of `report`: every import here is said as a toast once it lands
+          // or is refused — the dialog closes on a landing, and a list filed into a deck, a
+          // folder or the wishlist changes a page the reader may not be looking at (the owner's
+          // rule).
+          report={notify}
           onBack={toSource}
         />
       </>

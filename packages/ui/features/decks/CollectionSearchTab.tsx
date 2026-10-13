@@ -14,6 +14,7 @@ import { plural } from "@/lib/counts";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
 import { ipcError, type CollectionRow, type DeckCategory, type DeckPile } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
+import { notify } from "@/lib/notifications";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { tileKeyOf } from "@/lib/tileKey";
@@ -373,7 +374,25 @@ export function CollectionSearchTab({
   /** Send it. The confirm — where there is one — has already been answered by the time this runs. */
   const commit = (tile: CopyTile, pile: DeckPile | null) => {
     setAsking(null);
-    if (tile.add) move.mutate({ row: tile.add, pile, quantity: 1 });
+    // **A receipt per press** (the owner's rule: every move of a card between the collection and
+    // a deck says so — this tab's press is none of the exempt three). The line under the wall
+    // still says where a copy came *from* when it left another deck; the toast says what moved.
+    if (tile.add) {
+      move.mutate(
+        { row: tile.add, pile, quantity: 1 },
+        {
+          onSuccess: (outcome) => {
+            if (outcome.quantity === 0) return;
+            notify.success(
+              `Moved ${plural(outcome.quantity, "copy", "copies")} of “${tile.name}” into the deck`,
+              outcome.fromDeck === null ? undefined : { body: `From “${outcome.fromDeck}”` },
+            );
+          },
+          onError: (error) =>
+            notify.error(`Couldn't move “${tile.name}” into the deck`, { body: ipcError(error) }),
+        },
+      );
+    }
   };
 
   /**

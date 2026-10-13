@@ -10,6 +10,7 @@ import { useAppStore } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 import { cardDetailKey } from "./cardDetailKey";
+import { refusedOpen } from "./refusedOpen";
 
 /**
  * Every note naming this card, in every deck — `ipc.cardNotes`.
@@ -401,7 +402,8 @@ function LinkRun({ run }: { run: Extract<Inline, { kind: "link" }> }) {
   return (
     <button
       type="button"
-      onClick={() => void openExternal(run.href)}
+      // A refused open is said (`./refusedOpen`) rather than swallowed.
+      onClick={() => refusedOpen(openExternal(run.href), "the link")}
       className={cn("rounded-sm underline underline-offset-2 hover:text-text", FOCUS)}
     >
       {run.text}

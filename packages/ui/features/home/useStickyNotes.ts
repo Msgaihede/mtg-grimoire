@@ -107,8 +107,11 @@ export interface StickyNotesApi {
   create: (title: string, body: string, color: NoteColor, onCreated?: (id: number) => void) => void;
   /** Change a note. A field the patch leaves out is left alone; `""` really empties one. */
   update: (id: number, patch: StickyNotePatch) => void;
-  /** Delete one note. */
-  remove: (id: number) => void;
+  /**
+   * Delete one note. `onDeleted` runs once the write lands — `create`'s `onCreated`, for the same
+   * observer reasons: it is the widget's receipt toast, and a widget that has gone owes none.
+   */
+  remove: (id: number, onDeleted?: () => void) => void;
   /** Renumber every note in the order given. An id that is no longer a note is skipped at the far
    *  end rather than refused, so a drag survives a note deleted in another window. */
   reorder: (ids: number[]) => void;
@@ -173,7 +176,11 @@ export function useStickyNotes(): StickyNotesApi {
     (id: number, patch: StickyNotePatch) => startUpdate({ id, patch }),
     [startUpdate],
   );
-  const remove = useCallback((id: number) => startDelete(id), [startDelete]);
+  const remove = useCallback(
+    (id: number, onDeleted?: () => void) =>
+      startDelete(id, onDeleted === undefined ? undefined : { onSuccess: onDeleted }),
+    [startDelete],
+  );
   const reorder = useCallback((ids: number[]) => startReorder(ids), [startReorder]);
 
   /**

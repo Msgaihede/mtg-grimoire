@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import type { Currency } from "@/lib/marketplace";
+import { useNotifications } from "@/lib/notifications";
 import { pickOption } from "@/test-dropdown";
 
 /**
@@ -380,6 +381,11 @@ describe("EditCopy", () => {
     await user.click(save());
 
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // …and since the surface is gone, the receipt is a toast.
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Updated “Lightning Bolt”",
+      tone: "success",
+    });
   });
 
   /**
@@ -399,6 +405,8 @@ describe("EditCopy", () => {
       "Couldn't save this copy — That entry is gone.",
     );
     expect(screen.getByRole("button", { name: "Condition" })).toHaveTextContent("Near mint");
+    // The open dialog says it inline, so nothing is toasted on top of it.
+    expect(useNotifications.getState().notices).toHaveLength(0);
   });
 
   /**

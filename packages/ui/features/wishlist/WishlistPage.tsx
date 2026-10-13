@@ -16,7 +16,6 @@ import { UndoNotice } from "@/components/UndoNotice";
 import { ViewAllToggle } from "@/components/ViewAllToggle";
 import { buildCardMenu, type CardMenuDeps, type CardMenuTarget } from "@/features/card/cardMenu";
 import { ShareFolderMenu } from "@/features/collection/ShareFolderMenu";
-import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { deckListKey } from "@/features/home/keys";
@@ -57,6 +56,7 @@ import {
 } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { statusLine } from "@/lib/motion";
+import { notify } from "@/lib/notifications";
 import { pricesAsOf } from "@/lib/prices";
 import { layoutShelves } from "@/lib/shelfLayout";
 import { buildShelves, visibleShelves, type Shelf } from "@/lib/shelves";
@@ -530,19 +530,58 @@ export function WishlistPage() {
   const { settleWhole, setQuantity, remove, setFolder, anyPrinting } = useWishEntryWrites();
   // The four writes' `mutate`, held still where the result objects around them are not (issue
   // #557) — the handlers below are what the memoised wall and table are handed.
+  // `mutateAsync` for the two that say something when they land, and not `mutate` with a per-call
+  // `onSuccess`: TanStack fires a call's own callbacks for the **newest** call alone, so a reader
+  // crossing off three wishes in a row would be told about the third. The promise is the call's
+  // own. A refusal is said both ways — the banner below (`bannerFailure`) and a toast — because the
+  // owner's rule (2026-10-12) is that every wishlist edit toasts its outcome, failure included.
   const { mutate: setQuantityMutate } = setQuantity;
-  const { mutate: removeMutate } = remove;
-  const { mutate: setFolderMutate } = setFolder;
+  const { mutateAsync: removeAsync } = remove;
+  // Both halves of the filing write: the drags' `mutate` (silent, `useWishDrops`) and the panel's
+  // promise (said, {@link onSetFolder}).
+  const { mutate: setFolderMutate, mutateAsync: setFolderAsync } = setFolder;
   const { mutate: anyPrintingMutate } = anyPrinting;
 
   const onSetQuantity = useCallback(
     (row: WishRow, quantity: number) => setQuantityMutate({ row, quantity }),
     [setQuantityMutate],
   );
-  const onRemove = useCallback((row: WishRow) => removeMutate(row), [removeMutate]);
+  /**
+   * **Remove gets a toast and the stepper taken to zero does not**, though they are one write
+   * (`useWishEntryWrites`' `setQuantity`). The stepper is a held-down control whose number is
+   * under the reader's finger; the ✕ is a deliberate deletion with no undo, and the row it names
+   * leaves the list at once — on a wall that reflows under it, so the receipt is the one place
+   * left that says *which* wish went (`@/lib/notifications`, 2026-10-12).
+   */
+  const onRemove = useCallback(
+    (row: WishRow) =>
+      void removeAsync(row).then(
+        () => notify.success(`Removed “${row.name}” from the wishlist`),
+        (error: unknown) =>
+          notify.error(`Couldn't remove “${row.name}” from the wishlist`, {
+            body: ipcError(error),
+          }),
+      ),
+    [removeAsync],
+  );
+  /**
+   * Filing a wish from its Edit panel — **the drags do not come through here** (`useWishDrops`
+   * writes `setFolder` itself), so this is the panel's press alone. A toast because the wish
+   * usually leaves the shelf the reader is looking at for a drawer that is shut or on another
+   * level, and the tile, the panel with it, goes too. The name is read at the press, before the
+   * re-read that follows the write.
+   */
   const onSetFolder = useCallback(
-    (row: WishRow, to: number | null) => setFolderMutate({ id: row.id, folderId: to }),
-    [setFolderMutate],
+    (row: WishRow, to: number | null) => {
+      const into =
+        to === null ? ROOT_LABEL : (folders.folders.find((f) => f.id === to)?.name ?? "a folder");
+      void setFolderAsync({ id: row.id, folderId: to }).then(
+        () => notify.success(`Moved “${row.name}” to “${into}”`),
+        (error: unknown) =>
+          notify.error(`Couldn't move “${row.name}” to “${into}”`, { body: ipcError(error) }),
+      );
+    },
+    [setFolderAsync, folders.folders],
   );
   const onAnyPrinting = useCallback((row: WishRow) => anyPrintingMutate(row), [anyPrintingMutate]);
 
@@ -628,7 +667,7 @@ export function WishlistPage() {
    * card this row cannot name.
    */
   const { menu, menuKey, menuClick } = useContextMenu();
-  const { deps: menuDeps, error: menuFailure } = useCardMenuDeps();
+  const { deps: menuDeps } = useCardMenuDeps();
   /**
    * The deps a press builds on: the page's own, plus the wall's picked set when the right-clicked
    * wish is a member of it (issue #954), so `Add N cards to` files every picked wish. A wish with
@@ -1333,22 +1372,89 @@ export function WishlistPage() {
   );
   /** The strip's four answers, each landing the caret through {@link leaveHeading} where a folder
    *  leaves its heading — held still for the memoised panel (issue #557). */
+  //
+  // **Each says what it did once it lands** (`@/lib/notifications`): the strip that asked closes on
+  // the answer, and a delete or a clear takes a drawer — or every wish in it — off the wall with
+  // nothing left on screen to name what went. The names are read at the press, because a deleted
+  // folder has no name to look up afterwards. A refusal is said as well as left on the open strip
+  // and in the page's banner (`bannerFailure`): the owner's rule is that every edit that moves or
+  // removes wishes toasts its outcome. **Create and rename say nothing** — both are
+  // typed on a heading that stays on screen holding the answer — and nor do Move up / Move down,
+  // the keyboard's drag, whose answer is the heading moving under the caret.
   const moveFolderTo = useCallback(
-    (id: number, parentId: number | null) =>
-      leaveHeading(id, (done) => moveMutate({ id, parentId }, done), parentId),
-    [leaveHeading, moveMutate],
+    (id: number, parentId: number | null) => {
+      const name = folderNameOf(id) ?? "Folder";
+      const into = folderNameOf(parentId) ?? "a folder";
+      leaveHeading(
+        id,
+        (done) =>
+          moveMutate(
+            { id, parentId },
+            {
+              onSuccess: () => {
+                done.onSuccess();
+                notify.success(`Moved “${name}” to “${into}”`);
+              },
+              onError: (error) =>
+                notify.error(`Couldn't move “${name}” to “${into}”`, { body: ipcError(error) }),
+            },
+          ),
+        parentId,
+      );
+    },
+    [leaveHeading, moveMutate, folderNameOf],
   );
   const deleteFolder = useCallback(
-    (id: number) => leaveHeading(id, (done) => removeFolderMutate(id, done)),
-    [leaveHeading, removeFolderMutate],
+    (id: number) => {
+      const name = folderNameOf(id) ?? "Folder";
+      leaveHeading(id, (done) =>
+        removeFolderMutate(id, {
+          onSuccess: () => {
+            done.onSuccess();
+            // The half of the confirmation's sentence the reader feared for: the wishes stay.
+            notify.success(`Folder “${name}” deleted`, {
+              body: "Its cards went back to your wishlist",
+            });
+          },
+          onError: (error) => notify.error(`Couldn't delete “${name}”`, { body: ipcError(error) }),
+        }),
+      );
+    },
+    [leaveHeading, removeFolderMutate, folderNameOf],
   );
   const deleteFolderWithWishes = useCallback(
-    (id: number) => leaveHeading(id, (done) => removeWithWishesMutate(id, done)),
-    [leaveHeading, removeWithWishesMutate],
+    (id: number) => {
+      const name = folderNameOf(id) ?? "Folder";
+      leaveHeading(id, (done) =>
+        removeWithWishesMutate(id, {
+          // The command answers how many wishes went — the count the heading showed, now gone.
+          onSuccess: (gone) => {
+            done.onSuccess();
+            notify.success(`Folder “${name}” deleted`, {
+              ...(gone > 0 ? { body: `Removed ${plural(gone, "card")} from your wishlist` } : {}),
+            });
+          },
+          onError: (error) => notify.error(`Couldn't delete “${name}”`, { body: ipcError(error) }),
+        }),
+      );
+    },
+    [leaveHeading, removeWithWishesMutate, folderNameOf],
   );
   const clearFolder = useCallback(
-    (id: number) => clearMutate(id, { onSuccess: dismiss }),
-    [clearMutate, dismiss],
+    (id: number) => {
+      const name = folderNameOf(id) ?? "this folder";
+      clearMutate(id, {
+        onSuccess: (gone) => {
+          dismiss();
+          // `0` is reachable — the summary can answer after the question opened — and "Removed 0
+          // cards" is not a receipt for anything.
+          if (gone > 0) notify.success(`Removed ${plural(gone, "card")} from “${name}”`);
+          else notify.info(`“${name}” had no cards to clear`);
+        },
+        onError: (error) => notify.error(`Couldn't clear “${name}”`, { body: ipcError(error) }),
+      });
+    },
+    [clearMutate, dismiss, folderNameOf],
   );
 
   /** A folder's unfiltered figures, recursive — `null` for Not sorted and before the summary. */
@@ -2128,12 +2234,6 @@ export function WishlistPage() {
               the reader just did, the refusal first; always mounted, so the sentence arriving in
               it is announced, and `empty:-mt-2` gives back this column's gap while it is silent. */}
           <UndoNotice scope="wishlist" className="empty:-mt-2" />
-
-          {/* A write the right-click menu started and the backend refused, beside the banner
-              above rather than folded into it: that one is about this list's own controls — a
-              stepper press, a removal — and this one is about a card the reader filed somewhere
-              from a menu that has already closed. */}
-          <CardMenuRefusal error={menuFailure} />
 
           {/* **The shelves** — drawn whenever there is a shelf to draw, which on a filed wishlist
               holding no wishes is still a wall of headings: they are the content. */}

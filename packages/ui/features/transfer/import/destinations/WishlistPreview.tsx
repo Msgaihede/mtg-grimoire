@@ -29,6 +29,7 @@ export function WishlistPreview({
   list,
   resolved,
   onDone,
+  report,
   onBack,
 }: DestinationPreviewProps): JSX.Element {
   // The same store field the collection reads, finish alone — see the file doc.
@@ -63,8 +64,20 @@ export function WishlistPreview({
             ? `Set wishlist quantities from a file of ${cards(plan.items.length)}.`
             : `Imported ${cards(plan.totalCards)} into your wishlist.`,
         );
+        // The toast says what moved where, the undo bar beside the list keeps its Undo: one
+        // notice for the one transaction, whatever the file's length.
+        report?.({
+          title:
+            mode === "set"
+              ? `Set wishlist quantities from a file of ${cards(plan.items.length)}`
+              : `Imported ${cards(plan.totalCards)} into your wishlist`,
+          body: `${outcome.added} added, ${outcome.updated} updated`,
+          tone: "success",
+        });
         onDone(`${outcome.added} added, ${outcome.updated} updated.`);
       },
+      onError: (e) =>
+        report?.({ title: "Couldn't import into your wishlist", body: ipcError(e), tone: "error" }),
     });
   };
 

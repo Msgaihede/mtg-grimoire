@@ -22,8 +22,10 @@ import {
   useSetCollectionFolderMany,
 } from "@/features/collection/useCollectionFolders";
 import { useWishlistFolderList } from "@/features/wishlist/useWishlistFolders";
+import { plural } from "@/lib/counts";
 import type { Finish } from "@/lib/finish";
 import { ipcError } from "@/lib/ipc";
+import { notify } from "@/lib/notifications";
 import { useAppStore } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { DEFAULT_VARIANT } from "@/features/decks/useDeck";
@@ -33,28 +35,30 @@ import {
   type CardMenuDeps,
   type CardMenuTarget,
 } from "./cardMenu";
+import { filingBatcher, type FilingWords } from "./menuReceipts";
 import { useCollectionAdd, useWishlistAdd } from "./useCardAdds";
 
 /** What the collection's root is called in a sentence — the breadcrumb's first segment
  *  (`CollectionBreadcrumb`'s `ROOT`) and the activity feed's `COLLECTION.root`. */
 const COLLECTION_ROOT = "Collection";
 
+/** The receipt words for an add and for a move, given where the cards went. */
+const ADDED = (where: string): FilingWords => ({ done: "Added", verb: "add", where });
+const MOVED = (where: string): FilingWords => ({ done: "Moved", verb: "move", where });
+/** A folder by its name in curly quotes — or the generic word, unquoted, for a folder the cached
+ *  cabinet does not carry (another window just made it). */
+const quoted = (name: string | undefined): string =>
+  name === undefined ? "a folder" : `“${name}”`;
+
 export interface CardMenuWiring {
   /** One object for the whole page. Hand it to `buildCardMenu` with each row's own target. */
   deps: CardMenuDeps;
-  /**
-   * What the last refused **collection or wishlist** write said, as a whole sentence, or `null` —
-   * either add, and the folder move.
-   *
-   * **The page must draw this.** Every write a card menu starts is begun by a panel that is
-   * already closing, so there is nothing left on screen for a refusal to be reported to and no
-   * observer left to report it — a page that ignores this string is a page where a card
-   * silently fails to be added.
-   *
-   * The deck add is **not** here and needs nothing from the page: it reaches the app's single
-   * `useCardToDeck` through `CardToDeckProvider`, and that one mount draws its own sentence.
-   */
-  error: string | null;
+  // **No `error` any more (2026-10-12).** This used to carry the sentence a refused collection or
+  // wishlist write left, which every page had to draw in a `CardMenuRefusal` because the menu that
+  // started the write had already closed. Every write here now answers with a toast instead
+  // (`@/lib/notifications`) — a receipt when it lands, the refusal when it does not — which is the
+  // one place an answer to a closed menu can go, and it no longer depends on each page remembering
+  // to draw a banner.
 }
 
 export function useCardMenuDeps(): CardMenuWiring {
@@ -137,36 +141,50 @@ export function useCardMenuDeps(): CardMenuWiring {
    */
   const addToDeck = useOptionalAddCardToDeck();
 
-  /** The sentence a refused collection or wishlist add left behind. */
-  const [refusal, setRefusal] = useState<string | null>(null);
+  /**
+   * **One toast per press, whatever the press filed** — see `./menuReceipts`. A picked set's
+   * `Add 4 cards to → Collection` is four calls of {@link addToCollection} in one tick, and this is
+   * what folds them back into the one sentence the reader's one press is owed (the owner's rule,
+   * 2026-10-12: every add, remove or move of cards toasts, and one action is one toast).
+   *
+   * In state rather than a module constant so two mounted pages cannot fold each other's presses
+   * together; `useState`'s initialiser runs once per mount.
+   */
+  const [file] = useState(filingBatcher);
+  /** Where a cabinet's root is called in a receipt, and a folder by its own name. */
+  const collectionWhere = useCallback(
+    (folderId: number | null) =>
+      folderId === null
+        ? "your collection"
+        : quoted(collectionFolders.find((folder) => folder.id === folderId)?.name),
+    [collectionFolders],
+  );
+  const wishlistWhere = useCallback(
+    (folderId: number | null) =>
+      folderId === null
+        ? "your wishlist"
+        : quoted(wishlistFolders.find((folder) => folder.id === folderId)?.name),
+    [wishlistFolders],
+  );
 
   /**
    * One copy of exactly the printing that was right-clicked — `useCollectionAdd`, whose doc carries
    * the four keys it settles and why (out of this file on 2026-10-03, for the light app's phone
    * face).
    *
-   * **The refusal is cleared when the next add starts, not when one succeeds**, which is what every
-   * other banner on these pages does — each is derived from the *latest* mutation's state, so a new
-   * write supersedes the last one's complaint. Cleared only on success, a refusal would stand on
-   * screen while the reader dealt with it some other way: `CollectionPage` carries a comment about
-   * exactly that bug being found live and fixed for the stepper and the removal. Both writes here
-   * clear the same one, so the sentence on screen always belongs to the last thing the reader
-   * asked for.
+   * **No handlers, and the answer is read off `mutateAsync` at the call below instead.** The
+   * receipt needs the card's name and the press's batch, neither of which the mutation's own
+   * variables carry; and a promise held by the batch outlives the observer, where a
+   * `mutate`-scoped callback is dropped with it — the card modal's `Add to collection` can be
+   * pressed and closed inside one round trip.
    */
-  const collectionAdd = useCollectionAdd({
-    onMutate: () => setRefusal(null),
-    onError: (error) => setRefusal(`Couldn't add to your collection — ${ipcError(error)}`),
-  });
+  const collectionAdd = useCollectionAdd();
 
   /**
    * A wish for **this exact printing** — the menu is opened on one, and "any printing" is a
    * choice the quick-add popup exists to offer. `useWishlistAdd`, with its two keys.
    */
-  const wishlistAdd = useWishlistAdd({
-    // Superseded on the next add, exactly as the collection's is, and clearing the same one.
-    onMutate: () => setRefusal(null),
-    onError: (error) => setRefusal(`Couldn't add to your wishlist — ${ipcError(error)}`),
-  });
+  const wishlistAdd = useWishlistAdd();
 
   /**
    * One row the reader already owns, filed somewhere else — the menu's half of the collection
@@ -179,59 +197,76 @@ export function useCardMenuDeps(): CardMenuWiring {
    * drifted on the deck key, so one gesture left a built deck's claims stale or fresh depending
    * on whether the reader dragged the row or used its menu.
    *
-   * **What stays here is the refusal, and it is why the hook takes handlers at all.** A menu's
-   * panel is already closing when the answer arrives, so there is no observer left on screen to
-   * report to — the sentence has to be lifted into the page through {@link CardMenuWiring.error},
-   * where the collection page instead folds its own copy of this write into its banner.
+   * **What stays here is the answer**, as a toast off `mutateAsync` at {@link moveToFolder}: a
+   * menu's panel is already closing when it arrives, so there is no observer left on screen to
+   * report to. The collection page's own drag folds its copy of this write into its banner.
    */
-  const setFolder = useSetCollectionFolder({
-    // Superseded on the next write, exactly as the two adds are, and clearing the same sentence.
-    onMutate: () => setRefusal(null),
-    onError: (error) => setRefusal(`Couldn't move that card — ${ipcError(error)}`),
-  });
+  const setFolder = useSetCollectionFolder();
 
   /**
    * `Move N cards to` in **one** write (issue #555) — the same filing at a coarser grain, with the
-   * same refusal surface as {@link setFolder} beside it and the undo offer made inside the hook.
-   * A refusal rolls the whole press back, so the sentence says none of them moved.
+   * undo offer made inside the hook and the receipt made at {@link moveCopies}. A refusal rolls the
+   * whole press back, so the sentence says none of them moved.
    */
-  const setFolderMany = useSetCollectionFolderMany({
-    onMutate: () => setRefusal(null),
-    onError: (error) => setRefusal(`Couldn't move those cards — ${ipcError(error)}`),
-  });
+  const setFolderMany = useSetCollectionFolderMany();
 
-  // `mutate` is stable for the life of the observer, which is what lets the callbacks below — and
-  // therefore `deps` — hold still across a render of a wall of forty tiles.
-  const addCopy = collectionAdd.mutate;
-  const addWish = wishlistAdd.mutate;
-  const moveCopy = setFolder.mutate;
-  const moveMany = setFolderMany.mutate;
+  // `mutateAsync` is stable for the life of the observer, which is what lets the callbacks below —
+  // and therefore `deps` — hold still across a render of a wall of forty tiles.
+  const addCopy = collectionAdd.mutateAsync;
+  const addWish = wishlistAdd.mutateAsync;
+  const moveCopy = setFolder.mutateAsync;
+  const moveMany = setFolderMany.mutateAsync;
 
+  /**
+   * **Each write hands its promise to the press's batch**, keyed by the destination, so a picked
+   * set filed in one press is one toast — `Added 4 cards to “Binder”`, or `Added 3 of 4 cards …`
+   * with the first refusal under it. The card modal's `Add to collection` button reaches this same
+   * callback, and it toasts too even though the modal stays open: the owner's rule names the add,
+   * not the surface, and the rail's count ticking over is not a sentence about it.
+   */
   const addToCollection = useCallback(
     (target: CardMenuTarget, finish: Finish, folderId: number | null) =>
-      addCopy({ cardId: target.cardId, finish, folderId }),
-    [addCopy],
+      file(
+        `collection:${folderId}`,
+        target.name,
+        addCopy({ cardId: target.cardId, finish, folderId }),
+        ADDED(collectionWhere(folderId)),
+      ),
+    [addCopy, file, collectionWhere],
   );
   const addToWishlist = useCallback(
     (target: CardMenuTarget, folderId: number | null) =>
-      addWish({
-        cardId: target.cardId,
-        quantity: 1,
-        // The surface's own where it names one — a wish for the foil is a different wish, and
-        // is not filled by the nonfoil. Absent is no preference, which is not nonfoil.
-        preferredFinish: target.finish,
-        // Where the reader pointed, and `null` for the root — never omitted. The field is part
-        // of the row's storage grain, so a folder the caller failed to pass is not a wish filed
-        // in the wrong drawer but a *second* wish for the same card.
-        folderId,
-      }),
-    [addWish],
+      file(
+        `wishlist:${folderId}`,
+        target.name,
+        addWish({
+          cardId: target.cardId,
+          quantity: 1,
+          // The surface's own where it names one — a wish for the foil is a different wish, and
+          // is not filled by the nonfoil. Absent is no preference, which is not nonfoil.
+          preferredFinish: target.finish,
+          // Where the reader pointed, and `null` for the root — never omitted. The field is part
+          // of the row's storage grain, so a folder the caller failed to pass is not a wish filed
+          // in the wrong drawer but a *second* wish for the same card.
+          folderId,
+        }),
+        ADDED(wishlistWhere(folderId)),
+      ),
+    [addWish, file, wishlistWhere],
   );
   /** The **entry** id rather than a target, because this is the one write here that is about a
    *  row the reader owns instead of a piece of cardboard — see `CardMenuTarget.entryId`. */
+  //
+  // Batched like the adds, for the one surface that loops it — a menu with no `moveCopies` wired.
   const moveToFolder = useCallback(
-    (entryId: number, folderId: number | null) => moveCopy({ entryId, folderId }),
-    [moveCopy],
+    (entryId: number, folderId: number | null, name?: string) =>
+      file(
+        `move:${folderId}`,
+        name,
+        moveCopy({ entryId, folderId }),
+        MOVED(collectionWhere(folderId)),
+      ),
+    [moveCopy, file, collectionWhere],
   );
   /**
    * The several — one write, and the destination's name for the undo notice's sentence, read out
@@ -239,17 +274,29 @@ export function useCardMenuDeps(): CardMenuWiring {
    * first segment. A folder the list does not carry (a cabinet another window just changed) is
    * still named, as the generic word, rather than as an empty `to`.
    */
+  //
+  // **One write, so one answer** — a toast as well as the undo bar the hook raises, because the
+  // owner's rule names every move of cards and the undo bar is drawn on the collection page alone.
+  // All or nothing: the backend rolls the whole press back on a refusal.
   const moveCopies = useCallback(
-    (entryIds: readonly number[], folderId: number | null) =>
-      moveMany({
+    (entryIds: readonly number[], folderId: number | null) => {
+      const where = collectionWhere(folderId);
+      void moveMany({
         entryIds,
         folderId,
         destination:
           folderId === null
             ? COLLECTION_ROOT
             : (collectionFolders.find((folder) => folder.id === folderId)?.name ?? "a folder"),
-      }),
-    [moveMany, collectionFolders],
+      }).then(
+        () => notify.success(`Moved ${plural(entryIds.length, "card")} to ${where}`),
+        (e: unknown) =>
+          notify.error(`Couldn't move ${plural(entryIds.length, "card")} to ${where}`, {
+            body: ipcError(e),
+          }),
+      );
+    },
+    [moveMany, collectionFolders, collectionWhere],
   );
   /**
    * **`DEFAULT_VARIANT`, and the row does not ask.** "Add to → Deck" offers Theory then Live for a
@@ -319,5 +366,5 @@ export function useCardMenuDeps(): CardMenuWiring {
     ],
   );
 
-  return { deps, error: refusal };
+  return { deps };
 }

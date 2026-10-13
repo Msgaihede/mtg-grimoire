@@ -4,6 +4,7 @@ import { CreateDeckDialog } from "@/features/decks/CreateDeckDialog";
 import { useNewDeckFormat } from "@/features/decks/useNewDeckFormat";
 import { plural } from "@/lib/counts";
 import { ipc, ipcError } from "@/lib/ipc";
+import { notify } from "@/lib/notifications";
 import { useAppStore } from "@/lib/store";
 import { Overlay } from "./Overlay";
 import { TiersPanel } from "./panels/TiersPanel";
@@ -282,11 +283,47 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     condition: prefs.condition,
     folderId: prefs.folderId,
     folderList,
+    onRefused: (sentence) => notify.error("Couldn't add the scanned cards", { body: sentence }),
   });
   // The same press for a destination that is not the collection: its own write first, then the
   // tray's subtraction (`useTrayDestination`). Both hooks are called; one of them acts.
-  const handOff = useTrayDestination({ tray, destination });
-  const onCommit = () => void (destination === undefined ? commit() : handOff.commit());
+  const handOff = useTrayDestination({
+    tray,
+    destination,
+    onRefused: (sentence) =>
+      notify.error(`Couldn't add the scanned cards to ${destination?.name ?? "the list"}`, {
+        body: sentence,
+      }),
+  });
+  /**
+   * **One toast per Add, never one per card** — the owner's rule for a collection write, and its
+   * batch half. Each card already says it landed in the tray, over the camera (`AddedToast`), and
+   * the tray is a staging list rather than the collection: a toast per scan would stack four
+   * deep over a reader feeding cards at the camera, about cards that are not filed yet. The press
+   * that files them is the write, and it is said once, with the count and where they went. A
+   * refusal is the hooks' `onRefused`, above.
+   */
+  const onCommit = () => {
+    if (destination !== undefined) {
+      void handOff.commit().then((copies) => {
+        if (copies !== null) {
+          notify.success(`Added ${plural(copies, "card")} to ${destination.name}`);
+        }
+      });
+      return;
+    }
+    void commit().then((filed) => {
+      if (filed === null) return;
+      notify.success(`Added ${plural(filed.copies, "card")} to ${filedInto(filed.folderId)}`);
+    });
+  };
+  /** Where a commit filed, as the toast names it: a folder's name, or the collection's. A folder
+   *  the list does not hold (it would not load, and the stored id went to the backend as it
+   *  stood) is called the collection too — the answer proves no more than that. */
+  const filedInto = (id: number | null): string => {
+    const folder = id === null ? undefined : folderList.folders.find((f) => f.id === id);
+    return folder === undefined ? "your collection" : `“${folder.name}”`;
+  };
 
   /**
    * *Clear all…*: the rows the reader was asked about, while the question is up, and the button
@@ -545,6 +582,10 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
         onConfirm={() => {
           if (clearing === null) return;
           writeRows(withoutCommitted(tray.latest(), clearing));
+          // A clear is a bulk removal, and gets a receipt with its count even though the tray
+          // visibly empties: the dialog has closed over it, and the scans are not coming back.
+          const copies = plural(totalCopies(clearing), "scanned copy", "scanned copies");
+          notify.success(`Cleared ${copies} from the tray`);
         }}
         onDismiss={() => {
           setClearing(null);
@@ -560,7 +601,14 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
         create={scannedDeck}
         defaultFormatKey={newDeckFormat}
         intro={`${totalCopies(deckRows ?? [])} scanned copies will be filed into automatic categories. The scans stay in the tray so you can also add them to your collection.`}
+        // A deck made out of the tray is a deck write, and the owner's rule says it out loud,
+        // once, with the count — through the dialog's own receipt, so the create is one toast
+        // rather than the dialog's `Deck “X” created` and this beside it.
+        receipt={(deck) =>
+          `Created “${deck.name}” with ${plural(totalCopies(deckRows ?? []), "card")}`
+        }
         onCreated={(deck) => {
+          // The page then leaves for the deck; the scans stay in the tray.
           setDeckRows(null);
           useAppStore.getState().setActiveView("decks");
           useAppStore.getState().setOpenDeckId(deck.id);

@@ -45,6 +45,7 @@ import { FINISH_LABEL, isFinish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { ipcError, type EntryPatch } from "@/lib/ipc";
 import type { Currency } from "@/lib/marketplace";
+import { notify } from "@/lib/notifications";
 import { parsePurchasePrice, priceText, unreadablePriceNote } from "@/lib/prices";
 import { cn } from "@/lib/utils";
 import { useCopyUpdate } from "./useCopyWrites";
@@ -368,8 +369,14 @@ function EditCopyForm({
    */
   const save = useCopyUpdate({
     // Closed without moving the caret: the menu row that opened this is long gone, so there is
-    // nothing to hand focus back to and `Dialog`'s own restore has nothing to do.
-    onSuccess: () => onDone(),
+    // nothing to hand focus back to and `Dialog`'s own restore has nothing to do. **A toast**,
+    // because the dialog is gone with the answer and the row behind it may have folded into a
+    // neighbour; a refusal keeps the dialog open with its own alert line, so it toasts nothing.
+    // Here rather than in `useCopyUpdate`, which the light app's phone face presses too.
+    onSuccess: () => {
+      notify.success(`Updated “${target.cardName}”`);
+      onDone();
+    },
   });
 
   /**

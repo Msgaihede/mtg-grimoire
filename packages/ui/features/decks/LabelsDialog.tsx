@@ -53,6 +53,8 @@
 import { useEffect, useId, useMemo, useRef, useState, type JSX } from "react";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { type DeckLabel, type DeckVariant, type GlobalLabel, type LabelColor } from "@/lib/ipc";
+import { plural } from "@/lib/counts";
+import { notify } from "@/lib/notifications";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "@/lib/focus";
 import { Dialog } from "@/components/Dialog";
@@ -619,7 +621,21 @@ function RemoveFromDeck({
         <button
           type="button"
           disabled={meta.removeLabelFromDeck.isPending}
-          onClick={() => meta.removeLabelFromDeck.mutate(label.id, { onSuccess: onDone })}
+          // A receipt for a bulk unlabel (the owner's rule for bulk edits): the question closes
+          // on it and the cards it touched are on the desk behind this dialog. A refusal is the
+          // dialog's own inline line, which stays where the reader is looking.
+          onClick={() =>
+            meta.removeLabelFromDeck.mutate(label.id, {
+              onSuccess: () => {
+                notify.success(
+                  label.cardCount === 0
+                    ? `Removed “${label.name}” from this deck`
+                    : `Removed “${label.name}” from ${plural(label.cardCount, "card")}`,
+                );
+                onDone();
+              },
+            })
+          }
           className={CONFIRM_DESTRUCTIVE}
         >
           Remove from deck
@@ -679,7 +695,15 @@ function DeleteLabel({
         <button
           type="button"
           disabled={meta.deleteLabel.isPending}
-          onClick={() => meta.deleteLabel.mutate(label.id, { onSuccess: onDeleted })}
+          // Destructive and app-wide, so always a receipt; the refusal stays the dialog's line.
+          onClick={() =>
+            meta.deleteLabel.mutate(label.id, {
+              onSuccess: () => {
+                notify.success(`Label “${label.name}” deleted`);
+                onDeleted();
+              },
+            })
+          }
           className={CONFIRM_DESTRUCTIVE}
         >
           Delete label

@@ -47,6 +47,7 @@ import { useAppStore, type CardOverlay } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import type { CardModalScope } from "./cardModalScope";
 import { openMarketplaceForCard } from "./openMarketplace";
+import { refusedOpen } from "./refusedOpen";
 
 /** One surface-specific rail entry — a word and what pressing it does, and nothing else. */
 export interface RailAction {
@@ -196,14 +197,15 @@ export function CardModalRail({
       // in a Tauri webview that navigates the app's own window. The URL is built by
       // `scryfallCardUrl`, which lowercases the set code and escapes a collector number like
       // `1556★`; assembling it here would be a second spelling of a documented permalink.
-      onSelect: () => void openExternal(scryfallCardUrl(card.setCode, card.collectorNumber)),
+      onSelect: () =>
+        refusedOpen(openExternal(scryfallCardUrl(card.setCode, card.collectorNumber)), "Scryfall"),
     },
     {
       label: "Open on EDHREC",
       external: true,
       // By name, to EDHREC's own router — the shape Scryfall publishes as a card's EDHREC link.
       // `edhrecCardUrl` says why the name goes whole; nothing here slugs it.
-      onSelect: () => void openExternal(edhrecCardUrl(card.name)),
+      onSelect: () => refusedOpen(openExternal(edhrecCardUrl(card.name)), "EDHREC"),
     },
     {
       // `Open on TCGplayer`, `Open on Card Kingdom`… — the label follows the setting, which is
@@ -223,19 +225,22 @@ export function CardModalRail({
       // both of them. All this row supplies is the four facts only a surface knows: which printing,
       // its name, the finish the surface named, and the finishes the printing is sold in.
       //
-      // `void` rather than a `catch`, exactly like the two rows above: every way the exact page
-      // cannot be had already falls back to the search *inside* that helper, so a rejection
-      // arriving here would mean the helper itself threw rather than that the link failed.
+      // Caught and said, exactly like the two rows above and the menu's `Open on` row: every way
+      // the exact page cannot be had already falls back to the search *inside* that helper, so a
+      // rejection arriving here means the open itself was refused — which used to be swallowed.
       label: `Open on ${marketplace.label}`,
       external: true,
       onSelect: () =>
-        void openMarketplaceForCard({
-          marketplace,
-          cardId: card.id,
-          cardName: card.name,
-          finish,
-          finishes: card.finishes,
-        }),
+        refusedOpen(
+          openMarketplaceForCard({
+            marketplace,
+            cardId: card.id,
+            cardName: card.name,
+            finish,
+            finishes: card.finishes,
+          }),
+          marketplace.label,
+        ),
     },
     ...actions,
   ];

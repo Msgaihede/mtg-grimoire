@@ -9,6 +9,7 @@ import { buildFolderTree, flattenFolders } from "@/lib/folderTree";
 import { ipcError } from "@/lib/ipc";
 import type { CollectionFolder, Trade, TradeFinishOptions } from "@/lib/ipc";
 import type { Currency } from "@/lib/marketplace";
+import { notify } from "@/lib/notifications";
 import { formatPrice } from "@/lib/prices";
 import { cn } from "@/lib/utils";
 import {
@@ -17,6 +18,7 @@ import {
   defaultFinishOptions,
   fromCents,
   givenNote,
+  outcomeSentence,
   receivedNote,
   tradeMoney,
   unwishNote,
@@ -126,8 +128,22 @@ function Body({
     setFailure(null);
     writes
       .finish(trade.id, options)
-      .then(onFinished)
+      .then((outcome) => {
+        // The one trade write that reaches the collection and the wishlist, so the owner's rule
+        // for those lists applies: a toast saying what moved, once for the whole finish however
+        // many cards it took — `outcomeSentence`'s words, the archived banner's own. The dialog
+        // closes on it, and what moved is on two pages the reader is not looking at.
+        notify.success(`Finished “${trade.name}”`, {
+          body:
+            outcomeSentence(outcome) ??
+            "Finishing it changed nothing in your collection or your wishlist.",
+        });
+        onFinished();
+      })
       .catch((e: unknown) => {
+        // Said in the footer, where the retry is, and as a toast for the rule's record of a
+        // refused collection write. The write is one transaction: nothing moved.
+        notify.error(`Couldn't finish “${trade.name}”`, { body: ipcError(e) });
         setFailure(`Couldn't finish the trade — ${ipcError(e)}`);
         setBusy(false);
       });

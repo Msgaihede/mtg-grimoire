@@ -4,6 +4,7 @@ import { Dialog } from "@/components/Dialog";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import { FIELD } from "@/features/decks/formFields";
 import { ipcError } from "@/lib/ipc";
+import { notify } from "@/lib/notifications";
 import { isMarketplaceId, type MarketplaceId } from "@/lib/marketplace";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
@@ -100,7 +101,12 @@ function Body({
     writes
       // A blank name is left out rather than sent empty: absent is "name it for me".
       .create({ ...(trimmed ? { name: trimmed } : {}), marketplace })
-      .then(onCreated)
+      .then((id) => {
+        // A receipt for a dialog that writes and closes. A name left blank is the backend's to
+        // choose, and this does not have it, so that receipt names no trade.
+        notify.success(trimmed ? `Trade “${trimmed}” created` : "Trade created");
+        onCreated(id);
+      })
       .catch((e: unknown) => {
         setFailure(`Couldn't create the trade — ${ipcError(e)}`);
         setBusy(false);

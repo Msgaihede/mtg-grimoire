@@ -12,6 +12,7 @@ import type {
   SearchResponse,
   SupporterStatus,
 } from "@/lib/ipc";
+import { useNotifications } from "@/lib/notifications";
 import { SCANNER_NOT_IN_A_BROWSER_YET, SCANNER_OPEN_ELSEWHERE } from "./verdictText";
 import {
   DEFAULT_SCANNER_PREFS,
@@ -800,6 +801,12 @@ describe("ScannerPage", () => {
     expect(ipc.scannerTrayCommit).toHaveBeenCalledWith(importItems(rows, "LP"), BINDER.id, []);
     expect(ipc.collectionImportCommit).not.toHaveBeenCalled();
     expect(await within(tray()).findByText("Cards you scan appear here.")).toBeInTheDocument();
+    // One toast for the press, with the copies and the folder — never one per card.
+    await waitFor(() => expect(useNotifications.getState().notices).toHaveLength(1));
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Added 5 cards to “Trade binder”",
+      tone: "success",
+    });
     // Nothing is written behind it: the store already holds the empty tray.
     await new Promise((resolve) => setTimeout(resolve, 600));
     expect(ipc.setScannerTray).not.toHaveBeenCalled();
@@ -974,6 +981,11 @@ describe("ScannerPage", () => {
     ).toBeInTheDocument();
     expect(within(tray()).getAllByRole("listitem")).toHaveLength(rows.length);
     expect(ipc.setScannerTray).not.toHaveBeenCalledWith([]);
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Couldn't add the scanned cards",
+      body: "no card with the id `x` is in the card database",
+      tone: "error",
+    });
     // Pressed again, it sends the same rows and the same empty remainder — nothing was dropped.
     await user.click(within(tray()).getByRole("button", { name: "Add 5 to collection" }));
     await waitFor(() => expect(ipc.scannerTrayCommit).toHaveBeenCalledTimes(2));
@@ -1037,6 +1049,9 @@ describe("ScannerPage", () => {
     });
     expect(ipc.scannerTrayCommit).not.toHaveBeenCalled();
     expect(ipc.collectionImportCommit).not.toHaveBeenCalled();
+    expect(useNotifications.getState().notices[0]?.title).toMatch(
+      /^Cleared \d+ scanned (copy|copies) from the tray$/,
+    );
   });
 
   /**

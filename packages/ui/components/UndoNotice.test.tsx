@@ -10,6 +10,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import { offerUndo, resetBulkUndo, useBulkUndo } from "@/lib/bulkUndo";
+import { useNotifications } from "@/lib/notifications";
 import { DISMISS_UNDO, UndoNotice } from "./UndoNotice";
 
 let client: QueryClient;
@@ -79,6 +80,12 @@ describe("UndoNotice", () => {
       expect(invalidate).toHaveBeenCalledWith({ queryKey });
     }
     expect(screen.queryByRole("alert")).toBeNull();
+    // The bar is gone with the answer, so the receipt is a toast naming what was taken back.
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      tone: "success",
+      title: "Undone",
+      body: "Removed 3 cards from your collection.",
+    });
   });
 
   it("re-reads the wishlist's own roots for a wishlist ticket", async () => {
@@ -115,6 +122,8 @@ describe("UndoNotice", () => {
     );
     await waitFor(() => expect(useBulkUndo.getState().offers.collection).toBeNull());
     expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+    // Said on the page where the reader pressed Undo, and not again in a toast.
+    expect(useNotifications.getState().notices).toHaveLength(0);
   });
 
   /** The refusal speaks until a newer write replaces it, the page banner's rule. */

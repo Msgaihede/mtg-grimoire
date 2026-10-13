@@ -50,6 +50,7 @@ import {
   spellbookComboUrl,
   splitLines,
 } from "./combos";
+import { refusedOpen } from "./refusedOpen";
 
 /**
  * The combos a card is in, over the card detail modal.
@@ -812,7 +813,10 @@ function Pane({ combo }: { combo: CardCombo }) {
           rule `CardModalRail` states at its own site. */}
       <button
         type="button"
-        onClick={() => void openExternal(spellbookComboUrl(combo.id))}
+        onClick={() =>
+          // A refused open is said (`./refusedOpen`) rather than swallowed.
+          refusedOpen(openExternal(spellbookComboUrl(combo.id)), "Commander Spellbook")
+        }
         className={cn(
           "mt-5 rounded-md text-xs text-dim",
           "transition-colors duration-150 hover:text-text motion-reduce:transition-none",

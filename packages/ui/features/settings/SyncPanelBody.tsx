@@ -7,6 +7,7 @@ import { MEMBERSHIP_ELSEWHERE } from "@/lib/core/hostMembership";
 import { STORAGE_GROUP_WARNING } from "@/lib/core/hostStorage";
 import { count, plural, verb } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
+import { notify } from "@/lib/notifications";
 import {
   ipc,
   ipcError,
@@ -1274,17 +1275,31 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
       ipc.syncDeviceRename(deviceId, name),
     onSuccess: refresh,
   });
+  /**
+   * **Both of these answer in a toast as well as in the roster**, because each is confirmed in a
+   * dialog that closes on success — rule 2 of the toasts (`@/lib/notifications`): a write behind
+   * a confirmation gets a receipt once the question is gone. And a refusal is said in a toast
+   * too, because the dialog stays up over it: the panel's own problem line is under the scrim.
+   * A rename, edited in place in the roster, says nothing — the new name is where the reader is
+   * looking.
+   */
   const revoke = useMutation({
-    mutationFn: (deviceId: string) => ipc.syncDeviceRevoke(deviceId),
-    onSuccess: () => {
+    mutationFn: (device: PairedDevice) => ipc.syncDeviceRevoke(device.deviceId),
+    onSuccess: (_answer, device) => {
       setRemoving(null);
       refresh();
+      notify.success(`Removed “${device.name}” from the group`);
     },
+    onError: (failure, device) =>
+      void notify.error(`Couldn't remove “${device.name}”`, { body: ipcError(failure) }),
   });
   const leave = useMutation({
     mutationFn: () => ipc.syncGroupLeave(),
+    onError: (failure) =>
+      void notify.error("Couldn't leave the group", { body: ipcError(failure) }),
     onSuccess: () => {
       setLeaving(false);
+      notify.success("Left the sync group");
       // **`SYNC_KEY` rather than `refresh()`, and the difference is the membership.** Leaving
       // runs `entitlement::clear` as well as `identity::leave_group` (spec §2.3), so the
       // supporter block and the relay figures are as stale as the roster the moment this
@@ -1383,6 +1398,13 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
     // error banner over a ceremony that completed. `error_log` already has the reason if there
     // is one, and *Sync now* below is the retry — one press, not a failure to explain here.
     void ipc.syncNow().catch(() => undefined);
+    // **The receipt, as a toast as well as the panel's line**, and here rather than beside
+    // `setPairedNote` in the render-time block above: a toast is a write to another store, which
+    // render must never do. A pairing finishes when the *other* device's reader presses Codes
+    // match, so this reader is usually looking at that screen, not this one — the toast and the
+    // inbox are what they come back to. The panel's line stays for the light app's phone face,
+    // which mounts no `Toaster`.
+    notify.success("Device paired", { body: "The other device is now in this group." });
   }, [poll.data, client]);
 
   /**
@@ -1686,7 +1708,7 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
         typeToConfirm={false}
         pending={revoke.isPending}
         onConfirm={() => {
-          if (removing !== null) revoke.mutate(removing.deviceId);
+          if (removing !== null) revoke.mutate(removing);
         }}
         onDismiss={() => setRemoving(null)}
         onClose={() => setRemoving(null)}

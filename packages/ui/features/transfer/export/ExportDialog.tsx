@@ -250,6 +250,13 @@ function Body({
    * that lets a test assert a line no reader can see.
    */
   const [showList, setShowList] = useState(false);
+  /**
+   * **Inline, not a toast** — unlike Save's receipt. The dialog stays open after a Copy, with the
+   * line beside the button that was pressed, and the line is a claim about the clipboard that the
+   * next format or field change takes back (see the file doc); a toast cannot be taken back, and
+   * would keep saying "Copied" over a preview the clipboard no longer matches. Save gets a toast
+   * because the native save dialog has closed over this one and the file is somewhere else.
+   */
   const [copied, setCopied] = useState(false);
   const [saving, setSaving] = useState(false);
   /** One line for both failures a press here can produce — a refused clipboard write and a

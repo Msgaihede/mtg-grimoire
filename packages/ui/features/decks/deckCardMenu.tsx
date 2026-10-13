@@ -91,6 +91,7 @@ import { quickAddBlock, quickAddShort, type QuickAddTarget } from "./quickCollec
 // The rules a deck card's rows are greyed by — moved to a leaf on 2026-10-03 so the light app's
 // phone face asks them too, rather than a second spelling of each.
 import { ALREADY_HERE, finishChoices, REGULAR, zoneClaims } from "./deckCardRules";
+import { reportPresses, type PressWording } from "./receipts";
 
 /**
  * The card a right-click on a deck row is about, as `CardMenuTarget` describes it.
@@ -127,6 +128,29 @@ type Press = void | Promise<unknown>;
 /** Hand a plural row's presses to the surface as one batch — see {@link DeckCardMenuDeps.batch}. */
 function reportBatch(deps: DeckCardMenuDeps, presses: readonly Press[]) {
   deps.batch?.(presses.filter((press): press is Promise<unknown> => press instanceof Promise));
+}
+
+/**
+ * **A row's presses, to the banner's batch and to one toast** (`./receipts`, 2026-10-12).
+ *
+ * The menu has closed by the time a write answers, so until this the reader's only receipt for a
+ * `Category`, `Label`, `Remove` or `Add to theory` was the desk changing — somewhere on a deck
+ * that may be scrolled away from the card. One toast per press, never per card: a plural row's
+ * twelve writes are said once, with the count that landed. The editor's banner still speaks for
+ * a refusal as it always did; the toast is the owner's rule that every card edit says so.
+ */
+function pressRows(
+  deps: DeckCardMenuDeps,
+  rows: readonly DeckCard[],
+  presses: readonly Press[],
+  say: PressWording,
+) {
+  reportBatch(deps, presses);
+  reportPresses(
+    presses,
+    rows.map((row) => row.name),
+    say,
+  );
 }
 
 /** Everything the deck's own rows need that is not the card. Built once per surface, never
@@ -166,7 +190,7 @@ export interface DeckCardMenuDeps {
   /** `useDeck.setLabel`. `null` takes the label off. */
   setLabel: (card: DeckCard, labelId: number | null) => Press;
   /** `useDeck.setCardFinish`. `null` is the regular copy — see {@link finishItem}. */
-  setFinish: (card: DeckCard, to: DeckFinish) => void;
+  setFinish: (card: DeckCard, to: DeckFinish) => Press;
   /** The labels **this list is wearing**, already in hand from `deck_get`, most-used first —
    *  the label rows are built from these rather than from a second `deck_label_list`, which is
    *  what lets the submenu be `submenu`
@@ -377,7 +401,7 @@ export interface DeckCardMenuDeps {
    * Optional, and absent takes the row with it — a surface with no deck row to write to (a story,
    * a read-only mount) offers nothing rather than a press that cannot land. See {@link coverItem}.
    */
-  cover?: { cardId: string | null; set: (card: DeckCard) => void };
+  cover?: { cardId: string | null; set: (card: DeckCard) => Press };
   /**
    * **Split to new printing…** — open the printings wall on this row, asking how many of its
    * copies move and onto which printing (issue #934). It writes nothing itself: the press on a
@@ -503,12 +527,15 @@ export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuI
       label: many ? `Label ${manyCards(rows.length)}` : "Label card",
       Icon: Tag,
       items: [
-        ...deckCardLabelRows(card, deps.labels, (_card, labelId) =>
-          reportBatch(
+        ...deckCardLabelRows(card, deps.labels, (_card, labelId) => {
+          const label = deps.labels.find((l) => l.id === labelId)?.name;
+          pressRows(
             deps,
+            rows,
             rows.map((row) => deps.setLabel(row, labelId)),
-          ),
-        ),
+            labelWording(label),
+          );
+        }),
         // The line between putting a label on and making one. Above it every row is a press and
         // the card is labelled; below it the menu closes and a dialog opens, which is a
         // different kind of act and is drawn as one.
@@ -557,12 +584,33 @@ export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuI
       // one Ctrl-click at a time, and every one of them is wearing a gold ring while they read
       // this row — the pile's `Clear stack…` asks because a pile is a column nobody enumerated.
       onSelect: () =>
-        reportBatch(
+        pressRows(
           deps,
+          rows,
           rows.map((row) => deps.remove(row)),
+          {
+            done: (what) => `Removed ${what} from the deck`,
+            failed: (what) => `Couldn't remove ${what} from the deck`,
+          },
         ),
     },
   ];
+}
+
+/**
+ * The words for a label press: put on, or (`undefined` — the `None` row, or a label the list
+ * no longer wears) taken off.
+ */
+export function labelWording(label: string | undefined): PressWording {
+  return label === undefined
+    ? {
+        done: (what) => `Removed the label from ${what}`,
+        failed: (what) => `Couldn't remove the label from ${what}`,
+      }
+    : {
+        done: (what) => `Labeled ${what} “${label}”`,
+        failed: (what) => `Couldn't label ${what} “${label}”`,
+      };
 }
 
 /**
@@ -626,16 +674,20 @@ function categoryItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem {
           onSelect: () => {},
         };
       }
+      const moving = rows.filter((row) => row.categoryId !== category.id);
       return {
         kind: "action",
         id: `move-${category.id}`,
         label: category.name,
         onSelect: () =>
-          reportBatch(
+          pressRows(
             deps,
-            rows
-              .filter((row) => row.categoryId !== category.id)
-              .map((row) => deps.moveTo(row, category.id)),
+            moving,
+            moving.map((row) => deps.moveTo(row, category.id)),
+            {
+              done: (what) => `Moved ${what} to “${category.name}”`,
+              failed: (what) => `Couldn't move ${what} to “${category.name}”`,
+            },
           ),
       };
     }),
@@ -672,9 +724,14 @@ function otherListItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
     {
       ...item,
       onSelect: () =>
-        reportBatch(
+        pressRows(
           deps,
+          addable,
           addable.map((row) => otherList.add(row)),
+          {
+            done: (what) => `Added ${what} to the ${list} list`,
+            failed: (what) => `Couldn't add ${what} to the ${list} list`,
+          },
         ),
     },
   ];
@@ -1011,7 +1068,12 @@ function zoneItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
       claim.label,
       claim.zone === "commander" ? Crown : UserRound,
       claim.refusal,
-      () => deps.moveTo(card, claim.categoryId),
+      // A receipt like `Category`'s, which this is a named shortcut into — the menu has closed.
+      () =>
+        reportPresses([deps.moveTo(card, claim.categoryId)], [card.name], {
+          done: (what) => `Set ${what} as ${claim.zone}`,
+          failed: (what) => `Couldn't set ${what} as ${claim.zone}`,
+        }),
     ),
   );
 }
@@ -1069,7 +1131,16 @@ function coverItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
       id: "set-cover",
       label: "Set as deck image",
       Icon: ImageIcon,
-      ...(current ? { disabled: true, onSelect: () => {} } : { onSelect: () => cover.set(card) }),
+      ...(current
+        ? { disabled: true, onSelect: () => {} }
+        : {
+            // The image is the gallery's, on another page — so the receipt is the only sign here.
+            onSelect: () =>
+              reportPresses([cover.set(card)], [card.name], {
+                done: (what) => `Set ${what} as the deck image`,
+                failed: () => "Couldn't change the deck image",
+              }),
+          }),
     },
   ];
 }
@@ -1107,6 +1178,15 @@ function finishItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem {
    * the finish a reader opening this row came looking for.
    */
   const icon = (f: DeckFinish) => (f === "etched" ? Gem : Sparkles);
+  // The finish is drawn on the card, but the menu that made the press has closed and a refusal
+  // (a printing not sold in it) arrives after — so the press says what it did, once.
+  const setTo = (f: DeckFinish) => {
+    const word = f === null ? REGULAR.toLowerCase() : FINISH_LABEL[f].toLowerCase();
+    reportPresses([deps.setFinish(card, f)], [card.name], {
+      done: (what) => `Set ${what} as ${word}`,
+      failed: (what) => `Couldn't set ${what} as ${word}`,
+    });
+  };
 
   // Nothing to pick. The label names foil rather than the finish the printing *is*, because
   // what the greyed row is saying is "this card has no other finish", and foil is the one a
@@ -1130,7 +1210,7 @@ function finishItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem {
       id: "finish",
       label: label(other),
       Icon: icon(other),
-      onSelect: () => deps.setFinish(card, other),
+      onSelect: () => setTo(other),
     };
   }
   return {
@@ -1146,7 +1226,7 @@ function finishItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem {
       // file. It is drawn rather than dropped so the list keeps its length and its positions.
       ...(f === card.finish
         ? { disabled: true, onSelect: () => {} }
-        : { onSelect: () => deps.setFinish(card, f) }),
+        : { onSelect: () => setTo(f) }),
     })),
   };
 }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, type RefObject } from "react";
 import type { DeckFinish } from "@/lib/ipc";
+import { notify } from "@/lib/notifications";
 import { batchWrite, handled, type Write } from "@/lib/writes";
 import { AUTO_CATEGORY } from "./autoCategory";
 import { focusDeckGroup } from "./cardControl";
@@ -253,10 +254,17 @@ export function useDeckDrops({
         }).then(
           // The caret follows the card to the pile that now has it, which announces that pile's
           // name — the same hand-off a drag onto a heading makes, and the only feedback a move
-          // needs. When nothing moved there is nowhere to send it, and the sentence below is
-          // what says so instead.
-          ({ moved, categoryId }) => {
+          // needs. When nothing moved there is nowhere to send it, and the toast says so instead.
+          //
+          // **A toast since 2026-10-12, where it was a line over the desk that cleared itself
+          // after six seconds** (a bespoke toast). The two silences it fills are the ones that read
+          // as a broken control: a reader drags a card onto `Auto`, lets go, and the deck looks
+          // exactly as it did. Neither is a failure, so it is `info`; a re-file the backend
+          // *refused* is the banner's, like every other write. A card that moved says nothing —
+          // a drag inside the editor is drawn where the reader is looking.
+          ({ moved, category, categoryId }) => {
             if (moved && categoryId !== null) handOffTo(categoryId);
+            else if (!moved) notify.info(`“${card.name}” is already in “${category}”`);
           },
         ),
       );

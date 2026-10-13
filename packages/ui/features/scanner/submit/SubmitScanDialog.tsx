@@ -5,6 +5,7 @@ import { PANEL_BUTTON } from "@/features/settings/controls";
 import { PrivacyLink } from "@/features/settings/PrivacyLink";
 import { FINISH_LABEL, FINISHES, parseFinishes, type Finish } from "@/lib/finish";
 import { ipc, ipcError, type CardSummary } from "@/lib/ipc";
+import { notify } from "@/lib/notifications";
 import { radioKeys } from "@/lib/radioGroup";
 import { cn } from "@/lib/utils";
 import { PrintingPicker } from "./PrintingPicker";
@@ -214,6 +215,11 @@ const Body = memo(function Body({
       // the run as it stood at the press.
       const taken = await ipc.scannerSubmit(submissionOf(run, chosen.id, finish.value));
       setSent(taken.id);
+      // **Filed in the inbox, with no toast.** The dialog stays open and says "Sent" with the
+      // reference itself, so a toast would say it twice — but the reference is the only handle
+      // the reader will ever have on these pictures, and the dialog is gone the moment they press
+      // Done. The inbox keeps it after that, on this device.
+      notify.success("Scan sent", { body: `${REFERENCE} ${taken.id}`, toast: false });
     } catch (e) {
       // Drawn in place, with both choices left as they were: the commonest refusals are the
       // inbox's and the network's, and the cure for those is the same press again.

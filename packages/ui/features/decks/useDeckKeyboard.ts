@@ -2,6 +2,7 @@ import { useEffect, type RefObject } from "react";
 import { isTextField } from "@/components/menu/useContextMenu";
 import type { DeckCard, DeckFinish } from "@/lib/ipc";
 import { matchesShortcut, shortcut } from "@/lib/shortcuts";
+import { reportPresses } from "./receipts";
 
 /*
  * The deck editor's two bindings on `window` — undo/redo, and the picked set's Delete — moved out
@@ -149,7 +150,21 @@ export function useDeckKeyboard({
       const held = pickedRef.current;
       if (held.length < 2) return;
       event.preventDefault();
-      reportBatch(held.map((card) => setQuantityAt(card.cardId, card.categoryId, card.finish, 0)));
+      const presses = held.map((card) =>
+        setQuantityAt(card.cardId, card.categoryId, card.finish, 0),
+      );
+      reportBatch(presses);
+      // **One toast for the whole cut**, with the count that landed (`./receipts`): a bulk removal
+      // always gets a receipt — the owner's rule — and the cards it took are gone from the desk,
+      // so nothing on screen names them any more.
+      reportPresses(
+        presses,
+        held.map((card) => card.name),
+        {
+          done: (what) => `Removed ${what} from the deck`,
+          failed: (what) => `Couldn't remove ${what} from the deck`,
+        },
+      );
       setCardSelection(null);
     };
     window.addEventListener("keydown", onKey);

@@ -13,6 +13,7 @@ import type {
   FormatSpec,
 } from "@/lib/ipc";
 import { cardImageUrl } from "@/lib/images";
+import { useNotifications } from "@/lib/notifications";
 import { openDropdown, pickOption } from "@/test-dropdown";
 import { card, spec } from "./validation/fixtures";
 
@@ -376,6 +377,13 @@ describe("DeckSettingsDialog", () => {
 
     await waitFor(() => expect(deckSetFolder).toHaveBeenCalledWith(4, 2));
     expect(deckUpdate).not.toHaveBeenCalled();
+    // A deck moving between folders is a move, whatever surface made it: the receipt names the
+    // path the select drew.
+    await waitFor(() =>
+      expect(useNotifications.getState().notices).toMatchObject([
+        { title: "Moved “Burn” to “Commander › Legends”", tone: "success" },
+      ]),
+    );
   });
 
   /**
@@ -993,6 +1001,10 @@ describe("DeckSettingsDialog", () => {
     await waitFor(() =>
       expect(screen.queryByRole("group", { name: /^Clear the/ })).toBeNull(),
     );
+    // Cards left a deck: one receipt, with the count the command answered.
+    expect(useNotifications.getState().notices).toMatchObject([
+      { title: "Removed 7 cards from “Burn”’s theory list", tone: "success" },
+    ]);
   });
 
   /** A refusal is not an answer, so the question stays up over it — closing would leave the
@@ -1011,6 +1023,9 @@ describe("DeckSettingsDialog", () => {
       "Couldn't save that change — Database is busy.",
     );
     expect(screen.getByRole("group", { name: "Clear the actual list" })).toBeInTheDocument();
+    expect(useNotifications.getState().notices).toMatchObject([
+      { title: "Couldn't clear “Burn”’s actual list", body: "Database is busy.", tone: "error" },
+    ]);
   });
 
   /**

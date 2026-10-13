@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ipc, ipcError, type ErrorEntry } from "@/lib/ipc";
+import { notify } from "@/lib/notifications";
 
 /** Stable identity for "nothing has failed", so a render with no rows is not a new array. */
 const NONE: ErrorEntry[] = [];
@@ -26,7 +27,14 @@ export function useErrorLog() {
 
   const clear = useMutation({
     mutationFn: () => ipc.errorLogClear(),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["errorLog"] }),
+    onSuccess: (cleared) => {
+      // **A receipt, with the count**, because a clear is the destructive kind of write the
+      // app's toasts always answer (`@/lib/notifications`) — and the count is what the emptied
+      // list cannot say: the panel shows fifty rows, and the log can hold more. A refusal stays
+      // the panel's own line (`error` below), where the reader is still looking.
+      notify.success(`Cleared ${cleared} ${cleared === 1 ? "error" : "errors"} from the log`);
+      return queryClient.invalidateQueries({ queryKey: ["errorLog"] });
+    },
   });
 
   return {

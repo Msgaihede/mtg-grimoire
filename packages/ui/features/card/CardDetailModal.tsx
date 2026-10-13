@@ -90,6 +90,7 @@ import {
   type MeldRelation,
 } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
+import { notify } from "@/lib/notifications";
 import { sortOptions } from "@/lib/options";
 import { pricesAsOf } from "@/lib/prices";
 import { useAppStore, type CardWalkStop } from "@/lib/store";
@@ -817,7 +818,7 @@ function Body({
    * `"nonfoil"` above, so it beats a foil tile's `paneFinish` instead of falling through to it.
    */
   const railFinish = viewedFinish ?? paneFinish ?? scope.deck?.finish ?? null;
-  const { deps, error: menuFailure } = useCardMenuDeps();
+  const { deps } = useCardMenuDeps();
   const addToDeck = useOptionalAddCardToDeck();
 
   /**
@@ -1539,7 +1540,17 @@ function Body({
     return [
       {
         label: "Set deck image",
-        onSelect: () => deck.update.mutate({ coverCardId: card.id }),
+        // **A toast both ways, because nothing on this panel changes when it lands** — the cover is
+        // drawn on the gallery tile and the editor's header, neither of them here — and because
+        // `useDeck`'s `update` has no refusal of its own, so a failure was silent.
+        onSelect: () =>
+          deck.update.mutate(
+            { coverCardId: card.id },
+            {
+              onSuccess: () => notify.success(`Set “${card.name}” as the deck image`),
+              onError: (e) => notify.error("Couldn't set the deck image", { body: ipcError(e) }),
+            },
+          ),
       },
     ];
   }, [scope.deckControls, scope.deck, card, deck.update]);
@@ -1650,7 +1661,10 @@ function Body({
           present and inert. `flex: 1 1 auto` reports what is in it and still shrinks to nothing
           under `max-h-full`, which is what `min-h-0` beside it is for. */}
       <div ref={panelRef} className="flex min-h-0 flex-auto flex-col">
-        <CardMenuRefusal error={refusal ?? menuFailure} className="mx-5 mt-3 shrink-0" />
+        {/* This panel's own refusals only. The card menu's writes, and the two `Add to` buttons below
+            that share them, answer with a toast (`useCardMenuDeps`), which is where a write made
+            from a menu that has already closed can be told. */}
+        <CardMenuRefusal error={refusal} className="mx-5 mt-3 shrink-0" />
 
         {/* **What `Edit` turned on, said where the reader is looking** — the controls it changed
             look almost exactly as they did (`View as foil` became `Set as foil`, a printing row

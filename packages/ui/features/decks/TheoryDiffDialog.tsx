@@ -6,7 +6,10 @@ import { FinishMark } from "@/components/FinishMark";
 import { FINISH_LABEL } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { cardImageUrl } from "@/lib/images";
+import { plural } from "@/lib/counts";
 import { ipc, ipcError, type TheoryDiffRow } from "@/lib/ipc";
+import { notify } from "@/lib/notifications";
+import { notifyWishesSent } from "./receipts";
 import type { Currency, Marketplace, MarketplaceId } from "@/lib/marketplace";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useMarketplace } from "@/lib/useMarketplace";
@@ -273,7 +276,7 @@ function countNoun(view: DiffView, n: number): string {
  * makes it safe is that the *write* carries the id and not the name, so a name that has not
  * arrived costs a clause and never a destination.
  *
- * One function, so the sentence a footer press is reported in ({@link wishesSentNote}) and a
+ * One function, so the sentence a footer press is reported in ({@link notifyWishesSent}) and a
  * row's button cannot come to say "in Ordered" and "to Ordered" about one press.
  */
 function filedIn(destination: string | null): string {
@@ -285,7 +288,7 @@ function filedIn(destination: string | null): string {
  * {@link TheoryDiffDialogProps.onSent}.
  *
  * **Facts rather than a sentence**, so a host that wants to say it differently (or count it) is
- * not left parsing prose; {@link wishesSentNote} is the sentence for a host that wants this
+ * not left parsing prose; {@link notifyWishesSent} is the sentence for a host that wants this
  * dialog's own words, so the dialog's vocabulary for its own press stays in this file.
  */
 export interface WishesSent {
@@ -295,36 +298,6 @@ export interface WishesSent {
   /** The destination's **name**, `null` at the wishlist root — the same value, with the same
    *  fallback, that {@link filedIn} reads. */
   destination: string | null;
-}
-
-/**
- * The footer press's answer, in words — **said by the host now, because the dialog is gone by the
- * time anybody could read it here.**
- *
- * It was the footer's live region until issue #553 (2026-09-27): `Sent. 3 wishes updated.`,
- * beside the press, in a dialog that stayed open. Pressing it twice doubled every wish — the
- * press is `add_wish`'s fold, which **raises** a wish already there, and the reader chose to keep
- * that fold — and nothing on screen said the first press had worked except a dim line at the far
- * end of the footer. So a successful press closes the dialog, which is the plainest "done" there
- * is and leaves no second press to make from the same open, and this sentence travels out with
- * {@link TheoryDiffDialogProps.onSent}.
- *
- * **It names what was sent and from where**, which the old line did not have to: beside the
- * button, "Sent." was about the button; on the editor, with the dialog gone, a bare "Sent." is
- * about nothing a reader can see. The destination clause is {@link filedIn}'s, so the root still
- * adds nothing — `to your wishlist` already says where that is.
- *
- * **Zero is not "they were already wished for"**, which is `DeckStats`' zero arm's rule for the
- * same fold: nothing is ever skipped for being on the wishlist already, so a `0` means the rows
- * sent were no longer in the difference when the write re-read it (another window built them, or
- * they left the plan) or that every one was a printing the card database no longer holds.
- */
-export function wishesSentNote({ wishes, destination }: WishesSent): string {
-  if (wishes === 0) {
-    return "Nothing sent. These cards are no longer missing or no longer in the card database.";
-  }
-  const noun = wishes === 1 ? "item" : "items";
-  return `Added to your wishlist: ${wishes} ${noun} updated${filedIn(destination)}.`;
 }
 
 /**
@@ -538,13 +511,12 @@ export interface TheoryDiffDialogProps {
   /** Outside click: close without moving focus. */
   onClose: () => void;
   /**
-   * Told what the footer's press did, **just before** {@link onDismiss} closes the dialog on it —
-   * so a host can say so where the reader will be standing. {@link wishesSentNote} words it.
+   * Told what the footer's press did, **just before** {@link onDismiss} closes the dialog on it.
    *
-   * **Optional, and a host that passes nothing gets a dialog that closes without a word**, which
-   * is the one gap this leaves: a closed dialog cannot announce anything itself, because its body
-   * — the footer's live region included — unmounts on close. A row's own `Wishlist` press never
-   * calls it; that press keeps the dialog open and answers on its own button.
+   * **The dialog says it itself now** — {@link notifyWishesSent}, a toast, which outlives the
+   * body that unmounts on close — so this is facts for a host that wants them, and optional. It
+   * was the only way the press was ever announced until 2026-10-12, when the editor drew the
+   * sentence in a self-clearing line of its own. A row's own `Wishlist` press never calls it.
    */
   onSent?: (sent: WishesSent) => void;
 }
@@ -930,9 +902,18 @@ function TheoryDiffBody({
                   wishRow.variables !== undefined &&
                   rowKey(wishRow.variables) === rowKey(row)
                 }
+                // The row's own mark says it went, but the owner's rule is that every wishlist
+                // add is said — and a refusal was drawn nowhere at all until this toast.
                 onWishlist={() =>
                   wishRow.mutate(row, {
-                    onSuccess: () => setSent((was) => new Set(was).add(rowKey(row))),
+                    onSuccess: (wishes) => {
+                      setSent((was) => new Set(was).add(rowKey(row)));
+                      notifyWishesSent({ wishes, destination }, `“${row.name}”`);
+                    },
+                    onError: (error) =>
+                      notify.error(`Couldn't send “${row.name}” to the wishlist`, {
+                        body: ipcError(error),
+                      }),
                   })
                 }
               />
@@ -960,7 +941,7 @@ function TheoryDiffBody({
               **It says nothing on success any more, and that is issue #553 rather than an
               omission.** It used to read `Sent. 3 wishes updated.` after the footer's press; that
               press now closes the dialog, and its sentence leaves with it through `onSent` —
-              {@link wishesSentNote}. Kept here instead, it would flash into a panel that is
+              {@link notifyWishesSent}. Kept here instead, it would flash into a panel that is
               already fading out, in a region that unmounts before a screen reader could read it.
               A row's press was never announced here: its own button turning `Wishlisted` is the
               answer, on the control the reader pressed. */}
@@ -1031,10 +1012,18 @@ function TheoryDiffBody({
               // Said, then shut — see the class doc's paragraph on issue #553. `destination` is
               // this render's, and it is the one the write carried: the control that picks it is
               // disabled for as long as the write is in flight.
+              // The toast is the dialog's own now (`notifyWishesSent`), so every host says the same
+              // thing; `onSent` still hands the facts over for a host that wants them. A refusal
+              // was drawn nowhere until the toast — the dialog stays open on it, button live.
               onSuccess: (wishes) => {
+                notifyWishesSent({ wishes, destination });
                 onSent?.({ wishes, destination });
                 onDismiss();
               },
+              onError: (error) =>
+                notify.error(`Couldn't send ${plural(picked.length, "card")} to the wishlist`, {
+                  body: ipcError(error),
+                }),
             })
           }
           // Nothing ticked, and nothing sent twice while the write is in flight — **and that is

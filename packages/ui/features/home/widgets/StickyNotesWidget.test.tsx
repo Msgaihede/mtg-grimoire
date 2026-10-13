@@ -22,11 +22,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const stickyNotes = vi.hoisted(() => vi.fn());
 const stickyNoteCreate = vi.hoisted(() => vi.fn());
 const stickyNoteReorder = vi.hoisted(() => vi.fn());
+const stickyNoteDelete = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/ipc")>();
   return {
     ...actual,
-    ipc: { ...actual.ipc, stickyNotes, stickyNoteCreate, stickyNoteReorder },
+    ipc: { ...actual.ipc, stickyNotes, stickyNoteCreate, stickyNoteReorder, stickyNoteDelete },
   };
 });
 
@@ -36,8 +37,20 @@ vi.mock("@/lib/ipc", async (importOriginal) => {
  * only thing that says which note the dialog opened on is the id.
  */
 vi.mock("../StickyNoteDialog", () => ({
-  StickyNoteDialog: ({ note }: { note: { id: number; title: string } }) => (
-    <div data-testid="dialog" data-note-id={note.id}>{`Editing ${note.title}`}</div>
+  StickyNoteDialog: ({
+    note,
+    onDelete,
+  }: {
+    note: { id: number; title: string };
+    onDelete: () => void;
+  }) => (
+    <div data-testid="dialog" data-note-id={note.id}>
+      {`Editing ${note.title}`}
+      {/* The dialog's own confirm is its business; this stands for the press that ends it. */}
+      <button type="button" onClick={onDelete}>
+        Confirm delete
+      </button>
+    </div>
   ),
 }));
 
@@ -60,6 +73,7 @@ vi.mock("../widgetSettings", async (importOriginal) => {
 });
 
 import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
+import { useNotifications } from "@/lib/notifications";
 import type { HomeWidget, StickyNote } from "@/lib/ipc";
 import { boxed, pointerDrag } from "@/test-drag";
 import { makeFit, spanPx, type WidgetFit } from "../fit";
@@ -395,6 +409,22 @@ describe("StickyNotesWidget", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Cards to proxy" }));
     expect(screen.getByTestId("dialog")).toHaveTextContent("Editing Cards to proxy");
+  });
+
+  /** A deletion closes the dialog it was confirmed in, so its receipt is a toast. */
+  it("says a deleted note by name once the delete lands", async () => {
+    stickyNoteDelete.mockResolvedValue(undefined);
+    draw();
+    await userEvent.click(screen.getByRole("button", { name: "Cards to proxy" }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
+
+    expect(screen.queryByTestId("dialog")).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Note “Cards to proxy” deleted",
+        tone: "success",
+      }),
+    );
   });
 
   /**

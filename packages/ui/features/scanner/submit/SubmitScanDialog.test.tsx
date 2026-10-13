@@ -21,6 +21,7 @@ vi.mock("@/lib/ipc", async (orig) => {
 });
 
 import { ipc } from "@/lib/ipc";
+import { useNotifications } from "@/lib/notifications";
 import { STATUS, VERDICTS } from "../fixtures";
 import type { ScanFilters, ScannerSubmissionFrame } from "../types";
 import { runClock, runFrameOf, type RunFrame, type ScanRun } from "./run";
@@ -427,6 +428,14 @@ describe("SubmitScanDialog", () => {
     await userEvent.click(send());
 
     await waitFor(() => expect(ipc.scannerSubmit).toHaveBeenCalledTimes(1));
+    // The reference is kept in the inbox, with no toast over the dialog that is already saying it.
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Scan sent",
+        body: `Reference: ${REFERENCE}`,
+      }),
+    );
+    expect(useNotifications.getState().toasts).toEqual([]);
     const call = vi.mocked(ipc.scannerSubmit).mock.calls[0];
     expect(call).toHaveLength(1);
     expect(call[0]).toEqual({

@@ -10,6 +10,7 @@ import type {
   SupporterStatus,
 } from "@/lib/ipc";
 import { PAIRING_KEY } from "@/lib/query";
+import { useNotifications } from "@/lib/notifications";
 
 const syncPairingStatus = vi.hoisted(() => vi.fn());
 const syncPairingBegin = vi.hoisted(() => vi.fn());
@@ -501,6 +502,13 @@ describe("SyncPanel", () => {
     expect(screen.queryByRole("button", { name: /codes match/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /pair a device/i })).toBeInTheDocument();
     await waitFor(() => expect(syncNow).toHaveBeenCalled());
+    // And a toast, once: the other device is where the ceremony finished, so this reader may be
+    // looking at that screen rather than this one.
+    expect(useNotifications.getState().notices).toHaveLength(1);
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      tone: "success",
+      title: "Device paired",
+    });
   });
 
   /**
@@ -660,6 +668,30 @@ describe("SyncPanel", () => {
 
     await user.click(await screen.findByRole("button", { name: /remove device/i }));
     await waitFor(() => expect(syncDeviceRevoke).toHaveBeenCalledWith(PHONE));
+    // The dialog has closed, so the receipt is a toast.
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        tone: "success",
+        title: "Removed “Phone” from the group",
+      }),
+    );
+  });
+
+  /** The dialog stays up over a refusal, and the panel's problem line is under its scrim. */
+  it("says a refused removal in a toast", async () => {
+    syncDeviceRevoke.mockRejectedValueOnce("The relay can't be reached.");
+    const user = userEvent.setup();
+    render(<SyncPanel />, { wrapper: paired });
+
+    await user.click(await screen.findByRole("button", { name: /remove phone/i }));
+    await user.click(await screen.findByRole("button", { name: /remove device/i }));
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        tone: "error",
+        title: "Couldn't remove “Phone”",
+        body: "The relay can't be reached.",
+      }),
+    );
   });
 
   /** A matrix of `width * width` booleans draws one `<rect>` per dark module and none per
@@ -764,6 +796,12 @@ describe("leaving the group", () => {
 
     await user.click(screen.getByRole("button", { name: "Leave the group" }));
     await waitFor(() => expect(syncGroupLeave).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        tone: "success",
+        title: "Left the sync group",
+      }),
+    );
   });
 
   /**

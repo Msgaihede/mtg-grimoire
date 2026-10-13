@@ -21,10 +21,12 @@ import type { SearchCardDrag } from "@/features/search/searchCardDrag";
 import type { FolderDrag, FolderEdge } from "@/lib/folderDrag";
 import { reorderedLevel } from "@/lib/folderOrder";
 import { folderDescendants, folderLevel, type FolderNode } from "@/lib/folderTree";
-import { ipc, type WishlistFolder } from "@/lib/ipc";
+import { ipc, ipcError, type WishlistFolder } from "@/lib/ipc";
+import { notify } from "@/lib/notifications";
 import type { Shelf } from "@/lib/shelves";
 import type { WishDrop } from "./wishDrag";
 import type { CardDrops } from "./WishShelfHeading";
+import { ROOT_LABEL } from "./WishFolderPanel";
 import { fileTarget, NEW_FOLDER_SHELF } from "./wishShelfPlan";
 
 /**
@@ -101,9 +103,11 @@ export function useWishDrops({
       }),
     onSettled: settleWhole,
   });
-  // Held still for {@link fileWish}'s dependencies — `mutate` is stable where the result around it
-  // is a new object every render.
-  const { mutate: addWishMutate } = addWish;
+  // Held still for {@link fileWish}'s dependencies — `mutateAsync` is stable where the result
+  // around it is a new object every render. The promise rather than `mutate`'s per-call callbacks,
+  // which TanStack fires for the newest call alone: two cards dropped in quick succession are two
+  // receipts.
+  const { mutateAsync: addWishAsync } = addWish;
 
   /**
    * Where what is in the air may be let go — asked per target, because the answer differs per
@@ -139,12 +143,27 @@ export function useWishDrops({
    * asks one question and gets one answer: a heading lights up and takes what it is given.
    * Which command that turns into is the page's business, and it is the page that holds both.
    */
+  //
+  // **Only the add is said** (the owner's rule, 2026-10-12: every add to a list toasts, and a drag
+  // inside the open list does not). A wish re-filed by a drag is the list rearranging itself under
+  // the reader's pointer; a card off the search column is something new arriving on the wishlist,
+  // often into a shelf that is shut, so the receipt names it and the drawer. The refusal is said
+  // too — the page's banner says it as well, but a drop's banner sits far from where it was let go.
   const fileWish = useCallback(
-    (drop: WishDrop, to: number | null) =>
-      drop.kind === "wish"
-        ? setFolder({ id: drop.wish.wishId, folderId: to })
-        : addWishMutate({ card: drop.card, folderId: to }),
-    [setFolder, addWishMutate],
+    (drop: WishDrop, to: number | null) => {
+      if (drop.kind === "wish") {
+        setFolder({ id: drop.wish.wishId, folderId: to });
+        return;
+      }
+      const name = drop.card.name === "" ? "card" : drop.card.name;
+      const into = to === null ? ROOT_LABEL : (census.find((f) => f.id === to)?.name ?? "a folder");
+      void addWishAsync({ card: drop.card, folderId: to }).then(
+        () => notify.success(`Added “${name}” to “${into}”`),
+        (error: unknown) =>
+          notify.error(`Couldn't add “${name}” to “${into}”`, { body: ipcError(error) }),
+      );
+    },
+    [setFolder, addWishAsync, census],
   );
 
   /**

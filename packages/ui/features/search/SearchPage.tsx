@@ -9,7 +9,6 @@ import { OwnedBadge } from "@/components/OwnedBadge";
 import { RarityGem } from "@/components/RarityGem";
 import { VirtualTable, type TableColumn } from "@/components/table/VirtualTable";
 import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
-import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
 import { rowHasBackFace } from "@/features/card/printings";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
@@ -629,7 +628,7 @@ function Results({ search }: { search: CardSearch }) {
    * between them would be two answers to one question.
    */
   const { menu, menuKey } = useContextMenu();
-  const { deps: menuDeps, error: menuFailure } = useCardMenuDeps();
+  const { deps: menuDeps } = useCardMenuDeps();
   /** One row's or one tile's handler. The item list is a **thunk** inside `menu`, so a wall of
    *  forty pays for nothing until a reader actually right-clicks one of them. */
   const cardMenu = useCallback(
@@ -720,10 +719,8 @@ function Results({ search }: { search: CardSearch }) {
         )}
       </AnimatePresence>
 
-      {/* A write the menu started and the backend refused, said where the reader made it —
-          beside the banner above rather than folded into it, because that one is about the
-          *list* and this is about a card in it. */}
-      <CardMenuRefusal error={menuFailure} />
+      {/* A write the menu started answers with a toast — its receipt or its refusal — raised by
+          `useCardMenuDeps` once the closed menu's write lands; there is no line for it here. */}
 
       {!empty &&
         (view === "grid" ? (

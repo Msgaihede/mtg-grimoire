@@ -101,11 +101,20 @@ export function useTrayCommit({
   condition,
   folderId,
   folderList,
+  onRefused,
 }: {
   tray: Pick<TrayState, "latest" | "commit">;
   condition: Condition;
   folderId: number | null;
   folderList: FolderList;
+  /**
+   * The write was refused, in {@link TrayCommit.error}'s own sentence — told as it happens, since
+   * `commit` answers `null` for a refusal and for a press with nothing to send alike. The
+   * desktop's Scanner view raises its toast here; a surface that draws `error` alone passes none.
+   * **Not the plan's refusals** (a row waiting on a printing): those stop the press before anything
+   * is written, and are said beside it in the tray the reader is pressing in.
+   */
+  onRefused?: (sentence: string) => void;
 }): TrayCommit {
   const queryClient = useQueryClient();
   const [committing, setCommitting] = useState(false);
@@ -145,6 +154,7 @@ export function useTrayCommit({
       return { outcome, copies: totalCopies(taken), folderId: target };
     } catch (e) {
       setError(ipcError(e));
+      onRefused?.(ipcError(e));
       return null;
     } finally {
       setCommitting(false);

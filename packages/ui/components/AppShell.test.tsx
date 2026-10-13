@@ -174,14 +174,12 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import { AppShell } from "./AppShell";
-import { notify } from "@/lib/notifications";
-import { REPORT_MS } from "./useSidebarDrops";
+import { notify, useNotifications } from "@/lib/notifications";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { CardToDeckProvider, useAddCardToDeck } from "@/features/card/cardMenu";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { EditionContext, LIGHT_EDITION } from "@/lib/edition";
 import { usePublishes, useReaches } from "@/lib/reach";
-import { LAYER } from "@/lib/layers";
 import { DURATION } from "@/lib/motion";
 import type { Update } from "@/lib/useUpdate";
 import { cardDraggable, type DragPayload } from "@/features/decks/dnd";
@@ -229,8 +227,8 @@ const render = (ui: ReactElement) =>
   renderBare(
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        {/* The shell draws the sentence a refused card-menu deck add leaves and reads it through
-            this context, so it is as much a part of the shell's surroundings as the query client.
+        {/* The card menu's deck write, which a view below the shell reaches through this
+            context, so it is as much a part of the shell's surroundings as the query client.
             `App.tsx` mounts it **above `ContextMenuProvider`** rather than here, because that
             provider draws its panel as a sibling of the shell — a menu's rows are not inside the
             shell, which is a trap that cost one commit. */}
@@ -1023,9 +1021,17 @@ describe("the sidebar's drop targets", () => {
     name: "Lightning Bolt",
     typeLine: "Instant",
   };
+  const NO_REST: readonly DragPayload[] = [];
 
-  /** A card that can be picked up, standing in for the four walls that carry one. */
-  function CardSource({ payload }: { payload: DragPayload }) {
+  /** A card that can be picked up, standing in for the four walls that carry one. `rest` is a
+   *  multi-select's other cards, carried along as `cardDraggable`'s own `rest` carries them. */
+  function CardSource({
+    payload,
+    rest = NO_REST,
+  }: {
+    payload: DragPayload;
+    rest?: readonly DragPayload[];
+  }) {
     const ref = useRef<HTMLDivElement>(null);
     useEffect(() => {
       const element = ref.current;
@@ -1034,16 +1040,16 @@ describe("the sidebar's drop targets", () => {
       // hit-tests by coordinate and jsdom measures every rect as four zeroes, so a source with
       // no box is pressed at the origin — which is wherever anything else unmeasured also is.
       boxed(element, 0);
-      return cardDraggable({ element, payload: () => payload });
-    }, [payload]);
+      return cardDraggable({ element, payload: () => payload, rest: () => rest });
+    }, [payload, rest]);
     return <div ref={ref}>a card</div>;
   }
 
   /** The shell with a card in it, and that card in the air. */
-  async function pickUp(payload: DragPayload = BOLT) {
+  async function pickUp(payload: DragPayload = BOLT, rest: readonly DragPayload[] = NO_REST) {
     render(
       <AppShell update={noUpdate}>
-        <CardSource payload={payload} />
+        <CardSource payload={payload} rest={rest} />
       </AppShell>,
     );
     return startPointerDrag(screen.getByText("a card"));
@@ -1090,9 +1096,8 @@ describe("the sidebar's drop targets", () => {
    *  which jsdom accepts and no assertion here would notice. */
   const boxedEntry = (label: keyof typeof ENTRY_TOP) => boxed(entry(label), ENTRY_TOP[label]);
 
-  /** The entry's own live region — the line under its button, where a drop reports. */
-  const report = (label: string) =>
-    within(entry(label).parentElement as HTMLElement).getByRole("status");
+  /** What the drop said — a toast, and so the inbox's newest notice. */
+  const said = () => useNotifications.getState().notices[0];
 
   /**
    * A deck open in the editor, as the sidebar sees it: the store's id, and the detail the
@@ -1193,19 +1198,22 @@ describe("the sidebar's drop targets", () => {
     await held.drop();
 
     expect(deckAddCard).not.toHaveBeenCalled();
-    expect(report("Decks")).toBeEmptyDOMElement();
+    expect(useNotifications.getState().notices).toHaveLength(0);
   });
 
   it("wishes for the printing dropped on Wishlist", async () => {
     const held = await pickUp();
-    // The region exists before there is anything to say: a live region that first appears
-    // with its sentence already in it announces nothing.
-    expect(report("Wishlist")).toBeEmptyDOMElement();
 
     await held.over(boxedEntry("Wishlist"));
     await held.drop();
 
-    await waitFor(() => expect(report("Wishlist")).toHaveTextContent("Added to wishlist."));
+    // A toast: the wishlist is another page, so this is the only receipt the drop has.
+    await waitFor(() =>
+      expect(said()).toMatchObject({
+        tone: "success",
+        title: "Added “Lightning Bolt” to the wishlist",
+      }),
+    );
     // Quantity 1, and the printing that was dragged — a wish made from a card the reader was
     // looking at is a wish for *that* one.
     expect(wishlistAdd).toHaveBeenCalledWith({ cardId: "c-bolt", quantity: 1 });
@@ -1243,7 +1251,9 @@ describe("the sidebar's drop targets", () => {
     await held.over(boxedEntry("Decks"));
     await held.drop();
 
-    await waitFor(() => expect(report("Decks")).toHaveTextContent("Added to Burn."));
+    await waitFor(() =>
+      expect(said()).toMatchObject({ tone: "success", title: "Added “Lightning Bolt” to “Burn”" }),
+    );
     expect(deckAddCard).toHaveBeenCalledWith(...addedToDeck(7));
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
   });
@@ -1300,7 +1310,7 @@ describe("the sidebar's drop targets", () => {
    * A deck deleted in another view answers `GONE`, and this surface is outside the editor's
    * refused-write family — so the sentence is read here and the re-read is fired from here.
    */
-  it("says a refused add in the same line, and re-reads the deck behind it", async () => {
+  it("says a refused add in a toast, and re-reads the deck behind it", async () => {
     openDeck(7, "Burn");
     deckAddCard.mockRejectedValue("That deck is not there any more.");
     const held = await pickUp();
@@ -1309,42 +1319,49 @@ describe("the sidebar's drop targets", () => {
     await held.drop();
 
     await waitFor(() =>
-      expect(report("Decks")).toHaveTextContent("That deck is not there any more."),
+      expect(said()).toMatchObject({
+        tone: "error",
+        title: "Couldn't add to “Burn”",
+        body: "That deck is not there any more.",
+      }),
     );
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
   });
 
-  it("clears the line when the next card is picked up", async () => {
-    const held = await pickUp();
-    await held.over(boxedEntry("Wishlist"));
+  /**
+   * **One gesture, one toast** (the owner's rule): a picked set dropped on an entry is one
+   * notice with the count, never one per card — and a set some of which was refused is one
+   * warning saying how many of them landed, with the first refusal under it.
+   */
+  it("says a multi-card drop once, with the count", async () => {
+    openDeck(7, "Burn");
+    const helix: DragPayload = { ...BOLT, cardId: "c-helix", name: "Lightning Helix" };
+    const ponder: DragPayload = { ...BOLT, cardId: "c-ponder", name: "Ponder" };
+    const held = await pickUp(BOLT, [helix, ponder]);
+
+    await held.over(boxedEntry("Decks"));
     await held.drop();
-    await waitFor(() => expect(report("Wishlist")).toHaveTextContent("Added to wishlist."));
 
-    const again = await startPointerDrag(screen.getByText("a card"));
-
-    expect(report("Wishlist")).toBeEmptyDOMElement();
-    await again.cancel();
+    await waitFor(() => expect(deckAddCard).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(useNotifications.getState().notices).toHaveLength(1));
+    expect(said()).toMatchObject({ tone: "success", title: "Added 3 cards to “Burn”" });
   });
 
-  it("clears the line after four seconds", async () => {
-    // `setTimeout` only: the drag helper waits on a real animation frame, and the mutation
-    // settles on a microtask — faking either would stall the gesture rather than the timer.
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      const held = await pickUp();
-      await held.over(boxedEntry("Wishlist"));
-      await held.drop();
-      await act(async () => {});
-      expect(report("Wishlist")).toHaveTextContent("Added to wishlist.");
+  it("folds a partly refused drop into one warning", async () => {
+    const helix: DragPayload = { ...BOLT, cardId: "c-helix", name: "Lightning Helix" };
+    wishlistAdd.mockRejectedValueOnce("That printing is not there any more.");
+    const held = await pickUp(BOLT, [helix]);
 
-      await act(async () => {
-        vi.advanceTimersByTime(REPORT_MS);
-      });
+    await held.over(boxedEntry("Wishlist"));
+    await held.drop();
 
-      expect(report("Wishlist")).toBeEmptyDOMElement();
-    } finally {
-      vi.useRealTimers();
-    }
+    await waitFor(() => expect(wishlistAdd).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(useNotifications.getState().notices).toHaveLength(1));
+    expect(said()).toMatchObject({
+      tone: "warning",
+      title: "Added 1 of 2 cards to the wishlist",
+      body: "That printing is not there any more.",
+    });
   });
 
   /** The same card twice is two writes: `add_wish` folds into the row that is already there,
@@ -1353,7 +1370,7 @@ describe("the sidebar's drop targets", () => {
     const held = await pickUp();
     await held.over(boxedEntry("Wishlist"));
     await held.drop();
-    await waitFor(() => expect(report("Wishlist")).toHaveTextContent("Added to wishlist."));
+    await waitFor(() => expect(said()?.tone).toBe("success"));
 
     const again = await startPointerDrag(screen.getByText("a card"));
     await again.over(boxedEntry("Wishlist"));
@@ -1364,20 +1381,12 @@ describe("the sidebar's drop targets", () => {
   });
 
   /**
-   * The same drop with the rail down to 68px, where the report line has no column to be a line
-   * in and is drawn as a panel floating beside the rail instead.
-   *
-   * **The region and its mounting rule do not move** — same `role="status"`, same element,
-   * mounted for the life of the entry and `sr-only` while empty — so the sentence arrives here
-   * exactly as it does above, which is the half a screen reader hears and the half this can
-   * check. The geometry is a live pass's; what is pinned instead is `pointer-events-none`,
-   * because that class is the whole of why a panel hanging over the view for four seconds
-   * cannot eat the drop it is reporting or the click after it.
-   *
-   * Finding the entry by its name while it is an icon is the second claim, and it comes free:
-   * `entry("Wishlist")` is the ordinary query every other test here uses.
+   * The same drop with the rail down to 68px. The report used to be a line under the entry, and
+   * collapsed it had no column to be a line in — so it floated beside the rail as a panel of its
+   * own. It is a toast now, in the window's corner whatever the rail is doing, and drawn by the
+   * shell's own `Toaster`: what this pins is that the sentence reaches the screen.
    */
-  it("says where a card went in a panel beside the rail when the rail is collapsed", async () => {
+  it("says where a card went when the rail is collapsed", async () => {
     navCollapsed.mockResolvedValue(true);
     const held = await pickUp();
     await screen.findByRole("button", { name: "Expand sidebar" });
@@ -1385,8 +1394,7 @@ describe("the sidebar's drop targets", () => {
     await held.over(boxedEntry("Wishlist"));
     await held.drop();
 
-    await waitFor(() => expect(report("Wishlist")).toHaveTextContent("Added to wishlist."));
-    expect(report("Wishlist")).toHaveClass("pointer-events-none", LAYER.popup);
+    expect(await screen.findByText("Added “Lightning Bolt” to the wishlist")).toBeInTheDocument();
   });
 });
 
@@ -1396,8 +1404,8 @@ describe("the sidebar's drop targets", () => {
  * A card menu is opened on every card surface and its deck add has to outlive the menu — `ctx.run`
  * closes the panel before it calls a row's handler — so the write is mounted here, where
  * `useSidebarDrops` is and for the same reason. Mounting it *once* rather than per surface is
- * the second reason: the sentence a refusal leaves then has one place to be drawn, and a surface
- * never holds it at all.
+ * the second reason: one piece of state, and one place the answer is said (a toast, since the
+ * menu has closed) — a surface never holds it at all.
  */
 describe("the card menu's deck write", () => {
   /** A view, standing in for any card surface. It asks the shell for the write and nothing else,
@@ -1429,12 +1437,6 @@ describe("the card menu's deck write", () => {
     );
   }
 
-  /** The Decks entry's own live region, which this sentence deliberately does not use. */
-  const decksReport = () =>
-    within(screen.getByRole("button", { name: "Decks" }).parentElement as HTMLElement).getByRole(
-      "status",
-    );
-
   beforeEach(() => {
     deckGet.mockResolvedValue({ deck: { id: 4, name: "Burn" }, cards: [], categories: [] });
   });
@@ -1458,7 +1460,7 @@ describe("the card menu's deck write", () => {
     );
   });
 
-  it("says in the sidebar when the add is refused", async () => {
+  it("says a refused add in a toast, from the shell's own Toaster", async () => {
     const user = userEvent.setup();
     deckAddCard.mockRejectedValue(new Error("That deck is not there any more"));
     render(
@@ -1467,18 +1469,17 @@ describe("the card menu's deck write", () => {
       </AppShell>,
     );
 
-    // Nothing before the refusal: an alert is mounted on insertion, which is the whole of how
-    // it announces, and a permanently-mounted second alert would make `getByRole("alert")`
-    // ambiguous everywhere in this app.
     expect(screen.queryByRole("alert")).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "add to Burn" }));
 
-    // Its own region, and deliberately not the Decks entry's report line: that line is about a
-    // card let go *on* the entry, it clears itself after `REPORT_MS`, and one slot holding two
-    // lifetimes would hide this sentence and then bring it back when the other's timer expired.
+    // It used to be a line under the rail; it is an error toast now, which the `Toaster` draws as
+    // an `alert`. The probe passed no deck name, so the title says "the deck".
     expect(await screen.findByRole("alert")).toHaveTextContent("That deck is not there any more");
-    expect(decksReport()).toBeEmptyDOMElement();
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      tone: "error",
+      title: "Couldn't add to the deck",
+    });
   });
 });
 
@@ -1705,6 +1706,26 @@ describe("the shell's keyboard bindings", () => {
 
     expect(windowNew).toHaveBeenCalledOnce();
     expect(useAppStore.getState().activeView).toBe("search");
+  });
+
+  it("says so in a toast when the new window is refused", async () => {
+    windowNew.mockRejectedValueOnce("The window could not be created.");
+    const user = userEvent.setup();
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    await user.keyboard("{Control>}{Shift>}n{/Shift}{/Control}");
+
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        tone: "error",
+        title: "Couldn't open a new window",
+        body: "The window could not be created.",
+      }),
+    );
   });
 
   /**

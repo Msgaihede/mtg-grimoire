@@ -15,6 +15,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import { useAppStore } from "./store";
+import { useNotifications } from "./notifications";
 import {
   isStartView,
   START_VIEW_KEY,
@@ -149,12 +150,12 @@ describe("useStartView", () => {
   });
 
   /**
-   * **A refused write keeps the reader's choice**, and says nothing — `useNavCollapsed`'s trade
-   * for its reason. `set_start_view` answers `BUSY` while a sync holds the write connection, and
-   * putting the picker back under the reader's hand with nothing on screen saying why is worse
-   * than losing one launch's memory of the choice.
+   * **A refused write keeps the reader's choice**, and says so in a toast. `set_start_view`
+   * answers `BUSY` while a sync holds the write connection, and putting the picker back under the
+   * reader's hand would be worse than losing one launch's memory of the choice — but leaving that
+   * loss unsaid is a launch on the wrong page with nothing to connect it to.
    */
-  it("keeps a choice a refused write never stored, and raises nothing", async () => {
+  it("keeps a choice a refused write never stored, and says it was not saved", async () => {
     setStartView.mockRejectedValue("The database is busy with a sync — try again in a moment.");
     const { result } = renderHook(() => useStartView(), { wrapper });
     await waitFor(() => expect(result.current.view).toBe("search"));
@@ -163,6 +164,11 @@ describe("useStartView", () => {
 
     await waitFor(() => expect(client.getMutationCache().getAll()[0]?.state.status).toBe("error"));
     expect(result.current.view).toBe("decks");
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      tone: "error",
+      title: "Couldn't save the start view",
+      body: "The database is busy with a sync — try again in a moment.",
+    });
   });
 
   /**

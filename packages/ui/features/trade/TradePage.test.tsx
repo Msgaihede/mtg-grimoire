@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
+import { useNotifications } from "@/lib/notifications";
 import type {
   CollectionFolder,
   CollectionQuery,
@@ -552,6 +553,10 @@ describe("which trade the page opens on", () => {
       marketplace: "cardmarket",
     });
     await tradeSection("Friday swaps");
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Trade “Friday swaps” created",
+      tone: "success",
+    });
   });
 
   it("says a failed read in the backend's own words", async () => {
@@ -1241,6 +1246,11 @@ describe("an open trade", () => {
     // The page moves on to what is left rather than drawing a trade that is gone.
     await tradeSection("Trade 4");
     expect(screen.queryByRole("button", { name: /Trade 5/ })).not.toBeInTheDocument();
+    // The page that was deleted is gone, so its receipt is a toast.
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Deleted “Trade 5”",
+      tone: "success",
+    });
   });
 
   it("duplicates from the menu and shows the copy", async () => {
@@ -1254,6 +1264,7 @@ describe("an open trade", () => {
 
     expect(ipcMock.tradeDuplicate).toHaveBeenCalledExactlyOnceWith(5);
     await tradeSection("Trade 5 copy");
+    expect(useNotifications.getState().notices[0]?.title).toBe("Duplicated “Trade 5”");
   });
 
   it("swaps every card onto the other side from the arrows between the panels", async () => {
@@ -1319,6 +1330,7 @@ describe("an open trade", () => {
     expect(within(section).queryByRole("button", { name: "Archive" })).not.toBeInTheDocument();
     // The button that was pressed is gone, so the caret is on the section, not on `<body>`.
     expect(section).toHaveFocus();
+    expect(useNotifications.getState().notices[0]?.title).toBe("Archived “Trade 5”");
   });
 
   it("opens the scanner onto the side whose camera was pressed, and takes the caret back", async () => {
@@ -1948,6 +1960,15 @@ describe("finishing a trade", () => {
         "your collection, added 5 cards to your collection and took 2 cards off your wishlist.",
     );
     expect(section).toHaveFocus();
+    // One toast for the whole finish, however many cards it moved, saying what moved where.
+    expect(useNotifications.getState().notices).toHaveLength(1);
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Finished “Trade 5”",
+      body:
+        "Finishing it took 6 cards out of your collection, added 5 cards to your collection " +
+        "and took 2 cards off your wishlist.",
+      tone: "success",
+    });
   });
 
   /**
@@ -2167,6 +2188,11 @@ describe("finishing a trade", () => {
       "Couldn't finish the trade — That folder no longer exists.",
     );
     expect(within(section).getByRole("button", { name: "Archive" })).toBeVisible();
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Couldn't finish “Trade 5”",
+      body: "That folder no longer exists.",
+      tone: "error",
+    });
   });
 
   it("cancels without writing, and hands the caret back to the button", async () => {

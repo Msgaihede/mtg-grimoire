@@ -116,9 +116,13 @@ export function heldNotice(copies: number, name: string): string {
 export function useTrayDestination({
   tray,
   destination,
+  onRefused,
 }: {
   tray: Pick<TrayState, "rows" | "loaded" | "latest" | "setRows">;
   destination: TrayDestination | undefined;
+  /** A press was refused, in {@link TrayDestinationCommit.error}'s sentence — `useTrayCommit`'s
+   *  own hook, for the same reason: `commit`'s `null` does not say which. */
+  onRefused?: (sentence: string) => void;
 }): TrayDestinationCommit {
   const [committing, setCommitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -161,6 +165,7 @@ export function useTrayDestination({
     } catch (e) {
       taken.forEach((row) => inFlight.delete(row));
       setError(ipcError(e));
+      onRefused?.(ipcError(e));
       return null;
     } finally {
       busy.current = false;

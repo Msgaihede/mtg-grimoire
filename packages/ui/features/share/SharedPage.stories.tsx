@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 import { FRIEND_SHARE_URL } from "@grimoire/fake/seeds";
+import { useNotifications } from "@/lib/notifications";
 import { useAppStore } from "@/lib/store";
 import { SharedPage } from "./SharedPage";
 
@@ -154,10 +155,11 @@ export const WantList: Story = {
     await userEvent.click(canvas.getByRole("button", { name: "Add 2 cards" }));
 
     // The verb the button used, in the past tense, naming the destination the reader chose —
-    // said in the view, because the dialog has closed over it.
-    await waitFor(async () => {
-      await expect(canvas.getByText("Added 2 cards to Ordered.")).toBeInTheDocument();
-    });
+    // said as a toast (2026-10-12), because the dialog has closed over it. The Toaster is the
+    // shell's, so the story reads the store.
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]?.title).toBe("Added 2 cards to “Ordered”"),
+    );
     // And the picks are put down: a bar still reading *2 picked* over cards that are now on the
     // wishlist invites the same press twice.
     await expect(canvas.queryByText("2 picked")).toBeNull();

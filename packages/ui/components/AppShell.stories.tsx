@@ -6,7 +6,6 @@ import { expect, userEvent, waitFor, within } from "storybook/test";
 import { cardDraggable } from "@/features/decks/dnd";
 import { SettingsPage } from "@/features/settings/SettingsPage";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
-import { LAYER } from "@/lib/layers";
 import { useAppStore, type ViewId } from "@/lib/store";
 import { NAV_COLLAPSED_KEY } from "@/lib/useNavCollapsed";
 import { useUpdate } from "@/lib/useUpdate";
@@ -714,13 +713,10 @@ export const DecksDropTargetInert: Story = {
 };
 
 /**
- * The drop landing, and the sidebar saying where the card went.
- *
- * The sentence lives in a `role="status"` under the entry, mounted for the life of the sidebar
- * and **empty until there is something to say** — a live region that first appears with its
- * sentence already inside it announces nothing. `sr-only` while empty takes it out of the flow,
- * so the entries below sit where they always do until a card actually lands, and then move for
- * the four seconds the sentence is up.
+ * The drop landing, and the app saying where the card went — **a toast**, from the shell's own
+ * `Toaster` (`@/lib/notifications`), and so a notice in the rail's inbox too. It used to be a
+ * line under the entry that cleared itself after four seconds; the wishlist is another page, so
+ * this is the only receipt the drop has, and the inbox keeps it for a reader who looked away.
  *
  * The wish is for the printing that was dragged, pinned, with no finish — the wishlist's own
  * default and the only honest answer a drop has.
@@ -737,7 +733,7 @@ export const DroppedOnWishlist: Story = {
       await held.drop(wishlist);
 
       await waitFor(async () => {
-        await expect(canvas.getByText("Added to wishlist.")).toBeInTheDocument();
+        await expect(canvas.getByText(/^Added .+ to the wishlist$/)).toBeInTheDocument();
       });
     } finally {
       await held.cancel();
@@ -746,22 +742,9 @@ export const DroppedOnWishlist: Story = {
 };
 
 /**
- * The same landing with the rail down to icons: the sentence has nowhere in the column to go, so
- * it is drawn as a small panel floating beside the rail.
- *
- * **The region does not move and neither does its rule.** Same `role="status"`, same element,
- * mounted for the life of the entry and `sr-only` while empty — a live region that first appears
- * with its sentence already inside it announces nothing. All that changes is the box: at 68px
- * there is no 183px line to set two lines of text on, so the note goes to `absolute left-full`
- * beside the entry it belongs to, at `LAYER.popup`, on a bordered `bg-surface` panel.
- *
- * **`pointer-events-none` is the load-bearing class here**, and it is the reason this story is
- * worth its place beside {@link DroppedOnWishlist}: the note hangs over the view for the four
- * seconds it is up, and a panel that could take a pointer would eat the next drop or the click
- * on whatever is underneath it. `pointer-events` inherits, so one class covers the sentence too.
- *
- * The refused card-menu add draws the same box, from the same component, for the same reason —
- * `Chrome/AppShell` has no story for it because the refusal is a card menu's to produce.
+ * The same landing with the rail down to icons. The sentence used to have no column to be a line
+ * in here and floated beside the rail as a panel of its own; a toast sits in the window's corner
+ * whatever the rail is doing, so the collapsed rail changes nothing about it.
  */
 export const DroppedOnCollapsedRail: Story = {
   args: { view: "search", collapsed: true, children: <CardSource /> },
@@ -777,13 +760,8 @@ export const DroppedOnCollapsedRail: Story = {
       await held.drop(wishlist);
 
       await waitFor(async () => {
-        await expect(canvas.getByText("Added to wishlist.")).toBeInTheDocument();
+        await expect(canvas.getByText(/^Added .+ to the wishlist$/)).toBeInTheDocument();
       });
-      const note = canvas.getByText("Added to wishlist.");
-      await expect(note).toHaveClass("pointer-events-none", LAYER.popup);
-      // Beside the rail rather than in it, anchored on the entry's own wrapper so there is no
-      // offset arithmetic to get wrong.
-      await expect(note).toHaveClass("absolute", "left-full", "top-0");
     } finally {
       await held.cancel();
     }

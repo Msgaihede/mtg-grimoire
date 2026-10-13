@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type JSX } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { plural } from "@/lib/counts";
 import { ipc, ipcError, type DeckVariant } from "@/lib/ipc";
+import { notify } from "@/lib/notifications";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { writeFailure } from "@/lib/writes";
 import { Dialog } from "@/components/Dialog";
@@ -17,7 +19,12 @@ import { PullFromCollectionDialog } from "./PullFromCollectionDialog";
 import { useDeckCore as useDeck, usePullPlan } from "./useDeckCore";
 import { useDeckField } from "./useDeckField";
 import { useDeckFolders } from "./useDeckFolders";
+import { receipt } from "./useDecks";
 import { ANY_GAME, pickerFormats, useFormatSpecs } from "./useFormatSpecs";
+
+/** The top level, as a move's receipt names it — the gallery tree's `ROOT_LABEL`, spelled here
+ *  rather than imported because this dialog is also the light app's, which draws no tree. */
+const ROOT_NAME = "All decks";
 
 /** Stable identity for "no row yet", so the form's `value` does not change on every render of
  *  a dialog that is still loading. */
@@ -538,7 +545,21 @@ function Settings({ deckId, focus }: { deckId: number; focus?: "tags" }) {
     // `undefined` is "not in this patch" and `null` is the top level, which is why the guard is
     // `!== undefined` rather than a truthiness test — see this file's doc for what `null` costs
     // when it is sent as a patch instead.
-    if (patch.folderId !== undefined) setFolder.mutate(patch.folderId);
+    //
+    // **The one write here with a receipt**, because it is a deck moving between folders — the
+    // owner's rule for deck edits, whatever surface makes them (`packages/ui/CLAUDE.md`). The
+    // select shows the new folder, but the deck has also left the gallery wall behind this
+    // dialog, which is where the reader will look for it next. Every other control here is a
+    // setting drawn where it was pressed, and says nothing.
+    if (patch.folderId !== undefined && row != null) {
+      const deckName = row.name;
+      const where = paths.find((f) => f.id === patch.folderId)?.path ?? ROOT_NAME;
+      receipt(
+        setFolder.mutateAsync(patch.folderId),
+        () => notify.success(`Moved “${deckName}” to “${where}”`),
+        `Couldn't move “${deckName}”`,
+      );
+    }
   };
 
   /**
@@ -789,9 +810,21 @@ function Settings({ deckId, focus }: { deckId: number; focus?: "tags" }) {
                   owedFocus.current = asking;
                   setConfirming(null);
                 }}
-                onCleared={() =>
-                  deck.clearDeck.mutate(asking, { onSuccess: () => setConfirming(null) })
-                }
+                // **A receipt with the count**, the owner's rule for cards leaving a deck: the
+                // question closes on success and the row it stood in says only "(already empty)",
+                // which is not how many went. The refusal is toasted too, and the question stays
+                // up over the banner below as it always has.
+                onCleared={() => {
+                  const from = collects ? `“${row.name}”’s ${listName(asking)}` : `“${row.name}”`;
+                  receipt(
+                    deck.clearDeck.mutateAsync(asking),
+                    (cleared) => {
+                      setConfirming(null);
+                      notify.success(`Removed ${plural(cleared, "card")} from ${from}`);
+                    },
+                    `Couldn't clear ${from}`,
+                  );
+                }}
               />
             )}
           </div>
