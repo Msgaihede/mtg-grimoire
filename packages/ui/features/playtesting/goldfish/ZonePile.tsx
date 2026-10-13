@@ -160,6 +160,7 @@ function CommanderCard({
         })
       }
       onMouseLeave={onUnpoint}
+      data-point={card.id}
       data-land={card.id}
       className={cn("absolute left-0 h-[168px] w-[120px] cursor-grab rounded-md p-0", FOCUS)}
       style={{ top }}
@@ -249,6 +250,7 @@ function FaceUpZone({
             })
           }
           onMouseLeave={onUnpoint}
+          data-point={top.id}
           data-land={top.id}
           className={cn(
             "relative h-[168px] w-[120px] cursor-grab rounded-lg p-0",

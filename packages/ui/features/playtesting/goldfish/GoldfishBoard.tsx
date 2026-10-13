@@ -156,11 +156,26 @@ export function GoldfishBoard({
   }, [onAct, current, view]);
 
   const point = setPointed;
-  /** Let go of what is pointed at — or, given an id, of that card only if it still is. */
-  const unpoint = useCallback(
-    (id?: number) => setPointed((was) => (id === undefined || was?.card.id === id ? null : was)),
-    [],
-  );
+  // **It takes no argument, and must not grow one**: every card hands it to `onMouseLeave` as it
+  // is, so a parameter here is filled with the mouse event.
+  const unpoint = useCallback(() => setPointed(null), []);
+
+  // **A card's `mouseleave` is not the only way the pointer stops being on it.** A card redrawn
+  // by another element — an untapped land joining a pile, a graveyard's new top card — is gone
+  // from under the pointer without one, and is still in its zone, so nothing above lets go of it.
+  // So while a card is pointed at, each move of the pointer is asked what it is over
+  // (`data-point`), and anything but that card lets go.
+  const pointedId = pointed?.card.id ?? null;
+  useEffect(() => {
+    if (pointedId === null) return;
+    const onMove = (e: PointerEvent) => {
+      const over = e.target instanceof Element ? e.target.closest("[data-point]") : null;
+      if (over?.getAttribute("data-point") !== String(pointedId)) setPointed(null);
+    };
+    window.addEventListener("pointermove", onMove);
+    return () => window.removeEventListener("pointermove", onMove);
+  }, [pointedId]);
+
   const felt = feltBackground(playmat);
   const dead = view !== null && view.opponentLife <= 0;
   const status = error ?? log[0]?.text ?? "";

@@ -238,12 +238,14 @@ and the row's width shrink it as the table fills.
 the row stays the width of seven. The card pointed at is pulled 44 px out of the row and drawn over
 its neighbours. Its button never moves, only its face does, and while it is up the strip it rose
 into is part of the button. So a lift cannot take the card out from under the pointer, and the
-card lingers 120 ms after the pointer leaves. The kept hand is held lands first, the same order the
+card drops back the moment the pointer leaves it. The kept hand is held lands first, the same order the
 opening hand shows. After that, a card drawn or returned goes on the right (`arrangeHand`).
 
 **The preview follows the pointer.** It opens beside the cursor once the pointer has rested on a
-card for half a second, and it moves with the pointer, kept inside the board. Once open, it switches
-cards with the pointer at once. The wheel resizes it, from 200 to 640 px wide, while it is open; the
+card for half a second, and it moves with the pointer, kept inside the board. It closes the moment
+the pointer leaves the card, and the next card — or the same one again — is rested on anew. A card
+names itself in `data-point`, and the board lets go of a card whenever the pointer moves over
+anything else: a card redrawn by another element gets no `mouseleave`. The wheel resizes it, from 200 to 640 px wide, while it is open; the
 size holds for the rest of the game.
 
 **A card that lands pops once.** When a card arrives in a zone it gets a new id (CR 400.7). The
