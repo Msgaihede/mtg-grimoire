@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import type { UpdateStatus } from "@/lib/ipc";
+import { useNotifications } from "@/lib/notifications";
 import { nextAction, type Update } from "@/lib/useUpdate";
 import { pickAsset } from "@grimoire/fake/db";
 import { CURRENT_VERSION, NEXT_VERSION, release } from "@grimoire/fake/fixtures";
@@ -351,8 +352,9 @@ export const SomethingFailed: Story = {
  * `useDangerZone` is hooked up in the page for the error log's reason — nothing else in the
  * window writes to those tables — so this story is the only place the gate is *real*: the
  * press opens the dialog, the word arms the button, the fake's `collection_clear` empties its
- * table and derives the deck reservations that went with it, and the sentence that lands under
- * the buttons is `clearOutcome`'s over the fake's own numbers.
+ * table and derives the deck reservations that went with it, and the toast it raises is
+ * `clearOutcome`'s sentence over the fake's own numbers. The Toaster is the shell's, so the play
+ * reads the store.
  *
  * The seed is `starter`, which owns cards and holds decks — without both, the second clause of
  * that sentence would never be exercised, and that clause is the consequence the reader did not
@@ -385,13 +387,13 @@ export const ClearingTheCollection: Story = {
     await expect(confirm).toBeEnabled();
     await userEvent.click(confirm);
 
-    // The dialog closes itself before the command runs, so the sentence lands on a page the
-    // reader can see rather than under a modal.
+    // The dialog closes itself before the command runs, so the receipt is a toast rather than
+    // anything under a modal.
     await waitFor(async () => {
       await expect(page.queryByRole("dialog")).not.toBeInTheDocument();
     });
     await waitFor(async () => {
-      await expect(canvas.getByRole("alert")).toHaveTextContent(/Cleared|already empty/);
+      await expect(useNotifications.getState().notices[0]?.title).toMatch(/Cleared|already empty/);
     });
   },
 };
@@ -400,8 +402,8 @@ export const ClearingTheCollection: Story = {
  * The reversible one, for the contrast: same page, same shape of question, **no typed word**.
  *
  * A word typed on every dialog is a word nobody reads — which is what would make it useless on
- * the three below. So the cache asks once and takes the answer, and the sentence it leaves says
- * what came back rather than what went.
+ * the three below. So the cache asks once and takes the answer, and the toast it raises says
+ * what was freed.
  *
  * Same group as the three clears, and that is the ordering rule surviving the regrouping: within
  * `Storage and data` the cache sits above them, because it throws away bytes the app fetches
@@ -420,7 +422,7 @@ export const ClearingTheCache: Story = {
     await userEvent.click(within(dialog).getByRole("button", { name: "Clear cache" }));
 
     await waitFor(async () => {
-      await expect(canvas.getByText(/^Freed /)).toBeInTheDocument();
+      await expect(useNotifications.getState().notices[0]?.title).toMatch(/^Freed /);
     });
   },
 };

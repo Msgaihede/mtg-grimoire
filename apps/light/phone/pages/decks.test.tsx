@@ -38,8 +38,9 @@ const tab = (name: string) =>
   within(screen.getByRole("navigation", { name: "Views" })).getByRole("link", { name });
 
 /** Every labelled section on the page, in document order, by name — the piles and the rail. */
+/** The page's own regions — inside `main`, so the face's toast landmark is not one of them. */
 const regions = (): string[] =>
-  screen.getAllByRole("region").map((region) => {
+  within(screen.getByRole("main")).getAllByRole("region").map((region) => {
     const id = region.getAttribute("aria-labelledby");
     return id === null ? "" : (document.getElementById(id)?.textContent ?? "");
   });

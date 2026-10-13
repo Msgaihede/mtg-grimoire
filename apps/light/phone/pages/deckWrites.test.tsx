@@ -26,6 +26,7 @@ vi.mock("@grimoire/ui/features/decks/NoteEditor", () => ({
 
 import { ipc, type DeckCard, type DeckVariant } from "@grimoire/ui/lib/ipc";
 import { DEFAULT_MARKETPLACE } from "@grimoire/ui/lib/marketplace";
+import { useNotifications } from "@grimoire/ui/lib/notifications";
 import { PhoneFace } from "../PhoneApp";
 import { installLayout, renderPhone } from "../testing";
 
@@ -51,6 +52,13 @@ async function rows(deckId: number, variant: DeckVariant = "live"): Promise<Deck
 const bolts = async (deckId = MODERN) =>
   (await rows(deckId)).filter((card) => card.name === "Lightning Bolt");
 
+/** Every notice raised so far, oldest first, as `tone: title` — the toasts the presses made. */
+const said = () =>
+  useNotifications
+    .getState()
+    .notices.map((n) => `${n.tone}: ${n.title}`)
+    .reverse();
+
 /** Open a row's action sheet by its `⋯`, and hand back the sheet. */
 async function act(name: RegExp): Promise<HTMLElement> {
   await userEvent.click(await screen.findByRole("button", { name }, SETTLE));
@@ -69,6 +77,8 @@ describe("a deck row's action sheet", () => {
     await waitFor(async () => expect((await bolts())[0]?.quantity).toBe(4), SETTLE);
     // The sheet follows the row: its own count reads what the deck holds.
     expect(within(sheet).getByRole("status", { name: "Copies" })).toHaveTextContent("4");
+    // Steps are the rule's exemption.
+    expect(said()).toEqual([]);
   });
 
   it("removes the row, closes the sheet, and says where a cut's copies went", async () => {
@@ -86,6 +96,10 @@ describe("a deck row's action sheet", () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Undo/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /^Lightning Bolt, / })).toBeNull();
+    // The sheet that was pressed has gone: the removal is a toast too, the desktop menu's words.
+    await waitFor(() =>
+      expect(said()).toEqual(["success: Removed “Lightning Bolt” from the deck"]),
+    );
   });
 
   it("offers the deck's own undo for a write it journalled, and the undo puts it back", async () => {
@@ -103,6 +117,8 @@ describe("a deck row's action sheet", () => {
     expect(
       await within(sheet).findByText("Labelled Lightning Bolt Cut candidate.", undefined, SETTLE),
     ).toBeInTheDocument();
+    // A label is an edit to the row in a sheet that stays open on it: its line answers, no toast.
+    expect(said()).toEqual([]);
 
     // The button is named by the step the deck filed, which is what it reverses.
     await userEvent.click(await within(sheet).findByRole("button", { name: /^Undo — / }, SETTLE));
@@ -129,6 +145,7 @@ describe("a deck row's action sheet", () => {
     );
     // Back on the first page, about the same card at its new address.
     expect(await within(sheet).findByText("4 in Sideboard", undefined, SETTLE)).toBeInTheDocument();
+    expect(said()).toEqual(["success: Moved “Lightning Bolt” to “Sideboard”"]);
   });
 
   it("refuses a claim the card cannot make, in words, and writes nothing", async () => {
@@ -221,6 +238,7 @@ describe("adding cards to a deck", () => {
       SETTLE,
     );
     expect(await within(sheet).findByText(/1 in this list/, undefined, SETTLE)).toBeInTheDocument();
+    expect(said()).toEqual(["success: Added “Llanowar Elves” to “Modern Goodstuff”"]);
   });
 
   it("adds the printing on screen from the card sheet over a deck", async () => {
@@ -239,6 +257,7 @@ describe("adding cards to a deck", () => {
     expect(
       await screen.findByText("Added 1 × Lightning Bolt.", undefined, SETTLE),
     ).toBeInTheDocument();
+    expect(said()).toEqual(["success: Added “Lightning Bolt” to “Modern Goodstuff”"]);
   });
 
   it("offers no deck add on a card sheet opened anywhere but over a deck", async () => {

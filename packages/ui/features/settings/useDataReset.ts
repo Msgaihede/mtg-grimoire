@@ -1,10 +1,8 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
-import { useState } from "react";
 import { ipc, ipcError } from "@/lib/ipc";
 import { notify, type NoticeTone } from "@/lib/notifications";
 import { COMBOS_KEY } from "@/lib/query";
-import { writeFailure, type Write } from "@/lib/writes";
 import {
   cacheOutcome,
   collectionOutcome,
@@ -16,8 +14,8 @@ import {
 /**
  * The five things Settings can throw away, and what the cache has to be told afterwards.
  *
- * Two hooks rather than one, matching the two panels: the three destructive clears share a
- * status line and are confirmed by typing a word, and the two local-cache sweeps share neither.
+ * Two hooks rather than one, matching the two panels: the three destructive clears are confirmed
+ * by typing a word, and the two local-cache sweeps are not.
  * Folding them into one hook would give the cache panel three mutations it must not show and
  * give the danger zone two more its confirmation does not cover.
  *
@@ -35,23 +33,17 @@ export interface ClearAction {
   pending: boolean;
 }
 
-/** The one sentence a panel shows under its buttons, and how loudly. */
-export interface ClearStatus {
-  tone: "problem" | "plain";
-  text: string;
-}
-
 /**
- * A panel's outcome sentence, said again as a toast: its first sentence is the title (no full
- * stop, the toast's own voice) and a second one, where there is one, the body.
+ * A clear's outcome sentence, said as a toast: its first sentence is the title (no full stop, the
+ * toast's own voice) and a second one, where there is one, the body.
  *
- * **Both, and the panel line is not the redundant one.** Every clear here is confirmed in a dialog
- * that closes as the work starts, so the receipt arrives after the reader's attention has left
- * the button — and a clear is the destructive act the app's rule gives a receipt every time, with
- * the inbox keeping it (owner's rule, 2026-10-12: removing every card in the collection, the
- * wishlist or the decks is the largest edit those lists have). The line under the buttons stays
- * because the light app's phone face draws these same panels and mounts no `Toaster`, so it is the
- * only place that face says anything.
+ * **The toast is the one receipt, on both faces.** Every clear here is confirmed in a dialog that
+ * closes as the work starts, so the receipt arrives after the reader's attention has left the
+ * button — and a clear is the destructive act the app's rule gives a receipt every time, with the
+ * inbox keeping it (owner's rule, 2026-10-12: removing every card in the collection, the wishlist
+ * or the decks is the largest edit those lists have). The panels used to repeat it in a line
+ * under their buttons, only because the light app's phone face mounted no `Toaster`; it mounts
+ * one now, so the line went and the toast and the inbox say it everywhere.
  */
 function receipt(sentence: string, tone: NoticeTone): void {
   const cut = sentence.indexOf(". ");
@@ -59,7 +51,7 @@ function receipt(sentence: string, tone: NoticeTone): void {
   notify({ title, tone, ...(cut !== -1 && { body: sentence.slice(cut + 2) }) });
 }
 
-/** A refused clear, as a toast — {@link receipt}'s reason; the panel line says it too. */
+/** A refused clear, as a toast — {@link receipt}'s reason, and the inbox keeps it. */
 function refused(title: string) {
   return (error: unknown) => void notify.error(title, { body: ipcError(error) });
 }
@@ -130,34 +122,24 @@ const DECK_ROOTS = [["decks"], ["collection"]];
 const COMBO_ROOTS = [COMBOS_KEY];
 
 /**
- * The three irreversible clears, and the one sentence they share.
+ * The three irreversible clears.
  *
- * **One `outcome` for all three, and that is the rule rather than a shortcut**: `@/lib/writes`
- * settles that the most recently *started* write owns the banner, and one piece of state is what
- * makes that structural here. It is cleared on `onMutate` so a fresh press never leaves the
- * previous clear's sentence standing under a button that is still working.
- *
- * The refusal half goes through {@link writeFailure} unchanged, which reads the same rule off
- * the three mutations' `submittedAt`. So a refused clear replaces a successful one's sentence,
- * and a successful one replaces a refusal — in both directions, without either half having to
- * know about the other.
+ * **Nothing here is held in state.** Each outcome is a toast — {@link receipt} for a result,
+ * {@link refused} for a refusal — so there is no shared sentence for one press to overwrite or
+ * clear on another's behalf: two presses are two notices, in the order they settled, and the
+ * inbox keeps both.
  */
 export function useDangerZone(): {
   collection: ClearAction;
   wishlist: ClearAction;
   decks: ClearAction;
-  status: ClearStatus | null;
 } {
   const client = useQueryClient();
-  const [outcome, setOutcome] = useState<string | null>(null);
-  const started = () => setOutcome(null);
 
   const collection = useMutation({
     mutationFn: () => ipc.collectionClear(),
-    onMutate: started,
     onSuccess: (r) => {
       invalidate(client, COLLECTION_ROOTS);
-      setOutcome(collectionOutcome(r));
       receipt(collectionOutcome(r), r.entries === 0 ? "info" : "success");
     },
     onError: refused("Couldn't clear the collection"),
@@ -165,10 +147,8 @@ export function useDangerZone(): {
 
   const wishlist = useMutation({
     mutationFn: () => ipc.wishlistClear(),
-    onMutate: started,
     onSuccess: (entries) => {
       invalidate(client, WISHLIST_ROOTS);
-      setOutcome(wishlistOutcome(entries));
       receipt(wishlistOutcome(entries), entries === 0 ? "info" : "success");
     },
     onError: refused("Couldn't clear the wishlist"),
@@ -176,10 +156,8 @@ export function useDangerZone(): {
 
   const decks = useMutation({
     mutationFn: () => ipc.decksClear(),
-    onMutate: started,
     onSuccess: (r) => {
       invalidate(client, DECK_ROOTS);
-      setOutcome(decksOutcome(r));
       receipt(decksOutcome(r), r.decks + r.folders === 0 ? "info" : "success");
     },
     onError: refused("Couldn't clear the decks"),
@@ -189,20 +167,17 @@ export function useDangerZone(): {
     collection: { run: () => collection.mutate(), pending: collection.isPending },
     wishlist: { run: () => wishlist.mutate(), pending: wishlist.isPending },
     decks: { run: () => decks.mutate(), pending: decks.isPending },
-    status: statusOf([collection, wishlist, decks], outcome),
   };
 }
 
 /**
- * The two rebuildable things the Local cache panel throws away, and the one sentence they share.
+ * The two rebuildable things the Local cache panel throws away.
  *
  * **Both are `corpus.db` and `data/` rather than anything the reader made**, which is the whole
  * of why they are one panel above the fold instead of two more rows in the danger zone: schema
  * 27 split the reader's own tables out of the rebuildable ones precisely so that a button over
- * this half risks nothing. `useDangerZone`'s single `outcome` is the pattern followed here for
- * its stated reason — `@/lib/writes` settles that the most recently *started* write owns the
- * banner, and one piece of state is what makes that structural rather than a rule each site has
- * to remember.
+ * this half risks nothing. Like `useDangerZone`, it holds no state of its own: each outcome is
+ * a toast.
  *
  * ## The image sweep destroys nothing and invalidates nothing
  *
@@ -211,7 +186,7 @@ export function useDangerZone(): {
  * `mtgimg://` by the protocol handler, outside TanStack Query entirely, and a picture already
  * decoded into a painted `<img>` stays correct — the bytes it was made from are simply no longer
  * on disk. The next request for a key that is gone is a miss, and a miss re-fetches. So the only
- * thing that half does after a success is say what it freed.
+ * thing that half does after a success is say, in its toast, what it freed.
  *
  * ## The combo clear is two calls in one mutation, and that is the whole design
  *
@@ -219,7 +194,7 @@ export function useDangerZone(): {
  * came here because the data looked wrong with no data at all — and the feed is fetched on a
  * weekly schedule they cannot see, so "it will come back eventually" is not an answer. The
  * re-download is therefore inside the same `mutationFn` rather than chained by the panel: one
- * `isPending` that stays true across both calls, one refusal that reaches the banner whichever
+ * `isPending` that stays true across both calls, one refusal toast whichever
  * of the two produced it, and no window in which the button is idle over an empty table.
  *
  * **The invalidation is `onSettled` and not `onSuccess`, which is this hook's one departure from
@@ -231,17 +206,12 @@ export function useDangerZone(): {
 export function useLocalCache(): {
   clear: ClearAction;
   combos: ClearAction;
-  status: ClearStatus | null;
 } {
   const client = useQueryClient();
-  const [outcome, setOutcome] = useState<string | null>(null);
-  const started = () => setOutcome(null);
 
   const cache = useMutation({
     mutationFn: () => ipc.cacheClear(),
-    onMutate: started,
     onSuccess: (r) => {
-      setOutcome(cacheOutcome(r));
       receipt(cacheOutcome(r), r.failed > 0 ? "warning" : r.files === 0 ? "info" : "success");
     },
     onError: refused("Couldn't clear the cache"),
@@ -254,10 +224,8 @@ export function useLocalCache(): {
       await ipc.combosClear();
       return await ipc.combosRefresh(true);
     },
-    onMutate: started,
     onSettled: () => invalidate(client, COMBO_ROOTS),
     onSuccess: (r) => {
-      setOutcome(combosOutcome(r));
       // A refresh that landed nothing is the download failing after the clear succeeded.
       receipt(combosOutcome(r), r.combos === 0 ? "warning" : "success");
     },
@@ -267,24 +235,7 @@ export function useLocalCache(): {
   return {
     clear: { run: () => cache.mutate(), pending: cache.isPending },
     combos: { run: () => combos.mutate(), pending: combos.isPending },
-    status: statusOf([cache, combos], outcome),
   };
-}
-
-/**
- * A refusal beats a success, and the newest write beats an older one.
- *
- * `outcome` is already the newest success — it is one piece of state that every one of these
- * mutations overwrites — so all this has to decide is whether the newest write of the set is
- * currently holding an error, which is exactly {@link writeFailure}'s question.
- */
-function statusOf(
-  writes: readonly [Write, ...Write[]],
-  outcome: string | null,
-): ClearStatus | null {
-  const failure = writeFailure(writes);
-  if (failure) return { tone: "problem", text: failure };
-  return outcome === null ? null : { tone: "plain", text: outcome };
 }
 
 /** The danger zone's state, as the panel takes it — `useErrorLog`'s `ErrorLog` shape, one panel
