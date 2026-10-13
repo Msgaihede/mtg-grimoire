@@ -195,7 +195,8 @@ export type Decks = ReturnType<typeof useDecks>;
  * **A promise rather than `mutate`'s per-call callbacks**, because those fire for an observer's
  * *latest* call only: two decks archived in quick succession are two receipts, and the first
  * would otherwise be dropped. `mutateAsync` settles the mutation exactly as `mutate` does, so the
- * gallery's `writeFailure` banner still reads the refusal too.
+ * gallery's banner still sees the write — seated `toasted`, for its timing alone, since the toast
+ * is this refusal's one report.
  */
 export function receipt<T>(work: Promise<T>, done: (value: T) => void, failed: string): void {
   void work.then(done, (failure: unknown) => notify.error(failed, { body: ipcError(failure) }));

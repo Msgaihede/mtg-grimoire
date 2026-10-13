@@ -197,14 +197,24 @@ export function useWishEntryWrites() {
    * rather than a held-down stepper, so there is no second press racing the first — which is the
    * whole reason the stepper beside it *is* optimistic.
    */
-  const setFolder = useMutation({
+  const filing = {
     mutationFn: ({ id, folderId: to }: { id: number; folderId: number | null }) =>
       ipc.wishlistSetFolder(id, to),
     // Either way, and one handler because there is one behaviour: a refusal leaves the list
     // exactly as unknown as a success does, since a refused move is almost always a row another
     // surface has already moved or deleted.
     onSettled: settleWhole,
-  });
+  };
+  const setFolder = useMutation(filing);
+  /**
+   * The same write on an **observer of its own**, for a press that toasts its outcome — the
+   * desktop Edit panel's `Move to folder…` — while {@link setFolder} stays the drags', which the
+   * owner's rule exempts (2026-10-12). An observer only knows its newest call, and both kinds of
+   * call send the same `{ id, folderId }`, so on one observer the page's banner could not tell a
+   * refused drag, which only it reports, from a refused panel move, which a toast has already
+   * said (`WishlistPage`'s `bannerFailure`).
+   */
+  const moveWish = useMutation(filing);
 
   /**
    * Back to **any printing** — the second of spec §5's two printing writes, and the only one
@@ -265,7 +275,16 @@ export function useWishEntryWrites() {
     onSettled: settleWhole,
   });
 
-  return { patchWish, settleWhole, setQuantity, remove, setFolder, anyPrinting, setPrinting };
+  return {
+    patchWish,
+    settleWhole,
+    setQuantity,
+    remove,
+    setFolder,
+    moveWish,
+    anyPrinting,
+    setPrinting,
+  };
 }
 
 export type WishEntryWrites = ReturnType<typeof useWishEntryWrites>;

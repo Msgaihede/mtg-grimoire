@@ -1623,6 +1623,28 @@ describe("DecksPage", () => {
   });
 
   /**
+   * A rename has no toast (the owner's rule exempts it), so a refused one is the banner's — and
+   * the field stays open over it with the reader's text, to try again. A refused rename followed
+   * by a toasted write that lands takes the sentence down: the newest write owns the banner.
+   */
+  it("keeps a refused rename's field open, with the banner saying why", async () => {
+    deckUpdate.mockRejectedValueOnce("The database is busy.");
+    wrap(<DecksPage />);
+    const tile = await tileFor("Burn");
+    tile.focus();
+
+    await userEvent.keyboard("{F2}");
+    await userEvent.keyboard("Sunburn");
+    await userEvent.click(screen.getByRole("button", { name: "Save name" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Couldn't change your decks — The database is busy.",
+    );
+    expect(screen.getByLabelText("Rename Burn")).toHaveValue("Sunburn");
+    expect(notices()).toEqual([]);
+  });
+
+  /**
    * The pencil in the tile's tray — the way in that does not need a right-click or a key nobody
    * has been told about. It is the control the field replaces, so the caret comes back to the one
    * React renders in its place (`useFolderFieldReturn`) rather than to the detached node the page
@@ -1981,15 +2003,16 @@ describe("DecksPage", () => {
     expect(await tileFor("Burn")).toBeInTheDocument();
   });
 
-  /** A refused write is said in the app's own words, where the reader is looking. */
+  /** A refused deck edit is said once, in the app's own words: by its toast, with the backend's
+   *  sentence as its second line — and not again in the page's banner. */
   it("says so when a write is refused", async () => {
     deckDuplicate.mockRejectedValue("That deck is not there any more.");
 
     wrap(<DecksPage />);
     await userEvent.click(await screen.findByRole("button", { name: "Duplicate Burn" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("That deck is not there any more.");
-    // And toasted, with the backend's sentence as its second line.
+    await waitFor(() => expect(notices()).toHaveLength(1));
+    expect(screen.queryByRole("alert")).toBeNull();
     expect(notices()).toMatchObject([
       {
         title: "Couldn't duplicate “Burn”",
@@ -2401,7 +2424,8 @@ describe("DecksPage folders", () => {
    * read and the press — the refusal is surfaced rather than swallowed.
    *
    * `Legends` is inside `Commander`, so `All decks` is a live destination for it and the write
-   * really is attempted; the banner is `writeFailure`'s, over `folders.move`.
+   * really is attempted. The toast is the one report — `folders.move` is seated `toasted` in the
+   * banner's list.
    */
   it("says so when a folder move is refused", async () => {
     withFolders();
@@ -2413,9 +2437,8 @@ describe("DecksPage folders", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: "Move to" }));
     await userEvent.click(await screen.findByRole("menuitem", { name: "All decks" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "A folder cannot be moved inside itself.",
-    );
+    await waitFor(() => expect(notices()).toHaveLength(1));
+    expect(screen.queryByRole("alert")).toBeNull();
     expect(notices()).toMatchObject([
       {
         title: "Couldn't move folder “Legends”",

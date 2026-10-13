@@ -549,7 +549,15 @@ function PullBody({
             refusal reported somewhere the reader cannot see is a refusal they have to go looking
             for. Its own animated element, carrying no padding and no border so `height: 0` really
             is 0; `overflow-hidden` is still owed, because the sentence is laid out at full size
-            whatever the box around it is doing. */}
+            whatever the box around it is doing.
+
+            **Kept beside the press's toast, which says the same refusal** (decided 2026-10-13).
+            The press is a deliberate collection edit, so its `notify.error` stays (the owner's
+            rule), and this line stays too: the dialog does not close on a refusal, the reader is
+            looking here with the ticked rows still in front of them and the button to press
+            again, and a toast in the corner is easy to miss under a scrim. It is the `done`
+            readout's arrangement for a success. The editor resets the mutation
+            each time it opens the dialog, so the line is only ever about a press made here. */}
         <AnimatePresence initial={false}>
           {failure !== null && (
             <motion.p

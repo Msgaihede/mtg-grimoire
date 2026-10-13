@@ -30,7 +30,7 @@ import { reorderedLevel } from "@/lib/folderOrder";
 import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type DeckFolder, type DeckRow } from "@/lib/ipc";
 import { sortOptions } from "@/lib/options";
-import { writeFailure } from "@/lib/writes";
+import { toasted, writeFailure } from "@/lib/writes";
 import { LAYER } from "@/lib/layers";
 import { PRESS, statusLine, TRANSITION } from "@/lib/motion";
 import { notify } from "@/lib/notifications";
@@ -916,8 +916,8 @@ export function DecksPage() {
    * deck and folder edits (`packages/ui/CLAUDE.md`). A menu row has closed by the time its write
    * lands, a duplicate lands wherever `deck_list`'s order puts it, and a tile filed into a folder
    * leaves the wall it was on, so none of them has a receipt on screen. Each goes through
-   * `useDecks`' {@link receipt}, which also toasts the refusal; the banner below keeps reading it
-   * as the page's own line.
+   * `useDecks`' {@link receipt}, which also toasts the refusal — the toast is its only report,
+   * since the banner below seats these writes `toasted`.
    *
    * The deck's name is read **at the press**, from the row the wall is drawing — a receipt names
    * the deck the reader acted on, even if a rename lands in between.
@@ -1022,7 +1022,7 @@ export function DecksPage() {
 
   // The receipt is the destructive rule's as well as the owner's: the tile and the question
   // leave together, so nothing on screen says the deck went. A refusal keeps the question up, as
-  // it always has, and is toasted beside the banner.
+  // it always has, and the toast is what says why.
   const removeAsync = decks.remove.mutateAsync;
   const confirmDelete = useCallback(
     (deck: DeckRow) => {
@@ -1477,20 +1477,42 @@ export function DecksPage() {
   // The *latest* write on the screen, not whichever is still holding an error: a refused
   // archive used to leave its banner up while the reader went on to duplicate something
   // successfully, which is an alert about a thing already dealt with (the collection table's
-  // lesson). The rule itself is `lib/writes.ts`, shared with the three other surfaces that
-  // apply it. The folder writes are in the list because they are writes this screen makes —
-  // including the one refusal that is a sentence worth reading, a folder moved into its own
-  // descendant.
+  // lesson). The rule itself is `lib/writes.ts`, shared with the other surfaces that apply it.
+  //
+  // **Kept, and narrowed to the writes no toast speaks for** (2026-10-13). Every deliberate move,
+  // duplicate, archive, tag, delete and folder move here goes through `receipt`, which raises
+  // `notify.error` — so those are seated `toasted`: they still take the banner off an older
+  // refusal when they are newer, and never draw their own. What is left is what the owner's rule
+  // exempts and so has no toast to fall back on: a deck or folder **renamed** or a folder
+  // **created** in place, whose field stays open on a refusal for the reader to try again, and a
+  // folder **reordered** within its level, which snaps back with nothing else to say why. The
+  // banner is the only report those get.
+  //
+  // `decks.update` and `folders.reorder` are each one observer behind both kinds of press, so
+  // which kind it is is read off the newest call's own variables: a patch that names a `name` is
+  // the rename field (the menu's tags and the tray's archive never carry one), and a landing
+  // in which no folder the list still has sits under another parent is a reorder rather than a
+  // re-parent. That holds of a *refused* re-parent too — the refusal re-reads the list with the
+  // folder still where it was — and a folder deleted elsewhere, often the very reason a reorder
+  // was refused, is skipped rather than read as a move.
+  const renamed = decks.update.variables?.patch.name !== undefined;
+  const landing = folders.reorder.variables;
+  const reordered =
+    landing !== undefined &&
+    !landing.ids.some((id) => {
+      const folder = folders.folders.find((f) => f.id === id);
+      return folder !== undefined && folder.parentId !== landing.parentId;
+    });
   const bannerFailure = writeFailure([
-    decks.update,
-    decks.remove,
-    decks.duplicate,
-    setFolder,
+    renamed ? decks.update : toasted(decks.update),
+    toasted(decks.remove),
+    toasted(decks.duplicate),
+    toasted(setFolder),
     folders.create,
     folders.rename,
-    folders.move,
-    folders.reorder,
-    folders.remove,
+    toasted(folders.move),
+    reordered ? folders.reorder : toasted(folders.reorder),
+    toasted(folders.remove),
   ]);
   // **Where the re-read after a refusal comes from, since it is not here.** The editor keeps a
   // `refetch` effect keyed on the newest failure's `submittedAt`; this screen does not, because

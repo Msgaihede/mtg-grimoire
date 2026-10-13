@@ -4,7 +4,7 @@ import { plural } from "@/lib/counts";
 import { ipc, ipcError, type DeckVariant } from "@/lib/ipc";
 import { notify } from "@/lib/notifications";
 import { useMarketplace } from "@/lib/useMarketplace";
-import { writeFailure } from "@/lib/writes";
+import { toasted, writeFailure } from "@/lib/writes";
 import { Dialog } from "@/components/Dialog";
 import { ClearDeck } from "./ClearDeck";
 import { deckKind, deckKindPatch, tracksCollection } from "./deckKind";
@@ -341,10 +341,22 @@ function Settings({ deckId, focus }: { deckId: number; focus?: "tags" }) {
    *  is still news. `lib/writes.ts`, the one definition of that rule: a refused move must not
    *  leave its sentence up while the reader goes on to rename the deck successfully. The cover
    *  is not among them — it is a field of `deck.update` now, not a command of its own — and the
-   *  clear is, so a refused clear draws the sentence this dialog already had rather than a
-   *  second one of its own. Read the array; a count written out here is a number no build
-   *  answers. */
-  const bannerFailure = writeFailure([deck.update, setFolder, deck.clearDeck, writeTags]);
+   *  clear is in the list too. Read the array; a count written out here is a number no build
+   *  answers.
+   *
+   *  **Kept, for the fields** (2026-10-13). The Folder select and Clear list are deck edits
+   *  under the owner's rule and raise their own `notify.error` through `receipt`, so they are
+   *  seated `toasted`: newer than a refused rename, they still take its sentence down, and
+   *  their own refusal is the toast's alone — the clear's question also stays up for another
+   *  try. Every other control here autosaves with no toast at all (the rule's "settings fields"
+   *  exemption), and the dialog is still open over it, so this banner is the only place a
+   *  refused name, description, switch or tag is said. */
+  const bannerFailure = writeFailure([
+    deck.update,
+    toasted(setFolder),
+    toasted(deck.clearDeck),
+    writeTags,
+  ]);
 
   /**
    * The question actually on screen, which is not always the one that was opened.
@@ -830,8 +842,8 @@ function Settings({ deckId, focus }: { deckId: number; focus?: "tags" }) {
           </div>
 
           {/* Under both columns rather than beside the fields, which is where it used to
-              sit: the form owns the two-column layout now, and a refused filing is as much
-              this banner's business as a refused rename. */}
+              sit: the form owns the two-column layout now. A refused filing or clear is not
+              drawn here — its toast says it; see {@link bannerFailure}. */}
           {bannerFailure !== null && (
             <p role="alert" className="mt-3.5 text-xs text-destructive">
               Couldn't save that change — {bannerFailure}

@@ -1365,7 +1365,6 @@ describe("CollectionPage", () => {
       }),
     );
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(/not there any more/i);
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection"] }));
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
     expect(invalidate).toHaveBeenCalledWith(
@@ -1374,12 +1373,16 @@ describe("CollectionPage", () => {
     // And the row is still there — the removal did not happen, so the list must not pretend
     // it did.
     expect(screen.getByText("Lightning Bolt")).toBeInTheDocument();
-    // The ✕ is a deliberate removal, so its refusal is a toast as well as the banner.
-    expect(useNotifications.getState().notices[0]).toMatchObject({
-      title: "Couldn't remove “Lightning Bolt” from the collection",
-      body: "That collection entry is not there any more.",
-      tone: "error",
-    });
+    // The ✕ is a deliberate removal, so its refusal is a toast — and only a toast: the banner
+    // seats the write `toasted`, so it does not say the same sentence twice.
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Couldn't remove “Lightning Bolt” from the collection",
+        body: "That collection entry is not there any more.",
+        tone: "error",
+      }),
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   /** A row something else already deleted answers GONE, and the reader has to hear it — a
@@ -3268,9 +3271,9 @@ describe("the card menu", () => {
       expect(collectionRemoveMany).not.toHaveBeenCalled();
     });
 
-    /** A refusal takes nothing — Rust rolls the press back — and says why in the page's banner,
-     *  with the question left open for a second try. */
-    it("says a refused removal in the banner and leaves the question open", async () => {
+    /** A refusal takes nothing — Rust rolls the press back — and says why in a toast, once, with
+     *  the question left open for a second try. */
+    it("says a refused removal in a toast and leaves the question open", async () => {
       collectionRemoveMany.mockRejectedValue("That collection entry is not there any more.");
       const user = userEvent.setup();
       await rightClickTwoEntryTile(user);
@@ -3280,11 +3283,6 @@ describe("the card menu", () => {
 
       await user.click(within(question).getByRole("button", { name: "Remove 2 cards" }));
 
-      expect(await screen.findByRole("alert")).toHaveTextContent(
-        "Couldn't change your collection — That collection entry is not there any more.",
-      );
-      expect(screen.getByRole("group", { name: /^Remove 2 cards/ })).toBeInTheDocument();
-      expect(useBulkUndo.getState().offers.collection).toBeNull();
       await waitFor(() =>
         expect(useNotifications.getState().notices[0]).toMatchObject({
           title: "Couldn't remove 2 cards from the collection",
@@ -3292,6 +3290,9 @@ describe("the card menu", () => {
           tone: "error",
         }),
       );
+      expect(screen.getByRole("group", { name: /^Remove 2 cards/ })).toBeInTheDocument();
+      expect(useBulkUndo.getState().offers.collection).toBeNull();
+      expect(screen.queryByRole("alert")).toBeNull();
     });
 
     it("offers no removal on a tile a deck's group holds", async () => {
@@ -3448,10 +3449,15 @@ describe("clearing Recently removed", () => {
 
     await user.click(within(question).getByRole("button", { name: "Clear Recently removed" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Couldn't change your collection — There is no Recently removed folder.",
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Couldn't clear “Recently removed”",
+        body: "There is no Recently removed folder.",
+        tone: "error",
+      }),
     );
     expect(screen.getByRole("group", { name: "Clear Recently removed" })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
 

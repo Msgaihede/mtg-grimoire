@@ -45,7 +45,7 @@ export interface DeckKeyboard {
     finish: DeckFinish,
     quantity: number,
   ) => Promise<unknown>;
-  reportBatch: (presses: readonly Promise<unknown>[]) => void;
+  reportToasted: (presses: readonly Promise<unknown>[]) => void;
   setCardSelection: (selection: null) => void;
 }
 
@@ -55,7 +55,7 @@ export function useDeckKeyboard({
   layerOpen,
   pickedRef,
   setQuantityAt,
-  reportBatch,
+  reportToasted,
   setCardSelection,
 }: DeckKeyboard): void {
   /**
@@ -138,8 +138,9 @@ export function useDeckKeyboard({
    *
    * **What it costs is one press of Ctrl+Z per card**, because `deck_audit` has a row per write.
    * Named rather than hidden: batching is a Rust change to `deck_undo`'s grain. What it no longer
-   * costs is a refusal: every card's outcome goes to {@link reportBatch}, so a cut the backend
-   * refused for the second card of four is said even when the fourth went through.
+   * costs is a refusal: every card's outcome goes to the toast below, so a cut the backend
+   * refused for the second card of four is said even when the fourth went through — and to
+   * {@link reportToasted}, which keeps the editor's banner from saying it a second time.
    */
   useEffect(() => {
     if (layerOpen) return;
@@ -153,7 +154,7 @@ export function useDeckKeyboard({
       const presses = held.map((card) =>
         setQuantityAt(card.cardId, card.categoryId, card.finish, 0),
       );
-      reportBatch(presses);
+      reportToasted(presses);
       // **One toast for the whole cut**, with the count that landed (`./receipts`): a bulk removal
       // always gets a receipt — the owner's rule — and the cards it took are gone from the desk,
       // so nothing on screen names them any more.
@@ -169,5 +170,5 @@ export function useDeckKeyboard({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [layerOpen, pickedRef, setQuantityAt, reportBatch, setCardSelection]);
+  }, [layerOpen, pickedRef, setQuantityAt, reportToasted, setCardSelection]);
 }

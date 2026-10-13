@@ -885,7 +885,9 @@ describe("WishlistPage", () => {
     });
   });
 
-  it("says a refused removal in a toast as well as in the page's banner", async () => {
+  /** A removal is a deliberate edit, so its refusal is said once — by the toast. The banner is for
+   *  the writes no toast speaks for (the stepper, a drag), and seats this one `toasted`. */
+  it("says a refused removal in a toast, and not again in the page's banner", async () => {
     wishlistRemove.mockRejectedValue("The wishlist is busy.");
     wrap(<WishlistPage />);
     await screen.findByText("Lightning Bolt");
@@ -903,7 +905,7 @@ describe("WishlistPage", () => {
         tone: "error",
       }),
     );
-    expect(await screen.findByRole("alert")).toHaveTextContent("The wishlist is busy.");
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("says nothing when the stepper changes how many copies are wanted", async () => {

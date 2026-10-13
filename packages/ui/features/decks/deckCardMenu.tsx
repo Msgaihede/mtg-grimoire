@@ -136,8 +136,9 @@ function reportBatch(deps: DeckCardMenuDeps, presses: readonly Press[]) {
  * The menu has closed by the time a write answers, so until this the reader's only receipt for a
  * `Category`, `Label`, `Remove` or `Add to theory` was the desk changing — somewhere on a deck
  * that may be scrolled away from the card. One toast per press, never per card: a plural row's
- * twelve writes are said once, with the count that landed. The editor's banner still speaks for
- * a refusal as it always did; the toast is the owner's rule that every card edit says so.
+ * twelve writes are said once, with the count that landed. The toast is the refusal's one report
+ * (the owner's rule, 2026-10-12): the batch goes to the surface so that the editor's banner can
+ * seat it `toasted` and not say it again (2026-10-13).
  */
 function pressRows(
   deps: DeckCardMenuDeps,
@@ -250,11 +251,13 @@ export interface DeckCardMenuDeps {
    */
   otherList?: { variant: DeckVariant; add: (card: DeckCard) => Press };
   /**
-   * **Every outcome of a plural row's writes, handed back as one batch** (issue #553) — `Move N
-   * cards to`, `Add N cards to …`, `Label N cards` and `Remove N cards` each make one write per
-   * picked row, and the surface's banner can only hear a batch's refusals if it is shown all of
-   * them: each write is a call on one shared observer, which remembers the last card alone. Called
-   * with the promises the writes above answered; a write that answered none is left out.
+   * **Every outcome of a row's writes, handed back as one batch** (issue #553) — `Move N cards
+   * to`, `Add N cards to …`, `Label N cards` and `Remove N cards` each make one write per picked
+   * row, and a single-card row makes one. Every one of them is toasted here, so the surface's
+   * banner must *not* repeat the refusal — yet each write is a call on an observer the stepper
+   * and the drags share, whose refusals that banner does report. Handing the batch over is what
+   * lets the surface tell the two apart (the editor's `reportToasted`). Called with the promises
+   * the writes above answered; a write that answered none is left out.
    *
    * Optional, because a surface with no banner to speak through has nothing to do with them — the
    * workbench's stories build this menu with bare `act` spies.
@@ -1070,7 +1073,7 @@ function zoneItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
       claim.refusal,
       // A receipt like `Category`'s, which this is a named shortcut into — the menu has closed.
       () =>
-        reportPresses([deps.moveTo(card, claim.categoryId)], [card.name], {
+        pressRows(deps, [card], [deps.moveTo(card, claim.categoryId)], {
           done: (what) => `Set ${what} as ${claim.zone}`,
           failed: (what) => `Couldn't set ${what} as ${claim.zone}`,
         }),
@@ -1136,7 +1139,7 @@ function coverItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
         : {
             // The image is the gallery's, on another page — so the receipt is the only sign here.
             onSelect: () =>
-              reportPresses([cover.set(card)], [card.name], {
+              pressRows(deps, [card], [cover.set(card)], {
                 done: (what) => `Set ${what} as the deck image`,
                 failed: () => "Couldn't change the deck image",
               }),
@@ -1182,7 +1185,7 @@ function finishItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem {
   // (a printing not sold in it) arrives after — so the press says what it did, once.
   const setTo = (f: DeckFinish) => {
     const word = f === null ? REGULAR.toLowerCase() : FINISH_LABEL[f].toLowerCase();
-    reportPresses([deps.setFinish(card, f)], [card.name], {
+    pressRows(deps, [card], [deps.setFinish(card, f)], {
       done: (what) => `Set ${what} as ${word}`,
       failed: (what) => `Couldn't set ${what} as ${word}`,
     });

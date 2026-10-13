@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, type RefObject } from "react";
 import type { DeckFinish } from "@/lib/ipc";
 import { notify } from "@/lib/notifications";
-import { batchWrite, handled, type Write } from "@/lib/writes";
+import { batchWrite, handled, NO_BATCH, type Write } from "@/lib/writes";
 import { AUTO_CATEGORY } from "./autoCategory";
 import { focusDeckGroup } from "./cardControl";
 import type { DeckWrite } from "./dnd";
@@ -32,10 +32,23 @@ export interface DeckDropsInput {
   /** The editor's root — the caret's floor when no pile can take it. */
   editorRef: RefObject<HTMLElement | null>;
   /** The batch record the banner reads — see `DeckEditor`'s `lastBatch`. */
-  setLastBatch: (batch: Write) => void;
+  setLastBatch: (batch: LastBatch) => void;
   /** The picked set's clear, for a drop that has just moved every member. */
   setCardSelection: (selection: null) => void;
 }
+
+/**
+ * The last batch of card writes, and **whether a toast has already said its refusal** — which the
+ * banner needs and the editor's re-read must not see: a refused card in a menu's batch still
+ * leaves the deck to be read again, toast or no toast.
+ */
+export interface LastBatch {
+  write: Write;
+  toasted: boolean;
+}
+
+/** {@link LastBatch} before any batch has run. */
+export const NO_LAST_BATCH: LastBatch = { write: NO_BATCH, toasted: false };
 
 export function useDeckDrops({
   deck,
@@ -312,7 +325,31 @@ export function useDeckDrops({
       if (presses.length < 2) return;
       const firedAt = Date.now();
       void Promise.allSettled(presses).then((results) =>
-        setLastBatch(batchWrite(results, firedAt, Date.now())),
+        setLastBatch({ write: batchWrite(results, firedAt, Date.now()), toasted: false }),
+      );
+    },
+    [setLastBatch],
+  );
+
+  /**
+   * Presses that raise their own toast — a card menu row, Delete over a picked set, the quick
+   * category's filing — filed into the same record as {@link reportBatch}'s, but marked
+   * `toasted` for the banner (2026-10-13), **one press or many**.
+   *
+   * These presses share their observers with the stepper and the drags (`setQuantity`,
+   * `moveCard`, `update`), which the owner's rule exempts from toasts and which the banner is
+   * therefore the only report for — so the observers have to stay in the banner's list, and an
+   * observer cannot say which kind of press its newest call was. This record can: it is stamped
+   * when a refused press settled, after its own call's `submittedAt`, so it outranks that call and
+   * the banner says nothing — the toast is the report. A stepper pressed afterwards is newer
+   * again and takes the banner back.
+   */
+  const reportToasted = useCallback(
+    (presses: readonly Promise<unknown>[]) => {
+      if (presses.length === 0) return;
+      const firedAt = Date.now();
+      void Promise.allSettled(presses).then((results) =>
+        setLastBatch({ write: batchWrite(results, firedAt, Date.now()), toasted: true }),
       );
     },
     [setLastBatch],
@@ -349,6 +386,7 @@ export function useDeckDrops({
     refile,
     applyDrop,
     reportBatch,
+    reportToasted,
     applyDrops,
   };
 }

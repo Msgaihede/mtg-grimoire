@@ -55,7 +55,9 @@ or confirm, a sidebar drop, a bulk action, an import, the scanner, a finished tr
   once, after the loop. A partial failure is folded into that one toast:
   `notify.warning("Moved 47 of 50 cards to “Trade binder”", { body: firstRefusal })`, or
   `notify.error` when none landed. `useCardToDeck`'s `deckAddReceipt` is the pattern.
-- Failure is `notify.error("Couldn't …", { body: ipcError(e) })`, never swallowed.
+- Failure is `notify.error("Couldn't …", { body: ipcError(e) })`, never swallowed. A page banner
+  that also hears the write seats it `toasted` so the refusal is said once (see
+  [Page banners and the toast](#page-banners-and-the-toast-2026-10-13)).
 - The call goes at the **deliberate call site** (the menu row, the dialog's confirm, the drop
   handler), never in a shared mutation hook's `onSuccess`, which also runs for every stepper click.
 
@@ -133,9 +135,46 @@ The sweep of 2026-10-12 put every surface on it. By area:
 | Shared page, sticky notes, tag rail | Add to wishlist from a share, note deleted, tag hidden | — |
 | Light app phone face (`apps/light/phone/`) | Card sheet adds (collection, wishlist, deck), copy/wish remove and move, deck row pile move/claim/add to other list/remove, *Add cards* presses, imports — see *On the light app's phone face* | Steppers (bar the last step down), grade/finish/printing/label edits, every receipt line and its `Undo` |
 
-**Inline failure banners that a toast now repeats.** The gallery's, collection's and wishlist's
-page banners and Deck settings' banner still draw a refusal under the owner's "failure is
-`notify.error`" rule, so a refused write there says so twice. Retiring them is a follow-up.
+## Page banners and the toast (2026-10-13)
+
+Five surfaces kept a red banner from before the toasts — `Couldn't change your decks`, `… your
+collection`, `… your wishlist`, `… this deck`, and Deck settings' `Couldn't save that change` —
+and the "failure is `notify.error`" rule made each say a refused edit twice. Every one of them is
+**kept**, because each also speaks for writes the owner's rule exempts from toasts, which have no
+other report. What changed is that a banner now draws **only** those: a write whose refusal a
+toast has already said is seated in its list through `lib/writes.ts`' `toasted(write)`, which
+keeps the write's timing (a newer toasted write still takes down an older refusal — the
+newest-write rule) and drops its refusal.
+
+| Banner | Still draws | Now the toast's alone |
+| --- | --- | --- |
+| Deck gallery (`DecksPage`) | A deck or folder renamed, a folder created in place (the field stays open for another try), a folder reordered within its level | Moves, duplicate, archive/restore, tags, delete, folder move/delete, a folder re-parented by a drop |
+| Deck settings (`DeckSettingsDialog`) | Every autosaving field and switch, and the tags (the dialog stays open) | The Folder select and Clear list |
+| Collection (`CollectionPage`) | Steppers, a copy dragged between shelves, folder create/rename/reorder | ✕ remove, bulk remove, Recently removed clear, the copy picker, a confirmed locked crossing, search-column drops, folder move/delete/lock |
+| Wishlist (`WishlistPage`) | Steppers, `Any printing`, a wish dragged onto a shelf, folder create/rename/reorder | Remove, the Edit panel's move, search-column drops, folder move/delete/clear |
+| Deck editor (`DeckEditor`) | Steppers and drags (cards, piles, the token rail), the name/bracket/band switches, pile rename, undo, and the token writes while the band is shut | Every card-menu row, Delete over a picked set, the quick category's filing, label/category/clear dialogs, the Collection submenu (its reads included) |
+
+**Telling two kinds of press apart on one observer.** An observer knows only its newest call, so a
+write that serves both a toasted press and an exempt one needs a way to say which it was:
+
+- **By its variables**, where they differ — the gallery's `decks.update` (a patch naming a `name`
+  is the rename field) and `folders.reorder` (a landing that moves no folder to another parent).
+- **By a second observer** — the wishlist's `moveWish` and the collection's `moveCopy`, the same
+  filing write as the drags' `setFolder` for the presses that toast.
+- **By a record stamped after the press settles** — the deck editor's `reportToasted`, for
+  `setQuantity`, `moveCard` and `update`, whose menu presses and steppers send the same shape.
+  It shares `lastBatch` with the drags' `reportBatch`, marked `toasted`, and is newer than the
+  observer's own call, so the banner reads it and says nothing.
+
+**The token writes keep the editor's banner** while the Tokens & Emblems wall is shut: their
+promises answer only whether they landed, so the toast says `Couldn't add the token to the deck`
+without the reason, and the banner is where the backend's sentence is drawn.
+
+**The Pull and Add-missing dialogs keep their own refusal line** beside the toast. The dialog does
+not close on a refusal, and the line sits beside the button the reader will press again; it is
+the `done` readout's arrangement for a success. Opening either dialog from the editor resets its
+mutation, because the card menu's silent pull and picked-set quick add are calls on the same
+observer and their refusal is already a toast.
 
 Tests: `test-setup.ts` resets the store, and through it the stored copy, after every test
 (`resetNotifications`).
