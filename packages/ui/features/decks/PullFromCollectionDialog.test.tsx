@@ -2,6 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { DeckPullCandidate, DeckPullRow } from "@/lib/ipc";
+import { useNotifications } from "@/lib/notifications";
 import { openDropdown, pickOption } from "@/test-dropdown";
 import { PullFromCollectionDialog, type PullWrite } from "./PullFromCollectionDialog";
 
@@ -278,7 +279,32 @@ describe("PullFromCollectionDialog", () => {
     await pickOption(user, sourceName("Sol Ring"), "Cube binder · Lightly played · 2 copies");
     await user.click(screen.getByRole("button", { name: "Pull 2 copies" }));
 
-    expect(pull.mutate).toHaveBeenCalledWith([{ entryId: 22, quantity: 2 }]);
+    expect(vi.mocked(pull.mutate).mock.lastCall?.[0]).toEqual([{ entryId: 22, quantity: 2 }]);
+  });
+
+  /**
+   * **The press is said as a toast as well as in the readout** (the owner's rule: every move of
+   * cardboard into a deck says so) — through the call's own options, so it is the press's.
+   */
+  it("says what the press pulled, or why it could not, as a toast", async () => {
+    const user = userEvent.setup();
+    const { pull } = open({ rows: [SOL_RING] });
+    await screen.findByText("Sol Ring");
+    await pickOption(user, sourceName("Sol Ring"), "Cube binder · Lightly played · 2 copies");
+    await user.click(screen.getByRole("button", { name: "Pull 2 copies" }));
+
+    const options = vi.mocked(pull.mutate).mock.lastCall?.[1];
+    options?.onSuccess?.({ copies: 2, cards: 1 });
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Pulled 2 copies of 1 card into “Burn”",
+      tone: "success",
+    });
+    options?.onError?.("entry 22 is gone");
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Couldn't pull from your collection",
+      body: "entry 22 is gone",
+      tone: "error",
+    });
   });
 
   /**
@@ -294,7 +320,7 @@ describe("PullFromCollectionDialog", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Pull 5 copies" }));
 
-    expect(pull.mutate).toHaveBeenCalledWith([
+    expect(vi.mocked(pull.mutate).mock.lastCall?.[0]).toEqual([
       { entryId: 11, quantity: 3 },
       { entryId: 21, quantity: 2 },
     ]);
@@ -312,7 +338,7 @@ describe("PullFromCollectionDialog", () => {
 
     expect(screen.getByText("2 copies across 1 card")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Pull 2 copies" }));
-    expect(pull.mutate).toHaveBeenCalledWith([{ entryId: 21, quantity: 2 }]);
+    expect(vi.mocked(pull.mutate).mock.lastCall?.[0]).toEqual([{ entryId: 21, quantity: 2 }]);
   });
 
   /**

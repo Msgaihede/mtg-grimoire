@@ -68,6 +68,7 @@ import {
   TRAY_ROWS,
 } from "@/features/scanner/fixtures";
 import { ipc } from "@/lib/ipc";
+import { useNotifications } from "@/lib/notifications";
 import { TradeScanDialog } from "./TradeScanDialog";
 
 /** The fixture tray's three rows that are not waiting on a pick — five copies. */
@@ -235,6 +236,9 @@ describe("TradeScanDialog", () => {
     ]);
     // Nothing went to the collection: the tray's own commit is the Scanner view's.
     expect(ipc.scannerTrayCommit).not.toHaveBeenCalled();
+    // One toast for the press, outliving the dialog that closes on it.
+    await waitFor(() => expect(useNotifications.getState().notices).toHaveLength(1));
+    expect(useNotifications.getState().notices[0]?.title).toBe("Added 5 cards to their side");
     // Nothing is left to decide, so the dialog closes — and the emptied tray is stored on the
     // way out, by the tray's unmount flush.
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));

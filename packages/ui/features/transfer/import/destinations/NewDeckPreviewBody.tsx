@@ -48,6 +48,7 @@ import {
   Problems,
   Tally,
   commanderIdsOf,
+  deckReceipt,
   reportOf,
   useBlameSync,
   type DeckImportInto,
@@ -96,6 +97,7 @@ export function NewDeckPreviewBody({
   resolved,
   tags,
   onDone,
+  report,
   onBack,
   defaultFormatKey,
   folderId,
@@ -183,8 +185,17 @@ export function NewDeckPreviewBody({
           onImported?.(deck.id, outcome);
           // The deck's own name in front of the shared sentence: the gallery is about to open
           // a tile the reader has never seen, and "6 cards imported" alone does not say into what.
+          report?.(deckReceipt(`a new deck, “${deck.name}”`, outcome, ownedOutcome, ownRefusal));
           onDone(`${deck.name} — ${reportOf(outcome, ownedOutcome, ownRefusal)}`);
         },
+        // A refused list leaves no deck behind (`createDeckFromList`), so this is the whole
+        // story: nothing was made and nothing was filed.
+        onError: (e) =>
+          report?.({
+            title: `Couldn't import into a new deck, “${trimmedName}”`,
+            body: ipcError(e),
+            tone: "error",
+          }),
       },
     );
   };

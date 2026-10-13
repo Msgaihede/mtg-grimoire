@@ -70,6 +70,7 @@ import { plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import type { DeckCard, DeckNote, DeckNoteCard } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
+import { notify } from "@/lib/notifications";
 import { cn } from "@/lib/utils";
 import { attachableCards, noteTitle, type NoteCardChoice } from "./deckNotes";
 import { DeleteNoteDialog } from "./DeleteNoteDialog";
@@ -311,7 +312,15 @@ export const DeckNotesPanel = memo(function DeckNotesPanel({
       // the body's first line — the thing it already did for a blank title.
       onCreate={(body, oracleIds) => notes.create.mutate({ title: "", body, oracleIds })}
       onSave={(id, patch) => notes.update.mutate({ id, patch })}
-      onDelete={(id) => notes.remove.mutate(id)}
+      // A receipt for a delete (destructive, and the confirmation has closed). The band says a
+      // refusal itself (`failure`), so only the success is a toast.
+      onDelete={(id) => {
+        const gone = notes.notes.find((note) => note.id === id);
+        notes.remove.mutate(id, {
+          onSuccess: () =>
+            notify.success(gone ? `Deleted the note “${noteTitle(gone)}”` : "Deleted the note"),
+        });
+      }}
       onAttach={(noteId, oracleId) => notes.attach.mutate({ noteId, oracleId })}
       onDetach={(noteId, oracleId) => notes.detach.mutate({ noteId, oracleId })}
       onReorder={reorderNotes}

@@ -16,6 +16,10 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import { useDangerZone, useLocalCache } from "./useDataReset";
+import { useNotifications } from "@/lib/notifications";
+
+/** The toast the last press raised — the inbox's newest notice. */
+const newest = () => useNotifications.getState().notices[0];
 
 /** What a settled combo table answers back. Only the two figures the sentence reads matter. */
 const COMBOS = {
@@ -106,63 +110,60 @@ describe("useDangerZone", () => {
     expect(invalidatedRoots().sort()).toEqual(["collection", "decks"]);
   });
 
-  it("reports what the clear did, in the panel's plain tone", async () => {
+  /** A toast, since the confirmation that asked has closed: the outcome sentence in the toast's
+   *  own voice (no full stop), and one sentence means no body. */
+  it("reports what the clear did as a toast", async () => {
     const { result } = renderHook(() => useDangerZone(), { wrapper });
 
     act(() => result.current.wishlist.run());
 
     await waitFor(() =>
-      expect(result.current.status).toEqual({
-        tone: "plain",
-        text: "Cleared 4 wishlist entries.",
-      }),
+      expect(newest()).toMatchObject({ tone: "success", title: "Cleared 4 wishlist entries" }),
     );
+    expect(newest()?.body).toBeUndefined();
   });
 
-  /**
-   * The rule `@/lib/writes` exists for, applied across three buttons: a refusal replaces the
-   * sentence a *different* button left standing, rather than the panel reporting a success that
-   * has been overtaken.
-   */
-  it("lets a refused clear replace an earlier one's success", async () => {
+  it("says a clear that found nothing as news rather than a success", async () => {
+    collectionClear.mockResolvedValueOnce({ entries: 0 });
     const { result } = renderHook(() => useDangerZone(), { wrapper });
-
-    act(() => result.current.wishlist.run());
-    await waitFor(() => expect(result.current.status?.tone).toBe("plain"));
-
-    decksClear.mockRejectedValueOnce("The card database is busy.");
-    act(() => result.current.decks.run());
-
-    await waitFor(() =>
-      expect(result.current.status).toEqual({
-        tone: "problem",
-        text: "The card database is busy.",
-      }),
-    );
-  });
-
-  /** And back the other way, which is the half a one-directional implementation gets wrong. */
-  it("lets a later success replace a refusal", async () => {
-    const { result } = renderHook(() => useDangerZone(), { wrapper });
-
-    decksClear.mockRejectedValueOnce("The card database is busy.");
-    act(() => result.current.decks.run());
-    await waitFor(() => expect(result.current.status?.tone).toBe("problem"));
 
     act(() => result.current.collection.run());
 
     await waitFor(() =>
-      expect(result.current.status).toEqual({
-        tone: "plain",
-        text: "Cleared 12 collection entries.",
-      }),
+      expect(newest()).toMatchObject({ tone: "info", title: "The collection was already empty" }),
     );
   });
 
-  it("says nothing at all until something has been pressed", () => {
+  /**
+   * Two presses, two notices, in the order they settled — a refusal does not swallow the success
+   * before it, and the inbox keeps both. There is no shared line for one to overwrite any more.
+   */
+  it("toasts a refused clear after an earlier one's success, keeping both", async () => {
     const { result } = renderHook(() => useDangerZone(), { wrapper });
 
-    expect(result.current.status).toBeNull();
+    act(() => result.current.wishlist.run());
+    await waitFor(() => expect(newest()?.tone).toBe("success"));
+
+    decksClear.mockRejectedValueOnce("The card database is busy.");
+    act(() => result.current.decks.run());
+
+    await waitFor(() =>
+      expect(newest()).toMatchObject({
+        tone: "error",
+        title: "Couldn't clear the decks",
+        body: "The card database is busy.",
+      }),
+    );
+    expect(useNotifications.getState().notices.map((n) => n.title)).toEqual([
+      "Couldn't clear the decks",
+      "Cleared 4 wishlist entries",
+    ]);
+  });
+
+  it("says nothing at all until something has been pressed", () => {
+    renderHook(() => useDangerZone(), { wrapper });
+
+    expect(useNotifications.getState().notices).toHaveLength(0);
   });
 });
 
@@ -177,7 +178,7 @@ describe("useLocalCache", () => {
 
     act(() => result.current.clear.run());
 
-    await waitFor(() => expect(result.current.status).not.toBeNull());
+    await waitFor(() => expect(newest()).toBeDefined());
     expect(invalidate).not.toHaveBeenCalled();
   });
 
@@ -187,9 +188,22 @@ describe("useLocalCache", () => {
     act(() => result.current.clear.run());
 
     await waitFor(() =>
-      expect(result.current.status).toEqual({
-        tone: "plain",
-        text: "Freed 4 KB across 20 files.",
+      expect(newest()).toMatchObject({ tone: "success", title: "Freed 4 KB across 20 files" }),
+    );
+  });
+
+  /** Two sentences, and the toast splits them: what happened is the title, what did not the body. */
+  it("puts the files it could not delete under the receipt, as a warning", async () => {
+    cacheClear.mockResolvedValueOnce({ files: 20, bytes: 4_000, rows: 20, failed: 2 });
+    const { result } = renderHook(() => useLocalCache(), { wrapper });
+
+    act(() => result.current.clear.run());
+
+    await waitFor(() =>
+      expect(newest()).toMatchObject({
+        tone: "warning",
+        title: "Freed 4 KB across 20 files",
+        body: "2 files were in use and couldn't be deleted.",
       }),
     );
   });
@@ -203,9 +217,10 @@ describe("useLocalCache", () => {
     act(() => result.current.clear.run());
 
     await waitFor(() =>
-      expect(result.current.status).toEqual({
-        tone: "problem",
-        text: "a card update is running — clear the cache once it has finished",
+      expect(newest()).toMatchObject({
+        tone: "error",
+        title: "Couldn't clear the cache",
+        body: "a card update is running — clear the cache once it has finished",
       }),
     );
   });
@@ -249,7 +264,7 @@ describe("useLocalCache", () => {
 
     await waitFor(() => expect(combosRefresh).toHaveBeenCalledOnce());
     expect(result.current.combos.pending).toBe(true);
-    expect(result.current.status).toBeNull();
+    expect(useNotifications.getState().notices).toHaveLength(0);
 
     await act(async () => held.resolve(COMBOS));
 
@@ -262,9 +277,9 @@ describe("useLocalCache", () => {
     act(() => result.current.combos.run());
 
     await waitFor(() =>
-      expect(result.current.status).toEqual({
-        tone: "plain",
-        text: "Downloaded 105,478 combos covering 7,310 cards.",
+      expect(newest()).toMatchObject({
+        tone: "success",
+        title: "Downloaded 105,478 combos covering 7,310 cards",
       }),
     );
   });
@@ -279,14 +294,14 @@ describe("useLocalCache", () => {
     const { result } = renderHook(() => useLocalCache(), { wrapper });
 
     act(() => result.current.combos.run());
-    await waitFor(() => expect(result.current.status).not.toBeNull());
+    await waitFor(() => expect(newest()?.tone).toBe("success"));
     expect(invalidatedRoots()).toEqual(["combos"]);
 
     invalidate.mockClear();
     combosRefresh.mockRejectedValueOnce("Commander Spellbook could not be reached.");
     act(() => result.current.combos.run());
 
-    await waitFor(() => expect(result.current.status?.tone).toBe("problem"));
+    await waitFor(() => expect(newest()?.tone).toBe("error"));
     expect(invalidatedRoots()).toEqual(["combos"]);
   });
 
@@ -298,26 +313,11 @@ describe("useLocalCache", () => {
     act(() => result.current.combos.run());
 
     await waitFor(() =>
-      expect(result.current.status).toEqual({
-        tone: "problem",
-        text: "Commander Spellbook could not be reached.",
+      expect(newest()).toMatchObject({
+        tone: "error",
+        title: "Couldn't refresh combos",
+        body: "Commander Spellbook could not be reached.",
       }),
     );
-  });
-
-  /**
-   * One banner for two buttons, `useDangerZone`'s rule on a smaller panel: the most recently
-   * *started* write owns the line, so the image sweep's sentence does not sit under a combo
-   * refusal, or the other way round.
-   */
-  it("lets the newer of the two presses own the one status line", async () => {
-    const { result } = renderHook(() => useLocalCache(), { wrapper });
-
-    act(() => result.current.clear.run());
-    await waitFor(() => expect(result.current.status?.text).toContain("Freed"));
-
-    act(() => result.current.combos.run());
-
-    await waitFor(() => expect(result.current.status?.text).toContain("105,478 combos"));
   });
 });

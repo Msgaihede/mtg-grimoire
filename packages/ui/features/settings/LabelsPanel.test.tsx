@@ -57,6 +57,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import { LabelsPanel } from "./LabelsPanel";
+import { useNotifications } from "@/lib/notifications";
 
 /**
  * Every label the reader owns.
@@ -205,6 +206,13 @@ describe("LabelsPanel", () => {
 
     await waitFor(() =>
       expect(sent).toContainEqual(["deck_label_delete", { deckId: null, id: 10 }]),
+    );
+    // The label left cards in decks the reader cannot see from here, so the delete says so.
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        tone: "success",
+        title: "Label “Cut candidate” deleted",
+      }),
     );
   });
 

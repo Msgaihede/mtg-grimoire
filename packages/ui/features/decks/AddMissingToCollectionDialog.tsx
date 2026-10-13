@@ -87,6 +87,7 @@ import {
   type MissingChoice,
   type PlannedMissingRow,
 } from "./addMissingPlan";
+import { notifyMissingAdded, notifyRefusal } from "./receipts";
 
 /**
  * Stable identity for "the read has not answered", so {@link planAddMissing} is not re-run over a
@@ -158,7 +159,15 @@ const CLEAR_WISHES_LABEL = "Also take these off my wishlist";
  * would be sending a boolean where an array belongs.
  */
 export interface AddMissingWrite {
-  mutate: (input: { picks: DeckMissingPick[]; clearWishes: boolean }) => void;
+  /** The per-call options carry the press's toast (`./receipts`) — a call's own, so a write
+   *  that lands after the dialog closed still says what it did. */
+  mutate: (
+    input: { picks: DeckMissingPick[]; clearWishes: boolean },
+    options?: {
+      onSuccess?: (outcome: DeckMissingOutcome) => void;
+      onError?: (error: unknown) => void;
+    },
+  ) => void;
   isPending: boolean;
   isSuccess: boolean;
   isError: boolean;
@@ -460,7 +469,15 @@ function AddMissingBody({
             refusal reported somewhere the reader cannot see is a refusal they have to go looking
             for. Its own animated element, carrying no padding and no border so `height: 0` really
             is 0; `overflow-hidden` is still owed, because the sentence is laid out at full size
-            whatever the box around it is doing. */}
+            whatever the box around it is doing.
+
+            **Kept beside the press's toast, which says the same refusal** (decided 2026-10-13).
+            The press is a deliberate collection edit, so its `notify.error` stays (the owner's
+            rule), and this line stays too: the dialog does not close on a refusal, the reader is
+            looking here with the ticked rows still in front of them and the button to press
+            again, and a toast in the corner is easy to miss under a scrim. It is the `done`
+            readout's arrangement for a success. The editor resets the mutation
+            each time it opens the dialog, so the line is only ever about a press made here. */}
         <AnimatePresence initial={false}>
           {failure !== null && (
             <motion.p
@@ -517,7 +534,18 @@ function AddMissingBody({
             // screen were counted from. `planAddMissing` already builds a fresh object per pick
             // for exactly this reason, so the spread copies the array and shares nothing a caller
             // downstream could reach back into.
-            add.mutate({ picks: [...plan.picks], clearWishes });
+            //
+            // **The toast is on top of the readout, not instead of it** (the owner's rule: every
+            // collection add says so): the dialog may be shut before the answer, and the inbox
+            // keeps a record the readout does not.
+            add.mutate(
+              { picks: [...plan.picks], clearWishes },
+              {
+                onSuccess: notifyMissingAdded,
+                onError: (error) =>
+                  notifyRefusal("Couldn't add the missing copies to the collection", error),
+              },
+            );
           }}
           className={CONFIRM}
         >

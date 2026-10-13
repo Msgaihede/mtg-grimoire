@@ -11,8 +11,8 @@ import { cn } from "@/lib/utils";
  * How much quiet it takes for the badge to go away — measured from the **last** notch, not
  * from the first.
  *
- * A timer, where almost nothing else in this app has one, and it is allowed here for exactly
- * `REPORT_MS`'s reason (`components/useSidebarDrops.ts`): **it is not a transition.** Nothing
+ * A timer, where almost nothing else in this app has one, and it is allowed here because
+ * **it is not a transition.** Nothing
  * about the fade is decided here — that is {@link popup}'s, and `MotionConfig` in `App.tsx`
  * turns it down for a reader who asked the OS for less. All this number decides is *when* a
  * figure about a gesture that has stopped stops being news.

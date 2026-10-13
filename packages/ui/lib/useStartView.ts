@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ipc } from "./ipc";
+import { ipc, ipcError } from "./ipc";
+import { notify } from "./notifications";
 import { useAppStore, type ViewId } from "./store";
 
 /**
@@ -119,8 +120,15 @@ const QUERY = {
  * **The write is optimistic and deliberately not rolled back**, `useNavCollapsed`'s trade for its
  * reason: `set_start_view` answers `BUSY` while a sync holds the write connection, and putting the
  * picker back under the reader's hand with nothing on screen saying why is worse than losing one
- * launch's memory of the choice. There is no `onError` and nothing calls `mutateAsync`, so the
- * rejection settles inside the mutation and never reaches a boundary.
+ * launch's memory of the choice. Nothing calls `mutateAsync`, so the rejection settles inside the
+ * mutation and never reaches a boundary.
+ *
+ * **But it is said, as a toast** (`@/lib/notifications`), since there is somewhere to say it now.
+ * The choice is a deliberate press in Settings, and a refusal left silent is a row that reads
+ * *Decks* over a launch that will open on Home — the reader learns it on the next start, with
+ * nothing to connect it to. A toast tells them now, while the picker is under their hand and
+ * pressing it again is the fix. `useNavCollapsed` stays silent: the rail's toggle is a view
+ * preference pressed in passing, and its state is drawn whether or not it was stored.
  */
 export function useStartView(): {
   view: StartView;
@@ -135,6 +143,8 @@ export function useStartView(): {
 
   const write = useMutation({
     mutationFn: (view: StartView) => ipc.setStartView(view),
+    onError: (failure) =>
+      void notify.error("Couldn't save the start view", { body: ipcError(failure) }),
   });
 
   const startWrite = write.mutate;

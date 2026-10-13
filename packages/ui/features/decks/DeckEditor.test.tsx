@@ -351,6 +351,7 @@ import {
   NOTES_TODOS_COLUMN,
 } from "./DeckEditor";
 import { useAppStore, type CardWalkStop } from "@/lib/store";
+import { useNotifications } from "@/lib/notifications";
 
 /** The change the Undo button would reverse — a history row like any other, because that is
  *  what the state command answers and what `auditText` words the button's name from. */
@@ -4712,12 +4713,9 @@ describe("DeckEditor", () => {
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(deckTheoryMissingToWishlist).toHaveBeenCalledTimes(1);
+    // A toast (the dialog's own `notifyWishesSent`), where the editor drew a self-clearing line.
     await waitFor(() =>
-      expect(
-        screen
-          .getAllByRole("status")
-          .some((region) => region.textContent?.startsWith("Added to your wishlist")),
-      ).toBe(true),
+      expect(useNotifications.getState().notices[0]?.title).toMatch(/^Sent .* to the wishlist$/),
     );
   });
 
@@ -5290,8 +5288,7 @@ describe("DeckEditor", () => {
     await open();
 
     expect(screen.getByText(CUT_CARDS_NOTE)).toBeInTheDocument();
-    // Every live region in this view speaks for a press — the refile note, the wishlist
-    // sentence. A standing fact is in none of them.
+    // Every live region in this view speaks for a press. A standing fact is in none of them.
     for (const region of screen.queryAllByRole("status")) {
       expect(region).not.toHaveTextContent(CUT_CARDS_NOTE);
     }
@@ -5736,11 +5733,15 @@ describe("DeckEditor drag and drop", () => {
       await held.over(boxedZone("Auto"));
       await held.drop();
 
-      // By its text, not by its role: the quick-add field keeps a `role="status"` mounted for
-      // the life of the toolbar (a live region that first appears with its sentence already
-      // inside announces nothing), so this view has two and `getByRole` finds both.
-      const note = await screen.findByText(/already in Instant/);
-      expect(note).toHaveAttribute("role", "status");
+      // A toast since 2026-10-12, where it was a self-clearing line over the desk: `info`,
+      // because nothing failed — the card was simply home already.
+      await waitFor(() =>
+        expect(useNotifications.getState().notices[0]).toMatchObject({
+          title: "“Lightning Bolt” is already in “Instant”",
+          tone: "info",
+        }),
+      );
+      expect(screen.queryByText(/already in Instant/)).not.toBeInTheDocument();
       expect(deckMoveCard).not.toHaveBeenCalled();
     });
 
@@ -6018,6 +6019,43 @@ describe("DeckEditor — a card's menu", () => {
     await waitFor(() =>
       expect(document.querySelector(`[${DECK_GROUP_ATTR}="${MAIN}"]`)).toHaveFocus(),
     );
+    // The menu has closed, so the receipt is a toast.
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]?.title).toBe(
+        "Removed “Lightning Bolt” from the deck",
+      ),
+    );
+  });
+
+  /**
+   * **One observer, two kinds of press** (2026-10-13). The menu's `Remove card` and the stepper
+   * are the same `setQuantity` write, but only the menu's toasts — so its refusal is the toast's
+   * alone, while the stepper's, pressed afterwards, is the banner's again: the newest write owns
+   * the line, and a toasted press is newer than its own call (`reportToasted`).
+   */
+  it("leaves a refused menu removal to its toast, and a later stepper refusal to the banner", async () => {
+    deckToCollection.mockRejectedValue("The database is busy with a sync.");
+    deckSetCardQuantity.mockRejectedValue("The database is busy with a sync.");
+    deckGet.mockResolvedValue(detail({}, [bolt({ quantity: 2 })]));
+    await open();
+    await rightClickCard("Lightning Bolt");
+
+    await userEvent.click(screen.getByRole("menuitem", { name: "Remove card" }));
+
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Couldn't remove “Lightning Bolt” from the deck",
+        body: "The database is busy with a sync.",
+        tone: "error",
+      }),
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    await userEvent.click(await screen.findByRole("button", { name: `Increase ${COPIES}` }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Couldn't change this deck — The database is busy with a sync.",
+    );
+    expect(useNotifications.getState().notices).toHaveLength(1);
   });
 
   /**
@@ -6094,10 +6132,10 @@ describe("DeckEditor — a card's menu", () => {
   });
 
   /**
-   * **The menu has closed by the time a refusal lands**, so the banner is where it is said — the
-   * reason `useDeck.addToOtherList` sits in the editor's refused-write family.
+   * **The menu has closed by the time a refusal lands**, so a toast is where it is said — and only
+   * there: `useDeck.addToOtherList` is seated `toasted` in the editor's banner (2026-10-13).
    */
-  it("says a refused add to the other list in the banner", async () => {
+  it("says a refused add to the other list in a toast, not the banner", async () => {
     deckGet.mockResolvedValue(detail({ theoryEnabled: true }, [bolt()]));
     deckAddCardToOtherList.mockRejectedValue(new Error("database is locked"));
     await open();
@@ -6105,7 +6143,13 @@ describe("DeckEditor — a card's menu", () => {
 
     await userEvent.click(screen.getByRole("menuitem", { name: "Add to theory" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("database is locked");
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        body: "database is locked",
+        tone: "error",
+      }),
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   /** A deck with no plan has no other list, so the row is absent rather than greyed. */
@@ -6396,12 +6440,12 @@ describe("DeckEditor — a card's menu", () => {
   });
 
   /**
-   * …and a refused *create* is spoken for by the deck's own banner, which is why the mutation is
-   * in the editor's refused-write family rather than merely mounted in it.
+   * …and a refused *create* is spoken for by a toast — once: the mutation is seated `toasted` in
+   * the editor's banner, so the deck's own line does not say it again.
    *
    * A label the reader typed and pressed Add label on, that never appears and never says why, is
-   * the silent failure this family exists to prevent — and the dialog it was typed in closes on
-   * the press, so there is nowhere else it could be said.
+   * the silent failure this prevents — and the dialog it was typed in closes on the press, so
+   * there is nowhere on screen it could be said.
    */
   it("says so when the menu's label create is refused", async () => {
     deckLabelCreate.mockRejectedValue("The database is busy");
@@ -6414,9 +6458,13 @@ describe("DeckEditor — a card's menu", () => {
     await userEvent.type(await screen.findByLabelText("Find or name a label"), "Cut candidate");
     await userEvent.click(screen.getByRole("button", { name: "Create “Cut candidate”" }));
 
-    expect(
-      await screen.findByText(/Couldn't change this deck — The database is busy/),
-    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        body: "The database is busy",
+        tone: "error",
+      }),
+    );
+    expect(screen.queryByText(/Couldn't change this deck/)).not.toBeInTheDocument();
   });
 
   /**
@@ -6625,7 +6673,7 @@ describe("DeckEditor — a card's menu", () => {
   });
 
   /**
-   * **A refused collection add from the menu has to be said somewhere, and this is the somewhere.**
+   * **A refused collection add from the menu has to be said somewhere** — a toast now.
    *
    * `useCardMenuDeps` states it plainly: a page that ignores that sentence is a page where a card
    * silently fails to be added. The menu cannot draw it — `ctx.run` closes the panel before the
@@ -6648,7 +6696,14 @@ describe("DeckEditor — a card's menu", () => {
       await within(addTo as HTMLElement).findByRole("menuitem", { name: "Collection" }),
     );
 
-    expect(await screen.findByText(/Couldn't add to your collection/)).toBeInTheDocument();
+    // A toast since 2026-10-12 (`useCardMenuDeps`' receipts): the menu's refusal used to be a
+    // banner this editor drew, and is now the app's one way of saying it.
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        tone: "error",
+        body: "The database is busy",
+      }),
+    );
   });
 
   /**
@@ -7176,6 +7231,32 @@ describe("DeckEditor — the Collection submenu", () => {
   });
 
   /**
+   * **A refused outright pull is its toast's, and not the next dialog's** (2026-10-13). The silent
+   * pull and the dialog's press share one observer, so the dialog — which draws that observer's
+   * refusal beside its button — would open with a sentence about a press it never made, said a
+   * second time. Opening it resets the observer.
+   */
+  it("does not greet the pull dialog with a refused outright pull", async () => {
+    deckGet.mockResolvedValue(detail({}, [SHORT()]));
+    deckPullPlan.mockResolvedValue([planRow([55])]);
+    deckPullFromCollection.mockRejectedValue("database is locked");
+    await open();
+    await collectionMenu();
+
+    await userEvent.click(screen.getByRole("menuitem", { name: "Pull 4 from your collection" }));
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Couldn't pull from your collection",
+        tone: "error",
+      }),
+    );
+
+    await userEvent.click(await screen.findByRole("button", { name: "Pull from collection" }));
+    const dialog = await screen.findByRole("dialog", { name: "Pull from collection" });
+    expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  /**
    * **Two candidates is the issue's own question**, so the dialog opens — and it opens holding
    * **only this card's row**.
    *
@@ -7275,10 +7356,10 @@ describe("DeckEditor — the Collection submenu", () => {
   /**
    * **A read the reader pressed for cannot fail silently.** The menu closes before its handler
    * runs, so a refused `deck_quick_add_wishes` has nowhere of its own to be said — and a menu row
-   * that sometimes does nothing at all is the worst answer available. It lands in the same banner
-   * every refused write in this editor lands in.
+   * that sometimes does nothing at all is the worst answer available. It is a toast, like the
+   * refused write the press would have made — and not the banner too (2026-10-13).
    */
-  it("says so in the banner when the wish read is refused", async () => {
+  it("says so in a toast when the wish read is refused", async () => {
     deckGet.mockResolvedValue(detail({}, [SHORT()]));
     deckQuickAddWishes.mockRejectedValue(new Error("database is locked"));
     await open();
@@ -7288,16 +7369,19 @@ describe("DeckEditor — the Collection submenu", () => {
       screen.getByRole("menuitem", { name: "Quick add 4 and remove from wishlist" }),
     );
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Couldn't change this deck — database is locked",
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        body: "database is locked",
+        tone: "error",
+      }),
     );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(deckQuickAddToCollection).not.toHaveBeenCalled();
   });
 
-  /** The same for the pull's plan, which is the other read a press makes — one banner, two
-   *  reads, because both are the same kind of failure: an act the reader asked for that cannot
-   *  begin. */
-  it("says so in the banner when the pull plan is refused", async () => {
+  /** The same for the pull's plan, which is the other read a press makes — one toast each,
+   *  because both are the same kind of failure: an act the reader asked for that cannot begin. */
+  it("says so in a toast when the pull plan is refused", async () => {
     deckGet.mockResolvedValue(detail({}, [SHORT()]));
     deckPullPlan.mockRejectedValue(new Error("database is locked"));
     await open();
@@ -7305,9 +7389,14 @@ describe("DeckEditor — the Collection submenu", () => {
 
     await userEvent.click(screen.getByRole("menuitem", { name: "Pull 4 from your collection" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Couldn't change this deck — database is locked",
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Couldn't pull from your collection",
+        body: "database is locked",
+        tone: "error",
+      }),
     );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(deckPullFromCollection).not.toHaveBeenCalled();
   });
 
@@ -7340,10 +7429,10 @@ describe("DeckEditor — the Collection submenu", () => {
    * **A refusal from an *earlier* press is not this dialog's**, and one mutation serving all
    * three rows is what makes that possible: a refused `Quick add 4 copies` leaves
    * `quickAddToCollection.isError` standing, so a panel that read the flag alone would open with a
-   * red sentence about a press the banner had already reported.
+   * red sentence about a press a toast had already reported.
    *
-   * The banner still carries it, which is the pairing this case asserts — the sentence is not
-   * lost, it is drawn where it belongs.
+   * The toast carries it, which is the pairing this case asserts — the sentence is not lost, it
+   * is said where it belongs, and once: the banner seats the write `toasted`.
    */
   it("does not greet the wish question with an earlier press's refusal", async () => {
     deckGet.mockResolvedValue(detail({}, [SHORT()]));
@@ -7354,8 +7443,11 @@ describe("DeckEditor — the Collection submenu", () => {
 
     // The plain add, refused.
     await userEvent.click(screen.getByRole("menuitem", { name: "Quick add 4 copies" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Couldn't change this deck — database is locked",
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        body: "database is locked",
+        tone: "error",
+      }),
     );
 
     // Now the row that asks. The question opens clean.
@@ -7366,10 +7458,9 @@ describe("DeckEditor — the Collection submenu", () => {
     const dialog = await screen.findByRole("dialog", { name: "Which wishlist item?" });
 
     expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
-    // And the earlier refusal is where it was said in the first place.
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Couldn't change this deck — database is locked",
-    );
+    // And the earlier refusal is nowhere on screen but its toast's inbox entry.
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(useNotifications.getState().notices).toHaveLength(1);
   });
 
   /**
@@ -7690,6 +7781,12 @@ describe("DeckEditor — a category's menu", () => {
 
     await userEvent.click(within(dialog).getByRole("button", { name: "Remove 4 cards" }));
     await waitFor(() => expect(deckCategoryClear).toHaveBeenCalledWith(DECK.id, MAIN, "live"));
+    // The question closes on the write, so the receipt is a toast with the count it answered.
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]?.title).toBe(
+        "Removed 4 cards from “Main deck”",
+      ),
+    );
   });
 
   /** "Keep them" is the way out that writes nothing — the safe answer being the one a reader
@@ -7794,6 +7891,9 @@ describe("DeckEditor — a category's menu", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: "Deactivate" }));
 
     expect(deckCategorySetActive).toHaveBeenCalledWith(MAIN, false);
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]?.title).toBe("Deactivated “Main deck”"),
+    );
   });
 
   /** The row says what the write does rather than toggling a value read a moment earlier — a
@@ -8509,13 +8609,22 @@ describe("DeckEditor multi-select", () => {
     await userEvent.keyboard("{Delete}");
 
     await waitFor(() => expect(deckToCollection).toHaveBeenCalledTimes(2));
+    // **One press, one toast** (the owner's rule): two writes, said once with the count.
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Removed 2 cards from the deck",
+        tone: "success",
+      }),
+    );
+    expect(useNotifications.getState().notices).toHaveLength(1);
   });
 
   /**
    * **A refusal in the middle of a batch is said, even when the batch ended well** (issue #553).
    * Each card is its own call on one `useMutation` observer, and an observer remembers only its
    * newest call — so the second card's refusal used to roll its row back in silence because the
-   * last card's write had gone through. The banner now counts the whole batch.
+   * last card's write had gone through. The toast counts the whole batch, and the banner — whose
+   * `setQuantity` observer saw only the last card's success — leaves the refusal to it.
    */
   it("says which part of a Delete was refused when the last card went through", async () => {
     deckToCollection.mockRejectedValueOnce("The database is busy with a sync.");
@@ -8525,13 +8634,21 @@ describe("DeckEditor multi-select", () => {
 
     await userEvent.keyboard("{Delete}");
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "1 of 2 cards wasn't changed — The database is busy with a sync.",
+    // The toast folds the partial outcome into one warning, naming the first refusal.
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Removed 1 of 2 cards from the deck",
+        body: "The database is busy with a sync.",
+        tone: "warning",
+      }),
     );
+    expect(useNotifications.getState().notices).toHaveLength(1);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   /** The drop's half of the same fault: a two-card drag onto a pile where the first move is
-   *  refused and the second lands. */
+   *  refused and the second lands. A drag inside the editor takes no toast, so this one is the
+   *  banner's. */
   it("says which part of a multi-card drop was refused", async () => {
     deckMoveCard.mockRejectedValueOnce("That card is not in the pile any more.");
     await open();
@@ -9087,7 +9204,8 @@ describe("DeckEditor — the token pile (issue #507)", () => {
    * fan-in's carried minor). That deck is the one Add printing is offered on precisely to add a
    * token by hand, and the press opens the band — so the banner, keyed on the band being open,
    * stood down, while a band with no row draws no wall and so no line of its own. The refusal was
-   * said nowhere. Seeded open because that is the state the press itself leaves: this file's
+   * said nowhere. The toast says only that it failed (the token writes answer a boolean), so the
+   * banner keeps the reason. Seeded open because that is the state the press itself leaves: this file's
    * `deckUpdate` answers the old row, so a press from shut would never reach it.
    */
   it("says a refused first Add printing on a deck that makes nothing", async () => {
@@ -9118,7 +9236,7 @@ describe("DeckEditor — the token pile (issue #507)", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("The database is busy with a sync.");
-    // Said once: the band has no wall to say it above.
+    // Drawn once: the band has no wall to say it above.
     expect(screen.getAllByRole("alert")).toHaveLength(1);
   });
 

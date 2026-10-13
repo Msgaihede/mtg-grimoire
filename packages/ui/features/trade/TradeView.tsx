@@ -24,6 +24,7 @@ import { FOCUS } from "@/lib/focus";
 import { ipcError } from "@/lib/ipc";
 import type { Trade, TradeSide, TradeSummary } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
+import { notify } from "@/lib/notifications";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { FinishTradeDialog } from "./FinishTradeDialog";
@@ -54,6 +55,9 @@ import { TRADE_LIST_KEY, tradeKey, useTradeWrites } from "./useTrades";
  * ## Every write says where it failed
  *
  * The header's own writes — rename, duplicate, archive, reopen, delete — report under the name.
+ * Duplicate, archive and delete also say a landing as a toast (finish says its own, from its
+ * dialog): the menu that offered two of them has closed, and a delete takes this page with it.
+ * Rename, reopen and the swap do not — each is drawn in place the moment its read lands.
  * A line's report on the line and a side's add row reports under its field, in their own files.
  * Each is the backend's sentence after a dash, because the backend is the one that knows whether
  * the trade was archived in another window or the name was taken.
@@ -184,8 +188,15 @@ export function TradeView({
     run("swap the sides", () => writes.swapSides(trade.id));
   };
 
+  // A receipt, because the press is often the More menu's and the menu has closed; the page then
+  // moves to the copy, which is a different trade under the same name until the reader renames it.
   const duplicate = () =>
-    run("duplicate the trade", () => writes.duplicate(trade.id).then(onSelect));
+    run("duplicate the trade", () =>
+      writes.duplicate(trade.id).then((copy) => {
+        notify.success(`Duplicated “${trade.name}”`);
+        onSelect(copy);
+      }),
+    );
 
   const openTransfer = (kind: "import" | "export", side: TradeSide, opener: HTMLElement) => {
     transferOpener.current = opener;
@@ -325,7 +336,15 @@ export function TradeView({
           <button
             type="button"
             aria-disabled={busy || undefined}
-            onClick={() => run("archive the trade", () => writes.archive(trade.id).then(land))}
+            onClick={() =>
+              // Archiving puts the trade away — a receipt, as every archive in the app has.
+              run("archive the trade", () =>
+                writes.archive(trade.id).then(() => {
+                  notify.success(`Archived “${trade.name}”`);
+                  land();
+                }),
+              )
+            }
             className={TRADE_BUTTON}
           >
             <Archive className="size-4" aria-hidden="true" />
@@ -439,7 +458,8 @@ export function TradeView({
             }}
           />
           {/* One destination, so no radios: the side the reader pressed Import on. The message
-              is discarded, the wishlist's precedent — the cards are on the side behind it. */}
+              is discarded, the wishlist's precedent — the cards are on the side behind it, and the
+              dialog's own toast (`report`) says how many went there. */}
           <ImportDialog
             destinations={importInto}
             subtitle={`Onto ${sideWords(transferSide)} of “${trade.name}”`}
@@ -469,7 +489,16 @@ export function TradeView({
         // deleting it moves none of them. A typed word would be ceremony.
         typeToConfirm={false}
         pending={busy}
-        onConfirm={() => run("delete the trade", () => writes.remove(trade.id).then(onDeleted))}
+        // A delete is the one header write whose page goes with it — this view unmounts on the
+        // answer — so its receipt is a toast, the only place left to say it.
+        onConfirm={() =>
+          run("delete the trade", () =>
+            writes.remove(trade.id).then(() => {
+              notify.success(`Deleted “${trade.name}”`);
+              onDeleted();
+            }),
+          )
+        }
         onDismiss={() => {
           setDeleting(false);
           moreRef.current?.focus();

@@ -231,6 +231,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 import { CollectionPage } from "./CollectionPage";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { resetBulkUndo, useBulkUndo } from "@/lib/bulkUndo";
+import { useNotifications } from "@/lib/notifications";
 import { CardToDeckProvider } from "@/features/card/cardMenu";
 import { useAppStore } from "@/lib/store";
 
@@ -1364,7 +1365,6 @@ describe("CollectionPage", () => {
       }),
     );
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(/not there any more/i);
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection"] }));
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
     expect(invalidate).toHaveBeenCalledWith(
@@ -1373,6 +1373,16 @@ describe("CollectionPage", () => {
     // And the row is still there — the removal did not happen, so the list must not pretend
     // it did.
     expect(screen.getByText("Lightning Bolt")).toBeInTheDocument();
+    // The ✕ is a deliberate removal, so its refusal is a toast — and only a toast: the banner
+    // seats the write `toasted`, so it does not say the same sentence twice.
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Couldn't remove “Lightning Bolt” from the collection",
+        body: "That collection entry is not there any more.",
+        tone: "error",
+      }),
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   /** A row something else already deleted answers GONE, and the reader has to hear it — a
@@ -2910,27 +2920,14 @@ describe("the card menu", () => {
   });
 
   /**
-   * The banner is superseded by the next add rather than standing until one succeeds — the same
-   * rule the stepper's and the removal's banner follow, and for the reason written beside them:
-   * an alert about something the reader has already dealt with is worse than no alert.
-   *
-   * **The assertion is made while the second add is still in flight, and that is the whole
-   * fence.** Cleared-on-start and cleared-on-success agree about every settled state: a second
-   * add that succeeds ends with no banner either way, and one that is refused ends with its own
-   * sentence either way. The single moment they differ is the one below — between the press and
-   * the answer — so the second write is held open deliberately rather than answered. (Written
-   * the obvious way first, this test passed against the un-fixed code.)
+   * **A refused menu add is a toast now, and the page draws no banner for it** (2026-10-12): the
+   * menu has closed by the time the backend answers, so the refusal is said where every other
+   * answer to a closed menu is (`useCardMenuDeps`' receipts). Each add's refusal is its own notice,
+   * newest first — the superseding the old banner had to get right by hand is the inbox's order.
    */
-  it("clears a refused add's sentence when the next add starts, not when one answers", async () => {
+  it("says a refused menu add as a toast rather than a banner on the page", async () => {
     collectionAdd.mockRejectedValue("that card is not in the database");
-    // Held open: nothing resolves it until this test says so.
-    let refuseWish: (reason: unknown) => void = () => {};
-    wishlistAdd.mockImplementation(
-      () =>
-        new Promise((_resolve, reject) => {
-          refuseWish = reject;
-        }),
-    );
+    wishlistAdd.mockRejectedValue("the wishlist is locked");
     const user = userEvent.setup();
     wrap(<CollectionPage />);
     rightClick(await screen.findByRole("row", { name: /Lightning Bolt/ }));
@@ -2938,25 +2935,26 @@ describe("the card menu", () => {
     await user.click(screen.getByRole("menuitem", { name: /Add to/ }));
     await user.click(await screen.findByRole("menuitem", { name: "Collection" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Couldn't add to your collection — that card is not in the database",
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        body: "that card is not in the database",
+        tone: "error",
+      }),
     );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 
-    // A *wishlist* add, so what follows cannot be the same sentence written again.
     rightClick(screen.getByRole("row", { name: /Lightning Bolt/ }));
     await screen.findByRole("menu");
     await user.click(screen.getByRole("menuitem", { name: /Add to/ }));
     await user.click(await screen.findByRole("menuitem", { name: "Wishlist" }));
 
-    // Still pending — and the collection's complaint is already gone, because the reader has
-    // moved on from it. This is the assertion the finding was about.
-    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
-
-    // And when this one is refused in its turn, its own sentence takes the place.
-    await act(async () => refuseWish("the wishlist is locked"));
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Couldn't add to your wishlist — the wishlist is locked",
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        body: "the wishlist is locked",
+        tone: "error",
+      }),
     );
+    expect(useNotifications.getState().notices).toHaveLength(2);
   });
 
   /**
@@ -3232,6 +3230,13 @@ describe("the card menu", () => {
       await waitFor(() =>
         expect(notice).toHaveTextContent("Removed 2 cards from your collection."),
       );
+      // **One press, one toast** — the count off the one write's answer, never one per entry —
+      // and the undo bar above stays the inline way back.
+      expect(useNotifications.getState().notices).toHaveLength(1);
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Removed 2 cards from the collection",
+        tone: "success",
+      });
       await user.click(within(notice).getByRole("button", { name: "Undo" }));
       await waitFor(() => expect(bulkUndo).toHaveBeenCalledWith(44));
     });
@@ -3266,9 +3271,9 @@ describe("the card menu", () => {
       expect(collectionRemoveMany).not.toHaveBeenCalled();
     });
 
-    /** A refusal takes nothing — Rust rolls the press back — and says why in the page's banner,
-     *  with the question left open for a second try. */
-    it("says a refused removal in the banner and leaves the question open", async () => {
+    /** A refusal takes nothing — Rust rolls the press back — and says why in a toast, once, with
+     *  the question left open for a second try. */
+    it("says a refused removal in a toast and leaves the question open", async () => {
       collectionRemoveMany.mockRejectedValue("That collection entry is not there any more.");
       const user = userEvent.setup();
       await rightClickTwoEntryTile(user);
@@ -3278,11 +3283,16 @@ describe("the card menu", () => {
 
       await user.click(within(question).getByRole("button", { name: "Remove 2 cards" }));
 
-      expect(await screen.findByRole("alert")).toHaveTextContent(
-        "Couldn't change your collection — That collection entry is not there any more.",
+      await waitFor(() =>
+        expect(useNotifications.getState().notices[0]).toMatchObject({
+          title: "Couldn't remove 2 cards from the collection",
+          body: "That collection entry is not there any more.",
+          tone: "error",
+        }),
       );
       expect(screen.getByRole("group", { name: /^Remove 2 cards/ })).toBeInTheDocument();
       expect(useBulkUndo.getState().offers.collection).toBeNull();
+      expect(screen.queryByRole("alert")).toBeNull();
     });
 
     it("offers no removal on a tile a deck's group holds", async () => {
@@ -3335,6 +3345,11 @@ describe("the card menu", () => {
           "Removed Lightning Bolt from your collection.",
         ),
       );
+      // The menu has closed, so the receipt is a toast, by name.
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Removed “Lightning Bolt” from the collection",
+        tone: "success",
+      });
     });
   });
 });
@@ -3417,6 +3432,11 @@ describe("clearing Recently removed", () => {
       expect.objectContaining({ queryKey: ["cards", "search"] }),
     );
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
+    // Destructive and bulk, so a receipt with the count the write answered.
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Cleared 1 card from “Recently removed”",
+      tone: "success",
+    });
   });
 
   it("keeps the question open and says why when the clear is refused", async () => {
@@ -3429,10 +3449,15 @@ describe("clearing Recently removed", () => {
 
     await user.click(within(question).getByRole("button", { name: "Clear Recently removed" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Couldn't change your collection — There is no Recently removed folder.",
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Couldn't clear “Recently removed”",
+        body: "There is no Recently removed folder.",
+        tone: "error",
+      }),
     );
     expect(screen.getByRole("group", { name: "Clear Recently removed" })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
 
@@ -4000,6 +4025,9 @@ describe("the collection's shelves", () => {
 
     await waitFor(() => expect(collectionSetFolder).toHaveBeenCalledWith(7, 3));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    // A drag between shelves of the open wall is the owner's rule's exemption: the copy is drawn
+    // where it was let go, so nothing is toasted.
+    expect(useNotifications.getState().notices).toHaveLength(0);
   });
 
   it("asks which copies when the art stands for more than one row", async () => {
@@ -4032,6 +4060,12 @@ describe("the collection's shelves", () => {
         "Moved 2 cards to Trade binder.",
       ),
     );
+    // The picker closed on the answer, so one toast for the whole press, beside the undo bar.
+    expect(useNotifications.getState().notices).toHaveLength(1);
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Moved 2 cards to “Trade binder”",
+      tone: "success",
+    });
   });
 
   /**
@@ -6146,6 +6180,11 @@ describe("the caret after the path row's Add folder, Move to folder… and Delet
 
     await waitFor(() => expect(collectionFolderMove).toHaveBeenCalledWith(FOILS.id, null));
     await waitFor(() => expect(pathRowAddFolder()).toHaveFocus());
+    // The folder carries its cards, and the strip that asked has gone — a receipt.
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Moved “Foils” to “Collection”",
+      tone: "success",
+    });
   });
 
   /** **Deleted, the folder's `⋯` is gone with it**, so the caret goes to its parent heading's. */
@@ -6163,6 +6202,11 @@ describe("the caret after the path row's Add folder, Move to folder… and Delet
 
     await waitFor(() => expect(collectionFolderDelete).toHaveBeenCalledWith(FOILS.id));
     await waitFor(() => expect(manageOf("Trade binder")).toHaveFocus());
+    // Destructive: a receipt naming the folder, read before the write took it off the list.
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Folder “Foils” deleted",
+      tone: "success",
+    });
   });
 
   /** And at the top of the level there is no parent heading: the path row's Add folder. */
@@ -6254,6 +6298,13 @@ describe("locking a folder", () => {
     await user.click(screen.getByRole("menuitem", { name: "Lock folder" }));
 
     await waitFor(() => expect(collectionFolderSetLocked).toHaveBeenCalledWith(3, true));
+    // The menu has closed, so the receipt is a toast.
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Locked “Trade binder”",
+        tone: "success",
+      }),
+    );
   });
 
   /** …and back again. The row is the same row wearing the other word, because it toggles one
@@ -7783,6 +7834,13 @@ describe("the docked card search", () => {
     // And the *other* write did not happen: a card nobody owns has no `collection_entries` row
     // for `collection_set_folder` to address.
     expect(collectionSetFolder).not.toHaveBeenCalled();
+    // A card added from another surface toasts, saying where it went — the owner's "sidebar drop".
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Added “Black Lotus” to “Trade binder”",
+        tone: "success",
+      }),
+    );
   });
 });
 

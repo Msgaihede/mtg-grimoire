@@ -19,8 +19,7 @@ import {
   useSidebarDropTarget,
   type SidebarDrop,
 } from "@/components/useSidebarDrops";
-import { ipc } from "@/lib/ipc";
-import { useCardToDeckRefusal } from "@/features/card/cardMenu";
+import { ipc, ipcError } from "@/lib/ipc";
 import {
   ACTIVITY_DELAY_MS,
   comboActivity,
@@ -31,10 +30,9 @@ import {
 } from "@/lib/activity";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { editionHas, useEdition } from "@/lib/edition";
-import { LAYER } from "@/lib/layers";
 import { PublishesContext, ReachContext } from "@/lib/reach";
 import { DURATION, statusLine as statusLineMotion } from "@/lib/motion";
-import { useUnreadCount } from "@/lib/notifications";
+import { notify, useUnreadCount } from "@/lib/notifications";
 import { matchesChord, matchesShortcut, shortcut } from "@/lib/shortcuts";
 import { useAppStore, type ViewId } from "@/lib/store";
 import { usePrefetchSearchOpen } from "@/features/search/useSearchOpen";
@@ -180,17 +178,6 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   const labels = useNavLabels(collapsed, reduced ? 0 : DURATION.base);
   /** The rail is down to icons, or on its way back out of them. */
   const narrow = !labels;
-  /**
-   * What a refused deck add from a card menu left to say, drawn in the sidebar below.
-   *
-   * **Read through the context rather than by mounting `useCardToDeck` here**, and the reason is
-   * not tidiness: the write has to be provided *above* `ContextMenuProvider`, because that
-   * provider draws its panel as a **sibling** of the shell rather than inside it — a hook
-   * mounted here would be below the menu, out of reach of the rows that call it, and a second
-   * one would be a second piece of state reporting on adds nobody made through it. `App.tsx`
-   * owns the mount; this is the one place the sentence is drawn.
-   */
-  const cardToDeckRefusal = useCardToDeckRefusal();
   /** The rail's inbox (`NotificationsDialog`) — open or not. Window state, never persisted. */
   const [inboxOpen, setInboxOpen] = useState(false);
   // Here rather than in a view, because it is about the whole cache and this is the one
@@ -272,8 +259,16 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
       // view the edition does not draw.
       if (edition.id === "full" && matchesShortcut(NEW_WINDOW, e)) {
         e.preventDefault();
-        // Held keys repeat at the OS rate, and every repeat would be another window.
-        if (!e.repeat) void ipc.windowNew().catch(() => undefined);
+        // Held keys repeat at the OS rate, and every repeat would be another window. A refusal
+        // is a toast: the press asked for something that then did not appear, and nothing else
+        // on screen would say why.
+        if (!e.repeat) {
+          void ipc
+            .windowNew()
+            .catch((failure: unknown) =>
+              notify.error("Couldn't open a new window", { body: ipcError(failure) }),
+            );
+        }
         return;
       }
       if (document.querySelector('[aria-modal="true"]') !== null) return;
@@ -577,48 +572,10 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
               drop={id === "decks" || id === "wishlist" ? drops[id] : null}
             />
           ))}
-          {/* **A refused deck add from a card menu, and deliberately *not* folded into the Decks
-            entry's report line above.**
-
-            That line's subject is narrower than it looks: `SidebarDrop.report` is documented as
-            "what just happened **here**", and `useSidebarDrops` says "a drop reports where the
-            reader dropped it" — it is about a card let go *on this entry*, which is where the
-            reader's cursor was. A menu add happened at the card, several hundred pixels away,
-            and never touched this entry.
-
-            The mechanical objection is the decisive one. That report clears itself after
-            `REPORT_MS` and on the next drag; this one stands until the reader arms another add.
-            Two lifetimes in one slot — `drops.decks.report ?? cardToDeckRefusal` — would hide a
-            live refusal behind a drop's sentence and then **bring it back** four seconds later,
-            when the drop's timer expired. A sentence returning from the dead under a nav item is
-            worse than either message alone, and no ordering of the `??` fixes it: the other way
-            round, one refusal suppresses every drop report until the next menu add.
-
-            So: its own region, its own subject, and `role="alert"` rather than `status` because
-            this only ever holds a refusal.
-
-            **Mounted only when there is something to say, unlike the report line above it.**
-            That line is a `status` — polite, and a polite region that first appears with its
-            sentence already inside it announces nothing, which is why it is always there and
-            `sr-only` while empty. An `alert` is the other case: announcing on insertion is what
-            the role is for, and it is what the sync banner further down already relies on. It
-            also keeps `getByRole("alert")` meaning one thing — an always-mounted second alert
-            makes every such query in this app ambiguous whether or not it has any text in it.
-            The geometry is the report line's, which was measured for exactly this push.
-
-            **The wrapper is `relative` so the collapsed rail's floating form is positioned
-            against this sentence's own place in the column** rather than against the whole
-            `<nav>` — `left-full top-0` then needs no offset arithmetic and no re-measurement
-            when an entry above it moves. Collapsed, the wrapper is a zero-height flex item and
-            the panel hangs off it; expanded, it is the paragraph exactly where it has always
-            been. */}
-          {cardToDeckRefusal !== null && (
-            <div className="relative">
-              <NavNote role="alert" narrow={narrow} tone="text-destructive">
-                {cardToDeckRefusal}
-              </NavNote>
-            </div>
-          )}
+          {/* No sentences live in the rail any more. A drop on Decks or Wishlist and a refused
+              card-menu deck add used to each draw a line here (a panel beside the rail when it
+              was collapsed); both are toasts now (`@/lib/notifications`, drawn by the `Toaster`
+              below), which is the app's one place to say what just happened. */}
 
           {/* The rail's foot: the inbox, then the collapse toggle under it. **Full width, drawn
               with negative margins against the `<nav>`'s own `p-3`**, so the rule above it runs
@@ -773,91 +730,86 @@ function NavItem({
   const { over, eligible, inert } = useSidebarDropTarget({ ref, drop, dragging });
 
   return (
-    // `relative` for the report line below: `.sr-only` is `position: absolute`, so the empty
-    // region needs a positioned ancestor or it resolves to the *initial* containing block and
-    // stretches the document, and the collapsed rail's floating panel is anchored here so
-    // `left-full top-0` lands beside this entry with no offset arithmetic.
-    <div className="relative">
-      <button
-        ref={ref}
-        type="button"
-        onClick={onSelect}
-        aria-current={active ? "page" : undefined}
-        // Only while a card is in the air, and only when it cannot land: a tooltip about
-        // dropping on an entry nobody is dragging anything onto is chrome explaining a gesture
-        // that is not being made.
+    <button
+      ref={ref}
+      type="button"
+      onClick={onSelect}
+      aria-current={active ? "page" : undefined}
+      // Only while a card is in the air, and only when it cannot land: a tooltip about
+      // dropping on an entry nobody is dragging anything onto is chrome explaining a gesture
+      // that is not being made.
+      //
+      // **It is a description, not a tooltip, and the smoke measured which.** A native
+      // tooltip needs `:hover`, and Chromium freezes `:hover` at the element a drag started
+      // from for the whole drag — measured 2026-08-06 with a card parked on this entry for
+      // 1.6 s: `title` present, `document.querySelectorAll(":hover")` still ending at the
+      // search tile, nothing in the DOM (`[role=tooltip]`: 0). So no reader ever *sees* this
+      // sentence. What they get instead is the accname spec's fallback: mid-drag the AX node
+      // reads `button "Decks", description "Open a deck to drop cards into it"` (measured
+      // through `Accessibility.getPartialAXTree` in the same run), which is worth keeping and
+      // costs nothing. Giving the eye the same sentence would mean a toast (`notify`) — a
+      // change that would raise one, and announce it, on *every* drag while no deck is open,
+      // which is a product call and is written up in
+      // `docs/superpowers/notes/plan-5-followups-note.md` rather than made here.
+      // `drop?.` rather than `drop.`: `inert` is a hook's answer now rather than a `const`
+      // alias of `drop !== null && …` in this scope, so TypeScript's aliased-condition
+      // narrowing no longer reaches the field. The optional chain says the same thing and is
+      // the one line the lift cost.
+      title={inert ? (drop?.inertReason ?? undefined) : undefined}
+      // **The word, for the eye, while the rail is 68px wide** — `useTooltip()` at side
+      // `"right"`, which is the app's one hint mechanism, and never a native `title`.
+      //
+      // **The `title` above is not a counter-example**: it survives precisely *because* it is
+      // not a tooltip. Chromium freezes `:hover` at a drag's origin for the whole drag, so
+      // that sentence is never shown to anybody and is read instead through the accname
+      // spec's description fallback — measured, and written up above. This one has the
+      // opposite job: it has to be **seen**, by a pointer resting on an icon with nothing
+      // beside it, which is the one thing a `title` mid-drag provably cannot do.
+      //
+      // `narrow && label` rather than a conditional spread: `useTooltip` binds nothing for
+      // a falsy content, which is the documented shape and keeps one expression here.
+      //
+      // **`describes: false`, for the same reason `whenClipped` implies it.** The word is
+      // still in the DOM and is still this button's accessible name — only the paint is gone —
+      // so an `aria-describedby` at a panel holding that same word would have a screen reader
+      // say "Decks, Decks". The hint is for the eye, and only the eye has lost anything.
+      {...tip(narrow && label, { side: "right", describes: false })}
+      className={cn(
+        "relative flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-base",
+        // 44px in both states, and narrow it has to be said out loud: the label is out of
+        // the flow, so the row would otherwise be its 20px icon plus padding — a target
+        // smaller than the one this entry was drawn at, on the state where the reader has
+        // *less* to aim at rather than more.
         //
-        // **It is a description, not a tooltip, and the smoke measured which.** A native
-        // tooltip needs `:hover`, and Chromium freezes `:hover` at the element a drag started
-        // from for the whole drag — measured 2026-08-06 with a card parked on this entry for
-        // 1.6 s: `title` present, `document.querySelectorAll(":hover")` still ending at the
-        // search tile, nothing in the DOM (`[role=tooltip]`: 0). So no reader ever *sees* this
-        // sentence. What they get instead is the accname spec's fallback: mid-drag the AX node
-        // reads `button "Decks", description "Open a deck to drop cards into it"` (measured
-        // through `Accessibility.getPartialAXTree` in the same run), which is worth keeping and
-        // costs nothing. Giving the eye the same sentence means putting it in the `role=status`
-        // line below — a change that would announce it on *every* drag while no deck is open,
-        // which is a product call and is written up in
-        // `docs/superpowers/notes/plan-5-followups-note.md` rather than made here.
-        // `drop?.` rather than `drop.`: `inert` is a hook's answer now rather than a `const`
-        // alias of `drop !== null && …` in this scope, so TypeScript's aliased-condition
-        // narrowing no longer reaches the field. The optional chain says the same thing and is
-        // the one line the lift cost.
-        title={inert ? (drop?.inertReason ?? undefined) : undefined}
-        // **The word, for the eye, while the rail is 68px wide** — `useTooltip()` at side
-        // `"right"`, which is the app's one hint mechanism, and never a native `title`.
-        //
-        // **The `title` above is not a counter-example**: it survives precisely *because* it is
-        // not a tooltip. Chromium freezes `:hover` at a drag's origin for the whole drag, so
-        // that sentence is never shown to anybody and is read instead through the accname
-        // spec's description fallback — measured, and written up above. This one has the
-        // opposite job: it has to be **seen**, by a pointer resting on an icon with nothing
-        // beside it, which is the one thing a `title` mid-drag provably cannot do.
-        //
-        // `narrow && label` rather than a conditional spread: `useTooltip` binds nothing for
-        // a falsy content, which is the documented shape and keeps one expression here.
-        //
-        // **`describes: false`, for the same reason `whenClipped` implies it.** The word is
-        // still in the DOM and is still this button's accessible name — only the paint is gone —
-        // so an `aria-describedby` at a panel holding that same word would have a screen reader
-        // say "Decks, Decks". The hint is for the eye, and only the eye has lost anything.
-        {...tip(narrow && label, { side: "right", describes: false })}
-        className={cn(
-          "relative flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-base",
-          // 44px in both states, and narrow it has to be said out loud: the label is out of
-          // the flow, so the row would otherwise be its 20px icon plus padding — a target
-          // smaller than the one this entry was drawn at, on the state where the reader has
-          // *less* to aim at rather than more.
-          //
-          // **`gap-3` is unconditional above, and that is what makes the icon hold still.** An
-          // `.sr-only` label is `position: absolute`, so narrow there is exactly one in-flow
-          // child and a gap between one thing and nothing is nothing — while a `justify-center`
-          // in its place would centre that child in a box the width tween is still moving. The
-          // doc comment above has the 24 → 93.5 → 23.5 that cost, sampled per frame.
-          narrow && "h-11",
-          "transition-colors duration-150 motion-reduce:transition-none",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
-          // The gold indicator: a hairline against the item, not a filled pill. The
-          // sidebar is chrome, and chrome does not get to be the loudest thing on a
-          // screen that is about to be full of card art. It stayed 2px when the row grew:
-          // a hairline is a hairline at any row height, and a 3px one on a 44px row is the
-          // filled marker this deliberately is not.
-          active
-            ? "bg-bg text-accent before:absolute before:inset-y-2 before:left-0 before:w-0.5 before:rounded-full before:bg-accent"
-            : "text-dim hover:bg-bg/60 hover:text-text",
-          eligible && DROP_RING,
-          over && DROP_OVER,
-        )}
-      >
-        <Icon className="size-5 shrink-0" aria-hidden="true" />
-        {/* **`sr-only` while there is no room, and deliberately not an `aria-label` on the
+        // **`gap-3` is unconditional above, and that is what makes the icon hold still.** An
+        // `.sr-only` label is `position: absolute`, so narrow there is exactly one in-flow
+        // child and a gap between one thing and nothing is nothing — while a `justify-center`
+        // in its place would centre that child in a box the width tween is still moving. The
+        // doc comment above has the 24 → 93.5 → 23.5 that cost, sampled per frame.
+        narrow && "h-11",
+        "transition-colors duration-150 motion-reduce:transition-none",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+        // The gold indicator: a hairline against the item, not a filled pill. The
+        // sidebar is chrome, and chrome does not get to be the loudest thing on a
+        // screen that is about to be full of card art. It stayed 2px when the row grew:
+        // a hairline is a hairline at any row height, and a 3px one on a 44px row is the
+        // filled marker this deliberately is not.
+        active
+          ? "bg-bg text-accent before:absolute before:inset-y-2 before:left-0 before:w-0.5 before:rounded-full before:bg-accent"
+          : "text-dim hover:bg-bg/60 hover:text-text",
+        eligible && DROP_RING,
+        over && DROP_OVER,
+      )}
+    >
+      <Icon className="size-5 shrink-0" aria-hidden="true" />
+      {/* **`sr-only` while there is no room, and deliberately not an `aria-label` on the
             button.**
             The name is still computed from content, so it is the *same string* in both states —
             which is what keeps every `getByRole("button", { name: "Decks" })` in this repository
             meaning what it has always meant, and what makes it impossible for the two states to
             drift into two different names. An `aria-label` would be a second place the word is
             written, and the first of the two to change would be the one nothing tested. */}
-        {/* **And it fades in over `DURATION.instant`, arriving after the rail rather than with
+      {/* **And it fades in over `DURATION.instant`, arriving after the rail rather than with
             it.** By the time this class swaps, the width tween is over — so the fade is not the
             reader being told a word is coming, which 180ms of rail travelling has already said.
             It is the hard edge taken off text switching on, and that is the whole argument for
@@ -873,104 +825,16 @@ function NavItem({
             with the word in the flow at zero opacity before it could run, which is a frame of
             the rail laid out around a word nobody can see. `motion-reduce:animate-none` is the
             opt-out, and under it the words simply appear. */}
-        <span
-          className={
-            narrow
-              ? "sr-only"
-              : "animate-in fade-in duration-[var(--duration-instant)] motion-reduce:animate-none"
-          }
-        >
-          {label}
-        </span>
-      </button>
-      {drop && (
-        // Mounted for the life of the sidebar and empty until there is something to say: a
-        // live region that first appears with its sentence already inside it announces
-        // nothing (the card pane's swap report, for its reason). `sr-only` while empty takes
-        // it out of the flow, so the entries below sit where they always do until a card
-        // actually lands — and then move for the four seconds the sentence is up. Re-measured
-        // in the shipped window 2026-08-14 at 1280×800, after the shell was enlarged and this
-        // line went 11.2 → 12px: the box is 183px, `Added to wishlist.` sets in one line and
-        // pushes Settings **19px** down, and both long cases — a deck name
-        // (`Added to Kess, Dissident Mage Storm.`) and a refusal — set in two lines and push it
-        // **34px**, which is a card the reader just dropped saying where it went. Two lines is
-        // still the ceiling this was drawn for; the push grew by the 2px of extra leading.
-        //
-        // **Collapsed there is no column for any of that** — 68px is a 44px target and its
-        // padding — so `NavNote` floats the sentence beside the rail instead. The role and the
-        // mounting rule are untouched, which is the part that must not move.
-        <NavNote role="status" narrow={narrow} tone="text-dim">
-          {drop.report}
-        </NavNote>
-      )}
-    </div>
-  );
-}
-
-/**
- * One of the sidebar's two live regions, drawn where the rail has room for it.
- *
- * Expanded, that is where both have always been: a line in the rail's own column, under the
- * entry a card landed on or under all of them. Collapsed there is no column to be a line in, so
- * the sentence floats beside the rail on a small bordered panel at `LAYER.popup` — z-indexes
- * come from `packages/ui/lib/layers.ts` and `layers.test.ts` sweeps `packages/ui/` to keep it that way.
- *
- * **`pointer-events-none`, and it is not a tidiness class.** The drop report is up for four
- * seconds *during and after a drag*, hanging over whatever view is beside the rail: a panel that
- * could take a pointer would eat the next drop, or the click on the thing underneath it — and
- * `pointer-events` inherits, so putting it here covers the sentence too.
- *
- * **One component rather than two copies of the box**, which is this repository's own lesson
- * rather than a preference: two copies of one shape are N independent decisions that happen to
- * agree today, and the three dialogs that each carried their own chrome drew one scrim at two
- * darknesses and one panel at three heights before anybody noticed (`packages/ui/CLAUDE.md`).
- *
- * **What it deliberately does *not* own is mounting**, because the two regions differ there and
- * must go on differing. The `status` is mounted for the life of the sidebar and `sr-only` while
- * empty — a polite region that first appears with its sentence already inside it announces
- * nothing — and the `alert` is mounted only when there is something to say, because announcing
- * on insertion is exactly what that role is for. Both callers keep their own rule; this only
- * decides what the box looks like.
- */
-function NavNote({
-  role,
-  narrow,
-  tone,
-  children,
-}: {
-  role: "status" | "alert";
-  /**
-   * There is no column to be a line in — the rail is collapsed, or it is opening and has not
-   * arrived. **The tween half matters here too**: laid out inline inside a rail that is still
-   * 68px, this paragraph is the sidebar's labels overflowing again, at four times the width.
-   */
-  narrow: boolean;
-  /** The colour this sentence has always had — `text-dim` for a report, `text-destructive` for
-   *  a refusal. The box is the same in both cases; the words are not. */
-  tone: string;
-  children: string | null;
-}) {
-  return (
-    <p
-      role={role}
-      className={
-        children
-          ? cn(
-              "text-xs leading-tight",
-              tone,
-              narrow
-                ? cn(
-                    "pointer-events-none absolute top-0 left-full ml-2 w-48",
-                    "rounded-md border border-border bg-surface px-3 py-2",
-                    LAYER.popup,
-                  )
-                : "px-3 pt-1",
-            )
-          : "sr-only"
-      }
-    >
-      {children}
-    </p>
+      <span
+        className={
+          narrow
+            ? "sr-only"
+            : "animate-in fade-in duration-[var(--duration-instant)] motion-reduce:animate-none"
+        }
+      >
+        {label}
+      </span>
+    </button>
   );
 }
 

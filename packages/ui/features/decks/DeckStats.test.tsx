@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import type { DeckCard } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
+import { useNotifications } from "@/lib/notifications";
 import { pickOption } from "@/test-dropdown";
 import { card, islands } from "./validation/fixtures";
 import {
@@ -1720,7 +1721,15 @@ describe("DeckStats", () => {
     // exactly the behaviour this line has always been about, now stated in the argument as well
     // as in the absence of one. Asserted here rather than only in the destination block below,
     // because this is the case every deck meets.
-    expect(send.mutate).toHaveBeenCalledWith(null);
+    expect(send.mutate).toHaveBeenCalledWith(null, expect.any(Object));
+    // **And the press is a toast as well as the band's line** (the owner's rule for every
+    // wishlist add), raised from the call's own options once it lands.
+    const options = vi.mocked(send.mutate).mock.lastCall?.[1];
+    options?.onSuccess?.(3);
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Sent 3 cards to the wishlist",
+      tone: "success",
+    });
   });
 
   /**
@@ -2347,12 +2356,12 @@ describe("DeckStats", () => {
       strip(short(), send);
 
       await userEvent.click(screen.getByRole("button", { name: "Send missing to wishlist" }));
-      expect(send.mutate).toHaveBeenLastCalledWith(null);
+      expect(send.mutate).toHaveBeenLastCalledWith(null, expect.any(Object));
 
       await userEvent.click(screen.getByRole("button", { name: "Pick Ordered" }));
       await userEvent.click(screen.getByRole("button", { name: "Send missing to wishlist" }));
 
-      expect(send.mutate).toHaveBeenLastCalledWith(1);
+      expect(send.mutate).toHaveBeenLastCalledWith(1, expect.any(Object));
       expect(send.mutate).toHaveBeenCalledTimes(2);
     });
 
@@ -2379,7 +2388,7 @@ describe("DeckStats", () => {
       const button = screen.getByRole("button", { name: "Send missing to wishlist" });
       expect(button).not.toHaveAttribute("aria-disabled");
       await userEvent.click(button);
-      expect(settled.mutate).toHaveBeenCalledWith(1);
+      expect(settled.mutate).toHaveBeenCalledWith(1, expect.any(Object));
     });
 
     /**
@@ -2393,7 +2402,7 @@ describe("DeckStats", () => {
       const { idle } = await pressAt(short(), "Pick Ordered", settled);
       // The press that armed the latch really did carry the folder, so what is refused below is
       // a *second* press at `Ordered` rather than a strip that never sent anything.
-      expect(idle.mutate).toHaveBeenCalledWith(1);
+      expect(idle.mutate).toHaveBeenCalledWith(1, expect.any(Object));
 
       const button = screen.getByRole("button", { name: "Send missing to wishlist" });
       expect(button).toHaveAttribute("aria-disabled", "true");

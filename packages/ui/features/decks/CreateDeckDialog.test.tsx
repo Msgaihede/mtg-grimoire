@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState, type ReactElement } from "react";
 import type { CardDetail, CardSummary, DeckFolder, DeckRow, FormatSpec } from "@/lib/ipc";
 import { cardImageUrl } from "@/lib/images";
+import { useNotifications } from "@/lib/notifications";
 import { openDropdown } from "@/test-dropdown";
 // The kind captions' one home, so a test cannot pass against a sentence it invented itself.
 import { DECK_KIND_HINT } from "./deckKind";
@@ -334,6 +335,10 @@ describe("the create deck dialog", () => {
     );
     expect(deckCreate).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith(MADE));
+    // Every host closes the dialog on success, so the dialog itself leaves the receipt.
+    expect(useNotifications.getState().notices).toMatchObject([
+      { title: `Deck “${MADE.name}” created`, tone: "success" },
+    ]);
   });
 
   /**
@@ -689,6 +694,8 @@ describe("the create deck dialog", () => {
     expect(screen.getByLabelText("Name")).toHaveValue("Sunday burn");
     expect(screen.getByLabelText("Description")).toHaveValue("Bring the burn.");
     expect(onDismiss).not.toHaveBeenCalled();
+    // The alert line in the open dialog is the answer; a toast would only repeat it.
+    expect(useNotifications.getState().notices).toEqual([]);
   });
 
   /**

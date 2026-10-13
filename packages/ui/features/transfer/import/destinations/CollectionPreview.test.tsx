@@ -84,6 +84,7 @@ function mount(
 ) {
   const list = parseDecklist(csv);
   const onDone = vi.fn();
+  const report = vi.fn();
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   client.setQueryData(["collection", "folders"], folders);
   // …and answers the same on the refetch a mount makes of a stale entry.
@@ -95,12 +96,13 @@ function mount(
         resolved={list.lines.map((line, i) => hit(i, line.name))}
         tags={[]}
         onDone={onDone}
+        report={report}
         onBack={vi.fn()}
         folderId={folderId}
       />
     </QueryClientProvider>,
   );
-  return { onDone };
+  return { onDone, report };
 }
 
 const folder = (over: Partial<CollectionFolder> & Pick<CollectionFolder, "id" | "name">) =>
@@ -425,7 +427,7 @@ describe("CollectionPreview's Import into", () => {
 
   it("files into a folder picked in the step", async () => {
     const user = userEvent.setup();
-    mount("1 Sol Ring\n", { folders: FOLDERS });
+    const { report } = mount("1 Sol Ring\n", { folders: FOLDERS });
 
     await pickOption(user, "Import into", "Sealed");
     expect(screen.getByText("1 card will be added to Sealed.")).toBeInTheDocument();
@@ -433,6 +435,12 @@ describe("CollectionPreview's Import into", () => {
 
     await waitFor(() => expect(collectionImportCommit).toHaveBeenCalled());
     expect(collectionImportCommit.mock.calls[0]?.[2]).toBe(SEALED.id);
+    // The toast names the folder, quoted, with the copies.
+    await waitFor(() =>
+      expect(report).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ title: "Imported 1 card into “Sealed”", tone: "success" }),
+      ),
+    );
   });
 
   /** Under `set` the dry run is asked about the same folder the press will write, and the radio's
@@ -544,6 +552,36 @@ describe("CollectionPreview, over a file that names its binders", () => {
     expect(onDone).toHaveBeenCalledWith("3 cards imported into 1 folder (1 new) and 1 new deck.");
     // One ticket per binder, so none is offered for the press as a whole.
     expect(useBulkUndo.getState().offers.collection).toBeNull();
+  });
+
+  it("says the whole press in one notice", async () => {
+    const user = userEvent.setup();
+    const { onDone, report } = mount(MANABOX, { folders: [SELVALA_GROUP] });
+
+    await user.click(screen.getByRole("button", { name: "Import" }));
+
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(report).toHaveBeenCalledExactlyOnceWith({
+      title: "Imported 3 cards into your collection",
+      body: "3 cards imported into 1 folder (1 new) and 1 new deck.",
+      tone: "success",
+    });
+  });
+
+  it("says a press that stopped part-way as a warning with what landed", async () => {
+    const user = userEvent.setup();
+    deckImportCommit.mockReset().mockRejectedValue("database is locked");
+    const { onDone, report } = mount(MANABOX, { folders: [SELVALA_GROUP] });
+
+    await user.click(screen.getByRole("button", { name: "Import" }));
+
+    await waitFor(() => expect(report).toHaveBeenCalledTimes(1));
+    expect(report).toHaveBeenCalledWith({
+      title: "Imported 2 of 3 cards into your collection",
+      body: "Stopped at “Selvala”: database is locked. Already imported: “Value Binder”.",
+      tone: "warning",
+    });
+    expect(onDone).not.toHaveBeenCalled();
   });
 
   it("is the plain collection step again once unticked", async () => {

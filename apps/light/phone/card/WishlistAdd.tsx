@@ -6,6 +6,7 @@ import { PRESS_SOFT } from "@grimoire/ui/lib/motion";
 import { cn } from "@grimoire/ui/lib/utils";
 import { ReceiptBar } from "../deck/receipt";
 import { useListReceipt } from "../lists/receipt";
+import { toasted } from "../toasted";
 import type { ActionContext } from "./Actions";
 import { ADD_PRESS } from "./CollectionAdd";
 
@@ -17,7 +18,7 @@ import { ADD_PRESS } from "./CollectionAdd";
  * not opened on as a finish, and a wish for no particular finish is the wider wish.
  *
  * The receipt offers **`Undo`** as the collection add does — the desktop's stepper one wish back —
- * and says so in its name.
+ * and says so in its name — and toasts, as every wishlist add does (`CollectionAdd`'s reason).
  */
 export function WishlistAdd({ card }: ActionContext) {
   const add = useWishlistAdd();
@@ -27,10 +28,16 @@ export function WishlistAdd({ card }: ActionContext) {
 
   const wish = (any: boolean) =>
     receipt.track(
-      add.mutateAsync(
-        any && oracleId !== null
-          ? { oracleId, name: card.name, quantity: 1, folderId: null }
-          : { cardId: card.id, quantity: 1, folderId: null },
+      toasted(
+        add.mutateAsync(
+          any && oracleId !== null
+            ? { oracleId, name: card.name, quantity: 1, folderId: null }
+            : { cardId: card.id, quantity: 1, folderId: null },
+        ),
+        {
+          done: `Added “${card.name}” to your wishlist`,
+          failed: `Couldn't add “${card.name}” to your wishlist`,
+        },
       ),
       () => `Added ${card.name}${any ? " (any printing)" : ""} to your wishlist.`,
       (change) => ({

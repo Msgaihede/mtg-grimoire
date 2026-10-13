@@ -19,7 +19,8 @@
  *
  * What it is handed is the page's census and the page's writes, held still: the folder rows, the
  * trees built from them, the effective lock, the name lookup, and the two writes a drop reuses
- * (`setFolder` and the folder reorder) as their `mutate`.
+ * (`setFolder` — twice, a silent observer and a reporting one — and the folder reorder) as their
+ * `mutate`.
  */
 import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -28,10 +29,12 @@ import { reorderedLevel } from "@/lib/folderOrder";
 import type { Finish } from "@/lib/finish";
 import { folderDescendants, folderLevel, type FolderNode } from "@/lib/folderTree";
 import { MENU_CONDITION } from "@/lib/conditions";
-import { ipc, type CollectionFolder, type CollectionRow } from "@/lib/ipc";
+import { ipc, ipcError, type CollectionFolder, type CollectionRow } from "@/lib/ipc";
+import { notify } from "@/lib/notifications";
 import { refreshCardSearches } from "@/lib/searchMarks";
 import type { CollectionDrop } from "./collectionDrag";
 import { ROOT_LABEL } from "./CollectionFolderPanel";
+import { addedReceipt, movedReceipt, report } from "./collectionReceipts";
 
 /**
  * The root as `reorderedLevel` has to address it — an id no folder has, because
@@ -83,6 +86,7 @@ export function useCollectionDrops({
   treeParent,
   folderNameOf,
   setFolder,
+  moveCopy,
   reorder,
   setPicking,
 }: {
@@ -100,8 +104,17 @@ export function useCollectionDrops({
   treeParent: ReadonlyMap<number, number | null>;
   /** What to call a folder — the page's `folderNameOf`. */
   folderNameOf: (id: number | null) => string | null;
-  /** `useSetCollectionFolder`'s `mutate` — the drag's write and the row menu's, one mutation. */
+  /** `useSetCollectionFolder`'s `mutate` — a plain drag's write, which says nothing (the owner's
+   *  exemption for drags between shelves of the open wall); the page's banner is its report. */
   setFolder: (variables: { entryId: number; folderId: number | null }) => void;
+  /** The same write on the page's **second** observer, for a drag whose crossing into a locked
+   *  drawer was asked and answered — that one toasts, and the page's banner, which can only tell
+   *  calls apart by observer, must not say its refusal again. The options are `mutate`'s own,
+   *  which the receipt hangs on. */
+  moveCopy: (
+    variables: { entryId: number; folderId: number | null },
+    options: { onSuccess: () => void; onError: (error: unknown) => void },
+  ) => void;
   /** The folder reorder's `mutate` — what a heading or a segment drop writes. */
   reorder: (plan: Placement) => void;
   /** Ask the copy picker — the page's own `picking` state, which the row menu sets too. */
@@ -161,9 +174,10 @@ export function useCollectionDrops({
       void refreshCardSearches(queryClient);
     },
   });
-  // Held still for {@link commitFile}'s dependencies — `mutate` is stable where the result around
-  // it is a new object every render.
-  const { mutate: addDroppedMutate } = addDropped;
+  // Held still for {@link commitFile}'s dependencies — `mutateAsync` is stable where the result
+  // around it is a new object every render. The promise rather than `mutate`, so two cards
+  // dropped in quick succession are two receipts (`collectionReceipts.ts`' `report`).
+  const { mutateAsync: addDroppedAsync } = addDropped;
 
   /**
    * The question a **drag** asks when it crosses the edge of a drawer the reader has set aside,
@@ -361,28 +375,55 @@ export function useCollectionDrops({
    * unconfirmed one.** A lock question that re-implemented the single-row shortcut would be a
    * second definition of "which entry does this drop write", and the two would disagree the first
    * time either moved — which is `useSetCollectionFolder`'s own history, one write down.
+   *
+   * **Which of these toast** (`collectionReceipts.ts`): the search column's card always does — it
+   * is a card *added* to the collection from another surface, the owner's rule's "sidebar drop" —
+   * and a refile does only when `answered`, the lock's question having been asked and closed. A
+   * plain drag between shelves of the open wall is the rule's exemption: the copy is drawn where
+   * the reader let it go. The copy picker reports for itself.
    */
   const commitFile = useCallback(
-    (drop: CollectionDrop, to: number | null) => {
+    (drop: CollectionDrop, to: number | null, answered = false) => {
+      const destination = folderNameOf(to) ?? ROOT_LABEL;
       // **The one branch that is an add rather than a refile**, and it never asks the reader
       // anything: there is exactly one row to write, so the picker below has nothing to pick
       // between. See {@link addDropped} for what the write says and why it says so little.
       if (drop.kind === "new") {
-        addDroppedMutate({ cardId: drop.card.cardId, finish: drop.card.finish, folderId: to });
+        const { name } = drop.card;
+        report(
+          addDroppedAsync({ cardId: drop.card.cardId, finish: drop.card.finish, folderId: to }),
+          {
+            done: () => addedReceipt(name, destination),
+            failed: `Couldn't add “${name || "that card"}” to “${destination}”`,
+          },
+        );
         return;
       }
+      const file = (entryId: number, name: string) =>
+        answered
+          ? moveCopy(
+              { entryId, folderId: to },
+              {
+                onSuccess: () => notify.success(movedReceipt(1, name, destination)),
+                onError: (error) =>
+                  notify.error(`Couldn't move “${name || "that card"}” to “${destination}”`, {
+                    body: ipcError(error),
+                  }),
+              },
+            )
+          : setFolder({ entryId, folderId: to });
       if (drop.kind === "entry") {
-        setFolder({ entryId: drop.entry.entryId, folderId: to });
+        file(drop.entry.entryId, drop.entry.name);
         return;
       }
       const { copies, name } = drop.tile;
       if (copies.length === 1) {
-        setFolder({ entryId: copies[0].entryId, folderId: to });
+        file(copies[0].entryId, name);
         return;
       }
       setPicking({ cardName: name, entryIds: copies.map((copy) => copy.entryId), folderId: to });
     },
-    [addDroppedMutate, setFolder, setPicking],
+    [addDroppedAsync, setFolder, moveCopy, setPicking, folderNameOf],
   );
 
   /**

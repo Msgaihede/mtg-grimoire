@@ -41,6 +41,28 @@ export function newestWrite(writes: readonly [Write, ...Write[]]): Write {
   return writes.reduce((a, b) => (b.submittedAt >= a.submittedAt ? b : a));
 }
 
+/**
+ * A write whose refusal a toast has already said — kept in a banner's list for its **timing**
+ * and stripped of its **refusal**.
+ *
+ * The owner's rule (2026-10-12) is that a refused collection, wishlist or deck edit is a
+ * `notify.error` at its call site, so a banner that also drew the refusal said it twice. Leaving
+ * such a write out of the list altogether is the other obvious answer and the wrong one: the
+ * banner would then go on reporting a refused stepper press after the reader had removed the row
+ * successfully, which is the stale alert {@link newestWrite} exists to prevent. Seated through
+ * this, the write still outranks an older refusal when it is newer, and the banner then says
+ * nothing — the toast is the report. `isSuccess` is left alone, because the deck editor's redo
+ * stack reads it off the newest write and a toasted write edits past a branch like any other.
+ */
+export function toasted(write: Write): Write {
+  return {
+    submittedAt: write.submittedAt,
+    isError: false,
+    error: null,
+    isSuccess: write.isSuccess,
+  };
+}
+
 /** {@link newestWrite}'s refusal as a sentence, or `null` when the newest write is not one. */
 export function writeFailure(writes: readonly [Write, ...Write[]]): string | null {
   const last = newestWrite(writes);

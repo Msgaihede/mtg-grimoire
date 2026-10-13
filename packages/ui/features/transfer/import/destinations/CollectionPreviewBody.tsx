@@ -54,7 +54,7 @@ import type { ImportDefaults } from "../../prefs";
 import { CommitBar, useImportCommit } from "../shared/CommitBar";
 import { ModeRadios } from "../shared/ModeRadios";
 import { ImportProblems } from "../shared/Problems";
-import { useImport } from "../useImport";
+import { BinderImportStopped, useImport } from "../useImport";
 import { BinderSort, binderDoneMessage } from "./BinderSort";
 import { hasBinders, planBinderImport } from "./binders";
 import { planCollectionImport, type CollectionPlan } from "./collection";
@@ -139,6 +139,7 @@ export function CollectionPreviewBody({
   resolved,
   tags,
   onDone,
+  report,
   onBack,
   defaults,
   setDefaults,
@@ -196,6 +197,16 @@ export function CollectionPreviewBody({
       ? "a new folder"
       : `a new folder, ${newName.trim()}`
     : (chosen?.name ?? "your collection");
+
+  /** Where the toast says the cards went: a folder's name in quotes, which the sentences above
+   *  draw bare because they sit beside the selector that names it. */
+  const receiptWhere = making
+    ? newName.trim() === ""
+      ? "a new folder"
+      : `“${newName.trim()}”`
+    : chosen === undefined
+      ? "your collection"
+      : `“${chosen.name}”`;
 
   /**
    * The folder this press made, by the name it was made under — so a commit refused after the
@@ -262,13 +273,52 @@ export function CollectionPreviewBody({
       // offering the last of them would take back one folder and say it took back the file.
       // A deck it made is undone the way any deck is — deleting it sends its copies to
       // `Recently removed`.
+      // One toast for the whole press, however many binders it wrote: what landed on a success,
+      // and on a refusal how far it got — a warning when some groups landed before it stopped,
+      // since those copies are in the collection now, and a refusal when none did.
       importBinders.mutate(binderPlan.groups, {
-        onSuccess: (result) => onDone(binderDoneMessage(result)),
+        onSuccess: (result) => {
+          report?.({
+            title: `Imported ${cards(result.copies)} into your collection`,
+            body: binderDoneMessage(result),
+            tone: "success",
+          });
+          onDone(binderDoneMessage(result));
+        },
+        onError: (e) => {
+          const stopped = e instanceof BinderImportStopped ? e : null;
+          report?.(
+            stopped !== null && stopped.copies > 0
+              ? {
+                  title: `Imported ${count(stopped.copies)} of ${cards(stopped.total)} into your collection`,
+                  body: stopped.message,
+                  tone: "warning",
+                }
+              : {
+                  title: "Couldn't import into your collection",
+                  body: ipcError(e),
+                  tone: "error",
+                },
+          );
+        },
       });
       return;
     }
     commit.mutate(undefined, {
+      onError: (e) =>
+        report?.({
+          title: `Couldn't import into ${receiptWhere}`,
+          body: ipcError(e),
+          tone: "error",
+        }),
       onSuccess: (outcome) => {
+        // The toast is the receipt the owner's rule asks of every collection write; the undo bar
+        // on the page keeps the Undo. One notice for the one transaction.
+        report?.({
+          title: receiptOf(mode, plan, intoFolder ? receiptWhere : null),
+          body: doneCounts(outcome),
+          tone: "success",
+        });
         // `?? null`: an outcome from a build (or a test double) that predates the ticket carries
         // no `undoId` at all, and `offerUndo` offers anything that is not `null`.
         offerUndo(
@@ -552,11 +602,23 @@ function undoLabel(mode: string, plan: CollectionPlan, folder: string | null): s
     : `Imported ${cards(plan.totalCards)} into ${folder ?? "your collection"}.`;
 }
 
+/** The toast's title: {@link undoLabel}'s sentence, with the folder quoted and no full stop. */
+function receiptOf(mode: string, plan: CollectionPlan, folder: string | null): string {
+  return mode === "set"
+    ? `Set quantities in ${folder ?? "your collection"} from a file of ${cards(plan.items.length)}`
+    : `Imported ${cards(plan.totalCards)} into ${folder ?? "your collection"}`;
+}
+
 /** What `onDone` reports. `removed` only when a `set` removed something — an `add` never does,
  *  and `0 removed` on every import would be a clause that is never news. */
 function doneMessage(outcome: ImportCommitOutcome): string {
+  return `${doneCounts(outcome)}.`;
+}
+
+/** {@link doneMessage} without its full stop — the toast's second line. */
+function doneCounts(outcome: ImportCommitOutcome): string {
   const removed = outcome.removed > 0 ? `, ${outcome.removed} removed` : "";
-  return `${outcome.added} added, ${outcome.updated} updated${removed}.`;
+  return `${outcome.added} added, ${outcome.updated} updated${removed}`;
 }
 
 /** `1 card`, `3,000 cards` — `plural` with the thousands separator a collection file reaches and

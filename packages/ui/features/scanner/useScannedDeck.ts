@@ -1,7 +1,15 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { autoCategoryFor } from "@/features/decks/autoCategory";
-import { ipc, type DeckInput, type DeckRow, type ImportItem, type ScannerTrayRow } from "@/lib/ipc";
+import {
+  ipc,
+  ipcError,
+  type DeckInput,
+  type DeckRow,
+  type ImportItem,
+  type ScannerTrayRow,
+} from "@/lib/ipc";
 import { DEFAULT_MARKETPLACE } from "@/lib/marketplace";
+import { notify } from "@/lib/notifications";
 import { invalidateOwnedWrite } from "@/lib/searchMarks";
 import { isKnownFinish } from "./reader/trayFinish";
 
@@ -72,6 +80,12 @@ export function useScannedDeck(rows: readonly ScannerTrayRow[]) {
       }
       return deck;
     },
+    // Here and not at the press, because the press is `CreateDeckDialog`'s and that dialog is
+    // shared; this mutation has the one caller, the tray's *Create deck…*. The dialog keeps its
+    // own refusal line, where the retry is — the toast is the owner's rule for a deck write. A
+    // refusal leaves no deck behind (the create is rolled back above), so nothing was made.
+    onError: (e) =>
+      notify.error("Couldn't create a deck from the scanned cards", { body: ipcError(e) }),
     onSettled: () => invalidateOwnedWrite(queryClient),
   });
 }

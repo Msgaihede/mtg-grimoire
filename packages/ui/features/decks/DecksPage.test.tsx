@@ -106,8 +106,13 @@ import {
 } from "@/components/tooltip/TooltipProvider";
 import { FOLDER_DROP_LINE_ATTR } from "@/components/FolderDropLine";
 import { DEFAULT_SECTION_ZOOMS, DEFAULT_ZOOM, ZOOM_SECTIONS } from "@/lib/cardZoom";
+import { useNotifications } from "@/lib/notifications";
 import { useAppStore } from "@/lib/store";
 import { startPointerDrag } from "@/test-drag";
+
+/** Every notice raised so far, newest first — a receipt is asserted on the store, since this
+ *  suite mounts no `Toaster`. `test-setup.ts` empties it after every case. */
+const notices = () => useNotifications.getState().notices;
 
 /** A deck with a cover, which is the only kind that can carry an artist credit. */
 const BURN: DeckRow = {
@@ -1411,6 +1416,8 @@ describe("DecksPage", () => {
       }),
     );
     await waitFor(() => expect(useAppStore.getState().openDeckId).toBe(9));
+    // The dialog has closed and the editor has opened over the wall, so the receipt is a toast.
+    expect(notices()).toMatchObject([{ title: "Deck “Sunday burn” created", tone: "success" }]);
   });
 
   /**
@@ -1531,9 +1538,13 @@ describe("DecksPage", () => {
 
     expect(screen.getByRole("dialog", { name: /delete burn/i })).toBeInTheDocument();
 
+    // Nothing is said while the write is out — the question is still the answer on screen.
+    expect(notices()).toEqual([]);
+
     finish();
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(notices()).toMatchObject([{ title: "Deck “Burn” deleted", tone: "success" }]);
   });
 
   it("duplicates a deck", async () => {
@@ -1542,6 +1553,13 @@ describe("DecksPage", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Duplicate Burn" }));
 
     expect(deckDuplicate).toHaveBeenCalledWith(4);
+    // Named for the deck pressed on, and the copy named in the second line — it lands wherever
+    // the wall's sort puts it.
+    await waitFor(() =>
+      expect(notices()).toMatchObject([
+        { title: "Deck “Burn” duplicated", body: "The copy is “Burn (copy)”", tone: "success" },
+      ]),
+    );
   });
 
   /** Filing a deck away is `archived`, never the delete — this is what a gallery's remove is. */
@@ -1555,6 +1573,13 @@ describe("DecksPage", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Restore Old Standard" }));
 
     expect(deckUpdate).toHaveBeenCalledWith(6, { archived: false });
+    // One receipt per press, newest first: both tiles left the wall they were pressed on.
+    await waitFor(() =>
+      expect(notices().map((n) => n.title)).toEqual([
+        "Deck “Old Standard” restored",
+        "Deck “Burn” archived",
+      ]),
+    );
   });
 
   /**
@@ -1595,6 +1620,28 @@ describe("DecksPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save name" }));
 
     expect(deckUpdate).toHaveBeenCalledWith(4, { name: "Sunburn" });
+  });
+
+  /**
+   * A rename has no toast (the owner's rule exempts it), so a refused one is the banner's — and
+   * the field stays open over it with the reader's text, to try again. A refused rename followed
+   * by a toasted write that lands takes the sentence down: the newest write owns the banner.
+   */
+  it("keeps a refused rename's field open, with the banner saying why", async () => {
+    deckUpdate.mockRejectedValueOnce("The database is busy.");
+    wrap(<DecksPage />);
+    const tile = await tileFor("Burn");
+    tile.focus();
+
+    await userEvent.keyboard("{F2}");
+    await userEvent.keyboard("Sunburn");
+    await userEvent.click(screen.getByRole("button", { name: "Save name" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Couldn't change your decks — The database is busy.",
+    );
+    expect(screen.getByLabelText("Rename Burn")).toHaveValue("Sunburn");
+    expect(notices()).toEqual([]);
   });
 
   /**
@@ -1724,6 +1771,13 @@ describe("DecksPage", () => {
     await userEvent.click(await screen.findByRole("menuitem", { name: "Meme" }));
     // The last tag off is `[]`, which `deck_update` reads as "no tags" and not as "leave it".
     expect(deckUpdate).toHaveBeenLastCalledWith(BURN.id, { tags: [] });
+    // The menu sends whole lists; the receipts name the one tag each press moved.
+    await waitFor(() =>
+      expect(notices().map((n) => n.title)).toEqual([
+        "Removed tag “Meme” from “Burn”",
+        "Added tag “Budget” to “Burn”",
+      ]),
+    );
   });
 
   /** A tag no deck wears yet is typed where tags are typed: Deck settings, opened with the caret
@@ -1949,14 +2003,23 @@ describe("DecksPage", () => {
     expect(await tileFor("Burn")).toBeInTheDocument();
   });
 
-  /** A refused write is said in the app's own words, where the reader is looking. */
+  /** A refused deck edit is said once, in the app's own words: by its toast, with the backend's
+   *  sentence as its second line — and not again in the page's banner. */
   it("says so when a write is refused", async () => {
     deckDuplicate.mockRejectedValue("That deck is not there any more.");
 
     wrap(<DecksPage />);
     await userEvent.click(await screen.findByRole("button", { name: "Duplicate Burn" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("That deck is not there any more.");
+    await waitFor(() => expect(notices()).toHaveLength(1));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(notices()).toMatchObject([
+      {
+        title: "Couldn't duplicate “Burn”",
+        body: "That deck is not there any more.",
+        tone: "error",
+      },
+    ]);
   });
 
   /**
@@ -2151,6 +2214,10 @@ describe("DecksPage folders", () => {
     await userEvent.click(within(picker).getByRole("button", { name: "Commander" }));
 
     expect(deckSetFolder).toHaveBeenCalledWith(4, 1);
+    // The tile has left this wall for the drawer, so the receipt says where it went.
+    await waitFor(() =>
+      expect(notices()).toMatchObject([{ title: "Moved “Burn” to “Commander”", tone: "success" }]),
+    );
   });
 
   /**
@@ -2176,6 +2243,9 @@ describe("DecksPage folders", () => {
 
     expect(deckSetFolder).toHaveBeenCalledWith(5, null);
     expect(deckUpdate).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(notices()).toMatchObject([{ title: "Moved “Sunday draft” to “All decks”" }]),
+    );
   });
 
   /**
@@ -2294,6 +2364,16 @@ describe("DecksPage folders", () => {
     await userEvent.click(within(confirm).getByRole("button", { name: "Delete folder" }));
 
     expect(deckFolderDelete).toHaveBeenCalledWith(1);
+    // The receipt repeats the question's promise as what happened.
+    await waitFor(() =>
+      expect(notices()).toMatchObject([
+        {
+          title: "Folder “Commander” deleted",
+          body: "2 decks moved to “All decks” · 1 subfolder deleted",
+          tone: "success",
+        },
+      ]),
+    );
   });
 
   /**
@@ -2344,7 +2424,8 @@ describe("DecksPage folders", () => {
    * read and the press — the refusal is surfaced rather than swallowed.
    *
    * `Legends` is inside `Commander`, so `All decks` is a live destination for it and the write
-   * really is attempted; the banner is `writeFailure`'s, over `folders.move`.
+   * really is attempted. The toast is the one report — `folders.move` is seated `toasted` in the
+   * banner's list.
    */
   it("says so when a folder move is refused", async () => {
     withFolders();
@@ -2356,9 +2437,15 @@ describe("DecksPage folders", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: "Move to" }));
     await userEvent.click(await screen.findByRole("menuitem", { name: "All decks" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "A folder cannot be moved inside itself.",
-    );
+    await waitFor(() => expect(notices()).toHaveLength(1));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(notices()).toMatchObject([
+      {
+        title: "Couldn't move folder “Legends”",
+        body: "A folder cannot be moved inside itself.",
+        tone: "error",
+      },
+    ]);
   });
 
   /**
@@ -2706,6 +2793,10 @@ describe("dragging a folder", () => {
     await waitFor(() => expect(deckFolderReorder).toHaveBeenCalledWith(1, [2, 3]));
     // The other drag is untouched by this one — a folder is not a deck being filed.
     expect(deckSetFolder).not.toHaveBeenCalled();
+    // A nest changes the drawer, so it is a move and says so.
+    await waitFor(() =>
+      expect(notices()).toMatchObject([{ title: "Moved folder “Modern” to “Commander”" }]),
+    );
   });
 
   /**
@@ -2719,6 +2810,8 @@ describe("dragging a folder", () => {
     await dropOn(await folderRow("Modern"), await folderRow("Commander"), LEADING);
 
     await waitFor(() => expect(deckFolderReorder).toHaveBeenCalledWith(null, [3, 1]));
+    // Beside a folder in its own level is a reorder, drawn where the reader let go: no receipt.
+    expect(notices()).toEqual([]);
   });
 
   /**
@@ -2949,6 +3042,10 @@ describe("dragging a folder", () => {
 
     await waitFor(() => expect(deckSetFolder).toHaveBeenCalledWith(BURN.id, 1));
     expect(deckFolderReorder).not.toHaveBeenCalled();
+    // A drop on the sidebar is a move like any other (the owner's rule names it): one receipt.
+    await waitFor(() =>
+      expect(notices()).toMatchObject([{ title: "Moved “Burn” to “Commander”" }]),
+    );
   });
 
   /**
@@ -3335,6 +3432,9 @@ describe("the folder row's menu", () => {
     await userEvent.click(await screen.findByRole("menuitem", { name: "All decks" }));
 
     expect(deckFolderMove).toHaveBeenCalledWith(2, null);
+    await waitFor(() =>
+      expect(notices()).toMatchObject([{ title: "Moved folder “Legends” to “All decks”" }]),
+    );
   });
 
   /**

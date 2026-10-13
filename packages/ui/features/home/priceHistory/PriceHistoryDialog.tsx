@@ -37,6 +37,7 @@ import { artistOf, PANEL_MAX_H } from "@/features/card/CardDetailModal";
 import { CardModalTitle } from "@/features/card/CardModalTitle";
 import { CardModalArt } from "@/features/card/CardModalArt";
 import { openMarketplaceForCard } from "@/features/card/openMarketplace";
+import { refusedOpen } from "@/features/card/refusedOpen";
 import { plural } from "@/lib/counts";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
 import { FOCUS, FOCUS_INSET } from "@/lib/focus";
@@ -415,15 +416,19 @@ function Body({
               disabled={card === null}
               onClick={() => {
                 if (card === null) return;
-                // `void` rather than a `catch`, as `CardModalRail`'s row does: every way the exact
-                // page cannot be had already falls back to the name search inside the helper.
-                void openMarketplaceForCard({
-                  marketplace,
-                  cardId: request.cardId,
-                  cardName: card.name,
-                  finish: request.finish,
-                  finishes: card.finishes,
-                });
+                // Caught and said, as `CardModalRail`'s row does: every way the exact page cannot be
+                // had already falls back to the name search inside the helper, so what is left is
+                // a refused open — which used to be swallowed.
+                refusedOpen(
+                  openMarketplaceForCard({
+                    marketplace,
+                    cardId: request.cardId,
+                    cardName: card.name,
+                    finish: request.finish,
+                    finishes: card.finishes,
+                  }),
+                  marketplace.label,
+                );
               }}
               className={cn(ACTION_PRIMARY, "disabled:opacity-40", PRESS, FOCUS)}
             >

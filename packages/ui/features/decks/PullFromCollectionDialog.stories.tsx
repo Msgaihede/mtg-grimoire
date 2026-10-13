@@ -209,12 +209,15 @@ export const Review: Story = {
 
     // The press carries one pick per *source*, so the two-source row is two entries.
     await userEvent.click(canvas.getByRole("button", { name: "Pull 6 copies" }));
-    await expect(args.pull.mutate).toHaveBeenCalledWith([
-      { entryId: 11, quantity: 3 },
-      { entryId: 21, quantity: 1 },
-      { entryId: 22, quantity: 1 },
-      { entryId: 31, quantity: 1 },
-    ]);
+    await expect(args.pull.mutate).toHaveBeenCalledWith(
+      [
+        { entryId: 11, quantity: 3 },
+        { entryId: 21, quantity: 1 },
+        { entryId: 22, quantity: 1 },
+        { entryId: 31, quantity: 1 },
+      ],
+      expect.anything(),
+    );
   },
 };
 
@@ -256,7 +259,10 @@ export const PickingASource: Story = {
 
     // The binder holds both copies, so preferring it collapses two takes into one.
     await user.click(canvas.getByRole("button", { name: "Pull 2 copies" }));
-    await expect(args.pull.mutate).toHaveBeenCalledWith([{ entryId: 22, quantity: 2 }]);
+    await expect(args.pull.mutate).toHaveBeenCalledWith(
+      [{ entryId: 22, quantity: 2 }],
+      expect.anything(),
+    );
   },
 };
 

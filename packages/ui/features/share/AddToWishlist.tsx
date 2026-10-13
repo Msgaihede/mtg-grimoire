@@ -55,6 +55,7 @@ import { buildFolderTree, flattenFolders } from "@/lib/folderTree";
 import { isFinish, type Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError } from "@/lib/ipc";
+import { notify } from "@/lib/notifications";
 import type { ShareCard } from "@/lib/shareSnapshot";
 import { cn } from "@/lib/utils";
 import { refreshCardSearches } from "@/lib/searchMarks";
@@ -161,9 +162,9 @@ export function AddToWishlist({
    *  and draws neither. */
   index: OwnedIndex;
   onClose: () => void;
-  /** Every card landed. The sentence names the count and the destination; the host draws it and
-   *  clears its picks. */
-  onAdded: (report: string) => void;
+  /** Every card landed — the host clears its picks. The receipt itself is a toast this dialog
+   *  raises, since the dialog closes on it (see `submit`). */
+  onAdded: () => void;
 }) {
   const [destination, setDestination] = useState("");
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -187,6 +188,9 @@ export function AddToWishlist({
   );
   const folderId = destination === "" ? null : Number(destination);
   const named = tree.find((node) => node.folder.id === folderId)?.folder.name ?? "your wishlist";
+  /** The destination as a receipt names it: a drawer by its name in quotes, the root unquoted. */
+  const drawer = tree.find((node) => node.folder.id === folderId)?.folder.name;
+  const where = drawer === undefined ? "your wishlist" : `“${drawer}”`;
 
   /**
    * How many of the picked cards already have a line **at the destination on screen** — the real
@@ -228,6 +232,17 @@ export function AddToWishlist({
       // Names what got through, because the reader's list really did move that far and the
       // press is not repeatable without double-adding the half that landed.
       setRefusal(`Added ${added} of ${cards(wants.length)}. ${ipcError(e)}`);
+      // **And a notice, even though the dialog stays open with that line in it** — the owner's
+      // rule (2026-10-12) is that every add of cards to a wishlist answers in the inbox as well as
+      // where it was pressed, and a partial add is cards written. One notice for the press: a
+      // warning with the count where some landed, an error where none did.
+      if (added > 0) {
+        notify.warning(`Added ${added} of ${cards(wants.length)} to ${where}`, {
+          body: ipcError(e),
+        });
+      } else {
+        notify.error(`Couldn't add ${cards(wants.length)} to ${where}`, { body: ipcError(e) });
+      }
       return;
     } finally {
       setAdding(false);
@@ -240,7 +255,11 @@ export function AddToWishlist({
         void refreshCardSearches(client);
       }
     }
-    onAdded(`Added ${cards(added)} to ${named}.`);
+    // **The receipt is a toast**, because the dialog closes on it and the wall behind draws no
+    // wishlist — until 2026-10-12 it was a status line the shared page kept under its bar, a
+    // hand-rolled toast that stood until the next add.
+    notify.success(`Added ${cards(added)} to ${where}`);
+    onAdded();
     onClose();
   };
 

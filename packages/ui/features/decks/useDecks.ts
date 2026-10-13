@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ipc, type DeckInput, type DeckPatch, type DeckRow } from "@/lib/ipc";
+import { ipc, ipcError, type DeckInput, type DeckPatch, type DeckRow } from "@/lib/ipc";
+import { notify } from "@/lib/notifications";
 
 /** Stable identity for "no decks yet" — the gallery's `useMemo`s key off this array. */
 const NONE: readonly DeckRow[] = [];
@@ -180,3 +181,23 @@ export function useDecks() {
 
 /** The whole of what the gallery consumes, named so the view and the hook agree. */
 export type Decks = ReturnType<typeof useDecks>;
+
+/**
+ * A deliberate gallery write's receipt: `done` once it lands, and `notify.error(failed)` with the
+ * backend's sentence if it is refused.
+ *
+ * **At the call site and never on the definitions above** — `packages/ui/CLAUDE.md`'s rule for
+ * deck and folder edits, and `docs/reference/notifications.md`'s. `update` is also every control
+ * in Deck settings and `setFolder` is the tile's popup as well as the menu, so a toast in either
+ * hook's `onSuccess` would speak for gestures whose answer is said elsewhere, or twice. The menu
+ * row, the tray's icon, the drop and the confirmation each pass their own words.
+ *
+ * **A promise rather than `mutate`'s per-call callbacks**, because those fire for an observer's
+ * *latest* call only: two decks archived in quick succession are two receipts, and the first
+ * would otherwise be dropped. `mutateAsync` settles the mutation exactly as `mutate` does, so the
+ * gallery's banner still sees the write — seated `toasted`, for its timing alone, since the toast
+ * is this refusal's one report.
+ */
+export function receipt<T>(work: Promise<T>, done: (value: T) => void, failed: string): void {
+  void work.then(done, (failure: unknown) => notify.error(failed, { body: ipcError(failure) }));
+}

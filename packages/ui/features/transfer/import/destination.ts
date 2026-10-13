@@ -8,6 +8,7 @@
  */
 import type { JSX } from "react";
 import type { ImportResolveRow, PrintingTags } from "@/lib/ipc";
+import type { NotifyOptions } from "@/lib/notifications";
 import type { ParsedList } from "./parse";
 
 /**
@@ -68,6 +69,19 @@ export interface DestinationPreviewProps {
   /** Close, reporting what landed. */
   onDone: (message: string) => void;
   /**
+   * Say what the press did to the app's toast and inbox — **once per press**, the landing or the
+   * refusal, with what moved where and how many (the owner's rule: a deck, collection or wishlist
+   * edit always toasts, and one action is one toast).
+   *
+   * **Separate from {@link onDone}, and optional**, because the two are not the same sentence:
+   * `onDone`'s message is the destination's own words for a host that wants to draw them, while
+   * this is the toast. Both shells pass `notify` — the desktop's `ImportDialog` and the light app's
+   * phone `ImportSheet` — so an import is said once, as a toast, on either face; absent (a story, a
+   * test), the press says nothing. A refusal is reported here **as well as** in the commit bar: the
+   * bar is where the retry is, the toast is the rule's record of it.
+   */
+  report?: (notice: ImportNotice) => void;
+  /**
    * Back to the paste step, keeping the text.
    *
    * **This unmounts the preview, so nothing a destination holds survives it** — the mode, the
@@ -82,6 +96,10 @@ export interface DestinationPreviewProps {
    */
   onBack: () => void;
 }
+
+/** What a destination reports through {@link DestinationPreviewProps.report}: `notify`'s own
+ *  sentence, title first. */
+export type ImportNotice = Pick<NotifyOptions, "title" | "body" | "tone">;
 
 /** One mode's word and the sentence under it. */
 export interface ImportModeOption {

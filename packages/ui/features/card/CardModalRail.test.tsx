@@ -5,6 +5,7 @@ import { openExternal } from "@/lib/externalLinks";
 import type { Finish } from "@/lib/finish";
 import type { CardDetail } from "@/lib/ipc";
 import { MARKETPLACES, type Marketplace } from "@/lib/marketplace";
+import { useNotifications } from "@/lib/notifications";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
 import { CardModalRail, type RailAction, type RailCounts } from "./CardModalRail";
 import type { CardModalScope } from "./cardModalScope";
@@ -287,6 +288,23 @@ describe("the card modal's options rail", () => {
 
     expect(vi.mocked(openExternal)).toHaveBeenCalledExactlyOnceWith(
       "https://scryfall.com/card/lea/161",
+    );
+  });
+
+  /** A refused open used to be swallowed — a button that did nothing. It is said as a toast now. */
+  it("says a refused open rather than swallowing it", async () => {
+    vi.mocked(openExternal).mockRejectedValueOnce("no default browser");
+    const user = userEvent.setup();
+    renderRail();
+
+    await user.click(screen.getByRole("button", { name: "Open on Scryfall" }));
+
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Couldn't open Scryfall",
+        body: "no default browser",
+        tone: "error",
+      }),
     );
   });
 

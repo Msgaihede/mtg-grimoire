@@ -28,7 +28,7 @@ import { useSync } from "@/lib/useSync";
 import { cn } from "@/lib/utils";
 import { useDeckCore } from "@/features/decks/useDeckCore";
 import { useFormatSpecs } from "@/features/decks/useFormatSpecs";
-import type { DestinationPreviewProps } from "../destination";
+import type { DestinationPreviewProps, ImportNotice } from "../destination";
 import type { ImportDefaults } from "../../prefs";
 import { useImport } from "../useImport";
 import { CommitBar } from "../shared/CommitBar";
@@ -103,6 +103,7 @@ export function DeckPreviewBody({
   resolved,
   tags,
   onDone,
+  report,
   onBack,
   deckId,
   variant,
@@ -214,6 +215,10 @@ export function DeckPreviewBody({
     [list, resolved, importDefaults],
   );
 
+  /** The deck as the toast names it — the one being written into, which the editor beside this
+   *  may not be showing (a pile's own Import, a deck in another window). */
+  const deckWhere = into.deck === null ? "the deck" : `“${into.deck.name}”`;
+
   const runImport = () => {
     if (items.length === 0) return;
     // **The kind, read once for the two things it decides here**: whether the second write may
@@ -240,8 +245,15 @@ export function DeckPreviewBody({
       {
         onSuccess: ({ outcome, owned: ownedOutcome, ownRefusal }) => {
           onImported?.(deckId, outcome);
+          report?.(deckReceipt(deckWhere, outcome, ownedOutcome, ownRefusal));
           onDone(reportOf(outcome, ownedOutcome, ownRefusal));
         },
+        onError: (e) =>
+          report?.({
+            title: `Couldn't import into ${deckWhere}`,
+            body: ipcError(e),
+            tone: "error",
+          }),
       },
     );
   };
@@ -413,6 +425,40 @@ export function reportOf(
   // whose quantity moved, and a playset landing on a row the reader already had is one of the
   // second and not four of the first.
   return `${imported} ${plural(owned.added + owned.updated, "row")} in your collection.`;
+}
+
+/**
+ * The toast for a list that went into a deck — `ImportDialog`'s one notice for the press, with
+ * what landed where and how many (the owner's rule for deck and collection writes).
+ *
+ * **The copies' refusal folds into it as a warning** rather than raising a second notice: the
+ * list landed and the deck is what the reader asked for, but the copies they said they own are
+ * not in the collection, and that is the one thing about this press they have to act on. One
+ * action, one toast.
+ */
+export function deckReceipt(
+  where: string,
+  outcome: ImportOutcome,
+  owned: ImportCommitOutcome | null = null,
+  ownRefusal: string | null = null,
+): ImportNotice {
+  const title = `Imported ${plural(outcome.added, "card")} into ${where}`;
+  if (ownRefusal !== null) {
+    return {
+      title,
+      body: `The copies couldn't be added to your collection — ${ownRefusal}`,
+      tone: "warning",
+    };
+  }
+  const extra = [
+    outcome.labelsCreated > 0 ? plural(outcome.labelsCreated, "new label") : null,
+    owned === null ? null : `${plural(owned.added + owned.updated, "row")} in your collection`,
+  ].filter((part) => part !== null);
+  return {
+    title,
+    ...(extra.length === 0 ? {} : { body: extra.join(" · ") }),
+    tone: "success",
+  };
 }
 
 /**

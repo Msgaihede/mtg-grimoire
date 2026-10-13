@@ -2,7 +2,7 @@ import { useState, type JSX, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { PANEL_BUTTON } from "./controls";
-import { PanelAlert, SettingsSection } from "./panelChrome";
+import { SettingsSection } from "./panelChrome";
 import type { ClearAction, DangerZone } from "./useDataReset";
 
 /**
@@ -84,10 +84,10 @@ const ROWS: readonly Row[] = [
  * where a dialog used to be. The cache panel above deliberately does **not** ask for it — see
  * that prop, and the short version is that a word typed on every dialog is a word nobody reads.
  *
- * ## One status line for three buttons
+ * ## No status line
  *
- * `useDangerZone` owns the rule (`@/lib/writes`: the most recently *started* write owns the
- * banner) so this component renders one sentence and makes no decision about which.
+ * A clear's outcome — what went, or why it was refused — is a toast `useDangerZone` raises, kept
+ * by the inbox, so this component draws buttons and a dialog and says nothing after the fact.
  */
 export function DangerZonePanel({ danger }: { danger: DangerZone }): JSX.Element {
   const [asking, setAsking] = useState<Asking>(null);
@@ -154,11 +154,6 @@ export function DangerZonePanel({ danger }: { danger: DangerZone }): JSX.Element
           </li>
         ))}
       </ul>
-
-      {/* `problem` for a refusal and `plain` for a result, which is `PanelAlert`'s own split:
-          "cleared 1,284 collection entries" is not bad news, and drawing it in the destructive
-          red would make the panel shout about the thing the reader just asked for. */}
-      <PanelAlert tone={danger.status?.tone ?? "plain"}>{danger.status?.text ?? null}</PanelAlert>
 
       {/* One dialog, not three: `asking` is a single value, so there is exactly one to mount —
           and the shell's "closed is nothing mounted" is what throws the typed word away between

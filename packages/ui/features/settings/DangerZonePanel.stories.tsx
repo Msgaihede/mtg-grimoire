@@ -16,7 +16,6 @@ function danger(over: Partial<DangerZone> = {}): DangerZone {
     collection: { run: fn(), pending: false },
     wishlist: { run: fn(), pending: false },
     decks: { run: fn(), pending: false },
-    status: null,
     ...over,
   };
 }
@@ -101,41 +100,6 @@ export const TypingTheWord: Story = {
 
     await userEvent.click(confirm);
     await expect(args.danger.collection.run).toHaveBeenCalled();
-  },
-};
-
-/**
- * What the panel says after a clear, and the tone it says it in.
- *
- * Plain rather than the destructive red: "cleared 1,284 collection entries" is the thing the
- * reader just asked for, and a panel that shouted about it would be shouting about a success.
- * The second clause is the one they did not ask for — every deck in the app has stopped
- * holding a claim on an owned copy.
- */
-export const AfterAClear: Story = {
-  args: {
-    danger: danger({
-      status: {
-        tone: "plain",
-        text: "Cleared 1,284 collection entries and released 37 deck reservations.",
-      },
-    }),
-  },
-  play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-    await expect(canvas.getByRole("alert")).toHaveTextContent("released 37 deck reservations");
-  },
-};
-
-/** The write connection held by a sync, in `db.rs`' own words. Red, because it did not happen. */
-export const Refused: Story = {
-  args: {
-    danger: danger({
-      status: {
-        tone: "problem",
-        text: "The card database is busy finishing a sync. Try that again in a moment.",
-      },
-    }),
   },
 };
 

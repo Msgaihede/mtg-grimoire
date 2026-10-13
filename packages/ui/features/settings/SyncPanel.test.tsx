@@ -10,6 +10,7 @@ import type {
   SupporterStatus,
 } from "@/lib/ipc";
 import { PAIRING_KEY } from "@/lib/query";
+import { useNotifications } from "@/lib/notifications";
 
 const syncPairingStatus = vi.hoisted(() => vi.fn());
 const syncPairingBegin = vi.hoisted(() => vi.fn());
@@ -474,7 +475,7 @@ describe("SyncPanel", () => {
   /**
    * `"complete"` is settled during render rather than in an effect (`SyncPanel`'s own doc
    * comment on the two guarded `if`s above its `return`). The flow returns to `"idle"`, the
-   * success line takes its place, and the round trip a freshly paired device owes — the
+   * *Device paired* toast is the receipt, and the round trip a freshly paired device owes — the
    * assertion this test exists for — fires exactly once.
    */
   it("returns the panel to idle once the poll answers complete", async () => {
@@ -491,15 +492,20 @@ describe("SyncPanel", () => {
     // Real timers, `goes from waiting to compare`'s reason: `refetchInterval` is already a real
     // 1.5 s clock by the time a test could switch to a fake one, and reading the fake advance
     // back afterwards was the flake. `waitFor`'s own budget rides out the real wait instead.
-    await waitFor(
-      () =>
-        expect(
-          screen.getByText(/paired\. the other device is now in this group/i),
-        ).toBeInTheDocument(),
-      { timeout: 3000 },
-    );
+    await waitFor(() => expect(useNotifications.getState().notices).toHaveLength(1), {
+      timeout: 3000,
+    });
+    // A toast, once, and no line on the panel: the other device is where the ceremony finished,
+    // so this reader may be looking at that screen rather than this one — the toast and the
+    // inbox are the receipt, on both faces.
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      tone: "success",
+      title: "Device paired",
+      body: "The other device is now in this group.",
+    });
+    expect(screen.queryByText(/other device is now in this group/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /codes match/i })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /pair a device/i })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /pair a device/i })).toBeInTheDocument();
     await waitFor(() => expect(syncNow).toHaveBeenCalled());
   });
 
@@ -532,18 +538,12 @@ describe("SyncPanel", () => {
     await user.click(await screen.findByRole("button", { name: /pair a device/i }));
     await waitFor(
       () =>
-        expect(
-          screen.getByText(/paired\. the other device is now in this group/i),
-        ).toBeInTheDocument(),
+        expect(useNotifications.getState().notices[0]).toMatchObject({ title: "Device paired" }),
       { timeout: 3000 },
     );
 
     await user.click(await screen.findByRole("button", { name: /pair a device/i }));
     expect(await screen.findByTestId("pairing-qr")).toBeInTheDocument();
-    // And the success line from the *first* attempt does not linger over the second offer.
-    expect(
-      screen.queryByText(/paired\. the other device is now in this group/i),
-    ).not.toBeInTheDocument();
   });
 
   /**
@@ -660,6 +660,30 @@ describe("SyncPanel", () => {
 
     await user.click(await screen.findByRole("button", { name: /remove device/i }));
     await waitFor(() => expect(syncDeviceRevoke).toHaveBeenCalledWith(PHONE));
+    // The dialog has closed, so the receipt is a toast.
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        tone: "success",
+        title: "Removed “Phone” from the group",
+      }),
+    );
+  });
+
+  /** The dialog stays up over a refusal, and the panel's problem line is under its scrim. */
+  it("says a refused removal in a toast", async () => {
+    syncDeviceRevoke.mockRejectedValueOnce("The relay can't be reached.");
+    const user = userEvent.setup();
+    render(<SyncPanel />, { wrapper: paired });
+
+    await user.click(await screen.findByRole("button", { name: /remove phone/i }));
+    await user.click(await screen.findByRole("button", { name: /remove device/i }));
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        tone: "error",
+        title: "Couldn't remove “Phone”",
+        body: "The relay can't be reached.",
+      }),
+    );
   });
 
   /** A matrix of `width * width` booleans draws one `<rect>` per dark module and none per
@@ -764,6 +788,12 @@ describe("leaving the group", () => {
 
     await user.click(screen.getByRole("button", { name: "Leave the group" }));
     await waitFor(() => expect(syncGroupLeave).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        tone: "success",
+        title: "Left the sync group",
+      }),
+    );
   });
 
   /**
@@ -1700,9 +1730,7 @@ describe("a freshly paired device can reach the sync that entitles it", () => {
 
     // The assertion the whole block exists for. Nothing else in the app calls this.
     await waitFor(() => expect(syncNow).toHaveBeenCalled());
-    expect(
-      await screen.findByText(/paired\. the other device is now in this group/i),
-    ).toBeInTheDocument();
+    expect(useNotifications.getState().notices[0]).toMatchObject({ title: "Device paired" });
   });
 
   it("still offers Sync now to a paired device its membership has not reached yet", async () => {

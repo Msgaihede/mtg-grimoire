@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { dragData } from "@/features/decks/dnd";
 import { dndDraggable } from "@/lib/dndTarget";
 import { boxed, startPointerDrag } from "@/test-drag";
-import { useSidebarDropTarget, type SidebarDrop } from "./useSidebarDrops";
+import { dropReceipt, useSidebarDropTarget, type SidebarDrop } from "./useSidebarDrops";
 
 /** A card as every wall's drag carries one — built through `dragData`, so a change to that
  *  module's key cannot leave this passing about a record nothing writes any more. */
@@ -38,7 +38,6 @@ function Entry({ drop }: { drop: SidebarDrop }) {
 const drop = (onDrop: SidebarDrop["onDrop"]): SidebarDrop => ({
   eligible: true,
   inertReason: null,
-  report: null,
   onDrop,
 });
 
@@ -79,7 +78,21 @@ describe("useSidebarDropTarget", () => {
     await held.over(entry);
     expect(entry).toHaveAttribute("data-over", "true");
     await held.drop();
+    // The whole gesture in one call — what lets the entry say it in one toast.
     expect(onDrop).toHaveBeenCalledTimes(1);
-    expect(onDrop).toHaveBeenCalledWith(expect.objectContaining({ cardId: "c1" }));
+    expect(onDrop).toHaveBeenCalledWith([expect.objectContaining({ cardId: "c1" })]);
+  });
+});
+
+describe("dropReceipt", () => {
+  const bolt = { ...CARD };
+  const helix = { ...CARD, cardId: "c2", name: "Lightning Helix" };
+
+  it("names the card when the drop was one", () => {
+    expect(dropReceipt(1, [bolt], "“Burn”")).toBe("Added “Lightning Bolt” to “Burn”");
+  });
+
+  it("counts a set", () => {
+    expect(dropReceipt(2, [bolt, helix], "the wishlist")).toBe("Added 2 cards to the wishlist");
   });
 });

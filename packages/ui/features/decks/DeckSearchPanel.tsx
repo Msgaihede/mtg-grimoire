@@ -17,6 +17,7 @@ import { useSearchOpen } from "@/features/search/useSearchOpen";
 import { soleFinish, type Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { ipcError, type CardSummary, type DeckCategory, type DeckFinish } from "@/lib/ipc";
+import { notify } from "@/lib/notifications";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { ADD_BUTTON } from "./addButton";
@@ -985,7 +986,25 @@ function OpenPanel({
                       quantity: 1,
                     }
                   : { cardId: card.id, categoryId: targetCategoryId, finish: wanted, quantity: 1 },
-                { onSuccess: (change) => onAdded?.(change.id) },
+                {
+                  onSuccess: (change) => {
+                    onAdded?.(change.id);
+                    // **A receipt** (the owner's rule: every deliberate add to a deck says so —
+                    // this panel's press is not one of the exempt three, the stepper, Quick Add
+                    // and a drag). Per call, so three quick presses are three adds and three
+                    // toasts, each about its own copy; the cap keeps the corner from filling.
+                    notify.success(
+                      landsIn === null
+                        ? `Added “${card.name}” to the deck`
+                        : `Added “${card.name}” to “${landsIn}”`,
+                    );
+                  },
+                  // Said beside the panel too; the toast is the rule's, and the inbox keeps it.
+                  onError: (error) =>
+                    notify.error(`Couldn't add “${card.name}” to the deck`, {
+                      body: ipcError(error),
+                    }),
+                },
               )
             }
             className={cn(ADD_BUTTON, "hover:border-accent hover:text-accent")}

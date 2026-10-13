@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleCheck, Redo2, Undo2 } from "lucide-react";
+import { Redo2, Undo2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { FILTER_FOCUS } from "@/components/FilterChips";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { useTooltip } from "@/components/tooltip/useTooltip";
-import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { useSearchOpen } from "@/features/search/useSearchOpen";
@@ -16,12 +15,14 @@ import {
   type CardSummary,
   type DeckCard,
   type DeckFinish,
+  type DeckMissingPick,
   type DeckNote,
   type DeckPullRow,
   type DeckQuickAddWish,
   type DeckVariant,
 } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
+import { notify } from "@/lib/notifications";
 import { PLAIN_PRESS } from "./headerControls";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { editionHas, useEdition } from "@/lib/edition";
@@ -31,13 +32,21 @@ import { useMarketplace } from "@/lib/useMarketplace";
 import { useScrollPaddingTop } from "@/lib/useScrollPaddingTop";
 import { useUndocked } from "@/lib/useUndocked";
 import { cn } from "@/lib/utils";
-import { handled, NO_BATCH, newestWrite, writeFailure, type Write } from "@/lib/writes";
+import { handled, newestWrite, toasted, writeFailure } from "@/lib/writes";
 import { DECK_CARD_VARIANT, focusDeckGroup, keepsSelection } from "./cardControl";
 import { AUTO_CATEGORY } from "./autoCategory";
 import { defaultPileFor } from "./defaultCategory";
 import { movedTo } from "./categoryDrag";
 import { buildCategoryMenu } from "./categoryMenu";
-import { buildDeckCardMenu } from "./deckCardMenu";
+import { buildDeckCardMenu, labelWording } from "./deckCardMenu";
+import {
+  notifyMissingAdded,
+  notifyPulled,
+  notifyRefusal,
+  quickAddReceipt,
+  reportPresses,
+  withTokenRemoveReceipt,
+} from "./receipts";
 import { tracksCollection } from "./deckKind";
 import { DeckBracket } from "./DeckBracket";
 import { DeckDesk, type DeckBarProps, type RestoredView } from "./DeckDesk";
@@ -100,7 +109,6 @@ import {
 import { QuickAdd } from "./QuickAdd";
 import { QuickZones } from "./QuickZones";
 import { asSortBy } from "./sorting";
-import { wishesSentNote, type WishesSent } from "./TheoryDiffDialog";
 import { theoryMatchPlan, theoryProgress } from "./theoryMatch";
 import {
   pullPlanQuery,
@@ -109,7 +117,7 @@ import {
   useMissingPlan,
   usePullPlan,
 } from "./useDeck";
-import { useDeckDrops } from "./useDeckDrops";
+import { NO_LAST_BATCH, useDeckDrops, type LastBatch } from "./useDeckDrops";
 import { useDeckKeyboard } from "./useDeckKeyboard";
 import { useDeckMeta } from "./useDeckMeta";
 import { useFormatSpecs } from "./useFormatSpecs";
@@ -241,16 +249,6 @@ function searchCardTarget(card: CardSummary): CardMenuTarget {
 }
 
 /**
- * How long the quick zones' "nothing to do" sentence stays up.
- *
- * Long enough to be read after a gesture the reader's eye was following elsewhere, short enough
- * that it is gone before it could be mistaken for a statement about the *next* card. It is a
- * hint about one press rather than a state of the deck, which is the whole difference between
- * this and the refusal banner above it — that one stays until another write replaces it.
- */
-const REFILE_NOTE_MS = 6000;
-
-/**
  * What `deck_add_card` answers for `EntryChange.id` when the add made **no deck card** — the
  * printing was a token, a double-faced token or an emblem, and Rust filed it as a token entry
  * instead (token stacks, spec §4.6: *tokens never become deck cards*, whichever pile they were
@@ -343,7 +341,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    */
   const { menu, menuKey } = useContextMenu();
   const tip = useTooltip();
-  const { deps: cardMenuDeps, error: menuFailure } = useCardMenuDeps();
+  const { deps: cardMenuDeps } = useCardMenuDeps();
   const setOpenDeckId = useAppStore((s) => s.setOpenDeckId);
   const setSelectedCardId = useAppStore((s) => s.setSelectedCardId);
   const selectedCardId = useAppStore((s) => s.selectedCardId);
@@ -465,22 +463,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    */
   const [gcOnly, setGcOnly] = useState(false);
   const [layer, setLayer] = useState<Layer>(null);
-  /**
-   * A **read** the reader pressed for and that refused, as a sentence — the wishes behind
-   * `Quick add and remove from wishlist`, or the plan behind a card's `Pull …`.
-   *
-   * **In the write banner rather than in a second sentence of its own**, which is the one thing
-   * about this state worth arguing. Both reads are made *inside* a press: the reader chose a
-   * menu row, the row promised an act, and the act cannot happen — so what has failed is the
-   * press, not a background query, and the press's family is the banner. It is also the only
-   * place either could be said at all: the menu closes before its handler runs, and neither
-   * read has a surface of its own until it has answered.
-   *
-   * Cleared on the next press of either row rather than on a timer, so a sentence stays up for
-   * as long as it is the last thing that happened — {@link bannerFailure}'s own rule, since a
-   * refused write's sentence stays until another write replaces it.
-   */
-  const [pressReadFailure, setPressReadFailure] = useState<string | null>(null);
   /**
    * The pile whose heading is showing its rename field, or `null`.
    *
@@ -672,8 +654,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * removes the first's — so two "New label…" presses inside one round trip would create both
    * labels and attach only the second's. The promise belongs to the call rather than to the
    * observer, so each attach survives the next press. Narrow, but it costs a line and it is
-   * strictly the stronger shape; the observer's own state still drives the banner, which is why
-   * the rejection is swallowed here and not reported here.
+   * strictly the stronger shape. The rejection is answered once, as a toast, by
+   * {@link createLabelFor}; the banner seats this write `toasted` and does not repeat it.
    *
    * **The colour is the reader's and arrives with the name**, which is what changed on
    * 2026-08-20. It used to be `DEFAULT_LABEL_COLOR`, chosen here and never asked for, because the
@@ -682,11 +664,13 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * last one. `AddLabelDialog` asks for both, and this chain is otherwise untouched.
    */
   const startLabelCreate = meta.createLabel.mutateAsync;
-  const setLabelOnSlot = deck.setLabel.mutate;
+  // `mutateAsync` so each slot's write answers a promise of its own, which is what lets the
+  // dialog's press be reported once over every card it labelled (`labelSlots` below).
+  const setLabelOnSlot = deck.setLabel.mutateAsync;
   // The category menu's two direct writes, taken as `mutate` for the reason every other write
   // here is: TanStack hands back a fresh result object each render, and these end up in
   // `useCallback` dependency lists that the four views' group elements are built from.
-  const setCategoryActive = meta.setCategoryActive.mutate;
+  const setCategoryActive = meta.setCategoryActive.mutateAsync;
   const renameCategory = meta.renameCategory.mutate;
   const renamePending = meta.renameCategory.isPending;
   /**
@@ -700,10 +684,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * `Delete…` drew its `role="alert"` on mount: a sentence *announced on insertion*, about a
    * press the reader had not made, naming a pile it was never about.
    *
-   * **It clears the editor's own banner too, and that is right rather than incidental.** The
-   * banner speaks for the newest of {@link writes}, this is one of them, and a reader opening the
-   * question again is starting the write over — a stale refusal outliving the attempt that
-   * produced it is the same bug one rung out.
+   * The editor's banner does not draw this write's refusal (its toast does — {@link bannerWrites}
+   * seats it `toasted`), so the reset is the dialog's alone: a reader opening the question again
+   * is starting the write over, and a stale refusal outliving the attempt that produced it is
+   * the bug.
    *
    * Stable for the component's life, like every `mutate` above it: TanStack binds `reset` on the
    * observer, so putting it in a dependency list costs the menu memo nothing.
@@ -715,48 +699,59 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const resetCategoryClear = deck.clearCategory.reset;
   // The clear's write and its pending flag are read where the confirmation is drawn —
   // `DeckEditorLayers` (issue #557).
+
+  /**
+   * One label onto every slot the dialog was opened over, **reported once** (`./receipts`): the
+   * dialog has closed by the time the writes answer, so the toast is the press's receipt, and a
+   * picked set of twelve is one sentence with a count rather than twelve. Each write goes
+   * through {@link handled}, so a refusal leaves no unhandled rejection; the toast is its one
+   * report, since the banner seats `setLabel` `toasted`.
+   */
+  const labelSlots = useCallback(
+    (slots: readonly AddLabelSlot[], labelId: number, labelName: string) =>
+      reportPresses(
+        slots.map((slot) =>
+          handled(
+            setLabelOnSlot({
+              cardId: slot.cardId,
+              categoryId: slot.categoryId,
+              finish: slot.finish,
+              labelId,
+            }),
+          ),
+        ),
+        slots.map((slot) => slot.name),
+        labelWording(labelName),
+      ),
+    [setLabelOnSlot],
+  );
+
   const createLabelFor = useCallback(
     (slots: readonly AddLabelSlot[], name: string, color: string) => {
       void startLabelCreate({ name, color })
         // One label, then every slot the press was about — a picked set's `More labels…` (issue
         // #954). `setLabel`'s invalidation is the hook's own rather than a per-call callback, so
-        // a loop of `mutate` loses none of them.
-        .then((label) => {
-          for (const slot of slots) {
-            setLabelOnSlot({
-              cardId: slot.cardId,
-              categoryId: slot.categoryId,
-              finish: slot.finish,
-              labelId: label.id,
-            });
-          }
-        })
-        // The refusal is already on the observer, and the observer is in the banner family above.
-        // Swallowed here so a refused create is a sentence rather than an unhandled rejection.
-        .catch(() => {});
+        // a loop of writes loses none of them.
+        .then(
+          (label) => labelSlots(slots, label.id, label.name),
+          // The dialog that asked has closed, so a refused create is said as a toast (the owner's
+          // rule: a failed card edit is never silent) — and only there: the banner seats
+          // `createLabel` `toasted`. Handled here, so it is no unhandled rejection either.
+          (error: unknown) => notifyRefusal(`Couldn't create the label “${name}”`, error),
+        );
     },
-    [startLabelCreate, setLabelOnSlot],
+    [startLabelCreate, labelSlots],
   );
 
   /** Putting an **existing** label on the slot — `createLabelFor` without the create. One write
    *  rather than two, and the same `deck_card_set_label` grain, which is the whole reason the
    *  slot is frozen rather than looked back up. */
-  const setCardLabelOnSlot = useCallback(
-    (slots: readonly AddLabelSlot[], labelId: number) => {
-      for (const slot of slots) {
-        setLabelOnSlot({
-          cardId: slot.cardId,
-          categoryId: slot.categoryId,
-          finish: slot.finish,
-          labelId,
-        });
-      }
-    },
-    [setLabelOnSlot],
-  );
+  const setCardLabelOnSlot = labelSlots;
 
-  // Every write the editor's **own banner** speaks for — the array is the list, deliberately not
-  // a number in this sentence, because it has been recounted twice in one day. The *latest* of
+  // Every write the editor's **own banner** hears — the array is the list, deliberately not
+  // a number in this sentence, because it has been recounted twice in one day. (Since 2026-10-13
+  // the banner reads {@link bannerWrites}, these with the toasted ones seated `toasted`; this
+  // array stays whole for {@link lastOfAny}'s re-read and redo clear.) The *latest* of
   // them owns it, not
   // whichever is still holding an error: a refused move used to leave its sentence up while the
   // reader went on to rename the deck successfully (the collection table's lesson). That rule
@@ -846,97 +841,76 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // — "the deck has been edited since" — is exactly the kind this line exists to say. It is not
   // in `writes` because it is not a `useMutation` the array's type accepts: `useDeckUndo`
   // reports through a string of its own so that it can also drop a redo that can never work.
-  // **And a read the reader pressed for**, which is {@link pressReadFailure}'s own argument:
-  // the two menu rows that fetch before they write have no surface to report into, and their
-  // failure is the failure of a press rather than of a background query. It is last in the
-  // chain because a refused *write* is the more specific answer whenever both are standing.
   //
   // **The token writes join this family exactly while the Tokens & Emblems wall is not drawn**
   // (token stacks PR 2). The band says their refusal itself — once, above its wall, the newest
   // token write's sentence (`useDeckTokens`' `failure`) — but the wall is unmounted while the band
   // is collapsed, which is every deck's default, and the views draw the pile on every deck that has
-  // counted a token. So a refused pile stepper or pile swap (a busy database, a deck deleted under
-  // the reader) would otherwise be a press that changed nothing and said nothing anywhere. Drawn,
-  // the band speaks and this banner leaves them out: two sentences for one refusal is the reason
-  // this family leaves the docked panel's add out too.
+  // counted a token. So a refused pile stepper (a busy database, a deck deleted under the reader)
+  // would otherwise be a press that changed nothing and said nothing anywhere. Drawn, the band
+  // speaks and this banner leaves them out: two sentences for one refusal is the reason this
+  // family leaves the docked panel's add out too.
   //
   // **The wall and not the band's open flag** (`tokenWallDrawn`, the band's own condition): an
   // open band over a deck that makes nothing draws no wall, and since managed tokens that deck is
   // the one Add printing is offered on precisely to add a first token by hand — the press opens
   // the band, so a refused first add keyed on `tokensOpen` was said nowhere at all.
-  const bannerWrites = tokenWallDrawn(deckTokens, row?.tokensOpen === true)
-    ? writes
-    : ([...writes, ...deckTokens.writes] as const);
+  //
+  // **Kept, for the writes no toast speaks for — and only for those** (2026-10-13). The owner's
+  // rule makes every deliberate card edit a `notify.error` at its call site, so this banner used
+  // to say most refusals twice. Three kinds of write are left to it, all exempt from toasts and
+  // all drawn where the reader is looking, so the banner is their one report: the steppers and
+  // drags (`setQuantity`, `moveCard`, `refileCard`, a pile reorder, the token pile's stepper and
+  // rail), the in-place fields and switches (`update`'s name, bracket and band toggles, a pile's
+  // rename), and undo — plus the token writes, below, for a reason of their own. Everything else
+  // is seated `toasted`: kept for its timing, so a newer one still takes down an older refusal,
+  // and never drawn. The four observers that serve both kinds
+  // of press (`setQuantity`, `moveCard`, `update`, and `lastBatch`'s drag and menu batches) cannot
+  // say which their newest call was, so the toasted presses go through `reportToasted`, a record
+  // stamped after the press settles: newer than the observer's own call, it is what the banner
+  // reads, and it says nothing.
+  const bannerWrites = [
+    deck.setQuantity,
+    toasted(deck.clearCategory),
+    deck.moveCard,
+    deck.refileCard,
+    deck.update,
+    toasted(deck.setLabel),
+    toasted(deck.setCardFinish),
+    toasted(meta.createLabel),
+    meta.renameCategory,
+    toasted(meta.setCategoryActive),
+    meta.reorderCategories,
+    toasted(meta.deleteCategory),
+    toasted(deck.quickAddToCollection),
+    toasted(deck.addMissingToCollection),
+    toasted(deck.addToOtherList),
+    // **Not seated `toasted`, though the swap, the add and the remove do toast**: their writes
+    // answer only whether they landed (`useDeckTokens`' never-rejecting promises), so the toast
+    // can say "Couldn't add the token" and not why. With the wall shut this line is the only
+    // place the backend's reason is drawn, which is information the toast cannot carry.
+    ...(tokenWallDrawn(deckTokens, row?.tokensOpen === true) ? [] : deckTokens.writes),
+  ] as const;
   /**
    * **The last batch of card writes, as one write** — a multi-card drop or Delete over a picked
    * set (issue #553). Each card in a batch is its own call on the same observer, so the observer
    * only ever remembers the last card, and a refusal in the middle of a batch that ended well
-   * was said nowhere. {@link reportBatch} gathers every outcome into this record; `batchWrite`'s
-   * doc has the rest. **Last in both lists**, so a tie with its own final member goes to it.
+   * was said nowhere. `useDeckDrops`' `reportBatch` gathers every outcome into this record, and
+   * `reportToasted` every outcome of a press that toasts; `batchWrite`'s doc has the rest.
+   * **Last in both lists**, so a tie with its own final member goes to it.
    */
-  const [lastBatch, setLastBatch] = useState<Write>(NO_BATCH);
+  const [lastBatch, setLastBatch] = useState<LastBatch>(NO_LAST_BATCH);
   const bannerFailure =
-    writeFailure([...bannerWrites, lastBatch]) ?? undo.error ?? pressReadFailure;
+    writeFailure([
+      ...bannerWrites,
+      lastBatch.toasted ? toasted(lastBatch.write) : lastBatch.write,
+    ]) ?? undo.error;
 
-  /**
-   * What to say when a re-file moved nothing — and **nothing at all when it moved something**,
-   * because a card that travelled announces its new pile by taking the caret there.
-   *
-   * The two silences this fills are the ones that read as a broken control: a reader drags a card
-   * onto `Auto`, lets go, and the deck looks exactly as it did. Both answers are true and neither
-   * is a failure, so this is a `role="status"` rather than the `role="alert"` banner above it —
-   * a refused re-file is a refusal like any other and belongs in that one.
-   *
-   * **The card is named by looking it up rather than by being carried back**, which is free here
-   * and only here: nothing moved, so the row is still in the slot the mutation was addressed to.
-   * A moved card would need the answer to carry its name, and a moved card needs no sentence.
-   */
-  const refileAnswer = deck.refileCard.data;
-  const refileSlot = deck.refileCard.variables;
-  // `deck.cards` rather than the `cards` binding, which is declared further down this component
-  // and would be a temporal-dead-zone throw from up here.
-  const refileNote = useMemo(() => {
-    if (!refileAnswer || refileAnswer.moved || !refileSlot) return null;
-    const card = deck.cards.find(
-      (c) => c.cardId === refileSlot.cardId && c.categoryId === refileSlot.from,
-    );
-    const named = card ? `“${card.name}”` : "That card";
-    // **One sentence, where there were two.** The other said a card had no pile of its own to go
-    // in and had stayed put; since 2026-08-16 it goes to `Uncategorized` instead, so the only
-    // press that changes nothing is one aimed at the pile the card is already in.
-    return `${named} is already in ${refileAnswer.category}.`;
-  }, [refileAnswer, refileSlot, deck.cards]);
-
-  /**
-   * The sentence is a hint about one press, so it goes of its own accord — `reset()` clears the
-   * mutation's answer, which is what this is derived from, so there is no second piece of state
-   * to keep in step.
-   *
-   * Keyed on {@link refileAnswer}, whose identity is fresh per call (the `mutationFn` returns a
-   * literal), so pressing again restarts the clock rather than inheriting the first press's
-   * remaining time.
-   */
-  const resetRefile = deck.refileCard.reset;
-  useEffect(() => {
-    if (refileNote === null) return;
-    const timer = setTimeout(resetRefile, REFILE_NOTE_MS);
-    return () => clearTimeout(timer);
-  }, [refileAnswer, refileNote, resetRefile]);
-
-  /**
-   * What the Compare dialog's bulk send wrote — **said here, because the dialog closes on it**
-   * (issue #553). Pressing it twice wishes for the same copies twice, which is `add_wish`'s fold
-   * and was kept on purpose, so what the press owed the reader instead was an unmistakable
-   * "that worked": the dialog goes, and this line says what went where. A hint about one press,
-   * so it clears itself on the refile note's clock; a fresh answer is a fresh object and restarts
-   * it.
-   */
-  const [compareSent, setCompareSent] = useState<WishesSent | null>(null);
-  useEffect(() => {
-    if (compareSent === null) return;
-    const timer = setTimeout(() => setCompareSent(null), REFILE_NOTE_MS);
-    return () => clearTimeout(timer);
-  }, [compareSent]);
+  // **The quick zones' "already filed" line and the Compare dialog's "what was sent" line were
+  // drawn here until 2026-10-12**, each a sentence that cleared itself after six seconds — a
+  // bespoke toast apiece. Both are `notify` now: the re-file's at its write (`useDeckDrops`'
+  // `refile`), the send's in the dialog itself (`TheoryDiffDialog`'s `notifyWishesSent`), so a
+  // reader who looked away finds either in the Notifications inbox.
 
   /**
    * The columns and the move targets: **every category the deck has, in `sortOrder`.**
@@ -1412,8 +1386,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     deck.swapPrinting,
     ...deckTokens.writes,
     // A batch whose last card went through and whose second did not is a refusal the deck has to
-    // be re-read after — the observers above would all read as a success.
-    lastBatch,
+    // be re-read after — the observers above would all read as a success. Toasted or not: a
+    // toast says a refusal, it does not put the deck back.
+    lastBatch.write,
   ]);
   const failedAt = lastOfAny.isError ? lastOfAny.submittedAt : 0;
   useEffect(() => {
@@ -1551,12 +1526,18 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * `null` if the caret is somewhere else by then, which is `handBackRef`'s documented floor:
    * the dialog focuses its own panel either way, and the reader who moved on owns where they are.
    */
+  // **A fresh observer state per opening** (2026-10-13). The dialog draws `pullFromCollection`'s
+  // own refusal beside its button, and the card menu's silent `take` pull is a call on the same
+  // observer — so without the reset, a refused silent pull (already a toast) greeted the next
+  // dialog with its sentence: a refusal said twice, and about a press this dialog never made.
+  const resetPull = deck.pullFromCollection.reset;
   const openPull = useCallback(() => {
     const opener = document.activeElement;
+    resetPull();
     openLayer({ kind: "pull" }, () => {
       if (opener instanceof HTMLElement) opener.focus();
     });
-  }, [openLayer]);
+  }, [openLayer, resetPull]);
 
   /**
    * The plan behind that layer — **gated on the layer being up**, which is the whole of what
@@ -1605,12 +1586,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * There is nothing else for this callback to carry — see the `addMissing` arm's own doc for
    * why the layer has no payload and cannot grow one.
    */
+  // A fresh observer state per opening, for {@link openPull}'s reason: the card menu's picked-set
+  // quick add (`addMissingOf`) is a call on the same observer, and its refusal is a toast already.
+  const resetAddMissing = deck.addMissingToCollection.reset;
   const openAddMissing = useCallback(() => {
     const opener = document.activeElement;
+    resetAddMissing();
     openLayer({ kind: "addMissing" }, () => {
       if (opener instanceof HTMLElement) opener.focus();
     });
-  }, [openLayer]);
+  }, [openLayer, resetAddMissing]);
 
   /**
    * The plan behind that layer — **gated on the layer being up**, exactly as {@link pullPlan} is
@@ -1684,11 +1669,34 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * fresh result object every render, so a callback closing over the whole thing has a new
    * identity every render and every menu built from it is rebuilt.
    */
-  const writeQuickAdd = deck.quickAddToCollection.mutate;
-  const writePull = deck.pullFromCollection.mutate;
+  //
+  // **`mutateAsync` since 2026-10-12**, for the receipt: each press below says what it did as one
+  // toast (`./receipts` — the owner's rule that every collection add says so, and the menu that
+  // made the press has closed), and a call's own promise is that press's answer where a
+  // `mutate`-scoped callback would be replaced by the next press on the same observer.
+  const writeQuickAdd = deck.quickAddToCollection.mutateAsync;
+  const writePull = deck.pullFromCollection.mutateAsync;
   /** The deck-wide record, which is what a picked set's quick add presses (issue #510): one
    *  transaction and one history row for the whole set, rather than one per card. */
-  const writeMissing = deck.addMissingToCollection.mutate;
+  const writeMissing = deck.addMissingToCollection.mutateAsync;
+  /** One card's quick add, said once it lands — or refused, as a toast, the one report (the menu
+   *  row is gone, and a failed collection add is never silent; the banner seats it `toasted`). */
+  const quickAddOne = useCallback(
+    (card: DeckCard, copies: number) =>
+      void writeQuickAdd({ card, quantity: copies, wishId: null }).then(
+        () => notify.success(quickAddReceipt(card.name, copies)),
+        (error: unknown) => notifyRefusal(`Couldn't add “${card.name}” to the collection`, error),
+      ),
+    [writeQuickAdd],
+  );
+  /** A picked set's record — one write, so one toast with the counts it answered. */
+  const addMissingOf = useCallback(
+    (picks: DeckMissingPick[], clearWishes: boolean) =>
+      void writeMissing({ picks, clearWishes }).then(notifyMissingAdded, (error: unknown) =>
+        notifyRefusal("Couldn't add the missing copies to the collection", error),
+      ),
+    [writeMissing],
+  );
 
   /**
    * **Quick add N copies** — record what this row is short of into the deck's own group, and ask
@@ -1706,16 +1714,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    */
   const quickAdd = useCallback(
     (targets: readonly QuickAddTarget[]) => {
-      setPressReadFailure(null);
       if (targets.length === 1) {
         const [{ card, copies }] = targets;
-        writeQuickAdd({ card, quantity: copies, wishId: null });
+        quickAddOne(card, copies);
         return;
       }
       const picks = missingPicks(targets);
-      if (picks.length > 0) writeMissing({ picks, clearWishes: false });
+      if (picks.length > 0) addMissingOf(picks, false);
     },
-    [writeQuickAdd, writeMissing],
+    [quickAddOne, addMissingOf],
   );
 
   /**
@@ -1727,10 +1734,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * any printing, any finish — so {@link QuickUnwishDialog} lists them with their folders and the
    * reader says which one this purchase settles. No wish at all writes straight through.
    *
-   * **A failed read reaches the banner and never nothing.** This is a read the reader pressed
-   * for, inside an act they were promised, and the menu that made the press has closed — so a
-   * silent catch would be a menu row that sometimes does nothing at all. The write's own
-   * refusals are the banner's already, through `writes`; this puts the read beside them.
+   * **A failed read is said, and never nothing.** This is a read the reader pressed for, inside
+   * an act they were promised, and the menu that made the press has closed — so a silent catch
+   * would be a menu row that sometimes does nothing at all. It is a toast, like the write's own
+   * refusal: the press is a deliberate collection edit, and the owner's rule says it once, as
+   * `notify.error`. (It was the banner's too until 2026-10-13, which said it twice.)
    *
    * The hand-back is read off `document.activeElement` **before** the await, which is
    * {@link openAddLabel}'s answer and a rung more careful for the same reason: `ContextMenu`'s
@@ -1745,10 +1753,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    */
   const quickAddAndUnwish = useCallback(
     (targets: readonly QuickAddTarget[]) => {
-      setPressReadFailure(null);
       if (targets.length !== 1) {
         const picks = missingPicks(targets);
-        if (picks.length > 0) writeMissing({ picks, clearWishes: true });
+        if (picks.length > 0) addMissingOf(picks, true);
         return;
       }
       const [{ card, copies }] = targets;
@@ -1761,7 +1768,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         try {
           wishes = await queryClient.fetchQuery(quickAddWishesQuery(card.cardId, card.finish));
         } catch (error) {
-          setPressReadFailure(ipcError(error));
+          // The row that was pressed added nothing to the collection, and the menu has closed.
+          notifyRefusal(`Couldn't add “${card.name}” to the collection`, error);
           return;
         }
         const choice = chooseWish(wishes);
@@ -1769,10 +1777,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           openLayer({ kind: "quickUnwish", card, copies, wishes: choice.wishes }, handBack);
           return;
         }
-        writeQuickAdd({ card, quantity: copies, wishId: null });
+        quickAddOne(card, copies);
       })();
     },
-    [openLayer, queryClient, writeQuickAdd, writeMissing],
+    [openLayer, queryClient, quickAddOne, addMissingOf],
   );
 
   /**
@@ -1803,24 +1811,30 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       const handBack = () => {
         if (opener instanceof HTMLElement) opener.focus();
       };
-      setPressReadFailure(null);
       void (async () => {
         let rows: DeckPullRow[];
         try {
           rows = await queryClient.fetchQuery(pullPlanQuery(deckId));
         } catch (error) {
-          setPressReadFailure(ipcError(error));
+          notifyRefusal("Couldn't pull from your collection", error);
           return;
         }
         const choice = choosePullFor(rows, cards);
         if (choice.kind === "take") {
-          writePull(choice.picks);
+          // **The receipt, and the only word a refused silent pull ever gets.** The pull's write
+          // is not in the banner's family (the dialog speaks for it when it is open), so a
+          // refusal on this path, with no dialog, was said nowhere until this toast.
+          void writePull(choice.picks).then(
+            (outcome) => notifyPulled(outcome, row?.name ?? ""),
+            (error: unknown) => notifyRefusal("Couldn't pull from your collection", error),
+          );
           return;
         }
+        resetPull();
         openLayer({ kind: "pull", cards }, handBack);
       })();
     },
-    [deckId, openLayer, queryClient, writePull],
+    [deckId, openLayer, queryClient, writePull, resetPull, row?.name],
   );
 
   // The menu's three writes, each addressed by the **row** rather than by a slot — a menu is opened
@@ -1828,12 +1842,13 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // writes are; `useDeckDrops` carries that argument in full beside the writes it was written for.
   const writeLabel = deck.setLabel.mutateAsync;
   const writeOtherList = deck.addToOtherList.mutateAsync;
-  const writeFinish = deck.setCardFinish.mutate;
+  // `mutateAsync` so the menu's finish row can say what it did (`deckCardMenu`'s `finishItem`).
+  const writeFinish = deck.setCardFinish.mutateAsync;
 
   /** Every write a drop makes, and the caret's hand-off after one — see `useDeckDrops`. Called
    *  where these callbacks were declared, so the order of this component's effects is unchanged.
    *  `handOffTo` and `refile` stay inside it: nothing out here calls either but a drop. */
-  const { addTo, setQuantityAt, moveTo, applyDrop, reportBatch, applyDrops } = useDeckDrops({
+  const { addTo, setQuantityAt, moveTo, applyDrop, reportToasted, applyDrops } = useDeckDrops({
     deck,
     cards: deck.cards,
     markAdded,
@@ -1891,14 +1906,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
 
   /** The card menu's `Set as foil` / `Set as regular`, and the card pane's own button. */
   const setFinishAt = useCallback(
-    (card: DeckCard, to: DeckFinish) => {
-      writeFinish({
-        cardId: card.cardId,
-        categoryId: card.categoryId,
-        finish: card.finish,
-        to,
-      });
-    },
+    (card: DeckCard, to: DeckFinish) =>
+      handled(
+        writeFinish({
+          cardId: card.cardId,
+          categoryId: card.categoryId,
+          finish: card.finish,
+          to,
+        }),
+      ),
     [writeFinish],
   );
 
@@ -1930,19 +1946,33 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       if (!quickCategoryPayload) return;
       createCategory(name, {
         // **Closed only on success**, which is what leaves a refused name in the field to be
-        // corrected. The second write's own refusal is the editor's banner, like every other add
-        // and move.
+        // corrected. The second write's own refusal is the toast below — `reportToasted` keeps
+        // the editor's banner from saying it again.
         onSuccess: (category) => {
           const write = dropWrite(quickCategoryPayload, {
             kind: "category",
             categoryId: category.id,
           });
-          if (write) applyDrop(write);
+          // The dialog closes on this, so the pile it made and the card filed into it are said
+          // once, as a toast — a drag onto a drawn heading says nothing, but this one went
+          // through a question the reader answered and then watched disappear.
+          const card = quickCategoryPayload.name;
+          if (write) {
+            const press = applyDrop(write);
+            reportToasted([press]);
+            void press.then(
+              () => notify.success(`Created “${category.name}” and filed “${card}” in it`),
+              (error: unknown) =>
+                notifyRefusal(`Couldn't file “${card}” in “${category.name}”`, error),
+            );
+          } else {
+            notify.success(`Created “${category.name}”`);
+          }
           close();
         },
       });
     },
-    [applyDrop, close, createCategory, quickCategoryPayload],
+    [applyDrop, reportToasted, close, createCategory, quickCategoryPayload],
   );
 
   /** The stepper's write, addressed by the card's own slot. */
@@ -2129,13 +2159,17 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     setNoteRequest({ kind: "open", noteId: note.id });
   }, []);
 
-  /** **Set as deck image** — the card menu's cover row, over `updateDeck` (stable). A refusal
-   *  lands in the banner every other `deck.update` write already speaks through. The menu reads
-   *  the cover id rather than `row`, so a write to any other field does not rebuild it. */
+  /** **Set as deck image** — the card menu's cover row, over `updateDeck` (stable). A refusal is
+   *  the row's toast (`coverItem`), which hands the press to `reportToasted` so the banner every
+   *  other `deck.update` write speaks through stays quiet for it. The menu reads the cover id
+   *  rather than `row`, so a write to any other field does not rebuild it. */
   const coverCardId = row === null ? undefined : row.coverCardId;
+  // `mutateAsync`, so the row's receipt (`coverItem`) hears the answer; `handled` leaves no
+  // unhandled rejection behind it.
+  const writeCover = deck.update.mutateAsync;
   const setCoverFrom = useCallback(
-    (card: DeckCard) => updateDeck({ coverCardId: card.cardId }),
-    [updateDeck],
+    (card: DeckCard) => handled(writeCover({ coverCardId: card.cardId })),
+    [writeCover],
   );
 
   /**
@@ -2215,8 +2249,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           otherList: theoryEnabled
             ? { variant: variant === "theory" ? "live" : "theory", add: addToOtherList }
             : undefined,
-          // The plural rows' outcomes, into the same record a multi-card drop and Delete use.
-          batch: reportBatch,
+          // Every row's outcomes, into the same record a multi-card drop and Delete use — marked
+          // as toasted, so the banner leaves their refusals to the toast.
+          batch: reportToasted,
           // **The `Collection ▸` submenu's three rows** (2026-09-03, issue #350). All three are
           // callbacks and none of them is a mutation, which is this builder's contract — and
           // here it is load-bearing rather than ceremonial: two of the three *read* before they
@@ -2300,7 +2335,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       theoryEnabled,
       variant,
       addToOtherList,
-      reportBatch,
+      reportToasted,
       tracks,
       quickAdd,
       quickAddAndUnwish,
@@ -2355,7 +2390,18 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             openLayer({ kind: "import", forcedCategoryName }, () => focusDeckGroup(category.id)),
           openExport: ({ categoryId: id }) =>
             openLayer({ kind: "export", categoryId: id }, () => focusDeckGroup(id)),
-          setActive: (pile, isActive) => setCategoryActive({ id: pile.id, isActive }),
+          // A receipt, because the menu has closed and the change on the desk is only a dimmed
+          // heading the reader may not be looking at. Rename and Hide say nothing: one is an
+          // inline field over the heading the reader is typing in, the other a view preference.
+          setActive: (pile, isActive) =>
+            void setCategoryActive({ id: pile.id, isActive }).then(
+              () => notify.success(`${isActive ? "Activated" : "Deactivated"} “${pile.name}”`),
+              (error: unknown) =>
+                notifyRefusal(
+                  `Couldn't ${isActive ? "activate" : "deactivate"} “${pile.name}”`,
+                  error,
+                ),
+            ),
           // The clear's confirmation, and the reset on the way in is `askDelete`'s below —
           // same observer lifetime, same stale-sentence bug it prevents.
           askClear: (pile) => {
@@ -2926,7 +2972,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     layerOpen: layer !== null,
     pickedRef,
     setQuantityAt,
-    reportBatch,
+    reportToasted,
     setCardSelection,
   });
 
@@ -3231,9 +3277,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     () => focusable(editorRef.current?.querySelector(`[${TOKEN_ADD_ATTR}]`)) ?? editorRef.current,
     [],
   );
+  // The pile's Remove printing says what it took — the band's own arrangement (`DeckTokensPanel`),
+  // and the owner's rule that a deliberate removal from a deck always toasts.
+  const removeTokenSaid = useMemo(
+    () => withTokenRemoveReceipt(tokenList, removeToken),
+    [tokenList, removeToken],
+  );
   const removePileToken = useRemoveCaret({
     views: pileTokenList,
-    remove: removeToken,
+    remove: removeTokenSaid,
     root: pileRoot,
     fallback: pileFloor,
   });
@@ -3515,71 +3567,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         )}
       </AnimatePresence>
 
-      {/* The quick zones' `Auto`, when the rule had nothing to do — the card is already in the
-          pile it names, or there is no pile for it. Neither is a refusal, so this is a
-          `role="status"` and it is drawn in the dim voice rather than the destructive one; a
-          re-file that was actually *refused* is the banner above, like every other write.
-
-          It clears itself after {@link REFILE_NOTE_MS} — see the effect that owns that — which
-          is the other half of the difference: the banner speaks for the state of the deck until
-          something replaces it, and this speaks for one press. Grown into place like its two
-          neighbours, for their reason: the animated element is the wrapper and carries only
-          `overflow-hidden`, because `statusLine` takes `height` to 0 and a box with its own
-          padding can never be shorter than that padding. */}
-      <AnimatePresence initial={false}>
-        {refileNote && (
-          <motion.div {...statusLine} className="shrink-0 overflow-hidden">
-            <p
-              role="status"
-              className="rounded-md border border-border bg-surface px-3 py-2 text-xs text-dim"
-            >
-              {refileNote}
-            </p>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* The Compare dialog's bulk send, after the dialog has closed on it — see
-          {@link compareSent}. **Two elements for one sentence**, and the split is the point: a
-          live region that arrives with its words already inside announces nothing, so the
-          region is always mounted (and `sr-only`, so it costs the column no height while it is
-          empty) and the visible line is `aria-hidden` so it is not read a second time. Accent and
-          a check when something was wished for, the dim voice when nothing was — the stats
-          band's own pair for its inline press. */}
-      <p role="status" className="sr-only">
-        {compareSent ? wishesSentNote(compareSent) : ""}
-      </p>
-      <AnimatePresence initial={false}>
-        {compareSent && (
-          <motion.div {...statusLine} className="shrink-0 overflow-hidden" aria-hidden="true">
-            <p
-              className={cn(
-                "flex items-center gap-1.5 rounded-md border border-border bg-surface px-3 py-2 text-xs",
-                compareSent.wishes > 0 ? "text-accent" : "text-dim",
-              )}
-            >
-              {compareSent.wishes > 0 && <CircleCheck className="size-3.5 shrink-0" />}
-              {wishesSentNote(compareSent)}
-            </p>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* A collection or wishlist add the reader made from a card's right-click, refused.
-          Separate from the banner above because that one speaks for writes to **this deck** and
-          this one is about the binder — and it has to be drawn *somewhere*, because the menu
-          cannot draw it: `ctx.run` closes the panel before a row's handler runs, so by the time
-          an answer arrives there is no menu left to put a sentence in. The deck add is not here
-          and needs nothing from this file — it reaches the app's single `useCardToDeck` through
-          `CardToDeckProvider`, and that one mount draws its own sentence.
-
-          **The shared component rather than this file's fifth copy of it** (2026-08-16). Every
-          other surface that mounts `useCardMenuDeps` already drew `CardMenuRefusal`; this one
-          hand-drew the same markup down to the class string, and the only thing that differed
-          was the `shrink-0` this column needs — which is what `className` is for. `shrink-0`
-          stays at the call site rather than in the component: whether a banner may be squeezed
-          is a fact about the box it is drawn in. */}
-      <CardMenuRefusal error={menuFailure} className="shrink-0" />
 
       {loading && (
         <p role="status" className="py-16 text-center text-sm text-dim">
@@ -3911,6 +3898,17 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                 : undefined;
           setPickingToken(null);
           if (written === undefined) return;
+          // The picker has closed on the press, so the write is said once it answers (the
+          // owner's rule for every deliberate deck edit). The writes never reject; a refusal's
+          // reason is the band's `failure` line, so the toast only says that it failed.
+          const swapped = tokenPicker?.kind === "swap" ? `“${tokenPicker.entry.name}”` : null;
+          void written.then((landed) => {
+            if (swapped !== null) {
+              if (landed) notify.success(`Changed the printing of ${swapped}`);
+              else notify.error(`Couldn't change the printing of ${swapped}`);
+            } else if (landed) notify.success("Added the token to the deck");
+            else notify.error("Couldn't add the token to the deck");
+          });
           // The surface by its attribute, asked when the caret is placed — never the element the
           // opener sat in, which a view switch in the meantime could have replaced.
           const surface = tokenPickerOpener.current?.closest(`[${TOKEN_PILE_ATTR}]`)
@@ -4181,7 +4179,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         tracks={tracks}
         setCardLabelOnSlot={setCardLabelOnSlot}
         createLabelFor={createLabelFor}
-        setCompareSent={setCompareSent}
         pullPlan={pullPlan}
         missingPlan={missingPlan}
         createQuickCategory={createQuickCategory}

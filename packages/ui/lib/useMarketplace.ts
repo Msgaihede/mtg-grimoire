@@ -8,6 +8,7 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import { ipc, ipcError, type FeedProgressEvent, type MarketplaceFeedStatus } from "@/lib/ipc";
+import { notify } from "@/lib/notifications";
 import {
   DEFAULT_MARKETPLACE,
   FEED_MARKETPLACES,
@@ -324,10 +325,24 @@ export function useMarketplace() {
     // window with no event listener (a story, a plain `vite dev`) still has to end up right.
     // Invalidating twice costs one deduplicated refetch; invalidating in only one place would
     // leave one of the two paths showing the prices from before.
-    onSuccess: () => invalidatePricedQueries(queryClient),
+    //
+    // **And both answers are toasts** (`@/lib/notifications`): a feed is tens of megabytes, so
+    // the fetch routinely finishes after the reader has left Settings — and a mutation's own
+    // callbacks still run once its observer has unmounted, so the toast reaches them wherever
+    // they went. Only a press reaches this (the panel's Refresh, or choosing an empty feed);
+    // the backend's own start-up pass does not, and says nothing.
+    onSuccess: (_status, id) => {
+      notify.success(`${resolveMarketplace(id).label} prices updated`);
+      invalidatePricedQueries(queryClient);
+    },
     // The status row moves even when the fetch fails — `fetched_at` is not written, but a
     // reader looking at the panel is owed the state it is actually in.
-    onError: () => void queryClient.invalidateQueries({ queryKey: MARKETPLACE_FEEDS_KEY }),
+    onError: (failure, id) => {
+      notify.error(`Couldn't update ${resolveMarketplace(id).label} prices`, {
+        body: ipcError(failure),
+      });
+      void queryClient.invalidateQueries({ queryKey: MARKETPLACE_FEEDS_KEY });
+    },
   });
 
   const select = useMutation({

@@ -558,12 +558,36 @@ export async function importBinderGroups(
       }
     } catch (refusal) {
       const already = landed.length === 0 ? "" : ` Already imported: ${landed.join(", ")}.`;
-      throw new Error(`Stopped at ${label}: ${ipcError(refusal)}.${already}`, { cause: refusal });
+      throw new BinderImportStopped(
+        `Stopped at ${label}: ${ipcError(refusal)}.${already}`,
+        result.copies,
+        groups.reduce((sum, g) => sum + g.totalCards, 0),
+        refusal,
+      );
     }
     result.copies += group.totalCards;
     landed.push(label);
   }
   return result;
+}
+
+/**
+ * {@link importBinderGroups}' refusal: its sentence, and how far the press got — so the toast can
+ * say a press that stopped part-way as "Imported 40 of 120 cards" (a warning) and one that landed
+ * nothing as a refusal, which is the owner's rule for a batch that partly failed.
+ */
+export class BinderImportStopped extends Error {
+  /** Copies that landed, in the groups before the one that was refused. */
+  readonly copies: number;
+  /** Copies the whole press would have written. */
+  readonly total: number;
+
+  constructor(message: string, copies: number, total: number, cause: unknown) {
+    super(message, { cause });
+    this.name = "BinderImportStopped";
+    this.copies = copies;
+    this.total = total;
+  }
 }
 
 /** The whole of what the import dialog consumes, named so the surface and the hook agree. */

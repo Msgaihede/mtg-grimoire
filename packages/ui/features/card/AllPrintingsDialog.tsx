@@ -111,6 +111,7 @@ import { soleFinish, type Finish } from "@/lib/finish";
 import { finishTreatments } from "@/lib/treatment";
 import { ipc, ipcError, type Printing } from "@/lib/ipc";
 import { languageHint } from "@/lib/languages";
+import { notify } from "@/lib/notifications";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import {
   useAppStore,
@@ -126,7 +127,6 @@ import { TradeOwnedPrintings } from "@/features/trade/TradeOwnedPrintings";
 import { buildCardMenu, type CardMenuDeps } from "./cardMenu";
 import { finishRefusal } from "./copyEdit";
 import { handBackToDeckCard } from "./deckControl";
-import { CardMenuRefusal } from "./CardMenuRefusal";
 import {
   EMPTY_PRINTING_FILTER,
   filterPrintings,
@@ -726,6 +726,26 @@ function Body({
   const [splitRefusal, setSplitRefusal] = useState<string | null>(null);
 
   /**
+   * The printing a press chose, as the receipt toasts below name it — `M10 #146`, the set code and
+   * number the tiles carry, since a printing has no name of its own.
+   *
+   * **Every write on this wall that closes it answers with a toast** (`@/lib/notifications`), and
+   * that is the whole reason this exists: the wall is gone the moment the write lands, and what it
+   * changed — a deck row, a wish, a copy, a trade line — is drawn on a surface behind it that may
+   * not show the printing at all. A refusal keeps the wall open with its sentence beside it, so
+   * refusals stay the inline lines at the foot of this body and are not doubled as toasts.
+   */
+  const printingName = useCallback(
+    (cardId: string): string => {
+      const printing = items.find((row) => row.id === cardId);
+      return printing === undefined
+        ? "that printing"
+        : `${printing.setCode.toUpperCase()} #${printing.collectorNumber}`;
+    },
+    [items],
+  );
+
+  /**
    * The other write a press can be: the **wish** this modal was opened about, repointed onto the
    * printing pressed.
    *
@@ -747,9 +767,10 @@ function Body({
     // be left holding the id of a wish the request has since moved off.
     mutationFn: ({ id, cardId }: { id: number; cardId: string }) =>
       ipc.wishlistSetPrinting(id, cardId),
-    onSuccess: () => {
+    onSuccess: (_change, { cardId }) => {
       void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
       void refreshCardSearches(queryClient);
+      notify.success(`Changed the wish for “${request.name}” to ${printingName(cardId)}`);
       onDone();
     },
   });
@@ -782,6 +803,7 @@ function Body({
       void queryClient.invalidateQueries({ queryKey: ["decks"] });
       void refreshCardSearches(queryClient);
       if (useAppStore.getState().paneCopy?.entryId === id) editCopy(cardId, finish, change.id);
+      notify.success(`Changed your copy of “${request.name}” to ${printingName(cardId)}`);
       onDone();
     },
   });
@@ -804,7 +826,10 @@ function Body({
       if (!trade) return Promise.resolve();
       return trade.choose(cardId, null);
     },
-    onSuccess: () => onDone(),
+    onSuccess: (_answer, cardId) => {
+      notify.success(`Changed “${request.name}” in the trade to ${printingName(cardId)}`);
+      onDone();
+    },
   });
 
   const writing =
@@ -949,7 +974,14 @@ function Body({
             finish: from.finish,
             quantity: copies,
           },
-          { onSuccess: () => onDone() },
+          {
+            onSuccess: () => {
+              notify.success(
+                `Split ${plural(copies, "copy", "copies")} of “${request.name}” onto ${printingName(cardId)}`,
+              );
+              onDone();
+            },
+          },
         );
         return;
       }
@@ -990,6 +1022,9 @@ function Body({
              * dismissed.
              */
             if (!result.folded) {
+              // The receipt the closing wall owes — see `printingName`. A fold below says its own
+              // sentence in the open wall instead, so it gets no toast on top.
+              notify.success(`Changed “${request.name}” to ${printingName(cardId)}`);
               onDone();
               return;
             }
@@ -1049,6 +1084,7 @@ function Body({
       onDone,
       onSwapped,
       openAllPrintings,
+      printingName,
     ],
   );
 
@@ -1061,7 +1097,7 @@ function Body({
    * rather than a printing one because a different printing of this card is the same list.
    * `printingsDeck` is what makes the same menu's adds and a press mean the same slot.
    */
-  const { deps, error: menuFailure } = useCardMenuDeps();
+  const { deps } = useCardMenuDeps();
   const menuDeps = useMemo<CardMenuDeps>(
     () => ({ ...deps, printingsOracleId: request.oracleId, printingsDeck: request.deck }),
     [deps, request.oracleId, request.deck],
@@ -1227,10 +1263,8 @@ function Body({
           {copyRefusal ?? `Couldn't change this copy's printing — ${ipcError(moveCopy.error)}`}
         </p>
       )}
-      {/* And a refused **menu** write, which is a different thing: an add the reader made from a
-          panel that had already closed by the time the backend answered. Every surface mounting
-          `useCardMenuDeps` owes this, or a card silently fails to be filed. */}
-      <CardMenuRefusal error={menuFailure} className="shrink-0" />
+      {/* A refused **menu** write is not drawn here: an add made from a panel that had already
+          closed answers with a toast, which `useCardMenuDeps` raises for every surface. */}
 
       {/* Two empty states, because they are two different facts. One is about the filter and the
           reader can undo it; the other is about the card and they cannot.

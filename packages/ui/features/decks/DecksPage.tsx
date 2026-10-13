@@ -30,9 +30,10 @@ import { reorderedLevel } from "@/lib/folderOrder";
 import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type DeckFolder, type DeckRow } from "@/lib/ipc";
 import { sortOptions } from "@/lib/options";
-import { writeFailure } from "@/lib/writes";
+import { toasted, writeFailure } from "@/lib/writes";
 import { LAYER } from "@/lib/layers";
 import { PRESS, statusLine, TRANSITION } from "@/lib/motion";
+import { notify } from "@/lib/notifications";
 import { useAppStore } from "@/lib/store";
 import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
 import { useDeskWidth } from "@/lib/useDeskWidth";
@@ -42,7 +43,7 @@ import { CreateDeckDialog } from "./CreateDeckDialog";
 import { deckFormats, filterDecks, NO_DECK_FILTER, type DeckFilter } from "./deckFilter";
 import { DeckTile } from "./DeckTile";
 import { type DeckMenuDeps } from "./deckMenu";
-import { tagsInUse } from "./deckTags";
+import { hasTag, tagsInUse } from "./deckTags";
 import {
   DECK_SORT_OPTIONS,
   NATURAL_DESC,
@@ -80,7 +81,7 @@ import type { FolderRenameAt, Panel } from "./panels";
 import { bracketLabel, useDeckBrackets } from "./useDeckBrackets";
 import { useDeckFolders } from "./useDeckFolders";
 import { useDeckPips } from "./useDeckPips";
-import { useDecks, type Decks } from "./useDecks";
+import { receipt, useDecks, type Decks } from "./useDecks";
 import { useDeckSort } from "./useDeckSort";
 import { useFolderPane } from "./useFolderPane";
 import { useFormatSpecs } from "./useFormatSpecs";
@@ -906,18 +907,104 @@ export function DecksPage() {
    * **`tagsInUse` is the one value in here**, so the object is rebuilt when the wall's own
    * `deck_list` answer changes — which redraws every tile anyway. A drag does not touch it.
    */
-  const moveDeck = setFolder.mutate;
-  const duplicateDeck = decks.duplicate.mutate;
-  const updateDeck = decks.update.mutate;
+  const duplicateAsync = decks.duplicate.mutateAsync;
+  const updateAsync = decks.update.mutateAsync;
   const inUse = useMemo(() => tagsInUse(decks.decks), [decks.decks]);
+
+  /**
+   * **Every deliberate filing, duplicate and tag below says what it did** — the owner's rule for
+   * deck and folder edits (`packages/ui/CLAUDE.md`). A menu row has closed by the time its write
+   * lands, a duplicate lands wherever `deck_list`'s order puts it, and a tile filed into a folder
+   * leaves the wall it was on, so none of them has a receipt on screen. Each goes through
+   * `useDecks`' {@link receipt}, which also toasts the refusal — the toast is its only report,
+   * since the banner below seats these writes `toasted`.
+   *
+   * The deck's name is read **at the press**, from the row the wall is drawing — a receipt names
+   * the deck the reader acted on, even if a rename lands in between.
+   */
+  const deckName = useCallback(
+    (deckId: number) => decks.decks.find((d) => d.id === deckId)?.name ?? "deck",
+    [decks.decks],
+  );
+  /** A folder as a receipt names it — the tree's own `All decks` for the top level, and for a
+   *  folder the list does not carry, which `folderOf` files at the root too. */
+  const folderName = useCallback(
+    (folderId: number | null) => folders.folders.find((f) => f.id === folderId)?.name ?? ROOT_LABEL,
+    [folders.folders],
+  );
+
+  /**
+   * One deck, filed — from the menu's `Move to`, the tile's own popup and a drop on a folder
+   * card, tree row or way-up tile. All three are the same act and say the same sentence; the
+   * drop is in the rule by name ("sidebar drop") since it is not a drag *inside* an open list —
+   * the tile leaves the wall it was dragged from.
+   *
+   * `landed` is the popup's `dismiss`, which closes it only once the write is in — the shape the
+   * popup had with `mutate`'s `onSuccess`.
+   */
+  const moveDeckAsync = setFolder.mutateAsync;
+  const fileDeckIn = useCallback(
+    (deckId: number, folderId: number | null, landed?: () => void) => {
+      const name = deckName(deckId);
+      const where = folderName(folderId);
+      receipt(
+        moveDeckAsync({ id: deckId, folderId }),
+        () => {
+          landed?.();
+          notify.success(`Moved “${name}” to “${where}”`);
+        },
+        `Couldn't move “${name}”`,
+      );
+    },
+    [deckName, folderName, moveDeckAsync],
+  );
+
+  /** The tray's `Duplicate` and the menu's, one sentence — and it names the copy, which may land
+   *  anywhere on a wall sorted by something other than when a deck was touched. */
+  const duplicateDeck = useCallback(
+    (deckId: number) => {
+      const name = deckName(deckId);
+      receipt(
+        duplicateAsync(deckId),
+        (copy) =>
+          notify.success(`Deck “${name}” duplicated`, { body: `The copy is “${copy.name}”` }),
+        `Couldn't duplicate “${name}”`,
+      );
+    },
+    [deckName, duplicateAsync],
+  );
+
+  /**
+   * A menu's tag write, said as the one tag it added or took off. The menu hands over the whole
+   * list (`deck_update` takes nothing smaller), so which tag moved is read back by comparing it
+   * with the row the menu was built on — `hasTag`, which folds capitals as Rust does.
+   */
+  const setDeckTags = useCallback(
+    (deckId: number, tags: string[]) => {
+      const deck = decks.decks.find((d) => d.id === deckId);
+      const name = deck?.name ?? "deck";
+      const before = deck?.tags ?? [];
+      const added = tags.find((tag) => !hasTag(before, tag));
+      const removed = before.find((tag) => !hasTag(tags, tag));
+      receipt(
+        updateAsync({ id: deckId, patch: { tags } }),
+        () => {
+          if (added !== undefined) notify.success(`Added tag “${added}” to “${name}”`);
+          else if (removed !== undefined) notify.success(`Removed tag “${removed}” from “${name}”`);
+        },
+        `Couldn't change the tags on “${name}”`,
+      );
+    },
+    [decks.decks, updateAsync],
+  );
   const deckMenuDeps = useMemo<DeckMenuDeps>(
     () => ({
       setOpenDeckId,
       startRename: (deck) => startDeckRename(deck, menuOpenerRef.current),
       openSettings: (deckId, focus) => openDeckSettings(deckId, menuOpenerRef.current, focus),
-      moveToFolder: (deckId, folderId) => moveDeck({ id: deckId, folderId }),
+      moveToFolder: (deckId, folderId) => fileDeckIn(deckId, folderId),
       tagsInUse: inUse,
-      setTags: (deckId, tags) => updateDeck({ id: deckId, patch: { tags } }),
+      setTags: setDeckTags,
       duplicate: duplicateDeck,
       askDelete: (deck) => askDelete(deck, menuOpenerRef.current),
     }),
@@ -925,27 +1012,34 @@ export function DecksPage() {
       setOpenDeckId,
       startDeckRename,
       openDeckSettings,
-      moveDeck,
+      fileDeckIn,
       inUse,
-      updateDeck,
+      setDeckTags,
       duplicateDeck,
       askDelete,
     ],
   );
 
+  // The receipt is the destructive rule's as well as the owner's: the tile and the question
+  // leave together, so nothing on screen says the deck went. A refusal keeps the question up, as
+  // it always has, and the toast is what says why.
+  const removeAsync = decks.remove.mutateAsync;
   const confirmDelete = useCallback(
     (deck: DeckRow) => {
-      decks.remove.mutate(deck.id, {
-        onSuccess: () => {
+      receipt(
+        removeAsync(deck.id),
+        () => {
           // The tile the caret was on is about to leave with the deck, so the hand-back goes
           // to the one control that is certainly still there.
           openerRef.current = null;
           setPanel(null);
           newDeckRef.current?.focus();
+          notify.success(`Deck “${deck.name}” deleted`);
         },
-      });
+        `Couldn't delete “${deck.name}”`,
+      );
     },
-    [decks.remove],
+    [removeAsync],
   );
 
   const onCreated = useCallback(
@@ -1017,8 +1111,8 @@ export function DecksPage() {
   );
 
   const fileDeck = useCallback(
-    (drag: DeckDrag, folderId: number | null) => setFolder.mutate({ id: drag.deckId, folderId }),
-    [setFolder],
+    (drag: DeckDrag, folderId: number | null) => fileDeckIn(drag.deckId, folderId),
+    [fileDeckIn],
   );
 
   // Back where it already is is not a move: it would write nothing, bump `updated_at` and
@@ -1158,12 +1252,27 @@ export function DecksPage() {
    * somewhere the reader was not shown.
    */
   const reorderFolders = folders.reorder.mutate;
+  const reorderFoldersAsync = folders.reorder.mutateAsync;
   const dropFolder = useCallback(
     (drag: FolderDrag, folderId: number | null, edge: FolderEdge) => {
       const landing = folderLanding(drag, folderId, edge);
-      if (landing !== null) reorderFolders(landing);
+      if (landing === null) return;
+      // **A drop that changes the drawer says so; one that only changes the order does not.** A
+      // folder nested into another (or lifted out) takes every deck it holds with it and leaves
+      // the level it was dragged from — the move the owner's rule is about. A reorder within one
+      // level is drawn exactly where the reader let go, which is the rule's own exemption.
+      if (landing.parentId === drag.parentId) {
+        reorderFolders(landing);
+        return;
+      }
+      const where = folderName(landing.parentId);
+      receipt(
+        reorderFoldersAsync(landing),
+        () => notify.success(`Moved folder “${drag.name}” to “${where}”`),
+        `Couldn't move folder “${drag.name}”`,
+      );
     },
-    [folderLanding, reorderFolders],
+    [folderLanding, reorderFolders, reorderFoldersAsync, folderName],
   );
 
   /**
@@ -1209,7 +1318,21 @@ export function DecksPage() {
    * caret goes back to a row that does not exist yet — `refocusFolderRef` finds it by attribute
    * after the render that redraws it.
    */
-  const moveFolder = folders.move.mutate;
+  const moveFolderAsync = folders.move.mutateAsync;
+  /** The menu's `Move to`, for a folder: the menu has closed and the folder has left the level it
+   *  was drawn in, so the receipt is the only place the reader learns where it went. */
+  const moveFolder = useCallback(
+    ({ id, parentId }: { id: number; parentId: number | null }) => {
+      const name = folders.folders.find((f) => f.id === id)?.name ?? "folder";
+      const where = folderName(parentId);
+      receipt(
+        moveFolderAsync({ id, parentId }),
+        () => notify.success(`Moved folder “${name}” to “${where}”`),
+        `Couldn't move folder “${name}”`,
+      );
+    },
+    [folders.folders, folderName, moveFolderAsync],
+  );
   /**
    * The four rows that are the same wherever the menu was opened.
    *
@@ -1354,20 +1477,42 @@ export function DecksPage() {
   // The *latest* write on the screen, not whichever is still holding an error: a refused
   // archive used to leave its banner up while the reader went on to duplicate something
   // successfully, which is an alert about a thing already dealt with (the collection table's
-  // lesson). The rule itself is `lib/writes.ts`, shared with the three other surfaces that
-  // apply it. The folder writes are in the list because they are writes this screen makes —
-  // including the one refusal that is a sentence worth reading, a folder moved into its own
-  // descendant.
+  // lesson). The rule itself is `lib/writes.ts`, shared with the other surfaces that apply it.
+  //
+  // **Kept, and narrowed to the writes no toast speaks for** (2026-10-13). Every deliberate move,
+  // duplicate, archive, tag, delete and folder move here goes through `receipt`, which raises
+  // `notify.error` — so those are seated `toasted`: they still take the banner off an older
+  // refusal when they are newer, and never draw their own. What is left is what the owner's rule
+  // exempts and so has no toast to fall back on: a deck or folder **renamed** or a folder
+  // **created** in place, whose field stays open on a refusal for the reader to try again, and a
+  // folder **reordered** within its level, which snaps back with nothing else to say why. The
+  // banner is the only report those get.
+  //
+  // `decks.update` and `folders.reorder` are each one observer behind both kinds of press, so
+  // which kind it is is read off the newest call's own variables: a patch that names a `name` is
+  // the rename field (the menu's tags and the tray's archive never carry one), and a landing
+  // in which no folder the list still has sits under another parent is a reorder rather than a
+  // re-parent. That holds of a *refused* re-parent too — the refusal re-reads the list with the
+  // folder still where it was — and a folder deleted elsewhere, often the very reason a reorder
+  // was refused, is skipped rather than read as a move.
+  const renamed = decks.update.variables?.patch.name !== undefined;
+  const landing = folders.reorder.variables;
+  const reordered =
+    landing !== undefined &&
+    !landing.ids.some((id) => {
+      const folder = folders.folders.find((f) => f.id === id);
+      return folder !== undefined && folder.parentId !== landing.parentId;
+    });
   const bannerFailure = writeFailure([
-    decks.update,
-    decks.remove,
-    decks.duplicate,
-    setFolder,
+    renamed ? decks.update : toasted(decks.update),
+    toasted(decks.remove),
+    toasted(decks.duplicate),
+    toasted(setFolder),
     folders.create,
     folders.rename,
-    folders.move,
-    folders.reorder,
-    folders.remove,
+    toasted(folders.move),
+    reordered ? folders.reorder : toasted(folders.reorder),
+    toasted(folders.remove),
   ]);
   // **Where the re-read after a refusal comes from, since it is not here.** The editor keeps a
   // `refetch` effect keyed on the newest failure's `submittedAt`; this screen does not, because
@@ -1663,15 +1808,32 @@ export function DecksPage() {
                     <DeleteFolderConfirm
                       node={openNode}
                       pending={folders.remove.isPending}
-                      onConfirm={() =>
-                        folders.remove.mutate(openNode.folder.id, {
-                          onSuccess: () => {
+                      onConfirm={() => {
+                        // Destructive, and the wall it was asked over is gone with it — so a
+                        // receipt, which also says what the question promised: the decks inside
+                        // went to the top level, and the subfolders went with the folder.
+                        const { folder } = openNode;
+                        const kept = decksUnder(openNode, decks.decks, folderOf).length;
+                        const dropped = flattenFolders(openNode.children).length;
+                        const body = [
+                          kept > 0 ? `${plural(kept, "deck")} moved to “${ROOT_LABEL}”` : null,
+                          dropped > 0 ? `${plural(dropped, "subfolder")} deleted` : null,
+                        ]
+                          .filter((part): part is string => part !== null)
+                          .join(" · ");
+                        receipt(
+                          folders.remove.mutateAsync(folder.id),
+                          () => {
                             openerRef.current = null;
                             setPanel(null);
-                            setSelectedFolderId(openNode.folder.parentId);
+                            setSelectedFolderId(folder.parentId);
+                            notify.success(`Folder “${folder.name}” deleted`, {
+                              ...(body !== "" && { body }),
+                            });
                           },
-                        })
-                      }
+                          `Couldn't delete folder “${folder.name}”`,
+                        );
+                      }}
                       onCancel={dismiss}
                       onClose={close}
                     />
@@ -1931,9 +2093,7 @@ export function DecksPage() {
                   onRename={renameDeck}
                   menuDeps={deckMenuDeps}
                   menuOpenerRef={menuOpenerRef}
-                  onMove={(folderId) =>
-                    setFolder.mutate({ id: deck.id, folderId }, { onSuccess: dismiss })
-                  }
+                  onMove={(folderId) => fileDeckIn(deck.id, folderId, dismiss)}
                   onConfirmDelete={confirmDelete}
                   onCancelPanel={dismiss}
                   onClosePanel={close}
@@ -2083,9 +2243,7 @@ export function DecksPage() {
                       onRename={renameDeck}
                       menuDeps={deckMenuDeps}
                       menuOpenerRef={menuOpenerRef}
-                      onMove={(folderId) =>
-                        setFolder.mutate({ id: deck.id, folderId }, { onSuccess: dismiss })
-                      }
+                      onMove={(folderId) => fileDeckIn(deck.id, folderId, dismiss)}
                       onConfirmDelete={confirmDelete}
                       onCancelPanel={dismiss}
                       onClosePanel={close}

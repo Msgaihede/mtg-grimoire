@@ -471,8 +471,6 @@ function Binder({
    */
   const [picked, setPicked] = useState<ReadonlySet<string>>(() => new Set());
   const [sending, setSending] = useState(false);
-  /** What the last add did, in the view rather than in a dialog that has closed over it. */
-  const [report, setReport] = useState<string | null>(null);
 
   const currency = shareCurrency(snapshot);
   const market = resolveMarketplace(snapshot.marketplace);
@@ -739,21 +737,14 @@ function Binder({
         </div>
       )}
 
-      {report !== null && (
-        // `status` and not `alert`: the region is mounted only when there is something to say,
-        // but this one is the result of a press the reader has just made and watched.
-        <p role="status" className="pt-3 text-sm text-dim">
-          {report}
-        </p>
-      )}
-
       <AddToWishlist
         open={sending}
         cards={pickedCards}
         index={index}
         onClose={() => setSending(false)}
-        onAdded={(said) => {
-          setReport(said);
+        // The receipt is the dialog's own toast (`AddToWishlist`'s `submit`); all this page owes
+        // the add is to put the picks down.
+        onAdded={() => {
           // Put the picks down: a bar still reading *2 picked* over cards that are now on the
           // wishlist invites exactly the same press a second time, and `wishlist_add` folds.
           setPicked(new Set());

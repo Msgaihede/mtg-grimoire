@@ -7,6 +7,7 @@ import { newDeckDestination } from "@/features/transfer/import/destinations/newD
 import { NewDeckPreview } from "@/features/transfer/import/destinations/NewDeckPreview";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import { plural } from "@/lib/counts";
+import { notify } from "@/lib/notifications";
 import {
   ipcError,
   type DeckCard,
@@ -28,9 +29,10 @@ import { deckCardPullKey, pullKey } from "./pullPlan";
 import { PullFromCollectionDialog } from "./PullFromCollectionDialog";
 import { QuickUnwishDialog } from "./QuickUnwishDialog";
 import { QuickCategoryDialog } from "./QuickZones";
-import { TheoryDiffDialog, type WishesSent } from "./TheoryDiffDialog";
+import { TheoryDiffDialog } from "./TheoryDiffDialog";
 import type { Deck, useMissingPlan, usePullPlan } from "./useDeck";
 import type { DeckMeta } from "./useDeckMeta";
+import { notifyRefusal, quickAddReceipt } from "./receipts";
 
 /*
  * **The deck editor's layers** — the `Layer` union that says which one is up, and the overlays it
@@ -352,9 +354,9 @@ export interface DeckEditorLayersProps {
   deckName: string;
   categories: Deck["categories"];
   tracks: boolean;
-  setCardLabelOnSlot: (slots: readonly AddLabelSlot[], labelId: number) => void;
+  /** The label's name rides with its id, for the receipt the editor says once they land. */
+  setCardLabelOnSlot: (slots: readonly AddLabelSlot[], labelId: number, labelName: string) => void;
   createLabelFor: (slots: readonly AddLabelSlot[], name: string, color: string) => void;
-  setCompareSent: (sent: WishesSent) => void;
   pullPlan: ReturnType<typeof usePullPlan>;
   missingPlan: ReturnType<typeof useMissingPlan>;
   createQuickCategory: (name: string) => void;
@@ -379,7 +381,6 @@ export function DeckEditorLayers({
   tracks,
   setCardLabelOnSlot,
   createLabelFor,
-  setCompareSent,
   pullPlan,
   missingPlan,
   createQuickCategory,
@@ -612,7 +613,8 @@ export function DeckEditorLayers({
         pending={meta.createLabel.isPending}
         onPick={(labelId) => {
           if (layer?.kind !== "addLabel") return;
-          setCardLabelOnSlot(layer.slots, labelId);
+          const label = addLabelChoices.find((choice) => choice.id === labelId);
+          setCardLabelOnSlot(layer.slots, labelId, label?.name ?? "");
           dismiss();
         }}
         onCreate={(name, color) => {
@@ -634,7 +636,6 @@ export function DeckEditorLayers({
         open={layer?.kind === "theoryDiff"}
         onDismiss={dismiss}
         onClose={close}
-        onSent={setCompareSent}
       />
       <DeckSettingsDialog
         deckId={deckId}
@@ -759,7 +760,23 @@ export function DeckEditorLayers({
               virtual={!tracks}
               pending={clearPending}
               onCancel={dismiss}
-              onCleared={() => clearCategory(clearedCategory.id, { onSuccess: dismiss })}
+              // **A receipt, with the count the write answered**: a clear is destructive and the
+              // question closes on it (`./receipts`' rule). The refusal stays inside the open
+              // dialog as it was, and is a toast too — the owner's rule for every card edit.
+              onCleared={() =>
+                clearCategory(clearedCategory.id, {
+                  onSuccess: (cleared) => {
+                    notify.success(
+                      cleared === 0
+                        ? `Cleared “${clearedCategory.name}”`
+                        : `Removed ${plural(cleared, "card")} from “${clearedCategory.name}”`,
+                    );
+                    dismiss();
+                  },
+                  onError: (error) =>
+                    notifyRefusal(`Couldn't clear “${clearedCategory.name}”`, error),
+                })
+              }
             />
           </div>
         )}
@@ -875,12 +892,25 @@ export function DeckEditorLayers({
         failure={unwishFailure}
         onConfirm={(wishId) => {
           if (unwish === null) return;
+          const { card, copies } = unwish;
           writeQuickAdd(
-            { card: unwish.card, quantity: unwish.copies, wishId },
+            { card, quantity: copies, wishId },
             // Closed on the answer rather than on the press, so a refusal leaves the question
             // open with its sentence under it — `ClearCategory`'s arrangement, and the reason
             // the panel takes a `failure` at all.
-            { onSuccess: dismiss },
+            //
+            // **And said as a toast either way** (`./receipts`): both halves land out of sight —
+            // the binder and the wishlist — and the dialog is gone on success.
+            {
+              onSuccess: () => {
+                notify.success(quickAddReceipt(card.name, copies), {
+                  body: "Taken off your wishlist",
+                });
+                dismiss();
+              },
+              onError: (error) =>
+                notifyRefusal(`Couldn't add “${card.name}” to the collection`, error),
+            },
           );
         }}
         onDismiss={dismiss}

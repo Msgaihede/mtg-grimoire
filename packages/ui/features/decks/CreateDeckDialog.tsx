@@ -3,6 +3,7 @@ import { skipToken, useQuery } from "@tanstack/react-query";
 import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type DeckInput, type DeckRow } from "@/lib/ipc";
 import { DEFAULT_MARKETPLACE } from "@/lib/marketplace";
+import { notify } from "@/lib/notifications";
 import { cn } from "@/lib/utils";
 import { AUTO_CATEGORY } from "./autoCategory";
 import { Dialog } from "@/components/Dialog";
@@ -169,6 +170,13 @@ export interface CreateDeckDialogProps {
    *  look at a tile of it. */
   onCreated: (deck: DeckRow) => void;
   /**
+   * The receipt toast's sentence for the deck the write answered with — absent, `Deck “X”
+   * created`. **One create is one toast**: a host that has more to say about the deck (the
+   * scanner's `Created “X” with 12 cards`) says it here rather than raising a second one from
+   * `onCreated`.
+   */
+  receipt?: (deck: DeckRow) => string;
+  /**
    * Escape, the header's ✕ and the trigger pressed again: close, and hand the caret back to
    * whatever opened this. Handed straight to {@link Dialog}, which owns both rungs.
    *
@@ -238,6 +246,7 @@ export function CreateDeckDialog({
   defaultFolderId = null,
   open,
   onCreated,
+  receipt,
   onDismiss,
   onClose,
 }: CreateDeckDialogProps): JSX.Element {
@@ -260,6 +269,7 @@ export function CreateDeckDialog({
         defaultFormatKey={defaultFormatKey}
         defaultFolderId={defaultFolderId}
         onCreated={onCreated}
+        receipt={receipt}
       />
     </Dialog>
   );
@@ -314,6 +324,7 @@ function CreateDeckBody({
   defaultFormatKey,
   defaultFolderId = null,
   onCreated,
+  receipt,
 }: Omit<CreateDeckDialogProps, "open" | "onDismiss" | "onClose">) {
   /**
    * The draft, seeded with the format the host resolved.
@@ -487,7 +498,17 @@ function CreateDeckBody({
       } satisfies DeckInput,
       // The row the INSERT answered with, cover and all — there is no follow-up write left to
       // wait for, so the deck opens on the one answer.
-      { onSuccess: onCreated },
+      //
+      // **And a receipt, here rather than in a host**, because every host closes this dialog
+      // on success — the gallery opens the new deck, the scanner files into it — so the panel
+      // the reader pressed Create in is gone by the time it could say anything. A refusal is not
+      // toasted: the dialog stays up and draws it in its own alert line under the button.
+      {
+        onSuccess: (deck) => {
+          notify.success(receipt?.(deck) ?? `Deck “${deck.name}” created`);
+          onCreated(deck);
+        },
+      },
     );
   };
 

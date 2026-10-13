@@ -13,6 +13,7 @@ import type {
   FormatSpec,
 } from "@/lib/ipc";
 import { cardImageUrl } from "@/lib/images";
+import { useNotifications } from "@/lib/notifications";
 import { openDropdown, pickOption } from "@/test-dropdown";
 import { card, spec } from "./validation/fixtures";
 
@@ -376,6 +377,13 @@ describe("DeckSettingsDialog", () => {
 
     await waitFor(() => expect(deckSetFolder).toHaveBeenCalledWith(4, 2));
     expect(deckUpdate).not.toHaveBeenCalled();
+    // A deck moving between folders is a move, whatever surface made it: the receipt names the
+    // path the select drew.
+    await waitFor(() =>
+      expect(useNotifications.getState().notices).toMatchObject([
+        { title: "Moved “Burn” to “Commander › Legends”", tone: "success" },
+      ]),
+    );
   });
 
   /**
@@ -847,9 +855,9 @@ describe("DeckSettingsDialog", () => {
     ]);
   });
 
-  /** A refused write says so, once, and it is the *newest* write that owns the line — a refused
-   *  move must not leave its sentence up while the reader goes on to rename the deck. */
-  it("reports a refused write in words", async () => {
+  /** A refused filing is a deck edit under the owner's rule, so it is said once — by its toast —
+   *  and not again in the dialog's banner. */
+  it("reports a refused filing as a toast, and only there", async () => {
     deckSetFolder.mockRejectedValue("Database is busy.");
     open();
     await loaded();
@@ -857,9 +865,29 @@ describe("DeckSettingsDialog", () => {
     await openDropdown(userEvent.setup(), "Folder");
     await userEvent.click(await screen.findByRole("option", { name: "Commander › Legends" }));
 
+    await waitFor(() =>
+      expect(useNotifications.getState().notices).toMatchObject([
+        { title: "Couldn't move “Burn”", body: "Database is busy.", tone: "error" },
+      ]),
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  /** A field has no toast, so its refusal is the banner's — and it is the *newest* write that
+   *  owns the line: a filing that lands afterwards takes the rename's sentence down. */
+  it("reports a refused field in words until a newer write lands", async () => {
+    deckUpdate.mockRejectedValue("Database is busy.");
+    open();
+    await loaded();
+
+    await userEvent.type(screen.getByLabelText("Name"), "!{Enter}");
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Couldn't save that change — Database is busy.",
     );
+
+    await openDropdown(userEvent.setup(), "Folder");
+    await userEvent.click(await screen.findByRole("option", { name: "Commander › Legends" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   });
 
   /** A deck another view deleted while this was open. The read succeeded and answered nothing,
@@ -993,12 +1021,16 @@ describe("DeckSettingsDialog", () => {
     await waitFor(() =>
       expect(screen.queryByRole("group", { name: /^Clear the/ })).toBeNull(),
     );
+    // Cards left a deck: one receipt, with the count the command answered.
+    expect(useNotifications.getState().notices).toMatchObject([
+      { title: "Removed 7 cards from “Burn”’s theory list", tone: "success" },
+    ]);
   });
 
   /** A refusal is not an answer, so the question stays up over it — closing would leave the
-   *  reader with a banner and nothing to press again. The sentence is the dialog's existing
-   *  one, which is what putting the clear in `writeFailure`'s list buys. */
-  it("leaves a refused clear's question up, with the banner saying why", async () => {
+   *  reader with a toast and nothing to press again. The toast is the one report: the clear is
+   *  seated `toasted` in `writeFailure`'s list, so the banner does not repeat it. */
+  it("leaves a refused clear's question up, with the toast saying why", async () => {
     deckGet.mockResolvedValue(withPlan());
     deckClear.mockRejectedValue("Database is busy.");
     open();
@@ -1007,10 +1039,13 @@ describe("DeckSettingsDialog", () => {
     await userEvent.click(screen.getByRole("button", { name: /Clear actual list/ }));
     await userEvent.click(screen.getByRole("button", { name: "Remove 7 cards" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Couldn't save that change — Database is busy.",
+    await waitFor(() =>
+      expect(useNotifications.getState().notices).toMatchObject([
+        { title: "Couldn't clear “Burn”’s actual list", body: "Database is busy.", tone: "error" },
+      ]),
     );
     expect(screen.getByRole("group", { name: "Clear the actual list" })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   /**

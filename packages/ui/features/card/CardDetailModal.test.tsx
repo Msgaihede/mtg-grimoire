@@ -45,6 +45,8 @@ const marketplaceFeedStatus = vi.fn();
 const cardTcgplayerIds = vi.fn();
 /** The home page's Recently viewed recorder — the one write the modal makes on its own. */
 const recordRecentCard = vi.fn();
+/** `Set deck image` — the rail's one deck write. */
+const deckUpdate = vi.fn();
 
 /**
  * The whole IPC surface this modal reaches, and it is a long list because the modal is the one
@@ -84,6 +86,7 @@ vi.mock("@/lib/ipc", async (original) => ({
     // **The list `deck_get` cannot answer.** `deckLabelList` only ever sees a label some card is
     // wearing, so the picker's own list is this one — see the modal's `labelOptions`.
     deckLabelAll: () => deckLabelAll(),
+    deckUpdate: (...args: unknown[]) => deckUpdate(...args),
     deckLabelCreate: (...args: unknown[]) => deckLabelCreate(...args),
     deckCategoryCreate: (...args: unknown[]) => deckCategoryCreate(...args),
     deckMoveCard: (...args: unknown[]) => deckMoveCard(...args),
@@ -114,6 +117,7 @@ import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { LAYER } from "@/lib/layers";
 import { LABEL_COLORS } from "@/features/decks/labelColors";
 import { openExternal } from "@/lib/externalLinks";
+import { useNotifications } from "@/lib/notifications";
 import { useAppStore } from "@/lib/store";
 
 const detail: CardDetail = {
@@ -1024,6 +1028,12 @@ it("re-reads the figures after a write it has no callback to hang off", async ()
   await waitFor(() => expect(wishlistAdd).toHaveBeenCalled());
 
   await waitFor(() => expect(figures("Wished")).toEqual(["1", "1"]));
+  // And it says so: the owner's rule is that an add to the wishlist always toasts, on this panel
+  // too, even though the panel stays open.
+  expect(useNotifications.getState().notices[0]).toMatchObject({
+    title: expect.stringMatching(/^Added “.+” to your wishlist$/),
+    tone: "success",
+  });
 });
 
 /**
@@ -1353,6 +1363,32 @@ async function renderFromDeck({ wearing }: { wearing?: number } = {}) {
   // drawn until there is a card — so the dialog alone is not far enough to press anything.
   await screen.findByRole("button", { name: /view all printings/i });
 }
+
+/**
+ * `Set deck image` changes nothing on this panel — the cover is drawn on the gallery and the
+ * editor's header — so both of its answers are toasts, and its refusal was silent before them.
+ */
+it("says a deck image set from the rail, and a refused one", async () => {
+  deckUpdate.mockResolvedValue({});
+  await renderFromDeck();
+  await userEvent.click(screen.getByRole("button", { name: "Set deck image" }));
+  await waitFor(() =>
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: expect.stringMatching(/^Set “.+” as the deck image$/),
+      tone: "success",
+    }),
+  );
+
+  deckUpdate.mockRejectedValue("That deck is gone.");
+  await userEvent.click(screen.getByRole("button", { name: "Set deck image" }));
+  await waitFor(() =>
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Couldn't set the deck image",
+      body: "That deck is gone.",
+      tone: "error",
+    }),
+  );
+});
 
 it("offers every label the reader has, not only the ones this deck's list wears", async () => {
   // **The bug, stated as its cause.** The picker was built from `deck.labels`, which comes off

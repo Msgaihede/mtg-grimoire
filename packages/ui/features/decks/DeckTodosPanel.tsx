@@ -40,6 +40,7 @@ import { ChevronRight, Plus } from "lucide-react";
 import { FOCUS } from "@/lib/focus";
 import { ipcError, type DeckTodoList } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
+import { notify } from "@/lib/notifications";
 import { cn } from "@/lib/utils";
 import { META_SUBMIT } from "./metaRows";
 import { countTodos, listTitle, parseTodos, toggleTodo } from "./todoMarkdown";
@@ -96,6 +97,17 @@ export const DeckTodosPanel = memo(function DeckTodosPanel({
 }: DeckTodosPanelProps): JSX.Element {
   const todos = useDeckTodoLists(deckId);
   const lists = todos.lists;
+  /** Delete one list, **with a receipt** — destructive, and both doors to it (the card's own
+   *  confirmation and the dialog's) close on the press. The band says a refusal itself. */
+  const removeList = (id: number) => {
+    const gone = lists?.find((list) => list.id === id);
+    todos.remove.mutate(id, {
+      onSuccess: () =>
+        notify.success(
+          gone ? `Deleted the to-do list “${listTitle(gone.title)}”` : "Deleted the to-do list",
+        ),
+    });
+  };
 
   const [editing, setEditing] = useState<Editing>({ key: 0, id: null, open: false });
   /** The list whose Delete question is up, from a card. The dialog asks its own. */
@@ -206,7 +218,7 @@ export const DeckTodosPanel = memo(function DeckTodosPanel({
           // The dialog's opener is this list's own card, which goes with it — dropped before the
           // dialog's close hands the caret back, so it lands on `New to-do list`.
           openerRef.current = null;
-          todos.remove.mutate(id);
+          removeList(id);
         }}
       />
 
@@ -219,7 +231,7 @@ export const DeckTodosPanel = memo(function DeckTodosPanel({
           // The opener is this list's own Delete, which goes with the card — dropped so the caret
           // lands on `New to-do list` rather than on a node about to be removed.
           openerRef.current = null;
-          todos.remove.mutate(confirming.id);
+          removeList(confirming.id);
           giveBack();
           setConfirming(null);
         }}

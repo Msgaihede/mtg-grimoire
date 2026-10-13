@@ -19,6 +19,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 
 import { BUTTON_OVER_ART } from "@/components/QuantityStepper";
 import { FOCUS_INSET } from "@/lib/focus";
+import { useNotifications } from "@/lib/notifications";
 import type { DeckTokenRow, DeckTokenView } from "./deckTokens";
 import { DeckTokensPanel, TOKENS_HEADING, type DeckTokensPanelProps } from "./DeckTokensPanel";
 import type { DeckTokens } from "./useDeckTokens";
@@ -117,7 +118,8 @@ function tokensOf(
     setQuantity: vi.fn(),
     swap: vi.fn(),
     addPrinting: vi.fn(),
-    remove: vi.fn(),
+    // `useDeckTokens`' writes answer whether they landed; the panel's receipt waits on that.
+    remove: vi.fn(() => Promise.resolve(true)),
   } as unknown as DeckTokens;
 }
 
@@ -459,6 +461,11 @@ describe("DeckTokensPanel", () => {
       finish: "foil",
       implicit: false,
     });
+    // A deliberate removal from the deck, so it is said as a toast (the owner's rule).
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({ tone: "success" }),
+    );
+    expect(useNotifications.getState().notices[0].title).toMatch(/^Removed .* from the deck$/);
   });
 
   /** The pointer's word for the glyph is the spec's, `Remove printing`, whatever the entry. */

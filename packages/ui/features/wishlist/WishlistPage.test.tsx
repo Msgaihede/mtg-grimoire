@@ -144,6 +144,7 @@ import { SHELF_FOLDS_KEY } from "@/features/shelves/useShelfFolds";
 import { EMPTY_SHELF_COPY } from "@/features/shelves/EmptyShelf";
 import { FOLD_PAUSED_REASON } from "@/features/shelves/ShelfToolbar";
 import { offerUndo, resetBulkUndo } from "@/lib/bulkUndo";
+import { useNotifications } from "@/lib/notifications";
 import { useAppStore } from "@/lib/store";
 
 /** The one printing `import_resolve` answers with for the import test below —
@@ -876,6 +877,49 @@ describe("WishlistPage", () => {
 
     expect(wishlistRemove).toHaveBeenCalledWith(7);
     await waitFor(() => expect(screen.queryByText("Lightning Bolt")).not.toBeInTheDocument());
+    // The ✕ is a deliberate deletion, so it leaves a receipt naming the wish that went.
+    expect(useNotifications.getState().notices).toHaveLength(1);
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Removed “Lightning Bolt” from the wishlist",
+      tone: "success",
+    });
+  });
+
+  /** A removal is a deliberate edit, so its refusal is said once — by the toast. The banner is for
+   *  the writes no toast speaks for (the stepper, a drag), and seats this one `toasted`. */
+  it("says a refused removal in a toast, and not again in the page's banner", async () => {
+    wishlistRemove.mockRejectedValue("The wishlist is busy.");
+    wrap(<WishlistPage />);
+    await screen.findByText("Lightning Bolt");
+
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: /^Remove Lightning Bolt \(LEA 161, Foil\) from your wishlist/,
+      }),
+    );
+
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Couldn't remove “Lightning Bolt” from the wishlist",
+        body: "The wishlist is busy.",
+        tone: "error",
+      }),
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("says nothing when the stepper changes how many copies are wanted", async () => {
+    wrap(<WishlistPage />);
+    await screen.findByText("Lightning Bolt");
+
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: "Increase Copies wanted of Lightning Bolt (LEA 161, Foil)",
+      }),
+    );
+
+    await waitFor(() => expect(wishlistSetQuantity).toHaveBeenCalled());
+    expect(useNotifications.getState().notices).toHaveLength(0);
   });
 
   /**
@@ -3859,6 +3903,12 @@ describe("the folders", () => {
     await userEvent.click(within(destinations).getByRole("button", { name: /Ordered/ }));
 
     expect(wishlistSetFolder).toHaveBeenCalledWith(BOLT.id, ORDERED.id);
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Moved “Lightning Bolt” to “Ordered”",
+        tone: "success",
+      }),
+    );
     await userEvent.keyboard("{Escape}");
     await waitFor(() =>
       expect(follows(heading(ORDERED.id), screen.getByText("Lightning Bolt"))).toBe(true),
@@ -3945,6 +3995,13 @@ describe("the folders", () => {
     await waitFor(() =>
       expect(screen.queryByRole("group", { name: "Delete Ordered" })).not.toBeInTheDocument(),
     );
+    // One bulk write, one receipt — with the count the command answered (the mock's 3).
+    expect(useNotifications.getState().notices).toHaveLength(1);
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Folder “Ordered” deleted",
+      body: "Removed 3 cards from your wishlist",
+      tone: "success",
+    });
   });
 
   /**
@@ -3977,6 +4034,11 @@ describe("the folders", () => {
     await waitFor(() =>
       expect(screen.queryByRole("group", { name: "Clear Ordered" })).not.toBeInTheDocument(),
     );
+    expect(useNotifications.getState().notices).toHaveLength(1);
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Removed 1 card from “Ordered”",
+      tone: "success",
+    });
   });
 
   /** `Backordered` is on the root's wall now, so the question is asked from its heading directly.
@@ -4188,6 +4250,8 @@ describe("the folders", () => {
     await wishOnto(cardSources(container)[0], heading(ORDERED.id));
 
     expect(wishlistSetFolder).toHaveBeenCalledWith(BOLT.id, ORDERED.id);
+    // A drag inside the open list is the list rearranging itself under the pointer: no toast.
+    expect(useNotifications.getState().notices).toHaveLength(0);
   });
 
   /**
@@ -5163,6 +5227,13 @@ describe("the search column", () => {
       ),
     );
     expect(wishlistSetFolder).not.toHaveBeenCalled();
+    // An add from outside the list is said, naming the card and the drawer it went into.
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Added “Lightning Bolt” to “Ordered”",
+        tone: "success",
+      }),
+    );
   });
 });
 

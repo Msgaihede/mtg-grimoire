@@ -9,6 +9,7 @@ import { radioKeys } from "@grimoire/ui/lib/radioGroup";
 import { cn } from "@grimoire/ui/lib/utils";
 import { ReceiptBar } from "../deck/receipt";
 import { useListReceipt } from "../lists/receipt";
+import { toasted } from "../toasted";
 import type { ActionContext } from "./Actions";
 
 /** The press line every add on the card sheet is drawn as — `AddToDeck`'s. */
@@ -33,6 +34,8 @@ export const ADD_PRESS = cn(
  * Under it, the receipt: what was added and **`Undo`, which is the desktop's stepper one copy back**
  * (`set_quantity` to the count before the add — a row the add made is deleted). The desktop offers
  * no undo for an add; this is the nearest write it does make, and the line names what it takes back.
+ * **And a toast**, the desktop menu's words (`Added “Sol Ring” to your collection`): every add to the
+ * collection says so in the inbox too (the owner's rule), and the receipt line stays as the `Undo`.
  */
 export function CollectionAdd({ card }: ActionContext) {
   const offered = parseFinishes(card.finishes);
@@ -70,7 +73,10 @@ function CollectionAddBox({
         type="button"
         onClick={() =>
           receipt.track(
-            add.mutateAsync({ cardId, finish, folderId: null }),
+            toasted(add.mutateAsync({ cardId, finish, folderId: null }), {
+              done: `Added “${name}” to your collection`,
+              failed: `Couldn't add “${name}” to your collection`,
+            }),
             () => `Added 1 × ${name}${said} to your collection.`,
             (change) => ({
               name: `take back the copy of ${name}`,

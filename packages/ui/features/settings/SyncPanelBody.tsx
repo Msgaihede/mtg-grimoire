@@ -7,6 +7,7 @@ import { MEMBERSHIP_ELSEWHERE } from "@/lib/core/hostMembership";
 import { STORAGE_GROUP_WARNING } from "@/lib/core/hostStorage";
 import { count, plural, verb } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
+import { notify } from "@/lib/notifications";
 import {
   ipc,
   ipcError,
@@ -1162,19 +1163,14 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
    *  the device leaving is always this one — there is nothing to name. */
   const [leaving, setLeaving] = useState(false);
   /**
-   * The one line a finished pairing leaves behind. Neither {@link Flow} nor a mutation's own
-   * state survives the return to `"idle"` that draws it, so it needs a home of its own — cleared
-   * the moment a *new* pairing starts, so a second pairing never opens under the first one's
-   * success line.
-   */
-  const [pairedNote, setPairedNote] = useState<string | null>(null);
-  /**
    * The one line an attempt that ended *without* pairing leaves behind — {@link EXPIRED_NOTE}.
    *
-   * Its own state rather than {@link pairedNote}'s, because the two are drawn in different tones
-   * and one must never be mistaken for the other: a reader who reads *Paired.* after a timeout
-   * would go looking for a device that is not in the group. It is cleared wherever a new attempt
-   * starts, so a second attempt never opens under the first one's obituary.
+   * Neither {@link Flow} nor a mutation's own state survives the return to `"idle"` that draws
+   * it, so it needs a home of its own. **A finished pairing has no counterpart line**: its
+   * receipt is the *Device paired* toast the completion effect below raises, kept by the inbox,
+   * on both faces. The expiry is not toasted — nothing was done, so it is the panel telling the
+   * reader why the flow they were watching closed. It is cleared wherever a new attempt starts,
+   * so a second attempt never opens under the first one's obituary.
    */
   const [endedNote, setEndedNote] = useState<string | null>(null);
   /**
@@ -1223,7 +1219,6 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
    * accident, and `refresh()` above already owns invalidating `PAIRING_KEY` itself.
    */
   const startNewAttempt = () => {
-    setPairedNote(null);
     setEndedNote(null);
     completedRef.current = false;
     client.removeQueries({ queryKey: PAIRING_POLL_KEY, exact: true });
@@ -1274,17 +1269,31 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
       ipc.syncDeviceRename(deviceId, name),
     onSuccess: refresh,
   });
+  /**
+   * **Both of these answer in a toast as well as in the roster**, because each is confirmed in a
+   * dialog that closes on success — rule 2 of the toasts (`@/lib/notifications`): a write behind
+   * a confirmation gets a receipt once the question is gone. And a refusal is said in a toast
+   * too, because the dialog stays up over it: the panel's own problem line is under the scrim.
+   * A rename, edited in place in the roster, says nothing — the new name is where the reader is
+   * looking.
+   */
   const revoke = useMutation({
-    mutationFn: (deviceId: string) => ipc.syncDeviceRevoke(deviceId),
-    onSuccess: () => {
+    mutationFn: (device: PairedDevice) => ipc.syncDeviceRevoke(device.deviceId),
+    onSuccess: (_answer, device) => {
       setRemoving(null);
       refresh();
+      notify.success(`Removed “${device.name}” from the group`);
     },
+    onError: (failure, device) =>
+      void notify.error(`Couldn't remove “${device.name}”`, { body: ipcError(failure) }),
   });
   const leave = useMutation({
     mutationFn: () => ipc.syncGroupLeave(),
+    onError: (failure) =>
+      void notify.error("Couldn't leave the group", { body: ipcError(failure) }),
     onSuccess: () => {
       setLeaving(false);
+      notify.success("Left the sync group");
       // **`SYNC_KEY` rather than `refresh()`, and the difference is the membership.** Leaving
       // runs `entitlement::clear` as well as `identity::leave_group` (spec §2.3), so the
       // supporter block and the relay figures are as stale as the roster the moment this
@@ -1330,14 +1339,13 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
 
   /**
    * The pairing's own end — also settled during render, for the same reason as the digits
-   * above: ending the flow and posting the success line are both React state and nothing
-   * external, so both belong here rather than in the effect below. **`polling` is the guard
+   * above: ending the flow is React state and nothing external, so it belongs here rather than in
+   * the effect below, which raises the receipt. **`polling` is the guard
    * that stops this looping**: it reads `flow.kind`, which the write just changed to `"idle"`,
    * so the condition is false on the render right after.
    */
   if (polling && poll.data?.stage === "complete") {
     setFlow({ kind: "idle" });
-    setPairedNote("Paired. The other device is now in this group.");
   }
 
   /**
@@ -1383,6 +1391,12 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
     // error banner over a ceremony that completed. `error_log` already has the reason if there
     // is one, and *Sync now* below is the retry — one press, not a failure to explain here.
     void ipc.syncNow().catch(() => undefined);
+    // **The receipt, as a toast and nothing else**, and here rather than in the render-time
+    // block above that ends the flow: a toast is a write to another store, which render must
+    // never do. A pairing finishes when the *other* device's reader presses Codes match, so this
+    // reader is usually looking at that screen, not this one — the toast and the inbox are what
+    // they come back to, on both faces.
+    notify.success("Device paired", { body: "The other device is now in this group." });
   }, [poll.data, client]);
 
   /**
@@ -1502,7 +1516,6 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
               <button
                 type="button"
                 onClick={() => {
-                  setPairedNote(null);
                   setEndedNote(null);
                   setFlow({ kind: "reading" });
                 }}
@@ -1513,7 +1526,6 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
               <button
                 type="button"
                 onClick={() => {
-                  setPairedNote(null);
                   setEndedNote(null);
                   setFlow({ kind: "scanning" });
                 }}
@@ -1670,7 +1682,6 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
         </>
       )}
 
-      <PanelAlert tone="plain">{pairedNote}</PanelAlert>
       {/* **One problem line, and a live refusal outranks the obituary.** `error` is whatever
           just failed; `endedNote` is an attempt that quietly ran out of time. Both are the same
           kind of thing to a reader — *the thing you were doing is not happening* — so they share
@@ -1686,7 +1697,7 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
         typeToConfirm={false}
         pending={revoke.isPending}
         onConfirm={() => {
-          if (removing !== null) revoke.mutate(removing.deviceId);
+          if (removing !== null) revoke.mutate(removing);
         }}
         onDismiss={() => setRemoving(null)}
         onClose={() => setRemoving(null)}

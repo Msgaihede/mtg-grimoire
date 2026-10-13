@@ -1,8 +1,9 @@
 import { useId, type ReactNode } from "react";
-import { Settings } from "lucide-react";
+import { Bell, Settings } from "lucide-react";
 import { ManaLine } from "@grimoire/ui/components/ManaLine";
 import type { ManaLineSync } from "@grimoire/ui/lib/mana";
 import { FOCUS_INSET } from "@grimoire/ui/lib/focus";
+import { useUnreadCount } from "@grimoire/ui/lib/notifications";
 import { cn } from "@grimoire/ui/lib/utils";
 import { tabLinkTo, usePlace } from "./router";
 import { TabBar } from "./TabBar";
@@ -34,14 +35,25 @@ import { TabBar } from "./TabBar";
  * loudest job running — the card sync above the feeds, `topActivity`'s fold — and `null` draws the
  * line at rest. Its label is the bar's accessible name; nothing else on the frame grows a caption,
  * so a download never pushes the page down. An empty wall over a first run says the rest itself.
+ *
+ * **The bell beside the gear opens the Notifications inbox** (`onInbox`) — the desktop rail's entry,
+ * in the one row this face keeps for things that are not a destination. A button, not a link: the
+ * inbox is a dialog over wherever the reader is, and its Back step is the dialog host's. It carries
+ * the unread count as the rail's collapsed entry does, a pip on the glyph.
  */
 export function Shell({
   title,
   activity = null,
+  inboxOpen = false,
+  onInbox = () => {},
   children,
 }: {
   title: string;
   activity?: ManaLineSync | null;
+  /** The inbox is up — the bell's `aria-expanded`. */
+  inboxOpen?: boolean;
+  /** A press on the bell. */
+  onInbox?: () => void;
   children: ReactNode;
 }) {
   const place = usePlace();
@@ -56,6 +68,7 @@ export function Shell({
       <header className="shrink-0 bg-surface pt-[env(safe-area-inset-top)]">
         <div className="flex h-12 items-center gap-3 pr-[calc(1rem+env(safe-area-inset-right))] pl-[calc(1rem+env(safe-area-inset-left))]">
           <h1 className="min-w-0 flex-1 truncate font-heading text-lg">{title}</h1>
+          <InboxBell open={inboxOpen} onOpen={onInbox} />
           {/* A link, for the tab bar's reason: it changes the URL. A destination of its own, so it
               is switched to as a tab is (`switchTo`), and a second press scrolls it up. */}
           <a
@@ -92,6 +105,40 @@ export function Shell({
         <TabBar view={place.view} onReselect={toTop} />
       </div>
     </div>
+  );
+}
+
+/**
+ * The header's way into the inbox: the bell, a 44px press, and the count of notices that arrived
+ * since the inbox was last opened — `99+` past two digits, the rail's badge. The count is in the
+ * press's name as well as on the glyph, so a screen reader hears what the pip shows.
+ */
+function InboxBell({ open, onOpen }: { open: boolean; onOpen: () => void }) {
+  const unread = useUnreadCount();
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-haspopup="dialog"
+      aria-expanded={open}
+      aria-label={unread > 0 ? `Notifications, ${unread} unread` : "Notifications"}
+      className={cn(
+        "relative flex size-11 shrink-0 items-center justify-center rounded-md text-dim",
+        // Inset, the gear's reason: flush to the top edge wherever that inset is 0.
+        FOCUS_INSET,
+      )}
+    >
+      <Bell aria-hidden className="size-5" />
+      {unread > 0 && (
+        <span
+          aria-hidden
+          data-testid="inbox-pip"
+          className="absolute top-1.5 right-1 min-w-4 rounded-full bg-accent px-1 text-center text-[0.625rem] leading-4 font-semibold text-accent-foreground"
+        >
+          {unread > 99 ? "99+" : unread}
+        </span>
+      )}
+    </button>
   );
 }
 
