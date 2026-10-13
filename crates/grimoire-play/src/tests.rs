@@ -271,6 +271,89 @@ fn the_next_turn_untaps_draws_and_counts_only_the_readers_turns() {
 }
 
 #[test]
+fn a_turn_passed_over_the_hand_size_waits_for_the_reader_to_choose_the_discard() {
+    let (asked, refused, short, done, chosen) = engine(|| {
+        let mut game = kept();
+        let short_of_ten = 10 - game.view().hand.len() as u32;
+        game.act(A::Draw {
+            count: short_of_ten,
+        })
+        .unwrap();
+        let asked = game.act(A::NextTurn).unwrap();
+        let refused = game.act(A::Draw { count: 1 }).unwrap_err();
+        // The oldest three, never the newest: what the engine's own first answer would not be.
+        let chosen: Vec<(u64, String)> = asked.view.hand[..3]
+            .iter()
+            .map(|c| (c.id, c.name.clone()))
+            .collect();
+        let short = game
+            .act(A::Discard {
+                ids: vec![chosen[0].0],
+            })
+            .unwrap_err();
+        assert_eq!(game.view(), asked.view, "a refusal changed nothing");
+        let done = game
+            .act(A::Discard {
+                ids: chosen.iter().map(|c| c.0).collect(),
+            })
+            .unwrap();
+        (asked, refused, short, done, chosen)
+    });
+    assert_eq!(asked.view.stage, Stage::Discard);
+    assert_eq!(asked.view.discard, 3);
+    assert_eq!(asked.view.turn, 1, "the turn has not passed yet");
+    assert_eq!(asked.view.hand.len(), 10, "nothing was discarded for them");
+    assert!(asked.view.graveyard.is_empty());
+    assert!(!asked
+        .happened
+        .iter()
+        .any(|h| matches!(h, Happened::Chose { .. })));
+    assert_eq!(refused, "Discard down to your hand size first.");
+    assert_eq!(short, "Pick 3 cards to discard first.");
+
+    assert_eq!(done.view.stage, Stage::Playing);
+    assert_eq!(done.view.discard, 0);
+    assert_eq!(done.view.turn, 2);
+    assert_eq!(done.view.hand.len(), 8, "seven kept, and the turn's draw");
+    let mut buried: Vec<&str> = done
+        .view
+        .graveyard
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
+    let mut names: Vec<&str> = chosen.iter().map(|c| c.1.as_str()).collect();
+    buried.sort_unstable();
+    names.sort_unstable();
+    assert_eq!(buried, names, "the cards the reader chose, and no others");
+    let discarded = done
+        .happened
+        .iter()
+        .filter(|h| {
+            matches!(
+                h,
+                Happened::Moved {
+                    from: Place::Hand,
+                    to: Place::Graveyard,
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(discarded, 3);
+    assert!(done.happened.contains(&Happened::TurnBegan { turn: 2 }));
+}
+
+#[test]
+fn a_discard_nobody_asked_for_is_refused() {
+    let refused = engine(|| {
+        let mut game = kept();
+        let id = game.view().hand[0].id;
+        game.act(A::Discard { ids: vec![id] }).unwrap_err()
+    });
+    assert_eq!(refused, "There is nothing to discard.");
+}
+
+#[test]
 fn a_life_total_at_zero_does_not_end_the_game() {
     let view = engine(|| {
         let mut game = kept();

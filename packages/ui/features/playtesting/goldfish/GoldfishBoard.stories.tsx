@@ -3,7 +3,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
 import type { GoldfishAction, GoldfishView } from "@/lib/ipc";
 import { GoldfishBoard } from "./GoldfishBoard";
-import { openingHandView, playLocally, turnNineView } from "./fixtures";
+import { discardView, openingHandView, playLocally, turnNineView } from "./fixtures";
 import type { LogLine } from "./log";
 import type { Playmat } from "./types";
 
@@ -107,6 +107,29 @@ export const SpaceForNextTurn: Story = {
     await expect(canvas.getByText(/Turn 9 ·/)).toBeVisible();
     await userEvent.keyboard(" ");
     await expect(args.onAct).toHaveBeenLastCalledWith({ type: "nextTurn" });
+    await expect(canvas.getByText(/Turn 10 ·/)).toBeVisible();
+  },
+};
+
+/**
+ * Nine cards in hand at the end of the turn: the board asks which two are discarded, and the
+ * turn passes once they are picked.
+ */
+export const DiscardToHandSize: Story = {
+  args: { start: { ...turnNineView(), hand: discardView(2).hand } },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: /Next turn/ }));
+    const dialog = within(await canvas.findByRole("dialog", { name: "Discard to hand size" }));
+    await expect(canvas.getByText(/Turn 9 ·/)).toBeInTheDocument();
+    const [first, , third] = args.start.hand;
+    await userEvent.click(dialog.getByRole("button", { name: first.name }));
+    await userEvent.click(dialog.getByRole("button", { name: third.name }));
+    await userEvent.click(dialog.getByRole("button", { name: "Discard 2 and end the turn" }));
+    await expect(args.onAct).toHaveBeenLastCalledWith({
+      type: "discard",
+      ids: [first.id, third.id],
+    });
     await expect(canvas.getByText(/Turn 10 ·/)).toBeVisible();
   },
 };

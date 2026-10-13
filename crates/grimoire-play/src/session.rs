@@ -8,7 +8,8 @@
 //!
 //! - **By the rules**: the opening hand (the London mulligan and Commander's free first one),
 //!   playing a land, casting a spell from untapped mana, commander tax, the turn (untap, upkeep,
-//!   draw), every card's P/T with its counters, and the mana a board has open.
+//!   draw, and the cleanup step's discard to hand size, which the reader chooses), every card's
+//!   P/T with its counters, and the mana a board has open.
 //! - **By hand**: a drag to any zone, a tap, a counter, a token, a life total, a draw or mill
 //!   outside the draw step — and a play the rules refuse. A card the reader double-clicks when it
 //!   cannot be paid for, or that would ask a question the board has no prompt for (a target, a
@@ -74,6 +75,8 @@ const STEP_LIMIT: usize = 2000;
 const NOT_IN_GAME: &str = "That card is no longer where it was. The board has been refreshed.";
 const NOT_NOW: &str = "Keep or mulligan the opening hand first.";
 const ALREADY_KEPT: &str = "The opening hand has already been kept.";
+const DISCARD_FIRST: &str = "Discard down to your hand size first.";
+const NOTHING_TO_DISCARD: &str = "There is nothing to discard.";
 
 pub struct Goldfish {
     state: GameState,
@@ -262,6 +265,7 @@ impl Goldfish {
             stage: self.stage(),
             turn: self.turn,
             mulligan: self.mulligan(),
+            discard: self.discard_owed() as u32,
             life: you.life,
             opponent_life: fish.life,
             hand: cards(&mut you.hand.iter()),
@@ -293,7 +297,16 @@ impl Goldfish {
             WaitingFor::MulliganDecision { .. } | WaitingFor::OpeningHandBottomCards { .. } => {
                 Stage::Mulligan
             }
+            WaitingFor::DiscardToHandSize { player, .. } if player == YOU => Stage::Discard,
             _ => Stage::Playing,
+        }
+    }
+
+    /// How many cards the reader's cleanup step is waiting for them to discard; 0 when it is not.
+    fn discard_owed(&self) -> usize {
+        match self.state.waiting_for {
+            WaitingFor::DiscardToHandSize { player, count, .. } if player == YOU => count,
+            _ => 0,
         }
     }
 
@@ -450,6 +463,8 @@ impl Goldfish {
                 );
             }
             _ if mulliganing => return Err(NOT_NOW.into()),
+            GoldfishAction::Discard { ids } => self.discard(ids, out)?,
+            _ if self.stage() == Stage::Discard => return Err(DISCARD_FIRST.into()),
             GoldfishAction::Play { id } => self.play(ObjectId(id), out)?,
             GoldfishAction::Move { id, to } => self.put(ObjectId(id), to, out)?,
             GoldfishAction::Tap { ids, tapped } => {
@@ -713,12 +728,53 @@ impl Goldfish {
         }
     }
 
+    /// The cleanup step's discard, the reader's choice of it, and then on to their next turn.
+    fn discard(&mut self, ids: Vec<u64>, out: &mut Vec<Happened>) -> Result<(), String> {
+        let owed = self.discard_owed();
+        if owed == 0 {
+            return Err(NOTHING_TO_DISCARD.into());
+        }
+        let picked: HashSet<u64> = ids.iter().copied().collect();
+        if picked.len() != owed || ids.len() != owed {
+            return Err(format!(
+                "Pick {owed} card{} to discard first.",
+                if owed == 1 { "" } else { "s" }
+            ));
+        }
+        let hand: HashSet<u64> = self.you().hand.iter().map(|id| id.0).collect();
+        if !picked.is_subset(&hand) {
+            return Err(NOT_IN_GAME.into());
+        }
+        let cards: Vec<ObjectId> = ids.into_iter().map(ObjectId).collect();
+        let printings: Vec<(String, String)> = cards
+            .iter()
+            .filter_map(|id| {
+                let name = self.state.objects.get(id)?.name.clone();
+                Some((name, self.printings.get(id)?.clone()))
+            })
+            .collect();
+        let before = self.zones();
+        self.apply(YOU, GameAction::SelectCards { cards })?;
+        for (name, printing) in printings {
+            self.carry_printing(&name, printing);
+        }
+        // Said before the turn that follows, so the log reads in the order it happened.
+        self.report_moves(&before, None, out);
+        self.next_turn(out)
+    }
+
     /// The reader's next turn, through the goldfish's: pass until it is the reader's main phase
-    /// again, a turn later.
+    /// again, a turn later — or until the reader's cleanup step asks which cards they discard
+    /// (`Stage::Discard`), the one question a passing turn stops for. `discard` picks it up from
+    /// there: the turn is the same one, so it runs on to the same place.
     fn next_turn(&mut self, out: &mut Vec<Happened>) -> Result<(), String> {
         let before = self.zones();
         let from_turn = self.state.turn_number;
         for _ in 0..STEP_LIMIT {
+            if self.stage() == Stage::Discard {
+                self.report_moves(&before, None, out);
+                return Ok(());
+            }
             if self.state.turn_number > from_turn && self.at_home() {
                 self.turn += 1;
                 out.push(Happened::TurnBegan { turn: self.turn });
