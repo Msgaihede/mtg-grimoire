@@ -3,16 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GameCard, GoldfishView } from "@/lib/ipc";
 import { GoldfishBoard } from "./GoldfishBoard";
 import { INSPECT_DELAY } from "./Inspect";
-import { gameCard, turnNineView } from "./fixtures";
+import { discardView, gameCard, turnNineView } from "./fixtures";
 
-function board(view: GoldfishView) {
+function board(view: GoldfishView, onAct = vi.fn()) {
   return (
     <GoldfishBoard
       deckName="Kenrith"
       view={view}
       log={[]}
       error={null}
-      onAct={vi.fn()}
+      onAct={onAct}
       onBack={vi.fn()}
       onNewGame={vi.fn()}
     />
@@ -91,5 +91,45 @@ describe("GoldfishBoard's inspect preview", () => {
     rest(INSPECT_DELAY);
     fireEvent.pointerMove(ring);
     expect(preview()).toBeInTheDocument();
+  });
+});
+
+describe("GoldfishBoard's discard to hand size", () => {
+  const dialog = () => screen.queryByRole("dialog", { name: "Discard to hand size" });
+
+  it("asks which cards are discarded, and sends the reader's picks", () => {
+    const view = discardView(1);
+    const onAct = vi.fn();
+    render(board(view, onAct));
+    expect(dialog()).toBeInTheDocument();
+
+    // The oldest card of the hand, where the engine's own answer was always the newest.
+    const gone = view.hand[0];
+    fireEvent.click(screen.getByRole("button", { name: gone.name }));
+    fireEvent.click(screen.getByRole("button", { name: "Discard 1 and end the turn" }));
+    expect(onAct).toHaveBeenCalledExactlyOnceWith({ type: "discard", ids: [gone.id] });
+  });
+
+  it("closes to show the table, and the turn's button and Space open it again", () => {
+    const onAct = vi.fn();
+    render(board(discardView(2), onAct));
+
+    fireEvent.click(screen.getByRole("button", { name: "Close and look at the board" }));
+    expect(dialog()).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Discard 2/ }));
+    expect(dialog()).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close and look at the board" }));
+    expect(dialog()).not.toBeInTheDocument();
+    fireEvent.keyDown(window, { key: " " });
+    expect(dialog()).toBeInTheDocument();
+    // Neither is a pass of the turn: the game is still waiting on the discard.
+    expect(onAct).not.toHaveBeenCalled();
+  });
+
+  it("does not ask while the hand is within its size", () => {
+    render(board(turnNineView()));
+    expect(dialog()).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Next turn/ })).toBeInTheDocument();
   });
 });

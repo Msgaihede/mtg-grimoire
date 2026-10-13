@@ -29,6 +29,7 @@ function view(over: Partial<GoldfishView> = {}): GoldfishView {
     stage: "playing",
     turn: 3,
     mulligan: null,
+    discard: 0,
     life: 40,
     opponentLife: 40,
     hand: [],
