@@ -83,6 +83,27 @@ describe("GoldfishBoard's inspect preview", () => {
     expect(preview()).not.toBeInTheDocument();
   });
 
+  it.each([
+    ["the command zone", /in the command zone/],
+    ["the graveyard", /^Graveyard, /],
+    ["exile", /^Exile, /],
+  ])("closes at once when the pointer leaves a card in %s", (_zone, name) => {
+    const view: GoldfishView = {
+      ...turnNineView(),
+      command: [gameCard("Kenrith, the Returned King", { isCommander: true })],
+      exile: [gameCard("Counterspell")],
+    };
+    render(board(view));
+    const card = screen.getByRole("button", { name });
+
+    fireEvent.mouseEnter(card);
+    rest(INSPECT_DELAY);
+    expect(preview()).toBeInTheDocument();
+
+    fireEvent.mouseLeave(card);
+    expect(preview()).not.toBeInTheDocument();
+  });
+
   it("stays open while the pointer moves over the card it shows", () => {
     render(board(table([gameCard("Sol Ring")])));
     const ring = screen.getByRole("button", { name: "Sol Ring" });
