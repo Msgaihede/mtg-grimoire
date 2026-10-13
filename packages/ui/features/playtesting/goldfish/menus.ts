@@ -38,17 +38,22 @@ function counted(card: GameCard, kind: string): number {
  * The menu for a card, or for a pile of identical cards on the battlefield (`ids`, the pile's
  * engine ids, `ids[0]` its top). Everything but "Tap all" acts on the top card alone: moving a
  * pile of seven Forests to the graveyard by one row would be a misclick nobody could take back.
+ *
+ * `onActivate` heads a permanent's menu with "Activate ability" — the playtest board's, where the
+ * rules engine can activate one. The goldfish has no such action and passes none.
  */
 export function cardMenu({
   card,
   ids,
   place,
   onAct,
+  onActivate,
 }: {
   card: GameCard;
   ids: number[];
   place: GoldfishPlace;
   onAct: Act;
+  onActivate?: (id: number) => void;
 }): MenuItem[] {
   const id = ids[0] ?? card.id;
   const move = (to: GoldfishPlace) => () => onAct({ type: "move", id, to });
@@ -60,11 +65,18 @@ export function cardMenu({
       const tapWord = card.tapped ? "Untap" : "Tap";
       const counter = (kind: string, delta: number) => () =>
         onAct({ type: "counters", id, kind, delta });
-      const items: MenuItem[] = [
+      const items: MenuItem[] = [];
+      if (onActivate !== undefined) {
+        items.push(
+          action("activate", "Activate ability", () => onActivate(id)),
+          { kind: "separator", id: "sepActivate" },
+        );
+      }
+      items.push(
         action("tap", `${tapWord}${pile ? " one" : ""}`, () =>
           onAct({ type: "tap", ids: [id], tapped: !card.tapped }),
         ),
-      ];
+      );
       if (pile) {
         items.push(
           action("tapAll", `${tapWord} all ${ids.length}`, () =>
@@ -162,7 +174,7 @@ export function libraryMenu({
   onAct,
   onLook,
 }: {
-  view: GoldfishView;
+  view: Pick<GoldfishView, "library">;
   onAct: Act;
   onLook: (l: ZoneLook) => void;
 }): MenuItem[] {
@@ -216,13 +228,25 @@ export function libraryMenu({
   ];
 }
 
+/** What the game menu reads of a game: the reader's tokens, graveyard and exile, and — for a
+ *  goldfish view — its stage. */
+export type GameMenuView = Pick<GoldfishView, "tokens" | "graveyard" | "exile"> & {
+  stage?: string;
+};
+
 /**
  * The game menu, under the board's top-left button. `view` is `null` while a game is being
  * dealt; then, and during the opening hand, only the rows that are not moves in the game work —
  * the engine refuses everything else until a hand is kept.
+ *
+ * **The playtest board's menu too**, which hands it the reader's own zones (`GameMenuView`), says
+ * itself whether the moves work (`playing`: not during the opening hand, not once the game is
+ * over) and names its own way back (`backLabel`).
  */
 export function gameMenu({
   view,
+  playing: playingOverride,
+  backLabel = "Back to the deck",
   playmat,
   commanderName,
   onAct,
@@ -231,7 +255,10 @@ export function gameMenu({
   onBack,
   onLook,
 }: {
-  view: GoldfishView | null;
+  view: GameMenuView | null;
+  /** Whether the game's own moves work now; read off a goldfish view's `stage` when absent. */
+  playing?: boolean;
+  backLabel?: string;
   playmat: Playmat;
   commanderName: string | null;
   onAct: Act;
@@ -240,7 +267,7 @@ export function gameMenu({
   onBack: () => void;
   onLook: (l: ZoneLook) => void;
 }): MenuItem[] {
-  const playing = view !== null && view.stage === "playing";
+  const playing = playingOverride ?? (view !== null && view.stage === "playing");
   const tokens = view?.tokens ?? [];
 
   const mats: MenuItem[] = FELTS.map((felt): MenuItem => ({
@@ -300,6 +327,6 @@ export function gameMenu({
     { kind: "separator", id: "sep" },
     action("new", "New game", onNewGame),
     { kind: "separator", id: "sep2" },
-    action("back", "Back to the deck", onBack),
+    action("back", backLabel, onBack),
   ];
 }

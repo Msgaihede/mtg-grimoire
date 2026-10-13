@@ -124,7 +124,8 @@ pub fn goldfish_end(slot: tauri::State<'_, GoldfishSlot>) {
 
 /// The core's row as the engine crate takes it. `faces` is Scryfall's `card_faces` verbatim, read
 /// leniently: a blob that does not parse is a card of one face, which the engine still plays.
-fn facts(card: grimoire_core::play::PlayCard) -> CardFacts {
+/// The playtest board's decks are read through it too (`playtest/mod.rs`).
+pub(crate) fn facts(card: grimoire_core::play::PlayCard) -> CardFacts {
     let faces = card
         .faces
         .as_deref()

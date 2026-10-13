@@ -113,7 +113,7 @@ For global repo workflow, style, and testing conventions, refer to:
 | `packages/ui/features/` | Feature surfaces (`decks/`, `search/`, `collection/`, `wishlist/`, `transfer/`, `settings/`) |
 | `packages/ui/lib/` | Infrastructure (`ipc.ts`, `layers.ts`, `motion.ts`, `shortcuts.ts`, `tokens.ts`) |
 
-- **Occasional views are lazy**: `App.tsx` loads Scanner, Settings, Trade, Playtesting, the goldfish board and Shared with `React.lazy` under one `Suspense`; a static import of any of them puts its chunk back in the first load (`App.test.tsx` fences it).
+- **Occasional views are lazy**: `App.tsx` loads Scanner, Settings, Trade, Playtesting (its setup page and the playtest board, one chunk), the goldfish board and Shared with `React.lazy` under one `Suspense`; a static import of any of them puts its chunk back in the first load (`App.test.tsx` fences it).
 
 Run verification tests only at the end of feature work:
 

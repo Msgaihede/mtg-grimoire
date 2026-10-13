@@ -52,7 +52,7 @@ _For complete command options, coverage caveats, and environment flags, see [`do
   - Rust owns data plumbing (SQLite/FTS5, Scryfall bulk ingestion, image caching).
   - TypeScript owns domain logic (deck validation, import/export parsing).
   - Keep this boundary clean: do not leak UI assumptions into Rust or storage plumbing into TypeScript.
-- **The rules engine is phase.rs's** (`phase-engine`, from git), wrapped by `crates/grimoire-play` and linked by the desktop alone. It is why `rust-toolchain.toml` pins a dated nightly — see [`docs/reference/goldfish.md`](docs/reference/goldfish.md).
+- **The rules engine and the AI opponent are phase.rs's** (`phase-engine`, `phase-ai`, from git), wrapped by `crates/grimoire-play` and linked by the desktop alone. It is why `rust-toolchain.toml` pins a dated nightly — see [`docs/reference/goldfish.md`](docs/reference/goldfish.md).
 - **Crate Boundary (window awareness)**:
   - `crates/grimoire-core` is the engine with no window dependency. It contains schemas, database migrations, decks, collection, wishlist, search, and Scryfall clients. Compiles to native and WASM.
   - `apps/desktop/src-tauri` is the desktop application: windows, menus, native updater, IPC commands (`#[tauri::command]`), and filesystem mirror.
@@ -74,7 +74,7 @@ This file contains only global instructions. **The binding rules for any specifi
 | [`crates/grimoire-core/CLAUDE.md`](crates/grimoire-core/CLAUDE.md)                   | Shared headless engine (schema, decks, collection, wishlist, search, Scryfall client, platform abstraction) |
 | [`crates/grimoire-web/CLAUDE.md`](crates/grimoire-web/CLAUDE.md)                     | Web host — engine compiled to WASM module for browser execution                                             |
 | [`crates/grimoire-scan/CLAUDE.md`](crates/grimoire-scan/CLAUDE.md)                   | Web host's scanner — `card-scanner` as a WASM module of its own, for a Worker of its own                    |
-| [`crates/grimoire-play/CLAUDE.md`](crates/grimoire-play/CLAUDE.md)                   | Games on a deck over phase.rs's rules engine — the goldfish board's engine half, desktop-only, nightly pin  |
+| [`crates/grimoire-play/CLAUDE.md`](crates/grimoire-play/CLAUDE.md)                   | Games on a deck over phase.rs's rules engine and AI — goldfish and playtest engine halves, desktop-only     |
 | [`apps/light/CLAUDE.md`](apps/light/CLAUDE.md)                                       | Light app — Android and web UI faces and responsive boundary                                                |
 | [`packages/ui/CLAUDE.md`](packages/ui/CLAUDE.md)                                     | React frontend, design tokens, `CardImage` rules, Storybook MCP usage                                       |
 | [`packages/ui/features/decks/CLAUDE.md`](packages/ui/features/decks/CLAUDE.md)       | Deck validation, categories, deck editor views, and drag-and-drop interactions                              |

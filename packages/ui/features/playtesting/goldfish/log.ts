@@ -30,7 +30,11 @@ export type LogKind =
   | "shuffle"
   | "life"
   | "turn"
-  | "engine";
+  | "engine"
+  /** The playtest board's: an attack, a block, damage. */
+  | "combat"
+  /** The playtest board's: the game is over. */
+  | "end";
 
 /** The kind of line one fact makes. */
 export function kindOf(h: Happened): LogKind {

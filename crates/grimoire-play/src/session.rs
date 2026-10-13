@@ -340,53 +340,14 @@ impl Goldfish {
 
     fn card(&self, id: ObjectId) -> Option<GameCard> {
         let o = self.state.objects.get(&id)?;
-        let core = &o.card_types.core_types;
-        let is_creature = core.contains(&CoreType::Creature);
-        let is_land = core.contains(&CoreType::Land);
-        let lane = if is_creature {
-            Lane::Creature
-        } else if is_land {
-            Lane::Land
-        } else {
-            Lane::Other
-        };
         let card_id = self
             .printings
             .get(&id)
             .cloned()
             .or_else(|| o.token_image_ref.as_ref().map(|r| r.scryfall_id.clone()))
             .or_else(|| self.by_name.get(&o.name).cloned());
-        let mut counters: Vec<CardCounter> = o
-            .counters
-            .iter()
-            .filter(|(_, n)| **n > 0)
-            .map(|(kind, n)| CardCounter {
-                kind: kind.display_phrase().into_owned(),
-                count: *n,
-            })
-            .collect();
-        counters.sort_by(|a, b| a.kind.cmp(&b.kind));
         let is_commander = self.commanders.contains(&o.name) && !o.is_token;
-        Some(GameCard {
-            id: id.0,
-            card_id,
-            name: o.name.clone(),
-            type_line: type_line(o),
-            lane,
-            mana_value: o.mana_cost.mana_value(),
-            is_land,
-            is_token: o.is_token,
-            is_commander,
-            tapped: o.tapped,
-            counters,
-            power: if is_creature { o.power } else { None },
-            toughness: if is_creature { o.toughness } else { None },
-            tax: if is_commander {
-                commander_tax(&self.state, id)
-            } else {
-                0
-            },
-        })
+        game_card(&self.state, id, card_id, is_commander)
     }
 
     // ── Actions ───────────────────────────────────────────────────────────────────────────
@@ -977,7 +938,59 @@ impl Goldfish {
     }
 }
 
-fn place_of(zone: Zone) -> Option<Place> {
+/// One object as a board draws it. `card_id` is the printing to draw it by, which only the
+/// session knows (it follows a card across zones by name); `is_commander` likewise. Shared by the
+/// goldfish and the playtest board, so a card looks the same on both.
+pub(crate) fn game_card(
+    state: &GameState,
+    id: ObjectId,
+    card_id: Option<String>,
+    is_commander: bool,
+) -> Option<GameCard> {
+    let o = state.objects.get(&id)?;
+    let core = &o.card_types.core_types;
+    let is_creature = core.contains(&CoreType::Creature);
+    let is_land = core.contains(&CoreType::Land);
+    let lane = if is_creature {
+        Lane::Creature
+    } else if is_land {
+        Lane::Land
+    } else {
+        Lane::Other
+    };
+    let mut counters: Vec<CardCounter> = o
+        .counters
+        .iter()
+        .filter(|(_, n)| **n > 0)
+        .map(|(kind, n)| CardCounter {
+            kind: kind.display_phrase().into_owned(),
+            count: *n,
+        })
+        .collect();
+    counters.sort_by(|a, b| a.kind.cmp(&b.kind));
+    Some(GameCard {
+        id: id.0,
+        card_id,
+        name: o.name.clone(),
+        type_line: type_line(o),
+        lane,
+        mana_value: o.mana_cost.mana_value(),
+        is_land,
+        is_token: o.is_token,
+        is_commander,
+        tapped: o.tapped,
+        counters,
+        power: if is_creature { o.power } else { None },
+        toughness: if is_creature { o.toughness } else { None },
+        tax: if is_commander {
+            commander_tax(state, id)
+        } else {
+            0
+        },
+    })
+}
+
+pub(crate) fn place_of(zone: Zone) -> Option<Place> {
     Some(match zone {
         Zone::Hand => Place::Hand,
         Zone::Battlefield => Place::Battlefield,
@@ -989,7 +1002,7 @@ fn place_of(zone: Zone) -> Option<Place> {
     })
 }
 
-fn is_permanent(o: &engine::game::GameObject) -> bool {
+pub(crate) fn is_permanent(o: &engine::game::GameObject) -> bool {
     o.card_types.core_types.iter().any(|t| {
         matches!(
             t,
