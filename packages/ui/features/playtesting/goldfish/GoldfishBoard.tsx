@@ -32,8 +32,8 @@ import type { Playmat, Pointed, ZoneLook } from "./types";
  * one place that wires it to the engine.
  *
  * **The frame, and nothing drawn by itself**: the artboard's fixed places — a dashed table inset
- * 150 px from either side, 92 from the top and 108 from the bottom; the zone columns 22 px in at
- * 250 px down; the plates and the hand at the foot — each filled by a component of its own file.
+ * 224 px from either side, 92 from the top and 108 from the bottom; the zone columns 22 px in,
+ * level with its top; the plates and the hand at the foot — each filled by a component of its own file.
  * Positions are the artboard's, measured from this element's box rather than its 1440 × 900 frame,
  * so a wider window has a wider table and the same margins.
  *
@@ -201,15 +201,15 @@ export function GoldfishBoard({
       {/* The table's dashed edge, drawn under everything on it. */}
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-x-[150px] top-[92px] bottom-[108px] rounded-[28px] border border-dashed border-border opacity-70"
+        className="pointer-events-none absolute inset-x-[224px] top-[92px] bottom-[108px] rounded-[28px] border border-dashed border-border opacity-70"
       />
 
       {view === null ? (
-        <div className="absolute inset-x-[150px] top-[92px] bottom-[108px] flex items-center justify-center text-dim">
+        <div className="absolute inset-x-[224px] top-[92px] bottom-[108px] flex items-center justify-center text-dim">
           {error ?? "Shuffling…"}
         </div>
       ) : view.stage === "mulligan" ? (
-        <div className="absolute inset-x-[150px] top-[92px] bottom-[108px] flex items-center justify-center">
+        <div className="absolute inset-x-[224px] top-[92px] bottom-[108px] flex items-center justify-center">
           <OpeningHand view={view} onAct={onAct} />
         </div>
       ) : (
@@ -219,7 +219,7 @@ export function GoldfishBoard({
           onDrop={drop}
           onPoint={point}
           onUnpoint={unpoint}
-          className="absolute inset-x-[150px] top-[92px] bottom-[108px]"
+          className="absolute inset-x-[224px] top-[92px] bottom-[108px]"
         />
       )}
 
@@ -300,13 +300,13 @@ export function GoldfishBoard({
       </div>
 
       {/* The left column: command zone and exile. */}
-      <div className="absolute top-[250px] left-[22px] flex flex-col gap-[22px]">
+      <div className="absolute top-[92px] left-[22px] flex flex-col gap-[22px]">
         <CommandZone view={view} onAct={onAct} onDrop={drop} onPoint={point} onUnpoint={unpoint} />
         <ExileZone view={view} onDrop={drop} onPoint={point} onUnpoint={unpoint} onLook={setLook} />
       </div>
 
       {/* The right column: graveyard and library. */}
-      <div className="absolute top-[250px] right-[22px] flex flex-col items-end gap-[22px]">
+      <div className="absolute top-[92px] right-[22px] flex flex-col items-end gap-[22px]">
         <GraveyardZone
           view={view}
           onDrop={drop}

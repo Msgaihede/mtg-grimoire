@@ -225,9 +225,9 @@ board's own menus and dialogs open over it. Escape is the way back.
 `GoldfishBoard` is presentational: a view in, actions out, no `ipc`. That is what its stories stand
 on. The artboard's fixed places are measured from the board's box, not from its 1440 × 900 frame:
 
-- the table is inset 150 px from either side, 92 px from the top and 108 px from the bottom;
-- the zone columns sit 22 px in, 250 px down, each card 120 × 168 (the artboard's 104 × 146,
-  grown);
+- the table is inset 224 px from either side, 92 px from the top and 108 px from the bottom;
+- the zone columns sit 22 px in, level with the table's top, each card 180 × 252 (the artboard's
+  104 × 146, grown — large enough to read a commander's name and art without the preview);
 - the plates and the hand are at the foot.
 
 **Cards are drawn as big as the table allows.** A lane's card size is capped high (260 px for a

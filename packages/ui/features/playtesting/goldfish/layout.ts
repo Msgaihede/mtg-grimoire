@@ -53,8 +53,8 @@ export const HAND_ROW_MAX = 7 * HAND_CARD_W + 6 * HAND_GAP;
 export const HAND_MIN_STEP = 36;
 
 /** The zone columns' cards: command, exile, graveyard, library. */
-export const ZONE_W = 120;
-export const ZONE_H = 168;
+export const ZONE_W = 180;
+export const ZONE_H = 252;
 
 /**
  * One pile: the cards of one name that look the same — same tapped state, same counters — and

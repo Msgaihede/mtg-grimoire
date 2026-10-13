@@ -13,7 +13,7 @@ import type { Pointed, ZoneLook } from "./types";
 
 /**
  * The four zones beside the table — command and exile on the left, graveyard and library on the
- * right — each one a 120 × 168 slot (the artboard's 104 × 146, grown) with its count under it.
+ * right — each one a 180 × 252 slot (the artboard's 104 × 146, grown) with its count under it.
  *
  * **Every zone is a drop target drawn over nothing but the board**, and `overlay` all the same:
  * the columns sit beside the table's box, and a card carried out of the table toward them is
@@ -25,14 +25,14 @@ import type { Pointed, ZoneLook } from "./types";
 type Drop = (drag: GoldfishDrag, to: GoldfishPlace) => void;
 
 /** How far down each further commander is drawn, so the one under it still shows its name. */
-const PARTNER_STEP = 28;
+const PARTNER_STEP = 42;
 
 /** The empty zone: a dashed slot naming itself, its edge gold while a card is over it. */
 function EmptySlot({ label, over }: { label: string; over: boolean }): JSX.Element {
   return (
     <div
       className={cn(
-        "flex h-[168px] w-[120px] items-center justify-center rounded-lg border border-dashed bg-bg/60 text-[11px] text-dim",
+        "flex h-[252px] w-[180px] items-center justify-center rounded-lg border border-dashed bg-bg/60 text-[11px] text-dim",
         "transition-[border-color] duration-150 motion-reduce:transition-none",
         over ? "border-accent" : "border-border",
       )}
@@ -93,8 +93,8 @@ export function CommandZone({
         <EmptySlot label="Command" over={over} />
       ) : (
         <div
-          className={cn("relative w-[120px] rounded-lg", over && OVER_OUTLINE)}
-          style={{ height: 168 + (commanders.length - 1) * PARTNER_STEP }}
+          className={cn("relative w-[180px] rounded-lg", over && OVER_OUTLINE)}
+          style={{ height: 252 + (commanders.length - 1) * PARTNER_STEP }}
         >
           {commanders.map((card, i) => (
             <CommanderCard
@@ -162,7 +162,7 @@ function CommanderCard({
       onMouseLeave={onUnpoint}
       data-point={card.id}
       data-land={card.id}
-      className={cn("absolute left-0 h-[168px] w-[120px] cursor-grab rounded-md p-0", FOCUS)}
+      className={cn("absolute left-0 h-[252px] w-[180px] cursor-grab rounded-md p-0", FOCUS)}
       style={{ top }}
     >
       <CardFace card={card} />
@@ -253,7 +253,7 @@ function FaceUpZone({
           data-point={top.id}
           data-land={top.id}
           className={cn(
-            "relative h-[168px] w-[120px] cursor-grab rounded-lg p-0",
+            "relative h-[252px] w-[180px] cursor-grab rounded-lg p-0",
             FOCUS,
             over && OVER_OUTLINE,
           )}
@@ -297,7 +297,7 @@ export function LibraryZone({ view, onAct, onDrop, onLook }: LibraryZoneProps): 
         onContextMenu={menu(build)}
         onKeyDown={menuKey(build)}
         className={cn(
-          "flex h-[168px] w-[120px] cursor-pointer items-center justify-center rounded-lg border bg-surface text-accent disabled:cursor-default",
+          "flex h-[252px] w-[180px] cursor-pointer items-center justify-center rounded-lg border bg-surface text-accent disabled:cursor-default",
           // The edges of the cards under the top one, two of them, the way a deck sits.
           "shadow-[2px_2px_0_var(--color-bg),3px_3px_0_var(--color-border),5px_5px_0_var(--color-bg),6px_6px_0_var(--color-border)]",
           over ? "border-accent" : "border-border",
@@ -305,7 +305,7 @@ export function LibraryZone({ view, onAct, onDrop, onLook }: LibraryZoneProps): 
           FOCUS,
         )}
       >
-        <GrimoireMark size={48} className="text-accent" />
+        <GrimoireMark size={72} className="text-accent" />
       </button>
       <span className={ZONE_LABEL}>Library · {count}</span>
     </div>
