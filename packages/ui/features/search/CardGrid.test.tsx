@@ -537,7 +537,7 @@ describe("CardGrid", () => {
       "Spoiled Dragon",
     );
     expect(screen.getByTestId("badge-aaa").parentElement?.className).toContain(
-      "bottom-[calc(1.75rem*var(--mark-scale,1))]",
+      "bottom-[calc(1.25rem*var(--mark-scale,1)+4px)]",
     );
     expect(screen.getByTestId("badge-bbb").parentElement?.className).toContain(
       "bottom-[calc(0.25rem*var(--mark-scale,1))]",
@@ -2211,9 +2211,7 @@ describe("CardGrid multi-select", () => {
 
     it("fetches no further ahead than its limit", async () => {
       const onNeedNextPage = vi.fn();
-      render(
-        <CardGrid rows={ROWS} onNeedNextPage={onNeedNextPage} selectAllLimit={4} {...base} />,
-      );
+      render(<CardGrid rows={ROWS} onNeedNextPage={onNeedNextPage} selectAllLimit={4} {...base} />);
       onNeedNextPage.mockClear();
 
       await pressSelectAll();
@@ -2413,9 +2411,7 @@ describe("the chin and the tile key", () => {
       <CardGrid
         rows={[card("aaa", "Lightning Bolt")]}
         onSelect={vi.fn()}
-        action={() => (
-          <button type="button">Add</button>
-        )}
+        action={() => <button type="button">Add</button>}
         {...base}
       />,
     );
