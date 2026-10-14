@@ -139,7 +139,34 @@ fn deal(you: Vec<CardFacts>, seed: u64) -> (Playtest, PlaytestStep) {
     let mut red = red();
     // Haste is a keyword line the parser reads from Scryfall's keywords.
     red[1].keywords = vec!["Haste".into()];
-    Playtest::new(&you, &red, seed, Difficulty::VeryEasy).expect("a game starts")
+    Playtest::new(&you, &[], &red, &[], seed, Difficulty::VeryEasy).expect("a game starts")
+}
+
+/// Issue #991: the reader's token is offered and drawn in the printing their deck sets for it.
+#[test]
+fn a_token_is_offered_and_drawn_in_the_printing_the_deck_sets() {
+    let (preset, oracle, source) = crate::tokens::a_treasure();
+    let token = crate::tokens::a_treasure_facts(&oracle, &source);
+    let mut you = green();
+    you.push(card(
+        &source,
+        Some("{1}{G}"),
+        "Enchantment",
+        "",
+        None,
+        "G",
+        1,
+    ));
+    let view = engine(move || {
+        let (mut game, _) =
+            Playtest::new(&you, &[token], &red(), &[], 2, Difficulty::VeryEasy).unwrap();
+        game.act(A::Keep { bottom: vec![] }).unwrap();
+        game.act(A::CreateToken { preset, count: 1 }).unwrap().view
+    });
+    let offer = view.tokens.iter().find(|t| t.name == "Treasure").unwrap();
+    assert_eq!(offer.card_id.as_deref(), Some("deck-treasure"));
+    let made = view.you.battlefield.iter().find(|c| c.is_token).unwrap();
+    assert_eq!(made.card_id.as_deref(), Some("deck-treasure"));
 }
 
 /// A game past the reader's opening hand, kept at seven, at the reader's first main phase.
@@ -601,7 +628,7 @@ fn a_medium_ai_plays_a_turn() {
     let step = engine(|| {
         let mut red = red();
         red[1].keywords = vec!["Haste".into()];
-        let (mut game, _) = Playtest::new(&green(), &red, 3, Difficulty::Medium).unwrap();
+        let (mut game, _) = Playtest::new(&green(), &[], &red, &[], 3, Difficulty::Medium).unwrap();
         game.act(A::Keep { bottom: vec![] }).unwrap()
     });
     assert_eq!(step.view.active, Seat::You);
@@ -854,8 +881,8 @@ fn a_creature_attacks_the_opponents_planeswalker() {
         );
         walker.loyalty = Some("5".into());
         red.push(walker);
-        let (mut game, _) =
-            Playtest::new(&green(), &red, 2, Difficulty::VeryEasy).expect("a game starts");
+        let (mut game, _) = Playtest::new(&green(), &[], &red, &[], 2, Difficulty::VeryEasy)
+            .expect("a game starts");
         game.act(A::Keep { bottom: vec![] }).unwrap();
         game.put_for_test(AI_SEAT, "Test Walker");
         put_down(&mut game, "Grizzly Bears");
