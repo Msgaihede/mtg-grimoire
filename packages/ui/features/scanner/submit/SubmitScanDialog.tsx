@@ -1,13 +1,12 @@
 import { memo, useCallback, useEffect, useId, useRef, useState, type JSX } from "react";
 import { Dialog } from "@/components/Dialog";
-import { FILTER_CONTROL, FILTER_FOCUS, filterChipState } from "@/components/FilterChips";
 import { PANEL_BUTTON } from "@/features/settings/controls";
 import { PrivacyLink } from "@/features/settings/PrivacyLink";
-import { FINISH_LABEL, FINISHES, parseFinishes, type Finish } from "@/lib/finish";
+import type { Finish } from "@/lib/finish";
 import { ipc, ipcError, type CardSummary } from "@/lib/ipc";
 import { notify } from "@/lib/notifications";
-import { radioKeys } from "@/lib/radioGroup";
 import { cn } from "@/lib/utils";
+import { finishesOf, FinishRadios } from "./FinishRadios";
 import { PrintingPicker } from "./PrintingPicker";
 import { submissionOf, type ScanRun } from "./run";
 import { RunPictures } from "./RunPictures";
@@ -17,10 +16,7 @@ import {
   CHOOSE_THE_CARD,
   disclosure,
   DONE,
-  FINISH,
-  FINISH_NEEDS_CARD,
   KEEP_THE_REFERENCE,
-  ONE_FINISH,
   REFERENCE,
   SEND,
   SEND_TITLE,
@@ -119,15 +115,6 @@ const OUT_OF_REACH = "cursor-not-allowed opacity-50 active:scale-100";
  * is carried across — and then only where the new printing comes in it.
  */
 type FinishChoice = { value: Finish; by: "reader" | "printing" };
-
-/**
- * The finishes a printing is offered in. An empty or unreadable list is **unknown**, never "none"
- * (`CardSummary.finishes`), so it offers all three and selects none of them.
- */
-function finishesOf(card: CardSummary): readonly Finish[] {
-  const listed = parseFinishes(card.finishes);
-  return listed.length > 0 ? listed : FINISHES;
-}
 
 /**
  * The dialog's contents, mounted only while it is open — the shell's rule, and what makes the
@@ -347,77 +334,3 @@ const Body = memo(function Body({
     </div>
   );
 });
-
-/**
- * *Finish* — the ways the chosen printing was sold, as a radio group.
- *
- * **Only what the printing comes in is offered**, as everywhere a finish is chosen in this app:
- * the engine refuses a finish the printing does not have, and a chip that can only be refused is
- * a question with a wrong answer in it. Before there is a printing, all three are drawn out of
- * reach with a sentence saying what they are waiting for — the group does not appear from nowhere
- * under the reader's press, and the dialog's shape says from the start that there are two things
- * to answer.
- *
- * The chips are the filter row's own (`FilterChips`), which is what the desktop's add-to-collection
- * popup draws a finish with, and they carry the 44px floor for the phone. The keys are
- * `radioGroup.ts`'s: one Tab stop, and the arrows choose.
- */
-function FinishRadios({
-  chosen,
-  finish,
-  onFinish,
-}: {
-  chosen: CardSummary | null;
-  finish: Finish | null;
-  onFinish: (finish: Finish) => void;
-}) {
-  const id = useId();
-  const waiting = chosen === null;
-  const offered = waiting ? FINISHES : finishesOf(chosen);
-  const pick = (next: Finish | null) => {
-    if (!waiting && next !== null) onFinish(next);
-  };
-  const note = waiting ? FINISH_NEEDS_CARD : offered.length === 1 ? ONE_FINISH : "";
-
-  return (
-    <div className="flex flex-col gap-2">
-      <p id={`${id}-label`} className="text-sm font-medium text-text">
-        {FINISH}
-      </p>
-      <div
-        role="radiogroup"
-        aria-labelledby={`${id}-label`}
-        aria-describedby={`${id}-note`}
-        aria-disabled={waiting || undefined}
-        className="flex flex-wrap gap-1.5"
-      >
-        {offered.map((one, index) => (
-          <button
-            key={one}
-            type="button"
-            role="radio"
-            aria-checked={finish === one}
-            // Out of reach rather than gone from the tab order, like every greyed chip here.
-            aria-disabled={waiting || undefined}
-            {...radioKeys<Finish | null>(offered, finish, pick, index)}
-            onClick={() => pick(one)}
-            className={cn(
-              FILTER_CONTROL,
-              FILTER_FOCUS,
-              "px-3",
-              filterChipState(finish === one, waiting),
-              // The two responses the state's classes cannot reach — `ToggleChip` carries the
-              // same pair for the same reason.
-              waiting && "hover:text-dim active:scale-100",
-            )}
-          >
-            {FINISH_LABEL[one]}
-          </button>
-        ))}
-      </div>
-      <p id={`${id}-note`} className="min-h-4 text-xs text-dim">
-        {note}
-      </p>
-    </div>
-  );
-}

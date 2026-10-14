@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useBulkUndoAction } from "@grimoire/ui/components/UndoNotice";
 import { CreateDeckDialog } from "@grimoire/ui/features/decks/CreateDeckDialog";
 import { useNewDeckFormat } from "@grimoire/ui/features/decks/useNewDeckFormat";
+import { AddCardDialog } from "@grimoire/ui/features/scanner/reader/AddCardDialog";
 import { AddedToast } from "@grimoire/ui/features/scanner/reader/AddedToast";
 import { SCANNING_STOPPED } from "@grimoire/ui/features/scanner/reader/readerText";
 import { totalCopies } from "@grimoire/ui/features/scanner/reader/tray";
@@ -148,19 +149,34 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
 
   useScannerHold(parked.released);
 
-  const { onDecision, lastAdded, landed, clearLanded, flashKey } = useTrayLanding(
+  const { onDecision, onPicked, lastAdded, landed, clearLanded, flashKey } = useTrayLanding(
     tray,
     prefs.finish,
   );
 
   // The crate's defaults, in the reader's mode, and never with previews.
+  // *Add card…* (issue #978) — the desktop page's: the scanner pauses while the search is open,
+  // and closing it resumes whatever was running before.
+  const [picking, setPicking] = useState(false);
+  const pickOpener = useRef<HTMLElement | null>(null);
+
   const options = useMemo(
     () => frameOptions(DEFAULT_SCANNER_OPTIONS, prefs.mode, false),
     [prefs.mode],
   );
+  // *Send scan…*'s dialog is open, so recognition pauses (issue #977) — the desktop page's
+  // `sending`, synced below `useScanSubmit` for its reason.
+  const [sending, setSending] = useState(false);
   const loop = useScanLoop({
     videoRef,
-    live: scanning && camera.kind === "live" && loaded && tray.loaded && !parked.paused,
+    live:
+      scanning &&
+      camera.kind === "live" &&
+      loaded &&
+      tray.loaded &&
+      !parked.paused &&
+      !sending &&
+      !picking,
     options,
     sendPx: DEFAULT_SEND_PX,
     detailWaitMs: DEFAULT_DETAIL_WAIT_MS,
@@ -265,6 +281,9 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     filters: inForce,
     ready: sendable,
   });
+  // **Recognition pauses while the dialog is open** (issue #977), as on the desktop: a card left
+  // under the lens must not land in the tray while the reader picks a printing.
+  if (sending !== (submit.run !== null)) setSending(submit.run !== null);
   // **A run never spans a change of filters**, as on the desktop: the session drops its tracker
   // to take a changed set, which the pump cannot see, so when the filters in force move the
   // frames kept so far are let go (`ScanLoop.breakRun`). The one extra run at mount empties a
@@ -363,6 +382,10 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
               flashKey={flashKey}
               title={destination?.title}
               marketplace={destination?.marketplace}
+              onAddCard={(opener) => {
+                pickOpener.current = opener;
+                setPicking(true);
+              }}
             />
           </div>
         </div>
@@ -450,6 +473,22 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
       {/* The shared dialog, mounted bare: its controls take a finger's size from the shared
           recipes, so it needs no floor reached in from here as the desktop's New deck does. */}
       <SubmitScanDialog run={submit.run} onDismiss={submit.onDismiss} onClose={submit.onClose} />
+
+      {/* Into the staging tray, so no toast — a scan's rule; the tray's Add is the write. */}
+      <AddCardDialog
+        open={picking}
+        finishPref={prefs.finish}
+        onAdd={(picked, finish) => {
+          onPicked(picked, finish);
+          setPicking(false);
+          pickOpener.current?.focus();
+        }}
+        onDismiss={() => {
+          setPicking(false);
+          pickOpener.current?.focus();
+        }}
+        onClose={() => setPicking(false)}
+      />
 
       <div className={CREATE_DECK_FLOOR}>
         <CreateDeckDialog

@@ -1,10 +1,10 @@
 //! The labels, as bytes — for a host that has a session and no database to read them from.
 //!
-//! [`Reference::load_labels`] reads nine columns of every row of `corpus.db`'s `cards` and
+//! [`Reference::load_labels`] reads ten columns of every row of `corpus.db`'s `cards` and
 //! attaches each as a [`Label`]. A browser's scanner runs in a Worker of its own, on a module
 //! of this crate alone (`crates/grimoire-scan`, the light app's step 7.5): the corpus is the
 //! engine's, in another Worker, behind the one connection its storage permits. So the engine
-//! reads the same nine columns, writes them down here ([`Encoder`], [`read_page`]), and hands
+//! reads the same ten columns, writes them down here ([`Encoder`], [`read_page`]), and hands
 //! the bytes across; the scanner's module reads them back ([`decode`]) and attaches them
 //! ([`attach`]) through the same two calls `load_labels` makes, in the same order.
 //!
@@ -12,7 +12,7 @@
 //! it is the one this exists to avoid. [`Row`], [`Encoder`], [`decode`] and [`attach`] are
 //! plain code; only [`read_page`], which reads a connection, is behind `corpus`.
 //!
-//! ## The layout — version 1
+//! ## The layout — version 2
 //!
 //! ```text
 //! "MTGL"                      4 bytes
@@ -31,7 +31,11 @@
 //!     name, set, number,      five varints, each a place in its own table
 //!       language, released
 //!     finishes                varint n, then n varints, each a place in the finish table
+//!     promo                   1 byte: 0, or 1 for a printing the corpus marks a promo
 //! ```
+//!
+//! Version 1 had no promo byte. Both ends of a hand-over are one build, so a version 1 file is
+//! never met and is refused like any other.
 //!
 //! A varint is LEB128, least significant group first, ten bytes at most. Nothing follows the
 //! last row.
@@ -64,7 +68,7 @@ use std::collections::HashMap;
 /// The first four bytes of a labels file.
 pub const MAGIC: [u8; 4] = *b"MTGL";
 /// The layout above. A number is never reused, as the bundle's is not.
-pub const VERSION: u8 = 1;
+pub const VERSION: u8 = 2;
 
 /// The string tables, in the order the file holds them.
 const NAME: usize = 0;
@@ -80,8 +84,9 @@ const ORACLE: usize = 0;
 const ILLUSTRATION: usize = 1;
 const ID_TABLES: [&str; 2] = ["oracle", "illustration"];
 
-/// The fewest bytes a row can be: its id, two absent ids, five places and no finishes.
-const MIN_ROW: usize = ID_LEN + 2 + 5 + 1;
+/// The fewest bytes a row can be: its id, two absent ids, five places, no finishes and its promo
+/// byte.
+const MIN_ROW: usize = ID_LEN + 2 + 5 + 1 + 1;
 
 /// One printing, as `corpus.db` has it: what [`Reference::load_labels`] reads from one row.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,22 +97,26 @@ pub struct Row {
     pub label: Label,
     /// The finishes the printing exists in, in the order the corpus lists them.
     pub finishes: Vec<String>,
+    /// The corpus marks it a promo (Scryfall's `promo`). See
+    /// [`crate::filters::ScanFilters::exclude_promos`].
+    pub promo: bool,
 }
 
 impl Row {
-    /// Attach this printing to `reference` — **the two calls `load_labels` makes, in its
+    /// Attach this printing to `reference` — **the three calls `load_labels` makes, in its
     /// order**, so a reference built from a labels file is built by the code a reference built
     /// from the corpus is.
     pub fn attach(self, reference: &mut Reference) {
         reference.set_finishes(self.id, self.finishes);
+        reference.set_promo(self.id, self.promo);
         reference.add_label(self.id, self.oracle, self.illustration, self.label);
     }
 }
 
-/// The nine columns a label is read from, in the order [`Row::from_sql`] reads them.
+/// The ten columns a label is read from, in the order [`Row::from_sql`] reads them.
 #[cfg(feature = "corpus")]
 pub const COLUMNS: &str = "id, illustration_id, name, set_code, collector_number, lang, \
-                           released_at, oracle_id, finishes";
+                           released_at, oracle_id, finishes, promo";
 
 #[cfg(feature = "corpus")]
 impl Row {
@@ -126,6 +135,7 @@ impl Row {
         };
         let oracle: Option<String> = r.get(at + 7)?;
         let finishes: Option<String> = r.get(at + 8)?;
+        let promo: Option<i64> = r.get(at + 9)?;
         let Some(id) = crate::index::parse_uuid(&id) else { return Ok(None) };
         Ok(Some(Row {
             id,
@@ -133,6 +143,7 @@ impl Row {
             illustration: illustration.as_deref().and_then(crate::index::parse_uuid),
             label,
             finishes: crate::reference::parse_finishes(finishes.as_deref().unwrap_or("")),
+            promo: promo.is_some_and(|p| p != 0),
         }))
     }
 }
@@ -268,6 +279,7 @@ impl Encoder {
             let at = self.strings[FINISH].place(finish);
             put_varint(&mut self.rows, at);
         }
+        self.rows.push(u8::from(row.promo));
     }
 
     /// The file. Built in one allocation of its exact size.
@@ -421,6 +433,7 @@ struct Parts<'a> {
     finishes: usize,
     /// At the first finish.
     finishes_at: Cursor<'a>,
+    promo: bool,
 }
 
 impl<'a> Labels<'a> {
@@ -476,7 +489,13 @@ impl<'a> Labels<'a> {
         for _ in 0..finishes {
             self.word(FINISH, at)?;
         }
-        Ok(Parts { id, oracle, illustration, words, finishes, finishes_at })
+        let before = *at;
+        let promo = match at.take(1, "a row's promo byte")?[0] {
+            0 => false,
+            1 => true,
+            _ => return Err(before.damaged("a promo byte that is neither 0 nor 1")),
+        };
+        Ok(Parts { id, oracle, illustration, words, finishes, finishes_at, promo })
     }
 
     fn row(&self, p: &Parts<'a>) -> Row {
@@ -497,6 +516,7 @@ impl<'a> Labels<'a> {
                 released: p.words[RELEASED].to_owned(),
             },
             finishes,
+            promo: p.promo,
         }
     }
 }
@@ -597,13 +617,18 @@ mod tests {
                 released: released.into(),
             },
             finishes: finishes.iter().map(|f| f.to_string()).collect(),
+            promo: false,
         }
+    }
+
+    fn promo(row: Row) -> Row {
+        Row { promo: true, ..row }
     }
 
     /// Rows that between them use every shape a row has: an id with and without an oracle and
     /// an illustration, a shared oracle, a shared illustration, a split name, a name outside
     /// ASCII, an empty release date, no finishes and all three, a set and number two languages
-    /// share, and one printing pushed twice.
+    /// share, a promo, and one printing pushed twice.
     fn rows() -> Vec<Row> {
         vec![
             row(1, Some(10), Some(50), "Forest", "blb", "280", "en", "2024-08-02", &["nonfoil", "foil"]),
@@ -613,7 +638,7 @@ mod tests {
             row(5, None, None, "Virtue of Knowledge // Vantress Visions", "woe", "76", "en", "", &["etched"]),
             row(6, Some(30), Some(52), "Lim-Dûl's Vault", "all", "107★", "en", "1996-06-10", &["nonfoil", "foil", "etched"]),
             row(7, Some(40), Some(53), "Memory Lapse // Memory Lapse", "astx", "66", "en", "2021-04-23", &["nonfoil"]),
-            row(8, Some(41), Some(53), "Memory Lapse", "sld", "2142", "en", "2025-12-01", &["foil"]),
+            promo(row(8, Some(41), Some(53), "Memory Lapse", "sld", "2142", "en", "2025-12-01", &["foil"])),
             row(1, Some(10), Some(50), "Forest", "blb", "280", "en", "2024-08-02", &["nonfoil", "foil"]),
         ]
     }
@@ -665,6 +690,7 @@ mod tests {
         assert_eq!(through.label_count(), 8);
         assert_eq!(through.finishes_of(&id(6)), ["nonfoil", "foil", "etched"]);
         assert_eq!(through.lookup_by_name("memory lapse"), Some((id(8), 0)));
+        assert!(through.is_promo(&id(8)) && !through.is_promo(&id(7)));
     }
 
     #[test]
@@ -677,7 +703,7 @@ mod tests {
         newer[4] = VERSION + 1;
         let refused = decode(&newer).err().expect("a version this build does not read");
         assert_eq!(refused, LabelsError::BadVersion { found: VERSION + 1, expected: VERSION });
-        assert_eq!(refused.to_string(), "labels format version 2, but this build understands 1");
+        assert_eq!(refused.to_string(), "labels format version 3, but this build understands 2");
         let mut longer = bytes.clone();
         longer.push(0);
         assert!(matches!(decode(&longer), Err(LabelsError::Damaged { .. })), "a byte too many");
@@ -760,7 +786,8 @@ mod tests {
     #[test]
     fn a_place_outside_its_table_is_refused() {
         let bytes = encoded(&[row(1, None, None, "Forest", "blb", "280", "en", "", &[])]);
-        // The row is the last 24 bytes: an id, two absent ids, five places, no finishes.
+        // The row is the last 25 bytes: an id, two absent ids, five places, no finishes, and
+        // the promo byte.
         let body = bytes.len() - MIN_ROW;
         for (offset, what) in [(ID_LEN, "id"), (ID_LEN + 2, "string"), (ID_LEN + 6, "string")] {
             let mut bad = bytes.clone();
@@ -768,6 +795,24 @@ mod tests {
             let refused = decode(&bad).err().unwrap_or_else(|| panic!("{what} place let through"));
             assert!(matches!(refused, LabelsError::Damaged { .. }), "{refused}");
         }
+    }
+
+    #[test]
+    fn a_promo_byte_is_0_or_1_and_nothing_else() {
+        let plain = encoded(&[row(1, None, None, "Forest", "blb", "280", "en", "", &[])]);
+        let promoted = encoded(&[promo(row(1, None, None, "Forest", "blb", "280", "en", "", &[]))]);
+        assert_eq!(plain.last(), Some(&0));
+        assert_eq!(promoted.last(), Some(&1));
+        assert!(!decode(&plain).expect("decode").rows().next().expect("a row").promo);
+        assert!(decode(&promoted).expect("decode").rows().next().expect("a row").promo);
+        let mut bad = plain.clone();
+        *bad.last_mut().expect("a byte") = 2;
+        let at = bad.len() - 1;
+        let refused = decode(&bad).err().expect("refused");
+        assert_eq!(
+            refused,
+            LabelsError::Damaged { what: "a promo byte that is neither 0 nor 1", at }
+        );
     }
 
     // ---- Against the corpus -------------------------------------------------------------------
@@ -780,7 +825,8 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE cards (id TEXT PRIMARY KEY, oracle_id TEXT, name TEXT, lang TEXT,
                                  released_at TEXT, set_code TEXT, collector_number TEXT,
-                                 oracle_text TEXT, finishes TEXT, illustration_id TEXT)",
+                                 oracle_text TEXT, finishes TEXT, illustration_id TEXT,
+                                 promo INTEGER NOT NULL DEFAULT 0)",
         )
         .expect("schema");
         for c in cards {
@@ -812,7 +858,7 @@ mod tests {
         const I1: &str = "8ae3562f-28b7-4462-96ed-be0cf7052ccc";
         const I2: &str = "dc4e2134-f0c2-49aa-9ea3-ebf83af1445c";
         let nonfoil_foil = Some(r#"["nonfoil","foil"]"#);
-        corpus(&[
+        let conn = corpus(&[
             [Some(A), Some(I1), Some("Forest"), Some("blb"), Some("280"), Some("en"), Some("2024-08-02"), Some(O1), nonfoil_foil],
             // A reprint under the same artwork, and a set and number a Japanese printing shares.
             [Some(B), Some(I1), Some("Forest"), Some("ltr"), Some("0270"), Some("ja"), Some("2023-06-23"), Some(O1), Some(r#"["foil"]"#)],
@@ -824,7 +870,10 @@ mod tests {
             [Some("not-a-uuid"), None, Some("Nobody"), Some("x"), Some("0"), Some("en"), None, None, None],
             [Some(F), None, None, Some("x"), Some("1"), Some("en"), None, None, None],
             [Some(G), Some(I2), Some("Memory Lapse"), Some("sld"), Some("2142"), Some("en"), Some("2025-12-01"), Some(O2), nonfoil_foil],
-        ])
+        ]);
+        // A promo: the column is an integer, and every other row keeps its default of 0.
+        conn.execute("UPDATE cards SET promo = 1 WHERE id = ?1", [G]).expect("promo");
+        conn
     }
 
     /// Every row of `conn`, a page of `page` rows at a time.
@@ -874,6 +923,8 @@ mod tests {
         assert_eq!(r.label_for(&d).map(|l| l.released), Some(String::new()));
         assert_eq!(r.oracle_id_of(&d), None);
         assert_eq!(r.lookup_by_name("vantress visions"), Some((d, 0)));
+        let g = crate::index::parse_uuid("0001f1ef-b957-4a55-b47f-14839cdbab6f").expect("id");
+        assert!(r.is_promo(&g) && !r.is_promo(&c));
     }
 
     /// The whole of a real corpus, for the figures and for the promise at its real size:

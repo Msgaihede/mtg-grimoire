@@ -207,6 +207,9 @@ import type {
   EntryPatch,
   FacetResponse,
   FinishPrices,
+  FolderConflicts,
+  FolderRule,
+  RuleConflicts,
   HomeLayout,
   HomeWidget,
   ImportCommitOutcome,
@@ -513,6 +516,9 @@ export interface FakeWishlistFolder {
   /** `wishlist_folders.sync_uid`. Absent derives `wishlist-folder-uid-{id}` for a folder the
    *  reader made and `null` for a managed one, which `capture::suppressed` leaves unminted. */
   syncUid?: string | null;
+  /** User schema v64's `rules` (issue #980) — the folder's **own** {@link FolderRule}s; absent
+   *  or `[]` is none, which the crate stores as `NULL`. See {@link folderRuleConflicts}. */
+  rules?: FolderRule[];
 }
 
 /**
@@ -586,6 +592,9 @@ export interface FakeCollectionFolder {
   syncUid?: string | null;
   /** User schema v29's column — see {@link FakeDeckFolder.needsReview}. */
   needsReview?: string | null;
+  /** User schema v64's `rules` (issue #980) — the folder's **own** {@link FolderRule}s; absent
+   *  or `[]` is none. Only a `user` folder can be given any. See {@link folderRuleConflicts}. */
+  rules?: FolderRule[];
 }
 
 /**
@@ -1882,7 +1891,7 @@ export interface FakeTradeLine {
 }
 
 /**
- * One row of `scan_batches` (user schema v64, issue #989): one press that put the Scanner's review
+ * One row of `scan_batches` (user schema v65, issue #989): one press that put the Scanner's review
  * tray away — **Add to collection** (`filed`) or **Archive** (`archived`, kept here and filed
  * nowhere).
  *
@@ -7770,7 +7779,30 @@ function elsewhereWishes(db: FakeDb, w: FakeWish): number {
   return db.wishlistEntries.filter((o) => o.id !== w.id && o.oracleId === w.oracleId).length;
 }
 
+/**
+ * What the collection holds of a wish's card, split by whether the printing answers the wish —
+ * `wishlist.rs`' `owned_exact` and `owned_other` (issue #988). Every finish, condition and
+ * folder; an any-printing wish counts the whole card as exact, and an orphan with no oracle id
+ * counts only its pinned printing.
+ */
+function ownedForWish(db: FakeDb, w: FakeWish): { exact: number; other: number } {
+  let exact = 0;
+  let other = 0;
+  for (const e of db.collectionEntries) {
+    if (w.cardId !== null && e.cardId === w.cardId) {
+      exact += e.quantity;
+      continue;
+    }
+    if (w.oracleId === null) continue;
+    if (cardById(db, e.cardId)?.oracleId !== w.oracleId) continue;
+    if (w.cardId === null) exact += e.quantity;
+    else other += e.quantity;
+  }
+  return { exact, other };
+}
+
 function toWishRow(db: FakeDb, w: FakeWish, mp: MarketplaceId): WishRow {
+  const owned = ownedForWish(db, w);
   const card = wishCard(db, w);
   return {
     id: w.id,
@@ -7801,6 +7833,8 @@ function toWishRow(db: FakeDb, w: FakeWish, mp: MarketplaceId): WishRow {
     // disagree about what one copy of one printing costs this wish.
     unitPrice: wishPriceAt(db, card, w.preferredFinish, mp),
     elsewhere: elsewhereWishes(db, w),
+    ownedExact: owned.exact,
+    ownedOther: owned.other,
     notes: w.notes,
     needsReview: w.needsReview,
     updatedAt: w.updatedAt,
@@ -7859,6 +7893,7 @@ function toWishlistFolder(f: FakeWishlistFolder): WishlistFolder {
     managedTokens: f.managedTokens ?? false,
     syncUid: uidOfWishFolder(f),
     managedDeckUid: managedDeckId === null ? null : fakeDeckUid(managedDeckId),
+    rules: cloneRules(f.rules ?? []),
   };
 }
 
@@ -7898,6 +7933,8 @@ function toCollectionFolder(f: FakeCollectionFolder): CollectionFolder {
     // nothing gets a stable uid so every fake folder is shareable, and a seed that says `null`
     // keeps it — see {@link FakeCollectionFolder.syncUid}.
     syncUid: f.syncUid === undefined ? `folder-uid-${f.id}` : f.syncUid,
+    // Copies, {@link toWishlistFolder}'s reason: a caller must not edit the store through them.
+    rules: cloneRules(f.rules ?? []),
   };
 }
 
@@ -10739,6 +10776,52 @@ export function readHandlers(db: FakeDb) {
         byFolder.set(e.folderId, row);
       }
       return [...byFolder.values()].sort((a, b) => a.folderId - b.folderId);
+    },
+
+    /**
+     * `folder_rules::collection_conflicts` (issue #980) — which owned rows break their folder's
+     * effective rules (spec §1–§2), priced at `marketplace` off {@link finishPriceAt}, the
+     * folder summary's own figure. An orphan breaks nothing, and an unpriced row passes a price
+     * rule: a rule only breaks on a fact the app knows.
+     */
+    collection_rule_conflicts: (args: { marketplace?: MarketplaceId }): RuleConflicts => {
+      const mp = marketplaceOf(args.marketplace);
+      return folderRuleConflicts(db.collectionEntries, db.collectionFolders, (e, rules) => {
+        const card = cardById(db, e.cardId);
+        if (card === null) return false;
+        const facts: RuleRowFacts = {
+          price: finishPriceAt(db, card, e.finish, mp),
+          finish: e.finish,
+          condition: e.condition,
+        };
+        return rules.some((r) => cardBreaksRule(card, r) || rowBreaksRule(facts, r));
+      });
+    },
+
+    /**
+     * `folder_rules::wishlist_conflicts` (issue #980) — {@link collection_rule_conflicts} over
+     * the wishes. The price is the row price the wall shows ({@link wishPriceAt}); a wish naming
+     * no finish passes a finish rule, and `conditions` is ignored. **An any-printing wish** breaks
+     * the card-level rules only when no printing of its card satisfies them all together.
+     */
+    wishlist_rule_conflicts: (args: { marketplace?: MarketplaceId }): RuleConflicts => {
+      const mp = marketplaceOf(args.marketplace);
+      return folderRuleConflicts(db.wishlistEntries, db.wishlistFolders, (w, rules) => {
+        const facts: RuleRowFacts = {
+          price: wishPriceAt(db, wishCard(db, w), w.preferredFinish, mp),
+          finish: w.preferredFinish,
+          condition: null,
+        };
+        if (rules.some((r) => rowBreaksRule(facts, r))) return true;
+        if (w.cardId !== null) {
+          const card = cardById(db, w.cardId);
+          return card !== null && rules.some((r) => cardBreaksRule(card, r));
+        }
+        const printings = db.cards.filter((c) => c.oracleId === w.oracleId);
+        // No printing at all is no known fact — the orphan's rule, not a conflict.
+        if (printings.length === 0) return false;
+        return !printings.some((c) => !rules.some((r) => cardBreaksRule(c, r)));
+      });
     },
 
     /** `wishlist_folders::list_folders` — every folder there is, flat, `ORDER BY sort_order,
@@ -15866,6 +15949,198 @@ function collectionFolderLocked(db: FakeDb, id: number | null): boolean {
   return false;
 }
 
+/* ------------------------------------------------------------------ folder rules ------ */
+
+/** `folder_rules::MAX_RULES`. */
+const MAX_FOLDER_RULES = 20;
+const RULES_TOO_MANY = "A folder can hold at most 20 rules.";
+const RULES_NO_VALUE = "Pick at least one value for each rule.";
+const RULES_BAD_RANGE = "Give each range at least one end, with the lower end first.";
+const RULES_BAD_DATE = "Write dates as YYYY, YYYY-MM or YYYY-MM-DD.";
+/** The colour rule's vocabulary — `filters::COLORS` and `C` for colourless. */
+const RULE_COLORS = ["W", "U", "B", "R", "G", "C"];
+/** The rarity rule's vocabulary, which is wider than the rarity chips' {@link RARITY_KEYS}. */
+const RULE_RARITIES = ["common", "uncommon", "rare", "mythic", "special", "bonus"];
+
+/** A copy deep enough that nobody edits the store through a rule they were handed. */
+function cloneRules(rules: readonly FolderRule[]): FolderRule[] {
+  return rules.map((r) => ("values" in r ? { ...r, values: [...r.values] } : { ...r }));
+}
+
+/**
+ * `folder_rules::tidy` — what a rule write stores, or the one sentence it is refused with (spec
+ * §4). A values rule keeps only words of its vocabulary, deduplicated and sorted, and is refused
+ * left empty; a range needs an end and its ends in order, never negative; a date is `YYYY`,
+ * `YYYY-MM` or `YYYY-MM-DD`. A kind this build does not know is dropped, as the crate skips one
+ * on read.
+ */
+function tidyFolderRules(rules: readonly FolderRule[]): FolderRule[] {
+  if (rules.length > MAX_FOLDER_RULES) throw refuse(RULES_TOO_MANY);
+  const keep = (values: readonly string[], vocabulary: readonly string[]): string[] => {
+    const kept = [...new Set(values.filter((v) => vocabulary.includes(v)))].sort();
+    if (kept.length === 0) throw refuse(RULES_NO_VALUE);
+    return kept;
+  };
+  const range = (min: number | null, max: number | null): void => {
+    if (min === null && max === null) throw refuse(RULES_BAD_RANGE);
+    if ((min !== null && min < 0) || (max !== null && max < 0)) throw refuse(RULES_BAD_RANGE);
+    if (min !== null && max !== null && min > max) throw refuse(RULES_BAD_RANGE);
+  };
+  const date = (d: string | null): void => {
+    if (d !== null && !/^\d{4}(-\d{2}(-\d{2})?)?$/.test(d)) throw refuse(RULES_BAD_DATE);
+  };
+  return rules.flatMap((rule): FolderRule[] => {
+    switch (rule.kind) {
+      case "price":
+      case "manaValue":
+        range(rule.min, rule.max);
+        return [{ kind: rule.kind, min: rule.min, max: rule.max }];
+      case "released":
+        if (rule.from === null && rule.to === null) throw refuse(RULES_BAD_RANGE);
+        date(rule.from);
+        date(rule.to);
+        return [{ kind: "released", from: rule.from, to: rule.to }];
+      case "colors":
+        return [{ kind: rule.kind, values: keep(rule.values, RULE_COLORS) }];
+      case "types":
+        return [{ kind: rule.kind, values: keep(rule.values, CARD_TYPES) }];
+      case "sets": {
+        const codes = rule.values.map((v) => v.trim().toLowerCase()).filter((v) => v !== "");
+        return [{ kind: rule.kind, values: keep(codes, codes).slice(0, MAX_SET_FILTER) }];
+      }
+      case "rarities":
+        return [{ kind: rule.kind, values: keep(rule.values, RULE_RARITIES) }];
+      case "finishes":
+        return [{ kind: rule.kind, values: keep(rule.values, FINISHES) }];
+      case "conditions":
+        return [{ kind: rule.kind, values: keep(rule.values, CONDITIONS) }];
+      case "borders":
+        return [{ kind: rule.kind, values: keep(rule.values, BORDERS) }];
+      default:
+        return [];
+    }
+  });
+}
+
+/**
+ * A folder's **effective** rules — its own, then each ancestor's, nearest first (spec §2). The
+ * climb is bounded by {@link MAX_FOLDER_DEPTH}, {@link collectionFolderLocked}'s reason. `null`
+ * is the root, which has no rules.
+ */
+function effectiveFolderRules(
+  folders: readonly { id: number; parentId: number | null; rules?: FolderRule[] }[],
+  id: number | null,
+): FolderRule[] {
+  const out: FolderRule[] = [];
+  let cursor = id;
+  for (let hops = 0; cursor !== null && hops < MAX_FOLDER_DEPTH; hops += 1) {
+    const at = cursor;
+    const folder = folders.find((f) => f.id === at);
+    if (!folder) break;
+    out.push(...(folder.rules ?? []));
+    cursor = folder.parentId;
+  }
+  return out;
+}
+
+/** Whether `value` falls outside `[min, max]` — `false` for a value the app does not know, since
+ *  a rule only breaks on a known fact (`NOT coalesce(pred, 1)`). */
+function outsideRange(value: number | null, min: number | null, max: number | null): boolean {
+  if (value === null) return false;
+  return (min !== null && value < min) || (max !== null && value > max);
+}
+
+/** The `released` rule's comparison: each end compared on its own length, so `to: "2000"` is
+ *  through the end of 2000. An unknown date breaks nothing. */
+function releasedOutside(released: string, from: string | null, to: string | null): boolean {
+  if (released === "") return false;
+  if (from !== null && released.slice(0, from.length) < from) return true;
+  return to !== null && released.slice(0, to.length) > to;
+}
+
+/** Whether one printing breaks one **card-level** rule (spec §1). Row-level kinds — price,
+ *  finishes, conditions — are not this function's and answer `false`. */
+function cardBreaksRule(card: FakeCard, rule: FolderRule): boolean {
+  switch (rule.kind) {
+    case "manaValue":
+      return outsideRange(card.cmc, rule.min, rule.max);
+    case "colors": {
+      if (card.colors === null) return false;
+      const colors = card.colors.toUpperCase();
+      if (colors === "") return !rule.values.includes("C");
+      return [...colors].some((c) => COLORS.includes(c) && !rule.values.includes(c));
+    }
+    case "types":
+      if (card.typeLine === null) return false;
+      return !rule.values.some((t) => cardHasType(card.typeLine, t));
+    case "sets":
+      return !rule.values.includes(card.setCode.toLowerCase());
+    case "rarities":
+      return card.rarity !== null && !rule.values.includes(card.rarity);
+    case "borders":
+      return !pickedFrom(rule.values, BORDERS).some((b) => cardHasBorder(card, b));
+    case "released":
+      return releasedOutside(card.releasedAt, rule.from, rule.to);
+    default:
+      return false;
+  }
+}
+
+/** What one row offers a rule beyond its card: its unit price at the page's marketplace, its
+ *  finish and its condition, each `null` where the row has none to judge. */
+interface RuleRowFacts {
+  price: number | null;
+  finish: string | null;
+  condition: string | null;
+}
+
+/** Whether one row's own facts break one **row-level** rule; card-level kinds answer `false`. */
+function rowBreaksRule(facts: RuleRowFacts, rule: FolderRule): boolean {
+  switch (rule.kind) {
+    case "price":
+      return outsideRange(facts.price, rule.min, rule.max);
+    case "finishes":
+      return facts.finish !== null && !rule.values.includes(facts.finish);
+    case "conditions":
+      return facts.condition !== null && !rule.values.includes(facts.condition);
+    default:
+      return false;
+  }
+}
+
+/**
+ * `folder_rules::conflicts` over either cabinet — one {@link FolderConflicts} per folder holding a
+ * conflicting row, counted in that folder alone, and every conflicting id, both ascending.
+ * `breaks` answers whether a row breaks its folder's effective rules.
+ */
+function folderRuleConflicts<R extends { id: number; folderId: number | null; quantity: number }>(
+  rows: readonly R[],
+  folders: readonly { id: number; parentId: number | null; rules?: FolderRule[] }[],
+  breaks: (row: R, rules: FolderRule[]) => boolean,
+): RuleConflicts {
+  const effective = new Map<number, FolderRule[]>();
+  const byFolder = new Map<number, FolderConflicts>();
+  const ids: number[] = [];
+  for (const row of rows) {
+    if (row.folderId === null) continue;
+    let rules = effective.get(row.folderId);
+    if (rules === undefined) {
+      rules = effectiveFolderRules(folders, row.folderId);
+      effective.set(row.folderId, rules);
+    }
+    if (rules.length === 0 || !breaks(row, rules)) continue;
+    ids.push(row.id);
+    const counts = byFolder.get(row.folderId) ?? { folderId: row.folderId, entries: 0, copies: 0 };
+    counts.entries += 1;
+    counts.copies += row.quantity;
+    byFolder.set(row.folderId, counts);
+  }
+  return {
+    folders: [...byFolder.values()].sort((a, b) => a.folderId - b.folderId),
+    ids: ids.sort((a, b) => a - b),
+  };
+}
+
 /**
  * `collection::folder_named` — the folder an **add** names, refused in words unless it is there
  * **and is the reader's own**. `null` is the root and is always a destination: there is no row to
@@ -18153,6 +18428,19 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
+     * `collection_folders::set_folder_rules` (user schema v64, issue #980) — replace a folder's
+     * own rules, whole, through {@link tidyFolderRules}; `[]` clears them. The lock's fence
+     * exactly: a deck's group and `Recently removed` answer {@link FOLDER_NOT_YOURS}.
+     */
+    collection_folder_set_rules: (args: { id: number; rules: FolderRule[] }): CollectionFolder => {
+      refuseIfBusy(db);
+      const folder = userCollectionFolder(db, args.id);
+      const rules = tidyFolderRules(args.rules);
+      folder.rules = rules.length === 0 ? undefined : rules;
+      return toCollectionFolder(folder);
+    },
+
+    /**
      * `collection_folders::delete_folder`. **Its cards are not deleted** —
      * `collection_entries.folder_id` is `ON DELETE SET NULL`, so they surface at the root, filed
      * nowhere and otherwise exactly as they were. **Sub-folders do go with it**, `parent_id`
@@ -19392,6 +19680,20 @@ export function writeHandlers(db: FakeDb) {
       // A managed folder is named after its deck, and renamed with it — never by hand.
       refuseIfManagedFolder(db, args.id);
       folder.name = name;
+      return toWishlistFolder(folder);
+    },
+
+    /**
+     * `wishlist_folders::set_folder_rules` (user schema v64, issue #980) — replace a folder's own
+     * rules, whole, through {@link tidyFolderRules}; `[]` clears them. Every wishlist folder takes
+     * them, a deck's managed one included: a rule fences nothing, it only marks.
+     */
+    wishlist_folder_set_rules: (args: { id: number; rules: FolderRule[] }): WishlistFolder => {
+      refuseIfBusy(db);
+      const folder = wishFolderById(db, args.id);
+      if (!folder) throw refuse(FOLDER_GONE);
+      const rules = tidyFolderRules(args.rules);
+      folder.rules = rules.length === 0 ? undefined : rules;
       return toWishlistFolder(folder);
     },
 
@@ -26612,7 +26914,11 @@ export function scannerHandlers(db: FakeDb) {
      */
     scanner_set_filters: (args: { filters: ScanFilters }): void => {
       const f = args.filters;
-      const empty = f.sets.length === 0 && f.released_from === null && f.released_to === null;
+      const empty =
+        f.sets.length === 0 &&
+        f.released_from === null &&
+        f.released_to === null &&
+        f.exclude_promos !== true;
       if (empty) return;
       if (db.fault === "scannerMissing") throw refuse(FILTERS_NEED_NAMES);
       if (f.sets.some((s) => s.toLowerCase() === "zzz")) throw refuse(NO_PRINTING_MATCHES);

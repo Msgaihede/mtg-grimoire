@@ -185,6 +185,8 @@ const BOLT: WishRow = {
   // whole first block below is about. `FILED` further down is the same card in a folder.
   folderId: null,
   elsewhere: 0,
+  ownedExact: 0,
+  ownedOther: 0,
   name: "Lightning Bolt",
   setCode: "lea",
   collectorNumber: "161",
@@ -235,6 +237,8 @@ const FILED: WishRow = {
   id: 12,
   folderId: 1,
   elsewhere: 1,
+  ownedExact: 0,
+  ownedOther: 0,
   name: "Rhystic Study",
   cardId: "c-rhystic",
   artCardId: "c-rhystic",
@@ -286,9 +290,9 @@ const SEARCH_BOLT: CardSummary = {
  * and an empty folder has **no summary row at all** — the read groups the wishes — so it is the
  * one that catches a card fed a raw `Map.get`.
  */
-const ORDERED: WishlistFolder = { id: 1, parentId: null, name: "Ordered", sortOrder: 0, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };
-const BACKORDERED: WishlistFolder = { id: 2, parentId: 1, name: "Backordered", sortOrder: 0, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };
-const SOMEDAY: WishlistFolder = { id: 3, parentId: null, name: "Someday", sortOrder: 1, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };
+const ORDERED: WishlistFolder = { rules: [], id: 1, parentId: null, name: "Ordered", sortOrder: 0, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };
+const BACKORDERED: WishlistFolder = { rules: [], id: 2, parentId: 1, name: "Backordered", sortOrder: 0, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };
+const SOMEDAY: WishlistFolder = { rules: [], id: 3, parentId: null, name: "Someday", sortOrder: 1, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };
 const FOLDERS: WishlistFolder[] = [ORDERED, BACKORDERED, SOMEDAY];
 
 /** Direct per folder, and `Someday` is deliberately absent rather than zeroed. */
@@ -2388,6 +2392,7 @@ describe("the shelves", () => {
   it("draws a folder whose cards are all in its sub-folders as a container, with no empty box", async () => {
     useAppStore.setState({ wishlistView: "grid" });
     const MANA: WishlistFolder = {
+      rules: [],
       id: 10,
       parentId: null,
       name: "Mana base",
@@ -2396,6 +2401,7 @@ describe("the shelves", () => {
       managedTokens: false, syncUid: null, managedDeckUid: null,
     };
     const FETCH: WishlistFolder = {
+      rules: [],
       id: 11,
       parentId: 10,
       name: "Fetchlands",
@@ -2404,6 +2410,7 @@ describe("the shelves", () => {
       managedTokens: false, syncUid: null, managedDeckUid: null,
     };
     const SHOCK: WishlistFolder = {
+      rules: [],
       id: 12,
       parentId: 10,
       name: "Shocks",
@@ -3358,6 +3365,7 @@ describe("the shelves", () => {
    */
   it("draws a rail per level on a nested shelf's band and on every row under it, in the table", async () => {
     const SIGNED: WishlistFolder = {
+      rules: [],
       id: 4,
       parentId: BACKORDERED.id,
       name: "Signed",
@@ -4621,6 +4629,7 @@ describe("the folders", () => {
    */
   describe("a folder named Add folder", () => {
     const NAMED: WishlistFolder = {
+      rules: [],
       id: 20,
       parentId: null,
       name: "Add folder",
@@ -4629,6 +4638,7 @@ describe("the folders", () => {
       managedTokens: false, syncUid: null, managedDeckUid: null,
     };
     const INNER: WishlistFolder = {
+      rules: [],
       id: 21,
       parentId: NAMED.id,
       name: "Inner",
@@ -4637,6 +4647,7 @@ describe("the folders", () => {
       managedTokens: false, syncUid: null, managedDeckUid: null,
     };
     const DEEP: WishlistFolder = {
+      rules: [],
       id: 22,
       parentId: INNER.id,
       name: "Deep",
@@ -5246,6 +5257,7 @@ describe("the search column", () => {
  */
 describe("a deck's managed wishlist", () => {
   const MANAGED: WishlistFolder = {
+    rules: [],
     id: 9,
     parentId: null,
     name: "Rhystic Testbed",
@@ -5405,6 +5417,7 @@ describe("a deck's managed wishlist", () => {
    */
   it("names the deck, never the folder, inside a deck's Tokens subfolder", async () => {
     const TOKENS: WishlistFolder = {
+      rules: [],
       id: 10,
       parentId: MANAGED.id,
       name: "Tokens",

@@ -394,6 +394,7 @@ mod tests {
                     released: "2025-01-01".into(),
                 },
                 finishes: vec!["nonfoil".into(), "foil".into()],
+                promo: false,
             })
             .collect()
     }

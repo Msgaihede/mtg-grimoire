@@ -438,6 +438,7 @@ export function CardGrid<T extends GridCard>({
   treatment,
   gameChanger,
   unreleased,
+  ruleBreak,
   action,
   column,
   flips,
@@ -663,6 +664,18 @@ export function CardGrid<T extends GridCard>({
    * Hold it still (module scope, or a `useCallback`) — see {@link dragPayload}.
    */
   unreleased?: (card: T) => { set: string; date: string } | null;
+  /**
+   * Why a tile's card **does not belong where it is filed** — a folder rule it breaks (issue
+   * #980) — or `null` when it does. A string outlines the whole tile in destructive red (the art
+   * and the chin, through `CardChin`'s `tone`) and joins the art button's `aria-description`, so
+   * a screen reader hears the reason the eye sees as colour.
+   *
+   * A callback for {@link finish}'s reason: the wall's rows do not know their folder's rules; the
+   * page that asked Rust which entries break them does. Absent means no tile is outlined.
+   *
+   * Hold it still (module scope, or a `useCallback`) — see {@link dragPayload}.
+   */
+  ruleBreak?: (card: T) => string | null;
   /**
    * The one control a tile carries — **in a strip over the bottom of the art**, since 2026-08-26.
    * The search's quick-add.
@@ -1308,7 +1321,9 @@ export function CardGrid<T extends GridCard>({
   const carriedIndex = useMemo(
     () =>
       shelved && carriedId !== null
-        ? shelved.layout.rows.findIndex((row) => row.kind === "heading" && row.shelf.id === carriedId)
+        ? shelved.layout.rows.findIndex(
+            (row) => row.kind === "heading" && row.shelf.id === carriedId,
+          )
         : -1,
     [shelved, carriedId],
   );
@@ -2018,8 +2033,7 @@ export function CardGrid<T extends GridCard>({
       order.findIndex((card) => card !== undefined && tileKey(card) === key);
     const rowOfIndex = (at: number) =>
       shelved ? rowOfTile(shelved.layout, at) : Math.floor(at / columns);
-    const tileAt = (at: number) =>
-      wall.querySelector<HTMLElement>(`[${GRID_INDEX_ATTR}="${at}"]`);
+    const tileAt = (at: number) => wall.querySelector<HTMLElement>(`[${GRID_INDEX_ATTR}="${at}"]`);
     const caretInto = (tile: HTMLElement, onArt: boolean) =>
       (onArt ? (tile.querySelector<HTMLElement>(CARET_SELECTOR) ?? tile) : tile).focus({
         preventScroll: true,
@@ -2247,9 +2261,7 @@ export function CardGrid<T extends GridCard>({
    * `GAP` on the flat wall, as it always was. A sectioned wall can end on a heading or an empty
    * box, whose constants carry gaps of their own sizes, so only a trailing tile row's is removed.
    */
-  const lastLayoutRow = shelved
-    ? shelved.layout.rows[shelved.layout.rows.length - 1]
-    : undefined;
+  const lastLayoutRow = shelved ? shelved.layout.rows[shelved.layout.rows.length - 1] : undefined;
   const trailingGap = shelved ? (lastLayoutRow?.kind === "tiles" ? GAP : 0) : GAP;
 
   /** One tile, as both kinds of wall draw it — one list of the tile's slots, not two. */
@@ -2276,9 +2288,7 @@ export function CardGrid<T extends GridCard>({
       // ring; a Ctrl-click still picks the one tile. Without a `ringKey` both halves are the tile
       // key, which is what stops a wall that draws a foil and a nonfoil of one printing from
       // ringing both when the reader pressed one — see {@link tileKey}.
-      selected={
-        (card.ringKey ?? tileKey(card)) === selectedId || picked.selected(tileKey(card))
-      }
+      selected={(card.ringKey ?? tileKey(card)) === selectedId || picked.selected(tileKey(card))}
       dragRest={dragRest}
       badge={badge}
       badgeChrome={badgeChrome}
@@ -2289,6 +2299,7 @@ export function CardGrid<T extends GridCard>({
       treatment={treatment}
       gameChanger={gameChanger}
       unreleased={unreleased}
+      ruleBreak={ruleBreak}
       action={action}
       column={column}
       flips={flips}
@@ -2398,10 +2409,7 @@ export function CardGrid<T extends GridCard>({
                     data-shelf-row="tiles"
                     {...{ [SHELF_ID_ATTR]: row.shelf.id }}
                     // Raised when a popup is open in it, exactly as a flat row is — see below.
-                    className={cn(
-                      "absolute inset-x-0 top-0 flex gap-3",
-                      LAYER.raisedWhenPopupOpen,
-                    )}
+                    className={cn("absolute inset-x-0 top-0 flex gap-3", LAYER.raisedWhenPopupOpen)}
                     style={{ height: tileHeight, ...place }}
                   >
                     {rails}
@@ -2472,13 +2480,11 @@ export function CardGrid<T extends GridCard>({
                   paddingRight: gutter,
                 }}
               >
-                {rows
-                  .slice(v.index * columns, v.index * columns + columns)
-                  .map((card, i) =>
-                    // Keyed by slot rather than by card id: two pages fetched either side of a
-                    // sync can carry one printing twice, and a duplicate key drops a card.
-                    renderTile(card, v.index * columns + i, `${v.index}-${i}`),
-                  )}
+                {rows.slice(v.index * columns, v.index * columns + columns).map((card, i) =>
+                  // Keyed by slot rather than by card id: two pages fetched either side of a
+                  // sync can carry one printing twice, and a duplicate key drops a card.
+                  renderTile(card, v.index * columns + i, `${v.index}-${i}`),
+                )}
               </div>
             ))}
       </div>
@@ -2511,6 +2517,7 @@ function Tile<T extends GridCard>({
   treatment,
   gameChanger,
   unreleased,
+  ruleBreak,
   action,
   column,
   flips,
@@ -2574,6 +2581,7 @@ function Tile<T extends GridCard>({
   treatment?: (card: T) => readonly Treatment[];
   gameChanger?: (card: T) => boolean;
   unreleased?: (card: T) => { set: string; date: string } | null;
+  ruleBreak?: (card: T) => string | null;
   action?: (card: T) => ReactNode;
   column?: (card: T) => ReactNode;
   flips?: (card: T) => boolean;
@@ -2598,6 +2606,7 @@ function Tile<T extends GridCard>({
   const tileTreatments = treatment?.(card) ?? [];
   const crowned = gameChanger?.(card) ?? false;
   const stamp = unreleased?.(card) ?? null;
+  const broken = ruleBreak?.(card) ?? null;
   const turnable = turnsOver(card, flips);
   const face = useShownFace(turnable ? card.id : null);
   const controls = column?.(card);
@@ -2822,7 +2831,12 @@ function Tile<T extends GridCard>({
       // pitch the virtualiser is measuring — are exactly what they were with no ring at all.
       className={cn(
         "group flex shrink-0 scroll-m-1.5 flex-col rounded-lg",
-        selected && "ring-2 ring-accent",
+        // **A rule break is red, and the gold wins.** Both are a `ring-2` on this one box, so they
+        // cannot both be drawn; a picked card is the reader's present gesture and the red is a
+        // standing fact the chin's `tone` keeps saying through the selection. (The deck wall can
+        // draw both because its red is the card's *border* and its gold a ring outside it; this
+        // tile has no border of its own to lend the red.)
+        selected ? "ring-2 ring-accent" : broken !== null && "ring-2 ring-destructive",
       )}
       // A Shift-click is a range (issue #214), and Shift in a browser also drags a text selection
       // across everything between the two presses — on a wall of forty tiles, every chin from
@@ -2847,6 +2861,9 @@ function Tile<T extends GridCard>({
           // to (see {@link CARET_SELECTOR}) — a wall with an unreachable tile in the middle of it
           // would be worse than one with a tile that says it opens nothing.
           aria-disabled={card.id ? undefined : true}
+          // The rule break's reason, in words, since the outline says it only in colour. A
+          // description rather than part of the name — see the note on the name below.
+          aria-description={broken ?? undefined}
           // The name is the card and nothing else — the quick-add beside it says what it
           // does to the card, and two buttons whose names both start with it would be two
           // buttons a screen reader cannot tell apart in a wall of forty.
@@ -3132,6 +3149,9 @@ function Tile<T extends GridCard>({
         // **`"art"`.** `CardArt` draws its own edge and stops where this bar begins, so the chin
         // supplies all three of its own and the two read as one outline. See the prop.
         seam="art"
+        // The tile's red ring meets the chin's own border; a neutral one would put a grey seam
+        // through the outline — see the prop.
+        tone={broken !== null ? "destructive" : "default"}
         // **The crown only, and the finish is deliberately not here beside it.**
         //
         // This slot used to carry both, because the art's chip is `aria-hidden` — it sits inside

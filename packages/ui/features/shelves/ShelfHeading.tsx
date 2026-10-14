@@ -36,6 +36,7 @@ import {
   type KeyboardEventHandler,
   type MouseEventHandler,
   type ReactElement,
+  type ReactNode,
 } from "react";
 import {
   ArrowRight,
@@ -122,6 +123,13 @@ export interface ShelfHeadingProps {
    * on the row is about folding, so nothing else changes. Absent is the row exactly as before.
    */
   foldPaused?: string;
+  /**
+   * A mark the page hangs after the lock glyph — the folder's rules (`FolderRulesBadge`, issue
+   * #980). The page decides whether there is one: this row draws whatever it is handed, and
+   * nothing for `undefined` or `null`. A tab stop of its own is fine here; the heading's controls
+   * are siblings, never a button around it.
+   */
+  badge?: ReactNode;
 }
 
 /** A callback ref as this row calls it: the element in, and whatever React 19 allows back out. */
@@ -164,7 +172,11 @@ export function ShelfGlyph({
   return (
     <Icon
       aria-hidden="true"
-      className={cn("flex-none", open && kind !== "unfiled" ? "text-accent" : "text-dim", className)}
+      className={cn(
+        "flex-none",
+        open && kind !== "unfiled" ? "text-accent" : "text-dim",
+        className,
+      )}
     />
   );
 }
@@ -205,6 +217,7 @@ export function ShelfHeading({
   dropMark = "none",
   dragRef,
   foldPaused,
+  badge,
 }: ShelfHeadingProps): ReactElement {
   const tip = useTooltip();
   const foldRefused = Boolean(foldPaused);
@@ -367,6 +380,7 @@ export function ShelfHeading({
           <Lock className="size-3.5" aria-hidden="true" />
         </span>
       )}
+      {badge}
       {shelf.kind === "managed" && (
         <span
           className="flex-none rounded-full border border-border px-1.5 text-[0.6875rem] leading-4 text-dim"

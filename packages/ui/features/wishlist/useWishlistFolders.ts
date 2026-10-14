@@ -1,12 +1,17 @@
 import { useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ipc, type WishlistFolder } from "@/lib/ipc";
+import { ipc, type FolderConflicts, type FolderRule, type WishlistFolder } from "@/lib/ipc";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { refreshCardSearches } from "@/lib/searchMarks";
 
 /** Stable identity for "no folders yet" — a wishlist that files nothing is the ordinary case,
  *  and the tree builder's `useMemo` does not see a new identity every render. */
 const NONE: readonly WishlistFolder[] = [];
+
+/** Stable identities for "no rule conflicts" — `NONE`'s reason, for the readers of
+ *  {@link useWishlistRuleConflicts} that memoise on them. */
+const NO_CONFLICT_IDS: ReadonlySet<number> = new Set();
+const NO_CONFLICT_FOLDERS: readonly FolderConflicts[] = [];
 
 /**
  * Every folder there is, and nothing else — one query, no summary, no writes.
@@ -231,6 +236,20 @@ export function useWishlistFolders() {
     ...wishWrites,
   });
 
+  /**
+   * Replace a folder's own rules (issue #980) — the whole list; `[]` clears them.
+   *
+   * On `writes`, the whole `["wishlist"]` root: a rule moves no wish, but
+   * `["wishlist", "ruleConflicts", marketplace]` sits under that root, so the wall's red outlines
+   * and the folder badges' counts follow the edit. No heart changes, so the card search stays out,
+   * as it does for every other folder write here.
+   */
+  const setRules = useMutation({
+    mutationFn: ({ id, rules }: { id: number; rules: FolderRule[] }) =>
+      ipc.wishlistFolderSetRules(id, rules),
+    ...writes,
+  });
+
   return {
     // Both passed straight through, so this hook's public surface is exactly what it was before
     // the list became a hook of its own: its callers read `query` and `folders` off this object
@@ -248,6 +267,35 @@ export function useWishlistFolders() {
     remove,
     clear,
     removeWithWishes,
+    setRules,
+  };
+}
+
+/**
+ * Which wishes break their folder's rules, and how many each folder holds (issue #980, spec §4) —
+ * `useCollectionRuleConflicts`' twin.
+ *
+ * **Keyed on the marketplace**, because a price rule is judged on the row price the wall shows at
+ * the page's marketplace; **under `["wishlist"]`**, so every wish write that already settles that
+ * root refreshes the outlines without knowing they exist.
+ */
+export function useWishlistRuleConflicts({ enabled = true }: { enabled?: boolean } = {}) {
+  const { marketplace } = useMarketplace();
+  const query = useQuery({
+    queryKey: ["wishlist", "ruleConflicts", marketplace.id],
+    queryFn: () => ipc.wishlistRuleConflicts(marketplace.id),
+    enabled,
+  });
+  const ids = useMemo<ReadonlySet<number>>(
+    () => (query.data ? new Set(query.data.ids) : NO_CONFLICT_IDS),
+    [query.data],
+  );
+  return {
+    query,
+    /** Every conflicting `wishlist_entries.id` — what the wall outlines. */
+    ids,
+    /** Per folder, counted in that folder alone; `subtreeConflicts` sums a sub-tree. */
+    folders: query.data?.folders ?? NO_CONFLICT_FOLDERS,
   };
 }
 

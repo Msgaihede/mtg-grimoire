@@ -64,12 +64,15 @@ const BOLT: WishRow = {
   preferredFinish: "foil",
   unitPrice: 400.5,
   elsewhere: 0,
+  ownedExact: 0,
+  ownedOther: 0,
   notes: null,
   needsReview: null,
   updatedAt: 1_800_000_000,
 };
 
 const EXPENSIVE: WishlistFolder = {
+  rules: [],
   id: 3,
   name: "Expensive",
   parentId: null,

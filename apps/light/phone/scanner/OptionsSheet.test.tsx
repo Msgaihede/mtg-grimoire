@@ -11,7 +11,12 @@ import type { ScanFilters } from "@grimoire/ui/lib/ipc";
 import { renderPhone } from "../testing";
 import { OptionsSheet } from "./OptionsSheet";
 
-const NO_FILTERS: ScanFilters = { sets: [], released_from: null, released_to: null };
+const NO_FILTERS: ScanFilters = {
+  sets: [],
+  released_from: null,
+  released_to: null,
+  exclude_promos: false,
+};
 const CAMERAS = [
   { deviceId: "rear", label: "Rear camera" },
   { deviceId: "front", label: "Front camera" },
@@ -120,6 +125,23 @@ describe("the scanner's options sheet", () => {
     });
     // Each end bounds the other.
     expect(from).toHaveAttribute("max", "2024-12-31");
+  });
+
+  it("switches promos off beside the set picker, and the Filters row says so", async () => {
+    const filters = { sets: ["hob"], released_from: null, released_to: null };
+    const props = mount({ filters });
+    await open(/^Filters/);
+    const toggle = screen.getByRole("switch", { name: "Skip promos" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    await userEvent.click(toggle);
+    expect(props.onFilters).toHaveBeenLastCalledWith({ ...filters, exclude_promos: true });
+  });
+
+  it("names skipped promos on the Filters row", async () => {
+    mount({ filters: { ...NO_FILTERS, exclude_promos: true } });
+    expect(within(await sheet()).getByRole("button", { name: /^Filters/ })).toHaveTextContent(
+      "Any set · no promos",
+    );
   });
 
   it("says the session's refusal of a filter in words, and clears to everything", async () => {

@@ -7,6 +7,7 @@ import { cardImageUrl } from "@/lib/images";
 import { FOCUS } from "@/lib/focus";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
+import { LAYER } from "@/lib/layers";
 import { Battlefield } from "./Battlefield";
 import { DiscardDialog } from "./DiscardDialog";
 import { HandFan } from "./HandFan";
@@ -228,7 +229,16 @@ export function GoldfishBoard({
           {error ?? "Shuffling…"}
         </div>
       ) : view.stage === "mulligan" ? (
-        <div className="absolute inset-x-[224px] top-[92px] bottom-[108px] flex items-center justify-center">
+        // The opening hand takes the whole board (issue #993): a scrim over the zones and the
+        // reader's plate, which say nothing before the first turn, and only the top band — the
+        // menu, the goldfish's life, help and the log, raised alongside — left above it.
+        <div
+          data-testid="goldfish-opening-hand"
+          className={cn(
+            "absolute inset-0 flex flex-col items-center bg-bg/85 px-6 pt-[100px] pb-5",
+            LAYER.raised,
+          )}
+        >
           <OpeningHand view={view} onAct={onAct} />
         </div>
       ) : (
@@ -243,7 +253,7 @@ export function GoldfishBoard({
       )}
 
       {/* Top left: the game menu and the way back. */}
-      <div className="absolute top-[14px] left-4 flex items-center gap-2">
+      <div className={cn("absolute top-[14px] left-4 flex items-center gap-2", LAYER.raised)}>
         <button
           type="button"
           aria-label="Game menu"
@@ -278,7 +288,7 @@ export function GoldfishBoard({
       </div>
 
       {/* Top centre: the goldfish, whose life the reader keeps. */}
-      <div className="absolute top-3 left-1/2 -translate-x-1/2">
+      <div className={cn("absolute top-3 left-1/2 -translate-x-1/2", LAYER.raised)}>
         <LifePlate
           seat="opponent"
           title={dead && view !== null ? `Opponent · dead on turn ${view.turn}` : "Opponent"}
@@ -290,7 +300,7 @@ export function GoldfishBoard({
       </div>
 
       {/* Top right: help and the log. */}
-      <div className="absolute top-[14px] right-4 flex gap-2">
+      <div className={cn("absolute top-[14px] right-4 flex gap-2", LAYER.raised)}>
         <button
           type="button"
           aria-label="How to move cards"
@@ -374,6 +384,7 @@ export function GoldfishBoard({
           role="status"
           className={cn(
             "pointer-events-none absolute bottom-[18px] left-4 max-w-[260px] text-xs",
+            LAYER.raised,
             error === null ? "text-dim" : "text-text",
           )}
         >

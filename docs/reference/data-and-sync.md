@@ -15,7 +15,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `schema.rs` (`crates/grimoire-core/src/` since 2026-10-02) — re-run 2026-09-27 at v54: **32**
   and **25**, and again 2026-10-07 at v60: **34** and **25** (v59's `deck_todo_lists` and v60's
   `sync_orphans`), and 2026-10-11 at v61: **35** and **25** (`sync_heard`), and the same day at v63: **37** and **25**
-  (`trades` and `trade_lines`), and 2026-10-14 at v64: **39** and **25** (`scan_batches` and
+  (`trades` and `trade_lines`), and 2026-10-14 at v65: **39** and **25** (`scan_batches` and
   `scan_batch_lines`); **a bare `grep -c 'Side::User'`
   over-counts** — 37 against 32 at v54 and 39 against 34 at v60, because `mod tests` matches the
   enum by name five more
@@ -1444,7 +1444,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   ignored list, and in `TABLE_KEYS` under the one `["trade"]` root. The byte-identity figure went
   **93 → 96** (37 tables, 56 indexes, 3 autoindexes), `UNDO_V63` heads every rewind chain, and the
   rung creates both empty. [trades.md](trades.md) is the record.
-  **v64 adds `scan_batches` and `scan_batch_lines`, the Scanner's history** (2026-10-14,
+  **v65 adds `scan_batches` and `scan_batch_lines`, the Scanner's history** (2026-10-14,
   issue #989). A batch is one press that put the review tray away — `filed` by Add to collection
   or `archived` by Archive — with a name (`Scan N`), the folder an Add filed into (a soft id and
   the folder's name beside it) and the condition it filed at; a line is one printing in one
@@ -1453,7 +1453,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `idx_scan_batch_lines_batch`; **neither syncs, and the mirror writes neither** — absent from
   `SYNCED_TABLES`, no `sync_uid`, on the mirror's ignored list, and in `TABLE_KEYS` under the one
   `["scanHistory"]` root. The byte-identity figure went **96 → 99** (39 tables, 57 indexes, 3
-  autoindexes), `UNDO_V64` heads every rewind chain, and the rung creates both empty — the stored
+  autoindexes), `UNDO_V65` heads every rewind chain, and the rung creates both empty — the stored
   tray is not history. [card-scanner.md](card-scanner.md)'s *Scan history* is the record.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks

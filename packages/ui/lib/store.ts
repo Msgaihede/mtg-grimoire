@@ -751,6 +751,21 @@ interface AppState {
   /** Spend it — `SearchPage`, on the commit it applied it. */
   clearPendingSearchSet: () => void;
   /**
+   * **The search a press somewhere else asked the Collection page to open on** — the wishlist
+   * wall's owned chips (issue #988), and {@link pendingSearchSet}'s one-shot shape aimed at the
+   * collection. A query in the box's own syntax (`!"Lightning Bolt" e:lea cn:161`), so the page
+   * drops it into the filter it already has and the reader sees, and can edit, what narrowed it.
+   *
+   * Cleared by {@link setActiveView} for `pendingFolder`'s reason, and written after it by
+   * {@link showInCollection}, so no caller can order the two writes the wrong way.
+   */
+  pendingCollectionQuery: string | null;
+  /** Go to the Collection view filtered by `query` — the view change and the hand-off in one
+   *  action, {@link showSetInSearch}'s shape. */
+  showInCollection: (query: string) => void;
+  /** Spend it — `CollectionPage`, on the commit it applied it. */
+  clearPendingCollectionQuery: () => void;
+  /**
    * **The needs-review filter a press somewhere else asked a list to open with** — the home page's
    * To review widget, and {@link pendingFolder}'s one-shot shape aimed at a filter rather than a
    * drawer. `CollectionPage` or `WishlistPage`, whichever `scope` names, turns its own
@@ -1371,6 +1386,8 @@ export const useAppStore = create<AppState>((set) => ({
         // The search hand-off, for the folder's reason on the line above. `showSetInSearch` writes
         // it *after* calling this, which is the order that survives.
         pendingSearchSet: null,
+        // The wishlist's owned chips' hand-off, for the same reason (`showInCollection`).
+        pendingCollectionQuery: null,
         // The home page's three other hand-offs, for the folder's reason three lines up: each is
         // written after the view change that carries it, so this clears only one nobody read.
         pendingReviewFilter: null,
@@ -1651,6 +1668,13 @@ export const useAppStore = create<AppState>((set) => ({
     set({ pendingSearchSet: setCode });
   },
   clearPendingSearchSet: () => set({ pendingSearchSet: null }),
+  pendingCollectionQuery: null,
+  // `showSetInSearch`'s two `set`s, for its reason: the view first, because it clears the second.
+  showInCollection: (query) => {
+    useAppStore.getState().setActiveView("collection");
+    set({ pendingCollectionQuery: query });
+  },
+  clearPendingCollectionQuery: () => set({ pendingCollectionQuery: null }),
   // Nothing pending until a home-page press names one, and never again after the page that
   // answered it has read it — `pendingFolder`'s arrangement three times over. Each setter writes
   // one field and has no opinion about the view, so the order its caller depends on stays

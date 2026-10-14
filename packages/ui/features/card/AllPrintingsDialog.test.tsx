@@ -1143,6 +1143,7 @@ describe("AllPrintingsDialog", () => {
   describe("for a line the reader's collection supplies", () => {
     const folders: CollectionFolder[] = [
       {
+        rules: [],
         id: 11,
         parentId: null,
         name: "Serah",

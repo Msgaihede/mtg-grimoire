@@ -2,7 +2,7 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement, type ReactNode } from "react";
-import type { WishlistFolder, WishlistFolderSummary } from "@/lib/ipc";
+import type { FolderRule, WishlistFolder, WishlistFolderSummary } from "@/lib/ipc";
 
 const wishlistFolderList = vi.hoisted(() => vi.fn());
 const wishlistFolderCreate = vi.hoisted(() => vi.fn());
@@ -13,6 +13,9 @@ const wishlistFolderDelete = vi.hoisted(() => vi.fn());
 const wishlistFolderClear = vi.hoisted(() => vi.fn());
 const wishlistFolderDeleteWithWishes = vi.hoisted(() => vi.fn());
 const wishlistFolderSummary = vi.hoisted(() => vi.fn());
+/** Folder rules (issue #980): the write and the conflict read. */
+const wishlistFolderSetRules = vi.hoisted(() => vi.fn());
+const wishlistRuleConflicts = vi.hoisted(() => vi.fn());
 // `useWishlistFolders` reads `useMarketplace()`, which is the real hook here rather than a
 // fake — so its own queries need answers too. `marketplaceFeedStatus` is never asserted on;
 // it only has to resolve so that hook does not sit on a rejected query for the life of the test.
@@ -30,17 +33,46 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     wishlistFolderClear,
     wishlistFolderDeleteWithWishes,
     wishlistFolderSummary,
+    wishlistFolderSetRules,
+    wishlistRuleConflicts,
     getMarketplace,
     marketplaceFeedStatus,
   },
 }));
 
-import { useWishlistFolderList, useWishlistFolders } from "./useWishlistFolders";
+import {
+  useWishlistFolderList,
+  useWishlistFolders,
+  useWishlistRuleConflicts,
+} from "./useWishlistFolders";
 
 /** Two folders, one inside the other — flat rows, because the tree is the reader's to build
  *  from `parentId` and `wishlist_folders` has no notion of depth. */
-const WANTS: WishlistFolder = { id: 1, parentId: null, name: "Wants", sortOrder: 0, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };
-const STAPLES: WishlistFolder = { id: 2, parentId: 1, name: "Staples", sortOrder: 0, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };
+const WANTS: WishlistFolder = {
+  id: 1,
+  parentId: null,
+  name: "Wants",
+  sortOrder: 0,
+  managedDeckId: null,
+  managedTokens: false,
+  syncUid: null,
+  managedDeckUid: null,
+  rules: [],
+};
+const STAPLES: WishlistFolder = {
+  id: 2,
+  parentId: 1,
+  name: "Staples",
+  sortOrder: 0,
+  managedDeckId: null,
+  managedTokens: false,
+  syncUid: null,
+  managedDeckUid: null,
+  rules: [],
+};
+
+/** A rule a folder may carry — blue cards only. */
+const BLUE: FolderRule = { kind: "colors", values: ["U"] };
 
 /** One summary row per folder above — direct per folder, never recursive. */
 const WANTS_SUMMARY: WishlistFolderSummary = {
@@ -73,14 +105,19 @@ beforeEach(() => {
   wishlistFolderMove.mockReset().mockResolvedValue({ ...STAPLES, parentId: null });
   // The whole cabinet, flat, as it now stands — `wishlist_folders::reorder_folders` ends in the
   // same `list_folders` the plain read does, so this is not scoped to the level that was written.
-  wishlistFolderReorder
-    .mockReset()
-    .mockResolvedValue([{ ...STAPLES, parentId: null, sortOrder: 0 }, { ...WANTS, sortOrder: 1 }]);
+  wishlistFolderReorder.mockReset().mockResolvedValue([
+    { ...STAPLES, parentId: null, sortOrder: 0 },
+    { ...WANTS, sortOrder: 1 },
+  ]);
   wishlistFolderDelete.mockReset().mockResolvedValue(undefined);
   // How many wishes went — the only thing either command answers.
   wishlistFolderClear.mockReset().mockResolvedValue(3);
   wishlistFolderDeleteWithWishes.mockReset().mockResolvedValue(4);
   wishlistFolderSummary.mockReset().mockResolvedValue([WANTS_SUMMARY, STAPLES_SUMMARY]);
+  wishlistFolderSetRules.mockReset().mockResolvedValue({ ...WANTS, rules: [BLUE] });
+  wishlistRuleConflicts
+    .mockReset()
+    .mockResolvedValue({ folders: [{ folderId: 2, entries: 1, copies: 3 }], ids: [11] });
   // Matches `DEFAULT_MARKETPLACE`, so a test that does not care about marketplace settles with
   // no observable change from the hook's own initial guess.
   getMarketplace.mockReset().mockResolvedValue("tcgplayer");
@@ -358,5 +395,59 @@ describe("useWishlistFolders", () => {
     await result.current.remove.mutateAsync(1);
 
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
+  });
+});
+
+/**
+ * Folder rules (issue #980). The write is a folder write on `writes` — the `["wishlist"]` root and
+ * nothing else, since no heart changes — and the conflict read sits under that root keyed on the
+ * marketplace, so every wish write already refreshes the outlines.
+ */
+describe("folder rules", () => {
+  it("replaces a folder's rules by id, whole, and settles the wishlist root alone", async () => {
+    const { result } = renderHook(() => useWishlistFolders(), { wrapper });
+    await waitFor(() => expect(result.current.folders).toHaveLength(2));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await result.current.setRules.mutateAsync({ id: 1, rules: [BLUE] });
+
+    expect(wishlistFolderSetRules).toHaveBeenCalledWith(1, [BLUE]);
+    expect(invalidate.mock.calls).toEqual([[{ queryKey: ["wishlist"] }]]);
+  });
+
+  it("re-reads when a rule edit is refused", async () => {
+    wishlistFolderSetRules.mockRejectedValue("A folder can hold at most 20 rules.");
+    const { result } = renderHook(() => useWishlistFolders(), { wrapper });
+    await waitFor(() => expect(result.current.folders).toHaveLength(2));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await expect(result.current.setRules.mutateAsync({ id: 1, rules: [] })).rejects.toBe(
+      "A folder can hold at most 20 rules.",
+    );
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] }));
+  });
+
+  it("reads the conflicts at the page's marketplace, keyed by it under the wishlist root", async () => {
+    getMarketplace.mockResolvedValue("cardkingdom");
+    const { result } = renderHook(() => useWishlistRuleConflicts(), { wrapper });
+
+    await waitFor(() => expect(result.current.ids.has(11)).toBe(true));
+    expect(wishlistRuleConflicts).toHaveBeenLastCalledWith("cardkingdom");
+    expect(result.current.folders).toEqual([{ folderId: 2, entries: 1, copies: 3 }]);
+    expect(client.getQueryData(["wishlist", "ruleConflicts", "cardkingdom"])).toBeDefined();
+  });
+
+  it("answers stable empty identities while switched off", () => {
+    const { result, rerender } = renderHook(() => useWishlistRuleConflicts({ enabled: false }), {
+      wrapper,
+    });
+    const { ids, folders } = result.current;
+
+    expect(ids.size).toBe(0);
+    expect(folders).toEqual([]);
+    rerender();
+    expect(result.current.ids).toBe(ids);
+    expect(result.current.folders).toBe(folders);
+    expect(wishlistRuleConflicts).not.toHaveBeenCalled();
   });
 });

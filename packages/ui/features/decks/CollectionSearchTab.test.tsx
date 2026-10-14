@@ -83,6 +83,7 @@ const INSTANTS = category({ id: 3, name: "Instant", kind: "main", sortOrder: 2 }
 const LIFEGAIN = category({ id: 6, name: "Lifegain", kind: "main", origin: "auto", sortOrder: 0 });
 
 const THIS_GROUP: CollectionFolder = {
+  rules: [],
   id: 10,
   parentId: null,
   name: "Kenrith",
@@ -93,6 +94,7 @@ const THIS_GROUP: CollectionFolder = {
   syncUid: null,
 };
 const OTHER_GROUP: CollectionFolder = {
+  rules: [],
   id: 11,
   parentId: null,
   name: "Mono-Red Aggro",
@@ -103,6 +105,7 @@ const OTHER_GROUP: CollectionFolder = {
   syncUid: null,
 };
 const BINDER: CollectionFolder = {
+  rules: [],
   id: 12,
   parentId: null,
   name: "Trade binder",

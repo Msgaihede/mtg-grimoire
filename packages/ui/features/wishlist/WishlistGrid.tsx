@@ -13,6 +13,7 @@ import { hasBackFace } from "@/features/card/printings";
 import { dragData } from "@/features/decks/dnd";
 import { CardGrid, type GridCard, type GridSections } from "@/features/search/CardGrid";
 import type { Finish } from "@/lib/finish";
+import { RULE_BREAK } from "@/lib/folderRules";
 import type { FolderNode } from "@/lib/folderTree";
 import type { WishlistFolder, WishRow } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
@@ -22,7 +23,13 @@ import type { Shelf } from "@/lib/shelves";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { EditWishButton } from "./EditWish";
-import { preferredFinishOf, wallPrinting, wishLabel } from "./wish";
+import {
+  collectionQueryOf,
+  preferredFinishOf,
+  wallPrinting,
+  wishLabel,
+  type OwnedSide,
+} from "./wish";
 import { wishDragData } from "./wishDrag";
 import { ElsewhereMark } from "./wishMarks";
 
@@ -109,7 +116,9 @@ function toTile(wish: WishRow, managed: boolean): WishTile {
  * them: bottom-left the owned/wanted fraction, top-left the review flag and the cost, top-right
  * `FoilOverlay`'s chip. That inventory is what changed. The fraction is gone with every other
  * comparison this list made against the collection, the flag and the cost have moved to the
- * tile's bottom-right, and bottom-left holds a plain count of copies wanted.
+ * tile's bottom-right, and bottom-left holds a plain count of copies wanted — with, since issue
+ * #988, the copies the collection already holds above it ({@link WishOwned}), as a report rather
+ * than a fraction.
  *
  * What has **not** changed is the budget the old paragraph turned on: `CardGrid` positions its
  * virtual rows from `CAPTION_HEIGHT`, so a second line here is still a wall whose rows overlap by
@@ -145,7 +154,6 @@ const placedCaption =
     );
   };
 
-
 /**
  * The same fact as the sheen and corner chip `CardArt` draws over the picture.
  *
@@ -153,7 +161,6 @@ const placedCaption =
  * changes.
  */
 const tileFinish = (tile: WishTile): Finish | null => preferredFinishOf(tile.wish);
-
 
 /**
  * What a tile carries when it is dragged — spec §1's third drag source, and since spec §9 a
@@ -254,6 +261,82 @@ function WishWanted({ wish }: { wish: WishRow }) {
 }
 
 /**
+ * What the collection already holds of a wish's card (issue #988) — one chip per count that is
+ * not zero, so a tile shows the exact printing's, the other printings', both, or nothing.
+ *
+ * **A report, never arithmetic** — `WishRow.ownedExact`'s rule: nothing here dims the wish or
+ * subtracts from the copies wanted under it. The list stays the reader's; this only tells them
+ * what the binder has before they buy another.
+ *
+ * **The two counts are told apart by a word**, because a glyph would be one more thing to learn:
+ * `Own` is the printing the wish is for (every printing, on an any-printing wish), `Other` is the
+ * same card in another printing. Each carries its whole sentence as `sr-only` text and tooltip,
+ * {@link WishWanted}'s arrangement.
+ *
+ * **Each is a button that opens the collection on exactly those copies** —
+ * {@link collectionQueryOf} written into its search box, through `showInCollection`. The corner
+ * it sits in opens the card on a click, so the press stops there; `data-no-drag` keeps a press
+ * from becoming a drag of the whole wish (the `column` slot's reason).
+ */
+function WishOwned({ wish }: { wish: WishRow }) {
+  const tip = useTooltip();
+  const showInCollection = useAppStore((s) => s.showInCollection);
+  const chip = (side: OwnedSide, count: number) => {
+    if (count <= 0) return null;
+    const copies = `${count} ${count === 1 ? "copy" : "copies"}`;
+    const sentence =
+      side === "other"
+        ? `${copies} of another printing in your collection`
+        : wish.cardId === null
+          ? `${copies} in your collection`
+          : `${copies} of this printing in your collection`;
+    return (
+      <button
+        type="button"
+        data-no-drag=""
+        {...tip(`${sentence} — show in collection`, { describes: false })}
+        onClick={(event) => {
+          event.stopPropagation();
+          showInCollection(collectionQueryOf(wish, side));
+        }}
+        className={cn(
+          CORNER_PILL,
+          "inline-flex shrink-0 cursor-pointer items-center font-mono tabular-nums",
+          "text-[calc(0.75rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
+          side === "exact" ? "text-text" : "text-dim",
+          "hover:bg-bg",
+        )}
+      >
+        <span aria-hidden="true">
+          {side === "exact" ? "Own" : "Other"} ×{count}
+        </span>
+        <span className="sr-only">{`${sentence}. Show in collection`}</span>
+      </button>
+    );
+  };
+  const exact = chip("exact", wish.ownedExact);
+  const other = chip("other", wish.ownedOther);
+  if (exact === null && other === null) return null;
+  return (
+    <span className="flex flex-wrap gap-[calc(0.25rem*var(--mark-scale,1))]">
+      {exact}
+      {other}
+    </span>
+  );
+}
+
+/**
+ * The bottom-left corner: what the collection holds of the card, over how many copies are wanted.
+ * Module scope so `CardGrid` is handed one function for the life of the wall.
+ */
+const wishBadge = (tile: WishTile) => (
+  <span className="flex flex-col items-start gap-[calc(0.25rem*var(--mark-scale,1))]">
+    <WishOwned wish={tile.wish} />
+    <WishWanted wish={tile.wish} />
+  </span>
+);
+
+/**
  * The wishlist as a wall of art: one tile per wish, with what it will cost still to finish.
  *
  * The thin twin of the collection's wall, over rows that are wishes rather than entries — and
@@ -290,6 +373,7 @@ export const WishlistGrid = memo(function WishlistGrid({
   rowMenuKey,
   marketplace,
   stickyTop,
+  ruleBreaks,
 }: {
   rows: WishRow[];
   /** Identity of the current list, so a new one starts at the top. */
@@ -354,6 +438,12 @@ export const WishlistGrid = memo(function WishlistGrid({
   /** The height of a bar docked over `main` — the filter quick bar's while it is down — straight
    *  through to `CardGrid`'s `stickyTop`, so the shelf bar stacks under it. Absent is `0`. */
   stickyTop?: number;
+  /**
+   * The wishes that break their folder's rules (issue #980, `useWishlistRuleConflicts().ids`),
+   * outlined in red through `CardGrid`'s `ruleBreak`. Held still by the caller — the hook's set
+   * moves only with its answer. Absent outlines nothing.
+   */
+  ruleBreaks?: ReadonlySet<number>;
 }) {
   // Opening a card is a store write and nothing else — `App` owns the pane, so the wall never
   // has to know whether one is open, only which card is in it.
@@ -399,10 +489,7 @@ export const WishlistGrid = memo(function WishlistGrid({
         : [...byShelf.values()].flat(),
     [byShelf, rows, readOnly],
   );
-  const tilesOf = useCallback(
-    (shelfId: number) => byShelf?.get(shelfId) ?? NO_TILES,
-    [byShelf],
-  );
+  const tilesOf = useCallback((shelfId: number) => byShelf?.get(shelfId) ?? NO_TILES, [byShelf]);
   // **Not memoised, on purpose**: `CardGrid` keys its layout on `sections.sections` and `tilesOf`,
   // both held still above, and reads the four render props at draw time — so they go through as
   // the page built them, and a heading that redraws on the page's state is never stale.
@@ -422,10 +509,17 @@ export const WishlistGrid = memo(function WishlistGrid({
     () => (folderOf === undefined ? caption : placedCaption(folderOf)),
     [folderOf],
   );
+  // One tile is one wish, so the tile breaks a rule exactly when its wish does. A `useCallback`,
+  // `CardGrid`'s ask of every slot.
+  const ruleBreak = useCallback(
+    (tile: WishTile) => (ruleBreaks?.has(tile.wish.id) ? RULE_BREAK : null),
+    [ruleBreaks],
+  );
   const asOf = pricesAsOf(marketplace);
   const currency = marketplace.currency;
   return (
     <CardGrid
+      ruleBreak={ruleBreak}
       rows={tiles}
       sections={sections}
       stickyTop={stickyTop}
@@ -487,15 +581,18 @@ export const WishlistGrid = memo(function WishlistGrid({
       // every one of forty tiles. The corner keeps its own, because arithmetic over a wish is not
       // a figure the sentence under the wall is about.
       money={(tile) => formatPrice(tile.wish.unitPrice, currency)}
-      // **How many copies the reader wants, and nothing else, in a pill of its own** — which is
+      // **How many copies the reader wants, in a pill of its own** — which is
       // why this wall is still the one caller that asks `CardGrid` for a bare corner: the pill is
       // the mark's own backing, and the corner's chip around it would be a second.
       //
       // It shared the corner with a folder pill while Flatten captioned every tile with where it
       // was filed. Flatten is gone (spec §7) and the shelf's heading says which folder a tile is
       // in, once, above the tiles it is about.
+      //
+      // Since issue #988 the owned chips sit above it, each its own pill and its own press —
+      // `"bare"`'s case of a corner holding more than one mark. See {@link WishOwned}.
       badgeChrome="bare"
-      badge={(tile) => <WishWanted wish={tile.wish} />}
+      badge={wishBadge}
       // The bottom-right corner carries two facts in one chip: what the reconciler found, and
       // what this wish costs.
       //

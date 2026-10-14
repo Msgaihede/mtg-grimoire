@@ -4072,7 +4072,7 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
-   * **The Scanner's history** (user schema v64, issue #989): four commands, each sent under the
+   * **The Scanner's history** (user schema v65, issue #989): four commands, each sent under the
    * name and the arguments its wrapper declares — read out of `ipc.ts` and out of the crate, so
    * this cannot pass by agreeing with a list written here — registered on the desktop and in the
    * core's table under the same name. And the one vocabulary both sides spell: `ScanBatchStatus`
@@ -5230,6 +5230,55 @@ describe("the collection folder wrappers name the commands `collection_folders.r
       id: 2,
       locked: false,
     });
+  });
+
+  /**
+   * **Folder rules' four commands** (issue #980) — a write per cabinet that sends the whole list,
+   * and a read per cabinet priced at the page's marketplace, `*_folder_summary`'s shape. Both ends
+   * of each name, `card_tcgplayer_ids`' rule: the wrapper's literal here, and the desktop's
+   * registration and the core's table there, so a rename on one side alone is red. The rule
+   * objects travel verbatim: `FolderRule` is an internally tagged enum, and a wrapper that
+   * reshaped one would be refused by serde at the boundary.
+   */
+  it("sends the folder-rule writes and conflict reads under the names their commands declare", async () => {
+    const rules = [
+      { kind: "price" as const, min: null, max: 1 },
+      { kind: "colors" as const, values: ["U"] },
+    ];
+
+    invoke.mockResolvedValue({ id: 2, rules });
+    await ipc.collectionFolderSetRules(2, rules);
+    expect(invoke).toHaveBeenLastCalledWith("collection_folder_set_rules", { id: 2, rules });
+    // `[]` is a value the wire carries — it is how a reader clears the rules.
+    await ipc.collectionFolderSetRules(2, []);
+    expect(invoke).toHaveBeenLastCalledWith("collection_folder_set_rules", { id: 2, rules: [] });
+
+    invoke.mockResolvedValue({ id: 5, rules });
+    await ipc.wishlistFolderSetRules(5, rules);
+    expect(invoke).toHaveBeenLastCalledWith("wishlist_folder_set_rules", { id: 5, rules });
+
+    const answer = { folders: [{ folderId: 2, entries: 1, copies: 3 }], ids: [7] };
+    invoke.mockResolvedValue(answer);
+    await expect(ipc.collectionRuleConflicts("cardkingdom")).resolves.toEqual(answer);
+    expect(invoke).toHaveBeenLastCalledWith("collection_rule_conflicts", {
+      marketplace: "cardkingdom",
+    });
+    await expect(ipc.wishlistRuleConflicts("tcgplayer")).resolves.toEqual(answer);
+    expect(invoke).toHaveBeenLastCalledWith("wishlist_rule_conflicts", {
+      marketplace: "tcgplayer",
+    });
+
+    for (const command of [
+      "collection_folder_set_rules",
+      "wishlist_folder_set_rules",
+      "collection_rule_conflicts",
+      "wishlist_rule_conflicts",
+    ]) {
+      expect(desktopRs, `\`${command}\` is not registered`).toMatch(new RegExp(`::${command},`));
+      expect(commandsRs, `\`${command}\` is not in the core's table`).toMatch(
+        new RegExp(`^\\s*(?:read|write|owned) ${command} in \\w+\\(`, "m"),
+      );
+    }
   });
 
   /**

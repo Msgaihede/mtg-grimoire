@@ -46,6 +46,7 @@ import { shareFor, ShareFolderMenu, shareTargetFor, type ShareTarget } from "./S
  * one, so this is a shape the wire can produce rather than a hypothetical.
  */
 const folder = (over: Partial<CollectionFolder> = {}): CollectionFolder => ({
+  rules: [],
   id: 3,
   parentId: null,
   name: "Trade binder",

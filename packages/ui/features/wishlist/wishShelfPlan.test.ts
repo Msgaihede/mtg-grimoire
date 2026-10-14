@@ -58,6 +58,7 @@ const counts = (...rows: ShelfCount[]) => new Map(rows.map((c) => [c.folderId, c
 
 describe("toShelfFolder", () => {
   const folder: WishlistFolder = {
+    rules: [],
     id: 4,
     parentId: 1,
     name: "Foils",
@@ -391,6 +392,7 @@ describe("shelfTable", () => {
 
 describe("subtotalsOf and folderFigures", () => {
   const folder = (id: number, parentId: number | null): WishlistFolder => ({
+    rules: [],
     id,
     parentId,
     name: `F${id}`,

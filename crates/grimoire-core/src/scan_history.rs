@@ -1,5 +1,5 @@
 //! Scan history — every pile the scanner's tray put away, kept so a reader can go back and see
-//! what they scanned. User schema v64,
+//! what they scanned. User schema v65,
 //! [issue #989](https://github.com/Msgaihede/mtg-grimoire/issues/989).
 //!
 //! [`crate::trade`]'s file shape: pure functions over a [`Connection`] and nothing of a window.

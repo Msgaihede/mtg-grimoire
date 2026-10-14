@@ -72,6 +72,7 @@ import type {
   DeckVariant,
   EntryChange,
   EntryInput,
+  FolderRule,
   HomeLayout,
   HomeWidget,
   ImportResolveLine,
@@ -3707,8 +3708,8 @@ describe("the wishlist's folders", () => {
     // `managedDeckId: null` on every one — user schema v48's column, which a folder the reader
     // made always answers `null` for — and `managedTokens: false`, v55's, for the same reason.
     // `syncUid` is the derived cross-device name and `managedDeckUid` is `null` off a deck
-    // (issue #941's share key).
-    const mine = { managedDeckId: null, managedTokens: false, managedDeckUid: null };
+    // (issue #941's share key). `rules: []` is v64's — no rules (issue #980).
+    const mine = { managedDeckId: null, managedTokens: false, managedDeckUid: null, rules: [] };
     const uid = (id: number) => ({ syncUid: `wishlist-folder-uid-${id}` });
     expect(readHandlers(db).wishlist_folder_list()).toEqual([
       { id: 1, parentId: null, name: "Ordered", sortOrder: 0, ...mine, ...uid(1) },
@@ -12914,11 +12915,14 @@ describe("the busy fault", () => {
     // `readHandlers`. Count again after a merge.
     // 142 → 143 on 2026-10-12 with `deck_split_printing` (issue #934), the swap's plain
     // `sync::with_write` deck write for part of a row. Count again after a merge.
-    // 143 → 145 on 2026-10-14 with the scan history's two writes (issue #989),
+    // 143 → 145 on 2026-10-14 with folder rules (issue #980): `collection_folder_set_rules` and
+    // `wishlist_folder_set_rules`, plain `sync::with_write` folder writes; the two conflict reads
+    // sit in `readHandlers`. Count again after a merge.
+    // 145 → 147 on 2026-10-14 with the scan history's two writes (issue #989),
     // `scan_history_rename` and `scan_history_delete`, each reaching `refuseIfBusy` first; the
     // two reads, `scan_history_list` and `scan_history_get`, sit in `readHandlers`. Count again
     // after a merge.
-    expect(names).toHaveLength(145);
+    expect(names).toHaveLength(147);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -24237,5 +24241,199 @@ describe("scan history", () => {
     });
     expect(r.scan_history_list()[0].id).toBe(id);
     expect(id).toBe(4);
+  });
+});
+
+/**
+ * **Folder rules** (issue #980, user schema v64) — the two writes that store a folder's own rules
+ * and the two reads that say which rows break their folder's effective rules. Rules never stop a
+ * card being filed; they only mark it, and a rule breaks only on a fact the app knows.
+ */
+describe("folder rules", () => {
+  const SOL_RING = CARDS.find((c) => c.name === "Sol Ring")!;
+  const userFolder = (
+    id: number,
+    parentId: number | null,
+    rules?: FolderRule[],
+  ): FakeCollectionFolder => ({
+    id,
+    parentId,
+    name: `Folder ${id}`,
+    kind: "user",
+    deckId: null,
+    sortOrder: id,
+    locked: false,
+    rules,
+  });
+
+  it("stores a collection folder's rules tidied, carries them on the wire, and clears on []", () => {
+    const db = makeDb({ collectionFolders: [userFolder(1, null)] });
+    const w = writeHandlers(db);
+    expect(readHandlers(db).collection_folder_list()[0].rules).toEqual([]);
+
+    const answered = w.collection_folder_set_rules({
+      id: 1,
+      rules: [
+        { kind: "colors", values: ["U", "W", "U", "X"] },
+        { kind: "sets", values: [" LEA ", "2x2", ""] },
+        { kind: "price", min: null, max: 1 },
+      ],
+    });
+    // Values kept only from the vocabulary, deduplicated and sorted; set codes lower-cased.
+    expect(answered.rules).toEqual([
+      { kind: "colors", values: ["U", "W"] },
+      { kind: "sets", values: ["2x2", "lea"] },
+      { kind: "price", min: null, max: 1 },
+    ]);
+    expect(readHandlers(db).collection_folder_list()[0].rules).toEqual(answered.rules);
+
+    // `[]` clears them, which the crate stores as `NULL`.
+    expect(w.collection_folder_set_rules({ id: 1, rules: [] }).rules).toEqual([]);
+    expect(db.collectionFolders[0].rules).toBeUndefined();
+  });
+
+  it("refuses a rule list the crate refuses, in its sentences, and leaves the folder alone", () => {
+    const db = makeDb({ collectionFolders: [userFolder(1, null, [{ kind: "price", min: 1, max: null }])] });
+    const w = writeHandlers(db);
+    const set = (rules: FolderRule[]) => () => w.collection_folder_set_rules({ id: 1, rules });
+
+    expect(set([{ kind: "colors", values: ["X"] }])).toThrow("Pick at least one value for each rule.");
+    expect(set([{ kind: "price", min: null, max: null }])).toThrow(/at least one end/);
+    expect(set([{ kind: "manaValue", min: 5, max: 2 }])).toThrow(/lower end first/);
+    expect(set([{ kind: "price", min: -1, max: null }])).toThrow(/lower end first/);
+    expect(set([{ kind: "released", from: "1993/08", to: null }])).toThrow(
+      "Write dates as YYYY, YYYY-MM or YYYY-MM-DD.",
+    );
+    expect(set(Array.from({ length: 21 }, () => ({ kind: "price", min: 0, max: 1 }) as const))).toThrow(
+      "A folder can hold at most 20 rules.",
+    );
+    expect(db.collectionFolders[0].rules).toEqual([{ kind: "price", min: 1, max: null }]);
+  });
+
+  it("refuses rules on a folder the app owns, as the lock does, and answers busy first", () => {
+    const db = makeDb({
+      collectionFolders: [
+        userFolder(1, null),
+        { id: 2, parentId: null, name: "Burn", kind: "deck", deckId: 7, sortOrder: 1, locked: false },
+        { id: 3, parentId: null, name: "Recently removed", kind: "removed", deckId: null,
+          sortOrder: 2, locked: false },
+      ],
+    });
+    const w = writeHandlers(db);
+    const rules: FolderRule[] = [{ kind: "rarities", values: ["rare"] }];
+    expect(() => w.collection_folder_set_rules({ id: 2, rules })).toThrow(/is the app's own/);
+    expect(() => w.collection_folder_set_rules({ id: 3, rules })).toThrow(/is the app's own/);
+    expect(() => w.collection_folder_set_rules({ id: 404, rules })).toThrow(/not there any more/);
+
+    db.fault = "busy";
+    expect(() => w.collection_folder_set_rules({ id: 1, rules })).toThrow(/busy/i);
+    expect(db.collectionFolders[0].rules).toBeUndefined();
+  });
+
+  it("stores a wishlist folder's rules, and refuses a folder that is gone", () => {
+    const db = makeDb({ wishlistFolders: [{ id: 1, parentId: null, name: "Ordered", sortOrder: 0 }] });
+    const w = writeHandlers(db);
+    expect(readHandlers(db).wishlist_folder_list()[0].rules).toEqual([]);
+    expect(
+      w.wishlist_folder_set_rules({ id: 1, rules: [{ kind: "finishes", values: ["foil"] }] }).rules,
+    ).toEqual([{ kind: "finishes", values: ["foil"] }]);
+    expect(readHandlers(db).wishlist_folder_list()[0].rules).toEqual([
+      { kind: "finishes", values: ["foil"] },
+    ]);
+    expect(() => w.wishlist_folder_set_rules({ id: 9, rules: [] })).toThrow(/not there any more/);
+  });
+
+  /**
+   * The collection's conflicts: own and inherited rules together (spec §2), counted per folder
+   * and not per sub-tree, an unpriced row passing a price rule and an orphan breaking nothing.
+   */
+  it("marks the owned rows that break their folder's effective rules, per folder", () => {
+    const db = makeDb({
+      collectionFolders: [
+        userFolder(1, null, [{ kind: "price", min: null, max: 100 }]),
+        userFolder(2, 1, [{ kind: "colors", values: ["U"] }]),
+        userFolder(3, null, [
+          { kind: "conditions", values: ["NM", "LP"] },
+          { kind: "released", from: null, to: "2000" },
+        ]),
+      ],
+      collectionEntries: [
+        // $620 against a $100 cap.
+        entry({ id: 1, cardId: BOLT.id, quantity: 2, folderId: 1 }),
+        // Foil-only, held nonfoil: unpriced, so the cap says nothing about it.
+        entry({ id: 2, cardId: FOIL_ONLY.id, finish: "nonfoil", folderId: 1 }),
+        // Red under a blue-only rule, and over the inherited cap.
+        entry({ id: 3, cardId: BOLT.id, quantity: 3, folderId: 2, condition: "LP" }),
+        // Blue, but $164.95 foil against the inherited cap.
+        entry({ id: 4, cardId: FOIL_ONLY.id, finish: "foil", folderId: 2 }),
+        // An orphan breaks nothing.
+        entry({ id: 5, cardId: "gone", folderId: 2 }),
+        // The root has no rules.
+        entry({ id: 6, cardId: BOLT.id, folderId: null, condition: "LP" }),
+        // A grade the folder does not take; 1993 is through the end of 2000.
+        entry({ id: 7, cardId: BOLT.id, folderId: 3, condition: "HP" }),
+        entry({ id: 8, cardId: BOLT.id, folderId: 3, condition: "NM" }),
+        // 2017 is after 2000.
+        entry({ id: 9, cardId: FOIL_ONLY.id, finish: "foil", folderId: 3, condition: "NM" }),
+      ],
+    });
+
+    expect(readHandlers(db).collection_rule_conflicts({ marketplace: "tcgplayer" })).toEqual({
+      folders: [
+        { folderId: 1, entries: 1, copies: 2 },
+        { folderId: 2, entries: 2, copies: 4 },
+        { folderId: 3, entries: 2, copies: 2 },
+      ],
+      ids: [1, 3, 4, 7, 9],
+    });
+  });
+
+  /**
+   * The wishlist's conflicts: a pinned wish is judged on its printing, an any-printing wish breaks
+   * a card-level rule only when **no** printing of its card satisfies them all, a wish naming no
+   * finish passes a finish rule, and `conditions` is ignored.
+   */
+  it("marks the wishes that break their folder's rules, judging an any-printing wish by its card", () => {
+    const db = makeDb({
+      wishlistFolders: [
+        { id: 1, parentId: null, name: "Reprints", sortOrder: 0,
+          rules: [{ kind: "sets", values: [BOLT_2X2.setCode] }] },
+        { id: 2, parentId: null, name: "Foils", sortOrder: 1,
+          rules: [{ kind: "finishes", values: ["foil"] }, { kind: "conditions", values: ["NM"] }] },
+        { id: 3, parentId: null, name: "Colourless", sortOrder: 2,
+          rules: [{ kind: "colors", values: ["C"] }] },
+      ],
+      wishlistEntries: [
+        // Any printing of Lightning Bolt: one of them is in the set, so it passes.
+        wish({ id: 1, folderId: 1 }),
+        // Pinned to Alpha, which is not.
+        wish({ id: 2, cardId: BOLT.id, folderId: 1, quantity: 4 }),
+        // No finish named passes; a nonfoil one does not.
+        wish({ id: 3, cardId: BOLT.id, folderId: 2 }),
+        wish({ id: 4, cardId: BOLT.id, folderId: 2, preferredFinish: "nonfoil", quantity: 2 }),
+        // Colourless passes only because `C` is among the values; a red Bolt has no printing that
+        // is colourless.
+        wish({ id: 5, oracleId: SOL_RING.oracleId, name: "Sol Ring", folderId: 3 }),
+        wish({ id: 6, folderId: 3 }),
+      ],
+    });
+
+    expect(readHandlers(db).wishlist_rule_conflicts({ marketplace: "tcgplayer" })).toEqual({
+      folders: [
+        { folderId: 1, entries: 1, copies: 4 },
+        { folderId: 2, entries: 1, copies: 2 },
+        { folderId: 3, entries: 1, copies: 1 },
+      ],
+      ids: [2, 4, 6],
+    });
+  });
+
+  it("seeds one ruled folder in each cabinet of the starter world, each with a red card", () => {
+    const db = seed("starter");
+    const reads = readHandlers(db);
+    expect(reads.collection_folder_list().filter((f) => f.rules.length > 0)).toHaveLength(1);
+    expect(reads.wishlist_folder_list().filter((f) => f.rules.length > 0)).toHaveLength(1);
+    expect(reads.collection_rule_conflicts({ marketplace: "tcgplayer" }).ids.length).toBeGreaterThan(0);
+    expect(reads.wishlist_rule_conflicts({ marketplace: "tcgplayer" }).ids.length).toBeGreaterThan(0);
   });
 });

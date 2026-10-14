@@ -40,14 +40,21 @@ export type ScanMode = "fast" | "exact";
  * Which printings the scanner may answer with — `ScanFilters` in
  * `crates/card-scanner/src/filters.rs`. **Snake case**, like every scanner struct.
  *
- * Sets and a release-date range, and nothing else — no language, by decision. An empty `sets`
- * and two `null` dates is no filter at all. Dates are `YYYY-MM-DD`, both ends inclusive.
+ * Sets, a release-date range and whether promos count, and nothing else — no language, by
+ * decision. An empty `sets`, two `null` dates and promos admitted is no filter at all. Dates are
+ * `YYYY-MM-DD`, both ends inclusive.
  */
 export interface ScanFilters {
   /** Set codes, compared case-insensitively. Empty is any set. */
   sets: string[];
   released_from: string | null;
   released_to: string | null;
+  /**
+   * Never answer with a printing the corpus marks a promo (Scryfall's `promo`). **Optional, and
+   * absent is `false`**: the crate's struct is `#[serde(default)]`, and filters a page stored
+   * before the toggle existed carry no such key.
+   */
+  exclude_promos?: boolean;
 }
 
 /**

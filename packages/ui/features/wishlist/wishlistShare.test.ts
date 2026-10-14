@@ -4,6 +4,7 @@ import { WHOLE_WISHLIST_KEY, wishlistShareTarget } from "./wishlistShare";
 
 function folder(over: Partial<WishlistFolder> = {}): WishlistFolder {
   return {
+    rules: [],
     id: 1,
     parentId: null,
     name: "Buy list",

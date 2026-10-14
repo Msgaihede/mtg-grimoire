@@ -11,6 +11,7 @@ import {
 } from "./managed";
 
 const folder = (over: Partial<WishlistFolder> & Pick<WishlistFolder, "id" | "name">): WishlistFolder => ({
+  rules: [],
   parentId: null,
   sortOrder: 0,
   managedDeckId: null,

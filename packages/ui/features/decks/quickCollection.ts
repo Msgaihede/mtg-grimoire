@@ -20,22 +20,17 @@
  * `pullPlan.ts`'s discipline one press over, and for its reason: the alternative is a menu
  * builder and a dialog each holding half an opinion about when a press is ambiguous.
  *
- * ## A prompt only when the answer is ambiguous
+ * ## Neither the wish nor the pull is taken without the reader seeing it
  *
- * That is the whole rule the two `choose*` functions state, and it is stated once because the
- * two presses would otherwise word it twice: **one** matching wish is removed with no dialog,
- * **one** pull candidate is taken with no dialog, and only a genuine fork raises a picker. What
- * counts as a fork is a *count* and never a comparison against the shortfall — see
- * {@link choosePull}.
+ * Both presses used to take a lone answer silently and prompt only on a fork. Neither does now:
+ * a wish line can name another printing or finish than the copies just recorded (issue #511,
+ * {@link chooseWish}), and a pull moves a particular piece of cardboard out of a particular
+ * folder, which the reader wants to check before it moves (issue #987). So a card's **Pull N
+ * from your collection** always opens `PullFromCollectionDialog` — the source it would take is
+ * pre-picked there and one press commits it — and there is no pull decision left in this file.
  */
-import type {
-  DeckCard,
-  DeckMissingPick,
-  DeckPullPick,
-  DeckPullRow,
-  DeckQuickAddWish,
-} from "@/lib/ipc";
-import { NO_CHOICE, deckCardPlanFinish, deckCardPullKey, planPull, pullKey } from "./pullPlan";
+import type { DeckCard, DeckMissingPick, DeckQuickAddWish } from "@/lib/ipc";
+import { deckCardPlanFinish, deckCardPullKey } from "./pullPlan";
 
 /**
  * One row a quick add is pressed for, and the count its menu label quoted — issue #510.
@@ -231,81 +226,4 @@ export type WishChoice = { kind: "none" } | { kind: "ask"; wishes: readonly Deck
 export function chooseWish(wishes: readonly DeckQuickAddWish[]): WishChoice {
   if (wishes.length === 0) return { kind: "none" };
   return { kind: "ask", wishes };
-}
-
-/** Whether a pull of this card needs the dialog, and the picks when it does not. */
-export type PullChoiceForCard = { kind: "ask" } | { kind: "take"; picks: DeckPullPick[] };
-
-/**
- * One card's slice of `deck_pull_plan`, read as a decision.
- *
- * The plan is a deck-wide answer; a per-card press is about one row of it, found by keying the
- * card with {@link deckCardPullKey} and each row with {@link pullKey} — one spelling of the key,
- * over two readings of the finish. A row carries the finish the plan folded it on, which is the
- * one the deck card _plays_ (its stored finish, else the printing's sole finish), so the card has
- * to be read the same way. **It used to be `pullKey` on both sides**, on the argument that a
- * `DeckCard` satisfies that signature unchanged — which it does, and which is how an unsaid row
- * of a foil-only printing came to be keyed `id|` against a plan row `id|foil` and find nothing
- * (issue #563's follow-up).
- *
- * **Ambiguous is `candidates.length >= 2`, and nothing else.** In particular a lone candidate
- * holding *fewer* copies than the shortfall is still unambiguous: there is one pile to take from
- * and taking what is in it is the only thing a dialog could offer. Taking too little is a normal
- * answer here for `planPull`'s stated reason — filling three of four holes is worth doing.
- *
- * **No row at all is `ask`, deliberately.** A card with no unallocated copy anywhere is the
- * commonest way to press this and be told nothing can happen, and the dialog already words that
- * case (`NOTHING_TO_PULL`). A second sentence here would be the same fact said twice, in two
- * wordings, from two files.
- *
- * **The picks come from {@link planPull} rather than from arithmetic written here.** The row is
- * handed to the same function the dialog previews with, under {@link NO_CHOICE} — the reader has
- * departed from nothing, because there was nothing to depart from — so the copies a silent take
- * moves and the copies the dialog would have shown are the same number by construction rather
- * than by two files agreeing. A plan that yields no pick at all (a candidate holding nothing, a
- * row already filled) falls back to `ask` for the empty case's reason: the dialog explains, this
- * does not.
- */
-export function choosePull(rows: readonly DeckPullRow[], card: DeckCard): PullChoiceForCard {
-  const key = deckCardPullKey(card);
-  const row = rows.find((r) => pullKey(r) === key);
-  if (row === undefined || row.candidates.length >= 2) return { kind: "ask" };
-
-  const { picks } = planPull([row], NO_CHOICE);
-  if (picks.length === 0) return { kind: "ask" };
-  // Copied out of the plan's `readonly` array rather than handed over: `deckPullFromCollection`
-  // takes a mutable `DeckPullPick[]` — it is the wire type — and the array it is given belongs
-  // to a plan a dialog may still be drawing from.
-  return { kind: "take", picks: [...picks] };
-}
-
-/**
- * {@link choosePull} over a picked set — issue #510.
- *
- * **Silent only when every member is**: each distinct {@link deckCardPullKey} is asked the
- * one-card question, and a single `ask` among them opens the dialog over the whole set, where the
- * unambiguous rows arrive pre-picked beside the ones that need the reader. Taking the easy half
- * silently and asking about the rest would split one press into a write and a question about a
- * different number than the menu quoted.
- *
- * Deduplicated by key, because a printing short in two piles is one row of the plan and taking
- * its picks twice would ask the backend for copies twice over. The key is the plan's —
- * {@link choosePull}'s — so a foil-only printing picked once unsaid and once as `"foil"` is one
- * member too: the plan folded the two into one row.
- */
-export function choosePullFor(
-  rows: readonly DeckPullRow[],
-  cards: readonly DeckCard[],
-): PullChoiceForCard {
-  const seen = new Set<string>();
-  const picks: DeckPullPick[] = [];
-  for (const card of cards) {
-    const key = deckCardPullKey(card);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const choice = choosePull(rows, card);
-    if (choice.kind === "ask") return { kind: "ask" };
-    picks.push(...choice.picks);
-  }
-  return picks.length === 0 ? { kind: "ask" } : { kind: "take", picks };
 }

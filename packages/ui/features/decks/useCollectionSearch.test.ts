@@ -48,6 +48,7 @@ const DECK_ID = 4;
 
 /** This deck's own group: `kind: "deck"`, named after the deck, `deckId` pointing back at it. */
 const THIS_GROUP: CollectionFolder = {
+  rules: [],
   id: 10,
   parentId: null,
   name: "Kenrith",
@@ -59,6 +60,7 @@ const THIS_GROUP: CollectionFolder = {
 };
 /** Another deck's group — the folder the confirm exists for. */
 const OTHER_GROUP: CollectionFolder = {
+  rules: [],
   id: 11,
   parentId: null,
   name: "Mono-Red Aggro",
@@ -70,6 +72,7 @@ const OTHER_GROUP: CollectionFolder = {
 };
 /** A drawer the reader made. On the desk, so no confirm. */
 const BINDER: CollectionFolder = {
+  rules: [],
   id: 12,
   parentId: null,
   name: "Trade binder",
@@ -82,6 +85,7 @@ const BINDER: CollectionFolder = {
 /** The one holding area. **On the desk too** — a card that left the collection without leaving
  *  the database is not a card a deck is using. */
 const REMOVED: CollectionFolder = {
+  rules: [],
   id: 13,
   parentId: null,
   name: "Recently removed",

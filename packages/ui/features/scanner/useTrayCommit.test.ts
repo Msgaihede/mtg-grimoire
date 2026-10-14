@@ -47,6 +47,7 @@ import { useTrayCommit, useTrayFolder } from "./useTrayCommit";
 import { DB_BUSY } from "./verdictText";
 
 const BINDER: CollectionFolder = {
+  rules: [],
   id: 7,
   parentId: null,
   name: "Trade binder",

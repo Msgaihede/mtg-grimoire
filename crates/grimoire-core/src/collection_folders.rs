@@ -57,6 +57,7 @@ use crate::collection::{EntryChange, ENTRY_FINISH, GONE};
 // same kind of thing, and `deck_meta::CATEGORY_WRONG_DECK`'s doc is the standing rule — a
 // second copy of a refusal is a second thing to drift.
 use crate::deck_meta::{FOLDER_CYCLE, FOLDER_GONE};
+use crate::folder_rules::{FolderRule, RuleConflicts, Scope};
 use crate::sorting::Marketplace;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
@@ -156,7 +157,7 @@ const REMOVED_KIND: &str = crate::schema::COLLECTION_FOLDER_KINDS[2];
 /// [`crate::deck_meta`]'s `MAX_FOLDER_DEPTH`, which is private there, kept at the same number
 /// for the same reason: deep enough that no filing anyone does by hand reaches it. See
 /// [`move_folder`] for what the budget is actually guarding against, which is not depth.
-const MAX_FOLDER_DEPTH: usize = 64;
+pub(crate) const MAX_FOLDER_DEPTH: usize = 64;
 
 /// One folder. Flat rows; the tree is the reader's to build from `parent_id`, the way
 /// `collection_folders` itself has no notion of depth. `packages/ui/lib/folderTree.ts` is the reader.
@@ -205,6 +206,10 @@ pub struct CollectionFolder {
     /// not. A `null` reaching the page is a folder that cannot be shared *yet*, which is a state
     /// to draw rather than an error to raise.
     pub sync_uid: Option<String>,
+    /// The folder's **own** rules (`collection_folders.rules`, user schema v64), `[]` for none —
+    /// never what it inherits, which [`crate::folder_rules::conflicts`] and the page each walk
+    /// the tree for, `locked`'s reason. Read leniently ([`crate::folder_rules::read_rules`]).
+    pub rules: Vec<FolderRule>,
 }
 
 /// What one folder tile is drawn from — the two numbers, per folder, in one round trip.
@@ -263,12 +268,13 @@ fn folder_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<CollectionFolder> {
         // which is the only reading of a non-zero that is not a refusal.
         locked: r.get::<_, i64>(6)? != 0,
         sync_uid: r.get(7)?,
+        rules: crate::folder_rules::read_rules(r.get::<_, Option<String>>(8)?.as_deref()),
     })
 }
 
 fn read_folder(conn: &Connection, id: i64) -> Result<Option<CollectionFolder>, String> {
     conn.query_row(
-        "SELECT id, parent_id, name, kind, deck_id, sort_order, locked, sync_uid
+        "SELECT id, parent_id, name, kind, deck_id, sort_order, locked, sync_uid, rules
            FROM collection_folders WHERE id = ?1",
         params![id],
         folder_row,
@@ -304,7 +310,7 @@ fn user_folder(conn: &Connection, id: i64) -> Result<CollectionFolder, String> {
 pub fn list_folders(conn: &Connection) -> Result<Vec<CollectionFolder>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, parent_id, name, kind, deck_id, sort_order, locked, sync_uid
+            "SELECT id, parent_id, name, kind, deck_id, sort_order, locked, sync_uid, rules
                FROM collection_folders ORDER BY sort_order, id",
         )
         .map_err(|e| e.to_string())?;
@@ -468,6 +474,37 @@ pub fn set_folder_locked(
     )
     .map_err(|e| e.to_string())?;
     read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())
+}
+
+/// Replace a folder's own rules — [`set_folder_locked`]'s shape over the `rules` column.
+///
+/// [`user_folder`] first: a deck's group and `Recently removed` are [`FOLDER_NOT_YOURS`], since
+/// what is filed there is the app's decision rather than the reader's. Then
+/// [`crate::folder_rules::tidy`], whose refusals are one sentence each; an emptied list is
+/// stored as NULL. Like the lock, nothing is written to the sub-tree — a subfolder inherits on
+/// read — and no [`crate::activity`] row is recorded, because no card moved.
+pub fn set_folder_rules(
+    conn: &Connection,
+    id: i64,
+    rules: Vec<FolderRule>,
+) -> Result<CollectionFolder, String> {
+    user_folder(conn, id)?;
+    let rules = crate::folder_rules::tidy(rules)?;
+    conn.execute(
+        "UPDATE collection_folders SET rules = ?2, updated_at = unixepoch() WHERE id = ?1",
+        params![id, crate::folder_rules::write_rules(&rules)],
+    )
+    .map_err(|e| e.to_string())?;
+    read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())
+}
+
+/// Which owned copies break a rule of the folder they are filed in, priced at `marketplace` —
+/// see [`crate::folder_rules::conflicts`].
+pub fn rule_conflicts(
+    conn: &Connection,
+    marketplace: Marketplace,
+) -> Result<RuleConflicts, String> {
+    crate::folder_rules::conflicts(conn, Scope::Collection, marketplace)
 }
 
 /// Every folder that is locked, its own flag or an ancestor's — a **self-contained `SELECT`**,
@@ -1436,7 +1473,7 @@ pub fn folder_summary(
           WHERE e.folder_id IS NOT NULL
           GROUP BY e.folder_id
           ORDER BY e.folder_id",
-        price = crate::sorting::price_expr(marketplace, ENTRY_FINISH)
+        price = crate::sorting::held_price_expr(marketplace, ENTRY_FINISH)
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
@@ -3272,5 +3309,94 @@ mod tests {
             payload(line),
             serde_json::json!({ "entries": 2, "to": "Binder", "undo": true })
         );
+    }
+
+    /// **Rules are the reader's to set on the reader's folders**: a deck's group and
+    /// `Recently removed` refuse with [`FOLDER_NOT_YOURS`], a folder that is gone with
+    /// [`FOLDER_GONE`], and a list `tidy` refuses writes nothing.
+    #[test]
+    fn set_folder_rules_refuses_a_folder_that_is_not_the_readers() {
+        use crate::folder_rules::{FolderRule, NO_VALUES};
+        let conn = open();
+        let rule = || {
+            vec![FolderRule::Sets {
+                values: vec!["lea".to_owned()],
+            }]
+        };
+        for kind in ["deck", "removed"] {
+            let theirs = insert_system_folder(&conn, kind, "The app's");
+            assert_eq!(
+                set_folder_rules(&conn, theirs, rule()).unwrap_err(),
+                FOLDER_NOT_YOURS,
+                "a {kind} folder"
+            );
+            assert!(read_folder(&conn, theirs)
+                .unwrap()
+                .unwrap()
+                .rules
+                .is_empty());
+        }
+        assert_eq!(
+            set_folder_rules(&conn, 404, rule()).unwrap_err(),
+            FOLDER_GONE
+        );
+        let binder = create_folder(&conn, None, "Binder").unwrap().id;
+        assert_eq!(
+            set_folder_rules(&conn, binder, vec![FolderRule::Sets { values: vec![] }]).unwrap_err(),
+            NO_VALUES
+        );
+        assert!(read_folder(&conn, binder)
+            .unwrap()
+            .unwrap()
+            .rules
+            .is_empty());
+    }
+
+    /// **The rules round-trip through [`list_folders`] tidied, and an emptied list is NULL** —
+    /// never `'[]'`, so a folder that once had rules reads exactly as one that never did.
+    #[test]
+    fn a_folders_rules_round_trip_and_clear_to_null() {
+        use crate::folder_rules::FolderRule;
+        let conn = open();
+        let binder = create_folder(&conn, None, "Binder").unwrap().id;
+        let written = set_folder_rules(
+            &conn,
+            binder,
+            vec![
+                FolderRule::Price {
+                    min: None,
+                    max: Some(1.0),
+                },
+                FolderRule::Sets {
+                    values: vec!["M10".to_owned(), " lea".to_owned()],
+                },
+            ],
+        )
+        .unwrap();
+        let tidied = vec![
+            FolderRule::Price {
+                min: None,
+                max: Some(1.0),
+            },
+            FolderRule::Sets {
+                values: vec!["lea".to_owned(), "m10".to_owned()],
+            },
+        ];
+        assert_eq!(written.rules, tidied);
+        let listed = user_folders(&conn);
+        assert_eq!(listed[0].rules, tidied);
+
+        assert!(set_folder_rules(&conn, binder, vec![])
+            .unwrap()
+            .rules
+            .is_empty());
+        let stored: Option<String> = conn
+            .query_row(
+                "SELECT rules FROM collection_folders WHERE id = ?1",
+                params![binder],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, None);
     }
 }

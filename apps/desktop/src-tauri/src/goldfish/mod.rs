@@ -18,6 +18,7 @@ use std::sync::Mutex;
 
 use grimoire_play::{
     on_engine_stack, CardFacts, FaceFacts, Goldfish, GoldfishAction, GoldfishStep, GoldfishView,
+    TokenFacts,
 };
 use std::sync::Arc;
 
@@ -39,7 +40,8 @@ const NO_GAME: &str = "There is no game on the board. Start one from a deck.";
 const BUSY: &str = "The rules engine is still working on the last action.";
 
 /// A new game of the deck as it stands in `variant` (`live` or `theory`), with the opening hand
-/// drawn. `seed` shuffles it; a page sends a fresh one per game.
+/// drawn, its tokens in the printings the reader set for them (issue #991). `seed` shuffles it; a
+/// page sends a fresh one per game.
 #[tauri::command]
 pub async fn goldfish_start(
     state: tauri::State<'_, Arc<AppState>>,
@@ -49,18 +51,22 @@ pub async fn goldfish_start(
     seed: u64,
 ) -> Result<GoldfishView, String> {
     let app = state.inner().clone();
-    let cards = tauri::async_runtime::spawn_blocking(move || {
-        grimoire_core::play::deck_cards(&crate::sync::lock_db_read(&app), deck_id, &variant)
+    let (cards, deck_tokens) = tauri::async_runtime::spawn_blocking(move || {
+        let conn = crate::sync::lock_db_read(&app);
+        let cards = grimoire_core::play::deck_cards(&conn, deck_id, &variant)?;
+        let deck_tokens = grimoire_core::play::deck_tokens(&conn, deck_id, &variant)?;
+        Ok::<_, String>((cards, deck_tokens))
     })
     .await
     .map_err(|e| format!("the deck could not be read: {e}"))??;
     let facts: Vec<CardFacts> = cards.into_iter().map(facts).collect();
+    let deck_tokens: Vec<TokenFacts> = deck_tokens.into_iter().map(token_facts).collect();
     if facts.iter().all(|c| c.commander) {
         return Err("This deck has no cards to play with yet.".into());
     }
     let game = tauri::async_runtime::spawn_blocking(move || {
         on_engine_stack(move || {
-            let game = Goldfish::new(&facts, seed)?;
+            let game = Goldfish::new(&facts, &deck_tokens, seed)?;
             let view = game.view();
             Ok::<_, String>((game, view))
         })
@@ -119,6 +125,16 @@ pub fn goldfish_end(slot: tauri::State<'_, GoldfishSlot>) {
         if !matches!(*held, Slot::Busy) {
             *held = Slot::Empty;
         }
+    }
+}
+
+/// The core's token as the engine crate takes it. The playtest board's are read through it too.
+pub(crate) fn token_facts(token: grimoire_core::play::PlayToken) -> TokenFacts {
+    TokenFacts {
+        oracle_id: token.oracle_id,
+        name: token.name,
+        card_id: token.card_id,
+        sources: token.sources,
     }
 }
 

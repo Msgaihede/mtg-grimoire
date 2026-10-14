@@ -669,8 +669,12 @@ function starterEntries(): FakeEntry[] {
  */
 function starterCollectionFolders(decks: FakeDeck[]): FakeCollectionFolder[] {
   return [
+    // **The seed's one folder with a rule** (issue #980): cards under $100, so the Alpha
+    // Lightning Bolt filed here is the red one, and `Trade binder` underneath inherits the cap —
+    // where both copies are unpriced at TCGplayer and so break nothing (a rule only breaks on a
+    // fact the app knows).
     { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0,
-      locked: false },
+      locked: false, rules: [{ kind: "price", min: null, max: 100 }] },
     { id: 2, parentId: 1, name: "Trade binder", kind: "user", deckId: null, sortOrder: 0,
       locked: false },
     // The one folder in this seed the reader has set aside — see the note above.
@@ -737,7 +741,10 @@ const MANAGED_TESTBED_FOLDER = 4;
  */
 function starterWishFolders(): FakeWishlistFolder[] {
   return [
-    { id: 1, parentId: null, name: "Ordered", sortOrder: 0 },
+    // **The wishlist's one folder with a rule** (issue #980): blue cards only, so the pinned Sol
+    // Ring filed here — colourless, and `C` is not among the values — is the red one, while the
+    // Rhystic Study beside it passes. `Backordered` inherits the rule.
+    { id: 1, parentId: null, name: "Ordered", sortOrder: 0, rules: [{ kind: "colors", values: ["U"] }] },
     { id: 2, parentId: 1, name: "Backordered", sortOrder: 0 },
     { id: 3, parentId: null, name: "Someday", sortOrder: 1 },
     // **Deck 4's managed wishlist** (user schema v48, issue #512) — the folder a `Theory + Actual`

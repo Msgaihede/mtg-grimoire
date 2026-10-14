@@ -126,8 +126,9 @@ pub struct TokenOffer {
     /// phase's token preset id, which `createToken` takes back.
     pub preset: String,
     pub name: String,
-    /// The deck's card that makes it.
+    /// The deck's card that makes it, or empty for a token the reader added to the deck by hand.
     pub source: String,
+    /// The printing the reader set for the token in the deck, or else phase's preset's.
     pub card_id: Option<String>,
 }
 

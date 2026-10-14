@@ -9,6 +9,7 @@ import { useAppStore } from "@/lib/store";
 import { ScanHistoryDialog } from "./history/ScanHistoryDialog";
 import { Overlay } from "./Overlay";
 import { TiersPanel } from "./panels/TiersPanel";
+import { AddCardDialog } from "./reader/AddCardDialog";
 import { AddedToast } from "./reader/AddedToast";
 import { MatchStrip } from "./reader/MatchStrip";
 import { SCANNING_STOPPED } from "./reader/readerText";
@@ -152,17 +153,42 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
 
   // One card, into the tray — once per `decision_seq`, built on `tray.latest()`, in the finish
   // the Defaults popover holds as the card lands (`useTrayLanding`).
-  const { onDecision, lastAdded, landed, clearLanded, flashKey } = useTrayLanding(
+  const { onDecision, onPicked, lastAdded, landed, clearLanded, flashKey } = useTrayLanding(
     tray,
     prefs.finish,
   );
+
+  /**
+   * *Send scan…*'s dialog is open (issue #977). Mirrors `submit.run !== null`, which the pump
+   * cannot read directly: `useScanSubmit` is built on the loop, so it comes after it. Synced in
+   * render, below the hook, so the pump stops in the same commit the dialog opens in.
+   */
+  const [sending, setSending] = useState(false);
+
+  /**
+   * *Add card…* (issue #978): a card the camera will not read, searched for and put in the tray by
+   * hand. **The scanner pauses while the dialog is open** — the reader has turned to the keyboard,
+   * and a card read behind the scrim would land in a tray they cannot see. Not the Stop button's
+   * `scanning`: closing the dialog resumes exactly what was running before it opened.
+   */
+  const [picking, setPicking] = useState(false);
+  const pickOpener = useRef<HTMLElement | null>(null);
 
   const loop = useScanLoop({
     videoRef,
     // **Held until the prefs and the tray are in.** The first frame must go out in the stored
     // mode and under the stored filters, and a decision must land on the stored tray rather than
-    // on an empty one the load then overwrites. And paused the moment the window is minimized.
-    live: scanning && camera.kind === "live" && loaded && tray.loaded && !parked.paused,
+    // on an empty one the load then overwrites. And paused the moment the window is minimized,
+    // for as long as *Send scan…*'s dialog is open (`sending`, below), and while a card is being
+    // added by hand (`picking`).
+    live:
+      scanning &&
+      camera.kind === "live" &&
+      loaded &&
+      tray.loaded &&
+      !parked.paused &&
+      !sending &&
+      !picking,
     options: frameOptions,
     sendPx,
     detailWaitMs,
@@ -263,6 +289,12 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     filters: inForce,
     ready: sendable,
   });
+  // **Recognition pauses while the dialog is open** (issue #977): a card left under the lens
+  // while the reader picks a printing would otherwise land in the tray behind their back. React's
+  // "adjusting state when a prop changes", as `useScanLoop` empties its latches — re-rendered
+  // before anything commits. The run is already frozen in the dialog, so stopping the pump (which
+  // lets its ring go) costs it nothing; closing starts a fresh run.
+  if (sending !== (submit.run !== null)) setSending(submit.run !== null);
   // **A run never spans a change of filters.** The session drops its tracker to take a changed
   // set, and the pump cannot see that — a filter is a call of its own, not a frame's — so the
   // page says it: when the filters in force move, the frames kept so far are let go
@@ -405,9 +437,9 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     // what the developer column leaves, the tray the other third, and the panels get a column of
     // their own. A container is the containing block for anything `fixed` inside it, so nothing
     // that must cover the window may mount in here — and nothing does: the dropdowns measure the
-    // block they land in, the all-printings dialog is drawn at the app root, and the page's four
-    // dialogs — *Clear all…*, *Create deck…*, *Send scan…* and *History* — are this fragment's
-    // other children, siblings of the box and not inside it.
+    // block they land in, the all-printings dialog is drawn at the app root, and the page's five
+    // dialogs — *Clear all…*, *Create deck…*, *Send scan…*, *Add card…* and *History* — are this
+    // fragment's other children, siblings of the box and not inside it.
     <>
       <section className="@container/scan flex h-full flex-col gap-3">
         {/* Not shown: the ribbon already says `Scanner`, and every pixel of this view's height is
@@ -581,6 +613,10 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
                 // files somewhere else and draws none (`TrayPanel` also hides it for one).
                 onArchive={destination === undefined ? onArchive : undefined}
                 archiving={destination === undefined && archiving}
+                onAddCard={(opener) => {
+                  pickOpener.current = opener;
+                  setPicking(true);
+                }}
               />
             </div>
             {developer && (
@@ -666,6 +702,22 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
           historyOpener.current?.focus();
         }}
         onClose={() => setHistoryOpen(false)}
+      />
+      {/* A card into the staging tray, not the collection: no toast, as for a scan — the row's
+          flash and the strip's line say it landed, and the tray's Add is the write that toasts. */}
+      <AddCardDialog
+        open={picking}
+        finishPref={prefs.finish}
+        onAdd={(picked, finish) => {
+          onPicked(picked, finish);
+          setPicking(false);
+          pickOpener.current?.focus();
+        }}
+        onDismiss={() => {
+          setPicking(false);
+          pickOpener.current?.focus();
+        }}
+        onClose={() => setPicking(false)}
       />
     </>
   );

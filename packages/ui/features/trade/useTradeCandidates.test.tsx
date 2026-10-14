@@ -43,7 +43,7 @@ function card(over: Partial<CardSummary> & Pick<CardSummary, "id" | "name">) {
 }
 
 function folder(id: number, kind: string, name = kind): CollectionFolder {
-  return { id, parentId: null, name, kind, deckId: null, sortOrder: id, locked: false, syncUid: null };
+  return { rules: [], id, parentId: null, name, kind, deckId: null, sortOrder: id, locked: false, syncUid: null };
 }
 
 /**

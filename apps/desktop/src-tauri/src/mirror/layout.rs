@@ -694,6 +694,8 @@ mod tests {
             // for the machine it is on. No plan in this module may read it, so a fixture that
             // carried one would be claiming a difference that must not exist.
             sync_uid: None,
+            // A rule never changes what is filed, so the mirror has no reason to read one.
+            rules: Vec::new(),
         }
     }
 
@@ -703,6 +705,7 @@ mod tests {
             managed_tokens: false,
             sync_uid: None,
             managed_deck_uid: None,
+            rules: Vec::new(),
             id,
             parent_id,
             name: name.to_owned(),

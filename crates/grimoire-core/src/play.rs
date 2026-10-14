@@ -13,6 +13,12 @@
 //! inactive pile is not in the deck, so it is not in the game; the sideboard, the maybeboard and
 //! a companion start outside it (CR 702.139a — a companion is revealed from outside the game,
 //! which a goldfish board does not model yet); the commander pile starts in the command zone.
+//!
+//! **The deck's tokens are its own printings** ([`deck_tokens`], issue #991): one printing per
+//! token the list keeps, the one its token wall draws, so a Treasure made on the board wears the
+//! art the reader picked for this deck and not the printing the rules engine happens to know.
+use std::collections::HashMap;
+
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 
@@ -43,6 +49,21 @@ pub struct PlayCard {
     pub keywords: Vec<String>,
     /// Scryfall's `card_faces`, verbatim, for a card with several.
     pub faces: Option<String>,
+}
+
+/// One token the deck's list keeps, in the printing a game draws it by.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayToken {
+    /// What a game matches the token by — phase's presets name the same Scryfall oracle id.
+    pub oracle_id: String,
+    pub name: String,
+    /// The printing: the list's entry with the most copies (the first of a tie, in
+    /// [`crate::deck_tokens::deck_token_rows`]' order), or the implicit entry's for a token the
+    /// reader has not set.
+    pub card_id: String,
+    /// The names of the deck cards that make it. Empty for a token the reader added by hand.
+    pub sources: Vec<String>,
 }
 
 /// The categories whose cards start the game: the main deck and the commander.
@@ -87,6 +108,55 @@ pub fn deck_cards(conn: &Connection, deck_id: i64, variant: &str) -> Result<Vec<
         out.push(card(row, keywords, loyalty, defense));
     }
     Ok(out)
+}
+
+/// The tokens `variant`'s list keeps, one per token, in the printing the deck's token wall draws
+/// ([`PlayToken::card_id`]). Emblems and game helpers are not tokens a game creates, and are left
+/// out.
+pub fn deck_tokens(
+    conn: &Connection,
+    deck_id: i64,
+    variant: &str,
+) -> Result<Vec<PlayToken>, String> {
+    let rows =
+        crate::deck_tokens::deck_token_rows(conn, deck_id, variant, Marketplace::from_opt(None))?;
+    let mut out: Vec<PlayToken> = Vec::new();
+    // Per token: its index in `out`, and the copies of the entry that holds it there (`None` for
+    // the implicit entry, which any stored entry outranks).
+    let mut held: HashMap<String, (usize, Option<i64>)> = HashMap::new();
+    for row in rows {
+        if row.layout == "emblem" || !is_token_line(row.type_line.as_deref()) {
+            continue;
+        }
+        let copies = (!row.implicit).then_some(row.quantity);
+        match held.get_mut(&row.oracle_id) {
+            Some((at, best)) => {
+                if copies > *best {
+                    out[*at].card_id = row.card_id;
+                    *best = copies;
+                }
+            }
+            None => {
+                held.insert(row.oracle_id.clone(), (out.len(), copies));
+                out.push(PlayToken {
+                    oracle_id: row.oracle_id,
+                    name: row.name,
+                    card_id: row.card_id,
+                    sources: row.sources.into_iter().map(|s| s.name).collect(),
+                });
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Whether a type line is a token's — any face of it beginning `Token`. A helper (`The Monarch`,
+/// a `Card` type line) is not one.
+fn is_token_line(type_line: Option<&str>) -> bool {
+    type_line.is_some_and(|t| {
+        t.split(" // ")
+            .any(|face| face.trim_start().starts_with("Token"))
+    })
 }
 
 /// Scryfall writes loyalty and defense as strings (`"3"`, `"X"`); a number is read as one too
@@ -146,5 +216,68 @@ mod tests {
             vec!["G".to_string(), "W".to_string()]
         );
         assert!(letters(None).is_empty());
+    }
+
+    mod tokens {
+        use super::super::deck_tokens;
+        use crate::deck_tokens::fixtures::*;
+        use rusqlite::{params, Connection};
+
+        fn play(conn: &Connection, deck: i64, category: i64, card: &Card<'_>) {
+            conn.execute(
+                "INSERT INTO deck_cards
+                     (deck_id, category_id, variant, card_id, set_code, collector_number, lang,
+                      name, quantity, created_at, updated_at)
+                 VALUES (?1,?2,'live',?3,?4,?5,'en',?6,1,unixepoch(),unixepoch())",
+                params![
+                    deck,
+                    category,
+                    card.id,
+                    card.set_code,
+                    card.collector_number,
+                    card.name
+                ],
+            )
+            .unwrap();
+        }
+
+        fn a_tithe_deck() -> (Connection, i64) {
+            let conn = open();
+            tithe().insert(&conn);
+            treasure().insert(&conn);
+            treasure_older().insert(&conn);
+            let (deck, main, _) = deck_with_piles(&conn);
+            play(&conn, deck, main, &tithe());
+            (conn, deck)
+        }
+
+        #[test]
+        fn a_token_the_reader_has_not_set_is_its_default_printing() {
+            let (conn, deck) = a_tithe_deck();
+            let out = deck_tokens(&conn, deck, "live").unwrap();
+            assert_eq!(out.len(), 1);
+            assert_eq!(out[0].oracle_id, treasure().oracle_id);
+            assert_eq!(out[0].name, "Treasure");
+            assert_eq!(out[0].card_id, treasure().id);
+            assert_eq!(out[0].sources, vec!["Smothering Tithe".to_string()]);
+        }
+
+        #[test]
+        fn a_set_token_is_the_printing_with_the_most_copies() {
+            let (conn, deck) = a_tithe_deck();
+            seed_entry(&conn, deck, "live", &treasure(), "nonfoil", 1);
+            seed_entry(&conn, deck, "live", &treasure_older(), "foil", 3);
+            let out = deck_tokens(&conn, deck, "live").unwrap();
+            assert_eq!(out.len(), 1, "one token, however many printings it keeps");
+            assert_eq!(out[0].card_id, treasure_older().id);
+        }
+
+        #[test]
+        fn a_set_printing_at_zero_still_outranks_the_default() {
+            let (conn, deck) = a_tithe_deck();
+            seed_entry(&conn, deck, "live", &treasure_older(), "foil", 0);
+            let out = deck_tokens(&conn, deck, "live").unwrap();
+            assert_eq!(out[0].card_id, treasure_older().id);
+        }
     }
 }

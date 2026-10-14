@@ -1,9 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { landedFrom, type LandedCard } from "./reader/AddedToast";
 import type { LastAdded } from "./reader/readerText";
-import { addDecision } from "./reader/tray";
+import { addDecision, addPicked, type PickedPrinting } from "./reader/tray";
 import { trayFinish } from "./reader/trayFinish";
-import type { ScannerDecision, ScannerFinishPref } from "./types";
+import type {
+  ScannerDecision,
+  ScannerFinishPref,
+  ScannerTrayFinish,
+  ScannerTrayRow,
+} from "./types";
 import type { TrayState } from "./useTray";
 
 /**
@@ -18,6 +23,12 @@ export const FLASH_MS = 1200;
 export interface TrayLanding {
   /** `useScanLoop`'s `onDecision`: one card, into the tray. */
   onDecision: (decision: ScannerDecision) => void;
+  /**
+   * One card the reader searched for by hand (*Add a card…*), into the tray in the finish they
+   * chose — landed with the same marks as a scan: the strip's line, the card over the camera and
+   * the row's flash, so a card added by hand is said where a scanned one would be.
+   */
+  onPicked: (picked: PickedPrinting, finish: ScannerTrayFinish) => void;
   /** The card the tray just took, as the Match strip names it — never cleared. */
   lastAdded: LastAdded;
   /**
@@ -66,14 +77,8 @@ export function useTrayLanding(
     [],
   );
 
-  const onDecision = (decision: ScannerDecision) => {
-    const { rows, bumped, replaced } = addDecision(
-      tray.latest(),
-      decision,
-      { finish: trayFinish(finishPref, decision) },
-      Date.now(),
-      crypto.randomUUID(),
-    );
+  /** The landing's marks for a write that put `rows[0]` at the head — whoever wrote it. */
+  const land = (rows: ScannerTrayRow[], bumped: boolean, replaced: boolean) => {
     tray.setRows(rows);
     const head = rows[0];
     setLastAdded({
@@ -92,5 +97,27 @@ export function useTrayLanding(
     }, FLASH_MS);
   };
 
-  return { onDecision, lastAdded, landed, clearLanded: () => setLanded(null), flashKey };
+  const onDecision = (decision: ScannerDecision) => {
+    const { rows, bumped, replaced } = addDecision(
+      tray.latest(),
+      decision,
+      { finish: trayFinish(finishPref, decision) },
+      Date.now(),
+      crypto.randomUUID(),
+    );
+    land(rows, bumped, replaced);
+  };
+
+  const onPicked = (picked: PickedPrinting, finish: ScannerTrayFinish) => {
+    const { rows, bumped } = addPicked(
+      tray.latest(),
+      picked,
+      finish,
+      Date.now(),
+      crypto.randomUUID(),
+    );
+    land(rows, bumped, false);
+  };
+
+  return { onDecision, onPicked, lastAdded, landed, clearLanded: () => setLanded(null), flashKey };
 }

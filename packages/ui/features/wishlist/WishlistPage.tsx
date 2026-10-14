@@ -6,9 +6,18 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
 } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, Eraser, FolderInput, TrendingDown, Trash2 } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  Eraser,
+  FolderInput,
+  ListChecks,
+  TrendingDown,
+  Trash2,
+} from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import type { MenuItem } from "@/components/menu/types";
 import { useContextMenu } from "@/components/menu/useContextMenu";
@@ -18,6 +27,8 @@ import { buildCardMenu, type CardMenuDeps, type CardMenuTarget } from "@/feature
 import { ShareFolderMenu } from "@/features/collection/ShareFolderMenu";
 import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
+import { FolderRulesBadge } from "@/features/folders/FolderRulesBadge";
+import { FolderRulesDialog } from "@/features/folders/FolderRulesDialog";
 import { deckListKey } from "@/features/home/keys";
 import { ShelfLabel } from "@/features/shelves/ShelfLabel";
 import { FOLD_PAUSED_REASON, ShelfToolbar } from "@/features/shelves/ShelfToolbar";
@@ -39,6 +50,13 @@ import { FilterQuickBar } from "@/features/search/FilterQuickBar";
 import { plural } from "@/lib/counts";
 import { useDragRecord } from "@/lib/dndTarget";
 import { readFolderDrag } from "@/lib/folderDrag";
+import {
+  effectiveRules,
+  hasRules,
+  subtreeConflicts,
+  type EffectiveRules,
+  type InheritedRules,
+} from "@/lib/folderRules";
 import { isFinish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import {
@@ -48,12 +66,7 @@ import {
   trailOf,
   type FolderNode,
 } from "@/lib/folderTree";
-import {
-  ipc,
-  ipcError,
-  type WishlistFolder,
-  type WishRow,
-} from "@/lib/ipc";
+import { ipc, ipcError, type FolderRule, type WishlistFolder, type WishRow } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { statusLine } from "@/lib/motion";
 import { notify } from "@/lib/notifications";
@@ -80,7 +93,7 @@ import { WishlistGrid, type WishShelves } from "./WishlistGrid";
 import { WishlistTable, type WishTableBands } from "./WishlistTable";
 import { OptimizeWishlistDialog } from "./OptimizeWishlistDialog";
 import { useWishlist, WISHLIST_TRAY, type Wishlist } from "./useWishlist";
-import { useWishlistFolders } from "./useWishlistFolders";
+import { useWishlistFolders, useWishlistRuleConflicts } from "./useWishlistFolders";
 import { wishlistShareTarget } from "./wishlistShare";
 import { useWishlistOptimize } from "./useWishlistOptimize";
 import { wholeWishlistQuery, type SweepScope } from "./wholeWishlistQuery";
@@ -183,6 +196,9 @@ type Panel =
 
 /** No rows on a shelf — one identity, so `rowsOf` hands `WishlistGrid` a stable array. */
 const NO_ROWS: readonly WishRow[] = [];
+/** No rules, as one identity — what the rules dialog is handed while it is shut. */
+const NO_RULES: readonly FolderRule[] = [];
+const NO_INHERITED: readonly InheritedRules[] = [];
 
 /** The `View all` toggle's accessible name — its visible words plus what they are all of. */
 const VIEW_ALL_NAME = "View all wishes";
@@ -264,7 +280,6 @@ function wishTarget(row: WishRow, cardId: string): CardMenuTarget {
  */
 const WISHLIST_LABELS: FilterLabels = { idStem: "wishlist", search: "Search your wishlist" };
 
-
 export function WishlistPage() {
   // The To review widget's needs-review hand-off — `useReviewHandoff` has the whole rule.
   const review = useReviewHandoff("wishlist");
@@ -306,6 +321,38 @@ export function WishlistPage() {
   const { mutate: removeFolderMutate, reset: removeFolderReset } = folders.remove;
   const { mutate: removeWithWishesMutate, reset: removeWithWishesReset } = folders.removeWithWishes;
   const { mutate: clearMutate, reset: clearReset } = folders.clear;
+  const { mutateAsync: setRulesAsync, reset: setRulesReset } = folders.setRules;
+  /**
+   * **Folder rules** (issue #980) — `CollectionPage`'s arrangement on this cabinet: which wishes
+   * break their folder's rules, and how many each folder holds. Under `["wishlist"]`, so every
+   * wish write that settles that root redraws the outlines without asking for it.
+   */
+  const conflicts = useWishlistRuleConflicts();
+  /** The folder whose `Rules…` dialog is open, or `null` — a modal, so not a {@link Panel}. */
+  const [rulesFolderId, setRulesFolderId] = useState<number | null>(null);
+  /** Every folder with rules of its own or from above, by id — built once per folder list. */
+  const rulesById = useMemo(() => {
+    const out = new Map<number, EffectiveRules>();
+    for (const folder of folders.folders) {
+      const effective = effectiveRules(folders.folders, folder.id);
+      if (hasRules(effective)) out.set(folder.id, effective);
+    }
+    return out;
+  }, [folders.folders]);
+  /** The badge a folder with rules wears, its sub-tree's conflicts counted in copies wanted. */
+  const rulesBadge = useCallback(
+    (id: number): ReactNode => {
+      const effective = rulesById.get(id);
+      if (effective === undefined) return null;
+      return (
+        <FolderRulesBadge
+          effective={effective}
+          conflicts={subtreeConflicts(folders.folders, conflicts.folders, id).copies}
+        />
+      );
+    },
+    [rulesById, folders.folders, conflicts.folders],
+  );
 
   /**
    * **The folder another surface asked this page to open on its way in** — `store.ts`'s
@@ -443,6 +490,15 @@ export function WishlistPage() {
    */
   const [panel, setPanel] = useState<Panel>(null);
   const openerRef = useRef<HTMLElement | null>(null);
+  /** The folder the `Rules…` dialog is about — gone with it, so a folder deleted elsewhere while
+   *  its rules are open closes the dialog rather than saving into nothing. */
+  const rulesFolder =
+    rulesFolderId === null ? undefined : folders.folders.find((f) => f.id === rulesFolderId);
+  /** Closing it hands the caret back to the heading's `⋯` it was raised from. */
+  const closeRules = useCallback(() => {
+    setRulesFolderId(null);
+    openerRef.current?.focus();
+  }, []);
   /**
    * The row the list and the docked search column share, and the box the column is pinned inside —
    * `DeckEditor`'s desk and dock, on a page that had neither because it was `flex-col` from its
@@ -701,9 +757,7 @@ export function WishlistPage() {
     (row: WishRow, flip = false, picked: readonly WishRow[] = []) =>
       row.cardId === null
         ? undefined
-        : menuKey(() =>
-            buildCardMenu({ ...wishTarget(row, row.cardId!), flip }, depsFor(picked)),
-          ),
+        : menuKey(() => buildCardMenu({ ...wishTarget(row, row.cardId!), flip }, depsFor(picked))),
     [menuKey, depsFor],
   );
 
@@ -1066,13 +1120,16 @@ export function WishlistPage() {
   }, [setViewAll]);
   useDismissOnEscape({ layer: "navigation", onDismiss: leaveViewAll, enabled: requestedViewAll });
 
-  const open = useCallback((next: NonNullable<Panel>, opener: HTMLElement | null) => {
-    openerRef.current = opener;
-    // A caret still owed to a heading is the last layer's business, not this one's — and a request
-    // whose write has not answered yet is superseded, so it is never recorded at all.
-    supersedeCaret();
-    setPanel(next);
-  }, [supersedeCaret]);
+  const open = useCallback(
+    (next: NonNullable<Panel>, opener: HTMLElement | null) => {
+      openerRef.current = opener;
+      // A caret still owed to a heading is the last layer's business, not this one's — and a request
+      // whose write has not answered yet is superseded, so it is never recorded at all.
+      supersedeCaret();
+      setPanel(next);
+    },
+    [supersedeCaret],
+  );
 
   /**
    * **Add folder** — on the path row for the level on screen, and on a heading for inside that
@@ -1219,6 +1276,18 @@ export function WishlistPage() {
               : {}),
             onSelect: () => stepFolder(folder, 1),
           },
+          // What belongs in this folder (issue #980) — a modal, whose caret goes back to this
+          // heading's `⋯`, already captured by `remember` below.
+          {
+            kind: "action",
+            id: "rules",
+            label: "Rules…",
+            Icon: ListChecks,
+            onSelect: () => {
+              setRulesReset();
+              setRulesFolderId(folder.id);
+            },
+          },
           { kind: "separator", id: "before-delete" },
           // `Eraser` beside `Trash2` for the deck category menu's reason: what a clear takes is the
           // writing and not the page, and two trash cans in one menu would read as one row drawn
@@ -1288,6 +1357,7 @@ export function WishlistPage() {
       removeFolderReset,
       removeWithWishesReset,
       clearReset,
+      setRulesReset,
       folders.summary,
       folders.summaryQuery.data,
     ],
@@ -1587,11 +1657,14 @@ export function WishlistPage() {
           }
           source={node?.folder ?? null}
           caret={caretFor(shelf.id)}
+          // The reader's own folders only — a deck's managed folder holds no rules of theirs.
+          badge={node === undefined ? undefined : rulesBadge(shelf.id)}
         />
       );
     },
     [
       caretFor,
+      rulesBadge,
       nodeById,
       nameFolder,
       dismiss,
@@ -1634,10 +1707,7 @@ export function WishlistPage() {
       ),
     [cardDrops, managedSentenceOf],
   );
-  const renderLabel = useCallback(
-    (group: "decks" | "managed") => <ShelfLabel group={group} />,
-    [],
-  );
+  const renderLabel = useCallback((group: "decks" | "managed") => <ShelfLabel group={group} />, []);
   /**
    * The shelf bar, for both views — the wall's and the table's (`scrollTableTop`, below).
    *
@@ -1672,8 +1742,7 @@ export function WishlistPage() {
    */
   // The folder being added first — its field is where the caret is — and otherwise the heading a
   // write has just owed the caret to (`caretDue`).
-  const revealShelfId =
-    addingIn !== undefined ? NEW_FOLDER_SHELF : (caretDue?.shelfId ?? null);
+  const revealShelfId = addingIn !== undefined ? NEW_FOLDER_SHELF : (caretDue?.shelfId ?? null);
   /**
    * The wall's shelves, and below them the table's bands — **both plain objects, on purpose.**
    * `renderHeading` depends on a `useMutation` result, which is a new object on every render, so a
@@ -1713,10 +1782,7 @@ export function WishlistPage() {
 
   /** The table's rows, interleaved (spec §3.10) — complete once no page remains to load. */
   const complete = !wishlist.hasMore;
-  const table = useMemo(
-    () => shelfTable(sections, rowsOf, complete),
-    [sections, rowsOf, complete],
-  );
+  const table = useMemo(() => shelfTable(sections, rowsOf, complete), [sections, rowsOf, complete]);
   /**
    * The table's **Top**. While its sticky band is live `VirtualTable` scrolls a plain box around
    * the `role="table"` element rather than the table itself — the bar may not live inside a table —
@@ -1840,6 +1906,7 @@ export function WishlistPage() {
     toasted(folders.remove),
     toasted(folders.removeWithWishes),
     toasted(folders.clear),
+    toasted(folders.setRules),
   ]);
 
   /**
@@ -1878,10 +1945,7 @@ export function WishlistPage() {
    * here, Not sorted under `0`.
    */
   const shelfById = useMemo(() => new Map(shelves.map((shelf) => [shelf.id, shelf])), [shelves]);
-  const shelfOfRow = useCallback(
-    (row: WishRow) => shelfById.get(shelfOfWish(row)),
-    [shelfById],
-  );
+  const shelfOfRow = useCallback((row: WishRow) => shelfById.get(shelfOfWish(row)), [shelfById]);
 
   /**
    * What the export dialog's two sentences say about where the reader is standing. **At the root
@@ -2111,6 +2175,9 @@ export function WishlistPage() {
                 />
               </div>
             )}
+            {/* The rules of the folder the reader is standing in (issue #980), with its whole
+                sub-tree's count — its heading is not drawn on its own wall. */}
+            {folderId !== null && rulesBadge(folderId)}
             {/* **The page's one live region, and it lives in this row rather than on a line of its
                 own under it** (2026-09-27, the header redesign; the collection's twin). A region
                 that appears together with its text announces nothing, so it is mounted for the
@@ -2269,6 +2336,7 @@ export function WishlistPage() {
                 // view. The table needs none: it is its own scroller and the quick bar never
                 // shows over it.
                 stickyTop={quick.stickyTop}
+                ruleBreaks={conflicts.ids}
                 {...filing}
               />
             ) : (
@@ -2288,6 +2356,7 @@ export function WishlistPage() {
                 rowMenu={rowMenu}
                 rowMenuKey={rowMenuKey}
                 marketplace={marketplace}
+                ruleBreaks={conflicts.ids}
                 {...filing}
               />
             ))}
@@ -2335,10 +2404,7 @@ export function WishlistPage() {
             that does not occur. */}
         <div
           ref={dockRef}
-          className={cn(
-            "sticky flex shrink-0 self-start",
-            overWidth !== undefined && LAYER.popup,
-          )}
+          className={cn("sticky flex shrink-0 self-start", overWidth !== undefined && LAYER.popup)}
           style={{ top: quick.dockTop }}
         >
           <WishlistSearchPanel
@@ -2398,6 +2464,34 @@ export function WishlistPage() {
 
           Everything about the sweep arrives as a prop: the dialog holds no query and no mutation,
           so it renders in a test with no query client. */}
+      {/* **Folder options → Rules…** (issue #980), `CollectionPage`'s dialog on this cabinet. A
+          wishlist folder's rules never offer a condition — a wish has none. One toast per save,
+          and the dialog closes only once the write has landed. */}
+      <FolderRulesDialog
+        open={rulesFolder !== undefined}
+        scope="wishlist"
+        folderName={rulesFolder?.name ?? ""}
+        rules={rulesFolder?.rules ?? NO_RULES}
+        inherited={rulesById.get(rulesFolder?.id ?? -1)?.inherited ?? NO_INHERITED}
+        pending={folders.setRules.isPending}
+        error={folders.setRules.error ? ipcError(folders.setRules.error) : null}
+        onSave={(rules) => {
+          if (rulesFolder === undefined) return;
+          const { id, name } = rulesFolder;
+          setRulesAsync({ id, rules }).then(
+            () => {
+              notify.success(
+                rules.length === 0 ? `Cleared rules for “${name}”` : `Saved rules for “${name}”`,
+              );
+              closeRules();
+            },
+            (error: unknown) =>
+              notify.error(`Couldn't save rules for “${name}”`, { body: ipcError(error) }),
+          );
+        }}
+        onClose={closeRules}
+      />
+
       <OptimizeWishlistDialog
         open={optimizing}
         // The scope the plan was taken over, in three facts. At the root the sweep is every shelf,

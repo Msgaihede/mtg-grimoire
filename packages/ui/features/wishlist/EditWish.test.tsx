@@ -35,6 +35,8 @@ const BOLT: WishRow = {
   preferredFinish: "foil",
   unitPrice: 400.5,
   elsewhere: 0,
+  ownedExact: 0,
+  ownedOther: 0,
   notes: null,
   needsReview: null,
   updatedAt: 1_800_000_000,
@@ -62,8 +64,8 @@ const ANY: WishRow = {
 const ORPHAN: WishRow = { ...BOLT, id: 9, oracleId: null, name: "Chaos Orb" };
 
 const FOLDERS: WishlistFolder[] = [
-  { id: 2, parentId: null, name: "Expensive", sortOrder: 0, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null },
-  { id: 3, parentId: 2, name: "Ordered", sortOrder: 0, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null },
+  { rules: [], id: 2, parentId: null, name: "Expensive", sortOrder: 0, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null },
+  { rules: [], id: 3, parentId: 2, name: "Ordered", sortOrder: 0, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null },
 ];
 
 const NODES = buildFolderTree(FOLDERS, []);

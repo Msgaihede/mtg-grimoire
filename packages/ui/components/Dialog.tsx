@@ -881,8 +881,12 @@ function useSwipeToClose(
           if ("setPointerCapture" in e.currentTarget)
             e.currentTarget.setPointerCapture(e.pointerId);
         }
+        // A sample that has not moved is a finger held still, even one that shares the last
+        // sample's timestamp (coalesced events do): it must not keep the last move's speed, or a
+        // pause before the let-go would still read as a flick.
         const dt = e.timeStamp - d.lastT;
-        if (dt > 0) d.v = (e.clientY - d.lastY) / dt;
+        if (e.clientY === d.lastY) d.v = 0;
+        else if (dt > 0) d.v = (e.clientY - d.lastY) / dt;
         d.lastY = e.clientY;
         d.lastT = e.timeStamp;
         y.set(Math.max(0, dy));
