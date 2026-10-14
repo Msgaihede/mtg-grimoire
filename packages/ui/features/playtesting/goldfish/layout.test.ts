@@ -6,6 +6,7 @@ import {
   FLOOR,
   GAP,
   PILE,
+  UNDER,
   HAND_CARD_W,
   HAND_GAP,
   HAND_LIFT,
@@ -18,6 +19,7 @@ import {
   layoutTable,
   pileHeight,
   pileWidth,
+  underOf,
   pilesOf,
 } from "./layout";
 
@@ -99,6 +101,16 @@ describe("fitWidth", () => {
     const stacked = pilesOf([card("Plains"), card("Plains"), card("Plains")], "land")[0];
     expect(pileWidth(tapped, 100)).toBe(140);
     expect(pileWidth(stacked, 100)).toBe(100 + 2 * PILE);
+  });
+
+  it("draws five cards of a pile at most, however many it holds", () => {
+    const pile = pilesOf(
+      Array.from({ length: 9 }, () => card("Forest")),
+      "land",
+    )[0];
+    expect(UNDER).toBe(4);
+    expect(underOf(pile)).toBe(UNDER);
+    expect(pileWidth(pile, 100)).toBe(100 + UNDER * PILE);
   });
 
   it("never goes under the floor", () => {

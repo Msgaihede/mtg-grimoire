@@ -330,7 +330,8 @@ function PileView({
     height: h,
     transform: tapped ? "rotate(90deg)" : undefined,
   });
-  // The ×N marker straddles the bottom edge of the card as it lies, centred under it.
+  // The ×N marker straddles the bottom edge of the card as it lies, centred under it — large
+  // enough to read across the table (issue #1001).
   const markX = Math.round(w * (tapped ? 0.7 : 0.5));
   const markY = under * PILE + (tapped ? turn + w : h);
 
@@ -426,7 +427,7 @@ function PileView({
       {count > 1 && (
         <span
           aria-hidden="true"
-          className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 rounded-full border border-border bg-bg px-2 font-mono text-xs/5 font-semibold whitespace-nowrap text-text tabular-nums"
+          className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 rounded-full border border-border bg-bg px-2.5 font-mono text-sm/6 font-semibold whitespace-nowrap text-text tabular-nums shadow-[0_2px_6px_rgb(0_0_0/0.35)]"
           style={{ left: markX, top: markY }}
         >
           ×{count}
