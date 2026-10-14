@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ScannerDecision } from "@/lib/ipc";
 import {
   addDecision,
+  addPicked,
   commitPlan,
   importItems,
   NO_FINISHED_ROWS,
@@ -347,6 +348,49 @@ describe("tray", () => {
   it("refuses to build an import line for a row of unknown finish", () => {
     const rows = addDecision([], resolved, { finish: "unknown" }, 1, "a").rows;
     expect(() => importItems(rows, "NM")).toThrow("has no finish yet");
+  });
+
+  describe("a printing added by hand (issue #978)", () => {
+    const picked = {
+      cardId: "bolt-2x2",
+      oracleId: "bolt",
+      name: "Lightning Bolt",
+      setCode: "2x2",
+      collectorNumber: "117",
+    };
+
+    it("lands as a settled newest row in the reader's finish", () => {
+      const first = addDecision([], resolved, { finish: "nonfoil" }, 1, "a").rows;
+      const { rows, bumped } = addPicked(first, picked, "foil", 2, "b");
+      expect(bumped).toBe(false);
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toEqual({
+        key: "b",
+        ...picked,
+        finish: "foil",
+        quantity: 1,
+        choices: [],
+        addedAt: 2,
+      });
+      expect(unresolvedCount(rows)).toBe(0);
+    });
+
+    it("bumps the newest row of the same printing and finish, and nothing else", () => {
+      const once = addPicked([], picked, "foil", 1, "a").rows;
+      const twice = addPicked(once, picked, "foil", 2, "b");
+      expect(twice.bumped).toBe(true);
+      expect(twice.rows).toEqual([{ ...once[0], quantity: 2, addedAt: 2 }]);
+      // Another finish is another row, as for a scan.
+      expect(addPicked(twice.rows, picked, "nonfoil", 3, "c").rows).toHaveLength(2);
+    });
+
+    it("never bumps a row of unknown finish or one waiting for a pick", () => {
+      const unknown = addPicked([], picked, "unknown", 1, "a").rows;
+      expect(addPicked(unknown, picked, "unknown", 2, "b").rows).toHaveLength(2);
+      const waiting = addDecision([], ambiguous, { finish: "nonfoil" }, 1, "w").rows;
+      const sameAsProvisional = { ...picked, cardId: waiting[0].cardId };
+      expect(addPicked(waiting, sameAsProvisional, "nonfoil", 2, "b").rows).toHaveLength(2);
+    });
   });
 
   it("counts copies and removes rows", () => {

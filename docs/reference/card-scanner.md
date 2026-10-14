@@ -4438,6 +4438,31 @@ The scans stay in the tray after creation or cancellation. Creating a deck write
 the separate **Add to collection** action records physical ownership. The dialog explains
 this before creation, and a successful creation opens the deck editor.
 
+## Adding a card by hand
+
+**A card the camera will not read can be searched for and put in the tray by hand** (issue #978,
+2026-10-14). The tray's header carries **Add card…** on both faces — beside *Clear all…* in
+`TrayPanel`, beside the walk in the phone's `Tray` — and a press opens `AddCardDialog`
+(`reader/AddCardDialog.tsx`), mounted by the page beside its other dialogs.
+
+- **The same two questions *Send scan…* asks**, through the same parts: `PrintingPicker` (whole
+  cards, uncollapsed, unplayable printings included) with an empty box and its own label, and
+  `FinishRadios` (moved out of `SubmitScanDialog` for the two to share). A printing sold one way
+  settles its finish; the Defaults popover's fixed finish is chosen wherever the printing comes in
+  it; under *Detect* the reader answers. *Add to tray* is out of reach, with its reason beside it,
+  until both are answered — so a hand-added row is never `unknown`.
+- **The scanner pauses while the dialog is open.** The page's `picking` joins `useScanLoop`'s
+  `live` gate, beside Stop and the parked window: the reader has turned to the keyboard, and a card
+  read behind the scrim would land in a tray they cannot see. It is not the Stop button's
+  `scanning`, so closing the dialog resumes exactly what was running before. The dialog's footer
+  says the scanner is paused, because the picture behind the scrim is still moving.
+- **The row is `tray.ts`'s `addPicked`**: settled (no `choices`), newest first, and it bumps the
+  newest row by `addDecision`'s rule for a resolved decision — the same printing in the same known
+  finish — so a card added by hand and another copy then scanned are one row of two.
+  `useTrayLanding`'s `onPicked` lands it with a scan's marks: the strip's line, the card over the
+  camera, the row's flash. **No toast**: the tray is staging, not the collection, and its Add is
+  the write that toasts.
+
 ## Sending a scan to the inbox
 
 **A reader can send a scan — the last couple of seconds of frames the scanner was given, with

@@ -49,6 +49,8 @@ export interface PrintingPickerProps {
   /** The reader's choice, or `null` before they have made one. */
   chosen: CardSummary | null;
   onChoose: (card: CardSummary) => void;
+  /** The box's label — *Send scan…*'s question about the last picture unless a host asks another. */
+  label?: string;
 }
 
 /**
@@ -80,7 +82,12 @@ export interface PrintingPickerProps {
  * screen to show for it would send a card they can no longer see. So the choice is kept and
  * **said in words under the grid**, whatever the grid is showing.
  */
-export function PrintingPicker({ initialQuery, chosen, onChoose }: PrintingPickerProps): JSX.Element {
+export function PrintingPicker({
+  initialQuery,
+  chosen,
+  onChoose,
+  label = WHICH_CARD,
+}: PrintingPickerProps): JSX.Element {
   const id = useId();
   const [text, setText] = useState(initialQuery);
   // Seeded with the prefill, so the box's opening answer is asked for at once rather than after
@@ -150,7 +157,7 @@ export function PrintingPicker({ initialQuery, chosen, onChoose }: PrintingPicke
   return (
     <div className="flex flex-col gap-2">
       <label htmlFor={`${id}-search`} className="text-sm font-medium text-text">
-        {WHICH_CARD}
+        {label}
       </label>
       <input
         id={`${id}-search`}

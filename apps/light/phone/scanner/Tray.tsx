@@ -22,6 +22,7 @@ import {
   TRAY_FINISH_LABEL,
   UNKNOWN_FINISH,
 } from "@grimoire/ui/features/scanner/reader/trayFinish";
+import { ADD_CARD_LABEL } from "@grimoire/ui/features/scanner/reader/AddCardDialog";
 import { useTrayPrices } from "@grimoire/ui/features/scanner/reader/useTrayPrices";
 import { plural } from "@grimoire/ui/lib/counts";
 import { FINISHES, parseFinishes } from "@grimoire/ui/lib/finish";
@@ -134,6 +135,7 @@ export function Tray({
   flashKey,
   title = "Scanned cards",
   marketplace,
+  onAddCard,
 }: {
   rows: readonly ScannerTrayRow[];
   /** An edit, as a function of the rows — never the rows this render drew. */
@@ -146,6 +148,9 @@ export function Tray({
   /** Whose prices the rows are quoted at — a destination's, where it has one. Absent is the
    *  reader's own marketplace. */
   marketplace?: MarketplaceId;
+  /** *Add card…* was pressed (issue #978): the page opens the search and pauses the scanner under
+   *  it. Handed the press, for the caret to come back to. Absent draws no button. */
+  onAddCard?: (opener: HTMLElement) => void;
 }) {
   const titleId = useId();
   const listRef = useRef<HTMLUListElement>(null);
@@ -245,23 +250,41 @@ export function Tray({
         {waiting > 0 && (
           <span className="text-xs text-accent">{plural(waiting, "card")} to pick</span>
         )}
-        {/* Hidden rather than greyed when nothing is waiting: a control that can do nothing is
-            one a reader keeps trying. Gold, because it walks the questions gold already marks. */}
-        {deciding && (
-          <button
-            type="button"
-            onClick={nextDecision}
-            className={cn(
-              "ml-auto inline-flex h-11 shrink-0 items-center gap-1.5 rounded-md border border-accent/60 px-3",
-              "text-xs text-accent",
-              PRESS,
-              FOCUS,
-            )}
-          >
-            <ArrowDown aria-hidden className="size-3.5" />
-            {NEXT_DECISION_LABEL}
-          </button>
-        )}
+        <div className="ml-auto flex items-center gap-2">
+          {/* Hidden rather than greyed when nothing is waiting: a control that can do nothing is
+              one a reader keeps trying. Gold, because it walks the questions gold already marks. */}
+          {deciding && (
+            <button
+              type="button"
+              onClick={nextDecision}
+              className={cn(
+                "inline-flex h-11 shrink-0 items-center gap-1.5 rounded-md border border-accent/60 px-3",
+                "text-xs text-accent",
+                PRESS,
+                FOCUS,
+              )}
+            >
+              <ArrowDown aria-hidden className="size-3.5" />
+              {NEXT_DECISION_LABEL}
+            </button>
+          )}
+          {onAddCard && (
+            <button
+              type="button"
+              aria-haspopup="dialog"
+              onClick={(e) => onAddCard(e.currentTarget)}
+              className={cn(
+                "inline-flex h-11 shrink-0 items-center gap-1.5 rounded-md border border-border px-3",
+                "text-xs text-text",
+                PRESS,
+                FOCUS,
+              )}
+            >
+              <Plus aria-hidden className="size-3.5" />
+              {ADD_CARD_LABEL}
+            </button>
+          )}
+        </div>
       </header>
 
       {rows.length === 0 ? (

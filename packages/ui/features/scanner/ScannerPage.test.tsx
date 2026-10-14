@@ -404,6 +404,88 @@ describe("ScannerPage", () => {
     }
   });
 
+  /**
+   * *Add card…* (issue #978): the pump pauses while the search is open, the reader's printing and
+   * finish land at the head of the tray, and closing the dialog resumes what was running.
+   */
+  it("pauses the scanner while a card is added by hand, and lands it in the tray", async () => {
+    const restore = shimVideo();
+    opens();
+    paced();
+    const bolt: CardSummary = {
+      id: "bolt-2x2",
+      name: "Lightning Bolt",
+      setCode: "2x2",
+      setName: "Double Masters 2022",
+      collectorNumber: "117",
+      rarity: "uncommon",
+      typeLine: "Instant",
+      manaCost: "{R}",
+      price: null,
+      layout: "normal",
+      oracleId: "bolt",
+      finishes: '["nonfoil","foil"]',
+      promoTypes: null,
+      gameChanger: false,
+      releasedAt: null,
+      ownedQuantity: 0,
+      wishlisted: false,
+      printings: 1,
+      priceLow: null,
+      priceHigh: null,
+    };
+    vi.mocked(ipc.searchCards).mockResolvedValue({ items: [bolt], total: 1, totalIsCapped: false });
+    const user = userEvent.setup();
+    try {
+      mount();
+      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalled());
+      const opener = within(tray()).getByRole("button", { name: "Add card…" });
+      await user.click(opener);
+      const dialog = await screen.findByRole("dialog", { name: "Add a card" });
+      expect(
+        within(dialog).getByText("Scanning is paused while this is open."),
+      ).toBeInTheDocument();
+
+      // Paused: no frame goes out while the dialog stays open.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const sent = vi.mocked(ipc.scannerFrame).mock.calls.length;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(ipc.scannerFrame).toHaveBeenCalledTimes(sent);
+
+      await user.type(
+        within(dialog).getByRole("searchbox", { name: "Which card do you want to add?" }),
+        "bolt",
+      );
+      await user.click(await within(dialog).findByRole("radio", { name: /Lightning Bolt/ }));
+      await user.click(within(dialog).getByRole("radio", { name: "Foil" }));
+      await user.click(within(dialog).getByRole("button", { name: "Add to tray" }));
+
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: "Add a card" })).not.toBeInTheDocument(),
+      );
+      expect(opener).toHaveFocus();
+      expect(tray()).toHaveTextContent("Lightning Bolt");
+      await waitFor(() => expect(ipc.setScannerTray).toHaveBeenCalled(), { timeout: 2000 });
+      const [written] = vi.mocked(ipc.setScannerTray).mock.lastCall ?? [];
+      expect(written?.[0]).toMatchObject({
+        cardId: "bolt-2x2",
+        oracleId: "bolt",
+        name: "Lightning Bolt",
+        setCode: "2x2",
+        collectorNumber: "117",
+        finish: "foil",
+        quantity: 1,
+        choices: [],
+      });
+      // And resumed.
+      await waitFor(() =>
+        expect(vi.mocked(ipc.scannerFrame).mock.calls.length).toBeGreaterThan(sent),
+      );
+    } finally {
+      restore();
+    }
+  });
+
   it("can stop recognition while a camera request is pending without cancelling the preview", async () => {
     const restore = shimVideo();
     let opened!: (stream: MediaStream) => void;
