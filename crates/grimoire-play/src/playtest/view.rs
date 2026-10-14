@@ -13,7 +13,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::view::{GameCard, MulliganView, Place, Seat, TokenOffer};
+use crate::view::{GameCard, ManaTable, MulliganView, Place, Seat, TokenOffer};
 
 /// A player at the table, from the reader's seat: the reader, or one of up to three opponents in
 /// turn order after them. On the wire `"you"`, `"opponent"`, `"opponent2"` and `"opponent3"`, so a
@@ -162,6 +162,8 @@ pub struct PlaytestSeat {
     pub library_cards: Vec<GameCard>,
     /// What this seat's untapped permanents could make right now (phase's `max_mana_yield`).
     pub mana_open: u32,
+    /// The same open mana by type, and what is floating in the pool (`crate::view::ManaTable`).
+    pub mana: ManaTable,
 }
 
 /// The creatures in combat: each attacker and what it attacks, and each block.
@@ -563,7 +565,8 @@ pub enum PlaytestHappened {
         life: i32,
         was: i32,
     },
-    /// The engine's AI answered a question for the reader (`auto`, or one the board does not ask).
+    /// The engine's AI answered a question for the reader (`auto`, or one the board does not ask),
+    /// or the question had only one answer and the session took it (`sole_answer`).
     Chose {
         what: String,
     },

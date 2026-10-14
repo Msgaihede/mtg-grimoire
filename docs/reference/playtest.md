@@ -174,6 +174,14 @@ generically, never matched variant by variant.
 
 - **`auto`** answers any prompt with `phase_ai::choose_action` for the reader, at Medium.
   `Happened::Chose` says so. It is also the answer to a prompt with no options the board can draw.
+- **A question with one answer is never asked** (issue #999, `sole_answer`). phase already fills
+  in a cast whose targets have one combination, and a discard of every card in hand. What it still
+  asks with one answer, `advance` takes and tells as `Chose`: a target slot with one card left
+  once the reader answered the first, a payment with nothing to choose, a sole mana source. phase's
+  own way back out of a cast (`CancelCast`, `BackToManaPayment`) is not counted, since the board's
+  `cancel` is there for that. A pick has one answer only when every eligible card must be picked
+  and their order cannot matter. Should the engine refuse that answer, the question is asked
+  after all.
 - A card named alone by an option lights up on the table, and clicking it answers.
 
 **A pick: the answer that is a set of cards.** For a scry of three, `legal_actions` offers four

@@ -16,7 +16,14 @@
  * **A web or phone host refuses all three** — they are on the desktop's `DESKTOP_ONLY` list, and
  * the light app draws no Playtesting.
  */
-import type { GameCard, GoldfishPlace, GoldfishSeat, MulliganView, TokenOffer } from "./goldfish";
+import type {
+  GameCard,
+  GoldfishPlace,
+  GoldfishSeat,
+  ManaTable,
+  MulliganView,
+  TokenOffer,
+} from "./goldfish";
 import { invoke } from "./invoke";
 
 /**
@@ -119,6 +126,8 @@ export interface PlaytestSeat {
   /** The reader's library, top first; empty for the opponent. */
   libraryCards: GameCard[];
   manaOpen: number;
+  /** The same open mana by type, and what is floating in the pool. */
+  mana: ManaTable;
 }
 
 export interface PlaytestCombat {

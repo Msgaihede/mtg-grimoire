@@ -30,6 +30,7 @@ import { HandFan } from "../goldfish/HandFan";
 import { INSPECT_WIDTH, Inspect, pointerAt } from "../goldfish/Inspect";
 import { LibraryDialog } from "../goldfish/LibraryDialog";
 import { LifePlate } from "../goldfish/LifePlate";
+import { ManaTableView } from "../goldfish/ManaTable";
 import { gameMenu } from "../goldfish/menus";
 import { OpeningHand } from "../goldfish/OpeningHand";
 import { HelpPanel, LogPanel } from "../goldfish/Panels";
@@ -789,6 +790,7 @@ export function PlaytestBoard({
 
       {view !== null && view.stage !== "mulligan" && view.stage !== "over" && !replaying && (
         <div className="absolute right-3 bottom-3 flex flex-col items-end gap-2">
+          <ManaTableView mana={view.you.mana} label="Your mana" />
           <span className="text-xs text-dim">
             {view.you.manaOpen} mana open · hand {view.you.hand.length}
           </span>

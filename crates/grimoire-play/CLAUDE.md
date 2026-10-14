@@ -48,7 +48,7 @@ the pin, the goldfish) and [playtest.md](../../docs/reference/playtest.md) (the 
 - **A prompt is the engine's legal answers, read generically** (`option_of`), never a match on
   `WaitingFor`'s hundred-odd variants. The one exception is `pick`: the few questions answered by
   a set of cards, whose fields give the count. `auto` must answer any prompt (phase-ai for the
-  reader).
+  reader). A question with one answer (`sole_answer`) is taken by `advance`, never asked.
 - **A replay frame shows, it never offers.** Every `PlaytestFrame` view is `watching`, with no
   prompt, attack or block (`view_as(true)`), so the AI's own questions never reach the page.
 - **A refused action changes nothing.** Both games' `act` restore a checkpoint on any `Err`. On

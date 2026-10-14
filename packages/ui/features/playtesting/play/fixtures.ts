@@ -15,7 +15,7 @@ import type {
   PlaytestStep,
   PlaytestView,
 } from "@/lib/ipc";
-import { gameCard } from "../goldfish/fixtures";
+import { gameCard, manaTable } from "../goldfish/fixtures";
 
 /** A Mountain: not among the fake's rows, so named and typed by hand (drawn as a plain tile). */
 function mountain(over: Partial<GameCard> = {}): GameCard {
@@ -43,6 +43,7 @@ function seat(player: PlaytestPlayer, over: Partial<PlaytestSeat>): PlaytestSeat
     library: 0,
     libraryCards: [],
     manaOpen: 0,
+    mana: manaTable(),
     ...over,
   };
 }
@@ -107,6 +108,7 @@ export function turnFive(): TurnFive {
       library: 48,
       libraryCards: library(48),
       manaOpen: 5,
+      mana: manaTable([0, 1, 0, 0, 2, 2]),
     }),
     opponents: [
       seat("opponent", {
@@ -125,6 +127,7 @@ export function turnFive(): TurnFive {
         exile: [gameCard("Bonecrusher Giant // Stomp")],
         library: 47,
         manaOpen: 3,
+        mana: manaTable([0, 0, 0, 1, 0, 2]),
       }),
     ],
     combat: null,
