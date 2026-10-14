@@ -664,6 +664,9 @@ mod tests {
             // User schema v62's deck tags, none as a fresh deck carries them — here for
             // `bracket`'s reason. The mirror writes no file for them.
             tags: Vec::new(),
+            // Issue #1032's share key, none as a deck that was never captured carries it — here
+            // for `bracket`'s reason. The mirror names its files by name, never by uid.
+            sync_uid: None,
         }
     }
 

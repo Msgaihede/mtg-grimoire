@@ -944,3 +944,278 @@ fn the_golden_snapshot_is_what_the_writer_produces() {
     // committed file is LF; this only stops a checkout setting from failing the build.
     assert_eq!(got.trim_end(), want.replace("\r\n", "\n").trim_end());
 }
+
+/* ------------------------------------------------------------------ decks, issue #1032 --- */
+
+/// A Commander deck with a uid, its predefined piles seeded by `create_deck` itself — so the
+/// piles a share reads are the ones the app really makes, not a hand-written agreement about them.
+fn shared_deck(conn: &Connection, name: &str, uid: &str) -> i64 {
+    let deck = crate::deck::create_deck(
+        conn,
+        &crate::deck::DeckInput {
+            name: name.to_owned(),
+            format_key: "commander".to_owned(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE decks SET sync_uid = ?2 WHERE id = ?1",
+        params![deck.id, uid],
+    )
+    .unwrap();
+    deck.id
+}
+
+/// The live list's predefined pile of `kind`.
+fn zone(conn: &Connection, deck: i64, kind: &str) -> i64 {
+    conn.query_row(
+        "SELECT id FROM deck_categories WHERE deck_id = ?1 AND kind = ?2 AND variant = 'live'",
+        params![deck, kind],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+/// A printing a deck can be built from: a type line, a cost and a value on top of [`card`].
+fn spell(conn: &Connection, id: &str, name: &str, type_line: &str, cost: &str, mv: f64) {
+    card(conn, id, name);
+    conn.execute(
+        "UPDATE cards SET type_line = ?2, mana_cost = ?3, cmc = ?4 WHERE id = ?1",
+        params![id, type_line, cost, mv],
+    )
+    .unwrap();
+}
+
+fn put(conn: &Connection, deck: i64, card: &str, pile: i64, qty: i64) {
+    crate::deck::add_card(conn, deck, card, Some(pile), None, "live", None, qty).unwrap();
+}
+
+#[test]
+fn deck_keys_parse_and_are_told_from_folders_and_wishlists() {
+    assert_eq!(super::deck::parse("deck:abc"), Some("abc"));
+    assert_eq!(super::deck::parse("deck:"), Some(""));
+    assert_eq!(super::deck::parse("wishlist:deck:abc"), None);
+    assert_eq!(super::deck::parse("0123456789abcdef0123456789abcdef"), None);
+}
+
+/// The live list, pile by pile in the reader's order: a pile is a folder, its role rides in
+/// `deck`, every card carries the three facts a deck is read by, and the plan stays home.
+#[test]
+fn a_deck_share_carries_its_live_list_as_piles() {
+    let conn = test_db();
+    spell(
+        &conn,
+        "k1",
+        "Krenko, Mob Boss",
+        "Legendary Creature — Goblin Warrior",
+        "{2}{R}{R}",
+        4.0,
+    );
+    spell(&conn, "b1", "Lightning Bolt", "Instant", "{R}", 1.0);
+    spell(&conn, "m1", "Mountain", "Basic Land — Mountain", "", 0.0);
+    spell(&conn, "s1", "Shock", "Instant", "{R}", 1.0);
+    let deck = shared_deck(&conn, "Krenko", "deckuid-krenko");
+    put(&conn, deck, "k1", zone(&conn, deck, "commander"), 1);
+    let burn = crate::deck_meta::create_category(&conn, deck, "live", "Burn").unwrap();
+    put(&conn, deck, "b1", burn.id, 1);
+    let lands = crate::deck_meta::create_category(&conn, deck, "live", "Lands").unwrap();
+    put(&conn, deck, "m1", lands.id, 30);
+    put(&conn, deck, "s1", zone(&conn, deck, "maybe"), 1);
+    // A pile whose only row is the plan's: it holds nothing of the live list, so it does not travel.
+    let plan = crate::deck_meta::create_category(&conn, deck, "live", "Plan").unwrap();
+    put(&conn, deck, "s1", plan.id, 2);
+    conn.execute(
+        "UPDATE deck_cards SET variant = 'theory' WHERE category_id = ?1",
+        params![plan.id],
+    )
+    .unwrap();
+
+    let s = snap(&conn, Some("deck:deckuid-krenko"));
+    assert_eq!(s.title, "Krenko");
+    // A deck row has no condition, so the question is not claimed.
+    assert_eq!(s.fields, vec!["lang", "value"]);
+
+    let deck = s.deck.as_ref().expect("a deck share carries its deck half");
+    assert_eq!(deck.format, "Commander");
+    let piles: Vec<(&str, &str, bool)> = deck
+        .piles
+        .iter()
+        .map(|p| {
+            let name = s.folders.iter().find(|f| f.uid == p.uid).unwrap();
+            (name.name.as_str(), p.kind.as_str(), p.active)
+        })
+        .collect();
+    // The seeded zones first in their seeded order, then the reader's — the Categories view.
+    assert_eq!(
+        piles,
+        vec![
+            ("Commander", "commander", true),
+            ("Maybeboard", "maybe", false),
+            ("Burn", "main", true),
+            ("Lands", "main", true),
+        ]
+    );
+    assert!(s.folders.iter().all(|f| f.parent.is_none()));
+    assert!(
+        s.folders.iter().all(|f| f.uid.starts_with("pile-")),
+        "a pile's position, never its row id"
+    );
+
+    let bolt = s.cards.iter().find(|c| c.n == "Lightning Bolt").unwrap();
+    assert_eq!(bolt.t.as_deref(), Some("Instant"));
+    assert_eq!(bolt.mc.as_deref(), Some("{R}"));
+    assert_eq!(bolt.mv, Some(1.0));
+    assert_eq!(bolt.f, "nonfoil");
+    assert_eq!(bolt.p, Some(0.34));
+    assert!(bolt.c.is_none());
+    let burn_uid = &s.folders.iter().find(|f| f.name == "Burn").unwrap().uid;
+    assert_eq!(bolt.fo.as_ref(), Some(burn_uid));
+
+    // A land's empty cost is an absent `mc`, never `""`.
+    let mountain = s.cards.iter().find(|c| c.n == "Mountain").unwrap();
+    assert_eq!(mountain.q, 30);
+    assert!(mountain.mc.is_none());
+
+    // The plan's two Shocks did not travel; the Maybeboard's one did.
+    let shocks: i64 = s.cards.iter().filter(|c| c.n == "Shock").map(|c| c.q).sum();
+    assert_eq!(shocks, 1);
+}
+
+#[test]
+fn a_deck_key_nothing_answers_is_refused_by_name() {
+    let conn = test_db();
+    shared_deck(&conn, "Krenko", "deckuid-krenko");
+    for key in ["deck:nobody", "deck:"] {
+        let err = snapshot(
+            &conn,
+            "x",
+            "Giradeli",
+            Some(key),
+            all(false),
+            crate::sorting::Marketplace::Tcgplayer,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(err, DECK_NOT_FOUND, "{key}");
+    }
+}
+
+/// A binder's snapshot carries none of the deck's keys, so it is the document it always was.
+#[test]
+fn a_binder_carries_no_deck_half_and_no_deck_facts() {
+    let conn = test_db();
+    let (f, uid) = folder(&conn, None, "Binder", false);
+    spell(&conn, "b1", "Lightning Bolt", "Instant", "{R}", 1.0);
+    entry(&conn, "b1", Some(f), 1);
+    let json = serde_json::to_value(snap(&conn, Some(&uid))).unwrap();
+    assert!(json.get("deck").is_none(), "{json}");
+    let card = &json["cards"][0];
+    for key in ["t", "mc", "mv"] {
+        assert!(card.get(key).is_none(), "{key} on a binder's card: {card}");
+    }
+}
+
+/// The reader's own words about their deck never reach the wire — the description, the tags and
+/// a row's review sentence, each carrying a marker the sweep looks for.
+#[test]
+fn no_private_deck_field_can_reach_the_wire() {
+    let conn = test_db();
+    spell(&conn, "b1", "Lightning Bolt", "Instant", "{R}", 1.0);
+    let deck = shared_deck(&conn, "Burn", "deckuid-burn");
+    let pile = crate::deck_meta::create_category(&conn, deck, "live", "Burn").unwrap();
+    put(&conn, deck, "b1", pile.id, 4);
+    conn.execute(
+        "UPDATE decks SET description = 'private-description', tags = '[\"private-tag\"]'
+          WHERE id = ?1",
+        params![deck],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE deck_cards SET needs_review = 'private-review' WHERE deck_id = ?1",
+        params![deck],
+    )
+    .unwrap();
+    let json = serde_json::to_string(&snap(&conn, Some("deck:deckuid-burn"))).unwrap();
+    assert!(!json.contains("private-"), "{json}");
+}
+
+/// The deck format's fence, `the_golden_snapshot_is_what_the_writer_produces`' twin: the two
+/// TypeScript viewers parse this very file, so the three implementations agree on a deck too.
+#[test]
+fn the_golden_deck_snapshot_is_what_the_writer_produces() {
+    let conn = test_db();
+    spell(
+        &conn,
+        "5d8a1ab2-4c53-4b2b-a9e4-1e3c0e7d2f01",
+        "Krenko, Mob Boss",
+        "Legendary Creature — Goblin Warrior",
+        "{2}{R}{R}",
+        4.0,
+    );
+    spell(
+        &conn,
+        "e3285e6b-3e79-4d7c-bf96-d920f973b80d",
+        "Lightning Bolt",
+        "Instant",
+        "{R}",
+        1.0,
+    );
+    let deck = shared_deck(&conn, "Krenko's Goblins", "deckuid-krenko");
+    put(
+        &conn,
+        deck,
+        "5d8a1ab2-4c53-4b2b-a9e4-1e3c0e7d2f01",
+        zone(&conn, deck, "commander"),
+        1,
+    );
+    let burn = crate::deck_meta::create_category(&conn, deck, "live", "Burn").unwrap();
+    put(
+        &conn,
+        deck,
+        "e3285e6b-3e79-4d7c-bf96-d920f973b80d",
+        burn.id,
+        1,
+    );
+
+    let got = serde_json::to_string_pretty(&snap(&conn, Some("deck:deckuid-krenko"))).unwrap();
+    let want = include_str!("__golden__/deck.json");
+    assert_eq!(got.trim_end(), want.replace("\r\n", "\n").trim_end());
+}
+
+/// A deck share's link preview shows its commander (issue #1032) — read off the very document
+/// being uploaded — and the first card in the deck when there is no commander.
+#[test]
+fn a_deck_previews_as_its_commander_and_a_binder_as_nothing() {
+    let conn = test_db();
+    spell(
+        &conn,
+        "k1",
+        "Krenko, Mob Boss",
+        "Legendary Creature — Goblin",
+        "{2}{R}{R}",
+        4.0,
+    );
+    spell(&conn, "b1", "Lightning Bolt", "Instant", "{R}", 1.0);
+    let deck = shared_deck(&conn, "Krenko", "deckuid-krenko");
+    let burn = crate::deck_meta::create_category(&conn, deck, "live", "Burn").unwrap();
+    put(&conn, deck, "b1", burn.id, 1);
+
+    // No commander yet: the first card played in the deck.
+    let s = snap(&conn, Some("deck:deckuid-krenko"));
+    assert_eq!(
+        super::deck::preview_image(&s),
+        Some(display_uri("b1").as_str())
+    );
+
+    put(&conn, deck, "k1", zone(&conn, deck, "commander"), 1);
+    let s = snap(&conn, Some("deck:deckuid-krenko"));
+    assert_eq!(
+        super::deck::preview_image(&s),
+        Some(display_uri("k1").as_str())
+    );
+
+    let (f, uid) = folder(&conn, None, "Binder", false);
+    entry(&conn, "b1", Some(f), 1);
+    assert_eq!(super::deck::preview_image(&snap(&conn, Some(&uid))), None);
+}

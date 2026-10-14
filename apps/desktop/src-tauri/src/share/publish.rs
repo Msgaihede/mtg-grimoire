@@ -591,6 +591,9 @@ async fn delete_share(
 
 /// The metadata body, built from the document that is about to be uploaded.
 ///
+/// A deck share also sends its `format` and a preview `image` (issue #1032) — what the Worker's
+/// OpenGraph card shows for a deck; both are `null` for a binder and a wishlist.
+///
 /// `cardCount` is the copies rather than the rows, which is what the page prints; `totalValue`
 /// is `None` unless `value` crossed **and** at least one card carried a price, because a `0.0`
 /// on a binder no feed quotes is the page claiming it is worth nothing.
@@ -615,6 +618,11 @@ fn meta_body(
         "currency": snap.currency,
         "marketplace": snap.marketplace,
         "fields": snap.fields,
+        // A deck share's link preview (issue #1032): its format for the card's description and a
+        // picture of the deck for `og:image`. `null` on every other kind — a binder's preview
+        // stays text, as it always was.
+        "format": snap.deck.as_ref().map(|deck| deck.format.as_str()).filter(|f| !f.is_empty()),
+        "image": super::deck::preview_image(snap),
     }))
     .map_err(|e| e.to_string())
 }
@@ -1378,6 +1386,9 @@ mod tests {
             c: None,
             l: None,
             p,
+            t: None,
+            mc: None,
+            mv: None,
         }
     }
 
@@ -1393,6 +1404,7 @@ mod tests {
             fields: vec!["value"],
             folders: Vec::new(),
             cards,
+            deck: None,
         }
     }
 
@@ -1749,6 +1761,45 @@ mod tests {
         assert!(body["folderUid"].is_null(), "{body}");
         assert_eq!(body["ownerName"], "Giradeli");
         assert_eq!(body["title"], "Trade binder");
+    }
+
+    /// A binder's preview is text, as it always was: neither preview key carries anything — the
+    /// deck half is what supplies them (issue #1032, `share::tests` has the deck's side).
+    #[test]
+    fn a_binder_sends_no_preview() {
+        let body = meta_body(
+            Some("uid-a"),
+            "Giradeli",
+            &wire_snapshot(vec![wire_card(1, None)]),
+        )
+        .unwrap();
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(body["format"].is_null(), "{body}");
+        assert!(body["image"].is_null(), "{body}");
+    }
+
+    /// A deck sends its format and its preview picture beside the rest of the metadata.
+    #[test]
+    fn a_deck_sends_its_format_and_preview_picture() {
+        let mut card = wire_card(1, None);
+        card.fo = Some("pile-0".to_owned());
+        card.img = Some("https://cards.scryfall.io/display/front/k/1/k1.webp".to_owned());
+        let mut snap = wire_snapshot(vec![card]);
+        snap.deck = Some(super::super::ShareDeck {
+            format: "Commander".to_owned(),
+            piles: vec![super::super::SharePile {
+                uid: "pile-0".to_owned(),
+                kind: "commander".to_owned(),
+                active: true,
+            }],
+        });
+        let body = meta_body(Some("deck:uid"), "Giradeli", &snap).unwrap();
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["format"], "Commander");
+        assert_eq!(
+            body["image"],
+            "https://cards.scryfall.io/display/front/k/1/k1.webp"
+        );
     }
 
     // -----------------------------------------------------------------------------------

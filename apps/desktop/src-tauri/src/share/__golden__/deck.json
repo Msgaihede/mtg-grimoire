@@ -1,0 +1,72 @@
+{
+  "v": 1,
+  "id": "testshareid00000",
+  "title": "Krenko's Goblins",
+  "owner": "Giradeli",
+  "updatedAt": 1757308800,
+  "marketplace": "tcgplayer",
+  "currency": "USD",
+  "fields": [
+    "lang",
+    "value"
+  ],
+  "folders": [
+    {
+      "uid": "pile-0",
+      "name": "Commander",
+      "parent": null
+    },
+    {
+      "uid": "pile-1",
+      "name": "Burn",
+      "parent": null
+    }
+  ],
+  "cards": [
+    {
+      "id": "5d8a1ab2-4c53-4b2b-a9e4-1e3c0e7d2f01",
+      "n": "Krenko, Mob Boss",
+      "s": "tsp",
+      "cn": "157",
+      "f": "nonfoil",
+      "q": 1,
+      "fo": "pile-0",
+      "img": "https://cards.scryfall.io/display/front/5/d/5d8a1ab2-4c53-4b2b-a9e4-1e3c0e7d2f01.webp?1757308800",
+      "l": "en",
+      "p": 0.34,
+      "t": "Legendary Creature — Goblin Warrior",
+      "mc": "{2}{R}{R}",
+      "mv": 4.0
+    },
+    {
+      "id": "e3285e6b-3e79-4d7c-bf96-d920f973b80d",
+      "n": "Lightning Bolt",
+      "s": "tsp",
+      "cn": "157",
+      "f": "nonfoil",
+      "q": 1,
+      "fo": "pile-1",
+      "img": "https://cards.scryfall.io/display/front/e/3/e3285e6b-3e79-4d7c-bf96-d920f973b80d.webp?1757308800",
+      "l": "en",
+      "p": 0.34,
+      "t": "Instant",
+      "mc": "{R}",
+      "mv": 1.0
+    }
+  ],
+  "deck": {
+    "format": "Commander",
+    "piles": [
+      {
+        "uid": "pile-0",
+        "kind": "commander",
+        "active": true
+      },
+      {
+        "uid": "pile-1",
+        "kind": "main",
+        "active": true
+      }
+    ]
+  }
+}

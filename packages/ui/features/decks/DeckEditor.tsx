@@ -119,6 +119,7 @@ import {
 import { NO_LAST_BATCH, useDeckDrops, type LastBatch } from "./useDeckDrops";
 import { useDeckKeyboard } from "./useDeckKeyboard";
 import { useDeckMeta } from "./useDeckMeta";
+import { deckShareTarget } from "./deckShare";
 import { useFormatSpecs } from "./useFormatSpecs";
 import { useRecentAdds } from "./useRecentAdds";
 import { ValidationPanel } from "./ValidationPanel";
@@ -398,6 +399,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   useDismissOnEscape({ layer: "navigation", onDismiss: closeDeck });
 
   const row = deck.deck;
+  /**
+   * What the header's Share control publishes (issue #1032) — held still on the two fields it
+   * reads, because the header is memoised and a fresh target per render would redraw it.
+   */
+  const shareName = row?.name ?? null;
+  const shareUid = row?.syncUid ?? null;
+  const share = useMemo(
+    () => deckShareTarget(shareName === null ? null : { name: shareName, syncUid: shareUid }),
+    [shareName, shareUid],
+  );
   const spec = row ? formatSpecFor(row.formatKey) : null;
   /** The deck's description as its band draws it, or `null` — which draws no band (issue #912). */
   const description = shownDescription(row?.description);
@@ -3439,6 +3450,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         wideHeader={wideHeader}
         settingsIcon={settingsIcon}
         openGoldfish={playtests ? openGoldfish : undefined}
+        share={share}
       />
 
       {row && (
@@ -3572,7 +3584,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           </motion.div>
         )}
       </AnimatePresence>
-
 
       {loading && (
         <p role="status" className="py-16 text-center text-sm text-dim">

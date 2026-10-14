@@ -1135,6 +1135,14 @@ pub struct DeckRow {
     /// **[`duplicate_deck`] carries it**, [`Self::bracket`]'s distinction: a tag is an answer
     /// about the deck, and a copy of a `Meme` deck is a `Meme` deck.
     pub tags: Vec<String>,
+    /// `decks.sync_uid` — the deck's identity across every device in the group, and what a deck
+    /// share is keyed on (`deck:<sync_uid>`, issue #1032).
+    ///
+    /// **`None` is a deck that cannot be shared yet rather than an error**, the rule
+    /// `CollectionFolder::sync_uid` set: the column is nullable, and a share keyed on the row's
+    /// own id would name a deck no other device can find — so *Update* would stop working the
+    /// moment the reader pressed it anywhere else.
+    pub sync_uid: Option<String>,
 }
 
 /// One deck's tags as a reader would have typed them carefully — [`update_deck`]'s whole say
@@ -1442,7 +1450,7 @@ const DECK_SELECT: &str = "SELECT d.id, d.name, d.format_key, fs.display_name, d
             d.theory_mark_exact, d.theory_mark_name, d.theory_mark_unplanned,
             d.virtual_only, d.stats_open, d.notes_open, d.token_mode, d.managed_wishlist_mode,
             d.token_rail_index, d.curve_creatures, d.managed_wishlist_tokens, d.todos_open,
-            d.tags
+            d.tags, d.sync_uid
        FROM decks d
        LEFT JOIN format_specs fs ON fs.key = d.format_key
        LEFT JOIN cards c ON c.id = d.cover_card_id";
@@ -1606,6 +1614,9 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
         // down to the storage class: the column syncs, and a value that is not text at all must
         // read as no tags rather than fail the row — and with it every deck on the page.
         tags: read_tags(r.get_ref(33)?.as_str().unwrap_or_default()),
+        // 34, at the end of the list, same rule — and a `TEXT` like `tags` at 33 beside it, so a
+        // crossed pair would hand a JSON array to a share key and back with nothing going red.
+        sync_uid: r.get(34)?,
     })
 }
 
@@ -10932,6 +10943,9 @@ mod tests {
             // what every deck carries and would read correct on a field that never left Rust.
             // Two, so the order is on the wire as well.
             tags: vec!["No Gamechangers".to_owned(), "Meme".to_owned()],
+            // A real uid rather than `None`, the rule above: `null` is what a deck that was never
+            // captured carries and would read correct on a field that never left Rust.
+            sync_uid: Some("deck-uid-burn".to_owned()),
         })
         .unwrap();
         assert_eq!(
@@ -11001,6 +11015,10 @@ mod tests {
                 // crossed index among them succeeds silently, and only the values (`true`,
                 // `false`, `true`) and these three keys tell them apart.
                 "notesOpen": true,
+                // Issue #1032, and `syncUid` rather than `sync_uid`: the deck's Share control
+                // keys the share on it, and a snake-cased key would be `undefined` — so the
+                // control would draw nothing for every deck.
+                "syncUid": "deck-uid-burn",
                 // User schema v56, and `curveCreatures` rather than `curve_creatures`: the Mana
                 // curve reads this key to know whether to split its bars, and a snake-cased one
                 // would be `undefined` — falsy, so a split the reader saved would never draw.

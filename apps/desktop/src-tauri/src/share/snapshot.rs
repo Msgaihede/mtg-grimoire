@@ -84,6 +84,17 @@ pub struct ShareCard {
     pub l: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub p: Option<f64>,
+    /// The type line. **A deck share's alone** (issue #1032) — a deck is read by type and by
+    /// cost, and a viewer with no corpus has no other way to know either. A binder and a wishlist
+    /// carry none, so their snapshots, and the golden, are unchanged byte for byte.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub t: Option<String>,
+    /// The printed mana cost, verbatim (`{1}{R}`). A deck share's alone; absent for a land.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mc: Option<String>,
+    /// The mana value. A deck share's alone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mv: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -99,6 +110,11 @@ pub struct ShareSnapshot {
     pub fields: Vec<&'static str>,
     pub folders: Vec<ShareFolder>,
     pub cards: Vec<ShareCard>,
+    /// The deck half of a deck share, and absent from every other kind (issue #1032). **Absent
+    /// rather than `null`**, so a binder's snapshot is the document it always was — and `v` stays
+    /// 1, because a viewer that predates it reads a deck as a binder with a drawer per pile.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deck: Option<super::deck::ShareDeck>,
 }
 
 /// Every folder in the share, as `(id, uid, name, parent_uid)`.
@@ -158,6 +174,10 @@ pub fn snapshot(
     if let Some(key) = folder_uid.and_then(super::wishlist::WishlistKey::parse) {
         return super::wishlist::snapshot(conn, id, owner, key, fields, marketplace, now);
     }
+    // And a deck key is a deck — `super::deck` (issue #1032).
+    if let Some(uid) = folder_uid.and_then(super::deck::parse) {
+        return super::deck::snapshot(conn, id, owner, uid, fields, marketplace, now);
+    }
     // The two refusals, in this order, before a single row is read. `FOLDER_NOT_FOUND` first
     // so a folder that is not there never reports as locked. **Any `kind` may be named** — a
     // deck's group and `Recently removed` included, issue #941; see [`SUBTREE`].
@@ -213,6 +233,7 @@ pub fn snapshot(
         fields: fields.names(),
         folders,
         cards,
+        deck: None,
     })
 }
 
@@ -318,6 +339,9 @@ fn read_cards(
                 } else {
                     None
                 },
+                t: None,
+                mc: None,
+                mv: None,
             })
         })
         .map_err(|e| e.to_string())?;

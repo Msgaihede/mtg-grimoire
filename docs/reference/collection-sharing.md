@@ -354,6 +354,66 @@ share is a string in that namespace — no schema rung, no new column, no Worker
 - The snapshot format is unchanged (`v` stays 1); both viewers draw a wishlist share as they draw a
   binder.
 
+### Issue #1032 — a deck, through the same pipe
+
+**A supporter can share a deck the way they share a folder**, read-only, and it is a fourth key
+in the same namespace rather than a new route: `deck:<decks.sync_uid>`. Like the wishlist (#941)
+it needs **no schema rung, no new column and no new Worker route**; the Worker reads the key's
+shape for one thing only, the OpenGraph card's kind, which now says *Deck*. `share::deck` reads
+it and `packages/ui/features/decks/deckShare.ts` builds it.
+
+| | |
+| --- | --- |
+| What travels | The deck's **live list** (its *Actual*) — never the theory plan, which is a draft the press did not ask to publish |
+| Piles | Each pile that holds a live card is a **folder** (`pile-0`, `pile-1`, … — its position, never its row id), named as the reader named it, in the editor's order; its role and switch ride in a new top-level `deck: { format, piles: [{ uid, kind, active }] }`. An empty pile does not travel |
+| Card facts | Three short keys a binder's cards never carry: `t` (type line), `mc` (mana cost) and `mv` (mana value) — what a deck is read by, and what a viewer with no corpus cannot know otherwise |
+| Absent, not switched off | The deck's labels, notes, to-dos, tags, description and every `needs_review` sentence. No `c` either — a deck row has no condition — so `condition` is dropped from `fields`, as a wishlist share drops it |
+| Refusal | `DECK_NOT_FOUND` — *"That deck is not in your decks."* |
+
+**`v` stays 1, and that is the compatibility story.** Every new key is absent on a binder, so a
+binder's snapshot is byte-identical (the golden did not move), and a viewer that predates deck
+shares reads a deck as a binder with one drawer per pile — a correct reading of the same document
+rather than a refusal. `__golden__/deck.json` is the deck half's fence, asserted byte for byte by
+`share::tests::the_golden_deck_snapshot_is_what_the_writer_produces` and parsed by
+`shareSnapshot.test.ts`. Both viewers ask one function whether a snapshot is a deck,
+`shareDeckOf`, which also drops a pile that names no folder.
+
+**`DeckRow` gained `sync_uid`** for this, the way `CollectionFolder` gained it for the first
+release: the deck editor's Share control (in `DeckEditorHeader`, the cabinets' own
+`ShareFolderMenu` with a `deck` target and no *Open* half) needs the key, and `null` is a deck
+that cannot be shared yet, never a fallback.
+
+**The two viewers draw it as a deck, read-only, Stacks first and switchable to Grid, Table and
+Text.** In the app, `features/share/SharedDeck.tsx` mounts the deck editor's **own** four views
+over rows `sharedDeckRows.ts` builds from the snapshot, and passes them **no `actions` and no
+`onSelect`** — the one prop every deck view's writes arrive through, and the card pane's every
+write — so the read-only guarantee is structural, as the binder's is; `readOnly.test.ts` holds
+that file to it and lists the renderers it may import. `tracksCollection` is `false`, because the
+owned counts are the publisher's. The public page cannot reach `features/`, so
+`apps/share/ShareDeck.tsx` draws the same four shapes from `components/` (a column of overlapping
+cards per pile, `ShareTile`'s wall, a table, a decklist), grouped by the deck's piles, by type or
+by mana value — the command zone first and the piles played beside the deck last, the editor's
+two rules.
+
+#### The deck's link preview
+
+A deck link unfurls as a deck: *"Commander deck · 100 cards · updated today"*, with **its
+commander's picture** as `og:image` (plus `og:image:alt`, `twitter:image` and
+`twitter:card` `summary_large_image`). The shell still reads one D1 row and no snapshot, so the
+two facts ride in the **metadata** the publish already posts — `format` and `image` — into two
+columns the Worker's first tracked migration adds,
+`infrastructure/share-worker/migrations/0001_deck-link-preview.sql` (additive, applied by the
+release's `share-deploy` before it deploys). `share::deck::preview_image` picks the picture off
+the document being uploaded — the active commander pile's first card, else the first card played
+in the deck — so the preview can only show a picture the share itself carries.
+
+⚠️ **The picture is a URL a publisher sent, rendered on a page every chat app fetches**, so
+`metaProblem` takes it only under `PREVIEW_IMAGE_ORIGIN` (`https://cards.scryfall.io/`, the host
+every `img` in a snapshot names) and under 500 characters, and `page.ts` escapes it like every
+other interpolation. A publisher cannot point strangers' unfurls at a host of their choosing. A
+binder and a wishlist send `null` for both and their cards are unchanged; a deck published before
+the columns existed previews as a plain *Deck* with no picture until its next *Update now*.
+
 ### The root arm, and the leak that sixteen green tests did not see
 
 The card read gates `e.folder_id IS NULL OR` on `folder_uid.is_none()` — the root's unfiled cards
@@ -590,9 +650,10 @@ like a binder's. `publicShare` reads `folder_uid` only to derive that kind from 
 (`null`, `wishlist:`, `wishlist:…`, anything else; see
 [issue #941](#issue-941--every-folder-kind-and-the-wishlist)) and drops the uid before the page
 module holds it. The shell also carries `og:site_name` and `twitter:card` `summary`. Still no
-`og:image`: the Worker has no image of its own to point at, and a card's Scryfall art would
-need the snapshot read the shell exists to avoid. The 410s and the 404 are unchanged — still no
-metadata at all.
+`og:image` **for a binder or a wishlist**: the Worker has no image of its own to point at, and a
+card's Scryfall art would need the snapshot read the shell exists to avoid. **A deck has one**
+(issue #1032) — see [the deck's preview](#the-decks-link-preview). The 410s and the 404 are
+unchanged — still no metadata at all.
 
 ⚠️ **`page.ts` interpolates a title and an owner's name that a reader typed, and there is no
 template engine.** One `esc()` — five characters, `&` first — covers every interpolation site,
@@ -1316,6 +1377,10 @@ branch acquires an unrelated red.
 | Path | Holds |
 | --- | --- |
 | `apps/desktop/src-tauri/src/share/snapshot.rs` | `ShareSnapshot`, the subtree read, the gzip, the three refusals |
+| `apps/desktop/src-tauri/src/share/deck.rs` | A deck's share — the `deck:` key, its piles and its three card facts (issue #1032) |
+| `apps/share/ShareDeck.tsx` | The public page's deck — Stacks, Grid, Table, Text |
+| `packages/ui/features/share/SharedDeck.tsx` | The in-app deck — the editor's own views, handed no writes |
+| `packages/ui/features/decks/deckShare.ts` | The deck's share key, and its Share control's target |
 | `apps/desktop/src-tauri/src/share/cache.rs` | `collection_shares` reads, writes and `reconcile` |
 | `apps/desktop/src-tauri/src/share/publish.rs` | The two-step upload, the sentences, and the viewer's bounded open |
 | `apps/desktop/src-tauri/src/share/commands.rs` | The five commands and `ShareRow` |

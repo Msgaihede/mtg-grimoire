@@ -125,9 +125,7 @@ export async function sweepLapsed(env: Env): Promise<void> {
   const move = env.DB.prepare(`UPDATE shares SET state = ? WHERE group_id = ? AND state = ?`);
   await env.DB.batch(
     [...groups].map((group) =>
-      serving.has(group)
-        ? move.bind(LIVE, group, LAPSED)
-        : move.bind(LAPSED, group, LIVE),
+      serving.has(group) ? move.bind(LIVE, group, LAPSED) : move.bind(LAPSED, group, LIVE),
     ),
   );
 }

@@ -9,9 +9,11 @@
  */
 import { describe, expect, it } from "vitest";
 import golden from "../../../apps/desktop/src-tauri/src/share/__golden__/snapshot.json?raw";
+import deckGolden from "../../../apps/desktop/src-tauri/src/share/__golden__/deck.json?raw";
 import {
   parseSnapshot,
   parseSnapshotValue,
+  shareDeckOf,
   SNAPSHOT_NOT_A_SNAPSHOT,
   SNAPSHOT_TOO_NEW,
   SNAPSHOT_VERSION,
@@ -205,5 +207,64 @@ describe("the value door", () => {
    */
   it("is what the text door delegates to", () => {
     expect(parseSnapshot(golden)).toEqual(parseSnapshotValue(JSON.parse(golden)));
+  });
+});
+
+/**
+ * A deck share (issue #1032) — `deck.json`, written by
+ * `share::tests::the_golden_deck_snapshot_is_what_the_writer_produces` and parsed here, so the
+ * deck half of the format is fenced the way the binder's is.
+ */
+describe("a shared deck", () => {
+  it("parses the deck golden the Rust writer produced", () => {
+    const s = parseSnapshot(deckGolden);
+    expect(s.v).toBe(SNAPSHOT_VERSION);
+    expect(s.title).toBe("Krenko's Goblins");
+    // A deck row has no condition, so the question is not claimed.
+    expect(s.fields).not.toContain("condition");
+    const deck = shareDeckOf(s);
+    expect(deck).not.toBeNull();
+    expect(deck?.format).toBe("Commander");
+    // Every pile is a folder too, named as the reader named it, so a viewer that predates decks
+    // draws one drawer per pile.
+    const names = deck?.piles.map((p) => s.folders.find((f) => f.uid === p.uid)?.name);
+    expect(names).toEqual(["Commander", "Burn"]);
+    expect(deck?.piles.map((p) => p.kind)).toEqual(["commander", "main"]);
+  });
+
+  it("carries the three facts a deck is read by on every card", () => {
+    const bolt = parseSnapshot(deckGolden).cards.find((c) => c.n === "Lightning Bolt");
+    expect(bolt).toMatchObject({ t: "Instant", mc: "{R}", mv: 1 });
+    expect(bolt?.c).toBeUndefined();
+  });
+
+  it("is no deck at all for a binder, whose document did not change", () => {
+    const s = parseSnapshot(golden);
+    expect(shareDeckOf(s)).toBeNull();
+    expect("deck" in (JSON.parse(golden) as object)).toBe(false);
+    for (const card of JSON.parse(golden).cards as Record<string, unknown>[]) {
+      expect(card.t).toBeUndefined();
+      expect(card.mc).toBeUndefined();
+      expect(card.mv).toBeUndefined();
+    }
+  });
+
+  it("reads a deck half it cannot draw as no deck, and drops a pile that names no folder", () => {
+    const s = parseSnapshot(deckGolden);
+    expect(shareDeckOf({ ...s, deck: "nonsense" as never })).toBeNull();
+    expect(shareDeckOf({ ...s, deck: { format: "x" } as never })).toBeNull();
+    const deck = shareDeckOf({
+      ...s,
+      deck: {
+        format: 7 as never,
+        piles: [
+          ...(s.deck?.piles ?? []),
+          { uid: "pile-elsewhere", kind: "main", active: true },
+          null as never,
+        ],
+      },
+    });
+    expect(deck?.format).toBe("");
+    expect(deck?.piles.map((p) => p.uid)).toEqual(s.deck?.piles.map((p) => p.uid));
   });
 });
