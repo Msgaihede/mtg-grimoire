@@ -65,6 +65,7 @@ const deckAddCard = vi.hoisted(() => vi.fn());
 const deckAddCardToOtherList = vi.hoisted(() => vi.fn());
 const deckMissingToWishlist = vi.hoisted(() => vi.fn());
 const deckPullPlan = vi.hoisted(() => vi.fn());
+const deckOwnedElsewhere = vi.hoisted(() => vi.fn());
 const deckPullFromCollection = vi.hoisted(() => vi.fn());
 // The shortfall's third answer, deck-wide: the read behind `Add missing to collection` and the
 // write that records the ticked copies. Like the pull's pair, the read is a **mounted** query
@@ -205,6 +206,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckAddCardToOtherList,
     deckMissingToWishlist,
     deckPullPlan,
+    deckOwnedElsewhere,
     deckPullFromCollection,
     deckMissingPlan,
     deckMissingToCollection,
@@ -974,6 +976,8 @@ beforeEach(() => {
   // rather than about the list inside it (`PullFromCollectionDialog.test.tsx` owns that), and
   // the empty state still draws the ✕, Cancel and Pull that the Tab sweep walks.
   deckPullPlan.mockReset().mockResolvedValue([]);
+  // Owned nowhere else — the figure's red, which is what every older case here expects.
+  deckOwnedElsewhere.mockReset().mockResolvedValue([]);
   deckPullFromCollection.mockReset().mockResolvedValue({ copies: 0, cards: 0 });
   // **The same empty plan, and the same reason it is not a failure**: a deck short only of
   // printings that have left the card database. Every test here is about the layer rather than
@@ -3485,6 +3489,36 @@ describe("DeckEditor", () => {
         .getByRole("button", { name: /^Lightning Bolt/ })
         .getAttribute("aria-label"),
     ).not.toMatch(/you own/i);
+  });
+
+  /**
+   * Issue #986: the missing figure is red when the reader owns the card nowhere else and gold
+   * when copies sit elsewhere in the collection — read once per deck from `deck_owned_elsewhere`.
+   */
+  it("colours the missing figure by whether the card is owned elsewhere", async () => {
+    const short = bolt({ quantity: 4, ownedQuantity: 1 });
+    deckGet.mockResolvedValue(detail({}, [short]));
+    deckOwnedElsewhere.mockResolvedValue([
+      {
+        oracleId: short.oracleId,
+        places: [{ folderId: 7, name: "Binder", kind: "user", quantity: 3 }],
+      },
+    ]);
+
+    await open();
+
+    await waitFor(() => expect(screen.getByText("1/4")).toHaveClass("text-accent"));
+    expect(deckOwnedElsewhere).toHaveBeenCalledWith(4);
+  });
+
+  it("leaves the missing figure red when the card is owned nowhere else", async () => {
+    deckGet.mockResolvedValue(detail({}, [bolt({ quantity: 4, ownedQuantity: 0 })]));
+
+    await open();
+
+    await waitFor(() => expect(screen.getByText("0/4")).toHaveAttribute("data-elsewhere", "none"));
+    expect(screen.getByText("0/4")).toHaveClass("text-destructive");
+    expect(deckOwnedElsewhere).toHaveBeenCalledWith(4);
   });
 
   /** Six cards is not a Modern deck, and the chip says so before it is opened. */

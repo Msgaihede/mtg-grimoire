@@ -1489,6 +1489,25 @@ export function useDeckCore(
 export type DeckCore = ReturnType<typeof useDeckCore>;
 
 /**
+ * Where the reader owns the cards this deck is short of, outside the deck's own group — what
+ * colours the missing figure on a deck card red (owned nowhere) or gold (owned elsewhere) and
+ * names the places in its tooltip (issue #986).
+ *
+ * **Keyed under the `["decks"]` root**, {@link usePullPlan}'s reason: every write `useDeck`
+ * invalidates can move a shortfall or a copy, so the answer is re-read with the deck. No variant
+ * and no marketplace in the key, for the same reasons — the command reads the live list only and
+ * prices nothing. `enabled` is the caller's: a virtual deck is refused by the command and has no
+ * figure to colour, and the theory list draws none either.
+ */
+export function useOwnedElsewhere(deckId: number | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ["decks", "ownedElsewhere", deckId],
+    queryFn: () => ipc.deckOwnedElsewhere(opened(deckId)),
+    enabled: enabled && deckId !== null,
+  });
+}
+
+/**
  * What the deck is short of that the reader **already owns** — the read half of the pull, and
  * the whole of what the dialog draws.
  *

@@ -447,6 +447,7 @@ pub fn run() {
             // the pair above's reason: `generate_handler!` names a command after the last
             // path segment, so these are `deck_pull_plan` and `deck_pull_from_collection`.
             deck_pull::commands::deck_pull_plan,
+            deck_pull::commands::deck_owned_elsewhere,
             deck_pull::commands::deck_pull_from_collection,
             // The fourth crossing, and the first that *creates* copies rather than moving
             // them — see `deck_quick_add`. Same registration shape as the pair above:

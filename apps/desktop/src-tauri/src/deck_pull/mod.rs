@@ -7,7 +7,7 @@
 
 pub use grimoire_core::deck_pull::*;
 
-/// The two commands, in a module of their own so the wire names and the crate's names can each
+/// The three commands, in a module of their own so the wire names and the crate's names can each
 /// read well — [`crate::collection_alloc::commands`]' shape.
 ///
 /// `generate_handler!` takes the **last segment** of the path as the command name, so these
@@ -15,7 +15,10 @@ pub use grimoire_core::deck_pull::*;
 /// invokes — while the crate says [`super::plan`] and [`super::from_collection`], which are
 /// module plus verb and do not stutter.
 pub mod commands {
-    use super::{from_collection as pull, plan as read_plan, Pick, PullOutcome, PullRow};
+    use super::{
+        elsewhere as read_elsewhere, from_collection as pull, plan as read_plan, ElsewhereRow,
+        Pick, PullOutcome, PullRow,
+    };
     use crate::sync::AppState;
     use std::sync::Arc;
 
@@ -35,6 +38,22 @@ pub mod commands {
         })
         .await
         .map_err(|e| format!("the pull could not be planned: {e}"))?
+    }
+
+    /// [`super::elsewhere`]'s command — where the reader owns the cards this deck is short of,
+    /// outside its own group, which colours the editor's missing figure (issue #986).
+    /// **Read-only** connection, and no marketplace, for [`deck_pull_plan`]'s reason.
+    #[tauri::command]
+    pub async fn deck_owned_elsewhere(
+        state: tauri::State<'_, Arc<AppState>>,
+        deck_id: i64,
+    ) -> Result<Vec<ElsewhereRow>, String> {
+        let state = state.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            read_elsewhere(&crate::sync::lock_db_read(&state), deck_id)
+        })
+        .await
+        .map_err(|e| format!("where else you own these cards could not be read: {e}"))?
     }
 
     /// **[`crate::collection_source::with_write_owned`] and not bare `with_write`**: this moves

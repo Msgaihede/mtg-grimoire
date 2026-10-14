@@ -190,6 +190,8 @@ import type {
   DeckPullOutcome,
   DeckPullPick,
   DeckPullRow,
+  DeckOwnedElsewhere,
+  DeckElsewherePlace,
   DeckQuickAddOutcome,
   DeckQuickAddWish,
   DeckRow,
@@ -11751,6 +11753,65 @@ export function readHandlers(db: FakeDb) {
         });
       }
       return [...folded.values()].filter((row) => row.candidates.length > 0);
+    },
+
+    /**
+     * `deck_pull::elsewhere` — where the reader owns the cards the **live** list is short of,
+     * outside this deck's own group (issue #986). The shortfall is {@link deck_pull_plan}'s fold
+     * read off `deck_get`, folded once more on to the oracle card; every printing and finish of
+     * that card counts, and every folder but this deck's group — another deck's included, named
+     * by its deck. Root, then the reader's folders, then other decks, then `Recently removed`.
+     * A card owned nowhere else is left out; a virtual deck is refused, {@link deck_pull_plan}'s
+     * fence.
+     */
+    deck_owned_elsewhere: (args: { deckId: number }): DeckOwnedElsewhere[] => {
+      if (isVirtual(db, args.deckId)) throw refuse(VIRTUAL_HOLDS_NOTHING);
+      const detail = readHandlers(db).deck_get({ id: args.deckId, variant: LIVE });
+      if (!detail) throw refuse(DECK_GONE);
+      const group = deckGroup(db, args.deckId)?.id ?? null;
+      const rank = (p: DeckElsewherePlace) =>
+        p.kind === null
+          ? 0
+          : p.kind === COLLECTION_REMOVED_KIND
+            ? 3
+            : p.kind === COLLECTION_DECK_KIND
+              ? 2
+              : 1;
+      const order = (p: DeckElsewherePlace) =>
+        p.folderId === null ? 0 : (collectionFolderById(db, p.folderId)?.sortOrder ?? 0);
+      const asked = new Set<string>();
+      const rows: DeckOwnedElsewhere[] = [];
+      for (const row of detail.cards) {
+        if (!row.categoryActive || row.quantity - row.ownedQuantity <= 0) continue;
+        const oracleId = cardById(db, row.cardId)?.oracleId ?? null;
+        if (oracleId === null || asked.has(oracleId)) continue;
+        asked.add(oracleId);
+        const byFolder = new Map<number | null, DeckElsewherePlace>();
+        for (const e of db.collectionEntries) {
+          if (e.quantity <= 0 || (e.folderId !== null && e.folderId === group)) continue;
+          if (cardById(db, e.cardId)?.oracleId !== oracleId) continue;
+          const found = byFolder.get(e.folderId);
+          if (found) {
+            found.quantity += e.quantity;
+            continue;
+          }
+          const folder = e.folderId === null ? undefined : collectionFolderById(db, e.folderId);
+          const deck =
+            folder?.deckId == null ? undefined : db.decks.find((d) => d.id === folder.deckId);
+          byFolder.set(e.folderId, {
+            folderId: e.folderId,
+            name: deck?.name ?? folder?.name ?? null,
+            kind: folder?.kind ?? null,
+            quantity: e.quantity,
+          });
+        }
+        const places = [...byFolder.values()].sort(
+          (a, b) =>
+            rank(a) - rank(b) || order(a) - order(b) || (a.folderId ?? 0) - (b.folderId ?? 0),
+        );
+        if (places.length > 0) rows.push({ oracleId, places });
+      }
+      return rows;
     },
 
     /**

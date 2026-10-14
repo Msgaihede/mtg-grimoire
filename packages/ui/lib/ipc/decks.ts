@@ -433,6 +433,34 @@ export interface DeckPullOutcome {
 }
 
 /**
+ * One card the live list is short of, and where else the reader owns it — `deck_pull::ElsewhereRow`,
+ * what {@link ipc.deckOwnedElsewhere} answers a row of (issue #986).
+ *
+ * **The grain is the oracle card, one coarser than {@link DeckPullRow}'s**: this is "do I own the
+ * card at all, and where?", so every printing and finish counts. A card owned nowhere else is
+ * left out, so a missing key is the whole of "you own none".
+ */
+export interface DeckOwnedElsewhere {
+  oracleId: string;
+  /** Root first, then the reader's folders, then other decks, then `Recently removed`. Never
+   *  empty, and never this deck's own group — what sits there is already in the figure. */
+  places: DeckElsewherePlace[];
+}
+
+/** One place holding copies of a card — `deck_pull::ElsewherePlace`. */
+export interface DeckElsewherePlace {
+  /** The folder, or `null` at the root. */
+  folderId: number | null;
+  /** The folder's name — a deck's group is named by its deck — or `null` at the root, which the
+   *  UI words. */
+  name: string | null;
+  /** `"user"`, `"deck"` or `"removed"`; `null` at the root. */
+  kind: string | null;
+  /** Copies held there, every printing and finish of the card together. */
+  quantity: number;
+}
+
+/**
  * One wishlist line a quick add could take copies off — `deck_quick_add::QuickAddWish`, the whole
  * of what {@link ipc.deckQuickAddWishes} answers.
  *
@@ -3945,6 +3973,15 @@ export const deckCommands = {
    * a deck whose shortfall is all cards the reader has never owned, are both zero rows.
    */
   deckPullPlan: (deckId: number) => invoke<DeckPullRow[]>("deck_pull_plan", { deckId }),
+  /**
+   * Where the reader owns the cards this deck is short of, **outside the deck's own group** —
+   * the read that colours the editor's missing figure and names the places in its tooltip
+   * (issue #986). Every other folder counts, another deck's included: the question is whether the
+   * card is owned, not whether it is free to pull. Live list only, no marketplace — the pull
+   * plan's reasons. A virtual deck is refused in words; the editor never asks for one.
+   */
+  deckOwnedElsewhere: (deckId: number) =>
+    invoke<DeckOwnedElsewhere[]>("deck_owned_elsewhere", { deckId }),
   /**
    * Move owned copies into this deck's group, filling holes the list already has.
    *

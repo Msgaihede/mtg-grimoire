@@ -6,7 +6,6 @@
  */
 import { memo, useRef } from "react";
 import { CardChin } from "@/components/CardChin";
-import { useTooltip } from "@/components/tooltip/useTooltip";
 import { useShownFace } from "@/features/card/shownFace";
 import { atLeast, cardScaleVars, scaled } from "@/lib/cardZoom";
 import { DROP_MARK_ROOM, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
@@ -52,6 +51,7 @@ import { GroupHeader } from "./GroupHeader";
 import { sameDrawnProps } from "./sameDrawn";
 import { hasTokenPile, TokenGridPile, type TokenPile } from "./TokenPile";
 import { TOKEN_ITEM, tokenRailSlot, withTokenPile } from "./tokenRail";
+import { ShortfallFigure } from "../ShortfallFigure";
 
 /**
  * A tile at 1× and the gutter around it — what is left of the wall's geometry, and both of these
@@ -449,7 +449,6 @@ function GridCard({
    *  and the chin follow from that width through `deckCardScale`. */
   zoom: number;
 }) {
-  const tip = useTooltip();
   const dragRef = useDeckCardDrag(card, actions?.drop !== undefined, actions?.groupDrag);
   // {@link deckCardShort}, which is also what `deckCardName` says this card's shortage in words
   // from — an inactive pile and a virtual deck each read 0 owned for a reason that is not an
@@ -628,21 +627,9 @@ function GridCard({
         //
         // `aria-hidden` even out here, outside the button: the button beside it already says the
         // shortage in words, and a screen reader should not hear "1 slash 2" as well.
-        extra={
-          short ? (
-            <span
-              aria-hidden="true"
-              // Redundant with `deckCardName`'s own "you own N of M" clause — the button beside
-              // this figure already says the shortage in words.
-              {...tip(`You own ${card.ownedQuantity} of the ${card.quantity} this deck wants`, {
-                describes: false,
-              })}
-              className="shrink-0 tabular-nums text-destructive"
-            >
-              {card.ownedQuantity}/{card.quantity}
-            </span>
-          ) : undefined
-        }
+        // Red when the reader owns the card nowhere else, gold when copies sit elsewhere in the
+        // collection — `ShortfallFigure`, issue #986.
+        extra={short ? <ShortfallFigure card={card} /> : undefined}
       />
 
       {/* **Over the card, never in it** — the stacked card's column, at the stacked card's offset.

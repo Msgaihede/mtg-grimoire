@@ -2,7 +2,6 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { motion, useReducedMotion, type Transition } from "motion/react";
 import { CardChin } from "@/components/CardChin";
 import { useMenuOpener } from "@/components/menu/useContextMenu";
-import { useTooltip } from "@/components/tooltip/useTooltip";
 import { useShownFace } from "@/features/card/shownFace";
 import {
   cardScaleVars,
@@ -44,6 +43,7 @@ import { theoryMatchMark, type TheoryMark, type TheoryPlan } from "./theoryMatch
 import { ruleBreak, violationsFor } from "./violations";
 import { sameDrawnProps } from "./views/sameDrawn";
 import type { ValidationIssue } from "./validation/types";
+import { ShortfallFigure } from "./ShortfallFigure";
 
 /**
  * The stack's geometry, and it is arithmetic rather than taste — the numbers below have to
@@ -920,7 +920,6 @@ function StackedCard({
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
 }) {
-  const tip = useTooltip();
   const dragRef = useDeckCardDrag(card, actions?.drop !== undefined, actions?.groupDrag);
   const finish = playedFinish(card.finish, card.finishes);
   // What that copy is *called*, if anything — the same reading the deck's other three views
@@ -1104,21 +1103,9 @@ function StackedCard({
         //
         // `aria-hidden` even out here, outside the button: the button beside it already says the
         // shortage in words, and a screen reader should not hear "1 slash 2" as well.
-        extra={
-          short ? (
-            <span
-              aria-hidden="true"
-              // Redundant with `deckCardName`'s own "you own N of M" clause — the button beside
-              // this figure already says the shortage in words.
-              {...tip(`You own ${card.ownedQuantity} of the ${card.quantity} this deck wants`, {
-                describes: false,
-              })}
-              className="shrink-0 tabular-nums text-destructive"
-            >
-              {card.ownedQuantity}/{card.quantity}
-            </span>
-          ) : undefined
-        }
+        // Red when the reader owns the card nowhere else, gold when copies sit elsewhere in the
+        // collection — `ShortfallFigure`, issue #986.
+        extra={short ? <ShortfallFigure card={card} /> : undefined}
       />
 
       {/* **Over the card, never in it.** An absolutely positioned column takes no height, so a
