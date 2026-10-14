@@ -1188,6 +1188,7 @@ mod tests {
             // A cleared date input is a blank, which is no bound; a date is `YYYY-MM-DD`.
             released_from: Some("  ".to_owned()),
             released_to: Some("2022-07-08".to_owned()),
+            exclude_promos: false,
         };
         assert_eq!(
             labelled(&state, &sent).expect("a label").scanner.filters,
@@ -1284,6 +1285,7 @@ mod tests {
                 sets: (0..200).map(|n| format!("set{n:05}")).collect(),
                 released_from: Some("1993-08-05".to_owned()),
                 released_to: Some("2026-10-11".to_owned()),
+                exclude_promos: false,
             }),
         };
         label.run = vec![tidy_frame(&worst, widest); MAX_RUN_FRAMES];

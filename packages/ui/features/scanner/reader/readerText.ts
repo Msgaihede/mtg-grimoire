@@ -50,7 +50,30 @@ export const CAMERA_CHOICE_NOTE =
   "Switching restarts the camera. Your choice is remembered on this device.";
 
 /** The unrestricted filter — what *Clear* sets, spelled once for both Scanner surfaces. */
-export const NO_FILTERS: ScanFilters = { sets: [], released_from: null, released_to: null };
+export const NO_FILTERS: ScanFilters = {
+  sets: [],
+  released_from: null,
+  released_to: null,
+  exclude_promos: false,
+};
+
+/** The promo toggle's name, beside the set picker on both Scanner surfaces. */
+export const SKIP_PROMOS = "Skip promos";
+
+/** What the promo toggle does, under it on both surfaces. */
+export const SKIP_PROMOS_NOTE =
+  "Never match a promo printing — prerelease stamps, promo packs, buy-a-box and the like.";
+
+/** Whether any filter is in force — what lights the desktop's Filters trigger. A cleared date
+ *  field reports `""`, which is no bound. */
+export function filtering(filters: ScanFilters): boolean {
+  return (
+    filters.sets.length > 0 ||
+    Boolean(filters.released_from) ||
+    Boolean(filters.released_to) ||
+    filters.exclude_promos === true
+  );
+}
 
 /**
  * The card the tray just took, as the strip names it — `null` until one has landed.
@@ -270,7 +293,7 @@ function datesPart(from: string | null, to: string | null): string | null {
 
 /**
  * What the Filters button says: `Any set`, `HOB, LTR`, `HOB · from 2023-06-23`,
- * `3 sets · 2020-01-01 – 2024-12-31`.
+ * `3 sets · 2020-01-01 – 2024-12-31`, `Any set · no promos`.
  *
  * **Two codes and then a count**, because the trigger shares a wrapping row with three other
  * controls and a reader scanning a pile rarely narrows to more than a pair; past two, the codes
@@ -280,7 +303,7 @@ function datesPart(from: string | null, to: string | null): string | null {
 export function filterSummary(filters: ScanFilters): string {
   const from = filters.released_from === "" ? null : filters.released_from;
   const to = filters.released_to === "" ? null : filters.released_to;
-  const dates = datesPart(from, to);
-  const sets = setsPart(filters.sets);
-  return dates === null ? sets : `${sets} · ${dates}`;
+  const parts = [setsPart(filters.sets), datesPart(from, to)];
+  if (filters.exclude_promos === true) parts.push("no promos");
+  return parts.filter((p) => p !== null).join(" · ");
 }

@@ -26295,7 +26295,11 @@ export function scannerHandlers(db: FakeDb) {
      */
     scanner_set_filters: (args: { filters: ScanFilters }): void => {
       const f = args.filters;
-      const empty = f.sets.length === 0 && f.released_from === null && f.released_to === null;
+      const empty =
+        f.sets.length === 0 &&
+        f.released_from === null &&
+        f.released_to === null &&
+        f.exclude_promos !== true;
       if (empty) return;
       if (db.fault === "scannerMissing") throw refuse(FILTERS_NEED_NAMES);
       if (f.sets.some((s) => s.toLowerCase() === "zzz")) throw refuse(NO_PRINTING_MATCHES);

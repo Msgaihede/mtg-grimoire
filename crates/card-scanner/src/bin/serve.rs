@@ -140,7 +140,7 @@ fn options_from_query(url: &str) -> FrameOptions {
     }
 }
 
-/// The filters, from `/filters?sets=hob,ltr&from=YYYY-MM-DD&to=YYYY-MM-DD`.
+/// The filters, from `/filters?sets=hob,ltr&from=YYYY-MM-DD&to=YYYY-MM-DD&promos=off`.
 ///
 /// An empty or absent value is no bound, which is what a cleared field sends.
 fn filters_from_query(url: &str) -> ScanFilters {
@@ -155,6 +155,7 @@ fn filters_from_query(url: &str) -> ScanFilters {
             .unwrap_or_default(),
         released_from: bound("from"),
         released_to: bound("to"),
+        exclude_promos: q.get("promos").is_some_and(|v| v.trim() == "off"),
     }
 }
 

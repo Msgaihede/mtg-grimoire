@@ -54,7 +54,12 @@ function hasUnsavedPrefs(qc: QueryClient): boolean {
 registerUnsavedCheck(PREFS_KEY, hasUnsavedPrefs);
 
 /** The unrestricted filter: what a session holds before anything has been pushed to it. */
-const NO_FILTERS: ScanFilters = { sets: [], released_from: null, released_to: null };
+const NO_FILTERS: ScanFilters = {
+  sets: [],
+  released_from: null,
+  released_to: null,
+  exclude_promos: false,
+};
 
 /**
  * What the page draws before the row has loaded — `ScannerPrefs::default()` in `scanner.rs`.

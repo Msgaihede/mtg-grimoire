@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ScannerChoice, ScannerResolution, ScannerTracked, ScannerVerdict } from "@/lib/ipc";
 import { VERDICTS } from "../fixtures";
-import { filterSummary, matchStrip, type LastAdded } from "./readerText";
+import { filtering, filterSummary, matchStrip, NO_FILTERS, type LastAdded } from "./readerText";
 
 /**
  * A resolve's outcome on its own, with nothing else in it — every rung but the ambiguous one reads
@@ -286,5 +286,25 @@ describe("filterSummary", () => {
 
   it("reads a cleared date field as no date", () => {
     expect(filterSummary({ sets: [], released_from: "", released_to: "" })).toBe("Any set");
+  });
+
+  it("says skipped promos last, and says nothing of promos admitted or unspoken", () => {
+    const base = { sets: ["hob"], released_from: "2023-06-23", released_to: null };
+    expect(filterSummary({ ...base, exclude_promos: true })).toBe(
+      "HOB · from 2023-06-23 · no promos",
+    );
+    expect(filterSummary({ ...NO_FILTERS, exclude_promos: true })).toBe("Any set · no promos");
+    expect(filterSummary({ ...base, exclude_promos: false })).toBe("HOB · from 2023-06-23");
+    expect(filterSummary(base)).toBe("HOB · from 2023-06-23");
+  });
+});
+
+describe("filtering", () => {
+  it("is on for any one filter, the promo switch alone among them", () => {
+    expect(filtering(NO_FILTERS)).toBe(false);
+    expect(filtering({ sets: [], released_from: "", released_to: "" })).toBe(false);
+    expect(filtering({ ...NO_FILTERS, exclude_promos: true })).toBe(true);
+    expect(filtering({ ...NO_FILTERS, sets: ["hob"] })).toBe(true);
+    expect(filtering({ ...NO_FILTERS, released_to: "2024-12-31" })).toBe(true);
   });
 });

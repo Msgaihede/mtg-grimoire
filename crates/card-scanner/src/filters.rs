@@ -1,4 +1,5 @@
-//! What a reader can narrow a scan to: sets, and a release-date range. Nothing else.
+//! What a reader can narrow a scan to: sets, a release-date range, and whether promos count.
+//! Nothing else.
 //!
 //! **Language is deliberately absent**, not merely unimplemented — see the design's decision 7
 //! (`docs/superpowers/specs/2026-09-15-scanner-modes-and-shipping-design.md` §3). The bundle
@@ -22,6 +23,11 @@ pub struct ScanFilters {
     pub released_from: Option<String>,
     /// `YYYY-MM-DD`, inclusive.
     pub released_to: Option<String>,
+    /// Leave out every printing the corpus marks a promo (Scryfall's `promo`) — prerelease
+    /// stamps, promo packs, buy-a-box and the rest. A promo shares its artwork with the
+    /// printing it promotes often enough that the descriptor reads one for the other, and a
+    /// reader sorting a box of boosters never wants the promo answered.
+    pub exclude_promos: bool,
 }
 
 impl ScanFilters {
@@ -35,12 +41,19 @@ impl ScanFilters {
         self.set_codes().next().is_none()
             && bound(&self.released_from).is_none()
             && bound(&self.released_to).is_none()
+            && !self.exclude_promos
     }
 
     /// Does this printing pass? Dates compare lexicographically, which is chronological for
     /// `YYYY-MM-DD`. A printing with no release date fails any date bound — it cannot be shown
     /// to lie inside the range.
-    pub fn permits(&self, label: &Label) -> bool {
+    ///
+    /// `promo` is whether the corpus marks the printing a promo — a fact the reference keeps
+    /// beside the label ([`crate::reference::Reference::is_promo`]), not on it.
+    pub fn permits(&self, label: &Label, promo: bool) -> bool {
+        if self.exclude_promos && promo {
+            return false;
+        }
         let mut sets = self.set_codes().peekable();
         if sets.peek().is_some() && !sets.any(|s| s.eq_ignore_ascii_case(&label.set)) {
             return false;
@@ -77,6 +90,7 @@ impl ScanFilters {
         codes(self) == codes(other)
             && bound(&self.released_from) == bound(&other.released_from)
             && bound(&self.released_to) == bound(&other.released_to)
+            && self.exclude_promos == other.exclude_promos
     }
 
     fn set_codes(&self) -> impl Iterator<Item = &str> {
@@ -121,9 +135,11 @@ mod tests {
             sets: vec![" ".into()],
             released_from: Some(String::new()),
             released_to: Some(String::new()),
+            exclude_promos: false,
         };
         assert!(f.is_empty());
-        assert!(f.permits(&label("ltr", "2023-06-23")));
+        assert!(f.permits(&label("ltr", "2023-06-23"), false));
+        assert!(f.permits(&label("ltr", "2023-06-23"), true));
     }
 
     #[test]
@@ -132,23 +148,31 @@ mod tests {
             sets: vec!["hob".into(), "ltr".into()],
             released_from: Some("2023-01-01".into()),
             released_to: None,
+            exclude_promos: false,
         };
         let respelled = ScanFilters {
             sets: vec![" LTR".into(), "".into(), "Hob ".into(), "hob".into()],
             released_from: Some(" 2023-01-01 ".into()),
             released_to: Some(String::new()),
+            exclude_promos: false,
         };
         assert!(hob.same_as(&respelled));
         assert!(ScanFilters::default().same_as(&ScanFilters {
             sets: vec![" ".into()],
             released_from: Some(String::new()),
             released_to: None,
+            exclude_promos: false,
         }));
 
         let other_set = ScanFilters { sets: vec!["hob".into()], ..hob.clone() };
         assert!(!hob.same_as(&other_set));
         let other_date = ScanFilters { released_to: Some("2024-01-01".into()), ..hob.clone() };
         assert!(!hob.same_as(&other_date));
+        let no_promos = ScanFilters {
+            exclude_promos: true,
+            ..hob.clone()
+        };
+        assert!(!hob.same_as(&no_promos));
         assert!(!hob.same_as(&ScanFilters::default()));
     }
 
@@ -159,11 +183,37 @@ mod tests {
             sets: vec!["HOB".into()],
             ..Default::default()
         };
-        assert!(by_set.permits(&undated));
+        assert!(by_set.permits(&undated, false));
         let by_date = ScanFilters {
             released_to: Some("2030-01-01".into()),
             ..Default::default()
         };
-        assert!(!by_date.permits(&undated));
+        assert!(!by_date.permits(&undated, false));
+    }
+
+    #[test]
+    fn excluding_promos_is_a_filter_of_its_own_and_leaves_the_rest_alone() {
+        let f: ScanFilters = serde_json::from_str(r#"{"exclude_promos":true}"#).expect("parse");
+        assert!(
+            !f.is_empty(),
+            "the toggle alone is a filter — it must leave the fast path"
+        );
+        let ltr = label("ltr", "2023-06-23");
+        assert!(f.permits(&ltr, false));
+        assert!(!f.permits(&ltr, true));
+        // With a set: a promo of an admitted set is still out, a non-promo of another set too.
+        let both = ScanFilters {
+            sets: vec!["ltr".into()],
+            ..f.clone()
+        };
+        assert!(both.permits(&ltr, false));
+        assert!(!both.permits(&ltr, true));
+        assert!(!both.permits(&label("hob", "2023-06-23"), false));
+        // Off, a promo is any printing.
+        assert!(ScanFilters {
+            exclude_promos: false,
+            ..both
+        }
+        .permits(&ltr, true));
     }
 }

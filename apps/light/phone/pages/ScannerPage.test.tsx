@@ -1173,7 +1173,7 @@ describe("sending a scan from the Scanner page", () => {
     await narrowTo("2020-01-01");
     expect(pushed).toEqual([
       DEFAULT_SCANNER_PREFS.filters,
-      { sets: [], released_from: "2020-01-01", released_to: null },
+      { sets: [], released_from: "2020-01-01", released_to: null, exclude_promos: false },
     ]);
 
     const { dialog } = await opened(cards);
@@ -1231,6 +1231,7 @@ describe("sending a scan from the Scanner page", () => {
           sets: [],
           released_from: "2020-01-01",
           released_to: null,
+          exclude_promos: false,
         }),
       SETTLE,
     );
