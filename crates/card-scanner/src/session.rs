@@ -3486,7 +3486,10 @@ mod tests {
             v = locked_frame(&mut s, &card);
         }
         let res = v.resolution.as_ref().expect("the vote freeze held back the next stretch");
-        assert_eq!(res.outcome, Outcome::Resolved, "{:?}", res.tiers);
+        // A choice of one, not a resolution: the entry sits just inside the gate by construction,
+        // past `EXACT_ALONE_DISTANCE`. What matters here is that the stretch decided.
+        assert_eq!(res.outcome, Outcome::Ambiguous, "{:?}", res.tiers);
+        assert_eq!(res.choices.len(), 1, "{:?}", res.choices);
         assert_eq!(v.decision_seq, 1);
         assert!(v.decision.is_some());
         for _ in 0..10 {

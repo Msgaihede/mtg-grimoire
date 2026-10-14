@@ -26,6 +26,21 @@ pub const EXACT_MARGIN_BITS: u32 = 6;
 /// The longest list an ambiguous outcome reports. A picker longer than this is not a choice
 /// anybody makes.
 pub const EXACT_MAX_CHOICES: usize = 12;
+/// The furthest a lone survivor only the hash vouches for may be, normalized, and still resolve
+/// alone. Further, out towards the gate, it is offered as a choice of one that the reader confirms.
+///
+/// **It exists for one failure.** The hash finds whatever card sits nearest a crop that is not
+/// the card, just inside the gate and with nothing else inside it to rank against — in a binder,
+/// where the card's own edge is often no contour at all, the text box or the art window every
+/// frame alike. Readers' scans, 2026-10-14: Weapons Manufacturing resolved alone as Island at
+/// 0.293, Cauldron of Essence as Tsunami at 0.285, Gandalf, Spark Starter as an artist's
+/// biography card at 0.297. The lone answers the hash alone got right sat at 0.152 and 0.156 in
+/// those scans, and at most 0.234 over the synthetic evaluation's 361 (plain, sleeved, stacked);
+/// 0.25 is between. **Set on three failures, not swept**: the replay's corpus is what should move
+/// it as it grows. Card-likeness was tried first and does not separate them — the evaluation's
+/// right answers went as low as 0.04, and a floor that caught the failures held back one right
+/// answer in five.
+pub const EXACT_ALONE_DISTANCE: f32 = 0.25;
 
 type Id = [u8; ID_LEN];
 
@@ -315,6 +330,8 @@ pub fn resolve(
         (true, None) => Vec::new(),
     };
     let fitted = r.collector_among(&collector_raw, &standing);
+    // Whether the collector line chose the printing, which vouches for it as the title does.
+    let mut pinned = false;
     let fits = |printing: Id| {
         let shown = named(&printing).map_or_else(|| format_uuid(&printing), |l| l.display());
         format!("read \"{collector_raw}\" fits {shown}")
@@ -323,6 +340,7 @@ pub fn resolve(
         None => match fitted {
             Some(printing) => {
                 survivors = vec![printing];
+                pinned = true;
                 fits(printing)
             }
             None if collector_raw.is_empty() => "no read".to_string(),
@@ -372,12 +390,14 @@ pub fn resolve(
             match (conflict, fitted) {
                 (None, _) => {
                     survivors = vec![printing];
+                    pinned = true;
                     let shown =
                         named(&printing).map_or_else(|| format_uuid(&printing), |l| l.display());
                     format!("{at} → {shown}")
                 }
                 (Some(conflict), Some(fit)) => {
                     survivors = vec![fit];
+                    pinned = true;
                     format!("{conflict}; {}", fits(fit))
                 }
                 (Some(conflict), None) => conflict,
@@ -434,10 +454,25 @@ pub fn resolve(
     tiers.push(tier("re_rank", survivors.len(), detail));
 
     // ---- 5 classifier ----------------------------------------------------------------------
-    tiers.push(tier("classifier", survivors.len(), "not implemented"));
+    // **A lone survivor only the hash vouches for, and only just, is the reader's to confirm**
+    // ([`EXACT_ALONE_DISTANCE`]). It is still the answer offered — as a choice of one.
+    let far = survivors
+        .first()
+        .and_then(|p| best.get(p))
+        .copied()
+        .filter(|d| *d > EXACT_ALONE_DISTANCE);
+    let unvouched = survivors.len() == 1 && title_cards.is_empty() && !pinned && far.is_some();
+    let detail = match far {
+        Some(d) if unvouched => {
+            format!("not implemented; the hash alone, at {d:.3} — the reader confirms")
+        }
+        _ => "not implemented".to_string(),
+    };
+    tiers.push(tier("classifier", survivors.len(), detail));
 
     let outcome = match survivors.len() {
         0 => Outcome::NotFound,
+        1 if unvouched => Outcome::Ambiguous,
         1 => Outcome::Resolved,
         _ => Outcome::Ambiguous,
     };
@@ -1124,6 +1159,42 @@ mod tests {
         assert_eq!(v.tiers[0].survivors, 8);
         assert_eq!(v.tiers[5].detail, "not implemented");
         assert!(v.elapsed_ms >= 0.0);
+    }
+
+    #[test]
+    fn a_lone_survivor_the_hash_barely_reaches_is_the_readers_to_confirm() {
+        // Readers' scans, 2026-10-14: Weapons Manufacturing EOE 168 in a binder, rectified from
+        // its text box alone, resolved alone as Island at 0.293; Cauldron of Essence SOS 179,
+        // rectified from its art window, as Tsunami at 0.285 — each the only printing inside the
+        // gate, and the hash the only evidence.
+        let (up, down) = (img(5), img(99));
+        let far = (EXACT_ALONE_DISTANCE * 256.0).ceil() as u32 + 2;
+        let r = bits_away(&[far]);
+        let v = resolve(&r, &Mask::all(), &burst(&up, &down), &NoReaders, GATE);
+        assert_eq!(v.tiers[4].survivors, 1, "the premise: one inside the gate: {:?}", v.tiers);
+        assert_eq!(v.outcome, Outcome::Ambiguous, "{:?}", v.tiers);
+        assert_eq!(ids(&v), [format_uuid(&id(1))], "the survivor is still offered");
+        assert!(v.tiers[5].detail.contains("the reader confirms"), "says why: {:?}", v.tiers[5]);
+
+        // Within the distance, the hash alone is enough.
+        let near = (EXACT_ALONE_DISTANCE * 256.0).floor() as u32 - 2;
+        let r = bits_away(&[near]);
+        let v = resolve(&r, &Mask::all(), &burst(&up, &down), &NoReaders, GATE);
+        assert_eq!(v.outcome, Outcome::Resolved, "{:?}", v.tiers);
+        assert_eq!(v.tiers[5].detail, "not implemented");
+    }
+
+    #[test]
+    fn a_reader_vouches_for_a_lone_survivor_the_hash_barely_reaches() {
+        // A title or a collector line read off the card is evidence the hash is not, so a far
+        // distance does not hold back what a reader named.
+        let (up, down) = (img(5), img(99));
+        let far = (EXACT_ALONE_DISTANCE * 256.0).ceil() as u32 + 2;
+        let r = bits_away(&[far]);
+        let v = resolve(&r, &Mask::all(), &burst(&up, &down), &reads(Some("card 0"), &[]), GATE);
+        assert_eq!(v.outcome, Outcome::Resolved, "a title: {:?}", v.tiers);
+        let v = resolve(&r, &Mask::all(), &burst(&up, &down), &reads(None, &[("hob", "1")]), GATE);
+        assert_eq!(v.outcome, Outcome::Resolved, "a collector line: {:?}", v.tiers);
     }
 
     #[test]

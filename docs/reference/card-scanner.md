@@ -3116,10 +3116,35 @@ before and records a `detail` in words.
 | 2 `title` | read the most card-like view, and the next only on no read | **exact read** (0 edits): every permitted printing of that card, whether or not tier 1 found it — the foil rescue. **Corrected read** (≥ 1 edit): only the tier-1 survivors that are that card; if none are, the read is **ignored** (`… not among survivors — ignored`); if tier 1 found nothing at all, it replaces, bounded by the lookup's edit budget. No read, or a read naming no card: unchanged |
 | 3 `collector` | read the collector line the same way | a resolved printing pins itself **only if** its card is among the survivors **and** it is the card the title settled on — or, with no title, a card whose nearest surviving printing is less than `EXACT_MARGIN_BITS` (6) behind the nearest card. Otherwise a `conflict: …` detail naming why (`not among survivors`, `not the card the title read`, `N bits behind the nearest card`, `which has no distance`) and survivors unchanged |
 | 4 `re_rank` | best distance per survivor; a survivor a name read brought in is scored by a search restricted to the survivors | the best alone if it leads the second by ≥ 6 bits; otherwise every survivor less than 6 bits behind the best |
-| 5 `classifier` | the trait slot | unchanged (`not implemented`) |
+| 5 `classifier` | the trait slot | unchanged (`not implemented`; with the note below when it holds a lone survivor back) |
 
 The outcome is `resolved` for one survivor, `ambiguous` for several (best first, reported to
-`EXACT_MAX_CHOICES`, 12), `not_found` for none.
+`EXACT_MAX_CHOICES`, 12), `not_found` for none — **and `ambiguous`, a choice of one, for a lone
+survivor that only the hash vouches for, and only just**: no title settled the card, no collector
+line pinned or fitted the printing, and its distance is past `EXACT_ALONE_DISTANCE` (0.25, against
+the gate's 0.30). The `classifier` detail then says so, with the distance. The reader confirms it in
+the tray, as for any ambiguous row.
+
+**It is mostly for binders.** There the card's own outer edge is often no contour at all — a black border
+on the page's dark backing, or an edge welded to the pocket's seam, which runs off the frame and is
+refused with it (`touches_border`) — so the only quad is the text box or the art window, the same
+on every frame. The lock holds it, and the hash finds whatever card sits nearest that crop, just
+inside the gate with nothing else inside it to rank against. In the readers' scans of 2026-10-14
+(§ *The replay*), Weapons Manufacturing EOE 168 resolved alone as Island at 0.293 from its text box,
+Cauldron of Essence SOS 179 as Tsunami at 0.285 from its art window, and — held in a hand, not a
+binder — Gandalf, Spark Starter HOB 203 as an artist's biography card at 0.297. The lone answers the
+hash alone got right sat at 0.152 and 0.156 in those scans, and at most 0.234 over 361 in the
+synthetic evaluation (plain, sleeved and stacked), so 0.25 lies between. **Set on three failures,
+not swept**: the replay's corpus is what should move it as it grows. The synthetic evaluation and
+the replay's other passes came out exactly as before.
+
+**Card-likeness was tried first, and does not separate them.** A lone survivor held back when no
+view of the burst reached `cardness::GOOD_SCORE` caught the first two (their bursts' best were 0.38
+and 0.23 — far higher in the session than a single frame's 0.10 and 0.11), but the evaluation's right
+answers went as low as 0.04: Exact's ambiguous share rose from 6.2% to 15.0% filtered to the own
+set, plain, and from 6.9% to 16.9% sleeved, every stratum, accuracy unchanged. A floor low enough
+to spare those caught neither failure. That is the cardness note's own finding (`MIN_SCORE`),
+met again.
 
 **Rows 2 and 3 were tightened by the synthetic evaluation, and the rule behind both is that Exact
 must never be less right about the card than Fast.** As first built, any resolved name *replaced*
@@ -4029,8 +4054,30 @@ name of letters, digits, `_`, `.` and `-`, not starting with a dot. `scripts/sca
 computes every count once and both the summary and the page read it. The page draws, per scan, the
 frame strip, the expected card, each pass's answer and the slices.
 
-**Baseline**: None yet: no scan had been pulled when this was written. The first
-`pnpm scanner:replay --save-baseline` table goes here, with its date, commit and bundle.
+**Baseline**: none saved yet (`--save-baseline` has not been run). **The first replay**, 2026-10-14:
+86 scans, all Exact, 85 from the desktop, at `013639cb` against the main checkout's local bundle
+of 113,494 printings (older than the 118,624 the senders' app held; one expected card of the 86
+is newer than it). Two batches: 55 from one reader's binder pages, filmed in portrait and
+letterboxed into 960×540, and 31 of a hand-held stack. *Then* had the reader's printing on 23.
+
+| pass | n | printing ✓ % | card ✓ % | wrong card | undecided % | ambiguous | never resolved |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| As scanned | 86 | 31.4 | 38.4 | 23 | 34.9 | 27 | 25 |
+| Fast | 86 | 29.1 | 34.9 | 9 | 54.7 | 0 | 0 |
+| Exact | 86 | 31.4 | 38.4 | 23 | 34.9 | 27 | 25 |
+
+**What the binder batch showed** (55 scans, card ✓ 21.8% As scanned): the card's own outer edge
+is often no contour there, so the detector offers one quad on 40 of 49 frames it detects and
+card-likeness has nothing to rank. Run on each scan's deciding frame, that quad was the **sleeve
+pocket** (stitching where the title band should be: Tannuk, Steadfast Second read
+`bdeeeeerrrrrcc8r4`), or the **text box or art window**, rectified sideways. The pocket is
+`edges`' deliberate "a sleeve is let through" meeting a margin wider than a sleeve's. Card-likeness
+cannot choose the card from the pocket's inner lines either: enumerated on three pocket frames,
+the combinations scored within 0.01 of each other and kept the stitched top.
+
+With `EXACT_ALONE_DISTANCE` (§ *Exact*'s tiers) the replay holds back the three lone answers that
+were wrong — ambiguous 27 → 30 of 86, the 23 wrong cards still judged on the first choice — and
+changes no other pass.
 
 ### Measured in the app
 
