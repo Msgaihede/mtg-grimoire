@@ -1293,3 +1293,129 @@ fn two_triggers_at_once_are_ordered_by_answers_that_name_them() {
     );
     assert_ne!(answered.view.stage, Stage::Prompt);
 }
+
+/// Issue #1022: undo takes back the reader's last action and everything the AI did after it,
+/// back to the reader's last decision; redo comes forward to exactly the same table.
+#[test]
+fn undo_goes_back_to_the_readers_last_decision_and_redo_returns() {
+    engine(|| {
+        let (mut game, _) = kept(2);
+        let main = game.view();
+        assert_eq!(main.stage, Stage::Main);
+        assert!(main.can_undo, "the keep can be undone");
+
+        let after = to_main(&mut game).view;
+        assert!(after.turn > main.turn, "the AI played a turn");
+
+        // `to_main` may have stopped more than once; undo each of the reader's decisions.
+        while game.view().turn != main.turn || game.view().stage != Stage::Main {
+            let step = game.act(A::Undo).unwrap();
+            assert!(step.happened.is_empty() && step.frames.is_empty());
+        }
+        let back = game.view();
+        assert_eq!(back.you.hand, main.you.hand);
+        assert_eq!(back.opponents, main.opponents);
+        assert!(back.can_redo);
+
+        while game.view().can_redo {
+            game.act(A::Redo).unwrap();
+        }
+        let again = game.view();
+        assert_eq!(again.turn, after.turn);
+        assert_eq!(again.you.hand, after.you.hand);
+        assert_eq!(again.opponents, after.opponents);
+        assert_eq!(again.you.life, after.you.life);
+    });
+}
+
+/// The stops are a setting, not a move: setting them is not undone, and undo leaves them be.
+#[test]
+fn the_stops_are_not_undone() {
+    engine(|| {
+        let (mut game, _) = kept(2);
+        game.act(A::Undo).unwrap();
+        assert!(!game.view().can_undo);
+        let stops = vec![PlaytestStop {
+            seat: Seat::Opponent,
+            step: PlaytestStopStep::Upkeep,
+        }];
+        let set = game
+            .act(A::SetStops {
+                stops: stops.clone(),
+            })
+            .unwrap()
+            .view;
+        assert!(!set.can_undo, "a setting is not an action to undo");
+        assert!(set.can_redo, "and does not end the redo trail");
+        game.act(A::Redo).unwrap();
+        game.act(A::Undo).unwrap();
+        assert_eq!(game.view().stops, stops);
+    });
+}
+
+/// Issue #1022: undo walks back through the turn's phases one decision at a time — the second
+/// main phase, combat, the first main phase, the previous turn — each exactly as it stood.
+#[test]
+fn undo_walks_back_through_the_phases_one_decision_at_a_time() {
+    engine(|| {
+        let (mut game, _) = kept(2);
+        put_down(&mut game, "Grizzly Bears");
+        game.act(A::EndTurn).unwrap();
+        // The reader's second turn: main 1, then combat, then on to the end of the turn.
+        let mut seen = vec![game.view()];
+        assert_eq!(seen[0].phase, PlaytestPhase::Main1);
+        let offered = game.act(A::Pass).unwrap().view;
+        assert_eq!(offered.stage, Stage::Attack);
+        seen.push(offered.clone());
+        let attacks = offered
+            .attack
+            .as_ref()
+            .unwrap()
+            .attackers
+            .iter()
+            .map(|a| PlaytestAttackPair {
+                attacker: a.id,
+                target: None,
+                player: None,
+            })
+            .collect();
+        seen.push(game.act(A::Attack { attacks }).unwrap().view);
+        for _ in 0..20 {
+            let now = seen.last().unwrap();
+            if now.turn != seen[0].turn || now.stage == Stage::Over || seen.len() > 8 {
+                break;
+            }
+            let action = match now.stage {
+                Stage::Attack => A::Attack { attacks: vec![] },
+                Stage::Block => A::Block { blocks: vec![] },
+                Stage::Prompt => A::Auto,
+                _ => A::Pass,
+            };
+            seen.push(game.act(action).unwrap().view);
+        }
+        assert!(seen.len() >= 4, "main 1, combat and past it");
+
+        // Back, one decision at a time: every phase is the one it was, with the same table.
+        for then in seen.iter().rev().skip(1) {
+            let back = game.act(A::Undo).unwrap().view;
+            assert_eq!(
+                (back.stage, back.phase, back.step, back.turn, back.active),
+                (then.stage, then.phase, then.step, then.turn, then.active)
+            );
+            assert_eq!(back.you, then.you);
+            assert_eq!(back.opponents, then.opponents);
+            assert_eq!(back.combat, then.combat);
+        }
+        // And forward again to where the turn had got to.
+        while game.view().can_redo {
+            game.act(A::Redo).unwrap();
+        }
+        let end = seen.last().unwrap();
+        let again = game.view();
+        assert_eq!(
+            (again.stage, again.phase, again.turn, again.active),
+            (end.stage, end.phase, end.turn, end.active)
+        );
+        assert_eq!(again.you, end.you);
+    });
+}

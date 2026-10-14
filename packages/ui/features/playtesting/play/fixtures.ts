@@ -139,6 +139,8 @@ export function turnFive(): TurnFive {
     tokens: [],
     stops: [],
     endingTurn: false,
+    canUndo: false,
+    canRedo: false,
   };
   return { view, goyf, elves, delver, ragavan, reckoner, jace };
 }

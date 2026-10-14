@@ -20,6 +20,7 @@ The binding rules are in each area's `CLAUDE.md`. This page holds the reasons an
 - [The goldfish never loses](#the-goldfish-never-loses)
 - [The commands and the wire](#the-commands-and-the-wire)
 - [The board](#the-board)
+- [Undo and redo](#undo-and-redo)
 - [What is not there yet](#what-is-not-there-yet)
 - [Licences](#licences)
 
@@ -326,6 +327,35 @@ is a zone, never a coordinate:
 pointer. They are off while a field has the caret or a menu or dialog is open. Space belongs to the
 board even when a button has the focus: a card clicked keeps the focus, and Space would press it.
 Enter still presses a focused card, and that plays it.
+
+## Undo and redo
+
+**`Ctrl+Z` takes the last action back, and `Ctrl+Y` or `Ctrl+Shift+Z` takes it again** (issue
+#1022, 2026-10-14), on this board and the playtest board alike. The chords are the shortcut
+catalogue's ([keyboard-shortcuts.md](keyboard-shortcuts.md#undo-and-redo-on-the-game-boards)).
+**Undo** and **Redo** also head the game menu (`gameMenu`), greyed when there is nowhere to go, for
+a reader who does not know the chords; the playtest board's are greyed while the engine is busy.
+
+**The history is the engine's, and it is whole games, not inverses**
+(`crates/grimoire-play/src/history.rs`). Before every action it takes, the session keeps the game
+as it was — the `GameState`, the printings, the turn and the mulligan count, the same `Moment` a
+refusal goes back to. `GameState` is persistent (`im`), so a clone is a handful of reference
+counts. Going back is restoring one, which is exact for every action the board has, the rules'
+and the sandbox's alike; an inverse per action would be a second rules engine. Redo restores the
+moment from before the undo rather than replaying the action, so a redone turn is the one that was
+undone. A new action ends the redo trail. A hundred actions back is the limit (`UNDO_LIMIT`).
+
+**On the wire they are actions**, `{ type: "undo" }` and `{ type: "redo" }` on `goldfish_act`:
+no new command, the engine's stack and the slot as for any action. They answer with the board as
+it was and no facts, and a view says whether either has anywhere to go (`canUndo`, `canRedo`). A
+refused action was never taken, so it is not remembered; nothing to undo is a refusal like any
+other.
+
+**The log is the page's**, so the page keeps its side of the history the same way:
+`features/playtesting/undo.ts`' `LogBook` holds the whole log as it stood before each action, by
+the engine's own rules and limit so the two walk in step. Whole logs rather than a count of the
+lines an action added, because a playtest's replay logs its beats one by one, or merged when it is
+skipped or motion is reduced, and a count would have to agree with every way of logging them.
 
 ## What is not there yet
 

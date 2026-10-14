@@ -37,6 +37,7 @@ import { HelpPanel, LogPanel } from "../goldfish/Panels";
 import { CommandZone, ExileZone, GraveyardZone, LibraryZone } from "../goldfish/ZonePile";
 import { dropAction, type GoldfishDrag } from "../goldfish/goldfishDrag";
 import { useLandingOf } from "../goldfish/landing";
+import { useUndoKeys } from "../undo";
 import { handRow, type ZoneSize } from "../goldfish/layout";
 import type { LogLine } from "../goldfish/log";
 import { feltBackground } from "../goldfish/playmats";
@@ -302,6 +303,10 @@ export function PlaytestBoard({
   const locked = busy || replaying;
   const buttons = view === null ? null : stageButtons(view, picks);
   const primary = locked ? null : (buttons?.primary ?? null);
+
+  // Undo and redo (issue #1022): not while the engine is busy; during a replay, `act` shows its
+  // end first, as it does for any action.
+  useUndoKeys("playtesting", view, act, !busy);
 
   // **The board's keys**: Space presses the stage button (to combat, end the turn, declare), and
   // T, G, E, H act on the reader's own card under the pointer as on the goldfish. Not while a
@@ -581,7 +586,15 @@ export function PlaytestBoard({
               view:
                 view === null
                   ? null
-                  : { tokens: view.tokens, graveyard: view.you.graveyard, exile: view.you.exile },
+                  : {
+                      tokens: view.tokens,
+                      graveyard: view.you.graveyard,
+                      exile: view.you.exile,
+                      // Not while the engine is busy, as the keys; during a replay `act` shows
+                      // its end first.
+                      canUndo: view.canUndo && !busy,
+                      canRedo: view.canRedo && !busy,
+                    },
               playing: playing && !locked,
               backLabel: "Back to setup",
               playmat,
@@ -1068,6 +1081,9 @@ function PlaytestHelp(): JSX.Element {
       </span>
       <span className="text-dim">
         Press Space for the button at the bottom right: to combat, end the turn, attack or block.
+      </span>
+      <span className="text-dim">
+        Press Ctrl+Z to undo back to your last decision and Ctrl+Y to redo, or use the game menu.
       </span>
     </>
   );

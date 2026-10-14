@@ -755,3 +755,77 @@ fn a_life_total_the_rules_change_is_told_for_either_seat() {
     }));
     assert_eq!(step.view.opponent_life, 38);
 }
+
+/// Issue #1022: undo puts the board back exactly as it was before the action, redo takes it
+/// again, and a new action ends the redo trail.
+#[test]
+fn undo_and_redo_walk_the_board_back_and_forward() {
+    engine(|| {
+        let mut game = Goldfish::new(&deck(), &[], 7).unwrap();
+        let dealt = game.view();
+        assert!(
+            !dealt.can_undo && !dealt.can_redo,
+            "a new game has no history"
+        );
+        assert_eq!(
+            game.act(A::Undo).unwrap_err(),
+            "There is nothing to undo.",
+            "nothing to undo is a refusal"
+        );
+
+        let kept = game.act(A::Keep { bottom: vec![] }).unwrap().view;
+        assert!(kept.can_undo && !kept.can_redo);
+        let forest = in_hand(&mut game, "Forest");
+        let before = game.view();
+        let played = game.act(A::Play { id: forest }).unwrap().view;
+        assert_eq!(played.mana_open, 1);
+
+        let undone = game.act(A::Undo).unwrap();
+        assert!(undone.happened.is_empty(), "undo happens nothing");
+        let back = undone.view;
+        assert_eq!(back.hand, before.hand, "the land is back in the hand");
+        assert!(back.battlefield.is_empty());
+        assert!(back.can_redo);
+
+        let redone = game.act(A::Redo).unwrap().view;
+        assert_eq!(redone.battlefield, played.battlefield);
+        assert_eq!(redone.mana_open, 1);
+        assert!(!redone.can_redo);
+
+        // Back to the opening hand, every action at a time: the mulligan is offered again.
+        while game.view().can_undo {
+            game.act(A::Undo).unwrap();
+        }
+        let start = game.view();
+        assert_eq!(start.stage, Stage::Mulligan);
+        assert_eq!(start.hand, dealt.hand);
+
+        game.act(A::Mulligan).unwrap();
+        let view = game.view();
+        assert!(!view.can_redo, "a new action ends the redo trail");
+        assert_eq!(game.act(A::Redo).unwrap_err(), "There is nothing to redo.");
+        assert_eq!(view.mulligan.unwrap().mulligans, 1);
+        game.act(A::Undo).unwrap();
+        assert_eq!(
+            game.view().mulligan.unwrap().mulligans,
+            0,
+            "the count goes back too"
+        );
+    });
+}
+
+/// A refused action is not one to undo: the board was never changed.
+#[test]
+fn a_refused_action_is_not_remembered() {
+    engine(|| {
+        let mut game = kept();
+        game.act(A::Undo).unwrap();
+        assert!(!game.view().can_undo);
+        assert!(game.act(A::Play { id: u64::MAX }).is_err());
+        assert!(!game.view().can_undo);
+        assert!(
+            game.view().can_redo,
+            "a refusal leaves the redo trail as it was"
+        );
+    });
+}

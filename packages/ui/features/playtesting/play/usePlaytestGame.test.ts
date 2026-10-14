@@ -158,4 +158,30 @@ describe("usePlaytestGame", () => {
     expect(playtestStart.mock.calls[0][2]).toEqual(opponents);
     expect(result.current.log.map((l) => l.text)).toContain("Shuffled every deck and drew seven");
   });
+
+  // Issue #1022: an undo pressed while the AI's turn is still being played back takes back the
+  // whole of it — every beat, the ones not yet shown included — and a redo puts it all back.
+  it("undoes a step mid-replay to the log before it, and redoes it whole", async () => {
+    const { step } = replayStep();
+    const back = turnFive().view;
+    playtestAct.mockImplementation(async (a) => {
+      const type = (a as { type: string }).type;
+      if (type === "undo") return { view: back, happened: [], frames: [] };
+      if (type === "redo") return { view: step.view, happened: [], frames: [] };
+      return step;
+    });
+    const { result } = renderHook(() => usePlaytestGame(PICKS));
+    await waitFor(() => expect(result.current.view).not.toBeNull());
+    const before = result.current.log;
+    act(() => result.current.act({ type: "endTurn" }));
+    await waitFor(() => expect(result.current.replaying).toBe(true));
+    act(() => result.current.act({ type: "undo" }));
+    await waitFor(() => expect(result.current.view).toBe(back));
+    expect(result.current.replaying).toBe(false);
+    expect(result.current.log).toEqual(before);
+    act(() => result.current.act({ type: "redo" }));
+    await waitFor(() => expect(result.current.view).toBe(step.view));
+    expect(result.current.log).toHaveLength(before.length + 9);
+    expect(result.current.log[0].text).toBe("Drew Island");
+  });
 });
