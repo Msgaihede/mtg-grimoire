@@ -30,6 +30,54 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.51.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.50.0...v0.51.0) (2026-10-14)
+
+
+### Features
+
+* always show the source dialog for a card's Pull from collection ([c92381a](https://github.com/Msgaihede/mtg-grimoire/commit/c92381ae97b73c6fe2e542564bec101d4733c479))
+* always show the source dialog for a card's Pull from collection ([3142804](https://github.com/Msgaihede/mtg-grimoire/commit/31428041af8a6dce0daa8f3538218b030a874ecf)), closes [#987](https://github.com/Msgaihede/mtg-grimoire/issues/987)
+* **ci:** announce a release to several Discord webhooks ([ea2e883](https://github.com/Msgaihede/mtg-grimoire/commit/ea2e883161a48df5f5bede1c14793fbdf903489d))
+* **ci:** announce a release to several Discord webhooks ([d5a54e2](https://github.com/Msgaihede/mtg-grimoire/commit/d5a54e2075ca1778fa1867a188469b15b1849e99))
+* **decks:** colour the missing figure by where else the card is owned ([4a4f3ea](https://github.com/Msgaihede/mtg-grimoire/commit/4a4f3ea07d8bf161bb7365b20692c09e20315d51))
+* **decks:** colour the missing figure by where else the card is owned ([5599e4c](https://github.com/Msgaihede/mtg-grimoire/commit/5599e4ce81d907980319e7d0f057380519d12fd7)), closes [#986](https://github.com/Msgaihede/mtg-grimoire/issues/986)
+* **folders:** add rules to collection and wishlist folders ([d4f8fd9](https://github.com/Msgaihede/mtg-grimoire/commit/d4f8fd957eea53d54202d0e1df85640ee1573b9b))
+* **folders:** add rules to collection and wishlist folders ([f0c03a4](https://github.com/Msgaihede/mtg-grimoire/commit/f0c03a4e4f4cce70fa5834a212fb7661e6e503cd)), closes [#980](https://github.com/Msgaihede/mtg-grimoire/issues/980)
+* let the opening hand fill the board in goldfishing and playtesting ([4af9976](https://github.com/Msgaihede/mtg-grimoire/commit/4af9976fe3e362611193bedded218428fa53d02c))
+* let the opening hand fill the board in goldfishing and playtesting ([fe530fd](https://github.com/Msgaihede/mtg-grimoire/commit/fe530fd26c3e64aa161dc15814d1a966d8191b33)), closes [#993](https://github.com/Msgaihede/mtg-grimoire/issues/993)
+* **light:** Archive and Scan history on the phone's Scanner page ([#989](https://github.com/Msgaihede/mtg-grimoire/issues/989)) ([e9873b6](https://github.com/Msgaihede/mtg-grimoire/commit/e9873b6d74c36040c5fd913a1985e99e7e49ac2e))
+* **light:** Archive and Scan history on the phone's Scanner page ([#989](https://github.com/Msgaihede/mtg-grimoire/issues/989)) ([5ccff96](https://github.com/Msgaihede/mtg-grimoire/commit/5ccff96e9034d26fa923c69a6bc0243a83e2a484))
+* **scanner:** add a card to the tray by hand ([d1d6c0e](https://github.com/Msgaihede/mtg-grimoire/commit/d1d6c0ee982277071fec055c00b414169bdfdd7d))
+* **scanner:** add a card to the tray by hand ([#978](https://github.com/Msgaihede/mtg-grimoire/issues/978)) ([99d8032](https://github.com/Msgaihede/mtg-grimoire/commit/99d8032a28b1c0252b92862d01ee00d9e4212b4c))
+* **scanner:** add a Skip promos filter beside the set picker ([ccad29a](https://github.com/Msgaihede/mtg-grimoire/commit/ccad29abc3aee4c7b1e20cc528be860077206d4c))
+* **scanner:** add a Skip promos filter beside the set picker ([ea26bd0](https://github.com/Msgaihede/mtg-grimoire/commit/ea26bd071fae1602d8a5594b0ad5e185ed678f2f)), closes [#981](https://github.com/Msgaihede/mtg-grimoire/issues/981)
+* **scanner:** keep a scan history, with Archive and a History dialog ([#989](https://github.com/Msgaihede/mtg-grimoire/issues/989)) ([1d927d4](https://github.com/Msgaihede/mtg-grimoire/commit/1d927d4be97394325df222fb831a55720bef1bb8))
+* **scanner:** keep a scan history, with Archive and a History dialog ([#989](https://github.com/Msgaihede/mtg-grimoire/issues/989)) ([ccde73e](https://github.com/Msgaihede/mtg-grimoire/commit/ccde73ee0f8249723344dd6635a819d3247dbca6))
+* **scanner:** pause recognition while the Send scan dialog is open ([9066e05](https://github.com/Msgaihede/mtg-grimoire/commit/9066e05cb86782a43cc873234253ca406867abc5))
+* **scanner:** pause recognition while the Send scan dialog is open ([e97e68c](https://github.com/Msgaihede/mtg-grimoire/commit/e97e68c352ef11d7ac50a421cdec3ac287992102)), closes [#977](https://github.com/Msgaihede/mtg-grimoire/issues/977)
+* show collection-count chips on wishlist cards ([1e6f60f](https://github.com/Msgaihede/mtg-grimoire/commit/1e6f60fabf892ef697a299d95f5d833a50ac8eec))
+* show collection-count chips on wishlist cards ([227d936](https://github.com/Msgaihede/mtg-grimoire/commit/227d93631f46bfd338299c2c00d5871ab52f464b)), closes [#988](https://github.com/Msgaihede/mtg-grimoire/issues/988)
+* show label colour swatches in the deck editor's label filter chips ([fe9da14](https://github.com/Msgaihede/mtg-grimoire/commit/fe9da1401fd8b72c47e7bdbaddb13e258ce1900b))
+* show label colour swatches in the deck editor's label filter chips ([3fdda09](https://github.com/Msgaihede/mtg-grimoire/commit/3fdda09eea94f3c60eb9a1c0f21d7d882428b85e)), closes [#995](https://github.com/Msgaihede/mtg-grimoire/issues/995)
+
+
+### Bug Fixes
+
+* a still sample ends a header swipe's flick even at the same timestamp ([d8e9864](https://github.com/Msgaihede/mtg-grimoire/commit/d8e986416731be511a2af45a6f351cfe60b22687))
+* a still sample ends a header swipe's flick even at the same timestamp ([2c2cc39](https://github.com/Msgaihede/mtg-grimoire/commit/2c2cc398f06956fe9547bf4580cdd2d2082ea94c))
+* **decks:** filter the deck to missing cards from the ledger's "N missing" ([4ca111c](https://github.com/Msgaihede/mtg-grimoire/commit/4ca111c20bba1f8724e5abe647129968677382bf))
+* **decks:** filter the deck to missing cards from the ledger's "N missing" ([fc8698d](https://github.com/Msgaihede/mtg-grimoire/commit/fc8698d5446c31ed28073bd4445a5b3c4e04c619)), closes [#985](https://github.com/Msgaihede/mtg-grimoire/issues/985)
+* draw tooltips above the window caption bar ([885624b](https://github.com/Msgaihede/mtg-grimoire/commit/885624b6c512ccb5d5c20d74851fb451c98124a6))
+* draw tooltips above the window caption bar ([d0d0a5e](https://github.com/Msgaihede/mtg-grimoire/commit/d0d0a5e552cb936d6d81628493b8aada76b147c7)), closes [#976](https://github.com/Msgaihede/mtg-grimoire/issues/976)
+* playtesting and goldfishing draw tokens in the deck's printings ([5fdeeb7](https://github.com/Msgaihede/mtg-grimoire/commit/5fdeeb7ff0f2342234bcd545cabc72aaf20b7fdf))
+* playtesting and goldfishing draw tokens in the deck's printings ([dc020fb](https://github.com/Msgaihede/mtg-grimoire/commit/dc020fb6e14d30a6f797a32d17a0d620bbb5bfcb)), closes [#991](https://github.com/Msgaihede/mtg-grimoire/issues/991)
+* price a nonfoil copy of a foil- or etched-only printing at its sold finish ([46bdf4d](https://github.com/Msgaihede/mtg-grimoire/commit/46bdf4d35c9a7bf98f457b61c62dd4cbb9903b09))
+* price a nonfoil copy of a foil- or etched-only printing at its sold finish ([c09f7e0](https://github.com/Msgaihede/mtg-grimoire/commit/c09f7e0b56664c565aec15ceeaed471e567b216f)), closes [#983](https://github.com/Msgaihede/mtg-grimoire/issues/983)
+* **scanner:** offer only the finishes a scanned card's printing exists in ([3a493ae](https://github.com/Msgaihede/mtg-grimoire/commit/3a493ae0e8a95ff060cee96cf70e7b32dcde25fa))
+* **scanner:** offer only the finishes a scanned card's printing exists in ([1f1abe1](https://github.com/Msgaihede/mtg-grimoire/commit/1f1abe133a60642c0e12983c516d81d4fc6e5357)), closes [#982](https://github.com/Msgaihede/mtg-grimoire/issues/982)
+* **ui:** grey out the mana line while nothing is syncing ([9c58bd3](https://github.com/Msgaihede/mtg-grimoire/commit/9c58bd373298aec95029cabc794e71a5e20c0721))
+* **ui:** grey out the mana line while nothing is syncing ([914065d](https://github.com/Msgaihede/mtg-grimoire/commit/914065d645bcb7f694b422515dca8a71401c0992)), closes [#990](https://github.com/Msgaihede/mtg-grimoire/issues/990)
+
 ## [0.50.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.49.0...v0.50.0) (2026-10-13)
 
 
