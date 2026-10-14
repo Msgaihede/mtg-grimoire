@@ -518,7 +518,8 @@ pub enum PlaytestHappened {
         life: i32,
         was: i32,
     },
-    /// The engine's AI answered a question for the reader (`auto`, or one the board does not ask).
+    /// The engine's AI answered a question for the reader (`auto`, or one the board does not ask),
+    /// or the question had only one answer and the session took it (`sole_answer`).
     Chose {
         what: String,
     },
