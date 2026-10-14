@@ -16,11 +16,10 @@ const shareList = vi.hoisted(() => vi.fn());
 const shareCreate = vi.hoisted(() => vi.fn());
 const shareRefresh = vi.hoisted(() => vi.fn());
 const shareRevoke = vi.hoisted(() => vi.fn());
-const shareOpen = vi.hoisted(() => vi.fn());
 const syncSupporterStatus = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { shareList, shareCreate, shareRefresh, shareRevoke, shareOpen, syncSupporterStatus },
+  ipc: { shareList, shareCreate, shareRefresh, shareRevoke, syncSupporterStatus },
 }));
 
 /** The one seam a page names the clipboard through. Behind it is the host's (`@/lib/core`) —
@@ -33,8 +32,7 @@ import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import type { CollectionFolder, ShareRow, SupporterStatus } from "@/lib/ipc";
 import { useNotifications } from "@/lib/notifications";
 import { SUPPORTER_KEY } from "@/lib/query";
-import { PublishesContext, ReachContext } from "@/lib/reach";
-import { useAppStore } from "@/lib/store";
+import { PublishesContext } from "@/lib/reach";
 import { shareFor, ShareFolderMenu, shareTargetFor, type ShareTarget } from "./ShareFolderMenu";
 
 /* ------------------------------------------------------------------ fixtures ---------- */
@@ -126,6 +124,18 @@ function mount(ui: ReactElement) {
 const shareButton = (name: RegExp | string = /^Share/) =>
   screen.findByRole("button", { name });
 
+/**
+ * A second observer of the membership the control reads, drawing a word once it has answered.
+ * The cache notifies both observers in one batch, so once the word is on screen the control
+ * has drawn the answer too — the state in which the full edition draws Share. Waiting on the
+ * call alone asserts before the answer lands, and passes with or without the fence.
+ */
+function Answered() {
+  const { data } = useQuery({ queryKey: SUPPORTER_KEY, enabled: false });
+  return data === undefined ? null : <span>answered</span>;
+}
+const answered = () => screen.findByText("answered");
+
 beforeEach(() => {
   vi.clearAllMocks();
   shareList.mockResolvedValue([]);
@@ -134,7 +144,6 @@ beforeEach(() => {
   shareRevoke.mockResolvedValue(undefined);
   syncSupporterStatus.mockResolvedValue(SUPPORTING);
   copyText.mockResolvedValue(undefined);
-  useAppStore.setState({ openedShares: [], activeView: "collection" });
 });
 
 /* -------------------------------------------------- which level offers a control ---------- */
@@ -242,11 +251,14 @@ describe("a reader with no membership", () => {
   it("shows the connect story rather than a nag when nothing is connected", async () => {
     syncSupporterStatus.mockResolvedValue(NOTHING_CONNECTED);
     const user = userEvent.setup();
-    mount(<ShareFolderMenu target={COLLECTION} />);
+    mount(
+      <>
+        <ShareFolderMenu target={COLLECTION} />
+        <Answered />
+      </>,
+    );
 
-    // The entry point beside it needs no membership at all — viewing is open to everyone — so
-    // it is what says the read has answered.
-    await screen.findByRole("button", { name: "Open a shared collection" });
+    await answered();
     expect(screen.queryByRole("button", { name: /^Share/ })).toBeNull();
     expect(screen.queryByText(/Connect Patreon/)).toBeNull();
 
@@ -623,85 +635,32 @@ describe("withdrawing", () => {
   });
 });
 
-/* --------------------------------------------------------------- the way in ---------- */
-
-describe("opening somebody else's share", () => {
-  /**
-   * **The entry point spec decision 6 left nowhere to put.** The *Shared* rail row is hidden
-   * until a reader has opened a share, and this control is for publishing — so without this
-   * button the in-app viewer shipped reachable by `Ctrl+6` and discoverable by nothing.
-   *
-   * Beside the Share control because both halves of the feature are one idea read in two
-   * directions: publish your binder, open somebody else's.
-   */
-  it("offers a way to open somebody else's share, and it needs no membership", async () => {
-    syncSupporterStatus.mockResolvedValue(NOTHING_CONNECTED);
-    const user = userEvent.setup();
-    mount(<ShareFolderMenu target={COLLECTION} />);
-
-    await user.click(await screen.findByRole("button", { name: "Open a shared collection" }));
-    expect(await screen.findByLabelText("Link to a shared collection")).toBeInTheDocument();
-  });
-
-  /**
-   * ⚠️ **The caret comes back to the *Open* button, and `back()` cannot do it.**
-   *
-   * `Dialog` hands the caret to whatever opened it and says the host owes that; this host has two
-   * openers, and `back()` focuses the **Share** button — which for the reader driven here is not
-   * drawn at all, because they have connected nothing. So the shared callback would leave the
-   * caret on `<body>` for exactly the reader most likely to press *Open*, and their next Tab
-   * would restart at the top of the app. Driven in the shipped window and reproduced twice
-   * before it was fixed, by Escape and by the ✕.
-   *
-   * **Nothing connected on purpose**, so this case would still be red if the fix had been to
-   * point the existing `back()` at the Open button and leave one ref.
-   */
-  it("hands the caret back to the Open button when the paste box closes", async () => {
-    syncSupporterStatus.mockResolvedValue(NOTHING_CONNECTED);
-    const user = userEvent.setup();
-    mount(<ShareFolderMenu target={COLLECTION} />);
-
-    const opener = await screen.findByRole("button", { name: "Open a shared collection" });
-    await user.click(opener);
-    await screen.findByLabelText("Link to a shared collection");
-
-    await user.click(screen.getByRole("button", { name: "Close" }));
-
-    await waitFor(() => expect(document.activeElement).toBe(opener));
-  });
-});
-
-/* ------------------------------------------------------ a window with no shared view ---------- */
+/* --------------------------------------------------------------- no way in ---------- */
 
 /**
- * The light app draws seven destinations and the shared binder is not one: its shell answers
- * `useReaches("shared")` with false. The Open half goes there, so it is not drawn — a press that
- * answered would land on a view the light app cannot stand on.
+ * **No *Open a shared collection* beside Share** (issue #1028). It was the paste box into the
+ * in-app viewer; the owner removed it and gave the viewer no other way in.
  */
-describe("in a window with no shared view", () => {
-  const noShared = (view: string) => view !== "shared";
-
-  it("draws no way into somebody else's share, and keeps Share", async () => {
-    mount(
-      <ReachContext.Provider value={noShared}>
-        <ShareFolderMenu target={COLLECTION} />
-      </ReachContext.Provider>,
-    );
+describe("opening somebody else's share", () => {
+  it("draws no way into somebody else's share beside Share", async () => {
+    mount(<ShareFolderMenu target={COLLECTION} />);
 
     expect(await shareButton()).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Open a shared collection" })).toBeNull();
   });
 
-  it("draws no empty group when Share is hidden too", async () => {
+  it("draws no group at all when Share is hidden", async () => {
     syncSupporterStatus.mockResolvedValue(NOTHING_CONNECTED);
     mount(
-      <ReachContext.Provider value={noShared}>
+      <>
         <ShareFolderMenu target={COLLECTION} />
-      </ReachContext.Provider>,
+        <Answered />
+      </>,
     );
 
-    await waitFor(() => expect(syncSupporterStatus).toHaveBeenCalled());
+    await answered();
     expect(screen.queryByRole("group", { name: "Sharing" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open a shared collection" })).toBeNull();
   });
 });
 
@@ -709,13 +668,11 @@ describe("in a window with no shared view", () => {
 
 /**
  * The light app's hosts register none of the `share_*` commands, so its shell answers
- * `usePublishes` with false — and `useReaches("shared")` with false too, which is the pair
- * mounted here. A membership changes neither: an entitled device there would otherwise be
+ * `usePublishes` with false, which is what is mounted here. A membership changes neither: an entitled device there would otherwise be
  * handed a Share button whose list and publish can only answer *"There is no command named …
  * on this host."*
  */
 describe("in a window that cannot publish", () => {
-  const noShared = (view: string) => view !== "shared";
   /** Entitled through the pairing group rather than by its own grant: `groupBound` with no
    *  `since` of its own. Still `active` — `supporterState` asks `entitled` first. */
   const GROUP_ENTITLED: SupporterStatus = {
@@ -726,25 +683,11 @@ describe("in a window that cannot publish", () => {
   };
   const GRACE: SupporterStatus = { ...SUPPORTING, status: "grace" };
 
-  /**
-   * A second observer of the membership the control reads, drawing a word once it has answered.
-   * The cache notifies both observers in one batch, so once the word is on screen the control
-   * has drawn the answer too — the state in which the full edition draws Share. Waiting on the
-   * call alone asserts before the answer lands, and passes with or without the fence.
-   */
-  function Answered() {
-    const { data } = useQuery({ queryKey: SUPPORTER_KEY, enabled: false });
-    return data === undefined ? null : <span>answered</span>;
-  }
-  const answered = () => screen.findByText("answered");
-
   const light = (target: ShareTarget | null) => (
-    <ReachContext.Provider value={noShared}>
-      <PublishesContext.Provider value={false}>
-        <ShareFolderMenu target={target} />
-        <Answered />
-      </PublishesContext.Provider>
-    </ReachContext.Provider>
+    <PublishesContext.Provider value={false}>
+      <ShareFolderMenu target={target} />
+      <Answered />
+    </PublishesContext.Provider>
   );
 
   it.each([
@@ -770,26 +713,6 @@ describe("in a window that cannot publish", () => {
     await answered();
 
     expect(screen.queryByRole("button", { name: "Share Trade binder" })).toBeNull();
-    expect(shareList).not.toHaveBeenCalled();
-  });
-
-  /**
-   * The two halves are separate answers: a window that has the shared view but cannot publish
-   * keeps the way in, which needs no command beyond `share_open`'s own.
-   */
-  it("keeps the Open half where the shared view is reachable", async () => {
-    mount(
-      <PublishesContext.Provider value={false}>
-        <ShareFolderMenu target={COLLECTION} />
-        <Answered />
-      </PublishesContext.Provider>,
-    );
-
-    expect(
-      await screen.findByRole("button", { name: "Open a shared collection" }),
-    ).toBeInTheDocument();
-    await answered();
-    expect(screen.queryByRole("button", { name: /^Share/ })).toBeNull();
     expect(shareList).not.toHaveBeenCalled();
   });
 

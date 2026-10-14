@@ -7892,7 +7892,6 @@ describe("sharing from the cabinet", () => {
     await openShelf(user, "Mono-Red Aggro");
     await waitFor(() => expect(standingIn()).toBe(20));
     expect(await screen.findByRole("button", { name: "Share Mono-Red Aggro" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open a shared collection" })).toBeInTheDocument();
 
     await user.click(within(crumbs()).getByRole("button", { name: "Collection" }));
     await waitFor(() => expect(standingIn()).toBeNull());
@@ -7962,23 +7961,17 @@ describe("sharing from the cabinet", () => {
     });
     wrap(<CollectionPage />);
 
-    await screen.findByRole("button", { name: "Open a shared collection" });
-    expect(shareControl()).toBeNull();
+    await waitFor(() => expect(syncSupporterStatus).toHaveBeenCalled());
+    await waitFor(() => expect(shareControl()).toBeNull());
   });
 
-  /**
-   * **The entry point the plan had nowhere to put.** Decision 6 hides the *Shared* rail row until
-   * a reader has opened a share, and this page's other half is for *publishing* — so without this
-   * button the in-app viewer is reachable by `Ctrl+6` and discoverable by nothing. Beside the
-   * Share control, because both halves are one idea read in two directions.
-   */
-  it("opens somebody else's share from the collection page", async () => {
-    const user = userEvent.setup();
+  /** **No way into somebody else's share from here** (issue #1028): the *Open a shared
+   *  collection* button that sat beside Share is gone. */
+  it("draws no Open a shared collection button", async () => {
     wrap(<CollectionPage />);
 
-    await user.click(await screen.findByRole("button", { name: "Open a shared collection" }));
-
-    expect(await screen.findByLabelText("Link to a shared collection")).toBeInTheDocument();
+    await screen.findByRole("button", { name: "Share your collection" });
+    expect(screen.queryByRole("button", { name: "Open a shared collection" })).toBeNull();
   });
 });
 

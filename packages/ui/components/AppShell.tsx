@@ -96,9 +96,9 @@ const NEW_WINDOW = shortcut("global", "newWindow");
  * the rail (issue #937 — tag search is the Search page's sidebar now), which made this list nine
  * long again. `nav.test.ts` pins the ninth entry **by name**, because a length can only say how
  * many rows are reached and never which, and it is the *which* a reader has in their fingers.
- * What `shared` lost was its only keyboard route, and that route was a *fallback* —
- * `features/collection/ShareFolderMenu.tsx` draws **Open a shared collection** beside the Share
- * control now. `docs/reference/keyboard-shortcuts.md` carries the record.
+ * What `shared` lost was its only keyboard route, and that route was a *fallback* — the
+ * collection's **Open a shared collection** stood in for it until issue #1028 removed that too.
+ * `docs/reference/keyboard-shortcuts.md` carries the record.
  *
  * Derived rather than written out, so a destination added to `NAV` joins the list by construction
  * and only a deliberate second *exclusion* could ever be a decision again.
@@ -423,11 +423,10 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
    * makes closing the last binder safe: without it the row would vanish from under the reader in
    * the same frame the view emptied.
    *
-   * **The way *in* before there is a row at all is the collection's own control** —
-   * `features/collection/ShareFolderMenu.tsx` draws **Open a shared collection** beside the Share
-   * control, and opening one is what puts this row on the rail. It was `Ctrl+6` until 2026-09-08,
-   * when a tenth destination left nine digits to go round; {@link CHORD_NAV} carries that whole
-   * argument, and the entry point is why it costs nothing.
+   * **There is no way *in* before there is a row** (issue #1028): the collection's **Open a shared
+   * collection**, which put this row on the rail, was removed with no replacement. It was `Ctrl+6`
+   * until 2026-09-08, when a tenth destination left nine digits to go round; {@link CHORD_NAV}
+   * carries that whole argument.
    */
   const entries = useMemo(
     () =>

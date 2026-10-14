@@ -57,17 +57,14 @@ const BINDER: ShareTarget = { kind: "folder", uid: "uid-binder", title: "Trade b
  * Hidden rather than greyed is spec §9 and `PinnedFolders`' rule underneath it — a control whose
  * only outcome is a sentence explaining that it does not work teaches a reader nothing its
  * absence would not have, and the Settings sync panel is where the connection story already
- * lives. What stays is the other half, because opening somebody else's binder is open to
- * everyone.
+ * lives. Nothing else is drawn: the *Open a shared collection* half left with issue #1028.
  */
 export const NothingConnected: Story = {
   args: { target: COLLECTION },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    await expect(
-      await canvas.findByRole("button", { name: "Open a shared collection" }),
-    ).toBeInTheDocument();
+    await expect(canvas.queryByRole("group", { name: "Sharing" })).not.toBeInTheDocument();
     await expect(canvas.queryByRole("button", { name: /^Share/ })).not.toBeInTheDocument();
   },
 };
@@ -132,8 +129,8 @@ export const LockedDrawer: Story = {
 
 /**
  * **A level with nothing to publish** — a deck group, `Recently removed`, or a drawer the folder
- * list named no `sync_uid` for. `shareTargetFor` answers `null` for all three and the Share half
- * simply is not there, exactly as no other folder write is offered on the app's own folders.
+ * list named no `sync_uid` for. `shareTargetFor` answers `null` for all three and the Share
+ * control simply is not there, exactly as no other folder write is offered on the app's own folders.
  */
 export const NothingToShare: Story = {
   args: { target: null },
@@ -141,9 +138,7 @@ export const NothingToShare: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    await expect(
-      await canvas.findByRole("button", { name: "Open a shared collection" }),
-    ).toBeInTheDocument();
+    await expect(canvas.queryByRole("group", { name: "Sharing" })).not.toBeInTheDocument();
     await expect(canvas.queryByRole("button", { name: /^Share/ })).not.toBeInTheDocument();
   },
 };

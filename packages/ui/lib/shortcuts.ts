@@ -112,9 +112,9 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
        * carries the record.
        *
        * ⚠️ **The shared view's `Ctrl+6` was reversed on 2026-09-08**, and the reversal is what the
-       * entry point bought: that chord existed because *nothing else reached the view*, and
-       * `features/collection/ShareFolderMenu.tsx` now draws **Open a shared collection** beside
-       * the Share control. A signpost where there was only a key.
+       * entry point bought: that chord existed because *nothing else reached the view*, and the
+       * collection's **Open a shared collection** was a signpost where there was only a key. That
+       * signpost was removed too (issue #1028), and the chord did not come back.
        */
       chords: [
         { key: "1", ctrl: true },

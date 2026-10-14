@@ -183,6 +183,10 @@ shared collection** beside the Share control, so the view is reached by a signpo
 a key nobody was told about. What the reversal costs is a keyboard route to one view; what it
 buys is that no other view's digit moved.
 
+⚠️ **The signpost is gone too** (2026-10-14, issue #1028): the owner removed *Open a shared
+collection* from the cabinet and gave the view no other way in, so the conditional rail row is the
+only route to it — and it appears only once a share is open.
+
 `AppShell`'s floor moved with it: `i >= CHORD_NAV.length`, still guarding the direction that
 throws — a chord with no destination behind it. A destination with no chord costs nothing, which
 is exactly what `shared` now relies on, and `nav.test.ts` pins the `- 1` against the **id** rather
