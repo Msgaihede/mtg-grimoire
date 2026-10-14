@@ -427,14 +427,16 @@ pub fn run() {
             // Publishing a binder as a read-only page, and reading somebody else's. Registered
             // from `share::commands` for the pairs above's reason: `generate_handler!` names a
             // command after the **last path segment**, so these are `share_list`,
-            // `share_create`, `share_refresh`, `share_revoke` and `share_open`.
+            // `share_create`, `share_refresh`, `share_auto_update`, `share_revoke` and
+            // `share_open`.
             //
-            // **Four of the five reach the network and `share_open` reaches it with no token at
+            // **Five of the six reach the network and `share_open` reaches it with no token at
             // all** — viewing a share needs the link and nothing else (spec §9), which is the
             // whole of the entitlement asymmetry this feature is built around.
             share::commands::share_list,
             share::commands::share_create,
             share::commands::share_refresh,
+            share::commands::share_auto_update,
             share::commands::share_revoke,
             share::commands::share_open,
             // The two writes that move copies across the deck boundary. Registered from

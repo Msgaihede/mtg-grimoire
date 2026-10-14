@@ -282,13 +282,16 @@ export function CardArt({
 }
 
 /**
- * The chip on an **unreleased** printing (issue #965, replacing #940's diagonal stamp): a small red
+ * The chip on an **unreleased** printing (issue #965, replacing #940's diagonal stamp): a small
  * "Releases <date>" box in the art's bottom-left corner, sitting on the chin.
  *
  * Issue #940 drew this fact as the set code and date corner to corner in heavy type, and it hid the
  * very thing a reader opens a spoiler for — the art and the rules text. The fact still has to be
- * seen at a glance on a wall, so it is red rather than the felt the other corners use, but it is
- * one line in a corner: the card stays the card.
+ * seen at a glance on a wall, so it is red, but it is one line in a corner: the card stays the
+ * card. **It wears the deck builder's rule-break box** (`WordMark` in
+ * `features/decks/CardMarks.tsx`) — red words and a red hairline on the felt rather than a filled
+ * red block — so the two red corner marks in the app are one style; the words still tell them
+ * apart.
  *
  * Bottom-left because it is a fact about *when*, which sits with the rest of what the chin says
  * about the printing, and because the top two corners are the printing count's and the finish
@@ -296,8 +299,9 @@ export function CardArt({
  * both are drawn — see `CardGrid`.
  *
  * Every size is one at 100% zoom multiplied by `--mark-scale`, like {@link FoilOverlay}'s chip, so
- * it stays proportionate from a 0.5× wall to a 2× one. Its height (`py` 0.125rem twice plus a
- * 1rem line) is the owned badge's, which is what lets `CardGrid` stack the two exactly.
+ * it stays proportionate from a 0.5× wall to a 2× one — all but the hairline border and the 1px of
+ * vertical padding, which stay put like the rule-break box's. So its height is a 0.75rem scaled line
+ * plus 4px, and `CardGrid` lifts the owned badge by exactly that sum when both are drawn.
  *
  * `aria-hidden` for {@link FoilOverlay}'s reason: this sits inside the tile's button, whose
  * accessible name must stay the card's. Its words are still reachable — the tooltip names the set
@@ -312,11 +316,13 @@ export function UnreleasedChip({ set, date }: { set: string; date: string }) {
       data-unreleased-chip
       {...tip(`${set} · ${unreleasedLabel(date)}`, { describes: false })}
       className={cn(
-        "pointer-events-auto absolute select-none whitespace-nowrap bg-destructive/90 font-semibold text-white",
+        "pointer-events-auto absolute select-none whitespace-nowrap",
         "bottom-[calc(0.25rem*var(--mark-scale,1))] left-[calc(0.25rem*var(--mark-scale,1))]",
-        "rounded-[calc(0.25rem*var(--mark-scale,1))]",
-        "px-[calc(0.375rem*var(--mark-scale,1))] py-[calc(0.125rem*var(--mark-scale,1))]",
-        "text-[calc(0.75rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
+        // The deck builder's rule-break box (`WordMark`'s `art` surface), class for class: the
+        // destructive hairline, the 3px radius, the felt at 85% and the 9px data face.
+        "rounded-[3px] border border-destructive/50 bg-bg/85 font-mono text-destructive",
+        "px-[calc(0.25rem*var(--mark-scale,1))] py-px",
+        "text-[calc(0.5625rem*var(--mark-scale,1))] leading-[calc(0.75rem*var(--mark-scale,1))]",
       )}
     >
       {releaseChipLabel(date)}

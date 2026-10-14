@@ -69,9 +69,8 @@ export const NAV: readonly NavEntry[] = [
   // not always drawn: a chord's whole value is that it does not move, so binding a digit to a
   // row that appears and disappears is what would make one press mean two things to two readers
   // — and that is why the other nine rows fit `Ctrl+1…9` exactly. The reason this entry *had*
-  // `Ctrl+6` was that nothing else reached the view, and that is retired —
-  // `features/collection/ShareFolderMenu.tsx` draws **Open a shared collection** beside the Share
-  // control, which is a signpost where a chord was only a key.
+  // `Ctrl+6` was that nothing else reached the view; the collection's **Open a shared collection**
+  // retired it, and was itself removed (issue #1028), so this row is the only way in.
   // `docs/reference/keyboard-shortcuts.md` carries the whole record.
   { id: "shared", label: "Shared", Icon: Handshake },
   // Before Settings so Settings stays the last row. **`Camera` and not `ScanLine`** (main,

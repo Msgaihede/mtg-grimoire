@@ -7,7 +7,7 @@
  * main". The current one is lit in the colour of the seat whose turn it is (gold for the reader,
  * the opponent's red), so a glance at the strip says both at once.
  */
-import type { GoldfishSeat, PlaytestPhase, PlaytestView } from "@/lib/ipc";
+import type { PlaytestPhase, PlaytestPlayer, PlaytestView } from "@/lib/ipc";
 import { phaseLine } from "./combat";
 
 export const PHASES: readonly { id: PlaytestPhase; label: string }[] = [
@@ -30,7 +30,7 @@ export interface TrackerStep {
 export interface Tracker {
   /** 0 during the opening hands, when nothing is lit. */
   turn: number;
-  whose: GoldfishSeat;
+  whose: PlaytestPlayer;
   steps: TrackerStep[];
   /** The whole strip in words, for a screen reader: "Turn 5 · Your main phase". */
   caption: string;

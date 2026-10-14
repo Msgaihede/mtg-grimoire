@@ -121,6 +121,17 @@ export const shareCommands = {
   /** Upload a fresh snapshot for a share that already exists, **keeping its link** — so a reader
    *  who has handed the URL out never has to hand out a second one. Answers the row re-read. */
   shareRefresh: (id: string) => invoke<ShareRow>("share_refresh", { id }),
+  /**
+   * Republish every share **this device** published whose folder has changed since its last
+   * upload (issue #1025), and answer the rows that were updated — `[]` when nothing moved, which
+   * is nearly every call.
+   *
+   * **Free when nothing changed**: the crate decides which shares are due from a hash of each
+   * folder's snapshot, on the read connection, with no token and no request — so the shell can
+   * ask on a timer without spending the account's shared Worker budget. A share whose upload
+   * fails is left out of the answer rather than rejecting the call, and is tried again next time.
+   */
+  shareAutoUpdate: () => invoke<ShareRow[]>("share_auto_update"),
   /** Withdraw a share. **Terminal and the reader's own press** — the link stops answering, and
    *  {@link ShareRow.state} is `revoked` rather than the row going away. */
   shareRevoke: (id: string) => invoke<void>("share_revoke", { id }),

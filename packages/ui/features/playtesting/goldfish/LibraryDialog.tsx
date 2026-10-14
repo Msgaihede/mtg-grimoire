@@ -32,12 +32,16 @@ export function LibraryDialog({
   onAct,
   onClose,
   opponent = false,
+  owner = "The opponent's",
 }: {
   look: ZoneLook;
   view: Pick<GoldfishView, "libraryCards" | "graveyard" | "exile" | "library">;
   onAct: (a: GoldfishAction) => void;
   onClose: () => void;
   opponent?: boolean;
+  /** Whose zone an `opponent` look is, as its title starts: "Opponent 2's" at a four-player
+   *  table. */
+  owner?: string;
 }): JSX.Element {
   const [moved, setMoved] = useState(0);
   const [filter, setFilter] = useState("");
@@ -57,7 +61,7 @@ export function LibraryDialog({
   const cards =
     searching && needle !== "" ? shown.filter((c) => c.name.toLowerCase().includes(needle)) : shown;
 
-  const title = opponent ? opponentTitle(look) : titleFor(look);
+  const title = opponent ? opponentTitle(look, owner) : titleFor(look);
   const places = opponent ? [] : placesFor(look);
 
   const send = (card: GameCard, to: GoldfishPlace) => {
@@ -203,8 +207,8 @@ function titleFor(look: ZoneLook): string {
 }
 
 /** The opponent's zone, named as theirs. Only a graveyard or exile is ever opened for them. */
-function opponentTitle(look: ZoneLook): string {
-  return look.zone === "exile" ? "The opponent's exile" : "The opponent's graveyard";
+function opponentTitle(look: ZoneLook, owner: string): string {
+  return look.zone === "exile" ? `${owner} exile` : `${owner} graveyard`;
 }
 
 function subtitleFor(look: ZoneLook, view: Pick<GoldfishView, "library">): string {

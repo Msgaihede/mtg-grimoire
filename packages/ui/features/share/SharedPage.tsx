@@ -237,7 +237,7 @@ function SharedView() {
       />
       {share.isPending ? (
         <p className="mt-8 text-sm text-dim">Loading the collection…</p>
-      ) : share.isError ? (
+      ) : share.data === undefined ? (
         <Refused
           sentence={ipcError(share.error)}
           onRetry={() => void share.refetch()}
@@ -258,43 +258,55 @@ function SharedView() {
           onClose={() => closeShare(url)}
         />
       ) : (
-        <Binder
-          /**
-           * ⚠️ **The key is load-bearing and its absence was a wrong write.**
-           *
-           * Every piece of this component's state is about *one* binder, and the ticks are about
-           * one binder's **positions**: {@link rows} keys a row by its index in the snapshot's own
-           * array, which is the only unique key this document has. Switching binders is a shipped
-           * control — {@link Switcher} draws a tab per open share — and it does not unmount
-           * anything: `Switcher`'s `useQueries` holds an observer on every open link at
-           * `staleTime: Infinity`, so the target snapshot is already warm and `isPending` is false
-           * on the same render.
-           *
-           * Without a key, `picked` therefore survived the switch and `pickedCards` resolved keys
-           * `"0"`, `"1"` against the **new** binder's rows: *Add to wishlist* wrote the first two
-           * cards of a collection the reader had never looked at, with no error and no cue. The
-           * search box, the drawer, the sort and the report carried over too, which is merely
-           * wrong-looking.
-           *
-           * A key rather than an effect that clears the state, because "this is a different
-           * binder" is exactly what a key says and an effect would have to be remembered by
-           * whoever adds the next field.
-           */
-          key={url}
-          snapshot={share.data}
-          index={cross.index}
-          // ⚠️ **`ready` is passed and not merely computed.** Until both sweeps land — up to a
-          // hundred round trips at the 50 000-card size `useOwnedIndex` argues from — `index` is
-          // `EMPTY_INDEX`, and a wall drawn against it says *You own 0 · You want 0* on every
-          // tile: the exact figure that module exists to keep off the screen, arriving as an
-          // answer rather than as a wait. `failed` is the same absence for a different reason,
-          // which is why both are here and neither is folded into the other.
-          figuresReady={cross.ready}
-          figuresFailed={cross.failed}
-          refreshing={share.isFetching}
-          onRefresh={() => void share.refetch()}
-          onClose={() => closeShare(url)}
-        />
+        <>
+          {share.isError && (
+            /* **A failed re-check keeps the binder the reader is looking at** (issue #1025).
+               The snapshot re-checks itself on a timer now, and one that failed — a dropped
+               network, or the owner withdrawing the link — used to be the only fetch there
+               was. Swapping the binder for the refusal would take the cards away mid-read for a
+               blip; the sentence says what happened and the copy on screen stays. */
+            <p role="status" className="mt-4 text-sm text-dim">
+              Couldn't check for an update: {ipcError(share.error)}
+            </p>
+          )}
+          <Binder
+            /**
+             * ⚠️ **The key is load-bearing and its absence was a wrong write.**
+             *
+             * Every piece of this component's state is about *one* binder, and the ticks are about
+             * one binder's **positions**: {@link rows} keys a row by its index in the snapshot's own
+             * array, which is the only unique key this document has. Switching binders is a shipped
+             * control — {@link Switcher} draws a tab per open share — and it does not unmount
+             * anything: `Switcher`'s `useQueries` holds an observer on every open link, so the
+             * target snapshot is already warm and `isPending` is false
+             * on the same render.
+             *
+             * Without a key, `picked` therefore survived the switch and `pickedCards` resolved keys
+             * `"0"`, `"1"` against the **new** binder's rows: *Add to wishlist* wrote the first two
+             * cards of a collection the reader had never looked at, with no error and no cue. The
+             * search box, the drawer, the sort and the report carried over too, which is merely
+             * wrong-looking.
+             *
+             * A key rather than an effect that clears the state, because "this is a different
+             * binder" is exactly what a key says and an effect would have to be remembered by
+             * whoever adds the next field.
+             */
+            key={url}
+            snapshot={share.data}
+            index={cross.index}
+            // ⚠️ **`ready` is passed and not merely computed.** Until both sweeps land — up to a
+            // hundred round trips at the 50 000-card size `useOwnedIndex` argues from — `index` is
+            // `EMPTY_INDEX`, and a wall drawn against it says *You own 0 · You want 0* on every
+            // tile: the exact figure that module exists to keep off the screen, arriving as an
+            // answer rather than as a wait. `failed` is the same absence for a different reason,
+            // which is why both are here and neither is folded into the other.
+            figuresReady={cross.ready}
+            figuresFailed={cross.failed}
+            refreshing={share.isFetching}
+            onRefresh={() => void share.refetch()}
+            onClose={() => closeShare(url)}
+          />
+        </>
       )}
       {paste}
     </Frame>
@@ -318,9 +330,7 @@ function Empty({ onPaste }: { onPaste: () => void }) {
   return (
     <div className="max-w-[46ch] py-16">
       <Handshake className="size-7 text-dim" aria-hidden />
-      <h2 className="mt-4 font-heading text-[1.375rem] leading-snug">
-        Open a shared collection
-      </h2>
+      <h2 className="mt-4 font-heading text-[1.375rem] leading-snug">Open a shared collection</h2>
       <p className="mt-3 text-sm text-dim">
         Paste a link to see which of the shared cards you own or want.
       </p>
@@ -362,10 +372,12 @@ function Switcher({
    * snapshot *is* in the cache — but a query with no observer is garbage-collected at TanStack's
    * default `gcTime`, and a row of tabs reading off `getQueryData` would silently fall back to
    * the share's id for a reader who left the window alone. Subscribing keeps each one alive, and
-   * costs nothing to fetch: `staleTime` is `Infinity` and the documents are already there.
+   * costs nothing to fetch: the documents are already there, and `refetchOnMount: false` keeps a
+   * return to this view from re-asking every open link once they have gone stale. A tab needs a
+   * name, not news — the binder on screen is the one that re-checks (`useSharedSnapshot`).
    */
   const titles = useQueries({
-    queries: open.map((url) => sharedSnapshotQuery(url)),
+    queries: open.map((url) => ({ ...sharedSnapshotQuery(url), refetchOnMount: false })),
   });
   const nameOf = (url: string, at: number) => {
     const snapshot = titles[at]?.data;
@@ -632,8 +644,8 @@ function Binder({
           </p>
         )}
         <p className="mt-4 max-w-[54ch] text-sm text-dim">
-          Read-only snapshot. It won't change until {owner === "" ? "its owner" : owner} shares
-          it again.
+          Read-only snapshot. It won't change until {owner === "" ? "its owner" : owner} shares it
+          again.
         </p>
       </header>
 

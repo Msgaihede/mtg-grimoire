@@ -7,16 +7,18 @@ this page is the record of what was built against it, with the reason at each si
 every figure.
 
 **The one sentence: a share is a snapshot the owner publishes, not a window onto their
-database.** Everything a viewer sees was true when the owner last pressed publish, the owner
+database.** Everything a viewer sees was true when the owner's app last published, the owner
 chooses what crosses, and nothing a viewer does can reach back. Every decision below is a
-consequence of that.
+consequence of that. **Since issue #1025 the owner's app republishes a changed folder on its own**
+while it is open — still a snapshot, just one that does not wait for a press; see
+[keeping a share current](#keeping-a-share-current--issue-1025).
 
 It is **user schema v41**, **one new Cloudflare Worker** beside `infrastructure/relay/`, **one new D1 table** on
 the database the relay already owns, and **two viewers** — a public web page and a top-level view
 inside the app — reading **one format** written by **one Rust publisher**.
 
 ⚠️ **The spec says two D1 tables, twice, and one shipped.** Its header line and §5.2's own heading
-both say *two*; §5.2's body defines `shares` and two indexes, and `infrastructure/share-worker/schema.sql`
+both say _two_; §5.2's body defines `shares` and two indexes, and `infrastructure/share-worker/schema.sql`
 creates exactly that. Nothing is missing — the second table was designed away and the counts were
 not re-read. It is the failure this repository's own rule warns about: a prose-only edit routes to
 neither CI job, so nothing goes red when a count rots.
@@ -59,7 +61,7 @@ into the two files only after the deploy printed it and a probe answered there.
 `share::publish::endpoint` asks whether the effective base carries an `http(s)` scheme and answers
 `NOT_DEPLOYED` when it does not, **before any request and before any `error_log` row**. While the
 constant was a placeholder that was every build's answer; without the guard a connected reader
-pressing *Share* met `builder error: relative URL without a base` — reqwest's sentence about a
+pressing _Share_ met `builder error: relative URL without a base` — reqwest's sentence about a
 mistake nobody made. The test is the **scheme** and not an equality against the constant,
 deliberately: `base == SHARE_BASE` would have started refusing everything on the day that constant
 became a real host, because no override is the ordinary case. **A build released before the
@@ -71,16 +73,16 @@ exactly — it is what points a dev build at `wrangler dev --local`.
 
 **As of 2026-10-01, 20:30 UTC, asked of the account and the host rather than of this page:**
 
-| | State |
-| --- | --- |
-| The Worker | **deployed.** `GET /s/{16 chars}` answers the Worker's own **404 HTML page** with `noindex` and `cache-control: no-store` — a D1 read that found no share, where a missing `shares` table would be a 500; `/g/abc/shares` answers **401** JSON with no bearer, `/g/abc/share` **405** to a GET, `/g/abc/bogus` **404** JSON, and `/s/{id}/{hash}.json.gz` **404** JSON |
-| The viewer bundle | **served at the edge**: `GET /assets/share.js` answers 200 `text/javascript`, 507 153 bytes, 21 files uploaded from `apps/share/dist-share/` |
-| `shares` in D1 | **applied 2026-10-01**, one statement per request and never `--file`: the table and both indexes, read back from `sqlite_master` with the `CHECK` and `shares_folder`'s `WHERE state <> 'revoked'` intact |
-| The R2 bucket | **`mtg-grimoire-shares` exists** (`WEUR`, Standard), created the same day once Markus had enabled R2 in the dashboard — until then the API answered `10042: Please enable R2 through the Cloudflare Dashboard`. Empty: nothing has been published |
-| The cron | `30 3 * * *` is registered on the script, beside the relay's `0 * * * *` — two of the free plan's five |
+|                                 | State                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The Worker                      | **deployed.** `GET /s/{16 chars}` answers the Worker's own **404 HTML page** with `noindex` and `cache-control: no-store` — a D1 read that found no share, where a missing `shares` table would be a 500; `/g/abc/shares` answers **401** JSON with no bearer, `/g/abc/share` **405** to a GET, `/g/abc/bogus` **404** JSON, and `/s/{id}/{hash}.json.gz` **404** JSON                                                                                                                                                                                                                                                                                                                                                                                                                |
+| The viewer bundle               | **served at the edge**: `GET /assets/share.js` answers 200 `text/javascript`, 507 153 bytes, 21 files uploaded from `apps/share/dist-share/`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `shares` in D1                  | **applied 2026-10-01**, one statement per request and never `--file`: the table and both indexes, read back from `sqlite_master` with the `CHECK` and `shares_folder`'s `WHERE state <> 'revoked'` intact                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| The R2 bucket                   | **`mtg-grimoire-shares` exists** (`WEUR`, Standard), created the same day once Markus had enabled R2 in the dashboard — until then the API answered `10042: Please enable R2 through the Cloudflare Dashboard`. Empty: nothing has been published                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| The cron                        | `30 3 * * *` is registered on the script, beside the relay's `0 * * * *` — two of the free plan's five                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `RELAY_HMAC_KEY` on this Worker | **set at 20:15 UTC**, five minutes after the deploy. The relay's was rotated at 20:03 — Cloudflare never shows a secret back and the old value had not been kept — and `wrangler secret put` here could not stick before the Worker existed, so it was put a second time once it did. **The tell is a malformed bearer**: `GET /g/abc/shares` with `authorization: Bearer nonsense` answered **500** between the deploy and the secret, because `required()` throws before `verify` can refuse, and **401** after it. A bearer-less probe answers 401 either way and proves nothing. ⚠️ **What no probe can show is that the two Workers hold the _same_ value**: a different one also answers 401 — to every real publish — and only a token the relay minted can tell the two apart |
-| The relay's `dev` claim | **deployed 2026-10-01** — the gate's precondition, see [the Worker](#the-worker) |
-| `apps/share/dist-share/` | built by no automated command — see [what nothing runs](#what-no-build-runs-and-what-that-costs). ⚠️ **In a worktree with no `node_modules` of its own, `pnpm share:build` exits 0 and writes the wrong thing**: Node resolves the main checkout's Vite, a Vite 7 ignores `rolldownOptions`, and `apps/share/dist-share/assets/` holds the *app's* `index-*.js` and no `share.js` — which `wrangler deploy` would upload happily and the shell would then link to nothing. Measured 2026-10-01; check that `apps/share/dist-share/assets/share.js` exists before any deploy |
+| The relay's `dev` claim         | **deployed 2026-10-01** — the gate's precondition, see [the Worker](#the-worker)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `apps/share/dist-share/`        | built by no automated command — see [what nothing runs](#what-no-build-runs-and-what-that-costs). ⚠️ **In a worktree with no `node_modules` of its own, `pnpm share:build` exits 0 and writes the wrong thing**: Node resolves the main checkout's Vite, a Vite 7 ignores `rolldownOptions`, and `apps/share/dist-share/assets/` holds the _app's_ `index-*.js` and no `share.js` — which `wrangler deploy` would upload happily and the shell would then link to nothing. Measured 2026-10-01; check that `apps/share/dist-share/assets/share.js` exists before any deploy                                                                                                                                                                                                           |
 
 **What only a real publish can settle, and none has been made:**
 
@@ -138,7 +140,7 @@ these are the six a reader would most mind having published. `needs_review`, `co
 `tradelist_quantity`, `grading`, `serial_number`, `altered`, `signed`, `proxy` and `misprint` are
 absent for the plainer reason that nothing in either viewer draws them.
 
-**The fence is `no_private_field_can_reach_the_wire`, a sweep over the *serialised text* rather
+**The fence is `no_private_field_can_reach_the_wire`, a sweep over the _serialised text_ rather
 than over the struct — so a future field addition fails it — and it reads values as well as key
 names.** Both of spec §3's lists are in it, and each column the fixture can write a string into
 has its value in it too, spelled `private-…` so a match is unambiguous.
@@ -151,7 +153,7 @@ as such, because a boolean has no distinctive value to carry.
 
 ⚠️ **The fence had two holes and both were about the _fixture_ rather than the list** (found
 2026-09-08, in the whole-branch review). **`needs_review` was on both halves of the sweep and NULL
-on every row the fixture made** — it is a free-text *sentence* the reconciler writes, and a column
+on every row the fixture made** — it is a free-text _sentence_ the reconciler writes, and a column
 the fixture never sets is a column fenced by its key name alone, so a leak under a short key would
 have serialised as `null` and passed both halves. **`condition_original` was on neither half nor in
 spec §3** — arbitrary text out of the reader's own import file, whatever their spreadsheet held
@@ -160,8 +162,8 @@ reads. Both carry a `private-…` marker now, both are on the list, and each was
 pointing the select's `e.condition` at them in turn. The general form is worth more than the two
 columns: **a value sweep proves nothing about a column the fixture leaves unset.**
 
-**The TypeScript half swept five key names and no values while calling itself *"the assertion that
-the writer's absences are real"***, and it sweeps both now. The two fences are deliberately not one:
+**The TypeScript half swept five key names and no values while calling itself _"the assertion that
+the writer's absences are real"_**, and it sweeps both now. The two fences are deliberately not one:
 Rust's runs over a snapshot built at test time and so holds for every input, while
 `shareSnapshot.test.ts`'s runs over the **committed** golden and is what goes red when a golden is
 regenerated with a leak in it — the case where the writer's own suite moved in the same commit.
@@ -175,17 +177,17 @@ at all unless the snapshot says which question it answered.
 **And `fields` naming a column does not promise every card carries it.** Three absences are
 ordinary rather than edge cases, and the writer emits every one deliberately:
 
-* **An ungraded copy carries no `c`.** `NONE` is schema v35's *not set* — an app sentinel rather
+- **An ungraded copy carries no `c`.** `NONE` is schema v35's _not set_ — an app sentinel rather
   than a grade — and putting it on the wire would ship a value every reader of this format would
   then have to know how to decode.
-* **An unquoted finish carries no `p`.** `sorting::price_expr` answers NULL for a printing the
+- **An unquoted finish carries no `p`.** `sorting::price_expr` answers NULL for a printing the
   marketplace does not list, which for a foil copy of a card priced only in `usd` is the ordinary
   case. `p` is `Option<f64>` and never `f64` for this reason: the flat read raised
   `InvalidColumnType` and **failed the entire publish over one unpriced card**. A `0.0` would be
   the app claiming a shop offered the card for nothing.
-* **A folder whose parent is not itself in the snapshot carries `parent: null`.** A folder shared
+- **A folder whose parent is not itself in the snapshot carries `parent: null`.** A folder shared
   out of the middle of the cabinet is the root of the tree it publishes, so no edge ever points at
-  a drawer nobody shared. A tree walk may assume every non-null `parent` resolves *within*
+  a drawer nobody shared. A tree walk may assume every non-null `parent` resolves _within_
   `folders`; it may **not** assume a null one means "top of the owner's collection".
 
 Both viewers render a missing `c` or `p` as an em dash. `shareSnapshot.ts`'s header states all
@@ -193,19 +195,19 @@ three, because that is the file both readers see.
 
 ⚠️ **Three implementations spelled that absence three ways, and one of them disagreed with the
 writer about arithmetic** (fixed 2026-09-08). `share::publish::meta_body` sends `totalValue: null`
-unless at least one card carried a price, on the stated grounds that *a `0.0` on a binder no feed
-quotes is the page claiming it is worth nothing* — and `apps/share/SharePage.tsx` folded a missing `p`
+unless at least one card carried a price, on the stated grounds that _a `0.0` on a binder no feed
+quotes is the page claiming it is worth nothing_ — and `apps/share/SharePage.tsx` folded a missing `p`
 to zero, so a share published with `value` where the marketplace quotes nothing rendered **"Worth
 $0.00 at TCGplayer prices"** on the public page: the exact number the writer goes out of its way to
 refuse, mitigated by a `, with N unquoted` clause and still there. The page declines to state a
-total now — *"No TCGplayer price is quoted for anything here"* — so there are three states rather
+total now — _"No TCGplayer price is quoted for anything here"_ — so there are three states rather
 than two: prices were not shared, prices were shared and nothing is quoted, prices were shared and
 something is.
 
 **And the absence itself is now spelled `== null` everywhere, in both viewers.** It was
 `=== undefined` in three readers and `?? null` in two others. The writer emits neither — `c` and
 `p` both carry `skip_serializing_if` — but **nothing validates a document on the way in**, so a
-`p: null` counted as *quoted*: it contributed 0 to the total and was left out of the unquoted
+`p: null` counted as _quoted_: it contributed 0 to the total and was left out of the unquoted
 count, and a `c: null` would have rendered the blank cell both files' comments say must never
 happen.
 
@@ -221,7 +223,7 @@ on disk; and its one price cell is the only byte in it that depends on `serde_js
 formatting, which is worth knowing before anybody edits the fixture's price.
 
 The golden is a **full** snapshot and exercises no absence. That is deliberate — the absences are
-covered by targeted Rust tests that assert on the *serialised JSON* plus a TypeScript
+covered by targeted Rust tests that assert on the _serialised JSON_ plus a TypeScript
 delete-and-reparse case, so a second byte-exact artifact would duplicate coverage while adding a
 second file to keep in LF and in sync.
 
@@ -231,19 +233,19 @@ the same paste can be refused on either side of the boundary, and a reader who t
 thing must not be told two different things depending on which half noticed — and nothing held the
 two together. `OpenShareDialog.test.tsx` reads `publish.rs` through Vite's `?raw` and compares, the
 trick `ipc.test.ts` already uses on the crate and `share::publish` already uses on the Worker's
-`wrangler.jsonc`. Five lines, in a feature whose whole shape is *one format, N implementations,
-fenced*.
+`wrangler.jsonc`. Five lines, in a feature whose whole shape is _one format, N implementations,
+fenced_.
 
 ### Size, measured
 
 **Measured 2026-09-08, debug build, Windows**, by `share::tests::a_thousand_card_snapshot_is_measured`,
 which prints rather than asserts so that it reports rather than rots:
 
-| | |
-| --- | --- |
-| 1 000 cards, raw JSON | **273 117 B** (273 B/card) |
-| the same, gzipped | **41 331 B** (**41.3 B/card**) |
-| ratio | 6.6× |
+|                       |                                |
+| --------------------- | ------------------------------ |
+| 1 000 cards, raw JSON | **273 117 B** (273 B/card)     |
+| the same, gzipped     | **41 331 B** (**41.3 B/card**) |
+| ratio                 | 6.6×                           |
 
 Extrapolated linearly: **3 000 cards ≈ 124 KB gzipped**, **50 000 cards ≈ 2.07 MB gzipped**. The
 Worker's `MAX_BLOB_BYTES` is therefore roughly 190 000 cards — far above any real collection, which
@@ -278,12 +280,12 @@ reaches the network.
 **A share does not ride on `collection::list_entries`, and that is the whole of its safety.** The
 two reasons are both defaults that are right for the app and wrong here:
 
-* **`folder_id = ?` is direct members only.** `CollectionQuery`'s named-folder arm pushes
+- **`folder_id = ?` is direct members only.** `CollectionQuery`'s named-folder arm pushes
   `e.folder_id = ?` and nothing else, so a share of a parent folder built on it would silently
   omit every subfolder — no error, no empty state, just a binder missing its best drawer.
-* **`exclude_locked` is skipped entirely once a folder is named.** The guard reads
-  `if q.exclude_locked && q.folder_id.is_none()`, because *standing in a locked folder names it,
-  and a named folder is served whole*. That is the correct rule for a reader clicking into their
+- **`exclude_locked` is skipped entirely once a folder is named.** The guard reads
+  `if q.exclude_locked && q.folder_id.is_none()`, because _standing in a locked folder names it,
+  and a named folder is served whole_. That is the correct rule for a reader clicking into their
   own drawer and **a leak in a share**.
 
 So `share::snapshot` is its own read, and its shape is the inverse of `CollectionQuery`'s:
@@ -301,7 +303,7 @@ So `share::snapshot` is its own read, and its shape is the inverse of `Collectio
 
 > **`CollectionQuery`'s unasked question keeps every row; this one's keeps none.** A whole-collection
 > backup is the one read that must never ask. A share is the opposite kind of read: an unasked
-> question here must publish *less*, never more.
+> question here must publish _less_, never more.
 
 The recursive CTE uses `UNION` and never `UNION ALL`, `delete_folder`'s reason for the same word:
 the duplicate-row check is what makes a `parent_id` cycle — a hand-edited database, a restored
@@ -311,13 +313,13 @@ backup — converge instead of running forever.
 
 `FOLDER_NOT_FOUND` → `FOLDER_IS_LOCKED`, and the order is asserted. (`FOLDER_NOT_SHAREABLE`, the
 `kind <> 'user'` refusal that sat between them, was removed by issue #941.)
-A folder that is not there can never report as locked, because *"unlock it"* is advice nobody can
+A folder that is not there can never report as locked, because _"unlock it"_ is advice nobody can
 act on for a drawer that does not exist.
 
 **A locked folder is refused rather than published empty**, and the mutation that proves why is
 worth keeping: replacing `effectively_locked` with a plain `locked <> 0` produces
 `ShareSnapshot { title: "Top shelf", folders: [], cards: [] }` — a **success** carrying nothing,
-which is precisely spec §4's *"an empty snapshot that reads as this person owns nothing"*. That is
+which is precisely spec §4's _"an empty snapshot that reads as this person owns nothing"_. That is
 why the **refusal** had to be fenced and not merely the exclusion.
 
 ### Issue #941 — every folder kind, and the wishlist
@@ -334,17 +336,17 @@ the share Worker (they key one live share per group on it and read nothing else)
 share is a string in that namespace — no schema rung, no new column, no Worker deploy.
 `share::wishlist` reads it; `packages/ui/features/wishlist/wishlistShare.ts` builds it:
 
-| Key | Publishes |
-| --- | --- |
-| `wishlist:` | The whole wishlist — the root and every folder the reader made |
-| `wishlist:folder:<sync_uid>` | One folder the reader made, and everything under it |
-| `wishlist:deck:<decks.sync_uid>` | A deck's managed wishlist, its Tokens child included |
-| `wishlist:deck-tokens:<decks.sync_uid>` | A deck's managed Tokens folder alone |
+| Key                                     | Publishes                                                      |
+| --------------------------------------- | -------------------------------------------------------------- |
+| `wishlist:`                             | The whole wishlist — the root and every folder the reader made |
+| `wishlist:folder:<sync_uid>`            | One folder the reader made, and everything under it            |
+| `wishlist:deck:<decks.sync_uid>`        | A deck's managed wishlist, its Tokens child included           |
+| `wishlist:deck-tokens:<decks.sync_uid>` | A deck's managed Tokens folder alone                           |
 
 - **A managed folder is named by its deck**, because `managed_wishlist` derives the folder per
   device under `capture::suppressed`: its own `sync_uid` is NULL or per-device and is gone whenever
   the deck's mode goes off and back. The deck's uid syncs, so a second device resolves the same key
-  and *Update* works there. `WishlistFolder` carries `syncUid` and `managedDeckUid` for this.
+  and _Update_ works there. `WishlistFolder` carries `syncUid` and `managedDeckUid` for this.
 - A whole-wishlist share leaves the managed folders out, for the collection's reason.
 - **A wish is not a copy.** An any-printing wish travels as the printing the wishlist itself draws
   and prices it as (cheapest at the marketplace, then newest); `f` is `preferred_finish` or
@@ -359,16 +361,16 @@ share is a string in that namespace — no schema rung, no new column, no Worker
 **A supporter can share a deck the way they share a folder**, read-only, and it is a fourth key
 in the same namespace rather than a new route: `deck:<decks.sync_uid>`. Like the wishlist (#941)
 it needs **no schema rung, no new column and no new Worker route**; the Worker reads the key's
-shape for one thing only, the OpenGraph card's kind, which now says *Deck*. `share::deck` reads
+shape for one thing only, the OpenGraph card's kind, which now says _Deck_. `share::deck` reads
 it and `packages/ui/features/decks/deckShare.ts` builds it.
 
-| | |
-| --- | --- |
-| What travels | The deck's **live list** (its *Actual*) — never the theory plan, which is a draft the press did not ask to publish |
-| Piles | Each pile that holds a live card is a **folder** (`pile-0`, `pile-1`, … — its position, never its row id), named as the reader named it, in the editor's order; its role and switch ride in a new top-level `deck: { format, piles: [{ uid, kind, active }] }`. An empty pile does not travel |
-| Card facts | Three short keys a binder's cards never carry: `t` (type line), `mc` (mana cost) and `mv` (mana value) — what a deck is read by, and what a viewer with no corpus cannot know otherwise |
-| Absent, not switched off | The deck's labels, notes, to-dos, tags, description and every `needs_review` sentence. No `c` either — a deck row has no condition — so `condition` is dropped from `fields`, as a wishlist share drops it |
-| Refusal | `DECK_NOT_FOUND` — *"That deck is not in your decks."* |
+|                          |                                                                                                                                                                                                                                                                                               |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| What travels             | The deck's **live list** (its _Actual_) — never the theory plan, which is a draft the press did not ask to publish                                                                                                                                                                            |
+| Piles                    | Each pile that holds a live card is a **folder** (`pile-0`, `pile-1`, … — its position, never its row id), named as the reader named it, in the editor's order; its role and switch ride in a new top-level `deck: { format, piles: [{ uid, kind, active }] }`. An empty pile does not travel |
+| Card facts               | Three short keys a binder's cards never carry: `t` (type line), `mc` (mana cost) and `mv` (mana value) — what a deck is read by, and what a viewer with no corpus cannot know otherwise                                                                                                       |
+| Absent, not switched off | The deck's labels, notes, to-dos, tags, description and every `needs_review` sentence. No `c` either — a deck row has no condition — so `condition` is dropped from `fields`, as a wishlist share drops it                                                                                    |
+| Refusal                  | `DECK_NOT_FOUND` — _"That deck is not in your decks."_                                                                                                                                                                                                                                        |
 
 **`v` stays 1, and that is the compatibility story.** Every new key is absent on a binder, so a
 binder's snapshot is byte-identical (the golden did not move), and a viewer that predates deck
@@ -380,7 +382,7 @@ rather than a refusal. `__golden__/deck.json` is the deck half's fence, asserted
 
 **`DeckRow` gained `sync_uid`** for this, the way `CollectionFolder` gained it for the first
 release: the deck editor's Share control (in `DeckEditorHeader`, the cabinets' own
-`ShareFolderMenu` with a `deck` target and no *Open* half) needs the key, and `null` is a deck
+`ShareFolderMenu` with a `deck` target) needs the key, and `null` is a deck
 that cannot be shared yet, never a fallback.
 
 **The two viewers draw it as a deck, read-only, Stacks first and switchable to Grid, Table and
@@ -397,7 +399,7 @@ two rules.
 
 #### The deck's link preview
 
-A deck link unfurls as a deck: *"Commander deck · 100 cards · updated today"*, with **its
+A deck link unfurls as a deck: _"Commander deck · 100 cards · updated today"_, with **its
 commander's picture** as `og:image` (plus `og:image:alt`, `twitter:image` and
 `twitter:card` `summary_large_image`). The shell still reads one D1 row and no snapshot, so the
 two facts ride in the **metadata** the publish already posts — `format` and `image` — into two
@@ -412,7 +414,7 @@ in the deck — so the preview can only show a picture the share itself carries.
 every `img` in a snapshot names) and under 500 characters, and `page.ts` escapes it like every
 other interpolation. A publisher cannot point strangers' unfurls at a host of their choosing. A
 binder and a wishlist send `null` for both and their cards are unchanged; a deck published before
-the columns existed previews as a plain *Deck* with no picture until its next *Update now*.
+the columns existed previews as a plain _Deck_ with no picture until its next _Update now_.
 
 ### The root arm, and the leak that sixteen green tests did not see
 
@@ -431,7 +433,7 @@ firing does not prove the exclusion holds.**
 
 `condition = 'NONE'` emits **no `c` key**, and a folder whose parent is outside the snapshot gets
 `parent: null`. Each is one line to reverse and each is fenced by a test. What a reader loses is
-the ability to tell *"no condition recorded"* from *"condition not shared"* for a single card —
+the ability to tell _"no condition recorded"_ from _"condition not shared"_ for a single card —
 and the snapshot-level `fields` array still answers that for the share as a whole.
 
 ---
@@ -443,7 +445,7 @@ read the snapshot → POST the metadata → PUT the gzip → only now write coll
 ```
 
 The relay's row does not point at the new blob until the blob has landed, and the app does not
-point at the *share* until the relay has said it did. A publish that dies halfway leaves the
+point at the _share_ until the relay has said it did. A publish that dies halfway leaves the
 **previous** snapshot serving — `sync_engine::client::post_rotation`'s commit-last shape and its
 reason: a half-published share is a broken link in somebody's Discord, and the old one is never
 worse than that.
@@ -462,7 +464,7 @@ different problem.
 
 ⚠️ **What the two-step buys is the blob, the link and the cached row — and not the header above
 them.** The Worker's `POST` updates `title`, `owner_name`, `card_count`, `total_value` and `fields`
-on the existing row *before* the `PUT`, and the public page draws its heading and its card count
+on the existing row _before_ the `PUT`, and the public page draws its heading and its card count
 from that row. So a **republish** that dies between the two steps goes on serving the previous
 snapshot under a header describing the new one — 412 cards promised, 400 delivered — until the next
 successful publish. That is strictly smaller than a dead link and is the trade the shape was
@@ -471,23 +473,25 @@ it is.
 
 ### The five commands
 
-`share_list`, `share_create`, `share_refresh`, `share_revoke`, `share_open` —
+`share_list`, `share_create`, `share_refresh`, `share_revoke`, `share_open` — and a sixth since
+issue #1025, `share_auto_update`, which is `share_refresh` run by a timer over the shares that
+changed (see [keeping a share current](#keeping-a-share-current--issue-1025)) —
 `apps/desktop/src-tauri/src/share/commands.rs`, mirrored in `packages/ui/lib/ipc.ts`, and the mirror is fenced by
 `ipc.test.ts`'s parsers over the Rust source rather than by two hand-typed lists.
 
 Three of the five are worth a sentence each:
 
-* **`share_list` reaches the network, best effort**, and is the only one of the five that could.
+- **`share_list` reaches the network, best effort**, and is the only one of the five that could.
   Spec §4.3 has a second device inherit the owner's name from the relay's list, and every other
   command needs an id or a name that device does not yet have — so this is the only press that
   could ever learn the group's shares. No membership means no request at all; a failure answers
   the cache.
-* **`share_open` answers `serde_json::Value`**, not a typed struct. `ShareSnapshot` cannot
+- **`share_open` answers `serde_json::Value`**, not a typed struct. `ShareSnapshot` cannot
   implement `Deserialize` — `fields: Vec<&'static str>` has no owned form — and spec §10 wants a
   newer `v` **told about** rather than refused, which a strict Rust struct turns into a parse error
   at the wrong layer. Rust gunzips and refuses a non-object; TypeScript's `parseSnapshot` draws the
   version conclusion, which is where that rule already lives.
-* **`share_open` needs no membership and sends no token.** Viewing is open to everyone and the
+- **`share_open` needs no membership and sends no token.** Viewing is open to everyone and the
   link is the whole of the capability.
 
 Four of the five run on the **write** connection through one `spawn_blocking` helper, so each can
@@ -519,23 +523,73 @@ and `refusal()` is the pure function that picks one. The viewer's three bounds a
 [described with the bounds](#what-the-in-app-open-refuses-and-what-it-may-spend). Two of the
 older ones carry a rule:
 
-* **A 401 here does not revoke the grant.** `client::lapsed` exists because a 401 on push, pull or
+- **A 401 here does not revoke the grant.** `client::lapsed` exists because a 401 on push, pull or
   ack leaves nothing to try; here the token came back from `/token` seconds ago, so the authority
   on whether a membership ended is the next sync. Taking the grant away over this would tell a
   reader their membership ended because a binder failed to publish.
-* **The two cap refusals are matched on `code` and never on the sentence** — `share_limit` and
+- **The two cap refusals are matched on `code` and never on the sentence** — `share_limit` and
   `blob_limit` — because the copy is free to be improved and a 403 already means other things.
   That is `entitlement`'s `device_limit` rule, and it is the one that was learned the hard way.
   The Worker's own `error` string is kept where it exists, because **the number is in it** —
-  *"that snapshot is {size} bytes and a share may be at most {cap}"* — which is the difference
+  _"that snapshot is {size} bytes and a share may be at most {cap}"_ — which is the difference
   between a refusal a reader can act on and "too big".
 
 ---
 
+### Keeping a share current — issue #1025
+
+**A share used to change only when its owner remembered to press _Update now_.** Raised from
+Discord on 2026-10-14: shared folders should keep themselves up to date. They now do, from both
+ends, and the request budget below is what shaped each half.
+
+**The owner's app republishes a changed folder on its own.** `useShareAutoUpdate`
+(`packages/ui/features/collection/`, mounted once in `AppShell`, off in the light app and for a
+reader who has connected nothing) calls `share_auto_update` 30 s after launch and every 5 minutes
+after. The command splits on two connections:
+
+- **Deciding is free.** `share::publish::changed` builds each candidate share's snapshot on the
+  **read** connection and hashes it (`digest`: SHA-256 over everything but `id` and `updatedAt`,
+  the two fields that differ between two publishes of an unchanged folder), and compares it with
+  the digest of the last upload this device made, kept in `app_meta` under `share_digest:{id}`.
+  No token, no request, no writer and no sync lane — so the ordinary pass, where nothing moved,
+  costs the account's shared Worker budget nothing.
+- **Only a changed share is published**, by the same `publish::refresh` the press runs, on the
+  write connection. Its two requests are the only cost, and a burst of filing is one publish per
+  interval, not one per card. A failure is not the command's error: the publish has written its
+  `error_log` row, the old snapshot is still serving, and the stored digest is still the old one,
+  so the next pass tries again.
+
+Three kinds of share are never due: one not `live` (withdrawn, or lapsed and refused by the gate
+anyway); one **this device never published** (`published` is `None` — another device in the group
+made it, and two devices racing one link would flicker it between two pictures of a database that
+has not finished syncing; _Update now_ here makes this device the keeper); and one whose read is
+refused (a locked or deleted folder — the menu already says _Stale_). A share published before
+#1025 has no digest, so its first pass is one republish. A revoke deletes the digest. The digest
+is `app_meta` rather than a `collection_shares` column because it is this device's private
+bookkeeping, never synced or drawn, and losing it costs exactly one republish — not worth a rung.
+
+A process-wide flag (`AUTO_UPDATING`) makes a second window's concurrent pass answer `[]` at once
+instead of uploading the same change twice. The answer patches the `["share", "list"]` cache in
+place rather than invalidating it, because re-reading the list is `share_list`, which reconciles
+against the relay on the write connection.
+
+**What it cannot do: publish while the app is closed.** An edit made just before closing is
+published by the next launch's first pass. Nothing else in this design could do better without a
+server holding the reader's data, which is the one thing a share is built not to need.
+
+**The in-app viewer re-checks the binder on screen.** `sharedSnapshotQuery` went from
+`staleTime: Infinity` to 5 minutes, and `useSharedSnapshot` adds a 15-minute `refetchInterval` for
+the binder being viewed only — not the switcher's observers on other open links
+(`refetchOnMount: false` there) — and never in a background window or on focus. That is one Worker
+request per open view per 15 minutes. A failed re-check keeps the binder on screen with the
+sentence above it rather than swapping the cards for the refusal. **The public web page is
+unchanged**: it is one fetch per load, and a reload is the re-check — a timer there would put every
+stranger's idle tab on the account's daily budget.
+
 ## User schema v41 — `collection_shares`
 
 ⚠️ **v41 was this branch's guess.** Every open branch adding a rung guesses the same number; read
-*Schema rung collisions with main* before assuming the number here survived the merge.
+_Schema rung collisions with main_ before assuming the number here survived the merge.
 `apps/desktop/src-tauri/CLAUDE.md`'s ladder record carries the rung's own paragraph, and **that record routes to
 neither CI job**, so a renumber on the way in rots it silently.
 
@@ -543,13 +597,13 @@ neither CI job**, so a renumber on the way in rots it silently.
 `GET /g/{group}/shares` is the roster, exactly as the rewrapped key set is the roster for group
 membership and for the same reason: a synced copy would be a second record of a fact the relay
 already holds, and the two would disagree the first time a device was offline during a revoke.
-What the table buys is a *shared* badge on a folder that survives being offline, and the links to
+What the table buys is a _shared_ badge on a folder that survives being offline, and the links to
 go with it. `share::cache::reconcile` therefore **deletes** — a share the relay does not name has
-left — and it deliberately does not write `published`, which records when *this* device last
+left — and it deliberately does not write `published`, which records when _this_ device last
 uploaded and which the relay knows nothing about.
 
 **`owner_name` and `url` are columns rather than derivations**, and both were added to the rung
-after it was first written, inside the same unshipped v41. The name is what the *next* device in
+after it was first written, inside the same unshipped v41. The name is what the _next_ device in
 the group publishes under instead of asking the reader to type it again; the link is built by the
 Worker from its own binding, so rebuilding it in Rust would be one string built twice — and a
 placeholder until the day the Worker is deployed. Neither can be answered offline by anything but a
@@ -569,8 +623,8 @@ The first says a folder may be shared once. A whole-collection share carries a N
 and so is in no index at all, which is why there is a second.
 
 ⚠️ **The obvious second index — `ON collection_shares (folder_uid) WHERE folder_uid IS NULL` —
-refuses nothing.** The reasoning first written beside it (*every admitted row shares the same null
-key, so at most one row can exist*) is exactly backwards: **SQLite holds NULLs in a UNIQUE index as
+refuses nothing.** The reasoning first written beside it (_every admitted row shares the same null
+key, so at most one row can exist_) is exactly backwards: **SQLite holds NULLs in a UNIQUE index as
 distinct from each other**, so a second whole-collection share goes straight in. Measured on SQLite
 3.53.0 with `node:sqlite`, then reproduced as a red Rust test, then reproduced again independently
 by the reviewer rather than taken on the report's word. Indexing the **expression**
@@ -583,7 +637,7 @@ does — was available and deliberately not taken: two indexes say the two rules
 relay's has to fold a `group_id` in anyway.
 
 **A store therefore deletes the other row on the folder first**, and that is not tidying: the relay
-mints a *new* id when a withdrawn folder is shared again, so the insert would otherwise collide
+mints a _new_ id when a withdrawn folder is shared again, so the insert would otherwise collide
 with the tombstone of the share it replaces. The folder key is `coalesce(folder_uid, '')` there for
 the same NULL reason — `folder_uid = ?` matches nothing at all for a whole-collection share.
 
@@ -614,12 +668,12 @@ clear**, and Cloudflare — and Markus — can read it. What that buys is the Op
 Discord, a server-rendered landing page, and the freedom to page server-side later without
 re-cutting the format. What it costs:
 
-* the app must never send a field a reader would not put on a public page — the six absences are
+- the app must never send a field a reader would not put on a public page — the six absences are
   the fence, and they are absences rather than switches for exactly this reason;
-* a compromise of this Worker's D1 or R2 is a compromise of every shared binder **and of nothing
+- a compromise of this Worker's D1 or R2 is a compromise of every shared binder **and of nothing
   else** — the sync log's ciphertext is in a different Durable Object under a different key, and
   this Worker holds no key material at all;
-* **the privacy claim the app makes is "anyone with the link"**, and must be worded that way in
+- **the privacy claim the app makes is "anyone with the link"**, and must be worded that way in
   the UI. Not "private", not "encrypted".
 
 ### Nothing here reaches a Durable Object
@@ -637,7 +691,7 @@ for the viewer bundle would put every viewer's JavaScript on the account's daily
 ### The page a stranger lands on, and the one trap in it
 
 `GET /s/{id}` is rendered from the D1 row rather than served as a static file, which is what lets
-the HTML carry OpenGraph tags built from that row — *"Giradeli's Trade binder · 412 cards"*. That
+the HTML carry OpenGraph tags built from that row — _"Giradeli's Trade binder · 412 cards"_. That
 card is the concrete thing decision 2's plaintext storage buys, and it is worth one Worker request.
 Every response the page module produces carries `noindex`, the shell and both 410s and the 404
 alike, because it sits in one shared template.
@@ -683,29 +737,29 @@ stored in the clear and `revoked` is terminal, so the object it used to leave be
 the reader had withdrawn, readable in R2 for ever. `fakeD1` learned `UPDATE … RETURNING` for it.
 
 ⚠️ **The snapshot response sets `encodeBody: "manual"`** (same date). By default the Workers runtime
-*applies* the `content-encoding` a response declares, and the only exemption is an unread `fetch()`
+_applies_ the `content-encoding` a response declares, and the only exemption is an unread `fetch()`
 response passed through — an R2 stream is not one. Without the option every snapshot left the
 Worker gzipped twice: the web viewer's `parseSnapshot` would have answered `SNAPSHOT_UNREADABLE`
 and the app's `parse_snapshot` invalid UTF-8. jsdom cannot see runtime encoding, so the suite pins
 the option and the deploy runbook's `curl … | head -c 1` is what proves it, cold and warm.
 
 ⚠️ **The `PUT` buffers rather than streaming straight into R2, and the plan's "no buffering" was not
-implementable.** A content-addressed key needs the digest *before* the object can be named, and
+implementable.** A content-addressed key needs the digest _before_ the object can be named, and
 R2's Workers binding has no rename and no server-side copy. The bound is preserved differently:
 chunks past `MAX_BLOB_BYTES` are dropped as they arrive, so a caller who omits or lies about
 `content-length` still cannot make the Worker hold more than the cap.
 
 **What `immutable` costs** is that revoking cannot recall an edge copy somebody already holds. What
-revoking *does* stop is every new viewer, because the shell is the only thing that hands out that
+revoking _does_ stop is every new viewer, because the shell is the only thing that hands out that
 URL and the shell is `max-age=300`.
 
 ### `live` / `lapsed` / `revoked`
 
-| State | Written by | Reversible? |
-| --- | --- | --- |
-| `live` | a publish, and the daily pass lighting a revived membership | — |
-| `lapsed` | **the daily cron only** | yes — the next pass lights it again |
-| `revoked` | **the reader's own press only** | **no — terminal** |
+| State     | Written by                                                  | Reversible?                         |
+| --------- | ----------------------------------------------------------- | ----------------------------------- |
+| `live`    | a publish, and the daily pass lighting a revived membership | —                                   |
+| `lapsed`  | **the daily cron only**                                     | yes — the next pass lights it again |
+| `revoked` | **the reader's own press only**                             | **no — terminal**                   |
 
 Both non-live states answer **410** and not 404, with different sentences: a viewer should learn
 that a share was withdrawn or expired, not that they mistyped a link.
@@ -729,7 +783,7 @@ is what moves a subject through `active → grace → dead` against Patreon, and
 would be one account with two answers to when a membership ended.
 
 **A group with no entitlement row at all goes dark**, which is the opposite of what the plan's SQL
-would have done and is better: `/claim` *moves* a binding rather than refusing one, so a subject
+would have done and is better: `/claim` _moves_ a binding rather than refusing one, so a subject
 who reconnects on another group leaves this one entitled by nothing — a real state rather than a
 hypothesis. Fail closed, because `lapsed` is the reversible direction: a group that should not have
 gone dark lights again on the next pass, where a group that should have gone dark and did not,
@@ -743,7 +797,7 @@ exists for. Choosing a slightly wider read to keep a guard testable is the trade
 
 **The pass never writes `updated_at` at all** (2026-10-01, issue #548). It used to stamp the rows
 it moved, and the public page renders that stamp as the snapshot's date — so a share relit after a
-month of lapse told its OpenGraph card it had been *updated today*. A flip of `state` changes not
+month of lapse told its OpenGraph card it had been _updated today_. A flip of `state` changes not
 one byte of what the owner published. The rows it does not move were already left alone, so no
 share claims it was refreshed at 03:30 either; both halves are pinned by a test.
 
@@ -769,14 +823,14 @@ any revoke dies with `UNIQUE constraint failed: index 'shares_folder'`.
 ⚠️ **And the lookup in front of it has to carry the same predicate.** Without it `.first()` answers
 the tombstone, every publish after a revoke takes the mint-a-new-id branch, and **the third press
 is an uncaught 500 for ever** — i.e. every Refresh of that folder after a revoke, permanently.
-**Two publishes cannot see it**, because the second one is *supposed* to mint a new id, which is
+**Two publishes cannot see it**, because the second one is _supposed_ to mint a new id, which is
 why the regression test publishes **four** times around one revoke and pins the id from the second
 press on. Both folder-key reads now route through one `serving()` helper.
 
 **`infrastructure/relay/src/fakeD1.ts` cannot check any of this** — it models column keys, not expression indexes
 and not partial ones — so both halves were driven against real SQLite with `node:sqlite` over the
-shipped `schema.sql`. That is the general shape: *an index the test double does not implement is an
-index the suite cannot fence.*
+shipped `schema.sql`. That is the general shape: _an index the test double does not implement is an
+index the suite cannot fence._
 
 **Revoked tombstones accumulate unbounded.** There is no retention rule and none was invented; it
 is a sweep for the day it matters, beside spec §13's identical note about reclaiming R2 storage
@@ -790,31 +844,31 @@ the three, and the constants are the authority rather than a number written here
 **`fields` gained a fourth bound in the same round, and its ceiling is the format's own arity
 rather than a number somebody picked.** Checking each element does not bound the array —
 `["condition"]` repeated a hundred thousand times passes every element check and is a megabyte of
-JSON text in a column of a D1 database the whole account shares. `fields` is a *set* over three
+JSON text in a column of a D1 database the whole account shares. `fields` is a _set_ over three
 known names, so anything longer than that is duplicates or junk.
 
 ---
 
 ## The request budget, and what the caching actually buys
 
-**The Workers free plan's 100,000 requests/day is per *account*.** A share that goes viral draws on
-the same budget every paying reader's sync depends on, and past the ceiling *every* reader starts
+**The Workers free plan's 100,000 requests/day is per _account_.** A share that goes viral draws on
+the same budget every paying reader's sync depends on, and past the ceiling _every_ reader starts
 erroring at once — the cliff the relay's existing 70% alarm was added for. **Nothing in this design
 can bound how many strangers click.**
 
 What the design does do:
 
-* **the viewer bundle is a static asset**, free and unlimited, served without reaching this Worker
+- **the viewer bundle is a static asset**, free and unlimited, served without reaching this Worker
   at all;
-* **the blob is `immutable` for a year** with `caches.default` in front of R2;
-* **the shell is `public, max-age=300`** *for a share that is serving*, so a reader who reloads
+- **the blob is `immutable` for a year** with `caches.default` in front of R2;
+- **the shell is `public, max-age=300`** _for a share that is serving_, so a reader who reloads
   inside five minutes spends nothing.
 
 That puts a cold view at roughly **two Worker requests** — the shell and the blob.
 
 **The five minutes are conditional, and the two exceptions are the interesting part.** A shell for
 a row whose blob has not committed answers **`no-store`**, because that state is transient and the
-advice on the page is *reload*; and **both 410s answer `no-store` too**, because `lapsed` is
+advice on the page is _reload_; and **both 410s answer `no-store` too**, because `lapsed` is
 reversible — a reader who renews must not be told for five more minutes that their link is dead —
 and a 404 becomes a 200 the moment a publish lands on that id. A gone page also carries **no
 metadata and no OpenGraph tags at all**: a withdrawn share whose card went on advertising the
@@ -822,14 +876,14 @@ binder in every Discord it was ever pasted into is most of what withdrawing it w
 
 ⚠️ **Two facts qualify the warm one, and both are recorded rather than assumed** (spec §14 item 6):
 
-* **The Cache API does not read through.** A `caches.default` hit still costs a **Worker request**;
-  what it saves is the R2 read. So *"a warm view costs zero"* holds through the **browser's**
+- **The Cache API does not read through.** A `caches.default` hit still costs a **Worker request**;
+  what it saves is the R2 read. So _"a warm view costs zero"_ holds through the **browser's**
   `max-age`, not through `caches.default` — every distinct viewer inside the shell's 300 s still
   spends one Worker request against the shared daily budget.
-* **Cloudflare's Cache API page does not name `workers.dev`.** It grants functional cache
-  operations to *custom domains* and to Pages functions on `*.pages.dev`, and conspicuously omits
-  the address this Worker would first be deployed at. If the Cache API is inert there, *"a warm
-  view costs no R2 read"* quietly stops holding on the first deploy. **It fails open** — an extra
+- **Cloudflare's Cache API page does not name `workers.dev`.** It grants functional cache
+  operations to _custom domains_ and to Pages functions on `*.pages.dev`, and conspicuously omits
+  the address this Worker would first be deployed at. If the Cache API is inert there, _"a warm
+  view costs no R2 read"_ quietly stops holding on the first deploy. **It fails open** — an extra
   R2 read, nothing breaks — so this is a `curl -I` after the first deploy and not a document to
   argue with.
 
@@ -858,7 +912,7 @@ counts a side-effect and a dynamic import as imports.
 `CardArt` draws `remoteSrc` when the prop is present and otherwise asks the `mtgimg://` protocol
 for `cardId` — a protocol this page has no Tauri behind it to answer. So the tile passes
 `cardId={null}` and `remoteSrc={card.img ?? null}`, **never bare `card.img`**: an absent
-`remoteSrc` means *the cache* and a present `null` means *no picture*, which `CardArt` draws as a
+`remoteSrc` means _the cache_ and a present `null` means _no picture_, which `CardArt` draws as a
 named frame. No other `CardArt` in `packages/ui/` passes it. `apps/share/vite.config.ts` merges the app's
 config and adds no `define` of its own.
 
@@ -873,30 +927,30 @@ second Worker request.
 
 Five things a future editor needs:
 
-* ⚠️ **The shell's inline `<style>` is unlayered and Tailwind's utilities are not.** Its bare
+- ⚠️ **The shell's inline `<style>` is unlayered and Tailwind's utilities are not.** Its bare
   `body`, `main`, `h1` and `p` rules beat a layered declaration at any specificity, so they would
   repaint every paragraph and clamp every container on this page whatever class it carries.
   `main.tsx` reads the shell's `<style>` elements **before** adding its own and then removes them.
-* ⚠️ **The blob URL is inlined in the shell** as
+- ⚠️ **The blob URL is inlined in the shell** as
   `<link id="snapshot" rel="preload" as="fetch" crossorigin>`, rather than offered as an
   `index.json` route, because the shell response is already holding the fact a second request would
   go and fetch. **A row whose `object_key` is still NULL gets no `<link>`, and its absence is the
-  signal** the viewer reads to draw *still uploading*.
-* ⚠️ **`credentials: "omit"` on the fetch made Chromium discard that preload.** The `<link>`
+  signal** the viewer reads to draw _still uploading_.
+- ⚠️ **`credentials: "omit"` on the fetch made Chromium discard that preload.** The `<link>`
   requests in credentials mode `same-origin` — `fetch`'s own default — so passing `"omit"` made the
-  modes disagree and the warmed response was dropped on the floor: *"a preload for … is found, but
-  is not used because the request credentials mode does not match"*. The blob was then fetched
+  modes disagree and the warmed response was dropped on the floor: _"a preload for … is found, but
+  is not used because the request credentials mode does not match"_. The blob was then fetched
   **twice on every cold view**, defeating the whole point of inlining the link. Measured in the
   running page 2026-09-08 and re-measured after the fix: one request, `initiatorType: "link"`.
-* **A row is not identified by id + finish + folder + condition.** The first version keyed the card
+- **A row is not identified by id + finish + folder + condition.** The first version keyed the card
   list that way and React is entitled to drop one of a duplicated pair. The fence is a
   `console.error` spy rather than a length assertion, because React emits the duplicate-key warning
   on first mount too. The fixture uses two `structuredClone`s of the same card, so it agrees on
   **every** field rather than on the four the old composite key happened to name.
-* **The folder rail re-roots whatever the walk did not reach**, and that line is the difference
-  between a malformed document *losing* a drawer and merely mis-nesting one. **A cycle has no root
+- **The folder rail re-roots whatever the walk did not reach**, and that line is the difference
+  between a malformed document _losing_ a drawer and merely mis-nesting one. **A cycle has no root
   at all** — every folder in it names a parent that resolves — so a walk from `null` finds none of
-  them, and the rail silently loses every drawer in the loop *and the way to the cards inside it*.
+  them, and the rail silently loses every drawer in the loop _and the way to the cards inside it_.
   The current writer cannot produce one; **the viewer parses a document it did not write**, and
   `parseSnapshot` promises nothing about the folder graph by design. Deleting the rescue does not
   mis-nest a drawer — it removes **all** folder navigation, because the rail is gated on being
@@ -925,12 +979,12 @@ is enumerated in one file.
 `readOnly.test.ts` is that check: an `import.meta.glob` over the whole subtree, sweeping for
 `ipc.<name>` against two enumerated lists, plus four **back doors** refused outright
 (`ipc["…"]`, a binding taken off `ipc`, `ipc` passed as an argument, a namespace import) because
-none of the four has a legitimate use here and *"absent"* is a complete answer. It carries its own
+none of the four has a legitimate use here and _"absent"_ is a complete answer. It carries its own
 anti-vacuity guard, because a moved directory would otherwise turn the guarantee into a green build
 over an empty set.
 
 **The roster of what the view may call is `READS` and `WRITES` in that file, and the build answers
-both.** Spec decision 8's want list — tick rows, press *Add to wishlist*, choose a folder the
+both.** Spec decision 8's want list — tick rows, press _Add to wishlist_, choose a folder the
 reader already has — **is** a write, and it landed in `AddToWishlist.tsx`. It went onto a **second
 list** rather than as two more entries on the first, so `READS` stays only reads and a diff that
 touches `WRITES` is a diff about the view's promise: **every name there has to be a write to
@@ -942,35 +996,35 @@ picked copies onto one wish per printing and finish, offers the wishlist cabinet
 **no folder is minted here**, because §8 defers binding a folder to a share — and says which
 copies are already on the reader's list, since `wishlist_add` folds onto the grain and a second
 add would otherwise be silent. **The tick is gated on the same answer the figure line is**: against
-the empty index every card reads *wanted 0*, so a want list built during the sweep would offer to
+the empty index every card reads _wanted 0_, so a want list built during the sweep would offer to
 add cards the reader already wants with nothing on screen saying so.
 
-**The cross-reference is the reason to open a share in the app at all** — *you own 2 · you want 3*,
+**The cross-reference is the reason to open a share in the app at all** — _you own 2 · you want 3_,
 from two sweeps over the reader's own lists. Three things about it:
 
-* **Two reads, folded, never materialised.** There is no by-id read on either list, so the sweep
+- **Two reads, folded, never materialised.** There is no by-id read on either list, so the sweep
   walks both once and folds each page into a map, **discarding the rows**. At 50 000 cards, holding
   every row to build a `Map<string, number>` is the whole list in memory for an answer that fits in
   a few hundred kilobytes.
-* **The answers are filed under `["collection", …]` and `["wishlist", …]`**, not under `["share"]`,
-  because that is what they are reads *of* — so every existing write that changes what the reader
+- **The answers are filed under `["collection", …]` and `["wishlist", …]`**, not under `["share"]`,
+  because that is what they are reads _of_ — so every existing write that changes what the reader
   owns already invalidates them. Filed under `["share"]` they would be correct on the first draw
   and 30 seconds stale after the reader's next add, `staleTime` making a missing invalidation look
   like a considered figure.
-* ⚠️ **`ready` was computed and then never consumed**, which drew `You own 0 · You want 0` on every
+- ⚠️ **`ready` was computed and then never consumed**, which drew `You own 0 · You want 0` on every
   tile until both sweeps finished — up to ~100 round trips at 50 000 cards — and made the two filter
-  chips act on that zero: *On your wishlist* said "Nothing here matches" and *You do not own it*
+  chips act on that zero: _On your wishlist_ said "Nothing here matches" and _You do not own it_
   showed the whole binder. **No test caught it because every cross-reference case `waitFor`ed past
   the window.** The fix's test holds `collectionList` open with a hand-resolved promise and asserts
-  *inside* the loading window.
+  _inside_ the loading window.
 
 **`staleTime: Infinity` and `retry: false`** on the fetched snapshot, against the app's defaults: a
 snapshot does not change on its own, and every refusal the crate returns is a sentence and terminal.
-The view offers a *Check for an update* press, which is `refetch()`.
+The view offers a _Check for an update_ press, which is `refetch()`.
 
 ⚠️ **The blob fetch asks for gzip and then sniffs for it, and both halves are insurance against a
 question no document can settle.** `apps/desktop/src-tauri/Cargo.toml` builds reqwest `default-features = false`
-with **no `gzip` feature** — deliberately, because Scryfall's bulk data is a real `.gz` *file* and
+with **no `gzip` feature** — deliberately, because Scryfall's bulk data is a real `.gz` _file_ and
 transparent decompression would corrupt it — so this client decodes nothing itself and, until
 2026-09-08, sent no `accept-encoding` either. The Worker stores a gzipped object and nails
 `content-encoding: gzip` on by hand (`infrastructure/share-worker/src/blob.ts`), and `parse_snapshot` ran
@@ -1028,10 +1082,10 @@ of text and the app aborted on the allocation. Every read is capped now, **count
 arrive** — `Content-Length` is believed only when it refuses, `combos`' rule — and the figures are
 constants in `publish.rs`, not numbers to copy from here:
 
-| Cap | Constant | Chosen because |
-| --- | --- | --- |
-| The page | `MAX_PAGE_BYTES` | `page.ts` renders one template; the only publisher text in it is a title and a name at `MAX_TEXT_CHARS` each. A quarter of a megabyte is well over an order of magnitude above the largest shell the Worker can render and leaves a fork room for an inlined stylesheet. |
-| The snapshot, gzipped | `MAX_BLOB_BYTES` | **The Worker's own `MAX_BLOB_BYTES`**, which `blob.ts` refuses above at upload — so nothing larger can have come from a share. `the_blob_cap_is_the_workers_own` reads `infrastructure/share-worker/src/env.ts` and multiplies its expression out. |
+| Cap                                                          | Constant                                       | Chosen because                                                                                                                                                                                                                                                                                      |
+| ------------------------------------------------------------ | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The page                                                     | `MAX_PAGE_BYTES`                               | `page.ts` renders one template; the only publisher text in it is a title and a name at `MAX_TEXT_CHARS` each. A quarter of a megabyte is well over an order of magnitude above the largest shell the Worker can render and leaves a fork room for an inlined stylesheet.                            |
+| The snapshot, gzipped                                        | `MAX_BLOB_BYTES`                               | **The Worker's own `MAX_BLOB_BYTES`**, which `blob.ts` refuses above at upload — so nothing larger can have come from a share. `the_blob_cap_is_the_workers_own` reads `infrastructure/share-worker/src/env.ts` and multiplies its expression out.                                                  |
 | The snapshot, inflated — and a snapshot served as plain JSON | `MAX_SNAPSHOT_BYTES`, eight times the blob cap | [The sizing above](#size-measured) measured **6.6×** (273 B a card raw, 41.3 B gzipped) and calls the compressed figure a floor, so the ratio is a ceiling: a snapshot at the Worker's cap inflates to about 53 MiB, and eight times leaves a fifth to spare — roughly 245 000 cards at 273 B each. |
 
 **The snapshot's wire cap depends on what arrives**, and that is the sniff's own argument one step
@@ -1040,14 +1094,14 @@ the way past — is the inflated text by another route and is held to that. Hold
 blob cap would refuse a large, healthy share on exactly the edge the sniff exists to survive.
 **The inflation reads through `take(cap + 1)`**, and the `+ 1` is the check: a read capped at the cap
 itself would hand the parser a truncated document, and a real document followed by padding would
-then *parse*. All three answer one sentence, `SHARE_TOO_LARGE` — nothing the Worker writes is that
+then _parse_. All three answer one sentence, `SHARE_TOO_LARGE` — nothing the Worker writes is that
 large, whichever cap noticed — and the row names the cap.
 
 **And the whole open runs inside `OPEN_TIMEOUT`**, page, snapshot and parse on one wall clock,
 because a per-chunk timeout never ends a trickle. Two minutes carries a snapshot at the Worker's cap
 at about 70 KB/s. The viewer's client keeps a 10 s connect timeout and a 30 s per-chunk one, which
 now only make a dead connection fail fast. `OPEN_TIMED_OUT` is the one sentence in the file that
-says *try again*, because a slow afternoon is not terminal. The inflate and the parse run on the
+says _try again_, because a slow afternoon is not terminal. The inflate and the parse run on the
 blocking pool, since the open itself now runs on the async runtime every other command shares.
 
 **3. It fetched wherever the page pointed.** `resolve` took an absolute `href` as it stood, and the
@@ -1056,20 +1110,20 @@ make the app `GET` any `http(s)` address, one on the reader's own network includ
 body to the render. The webview's CSP `connect-src` forbids exactly that fetch; this was the way
 round it. Three fences now, each closing a different spelling:
 
-* **The pasted link must be `https`.** Refused as `NOT_A_LINK` — the paste box's sentence word for
+- **The pasted link must be `https`.** Refused as `NOT_A_LINK` — the paste box's sentence word for
   word — before any request and with no row. `shareLinkFrom` in `OpenShareDialog.tsx` still lets
   `http:` through to the command; the reader hears the same sentence either way. **There is no
   debug-build exception**: nothing in this repository documents opening a share from a local
   `wrangler dev` in the app, so there was no flow for one to keep. The `httpmock` suite reaches
   plain HTTP on loopback through a field of `Limits` that only a test can set.
-* **The snapshot must be on the page's own origin** — scheme, host and port, compared as
+- **The snapshot must be on the page's own origin** — scheme, host and port, compared as
   `Url::origin` after a real URL join, so `//cdn.example/…`, `http://` on the same host and another
   port all land on the same refusal, and `https://SHARE.example:443/…` is still home. A root-relative
   `href`, which is all the Worker writes, costs nothing; an absolute one on the same origin is taken;
   a bare relative one is still `NOT_A_LINK`. Anything else is **`SNAPSHOT_ELSEWHERE`**, its own
   sentence because the link passed every shape check there is, and its row names where the page
   tried to send the app.
-* **Redirects are followed only within the origin the request started on**, by a client of the
+- **Redirects are followed only within the origin the request started on**, by a client of the
   viewer's own, built per open. **Not reqwest's default**, which would make the origin rule
   decoration — a same-origin page answering `302` elsewhere is the same proxy one step on. **Not
   `Policy::none()`** either, which would also refuse a fork's custom domain normalising a trailing
@@ -1091,29 +1145,35 @@ was written, and the one deployed on 2026-10-01 has not been driven through an o
 
 ### The entry point, which decision 6 left nowhere to put
 
-Spec decision 6 hides the *Shared* rail row until a reader has opened a share, and the collection's
-control is for **publishing** — so nothing in the app offered a reader their *first* share. Binding
+Spec decision 6 hides the _Shared_ rail row until a reader has opened a share, and the collection's
+control is for **publishing** — so nothing in the app offered a reader their _first_ share. Binding
 `switchView` against the whole of `NAV` rather than the filtered rail made `Ctrl+6` open the view
 either way, landing on an empty state with a paste button. **That fixed reachable and not
 discoverable.**
 
-So *Open a shared collection* sits beside the Share control on the cabinet, mounting the same
-dialog. Both halves of the feature then live in one place — publish your binder, open somebody
+So _Open a shared collection_ sat beside the Share control on the cabinet, mounting the same
+dialog. Both halves of the feature then lived in one place — publish your binder, open somebody
 else's. Making the rail row unconditional would have fixed discovery by spending the slot decision
 6 exists to save, on a feature most readers will never use.
+
+⚠️ **Removed on 2026-10-14 (issue #1028), with no replacement — the owner's decision.** The
+cabinet's Share control is publishing only now. The _Shared_ rail row still appears once a reader
+has a share open, and the shared view still draws its own _Open a shared collection_ paste box, so
+a reader who opened one before the removal keeps the viewer; a reader who never has has no way in,
+and a share link is a web page a browser opens.
 
 ⚠️ **The chord is gone, and this view is the destination that goes without one** (2026-09-08,
 after `origin/main` brought Trade and Playtesting into the rail). `NAV` holds **ten** destinations
 against `Ctrl+1…9`, and `Ctrl+0` is not a tenth step of that run — so one row has to have no
-chord, and which one is forced by what a chord is *for*: it does not move. Every other row is on
+chord, and which one is forced by what a chord is _for_: it does not move. Every other row is on
 the rail for every reader; `shared` appears only once a link has been opened, so a digit bound to
 it would either shift the digits after it — one press meaning two things to two readers — or point
 at a row half the readers do not have. `AppShell.tsx`'s `CHORD_NAV` is `NAV` minus that one entry,
-derived rather than written out, and `AppShell.test.tsx` pins the consequence by name: *"gives the
-Shared view no chord, and `Ctrl+6` reaches Scanner instead"*.
+derived rather than written out, and `AppShell.test.tsx` pins the consequence by name: _"gives the
+Shared view no chord, and `Ctrl+6` reaches Scanner instead"_.
 
 **What it costs this view is nothing, and the paragraph above is why**: the route the chord had was
-a *fallback*, written when the app offered no first share at all, and the cabinet's control is the
+a _fallback_, written when the app offered no first share at all, and the cabinet's control is the
 signpost it was standing in for. Once a share is open the rail row is the way back.
 `docs/reference/keyboard-shortcuts.md` carries the ruling; `packages/ui/App.tsx`'s dispatch comment claimed
 the chord still worked until this pass, which is the **third** site on this branch to ship a comment
@@ -1125,24 +1185,24 @@ chord went and that one was not.
 `packages/ui/features/collection/ShareFolderMenu.tsx` — publish the level on screen, copy its link, update
 it, withdraw it.
 
-* **Hidden, not greyed, for a reader who has connected nothing** (spec §9). A control whose only
+- **Hidden, not greyed, for a reader who has connected nothing** (spec §9). A control whose only
   outcome is a sentence explaining that it does not work teaches a reader nothing its absence would
-  not, and Settings is where the connection story lives. A membership that *ended* keeps the
+  not, and Settings is where the connection story lives. A membership that _ended_ keeps the
   control, because that reader has connected something and the publish is what refuses, in words
   that name where to go.
-* **A locked folder greys the row with `unlock it first`** — the phrase `Delete…` already uses,
+- **A locked folder greys the row with `unlock it first`** — the phrase `Delete…` already uses,
   deliberately, because it points at the same next thing to do, and because a menu row is as wide
   as its widest content so the full sentence would set the width of the whole panel.
-* **A share whose folder was locked afterwards is marked stale and is never auto-revoked** (spec
+- **A share whose folder was locked afterwards is marked stale and is never auto-revoked** (spec
   §10). The next publish refuses, so the snapshot on the relay is frozen rather than wrong. A link
   in somebody's chat window going dead because its owner tidied a drawer would be the app taking a
   decision nobody asked it to take.
-* ⚠️ **`SUPPORTER_KEY` and `supporterState` belong in `packages/ui/lib/query.ts` beside `RELAY_KEY`, not
+- ⚠️ **`SUPPORTER_KEY` and `supporterState` belong in `packages/ui/lib/query.ts` beside `RELAY_KEY`, not
   in `SyncPanel`.** This control needs both — the membership decides whether it is drawn at all —
   and importing them from the panel is right by the one-prefix-one-spelling rule while dragging
   `QrScanner` and `jsqr` into the collection chunk behind them. **A query key imported from a
   panel carries that panel's whole module graph**, which is a bundling fact no lint sees.
-* ⚠️ **`useShares(connected)` takes its gate as an argument, and this is about the write
+- ⚠️ **`useShares(connected)` takes its gate as an argument, and this is about the write
   connection rather than about what the control draws** (2026-09-08). `share_list` is the only one
   of the five commands that reconciles, and `share::commands` runs it inside
   `on_the_write_connection` → `sync::with_write` — so it **holds the exclusive write lock across a
@@ -1166,7 +1226,7 @@ DTO carried no uid at all — so **a named folder could not be shared, only the 
 which is the issue's headline capability. It is `Option<String>` / `string | null` because the
 column is nullable, and **a `null` is a folder that cannot be shared yet rather than an error**.
 The discriminated `ShareTarget` in the menu exists so that "no folder" and "a folder I cannot name"
-can never be the same value — `share_create` reads a `null` `folderUid` as *the whole collection*.
+can never be the same value — `share_create` reads a `null` `folderUid` as _the whole collection_.
 
 ### The accessible name, and the finding both viewers proved
 
@@ -1177,11 +1237,11 @@ one page strangers open, as the first thing a screen reader announces.
 
 Measured 2026-09-08, in jsdom, which trims the same way a browser does:
 
-| | |
-| --- | --- |
-| A space **inside** the first element — `{owner}’s{" "}` | **does not work.** Name computation trims each element's contribution *before* appending it, so the trailing space is gone before the concatenation |
-| A space **between** the two elements — `</span>{" "}<span>` | **works.** It is a sibling text node in its own right |
-| An explicit `aria-label` | works, and is what the public page now uses |
+|                                                             |                                                                                                                                                     |
+| ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A space **inside** the first element — `{owner}’s{" "}`     | **does not work.** Name computation trims each element's contribution _before_ appending it, so the trailing space is gone before the concatenation |
+| A space **between** the two elements — `</span>{" "}<span>` | **works.** It is a sibling text node in its own right                                                                                               |
+| An explicit `aria-label`                                    | works, and is what the public page now uses                                                                                                         |
 
 > **Assert the computed accessible name, never the parts.** Asserting the two texts separately is
 > exactly what let this ship: the in-app viewer's own test was green for the right reason and the
@@ -1200,7 +1260,7 @@ branch finishes.
 
 ### A guarantee asserted with the mechanism that breaks it absent is not asserted
 
-**Five vacuous tests were found across this one feature**, and every one asserted the *right*
+**Five vacuous tests were found across this one feature**, and every one asserted the _right_
 outcome while being satisfied by the **absence of setup** rather than by the code under test:
 
 1. **The publisher's `image_uris` fixture keyed on `'normal'`** — a variant this app does not
@@ -1239,11 +1299,11 @@ clause on the strength of a mutation that stays green.
 Every stale figure this run found was one of three kinds, and each wants a different repair. A
 prose-only edit routes to neither CI job, so nothing goes red when one rots.
 
-| Kind | Repair | Why |
-| --- | --- | --- |
-| A **count** | replace it with a **name** — *one chord per `NAV` entry*, *the steps of the sequence* | the build already answers it, and a count is a fact about a *tree*: every open branch has a different one |
-| An **example of drawn output** | keep the literal form, take the **current** value — `Ctrl 1 to Ctrl 8` | an example that disagrees with what the component draws is precisely the failure that paragraph warns about |
-| A **measurement** | keep the **dated** figure, and say what changed **around** it | re-deriving it needs the measurement re-run, and a number invented to look current is worse than an honest stale one |
+| Kind                           | Repair                                                                                | Why                                                                                                                  |
+| ------------------------------ | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| A **count**                    | replace it with a **name** — _one chord per `NAV` entry_, _the steps of the sequence_ | the build already answers it, and a count is a fact about a _tree_: every open branch has a different one            |
+| An **example of drawn output** | keep the literal form, take the **current** value — `Ctrl 1 to Ctrl 8`                | an example that disagrees with what the component draws is precisely the failure that paragraph warns about          |
+| A **measurement**              | keep the **dated** figure, and say what changed **around** it                         | re-deriving it needs the measurement re-run, and a number invented to look current is worse than an honest stale one |
 
 The third row is the one that gets violated with good intentions. When `BottomTabBar` went from six
 destinations to eight, its 65×52 tab measurement was **not** renumbered: the arithmetic changed
@@ -1255,17 +1315,17 @@ phone layout on 2026-09-27; the example stays because the rule does.)
 
 ## What no build runs, and what that costs
 
-* **`pnpm share:build` is in neither `pnpm verify` nor CI.** The type-checking half is
+- **`pnpm share:build` is in neither `pnpm verify` nor CI.** The type-checking half is
   covered — `apps/share/` has a `tsconfig.json` of its own, `pnpm build` runs `tsc -p apps/share`, and it also runs
   `tsc -p infrastructure/share-worker/tsconfig.json` — and `vitest` collects both `apps/share/**/*.test.{ts,tsx}` and
   `infrastructure/share-worker/src/**/*.test.ts` through globs named in `vitest.config.ts`. **What nothing runs is
   the bundle**, so `apps/share/dist-share/` existing at all is a manual step, and `wrangler deploy` fails
   naming that directory until it has been taken.
-* **`apps/share/` and `infrastructure/share-worker/` match no arm of CI's `changes` router**, so they fall to the `*)`
+- **`apps/share/` and `infrastructure/share-worker/` match no arm of CI's `changes` router**, so they fall to the `*)`
   fail-safe and run **every** build job — frontend, rust and storybook. That is the cheap direction
   to be wrong in and it is deliberate design of that router; it does mean a Worker-only edit runs
   the whole clippy-and-test matrix on two platforms.
-* ⚠️ **A directory `vitest.config.ts`'s test globs do not name is collected by nothing**, and
+- ⚠️ **A directory `vitest.config.ts`'s test globs do not name is collected by nothing**, and
   `vitest run` answers `No test files found` — which prints on stdout and is easy to read as a
   pass. `infrastructure/share-worker/` was in that state for exactly one commit.
 
@@ -1276,7 +1336,7 @@ phone layout on 2026-09-27; the example stays because the rule does.)
 **The live pass happened on 2026-09-08, and it found two defects.** Both were in the collection's
 Share control, both are fixed, and both are recorded here because neither suite could see either.
 
-* 🔴 **The action block overhung its row at the phone's frame, and `Export` was off the window.**
+- 🔴 **The action block overhung its row at the phone's frame, and `Export` was off the window.**
   `FigureRow`'s actions box was `ml-auto shrink-0` while the `<dl>` beside it is `flex-1` with a
   `0%` basis — so the box's **max-content** was a hard floor on the row. One `ImportExportPair`
   (158.86px) fitted; that pair plus a sharing group (**421.67px**) did not, and at 390×844 the row
@@ -1284,8 +1344,8 @@ Share control, both are fixed, and both are recorded here because neither suite 
   **390** — `Import` cut mid-word, `Export` entirely off screen and **unreachable by scrolling**,
   because the overflow was in a box the page does not scroll. Two changes: the actions box lost
   `shrink-0`, so a block whose content wraps falls onto two lines at any width; and below the phone
-  fold both groups drew as glyph pairs (`ImportExportPair`'s *the word gives way, never the
-  control*, and `ShareFolderMenu` read the same fold). Re-measured over the built stylesheet at a
+  fold both groups drew as glyph pairs (`ImportExportPair`'s _the word gives way, never the
+  control_, and `ShareFolderMenu` read the same fold). Re-measured over the built stylesheet at a
   **335px** row: compact, sharing **74** + transfer **74** on **one** line with the `<dl>` keeping
   **155px**; worded, **251.78** + **155.70** on **two** lines with the `<dl>` on its own; and
   `scrollWidth === clientWidth === 335` with no button past the right edge in either. **The
@@ -1293,19 +1353,19 @@ Share control, both are fixed, and both are recorded here because neither suite 
   `compact` prop and `ShareFolderMenu` draws its words at every width — so the worded figures are
   the shape the tree draws, and the `shrink-0` removal is the fix that stands. 390px is below the
   desktop floor, so no shipped window reaches the row this defect was found in.
-* 🟠 **The *Open a shared collection* dialog dropped the caret on `<body>`**, reproduced by Escape
+- 🟠 **The _Open a shared collection_ dialog dropped the caret on `<body>`**, reproduced by Escape
   and by the ✕. `Dialog` says the host owes the caret and this host draws **two** openers — and the
-  shared `back()` focuses the *Share* button, which is not drawn at all for a reader who has
-  connected nothing, i.e. exactly the reader most likely to press *Open*. The Open button has its
+  shared `back()` focuses the _Share_ button, which is not drawn at all for a reader who has
+  connected nothing, i.e. exactly the reader most likely to press _Open_. The Open button has its
   own ref now. The other two dialogs were already correct.
 
-Confirmed clean in the same pass: the greyed row's accessible name reads *"Share this folder…
-unlock it first"* in Chromium's AX tree (a real space — not the `Missing2` failure); the
+Confirmed clean in the same pass: the greyed row's accessible name reads _"Share this folder…
+unlock it first"_ in Chromium's AX tree (a real space — not the `Missing2` failure); the
 `NOT_DEPLOYED` sentence matches `publish.rs` byte for byte with **no `error_log` row written**; the
-malformed-link refusal keeps the dialog open and the text; and the *Shared* row hides again on
+malformed-link refusal keeps the dialog open and the text; and the _Shared_ row hides again on
 leaving. Zero console errors or warnings across the pass.
 
-⚠️ **This paragraph also said *"`Ctrl+6/7/8` all land correctly"*, and it was driven before the
+⚠️ **This paragraph also said _"`Ctrl+6/7/8` all land correctly"_, and it was driven before the
 final `origin/main` merge.** The rail was eight destinations that day; it is **ten** now, `shared`
 has **no chord at all**, and `Ctrl+6` reaches Scanner — see [the chord
 ruling](#the-entry-point-which-decision-6-left-nowhere-to-put) above. The finding is not wrong so
@@ -1327,26 +1387,26 @@ cost: the wrapper drew **421.67** flush to the row's right edge, the `<dl>` was 
 floor. It broke only below a row width of **445.67**, which is the 390×844 defect above.
 
 **Automatic refresh is deliberately not built, and no plan task ever assigned it.** Spec §4.1 used
-to promise *"on app launch and after a sync that touched a shared folder, debounced, plus a manual
-Update now"*; **only the manual press exists.** The reasoning: the viewer is *told* how stale a
-snapshot is (the page renders *as of …*), the owner has an explicit press and a stale mark — so
+to promise _"on app launch and after a sync that touched a shared folder, debounced, plus a manual
+Update now"_; **only the manual press exists.** The reasoning: the viewer is _told_ how stale a
+snapshot is (the page renders _as of …_), the owner has an explicit press and a stale mark — so
 this is a convenience rather than a correctness gap; and an on-launch re-publish for every share is
 real network on the account's shared budget, decided with nothing deployed to measure it against. **What it
 costs is that a snapshot can sit stale for as long as an owner does not press Update**, visible to
-them in the app and to viewers as an older *as of* date.
+them in the app and to viewers as an older _as of_ date.
 
-⚠️ **The spec was amended, and this paragraph went on saying it had not been.** It read *"§4.1 was
+⚠️ **The spec was amended, and this paragraph went on saying it had not been.** It read _"§4.1 was
 ruled to be amended to say so and it was not — as this page is written the spec still reads as
 though the trigger shipped, and §14 carries no item for it. This page is the correction until
-somebody makes that edit."* Commit `6ff7a8ba` made exactly that edit: §4.1 now reads *"Refresh in
-v1 is the manual Update now and nothing else"* with the ⚠️ paragraph explaining the narrowing, and
+somebody makes that edit."_ Commit `6ff7a8ba` made exactly that edit: §4.1 now reads _"Refresh in
+v1 is the manual Update now and nothing else"_ with the ⚠️ paragraph explaining the narrowing, and
 §14 carries **item 7** for the automatic half. So the correction outlived the thing it corrected
 and became the only wrong sentence of the pair — a **prose-only edit routes to neither CI job**,
 which is what lets a note like this rot in place while every build stays green. Read the spec, not
 this line, for what §4.1 says.
 
 **A pre-existing landmine in `infrastructure/relay/src/fakeD1.ts`, found here and deliberately not fixed.** Its
-tokenizer has **no rule for `'`**, so `WHERE status = 'dead'` resolves `dead` as a *column*, yields
+tokenizer has **no rule for `'`**, so `WHERE status = 'dead'` resolves `dead` as a _column_, yields
 NULL and matches nothing — **silently, never throwing**. `IN (SELECT …)` is not in its dialect at
 all. `infrastructure/relay/src/claim.ts` already contains such literals; nothing goes wrong today only because
 `claim.test.ts` never drives those handlers through the fake, and **the first test that does will
@@ -1355,48 +1415,48 @@ branch acquires an unrelated red.
 
 **Smaller ones, each with its reason for standing:**
 
-* **Republishing a lapsed share answers 200 while the link stays dark** until the next cron pass —
+- **Republishing a lapsed share answers 200 while the link stays dark** until the next cron pass —
   up to 24 hours. Deliberate, and `state` is on the wire for the app to surface.
-* **No CORS and no `OPTIONS` handling.** The relay has none either and the client is Rust.
-* **`CardArt` prints "No card"** for a printing with no picture, so a tile can read
-  `Brainstorm / No card` — which reads as an error rather than as *the publisher's corpus forgot
-  this printing*. Fixing it means touching copy every wall in the app draws.
-* **Revoked tombstones and lapsed R2 objects both accumulate unbounded.** Two sweeps for the day
+- **No CORS and no `OPTIONS` handling.** The relay has none either and the client is Rust.
+- **`CardArt` prints "No card"** for a printing with no picture, so a tile can read
+  `Brainstorm / No card` — which reads as an error rather than as _the publisher's corpus forgot
+  this printing_. Fixing it means touching copy every wall in the app draws.
+- **Revoked tombstones and lapsed R2 objects both accumulate unbounded.** Two sweeps for the day
   they matter, and spec §13 says so rather than inventing retention rules nobody has needed. A
-  *revoked* share's R2 object no longer does — withdrawing deletes it since 2026-10-01 — but its
+  _revoked_ share's R2 object no longer does — withdrawing deletes it since 2026-10-01 — but its
   D1 row stays, because it is what answers 410.
-* **A seconds-long window after a republish** shows the new metadata over the old blob — the same
+- **A seconds-long window after a republish** shows the new metadata over the old blob — the same
   window the two-step's header caveat above describes.
-* **The 410 on `/s/{id}` is HTML**, so the app cannot tell withdrawn from lapsed and says one
+- **The 410 on `/s/{id}` is HTML**, so the app cannot tell withdrawn from lapsed and says one
   sentence for both. An app that claimed to know which had happened would be reading prose.
 
 ---
 
 ## Where the code is
 
-| Path | Holds |
-| --- | --- |
-| `apps/desktop/src-tauri/src/share/snapshot.rs` | `ShareSnapshot`, the subtree read, the gzip, the three refusals |
-| `apps/desktop/src-tauri/src/share/deck.rs` | A deck's share — the `deck:` key, its piles and its three card facts (issue #1032) |
-| `apps/share/ShareDeck.tsx` | The public page's deck — Stacks, Grid, Table, Text |
-| `packages/ui/features/share/SharedDeck.tsx` | The in-app deck — the editor's own views, handed no writes |
-| `packages/ui/features/decks/deckShare.ts` | The deck's share key, and its Share control's target |
-| `apps/desktop/src-tauri/src/share/cache.rs` | `collection_shares` reads, writes and `reconcile` |
-| `apps/desktop/src-tauri/src/share/publish.rs` | The two-step upload, the sentences, and the viewer's bounded open |
-| `apps/desktop/src-tauri/src/share/commands.rs` | The five commands and `ShareRow` |
-| `apps/desktop/src-tauri/src/share/__golden__/` | The committed snapshot both TypeScript suites read |
-| `infrastructure/share-worker/` | The Worker — `index.ts` (router and gate), `shares.ts`, `blob.ts`, `page.ts`, `lapse.ts`, `env.ts`, `schema.sql`, `README.md` |
-| `apps/share/` | The public viewer bundle; `apps/share/vite.config.ts` builds it into `apps/share/dist-share/` |
-| `packages/ui/features/share/` | The in-app view, the paste dialog, the want list, its hooks, the folder tree, the read-only sweep |
-| `packages/ui/features/collection/ShareFolderMenu.tsx` | The Share control and the entry point beside it |
-| `packages/ui/lib/shareSnapshot.ts` | The format, read — imports nothing, by requirement |
-| `packages/ui/lib/ipc.ts` | The five commands and `ShareRow`'s mirror |
+| Path                                                  | Holds                                                                                                                         |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `apps/desktop/src-tauri/src/share/snapshot.rs`        | `ShareSnapshot`, the subtree read, the gzip, the three refusals                                                               |
+| `apps/desktop/src-tauri/src/share/deck.rs`            | A deck's share — the `deck:` key, its piles and its three card facts (issue #1032)                                            |
+| `apps/share/ShareDeck.tsx`                            | The public page's deck — Stacks, Grid, Table, Text                                                                            |
+| `packages/ui/features/share/SharedDeck.tsx`           | The in-app deck — the editor's own views, handed no writes                                                                    |
+| `packages/ui/features/decks/deckShare.ts`             | The deck's share key, and its Share control's target                                                                          |
+| `apps/desktop/src-tauri/src/share/cache.rs`           | `collection_shares` reads, writes and `reconcile`                                                                             |
+| `apps/desktop/src-tauri/src/share/publish.rs`         | The two-step upload, the sentences, and the viewer's bounded open                                                             |
+| `apps/desktop/src-tauri/src/share/commands.rs`        | The five commands and `ShareRow`                                                                                              |
+| `apps/desktop/src-tauri/src/share/__golden__/`        | The committed snapshot both TypeScript suites read                                                                            |
+| `infrastructure/share-worker/`                        | The Worker — `index.ts` (router and gate), `shares.ts`, `blob.ts`, `page.ts`, `lapse.ts`, `env.ts`, `schema.sql`, `README.md` |
+| `apps/share/`                                         | The public viewer bundle; `apps/share/vite.config.ts` builds it into `apps/share/dist-share/`                                 |
+| `packages/ui/features/share/`                         | The in-app view, the paste dialog, the want list, its hooks, the folder tree, the read-only sweep                             |
+| `packages/ui/features/collection/ShareFolderMenu.tsx` | The Share control and the entry point beside it                                                                               |
+| `packages/ui/lib/shareSnapshot.ts`                    | The format, read — imports nothing, by requirement                                                                            |
+| `packages/ui/lib/ipc.ts`                              | The five commands and `ShareRow`'s mirror                                                                                     |
 
 ## Further reading
 
-| Doc | Holds |
-| --- | --- |
-| [collection-folders.md](collection-folders.md) | The cabinet the publisher reads — the eleventh grain term, and the lock this feature must never publish through |
-| [sync.md](sync.md) | The relay, the group, the bearer token this Worker verifies, and the entitlement that gates a publish |
-| [hosted-relay-deploy.md](hosted-relay-deploy.md) | The other Worker's runbook, and the *ask the host, never a document* rule this page inherits |
-| [data-and-sync.md](data-and-sync.md) | The schema ladder v41 sits on |
+| Doc                                              | Holds                                                                                                           |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| [collection-folders.md](collection-folders.md)   | The cabinet the publisher reads — the eleventh grain term, and the lock this feature must never publish through |
+| [sync.md](sync.md)                               | The relay, the group, the bearer token this Worker verifies, and the entitlement that gates a publish           |
+| [hosted-relay-deploy.md](hosted-relay-deploy.md) | The other Worker's runbook, and the _ask the host, never a document_ rule this page inherits                    |
+| [data-and-sync.md](data-and-sync.md)             | The schema ladder v41 sits on                                                                                   |

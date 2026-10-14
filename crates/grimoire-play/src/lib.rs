@@ -3,13 +3,16 @@
 //! why only the desktop links it.
 
 pub mod cards;
+mod history;
 pub mod playtest;
 pub mod session;
 pub mod tokens;
 pub mod view;
 
 pub use cards::{CardFacts, FaceFacts};
-pub use playtest::{Difficulty, Playtest, PlaytestAction, PlaytestStep, PlaytestView};
+pub use playtest::{
+    Difficulty, OpponentDeck, Playtest, PlaytestAction, PlaytestPlayer, PlaytestStep, PlaytestView,
+};
 pub use session::Goldfish;
 pub use tokens::TokenFacts;
 pub use view::{GoldfishAction, GoldfishStep, GoldfishView};

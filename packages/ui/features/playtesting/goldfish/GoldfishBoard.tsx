@@ -14,6 +14,7 @@ import { HandFan } from "./HandFan";
 import { INSPECT_WIDTH, Inspect } from "./Inspect";
 import { LibraryDialog } from "./LibraryDialog";
 import { LifePlate } from "./LifePlate";
+import { ManaTableView } from "./ManaTable";
 import { gameMenu } from "./menus";
 import { OpeningHand } from "./OpeningHand";
 import { HelpPanel, LogPanel } from "./Panels";
@@ -24,6 +25,7 @@ import { handRow } from "./layout";
 import type { LogLine } from "./log";
 import { feltBackground } from "./playmats";
 import type { Playmat, Pointed, ZoneLook } from "./types";
+import { useUndoKeys } from "../undo";
 
 /**
  * The goldfish board — the artboards `Goldfish · opening hand` and `Goldfish · the table, turn 9`
@@ -117,6 +119,9 @@ export function GoldfishBoard({
   }, [onAct]);
 
   const commander = view?.command[0] ?? view?.battlefield.find((c) => c.isCommander) ?? null;
+
+  // Undo and redo (issue #1022), the catalogue's `goldfish` chords.
+  useUndoKeys("goldfish", view, onAct);
 
   // **The board's own keys**, the artboard's help panel's: Space for the next turn, and T, G, E,
   // H on the card pointed at — tap it, bury it, exile it, return it to hand. Not while a field
@@ -394,6 +399,7 @@ export function GoldfishBoard({
 
       {view !== null && view.stage !== "mulligan" && (
         <div className="absolute right-4 bottom-4 flex flex-col items-end gap-2">
+          <ManaTableView mana={view.mana} />
           <span className="text-xs text-dim">
             Turn {view.turn} · {view.manaOpen} mana open · hand {view.hand.length}
           </span>

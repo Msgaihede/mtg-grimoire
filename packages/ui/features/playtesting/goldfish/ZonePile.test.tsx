@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { GameCard, GoldfishView } from "@/lib/ipc";
+import { manaTable } from "./fixtures";
 import { CommandZone, ExileZone, GraveyardZone, LibraryZone } from "./ZonePile";
 
 let next = 1;
@@ -41,7 +42,10 @@ function view(over: Partial<GoldfishView> = {}): GoldfishView {
     libraryCards: [],
     libraryLands: 30,
     manaOpen: 0,
+    mana: manaTable(),
     tokens: [],
+    canUndo: false,
+    canRedo: false,
     ...over,
   };
 }

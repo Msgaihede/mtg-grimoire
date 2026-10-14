@@ -822,10 +822,10 @@ it("opens the wishlist on the wishlist entry", async () => {
  * It used to press `Ctrl+6`, because before the cabinet grew its own control that chord was the
  * only way in. `NAV` reached ten destinations against nine digits the same day and this is the
  * entry that went without one (`docs/reference/keyboard-shortcuts.md` has the argument), so a
- * chord here would now be pressing Scanner and asserting about Shared. The reader's own route is
- * the collection's **Open a shared collection** button, which `ShareFolderMenu.test.tsx` and
- * `CollectionPage.test.tsx` each pin; what is left for this file is that the view exists and is
- * drawn when the store says so.
+ * chord here would now be pressing Scanner and asserting about Shared. The collection's **Open a
+ * shared collection** button that replaced it was removed too (issue #1028), so the rail row a
+ * share already opened puts there is the only way in; what is left for this file is that the view
+ * exists and is drawn when the store says so.
  */
 it("draws the shared view's empty state, with no share and no rail row", async () => {
   useAppStore.setState({ activeView: "shared", openedShares: [] });

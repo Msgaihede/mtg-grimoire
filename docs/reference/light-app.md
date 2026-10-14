@@ -2465,8 +2465,8 @@ page's own sticky line (Search's box) still stops at the inset** — it is the p
 
 #### Decided without a measurement
 
-- **A view the light edition does not draw.** The collection's *Open a shared collection* is
-  hidden where the shell answers `useReaches("shared")` with false (`packages/ui/lib/reach.ts`, provided by
+- **A view the light edition does not draw.** The collection's *Open a shared collection* (removed
+  from every edition on 2026-10-14, issue #1028) was hidden where the shell answers `useReaches("shared")` with false (`packages/ui/lib/reach.ts`, provided by
   `AppShell` from its edition) — so a page asks whether a destination exists here, never which
   edition it is in — and `useDesktopPlace` refuses any store move onto such a view, putting the
   store back on the URL's place without touching history. Hidden rather than refused on the press:

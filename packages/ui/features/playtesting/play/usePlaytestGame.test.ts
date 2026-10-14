@@ -19,8 +19,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 const PICKS: PlaytestPicks = {
   deckId: 7,
   variant: "theory",
-  opponentDeckId: 9,
-  opponentVariant: "live",
+  opponents: [{ deckId: 9, variant: "live" }],
   difficulty: "hard",
 };
 
@@ -38,8 +37,14 @@ describe("usePlaytestGame", () => {
   it("deals both decks with a fresh seed, logs the deal, and ends the game on unmount", async () => {
     const { result, unmount } = renderHook(() => usePlaytestGame(PICKS));
     await waitFor(() => expect(result.current.view?.stage).toBe("mulligan"));
-    expect(playtestStart).toHaveBeenCalledWith(7, "theory", 9, "live", "hard", expect.any(Number));
-    expect(Number.isSafeInteger(playtestStart.mock.calls[0][5])).toBe(true);
+    expect(playtestStart).toHaveBeenCalledWith(
+      7,
+      "theory",
+      [{ deckId: 9, variant: "live" }],
+      "hard",
+      expect.any(Number),
+    );
+    expect(Number.isSafeInteger(playtestStart.mock.calls[0][4])).toBe(true);
     expect(result.current.log.map((l) => l.text)).toEqual([
       "The opponent drew a card",
       "Shuffled both decks and drew seven",
@@ -136,5 +141,47 @@ describe("usePlaytestGame", () => {
       "The opponent drew a card",
       "The opponent's turn 6 begins",
     ]);
+  });
+
+  it("deals a four-player game's three opponents, and does not deal again for a list rebuilt alike", async () => {
+    const opponents = [
+      { deckId: 9, variant: "live" as const },
+      { deckId: 9, variant: "theory" as const },
+      { deckId: 11, variant: "live" as const },
+    ];
+    // A fresh list on every render, as a careless caller would build it.
+    const { result } = renderHook(() =>
+      usePlaytestGame({ ...PICKS, opponents: opponents.map((o) => ({ ...o })) }),
+    );
+    await waitFor(() => expect(result.current.view?.stage).toBe("mulligan"));
+    expect(playtestStart).toHaveBeenCalledTimes(1);
+    expect(playtestStart.mock.calls[0][2]).toEqual(opponents);
+    expect(result.current.log.map((l) => l.text)).toContain("Shuffled every deck and drew seven");
+  });
+
+  // Issue #1022: an undo pressed while the AI's turn is still being played back takes back the
+  // whole of it — every beat, the ones not yet shown included — and a redo puts it all back.
+  it("undoes a step mid-replay to the log before it, and redoes it whole", async () => {
+    const { step } = replayStep();
+    const back = turnFive().view;
+    playtestAct.mockImplementation(async (a) => {
+      const type = (a as { type: string }).type;
+      if (type === "undo") return { view: back, happened: [], frames: [] };
+      if (type === "redo") return { view: step.view, happened: [], frames: [] };
+      return step;
+    });
+    const { result } = renderHook(() => usePlaytestGame(PICKS));
+    await waitFor(() => expect(result.current.view).not.toBeNull());
+    const before = result.current.log;
+    act(() => result.current.act({ type: "endTurn" }));
+    await waitFor(() => expect(result.current.replaying).toBe(true));
+    act(() => result.current.act({ type: "undo" }));
+    await waitFor(() => expect(result.current.view).toBe(back));
+    expect(result.current.replaying).toBe(false);
+    expect(result.current.log).toEqual(before);
+    act(() => result.current.act({ type: "redo" }));
+    await waitFor(() => expect(result.current.view).toBe(step.view));
+    expect(result.current.log).toHaveLength(before.length + 9);
+    expect(result.current.log[0].text).toBe("Drew Island");
   });
 });

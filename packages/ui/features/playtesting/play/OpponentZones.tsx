@@ -21,7 +21,19 @@ import { markSize } from "../goldfish/ZonePile";
  *
  * **Compact, always**: each zone's count is a `CountTag` on its card rather than a line under it,
  * so a column is the card's width and no more.
+ *
+ * **Whose, by `owner`**: a duel's one opponent is "the opponent's", and at a four-player table
+ * each piece names its player ("Opponent 2's library"). `owner` is the possessive as it reads
+ * inside a sentence; a label that starts with it capitalises it.
  */
+
+/** "the opponent's" → "The opponent's"; "Opponent 2's" stays as it is. */
+function capital(owner: string): string {
+  return owner.charAt(0).toUpperCase() + owner.slice(1);
+}
+
+/** A duel's owner, and every piece's when none is given. */
+const THE_OPPONENTS = "the opponent's";
 
 /** A zone's count on its card. */
 function Count({ count, title }: { count: number; title: string }): JSX.Element {
@@ -66,15 +78,17 @@ function Back({ size, className }: { size: ZoneSize; className?: string }): JSX.
 export function OpponentLibrary({
   seat,
   size,
+  owner = THE_OPPONENTS,
 }: {
   seat: PlaytestSeat | null;
   size: ZoneSize;
+  owner?: string;
 }): JSX.Element {
   const count = seat?.library ?? 0;
   return (
     <div
       role="img"
-      aria-label={`The opponent's library, ${count} ${count === 1 ? "card" : "cards"}`}
+      aria-label={`${capital(owner)} library, ${count} ${count === 1 ? "card" : "cards"}`}
       className="relative"
     >
       <Back
@@ -94,6 +108,7 @@ export function OpponentPile({
   onPoint,
   onUnpoint,
   onLook,
+  owner = THE_OPPONENTS,
   className,
 }: {
   seat: PlaytestSeat | null;
@@ -102,6 +117,7 @@ export function OpponentPile({
   onPoint: (pointed: Pointed) => void;
   onUnpoint: () => void;
   onLook: (look: ZoneLook) => void;
+  owner?: string;
   className?: string;
 }): JSX.Element {
   const cards = seat?.[zone] ?? [];
@@ -116,7 +132,7 @@ export function OpponentPile({
       ) : (
         <button
           type="button"
-          aria-label={`The opponent's ${title.toLowerCase()}, ${n}; ${top.name} on top. Click to look through it`}
+          aria-label={`${capital(owner)} ${title.toLowerCase()}, ${n}; ${top.name} on top. Click to look through it`}
           onClick={() => {
             onUnpoint();
             onLook({ zone, mode: "browse", count: "all" });
@@ -154,12 +170,14 @@ export function OpponentCommand({
   size,
   onPoint,
   onUnpoint,
+  owner = THE_OPPONENTS,
   className,
 }: {
   seat: PlaytestSeat | null;
   size: ZoneSize;
   onPoint: (pointed: Pointed) => void;
   onUnpoint: () => void;
+  owner?: string;
   className?: string;
 }): JSX.Element {
   const commanders = seat?.command ?? [];
@@ -181,6 +199,7 @@ export function OpponentCommand({
               card={card}
               top={i * PARTNER_STEP}
               size={size}
+              owner={owner}
               onPoint={onPoint}
               onUnpoint={onUnpoint}
             />
@@ -195,25 +214,27 @@ function CommanderBack({
   card,
   top,
   size,
+  owner,
   onPoint,
   onUnpoint,
 }: {
   card: GameCard;
   top: number;
   size: ZoneSize;
+  owner: string;
   onPoint: (pointed: Pointed) => void;
   onUnpoint: () => void;
 }): JSX.Element {
   return (
     <span
       role="img"
-      aria-label={`${card.name}, the opponent's commander`}
+      aria-label={`${card.name}, ${owner} commander`}
       onMouseEnter={(e) =>
         onPoint({
           card,
           ids: [card.id],
           place: "command",
-          line: `${card.name} · the opponent's commander`,
+          line: `${card.name} · ${owner} commander`,
           at: pointerAt(e),
         })
       }
@@ -246,15 +267,32 @@ export function opponentHandWidth(count: number): number {
 /**
  * The opponent's hand: as many backs as they hold, hanging from the board's top edge the way the
  * reader's own hand rises from its foot, and the count beside them.
+ *
+ * **`size` makes it one zone among the others**: a single back of that size with the count on
+ * it, the way their library is drawn — a four-player table's opponent area has no edge of its
+ * own to hang a hand from.
  */
-export function OpponentHand({ count }: { count: number }): JSX.Element {
+export function OpponentHand({
+  count,
+  owner = THE_OPPONENTS,
+  size,
+}: {
+  count: number;
+  owner?: string;
+  size?: ZoneSize;
+}): JSX.Element {
+  const label = `${capital(owner)} hand, ${count} ${count === 1 ? "card" : "cards"}`;
+  if (size !== undefined) {
+    return (
+      <div role="img" aria-label={label} className="relative">
+        <Back size={size} />
+        <Count count={count} title={`${count} ${count === 1 ? "card" : "cards"} in their hand`} />
+      </div>
+    );
+  }
   const step = backStep(count);
   return (
-    <div
-      role="img"
-      aria-label={`The opponent's hand, ${count} ${count === 1 ? "card" : "cards"}`}
-      className="flex items-start gap-2"
-    >
+    <div role="img" aria-label={label} className="flex items-start gap-2">
       <div
         className="relative overflow-hidden"
         style={{ width: opponentHandWidth(count), height: HAND_BACK_PEEK }}

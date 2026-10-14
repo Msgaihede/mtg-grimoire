@@ -3,7 +3,9 @@
 use crate::cards::{CardFacts, FaceFacts};
 use crate::on_engine_stack;
 use crate::session::Goldfish;
-use crate::view::{GoldfishAction as A, GoldfishView, Happened, Lane, Place, Seat, Stage};
+use crate::view::{
+    GoldfishAction as A, GoldfishView, Happened, Lane, ManaByType, Place, Seat, Stage,
+};
 
 fn card(
     name: &str,
@@ -654,6 +656,67 @@ fn a_modal_double_faced_card_is_played_by_its_front_face() {
 }
 
 #[test]
+fn the_mana_table_counts_each_type_the_open_sources_could_make() {
+    let land =
+        |name: &str, type_line: &str, text: &str| card(name, None, type_line, text, None, 20);
+    let deck = vec![
+        land("Forest", "Basic Land — Forest", "({T}: Add {G}.)"),
+        land("Island", "Basic Land — Island", "({T}: Add {U}.)"),
+        land("Savannah", "Land", "{T}: Add {G} or {W}."),
+        card(
+            "Sol Ring",
+            Some("{1}"),
+            "Artifact",
+            "{T}: Add {C}{C}.",
+            None,
+            20,
+        ),
+    ];
+    let (open, tapped) = engine(move || {
+        let mut game = Goldfish::new(&deck, &[], 7).expect("a game starts");
+        game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+        for name in ["Forest", "Island", "Savannah", "Sol Ring"] {
+            let id = in_hand(&mut game, name);
+            game.act(A::Move {
+                id,
+                to: Place::Battlefield,
+            })
+            .unwrap();
+        }
+        let open = game.view();
+        let ring = find(&open.battlefield, "Sol Ring").unwrap().id;
+        let tapped = game
+            .act(A::Tap {
+                ids: vec![ring],
+                tapped: true,
+            })
+            .unwrap()
+            .view;
+        (open, tapped)
+    });
+    let by_type = |v: &GoldfishView| {
+        let m = v.mana.open;
+        [m.white, m.blue, m.black, m.red, m.green, m.colorless]
+    };
+    assert_eq!(open.mana_open, 5);
+    assert_eq!(
+        by_type(&open),
+        [1, 1, 0, 0, 2, 2],
+        "Savannah counts as white and as green; Sol Ring makes two colorless"
+    );
+    assert_eq!(
+        open.mana.floating,
+        ManaByType::default(),
+        "nothing is floating"
+    );
+    assert_eq!(
+        by_type(&tapped),
+        [1, 1, 0, 0, 2, 0],
+        "a tapped Sol Ring makes none"
+    );
+}
+
+#[test]
 fn a_life_total_the_rules_change_is_told_for_either_seat() {
     let step = engine(|| {
         let mut cards = deck();
@@ -691,4 +754,78 @@ fn a_life_total_the_rules_change_is_told_for_either_seat() {
         total: 42
     }));
     assert_eq!(step.view.opponent_life, 38);
+}
+
+/// Issue #1022: undo puts the board back exactly as it was before the action, redo takes it
+/// again, and a new action ends the redo trail.
+#[test]
+fn undo_and_redo_walk_the_board_back_and_forward() {
+    engine(|| {
+        let mut game = Goldfish::new(&deck(), &[], 7).unwrap();
+        let dealt = game.view();
+        assert!(
+            !dealt.can_undo && !dealt.can_redo,
+            "a new game has no history"
+        );
+        assert_eq!(
+            game.act(A::Undo).unwrap_err(),
+            "There is nothing to undo.",
+            "nothing to undo is a refusal"
+        );
+
+        let kept = game.act(A::Keep { bottom: vec![] }).unwrap().view;
+        assert!(kept.can_undo && !kept.can_redo);
+        let forest = in_hand(&mut game, "Forest");
+        let before = game.view();
+        let played = game.act(A::Play { id: forest }).unwrap().view;
+        assert_eq!(played.mana_open, 1);
+
+        let undone = game.act(A::Undo).unwrap();
+        assert!(undone.happened.is_empty(), "undo happens nothing");
+        let back = undone.view;
+        assert_eq!(back.hand, before.hand, "the land is back in the hand");
+        assert!(back.battlefield.is_empty());
+        assert!(back.can_redo);
+
+        let redone = game.act(A::Redo).unwrap().view;
+        assert_eq!(redone.battlefield, played.battlefield);
+        assert_eq!(redone.mana_open, 1);
+        assert!(!redone.can_redo);
+
+        // Back to the opening hand, every action at a time: the mulligan is offered again.
+        while game.view().can_undo {
+            game.act(A::Undo).unwrap();
+        }
+        let start = game.view();
+        assert_eq!(start.stage, Stage::Mulligan);
+        assert_eq!(start.hand, dealt.hand);
+
+        game.act(A::Mulligan).unwrap();
+        let view = game.view();
+        assert!(!view.can_redo, "a new action ends the redo trail");
+        assert_eq!(game.act(A::Redo).unwrap_err(), "There is nothing to redo.");
+        assert_eq!(view.mulligan.unwrap().mulligans, 1);
+        game.act(A::Undo).unwrap();
+        assert_eq!(
+            game.view().mulligan.unwrap().mulligans,
+            0,
+            "the count goes back too"
+        );
+    });
+}
+
+/// A refused action is not one to undo: the board was never changed.
+#[test]
+fn a_refused_action_is_not_remembered() {
+    engine(|| {
+        let mut game = kept();
+        game.act(A::Undo).unwrap();
+        assert!(!game.view().can_undo);
+        assert!(game.act(A::Play { id: u64::MAX }).is_err());
+        assert!(!game.view().can_undo);
+        assert!(
+            game.view().can_redo,
+            "a refusal leaves the redo trail as it was"
+        );
+    });
 }

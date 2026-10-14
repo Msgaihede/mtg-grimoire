@@ -11,8 +11,9 @@ import type { ViewId } from "./store";
  * shared binder has nowhere to land there — and no provider at all is every view, which is what
  * the desktop app, a story and a test get.
  *
- * First reader, 2026-10-03: the collection's **Open a shared collection**, whose `onOpened` is a
- * `setActiveView("shared")` the light app cannot draw (`docs/reference/light-app.md` §7.8).
+ * First reader, 2026-10-03: the collection's **Open a shared collection**, whose `onOpened` was a
+ * `setActiveView("shared")` the light app cannot draw (`docs/reference/light-app.md` §7.8). That
+ * button was removed (issue #1028), and no page asks today; the shell still answers.
  *
  * **A provider passes a stable function** — one made per render would re-render every reader on
  * every render of the shell, for an answer that does not change for the life of the window.

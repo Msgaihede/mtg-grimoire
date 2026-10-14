@@ -37,7 +37,7 @@ use engine::ai_support::legal_actions;
 use engine::game::commander::commander_tax;
 use engine::game::effects::create_emblem::grant_emblem;
 use engine::game::engine::apply;
-use engine::game::mana_sources::max_mana_yield;
+use engine::game::mana_sources::{activatable_mana_options, max_mana_yield};
 use engine::game::turn_control::authorized_submitters;
 use engine::game::{
     install_card_db, load_and_hydrate_decks, resolve_deck_list, start_game_with_starting_player,
@@ -50,6 +50,7 @@ use engine::types::events::GameEvent;
 use engine::types::format::FormatConfig;
 use engine::types::game_state::{MulliganDecisionPhase, WaitingFor};
 use engine::types::identifiers::ObjectId;
+use engine::types::mana::ManaType;
 use engine::types::phase::Phase;
 use engine::types::statics::StaticMode;
 use engine::types::zones::Zone;
@@ -57,10 +58,11 @@ use engine::types::StaticDefinition;
 use engine::types::{parse_counter_type, GameState, PlayerId};
 
 use crate::cards::{self, CardFacts};
+use crate::history::{History, NOTHING_TO_REDO, NOTHING_TO_UNDO};
 use crate::tokens::{DeckTokens, TokenFacts};
 use crate::view::{
-    CardCounter, GameCard, GoldfishAction, GoldfishStep, GoldfishView, Happened, Lane,
-    MulliganView, Place, Seat, Stage, TokenOffer,
+    CardCounter, GameCard, GoldfishAction, GoldfishStep, GoldfishView, Happened, Lane, ManaByType,
+    ManaTable, MulliganView, Place, Seat, Stage, TokenOffer,
 };
 
 const YOU: PlayerId = PlayerId(0);
@@ -103,6 +105,18 @@ pub struct Goldfish {
     /// While the goldfish's turn is on: how many cards it has drawn and discarded so far, told
     /// as `Happened::OpponentTurn` when the next turn starts.
     fish_turn: Option<FishTurn>,
+    /// The game before each of the reader's actions, for undo and redo (`crate::history`).
+    history: History<Moment>,
+}
+
+/// The part of a goldfish game an action changes: what a refusal puts back and what undo goes
+/// back to. The rest — the deck's printings by name, its commanders and tokens, the emblem — is
+/// the same for the whole game.
+struct Moment {
+    state: GameState,
+    printings: HashMap<ObjectId, String>,
+    turn: u32,
+    mulligans: u8,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -197,6 +211,7 @@ impl Goldfish {
             tokens,
             deck_tokens,
             fish_turn: None,
+            history: History::default(),
         };
         game.assign_printings(cards);
         start_game_with_starting_player(&mut game.state, YOU);
@@ -290,7 +305,10 @@ impl Goldfish {
             library_cards: cards(&mut you.library.iter()),
             library_lands,
             mana_open,
+            mana: mana_table(s, YOU),
             tokens: self.tokens.clone(),
+            can_undo: self.history.can_undo(),
+            can_redo: self.history.can_redo(),
         }
     }
 
@@ -363,15 +381,24 @@ impl Goldfish {
     // ── Actions ───────────────────────────────────────────────────────────────────────────
 
     /// Do what the board asked, and answer with the board after it. A refusal is one sentence
-    /// and leaves the game exactly as it was.
+    /// and leaves the game exactly as it was. Every action taken can be undone; undo and redo
+    /// themselves move along that history and happen nothing.
     pub fn act(&mut self, action: GoldfishAction) -> Result<GoldfishStep, String> {
+        match action {
+            GoldfishAction::Undo => return self.travel(true),
+            GoldfishAction::Redo => return self.travel(false),
+            _ => {}
+        }
         let checkpoint = self.clone_state();
         let mut happened = Vec::new();
         match self.run(action, &mut happened) {
-            Ok(()) => Ok(GoldfishStep {
-                view: self.view(),
-                happened,
-            }),
+            Ok(()) => {
+                self.history.record(checkpoint);
+                Ok(GoldfishStep {
+                    view: self.view(),
+                    happened,
+                })
+            }
             Err(e) => {
                 self.restore(checkpoint);
                 Err(e)
@@ -379,9 +406,26 @@ impl Goldfish {
         }
     }
 
+    /// Undo (`back`) or redo: the game as it was before the last action, or before the last undo.
+    fn travel(&mut self, back: bool) -> Result<GoldfishStep, String> {
+        let now = self.clone_state();
+        let then = if back {
+            self.history.undo(now).ok_or(NOTHING_TO_UNDO)?
+        } else {
+            self.history.redo(now).ok_or(NOTHING_TO_REDO)?
+        };
+        self.restore(then);
+        Ok(GoldfishStep {
+            view: self.view(),
+            happened: Vec::new(),
+        })
+    }
+
     fn run(&mut self, action: GoldfishAction, out: &mut Vec<Happened>) -> Result<(), String> {
         let mulliganing = self.stage() == Stage::Mulligan;
         match action {
+            // `act` takes these before a checkpoint is made: they move along the history.
+            GoldfishAction::Undo | GoldfishAction::Redo => {}
             GoldfishAction::Mulligan => {
                 if !mulliganing {
                     return Err(ALREADY_KEPT.into());
@@ -1010,15 +1054,21 @@ impl Goldfish {
         self.apply(YOU, GameAction::Debug(action)).map(|_| ())
     }
 
-    fn clone_state(&self) -> (GameState, HashMap<ObjectId, String>, u32) {
-        (self.state.clone(), self.printings.clone(), self.turn)
+    fn clone_state(&self) -> Moment {
+        Moment {
+            state: self.state.clone(),
+            printings: self.printings.clone(),
+            turn: self.turn,
+            mulligans: self.mulligans,
+        }
     }
 
-    fn restore(&mut self, (state, printings, turn): (GameState, HashMap<ObjectId, String>, u32)) {
-        self.state = state;
-        self.printings = printings;
-        self.turn = turn;
-        // The goldfish's turn always ends within the action that started it, so a checkpoint is
+    fn restore(&mut self, moment: Moment) {
+        self.state = moment.state;
+        self.printings = moment.printings;
+        self.turn = moment.turn;
+        self.mulligans = moment.mulligans;
+        // The goldfish's turn always ends within the action that started it, so a moment is
         // never taken in the middle of one.
         self.fish_turn = None;
     }
@@ -1086,6 +1136,71 @@ pub(crate) fn place_of(zone: Zone) -> Option<Place> {
         Zone::Library => Place::LibraryTop,
         Zone::Stack => return None,
     })
+}
+
+/// A seat's mana table: what its untapped permanents could make, by type, and its pool. Shared by
+/// the goldfish and the playtest board.
+///
+/// Each source counts once per type it can make: the most of that type any one of its activatable
+/// `{T}` mana abilities adds (phase's `activatable_mana_options`, one row per production), no more
+/// than its net yield (`max_mana_yield`). A row that makes several mana at once (Sol Ring's
+/// `{C}{C}`, a bounce land's `{W}{U}`) counts each type as many times as it holds it; a single
+/// row ("any color", "{G} for each creature") counts its source's whole yield.
+pub(crate) fn mana_table(state: &GameState, seat: PlayerId) -> ManaTable {
+    let mut open = ManaByType::default();
+    for id in state.battlefield.iter() {
+        let yields = max_mana_yield(state, *id, seat);
+        if yields == 0 {
+            continue;
+        }
+        let mut best = ManaByType::default();
+        for option in activatable_mana_options(state, *id, seat) {
+            match &option.atomic_combination {
+                Some(types) => {
+                    for kind in KINDS {
+                        let n = types.iter().filter(|t| **t == kind).count() as u32;
+                        let cell = best.cell(kind);
+                        *cell = (*cell).max(n.min(yields));
+                    }
+                }
+                None => {
+                    let cell = best.cell(option.mana_type);
+                    *cell = (*cell).max(yields);
+                }
+            }
+        }
+        for kind in KINDS {
+            *open.cell(kind) += *best.cell(kind);
+        }
+    }
+    let pool = &state.players[seat.0 as usize].mana_pool;
+    let mut floating = ManaByType::default();
+    for kind in KINDS {
+        *floating.cell(kind) = pool.count_color(kind) as u32;
+    }
+    ManaTable { open, floating }
+}
+
+const KINDS: [ManaType; 6] = [
+    ManaType::White,
+    ManaType::Blue,
+    ManaType::Black,
+    ManaType::Red,
+    ManaType::Green,
+    ManaType::Colorless,
+];
+
+impl ManaByType {
+    fn cell(&mut self, kind: ManaType) -> &mut u32 {
+        match kind {
+            ManaType::White => &mut self.white,
+            ManaType::Blue => &mut self.blue,
+            ManaType::Black => &mut self.black,
+            ManaType::Red => &mut self.red,
+            ManaType::Green => &mut self.green,
+            ManaType::Colorless => &mut self.colorless,
+        }
+    }
 }
 
 pub(crate) fn is_permanent(o: &engine::game::GameObject) -> bool {

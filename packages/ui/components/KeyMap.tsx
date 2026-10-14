@@ -79,6 +79,7 @@ function headingFor(scope: ShortcutScope): string {
   if (scope === "global") return "Everywhere";
   // Not a view, and never will be — it is the surface `App.tsx` swaps in place of `DecksPage`.
   if (scope === "deckEditor") return "Deck editor";
+  if (scope === "goldfish") return "Goldfish";
   // The rail's own word for the view, so the section a reader is standing in is named with the
   // label they pressed to get there. `NAV` covers every `ViewId`, so the fallback is unreachable
   // and is here only because `find` cannot say so in the type.
@@ -175,6 +176,8 @@ export function Caps({ shortcut }: { shortcut: Shortcut }) {
 function KeyMapTabs() {
   const activeView = useAppStore((s) => s.activeView);
   const openDeckId = useAppStore((s) => s.openDeckId);
+  // `App.tsx`'s own test for the board being the page drawn: a board left over another deck is not.
+  const goldfish = useAppStore((s) => s.goldfish !== null && s.goldfish.deckId === s.openDeckId);
   const [tab, setTab] = useState<KeyMapTab>("shortcuts");
   const barRef = useRef<HTMLDivElement>(null);
 
@@ -282,10 +285,10 @@ function KeyMapTabs() {
 
       {tab === "shortcuts" ? (
         <div role="tabpanel" id={panelDomId("shortcuts")} aria-labelledby={tabDomId("shortcuts")}>
-          {activeScopes({ activeView, openDeckId }).map((scope) => {
+          {activeScopes({ activeView, openDeckId, goldfish }).map((scope) => {
             const rows = SHORTCUTS[scope];
-            // **A scope with nothing in it draws nothing — not a heading over a gap.** All
-            // nine views are in that state today — `deckEditor` is a scope of its own and
+            // **A scope with nothing in it draws nothing — not a heading over a gap.** Every
+            // view but Playtesting is in that state today — `deckEditor` is a scope of its own and
             // *replaces* `decks` rather than filling it — and that is the honest answer
             // rather than a page whose section is "coming soon": what a reader on the
             // search page can press is exactly what `Everywhere` lists.

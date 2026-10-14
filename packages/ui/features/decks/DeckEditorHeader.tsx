@@ -445,9 +445,8 @@ export const DeckEditorHeader = memo(function DeckEditorHeader({
               {/* **Share** (issue #1032) — publish this deck as a read-only link, update it, copy
                   it, withdraw it. The cabinets' own control, so a deck share is offered, refused
                   and receipted exactly as a binder's is: hidden for a reader who has connected
-                  nothing, and with no *Open a shared collection* half here — that is the
-                  cabinets' to offer, and this header is about the deck on screen. */}
-              {share !== null && <ShareFolderMenu target={share} withOpen={false} />}
+                  nothing. */}
+              {share !== null && <ShareFolderMenu target={share} />}
 
               {/* Each row carries the layer it opens rather than a kind — see {@link ACTIONS},
                   which is where every one of these buttons' names is argued. The word is what

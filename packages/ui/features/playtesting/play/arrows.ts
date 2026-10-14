@@ -3,16 +3,17 @@
  * the curve each one takes between two boxes on the board.
  *
  * **An arrow joins two things the board has already drawn** (`Anchor`): a card on a table, found
- * by the `data-point` its pile carries, or a seat's life plate (`data-plate`). An attacker points
- * at the plate of the player it attacks — every attack is at a player on today's wire — and a
- * blocker points at the attacker it blocks. `CombatArrows` measures the anchors from the DOM;
- * everything here is a pure function of the boxes, so it is tested without one.
+ * by the `data-point` its pile carries, or a player's life plate (`data-plate`, the player's
+ * name: `you`, `opponent`, `opponent2`, `opponent3`). An attacker points at the card it attacks
+ * or the plate of the player it attacks, and a blocker points at the attacker it blocks.
+ * `CombatArrows` measures the anchors from the DOM; everything here is a pure function of the
+ * boxes, so it is tested without one.
  */
-import type { GoldfishSeat, PlaytestView } from "@/lib/ipc";
+import type { PlaytestPlayer, PlaytestView } from "@/lib/ipc";
 import { attacksOf, blocksOf, seatOf, type Picks } from "./combat";
 
 /** Something on the board an arrow or a pop is drawn at. */
-export type Anchor = { card: number } | { plate: GoldfishSeat };
+export type Anchor = { card: number } | { plate: PlaytestPlayer };
 
 /** A box on the board, in px from the board's own corner. */
 export interface Box {
@@ -32,7 +33,7 @@ export interface ArrowSpec {
   key: string;
   from: Anchor;
   to: Anchor;
-  /** Whose attack it draws (the attacker's seat), or a block. */
+  /** Whose attack it draws — the reader's, or any opponent's — or a block. */
   tone: "you" | "opponent" | "block";
 }
 
@@ -40,11 +41,16 @@ export interface ArrowSpec {
  * The arrows the combat makes. The attacks and blocks are read as `tableMarks` reads them: the
  * reader's picks while they are declaring, the engine's combat at any other time — so an attacker
  * picked in the declare-attackers step is drawn at what it will attack before it is declared. An
- * attack at a planeswalker or a battle points at that card; at the player, at their plate.
+ * attack at a planeswalker or a battle points at that card; at a player, at their plate.
+ *
+ * **Every attack is drawn, the AIs' on one another too**: at a four-player table an opponent may
+ * attack another, and that arrow runs between two of the opponents' areas in the attacker's red.
+ * An attack that names no player (an older view, or a pick the engine is left to aim) points at
+ * the reader's plate from an opponent's creature and at the first opponent's from the reader's.
  */
 export function combatArrows(view: PlaytestView, picks: Picks): ArrowSpec[] {
   const out: ArrowSpec[] = [];
-  for (const { attacker, target } of attacksOf(view, picks)) {
+  for (const { attacker, target, player } of attacksOf(view, picks)) {
     const seat = seatOf(view, attacker);
     if (seat === null) continue;
     out.push({
@@ -53,8 +59,8 @@ export function combatArrows(view: PlaytestView, picks: Picks): ArrowSpec[] {
       to:
         target !== null && seatOf(view, target) !== null
           ? { card: target }
-          : { plate: seat === "you" ? "opponent" : "you" },
-      tone: seat,
+          : { plate: player ?? (seat === "you" ? "opponent" : "you") },
+      tone: seat === "you" ? "you" : "opponent",
     });
   }
   for (const b of blocksOf(view, picks)) {

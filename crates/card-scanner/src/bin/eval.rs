@@ -81,6 +81,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+#[path = "support/ab.rs"]
+mod ab;
 #[path = "support/labels.rs"]
 mod labels;
 use labels::{attach, labels_agree, open_corpus, rows_from_corpus, LabelRow};
@@ -438,6 +440,8 @@ impl Ingredients {
         // than how busy the machine was while a resolve ran — and so the mean ms column still
         // holds each resolve's whole wall time.
         session.set_resolve_on(ResolveOn::Inline);
+        // The measured switches, from the environment — see support/ab.rs.
+        ab::apply(&mut session);
         Ok(session)
     }
 }

@@ -21,11 +21,11 @@ nothing red. The whole of what the catalogue buys is one sentence:
 > against the same object the panel draws.**
 
 That is a *fence*, not a convention, and it is worth being precise about which rows stand behind
-it. Of the eleven entries in `SHORTCUTS`:
+it. Of the entries in `SHORTCUTS`:
 
 | Rows | Fenced how |
 | --- | --- |
-| `switchView`, `keyMap`, `newWindow` (`AppShell`); `selectAll` (`selectAllSurface.ts`); `undo`, `redo`, `remove` (`DeckEditor`) | **Fenced.** The handler calls `matchesShortcut` against the entry. Rename the id and `shortcut()` throws at import; change a chord and the binding changes with it. |
+| `switchView`, `keyMap`, `newWindow` (`AppShell`); `selectAll` (`selectAllSurface.ts`); `undo`, `redo`, `remove` (`DeckEditor`); `undo`, `redo` on the game boards (`features/playtesting/undo.ts`) | **Fenced.** The handler calls `matchesShortcut` against the entry. Rename the id and `shortcut()` throws at import; change a chord and the binding changes with it. |
 | `dismiss` (`Escape`), `contextMenu` (`Shift+F10`, `Menu`) | **Prose.** The bindings live in `useDismissOnEscape` and `menu/useContextMenu`, and neither reads the catalogue. |
 | `zoom` (`Ctrl+wheel`), `select` (`Ctrl`/`Shift`-click) | **Unmatchable by construction.** A pointer chord carries no `key`, so `matchesChord` answers `false` from its shape rather than from a guard a caller could forget. `useCardZoomGesture` and `multiSelect.ts` keep their own logic; the fence there is only that the label sits next to the code it describes. |
 
@@ -138,7 +138,9 @@ the editor's chords, and `deckEditor` *replaces* `decks` rather than nesting und
 paragraph above. The design and `KeyMap.tsx`'s comment were corrected first, `KeyMap.stories.tsx`
 and `KeyMap.test.tsx` on the review pass that found them still saying it. Six, not five, in all
 four — a count this page has since carried to seven for `scanner`, to **nine** for `trade` and
-`playtesting`, to **ten** for `shared`, and to **eleven** for `home`.) That emptiness is the whole
+`playtesting`, to **ten** for `shared`, and to **eleven** for `home`.) **Playtesting stopped being
+empty on 2026-10-14** — its board's undo and redo, [below](#undo-and-redo-on-the-game-boards) —
+and is the first view scope to bind anything. That emptiness is the whole
 reason `Ctrl+1…9` sits in
 `"global"` — it is what gives the panel something true to say on a page that binds nothing.
 
@@ -182,6 +184,10 @@ is the only way in*. The cabinet has it — `features/collection/ShareFolderMenu
 shared collection** beside the Share control, so the view is reached by a signpost rather than by
 a key nobody was told about. What the reversal costs is a keyboard route to one view; what it
 buys is that no other view's digit moved.
+
+⚠️ **The signpost is gone too** (2026-10-14, issue #1028): the owner removed *Open a shared
+collection* from the cabinet and gave the view no other way in, so the conditional rail row is the
+only route to it — and it appears only once a share is open.
 
 `AppShell`'s floor moved with it: `i >= CHORD_NAV.length`, still guarding the direction that
 throws — a chord with no destination behind it. A destination with no chord costs nothing, which
@@ -254,6 +260,27 @@ The prediction in the section above held: given back a ninth slot, Settings took
 is again the one destination without a chord, for its own reason. `nav.test.ts` now pins the ninth
 entry as `settings`. Another breaking change to a binding readers have in their fingers, and it
 belongs in the release note as one.
+
+## Undo and redo on the game boards
+
+**`Ctrl+Z` takes the last action back on the goldfish board and the playtest board; `Ctrl+Y` or
+`Ctrl+Shift+Z` takes it again** (2026-10-14,
+[issue #1022](https://github.com/Msgaihede/mtg-grimoire/issues/1022)). The deck editor's
+spellings, so a reader's hands learn undo once; the argument for the pair stays at
+`deckEditor.redo`.
+
+**Two scopes, because the boards are drawn in two places.** The playtest board is the Playtesting
+view, so its rows are `playtesting`'s — the first view scope to bind anything. The goldfish board
+is drawn *in place of* the deck editor (`App.tsx`), the way the editor is drawn in place of the
+decks page, so it is a scope of its own, `goldfish`: `activeScopes` swaps `deckEditor` for it while
+the store's board is open over the open deck, and the panel lists **Goldfish** instead of chords
+for an editor that is not on screen.
+
+`useUndoKeys` (`features/playtesting/undo.ts`) is the one binding for both. It yields to a text
+field (the life steppers keep the browser's own undo), to a dialog or menu over the board as the
+boards' other keys do, and to a held key; a press with nothing to go to is eaten rather than
+reaching the browser. The game's history is the engine's — [goldfish.md](goldfish.md#undo-and-redo)
+has the design.
 
 ## `newWindow`
 

@@ -20,6 +20,7 @@ The binding rules are in each area's `CLAUDE.md`. This page holds the reasons an
 - [The goldfish never loses](#the-goldfish-never-loses)
 - [The commands and the wire](#the-commands-and-the-wire)
 - [The board](#the-board)
+- [Undo and redo](#undo-and-redo)
 - [What is not there yet](#what-is-not-there-yet)
 - [Licences](#licences)
 
@@ -215,6 +216,14 @@ the game is lost and the slot empties.
 what a board draws: each zone's cards, the lives, the mana open, the library, and the tokens the
 deck makes. The library goes top first, because the board shows it when the reader asks to look.
 
+**The mana table** (issue #1002) is the mana open by type, beside the Next turn button on both
+boards (`ManaTableView`). `session.rs`' `mana_table` reads phase's `activatable_mana_options` for
+each untapped source: a source counts toward every type it can make, the most of that type one
+activation adds, capped at its net yield (`max_mana_yield`). So a dual land is in two columns and
+the columns sum to more than the mana open; that is the question a reader asks of a table ("can I
+cast {W}{W}?"), where the total answers "how much can I spend". A second row, the pool, is drawn
+only while mana floats (CR 106.4) — mid-payment in a playtest.
+
 **An object's id changes when it changes zone** (CR 400.7), so the page keeps an id only as long as
 the view it came from. The page sends actions one at a time, in order, for that reason
 (`useGoldfishGame`). A printing follows its card across a zone change: the session hands it to the
@@ -318,6 +327,35 @@ is a zone, never a coordinate:
 pointer. They are off while a field has the caret or a menu or dialog is open. Space belongs to the
 board even when a button has the focus: a card clicked keeps the focus, and Space would press it.
 Enter still presses a focused card, and that plays it.
+
+## Undo and redo
+
+**`Ctrl+Z` takes the last action back, and `Ctrl+Y` or `Ctrl+Shift+Z` takes it again** (issue
+#1022, 2026-10-14), on this board and the playtest board alike. The chords are the shortcut
+catalogue's ([keyboard-shortcuts.md](keyboard-shortcuts.md#undo-and-redo-on-the-game-boards)).
+**Undo** and **Redo** also head the game menu (`gameMenu`), greyed when there is nowhere to go, for
+a reader who does not know the chords; the playtest board's are greyed while the engine is busy.
+
+**The history is the engine's, and it is whole games, not inverses**
+(`crates/grimoire-play/src/history.rs`). Before every action it takes, the session keeps the game
+as it was — the `GameState`, the printings, the turn and the mulligan count, the same `Moment` a
+refusal goes back to. `GameState` is persistent (`im`), so a clone is a handful of reference
+counts. Going back is restoring one, which is exact for every action the board has, the rules'
+and the sandbox's alike; an inverse per action would be a second rules engine. Redo restores the
+moment from before the undo rather than replaying the action, so a redone turn is the one that was
+undone. A new action ends the redo trail. A hundred actions back is the limit (`UNDO_LIMIT`).
+
+**On the wire they are actions**, `{ type: "undo" }` and `{ type: "redo" }` on `goldfish_act`:
+no new command, the engine's stack and the slot as for any action. They answer with the board as
+it was and no facts, and a view says whether either has anywhere to go (`canUndo`, `canRedo`). A
+refused action was never taken, so it is not remembered; nothing to undo is a refusal like any
+other.
+
+**The log is the page's**, so the page keeps its side of the history the same way:
+`features/playtesting/undo.ts`' `LogBook` holds the whole log as it stood before each action, by
+the engine's own rules and limit so the two walk in step. Whole logs rather than a count of the
+lines an action added, because a playtest's replay logs its beats one by one, or merged when it is
+skipped or motion is reduced, and a count would have to agree with every way of logging them.
 
 ## What is not there yet
 

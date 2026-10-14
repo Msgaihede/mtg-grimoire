@@ -24815,6 +24815,20 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
+     * `share::commands::share_auto_update` — republish every share this device published whose
+     * folder has changed since its last upload.
+     *
+     * **Always `[]` here**: the crate's answer turns on a digest of the last upload it keeps in
+     * `app_meta`, and the fake keeps no record of what it last uploaded — so the honest answer
+     * is the one the crate gives on almost every pass, *nothing moved*. A story that wants a
+     * share updated presses *Update now*, which is `share_refresh`.
+     */
+    share_auto_update: (): ShareRow[] => {
+      refuseIfBusy(db);
+      return [];
+    },
+
+    /**
      * `share::commands::share_revoke` — withdraw a share. Terminal, and the reader's own press.
      *
      * **The row survives its own revocation** and goes `revoked` rather than away, so the page can

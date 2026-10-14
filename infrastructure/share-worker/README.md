@@ -5,8 +5,9 @@ writes an entitled reader publishes with, the R2 blob each snapshot lives in, th
 stranger opens, and the daily pass that darkens a link when a membership ends.
 
 **A share is a snapshot the owner publishes, not a window onto their database.** Everything a
-viewer sees was true when the owner last pressed publish, the owner chooses what crosses, and
-nothing a viewer does can reach back. `docs/superpowers/specs/2026-09-08-collection-sharing-design.md`
+viewer sees was true when the owner's app last published — on a press, or on its own when the
+folder changed (issue #1025) — the owner chooses what crosses, and nothing a viewer does can reach
+back. `docs/superpowers/specs/2026-09-08-collection-sharing-design.md`
 is the design; everything below is what a deploy needs.
 
 ## Why it is not a route on the relay
@@ -38,19 +39,19 @@ format. What it costs, stated so nobody has to rediscover it:
 
 ## The routes
 
-| Route | Body | Answer | Guard |
-| --- | --- | --- | --- |
-| `POST /g/{group}/share` | metadata | `200 { id, url }` | bearer |
-| `PUT /g/{group}/share/{id}` | gzip | `200 { hash }` | bearer |
-| `GET /g/{group}/shares` | | `200 { shares: [ … ] }` | bearer |
-| `DELETE /g/{group}/share/{id}` | | `204` | bearer |
-| `GET /s/{id}` | | `200` HTML, or `410` | **public** |
-| `GET /s/{id}/{hash}.json.gz` | | `200`, immutable | **public** |
-| `GET /assets/*` | | the viewer bundle | **public** |
+| Route                          | Body     | Answer                  | Guard      |
+| ------------------------------ | -------- | ----------------------- | ---------- |
+| `POST /g/{group}/share`        | metadata | `200 { id, url }`       | bearer     |
+| `PUT /g/{group}/share/{id}`    | gzip     | `200 { hash }`          | bearer     |
+| `GET /g/{group}/shares`        |          | `200 { shares: [ … ] }` | bearer     |
+| `DELETE /g/{group}/share/{id}` |          | `204`                   | bearer     |
+| `GET /s/{id}`                  |          | `200` HTML, or `410`    | **public** |
+| `GET /s/{id}/{hash}.json.gz`   |          | `200`, immutable        | **public** |
+| `GET /assets/*`                |          | the viewer bundle       | **public** |
 
 The gated four verify the token the relay minted, with `infrastructure/relay/src/token.ts`'s `verify` over the
 shared `RELAY_HMAC_KEY`, and compare **`claims.grp` against the path segment**. That comparison is
-not redundant with the signature: a validly signed token for one's *own* group is exactly what an
+not redundant with the signature: a validly signed token for one's _own_ group is exactly what an
 attacker has.
 
 **Then they ask whether the device is still in the group** (2026-10-01, issue #548). A token
@@ -59,19 +60,19 @@ otherwise overwrite or withdraw the group's binders for that long. The gate read
 newest `group_keys` row — the manifest a rotation published, whose key set is the roster — and
 refuses a token minted **before** that rotation by a device (`dev`, stamped by the relay since the
 same date) that the manifest omits. A token minted at or after it passes: only the group's
-*current* auth mints one, and a removed device no longer derives it, while a device that has just
+_current_ auth mints one, and a removed device no longer derives it, while a device that has just
 paired may not be on the manifest yet. A token with no `dev` (an older relay's) predating the
 rotation is refused. A group with no rows has never rotated and is not asked. One D1 read per gated
 request — traffic from at most five devices, never from a viewer.
 
 ⚠️ **This needs the relay deployed first** so that tokens carry `dev`; until then every token
 minted before a group's newest rotation is refused, and a device sees one day of
-*"would not accept this device's membership"* at most.
+_"would not accept this device's membership"_ at most.
 
 **Issue #752 closes the re-claim path in the relay source** (2026-10-05): `/claim` requires
 `authIsCurrent` whenever the target group already has key rows. A stale claim returns a plain
 **401** before consuming the claim code or changing the binding, refresh secret, device roll or
-key rows, so a removed device cannot press Connect to obtain a token minted *after* its removal.
+key rows, so a removed device cannot press Connect to obtain a token minted _after_ its removal.
 A legitimate device behind a rotation catches up through `/keys` and then retries Connect; a
 group with no key rows keeps the first-claim seed behavior. The binding write also checks that
 the authenticated epoch and auth are unchanged, and an existing group's token is stamped before
@@ -83,7 +84,7 @@ credential shows the gate, and nobody has presented a stale claim to the hosted 
 
 **The two public routes are the whole of the entitlement asymmetry.** Publishing needs a token,
 which needs a membership; viewing needs the link and nothing else, which is what issue #360 asked
-for. The link *is* the capability — there is no viewer account and no per-viewer access control.
+for. The link _is_ the capability — there is no viewer account and no per-viewer access control.
 
 `GET /assets/*` reaches **no code here**. `wrangler.jsonc`'s `assets` binding names `/s/*` and
 `/g/*` as the only prefixes that `run_worker_first`, so the viewer bundle is served at the edge:
@@ -95,7 +96,7 @@ undo it.
 
 `POST` writes the metadata row with `object_key` **NULL**; `PUT` stores the bytes in R2 and only
 then points the row at them. That order is the whole of what makes a failed upload harmless: a
-publish that dies in between leaves either *no* snapshot or the *previous* snapshot, and never a
+publish that dies in between leaves either _no_ snapshot or the _previous_ snapshot, and never a
 link to something that was never written. The superseded object is deleted **after** the row has
 moved, and only when the key actually changed — a republish of an unchanged collection is
 content-addressed to the same key, and a delete that skipped that comparison would erase the
@@ -123,11 +124,11 @@ is bounded by the 8 MB cap, which is checked as it fills, so a caller who omits 
 
 `GET /s/{id}/{hash}.json.gz` is `public, max-age=31536000, immutable` with `caches.default` in
 front of R2, so a warm view costs no storage read. ⚠️ **The response sets `encodeBody: "manual"`**:
-by default the Workers runtime *applies* a declared `content-encoding` — gzips the body on the
+by default the Workers runtime _applies_ a declared `content-encoding` — gzips the body on the
 way out — and an R2 stream is not the unread `fetch()` pass-through it exempts. Without the option
 every snapshot left gzipped twice, which the jsdom suite cannot see; step 5 of the deploy is the
 check that can. What `immutable` costs is that revoking cannot
-recall an edge copy somebody already holds; what revoking *does* stop is every new viewer, because
+recall an edge copy somebody already holds; what revoking _does_ stop is every new viewer, because
 the shell is the only thing that hands out that URL and it is `max-age=300`.
 
 `GET /s/{id}` is rendered from the D1 row — that is what carries the OpenGraph card, and it is the
@@ -161,7 +162,7 @@ correct, and would make that clause unreachable for a group whose only share is 
 is exactly the case it exists for.
 
 **A group with no entitlement row at all is not serving, and goes dark.** That is a real state
-rather than a hypothesis: `/claim` *moves* a binding rather than refusing one, so a subject who
+rather than a hypothesis: `/claim` _moves_ a binding rather than refusing one, so a subject who
 reconnects on another group leaves this one entitled by nothing. Fail closed, because `lapsed` is
 reversible — a group that should not have gone dark lights again on the next pass, where a group
 that should have gone dark and did not, never does.
@@ -177,7 +178,7 @@ sync shares.
 **It never writes `updated_at`.** That column is the date the shell's OpenGraph card puts on the
 snapshot, and a lapse or a revival changes the row's state and not one byte of what the owner
 published — until 2026-10-01 both directions restamped it, so a share relit after a month
-previewed as *updated today*.
+previewed as _updated today_.
 
 A lapsed share **keeps its R2 object**. Reclaiming that storage is a sweep for later (spec §13),
 not a retention rule invented here: a revived membership wants the snapshot back.
@@ -274,6 +275,7 @@ thing that can show the two Workers hold the same key.
    so either answer opens. Record which one this deploy gives in
    [collection-sharing.md](../../docs/reference/collection-sharing.md); it is the only way anyone
    ever finds out.
+
 6. **Write that address into two places, byte for byte**: `wrangler.jsonc`'s `SHARE_BASE` var
    (currently the placeholder `<set on first deploy>`) and `share::SHARE_BASE` in the Rust. Then
    deploy again, because a `var` is baked at deploy time. The same trap `RELAY_BASE` documents
@@ -300,7 +302,7 @@ to read as a pass.
 
 `fakeD1` models column keys and not expression indexes, so `shares_folder` — the partial unique
 index that makes one share per folder true — is **not** enforced there. `handleCreate` therefore
-decides it by *reading* the folder's row, and catches a constraint violation only as the backstop
+decides it by _reading_ the folder's row, and catches a constraint violation only as the backstop
 for two devices publishing at once: the loser re-reads and is answered the winner's id rather than
 a 500. Neither half can be checked against the fake, so both were driven against real SQLite with
 `node:sqlite` on 2026-09-08 — the index refuses a second live share of one folder and a second
@@ -310,5 +312,5 @@ publish → revoke → publish → publish → publish answers one stable id fro
 ⚠️ **That last sequence is the shape of the bug this Worker shipped for one commit.** The lookup
 in front of the index has to carry the index's own `state <> 'revoked'` predicate; without it the
 tombstone is what `first()` answers, every later publish takes the mint-a-new-id branch, and the
-third press is an uncaught 500 for ever. Two publishes cannot see it — the second is *supposed*
+third press is an uncaught 500 for ever. Two publishes cannot see it — the second is _supposed_
 to mint a new id — which is why the test publishes four times.

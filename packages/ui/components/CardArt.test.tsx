@@ -1,6 +1,10 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID, TooltipProvider } from "@/components/tooltip/TooltipProvider";
+import {
+  TOOLTIP_OPEN_MS,
+  TOOLTIP_PANEL_ID,
+  TooltipProvider,
+} from "@/components/tooltip/TooltipProvider";
 import { CardArt } from "./CardArt";
 
 const mount = (ui: React.ReactNode) => render(<TooltipProvider>{ui}</TooltipProvider>);
@@ -26,7 +30,8 @@ describe("CardArt", () => {
     expect(chip?.textContent).toBe("Releases 2026-11-14");
     expect(chip?.className).toContain("bottom-[");
     expect(chip?.className).toContain("left-[");
-    expect(chip?.className).toContain("bg-destructive");
+    expect(chip?.className).toContain("text-destructive");
+    expect(chip?.className).toContain("border-destructive/50");
     expect(container.querySelector("svg")).toBeNull();
   });
 

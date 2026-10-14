@@ -44,8 +44,39 @@ pub struct GoldfishView {
     /// single `{T}` mana ability, net of its own cost (phase's `max_mana_yield`). A summoning-sick
     /// creature makes none.
     pub mana_open: u32,
+    /// The same open mana by type, and what is floating in the pool (issue #1002).
+    pub mana: ManaTable,
     /// The tokens this deck's cards make, for the game menu's "Create a token".
     pub tokens: Vec<TokenOffer>,
+    /// An action can be taken back (`GoldfishAction::Undo`).
+    pub can_undo: bool,
+    /// An undone action can be taken again (`GoldfishAction::Redo`).
+    pub can_redo: bool,
+}
+
+/// A seat's mana by type: the board's mana table. Shared by the goldfish and the playtest board.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManaTable {
+    /// The most of each type the untapped permanents could make right now: every source that can
+    /// make the type counts, so a dual land is in two rows and the rows sum to more than
+    /// `mana_open`. A source counts its largest single `{T}` ability's output of the type, no more
+    /// than its net yield (Sol Ring is 2 colorless; a bounce land 1 of each of its colors).
+    pub open: ManaByType,
+    /// The mana already in the pool (CR 106.4) — mana made and not yet spent.
+    pub floating: ManaByType,
+}
+
+/// One count per type of mana, in WUBRG order and then colorless.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManaByType {
+    pub white: u32,
+    pub blue: u32,
+    pub black: u32,
+    pub red: u32,
+    pub green: u32,
+    pub colorless: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -218,6 +249,10 @@ pub enum GoldfishAction {
     Discard {
         ids: Vec<u64>,
     },
+    /// Take the last action back: the game as it was before it, exactly. Happens nothing.
+    Undo,
+    /// Take the last undone action again: the game as it was before the undo. Happens nothing.
+    Redo,
 }
 
 /// What an action did, one fact a row, for the log — the reader's doing, the rules', and the

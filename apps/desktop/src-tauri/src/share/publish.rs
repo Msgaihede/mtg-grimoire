@@ -687,13 +687,14 @@ pub async fn publish(
     )
     .await?;
 
+    let digest = digest(&snap)?;
     snap.id = created.id.clone();
     let json = serde_json::to_vec(&snap).map_err(|e| e.to_string())?;
     let uploaded = put_blob(conn, &token, &group, &created.id, gzip(&json)?)
         .await
         .map(|_| ());
 
-    commit_publish(
+    let row = commit_publish(
         conn,
         &ShareRow {
             id: created.id,
@@ -710,7 +711,12 @@ pub async fn publish(
             updated_at: at,
         },
         uploaded,
-    )
+    )?;
+    // **Best effort, and after the commit.** A digest that did not stick costs the next
+    // [`changed`] pass one republish of a document that had not moved, which is the cheap
+    // direction to be wrong in; failing a publish that landed over it would be the dear one.
+    let _ = crate::app_meta::set_app_meta(conn, &digest_key(&row.id), &digest);
+    Ok(row)
 }
 
 /// The inverse of `ShareFields::names()`, which is private to [`super::snapshot`] and writes the
@@ -745,6 +751,91 @@ pub async fn refresh(conn: &Connection, tokens: &impl Store, id: &str) -> Result
     .await
 }
 
+// ---------------------------------------------------------------------------------------
+// Keeping a share current (issue #1025)
+// ---------------------------------------------------------------------------------------
+
+/// The `app_meta` key holding the digest of the last snapshot this device uploaded for `id`.
+///
+/// **`app_meta` rather than a column of `collection_shares`**, because the digest is this
+/// device's private bookkeeping about its own uploads — never synced, never drawn, and
+/// worthless to any other device — and losing it costs exactly one republish. A schema rung for
+/// a cache of a cache is not worth what a rung costs.
+fn digest_key(id: &str) -> String {
+    format!("share_digest:{id}")
+}
+
+/// What a snapshot *says*, as a hex SHA-256 — **without** its `id` and `updatedAt`.
+///
+/// Those two are the only fields that differ between two publishes of an unchanged folder: the
+/// id is stamped after the read and the clock moves on every call. Everything else is a fact
+/// about the reader's cards, folders, prices or the switches they ticked, and a change to any of
+/// it is a change a viewer should see.
+pub fn digest(snap: &super::ShareSnapshot) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    let body = serde_json::to_vec(&(
+        snap.v,
+        &snap.title,
+        &snap.owner,
+        &snap.marketplace,
+        &snap.currency,
+        &snap.fields,
+        &snap.folders,
+        &snap.cards,
+    ))
+    .map_err(|e| e.to_string())?;
+    Ok(Sha256::digest(&body)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
+}
+
+/// The ids of the live shares **this device published** whose folder no longer reads as the
+/// snapshot it last uploaded — the ones [`refresh`] should be run on.
+///
+/// **Local and free, and that is the whole design.** It is a read of the reader's own database
+/// and a hash per share, with no token and no request, so it can be asked on a timer without
+/// spending a single request of the account's shared Worker budget on a folder that has not
+/// moved. Only a share that *has* changed costs the two requests a publish always costs.
+///
+/// Three kinds of share are passed over, each for its own reason:
+///
+/// * **Not `live`** — a withdrawn share has no link to keep current, and a `lapsed` one would be
+///   refused by the gate on every pass.
+/// * **Never published from here** (`published` is `None`) — another device in the group made
+///   it, and two devices racing to republish one link is how a reader's binder flickers between
+///   two pictures of a database that has not finished syncing. Pressing *Update now* here makes
+///   this device the one that keeps it.
+/// * **Refused by the read** — a locked folder, or one since deleted. The press would earn the
+///   same sentence; the menu already says *Stale* for the first, and nothing should retry it
+///   on a timer.
+pub fn changed(conn: &Connection) -> Result<Vec<String>, String> {
+    let marketplace = crate::sorting::Marketplace::from_id(&crate::marketplace::stored(conn));
+    let mut due = Vec::new();
+    for known in cache::list(conn)? {
+        if known.state != "live" || known.published.is_none() {
+            continue;
+        }
+        let fields = fields_from_names(&known.fields);
+        let Ok(snap) = snapshot(
+            conn,
+            "",
+            &known.owner_name,
+            known.folder_uid.as_deref(),
+            fields,
+            marketplace,
+            0,
+        ) else {
+            continue;
+        };
+        let stored = crate::app_meta::get_app_meta(conn, &digest_key(&known.id));
+        if stored.as_deref() != Some(digest(&snap)?.as_str()) {
+            due.push(known.id);
+        }
+    }
+    Ok(due)
+}
+
 /// Withdraw one share. Terminal, and the reader's own press.
 ///
 /// **The local row moves only after the relay has taken it**, which is [`commit_publish`]'s rule
@@ -754,6 +845,12 @@ pub async fn revoke(conn: &Connection, tokens: &impl Store, id: &str) -> Result<
     endpoint(conn)?;
     let (token, group) = credentials(conn, tokens).await?;
     delete_share(conn, &token, &group, id).await?;
+    // Nothing will ever compare against it again: a withdrawn share is never republished, and a
+    // folder shared afresh is minted a new id. A failed delete is one orphaned row of text.
+    let _ = conn.execute(
+        "DELETE FROM app_meta WHERE key = ?1",
+        rusqlite::params![digest_key(id)],
+    );
     // The row survives its own revocation until the next reconcile drops it, so the page can
     // say *withdrawn* rather than having the folder's badge vanish with no explanation.
     cache::mark_state(conn, id, "revoked", now(conn)?)
@@ -1467,6 +1564,121 @@ mod tests {
         let after = cache::get(&conn, "kQ2p7fMx9Lb0RtVw").unwrap().unwrap();
         assert_eq!(after.published, Some(9_999));
         assert_eq!(after.title, "Trade binder (new)");
+    }
+
+    /// One copy of one card in the folder `uid` names — the corpus row as well, because the
+    /// snapshot's read joins it.
+    fn file_card(conn: &Connection, uid: &str, card: &str) {
+        conn.execute(
+            "INSERT OR IGNORE INTO cards (id, name, set_code, collector_number, lang, layout, raw)
+             VALUES (?1, ?1, 'lea', '161', 'en', 'normal', '{}')",
+            rusqlite::params![card],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO collection_entries
+               (card_id, set_code, collector_number, lang, finish, condition, quantity,
+                folder_id, created_at, updated_at)
+             VALUES (?1, 'lea', '161', 'en', 'nonfoil', 'NM', 1,
+                     (SELECT id FROM collection_folders WHERE sync_uid = ?2), 0, 0)",
+            rusqlite::params![card, uid],
+        )
+        .unwrap();
+    }
+
+    /// What [`changed`] reads the folder as now, for a test to store as "last uploaded".
+    fn current_digest(conn: &Connection, known: &ShareRow) -> String {
+        let snap = snapshot(
+            conn,
+            "",
+            &known.owner_name,
+            known.folder_uid.as_deref(),
+            fields_from_names(&known.fields),
+            crate::sorting::Marketplace::from_id(&crate::marketplace::stored(conn)),
+            0,
+        )
+        .unwrap();
+        digest(&snap).unwrap()
+    }
+
+    /// **Two publishes of an unchanged folder must digest alike** — the id is stamped after
+    /// the read and the clock moves on every call, so a digest that covered either would make
+    /// every pass a republish and the timer a drain on the Worker budget.
+    #[test]
+    fn the_digest_ignores_the_id_and_the_clock_but_not_the_cards() {
+        let mut a = wire_snapshot(vec![wire_card(1, Some(2.0))]);
+        let first = digest(&a).unwrap();
+        a.id = "kQ2p7fMx9Lb0RtVw".to_owned();
+        a.updated_at = 9_999_999;
+        assert_eq!(
+            digest(&a).unwrap(),
+            first,
+            "the id and the stamp are not content"
+        );
+        a.cards[0].q = 2;
+        assert_ne!(
+            digest(&a).unwrap(),
+            first,
+            "a copy more is a change a viewer should see"
+        );
+    }
+
+    /// The whole of issue #1025's pass, without a network: due when the folder moved, quiet
+    /// when it did not.
+    #[test]
+    fn a_share_is_due_exactly_when_its_folder_no_longer_reads_as_its_last_upload() {
+        let conn = open_db();
+        let uid = folder(&conn, "a", false);
+        file_card(&conn, &uid, "bolt");
+        let known = row("kQ2p7fMx9Lb0RtVw");
+        cache::store(&conn, &known).unwrap();
+
+        // A share published before this pass existed has no digest, so its first pass is one
+        // republish — and then never again until something changes.
+        assert_eq!(changed(&conn).unwrap(), vec![known.id.clone()]);
+
+        crate::app_meta::set_app_meta(
+            &conn,
+            &digest_key(&known.id),
+            &current_digest(&conn, &known),
+        )
+        .unwrap();
+        assert!(
+            changed(&conn).unwrap().is_empty(),
+            "nothing moved, nothing is due"
+        );
+
+        file_card(&conn, &uid, "counterspell");
+        assert_eq!(
+            changed(&conn).unwrap(),
+            vec![known.id.clone()],
+            "a card was filed"
+        );
+    }
+
+    /// The three kinds of share the pass leaves alone, each for its own reason — see
+    /// [`changed`]'s doc.
+    #[test]
+    fn withdrawn_foreign_and_locked_shares_are_never_due() {
+        let conn = open_db();
+        folder(&conn, "a", false);
+        folder(&conn, "b", false);
+        folder(&conn, "c", true);
+
+        let mut revoked = row("revokedrevoked00");
+        revoked.state = "revoked".to_owned();
+        cache::store(&conn, &revoked).unwrap();
+
+        let mut foreign = row("foreignforeign00");
+        foreign.folder_uid = Some("uid-b".to_owned());
+        foreign.published = None;
+        cache::store(&conn, &foreign).unwrap();
+
+        let mut locked = row("lockedlocked0000");
+        locked.folder_uid = Some("uid-c".to_owned());
+        cache::store(&conn, &locked).unwrap();
+
+        assert!(changed(&conn).unwrap().is_empty());
     }
 
     /// The cap refusals keep the relay's sentence, because the number is in it — and the test

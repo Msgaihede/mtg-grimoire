@@ -1,4 +1,4 @@
-//! The five commands, and the row they answer.
+//! The six commands, and the row they answer.
 //!
 //! ⚠️ **`generate_handler!` names a command after the last path segment**, so
 //! `share::commands::share_create` is invoked as `"share_create"` — the rule the comment beside
@@ -9,6 +9,7 @@ use serde::Serialize;
 
 use crate::sync::{self, AppState};
 use grimoire_core::state::InHand;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 /// One published share, as the page draws it.
@@ -162,6 +163,67 @@ pub async fn share_refresh(
     let state = state.inner().clone();
     on_the_write_connection(state, move |conn, tokens, runtime| {
         runtime.block_on(super::publish::refresh(conn, tokens, &id))
+    })
+    .await
+}
+
+/// Whether a [`share_auto_update`] pass is already running in this process.
+///
+/// Every window's shell asks on its own timer, and two passes over the same changed folder would
+/// upload it twice. The second caller is answered "nothing updated" at once rather than queued:
+/// the pass already running will see the same changes.
+static AUTO_UPDATING: AtomicBool = AtomicBool::new(false);
+
+/// Clears [`AUTO_UPDATING`] however the pass ends — a `?`, a panic in the worker, a cancel.
+struct AutoUpdating;
+
+impl Drop for AutoUpdating {
+    fn drop(&mut self) {
+        AUTO_UPDATING.store(false, Ordering::Release);
+    }
+}
+
+/// Republish every share this device published whose folder has changed since its last upload
+/// (issue #1025), and answer the rows that were updated — `[]` for the ordinary pass where
+/// nothing moved.
+///
+/// **Two halves on two connections, and the split is the point.** Which shares are due is
+/// [`super::publish::changed`]: a read and a hash per share, on the **read** connection, with no
+/// token and no request — so the pass the shell makes on a timer holds neither the writer nor the
+/// sync lane while it decides that nothing needs doing, which is nearly every time. Only when a
+/// folder has moved does it take [`on_the_write_connection`] and run the same
+/// [`super::publish::refresh`] the *Update now* press runs, share by share.
+///
+/// **One share's failure does not stop the others**, and it is not this command's error: the
+/// publish has already written its `error_log` row, the previous snapshot is still serving, and
+/// the digest it would have stored is still the old one — so the next pass tries it again.
+#[tauri::command]
+pub async fn share_auto_update(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Vec<ShareRow>, String> {
+    if AUTO_UPDATING.swap(true, Ordering::AcqRel) {
+        return Ok(Vec::new());
+    }
+    let _running = AutoUpdating;
+    let state = state.inner().clone();
+    let reader = state.clone();
+    let due = tauri::async_runtime::spawn_blocking(move || {
+        super::publish::changed(&reader.lock_db_read())
+    })
+    .await
+    .map_err(unfinished)??;
+    if due.is_empty() {
+        return Ok(Vec::new());
+    }
+    on_the_write_connection(state, move |conn, tokens, runtime| {
+        Ok(due
+            .iter()
+            .filter_map(|id| {
+                runtime
+                    .block_on(super::publish::refresh(conn, tokens, id))
+                    .ok()
+            })
+            .collect())
     })
     .await
 }

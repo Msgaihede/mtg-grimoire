@@ -3,9 +3,9 @@
 The one place the app touches a rules engine: [phase.rs](https://github.com/phase-rs/phase)'s
 `phase-engine` (library `engine`) and its AI, `phase-ai`, taken from git at one pinned `rev`. It
 holds two games: the goldfish board's (`session.rs`, `view.rs`: one player against a target that
-does nothing) and a playtest (`playtest/`: the reader's deck against another, the opponent played
-by phase's AI). Facts go in (`CardFacts`, Scryfall's fields for a deck row), and a view and what
-happened come out. It knows nothing of SQLite, Tauri or a window.
+does nothing) and a playtest (`playtest/`: the reader's deck against one other or three, each
+opponent played by phase's AI). Facts go in (`CardFacts`, Scryfall's fields for a deck row), and
+a view and what happened come out. It knows nothing of SQLite, Tauri or a window.
 
 Design, measurements and licences: [goldfish.md](../../docs/reference/goldfish.md) (the engine,
 the pin, the goldfish) and [playtest.md](../../docs/reference/playtest.md) (the AI game).
@@ -34,8 +34,12 @@ the pin, the goldfish) and [playtest.md](../../docs/reference/playtest.md) (the 
   `playtest/view.rs` ↔ `packages/ui/lib/ipc/playtest.ts`. `ipc.test.ts` holds each struct field
   for field, and every `GoldfishAction` / `Happened` / `PlaytestAction` / `PlaytestHappened`
   variant and field. A change to either side is one commit with the other.
-- **A playtest never sends what the reader may not see.** The opponent's hand and library are
-  counts in `PlaytestSeat`, and its draws are `Drew` with no name (`playtest/session.rs`' `tell`).
+- **A playtest never sends what the reader may not see.** Each opponent's hand and library are
+  counts in `PlaytestSeat`, and their draws are `Drew` with no name (`playtest/session.rs`' `tell`).
+- **A duel is a four-player game with one opponent.** `Playtest::new` takes a list of
+  `OpponentDeck`s (one to three), and every seat is a `PlaytestPlayer`. Never add a code path for
+  one player count alone: what the session does for `opponent` it does for `opponent2` and
+  `opponent3`.
 - **A playtest plays on by itself until the reader decides** (`advance`): the AI takes its own
   decisions through phase's `run_ai_actions`, and the reader's priority is passed for them except
   where `stops_here` stops them (their main phase, a step they asked for, the opponent's spell or
@@ -44,7 +48,7 @@ the pin, the goldfish) and [playtest.md](../../docs/reference/playtest.md) (the 
 - **A prompt is the engine's legal answers, read generically** (`option_of`), never a match on
   `WaitingFor`'s hundred-odd variants. The one exception is `pick`: the few questions answered by
   a set of cards, whose fields give the count. `auto` must answer any prompt (phase-ai for the
-  reader).
+  reader). A question with one answer (`sole_answer`) is taken by `advance`, never asked.
 - **A replay frame shows, it never offers.** Every `PlaytestFrame` view is `watching`, with no
   prompt, attack or block (`view_as(true)`), so the AI's own questions never reach the page.
 - **A refused action changes nothing.** Both games' `act` restore a checkpoint on any `Err`. On
@@ -52,13 +56,18 @@ the pin, the goldfish) and [playtest.md](../../docs/reference/playtest.md) (the 
   (`session.rs`' module doc); in a playtest the question is asked, and the cast's checkpoint
   (`Pending`) is what `cancel` goes back to until the spell is on the stack. Keep all three: both
   boards rely on a refusal leaving the game as it was.
+- **Undo and redo restore whole moments, never inverses** (`history.rs`, issue #1022). Both games
+  keep the game before each successful action (`Moment`) and `Undo` / `Redo` restore one exactly;
+  redo never replays, so the AI's dice cannot change a redone turn. Anything an action changes is
+  in its `Moment`: a new field of game state on either session is a field there too. `UNDO_LIMIT`
+  is mirrored by `packages/ui/features/playtesting/undo.ts`.
 - **Only the deck's cards are parsed**, with phase's own `build_oracle_face`. Never fetch phase's
   `card-data.json`: it is a 93 MB external host this app does not use.
 
 ## Commands
 
-| Command | Action |
-| --- | --- |
-| `cargo test -p grimoire-play` | Both games end to end, on the engine's stack (the playtest's against a `VeryEasy` AI) |
-| `cargo clippy -p grimoire-play --all-targets -- -D warnings` | Lints |
-| `cargo fmt -p grimoire-play` | Format (never `--all`) |
+| Command                                                      | Action                                                                                |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
+| `cargo test -p grimoire-play`                                | Both games end to end, on the engine's stack (the playtest's against a `VeryEasy` AI) |
+| `cargo clippy -p grimoire-play --all-targets -- -D warnings` | Lints                                                                                 |
+| `cargo fmt -p grimoire-play`                                 | Format (never `--all`)                                                                |

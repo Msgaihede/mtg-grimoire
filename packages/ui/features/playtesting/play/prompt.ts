@@ -8,6 +8,7 @@
  * ("ChooseRingBearer" → "Choose ring bearer"), which is clumsy but never wrong.
  */
 import type { GameCard, PlaytestCardRef, PlaytestOption, PlaytestPrompt } from "@/lib/ipc";
+import { opponentNumber } from "./players";
 
 /** "TriggerTargetSelection" → "Trigger target selection". */
 export function words(kind: string): string {
@@ -93,10 +94,14 @@ const BY_KIND = new Set(["CastChoice", "AbilityChoice"]);
  * number, the cards it points at, the players. A target answer that points at nothing is the one
  * that stops choosing ("No more targets"). The board's own two questions — how to cast, which
  * ability — say the answer's kind beside it, since every answer names the same card.
+ *
+ * A player is "You" or "Opponent", and at a four-player table (`opponents` of 3) the opponent's
+ * number too: "Opponent 2".
  */
 export function optionLabel(
   option: PlaytestOption,
   prompt: Pick<PlaytestPrompt, "kind">,
+  opponents = 1,
 ): OptionLabel {
   if (prompt.kind === "OrderTriggers" && option.cards.length > 0) {
     const refs = optionCards(option, prompt);
@@ -109,7 +114,9 @@ export function optionLabel(
   // A card standing for one of its abilities (a replacement effect) is said with the ability.
   const ability = option.cards.length === 1 ? option.cards[0].text : null;
   const hint = BY_KIND.has(prompt.kind) ? words(option.kind) : ability;
-  const players = option.players.map((p) => (p === "you" ? "You" : "Opponent"));
+  const players = option.players.map((p) =>
+    p === "you" ? "You" : opponents > 1 ? `Opponent ${opponentNumber(p)}` : "Opponent",
+  );
   const cards = option.cards.map((c) => c.name);
   const text =
     option.label ??

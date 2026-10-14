@@ -55,8 +55,35 @@ export interface GoldfishView {
   libraryLands: number;
   /** What the untapped permanents could make now (a summoning-sick creature makes none). */
   manaOpen: number;
+  /** The same open mana by type, and what is floating in the pool — the board's mana table. */
+  mana: ManaTable;
   /** The tokens this deck's cards make, for "Create a token". */
   tokens: TokenOffer[];
+  /** An action can be taken back (`undo`). */
+  canUndo: boolean;
+  /** An undone action can be taken again (`redo`). */
+  canRedo: boolean;
+}
+
+/** A seat's mana by type (issue #1002). Shared by the goldfish and the playtest board. */
+export interface ManaTable {
+  /**
+   * The most of each type the untapped permanents could make now. Every source that can make a
+   * type counts toward it, so a dual land is in two rows and the rows sum to more than `manaOpen`.
+   */
+  open: ManaByType;
+  /** The mana already in the pool, made and not yet spent. */
+  floating: ManaByType;
+}
+
+/** One count per type of mana: WUBRG, then colorless. */
+export interface ManaByType {
+  white: number;
+  blue: number;
+  black: number;
+  red: number;
+  green: number;
+  colorless: number;
 }
 
 export interface MulliganView {
@@ -121,7 +148,11 @@ export type GoldfishAction =
   | { type: "shuffle" }
   | { type: "setLife"; seat: GoldfishSeat; life: number }
   | { type: "nextTurn" }
-  | { type: "discard"; ids: number[] };
+  | { type: "discard"; ids: number[] }
+  /** The game as it was before the last action, exactly. Happens nothing. */
+  | { type: "undo" }
+  /** The game as it was before the last undo. Happens nothing. */
+  | { type: "redo" };
 
 /** What an action did, one fact a row. */
 export type Happened =
