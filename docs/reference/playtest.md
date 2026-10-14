@@ -179,7 +179,8 @@ checkpoint is dropped: the spell is cast, and the AI may already be answering it
 phase only, where nothing is half done: move a card anywhere by hand, tap, counters, token copies,
 preset tokens, draw, mill, shuffle and life totals. It is phase's debug actions. The engine permits
 them for the reader's seat (`debug_permitted`) and never for the AI's. The AI may well notice: it
-reads the state as it is.
+reads the state as it is. Tokens wear each deck's own printings, both seats', as on the goldfish
+(`goldfish.md`, _A token wears the deck's printing_).
 
 **A refused action changes nothing**, as on the goldfish: `act` restores its checkpoint on any
 `Err`.

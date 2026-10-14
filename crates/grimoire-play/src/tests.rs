@@ -84,7 +84,7 @@ fn deck() -> Vec<CardFacts> {
 
 /// A game past its opening hand, kept at seven.
 fn kept() -> Goldfish {
-    let mut game = Goldfish::new(&deck(), 7).expect("a game starts");
+    let mut game = Goldfish::new(&deck(), &[], 7).expect("a game starts");
     game.act(A::Keep { bottom: vec![] }).expect("keep seven");
     game
 }
@@ -110,7 +110,7 @@ fn engine<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
 
 #[test]
 fn a_new_game_waits_on_the_opening_hand_with_the_commander_in_the_command_zone() {
-    let view: GoldfishView = engine(|| Goldfish::new(&deck(), 7).unwrap().view());
+    let view: GoldfishView = engine(|| Goldfish::new(&deck(), &[], 7).unwrap().view());
     assert_eq!(view.stage, Stage::Mulligan);
     assert_eq!(view.turn, 0);
     assert_eq!(view.hand.len(), 7);
@@ -144,7 +144,7 @@ fn a_new_game_waits_on_the_opening_hand_with_the_commander_in_the_command_zone()
 #[test]
 fn the_london_mulligan_bottoms_one_fewer_card_when_the_first_is_free() {
     let (first, second, kept) = engine(|| {
-        let mut game = Goldfish::new(&deck(), 7).unwrap();
+        let mut game = Goldfish::new(&deck(), &[], 7).unwrap();
         let first = game.act(A::Mulligan).unwrap();
         let second = game.act(A::Mulligan).unwrap();
         let bottom = vec![second.view.hand[0].id];
@@ -431,6 +431,25 @@ fn counters_change_power_and_toughness() {
     assert_eq!(creature.counters[0].kind, "+1/+1");
 }
 
+/// Issue #991: a token the deck keeps is offered and drawn in the printing the reader set for it,
+/// not phase's.
+#[test]
+fn a_token_is_offered_and_drawn_in_the_printing_the_deck_sets() {
+    let (preset, oracle, source) = crate::tokens::a_treasure();
+    let token = crate::tokens::a_treasure_facts(&oracle, &source);
+    let mut cards = deck();
+    cards.push(card(&source, Some("{1}{G}"), "Enchantment", "", None, 1));
+    let view = engine(move || {
+        let mut game = Goldfish::new(&cards, &[token], 7).unwrap();
+        game.act(A::Keep { bottom: vec![] }).unwrap();
+        game.act(A::CreateToken { preset, count: 1 }).unwrap().view
+    });
+    let offer = view.tokens.iter().find(|t| t.name == "Treasure").unwrap();
+    assert_eq!(offer.card_id.as_deref(), Some("deck-treasure"));
+    let made = view.battlefield.iter().find(|c| c.is_token).unwrap();
+    assert_eq!(made.card_id.as_deref(), Some("deck-treasure"));
+}
+
 #[test]
 fn a_card_goes_to_the_bottom_of_the_library_and_a_token_leaving_play_is_gone() {
     let (library, tokens) = engine(|| {
@@ -490,7 +509,7 @@ fn a_card_goes_to_the_bottom_of_the_library_and_a_token_leaving_play_is_gone() {
 #[test]
 fn an_action_before_the_keep_is_refused_and_changes_nothing() {
     let (refused, hand) = engine(|| {
-        let mut game = Goldfish::new(&deck(), 7).unwrap();
+        let mut game = Goldfish::new(&deck(), &[], 7).unwrap();
         let hand = game.view().hand.len();
         (
             game.act(A::NextTurn).unwrap_err(),
@@ -504,8 +523,8 @@ fn an_action_before_the_keep_is_refused_and_changes_nothing() {
 #[test]
 fn the_same_seed_deals_the_same_hand() {
     let (a, b) = engine(|| {
-        let a = Goldfish::new(&deck(), 42).unwrap().view();
-        let b = Goldfish::new(&deck(), 42).unwrap().view();
+        let a = Goldfish::new(&deck(), &[], 42).unwrap().view();
+        let b = Goldfish::new(&deck(), &[], 42).unwrap().view();
         (a, b)
     });
     let names = |v: &GoldfishView| v.hand.iter().map(|c| c.name.clone()).collect::<Vec<_>>();
@@ -599,7 +618,7 @@ fn a_modal_double_faced_card_is_played_by_its_front_face() {
             ],
             ..CardFacts::default()
         });
-        let mut game = Goldfish::new(&cards, 7).unwrap();
+        let mut game = Goldfish::new(&cards, &[], 7).unwrap();
         game.act(A::Keep { bottom: vec![] }).unwrap();
         let id = in_hand(&mut game, "Bala Ged Recovery");
         let card = find(&game.view().hand, "Bala Ged Recovery")

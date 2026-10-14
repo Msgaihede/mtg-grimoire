@@ -220,6 +220,14 @@ the view it came from. The page sends actions one at a time, in order, for that 
 (`useGoldfishGame`). A printing follows its card across a zone change: the session hands it to the
 one object of that name that has none.
 
+**A token wears the deck's printing** (issue #991). The start command reads the deck's tokens with
+`grimoire_core::play::deck_tokens`: one printing per token the list keeps, the entry with the most
+copies, or the token wall's default for one the reader has not set. `crates/grimoire-play`'s
+`tokens.rs` ties them to phase's presets by the Scryfall oracle id both name. A token offered in
+the menu, and a token on the table however it was made, is drawn in that printing, and phase's
+preset image only for a token the deck does not keep. The menu also offers the deck's tokens phase
+ties to none of its cards, a hand-added one with no source.
+
 **Facts, not sentences.** `Happened` is which card went where and how. `features/playtesting/
 goldfish/log.ts` writes the log's lines. `ipc.test.ts` reads `view.rs` and holds every variant and
 field of `GoldfishAction` and `Happened` against the TypeScript unions, beside its usual
