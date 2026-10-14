@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { ScannerDecision, ScannerFinishMark, ScannerFinishPref, ScannerTrayFinish } from "../types";
 import { MARKS, VERDICTS } from "../fixtures";
-import { FINISH_PREF_LABEL, isKnownFinish, trayFinish } from "./trayFinish";
+import {
+  FINISH_PREF_LABEL,
+  fitFinish,
+  isKnownFinish,
+  trayFinish,
+  trayFinishChoices,
+} from "./trayFinish";
 
 const resolved = VERDICTS.decided.decision!;
 const ambiguous = VERDICTS.exactAmbiguous.decision!;
@@ -61,13 +67,23 @@ describe("trayFinish", () => {
   /** A fixed finish is the reader saying the pile is one finish; the camera does not overrule it. */
   it.each(["nonfoil", "foil", "etched"] as const)("a fixed %s is the answer whatever was read", (pref) => {
     for (const [finishes, mark] of [
-      [["foil"], star],
-      [["nonfoil"], dot],
-      [TWO, null],
+      [[pref], pref === "nonfoil" ? star : dot],
+      [["nonfoil", "foil", "etched"], null],
       [[], unmeasured],
     ] as const) {
       expect(trayFinish(pref, decided([...finishes], mark))).toBe(pref);
     }
+  });
+
+  /**
+   * **The corpus does overrule it** (issue #982): a preference the printing was never made in is
+   * no answer for that card, which is decided as Detect would decide it.
+   */
+  it("decides a fixed finish the printing was never made in as Detect would", () => {
+    expect(trayFinish("nonfoil", decided(["foil"], dot))).toBe("foil");
+    expect(trayFinish("foil", decided(["nonfoil"], star))).toBe("nonfoil");
+    expect(trayFinish("etched", decided(TWO, star))).toBe("foil");
+    expect(trayFinish("etched", decided(TWO, null))).toBe("unknown");
   });
 
   /**
@@ -91,5 +107,24 @@ describe("trayFinish", () => {
     expect(isKnownFinish("unknown")).toBe(false);
     expect(["nonfoil", "foil", "etched"].every((f) => isKnownFinish(f as ScannerTrayFinish))).toBe(true);
     expect(Object.keys(FINISH_PREF_LABEL)[0]).toBe("detect" satisfies ScannerFinishPref);
+  });
+
+  /** What a row's finish control offers, and what a finish becomes on a printing (issue #982). */
+  it("offers only the finishes a printing exists in, in the app's order, then Unknown", () => {
+    expect(trayFinishChoices(["foil"])).toEqual(["foil", "unknown"]);
+    expect(trayFinishChoices(["etched", "nonfoil"])).toEqual(["nonfoil", "etched", "unknown"]);
+    // The corpus silent — or a row written before rows carried finishes — offers everything.
+    for (const silent of [[], undefined, ["glossy"]]) {
+      expect(trayFinishChoices(silent)).toEqual(["nonfoil", "foil", "etched", "unknown"]);
+    }
+  });
+
+  it("fits a finish to a printing: its sole finish, the same finish, or the question again", () => {
+    expect(fitFinish("nonfoil", ["foil"])).toBe("foil");
+    expect(fitFinish("unknown", ["etched"])).toBe("etched");
+    expect(fitFinish("foil", TWO)).toBe("foil");
+    expect(fitFinish("unknown", TWO)).toBe("unknown");
+    expect(fitFinish("etched", TWO)).toBe("unknown");
+    expect(fitFinish("etched", [])).toBe("etched");
   });
 });

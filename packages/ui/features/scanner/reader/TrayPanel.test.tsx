@@ -47,8 +47,14 @@ import { addLabel, NEXT_DECISION_LABEL, TrayPanel, type TrayPanelProps } from ".
 const resolved = VERDICTS.exactResolved.decision!;
 const ambiguous = VERDICTS.exactAmbiguous.decision!;
 
-/** A resolved row with names this file controls, so an assertion can spell them. */
-const base = rowFromDecision(resolved, { finish: "nonfoil" }, 1, "base");
+/** A resolved row with names this file controls, so an assertion can spell them — of a printing
+ *  made in every finish, so a test about the controls is not one about the corpus. */
+const base = rowFromDecision(
+  { ...resolved, finishes: ["nonfoil", "foil", "etched"] },
+  { finish: "nonfoil" },
+  1,
+  "base",
+);
 const newer: ScannerTrayRow = {
   ...base,
   key: "newer",
@@ -335,6 +341,19 @@ describe("TrayPanel", () => {
       ["older", "nonfoil"],
     ]);
   });
+
+  /** A foil-only printing offers no Nonfoil, in either layout (issue #982). */
+  it.each(["list", "grid"] as const)(
+    "offers only the finishes the row's printing exists in (%s)",
+    async (layout) => {
+      const user = userEvent.setup();
+      const foilOnly: ScannerTrayRow = { ...newer, finish: "foil", finishes: ["foil"] };
+      const rows = [foilOnly, older];
+      wrap(<TrayPanel {...(layout === "grid" ? grid({ rows }) : props({ rows }))} />);
+      await user.click(screen.getByRole("button", { name: "Finish of Storm of Saruman — LTR 72" }));
+      expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Foil", "Unknown"]);
+    },
+  );
 
   it("draws an Unknown finish as a question in the grid too — the page's default layout", async () => {
     // The grid's tile arrived on main beside the Unknown state and was merged without it: the

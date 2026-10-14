@@ -21,8 +21,7 @@ import type {
   ScannerTrayLayout,
   ScannerTrayRow,
 } from "@/lib/ipc";
-import { isFinish } from "@/lib/finish";
-import { isKnownFinish, UNKNOWN_FINISH } from "./trayFinish";
+import { fitFinish, isKnownFinish, offeredFinishes } from "./trayFinish";
 
 /**
  * What a new row starts as that the decision itself cannot say.
@@ -65,6 +64,11 @@ function choiceOf(choice: ScannerDecision["choices"][number]): ScannerTrayChoice
  *
  * An ambiguous decision with no choices at all has nothing to offer and nothing to wait for; it
  * files as the printing the decision named, exactly as a resolved one does.
+ *
+ * **The row carries its printing's finishes** — what its finish control offers — and a settled
+ * row's finish is fitted to them ({@link fitFinish}), so no default can file a foil-only card as
+ * nonfoil (issue #982). A row still waiting wears its head's finishes provisionally, and its
+ * finish is left alone until the reader picks.
  */
 export function rowFromDecision(
   d: ScannerDecision,
@@ -74,6 +78,7 @@ export function rowFromDecision(
 ): ScannerTrayRow {
   const choices = d.outcome === "ambiguous" ? d.choices.map(choiceOf) : [];
   const head = choices[0];
+  const finishes = head ? (head.finishes ?? []) : d.finishes;
   return {
     key,
     cardId: head?.cardId ?? d.printing,
@@ -81,7 +86,8 @@ export function rowFromDecision(
     name: head?.name ?? d.label?.name ?? UNKNOWN_NAME,
     setCode: head?.setCode ?? d.label?.set ?? "",
     collectorNumber: head?.collectorNumber ?? d.label?.number ?? "",
-    finish: defaults.finish,
+    finish: head ? defaults.finish : fitFinish(defaults.finish, finishes),
+    finishes,
     quantity: 1,
     choices,
     addedAt: now,
@@ -135,12 +141,14 @@ export function addDecision(
       (d.oracle_id === null && newest.oracleId === null && newest.cardId === d.printing))
   ) {
     const fresh = rowFromDecision(d, defaults, now, newest.key);
+    // The reader's finish is kept, but fitted to the second opinion's printing once it is one.
+    const kept = isKnownFinish(newest.finish) ? newest.finish : fresh.finish;
     return {
       rows: [
         {
           ...fresh,
           quantity: newest.quantity,
-          finish: isKnownFinish(newest.finish) ? newest.finish : fresh.finish,
+          finish: fresh.choices.length > 0 ? kept : fitFinish(kept, fresh.finishes),
         },
         ...rows.slice(1),
       ],
@@ -154,7 +162,7 @@ export function addDecision(
     newest.choices.length === 0 &&
     newest.cardId === d.printing &&
     isKnownFinish(newest.finish) &&
-    newest.finish === defaults.finish
+    newest.finish === fitFinish(defaults.finish, d.finishes)
   ) {
     return {
       rows: [{ ...newest, quantity: newest.quantity + 1, addedAt: now }, ...rows.slice(1)],
@@ -196,32 +204,39 @@ export function setQuantity(
 }
 
 /** A row's finish, `unknown` included: a reader may set a row back to it to hold that card out of
- *  the next Add without removing it. */
+ *  the next Add without removing it. **A finish the row's printing was never made in changes
+ *  nothing** — the controls do not offer one, and a stale press must not file a foil-only card as
+ *  nonfoil (issue #982). */
 export function setFinish(
   rows: readonly ScannerTrayRow[],
   key: string,
   finish: ScannerTrayFinish,
 ): ScannerTrayRow[] {
-  return update(rows, key, (row) => ({ ...row, finish }));
+  return update(rows, key, (row) =>
+    isKnownFinish(finish) && !offeredFinishes(row.finishes).includes(finish)
+      ? row
+      : { ...row, finish },
+  );
 }
 
 /**
  * A printing adopted whole — every identifying field at once, so a row cannot end up half one
  * printing and half another — and the question it was waiting on closed.
  *
- * **An Unknown finish is settled by a printing that exists in one finish.** An ambiguous decision
- * files its row Unknown when its candidates disagree about finishes — measured live on
- * 2026-10-01, Ruthless Invasion's two candidates were PLST NPH-93 (non-foil only) and NPH 93 —
- * and once the reader names the printing that question has an answer. A finish the reader chose is
- * never overwritten, and neither is Unknown by a printing that exists in several.
+ * **The finish is fitted to the printing adopted** ({@link fitFinish}). An Unknown finish is settled
+ * by a printing that exists in one finish: an ambiguous decision files its row Unknown when its
+ * candidates disagree about finishes — measured live on 2026-10-01, Ruthless Invasion's two
+ * candidates were PLST NPH-93 (non-foil only) and NPH 93 — and once the reader names the printing
+ * that question has an answer. A finish the reader chose stands wherever the printing exists in
+ * it; one it was never made in is asked again (issue #982). A printing whose finishes are not
+ * known constrains nothing.
  */
 function adopt(row: ScannerTrayRow, p: ScannerTrayChoice): ScannerTrayRow {
-  const only = p.finishes?.length === 1 ? p.finishes[0] : undefined;
-  const settled =
-    row.finish === UNKNOWN_FINISH && only !== undefined && isFinish(only) ? only : null;
+  const finishes = p.finishes ?? [];
   return {
     ...row,
-    finish: settled ?? row.finish,
+    finish: fitFinish(row.finish, finishes),
+    finishes,
     cardId: p.cardId,
     oracleId: p.oracleId,
     name: p.name,

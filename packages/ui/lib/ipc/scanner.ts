@@ -693,8 +693,8 @@ export interface ScannerTrayChoice {
   collectorNumber: string;
   /**
    * The finishes the printing exists in — what settles an Unknown row's finish when the reader
-   * picks this printing. Absent from a printing picked through *More printings…*, whose dialog
-   * does not carry them, and from a tray written before the field existed.
+   * picks this printing, and what the row's finish control offers once it is adopted. Absent
+   * from a tray written before the field existed.
    */
   finishes?: string[];
 }
@@ -716,6 +716,12 @@ export interface ScannerTrayRow {
   setCode: string;
   collectorNumber: string;
   finish: ScannerTrayFinish;
+  /**
+   * The finishes the row's printing exists in — what its finish control offers (issue #982).
+   * Empty or absent when unknown, and in a tray written before the field existed; either
+   * constrains nothing.
+   */
+  finishes?: string[];
   quantity: number;
   choices: ScannerTrayChoice[];
   addedAt: number;

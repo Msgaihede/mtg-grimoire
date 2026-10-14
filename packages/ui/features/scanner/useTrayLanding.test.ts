@@ -87,7 +87,13 @@ describe("useTrayLanding", () => {
     expect(tray.latest()[0].finish).toBe("foil");
 
     rerender({ finish: "etched" });
-    act(() => result.current.onDecision({ ...RESOLVED, printing: "another-printing" }));
+    act(() =>
+      result.current.onDecision({
+        ...RESOLVED,
+        printing: "another-printing",
+        finishes: ["nonfoil", "foil", "etched"],
+      }),
+    );
     expect(tray.latest().map((row) => row.finish)).toEqual(["etched", "foil"]);
   });
 

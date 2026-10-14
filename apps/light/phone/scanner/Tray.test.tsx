@@ -121,7 +121,7 @@ describe("the phone's review tray", () => {
     await waitFor(() => expect(screen.queryByText("Ancient Tomb")).toBeNull());
   });
 
-  it("opens a row's finish as a sheet of the four answers, and writes the one pressed", async () => {
+  it("opens a row's finish as a sheet of its answers, and writes the one pressed", async () => {
     const held = mount([SAGA, TOMB]);
     await userEvent.click(
       screen.getByRole("button", { name: "Finish of Ancient Tomb — TMP 315: Foil" }),
@@ -144,6 +144,23 @@ describe("the phone's review tray", () => {
     expect(
       screen.getByRole("button", { name: "Finish of Ancient Tomb — TMP 315: Etched" }),
     ).toBeInTheDocument();
+  });
+
+  /** A foil-only printing's sheet offers no Nonfoil (issue #982). */
+  it("offers only the finishes the row's printing exists in", async () => {
+    const foilOnly: ScannerTrayRow = { ...TOMB, finishes: ["foil"] };
+    mount([SAGA, foilOnly]);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Finish of Ancient Tomb — TMP 315: Foil" }),
+    );
+    const sheet = await screen.findByRole("dialog", { name: "Ancient Tomb" });
+    const choices = within(within(sheet).getByRole("list", { name: "Finishes" })).getAllByRole(
+      "button",
+    );
+    expect(choices.map((c) => c.textContent)).toEqual([
+      "Foil",
+      "UnknownStays in the tray when you add the rest.",
+    ]);
   });
 
   it("hands the caret back to the finish it changed, and to the press a dismissed sheet opened from", async () => {
