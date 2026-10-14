@@ -374,6 +374,19 @@ export interface DeckStatsSummary {
 
 
 /**
+ * Is this row one of the copies the ledger's `N missing` counts — a row in a pile that counts,
+ * holding fewer copies than it wants?
+ *
+ * The **per-row** half of {@link deckStats}' shortfall, so the ledger's figure and the filter its
+ * press runs (issue #985) cannot disagree about which cards are short: `missing > 0` exactly when
+ * some row answers `true` here. A switched-off pile is never short, for the reason it is never
+ * counted — it reads `0` owned on both lists, so every Maybeboard card would otherwise be missing.
+ */
+export function isShort(card: DeckCard): boolean {
+  return card.categoryActive && card.ownedQuantity < card.quantity;
+}
+
+/**
  * Every number the strip draws, from the rows the editor already has.
  *
  * Pure, exported and tested on its own: a chart is only as trustworthy as the arithmetic

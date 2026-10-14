@@ -18,10 +18,11 @@
  * this file knows the difference beyond one line of prose, and the per-card press reads the same
  * cached `deck_pull_plan` the deck-wide one does.
  *
- * **The per-card entrance opens this dialog only when there is a decision in it**: one candidate
- * pulls outright with no dialog at all, and two or more, or none, land here. That test is
- * `quickCollection.ts`'s `choosePull` and is deliberately not this component's — a dialog that
- * decided whether it should have been opened is a dialog with an opinion about its own caller.
+ * **The per-card entrance always opens this dialog** (issue #987), one candidate included. It used
+ * to pull a lone candidate outright with no dialog; but a pull moves one particular piece of
+ * cardboard out of one particular folder, and the reader wants to see which before it moves. A
+ * lone candidate arrives pre-picked, its source printed as the row's caption, so verifying it
+ * costs a glance and committing it the one press on the footer.
  *
  * ## What the reader is actually deciding
  *

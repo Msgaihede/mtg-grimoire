@@ -166,8 +166,37 @@ describe("ScanBar", () => {
     await user.click(screen.getByRole("button", { name: /^Filters:/ }));
     const panel = await screen.findByRole("dialog", { name: "Filters" });
     await user.click(screen.getByRole("button", { name: "Clear" }));
-    expect(onFilters).toHaveBeenCalledWith({ sets: [], released_from: null, released_to: null });
+    expect(onFilters).toHaveBeenCalledWith({
+      sets: [],
+      released_from: null,
+      released_to: null,
+      exclude_promos: false,
+    });
     expect(panel).toBeInTheDocument();
+  });
+
+  it("switches promos off beside the set picker, keeping the other filters, and says so on the bar", async () => {
+    const user = userEvent.setup();
+    const onFilters = vi.fn();
+    const filters = { sets: ["hob"], released_from: null, released_to: null };
+    const { rerender } = wrap(<ScanBar {...props({ onFilters, filters })} />);
+    await user.click(screen.getByRole("button", { name: /^Filters:/ }));
+    const toggle = await screen.findByRole("switch", { name: "Skip promos" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(toggle).toHaveAccessibleDescription(/Never match a promo printing/);
+    await user.click(toggle);
+    expect(onFilters).toHaveBeenLastCalledWith({ ...filters, exclude_promos: true });
+
+    rerender(<ScanBar {...props({ onFilters, filters: { ...filters, exclude_promos: true } })} />);
+    expect(screen.getByRole("switch", { name: "Skip promos" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: /^Filters:/ })).toHaveAccessibleName(
+      /HOB · no promos/,
+    );
+    await user.click(screen.getByRole("switch", { name: "Skip promos" }));
+    expect(onFilters).toHaveBeenLastCalledWith({ ...filters, exclude_promos: false });
   });
 
   it("draws the last refusal inside the open popover as an alert", async () => {

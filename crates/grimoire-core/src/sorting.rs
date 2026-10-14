@@ -300,7 +300,42 @@ pub fn row_price_expr(market: Marketplace, finish_col: &str) -> String {
     )
 }
 
-/// What one copy of a **deck row** costs at `market` — [`row_price_expr`] over `deck_cards`, and
+/// What one **held copy** costs at `market` — [`row_price_expr`], with a `nonfoil` the printing
+/// is not sold in read as the reader not having said.
+///
+/// A copy is cardboard in a sleeve: a collection entry (`e.finish`), a deck row (`dc.finish`), a
+/// trade line (`l.finish`). **`nonfoil` is the finish a row gets when nobody chose one** — an
+/// import whose line carries no finish, an add that kept the default, a reconcile — and nothing
+/// polices it against `cards.finishes`. On a printing sold only in foil or etched it named a
+/// finish that does not exist, which no marketplace quotes: an em dash on a surge-foil-only card
+/// its printings list quoted at $47.97 (issue #983). That is the bug v18 fixed for decks, where
+/// "no finish" was read as `nonfoil`, arriving from the other side, so it gets the same answer:
+/// the chain, which on a printing sold in one finish is exactly that finish's price.
+///
+/// **Only `nonfoil`, and only when the printing lists finishes without it.** A stored `foil` or
+/// `etched` is a statement somebody made, and a printing not sold in it stays an em dash rather
+/// than taking another finish's rate (`deck`'s
+/// `a_deck_row_is_priced_at_the_finish_it_names_and_chained_when_it_names_none` fences it). So
+/// does a finish the printing is sold in and this marketplace does not quote — that hole is the
+/// marketplace's — and a row whose `c.finishes` is NULL (no corpus row, or no list), which is no
+/// evidence either way: `instr(NULL, …)` is NULL, never `0`. The test is `instr` with the quotes
+/// on, `filters`' spelling of the same question, so `"nonfoil"` is matched as a word.
+///
+/// **Not [`row_price_expr`] itself**, because that one also prices a wish's preferred finish
+/// across *other* printings (`wishlist_optimize`'s cheapest-printing sweep), where a printing
+/// not sold in the wished finish must stay unpriced so it is never offered as the cheapest.
+pub fn held_price_expr(market: Marketplace, finish_col: &str) -> String {
+    format!(
+        "CASE WHEN {finish_col} IS NULL
+                OR ({finish_col} = 'nonfoil' AND instr(c.finishes, '\"nonfoil\"') = 0)
+              THEN {chain}
+              ELSE {named} END",
+        chain = printing_price_by_finish_expr(market),
+        named = price_expr(market, finish_col),
+    )
+}
+
+/// What one copy of a **deck row** costs at `market` — [`held_price_expr`] over `deck_cards`, and
 /// the deck's figure since schema v18.
 ///
 /// The NULL arm is every row that predates that version and every row a reader has not spoken
@@ -308,7 +343,7 @@ pub fn row_price_expr(market: Marketplace, finish_col: &str) -> String {
 ///
 /// `dc` is the caller's alias for `deck_cards`, which is [`crate::deck`]'s throughout.
 pub fn deck_card_price_expr(market: Marketplace) -> String {
-    row_price_expr(market, "dc.finish")
+    held_price_expr(market, "dc.finish")
 }
 
 /// What a **printing** costs at `market`, with no finish to price it at.
@@ -666,6 +701,35 @@ mod tests {
         let cm = deck_card_price_expr(Marketplace::Cardmarket);
         assert!(cm.contains("WHEN 'etched' THEN NULL"), "{cm}");
         assert!(!cm.contains("eur_etched"), "{cm}");
+    }
+
+    /// A held copy's figure: [`row_price_expr`]'s two arms, with a `nonfoil` the printing is not
+    /// sold in sent to the chain (issue #983) — and `row_price_expr` itself left strict, because
+    /// the wishlist optimizer prices a wished finish across *other* printings with it.
+    #[test]
+    fn a_held_nonfoil_copy_of_a_printing_not_sold_in_nonfoil_takes_the_chain() {
+        for market in [
+            Marketplace::Tcgplayer,
+            Marketplace::Cardmarket,
+            Marketplace::Cardkingdom,
+            Marketplace::Manapool,
+        ] {
+            let sql = held_price_expr(market, "e.finish");
+            assert!(sql.contains("e.finish IS NULL"), "{sql}");
+            assert!(
+                sql.contains("e.finish = 'nonfoil' AND instr(c.finishes, '\"nonfoil\"') = 0"),
+                "only the default finish, matched as a quoted word: {sql}"
+            );
+            assert!(
+                sql.contains(&printing_price_by_finish_expr(market)),
+                "{sql}"
+            );
+            assert!(sql.contains(&price_expr(market, "e.finish")), "{sql}");
+            assert!(
+                !row_price_expr(market, "w.preferred_finish").contains("instr("),
+                "row_price_expr must stay strict for the optimizer's sweep"
+            );
+        }
     }
 
     /// The printing-level chain, which is the search's figure. Same `nonfoil → foil → etched`

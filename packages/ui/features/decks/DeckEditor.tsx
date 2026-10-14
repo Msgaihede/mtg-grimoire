@@ -17,7 +17,6 @@ import {
   type DeckFinish,
   type DeckMissingPick,
   type DeckNote,
-  type DeckPullRow,
   type DeckQuickAddWish,
   type DeckVariant,
 } from "@/lib/ipc";
@@ -41,7 +40,6 @@ import { buildCategoryMenu } from "./categoryMenu";
 import { buildDeckCardMenu, labelWording } from "./deckCardMenu";
 import {
   notifyMissingAdded,
-  notifyPulled,
   notifyRefusal,
   quickAddReceipt,
   reportPresses,
@@ -75,7 +73,7 @@ import { useDeckNotes } from "./useDeckNotes";
 import { useHiddenStacks } from "./useHiddenStacks";
 import { DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
 import { usePrefetchDeckSearchWidth } from "./useDeckSearchWidth";
-import { DeckStats } from "./DeckStats";
+import { DeckStats, isShort } from "./DeckStats";
 import { DeckTokensPanel, tokenWallDrawn } from "./DeckTokensPanel";
 import { TokenArtPicker } from "./TokenArtPicker";
 import { entryRef, pileTokens, type DeckTokenView } from "./deckTokens";
@@ -99,7 +97,7 @@ import { PriceStrip } from "./PriceStrip";
 // directory, and a case-insensitive filesystem resolves `./quickAdd` to whichever of the two the
 // resolver reaches first. `tsc` refuses the whole program with TS1149 and a suite that got past
 // it went red with `quickAddShort is not a function`, having imported the component.
-import { chooseWish, choosePullFor, missingPicks, type QuickAddTarget } from "./quickCollection";
+import { chooseWish, missingPicks, type QuickAddTarget } from "./quickCollection";
 import {
   BAR_WIDEST_PX,
   DECK_BAR_CLEARANCE_PX,
@@ -111,7 +109,6 @@ import { QuickZones } from "./QuickZones";
 import { asSortBy } from "./sorting";
 import { theoryMatchPlan, theoryProgress } from "./theoryMatch";
 import {
-  pullPlanQuery,
   quickAddWishesQuery,
   useDeck,
   useMissingPlan,
@@ -462,6 +459,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * it is {@link gcFilter}, and the derivation is the fence — see it.
    */
   const [gcOnly, setGcOnly] = useState(false);
+  /**
+   * Whether the ledger's red `N missing` is pressed (issue #985) — the game-changer chip's twin,
+   * held the same way and for the same reasons: a fact about the sitting, never persisted, and
+   * read only through {@link missingFilter}, whose derivation is the fence.
+   */
+  const [missingOnly, setMissingOnly] = useState(false);
   const [layer, setLayer] = useState<Layer>(null);
   /**
    * The pile whose heading is showing its rename field, or `null`.
@@ -1527,9 +1530,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * the dialog focuses its own panel either way, and the reader who moved on owns where they are.
    */
   // **A fresh observer state per opening** (2026-10-13). The dialog draws `pullFromCollection`'s
-  // own refusal beside its button, and the card menu's silent `take` pull is a call on the same
-  // observer — so without the reset, a refused silent pull (already a toast) greeted the next
-  // dialog with its sentence: a refusal said twice, and about a press this dialog never made.
+  // own refusal beside its button, so without the reset a refusal from an earlier opening greeted
+  // the next one with its sentence — said twice, and about a press this opening never made.
   const resetPull = deck.pullFromCollection.reset;
   const openPull = useCallback(() => {
     const opener = document.activeElement;
@@ -1675,7 +1677,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // made the press has closed), and a call's own promise is that press's answer where a
   // `mutate`-scoped callback would be replaced by the next press on the same observer.
   const writeQuickAdd = deck.quickAddToCollection.mutateAsync;
-  const writePull = deck.pullFromCollection.mutateAsync;
   /** The deck-wide record, which is what a picked set's quick add presses (issue #510): one
    *  transaction and one history row for the whole set, rather than one per card. */
   const writeMissing = deck.addMissingToCollection.mutateAsync;
@@ -1787,54 +1788,30 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * **Pull N from your collection** — the per-card entrance to the dialog the stats band already
    * opens over the whole deck.
    *
-   * The same test as the row above it and the same argument: `choosePull` answers `take` where
-   * the plan holds exactly one candidate for this printing — a lone source is unambiguous even
-   * when it cannot cover the line, so what there is is taken — and `ask` for two or more, **and
-   * for none**. None goes to the dialog rather than to a sentence here, because the dialog
-   * already words that case (`NOTHING_TO_PULL`) and words it better than a banner could: a
-   * reader whose deck says *3 missing* needs to be told *why* the pull found nothing, not merely
-   * that it did.
+   * **It always opens the dialog, whatever the plan holds** (issue #987). It used to read the plan
+   * first and pull a lone candidate outright with no dialog; but a pull moves one particular piece
+   * of cardboard out of one particular folder, and the reader wants to see which before it moves.
+   * The dialog arrives with that source pre-picked, so the ordinary case is still one press — on
+   * the footer instead of nowhere. Two or more candidates draw the picker; none draws
+   * `NOTHING_TO_PULL`'s explanation; a refused read is said inside the dialog, in the rows' place.
    *
-   * The read is {@link pullPlan}'s own, through the shared options factory, so this press fills
-   * the cache the dialog then draws from and the two can never disagree about the key. The
-   * filtering is done at the render site off the **live** query rather than frozen into the
-   * layer: the arm carries the card, and the plan is re-read after every write.
+   * The dialog draws from {@link pullPlan}'s live query, filtered at the render site rather than
+   * frozen into the layer: the arm carries the cards, and the plan is re-read after every write.
+   * A picked set (issue #510) opens over every picked row that is short, the same way.
    *
-   * **A picked set is one press over every picked row that is short** (issue #510):
-   * `choosePullFor` takes them all silently where each has one answer, and opens the dialog over
-   * the whole set where any one of them needs the reader.
+   * The observer is reset for `openPull`'s reason: the dialog draws `pullFromCollection`'s refusal
+   * beside its button, and a previous opening's refusal is not this one's.
    */
   const pullCard = useCallback(
     (cards: readonly DeckCard[]) => {
       if (cards.length === 0) return;
       const opener = document.activeElement;
-      const handBack = () => {
+      resetPull();
+      openLayer({ kind: "pull", cards }, () => {
         if (opener instanceof HTMLElement) opener.focus();
-      };
-      void (async () => {
-        let rows: DeckPullRow[];
-        try {
-          rows = await queryClient.fetchQuery(pullPlanQuery(deckId));
-        } catch (error) {
-          notifyRefusal("Couldn't pull from your collection", error);
-          return;
-        }
-        const choice = choosePullFor(rows, cards);
-        if (choice.kind === "take") {
-          // **The receipt, and the only word a refused silent pull ever gets.** The pull's write
-          // is not in the banner's family (the dialog speaks for it when it is open), so a
-          // refusal on this path, with no dialog, was said nowhere until this toast.
-          void writePull(choice.picks).then(
-            (outcome) => notifyPulled(outcome, row?.name ?? ""),
-            (error: unknown) => notifyRefusal("Couldn't pull from your collection", error),
-          );
-          return;
-        }
-        resetPull();
-        openLayer({ kind: "pull", cards }, handBack);
-      })();
+      });
     },
-    [deckId, openLayer, queryClient, writePull, resetPull, row?.name],
+    [openLayer, resetPull],
   );
 
   // The menu's three writes, each addressed by the **row** rather than by a slot — a menu is opened
@@ -2796,6 +2773,22 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const gcFilter = gcOnly && hasGameChangers;
 
   /**
+   * Whether the ledger draws its `N missing` press at all: a deck with a binder behind it
+   * ({@link tracks}) and a row it is short of. `isShort` is the per-row half of `deckStats`'
+   * shortfall, so this is `true` exactly when the ledger's figure is above zero.
+   */
+  const hasMissing = useMemo(() => tracks && deck.cards.some(isShort), [tracks, deck.cards]);
+
+  /**
+   * The shortfall press **as the filter reads it** (issue #985) — fenced exactly as
+   * {@link gcFilter} is. Buying or pulling the last missing copy takes the press off the ledger,
+   * and a stored flag left standing would narrow the deck to nothing with nothing on screen to
+   * press to get it back; gating the derivation keeps that a read, and an undo that brings the
+   * shortfall back finds the press where the reader left it.
+   */
+  const missingFilter = missingOnly && hasMissing;
+
+  /**
    * Whether the `{X}` spells get a heading of their own — **the deck's, not this editor's.**
    *
    * `decks.separate_x_group` (schema v13), so it survives closing the deck and is answered per
@@ -3326,6 +3319,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const toggleNotes = useCallback((next: boolean) => updateDeck({ notesOpen: next }), [updateDeck]);
   const toggleTodos = useCallback((next: boolean) => updateDeck({ todosOpen: next }), [updateDeck]);
   const toggleGcOnly = useCallback(() => setGcOnly((on) => !on), []);
+  const toggleMissingOnly = useCallback(() => setMissingOnly((on) => !on), []);
 
   /**
    * The ledger's two controls, built here because each opens one of this editor's layers — and
@@ -3452,6 +3446,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           hasGameChangers={hasGameChangers}
           gameChangersOnly={gcFilter}
           onGameChangersOnlyToggle={toggleGcOnly}
+          missingOnly={missingFilter}
+          onMissingOnlyToggle={toggleMissingOnly}
           tight={tightHeader}
           // Four terms rather than five on a Virtual deck — the `Owned` figure is the one thing
           // on this line that is about a *binder* rather than about the deck. See {@link tracks}.
@@ -3770,6 +3766,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         categories={categories}
         separateX={separateX}
         gcFilter={gcFilter}
+        missingFilter={missingFilter}
         emptyGroupRules={emptyGroupRules}
         theoryPlan={theoryPlan}
         marketplace={marketplace}

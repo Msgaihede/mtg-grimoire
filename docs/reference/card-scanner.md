@@ -212,22 +212,23 @@ A permanent 404 is recorded so a re-run never retries it; a transient failure is
 ### The labels, as bytes — `labels.rs` (2026-10-07)
 
 The bundle holds ids. What an id *is* — a name, a set, a number, a language, a release date,
-an oracle, an artwork, its finishes — is nine columns of `corpus.db`'s `cards`, which
+an oracle, an artwork, its finishes, whether it is a promo — is ten columns of `corpus.db`'s `cards`, which
 `Reference::load_labels` reads behind the `corpus` feature. **A browser's scanner has no
 `corpus` feature**: it is a module of this crate alone in a Worker of its own
 (`crates/grimoire-scan`, the light app's step 7.5), and the corpus is the engine's, in another
-Worker. So the engine reads the nine columns, writes them down, and the page hands the bytes
+Worker. So the engine reads the ten columns, writes them down, and the page hands the bytes
 across. `src/labels.rs` is both ends:
 
 | | Needs `corpus` | What |
 | --- | --- | --- |
-| `Row`, `Row::attach` | no | One printing as the corpus has it, and the two calls that attach it — `set_finishes`, then `add_label`. `load_labels` goes through the same two |
+| `Row`, `Row::attach` | no | One printing as the corpus has it, and the three calls that attach it — `set_finishes`, `set_promo`, then `add_label`. `load_labels` goes through the same three |
 | `Encoder` | no | `push(&Row)` a row at a time, `finish()` the file |
 | `decode`, `attach` | no | Read a file through and answer it only if all of it is sound; attach every row, or none |
-| `COLUMNS`, `Row::from_sql`, `read_page` | yes | The nine columns, one row read from them, and `limit` rows after a `rowid` into an `Encoder` |
+| `COLUMNS`, `Row::from_sql`, `read_page` | yes | The ten columns, one row read from them, and `limit` rows after a `rowid` into an `Encoder` |
 
-**The layout, version 1** (`MAGIC` is `MTGL`, `VERSION` is 1; a varint is LEB128, ten bytes at
-most):
+**The layout, version 2** (`MAGIC` is `MTGL`, `VERSION` is 2; a varint is LEB128, ten bytes at
+most). Version 1 had no promo byte; it was added for the promo filter (issue #981, under
+*Filters*), and both ends of a hand-over are one build, so a version 1 file is never met:
 
 ```text
 "MTGL" · version (1 byte) · rows (varint)
@@ -239,6 +240,7 @@ rows ×  id (16 bytes)
         name, set, number,         varint each: a place in its table
           language, released
         finishes                   varint n, then n places in the finish table
+        promo                      1 byte: 0, or 1 for a printing `cards.promo` marks
 ```
 
 Nothing follows the last row. A release date that was `NULL` is the empty string, as
@@ -247,7 +249,8 @@ Nothing follows the last row. A release date that was `NULL` is the empty string
 19 languages, 1 288 release dates, 38 705 oracle ids and 51 236 illustration ids. Each table is
 in first-seen order, so the encoder is one pass and holds no row.
 
-**5 998 193 B for those 118 475 labels** — against 21 555 383 B for the same rows as the JSON
+**5 998 193 B for those 118 475 labels** at version 1 (version 2's promo byte adds one a row,
+118 475 B; not re-measured) — against 21 555 383 B for the same rows as the JSON
 the frame bench carries (§11), 28% of it. Through brotli at quality 11 it is 4 748 121 B, which
 matters to nobody: it never crosses a network, only from one Worker to the next.
 
@@ -2954,14 +2957,24 @@ paragraph above is a reading of the code.
 
 ### Filters
 
-**Sets and a release-date range, and nothing else.** Language is absent rather than unimplemented
+**Sets, a release-date range and promos, and nothing else.** Language is absent rather than unimplemented
 (spec decision 7): `default_cards` holds one printing per card, English wherever English exists, so
 a language filter would bite only on printings that exist solely in another language.
-`filters::ScanFilters { sets, released_from, released_to }`; set codes compare case-insensitively,
+`filters::ScanFilters { sets, released_from, released_to, exclude_promos }`; set codes compare case-insensitively,
 dates as `YYYY-MM-DD` strings inclusive at both ends. **A blank string is no bound** — a cleared
 HTML date input sends `""`, and every date is `>= ""` while none is `<= ""`, so a cleared *to* would
 match nothing and read as *No printing matches these filters*. A printing with no release date fails
 any date bound and passes a set filter.
+
+**`exclude_promos` leaves out every printing `cards.promo` marks** (Scryfall's `promo`: prerelease
+stamps, promo packs, buy-a-box and the rest; issue #981). It is a filter like the others — on its
+own it is not empty, so it leaves the fast path and every tier is masked by it. The flag is not on
+`Label`: the reference keeps the promos as a set of ids beside the labels (`Reference::is_promo`,
+`set_promo`), so a non-promo — most of the corpus — costs nothing, and `mask_for` hands it to
+`permits`. Both surfaces draw it as a *Skip promos* switch under the set picker (the desktop's
+Filters popover, the phone's Filters page), and the trigger's summary ends `· no promos`. **A sent
+scan does not carry it**: the scan inbox rebuilds a label from the fields it checks, and it checks
+no such field, so `replay::LabelFilters::scan_filters` admits promos.
 
 **The mask constrains every tier, not only the hash search** — §3 "Match"'s rule, carried to the
 readers. `Reference::mask_for` builds one `Mask` from the labels; the hash search, the title lookup
@@ -4505,8 +4518,11 @@ kept past the two seconds below.
   of them now are, for exactly this.
 
 A press reads the ring and the page's state in one synchronous step (`useScanSubmit`): there is
-no grab to await, so nothing moves between the press and the snapshot. The camera and the pump
-run on behind the dialog; the snapshot is a value no later frame can reach.
+no grab to await, so nothing moves between the press and the snapshot. The snapshot is a value
+no later frame can reach. **Recognition pauses while the dialog is open** (issue #977): both pages
+hold the pump (`useScanLoop`'s `live`) while `useScanSubmit`'s `run` is not `null`, so a card left
+under the lens while the reader picks a printing does not land in the tray. The camera stays open,
+and closing the dialog starts a fresh run.
 
 ### What the reader sees and chooses, and why nothing is chosen for them
 

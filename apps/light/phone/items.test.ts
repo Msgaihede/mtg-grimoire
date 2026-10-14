@@ -136,6 +136,8 @@ const wish = (over: Partial<WishRow> = {}): WishRow =>
     preferredFinish: null,
     unitPrice: null,
     elsewhere: 0,
+    ownedExact: 0,
+    ownedOther: 0,
     ...over,
   }) as WishRow;
 

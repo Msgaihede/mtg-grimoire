@@ -139,15 +139,21 @@ pub struct WishlistQuery {
 
 /// One line of the list, as the wall and the table draw it.
 ///
-/// **Nothing here is a comparison against the collection, and that is the rule rather than an
+/// **Nothing here is derived from the collection, and that is the rule rather than an
 /// omission.** A wishlist is managed by the reader: they take a card off the list when they
 /// acquire it, and until they do the list goes on asking for every copy it names. So there is
-/// no owned count on this row, no "fulfilled" state derived from one, and every figure drawn
-/// from it — the Cost cell, the page header's total — is unit price × the copies **wanted**.
-/// The row carried an `owned_quantity` until 2026-09-08, a correlated sum over
-/// `collection_entries` narrowed by the wish's printing and finish; what it bought was a badge
-/// that contradicted the reader about what was still on their list, and a Cost column that
-/// totalled zero for a card they had every intention of buying another copy of.
+/// no "fulfilled" state, and every figure drawn from this row — the Cost cell, the page
+/// header's total — is unit price × the copies **wanted**. The row carried an `owned_quantity`
+/// until 2026-09-08, a correlated sum over `collection_entries` narrowed by the wish's printing
+/// and finish; what it bought was a badge that contradicted the reader about what was still on
+/// their list, and a Cost column that totalled zero for a card they had every intention of
+/// buying another copy of.
+///
+/// **[`Self::owned_exact`] and [`Self::owned_other`] are the collection read back, and they
+/// are reports, not arithmetic** (issue #988). They say what the binder already holds of this
+/// card so the reader can decide whether the wish still stands — the decision stays theirs,
+/// nothing subtracts them from what is wanted, and nothing on the list is costed or filtered
+/// by them.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WishRow {
@@ -247,6 +253,16 @@ pub struct WishRow {
     /// `0` on an orphan with no oracle id, and that is a fence rather than a coincidence —
     /// see the subquery's own comment in [`list_wishes`].
     pub elsewhere: i64,
+    /// Copies the collection holds **that answer this wish's printing**, across every finish,
+    /// condition and folder (issue #988) — the search badge's finish-blind reading.
+    ///
+    /// For a pinned wish that is its own `card_id`; for an any-printing wish every printing of
+    /// its oracle card answers, so every copy of the card is counted here and
+    /// [`Self::owned_other`] is `0`. An orphan with no oracle id counts only its pinned id.
+    pub owned_exact: i64,
+    /// Copies the collection holds of **other printings of the same oracle card** — `0` for an
+    /// any-printing wish, which has no "other" printing, and for an orphan with no oracle id.
+    pub owned_other: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -1485,7 +1501,28 @@ fn list_statements(q: &WishlistQuery) -> crate::collection::ListStatements {
                 w.folder_id,
                 -- Appended for the reason the three above were: the drawn printing's layout,
                 -- off the same join as `c.id`, so the flip a tile offers is about its picture.
-                c.layout
+                c.layout,
+                -- What the collection holds of this card (issue #988), split by whether the
+                -- printing answers the wish. Every copy wherever it is filed — the search
+                -- badge's reading. A pinned wish counts its own id exactly and every other
+                -- printing of its oracle card as `other`; an any-printing wish counts the
+                -- whole card as exact. `idx_cards_oracle` seeks the printings and the
+                -- collection's card index the copies. `w.oracle_id IS NOT NULL` is
+                -- `elsewhere`'s fence, for its reason.
+                CASE WHEN w.card_id IS NULL THEN
+                    (SELECT coalesce(sum(e.quantity), 0)
+                       FROM cards k JOIN collection_entries e ON e.card_id = k.id
+                      WHERE w.oracle_id IS NOT NULL AND k.oracle_id = w.oracle_id)
+                ELSE
+                    (SELECT coalesce(sum(e.quantity), 0)
+                       FROM collection_entries e WHERE e.card_id = w.card_id)
+                END AS owned_exact,
+                CASE WHEN w.card_id IS NULL THEN 0 ELSE
+                    (SELECT coalesce(sum(e.quantity), 0)
+                       FROM cards k JOIN collection_entries e ON e.card_id = k.id
+                      WHERE w.oracle_id IS NOT NULL AND k.oracle_id = w.oracle_id
+                        AND k.id <> w.card_id)
+                END AS owned_other
          FROM {from} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?"
     );
     params.push(Box::new(limit));
@@ -1535,6 +1572,8 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
                     legalities: r.get(17)?,
                     elsewhere: r.get(18)?,
                     folder_id: r.get(19)?,
+                    owned_exact: r.get(21)?,
+                    owned_other: r.get(22)?,
                 })
             },
         )
@@ -2670,6 +2709,8 @@ mod tests {
             legalities: Some(r#"{"timeless":"legal"}"#.into()),
             folder_id: Some(7),
             elsewhere: 1,
+            owned_exact: 2,
+            owned_other: 3,
         })
         .unwrap();
         assert_eq!(
@@ -2682,7 +2723,8 @@ mod tests {
                 "unitPrice": 40.0, "notes": null,
                 "needsReview": null, "updatedAt": 1800000000,
                 "legalities": "{\"timeless\":\"legal\"}",
-                "folderId": 7, "elsewhere": 1
+                "folderId": 7, "elsewhere": 1,
+                "ownedExact": 2, "ownedOther": 3
             })
         );
     }
@@ -4545,6 +4587,60 @@ mod tests {
             0,
             "two wishes with no oracle card are not two wishes for the same one"
         );
+    }
+
+    /// The collection read back onto the wish (issue #988): copies of the printing the wish is
+    /// for, and copies of the same card in other printings — every finish, condition and
+    /// folder. An any-printing wish is answered by every printing, so its whole count is exact.
+    #[test]
+    fn owned_counts_split_the_collection_by_whether_the_printing_answers_the_wish() {
+        let conn = seeded();
+        conn.execute_batch(
+            "INSERT INTO collection_entries (card_id, set_code, collector_number, lang, finish,
+                                             condition, quantity, created_at, updated_at)
+                  VALUES ('bolt-lea','lea','161','en','nonfoil','NM',2,0,0),
+                         ('bolt-lea','lea','161','en','foil',   'NM',1,0,0),
+                         ('bolt-2ed','2ed','162','en','nonfoil','NM',4,0,0),
+                         ('card-1',  'tst','1',  'en','nonfoil','NM',9,0,0);",
+        )
+        .unwrap();
+        let wish = |oracle_id: Option<&str>, card_id: Option<&str>| {
+            add_wish(
+                &conn,
+                &WishInput {
+                    oracle_id: oracle_id.map(str::to_owned),
+                    card_id: card_id.map(str::to_owned),
+                    quantity: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .id
+        };
+        let lea = wish(None, Some("bolt-lea"));
+        let any = wish(Some("o1"), None);
+        let page = list_wishes(&conn, &WishlistQuery::default()).unwrap();
+        let owned = |id: i64| {
+            let row = page.items.iter().find(|r| r.id == id).unwrap();
+            (row.owned_exact, row.owned_other)
+        };
+        assert_eq!(
+            owned(lea),
+            (3, 4),
+            "both finishes of LEA exact, the 2ed copies other"
+        );
+        assert_eq!(
+            owned(any),
+            (7, 0),
+            "every printing answers an any-printing wish"
+        );
+
+        conn.execute("DELETE FROM collection_entries", []).unwrap();
+        let empty = list_wishes(&conn, &WishlistQuery::default()).unwrap();
+        assert!(empty
+            .items
+            .iter()
+            .all(|r| r.owned_exact == 0 && r.owned_other == 0));
     }
 
     /// "Use this printing", from an any-printing wish. The three denormalised columns are the

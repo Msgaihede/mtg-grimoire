@@ -56,6 +56,8 @@ const BOLT: WishRow = {
   preferredFinish: "foil",
   unitPrice: 400.5,
   elsewhere: 0,
+  ownedExact: 0,
+  ownedOther: 0,
   notes: null,
   needsReview: null,
   updatedAt: 1_800_000_000,
@@ -370,6 +372,63 @@ describe("the elsewhere mark", () => {
     expect(
       screen.getByRole("img", { name: "Also on your wishlist 1 more time" }),
     ).toBeInTheDocument();
+  });
+});
+
+/**
+ * Issue #988: what the collection already holds of a wish's card, on the tile — the exact
+ * printing's count and the other printings', each only when it is not zero, each a press that
+ * opens the collection filtered to those copies.
+ */
+describe("the owned chips", () => {
+  beforeEach(() => {
+    useAppStore.getState().setActiveView("wishlist");
+  });
+
+  it("draws nothing when the collection holds none of the card", () => {
+    wall([BOLT]);
+    expect(screen.queryByRole("button", { name: /in your collection/ })).toBeNull();
+  });
+
+  it("draws only the count that applies", () => {
+    const { unmount } = wall([{ ...BOLT, ownedExact: 2 }]);
+    expect(
+      screen.getByRole("button", { name: /2 copies of this printing in your collection/ }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /another printing/ })).toBeNull();
+    unmount();
+
+    wall([{ ...BOLT, ownedOther: 1 }]);
+    expect(
+      screen.getByRole("button", { name: /1 copy of another printing in your collection/ }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /this printing/ })).toBeNull();
+  });
+
+  it("draws both when both apply, and says which is which", () => {
+    wall([{ ...BOLT, ownedExact: 2, ownedOther: 3 }]);
+    expect(screen.getByText("Own ×2")).toBeInTheDocument();
+    expect(screen.getByText("Other ×3")).toBeInTheDocument();
+  });
+
+  it("names an any-printing wish's copies without a printing", () => {
+    wall([{ ...ANY, ownedExact: 5 }]);
+    expect(
+      screen.getByRole("button", { name: /^5 copies in your collection/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("opens the collection on exactly those copies, without opening the card", async () => {
+    const user = userEvent.setup();
+    useAppStore.getState().setSelectedCardId(null);
+    wall([{ ...BOLT, ownedExact: 2, ownedOther: 3 }]);
+
+    await user.click(screen.getByRole("button", { name: /another printing/ }));
+
+    const s = useAppStore.getState();
+    expect(s.activeView).toBe("collection");
+    expect(s.pendingCollectionQuery).toBe('!"Lightning Bolt" -(e:lea cn:161 lang:en)');
+    expect(s.selectedCardId).toBeNull();
   });
 });
 

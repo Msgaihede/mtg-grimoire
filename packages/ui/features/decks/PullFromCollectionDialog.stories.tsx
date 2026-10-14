@@ -280,10 +280,10 @@ export const PickingASource: Story = {
  * of a key and the two entrances cannot come to disagree about which rows belong to which card.
  * That is why this story is one `args` line rather than a second component.
  *
- * **It opens at all only where there is a decision in it**: `choosePull` takes a lone candidate
- * outright with no dialog, and sends two or more — this row — here. None comes here too, so that
- * {@link NothingToPull}'s three sentences do the explaining rather than a banner that could only
- * have said the search found nothing.
+ * **It opens on every press** (issue #987): a lone candidate comes here too, pre-picked and with
+ * its source stated, so the reader sees which copy moves before it does. None comes here as well,
+ * so that {@link NothingToPull}'s three sentences do the explaining rather than a banner that could
+ * only have said the search found nothing.
  */
 export const OneCard: Story = {
   args: { rows: [BOROS_CHARM], cardName: "Boros Charm" },

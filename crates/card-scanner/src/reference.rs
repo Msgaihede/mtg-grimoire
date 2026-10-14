@@ -15,7 +15,7 @@
 
 use crate::filters::ScanFilters;
 use crate::index::{format_uuid, Bundle, Mask, Match, Section, ID_LEN};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// What a printing is called.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -156,6 +156,10 @@ pub struct Reference {
     /// Every distinct list of finishes a printing has been given, once each. The corpus has
     /// eight (counted 2026-10-07), where each printing used to own a `Vec` of `String`s.
     finish_lists: Vec<Vec<String>>,
+    /// The printings the corpus marks a promo (its `promo` column), and only those — a set of
+    /// the few rather than a flag on every label. What
+    /// [`ScanFilters::exclude_promos`] reads, through [`Reference::mask_for`].
+    promos: HashSet<[u8; ID_LEN]>,
 }
 
 /// [`Reference::snapshot`]'s answer. Ordered maps, so two of them compare and print alike
@@ -170,6 +174,7 @@ pub(crate) struct Snapshot {
     by_name: std::collections::BTreeMap<String, Vec<([u8; ID_LEN], bool)>>,
     by_set_number: std::collections::BTreeMap<(String, String), [u8; ID_LEN]>,
     finishes: std::collections::BTreeMap<[u8; ID_LEN], Vec<String>>,
+    promos: std::collections::BTreeSet<[u8; ID_LEN]>,
 }
 
 /// The shortest read [`Reference::lookup_cards_masked`] will take as the start of a longer name.
@@ -192,7 +197,7 @@ pub struct NameHits {
 impl Reference {
     pub fn new(bundle: Bundle) -> Self {
         let bundle_printings =
-            bundle.cards.ids.iter().collect::<std::collections::HashSet<_>>().len();
+            bundle.cards.ids.iter().collect::<HashSet<_>>().len();
         Reference {
             bundle,
             bundle_printings,
@@ -204,6 +209,7 @@ impl Reference {
             by_set_number: HashMap::new(),
             finishes: HashMap::new(),
             finish_lists: Vec::new(),
+            promos: HashSet::new(),
         }
     }
 
@@ -253,6 +259,7 @@ impl Reference {
                 .keys()
                 .map(|id| (*id, self.finishes_of(id).to_vec()))
                 .collect(),
+            promos: self.promos.iter().copied().collect(),
         }
     }
 
@@ -314,6 +321,22 @@ impl Reference {
             }
         };
         self.finishes.insert(printing, at as u32);
+    }
+
+    /// Is this printing a promo, as the corpus marks it? `false` for a printing the labels never
+    /// named, as for one they named a non-promo.
+    pub fn is_promo(&self, printing: &[u8; ID_LEN]) -> bool {
+        self.promos.contains(printing)
+    }
+
+    /// Record whether a printing is a promo — [`Reference::load_labels`]' own, public for a
+    /// caller with no SQLite.
+    pub fn set_promo(&mut self, printing: [u8; ID_LEN], promo: bool) {
+        if promo {
+            self.promos.insert(printing);
+        } else {
+            self.promos.remove(&printing);
+        }
     }
 
     /// Attach one printing's label — the body of [`Reference::load_labels`], public so a
@@ -388,7 +411,9 @@ impl Reference {
         if f.is_empty() {
             return Mask::all();
         }
-        Mask::allow_only(self.labels.iter().filter(|(_, l)| f.permits(l)).map(|(id, _)| *id))
+        Mask::allow_only(
+            self.labels.iter().filter(|(id, l)| f.permits(l, self.is_promo(id))).map(|(id, _)| *id),
+        )
     }
 
     /// Every printing of a card, by its oracle id. Empty for an id the labels never named.
@@ -1252,6 +1277,26 @@ mod tests {
     }
 
     #[test]
+    fn excluding_promos_leaves_out_the_promos_and_every_tier_follows() {
+        let mut r = three();
+        // The LTR Forest is the promo: the HOB Forest still answers the name, Shock is untouched.
+        r.set_promo(id(2), true);
+        assert!(r.is_promo(&id(2)) && !r.is_promo(&id(1)));
+        let no_promos = ScanFilters { exclude_promos: true, ..Default::default() };
+        let m = r.mask_for(&no_promos);
+        assert!(!m.is_unrestricted());
+        assert!(m.permits(&id(1)) && m.permits(&id(3)) && !m.permits(&id(2)));
+        assert_eq!(r.lookup_collector_masked(&[("ltr".into(), "270".into())], &m), None);
+        assert_eq!(r.lookup_by_name_masked("forest", &m), Some((id(10), 0)));
+        // Narrowed to the promo's own set, the name has nothing left to answer with.
+        let ltr = r.mask_for(&ScanFilters { sets: vec!["ltr".into()], ..no_promos.clone() });
+        assert_eq!(r.lookup_by_name_masked("forest", &ltr), None);
+        // And a printing marked and then unmarked is no promo.
+        r.set_promo(id(2), false);
+        assert!(r.mask_for(&no_promos).permits(&id(2)));
+    }
+
+    #[test]
     fn empty_filters_are_unrestricted() {
         let r = three();
         assert!(r.mask_for(&ScanFilters::default()).is_unrestricted());
@@ -1469,7 +1514,7 @@ mod tests {
                 "CREATE TABLE cards (
                 id TEXT, illustration_id TEXT, name TEXT, set_code TEXT,
                 collector_number TEXT, lang TEXT, released_at TEXT, oracle_id TEXT,
-                finishes TEXT, layout TEXT, set_type TEXT
+                finishes TEXT, layout TEXT, set_type TEXT, promo INTEGER NOT NULL DEFAULT 0
             )",
             )
             .unwrap();
@@ -1478,7 +1523,7 @@ mod tests {
             corpus
                 .execute(
                     "INSERT INTO cards VALUES (?1, NULL, ?2, ?3, ?4, 'en', '2025-01-01',
-                    NULL, '[\"nonfoil\"]', ?5, ?6)",
+                    NULL, '[\"nonfoil\"]', ?5, ?6, 0)",
                     rusqlite::params![
                         format_uuid(&id(p)),
                         name,
@@ -1498,6 +1543,7 @@ mod tests {
                 sets: vec![set.into()],
                 released_from: Some("2025-01-01".into()),
                 released_to: Some("2025-01-01".into()),
+                exclude_promos: false,
             };
             let mask = reference.mask_for(&filters);
             assert!(mask.permits(&id(p)));

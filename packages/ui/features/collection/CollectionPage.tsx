@@ -458,8 +458,27 @@ function focusedElement(): HTMLElement | null {
 export function CollectionPage() {
   // The To review widget's needs-review hand-off — `useReviewHandoff` has the whole rule.
   const review = useReviewHandoff("collection");
-  const collection = useCollection({ initialNeedsReview: review.initialNeedsReview });
+  // The wishlist's owned chips' hand-off (issue #988) — `store.ts`' `pendingCollectionQuery`,
+  // answered as `SearchPage` answers `pendingSearchSet`: a seed on a mount, so the first fetch is
+  // already filtered, and a render-phase adjustment on a page already mounted. `appliedQuery` is
+  // what makes the adjustment terminate until the effect below spends the hand-off.
+  const pendingQuery = useAppStore((s) => s.pendingCollectionQuery);
+  const clearPendingQuery = useAppStore((s) => s.clearPendingCollectionQuery);
+  const collection = useCollection({
+    initialNeedsReview: review.initialNeedsReview,
+    initialText: pendingQuery ?? undefined,
+  });
   review.settle(collection.needsReview, collection.setNeedsReview);
+  const [appliedQuery, setAppliedQuery] = useState(pendingQuery);
+  if (pendingQuery !== null && pendingQuery !== appliedQuery) {
+    setAppliedQuery(pendingQuery);
+    collection.setText(pendingQuery);
+  } else if (pendingQuery === null && appliedQuery !== null) {
+    setAppliedQuery(null);
+  }
+  useEffect(() => {
+    if (pendingQuery !== null) clearPendingQuery();
+  }, [pendingQuery, clearPendingQuery]);
   // `folderId` is the level **on screen**, which trails `requestedFolderId` by a round trip while a
   // level nothing has cached arrives (`useCollection`'s `shown`). Everything drawn reads the
   // first; the page's navigation — the two hand-offs below and Escape's step up — reads the second.

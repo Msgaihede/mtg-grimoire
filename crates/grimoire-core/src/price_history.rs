@@ -11,9 +11,11 @@
 //! # The rules
 //!
 //! * **Every price is `sorting::price_expr`'s**, the crate's one price builder, at the copy's own
-//!   finish. So a snapshot is exactly the number the collection page showed that day, the etched
-//!   hole in Cardmarket and a feed that does not quote a printing included — and an unpriced
-//!   finish is a **NULL**, never a zero.
+//!   finish — through `sorting::held_price_expr` for an owned copy, as the collection page reads
+//!   it, so a `nonfoil` copy of a printing not sold in nonfoil is that printing's price. So a
+//!   snapshot is exactly the number the collection page showed that day, the etched hole in
+//!   Cardmarket and a feed that does not quote a printing included — and an unpriced finish is a
+//!   **NULL**, never a zero.
 //! * **A row is a holding, not a price (user schema v50).** Every printing the reader holds gets
 //!   its row, priced or not, so a card whose price starts or stops being quoted stays in the
 //!   table and [`crate::value_history`] reads that as a price moving rather than as a card
@@ -326,13 +328,20 @@ fn write_snapshot(conn: &Connection, markets: &[Marketplace]) -> rusqlite::Resul
 /// **`copies` rides beside the price**: the same sum `owned` already computes to decide what is
 /// owned, every folder at once, so a day's row says what the reader's holding of that printing was
 /// worth and not only what one copy cost. [`crate::value_history`] is the reader.
+///
+/// **An owned row is priced by [`sorting::held_price_expr`]**, the collection's own figure, so a
+/// `nonfoil` copy of a foil-only printing (issue #983) is recorded at the price the collection
+/// page shows for it and its graph does not read the fix as a price move. A **watched** row keeps
+/// [`sorting::price_expr`]: the watch list's every finish includes a `nonfoil` the printing is
+/// not sold in, and pricing it would write a second row of the foil's figure under that name.
 fn held_cte(conn: &Connection, market: Marketplace) -> String {
     format!(
         "WITH owned(card_id, finish, copies) AS ({owned}),
          wanted(card_id, finish) AS ({wished} UNION {listed}),
          held AS (
              SELECT card_id, finish, price, copies
-               FROM (SELECT k.card_id AS card_id, k.finish AS finish, {price} AS price,
+               FROM (SELECT k.card_id AS card_id, k.finish AS finish,
+                            CASE WHEN max(k.copies) > 0 THEN {held} ELSE {price} END AS price,
                             max(k.copies) AS copies
                        FROM (SELECT card_id, finish, copies FROM owned WHERE copies > 0
                              UNION ALL
@@ -344,6 +353,7 @@ fn held_cte(conn: &Connection, market: Marketplace) -> String {
         owned = collection_source::copies_by_printing_and_finish(conn, Availability::Everything),
         wished = wished_printings(""),
         listed = listed_printings("?3"),
+        held = sorting::held_price_expr(market, "k.finish"),
         price = sorting::price_expr(market, "k.finish"),
     )
 }
@@ -800,8 +810,8 @@ const HISTORY_SQL: &str = "SELECT unixepoch(day), price FROM price_snapshots
 ///   reading of the same day's live price, and a chart holding both draws one day twice.
 ///   The day is read **once**, by the first statement, and bound into the second, so a read
 ///   straddling UTC midnight cannot answer a point that is not before its own `today`.
-/// * **`now` is [`sorting::price_expr`] against the `cards` row, with the finish bound as `?2`**
-///   rather than written into the SQL — a scalar subquery, so an id the corpus does not hold is a
+/// * **`now` is [`sorting::held_price_expr`] against the `cards` row, with the finish bound as
+///   `?2`** rather than written into the SQL — a scalar subquery, so an id the corpus does not hold is a
 ///   NULL rather than no row. It is **not** gated on ownership: a price is a fact about the
 ///   printing, and a mover the reader has since sold may still be open on the page.
 /// * **An unknown card id is not an error.** `now` is `None`, and the points are whatever history
@@ -826,7 +836,7 @@ pub fn history(
             &format!(
                 "SELECT date('now'), unixepoch(date('now')),
                         (SELECT {price} FROM cards c WHERE c.id = ?1)",
-                price = sorting::price_expr(market, "?2"),
+                price = sorting::held_price_expr(market, "?2"),
             ),
             params![card_id, finish],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),

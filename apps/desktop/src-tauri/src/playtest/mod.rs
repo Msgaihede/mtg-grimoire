@@ -12,10 +12,10 @@
 use std::sync::{Arc, Mutex};
 
 use grimoire_play::{
-    on_engine_stack, CardFacts, Difficulty, Playtest, PlaytestAction, PlaytestStep,
+    on_engine_stack, CardFacts, Difficulty, Playtest, PlaytestAction, PlaytestStep, TokenFacts,
 };
 
-use crate::goldfish::facts;
+use crate::goldfish::{facts, token_facts};
 use crate::sync::AppState;
 
 /// The one game, or none. `Busy` while a call has it on the engine's stack.
@@ -36,7 +36,8 @@ const BUSY: &str = "The opponent is still thinking.";
 /// A new game: `deck_id` as it stands in `variant` (`live` or `theory`) for the reader, against
 /// `opponent_deck_id` in `opponent_variant`, the opponent played at `difficulty`. `seed` is the
 /// shuffle and the coin flip; a page sends a fresh one per game. Answers at the reader's first
-/// decision, the opening hand.
+/// decision, the opening hand. Each deck's tokens are drawn in the printings the reader set for
+/// them (issue #991).
 ///
 /// Flat parameters, as every command's, because Tauri maps each camelCase key to one; the two
 /// states are Tauri's, the six the page's.
@@ -53,16 +54,23 @@ pub async fn playtest_start(
     seed: u64,
 ) -> Result<PlaytestStep, String> {
     let app = state.inner().clone();
-    let (yours, theirs) = tauri::async_runtime::spawn_blocking(move || {
-        let conn = crate::sync::lock_db_read(&app);
-        let yours = grimoire_core::play::deck_cards(&conn, deck_id, &variant)?;
-        let theirs = grimoire_core::play::deck_cards(&conn, opponent_deck_id, &opponent_variant)?;
-        Ok::<_, String>((yours, theirs))
-    })
-    .await
-    .map_err(|e| format!("the decks could not be read: {e}"))??;
+    let (yours, theirs, your_tokens, their_tokens) =
+        tauri::async_runtime::spawn_blocking(move || {
+            let conn = crate::sync::lock_db_read(&app);
+            let yours = grimoire_core::play::deck_cards(&conn, deck_id, &variant)?;
+            let theirs =
+                grimoire_core::play::deck_cards(&conn, opponent_deck_id, &opponent_variant)?;
+            let your_tokens = grimoire_core::play::deck_tokens(&conn, deck_id, &variant)?;
+            let their_tokens =
+                grimoire_core::play::deck_tokens(&conn, opponent_deck_id, &opponent_variant)?;
+            Ok::<_, String>((yours, theirs, your_tokens, their_tokens))
+        })
+        .await
+        .map_err(|e| format!("the decks could not be read: {e}"))??;
     let yours: Vec<CardFacts> = yours.into_iter().map(facts).collect();
     let theirs: Vec<CardFacts> = theirs.into_iter().map(facts).collect();
+    let your_tokens: Vec<TokenFacts> = your_tokens.into_iter().map(token_facts).collect();
+    let their_tokens: Vec<TokenFacts> = their_tokens.into_iter().map(token_facts).collect();
     if yours.iter().all(|c| c.commander) {
         return Err("Your deck has no cards to play with yet.".into());
     }
@@ -70,7 +78,16 @@ pub async fn playtest_start(
         return Err("The opponent's deck has no cards to play with yet.".into());
     }
     let (game, step) = tauri::async_runtime::spawn_blocking(move || {
-        on_engine_stack(move || Playtest::new(&yours, &theirs, seed, difficulty))
+        on_engine_stack(move || {
+            Playtest::new(
+                &yours,
+                &your_tokens,
+                &theirs,
+                &their_tokens,
+                seed,
+                difficulty,
+            )
+        })
     })
     .await
     .map_err(|e| e.to_string())???;

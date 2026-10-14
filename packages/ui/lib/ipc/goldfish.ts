@@ -99,8 +99,9 @@ export interface TokenOffer {
   /** phase's preset id, which `createToken` takes back. */
   preset: string;
   name: string;
-  /** The deck's card that makes it. */
+  /** The deck's card that makes it, or empty for a token the reader added to the deck by hand. */
   source: string;
+  /** The printing the reader set for the token in the deck, or else phase's preset's. */
   cardId: string | null;
 }
 

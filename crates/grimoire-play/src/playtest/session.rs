@@ -35,7 +35,6 @@ use engine::ai_support::{has_meaningful_priority_action, legal_actions};
 use engine::game::combat::AttackTarget;
 use engine::game::engine::apply;
 use engine::game::mana_sources::max_mana_yield;
-use engine::game::token_presets::known_token_presets;
 use engine::game::turn_control::authorized_submitters;
 use engine::game::{
     install_card_db, load_and_hydrate_decks, resolve_deck_list, start_game_with_starting_player,
@@ -58,6 +57,7 @@ use serde_json::Value;
 
 use crate::cards::{self, CardFacts};
 use crate::session::{game_card, place_of};
+use crate::tokens::{DeckTokens, TokenFacts};
 use crate::view::{GameCard, MulliganView, Place, Seat, TokenOffer};
 
 use super::view::{
@@ -129,6 +129,8 @@ pub struct Playtest {
     commanders: HashSet<(PlayerId, String)>,
     mulligans: u8,
     tokens: Vec<TokenOffer>,
+    /// Each seat's deck's tokens in the printings the reader set, which a token is drawn by.
+    deck_tokens: HashMap<PlayerId, DeckTokens>,
     started: PlayerId,
     ai_seats: HashSet<PlayerId>,
     ai_configs: HashMap<PlayerId, AiConfig>,
@@ -156,10 +158,14 @@ pub struct Playtest {
 impl Playtest {
     /// A new game of `you` (the reader's deck as it stands) against `opponent`, played by the AI
     /// at `difficulty`. `seed` is the shuffle, the coin flip for who plays first (its lowest bit:
-    /// even, the reader), and the AI's dice. Answers with the game at the reader's opening hand.
+    /// even, the reader), and the AI's dice. `your_tokens` and `their_tokens` are each deck's
+    /// tokens in the printings the reader set, which a token is offered and drawn by. Answers with
+    /// the game at the reader's opening hand.
     pub fn new(
         you: &[CardFacts],
+        your_tokens: &[TokenFacts],
         opponent: &[CardFacts],
+        their_tokens: &[TokenFacts],
         seed: u64,
         difficulty: Difficulty,
     ) -> Result<(Self, PlaytestStep), String> {
@@ -232,26 +238,11 @@ impl Playtest {
             .filter(|(seat, _)| *seat == YOU)
             .map(|(_, n)| n.as_str())
             .collect();
-        let mut tokens: Vec<TokenOffer> = known_token_presets()
-            .iter()
-            .filter_map(|preset| {
-                let source = preset
-                    .source_card_names
-                    .iter()
-                    .find(|n| deck_names.contains(n.as_str()))?;
-                Some(TokenOffer {
-                    preset: preset.id.clone(),
-                    name: preset.body.display_name.clone(),
-                    source: source.clone(),
-                    card_id: preset
-                        .token_image_ref
-                        .as_ref()
-                        .map(|r| r.scryfall_id.clone()),
-                })
-            })
-            .collect();
-        tokens.sort_by(|a, b| a.name.cmp(&b.name).then(a.source.cmp(&b.source)));
-        tokens.dedup_by(|a, b| a.name == b.name && a.source == b.source);
+        let deck_tokens = HashMap::from([
+            (YOU, DeckTokens::new(your_tokens)),
+            (AI, DeckTokens::new(their_tokens)),
+        ]);
+        let tokens = deck_tokens[&YOU].offers(&deck_names);
 
         let level = match difficulty {
             Difficulty::VeryEasy => AiDifficulty::VeryEasy,
@@ -268,6 +259,7 @@ impl Playtest {
             commanders,
             mulligans: 0,
             tokens,
+            deck_tokens,
             started,
             ai_seats: HashSet::from([AI]),
             ai_configs: HashMap::from([(
@@ -596,6 +588,12 @@ impl Playtest {
         self.printings
             .get(&id)
             .map(|p| p.card_id.clone())
+            .or_else(|| {
+                o.is_token
+                    .then(|| self.deck_tokens.get(&o.owner))
+                    .flatten()
+                    .and_then(|t| t.printing_of(o.token_image_ref.as_ref(), &o.name))
+            })
             .or_else(|| o.token_image_ref.as_ref().map(|r| r.scryfall_id.clone()))
             .or_else(|| self.by_name.get(&(o.owner, o.name.clone())).cloned())
     }

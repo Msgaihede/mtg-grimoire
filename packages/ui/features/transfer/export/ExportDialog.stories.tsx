@@ -259,6 +259,8 @@ function wishRow(card: ReturnType<typeof printing>, over: Partial<WishRow> = {})
     // No other wish for this oracle card. Same reason as `folderId` above: unread here, and
     // required by the type.
     elsewhere: 0,
+    ownedExact: 0,
+    ownedOther: 0,
     notes: null,
     needsReview: null,
     updatedAt: 1_786_266_000,

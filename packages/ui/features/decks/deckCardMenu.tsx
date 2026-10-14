@@ -301,10 +301,9 @@ export interface DeckCardMenuDeps {
    * **It takes no `copies`, and that asymmetry is the write's rather than an omission.** The two
    * rows above *create* cardboard, so the number is the whole of what they need; this one moves
    * cardboard that exists, so what it can take is decided by what the binder actually holds —
-   * the surface reads the plan and either pulls the one candidate or opens
-   * `PullFromCollectionDialog`, which is the prompt and which words the empty case itself. Every
-   * picked row that is short arrives at once under a picked set, and the dialog opens over all of
-   * them if any one needs the reader.
+   * the surface opens `PullFromCollectionDialog`, which is the prompt, shows the source each row
+   * would take (even a lone one — issue #987) and words the empty case itself. Every picked row
+   * that is short arrives at once under a picked set, and the dialog opens over all of them.
    *
    * Optional, on {@link quickAdd}'s terms.
    */

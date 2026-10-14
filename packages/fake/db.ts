@@ -7706,7 +7706,30 @@ function elsewhereWishes(db: FakeDb, w: FakeWish): number {
   return db.wishlistEntries.filter((o) => o.id !== w.id && o.oracleId === w.oracleId).length;
 }
 
+/**
+ * What the collection holds of a wish's card, split by whether the printing answers the wish —
+ * `wishlist.rs`' `owned_exact` and `owned_other` (issue #988). Every finish, condition and
+ * folder; an any-printing wish counts the whole card as exact, and an orphan with no oracle id
+ * counts only its pinned printing.
+ */
+function ownedForWish(db: FakeDb, w: FakeWish): { exact: number; other: number } {
+  let exact = 0;
+  let other = 0;
+  for (const e of db.collectionEntries) {
+    if (w.cardId !== null && e.cardId === w.cardId) {
+      exact += e.quantity;
+      continue;
+    }
+    if (w.oracleId === null) continue;
+    if (cardById(db, e.cardId)?.oracleId !== w.oracleId) continue;
+    if (w.cardId === null) exact += e.quantity;
+    else other += e.quantity;
+  }
+  return { exact, other };
+}
+
 function toWishRow(db: FakeDb, w: FakeWish, mp: MarketplaceId): WishRow {
+  const owned = ownedForWish(db, w);
   const card = wishCard(db, w);
   return {
     id: w.id,
@@ -7737,6 +7760,8 @@ function toWishRow(db: FakeDb, w: FakeWish, mp: MarketplaceId): WishRow {
     // disagree about what one copy of one printing costs this wish.
     unitPrice: wishPriceAt(db, card, w.preferredFinish, mp),
     elsewhere: elsewhereWishes(db, w),
+    ownedExact: owned.exact,
+    ownedOther: owned.other,
     notes: w.notes,
     needsReview: w.needsReview,
     updatedAt: w.updatedAt,
@@ -26572,7 +26597,11 @@ export function scannerHandlers(db: FakeDb) {
      */
     scanner_set_filters: (args: { filters: ScanFilters }): void => {
       const f = args.filters;
-      const empty = f.sets.length === 0 && f.released_from === null && f.released_to === null;
+      const empty =
+        f.sets.length === 0 &&
+        f.released_from === null &&
+        f.released_to === null &&
+        f.exclude_promos !== true;
       if (empty) return;
       if (db.fault === "scannerMissing") throw refuse(FILTERS_NEED_NAMES);
       if (f.sets.some((s) => s.toLowerCase() === "zzz")) throw refuse(NO_PRINTING_MATCHES);
