@@ -38,11 +38,13 @@ import {
 import { ConfirmDialog } from "@grimoire/ui/features/settings/ConfirmDialog";
 import { plural } from "@grimoire/ui/lib/counts";
 import { ipcError, type ScannerTrayRow } from "@grimoire/ui/lib/ipc";
+import { notify } from "@grimoire/ui/lib/notifications";
 import { cn } from "@grimoire/ui/lib/utils";
 import { ReceiptBar } from "../deck/receipt";
 import { useListReceipt } from "../lists/receipt";
 import { navigate } from "../router";
 import { CameraBox } from "../scanner/CameraBox";
+import { HistorySheet } from "../scanner/HistorySheet";
 import { MatchLine } from "../scanner/MatchLine";
 import { OptionsSheet } from "../scanner/OptionsSheet";
 import { ScanControls } from "../scanner/ScanControls";
@@ -63,8 +65,9 @@ import { CREATE_DECK_FLOOR } from "./parts";
  * **`destination` is this page filing somewhere else** — a side of a trade, from the sheet that
  * mounts it over the Trade page (`TrayDestination`). Absent, which is the Scanner tab, nothing
  * below differs from before the prop. With one, Add hands the ready rows to the destination and
- * wears its words, and the folder and *Create deck…* are not drawn. The tray is the same stored
- * row, so cards already in it are in the list, and a line above the tray says so.
+ * wears its words, and the folder, *Create deck…*, *Archive* and *Scan history* are not drawn.
+ * The tray is the same stored row, so cards already in it are in the list, and a line above the
+ * tray says so.
  */
 export function ScannerPage({ destination }: { destination?: TrayDestination }) {
   const elsewhere = useScannerElsewhere();
@@ -185,9 +188,13 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   useRefusedElsewhere(loop.error);
 
   const { folderId, folderList } = useTrayFolder(prefs.folderId, loaded, update);
+  // Archive (issue #989) is the commit's plan into the scan history instead, and shares its
+  // in-flight state and its one refusal slot — the footer's alert says either press's refusal.
   const {
     commit,
     committing,
+    archive,
+    archiving,
     error: commitError,
   } = useTrayCommit({
     tray,
@@ -234,6 +241,23 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
       },
     );
   };
+
+  /**
+   * *Archive*: the rows an Add would take, kept in the scan history and filed nowhere. **One
+   * toast, in the desktop's words** — the tray empties under the reader and the cards are not in
+   * the collection, so the toast is what says where to find them again. No receipt line: there is
+   * nothing to take back, and the toast already says it. A refusal is the footer's alert, as an
+   * Add's is.
+   */
+  const onArchive = () => {
+    void archive().then((kept) => {
+      if (kept === null) return;
+      notify.success(`Archived ${plural(kept.copies, "card")} to Scan history`);
+    });
+  };
+  // The scan history's sheet, and the press that opened it, for the caret.
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const historyOpener = useRef<HTMLElement | null>(null);
 
   // A refusal to reset has somewhere to go: the line over the picture, cleared by the next press.
   const [resetError, setResetError] = useState<string | null>(null);
@@ -414,6 +438,18 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
               clearOpener.current = opener;
               setClearing(tray.latest());
             }}
+            // The archive and its history are the Scanner tab's own record: over a trade the page
+            // is already a sheet, and files somewhere else (the footer hides both for one too).
+            onArchive={destination === undefined ? onArchive : undefined}
+            archiving={destination === undefined && archiving}
+            onHistory={
+              destination === undefined
+                ? (opener) => {
+                    historyOpener.current = opener;
+                    setHistoryOpen(true);
+                  }
+                : undefined
+            }
           />
         </div>
       </div>
@@ -469,6 +505,15 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
         will leave the tray without being added to {destination?.name ?? "your collection"}. Cards
         you scan while this is open stay.
       </ConfirmDialog>
+
+      <HistorySheet
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        onDismiss={() => {
+          setHistoryOpen(false);
+          historyOpener.current?.focus();
+        }}
+      />
 
       {/* The shared dialog, mounted bare: its controls take a finger's size from the shared
           recipes, so it needs no floor reached in from here as the desktop's New deck does. */}

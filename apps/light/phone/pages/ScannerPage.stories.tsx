@@ -219,6 +219,57 @@ export const FolderSheet: Story = {
 };
 
 /**
+ * The tray's other acts, behind the footer's `⋯`: *Archive* (issue #989) — the rows Add would
+ * take, kept in the scan history and filed nowhere — *Create deck…*, *Clear all…*, and the way
+ * into the *Scan history*. Each refused act stays drawn and says why on its second line.
+ *
+ * Here a printing is still unpicked, so the deck is refused in words while Archive is not: it
+ * goes, and the plan's sentence about the printing is said over the footer, as it is for Add.
+ */
+export const TrayActions: Story = {
+  render: () => <Refused tray={[NEEDS_A_FINISH_ROW, ...TRAY_ROWS]} />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(await canvas.findByRole("button", { name: "Tray actions" }));
+    const sheet = await canvas.findByRole("dialog", { name: "Scanned cards" });
+    const rows = within(sheet)
+      .getAllByRole("button")
+      .map((row) => row.querySelector("span.truncate")?.textContent)
+      .filter((label) => label !== undefined);
+    await expect(rows).toEqual(["Archive", "Create deck…", "Clear all…", "Scan history"]);
+    await expect(within(sheet).getByRole("button", { name: "Archive" })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+  },
+};
+
+/**
+ * The scan history, opened from the tray's `⋯` over a world with three batches (`scanHistory`):
+ * newest first, each with its cover, when and how many, and where it went — and one of them
+ * drilled into, its cards read-only under its *Rename* and *Delete…*. The desktop's dialog's
+ * reads and words, as a sheet's pages.
+ */
+export const ScanHistory: Story = {
+  parameters: { fake: { seed: "scanHistory" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(await canvas.findByRole("button", { name: "Tray actions" }));
+    await userEvent.click(
+      within(await canvas.findByRole("dialog", { name: "Scanned cards" })).getByRole("button", {
+        name: "Scan history",
+      }),
+    );
+    const sheet = await canvas.findByRole("dialog", { name: "Scan history" });
+    const list = await within(sheet).findByRole("list", { name: "Scans" });
+    await expect(within(list).getAllByRole("button")).toHaveLength(3);
+    await userEvent.click(within(list).getByRole("button", { name: /^Bob's binder/ }));
+    const batch = await within(sheet).findByRole("region", { name: "Bob's binder" });
+    await expect(within(batch).getByText("4 cards · 3 printings")).toBeInTheDocument();
+    await expect(within(batch).getByRole("button", { name: "Delete…" })).toBeInTheDocument();
+  },
+};
+
+/**
  * The scanner's data absent — the state a light install starts in, since it does not carry the
  * bundle and the reading models inside its binary.
  *
