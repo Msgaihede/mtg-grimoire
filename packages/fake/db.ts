@@ -303,6 +303,9 @@ import type {
   TradeSource,
   TradeStatus,
   TradeSummary,
+  ScanBatch,
+  ScanBatchStatus,
+  ScanBatchSummary,
   TransferImportMode,
   UpdateAsset,
   UpdateStatus,
@@ -1889,6 +1892,62 @@ export interface FakeTradeLine {
   unitPrice: number | null;
 }
 
+/**
+ * One row of `scan_batches` (user schema v65, issue #989): one press that put the Scanner's review
+ * tray away — **Add to collection** (`filed`) or **Archive** (`archived`, kept here and filed
+ * nowhere).
+ *
+ * **Local to the device**, {@link FakeTrade}'s rule: neither scan table syncs, because a batch
+ * describes what was in front of one device's camera. The collection rows an Add filed travel as
+ * every other collection row does, and this row owns none of them — deleting it takes nothing out
+ * of the collection.
+ *
+ * `lineCount`, `copies` and `coverCardId` are **not** stored: `scan_history.rs`' `SUMMARY_SQL`
+ * counts them off the lines on every read, so here {@link scanBatchSummary} does too, and a seed
+ * cannot write a header that disagrees with its own lines.
+ */
+export interface FakeScanBatch {
+  id: number;
+  /** `Scan {id}` until the reader renames it, and never blank: a blank rename is the default
+   *  back. */
+  name: string;
+  status: ScanBatchStatus;
+  /** Where an Add filed it — `null` for the root, and always `null` for an archive. */
+  folderId: number | null;
+  /** The folder's name **when the batch was written**, copied rather than joined, so a folder
+   *  renamed or deleted since still says where the cards went. `null` for the root and for an
+   *  archive. */
+  folderName: string | null;
+  /** The first line's condition as the press sent it, trimmed; `null` when it sent none. */
+  condition: string | null;
+  /** Unix seconds — the crate's `unixepoch()`. The list is ordered on it, newest first, with the
+   *  id breaking a tie. */
+  createdAt: number;
+}
+
+/**
+ * One row of `scan_batch_lines`: one printing in one finish, and how many copies the press put
+ * away — the press's items **folded** to that grain, in the order each first appeared.
+ *
+ * `name`, `setCode` and `collectorNumber` are copied off the printing when the batch is written,
+ * {@link FakeTradeLine}'s three columns and for its reason: a batch from last year still says what
+ * was scanned when a sync has dropped the printing it names. A read prefers the card's own words
+ * and falls back on these.
+ */
+export interface FakeScanBatchLine {
+  id: number;
+  batchId: number;
+  cardId: string;
+  name: string;
+  setCode: string;
+  collectorNumber: string;
+  finish: FakeEntry["finish"];
+  /** Always at least one: a press refuses a line of nothing before it writes. */
+  quantity: number;
+  /** The tray's order, with `id` as the tiebreak — an ordering, never an index. */
+  position: number;
+}
+
 export interface FakeDb {
   cards: FakeCard[];
   collectionEntries: FakeEntry[];
@@ -2456,6 +2515,16 @@ export interface FakeDb {
   /** `trade_lines` — keyed to the **trade**, so a row here is found through
    *  {@link FakeDb.trades} and goes when its trade does. */
   tradeLines: FakeTradeLine[];
+  /**
+   * `scan_batches` — every pile the Scanner's tray filed or archived, and **empty in every world
+   * but the `scanHistory` seed**: a batch is written by a reader's press on the tray
+   * ({@link scannerHandlers}' `scanner_tray_commit` and `scanner_tray_archive`) and by nothing
+   * else, so no collection implies one.
+   */
+  scanBatches: FakeScanBatch[];
+  /** `scan_batch_lines` — keyed to the **batch**, so a row here is found through
+   *  {@link FakeDb.scanBatches} and goes when its batch does. */
+  scanBatchLines: FakeScanBatchLine[];
   fault: Fault | null;
 }
 
@@ -3738,6 +3807,10 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // `trades` seed is the one world that has some.
     trades: [],
     tradeLines: [],
+    // No scan history, for the trades' reason: a batch is a press somebody made on the Scanner's
+    // tray, and the `scanHistory` seed is the one world in which somebody has.
+    scanBatches: [],
+    scanBatchLines: [],
     fault: null,
     ...init,
   };
@@ -13687,6 +13760,52 @@ export function readHandlers(db: FakeDb) {
     trade_get: (args: { id: number }): Trade | null => {
       const trade = db.trades.find((t) => t.id === args.id);
       return trade ? toTrade(db, trade) : null;
+    },
+
+    /**
+     * `scan_history::list_batches` — every batch, **newest first**: `createdAt` descending and
+     * the id breaking a tie, which in the crate is two presses inside one second of `unixepoch()`.
+     * Each row's counts and cover are read off its lines ({@link scanBatchSummary}), never stored.
+     */
+    scan_history_list: (): ScanBatchSummary[] =>
+      throughJson(
+        [...db.scanBatches]
+          .sort((a, b) => b.createdAt - a.createdAt || b.id - a.id)
+          .map((batch) => scanBatchSummary(db, batch)),
+      ),
+
+    /**
+     * `scan_history::get_batch` — one batch with its lines in the tray's order, or **`null`** for
+     * an id nothing answers to: a batch deleted in another window is a state the page draws, not
+     * an error it reports — `trade_get`'s rule.
+     *
+     * A line reads its printing **live** off `cards` where it still resolves and from the three
+     * words it remembered where it does not; the four facts it never remembered (`oracleId`,
+     * `setName`, `rarity`, `layout`) are `null` for a printing that has gone — the crate's
+     * `LEFT JOIN cards` and its `coalesce`s.
+     */
+    scan_history_get: (args: { id: number }): ScanBatch | null => {
+      const batch = db.scanBatches.find((b) => b.id === args.id);
+      if (!batch) return null;
+      return throughJson({
+        summary: scanBatchSummary(db, batch),
+        lines: linesOfScanBatch(db, batch.id).map((line) => {
+          const card = cardById(db, line.cardId);
+          return {
+            id: line.id,
+            cardId: line.cardId,
+            oracleId: card?.oracleId ?? null,
+            name: card?.name ?? line.name,
+            setCode: card?.setCode ?? line.setCode,
+            setName: card?.setName ?? null,
+            collectorNumber: card?.collectorNumber ?? line.collectorNumber,
+            rarity: card?.rarity ?? null,
+            layout: card?.layout ?? null,
+            finish: line.finish,
+            quantity: line.quantity,
+          };
+        }),
+      });
     },
   } satisfies Record<string, CommandHandler>;
 }
@@ -25279,6 +25398,35 @@ export function writeHandlers(db: FakeDb) {
       db.tradeLines = db.tradeLines.filter((l) => l.tradeId !== args.id);
       db.trades = db.trades.filter((t) => t.id !== args.id);
     },
+
+    /**
+     * `scan_history::rename_batch`. Trimmed, and **a blank name is the one the batch was made
+     * with**, `Scan {id}` — `trade_rename`'s rule: clearing the field is how a reader asks for the
+     * default back. A batch that is gone is refused in {@link SCAN_BATCH_GONE}'s words, the
+     * crate's `changed == 0`.
+     *
+     * The two scan-history writes record **no undo step**, and {@link NO_UNDO_STEP} does not list
+     * them, the trade writes' position exactly: {@link journalled} files a step only where a write
+     * names a deck, and a batch names none.
+     */
+    scan_history_rename: (args: { id: number; name: string }): void => {
+      refuseIfBusy(db);
+      const batch = db.scanBatches.find((b) => b.id === args.id);
+      if (!batch) throw refuse(SCAN_BATCH_GONE);
+      batch.name = nonblank(args.name) ?? `Scan ${batch.id}`;
+    },
+
+    /**
+     * `scan_history::delete_batch` — the batch and its lines. **The collection is not touched**:
+     * the history records what was put away and owns none of the rows an Add filed. A batch that
+     * is already gone is a success, `trade_delete`'s rule, so a second press — or another
+     * window's — is not an error.
+     */
+    scan_history_delete: (args: { id: number }): void => {
+      refuseIfBusy(db);
+      db.scanBatchLines = db.scanBatchLines.filter((l) => l.batchId !== args.id);
+      db.scanBatches = db.scanBatches.filter((b) => b.id !== args.id);
+    },
   } satisfies Record<string, CommandHandler>;
 }
 
@@ -26571,6 +26719,169 @@ export const SCAN_MIN_FRAMES = 5;
  */
 export const SCAN_NOT_ON = "Sending scans is not turned on for this device.";
 
+/* ------------------------------------------------------------------ scan history ------ */
+
+/** `scan_history::GONE`, verbatim — a rename naming a batch deleted here or in another window.
+ *  `scan_history_get` answers `null` for one instead, and `scan_history_delete` succeeds. */
+export const SCAN_BATCH_GONE = "that scan is not in your history any more";
+/** `scan_history::NOTHING_TO_KEEP`, verbatim. Neither press reaches it — both record nothing for
+ *  an empty pile rather than refusing it — so it is the sentence for a caller's mistake, kept for
+ *  {@link prepareScanBatch}'s completeness. */
+export const SCAN_NOTHING_TO_KEEP = "there are no scanned cards to keep";
+/** `scan_history::NO_SUCH_CARD`, verbatim. An Add has refused such a line already, in the
+ *  import's own words; this is Archive's. */
+export const SCAN_NO_SUCH_CARD = "no card with that id is in the card database";
+/** `scan_history::NO_COPIES`, verbatim — a line for fewer than one copy. */
+export const SCAN_NO_COPIES = "a scanned card needs a quantity of at least one";
+/** `scan_history::UNKNOWN_FINISH`, verbatim — a finish that is not one of the collection's
+ *  three. A tray row whose finish was never decided is put away by neither press. */
+export const SCAN_UNKNOWN_FINISH = "a scanned card needs a finish before it can be kept";
+
+/** The collection's three finishes, `schema::FINISHES` — the only words a batch line holds. */
+const SCAN_FINISHES: readonly FakeEntry["finish"][] = ["nonfoil", "foil", "etched"];
+
+/**
+ * A batch {@link prepareScanBatch} has checked and not yet written: its lines folded and each
+ * one's printing read, its folder named and its condition chosen. Nothing in it has touched the
+ * store, which is what lets a press refuse **after** asking every question and still leave the
+ * world exactly as it was.
+ */
+interface PreparedScanBatch {
+  status: ScanBatchStatus;
+  folderId: number | null;
+  folderName: string | null;
+  condition: string | null;
+  lines: {
+    card: Pick<FakeCard, "id" | "name" | "setCode" | "collectorNumber">;
+    finish: FakeEntry["finish"];
+    quantity: number;
+  }[];
+}
+
+/**
+ * The first half of `scan_history::record_batch`: **every refusal it makes, in its order, and no
+ * write.**
+ *
+ * The press's items are folded to the history's grain — one line per printing and finish, in the
+ * order each first appears — checking each item as it is reached: no items at all
+ * ({@link SCAN_NOTHING_TO_KEEP}), fewer than one copy ({@link SCAN_NO_COPIES}), then a finish
+ * that is not one of the three ({@link SCAN_UNKNOWN_FINISH}). Only once the fold is whole is each
+ * line's printing looked up ({@link SCAN_NO_SUCH_CARD}) — the crate's loop after `folded`, so a
+ * pile holding both a zero and an unknown card is refused for the zero.
+ *
+ * `folderId` is kept for a `filed` batch only — an archive files nowhere, whatever it was handed —
+ * and its name is read off `collection_folders` **now**, so the batch still says where the cards
+ * went after the folder is renamed or deleted. The condition is the **first** item's, trimmed,
+ * because a press files at one.
+ */
+function prepareScanBatch(
+  db: FakeDb,
+  items: CollectionImportItem[],
+  status: ScanBatchStatus,
+  folderId: number | null,
+): PreparedScanBatch {
+  if (items.length === 0) throw refuse(SCAN_NOTHING_TO_KEEP);
+  const folded: { cardId: string; finish: FakeEntry["finish"]; quantity: number }[] = [];
+  for (const item of items) {
+    if (item.quantity < 1) throw refuse(SCAN_NO_COPIES);
+    const finish = SCAN_FINISHES.find((f) => f === item.finish);
+    if (finish === undefined) throw refuse(SCAN_UNKNOWN_FINISH);
+    const twin = folded.find((l) => l.cardId === item.cardId && l.finish === finish);
+    if (twin) twin.quantity += item.quantity;
+    else folded.push({ cardId: item.cardId, finish, quantity: item.quantity });
+  }
+  const lines = folded.map((line) => {
+    const card = cardById(db, line.cardId);
+    if (card === null) throw refuse(SCAN_NO_SUCH_CARD);
+    return { card, finish: line.finish, quantity: line.quantity };
+  });
+  const filedInto = status === "filed" ? folderId : null;
+  return {
+    status,
+    folderId: filedInto,
+    folderName:
+      filedInto === null
+        ? null
+        : (db.collectionFolders.find((f) => f.id === filedInto)?.name ?? null),
+    condition: nonblank(items[0].condition),
+    lines,
+  };
+}
+
+/**
+ * The second half of `scan_history::record_batch`: write a {@link prepareScanBatch}'s batch and
+ * answer its id. **It cannot refuse** — every question was asked before it — which is the fake's
+ * stand-in for the crate's savepoint: a press calls it last, after everything else that could
+ * fail, so no refusal leaves a header without its lines or a batch without its press.
+ *
+ * Named `Scan {id}` after its own id, `trade_create`'s `Trade {id}` rule, and stamped one past
+ * the newest batch so a press made in a story lands at the top of the list.
+ */
+function writeScanBatch(db: FakeDb, prepared: PreparedScanBatch): number {
+  const id = nextId(db.scanBatches);
+  db.scanBatches.push({
+    id,
+    name: `Scan ${id}`,
+    status: prepared.status,
+    folderId: prepared.folderId,
+    folderName: prepared.folderName,
+    condition: prepared.condition,
+    createdAt: scanStamp(db),
+  });
+  prepared.lines.forEach((line, position) => {
+    db.scanBatchLines.push({
+      id: nextId(db.scanBatchLines),
+      batchId: id,
+      cardId: line.card.id,
+      name: line.card.name,
+      setCode: line.card.setCode,
+      collectorNumber: line.card.collectorNumber,
+      finish: line.finish,
+      quantity: line.quantity,
+      position,
+    });
+  });
+  return id;
+}
+
+/**
+ * {@link stamp} for `scan_batches.created_at` — {@link tradeStamp}'s shape and its reason: the
+ * list is ordered on it, so a batch written in a story has to land above every batch the seed laid
+ * down, and `stamp` alone reads none of them. One past the newest batch, and never below `stamp`'s
+ * own answer — which an Add has just raised, since its import stamps the rows it files.
+ */
+function scanStamp(db: FakeDb): number {
+  return db.scanBatches.reduce((n, b) => Math.max(n, b.createdAt + 1), stamp(db));
+}
+
+/** A batch's lines in the order they are read in: `position`, then `id`. */
+function linesOfScanBatch(db: FakeDb, batchId: number): FakeScanBatchLine[] {
+  return db.scanBatchLines
+    .filter((l) => l.batchId === batchId)
+    .sort((a, b) => a.position - b.position || a.id - b.id);
+}
+
+/**
+ * `scan_history::SUMMARY_SQL` — the header's columns and the three figures counted off its lines
+ * on every read: how many lines, every line's quantity added, and the first line's printing for a
+ * picture beside the row (`null` for a batch with no lines, which only a hand-made world holds).
+ */
+function scanBatchSummary(db: FakeDb, batch: FakeScanBatch): ScanBatchSummary {
+  const lines = linesOfScanBatch(db, batch.id);
+  return {
+    id: batch.id,
+    name: batch.name,
+    status: batch.status,
+    folderId: batch.folderId,
+    folderName: batch.folderName,
+    condition: batch.condition,
+    lineCount: lines.length,
+    copies: lines.reduce((n, l) => n + l.quantity, 0),
+    coverCardId: lines[0]?.cardId ?? null,
+    createdAt: batch.createdAt,
+  };
+}
+
 /** A copy through JSON, which is what `app_meta` stores — so a story holding the object it was
  *  handed cannot reach back into the row, and a row cannot hold anything JSON would not. */
 function throughJson<T>(value: T): T {
@@ -26589,6 +26900,12 @@ function throughJson<T>(value: T): T {
  * are `app_meta` rows, read and written whole here and nowhere else. Neither is on
  * {@link writeHandlers}, so `db.test.ts`' busy sweep does not walk them — but both writes still
  * answer `busy`, because the crate's go through `sync::with_write`.
+ *
+ * **The tray's two presses also write the scan history** (issue #989): `scanner_tray_commit`
+ * records a `filed` batch beside its import and `scanner_tray_archive` an `archived` one, into
+ * {@link FakeDb.scanBatches} and {@link FakeDb.scanBatchLines} — the only writers those two
+ * tables have. Reading, renaming and deleting a batch are ordinary table commands, on
+ * {@link readHandlers} and {@link writeHandlers} beside the trades'.
  */
 export function scannerHandlers(db: FakeDb) {
   // The session, which is the host's and not a table's: where the pile has got to, and the
@@ -26696,6 +27013,15 @@ export function scannerHandlers(db: FakeDb) {
      * filed leave the stored tray in the same write, so an undo that took the copies back would
      * leave the scanned cards in neither place. Which is why this runs the import's body rather
      * than the command, which would file one.
+     *
+     * **And the pile goes into the scan history in the same write** (issue #989): one `filed`
+     * batch of the items the import took, folder and all, recorded inside the import's
+     * transaction in the crate — so the history can never name cards the collection did not take
+     * nor miss a pile it did. A commit of no items records nothing; a refused import records
+     * nothing. The batch's own refusals come after the import's, the crate's order — and an
+     * import that succeeded has already refused everything the batch would (a zero, an unknown
+     * finish, an unknown card) in its own words, so here they are a backstop that puts the
+     * collection back exactly as the crate's rollback would.
      */
     scanner_tray_commit: (args: {
       items: CollectionImportItem[];
@@ -26705,12 +27031,49 @@ export function scannerHandlers(db: FakeDb) {
       refuseIfBusy(db);
       if (args.remaining.length > MAX_TRAY_ROWS) throw refuse(TRAY_IS_FULL);
       if (args.remaining.some((row) => row.quantity < 1)) throw refuse(TRAY_ROW_NEEDS_A_COPY);
+      const before = db.collectionEntries.map((e) => ({ ...e }));
       const outcome: ImportCommitOutcome = {
         ...importIntoCollection(db, { items: args.items, mode: "add", folderId: args.folderId }),
         undoId: null,
       };
+      let batch: PreparedScanBatch | null = null;
+      try {
+        if (args.items.length > 0) {
+          batch = prepareScanBatch(db, args.items, "filed", args.folderId ?? null);
+        }
+      } catch (e) {
+        db.collectionEntries = before;
+        throw e;
+      }
+      if (batch !== null) writeScanBatch(db, batch);
       db.scannerTray = throughJson(args.remaining);
       return outcome;
+    },
+    /**
+     * `scanner::scanner_tray_archive` — Archive: the tray's rows **into the scan history and
+     * nowhere else**, and what is left of the tray into its `app_meta` row, in one write. The
+     * trade page's *put away without touching the collection*, for a pile the reader wants a
+     * record of and does not own — so the collection is not read for a folder and not written at
+     * all.
+     *
+     * `scanner_tray_commit`'s shape with the import taken out, and its order: `remaining` is
+     * refused on `store_tray`'s terms first, then the batch's own refusals in
+     * {@link prepareScanBatch}'s order, and only then is anything written — so any refusal leaves
+     * the history and the stored tray exactly as they were. Answers the new batch's id, or
+     * **`null` for an archive of no items**, which records nothing and only stores the tray.
+     */
+    scanner_tray_archive: (args: {
+      items: CollectionImportItem[];
+      remaining: ScannerTrayRow[];
+    }): number | null => {
+      refuseIfBusy(db);
+      if (args.remaining.length > MAX_TRAY_ROWS) throw refuse(TRAY_IS_FULL);
+      if (args.remaining.some((row) => row.quantity < 1)) throw refuse(TRAY_ROW_NEEDS_A_COPY);
+      const batch =
+        args.items.length === 0 ? null : prepareScanBatch(db, args.items, "archived", null);
+      const id = batch === null ? null : writeScanBatch(db, batch);
+      db.scannerTray = throughJson(args.remaining);
+      return id;
     },
   } satisfies Record<string, CommandHandler>;
 }

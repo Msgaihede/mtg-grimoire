@@ -50,6 +50,9 @@
  * * **`trades`** — `starter` with five trades: two open, two finished and one archived without
  *   finishing, and the only world the Trade page has anything to list in. See {@link tradesSeed}
  *   for what it adds to the collection and the wishlist so the open one's lines are true.
+ * * **`scanHistory`** — `starter` with three Scanner batches: two filed into the collection (one
+ *   at the root, one into `Binder`) and one archived under a name the reader typed, and the only
+ *   world the scan history has anything to list in. See {@link scanHistorySeed}.
  *
  * **Every seed builds its rows fresh on every call**, and that is load-bearing rather than
  * tidy: the writes in `db.ts` mutate row objects in place (`existing.quantity += …`), so a
@@ -99,6 +102,8 @@ import type {
   FakeDeckTokenPrinting,
   FakeEntry,
   FakeRelayShare,
+  FakeScanBatch,
+  FakeScanBatchLine,
   FakeTrade,
   FakeTradeLine,
   FakeWish,
@@ -125,7 +130,8 @@ export type SeedName =
   | "shared"
   | "waiting"
   | "tokenPlan"
-  | "trades";
+  | "trades"
+  | "scanHistory";
 
 /* ------------------------------------------------------------------ row builders ------- */
 
@@ -3479,6 +3485,97 @@ function tradesSeed(): FakeDb {
   return db;
 }
 
+/**
+ * `starter` with three batches in its scan history (issue #989) — every state the history's list
+ * and an opened batch have to draw, and the only world that holds any.
+ *
+ * | id | name | status | shape |
+ * | --- | --- | --- | --- |
+ * | 3 | `Bob's binder` | archived | three printings, four copies, a name the reader typed |
+ * | 2 | `Scan 2` | filed | one slab, into `Binder` |
+ * | 1 | `Scan 1` | filed | two printings, five copies, at the collection's root |
+ *
+ * **The two filed batches name copies `starter` really holds**, where they say they went: four
+ * nonfoil Urza's Sagas (`mh2 259`) and the etched Japanese Lightning Bolt (`sta 105`) at the
+ * root, and the PSA-graded foil Consecrated Sphinx (`mp2 8`) in `Binder`. A batch owns none of those rows (deleting it takes nothing out of the collection),
+ * but a filed batch beside a collection that never held its cards would stage a past the app
+ * cannot have had.
+ *
+ * **The archived batch names cards the reader does not own**, which is what Archive is for: a
+ * friend's binder, scanned for a record and filed nowhere — so its `folderId` and `folderName`
+ * are `null`, as every archive's are. Its name is the one thing the reader changed, so the list
+ * shows both kinds of name side by side.
+ *
+ * Created in id order on fixed days ({@link on}'s rule — the list prints a date), so newest-first
+ * is 3 down to 1. The lines copy their three words off the printing, as `record_batch` copies
+ * them.
+ */
+function scanHistorySeed(): FakeDb {
+  const db = starterSeed();
+  const batch = (
+    id: number,
+    name: string,
+    status: FakeScanBatch["status"],
+    folderId: number | null,
+    createdAt: number,
+  ): FakeScanBatch => ({
+    id,
+    name,
+    status,
+    folderId,
+    // Read off the seed's own folder, as `record_batch` reads it when the batch is written — so
+    // the row cannot name a folder the world does not hold.
+    folderName:
+      folderId === null
+        ? null
+        : (db.collectionFolders.find((f) => f.id === folderId)?.name ?? null),
+    condition: "NM",
+    createdAt,
+  });
+  db.scanBatches = [
+    batch(1, "Scan 1", "filed", null, on(9, 12)),
+    // `Binder` — a drawer of the reader's own.
+    batch(2, "Scan 2", "filed", 1, on(9, 26)),
+    batch(3, "Bob's binder", "archived", null, on(10, 4)),
+  ];
+
+  const nextLine = ids();
+  const positions = new Map<number, number>();
+  /** One line, positioned in the order written per batch, its words copied off the printing. */
+  const line = (
+    batchId: number,
+    card: FakeCard,
+    finish: FakeScanBatchLine["finish"],
+    quantity: number,
+  ): FakeScanBatchLine => {
+    const position = positions.get(batchId) ?? 0;
+    positions.set(batchId, position + 1);
+    return {
+      id: nextLine(),
+      batchId,
+      cardId: card.id,
+      name: card.name,
+      setCode: card.setCode,
+      collectorNumber: card.collectorNumber,
+      finish,
+      quantity,
+      position,
+    };
+  };
+  db.scanBatchLines = [
+    // --- Scan 1: filed at the root — `starter`'s own root rows of both printings.
+    line(1, printing("mh2", "259"), "nonfoil", 4),
+    line(1, printing("sta", "105"), "etched", 1),
+    // --- Scan 2: filed into `Binder` — the slab `starter` keeps there.
+    line(2, printing("mp2", "8"), "foil", 1),
+    // --- Scan 3: archived. A friend's pile, none of it the reader's.
+    line(3, printing("emn", "15"), "nonfoil", 2),
+    line(3, printing("znr", "90"), "nonfoil", 1),
+    line(3, printing("iko", "226"), "nonfoil", 1),
+  ];
+  return db;
+}
+
 /** {@link ids}, continuing from the rows a world already holds — what a seed built on top of
  *  another hands its own rows, and what `nextId` would hand the first write of a story. */
 function idsAfter(rows: readonly { id: number }[]): () => number {
@@ -3518,6 +3615,8 @@ export function seed(name: SeedName): FakeDb {
       return tokenPlanSeed();
     case "trades":
       return tradesSeed();
+    case "scanHistory":
+      return scanHistorySeed();
     default:
       return starterSeed();
   }

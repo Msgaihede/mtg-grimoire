@@ -12,9 +12,14 @@ const scannerTrayCommit =
     (items: CollectionImportItem[], folderId: number | null, remaining: ScannerTrayRow[]) => Promise<ImportCommitOutcome>
   >();
 
+const scannerTrayArchive =
+  vi.fn<(items: CollectionImportItem[], remaining: ScannerTrayRow[]) => Promise<number | null>>();
+
 vi.mock("@/lib/ipc", async (original) => ({
   ...(await original<typeof import("@/lib/ipc")>()),
   ipc: {
+    scannerTrayArchive: (items: CollectionImportItem[], remaining: ScannerTrayRow[]) =>
+      scannerTrayArchive(items, remaining),
     scannerTray: () => scannerTray(),
     setScannerTray: (rows: ScannerTrayRow[]) => setScannerTray(rows),
     scannerTrayCommit: (items: CollectionImportItem[], folderId: number | null, remaining: ScannerTrayRow[]) =>
@@ -112,6 +117,7 @@ beforeEach(() => {
   scannerTray.mockReset().mockResolvedValue([]);
   setScannerTray.mockReset().mockResolvedValue(undefined);
   scannerTrayCommit.mockReset().mockResolvedValue(OUTCOME);
+  scannerTrayArchive.mockReset().mockResolvedValue(12);
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -421,6 +427,116 @@ describe("useTray", () => {
       await advance(TRAY_QUIET_MS);
       expect(setScannerTray).toHaveBeenCalledWith(TRAY_ROWS.slice(1));
     });
+  });
+});
+
+/**
+ * **Archive is the commit's job with another command** (issue #989): one shared body in the hook,
+ * so these prove the guarantees reach it — the queue, the lines built at send, the two
+ * `remaining`s, a refusal keeping every row — and that it settles the history and nothing owned.
+ */
+describe("useTray's archive", () => {
+  const LINE: CollectionImportItem = {
+    cardId: "c",
+    quantity: 1,
+    finish: "nonfoil",
+    condition: "NM",
+  };
+
+  it("waits for the tray write on the wire, then sends the lines and what is left as they are then", async () => {
+    const wire = backend();
+    scannerTray.mockResolvedValue(TRAY_ROWS);
+    const { result } = mount();
+    await advance(0);
+    act(() => result.current.setRows(TRAY_ROWS.slice(0, 3)));
+    await advance(TRAY_QUIET_MS);
+    expect(setScannerTray, "the premise: a tray write is on the wire").toHaveBeenCalledTimes(1);
+
+    const pressed = result.current.latest();
+    const seen: ScannerTrayRow[][] = [];
+    let kept!: Promise<number | null>;
+    act(() => {
+      kept = result.current.archive(
+        (sent) => {
+          seen.push(sent);
+          return [LINE];
+        },
+        (latest) => latest.filter((row) => !pressed.includes(row)),
+      );
+    });
+    await advance(0);
+    expect(
+      scannerTrayArchive,
+      "the archive went out beside a write on the wire",
+    ).not.toHaveBeenCalled();
+
+    const landed: ScannerTrayRow = { ...TRAY_ROWS[3], key: "landed-while-queued" };
+    act(() => result.current.setRows([landed, ...pressed]));
+    await wire.settleNewestFirst();
+    await expect(kept).resolves.toBe(12);
+    expect(seen).toEqual([[landed, ...pressed]]);
+    expect(scannerTrayArchive).toHaveBeenCalledWith([LINE], [landed]);
+    expect(result.current.rows).toEqual([landed]);
+    expect(scannerTrayCommit).not.toHaveBeenCalled();
+  });
+
+  it("sends nothing and answers null when the lines find nothing left to keep", async () => {
+    scannerTray.mockResolvedValue(TRAY_ROWS);
+    const { result } = mount();
+    await advance(0);
+    let kept: number | null | undefined;
+    await act(async () => {
+      kept = await result.current.archive(
+        () => [],
+        () => [],
+      );
+    });
+    expect(kept).toBeNull();
+    expect(scannerTrayArchive).not.toHaveBeenCalled();
+    expect(result.current.rows).toEqual(TRAY_ROWS);
+  });
+
+  it("keeps every row when the archive is refused", async () => {
+    scannerTray.mockResolvedValue(TRAY_ROWS);
+    scannerTrayArchive.mockRejectedValueOnce(BUSY);
+    const { result } = mount();
+    await advance(0);
+    let refusal: unknown = null;
+    await act(async () => {
+      await result.current
+        .archive(
+          () => [LINE],
+          () => [],
+        )
+        .catch((e: unknown) => {
+          refusal = e;
+        });
+    });
+    expect(refusal).toBe(BUSY);
+    expect(result.current.rows).toEqual(TRAY_ROWS);
+  });
+
+  it("settles the scan history once it lands — and so does a commit, which records a filed batch", async () => {
+    scannerTray.mockResolvedValue(TRAY_ROWS);
+    const qc = client();
+    const invalidate = vi.spyOn(qc, "invalidateQueries");
+    const { result } = mount(qc);
+    await advance(0);
+
+    await act(async () => {
+      await result.current.archive(
+        () => [LINE],
+        () => TRAY_ROWS.slice(1),
+      );
+    });
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    expect(invalidate).toHaveBeenLastCalledWith({ queryKey: ["scanHistory"] });
+
+    await act(async () => {
+      await result.current.commit([LINE], null, () => TRAY_ROWS.slice(2));
+    });
+    expect(invalidate).toHaveBeenCalledTimes(2);
+    expect(invalidate).toHaveBeenLastCalledWith({ queryKey: ["scanHistory"] });
   });
 });
 

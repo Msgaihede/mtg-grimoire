@@ -204,6 +204,11 @@ export const TABLE_KEYS: Readonly<Record<string, readonly QueryKey[]>> = {
   error_log: [["errorLog"]],
   muted_tags: [["tags-muted"], ["tag-search"], ["tag-children"], ["tags"]],
   price_snapshots: [],
+  // The Scanner's history (user schema v65), read under the one `["scanHistory"]` root by
+  // `features/scanner/history/useScanHistory`. Written by the tray's Add and Archive, and by the
+  // history's own rename and delete. Neither table syncs between devices.
+  scan_batch_lines: [["scanHistory"]],
+  scan_batches: [["scanHistory"]],
   // The home page's sticky notes, and **one key** because one query reads the whole table: the
   // list is small, every one of the four writes changes its order or its contents, and
   // `useStickyNotes` invalidates exactly this root in the window that made them. It is its own

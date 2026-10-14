@@ -162,6 +162,10 @@ pub fn surface_of(table: &str) -> Option<Dirty> {
         // the `collection_entries` and `wishlist_entries` arms above — the rows it writes
         // are those tables', and the hook reports them as it reports any other write.
         "trades" | "trade_lines" => None,
+        // **`None`, for the trades' reason** (user schema v65). A scan batch is a record of what
+        // the tray put away, not anything a mirrored file quotes. What an Add files reaches the
+        // mirror anyway, as the `collection_entries` rows it writes.
+        "scan_batches" | "scan_batch_lines" => None,
         _ => None,
     }
 }
@@ -1158,6 +1162,12 @@ mod tests {
                 // change no file shows. It is `WITHOUT ROWID` and could not reach the hook anyway,
                 // which is not a decision; this is.
                 "price_snapshots",
+                // The Scanner's history (user schema v65): a record of what the tray put away,
+                // which no mirrored file quotes. Rowid tables the hook sees, so `surface_of`
+                // says `None` for them in an arm of its own; an Add's cards are mirrored as the
+                // collection rows they become.
+                "scan_batch_lines",
+                "scan_batches",
                 "sets",
                 // The reader's own prose on the home page (user schema v46). It is neither a
                 // deck nor the collection, and none of the seven mirrored formats has a

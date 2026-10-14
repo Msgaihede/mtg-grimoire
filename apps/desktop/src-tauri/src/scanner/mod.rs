@@ -281,6 +281,25 @@ pub async fn scanner_tray_commit(
         .map_err(|e| format!("the collection could not be written: {e}"))?
 }
 
+/// Keep the tray's rows in the scan history without filing them, and store what is left of the
+/// tray, as one write — see [`tray_archive`]. Through `with_write`: the collection is not
+/// touched. Answers the batch's id, or `None` when there was nothing to keep.
+///
+/// **Admitted first and held until it settles**, [`scanner_tray_commit`]'s reason exactly.
+#[tauri::command]
+pub async fn scanner_tray_archive(
+    state: tauri::State<'_, Arc<AppState>>,
+    items: Vec<crate::collection::CollectionImportItem>,
+    remaining: Vec<ScannerTrayRow>,
+    webview: tauri::Webview,
+) -> Result<Option<i64>, String> {
+    let _lease = state.scanner.admit(webview.label())?;
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || archive_tray(&state, &items, &remaining))
+        .await
+        .map_err(|e| format!("the scan history could not be written: {e}"))?
+}
+
 /// What this install lacks of the scanner's three files, and what fetching them costs — the
 /// core's `scanner_assets::owed`. **Nothing, on a build that embeds them** ([`compiled`]), which
 /// is every release: the page draws no offer and nothing is ever requested. A build without them

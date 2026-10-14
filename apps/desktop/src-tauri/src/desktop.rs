@@ -19,7 +19,7 @@ use crate::{
     deck_quick_add, deck_theory, deck_todos, deck_tokens, deck_undo, deckpane, decksort, errors,
     export, goldfish, home, images, import, index, listview, markcolors, marketplace,
     marketplace_feed, mirror, nav, new_printings, panelwidth, paths, playtest, price_history,
-    recent_cards, reset, scanner, schema, scryfall, search, searchopen, searchwidth,
+    recent_cards, reset, scan_history, scanner, schema, scryfall, search, searchopen, searchwidth,
     set_completion, share, shelffolds, stackhide, startup, startview, sticky_notes, sync,
     sync_engine, sync_pair, tags, trade, upcoming_sets, update, value_history, window, wishlist,
     wishlist_folders, wishlist_optimize, zoom,
@@ -664,6 +664,13 @@ pub fn run() {
             trade::trade_reopen,
             trade::trade_duplicate,
             trade::trade_delete,
+            // The Scanner's history (user schema v64): two reads on the read-only connection and
+            // two writes that touch nothing but the history. A batch is *written* by the tray's
+            // two presses, `scanner_tray_commit` and `scanner_tray_archive`, above.
+            scan_history::scan_history_list,
+            scan_history::scan_history_get,
+            scan_history::scan_history_rename,
+            scan_history::scan_history_delete,
             // The Recently viewed widget: the read is infallible by signature, and the write is
             // the card modal's, which ignores a BUSY — a missed entry costs one tile.
             recent_cards::recent_cards,
@@ -776,6 +783,7 @@ pub fn run() {
             scanner::scanner_tray,
             scanner::set_scanner_tray,
             scanner::scanner_tray_commit,
+            scanner::scanner_tray_archive,
             // The scanner's three files where the binary does not carry them: what this install
             // owes, and the download a reader's press starts. A release build embeds all three,
             // owes nothing and so is never offered it. See the core's `scanner_assets`.

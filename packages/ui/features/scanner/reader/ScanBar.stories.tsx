@@ -128,6 +128,20 @@ export const Default: Story = {
   },
 };
 
+/**
+ * The Scanner view's bar, with the way into the scan history (issue #989) at its far end beside
+ * the Developer switch. A host that passes no `onHistory` — the scanner over a trade — draws none.
+ */
+export const WithHistory: Story = {
+  args: { onHistory: fn() },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+    const history = canvas.getByRole("button", { name: "History" });
+    await userEvent.click(history);
+    await expect(args.onHistory).toHaveBeenCalledWith(history);
+  },
+};
+
 export const StartAndStop: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);

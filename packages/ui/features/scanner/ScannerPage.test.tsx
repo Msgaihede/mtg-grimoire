@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   CardSummary,
   CollectionFolder,
+  ScanBatchSummary,
   ScannerAssetsOwed,
   ScannerPrefs,
   ScannerSubmitted,
@@ -88,6 +89,13 @@ vi.mock("@/lib/ipc", async (orig) => {
         leftInFolders: 0,
         undoId: null,
       })),
+      // Archive (issue #989): the batch's id. The history's reads answer an empty history, so a
+      // test that opens the dialog says what is in it.
+      scannerTrayArchive: vi.fn(async (): Promise<number | null> => 12),
+      scanHistoryList: vi.fn(async (): Promise<ScanBatchSummary[]> => []),
+      scanHistoryGet: vi.fn(async () => null),
+      scanHistoryRename: vi.fn(async () => {}),
+      scanHistoryDelete: vi.fn(async () => {}),
       // Mocked so a regression back to it answers rather than reaching the real core — and so the
       // commit tests can say it is never called.
       collectionImportCommit: vi.fn(async () => ({
@@ -327,6 +335,11 @@ const COMMANDS = [
   ipc.scannerTray,
   ipc.setScannerTray,
   ipc.scannerTrayCommit,
+  ipc.scannerTrayArchive,
+  ipc.scanHistoryList,
+  ipc.scanHistoryGet,
+  ipc.scanHistoryRename,
+  ipc.scanHistoryDelete,
   ipc.collectionImportCommit,
   ipc.collectionFolderList,
 ];
@@ -1190,6 +1203,88 @@ describe("ScannerPage", () => {
     await user.click(await within(tray()).findByRole("button", { name: "Add 5 to collection" }));
     await waitFor(() => expect(ipc.scannerTrayCommit).toHaveBeenCalledTimes(1));
     expect(vi.mocked(ipc.scannerTrayCommit).mock.calls[0]?.[1]).toBeNull();
+  });
+
+  /**
+   * *Archive* (issue #989): the rows an Add would take, into the scan history and **not** the
+   * collection — one `scanner_tray_archive`, the tray that is left stored with it, one toast.
+   */
+  it("archives the known-finish rows without filing them, keeps the one that needs a finish, and says so once", async () => {
+    refused();
+    const known = TRAY_ROWS.slice(1); // 3 + 1 + 1 copies
+    vi.mocked(ipc.scannerTray).mockResolvedValue([NEEDS_A_FINISH_ROW, ...known]);
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("region", { name: "Scanned cards" });
+
+    await user.click(await within(tray()).findByRole("button", { name: "Archive" }));
+    await waitFor(() => expect(ipc.scannerTrayArchive).toHaveBeenCalledTimes(1));
+    expect(ipc.scannerTrayArchive).toHaveBeenCalledWith(importItems(known, "NONE"), [
+      NEEDS_A_FINISH_ROW,
+    ]);
+    expect(ipc.scannerTrayCommit).not.toHaveBeenCalled();
+    expect(ipc.collectionImportCommit).not.toHaveBeenCalled();
+    await waitFor(() => expect(within(tray()).getAllByRole("listitem")).toHaveLength(1));
+    await waitFor(() => expect(useNotifications.getState().notices).toHaveLength(1));
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Archived 5 cards to Scan history",
+      tone: "success",
+    });
+  });
+
+  it("keeps every row and says the sentence when the archive is refused", async () => {
+    refused();
+    const rows = TRAY_ROWS.slice(1);
+    vi.mocked(ipc.scannerTray).mockResolvedValue(rows);
+    vi.mocked(ipc.scannerTrayArchive).mockRejectedValueOnce("The database is busy.");
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("region", { name: "Scanned cards" });
+
+    await user.click(await within(tray()).findByRole("button", { name: "Archive" }));
+    expect(await within(tray()).findByText("The database is busy.")).toBeInTheDocument();
+    expect(within(tray()).getAllByRole("listitem")).toHaveLength(rows.length);
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Couldn't archive the scanned cards",
+      body: "The database is busy.",
+      tone: "error",
+    });
+  });
+
+  it("stops an archive in the plan's words while a card waits on a printing, sending nothing", async () => {
+    refused();
+    vi.mocked(ipc.scannerTray).mockResolvedValue(TRAY_ROWS);
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("region", { name: "Scanned cards" });
+
+    await user.click(await within(tray()).findByRole("button", { name: "Archive" }));
+    expect(
+      await within(tray()).findByText(/still waiting for a printing to be picked/),
+    ).toBeInTheDocument();
+    expect(ipc.scannerTrayArchive).not.toHaveBeenCalled();
+  });
+
+  /** The history's dialog is the page's, mounted outside `@container/scan` like *Clear all…*'s. */
+  it("opens the scan history from the bar, outside the view's container, and hands the caret back", async () => {
+    refused();
+    const user = userEvent.setup();
+    const { container } = mount();
+    await screen.findByRole("region", { name: "Scanned cards" });
+
+    const history = screen.getByRole("button", { name: "History" });
+    await user.click(history);
+    const dialog = await screen.findByRole("dialog", { name: "Scan history" });
+    expect(container.querySelector(".\\@container\\/scan")?.contains(dialog)).toBe(false);
+    expect(
+      await within(dialog).findByText(
+        "Scans you add to your collection or archive will appear here.",
+      ),
+    ).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: "Close scan history" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(history).toHaveFocus();
   });
 
   it("sends mode: exact on the next frame once Exact is pressed", async () => {
@@ -2336,6 +2431,9 @@ describe("ScannerPage with a destination", () => {
     expect(screen.queryByRole("button", { name: /^Folder:/ })).toBeNull();
     expect(screen.queryByRole("button", { name: "Create deck…" })).toBeNull();
     expect(screen.queryByRole("switch", { name: "Developer" })).toBeNull();
+    // The scan history is the Scanner view's own: no way into it, and no way to add to it.
+    expect(screen.queryByRole("button", { name: "History" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Archive" })).toBeNull();
     expect(screen.queryByRole("region", { name: "Match" })).toBeNull();
     expect(screen.queryByRole("region", { name: "Tiers" })).toBeNull();
     // The rest of the bar is the scanner's own.

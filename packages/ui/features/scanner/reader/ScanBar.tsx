@@ -1,5 +1,5 @@
 import { useId, type ReactNode } from "react";
-import { Bug, Check, ChevronDown, Play, Square } from "lucide-react";
+import { Bug, Check, ChevronDown, History, Play, Square } from "lucide-react";
 import { AnchoredPopup } from "@/components/AnchoredPopup";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import type { DropdownOption } from "@/components/Dropdown/types";
@@ -58,6 +58,14 @@ export interface ScanBarProps {
    * Scanner view would then open with. Absent is the Scanner view's bar, switch and all.
    */
   developerSwitch?: boolean;
+  /**
+   * *History* was pressed — the scan history's dialog (issue #989), which the page mounts outside
+   * its `@container/scan` box for the `@container` rule. `opener` is the button, for the caret to
+   * come back to. **Absent draws no button**: the scanner opened over a trade passes none, for the
+   * reason it draws no Developer switch — the history is the Scanner view's, and a dialog opened
+   * from inside another dialog is a stack the reader did not ask for.
+   */
+  onHistory?: (opener: HTMLElement) => void;
 }
 
 // The two modes' words and the unrestricted filter are `readerText.ts`'s — shared with the light
@@ -115,6 +123,7 @@ export function ScanBar({
   developer,
   onDeveloper,
   developerSwitch = true,
+  onHistory,
 }: ScanBarProps) {
   const summary = filterSummary(filters);
   const conditionWords =
@@ -192,7 +201,29 @@ export function ScanBar({
         )}
       </BarPopover>
 
-      {developerSwitch && <DeveloperSwitch on={developer} onChange={onDeveloper} />}
+      {/* The row's far end: the history, then the way back to the panels. `ml-auto` on the pair
+          rather than on each, so the two sit together at the right whichever of them is drawn. */}
+      {(onHistory !== undefined || developerSwitch) && (
+        <div className="ml-auto flex items-center gap-2">
+          {onHistory !== undefined && (
+            <button
+              type="button"
+              onClick={(e) => onHistory(e.currentTarget)}
+              aria-haspopup="dialog"
+              className={cn(
+                FILTER_CONTROL,
+                "inline-flex items-center gap-1.5 px-2.5",
+                "border-border text-dim hover:border-accent hover:text-accent",
+                FOCUS,
+              )}
+            >
+              <History className="size-3.5 shrink-0" aria-hidden="true" />
+              History
+            </button>
+          )}
+          {developerSwitch && <DeveloperSwitch on={developer} onChange={onDeveloper} />}
+        </div>
+      )}
     </div>
   );
 }

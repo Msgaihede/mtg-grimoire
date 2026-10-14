@@ -487,6 +487,62 @@ describe("TrayPanel", () => {
   });
 
   /**
+   * *Archive* (issue #989) sits beside *Clear all…* and on its rules: a press is the page's to
+   * act on, greyed and never hidden on an empty tray or while either press is in flight.
+   */
+  it("asks the page to archive the tray, and writes no rows itself", async () => {
+    const user = userEvent.setup();
+    const onRows = vi.fn();
+    const onArchive = vi.fn();
+    wrap(<TrayPanel {...props({ onRows, onArchive })} />);
+    const archive = screen.getByRole("button", { name: "Archive" });
+    expect(archive).not.toHaveAttribute("aria-disabled");
+    await user.click(archive);
+    expect(onArchive).toHaveBeenCalledTimes(1);
+    expect(onRows).not.toHaveBeenCalled();
+  });
+
+  it("offers Archive on a tray still waiting on a pick — the press says why it stops", async () => {
+    const user = userEvent.setup();
+    const onArchive = vi.fn();
+    const waiting = rowFromDecision(ambiguous, { finish: "nonfoil" }, 3, "waiting");
+    wrap(<TrayPanel {...grid({ rows: [waiting, newer], onArchive })} />);
+    await user.click(screen.getByRole("button", { name: "Archive" }));
+    expect(onArchive).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses Archive on an empty tray and while either press is in flight, drawn rather than hidden", async () => {
+    const user = userEvent.setup();
+    const onArchive = vi.fn();
+    const onCommit = vi.fn();
+    const empty = wrap(<TrayPanel {...props({ rows: [], onArchive })} />);
+    expect(screen.getByRole("button", { name: "Archive" })).toHaveAttribute("aria-disabled", "true");
+    empty.unmount();
+
+    const filing = wrap(<TrayPanel {...props({ committing: true, onArchive })} />);
+    await user.click(screen.getByRole("button", { name: "Archive" }));
+    filing.unmount();
+
+    wrap(<TrayPanel {...props({ archiving: true, onArchive, onCommit })} />);
+    const archive = screen.getByRole("button", { name: "Archive" });
+    expect(archive).toHaveAttribute("aria-busy", "true");
+    await user.click(archive);
+    // Add and Clear all are held too: the archive is putting these very rows away.
+    await user.click(screen.getByRole("button", { name: /^Add \d+ to collection/ }));
+    expect(screen.getByRole("button", { name: "Clear all…" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(onArchive).not.toHaveBeenCalled();
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("draws no Archive when the page offers none", () => {
+    wrap(<TrayPanel {...props()} />);
+    expect(screen.queryByRole("button", { name: "Archive" })).not.toBeInTheDocument();
+  });
+
+  /**
    * **An edit is applied to the tray as it is, not as this render drew it.** The pump writes a card
    * between two renders; a stepper pressed in that gap used to write the tray back from `rows`, and
    * the card just scanned went with it.
@@ -843,6 +899,12 @@ describe("TrayPanel filing somewhere that is not the collection", () => {
     expect(unfinished).toHaveAttribute("aria-disabled", "true");
     await userEvent.click(unfinished);
     expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("draws no Archive — the scan history is the Scanner view's own", () => {
+    wrap(<TrayPanel {...props({ destination, onArchive: vi.fn() })} />);
+    expect(screen.queryByRole("button", { name: "Archive" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Clear all…" })).toBeInTheDocument();
   });
 
   it("draws no folder to file into, and asks for no folder list", async () => {

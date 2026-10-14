@@ -1,6 +1,7 @@
 import { useId, useMemo, useRef, useState } from "react";
 import { motion } from "motion/react";
 import {
+  Archive,
   ArrowDown,
   ChevronUp,
   Folder,
@@ -96,6 +97,15 @@ export interface TrayPanelProps {
    */
   onClearAll: (opener: HTMLElement) => void;
   /**
+   * *Archive* was pressed: the rows an Add would take, into the scan history and **not** into the
+   * collection (issue #989) — the trade page's Archive, for a pile the reader wants a record of
+   * and does not own. Absent draws no button, and so does a {@link destination}: an archive is the
+   * Scanner view's own history, and a side of a trade is not a pile to keep a record of here.
+   */
+  onArchive?: () => void;
+  /** The archive is in flight — {@link committing}'s counterpart, and greys the same controls. */
+  archiving?: boolean;
+  /**
    * *Add card…* was pressed — a card the camera will not read, to be searched for by hand (issue
    * #978). A request, like *Clear all…*, for the same `@container` reason: the page mounts the
    * dialog and pauses the scanner under it. Absent draws no button.
@@ -114,6 +124,13 @@ export interface TrayPanelProps {
    *  the tray held cards before this surface opened. `null` or absent draws nothing. */
   notice?: string | null;
 }
+
+/**
+ * What *Archive* does, in its tooltip — the one thing a reader cannot tell from the word, since
+ * the trade page's Archive is the only other one in the app and a trade is not the collection.
+ */
+export const ARCHIVE_TIP =
+  "Keep these scans in Scan history without adding them to your collection";
 
 /** The collection's own word for its top level — `AddToCollection`'s `rootLabel`, one tree over. */
 const ROOT_LABEL = "Collection";
@@ -269,6 +286,8 @@ export function TrayPanel({
   layout,
   onLayout,
   onClearAll,
+  onArchive,
+  archiving = false,
   onAddCard,
   destination,
   notice = null,
@@ -283,7 +302,10 @@ export function TrayPanel({
   // The order `commitPlan` refuses in, so the drawing and the press agree.
   const refusal = addRefusal(rows);
   const deckRefused = deckRefusal(rows);
-  const refused = refusal !== null || committing;
+  // Add and Archive put the same rows away, so either one in flight holds every press that would
+  // act on them — the commit's own state, widened.
+  const busy = committing || archiving;
+  const refused = refusal !== null || busy;
   const deciding = rows.some(needsDecision);
 
   // The walk's cursor: the row the last press landed on, by key — `nextDecisionKey` says why a key.
@@ -308,7 +330,11 @@ export function TrayPanel({
 
   // Nothing to clear, or a commit about to file these very rows — the Add button's two states that
   // are not about printings or finishes, since a card waiting on either can still be thrown away.
-  const clearRefused = rows.length === 0 || committing;
+  const clearRefused = rows.length === 0 || busy;
+  // **Archive is refused on Clear all's terms, not Add's**: greyed on an empty tray and while
+  // either press is in flight, and otherwise pressable — a row waiting on a printing is said by
+  // the press, in the plan's sentence above the rows, exactly as it would be for an Add.
+  const archiveShown = onArchive !== undefined && destination === undefined;
   const { priceOf, currency, marketplaceLabel } = useTrayPrices(rows, destination?.marketplace);
   const money: Money = { currency, marketplaceLabel };
 
@@ -396,7 +422,7 @@ export function TrayPanel({
               if (clearRefused) return;
               onClearAll(e.currentTarget);
             }}
-            {...tip(committing ? null : rows.length === 0 ? EMPTY_REASON : null)}
+            {...tip(busy ? null : rows.length === 0 ? EMPTY_REASON : null)}
             className={cn(
               "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs text-dim",
               "hover:text-destructive",
@@ -409,6 +435,40 @@ export function TrayPanel({
             <Trash2 className="size-3.5" aria-hidden="true" />
             Clear all…
           </button>
+          {/* **Beside *Clear all…* and drawn on its rules** — greyed, never hidden, on an empty
+              tray, so a press that has just archived everything leaves the caret on a control
+              that is still there. No question first: nothing is thrown away, the rows go to the
+              history where the reader can read them back, and the toast says where. */}
+          {archiveShown && (
+            <button
+              type="button"
+              aria-disabled={clearRefused || undefined}
+              aria-busy={archiving || undefined}
+              onClick={() => {
+                if (clearRefused) return;
+                onArchive();
+              }}
+              {...tip(busy ? null : rows.length === 0 ? EMPTY_REASON : ARCHIVE_TIP)}
+              className={cn(
+                "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs text-dim",
+                "hover:text-text",
+                PRESS,
+                "aria-disabled:cursor-not-allowed aria-disabled:opacity-45 aria-disabled:hover:text-dim",
+                "aria-disabled:active:scale-100",
+                FOCUS,
+              )}
+            >
+              {archiving ? (
+                <LoaderCircle
+                  className="size-3.5 animate-spin motion-reduce:animate-none"
+                  aria-hidden="true"
+                />
+              ) : (
+                <Archive className="size-3.5" aria-hidden="true" />
+              )}
+              Archive
+            </button>
+          )}
           <LayoutToggle layout={layout} onLayout={onLayout} />
         </div>
       </header>
@@ -501,12 +561,12 @@ export function TrayPanel({
         {onCreateDeck && (
           <button
             type="button"
-            aria-disabled={deckRefused !== null || committing || undefined}
+            aria-disabled={deckRefused !== null || busy || undefined}
             onClick={(e) => {
-              if (deckRefused !== null || committing) return;
+              if (deckRefused !== null || busy) return;
               onCreateDeck(e.currentTarget);
             }}
-            {...tip(committing ? null : deckRefused)}
+            {...tip(busy ? null : deckRefused)}
             className={cn(
               "inline-flex h-9 items-center rounded-md border border-border px-3 text-sm hover:border-accent hover:text-accent",
               PRESS,
@@ -532,7 +592,7 @@ export function TrayPanel({
           }}
           // The reason while there is one; nothing while the write is in flight, where the spinner
           // already says what is happening and a sentence about emptiness would be untrue.
-          {...tip(committing ? null : refusal)}
+          {...tip(busy ? null : refusal)}
           className={cn(
             "ml-auto inline-flex h-9 shrink-0 items-center gap-2 rounded-md border border-accent px-4 text-sm text-accent",
             "hover:bg-accent hover:text-accent-fg",

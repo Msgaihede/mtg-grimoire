@@ -155,6 +155,9 @@ pub mod recent_cards;
 /// behind the capture guard, because every device derives them for itself.
 pub mod reconcile;
 pub mod reset;
+/// **Scan history** — every pile the scanner's tray filed or archived, kept as a record a reader
+/// can go back to. User schema v64; neither of its tables syncs.
+pub mod scan_history;
 /// **The scanner's session glue**: the `card-scanner` session behind a lazy load, the one-window
 /// lease, the reader's scanner prefs and review tray. `State.scanner` holds it.
 pub mod scanner;

@@ -830,6 +830,16 @@ export const scannerCommands = {
     remaining: ScannerTrayRow[],
   ) => invoke<ImportCommitOutcome>("scanner_tray_commit", { items, folderId, remaining }),
   /**
+   * `scanner::scanner_tray_archive`. The tray's rows **into the scan history and nowhere else**
+   * and `remaining` stored as the tray, in one write — the trade page's Archive, for a pile the
+   * reader wants a record of and does not own. Answers the batch's id, or `null` when `items` was
+   * empty and nothing was kept. Refuses as {@link ipc.setScannerTray} does, and for a line naming
+   * a printing the card database lacks or no finish; a refusal leaves the history and the stored
+   * tray both as they were.
+   */
+  scannerTrayArchive: (items: CollectionImportItem[], remaining: ScannerTrayRow[]) =>
+    invoke<number | null>("scanner_tray_archive", { items, remaining }),
+  /**
    * `scanner_assets::owed`, as `scanner_assets`. Which of the scanner's three files this install
    * lacks, and what fetching them costs. **Empty where the binary carries them** — a desktop
    * release build — and rejected on a host that cannot fetch them, so a page draws its offer

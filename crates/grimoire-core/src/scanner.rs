@@ -995,6 +995,11 @@ fn valid_tray(rows: &[ScannerTrayRow]) -> Result<(), String> {
 /// [`store_tray`]'s terms **before** the import starts, so a tray that could not be stored costs
 /// no rolled-back import; any refusal from either half leaves the collection and the stored tray
 /// exactly as they were.
+///
+/// **And the pile goes into the scan history in the same write** (issue #989): one
+/// [`crate::scan_history::FILED`] batch of the lines the import took, recorded inside the
+/// import's transaction, so the history can never name cards the collection did not take nor
+/// miss a pile it did. A commit of no lines records nothing.
 pub fn tray_commit(
     conn: &Connection,
     items: &[crate::collection::CollectionImportItem],
@@ -1003,7 +1008,41 @@ pub fn tray_commit(
 ) -> Result<crate::collection::ImportCommitOutcome, String> {
     valid_tray(remaining)?;
     crate::collection::commit_import_with(conn, items, "add", folder_id, |tx| {
+        if !items.is_empty() {
+            crate::scan_history::record_batch(tx, items, crate::scan_history::FILED, folder_id)?;
+        }
         store_tray(tx, remaining)
+    })
+}
+
+/// The tray's rows **into the scan history and nowhere else**, and what is left of the tray into
+/// `app_meta`, in one savepoint — Archive, the trade page's *put away without touching the
+/// collection* for a pile the reader wants a record of and does not own (issue #989).
+///
+/// [`tray_commit`]'s shape with the import taken out: `remaining` is refused on [`store_tray`]'s
+/// terms before anything is written, the batch's own refusals
+/// ([`crate::scan_history::record_batch`]) are made before it writes, and a refusal from either
+/// leaves the history and the stored tray as they were. Answers the batch's id, or `None` for an
+/// archive of no lines, which records nothing and only stores the tray.
+pub fn tray_archive(
+    conn: &Connection,
+    items: &[crate::collection::CollectionImportItem],
+    remaining: &[ScannerTrayRow],
+) -> Result<Option<i64>, String> {
+    valid_tray(remaining)?;
+    crate::db::in_savepoint(conn, "scanner_tray_archive", || {
+        let id = if items.is_empty() {
+            None
+        } else {
+            Some(crate::scan_history::record_batch(
+                conn,
+                items,
+                crate::scan_history::ARCHIVED,
+                None,
+            )?)
+        };
+        store_tray(conn, remaining)?;
+        Ok(id)
     })
 }
 
@@ -1200,6 +1239,22 @@ pub fn commit_tray(
     crate::collection_source::with_write_owned(state, |conn| {
         tray_commit(conn, items, folder_id, remaining)
     })
+}
+
+/// `scanner_tray_archive`'s work: the tray's rows into the scan history and what is left of the
+/// tray into `app_meta`, as one write — see [`tray_archive`]. Through `with_write`, the tray's own
+/// door: the collection is not touched, so the facet index has nothing to publish. A busy write
+/// connection answers [`crate::db::BUSY`] with nothing written.
+///
+/// **Admitted first and held until it settles by the caller**, [`commit_tray`]'s reason exactly:
+/// `remaining` is the tray written whole.
+#[track_caller]
+pub fn archive_tray(
+    state: &State,
+    items: &[crate::collection::CollectionImportItem],
+    remaining: &[ScannerTrayRow],
+) -> Result<Option<i64>, String> {
+    crate::state::with_write(state, |conn| tray_archive(conn, items, remaining))
 }
 
 #[cfg(test)]
@@ -1695,6 +1750,84 @@ mod tests {
             "the import committed before the tray was written"
         );
         assert_eq!(stored_tray(&conn), before);
+    }
+
+    fn batches(conn: &Connection) -> Vec<crate::scan_history::ScanBatchSummary> {
+        crate::scan_history::list_batches(conn).unwrap()
+    }
+
+    /// Issue #989: an Add records the pile it filed, in the same write — and a refused Add
+    /// records nothing, because the batch is inside the import's transaction.
+    #[test]
+    fn a_tray_commit_records_a_filed_batch_and_a_refused_one_records_nothing() {
+        let conn = pair_with_a_card();
+        let err = tray_commit(
+            &conn,
+            &[import_line("card-1", 1), import_line("no-such-card", 1)],
+            None,
+            &[],
+        )
+        .unwrap_err();
+        assert!(err.contains("no-such-card"), "{err}");
+        assert!(
+            batches(&conn).is_empty(),
+            "a refused Add left a batch behind"
+        );
+
+        tray_commit(&conn, &[], None, &[]).unwrap();
+        assert!(
+            batches(&conn).is_empty(),
+            "a commit of nothing records nothing"
+        );
+
+        tray_commit(&conn, &[import_line("card-1", 3)], None, &[]).unwrap();
+        let list = batches(&conn);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].status, crate::scan_history::FILED);
+        assert_eq!((list[0].line_count, list[0].copies), (1, 3));
+        assert_eq!(list[0].folder_id, None);
+    }
+
+    /// Archive keeps the pile in the history and out of the collection, and stores the tray
+    /// that is left in the same write; a refusal from either half writes neither.
+    #[test]
+    fn a_tray_archive_records_the_pile_and_files_nothing() {
+        let conn = pair_with_a_card();
+        store_tray(&conn, &[tray_row("taken", 2), tray_row("left", 1)]).unwrap();
+
+        let id = tray_archive(&conn, &[import_line("card-1", 2)], &[tray_row("left", 1)])
+            .unwrap()
+            .expect("a batch");
+        assert_eq!(copies(&conn), 0, "an archive filed into the collection");
+        assert_eq!(stored_tray(&conn), vec![tray_row("left", 1)]);
+        let batch = crate::scan_history::get_batch(&conn, id).unwrap().unwrap();
+        assert_eq!(batch.summary.status, crate::scan_history::ARCHIVED);
+        assert_eq!(batch.lines[0].name, "Test Card");
+
+        // A remaining tray `store_tray` would refuse, and a line the history would refuse.
+        let before = stored_tray(&conn);
+        assert_eq!(
+            tray_archive(&conn, &[import_line("card-1", 1)], &[tray_row("z", 0)]).unwrap_err(),
+            TRAY_ROW_NEEDS_A_COPY
+        );
+        assert_eq!(
+            tray_archive(&conn, &[import_line("no-such-card", 1)], &[]).unwrap_err(),
+            crate::scan_history::NO_SUCH_CARD
+        );
+        assert_eq!(
+            stored_tray(&conn),
+            before,
+            "a refused archive moved the tray"
+        );
+        assert_eq!(
+            batches(&conn).len(),
+            1,
+            "a refused archive left a batch behind"
+        );
+
+        assert_eq!(tray_archive(&conn, &[], &[]).unwrap(), None);
+        assert!(stored_tray(&conn).is_empty());
+        assert_eq!(batches(&conn).len(), 1);
     }
 
     #[test]

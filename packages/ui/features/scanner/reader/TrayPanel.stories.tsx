@@ -219,6 +219,46 @@ export const Committing: Story = {
 };
 
 /**
+ * *Archive* offered (issue #989): beside *Clear all…* in the header, on the plain Scanner only —
+ * the rows an Add would take go to the scan history instead of the collection. A press is the
+ * page's to act on.
+ */
+export const Archive: Story = {
+  args: { rows: TRAY_ROWS.filter((row) => row.choices.length === 0), onArchive: fn() },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+    const archive = canvas.getByRole("button", { name: "Archive" });
+    await expect(archive).not.toHaveAttribute("aria-disabled");
+    await userEvent.click(archive);
+    await expect(args.onArchive).toHaveBeenCalledTimes(1);
+  },
+};
+
+/** The archive under way: it spins, and it holds Add, *Clear all…* and itself — the same rows. */
+export const Archiving: Story = {
+  args: {
+    rows: TRAY_ROWS.filter((row) => row.choices.length === 0),
+    onArchive: fn(),
+    archiving: true,
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByRole("button", { name: "Archive" })).toHaveAttribute(
+      "aria-busy",
+      "true",
+    );
+    await expect(canvas.getByRole("button", { name: "Clear all…" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    await expect(canvas.getByRole("button", { name: /^Add \d+ to collection$/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  },
+};
+
+/**
  * The commit refused. One transaction, so nothing was filed and every row is still here — the
  * sentence sits above the footer it came from, and the rows it is about stay pressable.
  */

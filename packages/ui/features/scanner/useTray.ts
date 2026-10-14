@@ -9,6 +9,14 @@ import { refusalPasses } from "./verdictText";
 /** The cache entry the tray lives in. */
 const TRAY_KEY = ["scanner", "tray"] as const;
 
+/**
+ * The scan history's query root (`useScanHistory.ts`'s `SCAN_HISTORY_KEY`, spelled again here
+ * rather than imported so this hook does not pull the history's module into every surface that
+ * scans). Both presses that put the tray away write a batch into it — Add a `filed` one, inside
+ * `scanner_tray_commit`; Archive an `archived` one — so both settle it once they land.
+ */
+const SCAN_HISTORY_ROOT = ["scanHistory"] as const;
+
 /** Stable identity for "nothing scanned", so a consumer's memo does not see a new array each render. */
 const EMPTY: readonly ScannerTrayRow[] = [];
 
@@ -46,13 +54,13 @@ function queueFor(qc: QueryClient): WriteQueue {
  * **Whether this client's tray holds rows the store has not confirmed** — what `crossWindow.ts`
  * asks before it drops an idle tray on another window's `app_meta` change.
  *
- * The first two terms are a write that has not finished — queued or on the wire, commits included,
- * or waiting out its delay before the next try; the third is one that finished badly. A sync or
- * another window's lease keeps the first two true for as long as it lasts, because those refusals
- * are tried until the write lands. **The third is for a refusal no wait changes** — a row of
+ * The first two terms are a write that has not finished — queued or on the wire, commits and
+ * archives included, or waiting out its delay before the next try; the third is one that finished
+ * badly. A sync or another window's lease keeps the first two true for as long as it lasts,
+ * because those refusals are tried until the write lands. **The third is for a refusal no wait changes** — a row of
  * nothing, a tray past its limit — which gets one more try and then stops, with the cards still in
- * this cache and nowhere else: dropped then, they would simply be gone. It clears when a tray write
- * or a commit lands.
+ * this cache and nowhere else: dropped then, they would simply be gone. It clears when a tray write,
+ * a commit or an archive lands.
  */
 function hasUnsavedTray(qc: QueryClient): boolean {
   const queue = queues.get(qc);
@@ -128,6 +136,22 @@ export interface TrayState {
       remaining: (latest: ScannerTrayRow[]) => ScannerTrayRow[],
     ): Promise<ImportCommitOutcome | null>;
   };
+  /**
+   * The tray **into the scan history and nowhere else** through `scanner_tray_archive` (issue
+   * #989), with `remaining(latest)` stored as the tray in the same write — the trade page's
+   * Archive, for a pile the reader wants a record of and does not own.
+   *
+   * {@link TrayState.commit}'s guarantees, word for word, because it is the same queue and the same
+   * job: it waits behind any tray write on the wire, `items` is asked of the rows as they are when
+   * it goes out (and nothing left to keep sends nothing and answers `null`), `remaining` is asked
+   * then and again when it answers, and a rejection keeps every row and is the caller's to word.
+   * Answers the batch's id. **The collection is not touched**, so nothing owned is invalidated —
+   * only the history, which now holds one more batch.
+   */
+  archive: (
+    items: (sent: ScannerTrayRow[]) => CollectionImportItem[],
+    remaining: (latest: ScannerTrayRow[]) => ScannerTrayRow[],
+  ) => Promise<number | null>;
 }
 
 /**
@@ -141,8 +165,8 @@ export interface TrayState {
  * `staleTime` is `Infinity` too. Another window's `app_meta` change drops this entry once the view
  * has gone, and only once {@link hasUnsavedTray} says nothing in it is waiting to be stored.
  *
- * **Every write is single-flight, the commit included.** At most one `set_scanner_tray` or
- * `scanner_tray_commit` is on the wire; the next waits for it to settle, so they reach the backend
+ * **Every write is single-flight, the commit and the archive included.** At most one
+ * `set_scanner_tray`, `scanner_tray_commit` or `scanner_tray_archive` is on the wire; the next waits for it to settle, so they reach the backend
  * in the order they were asked for. Two tray writes racing could land old-after-new, and a tray
  * write that started before a commit and landed after it restored the rows the commit had just
  * filed — which the next launch offered again, and the next Add filed twice. A write asked for
@@ -266,22 +290,35 @@ export function useTray(): TrayState {
     [qc, write],
   );
 
-  const commit = useCallback(
-    (
+  /**
+   * **One job for both presses that put the tray away** — Add's `scanner_tray_commit` and
+   * Archive's `scanner_tray_archive` — so the guarantees `TrayState.commit` spells out cannot come
+   * to differ between them: queued behind whatever is on the wire, lines and `remaining` asked of
+   * the rows as they are when the write goes out, `remaining` asked again when it answers, and the
+   * tray written behind it only while there is still a tray here to write. `send` is the one
+   * command that differs; a lines function that finds nothing left to put away sends nothing and
+   * answers `null`.
+   *
+   * Both writes record a batch in the scan history, so a landed one settles its root.
+   */
+  const putAway = useCallback(
+    <T>(
       items: CollectionImportItem[] | ((sent: ScannerTrayRow[]) => CollectionImportItem[]),
-      folderId: number | null,
       remaining: (latest: ScannerTrayRow[]) => ScannerTrayRow[],
-    ) =>
+      send: (lines: CollectionImportItem[], rest: ScannerTrayRow[]) => Promise<T>,
+    ): Promise<T | null> =>
       enqueue(async () => {
         const sent = latest();
         // Lines asked for now rather than at the press: see `TrayState.commit`.
         const lines = typeof items === "function" ? items(sent) : items;
         if (typeof items === "function" && lines.length === 0) return null;
         const rest = remaining(sent);
-        const outcome = await ipc.scannerTrayCommit(lines, folderId, rest);
+        const outcome = await send(lines, rest);
         // The store holds `rest` now, whole: whatever an earlier refused write left unsaved is
         // settled by it or carried by the write below.
         queueFor(qc).refused = false;
+        // A batch was written beside the tray (`scan_history::record_batch`), in either press.
+        void qc.invalidateQueries({ queryKey: SCAN_HISTORY_ROOT });
         const now = qc.getQueryData<ScannerTrayRow[]>(TRAY_KEY);
         // The view has gone and its entry with it: the stored `rest` is the tray, and there is
         // nothing here to write behind it — `remaining([])` stored would empty it.
@@ -295,14 +332,33 @@ export function useTray(): TrayState {
             quietRef.current = null;
           }
         } else {
-          // Cards landed while it was on the wire: the tray without what the commit took, and
+          // Cards landed while it was on the wire: the tray without what the write took, and
           // written behind the reader like any other change.
           setRows(remaining(now));
         }
         return outcome;
       }),
     [enqueue, latest, qc, setRows],
+  );
+
+  const commit = useCallback(
+    (
+      items: CollectionImportItem[] | ((sent: ScannerTrayRow[]) => CollectionImportItem[]),
+      folderId: number | null,
+      remaining: (latest: ScannerTrayRow[]) => ScannerTrayRow[],
+    ) => putAway(items, remaining, (lines, rest) => ipc.scannerTrayCommit(lines, folderId, rest)),
+    [putAway],
   ) as TrayState["commit"];
+
+  const archive = useCallback<TrayState["archive"]>(
+    (items, remaining) =>
+      // `scanner_tray_archive` answers `null` itself for no lines, which `putAway` has already
+      // answered without sending — so `null` here is always "nothing was kept".
+      putAway(items, remaining, (lines, rest) => ipc.scannerTrayArchive(lines, rest)).then(
+        (id) => id ?? null,
+      ),
+    [putAway],
+  );
 
   useEffect(
     () => () => {
@@ -321,5 +377,6 @@ export function useTray(): TrayState {
     latest,
     setRows,
     commit,
+    archive,
   };
 }

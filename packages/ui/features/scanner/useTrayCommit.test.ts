@@ -21,6 +21,8 @@ const scannerTrayCommit =
       remaining: ScannerTrayRow[],
     ) => Promise<ImportCommitOutcome>
   >();
+const scannerTrayArchive =
+  vi.fn<(items: CollectionImportItem[], remaining: ScannerTrayRow[]) => Promise<number | null>>();
 
 vi.mock("@/lib/ipc", async (original) => ({
   ...(await original<typeof import("@/lib/ipc")>()),
@@ -33,6 +35,8 @@ vi.mock("@/lib/ipc", async (original) => ({
       folderId: number | null,
       remaining: ScannerTrayRow[],
     ) => scannerTrayCommit(items, folderId, remaining),
+    scannerTrayArchive: (items: CollectionImportItem[], remaining: ScannerTrayRow[]) =>
+      scannerTrayArchive(items, remaining),
   },
 }));
 
@@ -98,6 +102,8 @@ beforeEach(() => {
   setScannerTray.mockResolvedValue(undefined);
   scannerTrayCommit.mockReset();
   scannerTrayCommit.mockResolvedValue(OUTCOME);
+  scannerTrayArchive.mockReset();
+  scannerTrayArchive.mockResolvedValue(41);
 });
 
 describe("useTrayFolder", () => {
@@ -367,5 +373,139 @@ describe("useTrayCommit", () => {
     expect(items).toEqual([TOMB, LOTUS].map(lineOf));
     expect(remaining).toEqual([stepped]);
     expect(result.current.tray.latest()).toEqual([stepped]);
+  });
+});
+
+/**
+ * **Archive** (issue #989): the rows an Add would take, into the scan history and nowhere else.
+ * Over the real tray for the commit's reason — what it takes is decided between the two hooks.
+ */
+describe("useTrayCommit's archive", () => {
+  async function mount(qc = client(), onArchiveRefused = vi.fn()) {
+    const view = renderHook(
+      () => {
+        const tray = useTray();
+        const folderList = useCollectionFolderList();
+        return {
+          tray,
+          commit: useTrayCommit({
+            tray,
+            condition: "NM",
+            folderId: BINDER.id,
+            folderList,
+            onArchiveRefused,
+          }),
+        };
+      },
+      { wrapper: wrapperFor(qc) },
+    );
+    await waitFor(() => expect(view.result.current.tray.loaded).toBe(true));
+    return { ...view, onArchiveRefused };
+  }
+
+  it("keeps the rows an Add would take, leaves the unknown finish in the tray, and files nothing", async () => {
+    scannerTray.mockResolvedValue([NEEDS_A_FINISH_ROW, ...RESOLVED]);
+    const qc = client();
+    const invalidate = vi.spyOn(qc, "invalidateQueries");
+    const { result } = await mount(qc);
+    let kept: Awaited<ReturnType<typeof result.current.commit.archive>> = null;
+    await act(async () => {
+      kept = await result.current.commit.archive();
+    });
+
+    expect(scannerTrayArchive).toHaveBeenCalledTimes(1);
+    const [items, remaining] = scannerTrayArchive.mock.calls[0];
+    expect(items).toEqual(RESOLVED.map(lineOf));
+    expect(remaining).toEqual([NEEDS_A_FINISH_ROW]);
+    expect(kept).toEqual({ batchId: 41, copies: 5 });
+    expect(result.current.tray.rows).toEqual([NEEDS_A_FINISH_ROW]);
+    expect(scannerTrayCommit, "an archive files into the collection").not.toHaveBeenCalled();
+    // The history moves; nothing that reads "what is owned" does.
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["scanHistory"] });
+    expect(result.current.commit.archiving).toBe(false);
+    expect(result.current.commit.error).toBeNull();
+  });
+
+  it("refuses in the plan's words while a row waits on a printing, before anything is sent", async () => {
+    scannerTray.mockResolvedValue([...TRAY_ROWS]);
+    const { result } = await mount();
+    await act(async () => {
+      expect(await result.current.commit.archive()).toBeNull();
+    });
+    expect(result.current.commit.error).toMatch(/still waiting for a printing to be picked/);
+    expect(scannerTrayArchive).not.toHaveBeenCalled();
+  });
+
+  it("keeps every row and says the backend's sentence on a refusal, and the next press clears it", async () => {
+    scannerTrayArchive.mockRejectedValueOnce(DB_BUSY);
+    const qc = client();
+    const invalidate = vi.spyOn(qc, "invalidateQueries");
+    const { result, onArchiveRefused } = await mount(qc);
+    await act(async () => {
+      expect(await result.current.commit.archive()).toBeNull();
+    });
+    expect(result.current.commit.error).toBe(DB_BUSY);
+    expect(onArchiveRefused).toHaveBeenCalledWith(DB_BUSY);
+    expect(result.current.tray.latest()).toEqual(RESOLVED);
+    expect(invalidate).not.toHaveBeenCalled();
+
+    await act(async () => {
+      expect(await result.current.commit.archive()).not.toBeNull();
+    });
+    expect(result.current.commit.error).toBeNull();
+    expect(result.current.tray.latest()).toEqual([]);
+  });
+
+  it("holds Add while an archive is putting the same rows away, and the archive while an Add is", async () => {
+    const wire = gate<number | null>();
+    scannerTrayArchive.mockReturnValueOnce(wire.held);
+    const { result } = await mount();
+    let archived: Promise<unknown> = Promise.resolve();
+    act(() => {
+      archived = result.current.commit.archive();
+    });
+    await waitFor(() => expect(result.current.commit.archiving).toBe(true));
+    await act(async () => {
+      expect(await result.current.commit.commit()).toBeNull();
+      expect(await result.current.commit.archive()).toBeNull();
+    });
+    expect(scannerTrayCommit).not.toHaveBeenCalled();
+    expect(scannerTrayArchive).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      wire.open(41);
+      await archived;
+    });
+    expect(result.current.commit.archiving).toBe(false);
+  });
+
+  it("does not archive a pile twice when a second mount presses Archive while the first's waits", async () => {
+    const wire = gate<number | null>();
+    scannerTrayArchive.mockReturnValueOnce(wire.held);
+    const qc = client();
+    const first = await mount(qc);
+    let waiting: Promise<unknown> = Promise.resolve();
+    act(() => {
+      waiting = first.result.current.commit.archive();
+    });
+    await waitFor(() => expect(scannerTrayArchive).toHaveBeenCalledTimes(1));
+    first.unmount();
+
+    const second = await mount(qc);
+    let again: unknown;
+    let pressed: Promise<unknown> = Promise.resolve();
+    act(() => {
+      pressed = second.result.current.commit.archive().then((kept) => {
+        again = kept;
+      });
+    });
+    await act(async () => {
+      wire.open(41);
+      await waiting;
+      await pressed;
+    });
+    expect(scannerTrayArchive).toHaveBeenCalledTimes(1);
+    expect(again).toBeNull();
+    expect(second.result.current.tray.latest()).toEqual([]);
   });
 });
