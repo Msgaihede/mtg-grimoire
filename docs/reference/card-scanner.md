@@ -4505,8 +4505,11 @@ kept past the two seconds below.
   of them now are, for exactly this.
 
 A press reads the ring and the page's state in one synchronous step (`useScanSubmit`): there is
-no grab to await, so nothing moves between the press and the snapshot. The camera and the pump
-run on behind the dialog; the snapshot is a value no later frame can reach.
+no grab to await, so nothing moves between the press and the snapshot. The snapshot is a value
+no later frame can reach. **Recognition pauses while the dialog is open** (issue #977): both pages
+hold the pump (`useScanLoop`'s `live`) while `useScanSubmit`'s `run` is not `null`, so a card left
+under the lens while the reader picks a printing does not land in the tray. The camera stays open,
+and closing the dialog starts a fresh run.
 
 ### What the reader sees and chooses, and why nothing is chosen for them
 
