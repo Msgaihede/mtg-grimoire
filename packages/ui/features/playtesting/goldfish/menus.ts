@@ -228,9 +228,12 @@ export function libraryMenu({
   ];
 }
 
-/** What the game menu reads of a game: the reader's tokens, graveyard and exile, and — for a
- *  goldfish view — its stage. */
-export type GameMenuView = Pick<GoldfishView, "tokens" | "graveyard" | "exile"> & {
+/** What the game menu reads of a game: the reader's tokens, graveyard and exile, whether there is
+ *  anything to undo or redo, and — for a goldfish view — its stage. */
+export type GameMenuView = Pick<
+  GoldfishView,
+  "tokens" | "graveyard" | "exile" | "canUndo" | "canRedo"
+> & {
   stage?: string;
 };
 
@@ -242,6 +245,10 @@ export type GameMenuView = Pick<GoldfishView, "tokens" | "graveyard" | "exile"> 
  * **The playtest board's menu too**, which hands it the reader's own zones (`GameMenuView`), says
  * itself whether the moves work (`playing`: not during the opening hand, not once the game is
  * over) and names its own way back (`backLabel`).
+ *
+ * **Undo and redo head it** (issue #1022), greyed when the view has nothing to go back or forward
+ * to — the menu's way to the same two actions `Ctrl+Z` and `Ctrl+Y` send, for a reader who does
+ * not know the chords. Not greyed by the opening hand: a mulligan is an action to take back.
  */
 export function gameMenu({
   view,
@@ -288,6 +295,9 @@ export function gameMenu({
   }
 
   return [
+    action("undo", "Undo", () => onAct({ type: "undo" }), !(view?.canUndo ?? false)),
+    action("redo", "Redo", () => onAct({ type: "redo" }), !(view?.canRedo ?? false)),
+    { kind: "separator", id: "sepUndo" },
     action("untap", "Untap everything", () => onAct({ type: "untapAll" }), !playing),
     submenu(
       "token",

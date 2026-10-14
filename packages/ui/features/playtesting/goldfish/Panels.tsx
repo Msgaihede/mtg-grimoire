@@ -87,6 +87,9 @@ function GoldfishHelp(): JSX.Element {
         Point at a card and press T, G, E or H to tap it, bury it, exile it or return it to hand.
       </span>
       <span className="text-dim">Press Space for the next turn.</span>
+      <span className="text-dim">
+        Press Ctrl+Z to undo and Ctrl+Y to redo, or use the game menu.
+      </span>
     </>
   );
 }

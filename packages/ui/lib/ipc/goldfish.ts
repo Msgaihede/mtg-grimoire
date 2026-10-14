@@ -59,6 +59,10 @@ export interface GoldfishView {
   mana: ManaTable;
   /** The tokens this deck's cards make, for "Create a token". */
   tokens: TokenOffer[];
+  /** An action can be taken back (`undo`). */
+  canUndo: boolean;
+  /** An undone action can be taken again (`redo`). */
+  canRedo: boolean;
 }
 
 /** A seat's mana by type (issue #1002). Shared by the goldfish and the playtest board. */
@@ -144,7 +148,11 @@ export type GoldfishAction =
   | { type: "shuffle" }
   | { type: "setLife"; seat: GoldfishSeat; life: number }
   | { type: "nextTurn" }
-  | { type: "discard"; ids: number[] };
+  | { type: "discard"; ids: number[] }
+  /** The game as it was before the last action, exactly. Happens nothing. */
+  | { type: "undo" }
+  /** The game as it was before the last undo. Happens nothing. */
+  | { type: "redo" };
 
 /** What an action did, one fact a row. */
 export type Happened =

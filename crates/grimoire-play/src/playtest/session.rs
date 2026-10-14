@@ -58,6 +58,7 @@ use rand_chacha::ChaCha8Rng;
 use serde_json::Value;
 
 use crate::cards::{self, CardFacts};
+use crate::history::{History, NOTHING_TO_REDO, NOTHING_TO_UNDO};
 use crate::session::{game_card, mana_table, place_of};
 use crate::tokens::{DeckTokens, TokenFacts};
 use crate::view::{GameCard, MulliganView, Place, Seat, TokenOffer};
@@ -121,6 +122,7 @@ struct Printing {
 
 /// A cast or an activation the engine is still asking the reader about, which `cancel` takes
 /// back to `checkpoint`.
+#[derive(Clone)]
 struct Pending {
     checkpoint: Checkpoint,
     source: String,
@@ -128,6 +130,7 @@ struct Pending {
 
 /// The board's own question: a card that can be cast (or a permanent activated) in more than
 /// one way. Nothing has happened yet; an answer is one of `actions`.
+#[derive(Clone)]
 struct BoardChoice {
     kind: &'static str,
     source: String,
@@ -173,6 +176,21 @@ pub struct Playtest {
     frames: Vec<PlaytestFrame>,
     /// How many frames one action may answer with: `FRAME_LIMIT` an opponent.
     frame_limit: usize,
+    /// The game before each of the reader's actions, for undo and redo (`crate::history`).
+    history: History<Moment>,
+}
+
+/// The whole of a game an action can change, for undo and redo: the checkpoint a refusal goes
+/// back to, and the session's own place in the game around it — a cast half made, the board's
+/// own question, the end told, the turn being ended, the stop last stopped at. The stops the
+/// reader set are a setting, not the game, and stay as they are.
+struct Moment {
+    checkpoint: Checkpoint,
+    pending: Option<Pending>,
+    choice: Option<BoardChoice>,
+    over_told: bool,
+    ending: Option<u32>,
+    stopped_at: Option<(u32, Phase)>,
 }
 
 impl Playtest {
@@ -343,6 +361,7 @@ impl Playtest {
             stopped_at: None,
             frames: Vec::new(),
             frame_limit: FRAME_LIMIT * opponents.len(),
+            history: History::default(),
         };
         game.assign_printings(you, YOU);
         for (deck, &seat) in opponents.iter().zip(&seats) {
@@ -606,6 +625,9 @@ impl Playtest {
             tokens: self.tokens.clone(),
             stops: self.stops.clone(),
             ending_turn: self.ending == Some(s.turn_number),
+            // A replay frame is a moment inside an action, never one to go back to.
+            can_undo: !watching && self.history.can_undo(),
+            can_redo: !watching && self.history.can_redo(),
         }
     }
 
@@ -1106,13 +1128,28 @@ impl Playtest {
 
     /// Do what the board asked, play on until the reader next decides, and answer with the
     /// table then. A refusal is one sentence and leaves the game exactly as it was.
+    ///
+    /// Every action taken but `setStops` (a setting) can be undone, and with it everything the
+    /// AI did after it up to the reader's next decision: undo goes back to the reader's last
+    /// decision, never into the middle of the opponent's turn. Undo and redo happen nothing and
+    /// play nothing back — taken at any stage, a finished game's included.
     pub fn act(&mut self, action: PlaytestAction) -> Result<PlaytestStep, String> {
+        match action {
+            PlaytestAction::Undo => return self.travel(true),
+            PlaytestAction::Redo => return self.travel(false),
+            _ => {}
+        }
+        let remembered = !matches!(action, PlaytestAction::SetStops { .. });
+        let before = remembered.then(|| self.moment());
         let checkpoint = self.checkpoint();
         let mut happened = Vec::new();
         let choice = self.choice.take();
         self.frames.clear();
         match self.run(action, choice, &mut happened) {
             Ok(()) => {
+                if let Some(before) = before {
+                    self.history.record(before);
+                }
                 self.follow_printings();
                 Ok(PlaytestStep {
                     view: self.view(),
@@ -1973,6 +2010,39 @@ impl Playtest {
             }),
         )
         .expect("the engine moves it");
+    }
+
+    /// Undo (`back`) or redo: the game as it was before the last action, or before the last undo.
+    fn travel(&mut self, back: bool) -> Result<PlaytestStep, String> {
+        let now = self.moment();
+        let then = if back {
+            self.history.undo(now).ok_or(NOTHING_TO_UNDO)?
+        } else {
+            self.history.redo(now).ok_or(NOTHING_TO_REDO)?
+        };
+        self.restore(then.checkpoint);
+        self.pending = then.pending;
+        self.choice = then.choice;
+        self.over_told = then.over_told;
+        self.ending = then.ending;
+        self.stopped_at = then.stopped_at;
+        self.frames.clear();
+        Ok(PlaytestStep {
+            view: self.view(),
+            happened: Vec::new(),
+            frames: Vec::new(),
+        })
+    }
+
+    fn moment(&self) -> Moment {
+        Moment {
+            checkpoint: self.checkpoint(),
+            pending: self.pending.clone(),
+            choice: self.choice.clone(),
+            over_told: self.over_told,
+            ending: self.ending,
+            stopped_at: self.stopped_at,
+        }
     }
 
     fn checkpoint(&self) -> Checkpoint {

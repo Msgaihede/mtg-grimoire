@@ -410,6 +410,17 @@ describe("activeScopes", () => {
     expect(activeScopes({ activeView: "wishlist", openDeckId: null })).toHaveLength(2);
   });
 
+  it("swaps the deck editor for the goldfish board when the board is open over it", () => {
+    expect(activeScopes({ activeView: "decks", openDeckId: 12, goldfish: true })).toEqual([
+      "global",
+      "goldfish",
+    ]);
+    expect(activeScopes({ activeView: "decks", openDeckId: 12, goldfish: false })).toEqual([
+      "global",
+      "deckEditor",
+    ]);
+  });
+
   it("treats deck 0 as an open deck rather than as nothing open", () => {
     expect(activeScopes({ activeView: "decks", openDeckId: 0 })).toEqual(["global", "deckEditor"]);
   });
@@ -446,6 +457,17 @@ describe("the catalogue's shape", () => {
       "selectAll",
     ]);
     expect(SHORTCUTS.deckEditor.map((s) => s.id)).toEqual(["undo", "redo", "remove"]);
+    expect(SHORTCUTS.playtesting.map((s) => s.id)).toEqual(["undo", "redo"]);
+    expect(SHORTCUTS.goldfish.map((s) => s.id)).toEqual(["undo", "redo"]);
+  });
+
+  // Issue #1022: both boards take the deck editor's spellings, so a reader's hands need learn
+  // undo and redo once.
+  it("gives both game boards the deck editor's undo and redo chords", () => {
+    for (const scope of ["playtesting", "goldfish"] as const) {
+      expect(shortcut(scope, "undo").chords).toEqual(shortcut("deckEditor", "undo").chords);
+      expect(shortcut(scope, "redo").chords).toEqual(shortcut("deckEditor", "redo").chords);
+    }
   });
 
   // The other half of the cross-task contract: the panel renders these strings, so a reworded
@@ -469,7 +491,7 @@ describe("the catalogue's shape", () => {
     });
   });
 
-  it("has an entry for every scope, and every view is honestly empty", () => {
+  it("has an entry for every scope, and every view but Playtesting is honestly empty", () => {
     expect(SHORTCUTS.home).toEqual([]);
     expect(SHORTCUTS.search).toEqual([]);
     expect(SHORTCUTS.decks).toEqual([]);
@@ -478,7 +500,6 @@ describe("the catalogue's shape", () => {
     expect(SHORTCUTS.shared).toEqual([]);
     expect(SHORTCUTS.scanner).toEqual([]);
     expect(SHORTCUTS.trade).toEqual([]);
-    expect(SHORTCUTS.playtesting).toEqual([]);
     expect(SHORTCUTS.settings).toEqual([]);
   });
 

@@ -3,6 +3,7 @@
 //! why only the desktop links it.
 
 pub mod cards;
+mod history;
 pub mod playtest;
 pub mod session;
 pub mod tokens;

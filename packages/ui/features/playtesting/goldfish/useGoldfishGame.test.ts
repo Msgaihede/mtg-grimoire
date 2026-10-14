@@ -71,4 +71,29 @@ describe("useGoldfishGame", () => {
     await waitFor(() => expect(result.current.error).toBe("That card is no longer where it was."));
     expect(result.current.view).toBe(before);
   });
+
+  // Issue #1022: the engine takes the game back; the hook takes the action's lines off the log.
+  it("takes an undone action's lines off the log, and a redone one's back on", async () => {
+    goldfishAct.mockImplementation(async (a) => {
+      const type = (a as { type: string }).type;
+      return {
+        view: turnNineView(),
+        happened: type === "shuffle" ? [{ type: "shuffled" }] : [],
+      };
+    });
+    const { result } = renderHook(() => useGoldfishGame(7, "live"));
+    await waitFor(() => expect(result.current.view).not.toBeNull());
+    const texts = () => result.current.log.map((l) => l.text);
+    act(() => result.current.act({ type: "shuffle" }));
+    await waitFor(() =>
+      expect(texts()).toEqual(["Shuffled the library", "Shuffled and drew seven"]),
+    );
+    act(() => result.current.act({ type: "undo" }));
+    await waitFor(() => expect(texts()).toEqual(["Shuffled and drew seven"]));
+    act(() => result.current.act({ type: "redo" }));
+    await waitFor(() =>
+      expect(texts()).toEqual(["Shuffled the library", "Shuffled and drew seven"]),
+    );
+    expect(goldfishAct).toHaveBeenLastCalledWith({ type: "redo" });
+  });
 });

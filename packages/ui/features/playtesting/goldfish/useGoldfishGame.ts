@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ipc, ipcError, type DeckVariant, type GoldfishAction, type GoldfishView } from "@/lib/ipc";
-import { appendLog, linesFor, type LogLine } from "./log";
+import { freshBook, redoLog, rememberLog, undoLog, writeLog, type LogBook } from "../undo";
+import { linesFor, type LogLine } from "./log";
 
 /**
  * One goldfish game's life on the page: dealt when the board mounts, put away when it leaves, and
@@ -15,6 +16,10 @@ import { appendLog, linesFor, type LogLine } from "./log";
  *
  * **A new game is a new seed** (`crypto.getRandomValues`), which is the shuffle: the engine deals
  * the same game from the same seed, which its own tests rely on and a reader never wants.
+ *
+ * **Undo and redo are actions like any other** (`{ type: "undo" }`, issue #1022): the engine
+ * keeps the game's history, and this keeps the log's beside it (`../undo.ts`' `LogBook`), so an
+ * undone action's lines leave the log and a redone one's come back.
  */
 export interface GoldfishGame {
   /** `null` until the first deal answers, and while a new game is being dealt. */
@@ -37,7 +42,7 @@ function freshSeed(): number {
 
 export function useGoldfishGame(deckId: number, variant: DeckVariant): GoldfishGame {
   const [view, setView] = useState<GoldfishView | null>(null);
-  const [log, setLog] = useState<LogLine[]>([]);
+  const [book, setBook] = useState<LogBook>(() => freshBook());
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   /** The chain every action waits its turn on. */
@@ -59,7 +64,7 @@ export function useGoldfishGame(deckId: number, variant: DeckVariant): GoldfishG
           (dealt) => {
             if (mine !== generation.current) return;
             setView(dealt);
-            setLog([{ turn: 0, text: "Shuffled and drew seven", kind: "deal" }]);
+            setBook(freshBook([{ turn: 0, text: "Shuffled and drew seven", kind: "deal" }]));
           },
           (e: unknown) => {
             if (mine === generation.current) setError(ipcError(e));
@@ -75,7 +80,7 @@ export function useGoldfishGame(deckId: number, variant: DeckVariant): GoldfishG
     const mine = ++generation.current;
     setView(null);
     setError(null);
-    setLog([]);
+    setBook(freshBook());
     request(mine);
   }, [request]);
 
@@ -101,7 +106,9 @@ export function useGoldfishGame(deckId: number, variant: DeckVariant): GoldfishG
           if (mine !== generation.current) return;
           setError(null);
           setView(step.view);
-          setLog((old) => appendLog(old, linesFor(step.happened, step.view.turn)));
+          if (action.type === "undo") setBook(undoLog);
+          else if (action.type === "redo") setBook(redoLog);
+          else setBook((b) => writeLog(rememberLog(b), linesFor(step.happened, step.view.turn)));
         },
         (e: unknown) => {
           if (mine === generation.current) setError(ipcError(e));
@@ -113,5 +120,5 @@ export function useGoldfishGame(deckId: number, variant: DeckVariant): GoldfishG
       });
   }, []);
 
-  return { view, log, error, busy, act, newGame };
+  return { view, log: book.log, error, busy, act, newGame };
 }
