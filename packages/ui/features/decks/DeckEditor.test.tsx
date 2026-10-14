@@ -7008,9 +7008,9 @@ describe("DeckEditor — the Collection submenu", () => {
   }
 
   /**
-   * **A right-click costs nothing**, which is the whole reason the two reads are `fetchQuery` at
-   * the press rather than hooks — a mounted query per drawn card would ask the wishlist and the
-   * collection about every card in the deck.
+   * **A right-click costs nothing**, which is why the wish read is a `fetchQuery` at the press and
+   * the pull's plan is read only by the dialog its row opens, rather than hooks — a mounted query
+   * per drawn card would ask the wishlist and the collection about every card in the deck.
    *
    * The opening of the submenu is in the same case as the absence, because "it was not called"
    * passes just as well against a menu that never drew the rows.
@@ -7213,10 +7213,11 @@ describe("DeckEditor — the Collection submenu", () => {
   });
 
   /**
-   * **A lone candidate is unambiguous, so the pull happens with no dialog** — and that is true
-   * even when it cannot cover the line: what there is, is taken. `choosePull`'s rule.
+   * **One source still opens the dialog** (issue #987): the reader sees which copy moves, and from
+   * where, before it does. Nothing is written until the footer is pressed, and the press then takes
+   * the pre-picked source — what the menu used to take silently.
    */
-  it("pulls outright when one source can supply the card", async () => {
+  it("opens the pull dialog even when one source can supply the card", async () => {
     deckGet.mockResolvedValue(detail({}, [SHORT()]));
     deckPullPlan.mockResolvedValue([planRow([55])]);
     await open();
@@ -7224,19 +7225,25 @@ describe("DeckEditor — the Collection submenu", () => {
 
     await userEvent.click(screen.getByRole("menuitem", { name: "Pull 4 from your collection" }));
 
+    const dialog = await screen.findByRole("dialog", { name: "Pull from collection" });
+    expect(
+      await within(dialog).findByRole("checkbox", { name: "Pull Lightning Bolt, 4 copies" }),
+    ).toBeChecked();
+    expect(deckPullFromCollection).not.toHaveBeenCalled();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Pull 4 copies" }));
+
     await waitFor(() =>
       expect(deckPullFromCollection).toHaveBeenCalledWith(4, [{ entryId: 55, quantity: 4 }]),
     );
-    expect(screen.queryByRole("dialog", { name: "Pull from collection" })).not.toBeInTheDocument();
   });
 
   /**
-   * **A refused outright pull is its toast's, and not the next dialog's** (2026-10-13). The silent
-   * pull and the dialog's press share one observer, so the dialog — which draws that observer's
-   * refusal beside its button — would open with a sentence about a press it never made, said a
-   * second time. Opening it resets the observer.
+   * **A refusal belongs to the opening that pressed it** (2026-10-13). The dialog draws the pull
+   * observer's refusal beside its button, so reopening it on the card must reset that observer —
+   * or the next dialog opens with a sentence about a press it never made.
    */
-  it("does not greet the pull dialog with a refused outright pull", async () => {
+  it("does not greet a reopened pull dialog with the last opening's refusal", async () => {
     deckGet.mockResolvedValue(detail({}, [SHORT()]));
     deckPullPlan.mockResolvedValue([planRow([55])]);
     deckPullFromCollection.mockRejectedValue("database is locked");
@@ -7244,16 +7251,18 @@ describe("DeckEditor — the Collection submenu", () => {
     await collectionMenu();
 
     await userEvent.click(screen.getByRole("menuitem", { name: "Pull 4 from your collection" }));
+    const first = await screen.findByRole("dialog", { name: "Pull from collection" });
+    await userEvent.click(await within(first).findByRole("button", { name: "Pull 4 copies" }));
+    expect(await within(first).findByRole("alert")).toBeInTheDocument();
+    await userEvent.click(within(first).getByRole("button", { name: "Cancel" }));
     await waitFor(() =>
-      expect(useNotifications.getState().notices[0]).toMatchObject({
-        title: "Couldn't pull from your collection",
-        tone: "error",
-      }),
+      expect(screen.queryByRole("dialog", { name: "Pull from collection" })).not.toBeInTheDocument(),
     );
 
-    await userEvent.click(await screen.findByRole("button", { name: "Pull from collection" }));
-    const dialog = await screen.findByRole("dialog", { name: "Pull from collection" });
-    expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+    await collectionMenu();
+    await userEvent.click(screen.getByRole("menuitem", { name: "Pull 4 from your collection" }));
+    const second = await screen.findByRole("dialog", { name: "Pull from collection" });
+    expect(within(second).queryByRole("alert")).not.toBeInTheDocument();
   });
 
   /**
@@ -7379,24 +7388,19 @@ describe("DeckEditor — the Collection submenu", () => {
     expect(deckQuickAddToCollection).not.toHaveBeenCalled();
   });
 
-  /** The same for the pull's plan, which is the other read a press makes — one toast each,
-   *  because both are the same kind of failure: an act the reader asked for that cannot begin. */
-  it("says so in a toast when the pull plan is refused", async () => {
+  /** **The pull's plan is the dialog's read, so its refusal is said there** (issue #987): the
+   *  press opens the dialog before anything is read, and the backend's sentence takes the rows'
+   *  place rather than a toast over a dialog that would otherwise sit empty. */
+  it("says so inside the pull dialog when the pull plan is refused", async () => {
     deckGet.mockResolvedValue(detail({}, [SHORT()]));
-    deckPullPlan.mockRejectedValue(new Error("database is locked"));
+    deckPullPlan.mockRejectedValue("database is locked");
     await open();
     await collectionMenu();
 
     await userEvent.click(screen.getByRole("menuitem", { name: "Pull 4 from your collection" }));
 
-    await waitFor(() =>
-      expect(useNotifications.getState().notices[0]).toMatchObject({
-        title: "Couldn't pull from your collection",
-        body: "database is locked",
-        tone: "error",
-      }),
-    );
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog", { name: "Pull from collection" });
+    expect(await within(dialog).findByText("database is locked")).toBeInTheDocument();
     expect(deckPullFromCollection).not.toHaveBeenCalled();
   });
 

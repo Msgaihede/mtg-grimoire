@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { DeckCard, DeckPullCandidate, DeckPullRow, DeckQuickAddWish } from "@/lib/ipc";
+import type { DeckCard, DeckQuickAddWish } from "@/lib/ipc";
 import {
   chooseWish,
-  choosePull,
-  choosePullFor,
   missingPicks,
   quickAddBlock,
   quickAddShort,
@@ -65,35 +63,6 @@ const card = (over: Partial<DeckCard> = {}): DeckCard => ({ ...BOLT, ...over });
  */
 const FOIL_ONLY = '["foil"]';
 const FOILABLE = '["nonfoil","foil"]';
-
-const candidate = (over: Partial<DeckPullCandidate> = {}): DeckPullCandidate => ({
-  entryId: 21,
-  quantity: 1,
-  folderId: null,
-  folderName: null,
-  folderKind: null,
-  condition: "NM",
-  lang: "en",
-  altered: false,
-  signed: false,
-  proxy: false,
-  misprint: false,
-  grading: null,
-  serialNumber: null,
-  ...over,
-});
-
-const row = (over: Partial<DeckPullRow> = {}): DeckPullRow => ({
-  cardId: "p1",
-  name: "Lightning Bolt",
-  setCode: "lea",
-  collectorNumber: "161",
-  finish: null,
-  short: 2,
-  categories: ["Main deck"],
-  candidates: [candidate()],
-  ...over,
-});
 
 const wish = (over: Partial<DeckQuickAddWish> = {}): DeckQuickAddWish => ({
   id: 7,
@@ -266,129 +235,6 @@ describe("chooseWish", () => {
   });
 });
 
-describe("choosePull", () => {
-  /**
-   * **A lone candidate is unambiguous, and the picks are the plan's own arithmetic.** One pile to
-   * take from is the only thing a dialog could have offered, so the press goes straight through.
-   */
-  it("takes a lone candidate without asking", () => {
-    const plan = [row({ short: 2, candidates: [candidate({ entryId: 21, quantity: 4 })] })];
-
-    expect(choosePull(plan, card())).toEqual({ kind: "take", picks: [{ entryId: 21, quantity: 2 }] });
-  });
-
-  /**
-   * **Taking too little is a normal answer, and it is still not a fork.** The rule is
-   * `candidates.length >= 2` and nothing else — a single pile holding one copy against a
-   * shortfall of two is one pile, and filling one of two holes is worth doing.
-   */
-  it("takes what a lone short candidate has rather than asking", () => {
-    const plan = [row({ short: 2, candidates: [candidate({ entryId: 21, quantity: 1 })] })];
-
-    expect(choosePull(plan, card())).toEqual({ kind: "take", picks: [{ entryId: 21, quantity: 1 }] });
-  });
-
-  /** **Two candidates is the one fork.** Which binder a copy leaves is the reader's filing. */
-  it("asks once two piles could supply the card", () => {
-    const plan = [
-      row({
-        short: 2,
-        candidates: [candidate({ entryId: 21, quantity: 1 }), candidate({ entryId: 22, quantity: 4 })],
-      }),
-    ];
-
-    expect(choosePull(plan, card())).toEqual({ kind: "ask" });
-  });
-
-  /**
-   * **No row is `ask`, deliberately**: a card with no unallocated copy anywhere is the commonest
-   * way to press this and be told nothing can happen, and the dialog already words that case. A
-   * second sentence here would be the same fact said twice from two files.
-   */
-  it("asks when the plan has no row for this card at all", () => {
-    expect(choosePull([], card())).toEqual({ kind: "ask" });
-    expect(choosePull([row({ cardId: "other" })], card())).toEqual({ kind: "ask" });
-  });
-
-  /**
-   * **The finish is half the key.** A deck holding the foil beside the regular copy is two rows
-   * on `deck_cards`' own grain, two shortfalls, and two piles of cardboard — so a press on the
-   * foil row must not be answered by the regular row's candidates.
-   */
-  it("matches on the printing and the finish together", () => {
-    const regular = row({ finish: null, candidates: [candidate({ entryId: 21, quantity: 4 })] });
-    const foil = row({ finish: "foil", candidates: [candidate({ entryId: 22, quantity: 4 })] });
-    const plan = [regular, foil];
-
-    expect(choosePull(plan, card({ finish: "foil" }))).toEqual({
-      kind: "take",
-      picks: [{ entryId: 22, quantity: 2 }],
-    });
-    expect(choosePull(plan, card({ finish: null }))).toEqual({
-      kind: "take",
-      picks: [{ entryId: 21, quantity: 2 }],
-    });
-    // A finish the plan has no row for is no row, not the nearest one.
-    expect(choosePull(plan, card({ finish: "etched" }))).toEqual({ kind: "ask" });
-  });
-
-  /**
-   * **The finish half is the one the row _plays_** (issue #563's follow-up). `deck_pull_plan`
-   * answers `"foil"` for a foil-only printing whose deck row stored nothing — the search's Add,
-   * the quick add and every drag store no finish — so a card keyed on its stored column finds no
-   * row, and the press opens a dialog with nothing in it over copies the reader owns. A printing
-   * sold in both finishes is the contrast: there an unsaid row is still the regular copy, and it
-   * must not be answered by the foil row's candidates.
-   */
-  it("matches the finish a row plays, so an unsaid foil-only card finds the foil row", () => {
-    const plan = [
-      row({ cardId: "palantir", finish: "foil", candidates: [candidate({ entryId: 41 })] }),
-      row({ cardId: "m10", finish: null, candidates: [candidate({ entryId: 51, quantity: 4 })] }),
-      row({ cardId: "m10", finish: "foil", candidates: [candidate({ entryId: 52, quantity: 4 })] }),
-    ];
-
-    expect(
-      choosePull(plan, card({ cardId: "palantir", finish: null, finishes: FOIL_ONLY })),
-    ).toEqual({ kind: "take", picks: [{ entryId: 41, quantity: 1 }] });
-    expect(choosePull(plan, card({ cardId: "m10", finish: null, finishes: FOILABLE }))).toEqual({
-      kind: "take",
-      picks: [{ entryId: 51, quantity: 2 }],
-    });
-    expect(choosePull(plan, card({ cardId: "m10", finish: "foil", finishes: FOILABLE }))).toEqual({
-      kind: "take",
-      picks: [{ entryId: 52, quantity: 2 }],
-    });
-  });
-
-  /**
-   * A lone candidate holding nothing yields no pick at all, and an empty batch is not something
-   * to send: the dialog explains, this does not. Not reachable through the backend's own contract
-   * — a candidate is a row that holds copies — which is exactly why it is pinned rather than
-   * assumed away.
-   */
-  it("asks rather than sending an empty batch", () => {
-    const plan = [row({ short: 2, candidates: [candidate({ entryId: 21, quantity: 0 })] })];
-
-    expect(choosePull(plan, card())).toEqual({ kind: "ask" });
-  });
-
-  /**
-   * The picks are a **copy** of the plan's array, not the array itself: `deckPullFromCollection`
-   * takes a mutable payload and the plan belongs to a query cache a dialog may still be drawing
-   * from. Mutating what comes back must not reach back into it.
-   */
-  it("hands back picks the caller may mutate", () => {
-    const plan = [row({ short: 2, candidates: [candidate({ entryId: 21, quantity: 4 })] })];
-    const choice = choosePull(plan, card());
-
-    if (choice.kind !== "take") throw new Error("expected a take");
-    choice.picks.push({ entryId: 99, quantity: 1 });
-
-    expect(plan[0].candidates).toHaveLength(1);
-    expect(plan[0].candidates[0]).toEqual(candidate({ entryId: 21, quantity: 4 }));
-  });
-});
-
 /** Issue #510: a picked set's quick add goes out as the deck-wide record's picks. */
 describe("missingPicks", () => {
   /** A printing short in two piles is two deck rows and one address, so one pick of the sum. */
@@ -443,67 +289,5 @@ describe("missingPicks", () => {
       { cardId: "m10", finish: null, quantity: 1 },
       { cardId: "m10", finish: "foil", quantity: 3 },
     ]);
-  });
-});
-
-describe("choosePullFor", () => {
-  const bolt = row({ cardId: "p1", short: 2, candidates: [candidate({ entryId: 21, quantity: 4 })] });
-  const bear = row({ cardId: "p2", short: 1, candidates: [candidate({ entryId: 31, quantity: 1 })] });
-
-  it("takes every member silently when each has one answer", () => {
-    expect(choosePullFor([bolt, bear], [card(), card({ cardId: "p2" })])).toEqual({
-      kind: "take",
-      picks: [
-        { entryId: 21, quantity: 2 },
-        { entryId: 31, quantity: 1 },
-      ],
-    });
-  });
-
-  /** One member needing the reader opens the dialog over the whole set, never half a write. */
-  it("asks when any one member is ambiguous or has nothing to pull", () => {
-    const forked = row({
-      cardId: "p2",
-      candidates: [candidate({ entryId: 31 }), candidate({ entryId: 32 })],
-    });
-    expect(choosePullFor([bolt, forked], [card(), card({ cardId: "p2" })])).toEqual({ kind: "ask" });
-    expect(choosePullFor([bolt], [card(), card({ cardId: "p9" })])).toEqual({ kind: "ask" });
-  });
-
-  /** The same printing in two piles is one plan row, and its picks are taken once. */
-  it("takes a printing picked in two piles once", () => {
-    expect(choosePullFor([bolt], [card({ id: 1 }), card({ id: 2, categoryId: 2 })])).toEqual({
-      kind: "take",
-      picks: [{ entryId: 21, quantity: 2 }],
-    });
-  });
-
-  /**
-   * **One foil-only printing under both spellings is one plan row, so it is taken once** (issue
-   * #563's follow-up). The plan folds an unsaid row and a `"foil"` row of a printing sold only in
-   * foil into a single `"foil"` shortfall; keyed on the stored finish the set would ask about a
-   * row that does not exist (the unsaid one) and open the dialog, or — were both keys found —
-   * take the one row's copies twice.
-   */
-  it("takes a foil-only printing picked under both spellings once", () => {
-    const palantir = row({
-      cardId: "palantir",
-      finish: "foil",
-      short: 3,
-      candidates: [candidate({ entryId: 41, quantity: 4 })],
-    });
-    const unsaid = card({ id: 1, cardId: "palantir", finish: null, finishes: FOIL_ONLY });
-    const foil = card({
-      id: 2,
-      categoryId: 2,
-      cardId: "palantir",
-      finish: "foil",
-      finishes: FOIL_ONLY,
-    });
-
-    expect(choosePullFor([palantir], [unsaid, foil])).toEqual({
-      kind: "take",
-      picks: [{ entryId: 41, quantity: 3 }],
-    });
   });
 });
