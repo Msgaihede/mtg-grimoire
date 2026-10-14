@@ -12,7 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::view::{GameCard, MulliganView, Place, Seat, TokenOffer};
+use crate::view::{GameCard, ManaTable, MulliganView, Place, Seat, TokenOffer};
 
 /// The whole table after an action, from the reader's seat.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -119,6 +119,8 @@ pub struct PlaytestSeat {
     pub library_cards: Vec<GameCard>,
     /// What this seat's untapped permanents could make right now (phase's `max_mana_yield`).
     pub mana_open: u32,
+    /// The same open mana by type, and what is floating in the pool (`crate::view::ManaTable`).
+    pub mana: ManaTable,
 }
 
 /// The creatures in combat: each attacker and what it attacks, and each block.
