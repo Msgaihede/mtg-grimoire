@@ -1,15 +1,13 @@
 /**
- * The Share control on the cabinet — publish a drawer, refresh it, withdraw it, and the one
- * visible way into somebody else's binder.
+ * The Share control on the cabinet — publish a drawer, refresh it, withdraw it.
  *
- * ## Two halves of one idea, in one bordered group
+ * ## Publishing only (issue #1028)
  *
- * **The second half is here because spec decision 6 left it nowhere else to go.** The *Shared*
- * rail row is hidden until a reader has opened a share, and this control is for *publishing* —
- * so the in-app viewer shipped reachable by `Ctrl+6` and discoverable by nothing at all. Making
- * the rail row unconditional would fix discovery by spending the slot decision 6 exists to save,
- * on a feature most readers will never use. Beside the Share control is where the other half
- * belongs anyway: publish your binder, open somebody else's, one place.
+ * **It drew a second half until 2026-10-14**: *Open a shared collection*, the paste box into the
+ * in-app viewer, beside Share in one bordered group. The owner removed it (issue #1028) and chose
+ * not to give the viewer another way in, so the *Shared* rail row — hidden until a reader has
+ * opened a share — is now reached only by a reader who opened one before then, and a share link
+ * is a web page a browser opens. `OpenShareDialog` stays: the shared view draws it too.
  *
  * ## What is hidden and what is refused
  *
@@ -42,14 +40,13 @@
  * it to take. Withdrawing is the reader's own press, behind a confirmation, and terminal.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Copy, Link2, Link2Off, RefreshCw, Share2, TriangleAlert } from "lucide-react";
+import { Copy, Link2Off, RefreshCw, Share2, TriangleAlert } from "lucide-react";
 import { useCallback, useMemo, useRef, useState, type JSX, type MouseEvent } from "react";
 import { Dialog } from "@/components/Dialog";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import type { MenuItem } from "@/components/menu/types";
 import { ConfirmDialog } from "@/features/settings/ConfirmDialog";
 import { BUTTON } from "@/features/settings/controls";
-import { OpenShareDialog } from "@/features/share/OpenShareDialog";
 import { SHARE_KEY, useShares } from "@/features/share/useShares";
 import { WHOLE_WISHLIST_KEY } from "@/features/wishlist/wishlistShare";
 import { copyText } from "@/lib/clipboard";
@@ -57,8 +54,7 @@ import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type CollectionFolder, type ShareFields, type ShareRow } from "@/lib/ipc";
 import { notify } from "@/lib/notifications";
 import { SUPPORTER_KEY, supporterState } from "@/lib/query";
-import { usePublishes, useReaches } from "@/lib/reach";
-import { useAppStore } from "@/lib/store";
+import { usePublishes } from "@/lib/reach";
 import { cn } from "@/lib/utils";
 
 /**
@@ -90,15 +86,6 @@ export const WHOLE_COLLECTION_TITLE = "Collection";
  * at the same next thing to do.
  */
 export const UNLOCK_FIRST = "unlock it first";
-
-/**
- * The entry point's name, spelled once.
- *
- * It is the button's `aria-label` and its visible words — two places that must not drift, since
- * WCAG 2.5.3 asks that the visible label be contained in the accessible name and here they are the
- * same string.
- */
-export const OPEN_A_SHARE = "Open a shared collection";
 
 /**
  * The folder's `sync_uid`, or `null` where the list did not name one.
@@ -206,14 +193,11 @@ function shareNameOf(target: ShareTarget): string {
  * The bordered pair in the collection's figures band: **Share**, and the way into somebody
  * else's binder.
  *
- * `target` is `null` for a level that offers no Share control at all — the Open half is still
- * drawn there, because viewing is open to everyone and needs no membership, no account and no
- * token (spec §9).
+ * `target` is `null` for a level that offers no Share control at all, and nothing is drawn there.
  */
 export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX.Element {
   const client = useQueryClient();
   const { menuClick } = useContextMenu();
-  const setActiveView = useAppStore((s) => s.setActiveView);
 
   /**
    * The membership, through the one key and the one reading of the four fields.
@@ -239,13 +223,6 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
    */
   const connected = membership !== "unknown" && membership !== "never";
 
-  /**
-   * Whether this window has the shared view the *Open* half goes to — the shell's answer, through
-   * `useReaches`, and false only in the light app, which draws seven destinations and not this
-   * one. **Hidden there rather than refused on the press**: a link that answered would land on a
-   * view the light app cannot stand on, and a share link is a web page a browser opens anyway.
-   */
-  const canOpen = useReaches("shared");
   const publishes = usePublishes();
   /**
    * `publishes` is the shell's answer to whether a publish can work in this window at all —
@@ -267,24 +244,12 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
 
   const [publishing, setPublishing] = useState(false);
   const [withdrawing, setWithdrawing] = useState(false);
-  const [opening, setOpening] = useState(false);
   const shareRef = useRef<HTMLButtonElement | null>(null);
-  /**
-   * ⚠️ **A second ref, because `back()` cannot serve the Open button and the difference is not
-   * tidiness.** `Dialog` hands the caret back to *whatever opened it* and says the host owes
-   * that; this host draws two openers, and the one that raises the paste box is the one a reader
-   * with **no membership** presses — the state in which `shareRef` is `null` because the Share
-   * button is not drawn at all. So a shared `back()` would drop the caret on `<body>` for exactly
-   * the reader most likely to be here. Driven in the shipped window (2026-09-08) and reproduced
-   * twice, by Escape and by the ✕.
-   */
-  const openRef = useRef<HTMLButtonElement | null>(null);
 
   /** The caret goes back to the control the layer was raised from — `Dialog` cannot know which
    *  one that was. Declared above the writes because every one of them closes a layer, and
    *  `focus()` on a detached or absent node is a silent no-op rather than a throw. */
   const back = useCallback(() => shareRef.current?.focus(), []);
-  const backToOpen = useCallback(() => openRef.current?.focus(), []);
 
   const existing = useMemo(
     () => (target === null ? null : shareFor(shares.data ?? [], target)),
@@ -447,48 +412,29 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
 
   return (
     <div className="flex flex-col items-end gap-1">
-      {/* The shape `ImportExportPair` beside it already draws: one bordered box with a hairline
-          between, because these are one idea read in two directions rather than two loose
-          buttons. The Share half is simply absent for a reader with nothing connected, which
-          leaves a group of one — correct, since the remaining half needs no membership. The Open
-          half is absent where the shell has no shared view (`canOpen`), and a group with neither
-          is not drawn at all. */}
-      {(canShare || canOpen) && (
+      {/* The bordered box `ImportExportPair` beside it draws, so the two read as one row. Absent
+          for a reader with nothing connected, and wherever nothing can publish. */}
+      {canShare && (
         <div
           role="group"
           aria-label="Sharing"
           className="flex shrink-0 overflow-hidden rounded-md border border-border bg-surface"
         >
-          {canShare && (
-            <button
-              ref={shareRef}
-              type="button"
-              aria-label={shareName}
-              // The popup *kind* is a fact about this button and is free; the expanded *state* is
-              // a fact about `ContextMenuProvider`, which publishes only `openMenu`/`closeMenu` —
-              // so a static `aria-expanded="false"` would be an assertion, wrong for exactly as
-              // long as the menu is up. `CollectionFolderCard`'s `⋯` makes the same declaration.
-              aria-haspopup="menu"
-              onClick={openMenu}
-              className={SHARE_BUTTON}
-            >
-              <Share2 className="size-4 shrink-0" aria-hidden="true" />
-              Share
-            </button>
-          )}
-          {canOpen && (
-            <button
-              ref={openRef}
-              type="button"
-              aria-label={OPEN_A_SHARE}
-              aria-haspopup="dialog"
-              onClick={() => setOpening(true)}
-              className={cn(SHARE_BUTTON, canShare && "border-l border-border")}
-            >
-              <Link2 className="size-4 shrink-0" aria-hidden="true" />
-              {OPEN_A_SHARE}
-            </button>
-          )}
+          <button
+            ref={shareRef}
+            type="button"
+            aria-label={shareName}
+            // The popup *kind* is a fact about this button and is free; the expanded *state* is
+            // a fact about `ContextMenuProvider`, which publishes only `openMenu`/`closeMenu` —
+            // so a static `aria-expanded="false"` would be an assertion, wrong for exactly as
+            // long as the menu is up. `CollectionFolderCard`'s `⋯` makes the same declaration.
+            aria-haspopup="menu"
+            onClick={openMenu}
+            className={SHARE_BUTTON}
+          >
+            <Share2 className="size-4 shrink-0" aria-hidden="true" />
+            Share
+          </button>
         </div>
       )}
 
@@ -532,29 +478,11 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
         unaffected.
       </ConfirmDialog>
 
-      <OpenShareDialog
-        open={opening && canOpen}
-        // **The caret is this host's to hand back**, which `Dialog` states and which the paste
-        // box cannot do for itself: it forwards one `onClose` to both `Dialog.onDismiss` and
-        // `Dialog.onClose`, so Escape, the ✕ and a press on the scrim all arrive here as the same
-        // callback. Returning the caret on all three is a shade more eager than the app's rule
-        // (an outside click deliberately does not), and it is the closest this side can get
-        // without changing that component's API — the alternative, which shipped for a day, is
-        // `<body>` on every exit. On a link that *opened*, the reader has already been navigated
-        // to the shared view and the button is gone, so the `focus()` is a no-op.
-        onClose={() => {
-          setOpening(false);
-          backToOpen();
-        }}
-        // The dialog reports that a link answered and does not decide where the reader goes —
-        // which is what lets it be drawn from inside the shared view as well as from here.
-        onOpened={() => setActiveView("shared")}
-      />
     </div>
   );
 }
 
-/** One button of the pair. `ImportExportPair`'s box, so the two groups read as one row. */
+/** The Share button. `ImportExportPair`'s box, so the two groups read as one row. */
 const SHARE_BUTTON = cn(
   "inline-flex h-9 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap px-2.5",
   "text-xs text-dim",

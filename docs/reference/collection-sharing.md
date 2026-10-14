@@ -1090,10 +1090,16 @@ control is for **publishing** — so nothing in the app offered a reader their _
 either way, landing on an empty state with a paste button. **That fixed reachable and not
 discoverable.**
 
-So _Open a shared collection_ sits beside the Share control on the cabinet, mounting the same
-dialog. Both halves of the feature then live in one place — publish your binder, open somebody
+So _Open a shared collection_ sat beside the Share control on the cabinet, mounting the same
+dialog. Both halves of the feature then lived in one place — publish your binder, open somebody
 else's. Making the rail row unconditional would have fixed discovery by spending the slot decision
 6 exists to save, on a feature most readers will never use.
+
+⚠️ **Removed on 2026-10-14 (issue #1028), with no replacement — the owner's decision.** The
+cabinet's Share control is publishing only now. The _Shared_ rail row still appears once a reader
+has a share open, and the shared view still draws its own _Open a shared collection_ paste box, so
+a reader who opened one before the removal keeps the viewer; a reader who never has has no way in,
+and a share link is a web page a browser opens.
 
 ⚠️ **The chord is gone, and this view is the destination that goes without one** (2026-09-08,
 after `origin/main` brought Trade and Playtesting into the rail). `NAV` holds **ten** destinations
