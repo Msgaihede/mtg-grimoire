@@ -16,6 +16,18 @@ import { ago, daysSince } from "@/lib/relativeTime";
  */
 const POLL_MS = 60_000;
 
+/**
+ * How soon the status is re-read while the backend says a check or a download is running.
+ *
+ * **The minute above is the wrong wait for that answer** (issue #1033). The first read lands
+ * while the startup check is usually still in flight, so it says `busy: true` — and `busy`
+ * disables Check now. A check takes a second; a minute poll then held the button grey, and
+ * held the pre-check "you're on the latest version", for the other fifty-nine. So a status
+ * that reports work in flight is re-read at this pace until it stops: one `app_meta` read,
+ * no network, and only for as long as the backend is busy.
+ */
+const BUSY_POLL_MS = 1_000;
+
 /** Bytes → `6.4 MB`. The unit a download is worth reporting in; nothing here is under a MB. */
 export function formatBytes(n: number): string {
   return `${(n / 1_000_000).toFixed(1)} MB`;
@@ -100,9 +112,11 @@ export function useUpdate(): Update {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const poll = async () => {
+      let wait = POLL_MS;
       try {
         const next = await ipc.updateStatus();
         if (!cancelled) setStatus(next);
+        if (next.busy) wait = BUSY_POLL_MS;
       } catch {
         // Not worth a banner: the next poll is a minute away, and a status that cannot be
         // read says nothing about whether an update exists.
@@ -111,7 +125,7 @@ export function useUpdate(): Update {
       // the effect is still live** (issue #556): a cleanup that lands while a read is in flight
       // clears a timer that does not exist yet, and an unguarded reschedule here then started a
       // loop nothing could stop — one per StrictMode remount and per failed install's re-run.
-      if (!cancelled) timer = setTimeout(poll, POLL_MS);
+      if (!cancelled) timer = setTimeout(poll, wait);
     };
     void poll();
     return () => {
@@ -136,7 +150,12 @@ export function useUpdate(): Update {
     ipc
       .updateCheck(true)
       .then(setStatus)
-      .catch((e: unknown) => setError(ipcError(e)))
+      .catch((e: unknown) => {
+        setError(ipcError(e));
+        // Most often "an update check is already running" — the startup one. Re-read, so
+        // the status says so and the busy pace above follows it to its answer.
+        setNonce((n) => n + 1);
+      })
       .finally(() => setBusy(false));
   }, []);
 
