@@ -4,6 +4,12 @@
 //   DISCORD_WEBHOOK_URL=… VERSION=0.44.0 TAG=v0.44.0 REPO=owner/name \
 //     node scripts/changelog/discord.ts notes.md
 //
+// **`DISCORD_WEBHOOK_URL` holds one webhook or several** (2026-10-14), separated by `;` — one
+// secret, so adding a channel changes no workflow. Every
+// address is checked before anything is sent, and the announcement goes to each in turn; a
+// webhook that fails does not keep the ones after it from being posted to, and the run still
+// fails, naming which (by position — the address is the credential).
+//
 // **The notes are the release's body as published**, read by the step before this one — so the
 // generated `changelog/<version>.md` when `publish` set it, and release-please's notes when it
 // did not. Nothing is read from the repository but this file.
@@ -18,7 +24,7 @@
 // titled `@everyone` stays text), and no link unfolds into a preview (`SUPPRESS_EMBEDS`):
 // release-please's notes carry a link per commit.
 //
-// **Not idempotent.** A re-run posts the announcement again, and a failure part-way leaves the
+// **Not idempotent.** A re-run posts the announcement again, to every webhook, and a failure part-way leaves the
 // messages already posted; the log says how many.
 //
 // The cutting and the payloads are pure and `discord.test.ts` holds them; `fetch` and `sleep`
@@ -181,6 +187,40 @@ export function webhookUrl(raw: string): string {
   return url.href;
 }
 
+/** What separates one webhook from the next in `DISCORD_WEBHOOK_URL`. */
+const DELIMITER = ";";
+
+/**
+ * Every webhook `raw` names, `;` between them, each through `webhookUrl`, in order, once each.
+ * Whitespace around an address is dropped. A bad address is named by its position, never
+ * repeated.
+ */
+export function webhookUrls(raw: string): string[] {
+  const parts = raw
+    .split(DELIMITER)
+    .map((part) => part.trim())
+    .filter((part) => part !== "");
+  if (parts.length === 0) throw new DiscordError("DISCORD_WEBHOOK_URL holds no address.");
+  const urls = parts.map((part, i) => {
+    try {
+      // A space or a comma is never in a webhook's address, only in a list using the wrong
+      // separator — and `new URL` would take it, encoded, as one address.
+      if (/[\s,]/.test(part)) {
+        throw new DiscordError(
+          "DISCORD_WEBHOOK_URL holds a space or a comma; separate webhooks with `;`.",
+        );
+      }
+      return webhookUrl(part);
+    } catch (error) {
+      if (error instanceof Error && parts.length > 1) {
+        error.message = `Address ${i + 1} of ${parts.length}: ${error.message}`;
+      }
+      throw error;
+    }
+  });
+  return [...new Set(urls)];
+}
+
 /** How long a 429 asks to be waited, in milliseconds: the body's `retry_after`, else the header's. */
 function waitOf(text: string, headers: DiscordResponse["headers"]): number {
   let seconds = Number.NaN;
@@ -251,17 +291,35 @@ async function main() {
       "usage: DISCORD_WEBHOOK_URL=… VERSION=… TAG=… REPO=… node scripts/changelog/discord.ts <notes.md>",
     );
   }
-  const url = webhookUrl(DISCORD_WEBHOOK_URL);
+  const urls = webhookUrls(DISCORD_WEBHOOK_URL);
   const messages = messagesFor({
     version: VERSION,
     url: releaseUrl(REPO, TAG),
     notes: readFileSync(file, "utf8"),
   });
   const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-  const posted = await announce(url, messages, { sleep, log: (line) => console.log(line) });
+  const noun = messages.length === 1 ? "message" : "messages";
+  const failed: number[] = [];
+  for (const [i, url] of urls.entries()) {
+    const which = `webhook ${i + 1} of ${urls.length}`;
+    try {
+      await announce(url, messages, { sleep, log: (line) => console.log(`${which}: ${line}`) });
+    } catch (error) {
+      console.error(`${which}: ${error instanceof Error ? error.message : String(error)}`);
+      failed.push(i + 1);
+    }
+  }
   if (GITHUB_STEP_SUMMARY) {
-    const noun = posted === 1 ? "message" : "messages";
-    appendFileSync(GITHUB_STEP_SUMMARY, `Announced ${TAG} on Discord in ${posted} ${noun}.\n`);
+    const done = urls.length - failed.length;
+    const hooks = urls.length === 1 ? "webhook" : "webhooks";
+    let line = `Announced ${TAG} on Discord in ${messages.length} ${noun}, to ${done} of ${urls.length} ${hooks}.`;
+    if (failed.length > 0) line += ` Failed: ${failed.map((n) => `webhook ${n}`).join(", ")}.`;
+    appendFileSync(GITHUB_STEP_SUMMARY, `${line}\n`);
+  }
+  if (failed.length > 0) {
+    throw new DiscordError(
+      `Not announced to ${failed.length} of ${urls.length} webhooks (${failed.join(", ")}).`,
+    );
   }
 }
 
