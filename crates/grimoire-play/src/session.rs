@@ -33,7 +33,6 @@ use engine::game::commander::commander_tax;
 use engine::game::effects::create_emblem::grant_emblem;
 use engine::game::engine::apply;
 use engine::game::mana_sources::max_mana_yield;
-use engine::game::token_presets::known_token_presets;
 use engine::game::turn_control::authorized_submitters;
 use engine::game::{
     install_card_db, load_and_hydrate_decks, resolve_deck_list, start_game_with_starting_player,
@@ -52,6 +51,7 @@ use engine::types::StaticDefinition;
 use engine::types::{parse_counter_type, GameState, PlayerId};
 
 use crate::cards::{self, CardFacts};
+use crate::tokens::{DeckTokens, TokenFacts};
 use crate::view::{
     CardCounter, GameCard, GoldfishAction, GoldfishStep, GoldfishView, Happened, Lane,
     MulliganView, Place, Seat, Stage, TokenOffer,
@@ -92,12 +92,15 @@ pub struct Goldfish {
     turn: u32,
     mulligans: u8,
     tokens: Vec<TokenOffer>,
+    /// The printing the reader set for each of the deck's tokens, which a token is drawn by.
+    deck_tokens: DeckTokens,
 }
 
 impl Goldfish {
     /// A new game of `cards` (the deck as it stands), with the opening hand drawn. `seed` is the
-    /// shuffle: the same seed and deck give the same game.
-    pub fn new(cards: &[CardFacts], seed: u64) -> Result<Self, String> {
+    /// shuffle: the same seed and deck give the same game. `deck_tokens` are the deck's tokens in
+    /// the printings the reader set, which a token is offered and drawn by.
+    pub fn new(cards: &[CardFacts], deck_tokens: &[TokenFacts], seed: u64) -> Result<Self, String> {
         let fish = cards::synthetic(FISH_CARD, "Land", "");
         let db = Arc::new(cards::database(cards, &[fish])?);
 
@@ -165,26 +168,8 @@ impl Goldfish {
         );
 
         let deck_names: HashSet<&str> = by_name.keys().map(String::as_str).collect();
-        let mut tokens: Vec<TokenOffer> = known_token_presets()
-            .iter()
-            .filter_map(|preset| {
-                let source = preset
-                    .source_card_names
-                    .iter()
-                    .find(|n| deck_names.contains(n.as_str()))?;
-                Some(TokenOffer {
-                    preset: preset.id.clone(),
-                    name: preset.body.display_name.clone(),
-                    source: source.clone(),
-                    card_id: preset
-                        .token_image_ref
-                        .as_ref()
-                        .map(|r| r.scryfall_id.clone()),
-                })
-            })
-            .collect();
-        tokens.sort_by(|a, b| a.name.cmp(&b.name).then(a.source.cmp(&b.source)));
-        tokens.dedup_by(|a, b| a.name == b.name && a.source == b.source);
+        let deck_tokens = DeckTokens::new(deck_tokens);
+        let tokens = deck_tokens.offers(&deck_names);
 
         let mut game = Goldfish {
             state,
@@ -195,6 +180,7 @@ impl Goldfish {
             turn: 0,
             mulligans: 0,
             tokens,
+            deck_tokens,
         };
         game.assign_printings(cards);
         start_game_with_starting_player(&mut game.state, YOU);
@@ -344,6 +330,14 @@ impl Goldfish {
             .printings
             .get(&id)
             .cloned()
+            .or_else(|| {
+                o.is_token
+                    .then(|| {
+                        self.deck_tokens
+                            .printing_of(o.token_image_ref.as_ref(), &o.name)
+                    })
+                    .flatten()
+            })
             .or_else(|| o.token_image_ref.as_ref().map(|r| r.scryfall_id.clone()))
             .or_else(|| self.by_name.get(&o.name).cloned());
         let is_commander = self.commanders.contains(&o.name) && !o.is_token;

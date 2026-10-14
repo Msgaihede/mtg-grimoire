@@ -221,6 +221,15 @@ describe("gameMenu", () => {
     expect(onAct).toHaveBeenLastCalledWith({ type: "createToken", preset: "food", count: 1 });
   });
 
+  it("names a token the reader added by hand without a source", () => {
+    const view: GoldfishView = {
+      ...turnNineView(),
+      tokens: [{ preset: "soldier", name: "Soldier", source: "", cardId: "c-soldier" }],
+    };
+    const tokens = sub(gameMenu({ ...base, view }), "Create a token");
+    expect(labels(tokens)).toEqual(["Soldier"]);
+  });
+
   it("says when the deck makes no tokens", () => {
     const view: GoldfishView = { ...turnNineView(), tokens: [] };
     const tokens = sub(gameMenu({ ...base, view }), "Create a token");

@@ -132,4 +132,13 @@ describe("OpeningHand", () => {
       `${view.libraryLands} landsof ${view.library}`,
     );
   });
+
+  it("draws each card from the display image, sized by the row it fills", () => {
+    const view = viewWith();
+    const { hand } = draw(view);
+    const card = hand().getByRole("button", { name: view.hand[0].name });
+    expect(card.className).toContain("aspect-[5/7]");
+    expect(card.className).toContain("100cqw");
+    expect(within(card).getByRole("img").getAttribute("src")).toContain("/display/");
+  });
 });

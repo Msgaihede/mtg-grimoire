@@ -45,6 +45,8 @@ const meta = {
     hasGameChangers: false,
     gameChangersOnly: false,
     onGameChangersOnlyToggle: fn(),
+    missingOnly: false,
+    onMissingOnlyToggle: fn(),
     tight: false,
     // The ordinary deck, and what every story on this page but {@link OnAVirtualDeck} draws.
     // `false` takes the `Owned` term and the hairline in front of it away; it is written once, in
@@ -293,7 +295,8 @@ export const ModalLands: Story = {
  * A deck the collection cannot cover, which is the one red thing on this line.
  *
  * It is a **fact**, not a refusal: the press that acts on it is `Send missing to wishlist`, under
- * the deck with the charts. Nothing here refuses anything.
+ * the deck with the charts. Nothing here refuses anything. The figure is a press of its own since
+ * issue #985 — it narrows the deck to the cards it counts, as the game-changer chip does.
  */
 export const Shortfall: Story = {
   args: {
@@ -307,6 +310,30 @@ export const Shortfall: Story = {
     const canvas = within(canvasElement);
 
     await expect(canvas.getByText("3 missing")).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "3 missing" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  },
+};
+
+/**
+ * {@link Shortfall} with the figure pressed (issue #985): the deck below is narrowed to the cards
+ * it is short of. The tint and the underline are the sighted half of `aria-pressed`; the name is
+ * the figure's own words in both states.
+ */
+export const ShortfallFilterOn: Story = {
+  args: {
+    ...Shortfall.args,
+    missingOnly: true,
+  },
+  play: async ({ args, canvasElement }) => {
+    const canvas = within(canvasElement);
+    const press = canvas.getByRole("button", { name: "3 missing" });
+
+    await expect(press).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(press);
+    await expect(args.onMissingOnlyToggle).toHaveBeenCalled();
   },
 };
 

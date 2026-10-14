@@ -1221,7 +1221,7 @@ describe("ScannerPage", () => {
  * under the printing and finish a reader says the last of them shows. The dialog's own suite
  * (`submit/SubmitScanDialog.test.tsx`) holds what it asks and refuses; what is asked here is the
  * page's half — where the press is offered, what it freezes, where the dialog is mounted, and
- * that nothing stops for it.
+ * that recognition pauses while it is open (issue #977).
  */
 describe("ScannerPage sending a scan", () => {
   /** The printing the Fast fixture decides on, as the search answers it. */
@@ -1430,11 +1430,11 @@ describe("ScannerPage sending a scan", () => {
   });
 
   /**
-   * **The camera keeps running behind the dialog**, as it does behind the tray's two questions —
-   * and the run in the dialog is the one frozen at the press, however far the pump's own has
-   * turned over since.
+   * **Recognition pauses behind the dialog** (issue #977) — a card left under the lens while the
+   * reader picks a printing must not land in the tray — and resumes when it closes. The run in the
+   * dialog is the one frozen at the press.
    */
-  it("goes on reading behind the dialog, with the run as it was at the press", async () => {
+  it("pauses reading behind the dialog, with the run as it was at the press, and resumes on close", async () => {
     const restore = shimVideo();
     const plainFrames = numberedCanvas();
     opens();
@@ -1457,11 +1457,11 @@ describe("ScannerPage sending a scan", () => {
       expect(Number(count)).toBeGreaterThanOrEqual(5);
       expect(within(dialog).getByRole("searchbox")).toHaveValue("Plains");
 
-      // A whole new run's worth of frames goes by behind it.
+      // No frame goes out behind it: at most the one already on the wire at the press.
       const sent = vi.mocked(ipc.scannerFrame).mock.calls.length;
-      await waitFor(() =>
-        expect(vi.mocked(ipc.scannerFrame).mock.calls.length).toBeGreaterThan(sent + 22),
-      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(vi.mocked(ipc.scannerFrame).mock.calls.length).toBeLessThanOrEqual(sent + 1);
+      const paused = vi.mocked(ipc.scannerFrame).mock.calls.length;
       // The same element, on the same picture, of the same number of pictures, with the same
       // word in the box.
       expect(picture(dialog)).toBe(shown);
@@ -1469,10 +1469,13 @@ describe("ScannerPage sending a scan", () => {
       expect(within(dialog).getByRole("slider", { name: "Picture" })).toHaveAttribute("max", count);
       expect(within(dialog).getByRole("searchbox")).toHaveValue("Plains");
 
-      // Escape hands the caret back to the press; the scanner never stopped.
+      // Escape hands the caret back to the press, and the scanner reads again.
       await user.keyboard("{Escape}");
       await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
       expect(screen.getByRole("button", { name: "Send scan…" })).toHaveFocus();
+      await waitFor(() =>
+        expect(vi.mocked(ipc.scannerFrame).mock.calls.length).toBeGreaterThan(paused),
+      );
     } finally {
       plainFrames();
       restore();

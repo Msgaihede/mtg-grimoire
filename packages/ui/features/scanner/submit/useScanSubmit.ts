@@ -49,10 +49,11 @@ export interface ScanSubmit {
  * frame of the run itself. The `verdict` here is only what the reader was looking at: the name
  * the search opens on.
  *
- * **Nothing stops for it.** The camera and the pump run on behind the dialog exactly as they do
- * behind the tray's two questions, and cards go on landing in the tray. The run is a value in
- * state: no later frame can reach it, and a second press cannot replace it — one is refused
- * while a dialog is open, so the pictures the reader is looking through are the ones Send sends.
+ * **Recognition pauses for it** (issue #977): the pages hold their pump while `run` is not
+ * `null`, so no card lands in the tray while the reader picks a printing. The camera stays open.
+ * The run is a value in state: no later frame can reach it, and a second press cannot replace
+ * it — one is refused while a dialog is open, so the pictures the reader is looking through are
+ * the ones Send sends.
  *
  * Takes the loop's `recent` and `verdict` rather than the whole loop, with the page's own word
  * for whether the press is offered at all (`ready`): the press is drawn only then, and a sentence

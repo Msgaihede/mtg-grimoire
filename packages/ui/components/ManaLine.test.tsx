@@ -14,6 +14,15 @@ describe("ManaLine", () => {
     expect(container.firstChild).toHaveAttribute("aria-hidden", "true");
   });
 
+  /** Inactive, the line is greyed out: the five colours belong to a sync in progress. */
+  it("is grey rather than the gradient when nothing is syncing", () => {
+    const { container } = render(<ManaLine sync={null} />);
+    const line = container.firstChild as HTMLElement;
+
+    expect(line).toHaveClass("bg-border");
+    expect(line.style.background).toBe("");
+  });
+
   it("becomes the progress bar during a sync", () => {
     render(<ManaLine sync={{ value: 0.42, label: "Downloading card data" }} />);
 

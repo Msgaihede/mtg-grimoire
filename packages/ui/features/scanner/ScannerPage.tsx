@@ -158,6 +158,13 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   );
 
   /**
+   * *Send scan…*'s dialog is open (issue #977). Mirrors `submit.run !== null`, which the pump
+   * cannot read directly: `useScanSubmit` is built on the loop, so it comes after it. Synced in
+   * render, below the hook, so the pump stops in the same commit the dialog opens in.
+   */
+  const [sending, setSending] = useState(false);
+
+  /**
    * *Add card…* (issue #978): a card the camera will not read, searched for and put in the tray by
    * hand. **The scanner pauses while the dialog is open** — the reader has turned to the keyboard,
    * and a card read behind the scrim would land in a tray they cannot see. Not the Stop button's
@@ -170,9 +177,17 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     videoRef,
     // **Held until the prefs and the tray are in.** The first frame must go out in the stored
     // mode and under the stored filters, and a decision must land on the stored tray rather than
-    // on an empty one the load then overwrites. And paused the moment the window is minimized, or
-    // while a card is being added by hand.
-    live: scanning && camera.kind === "live" && loaded && tray.loaded && !parked.paused && !picking,
+    // on an empty one the load then overwrites. And paused the moment the window is minimized,
+    // for as long as *Send scan…*'s dialog is open (`sending`, below), and while a card is being
+    // added by hand (`picking`).
+    live:
+      scanning &&
+      camera.kind === "live" &&
+      loaded &&
+      tray.loaded &&
+      !parked.paused &&
+      !sending &&
+      !picking,
     options: frameOptions,
     sendPx,
     detailWaitMs,
@@ -273,6 +288,12 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     filters: inForce,
     ready: sendable,
   });
+  // **Recognition pauses while the dialog is open** (issue #977): a card left under the lens
+  // while the reader picks a printing would otherwise land in the tray behind their back. React's
+  // "adjusting state when a prop changes", as `useScanLoop` empties its latches — re-rendered
+  // before anything commits. The run is already frozen in the dialog, so stopping the pump (which
+  // lets its ring go) costs it nothing; closing starts a fresh run.
+  if (sending !== (submit.run !== null)) setSending(submit.run !== null);
   // **A run never spans a change of filters.** The session drops its tracker to take a changed
   // set, and the pump cannot see that — a filter is a call of its own, not a frame's — so the
   // page says it: when the filters in force move, the frames kept so far are let go

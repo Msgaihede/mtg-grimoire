@@ -295,7 +295,7 @@ export function gameMenu({
       tokens.length === 0
         ? [action("none", "This deck makes no tokens", () => {}, true)]
         : tokens.map((t) =>
-            action(`token-${t.preset}`, `${t.name} · from ${t.source}`, () =>
+            action(`token-${t.preset}`, t.source ? `${t.name} · from ${t.source}` : t.name, () =>
               onAct({ type: "createToken", preset: t.preset, count: 1 }),
             ),
           ),
