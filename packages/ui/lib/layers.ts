@@ -194,8 +194,8 @@ export const LAYER = {
    * scrim that prompted it is a receipt nobody reads. **Below {@link LAYER.menuOverDialog} and
    * {@link LAYER.tooltip}**: both are opened by the reader on purpose and anchored to what they
    * are pointing at, and a toast that happened to be up in the corner must never paint over the
-   * menu row or the hint the reader is reading. Below `gate`, for the tooltip's reason: the sync
-   * takeover hides the controls a toast could be about.
+   * menu row or the hint the reader is reading. Below `gate`: the sync takeover hides the controls
+   * a toast could be about.
    */
   toast: "z-47",
   /**
@@ -216,32 +216,9 @@ export const LAYER = {
    * Above {@link LAYER.overlayStacked}, because a rung is a claim about the highest thing the
    * surface can be asked to cover and the printings wall is a stacked dialog — and above
    * {@link LAYER.toast}, so a menu opened near the corner is never read through a receipt. Below
-   * {@link LAYER.tooltip}, which a hint over a menu row must still clear, and so below `gate`.
+   * {@link LAYER.tooltip}, which a hint over a menu row must still clear, and below `gate`.
    */
   menuOverDialog: "z-48",
-  /**
-   * The app's one tooltip, over anything a view or a dialog draws.
-   *
-   * **Above every dialog rung because a hint is shown over the deck editor's dialogs** — a
-   * control inside a modal has as much to explain as one outside it, and a tooltip painted behind
-   * the scrim would be a tooltip that never appears. Below {@link LAYER.gate} because
-   * `SyncProgress` takes the window: a hint floating over it would describe a control the reader
-   * cannot see or reach.
-   *
-   * **It moved from `z-46` to `z-47` on 2026-09-03 rather than staying put while
-   * {@link LAYER.overlayStacked} was inserted below it**, and the reason is the one already
-   * written above: the argument names *a dialog*, so this has to clear the highest number a
-   * dialog is drawn at, whatever that number becomes. A control inside a nested overlay is a
-   * control inside a modal, and its hint is exactly the one the old number would have lost.
-   * It moved again, to `z-48`, on 2026-10-11 for the same reason one rung up: a menu opened from
-   * a dialog ({@link LAYER.menuOverDialog}) is drawn over it, and a hint over a menu row is a
-   * hint over a dialog. And to `z-49` on 2026-10-12, when {@link LAYER.toast} took a rung below
-   * the menu: a hint over a toast's ✕ is a hint over the corner it sits in.
-   *
-   * One rung and one panel — the provider holds at most one open tooltip, so there is no second
-   * one for a number to order against.
-   */
-  tooltip: "z-49",
   /**
    * `SyncProgress`'s full-window takeover, over everything the *app* draws.
    *
@@ -250,7 +227,7 @@ export const LAYER = {
    */
   gate: "z-50",
   /**
-   * The window's own caption bar, above every layer above.
+   * The window's own caption bar, above every layer above but {@link LAYER.tooltip}.
    *
    * **This is the only rung that is not about the app at all.** Everything below it is content
    * the app draws and may legitimately cover with something else it draws; `TitleBar` is the
@@ -277,11 +254,13 @@ export const LAYER = {
    * file), and fixes only the two surfaces that exist today. One rung says the thing that is
    * actually true and keeps being true for the next full-window surface somebody adds.
    *
-   * **Above {@link LAYER.tooltip} without taking a hint off the screen**, which is the one
-   * overlap worth checking rather than assuming: the caption's own buttons are the app's only
-   * anchors pinned to the window's top edge, and `placeTooltip` already has to flip those
-   * downward rather than open them off-window — so their panels are drawn *below* this row and
-   * never inside it.
+   * **Below {@link LAYER.tooltip} since 2026-10-14 (issue #976)**, the one surface allowed over
+   * the frame. This paragraph used to claim the caption could sit above the tooltip without taking
+   * a hint off the screen, on the grounds that only the caption's own buttons are anchored at the
+   * window's top edge and their hints flip downward. That checked the wrong anchors: a hint on a
+   * control *just under* this row opens upward, into it — see the tooltip's entry for why the fix
+   * is that rung rather than this one. A hint is transient and, unless asked to be interactive,
+   * takes no press, so the frame stays the reader's.
    *
    * `TitleBar`'s root is a direct child of the shell's `flex-col`, so the class needs no
    * `position` to work: a z-index other than `auto` on a flex item creates a stacking context
@@ -289,4 +268,40 @@ export const LAYER = {
    * {@link LAYER.overlappingMark} rests on.
    */
   caption: "z-60",
+  /**
+   * The app's one tooltip, over everything — the window's own caption included.
+   *
+   * **Above every dialog rung because a hint is shown over the deck editor's dialogs** — a
+   * control inside a modal has as much to explain as one outside it, and a tooltip painted behind
+   * the scrim would be a tooltip that never appears.
+   *
+   * **The top of the scale since 2026-10-14 (issue #976), above {@link LAYER.caption}.** It sat at
+   * `z-49`, under `gate` and so under the caption, and the caption won exactly the overlap its own
+   * entry said could not happen: `placeTooltip` keeps 8px off the *window's* edge, not off the
+   * caption's, so a `side="top"` hint on any control in the first row under the 34px bar — the
+   * deck editor's toolbar, Compare and Import — was placed up into the bar and drawn behind it,
+   * cut off at the bar's lower edge. Raising the number rather than teaching `placeTooltip` the
+   * caption's height is the fix for the reason the caption's own entry gives against bounding
+   * overlays at `BAR_H`: one rung says what is true for every anchor, now and later, where an
+   * inset would duplicate the bar's height into the placement and only describe today's layout.
+   *
+   * Covering the caption costs nothing the caption entry protects. A tooltip is transient, open
+   * only while the reader is pointing at or focused on its anchor, and — unless the caller asked
+   * for an interactive one — `pointer-events-none`, so a hint drawn over the bar never takes a
+   * press meant for Close or a drag meant for the window. **And above `gate` with it**, which the
+   * old placement argued against ("a hint floating over it would describe a control the reader
+   * cannot see"): the takeover leaves the pointer nothing to hover but the caption's own buttons,
+   * whose hints flip downward and were therefore drawn *under* the gate — invisible for the whole
+   * of a first sync. The only anchor that can open a hint over the gate is one the reader is
+   * pointing at, which is the whole reason a hint opens.
+   *
+   * The history, kept because each move was the same argument one rung up: `z-46` → `z-47` on
+   * 2026-09-03 to clear {@link LAYER.overlayStacked}, `z-48` on 2026-10-11 for
+   * {@link LAYER.menuOverDialog} (a hint over a menu row is a hint over a dialog), `z-49` on
+   * 2026-10-12 when {@link LAYER.toast} took a rung below the menu, and `z-70` for the caption.
+   *
+   * One rung and one panel — the provider holds at most one open tooltip, so there is no second
+   * one for a number to order against.
+   */
+  tooltip: "z-70",
 } as const;

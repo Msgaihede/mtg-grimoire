@@ -51,9 +51,7 @@ describe("the layer scale", () => {
     expect(numberOf(LAYER.overlay)).toBeLessThan(numberOf(LAYER.overlayStacked));
     // A tooltip is shown over the deck editor's dialogs, so it outranks the scrim they draw —
     // and it has to clear the *highest* dialog rung, not just the base one, because a control
-    // inside a nested overlay has as much to explain as one anywhere else. It stays under `gate`
-    // because `SyncProgress`'s full-window takeover must still cover a hint describing a control
-    // the reader can no longer see.
+    // inside a nested overlay has as much to explain as one anywhere else.
     expect(numberOf(LAYER.overlayStacked)).toBeLessThan(numberOf(LAYER.tooltip));
     // A context menu opened from inside a dialog is a `fixed` sibling of that dialog's scrim in
     // the root stacking context, so it has to clear the highest dialog rung or it paints behind
@@ -63,12 +61,17 @@ describe("the layer scale", () => {
     expect(numberOf(LAYER.overlayStacked)).toBeLessThan(numberOf(LAYER.toast));
     expect(numberOf(LAYER.toast)).toBeLessThan(numberOf(LAYER.menuOverDialog));
     expect(numberOf(LAYER.menuOverDialog)).toBeLessThan(numberOf(LAYER.tooltip));
-    expect(numberOf(LAYER.tooltip)).toBeLessThan(numberOf(LAYER.gate));
+    expect(numberOf(LAYER.menuOverDialog)).toBeLessThan(numberOf(LAYER.gate));
     // And the window's own caption is above every one of them. `decorations: false` makes that
     // row the only way to move, minimize or close the app, so a surface covering it does not
     // obscure a control — it takes the window away. Both full-window surfaces did exactly that
     // until 2026-08-22, the gate for the length of a first sync and the scrim for every modal.
     expect(numberOf(LAYER.gate)).toBeLessThan(numberOf(LAYER.caption));
+    // Except the tooltip, which is above the caption too (issue #976). `placeTooltip` keeps clear
+    // of the window's edge, not the caption's, so a hint opening upward from a control just under
+    // the bar is placed inside it — and at a rung below the caption it was drawn behind it, cut
+    // off. A hint is transient and takes no press, so covering the frame takes nothing away.
+    expect(numberOf(LAYER.caption)).toBeLessThan(numberOf(LAYER.tooltip));
   });
 
   /**
