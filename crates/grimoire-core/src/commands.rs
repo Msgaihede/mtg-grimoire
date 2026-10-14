@@ -86,6 +86,8 @@ use crate::state::State;
 #[allow(unused_imports)]
 use crate::filters::CardFilters;
 #[allow(unused_imports)]
+use crate::folder_rules::FolderRule;
+#[allow(unused_imports)]
 use crate::sorting::Marketplace;
 #[allow(unused_imports)]
 use crate::wishlist::WishlistQuery;
@@ -425,6 +427,10 @@ commands! {
         let marketplace = Marketplace::from_opt(marketplace.as_deref());
         folder_summary(conn, marketplace)
     };
+    read collection_rule_conflicts in collection_folders(marketplace: Option<String>) = |conn| {
+        let marketplace = Marketplace::from_opt(marketplace.as_deref());
+        rule_conflicts(conn, marketplace)
+    };
     write collection_folder_create in collection_folders(parent_id: Option<i64>, name: String) = |conn| {
         create_folder(conn, parent_id, &name)
     };
@@ -433,6 +439,9 @@ commands! {
     };
     write collection_folder_set_locked in collection_folders(id: i64, locked: bool) = |conn| {
         set_folder_locked(conn, id, locked)
+    };
+    write collection_folder_set_rules in collection_folders(id: i64, rules: Vec<FolderRule>) = |conn| {
+        set_folder_rules(conn, id, rules)
     };
     write collection_folder_move in collection_folders(id: i64, parent_id: Option<i64>) = |conn| {
         move_folder(conn, id, parent_id)
@@ -1234,11 +1243,18 @@ commands! {
         let marketplace = Marketplace::from_opt(marketplace.as_deref());
         folder_summary(conn, marketplace)
     };
+    read wishlist_rule_conflicts in wishlist_folders(marketplace: Option<String>) = |conn| {
+        let marketplace = Marketplace::from_opt(marketplace.as_deref());
+        rule_conflicts(conn, marketplace)
+    };
     write wishlist_folder_create in wishlist_folders(parent_id: Option<i64>, name: String) = |conn| {
         create_folder(conn, parent_id, &name)
     };
     write wishlist_folder_rename in wishlist_folders(id: i64, name: String) = |conn| {
         rename_folder(conn, id, &name)
+    };
+    write wishlist_folder_set_rules in wishlist_folders(id: i64, rules: Vec<FolderRule>) = |conn| {
+        set_folder_rules(conn, id, rules)
     };
     write wishlist_folder_move in wishlist_folders(id: i64, parent_id: Option<i64>) = |conn| {
         move_folder(conn, id, parent_id)

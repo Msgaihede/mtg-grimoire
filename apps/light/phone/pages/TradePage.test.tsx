@@ -862,6 +862,7 @@ describe("the copies a deck is holding", () => {
         ...over,
       }) as CollectionRow;
     const folder = (id: number, name: string, kind: string): CollectionFolder => ({
+      rules: [],
       id,
       parentId: null,
       name,

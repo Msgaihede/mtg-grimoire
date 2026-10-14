@@ -15,6 +15,7 @@ import {
   ArrowUp,
   Download,
   FolderInput,
+  ListChecks,
   Lock,
   LockOpen,
   Trash2,
@@ -35,17 +36,15 @@ import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { dragData } from "@/features/decks/dnd";
 import { CONFIRM_CANCEL } from "@/features/decks/metaRows";
 import { CardGrid, type GridSections } from "@/features/search/CardGrid";
-import {
-  FilterBar,
-  StatedFiltersLine,
-  type FilterLabels,
-} from "@/features/search/FilterBar";
+import { FilterBar, StatedFiltersLine, type FilterLabels } from "@/features/search/FilterBar";
 import { FilterQuickBar } from "@/features/search/FilterQuickBar";
 import { ShelfLabel } from "@/features/shelves/ShelfLabel";
 import { ShelfPlace } from "@/features/shelves/ShelfPlace";
 import { FOLD_PAUSED_REASON, ShelfToolbar } from "@/features/shelves/ShelfToolbar";
 import { useFoldAnchor } from "@/features/shelves/useFoldAnchor";
 import { useFoldOnFolderDrag } from "@/features/shelves/useFoldOnFolderDrag";
+import { FolderRulesBadge } from "@/features/folders/FolderRulesBadge";
+import { FolderRulesDialog } from "@/features/folders/FolderRulesDialog";
 import {
   caretIsNowhere,
   pathRowAddFolder,
@@ -60,19 +59,23 @@ import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import { CONDITION_LABEL, CONDITIONS } from "@/lib/conditions";
 import { count, plural } from "@/lib/counts";
 import { reorderedLevel } from "@/lib/folderOrder";
+import {
+  effectiveRules,
+  hasRules,
+  RULE_BREAK,
+  subtreeConflicts,
+  type EffectiveRules,
+  type InheritedRules,
+} from "@/lib/folderRules";
 import { FINISH_LABEL, finishLabel, isFinish, type Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
-import {
-  buildFolderTree,
-  folderDescendants,
-  folderLevel,
-  trailOf,
-} from "@/lib/folderTree";
+import { buildFolderTree, folderDescendants, folderLevel, trailOf } from "@/lib/folderTree";
 import {
   ipc,
   ipcError,
   type CollectionFolder,
   type CollectionRow,
+  type FolderRule,
 } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { notify } from "@/lib/notifications";
@@ -133,6 +136,7 @@ import { useCollectionEntryWrites } from "./useCollectionEntryWrites";
 import { countEditableIn, quantityRefusal } from "./entryFences";
 import {
   useCollectionFolders,
+  useCollectionRuleConflicts,
   useSetCollectionFolder,
   useSetCollectionFolderMany,
 } from "./useCollectionFolders";
@@ -168,6 +172,10 @@ import {
  * Escape rung, the same blur. The ids are held rather than re-derived because the question is
  * about the rows the menu reached, and nothing else on the page remembers which those were.
  */
+/** No rules, as one identity — what the rules dialog is handed while it is shut. */
+const NO_RULES: readonly FolderRule[] = [];
+const NO_INHERITED: readonly InheritedRules[] = [];
+
 type Panel =
   | { kind: "newFolder"; parentId: number | null; originShelfId?: number }
   | { kind: "renameFolder"; folderId: number }
@@ -447,7 +455,6 @@ function focusedElement(): HTMLElement | null {
   return document.activeElement instanceof HTMLElement ? document.activeElement : null;
 }
 
-
 export function CollectionPage() {
   // The To review widget's needs-review hand-off — `useReviewHandoff` has the whole rule.
   const review = useReviewHandoff("collection");
@@ -489,6 +496,44 @@ export function CollectionPage() {
   const { mutate: reorderMutate } = folders.reorder;
   const { mutateAsync: removeFolderAsync, reset: removeFolderReset } = folders.remove;
   const { mutateAsync: setLockedAsync, reset: setLockedReset } = folders.setLocked;
+  const { mutateAsync: setRulesAsync, reset: setRulesReset } = folders.setRules;
+  /**
+   * **Folder rules** (issue #980): which entries break their folder's rules, and how many each
+   * folder holds. Under `["collection"]`, so every write on this page that settles that root —
+   * a step, a move, a rule edit — redraws the outlines and the counts without asking for it.
+   */
+  const conflicts = useCollectionRuleConflicts();
+  /** The folder whose `Rules…` dialog is open, or `null`. Not a {@link Panel}: those are the strip
+   *  above the wall, and this is a modal over the whole page — `PickCopies`' arrangement. */
+  const [rulesFolderId, setRulesFolderId] = useState<number | null>(null);
+  /**
+   * Every folder with rules of its own or from above, by id — built once per folder list rather
+   * than walked once per heading per render. A folder that has none is absent, which is how a
+   * heading knows to draw no badge.
+   */
+  const rulesById = useMemo(() => {
+    const out = new Map<number, EffectiveRules>();
+    for (const folder of folders.folders) {
+      const effective = effectiveRules(folders.folders, folder.id);
+      if (hasRules(effective)) out.set(folder.id, effective);
+    }
+    return out;
+  }, [folders.folders]);
+  /** The badge a folder with rules wears — its sub-tree's conflicts counted in **copies**, since a
+   *  heading speaks of cards and a row holding three copies is three cards out of place. */
+  const rulesBadge = useCallback(
+    (id: number): ReactNode => {
+      const effective = rulesById.get(id);
+      if (effective === undefined) return null;
+      return (
+        <FolderRulesBadge
+          effective={effective}
+          conflicts={subtreeConflicts(folders.folders, conflicts.folders, id).copies}
+        />
+      );
+    },
+    [rulesById, folders.folders, conflicts.folders],
+  );
 
   /**
    * **The folder another surface asked this page to open on its way in** — `store.ts`'s
@@ -605,6 +650,15 @@ export function CollectionPage() {
    */
   const [panel, setPanel] = useState<Panel>(null);
   const openerRef = useRef<HTMLElement | null>(null);
+  /** The folder the `Rules…` dialog is about — gone with it, so a folder deleted elsewhere while
+   *  its rules are open closes the dialog rather than saving into nothing. */
+  const rulesFolder =
+    rulesFolderId === null ? undefined : folders.folders.find((f) => f.id === rulesFolderId);
+  /** Closing it hands the caret back to the `⋯` it was raised from, the export dialog's way. */
+  const closeRules = useCallback(() => {
+    setRulesFolderId(null);
+    openerRef.current?.focus();
+  }, []);
 
   /**
    * The row the list and the docked search column share, and the box the column is pinned inside
@@ -930,6 +984,22 @@ export function CollectionPage() {
     [copiesByTile],
   );
 
+  /**
+   * **A tile breaks its folder's rules when any copy behind it does** (issue #980). A tile is a
+   * printing in a finish on a shelf, and its copies can differ in what a rule reads — a condition
+   * rule passes the NM copy and fails the played one — so the outline says "something here is out
+   * of place", and the table, one row per copy, says which.
+   *
+   * Held still for `CardGrid`'s reason: it moves only with the rows and with the conflicts' answer.
+   */
+  const tileRuleBreak = useCallback(
+    (tile: CollectionTile): string | null =>
+      (copiesByTile.get(tile.key) ?? []).some((copy) => conflicts.ids.has(copy.entryId))
+        ? RULE_BREAK
+        : null,
+    [copiesByTile, conflicts.ids],
+  );
+
   const tileDrag = useCallback(
     (tile: CollectionTile): Record<string, unknown> | null => {
       // The tile's rows, by the tile's own key. **The two `cardId`s below stay `tile.id`**, and
@@ -987,7 +1057,12 @@ export function CollectionPage() {
    * depending on which was on screen would be two answers to one question.
    */
   const walk = useMemo(
-    () => listWalkStops(tiles, (tile) => ({ cardId: tile.id, oracleId: tile.oracleId, name: tile.name })),
+    () =>
+      listWalkStops(tiles, (tile) => ({
+        cardId: tile.id,
+        oracleId: tile.oracleId,
+        name: tile.name,
+      })),
     [tiles],
   );
   usePublishCardWalk("your collection", walk);
@@ -1245,7 +1320,8 @@ export function CollectionPage() {
    * of the lock on this page.
    */
   const shareTarget = useMemo(() => {
-    const here = folderId === null ? null : (folders.folders.find((f) => f.id === folderId) ?? null);
+    const here =
+      folderId === null ? null : (folders.folders.find((f) => f.id === folderId) ?? null);
     if (here === null) return shareTargetFor(null, false);
     return shareTargetFor(here, lockedIds.has(here.id));
   }, [folderId, folders.folders, lockedIds]);
@@ -1273,8 +1349,7 @@ export function CollectionPage() {
    */
   const onThisWall = useCallback(
     (id: number | null) =>
-      id === folderId ||
-      collection.shelves.some((shelf) => shelf.id === id && !shelf.headless),
+      id === folderId || collection.shelves.some((shelf) => shelf.id === id && !shelf.headless),
     [folderId, collection.shelves],
   );
   /**
@@ -1429,14 +1504,17 @@ export function CollectionPage() {
   }, [setViewAll]);
   useDismissOnEscape({ layer: "navigation", onDismiss: leaveViewAll, enabled: requestedViewAll });
 
-  const open = useCallback((next: NonNullable<Panel>, opener: HTMLElement | null) => {
-    openerRef.current = opener;
-    // A caret still owed to a heading is the last layer's business, not this one's — and a request
-    // whose write has not answered yet, or whose blur is still deciding, is superseded, so it is
-    // never recorded at all.
-    supersedeCaret();
-    setPanel(next);
-  }, [supersedeCaret]);
+  const open = useCallback(
+    (next: NonNullable<Panel>, opener: HTMLElement | null) => {
+      openerRef.current = opener;
+      // A caret still owed to a heading is the last layer's business, not this one's — and a request
+      // whose write has not answered yet, or whose blur is still deciding, is superseded, so it is
+      // never recorded at all.
+      supersedeCaret();
+      setPanel(next);
+    },
+    [supersedeCaret],
+  );
 
   /**
    * **Add folder** — on the path row it makes one at the level the reader is standing in, and on a
@@ -1677,6 +1755,22 @@ export function CollectionPage() {
             };
           })(),
           /**
+           * **What belongs in this drawer** (issue #980) — the rules its cards are expected to
+           * meet. Live on a locked folder: a rule moves no card, so it is not what the lock is
+           * about. The dialog is a modal, so the caret it hands back on closing is this heading's
+           * `⋯`, which `remember` below has already captured.
+           */
+          {
+            kind: "action",
+            id: "rules",
+            label: "Rules…",
+            Icon: ListChecks,
+            onSelect: () => {
+              setRulesReset();
+              setRulesFolderId(folder.id);
+            },
+          },
+          /**
            * **Set the drawer aside, or bring it back** — issue #365, and the one row here that is
            * neither a layer nor a field: it writes on the press, and what the reader watches change
            * is the badge on the card behind the menu.
@@ -1782,6 +1876,7 @@ export function CollectionPage() {
       reorderMutate,
       setLockedReset,
       setLockedAsync,
+      setRulesReset,
       askCaret,
       recordCaret,
     ],
@@ -2158,6 +2253,7 @@ export function CollectionPage() {
     folders.reorder,
     toasted(folders.remove),
     toasted(folders.setLocked),
+    toasted(folders.setRules),
   ]);
   const empty = rows.length === 0;
   // The cabinet is drawn only where there is one. In a collection nobody has filed, a lone inert
@@ -2254,9 +2350,7 @@ export function CollectionPage() {
         id,
         into,
         drawnOpen: (shelfId) =>
-          openShelves.some(
-            (shelf) => shelf.id === shelfId && !shelf.headless && !shelf.collapsed,
-          ),
+          openShelves.some((shelf) => shelf.id === shelfId && !shelf.headless && !shelf.collapsed),
         parentOf: (folder) => treeParent.get(folder) ?? null,
         pathRowAdd: () => pathRowAddFolder(pathRowRef.current),
       }),
@@ -2326,7 +2420,9 @@ export function CollectionPage() {
       wallShelves.map((shelf) => ({
         shelf,
         tileCount:
-          shelf.collapsed || shelf.id === NEW_FOLDER_SHELF ? 0 : (shelfCounts?.get(shelf.id)?.tiles ?? 0),
+          shelf.collapsed || shelf.id === NEW_FOLDER_SHELF
+            ? 0
+            : (shelfCounts?.get(shelf.id)?.tiles ?? 0),
       })),
     [wallShelves, shelfCounts],
   );
@@ -2453,11 +2549,15 @@ export function CollectionPage() {
           }
           dragFolder={mine ?? undefined}
           caret={caretFor(shelf.id)}
+          // Only the reader's own folders hold rules — a deck's group and the app's shelves are
+          // not theirs to write a rule on.
+          badge={mine ? rulesBadge(mine.id) : undefined}
         />
       );
     },
     [
       caretFor,
+      rulesBadge,
       folderById,
       folders.create.isPending,
       folders.rename.isPending,
@@ -2479,10 +2579,7 @@ export function CollectionPage() {
       placeFolder,
     ],
   );
-  const renderLabel = useCallback(
-    (group: "decks" | "managed") => <ShelfLabel group={group} />,
-    [],
-  );
+  const renderLabel = useCallback((group: "decks" | "managed") => <ShelfLabel group={group} />, []);
   const renderEmpty = useCallback(
     (shelf: Shelf) => <CollectionEmptyShelf shelf={shelf} cards={cardTarget} />,
     [cardTarget],
@@ -2551,7 +2648,16 @@ export function CollectionPage() {
       renderSticky,
       revealShelfId,
     }),
-    [tableLayout, rowsOf, complete, headingFor, renderLabel, renderEmpty, renderSticky, revealShelfId],
+    [
+      tableLayout,
+      rowsOf,
+      complete,
+      headingFor,
+      renderLabel,
+      renderEmpty,
+      renderSticky,
+      revealShelfId,
+    ],
   );
   /**
    * Every shelf at the root by id — what a `View all` tile's chin and a flat table row name their
@@ -2793,8 +2899,8 @@ export function CollectionPage() {
             <span className="min-w-0">
               <span className="mr-1 font-medium text-destructive">Needs review:</span>
               <span className="font-mono tabular-nums">{figures?.needsReview}</span>{" "}
-              {figures?.needsReview === 1 ? "entry" : "entries"} with a printing that changed or
-              was removed.
+              {figures?.needsReview === 1 ? "entry" : "entries"} with a printing that changed or was
+              removed.
             </span>
             <button
               type="button"
@@ -2887,6 +2993,10 @@ export function CollectionPage() {
                 />
               </div>
             )}
+            {/* The rules of the folder the reader is standing in (issue #980) — its own heading is
+                not drawn here, so this is where its badge goes, with the whole sub-tree's count:
+                that is everything on the wall below. Nothing at the root, which holds no rules. */}
+            {folderId !== null && rulesBadge(folderId)}
             {/* **The page's one live region, and it lives in this row rather than on a line of its
                 own under it** (2026-09-27, the header redesign). A region that appears together
                 with its text announces nothing, so it is mounted for the life of the view.
@@ -3101,9 +3211,7 @@ export function CollectionPage() {
                 // printing the reader opened one of. Built through {@link tileKeyOf} rather than
                 // spelled out, because the tile's own key is built by the same function and two
                 // spellings that drifted would be a wall where nothing rings at all.
-                selectedId={
-                  selectedCardId === null ? null : tileKeyOf(selectedCardId, paneFinish)
-                }
+                selectedId={selectedCardId === null ? null : tileKeyOf(selectedCardId, paneFinish)}
                 // The finish travels with the press, so the pane opens showing the object the
                 // reader pointed at rather than the plain one. The tile is the second argument
                 // because a tile here is a printing *and* a finish — see `CardGrid`'s `onSelect`,
@@ -3173,6 +3281,9 @@ export function CollectionPage() {
                 // and the menu's "Flip card" (issue #844). The table draws no picture and has
                 // neither.
                 flips={rowHasBackFace}
+                // A tile any of whose copies break their folder's rules is outlined in red
+                // (issue #980) — see {@link tileRuleBreak}.
+                ruleBreak={tileRuleBreak}
               />
             ) : (
               <>
@@ -3198,6 +3309,8 @@ export function CollectionPage() {
                   rowMenu={rowMenu}
                   rowMenuKey={rowMenuKey}
                   marketplace={marketplace}
+                  // The wall's red outline, per copy (issue #980).
+                  ruleBreaks={conflicts.ids}
                   // Flat on the `View all` wall, with a `Folder` column saying what the bands would.
                   shelves={viewAll ? undefined : tableShelves}
                   folderOf={viewAll ? shelfOfRow : undefined}
@@ -3253,10 +3366,7 @@ export function CollectionPage() {
             because a rung nothing overlaps is a claim about an overlap that does not occur. */}
         <div
           ref={dockRef}
-          className={cn(
-            "sticky flex shrink-0 self-start",
-            overWidth !== undefined && LAYER.popup,
-          )}
+          className={cn("sticky flex shrink-0 self-start", overWidth !== undefined && LAYER.popup)}
           // **The dock's `top` is inline, not a `top-0` class**: it is a number the filter quick
           // bar computes — 41px (under the bar, at the deck bar's clearance) while the bar is down,
           // 0 while it is up — and `useDockHeight` above is handed the very same `quick.dockTop`,
@@ -3397,6 +3507,31 @@ export function CollectionPage() {
           error: exportScope.error,
           onRetry: exportScope.retry,
         }}
+      />
+
+      {/* **Folder options → Rules…** (issue #980). A modal rather than the strip above the wall:
+          a list of rules is edited, not answered in a word. The write toasts, as the Lock row does,
+          and closes the dialog only once it has landed — a refusal leaves the reader's list on
+          screen with the backend's sentence over the footer. */}
+      <FolderRulesDialog
+        open={rulesFolder !== undefined}
+        scope="collection"
+        folderName={rulesFolder?.name ?? ""}
+        rules={rulesFolder?.rules ?? NO_RULES}
+        inherited={rulesById.get(rulesFolder?.id ?? -1)?.inherited ?? NO_INHERITED}
+        pending={folders.setRules.isPending}
+        error={folders.setRules.error ? ipcError(folders.setRules.error) : null}
+        onSave={(rules) => {
+          if (rulesFolder === undefined) return;
+          const { id, name } = rulesFolder;
+          report(setRulesAsync({ id, rules }), {
+            done: () =>
+              rules.length === 0 ? `Cleared rules for “${name}”` : `Saved rules for “${name}”`,
+            failed: `Couldn't save rules for “${name}”`,
+            then: closeRules,
+          });
+        }}
+        onClose={closeRules}
       />
 
       {/* One destination — the collection itself — so no destination radios are drawn: a

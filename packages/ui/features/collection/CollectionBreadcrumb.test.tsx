@@ -39,6 +39,7 @@ const TILE_DROP: CollectionDrop = { kind: "tile", tile: TILE };
 const SLEEVED: FolderDrag = { folderId: 12, name: "Sleeved", parentId: 9, scope: "collection" };
 
 const folder = (over: Partial<CollectionFolder> & { id: number; name: string }): CollectionFolder => ({
+  rules: [],
   parentId: null,
   kind: "user",
   deckId: null,

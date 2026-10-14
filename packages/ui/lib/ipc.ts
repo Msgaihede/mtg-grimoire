@@ -17,6 +17,7 @@
  * `EntryInput`/`EntryPatch`/`EntryChange`/`CollectionQuery`/`CollectionRow`/
  * `CollectionPage`/`CollectionSummary`/`BreakdownRow` — `crates/grimoire-core/src/collection.rs`
  * `MoveOutcome`                                  — `crates/grimoire-core/src/collection_alloc.rs`
+ * `FolderRule`/`FolderConflicts`/`RuleConflicts`  — `crates/grimoire-core/src/folder_rules.rs`
  * `WishInput`/`WishlistQuery`/`WishRow`/`WishlistPage`/
  * `WishlistSummary`                              — `crates/grimoire-core/src/wishlist.rs`
  * `DeckInput`/`DeckPatch`/`DeckViewState`/`DeckRow`/`DeckCardRow`/`DeckDetail`/

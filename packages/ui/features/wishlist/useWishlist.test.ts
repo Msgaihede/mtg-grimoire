@@ -41,6 +41,7 @@ const lastCount = () =>
 /** `Ordered` holds `Backordered`; `Someday` is a sibling; the deck's managed folder is shut by
  *  default (spec §3.4) — the four shapes the shelf list has to order. */
 const ORDERED: WishlistFolder = {
+  rules: [],
   id: 1,
   parentId: null,
   name: "Ordered",
@@ -51,6 +52,7 @@ const ORDERED: WishlistFolder = {
   managedDeckUid: null,
 };
 const BACKORDERED: WishlistFolder = {
+  rules: [],
   id: 2,
   parentId: 1,
   name: "Backordered",
@@ -61,6 +63,7 @@ const BACKORDERED: WishlistFolder = {
   managedDeckUid: null,
 };
 const SOMEDAY: WishlistFolder = {
+  rules: [],
   id: 3,
   parentId: null,
   name: "Someday",
@@ -71,6 +74,7 @@ const SOMEDAY: WishlistFolder = {
   managedDeckUid: null,
 };
 const MANAGED: WishlistFolder = {
+  rules: [],
   id: 9,
   parentId: null,
   name: "Rhystic Testbed",

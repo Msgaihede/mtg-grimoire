@@ -40,11 +40,11 @@ const LABEL = "Wishlist folder to send to";
  * whole path rule exists for: a picker that drew bare names would list that word twice with
  * nothing telling a reader — or a `getByRole` — which is which.
  */
-const ORDERED: WishlistFolder = { id: 1, parentId: null, name: "Ordered", sortOrder: 0, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };
-const DRAFT_NIGHT: WishlistFolder = { id: 2, parentId: 1, name: "Draft night", sortOrder: 0, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };
-const ORDERED_SOMEDAY: WishlistFolder = { id: 3, parentId: 1, name: "Someday", sortOrder: 1, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };
-const EXPENSIVE: WishlistFolder = { id: 4, parentId: null, name: "Expensive", sortOrder: 1, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };
-const EXPENSIVE_SOMEDAY: WishlistFolder = { id: 5, parentId: 4, name: "Someday", sortOrder: 0, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };
+const ORDERED: WishlistFolder = { rules: [], id: 1, parentId: null, name: "Ordered", sortOrder: 0, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };
+const DRAFT_NIGHT: WishlistFolder = { rules: [], id: 2, parentId: 1, name: "Draft night", sortOrder: 0, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };
+const ORDERED_SOMEDAY: WishlistFolder = { rules: [], id: 3, parentId: 1, name: "Someday", sortOrder: 1, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };
+const EXPENSIVE: WishlistFolder = { rules: [], id: 4, parentId: null, name: "Expensive", sortOrder: 1, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };
+const EXPENSIVE_SOMEDAY: WishlistFolder = { rules: [], id: 5, parentId: 4, name: "Someday", sortOrder: 0, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };
 
 /**
  * The flat rows, **deliberately not in the order the tree draws them**.
@@ -69,7 +69,7 @@ const ROWS = [
 
 /** The folder a `New folder…` press makes in the tests below — filed in `Ordered`, so its path is
  *  two levels deep and a create that dropped the parent draws a different one. */
-const PRERELEASE: WishlistFolder = { id: 6, parentId: 1, name: "Prerelease", sortOrder: 2, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };
+const PRERELEASE: WishlistFolder = { rules: [], id: 6, parentId: 1, name: "Prerelease", sortOrder: 2, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };
 
 let client: QueryClient;
 

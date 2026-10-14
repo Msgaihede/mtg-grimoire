@@ -395,6 +395,7 @@ const BURN: DeckRow = {
  *  here, which is what keeps "a locked folder" a claim one describe makes and not a property the
  *  file's fixtures quietly acquired. */
 const BINDER: CollectionFolder = {
+  rules: [],
   id: 3,
   parentId: null,
   name: "Trade binder",
@@ -408,6 +409,7 @@ const BINDER: CollectionFolder = {
   syncUid: "uid-binder",
 };
 const FOILS: CollectionFolder = {
+  rules: [],
   id: 9,
   parentId: 3,
   name: "Foils",
@@ -422,6 +424,7 @@ const FOILS: CollectionFolder = {
  *  card. `sortOrder` 1 puts it after `Trade binder`, which is the order every reorder below is
  *  measured against. */
 const SEALED: CollectionFolder = {
+  rules: [],
   id: 4,
   parentId: null,
   name: "Sealed",
@@ -436,6 +439,7 @@ const SEALED: CollectionFolder = {
  *  reads. `buildFolderTree` draws it at the **root** rather than dropping it, so its row names a
  *  folder that is gone while the wall it appears on is the top level. */
 const ORPHAN: CollectionFolder = {
+  rules: [],
   id: 5,
   parentId: 99,
   name: "Odds and ends",
@@ -458,6 +462,7 @@ const ORPHAN: CollectionFolder = {
  * gone). Out of `Recently removed` is the one direction that is the feature.
  */
 const DECK_GROUP: CollectionFolder = {
+  rules: [],
   id: 20,
   parentId: null,
   name: "Mono-Red Aggro",
@@ -472,6 +477,7 @@ const DECK_GROUP: CollectionFolder = {
   syncUid: "uid-deck-group",
 };
 const REMOVED: CollectionFolder = {
+  rules: [],
   id: 21,
   parentId: null,
   name: "Recently removed",
@@ -6248,6 +6254,7 @@ describe("locking a folder", () => {
   /** A second drawer *inside* `Trade binder`, beside {@link FOILS} — what a move that has crossed
    *  nothing needs, since both ends have to be under one locked parent. */
   const SLEEVED: CollectionFolder = {
+    rules: [],
     id: 10,
     parentId: 3,
     name: "Sleeved",

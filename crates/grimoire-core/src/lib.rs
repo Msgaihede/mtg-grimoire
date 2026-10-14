@@ -107,6 +107,9 @@ pub mod events;
 pub mod feed;
 /// **The card filters every list shares**, as SQL: `push_card_filters` and the FTS match.
 pub mod filters;
+/// **Folder rules** (issue #980): what a card filed in a collection or wishlist folder is
+/// expected to meet, and which filed cards do not.
+pub mod folder_rules;
 pub mod home;
 /// **The one update hook on the write connection, and who it tells.** SQLite allows one per
 /// connection, so this crate owns the installer and a host registers observers.

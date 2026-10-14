@@ -157,6 +157,7 @@ describe("lockedFolderIds", () => {
     name: string,
     locked = false,
   ): CollectionFolder => ({
+    rules: [],
     id,
     parentId,
     name,

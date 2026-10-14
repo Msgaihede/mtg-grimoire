@@ -13,7 +13,15 @@ import type { Finish } from "../finish";
 import type { MarketplaceId } from "../marketplace";
 import type { SortSpec } from "../sort";
 import type { CardFilters, WishlistSortKey } from "./cards";
-import type { BreakdownRow, EntryChange, ImportCommitOutcome, ShelfCount, TransferImportMode } from "./collection";
+import type {
+  BreakdownRow,
+  EntryChange,
+  FolderRule,
+  ImportCommitOutcome,
+  RuleConflicts,
+  ShelfCount,
+  TransferImportMode,
+} from "./collection";
 import { invoke } from "./invoke";
 
 /**
@@ -434,6 +442,11 @@ export interface WishlistFolder {
    * folder's share is named by its deck, which syncs, rather than by its own per-device uid.
    */
   managedDeckUid: string | null;
+  /**
+   * The folder's **own** rules ({@link FolderRule}), `[]` for none — what a wish filed here is
+   * expected to meet, never a bar to filing it. Inherited ones are walked by `lib/folderRules.ts`.
+   */
+  rules: FolderRule[];
 }
 
 /**
@@ -578,6 +591,20 @@ export const wishlistCommands = {
    */
   wishlistFolderSummary: (marketplace: MarketplaceId) =>
     invoke<WishlistFolderSummary[]>("wishlist_folder_summary", { marketplace }),
+  /**
+   * Replace a wishlist folder's own rules ({@link WishlistFolder.rules}) with `rules`, whole — an
+   * empty list clears them. Answers the folder re-read, rules tidied; a list the backend cannot
+   * accept is refused in one sentence.
+   */
+  wishlistFolderSetRules: (id: number, rules: FolderRule[]) =>
+    invoke<WishlistFolder>("wishlist_folder_set_rules", { id, rules }),
+  /**
+   * Which wishes break their folder's effective rules, priced at `marketplace` — {@link
+   * RuleConflicts}, counted per folder. An any-printing wish breaks a card-level rule only when no
+   * printing of its card satisfies them all.
+   */
+  wishlistRuleConflicts: (marketplace: MarketplaceId) =>
+    invoke<RuleConflicts>("wishlist_rule_conflicts", { marketplace }),
   /**
    * Change which printing a wish is for — the write `wishlist_entries.card_id` has never had
    * before, on a column that has always meant "any printing" when `null`.

@@ -4,6 +4,7 @@ import { NEEDS_A_FINISH_ROW, TRAY_ROWS } from "../fixtures";
 import { isUserFolder, withoutCommitted } from "./trayCommit";
 
 const BINDER: CollectionFolder = {
+  rules: [],
   id: 7,
   parentId: null,
   name: "Trade binder",

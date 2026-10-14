@@ -169,6 +169,7 @@ const wishFolder = (
   parentId: number | null = null,
   sortOrder = 0,
 ): WishlistFolder => ({
+  rules: [],
   id,
   parentId,
   name,
@@ -194,6 +195,7 @@ const binder = (
   kind = "user",
   locked = false,
 ): CollectionFolder => ({
+  rules: [],
   id,
   parentId,
   name,
@@ -219,6 +221,7 @@ const deckGroup = (
   deckId: number,
   sortOrder = 0,
 ): CollectionFolder => ({
+  rules: [],
   id,
   parentId: null,
   name,

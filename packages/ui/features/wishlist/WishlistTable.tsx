@@ -18,6 +18,7 @@ import { useTooltip, type TooltipBinder } from "@/components/tooltip/useTooltip"
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { shelfColumn } from "@/features/shelves/ShelfPlace";
 import { FOCUS } from "@/lib/focus";
+import { RULE_BREAK, RULE_BREAK_EDGE } from "@/lib/folderRules";
 import type { FolderNode } from "@/lib/folderTree";
 import type { WishlistFolder, WishlistSortKey, WishRow } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
@@ -608,6 +609,7 @@ export const WishlistTable = memo(function WishlistTable({
   rowMenu,
   rowMenuKey,
   marketplace,
+  ruleBreaks,
 }: {
   rows: WishTableRow[];
   /** Wishes matching the filters, not wishes loaded — what assistive tech is told. */
@@ -675,6 +677,12 @@ export const WishlistTable = memo(function WishlistTable({
   /** Which marketplace the Cost column quotes. Passed rather than read here so the list and
    *  the header above it cannot disagree about what they are pricing in. */
   marketplace: Marketplace;
+  /**
+   * The wishes that break their folder's rules (issue #980, `useWishlistRuleConflicts().ids`):
+   * such a row wears a red left edge and says {@link RULE_BREAK} as its description — the wall's
+   * red outline, in a table's terms. Held still by the caller; absent marks nothing.
+   */
+  ruleBreaks?: ReadonlySet<number>;
 }) {
   // Opening a card is a store write and nothing else — `App` owns the pane, so the list never
   // has to know whether one is open, only which card is in it.
@@ -721,6 +729,12 @@ export const WishlistTable = memo(function WishlistTable({
       // want, saying so without disappearing — and that dimming went on 2026-09-08 with the
       // figure behind it. There is no such thing as a covered wish now: the reader takes a card
       // off this list when they acquire one, so every row on it is a row they still want.
+      //
+      // **What it does carry is the rule break** (issue #980): a red left edge on a wish that does
+      // not match its folder's rules — a fact about where the wish is filed, not about wanting it.
+      rowClassName={(row) =>
+        !isBand(row) && ruleBreaks?.has(row.id) ? RULE_BREAK_EDGE : undefined
+      }
       onNeedNextPage={onNeedNextPage}
       // An any-printing wish names no printing, so there is nothing for the pane to open —
       // and a row that looked clickable and did nothing would be worse than one that does
@@ -743,6 +757,7 @@ export const WishlistTable = memo(function WishlistTable({
         isBand(row) ? null : row.cardId ? (
           <DraggableRow
             {...props}
+            aria-description={ruleBreaks?.has(row.id) ? RULE_BREAK : undefined}
             wishId={row.id}
             folderId={row.folderId}
             cardId={row.cardId}
@@ -772,6 +787,7 @@ export const WishlistTable = memo(function WishlistTable({
         ) : (
           <DraggableRow
             {...props}
+            aria-description={ruleBreaks?.has(row.id) ? RULE_BREAK : undefined}
             wishId={row.id}
             folderId={row.folderId}
             cardId={null}

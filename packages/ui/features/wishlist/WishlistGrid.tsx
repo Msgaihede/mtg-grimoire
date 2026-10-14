@@ -13,6 +13,7 @@ import { hasBackFace } from "@/features/card/printings";
 import { dragData } from "@/features/decks/dnd";
 import { CardGrid, type GridCard, type GridSections } from "@/features/search/CardGrid";
 import type { Finish } from "@/lib/finish";
+import { RULE_BREAK } from "@/lib/folderRules";
 import type { FolderNode } from "@/lib/folderTree";
 import type { WishlistFolder, WishRow } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
@@ -145,7 +146,6 @@ const placedCaption =
     );
   };
 
-
 /**
  * The same fact as the sheen and corner chip `CardArt` draws over the picture.
  *
@@ -153,7 +153,6 @@ const placedCaption =
  * changes.
  */
 const tileFinish = (tile: WishTile): Finish | null => preferredFinishOf(tile.wish);
-
 
 /**
  * What a tile carries when it is dragged — spec §1's third drag source, and since spec §9 a
@@ -290,6 +289,7 @@ export const WishlistGrid = memo(function WishlistGrid({
   rowMenuKey,
   marketplace,
   stickyTop,
+  ruleBreaks,
 }: {
   rows: WishRow[];
   /** Identity of the current list, so a new one starts at the top. */
@@ -354,6 +354,12 @@ export const WishlistGrid = memo(function WishlistGrid({
   /** The height of a bar docked over `main` — the filter quick bar's while it is down — straight
    *  through to `CardGrid`'s `stickyTop`, so the shelf bar stacks under it. Absent is `0`. */
   stickyTop?: number;
+  /**
+   * The wishes that break their folder's rules (issue #980, `useWishlistRuleConflicts().ids`),
+   * outlined in red through `CardGrid`'s `ruleBreak`. Held still by the caller — the hook's set
+   * moves only with its answer. Absent outlines nothing.
+   */
+  ruleBreaks?: ReadonlySet<number>;
 }) {
   // Opening a card is a store write and nothing else — `App` owns the pane, so the wall never
   // has to know whether one is open, only which card is in it.
@@ -399,10 +405,7 @@ export const WishlistGrid = memo(function WishlistGrid({
         : [...byShelf.values()].flat(),
     [byShelf, rows, readOnly],
   );
-  const tilesOf = useCallback(
-    (shelfId: number) => byShelf?.get(shelfId) ?? NO_TILES,
-    [byShelf],
-  );
+  const tilesOf = useCallback((shelfId: number) => byShelf?.get(shelfId) ?? NO_TILES, [byShelf]);
   // **Not memoised, on purpose**: `CardGrid` keys its layout on `sections.sections` and `tilesOf`,
   // both held still above, and reads the four render props at draw time — so they go through as
   // the page built them, and a heading that redraws on the page's state is never stale.
@@ -422,10 +425,17 @@ export const WishlistGrid = memo(function WishlistGrid({
     () => (folderOf === undefined ? caption : placedCaption(folderOf)),
     [folderOf],
   );
+  // One tile is one wish, so the tile breaks a rule exactly when its wish does. A `useCallback`,
+  // `CardGrid`'s ask of every slot.
+  const ruleBreak = useCallback(
+    (tile: WishTile) => (ruleBreaks?.has(tile.wish.id) ? RULE_BREAK : null),
+    [ruleBreaks],
+  );
   const asOf = pricesAsOf(marketplace);
   const currency = marketplace.currency;
   return (
     <CardGrid
+      ruleBreak={ruleBreak}
       rows={tiles}
       sections={sections}
       stickyTop={stickyTop}

@@ -32,6 +32,7 @@ import type { CardMenuTarget } from "./cardMenu";
 import { useCardMenuDeps } from "./useCardMenuDeps";
 
 const BINDER: CollectionFolder = {
+  rules: [],
   id: 3,
   parentId: null,
   name: "Trade binder",

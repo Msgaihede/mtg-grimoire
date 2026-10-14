@@ -8,6 +8,7 @@
 pub use grimoire_core::collection_folders::*;
 
 use crate::collection::EntryChange;
+use crate::folder_rules::{FolderRule, RuleConflicts};
 use crate::sorting::Marketplace;
 use crate::sync::{lock_db_read, with_write, AppState};
 use std::sync::Arc;
@@ -78,6 +79,24 @@ pub async fn collection_folder_set_locked(
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         with_write(&state, |c| set_folder_locked(c, id, locked))
+    })
+    .await
+    .map_err(unfinished)?
+}
+
+/// Replace a folder's own rules — see [`set_folder_rules`]; an emptied list clears them.
+///
+/// **`with_write` and not `with_write_owned`**: a rule moves no card, so the facet index's
+/// `owned` dimension already holds the answer.
+#[tauri::command]
+pub async fn collection_folder_set_rules(
+    state: tauri::State<'_, Arc<AppState>>,
+    id: i64,
+    rules: Vec<FolderRule>,
+) -> Result<CollectionFolder, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        with_write(&state, |c| set_folder_rules(c, id, rules))
     })
     .await
     .map_err(unfinished)?
@@ -209,4 +228,18 @@ pub async fn collection_folder_summary(
     tauri::async_runtime::spawn_blocking(move || folder_summary(&lock_db_read(&state), marketplace))
         .await
         .map_err(|e| format!("the collection folder totals could not be read: {e}"))?
+}
+
+/// **Read-only**: which entries break a rule of the folder they are filed in — see
+/// [`rule_conflicts`] — priced at the marketplace the caller names, `from_opt`'s rule.
+#[tauri::command]
+pub async fn collection_rule_conflicts(
+    state: tauri::State<'_, Arc<AppState>>,
+    marketplace: Option<String>,
+) -> Result<RuleConflicts, String> {
+    let state = state.inner().clone();
+    let marketplace = Marketplace::from_opt(marketplace.as_deref());
+    tauri::async_runtime::spawn_blocking(move || rule_conflicts(&lock_db_read(&state), marketplace))
+        .await
+        .map_err(|e| format!("the collection folder rules could not be read: {e}"))?
 }

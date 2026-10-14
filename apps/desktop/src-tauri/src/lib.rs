@@ -111,6 +111,9 @@ pub use grimoire_core::feed;
 /// the page. The rule for the next file command is in the module doc.
 pub mod file_dialog;
 pub use grimoire_core::filters;
+/// **Folder rules** (issue #980) — the rule type, its tidying and the conflict read.
+/// `grimoire-core`'s, re-exported; the two folder modules' wrappers call it.
+pub use grimoire_core::folder_rules;
 /// **[`markcolors`]'s shape with a document instead of a map.** One `app_meta` row, an
 /// infallible read that answers the default layout for anything it cannot parse, and a write
 /// that validates the document's *shape* and never its vocabulary — a widget kind this build

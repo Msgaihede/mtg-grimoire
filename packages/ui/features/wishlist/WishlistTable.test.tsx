@@ -70,6 +70,7 @@ const BOLT: WishRow = {
 };
 
 const EXPENSIVE: WishlistFolder = {
+  rules: [],
   id: 3,
   name: "Expensive",
   parentId: null,
