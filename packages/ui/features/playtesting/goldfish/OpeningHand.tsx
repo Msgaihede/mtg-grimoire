@@ -21,6 +21,11 @@ import { landsFirst } from "./layout";
  *
  * **It reads four fields of the view** (`OpeningHandView`), so the playtest board hands it the
  * reader's seat and its mulligan as they are, rather than a second opening hand being drawn.
+ *
+ * **The cards fill whatever box it is given** (issue #993): before the first turn the seven are
+ * the only thing on the table worth reading, so both boards hand it the whole board below their
+ * top band, and the row sizes each card to the smaller of what seven fit across and what fits
+ * down — see {@link CARD_WIDTH}.
  */
 export type OpeningHandView = Pick<GoldfishView, "hand" | "mulligan" | "library" | "libraryLands">;
 
@@ -40,6 +45,17 @@ export function OpeningHand({
 
 /** The size of every London mulligan's draw: always seven, whatever is then put back. */
 const DRAW = 7;
+
+/**
+ * Each card's width in the row, which is a size container (`cqw`/`cqh` are the row's box): the
+ * smaller of a seventh of the row less its six 14px gaps, and the row's height less the 28px a
+ * picked card's 14px rise and its outline need, at 5:7 — and never past `display`'s 672px, the
+ * widest the cache stores, so a 4K board does not upscale a card into a blur.
+ *
+ * Spelt out as one literal so Tailwind's scanner sees it; the row is the only container here and
+ * holds nothing `fixed`, so its containment reparents nothing.
+ */
+const CARD_WIDTH = "w-[min(calc((100cqw_-_84px)/7),calc((100cqh_-_28px)*5/7),672px)]";
 
 function Deciding({
   view,
@@ -97,24 +113,30 @@ function Deciding({
     : "Every mulligan puts a card on the bottom.";
 
   return (
-    <div className="flex flex-col items-center gap-5">
+    <div className="flex min-h-0 w-full flex-1 flex-col items-center gap-5">
       <div className="flex flex-col items-center gap-1.5">
         <h2 className="m-0 font-heading text-2xl font-semibold">Opening hand</h2>
         <p className="m-0 text-sm text-dim">{instruction}</p>
       </div>
 
-      {/* 214px tall for a 196px card: the 14px a picked card rises, and room for its outline.
-          Lands first, the way a reader sorts a hand they have just picked up; the board's hand
-          keeps that order once it is kept (`arrangeHand`). */}
-      <div role="group" aria-label="Opening hand" className="flex h-[214px] items-end gap-[14px]">
-        {landsFirst(hand).map((card) => (
-          <HandCard
-            key={card.id}
-            card={card}
-            picked={picked.includes(card.id)}
-            onPick={() => pick(card.id)}
-          />
-        ))}
+      {/* Every height the box has left over goes to the cards (`CARD_WIDTH`). Lands first, the
+          way a reader sorts a hand they have just picked up; the board's hand keeps that order
+          once it is kept (`arrangeHand`). */}
+      <div className="min-h-[120px] w-full flex-1 [container-type:size]">
+        <div
+          role="group"
+          aria-label="Opening hand"
+          className="flex h-full items-center justify-center gap-[14px]"
+        >
+          {landsFirst(hand).map((card) => (
+            <HandCard
+              key={card.id}
+              card={card}
+              picked={picked.includes(card.id)}
+              onPick={() => pick(card.id)}
+            />
+          ))}
+        </div>
       </div>
 
       <dl className="m-0 flex gap-8">
@@ -196,7 +218,8 @@ function HandCard({
       aria-label={picked ? `${card.name}, going to the bottom` : card.name}
       onClick={onPick}
       className={cn(
-        "relative h-[196px] w-[140px] flex-none rounded-lg p-0",
+        "relative aspect-[5/7] flex-none rounded-lg p-0",
+        CARD_WIDTH,
         "transition-transform duration-150 ease-[ease] motion-reduce:transition-none",
         FOCUS,
         picked && "-translate-y-[14px] outline-2 outline-offset-2 outline-accent outline-solid",
@@ -204,17 +227,19 @@ function HandCard({
     >
       {card.cardId !== null ? (
         <CardImage
-          src={cardImageUrl(card.cardId, 0, "grid")}
+          // `display`, not `grid`: a card drawn this large from 488px goes soft on a scaled
+          // display, and `display` is the key the inspect preview already caches.
+          src={cardImageUrl(card.cardId, 0, "display")}
           alt={card.name}
           className="block h-full w-full rounded-md"
         />
       ) : (
-        <span className="flex h-full w-full items-center justify-center rounded-md border border-border bg-surface p-2 text-center text-xs">
+        <span className="flex h-full w-full items-center justify-center rounded-md border border-border bg-surface p-2 text-center text-sm">
           {card.name}
         </span>
       )}
       {picked && (
-        <span className="absolute bottom-2 left-1.5 rounded bg-accent px-1.5 py-px text-[11px] text-accent-fg">
+        <span className="absolute bottom-2 left-1.5 rounded bg-accent px-2 py-0.5 text-[13px] text-accent-fg">
           To the bottom
         </span>
       )}
