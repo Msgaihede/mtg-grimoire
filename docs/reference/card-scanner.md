@@ -592,8 +592,8 @@ fit loses the match to one that does.
   and clearer than the quad does.
 
 **The ceiling is low, and the survey says so.** Over 1,452 detected frames the quad as found named the
-right card on 440, and some other reading did where it did not on only 84 more — mostly `lower`
-(43) and `text_block` (33), not `art` (11). Extrapolating outward from an inner box roughly doubles
+right card on 440, and some other reading did where it did not on only 84 more. Of the 107 right
+readings across every frame, `lower` made 45 and `text_block` 36, against `upper` 15 and `art` 11. Extrapolating outward from an inner box roughly doubles
 whatever error its corners had. On the replay it decides one more printing and two more cards in
 Exact and makes nothing worse (§10).
 
@@ -4284,7 +4284,8 @@ pocket with the card inset in it, 6 were the right card in a sibling printing (a
 the set's, a variant frame), 6 a decent crop that still missed (foils, a basic land, runs too short to
 resolve) and 3 something else. **Three quarters fail before the hash runs**, and the hash, the
 title band and the collector band all read that one crop. That is what §3 *Reframe* and § *Exact*'s
-gap gate answer:
+gap gate answer — and what other scanners do about each class, and what to try next, is in [the
+scanner research](../superpowers/research/2026-10-14-card-scanner-matching-methods.md):
 
 | As scanned, 86 scans, 2026-10-14 | printing ✓ % | card ✓ % | wrong card | undecided % | never resolved |
 | --- | ---: | ---: | ---: | ---: | ---: |
