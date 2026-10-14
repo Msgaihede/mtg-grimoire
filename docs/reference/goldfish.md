@@ -245,6 +245,15 @@ on. The artboard's fixed places are measured from the board's box, not from its 
 creature, 220 for the back row) so a table of a few cards fills its lanes, and the lane's height
 and the row's width shrink it as the table fills.
 
+**The opening hand takes the whole board** (issue #993). Before the first turn the seven are the
+only thing worth reading, so the mulligan screen is a scrim over everything below the top band —
+the zones and the reader's plate go under it, the menu, the goldfish's life, help and the log stay
+raised above it — and each card is as large as the box allows: the smaller of a seventh of the
+row's width (less six 14 px gaps) and its height (less the 28 px a picked card rises into), at 5:7,
+capped at `display`'s 672 px so nothing is drawn past the largest image the cache stores. The row
+is a size container (`cqw`/`cqh`) and holds nothing `fixed`. The playtest board hands it the same
+box below its 48 px band.
+
 **The hand is one straight row**, not a fan. Up to seven cards sit side by side; more overlap so
 the row stays the width of seven. The card pointed at is pulled 44 px out of the row and drawn over
 its neighbours. Its button never moves, only its face does, and while it is up the strip it rose

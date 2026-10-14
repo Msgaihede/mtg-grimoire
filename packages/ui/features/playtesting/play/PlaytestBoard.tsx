@@ -427,7 +427,15 @@ export function PlaytestBoard({
           {error ?? "Shuffling both decks…"}
         </div>
       ) : view.stage === "mulligan" ? (
-        <div className="absolute inset-x-[84px] top-[48px] bottom-3 flex flex-col items-center justify-center gap-3">
+        // The whole board below the opponent's band (issue #993), the zone columns and the
+        // reader's plate under a scrim: before the first turn the seven are all there is to read.
+        <div
+          data-testid="playtest-opening-hand"
+          className={cn(
+            "absolute inset-x-0 top-[48px] bottom-0 flex flex-col items-center gap-3 bg-bg/85 px-6 pt-2 pb-4",
+            LAYER.raised,
+          )}
+        >
           {/* The middle line is not drawn over an opening hand, so a refusal is said here. */}
           {error !== null && (
             <p role="status" className="m-0 text-xs text-text">
