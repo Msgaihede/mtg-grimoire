@@ -915,6 +915,12 @@ pub struct ScannerTrayRow {
     pub set_code: String,
     pub collector_number: String,
     pub finish: String,
+    /// The finishes the row's printing exists in — what the tray's finish control offers, so a
+    /// foil-only printing is never filed as nonfoil (issue #982). Empty when unknown, and in a
+    /// tray written before it existed; an empty list constrains nothing, and is not written, so
+    /// such a row round-trips as it was sent.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub finishes: Vec<String>,
     pub quantity: i64,
     pub choices: Vec<ScannerTrayChoice>,
     pub added_at: i64,
@@ -1236,6 +1242,7 @@ mod tests {
             set_code: "2x2".into(),
             collector_number: "117".into(),
             finish: "nonfoil".into(),
+            finishes: vec!["nonfoil".into(), "foil".into()],
             quantity,
             choices: vec![ScannerTrayChoice {
                 card_id: "b14fae63-2e82-49c1-8e62-d84a65f27479".into(),

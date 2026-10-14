@@ -22,7 +22,15 @@ import {
 } from "./tray";
 import { VERDICTS } from "../fixtures";
 
-const resolved = VERDICTS.exactResolved.decision!;
+/**
+ * The Exact fixture's resolved card, **as a printing sold in both finishes** — Alpha's Lotus was
+ * printed in one, which would settle every row's finish before a test about the reducer could set
+ * it. The corpus's say over a finish has tests of its own (issue #982).
+ */
+const resolved: ScannerDecision = {
+  ...VERDICTS.exactResolved.decision!,
+  finishes: ["nonfoil", "foil"],
+};
 const ambiguous = VERDICTS.exactAmbiguous.decision!;
 
 /** What Fast said about the Bolt in frame: its second printing, resolved, no choices. */
@@ -223,9 +231,94 @@ describe("tray", () => {
     expect(pickChoice(rows, "a", only.choices[2].id)[0].finish).toBe("nonfoil");
     // A printing in several finishes leaves the question open.
     expect(pickChoice(rows, "a", only.choices[0].id)[0].finish).toBe("unknown");
-    // And a finish the reader chose is never overwritten by the printing's.
+    // A finish the reader chose stands on a printing made in it…
     const chosen = setFinish(rows, "a", "foil");
-    expect(pickChoice(chosen, "a", only.choices[2].id)[0].finish).toBe("foil");
+    expect(pickChoice(chosen, "a", only.choices[0].id)[0].finish).toBe("foil");
+    // …and gives way on one that was never made in it (issue #982).
+    expect(pickChoice(chosen, "a", only.choices[2].id)[0].finish).toBe("nonfoil");
+  });
+
+  describe("a printing's finishes (issue #982)", () => {
+    const foilOnly: ScannerDecision = { ...resolved, finishes: ["foil"] };
+
+    it("carries the printing's finishes on the row", () => {
+      expect(rowFromDecision(resolved, { finish: "nonfoil" }, 1, "a").finishes).toEqual([
+        "nonfoil",
+        "foil",
+      ]);
+      // A waiting row wears its head candidate's, provisionally.
+      expect(rowFromDecision(ambiguous, { finish: "nonfoil" }, 1, "a").finishes).toEqual(
+        ambiguous.choices[0].finishes,
+      );
+    });
+
+    it("never lands a foil-only printing as nonfoil, whatever the default", () => {
+      expect(rowFromDecision(foilOnly, { finish: "nonfoil" }, 1, "a").finish).toBe("foil");
+      expect(rowFromDecision(foilOnly, { finish: "unknown" }, 1, "a").finish).toBe("foil");
+    });
+
+    it("asks again for a finish a printing in several was never made in", () => {
+      const twoFoils: ScannerDecision = { ...resolved, finishes: ["foil", "etched"] };
+      expect(rowFromDecision(twoFoils, { finish: "nonfoil" }, 1, "a").finish).toBe("unknown");
+    });
+
+    it("bumps a foil-only row with the copy a nonfoil default would have filed as foil", () => {
+      const first = addDecision([], foilOnly, { finish: "nonfoil" }, 1, "a").rows;
+      const { rows, bumped } = addDecision(first, foilOnly, { finish: "nonfoil" }, 2, "b");
+      expect(bumped).toBe(true);
+      expect(rows).toEqual([expect.objectContaining({ key: "a", finish: "foil", quantity: 2 })]);
+    });
+
+    it("refuses a finish the row's printing was never made in", () => {
+      const rows = addDecision([], foilOnly, { finish: "foil" }, 1, "a").rows;
+      expect(setFinish(rows, "a", "nonfoil")).toEqual(rows);
+      expect(setFinish(rows, "a", "etched")).toEqual(rows);
+      // Unknown is not a finish, and stays the reader's to give.
+      expect(setFinish(rows, "a", "unknown")[0].finish).toBe("unknown");
+    });
+
+    it("constrains nothing when the corpus said nothing", () => {
+      const silent: ScannerDecision = { ...resolved, finishes: [] };
+      const rows = addDecision([], silent, { finish: "nonfoil" }, 1, "a").rows;
+      expect(rows[0].finish).toBe("nonfoil");
+      expect(setFinish(rows, "a", "etched")[0].finish).toBe("etched");
+      // A row written before rows carried their finishes, too.
+      const legacy = rows.map((row) => ({ ...row, finishes: undefined }));
+      expect(setFinish(legacy, "a", "etched")[0].finish).toBe("etched");
+    });
+
+    it("takes the finishes of a printing adopted from outside the row's candidates", () => {
+      const rows = addDecision([], resolved, { finish: "nonfoil" }, 1, "a").rows;
+      const promo = {
+        cardId: "promo",
+        oracleId: resolved.oracle_id,
+        name: "Promo",
+        setCode: "p",
+        collectorNumber: "1",
+        finishes: ["foil"],
+      };
+      expect(setPrinting(rows, "a", promo)[0]).toMatchObject({
+        finish: "foil",
+        finishes: ["foil"],
+      });
+    });
+
+    it("fits the reader's finish to a second opinion's printing", () => {
+      const fast = setFinish(
+        addDecision([], fastBolt, { finish: "nonfoil" }, 1, "a").rows,
+        "a",
+        "nonfoil",
+      );
+      const foilPromo: ScannerDecision = {
+        ...fastBolt,
+        finishes: ["foil"],
+        replaces_previous: true,
+      };
+      expect(addDecision(fast, foilPromo, { finish: "nonfoil" }, 2, "b").rows[0]).toMatchObject({
+        key: "a",
+        finish: "foil",
+      });
+    });
   });
 
   it("leaves a row alone when a pick names no candidate it offers", () => {
@@ -258,8 +351,8 @@ describe("tray", () => {
       2,
       "b",
     ).rows;
-    const next = setFinish(rows, "a", "etched");
-    expect(next.find((r) => r.key === "a")?.finish).toBe("etched");
+    const next = setFinish(rows, "a", "foil");
+    expect(next.find((r) => r.key === "a")?.finish).toBe("foil");
     expect(next.find((r) => r.key === "b")?.finish).toBe("nonfoil");
   });
 
@@ -271,9 +364,9 @@ describe("tray", () => {
   });
 
   it("builds import items and refuses while a row is unresolved", () => {
-    const rows = addDecision([], resolved, { finish: "etched" }, 1, "a").rows;
+    const rows = addDecision([], resolved, { finish: "foil" }, 1, "a").rows;
     expect(importItems(rows, "NM")).toEqual([
-      { cardId: resolved.printing, quantity: 1, finish: "etched", condition: "NM" },
+      { cardId: resolved.printing, quantity: 1, finish: "foil", condition: "NM" },
     ]);
     const mixed = addDecision(rows, ambiguous, { finish: "nonfoil" }, 2, "b").rows;
     expect(() => importItems(mixed, "NM")).toThrow();
@@ -301,8 +394,8 @@ describe("tray", () => {
       key: "a",
       finish: "foil",
     });
-    const set = setFinish(fast, "a", "etched");
-    expect(addDecision(set, exact, { finish: "foil" }, 2, "b").rows[0].finish).toBe("etched");
+    const set = setFinish(fast, "a", "nonfoil");
+    expect(addDecision(set, exact, { finish: "foil" }, 2, "b").rows[0].finish).toBe("nonfoil");
   });
 
   it("sets a row back to unknown, to hold it out of the next Add", () => {

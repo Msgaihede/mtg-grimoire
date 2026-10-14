@@ -107,7 +107,7 @@ import { CardGrid } from "@/features/search/CardGrid";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { keepCaretForCard } from "@/lib/caretWalk";
 import { plural } from "@/lib/counts";
-import { soleFinish, type Finish } from "@/lib/finish";
+import { parseFinishes, soleFinish, type Finish } from "@/lib/finish";
 import { finishTreatments } from "@/lib/treatment";
 import { ipc, ipcError, type Printing } from "@/lib/ipc";
 import { languageHint } from "@/lib/languages";
@@ -885,6 +885,8 @@ function Body({
           name: request.name,
           setCode: printing.setCode,
           collectorNumber: printing.collectorNumber,
+          // So the tray offers only the finishes this printing exists in (issue #982).
+          finishes: parseFinishes(printing.finishes),
         });
         onDone();
         return;

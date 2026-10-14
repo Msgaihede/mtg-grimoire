@@ -34,6 +34,40 @@ export function isKnownFinish(finish: ScannerTrayFinish): finish is Finish {
   return finish !== UNKNOWN_FINISH;
 }
 
+/**
+ * The finishes a printing can be filed in — its corpus list, in the app's own order.
+ *
+ * **An empty list is the corpus saying nothing**, not a printing that exists in no finish, so it
+ * offers every finish: a row written before rows carried their finishes, or a printing the labels
+ * could not describe, keeps the whole choice rather than none (issue #982).
+ */
+export function offeredFinishes(finishes: readonly string[] | undefined): Finish[] {
+  const known = FINISHES.filter((f) => finishes?.includes(f) === true);
+  return known.length > 0 ? known : [...FINISHES];
+}
+
+/** What a tray row's finish control offers: the printing's finishes, then `Unknown`. */
+export function trayFinishChoices(finishes: readonly string[] | undefined): ScannerTrayFinish[] {
+  return [...offeredFinishes(finishes), UNKNOWN_FINISH];
+}
+
+/**
+ * A finish made to fit a printing — **the rule that a foil-only card is never filed as nonfoil**.
+ *
+ * A printing that exists in one finish is that finish, whatever the row said. A known finish the
+ * printing was never made in becomes `unknown`, the question asked again rather than a guess at
+ * which of the others was meant. Anything else stands.
+ */
+export function fitFinish(
+  finish: ScannerTrayFinish,
+  finishes: readonly string[] | undefined,
+): ScannerTrayFinish {
+  const offered = offeredFinishes(finishes);
+  if (offered.length === 1) return offered[0];
+  if (!isKnownFinish(finish)) return finish;
+  return offered.includes(finish) ? finish : UNKNOWN_FINISH;
+}
+
 /** One of the collection's finishes, or `null` for a word Scryfall has and this app does not. */
 function asFinish(word: string): Finish | null {
   return (FINISHES as readonly string[]).includes(word) ? (word as Finish) : null;
@@ -42,8 +76,11 @@ function asFinish(word: string): Finish | null {
 /**
  * The finish a new tray row takes for this decision.
  *
- * **A fixed preference is the whole answer** — Nonfoil, Foil or Etched in the Defaults popover is a
- * reader saying "this pile is all one finish", and nothing the camera reads overrules them.
+ * **A fixed preference is the answer wherever the printing exists in it** — Nonfoil, Foil or Etched
+ * in the Defaults popover is a reader saying "this pile is all one finish", and nothing the camera
+ * reads overrules them. **The corpus does**: a preference the decided printing was never made in —
+ * Nonfoil on a foil-only promo — is no answer for that card, so it is decided as `detect` would
+ * decide it (issue #982).
  *
  * **Under `detect`, three rungs, first answer wins:**
  *
@@ -66,10 +103,10 @@ function asFinish(word: string): Finish | null {
  * separator is a fact about the cardboard, not about the printing, so it still stands — alone.
  */
 export function trayFinish(pref: ScannerFinishPref, decision: ScannerDecision): ScannerTrayFinish {
-  if (pref !== "detect") return pref;
-
   const provisional = decision.outcome === "ambiguous" && decision.choices.length > 0;
   const finishes = provisional ? [] : decision.finishes;
+
+  if (pref !== "detect" && offeredFinishes(finishes).includes(pref)) return pref;
 
   if (finishes.length === 1) {
     return asFinish(finishes[0]) ?? UNKNOWN_FINISH;

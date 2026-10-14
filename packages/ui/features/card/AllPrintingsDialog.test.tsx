@@ -942,6 +942,8 @@ describe("AllPrintingsDialog", () => {
       name: "Sol Ring",
       setCode: "leb",
       collectorNumber: "233",
+      // So the tray offers only the finishes this printing exists in (issue #982).
+      finishes: ["nonfoil"],
     });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(useAppStore.getState().printingsRequest).toBeNull();

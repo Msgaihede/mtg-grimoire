@@ -26,7 +26,6 @@ import { MoveToFolder } from "@/features/decks/MoveToFolder";
 import { plural } from "@/lib/counts";
 import type { Currency } from "@/lib/marketplace";
 import { formatPrice } from "@/lib/prices";
-import { FINISHES } from "@/lib/finish";
 import { buildFolderTree } from "@/lib/folderTree";
 import { FOCUS } from "@/lib/focus";
 import { CARD_ASPECT, cardImageUrl, type ImageVariant } from "@/lib/images";
@@ -61,7 +60,7 @@ import {
 // The Add button's words and the walk's name are `tray.ts`'s now — the light app's phone page says
 // the same ones — and are handed on from here for the importers that found them in this file.
 export { addLabel, NEXT_DECISION_LABEL };
-import { isKnownFinish, TRAY_FINISH_LABEL, UNKNOWN_FINISH } from "./trayFinish";
+import { isKnownFinish, TRAY_FINISH_LABEL, trayFinishChoices } from "./trayFinish";
 import { useTrayPrices } from "./useTrayPrices";
 
 export interface TrayPanelProps {
@@ -120,15 +119,17 @@ export interface TrayPanelProps {
 const ROOT_LABEL = "Collection";
 
 /**
+ * A row's finish choices: **only the finishes its printing exists in** (issue #982), so a foil-only
+ * card offers no Nonfoil, and `Unknown`.
+ *
  * **Deliberately not through `sortOptions` — the order is the information.** A printing's finishes
  * read plain before the premium treatments everywhere in this app, and `Unknown` comes last because
  * it is not a finish: it is the answer "not yet", which a reader can also give on purpose to hold a
  * card out of the next Add without removing it.
  */
-const FINISH_OPTIONS: readonly DropdownOption[] = [...FINISHES, UNKNOWN_FINISH].map((f) => ({
-  value: f,
-  label: TRAY_FINISH_LABEL[f],
-}));
+function finishOptions(row: ScannerTrayRow): DropdownOption[] {
+  return trayFinishChoices(row.finishes).map((f) => ({ value: f, label: TRAY_FINISH_LABEL[f] }));
+}
 
 /**
  * How far a row the walk lands on is kept from the scroller's top edge when it is too tall to
@@ -772,7 +773,7 @@ function TrayRow({
                   label={`Finish of ${label}`}
                   value={row.finish}
                   onChange={(v) => onFinish(v as ScannerTrayFinish)}
-                  options={FINISH_OPTIONS}
+                  options={finishOptions(row)}
                   active={!isKnownFinish(row.finish)}
                 />
               </span>
@@ -1010,7 +1011,7 @@ function TrayTile({
             label={`Finish of ${label}`}
             value={row.finish}
             onChange={(v) => onFinish(v as ScannerTrayFinish)}
-            options={FINISH_OPTIONS}
+            options={finishOptions(row)}
             // The row's rule: an unknown finish wears the accent, so it is found in a wall of tiles too.
             active={!isKnownFinish(row.finish)}
           />

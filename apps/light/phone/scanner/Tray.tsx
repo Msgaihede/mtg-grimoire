@@ -20,21 +20,16 @@ import {
 import {
   isKnownFinish,
   TRAY_FINISH_LABEL,
+  trayFinishChoices,
   UNKNOWN_FINISH,
 } from "@grimoire/ui/features/scanner/reader/trayFinish";
 import { ADD_CARD_LABEL } from "@grimoire/ui/features/scanner/reader/AddCardDialog";
 import { useTrayPrices } from "@grimoire/ui/features/scanner/reader/useTrayPrices";
 import { plural } from "@grimoire/ui/lib/counts";
-import { FINISHES, parseFinishes } from "@grimoire/ui/lib/finish";
+import { parseFinishes } from "@grimoire/ui/lib/finish";
 import { FOCUS } from "@grimoire/ui/lib/focus";
 import { CARD_ASPECT, cardImageUrl } from "@grimoire/ui/lib/images";
-import {
-  ipc,
-  ipcError,
-  type ScannerTrayChoice,
-  type ScannerTrayFinish,
-  type ScannerTrayRow,
-} from "@grimoire/ui/lib/ipc";
+import { ipc, ipcError, type ScannerTrayChoice, type ScannerTrayRow } from "@grimoire/ui/lib/ipc";
 import type { Currency, MarketplaceId } from "@grimoire/ui/lib/marketplace";
 import { DURATION, PRESS, seconds, TRANSITION } from "@grimoire/ui/lib/motion";
 import { formatPrice } from "@grimoire/ui/lib/prices";
@@ -63,10 +58,6 @@ function choiceLabel(choice: ScannerTrayChoice): string {
   const printing = printingOf(choice);
   return printing === "" ? choice.name : `${choice.name} — ${printing}`;
 }
-
-/** A tray finish's choices, plain before the premium treatments and `Unknown` last — it is not a
- *  finish but the answer "not yet", which a reader can also give on purpose. */
-const TRAY_FINISHES: readonly ScannerTrayFinish[] = [...FINISHES, UNKNOWN_FINISH];
 
 /** A 44px square press on a row: the stepper's two and the remove. */
 const SQUARE = cn(
@@ -116,7 +107,8 @@ const HAND_BACK_MS = 400;
  * - **the printing is a press** that says what it is (`MH2 259 ›`) and opens the printings as a
  *   sheet — the phone has no all-printings wall — where a press hands the printing back through
  *   `setPrinting`;
- * - **the finish is a press** that says what it is and opens its four answers as a sheet, gold
+ * - **the finish is a press** that says what it is and opens its answers as a sheet — the finishes
+ *   the printing exists in, and `Unknown` — gold
  *   while the answer is `Unknown`, the colour this tray asks its questions in;
  * - **the stepper is 44px a side**, and stops at one — the row's own `×` is the removal;
  * - **a row waiting on a pick is its candidates**, as whole cards three to a line (what tells two
@@ -318,7 +310,10 @@ export function Tray({
       >
         {asked !== null && (
           <ul aria-label="Finishes">
-            {TRAY_FINISHES.map((finish) => (
+            {/* The finishes the row's printing exists in, plain before the premium treatments,
+                and `Unknown` last — not a finish but the answer "not yet", which a reader can
+                also give on purpose. A foil-only card offers no Nonfoil (issue #982). */}
+            {trayFinishChoices(asked.finishes).map((finish) => (
               <SheetChoice
                 key={finish}
                 label={TRAY_FINISH_LABEL[finish]}
