@@ -19,8 +19,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 const PICKS: PlaytestPicks = {
   deckId: 7,
   variant: "theory",
-  opponentDeckId: 9,
-  opponentVariant: "live",
+  opponents: [{ deckId: 9, variant: "live" }],
   difficulty: "hard",
 };
 
@@ -38,8 +37,14 @@ describe("usePlaytestGame", () => {
   it("deals both decks with a fresh seed, logs the deal, and ends the game on unmount", async () => {
     const { result, unmount } = renderHook(() => usePlaytestGame(PICKS));
     await waitFor(() => expect(result.current.view?.stage).toBe("mulligan"));
-    expect(playtestStart).toHaveBeenCalledWith(7, "theory", 9, "live", "hard", expect.any(Number));
-    expect(Number.isSafeInteger(playtestStart.mock.calls[0][5])).toBe(true);
+    expect(playtestStart).toHaveBeenCalledWith(
+      7,
+      "theory",
+      [{ deckId: 9, variant: "live" }],
+      "hard",
+      expect.any(Number),
+    );
+    expect(Number.isSafeInteger(playtestStart.mock.calls[0][4])).toBe(true);
     expect(result.current.log.map((l) => l.text)).toEqual([
       "The opponent drew a card",
       "Shuffled both decks and drew seven",
@@ -136,5 +141,21 @@ describe("usePlaytestGame", () => {
       "The opponent drew a card",
       "The opponent's turn 6 begins",
     ]);
+  });
+
+  it("deals a four-player game's three opponents, and does not deal again for a list rebuilt alike", async () => {
+    const opponents = [
+      { deckId: 9, variant: "live" as const },
+      { deckId: 9, variant: "theory" as const },
+      { deckId: 11, variant: "live" as const },
+    ];
+    // A fresh list on every render, as a careless caller would build it.
+    const { result } = renderHook(() =>
+      usePlaytestGame({ ...PICKS, opponents: opponents.map((o) => ({ ...o })) }),
+    );
+    await waitFor(() => expect(result.current.view?.stage).toBe("mulligan"));
+    expect(playtestStart).toHaveBeenCalledTimes(1);
+    expect(playtestStart.mock.calls[0][2]).toEqual(opponents);
+    expect(result.current.log.map((l) => l.text)).toContain("Shuffled every deck and drew seven");
   });
 });

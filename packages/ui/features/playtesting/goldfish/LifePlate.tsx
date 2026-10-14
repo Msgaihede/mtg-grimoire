@@ -34,6 +34,8 @@ export function LifePlate({
   highlight = false,
   disabled = false,
   compact = false,
+  label,
+  className,
 }: {
   seat: "you" | "opponent";
   title: string;
@@ -51,6 +53,13 @@ export function LifePlate({
    * plate is drawn exactly as it was.
    */
   compact?: boolean;
+  /**
+   * The stepper's name for a screen reader. Absent, "Your life" or "Opponent's life" by `seat` —
+   * the playtest board's four-player table names each opponent ("Opponent 2's life").
+   */
+  label?: string;
+  /** On the plate's own box: `min-w-0` lets a narrow row shrink its title. */
+  className?: string;
 }): JSX.Element {
   const [draft, setDraft] = useState<number | null>(null);
   const [pending, setPending] = useState(false);
@@ -98,7 +107,7 @@ export function LifePlate({
     timer.current = window.setTimeout(commit, SETTLE_MS);
   };
 
-  const label = seat === "opponent" ? "Opponent's life" : "Your life";
+  const named = label ?? (seat === "opponent" ? "Opponent's life" : "Your life");
   const portrait = seat === "you" && cardId != null ? cardId : null;
 
   return (
@@ -108,6 +117,7 @@ export function LifePlate({
         seat === "opponent" ? "pr-3" : "pr-4",
         highlight ? "border-accent" : "border-border",
         compact && "gap-2 rounded-full py-1 pr-1.5 pl-1",
+        className,
       )}
     >
       {portrait !== null ? (
@@ -165,7 +175,7 @@ export function LifePlate({
           onChange={change}
           min={0}
           max={999}
-          label={label}
+          label={named}
           size={compact ? "sm" : "md"}
         />
       </fieldset>

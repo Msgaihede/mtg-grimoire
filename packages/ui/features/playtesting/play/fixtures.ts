@@ -10,6 +10,7 @@ import type {
   GameCard,
   PlaytestHappened,
   PlaytestPick,
+  PlaytestPlayer,
   PlaytestSeat,
   PlaytestStep,
   PlaytestView,
@@ -27,8 +28,10 @@ function mountain(over: Partial<GameCard> = {}): GameCard {
   });
 }
 
-function seat(over: Partial<PlaytestSeat>): PlaytestSeat {
+function seat(player: PlaytestPlayer, over: Partial<PlaytestSeat>): PlaytestSeat {
   return {
+    player,
+    out: false,
     life: 20,
     poison: 0,
     hand: [],
@@ -82,7 +85,7 @@ export function turnFive(): TurnFive {
     started: "you",
     phase: "main1",
     mulligan: null,
-    you: seat({
+    you: seat("you", {
       life: 17,
       hand: [
         gameCard("Counterspell"),
@@ -105,23 +108,25 @@ export function turnFive(): TurnFive {
       libraryCards: library(48),
       manaOpen: 5,
     }),
-    opponent: seat({
-      life: 14,
-      handCount: 5,
-      battlefield: [
-        ragavan,
-        reckoner,
-        gameCard("Smuggler's Copter"),
-        jace,
-        mountain({ tapped: true }),
-        mountain(),
-        gameCard("Ancient Tomb"),
-      ],
-      graveyard: [gameCard("Lightning Bolt"), gameCard("Boros Charm")],
-      exile: [gameCard("Bonecrusher Giant // Stomp")],
-      library: 47,
-      manaOpen: 3,
-    }),
+    opponents: [
+      seat("opponent", {
+        life: 14,
+        handCount: 5,
+        battlefield: [
+          ragavan,
+          reckoner,
+          gameCard("Smuggler's Copter"),
+          jace,
+          mountain({ tapped: true }),
+          mountain(),
+          gameCard("Ancient Tomb"),
+        ],
+        graveyard: [gameCard("Lightning Bolt"), gameCard("Boros Charm")],
+        exile: [gameCard("Bonecrusher Giant // Stomp")],
+        library: 47,
+        manaOpen: 3,
+      }),
+    ],
     combat: null,
     attack: null,
     block: null,
@@ -146,9 +151,9 @@ export function attackStep(): TurnFive {
       phase: "combat",
       attack: {
         attackers: [
-          { id: t.goyf.id, player: true, targets: [t.jace.id] },
-          { id: t.elves.id, player: true, targets: [] },
-          { id: t.delver.id, player: true, targets: [] },
+          { id: t.goyf.id, players: ["opponent"], targets: [t.jace.id] },
+          { id: t.elves.id, players: ["opponent"], targets: [] },
+          { id: t.delver.id, players: ["opponent"], targets: [] },
         ],
         targets: [{ id: t.jace.id, name: t.jace.name, cardId: t.jace.cardId }],
       },
@@ -171,11 +176,15 @@ export function blockStep(): TurnFive {
       turn: 6,
       active: "opponent",
       phase: "combat",
-      opponent: {
-        ...t.view.opponent,
-        battlefield: t.view.opponent.battlefield.map((c) => (c.id === ragavan.id ? ragavan : c)),
-      },
-      combat: { attacks: [{ attacker: ragavan.id, target: null }], blocks: [] },
+      opponents: [
+        {
+          ...t.view.opponents[0],
+          battlefield: t.view.opponents[0].battlefield.map((c) =>
+            c.id === ragavan.id ? ragavan : c,
+          ),
+        },
+      ],
+      combat: { attacks: [{ attacker: ragavan.id, target: null, player: "you" }], blocks: [] },
       block: {
         blockers: [
           { id: t.goyf.id, attackers: [ragavan.id] },
@@ -286,7 +295,7 @@ export function gameOver(): TurnFive {
       ...t.view,
       stage: "over",
       turn: 9,
-      opponent: { ...t.view.opponent, life: 0 },
+      opponents: [{ ...t.view.opponents[0], life: 0 }],
       winner: "you",
     },
   };
@@ -319,14 +328,16 @@ export function openingHand(): PlaytestView {
       library: 53,
       libraryCards: library(53),
     },
-    opponent: {
-      ...t.view.opponent,
-      life: 20,
-      battlefield: [],
-      graveyard: [],
-      exile: [],
-      handCount: 7,
-    },
+    opponents: [
+      {
+        ...t.view.opponents[0],
+        life: 20,
+        battlefield: [],
+        graveyard: [],
+        exile: [],
+        handCount: 7,
+      },
+    ],
   };
 }
 
@@ -352,8 +363,8 @@ export function combatArrowsView(): TurnFive {
       },
       combat: {
         attacks: [
-          { attacker: t.goyf.id, target: null },
-          { attacker: t.delver.id, target: t.jace.id },
+          { attacker: t.goyf.id, target: null, player: "opponent" },
+          { attacker: t.delver.id, target: t.jace.id, player: null },
         ],
         blocks: [{ blocker: t.ragavan.id, attacker: t.delver.id }],
       },
@@ -458,11 +469,11 @@ export function replayStep(): { step: PlaytestStep; start: PlaytestView } {
     stage: "watching" as const,
     active: "opponent" as const,
     turn: 6,
-    opponent: { ...v.opponent, battlefield },
+    opponents: [{ ...v.opponents[0], battlefield }],
     ...over,
   });
   const played = mountain();
-  const f1Bf = [...start.opponent.battlefield, played];
+  const f1Bf = [...start.opponents[0].battlefield, played];
   const f1 = theirs(start, f1Bf, { phase: "main1" });
   const bolt = { id: 9001, name: "Lightning Bolt", cardId: gameCard("Lightning Bolt").cardId };
   const f2 = {
@@ -473,11 +484,17 @@ export function replayStep(): { step: PlaytestStep; start: PlaytestView } {
   const f3Bf = f1Bf.map((c) => (c.id === ragavan.id ? ragavan : c));
   const f3 = theirs(start, f3Bf, {
     phase: "combat",
-    combat: { attacks: [{ attacker: ragavan.id, target: null }], blocks: [] },
+    combat: {
+      attacks: [{ attacker: ragavan.id, target: null, player: "you" as const }],
+      blocks: [],
+    },
   });
   const f4 = theirs(start, f3Bf, {
     phase: "combat",
-    combat: { attacks: [{ attacker: ragavan.id, target: null }], blocks: [] },
+    combat: {
+      attacks: [{ attacker: ragavan.id, target: null, player: "you" as const }],
+      blocks: [],
+    },
     you: { ...start.you, life: start.you.life - 2 },
   });
   const h1: PlaytestHappened[] = [
@@ -508,7 +525,7 @@ export function replayStep(): { step: PlaytestStep; start: PlaytestView } {
     ...start,
     turn: 7,
     you: { ...start.you, life: start.you.life - 2 },
-    opponent: { ...start.opponent, battlefield: f3Bf.map((c) => ({ ...c, tapped: false })) },
+    opponents: [{ ...start.opponents[0], battlefield: f3Bf.map((c) => ({ ...c, tapped: false })) }],
   };
   return {
     start,
@@ -521,6 +538,150 @@ export function replayStep(): { step: PlaytestStep; start: PlaytestView } {
         { view: f3, happened: h3 },
         { view: f4, happened: h4 },
       ],
+    },
+  };
+}
+
+/** A four-player table's ids the stories and tests click, kept so a test can name them. */
+export interface FourPlayer {
+  view: PlaytestView;
+  /** The reader's creatures, as on turn 5. */
+  goyf: GameCard;
+  elves: GameCard;
+  /** Opponent 1's creature and planeswalker. */
+  ragavan: GameCard;
+  jace: GameCard;
+  /** Opponent 2's creature. */
+  lurrus: GameCard;
+}
+
+/**
+ * Turn 13 at a four-player Commander table (issue #994), the reader's first main phase: Opponent
+ * 1 is the turn-5 Boros deck, Opponent 2 sits behind Thrasios and Tymna with three poison, and
+ * Opponent 3 is out — their permanents gone with them (CR 800.4a), their commander and graveyard
+ * still to be looked at.
+ */
+export function fourPlayer(): FourPlayer {
+  const t = turnFive();
+  const lurrus = gameCard("Lurrus of the Dream-Den", { power: 3, toughness: 2 });
+  const kenrith = gameCard("Kenrith, the Returned King", { isCommander: true });
+  const view: PlaytestView = {
+    ...t.view,
+    turn: 13,
+    you: {
+      ...t.view.you,
+      life: 33,
+      battlefield: [kenrith, ...t.view.you.battlefield],
+    },
+    opponents: [
+      {
+        ...t.view.opponents[0],
+        life: 28,
+        command: [gameCard("Gisela, the Broken Blade", { isCommander: true })],
+      },
+      seat("opponent2", {
+        life: 31,
+        poison: 3,
+        handCount: 6,
+        battlefield: [
+          lurrus,
+          gameCard("Rhystic Study"),
+          gameCard("Sol Ring"),
+          gameCard("Forest"),
+          gameCard("Island", { tapped: true }),
+          gameCard("Island"),
+        ],
+        graveyard: [gameCard("Counterspell")],
+        command: [
+          gameCard("Thrasios, Triton Hero", { isCommander: true }),
+          gameCard("Tymna the Weaver", { isCommander: true }),
+        ],
+        library: 71,
+        manaOpen: 2,
+      }),
+      seat("opponent3", {
+        out: true,
+        life: 0,
+        graveyard: [gameCard("Swords to Plowshares"), gameCard("Dismember")],
+        command: [gameCard("Bruna, the Fading Light", { isCommander: true })],
+        library: 64,
+      }),
+    ],
+  };
+  return { view, goyf: t.goyf, elves: t.elves, ragavan: t.ragavan, jace: t.jace, lurrus };
+}
+
+/**
+ * The reader's declare-attackers step at the four-player table: Tarmogoyf may attack either
+ * opponent still in, or Opponent 1's Jace; the Elves either opponent. Opponent 3 is out, so no
+ * creature may attack them.
+ */
+export function fourPlayerAttack(): FourPlayer {
+  const f = fourPlayer();
+  const both: PlaytestPlayer[] = ["opponent", "opponent2"];
+  return {
+    ...f,
+    view: {
+      ...f.view,
+      stage: "attack",
+      phase: "combat",
+      step: "attackers",
+      attack: {
+        attackers: [
+          { id: f.goyf.id, players: both, targets: [f.jace.id] },
+          { id: f.elves.id, players: both, targets: [] },
+        ],
+        targets: [{ id: f.jace.id, name: f.jace.name, cardId: f.jace.cardId }],
+      },
+    },
+  };
+}
+
+/**
+ * Opponent 2's combat on turn 14, the reader holding priority after blocks: Lurrus attacks
+ * Opponent 1 — one AI on another — and nothing attacks the reader.
+ */
+export function fourPlayerCombat(): FourPlayer {
+  const f = fourPlayer();
+  const lurrus = { ...f.lurrus, tapped: true };
+  const [first, second, third] = f.view.opponents;
+  return {
+    ...f,
+    lurrus,
+    view: {
+      ...f.view,
+      stage: "respond",
+      turn: 14,
+      active: "opponent2",
+      phase: "combat",
+      step: "blockers",
+      opponents: [
+        first,
+        {
+          ...second,
+          battlefield: second.battlefield.map((c) => (c.id === lurrus.id ? lurrus : c)),
+        },
+        third,
+      ],
+      combat: {
+        attacks: [{ attacker: lurrus.id, target: null, player: "opponent" }],
+        blocks: [],
+      },
+    },
+  };
+}
+
+/** The reader out of the four-player game on turn 15: the others play on, and the reader lost. */
+export function fourPlayerLost(): FourPlayer {
+  const f = fourPlayer();
+  return {
+    ...f,
+    view: {
+      ...f.view,
+      stage: "over",
+      turn: 15,
+      you: { ...f.view.you, life: 0, out: true },
+      winner: null,
     },
   };
 }

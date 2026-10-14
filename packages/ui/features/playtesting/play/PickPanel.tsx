@@ -31,6 +31,7 @@ export function PickPanel({
   onAct,
   onPoint,
   onUnpoint,
+  opponents = 1,
   className,
 }: {
   prompt: PlaytestPrompt & { pick: NonNullable<PlaytestPrompt["pick"]> };
@@ -39,6 +40,8 @@ export function PickPanel({
   onAct: (action: PlaytestAction) => void;
   onPoint: (card: GameCard, e: MouseEvent) => void;
   onUnpoint: () => void;
+  /** How many opponents the game has, for "Other answers" that name one. */
+  opponents?: number;
   className?: string;
 }): JSX.Element {
   const { pick } = prompt;
@@ -162,6 +165,7 @@ export function PickPanel({
               onAct={onAct}
               onPoint={onPoint}
               onUnpoint={onUnpoint}
+              opponents={opponents}
             />
           )}
         </div>

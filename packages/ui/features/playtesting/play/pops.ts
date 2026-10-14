@@ -12,6 +12,7 @@
  */
 import type { GameCard, PlaytestHappened, PlaytestView } from "@/lib/ipc";
 import type { Anchor } from "./arrows";
+import { seatOfPlayer } from "./players";
 
 export interface Pop {
   key: string;
@@ -28,8 +29,7 @@ export function popsFor(happened: readonly PlaytestHappened[], view: PlaytestVie
   const onTable = (cards: readonly GameCard[], id: number) => cards.find((c) => c.id === id);
   happened.forEach((h, i) => {
     if (h.type === "dealt" && h.amount > 0) {
-      const side = h.seat === "you" ? view.you.battlefield : view.opponent.battlefield;
-      const target = onTable(side, h.targetId);
+      const target = onTable(seatOfPlayer(view, h.seat)?.battlefield ?? [], h.targetId);
       if (target !== undefined)
         out.push({
           key: `${i}`,

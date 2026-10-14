@@ -29,7 +29,7 @@ export function PlaytestingPage(): JSX.Element {
         <PlaytestPage
           picks={playing}
           deckName={nameOf(playing.deckId)}
-          opponentName={nameOf(playing.opponentDeckId)}
+          opponentNames={playing.opponents.map((o) => nameOf(o.deckId))}
           onBack={back}
         />
       )}

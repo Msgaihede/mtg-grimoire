@@ -13,6 +13,7 @@ import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { CardFace } from "../goldfish/Inspect";
 import { combatLine, type Picks } from "./combat";
+import { opponentNumber, playerPossessive, tableCards } from "./players";
 import { cardOfRef } from "./prompt";
 import { STOP_STEPS, fixedStop, hasStop, toggleStop } from "./stops";
 import { trackerOf } from "./tracker";
@@ -23,7 +24,7 @@ import { trackerOf } from "./tracker";
  *
  * **The tracker** is the turn's five places — Beginning, Main 1, Combat, Main 2, End — with the
  * one the game is in lit in the colour of the seat whose turn it is (gold for the reader, red for
- * the opponent), the ones already passed dimmed, and the turn's number before them.
+ * any opponent), the ones already passed dimmed, and the turn's number before them.
  *
  * **The last thing that happened is here too** (the log's newest line, or the engine's refusal),
  * where the eye already is between the two tables. A refusal is said in full text colour and
@@ -51,7 +52,7 @@ export function MiddleLine({
   return (
     <div className={cn("flex items-center gap-3 px-1", className)}>
       <TurnTracker view={view} />
-      <StopsButton stops={view.stops} onStops={onStops} />
+      <StopsButton stops={view.stops} many={view.opponents.length > 1} onStops={onStops} />
       {combat !== null && (
         <span className="flex-none text-xs whitespace-nowrap text-mana-r">{combat}</span>
       )}
@@ -71,6 +72,8 @@ export function MiddleLine({
 export function TurnTracker({ view }: { view: PlaytestView }): JSX.Element {
   const t = trackerOf(view);
   const yours = t.whose === "you";
+  // A duel's "Opponent"; at a four-player table, which one ("Opponent 2").
+  const theirs = view.opponents.length > 1 ? `Opponent ${opponentNumber(t.whose)}` : "Opponent";
   return (
     <div role="group" aria-label={t.caption} className="flex flex-none items-center gap-1">
       <span
@@ -84,7 +87,7 @@ export function TurnTracker({ view }: { view: PlaytestView }): JSX.Element {
               : "border-mana-r text-mana-r",
         )}
       >
-        {t.turn === 0 ? "Opening hands" : `Turn ${t.turn} · ${yours ? "You" : "Opponent"}`}
+        {t.turn === 0 ? "Opening hands" : `Turn ${t.turn} · ${yours ? "You" : theirs}`}
       </span>
       {t.steps.map((step) => (
         <span
@@ -111,7 +114,7 @@ export function TurnTracker({ view }: { view: PlaytestView }): JSX.Element {
 
 /**
  * The stack, as cards: what is waiting to resolve, **top first** and drawn in front, each with
- * whose it is (a gold edge for the reader's, red for the opponent's) and "ability" on an ability
+ * whose it is (a gold edge for the reader's, red for an opponent's) and "ability" on an ability
  * (its source's picture, not a card being cast). It stands in the board's right gutter between
  * the two tables' zone columns, where it covers no card, and each card is pointable like one on
  * the table, so a spell the opponent has just cast can be read before it resolves.
@@ -132,7 +135,8 @@ export function StackColumn({
 }): JSX.Element | null {
   if (view.stack.length === 0) return null;
   const shown = view.stack.slice(0, STACK_SHOWN);
-  const table = [...view.you.battlefield, ...view.opponent.battlefield];
+  const table = tableCards(view);
+  const many = view.opponents.length > 1;
   const more = view.stack.length - shown.length;
   return (
     <section aria-label="The stack" className={cn("flex flex-col items-center gap-1", className)}>
@@ -155,7 +159,8 @@ export function StackColumn({
         {[...shown].reverse().map((item, j) => {
           const i = shown.length - 1 - j;
           const card = cardOfRef(item, table);
-          const whose = item.seat === "you" ? "Yours" : "The opponent's";
+          const whose =
+            item.seat === "you" ? "Yours" : playerPossessive(item.seat, view.opponents.length);
           return (
             <li
               key={item.id}
@@ -177,7 +182,7 @@ export function StackColumn({
                   item.seat === "you" ? "bg-accent text-accent-fg" : "bg-mana-r text-bg",
                 )}
               >
-                {item.seat === "you" ? "You" : "Opp"}
+                {item.seat === "you" ? "You" : many ? `Opp ${opponentNumber(item.seat)}` : "Opp"}
                 {item.ability ? " · ability" : ""}
               </span>
             </li>
@@ -198,12 +203,18 @@ const STACK_SHOWN = 3;
  * The stops, by the tracker: a button that opens Arena's two rows of step toggles — "Your turn"
  * and "Opponent's turn" — each pressed step one the game stops at for the reader. Every toggle
  * sends the whole set (`setStops`); the reader's own main phases are always on and drawn so.
+ *
+ * **A stop on the opponents' side is a stop on each of their turns** (`PlaytestStop.seat` is a
+ * side, not a player), so a four-player table (`many`) has the same two rows, the second named
+ * "Opponents' turns".
  */
 function StopsButton({
   stops,
+  many = false,
   onStops,
 }: {
   stops: readonly PlaytestStop[];
+  many?: boolean;
   onStops?: (stops: PlaytestStop[]) => void;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
@@ -240,11 +251,13 @@ function StopsButton({
             <div
               key={seat}
               role="group"
-              aria-label={seat === "you" ? "Your turn" : "Opponent's turn"}
+              aria-label={
+                seat === "you" ? "Your turn" : many ? "Opponents' turns" : "Opponent's turn"
+              }
               className="flex items-center gap-1"
             >
               <span className="w-[128px] flex-none text-[11px] tracking-[0.08em] whitespace-nowrap text-dim uppercase">
-                {seat === "you" ? "Your turn" : "Opponent’s turn"}
+                {seat === "you" ? "Your turn" : many ? "Opponents’ turns" : "Opponent’s turn"}
               </span>
               {STOP_STEPS.map(({ step, label }) => {
                 const fixed = fixedStop(seat, step);

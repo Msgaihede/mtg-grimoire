@@ -32,16 +32,19 @@ export function PromptPanel({
   onAct,
   onPoint,
   onUnpoint,
+  opponents = 1,
   className,
 }: {
   prompt: PlaytestPrompt;
-  /** Every card on both tables, so a row names the card as it lies (its state, its counters). */
+  /** Every card on the tables, so a row names the card as it lies (its state, its counters). */
   table: readonly GameCard[];
   /** An action is with the engine: nothing more can be sent until it answers. */
   disabled: boolean;
   onAct: (action: PlaytestAction) => void;
   onPoint: (card: GameCard, e: MouseEvent) => void;
   onUnpoint: () => void;
+  /** How many opponents the game has, so an answer naming one says which (`optionLabel`). */
+  opponents?: number;
   className?: string;
 }): JSX.Element {
   const title = promptTitle(prompt.kind);
@@ -97,6 +100,7 @@ export function PromptPanel({
           onAct={onAct}
           onPoint={onPoint}
           onUnpoint={onUnpoint}
+          opponents={opponents}
         />
       )}
     </section>
@@ -112,6 +116,7 @@ export function OptionChips({
   onAct,
   onPoint,
   onUnpoint,
+  opponents = 1,
 }: {
   prompt: PlaytestPrompt;
   table: readonly GameCard[];
@@ -119,11 +124,12 @@ export function OptionChips({
   onAct: (action: PlaytestAction) => void;
   onPoint: (card: GameCard, e: MouseEvent) => void;
   onUnpoint: () => void;
+  opponents?: number;
 }): JSX.Element {
   return (
     <ul className="m-0 flex min-h-0 list-none flex-wrap gap-1.5 overflow-y-auto p-1.5">
       {prompt.options.map((option) => {
-        const { text, hint } = optionLabel(option, prompt);
+        const { text, hint } = optionLabel(option, prompt, opponents);
         const cards = option.cards.map((ref) => cardOfRef(ref, table));
         const first = cards[0];
         return (

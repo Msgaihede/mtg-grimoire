@@ -977,12 +977,17 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(playtestRs.length, "playtest/mod.rs was not read").toBeGreaterThan(1_000);
 
     invoke.mockResolvedValue({});
-    await ipc.playtestStart(4, "live", 9, "theory", "hard", 99);
+    // A four-player game's three opponents, each a deck and its list (issue #994); a duel's one.
+    const opponents = [
+      { deckId: 9, variant: "theory" },
+      { deckId: 9, variant: "live" },
+      { deckId: 11, variant: "live" },
+    ];
+    await ipc.playtestStart(4, "live", opponents, "hard", 99);
     expect(invoke).toHaveBeenLastCalledWith("playtest_start", {
       deckId: 4,
       variant: "live",
-      opponentDeckId: 9,
-      opponentVariant: "theory",
+      opponents,
       difficulty: "hard",
       seed: 99,
     });
@@ -998,14 +1003,7 @@ describe("ipc argument names match the Rust command signatures", () => {
       expect(playtestRs, `\`${command}\` declares no \`${param}\``).toMatch(
         new RegExp(`fn ${command}\\([^)]*\\b${param}\\s*:`, "s"),
       );
-    for (const param of [
-      "deck_id",
-      "variant",
-      "opponent_deck_id",
-      "opponent_variant",
-      "difficulty",
-      "seed",
-    ]) {
+    for (const param of ["deck_id", "variant", "opponents", "difficulty", "seed"]) {
       declares("playtest_start", param);
     }
     declares("playtest_act", "action");
@@ -1028,6 +1026,7 @@ describe("ipc argument names match the Rust command signatures", () => {
       "PlaytestPhase",
       "PlaytestPickPurpose",
       "PlaytestStopStep",
+      "PlaytestPlayer",
       "Difficulty",
     ]) {
       const ts = name === "Difficulty" ? "PlaytestDifficulty" : name;

@@ -1,5 +1,6 @@
-//! One playtest game: the reader's deck against another, the opponent's seat played by phase.rs's
-//! AI (`phase-ai`) on the same `GameState` the engine plays.
+//! One playtest game: the reader's deck against another, or against three in a four-player game
+//! (issue #994), each opponent's seat played by phase.rs's AI (`phase-ai`) on the same `GameState`
+//! the engine plays.
 //!
 //! **The rules decide, and the reader decides only what a player at a table would** — the owner's
 //! choices of 2026-10-13. After every action the session plays on by itself (`advance`): the AI
@@ -64,20 +65,31 @@ use super::view::{
     Difficulty, PlaytestAction, PlaytestAttack, PlaytestAttackPair, PlaytestAttacker,
     PlaytestBlock, PlaytestBlockPair, PlaytestBlocker, PlaytestCardRef, PlaytestCombat,
     PlaytestFrame, PlaytestHappened, PlaytestOption, PlaytestPhase, PlaytestPick,
-    PlaytestPickPurpose, PlaytestPrompt, PlaytestSeat, PlaytestStackItem, PlaytestStage,
-    PlaytestStep, PlaytestStop, PlaytestStopStep, PlaytestView,
+    PlaytestPickPurpose, PlaytestPlayer, PlaytestPrompt, PlaytestSeat, PlaytestStackItem,
+    PlaytestStage, PlaytestStep, PlaytestStop, PlaytestStopStep, PlaytestView,
 };
 
+/// The reader's seat. The opponents are `PlayerId(1)` on, in turn order.
 const YOU: PlayerId = PlayerId(0);
-const AI: PlayerId = PlayerId(1);
+
+/// The most opponents a game seats: a four-player Commander table.
+pub const MAX_OPPONENTS: usize = 3;
+
+/// One opponent's deck: its cards as they stand, and its tokens in the printings the reader set.
+#[derive(Debug, Clone, Default)]
+pub struct OpponentDeck {
+    pub cards: Vec<CardFacts>,
+    pub tokens: Vec<TokenFacts>,
+}
 
 /// How many times one action may pass the reader's priority (or declare no attackers for them)
 /// before the session gives up on it. A whole turn cycle is a few dozen; the bound is what stops a
 /// loop in the engine, the AI or here from hanging the board, and a game never reaches it.
 const STEP_LIMIT: usize = 2000;
 
-/// The most replay frames one action answers with. A long AI turn is a few dozen things to show;
-/// past this the rest is the final view, so a runaway loop of triggers cannot make a step huge.
+/// The most replay frames one action answers with, per opponent. A long AI turn is a few dozen
+/// things to show, and one action may play every opponent's turn; past this the rest is the final
+/// view, so a runaway loop of triggers cannot make a step huge.
 const FRAME_LIMIT: usize = 80;
 
 const NOT_IN_GAME: &str = "That card is no longer where it was. The board has been refreshed.";
@@ -94,6 +106,7 @@ struct Checkpoint {
     printings: HashMap<ObjectId, Printing>,
     mulligans: u8,
     rng: ChaCha8Rng,
+    out_told: HashSet<PlayerId>,
 }
 
 /// The printing an object is drawn by, with whose and what it was — so a printing can follow
@@ -132,11 +145,13 @@ pub struct Playtest {
     /// Each seat's deck's tokens in the printings the reader set, which a token is drawn by.
     deck_tokens: HashMap<PlayerId, DeckTokens>,
     started: PlayerId,
+    /// The opponents' seats, in turn order: `PlayerId(1)` on.
+    opponents: Vec<PlayerId>,
     ai_seats: HashSet<PlayerId>,
     ai_configs: HashMap<PlayerId, AiConfig>,
     /// The config `auto` answers the reader's questions with.
     helper: AiConfig,
-    /// phase-ai's per-game analysis of both decks, made the first time the AI decides.
+    /// phase-ai's per-game analysis of every deck, made the first time the AI decides.
     ai_session: Option<Arc<AiSession>>,
     /// The AI's dice, seeded from the game's seed: the same seed and decks play the same game.
     rng: ChaCha8Rng,
@@ -144,6 +159,8 @@ pub struct Playtest {
     choice: Option<BoardChoice>,
     /// The game's end has been put in the log.
     over_told: bool,
+    /// The players whose leaving the game has been put in the log (`Eliminated`).
+    out_told: HashSet<PlayerId>,
     /// The steps the reader asked to stop at (`setStops`).
     stops: Vec<PlaytestStop>,
     /// The turn the reader is ending (`endTurn`): until it changes, nothing but a block or a
@@ -153,23 +170,36 @@ pub struct Playtest {
     stopped_at: Option<(u32, Phase)>,
     /// The current action's replay frames, taken by `act`.
     frames: Vec<PlaytestFrame>,
+    /// How many frames one action may answer with: `FRAME_LIMIT` an opponent.
+    frame_limit: usize,
 }
 
 impl Playtest {
-    /// A new game of `you` (the reader's deck as it stands) against `opponent`, played by the AI
-    /// at `difficulty`. `seed` is the shuffle, the coin flip for who plays first (its lowest bit:
-    /// even, the reader), and the AI's dice. `your_tokens` and `their_tokens` are each deck's
-    /// tokens in the printings the reader set, which a token is offered and drawn by. Answers with
-    /// the game at the reader's opening hand.
+    /// A new game of `you` (the reader's deck as it stands) against each of `opponents` — one for
+    /// a duel, up to three for a four-player game — each played by the AI at `difficulty`. `seed`
+    /// is the shuffle, the coin flip for who plays first (the seed modulo the player count: 0 is
+    /// the reader, so in a duel an even seed), and the AI's dice. `your_tokens` and each
+    /// opponent's `tokens` are the deck's tokens in the printings the reader set, which a token is
+    /// offered and drawn by. Answers with the game at the reader's opening hand.
     pub fn new(
         you: &[CardFacts],
         your_tokens: &[TokenFacts],
-        opponent: &[CardFacts],
-        their_tokens: &[TokenFacts],
+        opponents: &[OpponentDeck],
         seed: u64,
         difficulty: Difficulty,
     ) -> Result<(Self, PlaytestStep), String> {
-        let all: Vec<CardFacts> = you.iter().chain(opponent).cloned().collect();
+        if opponents.is_empty() || opponents.len() > MAX_OPPONENTS {
+            return Err(format!(
+                "A game has from one to {MAX_OPPONENTS} opponents, not {}.",
+                opponents.len()
+            ));
+        }
+        let players = 1 + opponents.len();
+        let all: Vec<CardFacts> = you
+            .iter()
+            .chain(opponents.iter().flat_map(|o| &o.cards))
+            .cloned()
+            .collect();
         let db = Arc::new(cards::database(&all, &[])?);
 
         let mut by_name = HashMap::new();
@@ -195,37 +225,53 @@ impl Playtest {
             (main, commander)
         };
         let (your_main, your_commander) = piles(you, YOU);
-        let (their_main, their_commander) = piles(opponent, AI);
         if your_main.is_empty() {
             return Err("Your deck has no cards to shuffle into a library.".into());
         }
-        if their_main.is_empty() {
-            return Err("The opponent's deck has no cards to shuffle into a library.".into());
+        let seats: Vec<PlayerId> = (1..players).map(|n| PlayerId(n as u8)).collect();
+        let mut theirs = Vec::with_capacity(opponents.len());
+        for (deck, &seat) in opponents.iter().zip(&seats) {
+            let (main, commander) = piles(&deck.cards, seat);
+            if main.is_empty() {
+                return Err(if opponents.len() == 1 {
+                    "The opponent's deck has no cards to shuffle into a library.".into()
+                } else {
+                    format!(
+                        "Opponent {}'s deck has no cards to shuffle into a library.",
+                        seat.0
+                    )
+                });
+            }
+            theirs.push(PlayerDeckList {
+                main_deck: main,
+                commander,
+                ..PlayerDeckList::default()
+            });
         }
 
-        // A commander on either side makes it a Commander game: 40 life, the command zone, tax.
-        let format = if your_commander.is_empty() && their_commander.is_empty() {
+        // A commander on any side makes it a Commander game: 40 life, the command zone, tax.
+        let format = if your_commander.is_empty() && theirs.iter().all(|d| d.commander.is_empty()) {
             FormatConfig::freeform()
         } else {
             FormatConfig::commander()
         };
-        let mut state = GameState::new(format, 2, seed);
+        let mut state = GameState::new(format, players as u8, seed);
         // The sandbox is phase's debug actions, which the engine refuses unless the game allows
         // them and the player is on the list — the reader is, the AI is not.
         state.debug_mode = true;
         state.debug_permitted.insert(YOU);
 
+        // phase seats the first opponent as `opponent` and the rest as `ai_decks`, from
+        // `PlayerId(2)` on.
+        let mut theirs = theirs.into_iter();
         let list = DeckList {
             player: PlayerDeckList {
                 main_deck: your_main,
                 commander: your_commander,
                 ..PlayerDeckList::default()
             },
-            opponent: PlayerDeckList {
-                main_deck: their_main,
-                commander: their_commander,
-                ..PlayerDeckList::default()
-            },
+            opponent: theirs.next().unwrap_or_default(),
+            ai_decks: theirs.collect(),
             ..DeckList::default()
         };
         let payload = resolve_deck_list(&db, &list);
@@ -238,10 +284,15 @@ impl Playtest {
             .filter(|(seat, _)| *seat == YOU)
             .map(|(_, n)| n.as_str())
             .collect();
-        let deck_tokens = HashMap::from([
-            (YOU, DeckTokens::new(your_tokens)),
-            (AI, DeckTokens::new(their_tokens)),
-        ]);
+        let deck_tokens: HashMap<PlayerId, DeckTokens> =
+            std::iter::once((YOU, DeckTokens::new(your_tokens)))
+                .chain(
+                    opponents
+                        .iter()
+                        .zip(&seats)
+                        .map(|(deck, &seat)| (seat, DeckTokens::new(&deck.tokens))),
+                )
+                .collect();
         let tokens = deck_tokens[&YOU].offers(&deck_names);
 
         let level = match difficulty {
@@ -251,7 +302,7 @@ impl Playtest {
             Difficulty::Hard => AiDifficulty::Hard,
             Difficulty::VeryHard => AiDifficulty::VeryHard,
         };
-        let started = if seed & 1 == 0 { YOU } else { AI };
+        let started = PlayerId((seed % players as u64) as u8);
         let mut game = Playtest {
             state,
             printings: HashMap::new(),
@@ -261,12 +312,23 @@ impl Playtest {
             tokens,
             deck_tokens,
             started,
-            ai_seats: HashSet::from([AI]),
-            ai_configs: HashMap::from([(
-                AI,
-                create_config_for_players(level, Platform::Native, 2),
-            )]),
-            helper: create_config_for_players(AiDifficulty::Medium, Platform::Native, 2),
+            ai_seats: seats.iter().copied().collect(),
+            // phase scales its search down for a table of three or more (its "paranoid" cap).
+            ai_configs: seats
+                .iter()
+                .map(|&seat| {
+                    (
+                        seat,
+                        create_config_for_players(level, Platform::Native, players as u8),
+                    )
+                })
+                .collect(),
+            helper: create_config_for_players(
+                AiDifficulty::Medium,
+                Platform::Native,
+                players as u8,
+            ),
+            opponents: seats.clone(),
             ai_session: None,
             // Not the shuffle's own stream: the AI's choices must not shift when the engine
             // draws one more random number of its own.
@@ -274,13 +336,17 @@ impl Playtest {
             pending: None,
             choice: None,
             over_told: false,
+            out_told: HashSet::new(),
             stops: Vec::new(),
             ending: None,
             stopped_at: None,
             frames: Vec::new(),
+            frame_limit: FRAME_LIMIT * opponents.len(),
         };
         game.assign_printings(you, YOU);
-        game.assign_printings(opponent, AI);
+        for (deck, &seat) in opponents.iter().zip(&seats) {
+            game.assign_printings(&deck.cards, seat);
+        }
         start_game_with_starting_player(&mut game.state, started);
         let mut happened = Vec::new();
         game.advance(&mut happened)?;
@@ -409,6 +475,10 @@ impl Playtest {
                     .map(|a| PlaytestAttackPair {
                         attacker: a.object_id.0,
                         target: target_id(&a.attack_target),
+                        player: match a.attack_target {
+                            AttackTarget::Player(p) => Some(seat_of(p)),
+                            _ => None,
+                        },
                     })
                     .collect(),
                 blocks,
@@ -437,7 +507,13 @@ impl Playtest {
                         named.extend(ids.iter().copied());
                         PlaytestAttacker {
                             id: id.0,
-                            player: targets.iter().any(|t| matches!(t, AttackTarget::Player(_))),
+                            players: targets
+                                .iter()
+                                .filter_map(|t| match t {
+                                    AttackTarget::Player(p) => Some(seat_of(*p)),
+                                    _ => None,
+                                })
+                                .collect(),
                             targets: ids,
                         }
                     })
@@ -497,7 +573,7 @@ impl Playtest {
             step: stop_step(s.phase),
             mulligan: self.mulligan(),
             you: self.seat(YOU),
-            opponent: self.seat(AI),
+            opponents: self.opponents.iter().map(|&p| self.seat(p)).collect(),
             combat,
             attack,
             block,
@@ -541,6 +617,8 @@ impl Playtest {
         };
         let reader = seat == YOU;
         PlaytestSeat {
+            player: seat_of(seat),
+            out: player.is_eliminated,
             life: player.life,
             poison: player.poison_counters,
             hand: if reader {
@@ -608,6 +686,10 @@ impl Playtest {
     }
 
     fn stage(&self) -> PlaytestStage {
+        // Out of a game the others play on: the reader's game is over.
+        if self.reader_out() {
+            return PlaytestStage::Over;
+        }
         if self.choice.is_some() {
             return PlaytestStage::Prompt;
         }
@@ -900,7 +982,7 @@ impl Playtest {
             .to_string();
         let data = json.get("data").cloned().unwrap_or(Value::Null);
         let mut ids: Vec<ObjectId> = Vec::new();
-        let mut players: Vec<Seat> = Vec::new();
+        let mut players: Vec<PlaytestPlayer> = Vec::new();
         let mut number = None;
         let mut yes = None;
         let mut label = None;
@@ -1174,13 +1256,18 @@ impl Playtest {
                         .map_or(valid_attack_targets.as_slice(), |m| {
                             m.get(&attacker).map_or(&[][..], Vec::as_slice)
                         });
-                    let at = match pair.target {
-                        None => open
+                    let at = match (pair.target, pair.player) {
+                        (None, Some(player)) => open
+                            .iter()
+                            .find(|t| matches!(t, AttackTarget::Player(p) if seat_of(*p) == player))
+                            .copied()
+                            .ok_or("That creature can't attack that player.")?,
+                        (None, None) => open
                             .iter()
                             .find(|t| matches!(t, AttackTarget::Player(_)))
                             .copied()
-                            .unwrap_or(AttackTarget::Player(AI)),
-                        Some(id) => open
+                            .unwrap_or(AttackTarget::Player(self.opponents[0])),
+                        (Some(id), _) => open
                             .iter()
                             .find(|t| target_id(t) == Some(id))
                             .copied()
@@ -1404,7 +1491,7 @@ impl Playtest {
                     nonlegendary: false,
                 })?;
                 out.push(PlaytestHappened::TokensCreated {
-                    seat: Seat::You,
+                    seat: PlaytestPlayer::You,
                     name,
                     count: 1,
                 });
@@ -1430,7 +1517,7 @@ impl Playtest {
                     run_etb: true,
                 })?;
                 out.push(PlaytestHappened::TokensCreated {
-                    seat: Seat::You,
+                    seat: PlaytestPlayer::You,
                     name: offer.name,
                     count,
                 });
@@ -1446,7 +1533,7 @@ impl Playtest {
                     if !before.contains(id) {
                         let name = self.state.objects.get(id).map(|o| o.name.clone());
                         out.push(PlaytestHappened::Drew {
-                            seat: Seat::You,
+                            seat: PlaytestPlayer::You,
                             name,
                         });
                     }
@@ -1463,7 +1550,7 @@ impl Playtest {
                     if !before.contains(id) {
                         if let Some(o) = self.state.objects.get(id) {
                             out.push(PlaytestHappened::Moved {
-                                seat: Seat::You,
+                                seat: PlaytestPlayer::You,
                                 name: o.name.clone(),
                                 from: Place::LibraryTop,
                                 to: Place::Graveyard,
@@ -1479,10 +1566,10 @@ impl Playtest {
                 Ok(())
             }
             PlaytestAction::SetLife { seat, life } => {
-                let player = match seat {
-                    Seat::You => YOU,
-                    Seat::Opponent => AI,
-                };
+                let player = PlayerId(seat.index());
+                if player.0 as usize >= self.state.players.len() {
+                    return Err("There is no such player in this game.".into());
+                }
                 let was = self.player(player).life;
                 let life = life.clamp(-999, 9999);
                 self.debug(DebugAction::SetLife {
@@ -1546,6 +1633,13 @@ impl Playtest {
     /// reader ends a turn (`ending`), their main phases are passed and they declare no attackers.
     fn advance(&mut self, out: &mut Vec<PlaytestHappened>) -> Result<(), String> {
         for _ in 0..STEP_LIMIT {
+            self.tell_out(out);
+            // The reader lost a game the others play on (CR 800.4a): it is over for them, and the
+            // AIs' game among themselves is not played out.
+            if self.reader_out() {
+                self.pending = None;
+                return Ok(());
+            }
             if let WaitingFor::GameOver { winner } = &self.state.waiting_for {
                 if !self.over_told {
                     self.over_told = true;
@@ -1624,6 +1718,28 @@ impl Playtest {
         Err("The rules engine did not come back to you. Start a new game.".into())
     }
 
+    /// Each player who has left a game of more than two since the last look, as `Eliminated` —
+    /// read off the players rather than phase's events, so a life total set by hand counts too. A
+    /// duel's loser is told by `GameOver` alone.
+    fn tell_out(&mut self, out: &mut Vec<PlaytestHappened>) {
+        if self.state.players.len() <= 2 {
+            return;
+        }
+        for player in &self.state.players {
+            if player.is_eliminated && self.out_told.insert(player.id) {
+                out.push(PlaytestHappened::Eliminated {
+                    seat: seat_of(player.id),
+                });
+            }
+        }
+    }
+
+    /// The reader has lost and left a game of more than two, which the others would play on.
+    fn reader_out(&self) -> bool {
+        self.player(YOU).is_eliminated
+            && !matches!(self.state.waiting_for, WaitingFor::GameOver { .. })
+    }
+
     /// The reader's own main phase with an empty stack: where the board waits for them.
     fn at_home(&self) -> bool {
         self.state.stack.is_empty()
@@ -1654,7 +1770,7 @@ impl Playtest {
             let here = (s.turn_number, s.phase);
             let asked = stop_step(s.phase).is_some_and(|step| {
                 self.stops.contains(&PlaytestStop {
-                    seat: seat_of(s.active_player),
+                    seat: seat_of(s.active_player).side(),
                     step,
                 })
             });
@@ -1672,7 +1788,7 @@ impl Playtest {
 
     /// A replay frame of the table now, with the facts since `from`, when there are any.
     fn frame(&mut self, from: usize, out: &[PlaytestHappened]) {
-        if out.len() > from && self.frames.len() < FRAME_LIMIT {
+        if out.len() > from && self.frames.len() < self.frame_limit {
             self.frames.push(PlaytestFrame {
                 view: self.view_as(true),
                 happened: out[from..].to_vec(),
@@ -1697,7 +1813,7 @@ impl Playtest {
         for mut result in run.results {
             let from = out.len();
             tell(&result.state, &result.events, out);
-            if out.len() > from && self.frames.len() < FRAME_LIMIT {
+            if out.len() > from && self.frames.len() < self.frame_limit {
                 // The table as it was right after this decision: its state is swapped in for the
                 // view and straight back out (both are persistent, so a swap is two pointers).
                 std::mem::swap(&mut self.state, &mut result.state);
@@ -1756,8 +1872,8 @@ impl Playtest {
     /// Tests only: put a card of `seat`'s from its library onto the battlefield, as if it had
     /// been played — the AI cannot be told what to cast.
     #[cfg(test)]
-    pub(super) fn put_for_test(&mut self, seat: Seat, name: &str) {
-        let player = if seat == Seat::You { YOU } else { AI };
+    pub(super) fn put_for_test(&mut self, seat: PlaytestPlayer, name: &str) {
+        let player = PlayerId(seat.index());
         let id = self.state.players[player.0 as usize]
             .library
             .iter()
@@ -1783,6 +1899,7 @@ impl Playtest {
             printings: self.printings.clone(),
             mulligans: self.mulligans,
             rng: self.rng.clone(),
+            out_told: self.out_told.clone(),
         }
     }
 
@@ -1791,15 +1908,17 @@ impl Playtest {
         self.printings = checkpoint.printings;
         self.mulligans = checkpoint.mulligans;
         self.rng = checkpoint.rng;
+        self.out_told = checkpoint.out_told;
     }
 }
 
-fn seat_of(player: PlayerId) -> Seat {
-    if player == YOU {
-        Seat::You
-    } else {
-        Seat::Opponent
-    }
+/// The wire's name for a player: `PlayerId(n)` is `PlaytestPlayer::ALL[n]`. A game never seats
+/// more than four, so the last is a fallback that is never reached.
+fn seat_of(player: PlayerId) -> PlaytestPlayer {
+    PlaytestPlayer::ALL
+        .get(player.0 as usize)
+        .copied()
+        .unwrap_or(PlaytestPlayer::Opponent3)
 }
 
 /// What an attack is at, by id: a planeswalker's or a battle's, `None` for a player.
@@ -1838,7 +1957,7 @@ fn phase_of(phase: Phase) -> PlaytestPhase {
 
 /// The ids and players a JSON value names: an id is a number, a target is `{"Object": id}` or
 /// `{"Player": id}`, and a list is each of its items.
-fn collect_refs(value: &Value, ids: &mut Vec<ObjectId>, players: &mut Vec<Seat>) {
+fn collect_refs(value: &Value, ids: &mut Vec<ObjectId>, players: &mut Vec<PlaytestPlayer>) {
     match value {
         Value::Number(n) => {
             if let Some(id) = n.as_u64() {
@@ -1880,7 +1999,7 @@ fn names_source(action: &GameAction, id: ObjectId) -> bool {
 }
 
 /// What a run of the engine's events comes to, as the log's facts. `state` is the game after
-/// them, which names the objects they point at. The opponent's draws are told without the card.
+/// them, which names the objects they point at. An opponent's draws are told without the card.
 fn tell(state: &GameState, events: &[GameEvent], out: &mut Vec<PlaytestHappened>) {
     let name = |id: &ObjectId| state.objects.get(id).map(|o| o.name.clone());
     let seat = |id: &ObjectId| state.objects.get(id).map(|o| seat_of(o.controller));
@@ -1962,7 +2081,7 @@ fn tell(state: &GameState, events: &[GameEvent], out: &mut Vec<PlaytestHappened>
                     .get(object_id)
                     .map_or(record.controller, |o| o.owner);
                 let whose = seat_of(owner);
-                let hidden = whose == Seat::Opponent;
+                let hidden = whose != PlaytestPlayer::You;
                 match (from, to) {
                     (Zone::Library, Zone::Hand) => out.push(PlaytestHappened::Drew {
                         seat: whose,
@@ -1983,7 +2102,7 @@ fn tell(state: &GameState, events: &[GameEvent], out: &mut Vec<PlaytestHappened>
                 let names: Vec<String> = attacker_ids.iter().filter_map(name).collect();
                 if let (Some(first), false) = (attacker_ids.first(), names.is_empty()) {
                     out.push(PlaytestHappened::Attacked {
-                        seat: seat(first).unwrap_or(Seat::Opponent),
+                        seat: seat(first).unwrap_or(PlaytestPlayer::Opponent),
                         names,
                     });
                 }
@@ -1992,7 +2111,7 @@ fn tell(state: &GameState, events: &[GameEvent], out: &mut Vec<PlaytestHappened>
                 for (blocker, attacker) in assignments {
                     if let (Some(b), Some(a)) = (name(blocker), name(attacker)) {
                         out.push(PlaytestHappened::Blocked {
-                            seat: seat(blocker).unwrap_or(Seat::You),
+                            seat: seat(blocker).unwrap_or(PlaytestPlayer::You),
                             blocker: b,
                             attacker: a,
                         });
@@ -2033,7 +2152,7 @@ fn tell(state: &GameState, events: &[GameEvent], out: &mut Vec<PlaytestHappened>
             GameEvent::TokenCreated {
                 object_id, name, ..
             } => {
-                let whose = seat(object_id).unwrap_or(Seat::You);
+                let whose = seat(object_id).unwrap_or(PlaytestPlayer::You);
                 match out.last_mut() {
                     Some(PlaytestHappened::TokensCreated {
                         seat,

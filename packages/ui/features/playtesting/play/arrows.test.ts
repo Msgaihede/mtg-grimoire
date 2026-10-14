@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { NO_PICKS, toggleAttacker } from "./combat";
+import { NO_PICKS, aimAttacker, toggleAttacker } from "./combat";
 import { arrowPath, combatArrows, edgePoint } from "./arrows";
-import { attackStep, combatArrowsView } from "./fixtures";
+import { attackStep, combatArrowsView, fourPlayerAttack, fourPlayerCombat } from "./fixtures";
 
 const box = (left: number, top: number, width = 100, height = 140) => ({
   left,
@@ -69,5 +69,24 @@ describe("combatArrows", () => {
         tone: "you",
       },
     ]);
+  });
+
+  it("draws an attack at the very player it names, an AI's on another AI's too", () => {
+    const { view, lurrus } = fourPlayerCombat();
+    expect(combatArrows(view, NO_PICKS)).toEqual([
+      {
+        key: `attack-${lurrus.id}`,
+        from: { card: lurrus.id },
+        to: { plate: "opponent" },
+        tone: "opponent",
+      },
+    ]);
+    const attack = fourPlayerAttack();
+    const picks = aimAttacker(
+      toggleAttacker(NO_PICKS, attack.view, attack.elves.id),
+      attack.view,
+      "opponent2",
+    );
+    expect(combatArrows(attack.view, picks)[0].to).toEqual({ plate: "opponent2" });
   });
 });
