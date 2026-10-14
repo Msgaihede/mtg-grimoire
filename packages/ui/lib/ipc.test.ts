@@ -115,6 +115,8 @@ import wishlistOptimizeRsDesktop from "../../../apps/desktop/src-tauri/src/wishl
 // reads are declared there — and the app's own `scanner` is two files since the extraction's
 // seventh step: the session glue, the stored prefs and tray in the core, the commands in
 // `src-tauri`, joined below as `scannerRs`.
+import scanHistoryRsCore from "../../../crates/grimoire-core/src/scan_history.rs?raw";
+import scanHistoryRsDesktop from "../../../apps/desktop/src-tauri/src/scan_history/mod.rs?raw";
 import scannerRsCore from "../../../crates/grimoire-core/src/scanner.rs?raw";
 import scannerRsDesktop from "../../../apps/desktop/src-tauri/src/scanner/mod.rs?raw";
 // The scanner's files, fetched on first use (the light app's step 7.4): the engine's module, and
@@ -4070,6 +4072,66 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
+   * **The Scanner's history** (user schema v64, issue #989): four commands, each sent under the
+   * name and the arguments its wrapper declares — read out of `ipc.ts` and out of the crate, so
+   * this cannot pass by agreeing with a list written here — registered on the desktop and in the
+   * core's table under the same name. And the one vocabulary both sides spell: `ScanBatchStatus`
+   * against `scan_history::STATUSES`, a CHECKed column whose words the history's status chip
+   * branches on.
+   */
+  it("sends every scan history command under the name and arguments its command declares", async () => {
+    expect(scanHistoryRsCore.length, "scan_history.rs was not read").toBeGreaterThan(1_000);
+    expect(scanHistoryRsDesktop.length, "scan_history/mod.rs was not read").toBeGreaterThan(1_000);
+
+    invoke.mockResolvedValue([]);
+    expect(await ipc.scanHistoryList()).toEqual([]);
+    expect(invoke).toHaveBeenLastCalledWith("scan_history_list");
+    invoke.mockResolvedValue(null);
+    expect(await ipc.scanHistoryGet(3)).toBeNull();
+    expect(invoke).toHaveBeenLastCalledWith("scan_history_get", { id: 3 });
+    invoke.mockResolvedValue(undefined);
+    await ipc.scanHistoryRename(3, "Bob's binder");
+    expect(invoke).toHaveBeenLastCalledWith("scan_history_rename", { id: 3, name: "Bob's binder" });
+    await ipc.scanHistoryDelete(3);
+    expect(invoke).toHaveBeenLastCalledWith("scan_history_delete", { id: 3 });
+
+    /** A wrapper's parameter names, in order — `trade`'s case's reader, over this module. */
+    const wrapperParams = (command: string): string[] => {
+      const marker = `pub async fn ${command}(`;
+      const start = scanHistoryRsDesktop.indexOf(marker);
+      expect(start, `\`${command}\` has no wrapper in scan_history/mod.rs`).toBeGreaterThan(-1);
+      const open = start + marker.length;
+      const list = scanHistoryRsDesktop.slice(open, scanHistoryRsDesktop.indexOf(")", open));
+      return [...list.matchAll(/(?<![:\w])(\w+)\s*:(?!:)/g)].map((m) => m[1] ?? "");
+    };
+    for (const command of [
+      "scan_history_list",
+      "scan_history_get",
+      "scan_history_rename",
+      "scan_history_delete",
+    ]) {
+      const sent = payloadKeys(ipcSource, command).map(snake);
+      const declared = wrapperParams(command);
+      expect(declared[0], `\`${command}\` does not take the managed state first`).toBe("state");
+      expect(declared.slice(1), `the arguments of \`${command}\``).toEqual(sent);
+      expect(desktopRs, `\`${command}\` is not registered`).toContain(`scan_history::${command},`);
+      expect(commandsRs, `\`${command}\` is not in the core's table`).toMatch(
+        new RegExp(`^\\s*(?:read|write) ${command} in scan_history\\(`, "m"),
+      );
+    }
+    expect(wrapperParams("scan_history_rename")).toEqual(["state", "id", "name"]);
+
+    const statuses = /pub const STATUSES: \[&str; (\d+)\] = \[([^\]]*)\];/.exec(scanHistoryRsCore);
+    expect(statuses, "scan_history.rs no longer declares `STATUSES`").not.toBeNull();
+    const ts = /export type ScanBatchStatus = ([^;]+);/.exec(ipcSource);
+    expect(ts, "ipc.ts no longer declares `ScanBatchStatus`").not.toBeNull();
+    const words = (text: string) => [...text.matchAll(/"([^"]+)"/g)].map((w) => w[1] ?? "");
+    expect(words((ts as RegExpExecArray)[1] ?? "")).toEqual(
+      words((statuses as RegExpExecArray)[2] ?? ""),
+    );
+  });
+
+  /**
    * **The deck to-do lists' five** (user schema v59, issue #688), pinned on the day they were
    * written — one case, because they are one band's and one widget's worth of commands. They
    * replaced #672's three (`deck_todos`, `deck_todos_set` and a `deck_todo_lists` that took no
@@ -4553,6 +4615,37 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(scannerRs).toMatch(
       /fn scanner_tray_commit\([^)]*\bitems\s*:\s*Vec<crate::collection::CollectionImportItem>\s*,\s*folder_id\s*:\s*Option<i64>\s*,\s*remaining\s*:\s*Vec<ScannerTrayRow>/s,
     );
+  });
+
+  /**
+   * **The tray's Archive is the commit without the collection** (issue #989), and two argument
+   * names ride it — no folder, because an archive files nowhere. A name Tauri cannot fill is an
+   * Archive button that refuses every press; a `folderId` sent to it is dropped on the floor.
+   * Read off both the desktop wrapper and the core's table, which the light hosts dispatch
+   * through.
+   */
+  it("archives the tray under its own name with the items and what is left", async () => {
+    const items = [
+      {
+        cardId: TRAY_ROWS[0].cardId,
+        quantity: 1,
+        finish: "nonfoil" as const,
+        condition: "NM" as const,
+      },
+    ];
+    invoke.mockResolvedValue(4);
+    expect(await ipc.scannerTrayArchive(items, [TRAY_ROWS[1]])).toBe(4);
+    expect(invoke).toHaveBeenCalledWith("scanner_tray_archive", {
+      items,
+      remaining: [TRAY_ROWS[1]],
+    });
+    expect(scannerRsDesktop).toMatch(
+      /pub async fn scanner_tray_archive\([^)]*\bitems\s*:\s*Vec<crate::collection::CollectionImportItem>\s*,\s*remaining\s*:\s*Vec<ScannerTrayRow>\s*,\s*webview\s*:/s,
+    );
+    expect(commandsRs).toMatch(
+      /blocking scanner_tray_archive in scanner\(items: Vec<crate::collection::CollectionImportItem>, remaining: Vec<ScannerTrayRow>\)/,
+    );
+    expect(desktopRs).toContain("scanner::scanner_tray_archive,");
   });
 
   /**

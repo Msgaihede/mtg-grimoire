@@ -194,6 +194,44 @@ export const Developer: Story = {
 };
 
 /**
+ * *Archive* (issue #989): the resolved rows go to the scan history, not the collection, and the
+ * tray empties — then *History* on the bar opens the dialog with the pile at the top, `Archived`.
+ *
+ * Through the fake's `scanner_tray_archive` and `scan_history_*`, the commands' own names.
+ */
+export const ArchiveTray: Story = {
+  render: () => <Written tray={TRAY_ROWS.filter((row) => row.choices.length === 0)} />,
+  parameters: { docs: { story: { inline: false, height: "720px" } } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const tray = await canvas.findByRole("region", { name: "Scanned cards" });
+    await within(tray).findByText("Urza's Saga");
+    await userEvent.click(within(tray).getByRole("button", { name: "Archive" }));
+    await expect(await within(tray).findByText("Cards you scan appear here.")).toBeInTheDocument();
+
+    await userEvent.click(canvas.getByRole("button", { name: "History" }));
+    const dialog = await canvas.findByRole("dialog", { name: "Scan history" });
+    const scans = within(dialog).getByRole("navigation", { name: "Scans" });
+    const [newest] = await within(scans).findAllByRole("button");
+    await expect(newest).toHaveTextContent("Archived");
+  },
+};
+
+/** The scan history over the Scanner view, in the world that holds three piles. */
+export const ScanHistory: Story = {
+  parameters: {
+    fake: { seed: "scanHistory" },
+    docs: { story: { inline: false, height: "720px" } },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(await canvas.findByRole("button", { name: "History" }));
+    const dialog = await canvas.findByRole("dialog", { name: "Scan history" });
+    await expect(await within(dialog).findByText("Bob's binder", { selector: "h3" })).toBeVisible();
+  },
+};
+
+/**
  * Another window holds the scanner: one sentence, no camera, no tray.
  *
  * The fault is the lease being held and nothing else — `scanner_elsewhere` answers yes, so the page

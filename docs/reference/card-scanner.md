@@ -3630,6 +3630,52 @@ once in the same colour as it lands. **It is `aria-hidden`**: the strip above sa
 and two live regions announcing one landing is noise. Its motion is `motion.ts`'s `landed` preset;
 the tick's draw has its own `useReducedMotion` opt-out, because `pathLength` is not a positional key.
 
+### Scan history — Archive and the History dialog (issue #989, 2026-10-14)
+
+**Every pile the tray puts away is kept, so a reader can go back and see what they scanned.** The
+trade page's precedent: a trade is finished or archived, and a closed trade stays readable. Here
+the tray empties two ways that keep its cards, and each writes **one batch** to the scan history
+(`crates/grimoire-core/src/scan_history.rs`, user schema v64's `scan_batches` and
+`scan_batch_lines`):
+
+- **Add to collection** records a `filed` batch **inside `scanner_tray_commit`'s own transaction**
+  (`scanner::tray_commit`, in `commit_import_with`'s closure beside the tray that is left) — so the
+  history can never name a pile the collection did not take, nor miss one it did. A commit of no
+  lines records nothing. The batch keeps the folder's id **and its name**, so a deleted folder
+  still says where the cards went, and the one condition the press filed at.
+- **Archive** (the tray header's button beside *Clear all…*) is the commit without the collection:
+  `scanner_tray_archive(items, remaining)` (`scanner::tray_archive`) records an `archived` batch and
+  stores what is left of the tray in one savepoint, and files nothing. It is for a pile the reader
+  wants a record of and does not own — a friend's binder, a store's case. It takes the same rows
+  Add would (`commitPlan`: a row waiting on a printing stops the press with the plan's sentence,
+  a row of unknown finish stays in the tray), goes through the same single-flight queue
+  (`useTray`'s shared `putAway`, so its lines are built when the write goes out and a second
+  press over the same rows sends nothing), and holds the lease for `commit_tray`'s reason. It
+  invalidates `["scanHistory"]` and **not** `OWNED_WRITE_KEYS`; the commit now invalidates
+  `["scanHistory"]` too. A success toasts *Archived N cards to Scan history*; a refusal is
+  `notify.error` with the backend's sentence, and keeps every row.
+
+**A batch is a record, not a tray.** Lines are folded to one per printing and finish in the order
+the tray held them, named `Scan N` (N its id, `Trade N`'s rule), and carry the printing's name,
+set and number beside the soft `card_id` so they read after a sync drops the printing. Its lines
+cannot be edited; the history's own writes are `scan_history_rename` (blank is the default back)
+and `scan_history_delete`, which **never touches the collection** — the dialog's question says so.
+*Clear all…* keeps nothing, and a scan onto a trade's side is the trade's own record: with a
+`destination`, neither Archive nor History is drawn.
+
+**The History button on the bar opens `ScanHistoryDialog`** (`features/scanner/history/`): the
+batches newest first on the left — name, date, card count, a chip (*Added to “Binder”*, *Added to
+collection*, *Archived*) and the first line's whole card — and the picked batch's lines read-only
+on the right, with Rename and *Delete…*. It reads under one `["scanHistory"]` root
+(`useScanHistory.ts`), which `crossWindow.ts` maps both tables to. The delete question is a
+`Dialog` at `layer="stacked"` mounted beside it rather than `ConfirmDialog`, which has no layer of
+its own and would put two scrims on one z-index. Both are siblings of the `@container/scan` box,
+the Clear-all question's reason.
+
+**Neither table syncs and the mirror writes neither**, for the trades' reasons. The light app's
+phone face records `filed` batches through the same command — every host commits through the
+core's table — **but has no Archive or History of its own yet.**
+
 ### The Developer switch and the Tiers panel
 
 **§9's panels moved behind a Developer switch at the end of the bar, stored in `scanner_prefs`.**

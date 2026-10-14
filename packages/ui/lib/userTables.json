@@ -21,6 +21,8 @@
   "error_log",
   "muted_tags",
   "price_snapshots",
+  "scan_batch_lines",
+  "scan_batches",
   "sticky_notes",
   "sync_clock",
   "sync_devices",

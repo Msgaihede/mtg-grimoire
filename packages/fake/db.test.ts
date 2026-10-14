@@ -16,6 +16,11 @@ import {
   COMBO_CARD_NAMES,
   ORACLE_TAGGED_NAMES,
   RELAY_BASE,
+  SCAN_BATCH_GONE,
+  SCAN_NOTHING_TO_KEEP,
+  SCAN_NO_COPIES,
+  SCAN_NO_SUCH_CARD,
+  SCAN_UNKNOWN_FINISH,
   PANEL_WIDTH_MAX,
   PANEL_WIDTH_MIN,
   SUPPORTING_SINCE,
@@ -71,6 +76,7 @@ import type {
   HomeWidget,
   ImportResolveLine,
   SearchRequest,
+  ScannerTrayRow,
   SearchSortKey,
   StickyNote,
   Trade,
@@ -107,6 +113,9 @@ import { parseNoteBody } from "@grimoire/ui/features/decks/noteMarkdown";
 import type { MarketplaceId } from "@grimoire/ui/lib/marketplace";
 import { parseSnapshotValue, SNAPSHOT_VERSION } from "@grimoire/ui/lib/shareSnapshot";
 import type { SortSpec } from "@grimoire/ui/lib/sort";
+// The scan history's own source, read for its sentences: a refusal the page shows is the crate's
+// string literal, and only the file itself can say the fake spelled each one the same way.
+import scanHistoryRs from "../../crates/grimoire-core/src/scan_history.rs?raw";
 
 const BOLT = CARDS.find((c) => c.name === "Lightning Bolt")!;
 /** The second Bolt printing — `2x2 117`, uncommon. Used wherever "a different printing of
@@ -12905,7 +12914,11 @@ describe("the busy fault", () => {
     // `readHandlers`. Count again after a merge.
     // 142 → 143 on 2026-10-12 with `deck_split_printing` (issue #934), the swap's plain
     // `sync::with_write` deck write for part of a row. Count again after a merge.
-    expect(names).toHaveLength(143);
+    // 143 → 145 on 2026-10-14 with the scan history's two writes (issue #989),
+    // `scan_history_rename` and `scan_history_delete`, each reaching `refuseIfBusy` first; the
+    // two reads, `scan_history_list` and `scan_history_get`, sit in `readHandlers`. Count again
+    // after a merge.
+    expect(names).toHaveLength(145);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -23762,5 +23775,467 @@ describe("trades", () => {
     ]);
     // Closed at the prices it was looking at: the balance is the one the page drew.
     expect(tradeMoney(after).balance).toEqual({ kind: "youOwe", cents: 2270 });
+  });
+});
+
+/**
+ * The scan history (issue #989) — `crates/grimoire-core/src/scan_history.rs` and the tray's two
+ * presses that write it, `scanner::tray_commit` and `scanner::tray_archive`.
+ *
+ * What is held here is what a story and the history page lean on: that each press records exactly
+ * one batch of exactly what it put away, and **nothing at all when it refused**; that a batch is
+ * folded, named and ordered as the crate does it; that its two writes — the name and the whole
+ * batch — touch nothing else; and that every sentence a reader can be shown is the crate's own.
+ */
+describe("scan history", () => {
+  const URZA = printing("mh2", "259");
+  /** Three finishes, so a test can put one printing in two of them. */
+  const COUNTERSPELL = printing("mh2", "267");
+
+  const BINDER: FakeCollectionFolder = {
+    id: 1,
+    parentId: null,
+    name: "Binder",
+    kind: "user",
+    deckId: null,
+    sortOrder: 0,
+    locked: false,
+  };
+
+  /** One line of a press, as the tray's Add and Archive send it — at `NM` unless a case says
+   *  otherwise, since the tray files at the one condition its Defaults popover holds. */
+  const item = (
+    card: Pick<FakeCard, "id">,
+    finish: Finish,
+    quantity: number,
+    over: Partial<CollectionImportItem> = {},
+  ): CollectionImportItem => ({ cardId: card.id, finish, quantity, condition: "NM", ...over });
+
+  /** A row left in the tray — what both presses store beside their batch. */
+  const row = (key: string, quantity = 1): ScannerTrayRow => ({
+    key,
+    cardId: BOLT.id,
+    oracleId: BOLT.oracleId,
+    name: BOLT.name,
+    setCode: BOLT.setCode,
+    collectorNumber: BOLT.collectorNumber,
+    finish: "nonfoil",
+    quantity,
+    choices: [],
+    addedAt: 1,
+  });
+
+  /** A world with `Binder` and a tray holding one row nobody has put away yet. */
+  const world = (init: Partial<FakeDb> = {}): FakeDb =>
+    makeDb({ collectionFolders: [{ ...BINDER }], scannerTray: [row("left")], ...init });
+
+  /** Everything a refused press must leave exactly as it was, in one value to compare. */
+  const state = (db: FakeDb) =>
+    structuredClone({
+      batches: db.scanBatches,
+      lines: db.scanBatchLines,
+      tray: db.scannerTray,
+      collection: db.collectionEntries,
+    });
+
+  /** The crate holds each of these sentences as a string literal; the page shows them as-is. */
+  it("refuses in the crate's own sentences", () => {
+    for (const sentence of [
+      SCAN_BATCH_GONE,
+      SCAN_NOTHING_TO_KEEP,
+      SCAN_NO_SUCH_CARD,
+      SCAN_NO_COPIES,
+      SCAN_UNKNOWN_FINISH,
+    ]) {
+      expect(scanHistoryRs).toContain(`"${sentence}"`);
+    }
+  });
+
+  it("records one filed batch for an Add, with the folder it filed into, named after itself", () => {
+    const db = world();
+    allHandlers(db).scanner_tray_commit({
+      items: [item(BOLT, "nonfoil", 2), item(COUNTERSPELL, "foil", 1), item(BOLT, "nonfoil", 1)],
+      folderId: BINDER.id,
+      remaining: [row("next")],
+    });
+
+    expect(readHandlers(db).scan_history_list()).toEqual([
+      {
+        id: 1,
+        name: "Scan 1",
+        status: "filed",
+        folderId: BINDER.id,
+        folderName: "Binder",
+        condition: "NM",
+        lineCount: 2,
+        copies: 4,
+        coverCardId: BOLT.id,
+        createdAt: expect.any(Number),
+      },
+    ]);
+    // The Add still did what it always did: the copies are filed, and the tray is what was left.
+    expect(db.collectionEntries.map((e) => [e.cardId, e.finish, e.quantity, e.folderId])).toEqual([
+      [BOLT.id, "nonfoil", 3, BINDER.id],
+      [COUNTERSPELL.id, "foil", 1, BINDER.id],
+    ]);
+    expect(db.scannerTray.map((r) => r.key)).toEqual(["next"]);
+
+    // The folder's name was copied when the batch was written, so a rename does not reach it.
+    db.collectionFolders[0].name = "Old binder";
+    expect(readHandlers(db).scan_history_get({ id: 1 })?.summary.folderName).toBe("Binder");
+  });
+
+  it("records a filed batch at the root with no folder name", () => {
+    const db = world();
+    allHandlers(db).scanner_tray_commit({
+      items: [item(URZA, "nonfoil", 1)],
+      folderId: null,
+      remaining: [],
+    });
+    expect(readHandlers(db).scan_history_list()[0]).toMatchObject({
+      status: "filed",
+      folderId: null,
+      folderName: null,
+    });
+  });
+
+  /**
+   * **A refused Add records nothing**: the batch is written inside the import's transaction, so a
+   * refusal from the import, from the tray's own terms or from the lock leaves no row behind — and
+   * an Add of no lines is a success that records nothing either.
+   */
+  it("records nothing for a refused Add, nor for an Add of no lines", () => {
+    const db = world();
+    const before = state(db);
+    const h = allHandlers(db);
+
+    expect(() =>
+      h.scanner_tray_commit({
+        items: [
+          item(BOLT, "nonfoil", 1),
+          { cardId: "no-such-card", finish: "nonfoil", quantity: 1 },
+        ],
+        folderId: null,
+        remaining: [],
+      }),
+    ).toThrow(/no card with the id/);
+    expect(() =>
+      h.scanner_tray_commit({
+        items: [item(BOLT, "nonfoil", 1)],
+        folderId: null,
+        remaining: [row("empty", 0)],
+      }),
+    ).toThrow(/at least one copy/);
+    db.fault = "busy";
+    expect(() =>
+      h.scanner_tray_commit({ items: [item(BOLT, "nonfoil", 1)], folderId: null, remaining: [] }),
+    ).toThrow(/busy/i);
+    db.fault = null;
+    expect(state(db)).toEqual(before);
+
+    h.scanner_tray_commit({ items: [], folderId: null, remaining: [row("kept")] });
+    expect(db.scanBatches).toEqual([]);
+    expect(db.scannerTray.map((r) => r.key)).toEqual(["kept"]);
+  });
+
+  /**
+   * Archive is the trade page's *put away without touching the collection*: one `archived` batch
+   * and the rest of the tray, and **not one collection row** — not even with a folder in the world
+   * it could have named.
+   */
+  it("records an archived batch for Archive, stores the rest of the tray, and files nothing", () => {
+    const db = world();
+    const h = allHandlers(db);
+
+    const id = h.scanner_tray_archive({
+      items: [item(URZA, "nonfoil", 2), item(BOLT, "foil", 1)],
+      remaining: [row("next")],
+    });
+
+    expect(id).toBe(1);
+    expect(db.collectionEntries).toEqual([]);
+    expect(db.scannerTray.map((r) => r.key)).toEqual(["next"]);
+    expect(readHandlers(db).scan_history_get({ id: 1 })?.summary).toMatchObject({
+      name: "Scan 1",
+      status: "archived",
+      folderId: null,
+      folderName: null,
+      lineCount: 2,
+      copies: 3,
+      coverCardId: URZA.id,
+    });
+
+    // An archive of no lines records nothing, answers null, and still stores the tray.
+    expect(h.scanner_tray_archive({ items: [], remaining: [] })).toBeNull();
+    expect(db.scanBatches.map((b) => b.id)).toEqual([1]);
+    expect(db.scannerTray).toEqual([]);
+  });
+
+  /**
+   * The crate's order: the lock, then `remaining` on `store_tray`'s terms, then the batch's own
+   * refusals — the fold's per line (a zero before an unknown finish) and only then the printings.
+   * **Every one of them leaves the history, the tray and the collection exactly as they were.**
+   */
+  it("refuses an Archive in the crate's order and leaves everything as it was", () => {
+    const db = world();
+    const h = allHandlers(db);
+    // A batch already there, so a refusal that wrote half a batch would show up beside it.
+    h.scanner_tray_archive({ items: [item(BOLT, "nonfoil", 1)], remaining: [row("left")] });
+    const before = state(db);
+
+    const refusals: [Parameters<typeof h.scanner_tray_archive>[0], RegExp | string][] = [
+      // `remaining` is asked first, whatever is wrong with the items.
+      [{ items: [item(BOLT, "nonfoil", 0)], remaining: [row("empty", 0)] }, /at least one copy/],
+      [{ items: [item(BOLT, "nonfoil", 0)], remaining: [] }, SCAN_NO_COPIES],
+      [{ items: [item(BOLT, "unknown" as Finish, 1)], remaining: [] }, SCAN_UNKNOWN_FINISH],
+      [
+        {
+          items: [item(BOLT, "nonfoil", 1), item({ id: "no-such-card" }, "nonfoil", 1)],
+          remaining: [],
+        },
+        SCAN_NO_SUCH_CARD,
+      ],
+      // The fold is whole before any printing is looked up, so the zero is what is said.
+      [
+        {
+          items: [item({ id: "no-such-card" }, "nonfoil", 1), item(BOLT, "nonfoil", 0)],
+          remaining: [],
+        },
+        SCAN_NO_COPIES,
+      ],
+    ];
+    for (const [args, refusal] of refusals) {
+      expect(() => h.scanner_tray_archive(args)).toThrow(
+        typeof refusal === "string" ? new RegExp(`^${refusal}$`) : refusal,
+      );
+      expect(state(db)).toEqual(before);
+    }
+
+    db.fault = "busy";
+    expect(() =>
+      h.scanner_tray_archive({ items: [item(BOLT, "nonfoil", 1)], remaining: [] }),
+    ).toThrow(/busy/i);
+    expect(state(db)).toEqual(before);
+  });
+
+  /**
+   * One line per printing **and finish**, in the order each first appeared, its copies added; the
+   * condition the first line's, trimmed, and `null` when it carried none; and the list newest
+   * first.
+   */
+  it("folds a press's lines, takes its first condition, and lists newest first", () => {
+    const db = world();
+    const h = allHandlers(db);
+    h.scanner_tray_archive({
+      items: [
+        // Padded, as a hand-made caller might send it: the crate trims it (`filters::nonblank`).
+        item(BOLT, "nonfoil", 2, { condition: " LP " } as unknown as CollectionImportItem),
+        item(COUNTERSPELL, "foil", 1),
+        item(BOLT, "nonfoil", 1),
+        item(BOLT, "foil", 1),
+      ],
+      remaining: [],
+    });
+    h.scanner_tray_archive({
+      items: [item(URZA, "nonfoil", 4, { condition: undefined })],
+      remaining: [],
+    });
+
+    const r = readHandlers(db);
+    const first = r.scan_history_get({ id: 1 })!;
+    expect(first.lines.map((l) => [l.cardId, l.finish, l.quantity])).toEqual([
+      [BOLT.id, "nonfoil", 3],
+      [COUNTERSPELL.id, "foil", 1],
+      [BOLT.id, "foil", 1],
+    ]);
+    expect(first.summary).toMatchObject({ condition: "LP", lineCount: 3, copies: 5 });
+    expect(r.scan_history_get({ id: 2 })?.summary.condition).toBeNull();
+    expect(r.scan_history_list().map((b) => [b.id, b.name])).toEqual([
+      [2, "Scan 2"],
+      [1, "Scan 1"],
+    ]);
+  });
+
+  /** Two presses inside one second of `unixepoch()` tie on the clock; the id breaks it. */
+  it("breaks a tie on the clock by id, newest first", () => {
+    const db = makeDb({
+      scanBatches: [1, 2, 3].map((id) => ({
+        id,
+        name: `Scan ${id}`,
+        status: "archived" as const,
+        folderId: null,
+        folderName: null,
+        condition: null,
+        createdAt: id === 1 ? CLOCK_BASE + 10 : CLOCK_BASE,
+      })),
+    });
+    expect(
+      readHandlers(db)
+        .scan_history_list()
+        .map((b) => [b.id, b.coverCardId]),
+    ).toEqual([
+      [1, null],
+      [3, null],
+      [2, null],
+    ]);
+  });
+
+  /**
+   * A line reads its printing live where `cards` still holds it and from the three words it
+   * remembered where it does not — and the four facts it never remembered are `null` then. A batch
+   * that is gone reads as `null`, never an error.
+   */
+  it("reads a line's printing live, falls back on what it remembered, and answers null for a gone batch", () => {
+    const db = makeDb({
+      scanBatches: [
+        {
+          id: 7,
+          name: "Scan 7",
+          status: "archived",
+          folderId: null,
+          folderName: null,
+          condition: "NM",
+          createdAt: CLOCK_BASE,
+        },
+      ],
+      scanBatchLines: [
+        {
+          id: 1,
+          batchId: 7,
+          cardId: "a-printing-a-sync-dropped",
+          name: "Tarmogoyf",
+          setCode: "fut",
+          collectorNumber: "153",
+          finish: "nonfoil",
+          quantity: 1,
+          position: 1,
+        },
+        {
+          id: 2,
+          batchId: 7,
+          cardId: BOLT.id,
+          name: "What it was called once",
+          setCode: "old",
+          collectorNumber: "0",
+          finish: "foil",
+          quantity: 2,
+          position: 0,
+        },
+      ],
+    });
+    const r = readHandlers(db);
+    const batch = r.scan_history_get({ id: 7 })!;
+
+    expect(batch.summary.coverCardId).toBe(BOLT.id);
+    expect(batch.lines).toEqual([
+      {
+        id: 2,
+        cardId: BOLT.id,
+        oracleId: BOLT.oracleId,
+        name: BOLT.name,
+        setCode: BOLT.setCode,
+        setName: BOLT.setName,
+        collectorNumber: BOLT.collectorNumber,
+        rarity: BOLT.rarity,
+        layout: BOLT.layout,
+        finish: "foil",
+        quantity: 2,
+      },
+      {
+        id: 1,
+        cardId: "a-printing-a-sync-dropped",
+        oracleId: null,
+        name: "Tarmogoyf",
+        setCode: "fut",
+        setName: null,
+        collectorNumber: "153",
+        rarity: null,
+        layout: null,
+        finish: "nonfoil",
+        quantity: 1,
+      },
+    ]);
+    expect(r.scan_history_get({ id: 8 })).toBeNull();
+  });
+
+  it("renames a batch, gives a blank name the default back, and refuses one that is gone", () => {
+    const db = world();
+    allHandlers(db).scanner_tray_archive({ items: [item(BOLT, "nonfoil", 1)], remaining: [] });
+    const w = writeHandlers(db);
+    const name = () => readHandlers(db).scan_history_get({ id: 1 })?.summary.name;
+
+    w.scan_history_rename({ id: 1, name: "  Bob's binder " });
+    expect(name()).toBe("Bob's binder");
+    w.scan_history_rename({ id: 1, name: "   " });
+    expect(name()).toBe("Scan 1");
+    expect(() => w.scan_history_rename({ id: 2, name: "x" })).toThrow(
+      new RegExp(`^${SCAN_BATCH_GONE}$`),
+    );
+
+    db.fault = "busy";
+    expect(() => w.scan_history_rename({ id: 1, name: "Later" })).toThrow(/busy/i);
+    expect(name()).toBe("Scan 1");
+  });
+
+  /** The history owns none of the rows an Add filed, so deleting a batch takes nothing out of the
+   *  collection — and a batch already gone is a success. */
+  it("deletes a batch and its lines, leaves the collection alone, and takes a second press", () => {
+    const db = world();
+    const h = allHandlers(db);
+    h.scanner_tray_commit({ items: [item(BOLT, "nonfoil", 2)], folderId: null, remaining: [] });
+    h.scanner_tray_archive({ items: [item(URZA, "nonfoil", 1)], remaining: [] });
+    const collection = structuredClone(db.collectionEntries);
+    const w = writeHandlers(db);
+
+    db.fault = "busy";
+    expect(() => w.scan_history_delete({ id: 1 })).toThrow(/busy/i);
+    db.fault = null;
+    expect(db.scanBatches).toHaveLength(2);
+
+    w.scan_history_delete({ id: 1 });
+    expect(
+      readHandlers(db)
+        .scan_history_list()
+        .map((b) => b.id),
+    ).toEqual([2]);
+    expect(db.scanBatchLines.map((l) => l.batchId)).toEqual([2]);
+    expect(db.collectionEntries).toEqual(collection);
+    expect(readHandlers(db).scan_history_get({ id: 1 })).toBeNull();
+    expect(() => w.scan_history_delete({ id: 1 })).not.toThrow();
+  });
+
+  /**
+   * The `scanHistory` seed: three batches, newest first, and **each filed line names copies the
+   * world holds where the batch says they went**, while the archived one names none of the
+   * reader's — what Archive is for. A press made in a story lands on top of them.
+   */
+  it("seeds a history whose filed batches are true of the collection", () => {
+    const db = seed("scanHistory");
+    const r = readHandlers(db);
+    const list = r.scan_history_list();
+    expect(list.map((b) => [b.id, b.name, b.status, b.folderName])).toEqual([
+      [3, "Bob's binder", "archived", null],
+      [2, "Scan 2", "filed", "Binder"],
+      [1, "Scan 1", "filed", null],
+    ]);
+    for (const summary of list) {
+      const held = (cardId: string, finish: string) =>
+        db.collectionEntries.some(
+          (e) =>
+            e.cardId === cardId &&
+            e.finish === finish &&
+            (summary.status === "archived" || e.folderId === summary.folderId),
+        );
+      for (const line of r.scan_history_get({ id: summary.id })!.lines) {
+        expect(held(line.cardId, line.finish)).toBe(summary.status === "filed");
+      }
+    }
+
+    const id = allHandlers(db).scanner_tray_archive({
+      items: [item(BOLT, "nonfoil", 1)],
+      remaining: [],
+    });
+    expect(r.scan_history_list()[0].id).toBe(id);
+    expect(id).toBe(4);
   });
 });

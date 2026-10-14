@@ -65,6 +65,21 @@ function wrap(ui: ReactElement) {
 }
 
 describe("ScanBar", () => {
+  /** The way into the scan history (issue #989) is the Scanner view's alone. */
+  it("opens the scan history from its own press, handing up the button for the caret", async () => {
+    const user = userEvent.setup();
+    const onHistory = vi.fn();
+    wrap(<ScanBar {...props({ onHistory })} />);
+    const history = screen.getByRole("button", { name: "History" });
+    await user.click(history);
+    expect(onHistory).toHaveBeenCalledExactlyOnceWith(history);
+  });
+
+  it("draws no History where the host offers none", () => {
+    wrap(<ScanBar {...props({ developerSwitch: false })} />);
+    expect(screen.queryByRole("button", { name: "History" })).toBeNull();
+  });
+
   /**
    * **Detect leads the finish menu and is the one it opens on by default** — the reader decided it
    * should be the default, and the order is the information (`FINISH_OPTIONS`' comment). A fixed

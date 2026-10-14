@@ -49,14 +49,34 @@ export interface TrayCommitted {
   folderId: number | null;
 }
 
+/** What one Archive kept, for a surface that says so afterwards. */
+export interface TrayArchived {
+  /** The scan history's new batch — `scanner_tray_archive`'s answer. */
+  batchId: number;
+  /** The copies the press took out of the tray — the batch's lines, summed. */
+  copies: number;
+}
+
 export interface TrayCommit {
   /**
    * File the tray. **Never rejects**: a refusal is {@link TrayCommit.error}'s sentence and a
-   * `null` answer, and a press while one is already in flight is `null` and nothing else.
+   * `null` answer, and a press while one is already in flight — this one or an archive — is
+   * `null` and nothing else.
    */
   commit: () => Promise<TrayCommitted | null>;
   committing: boolean;
-  /** The last refusal, in the backend's own words — or the plan's. Cleared by the next press. */
+  /**
+   * Put the tray away **into the scan history without filing it** (issue #989): the rows an Add
+   * would take, by the same plan, kept as an `archived` batch and gone from the tray. Never
+   * rejects, on {@link TrayCommit.commit}'s terms.
+   */
+  archive: () => Promise<TrayArchived | null>;
+  archiving: boolean;
+  /**
+   * The last refusal of either press, in the backend's own words — or the plan's. **One slot for
+   * both**, because the tray draws one sentence above its rows and it has to be about the press
+   * the reader made last; cleared by the next press of either.
+   */
   error: string | null;
 }
 
@@ -102,8 +122,9 @@ export function useTrayCommit({
   folderId,
   folderList,
   onRefused,
+  onArchiveRefused,
 }: {
-  tray: Pick<TrayState, "latest" | "commit">;
+  tray: Pick<TrayState, "latest" | "commit" | "archive">;
   condition: Condition;
   folderId: number | null;
   folderList: FolderList;
@@ -115,13 +136,18 @@ export function useTrayCommit({
    * is written, and are said beside it in the tray the reader is pressing in.
    */
   onRefused?: (sentence: string) => void;
+  /** {@link onRefused} for Archive: the archive's write was refused, in its own sentence. */
+  onArchiveRefused?: (sentence: string) => void;
 }): TrayCommit {
   const queryClient = useQueryClient();
   const [committing, setCommitting] = useState(false);
+  const [archiving, setArchiving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Either press puts the same rows away, so neither goes while the other is in flight.
+  const busy = committing || archiving;
 
   const commit = async (): Promise<TrayCommitted | null> => {
-    if (committing) return null;
+    if (busy) return null;
     let snapshot: ScannerTrayRow[];
     try {
       // The plan is asked for its refusals and for which rows the press takes; the lines
@@ -161,5 +187,44 @@ export function useTrayCommit({
     }
   };
 
-  return { commit, committing, error };
+  /**
+   * **Archive takes exactly the rows Add would** — the same `commitPlan`, so a row waiting on a
+   * printing stops it with the plan's sentence and a row of unknown finish stays in the tray —
+   * and builds its lines when the write goes out, for the commit's reason above: a second press
+   * over rows the first has already put away finds them gone and sends nothing. The lines carry
+   * the Defaults' condition, which the batch records; no folder, because nothing is filed.
+   *
+   * **Nothing owned is invalidated** — the collection is untouched — and the history's root is
+   * settled by `tray.archive` itself.
+   */
+  const archive = async (): Promise<TrayArchived | null> => {
+    if (busy) return null;
+    let snapshot: ScannerTrayRow[];
+    try {
+      ({ taken: snapshot } = commitPlan(tray.latest(), condition));
+    } catch (e) {
+      setError(ipcError(e));
+      return null;
+    }
+    setArchiving(true);
+    setError(null);
+    try {
+      let taken = snapshot;
+      const lines = (sent: ScannerTrayRow[]): CollectionImportItem[] => {
+        taken = snapshot.filter((row) => sent.includes(row));
+        return importItems(taken, condition);
+      };
+      const batchId = await tray.archive(lines, (latest) => withoutCommitted(latest, taken));
+      if (batchId === null) return null;
+      return { batchId, copies: totalCopies(taken) };
+    } catch (e) {
+      setError(ipcError(e));
+      onArchiveRefused?.(ipcError(e));
+      return null;
+    } finally {
+      setArchiving(false);
+    }
+  };
+
+  return { commit, committing, archive, archiving, error };
 }

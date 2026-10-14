@@ -181,6 +181,10 @@ pub use grimoire_core::reconcile;
 /// **Settings' four clears.** `clear_collection`, `clear_wishlist` and `clear_decks` are
 /// `&Connection` in and a DTO out; `clear_cache` takes [`images`]' byte cache as well.
 pub mod reset;
+/// **Scan history** — `grimoire-core`'s module, and the four wrappers over it: two reads on the
+/// read connection and two writes through [`sync::with_write`]. The writes that record a batch
+/// are the scanner's tray commit and archive.
+pub mod scan_history;
 /// **The card scanner's commands**, over a glob re-export of `grimoire-core`'s `scanner` — whose
 /// doc has the asset load order, the lease, the prefs and the tray; this module's has the request
 /// body and the embedded assets. Its commands are registered in `desktop.rs`.

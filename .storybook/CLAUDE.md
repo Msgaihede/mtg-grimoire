@@ -43,6 +43,7 @@ The fake lives in `packages/fake/` (it was `.storybook/fake/` until 2026-10-08);
   - `shared`: A published read-only collection share snapshot and incoming friend share view.
   - `waiting`: Pre-release cards dated past `CLOCK_BASE` for the Home page's Coming Soon widget.
   - `trades`: `starter` plus five trades (two open, two finished, one archived unfinished) and the collection and wishlist rows that make Trade 5's marks true. `starter` itself holds no trades.
+  - `scanHistory`: `starter` plus the Scanner's history (user schema v64, issue #989) — *Scan 1* filed at the root, *Scan 2* filed into `Binder`, and an archived *Bob's binder* of printings the reader does not own. `starter` itself holds no batches.
   - `tokenPlan`: Managed token configurations and wishlist settlements (`All` mode with tokens on).
 - **Faults (refusals and edge conditions)**:
   - Configured per story via `parameters: { fake: { fault: "<fault-name>" } }`.

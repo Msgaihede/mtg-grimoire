@@ -909,7 +909,7 @@ commands! {
         )
     };
 
-    // scanner — all twelve, each the desktop wrapper's own body with one thing changed: **the
+    // scanner — all thirteen, each the desktop wrapper's own body with one thing changed: **the
     // lease is admitted for `PAGE`**, where a wrapper admits its webview's label. A table call
     // carries no window and a host of the table has one page (`scanner::PAGE`), so
     // `scanner_elsewhere` answers `false` here and `scanner_hold` succeeds, always. Every entry
@@ -962,6 +962,19 @@ commands! {
         let _lease = state.scanner.admit(PAGE)?;
         commit_tray(&state, &items, folder_id, &remaining)
     };
+    blocking scanner_tray_archive in scanner(items: Vec<crate::collection::CollectionImportItem>, remaining: Vec<ScannerTrayRow>) = |state| {
+        let _lease = state.scanner.admit(PAGE)?;
+        archive_tray(&state, &items, &remaining)
+    };
+
+    // scan_history (user schema v64) — the record the tray's two presses write. No lease: the
+    // history is not the scanner's, and reading or tidying it never touches the tray.
+    read scan_history_list in scan_history() = |conn| list_batches(conn);
+    read scan_history_get in scan_history(id: i64) = |conn| get_batch(conn, id);
+    write scan_history_rename in scan_history(id: i64, name: String) = |conn| {
+        rename_batch(conn, id, &name)
+    };
+    write scan_history_delete in scan_history(id: i64) = |conn| delete_batch(conn, id);
 
     // scanner_assets — what this install lacks of the scanner's three files, and the download a
     // reader's press starts (the light app's step 7.4). **Neither takes the lease**: what is
@@ -2406,6 +2419,7 @@ mod tests {
             "set_scanner_prefs" => json!({ "prefs": {} }),
             "set_scanner_tray" => json!({ "rows": [] }),
             "scanner_tray_commit" => json!({ "items": [], "remaining": [] }),
+            "scanner_tray_archive" => json!({ "items": [], "remaining": [] }),
             // `bytes`: no headers, and `chosen_body` is what the call carries.
             "scanner_frame" | "scanner_capture" => json!({}),
             // The scanner's files: the read and the fetch (a `task`) both stop at the same
@@ -2748,9 +2762,10 @@ mod tests {
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0xff, 0xd9,
     ];
 
-    /// The ten scanner commands that joined the table in step 7.3, and the two reads that
-    /// were there. A list of its own so a test can say "every one of them" and mean it.
-    const SCANNER: [&str; 12] = [
+    /// The ten scanner commands that joined the table in step 7.3, the two reads that were
+    /// there, and the tray's Archive (issue #989). A list of its own so a test can say "every
+    /// one of them" and mean it.
+    const SCANNER: [&str; 13] = [
         "scanner_status",
         "scanner_frame",
         "scanner_reset",
@@ -2763,26 +2778,29 @@ mod tests {
         "scanner_tray",
         "set_scanner_tray",
         "scanner_tray_commit",
+        "scanner_tray_archive",
     ];
 
-    /// The arguments and body each scanner command is asked with where a test asks all twelve.
+    /// The arguments and body each scanner command is asked with where a test asks all thirteen.
     fn scanner_call(name: &str) -> (Value, Option<Vec<u8>>) {
         match name {
             "scanner_frame" | "scanner_capture" => (json!({}), Some(TINY_JPEG.to_vec())),
             "scanner_set_filters" => (json!({ "filters": {} }), None),
             "set_scanner_prefs" => (json!({ "prefs": {} }), None),
             "set_scanner_tray" => (json!({ "rows": [] }), None),
-            "scanner_tray_commit" => (json!({ "items": [], "remaining": [] }), None),
+            "scanner_tray_commit" | "scanner_tray_archive" => {
+                (json!({ "items": [], "remaining": [] }), None)
+            }
             _ => (Value::Null, None),
         }
     }
 
     /// The two that fetch the scanner's files (step 7.4) — a list of their own, because they
-    /// are not the session's: neither takes the lease, and neither is one of the twelve above.
+    /// are not the session's: neither takes the lease, and neither is one of the thirteen above.
     const SCANNER_ASSETS: [&str; 2] = ["scanner_assets", "scanner_assets_fetch"];
 
     /// The one that sends a scan to the inbox (issue #776) — not the session's either: it takes
-    /// no lease, and it is the only one of the fifteen that asks a server of ours.
+    /// no lease, and it is the only one of the sixteen that asks a server of ours.
     const SCANNER_SUBMIT: [&str; 1] = ["scanner_submit"];
 
     /// `TINY_JPEG` as the page sends a picture to `scanner_submit`: standard base64.
@@ -2812,7 +2830,7 @@ mod tests {
     }
 
     #[test]
-    fn all_twelve_scanner_commands_are_in_the_table() {
+    fn all_thirteen_scanner_commands_are_in_the_table() {
         for name in SCANNER.iter().chain(&SCANNER_ASSETS).chain(&SCANNER_SUBMIT) {
             assert!(TABLE.iter().any(|e| e.name == *name), "{name}");
         }
@@ -3416,6 +3434,7 @@ mod tests {
                 "set_scanner_prefs",
                 "set_scanner_tray",
                 "scanner_tray_commit",
+                "scanner_tray_archive",
             ]
         );
     }

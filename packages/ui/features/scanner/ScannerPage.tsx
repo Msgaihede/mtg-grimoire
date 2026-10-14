@@ -6,6 +6,7 @@ import { plural } from "@/lib/counts";
 import { ipc, ipcError } from "@/lib/ipc";
 import { notify } from "@/lib/notifications";
 import { useAppStore } from "@/lib/store";
+import { ScanHistoryDialog } from "./history/ScanHistoryDialog";
 import { Overlay } from "./Overlay";
 import { TiersPanel } from "./panels/TiersPanel";
 import { AddedToast } from "./reader/AddedToast";
@@ -274,9 +275,13 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
 
   // The tray into the collection, in one `scanner_tray_commit` — all or nothing, the rows with a
   // known finish, the folder asked about again at the press (`useTrayCommit`).
+  // Archive is the same plan into the scan history instead (issue #989), and shares the commit's
+  // in-flight state and its one refusal slot.
   const {
     commit,
     committing,
+    archive,
+    archiving,
     error: commitError,
   } = useTrayCommit({
     tray,
@@ -284,6 +289,8 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     folderId: prefs.folderId,
     folderList,
     onRefused: (sentence) => notify.error("Couldn't add the scanned cards", { body: sentence }),
+    onArchiveRefused: (sentence) =>
+      notify.error("Couldn't archive the scanned cards", { body: sentence }),
   });
   // The same press for a destination that is not the collection: its own write first, then the
   // tray's subtraction (`useTrayDestination`). Both hooks are called; one of them acts.
@@ -317,6 +324,22 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
       notify.success(`Added ${plural(filed.copies, "card")} to ${filedInto(filed.folderId)}`);
     });
   };
+  /**
+   * *Archive* (issue #989): the rows an Add would take, kept in the scan history and filed
+   * nowhere. **One toast, with the count and where they went** — the Add's sentence with the
+   * archive's verb, because the tray empties under the reader and the cards are not in the
+   * collection, so the toast is the one place that says where to find them again.
+   */
+  const onArchive = () => {
+    void archive().then((kept) => {
+      if (kept === null) return;
+      notify.success(`Archived ${plural(kept.copies, "card")} to Scan history`);
+    });
+  };
+  /** The scan history's dialog, and the bar's *History* that opened it, for the caret. */
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const historyOpener = useRef<HTMLElement | null>(null);
+
   /** Where a commit filed, as the toast names it: a folder's name, or the collection's. A folder
    *  the list does not hold (it would not load, and the stored id went to the backend as it
    *  stood) is called the collection too — the answer proves no more than that. */
@@ -382,9 +405,9 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     // what the developer column leaves, the tray the other third, and the panels get a column of
     // their own. A container is the containing block for anything `fixed` inside it, so nothing
     // that must cover the window may mount in here — and nothing does: the dropdowns measure the
-    // block they land in, the all-printings dialog is drawn at the app root, and the page's three
-    // dialogs — *Clear all…*, *Create deck…* and *Send scan…* — are this fragment's other
-    // children, siblings of the box and not inside it.
+    // block they land in, the all-printings dialog is drawn at the app root, and the page's four
+    // dialogs — *Clear all…*, *Create deck…*, *Send scan…* and *History* — are this fragment's
+    // other children, siblings of the box and not inside it.
     <>
       <section className="@container/scan flex h-full flex-col gap-3">
         {/* Not shown: the ribbon already says `Scanner`, and every pixel of this view's height is
@@ -417,6 +440,15 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
           onCamera={(cameraId) => {
             if (cameraId !== prefs.cameraId) update({ cameraId });
           }}
+          // The history is the Scanner view's: over a trade the page is already a dialog.
+          onHistory={
+            destination === undefined
+              ? (opener) => {
+                  historyOpener.current = opener;
+                  setHistoryOpen(true);
+                }
+              : undefined
+          }
         />
 
         <div className="flex min-h-0 flex-1 gap-4">
@@ -545,6 +577,10 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
                 layout={trayLayoutOf(prefs.trayLayout)}
                 onLayout={(trayLayout) => update({ trayLayout })}
                 onClearAll={onClearAll}
+                // Archive is a record in the Scanner view's own history; a destination's host
+                // files somewhere else and draws none (`TrayPanel` also hides it for one).
+                onArchive={destination === undefined ? onArchive : undefined}
+                archiving={destination === undefined && archiving}
               />
             </div>
             {developer && (
@@ -623,6 +659,14 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
         }}
       />
       <SubmitScanDialog run={submit.run} onDismiss={submit.onDismiss} onClose={submit.onClose} />
+      <ScanHistoryDialog
+        open={historyOpen}
+        onDismiss={() => {
+          setHistoryOpen(false);
+          historyOpener.current?.focus();
+        }}
+        onClose={() => setHistoryOpen(false)}
+      />
     </>
   );
 }
