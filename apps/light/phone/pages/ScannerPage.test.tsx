@@ -995,6 +995,25 @@ describe("sending a scan from the Scanner page", () => {
     expect(opener).toHaveFocus();
   });
 
+  /** Issue #977: no card may land in the tray while the reader picks a printing. */
+  it("pauses recognition while the dialog is open, and resumes when it closes", async () => {
+    const { stop } = camera();
+    restoreVideo = shimVideo();
+    const cards = pile(0, "looking");
+    mount({ fake: SUPPORTER, over: () => ({ scanner_frame: cards.frame }) });
+    await opened(cards);
+    // One frame may have been on the wire as the press landed; nothing after it.
+    await act(() => new Promise((r) => setTimeout(r, 60)));
+    const paused = cards.sent.length;
+    await act(() => new Promise((r) => setTimeout(r, 120)));
+    expect(cards.sent.length).toBe(paused);
+    expect(stop).not.toHaveBeenCalled();
+
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull(), SETTLE);
+    await framesGoBy(cards, 0);
+  });
+
   /**
    * The reader is asked to look through every picture, so every one is a place the slider stops
    * — at a finger's size, from the shared floor.

@@ -158,9 +158,12 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     () => frameOptions(DEFAULT_SCANNER_OPTIONS, prefs.mode, false),
     [prefs.mode],
   );
+  // *Send scan…*'s dialog is open, so recognition pauses (issue #977) — the desktop page's
+  // `sending`, synced below `useScanSubmit` for its reason.
+  const [sending, setSending] = useState(false);
   const loop = useScanLoop({
     videoRef,
-    live: scanning && camera.kind === "live" && loaded && tray.loaded && !parked.paused,
+    live: scanning && camera.kind === "live" && loaded && tray.loaded && !parked.paused && !sending,
     options,
     sendPx: DEFAULT_SEND_PX,
     detailWaitMs: DEFAULT_DETAIL_WAIT_MS,
@@ -265,6 +268,9 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     filters: inForce,
     ready: sendable,
   });
+  // **Recognition pauses while the dialog is open** (issue #977), as on the desktop: a card left
+  // under the lens must not land in the tray while the reader picks a printing.
+  if (sending !== (submit.run !== null)) setSending(submit.run !== null);
   // **A run never spans a change of filters**, as on the desktop: the session drops its tracker
   // to take a changed set, which the pump cannot see, so when the filters in force move the
   // frames kept so far are let go (`ScanLoop.breakRun`). The one extra run at mount empties a
