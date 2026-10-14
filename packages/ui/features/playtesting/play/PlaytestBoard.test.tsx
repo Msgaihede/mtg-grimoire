@@ -1,12 +1,14 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PlaytestView } from "@/lib/ipc";
 import { goldfishDraggable } from "../goldfish/goldfishDrag";
+import { INSPECT_DELAY } from "../goldfish/Inspect";
 import {
   attackStep,
   blockStep,
   combatArrowsView,
   gameOver,
+  openingHand,
   respondStep,
   targetPrompt,
   turnFive,
@@ -75,6 +77,24 @@ describe("PlaytestBoard's stage button", () => {
     expect(onNewGame).toHaveBeenCalled();
     fireEvent.click(within(over).getByRole("button", { name: "Back to setup" }));
     expect(onBack).toHaveBeenCalled();
+  });
+});
+
+describe("PlaytestBoard's opening hand", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("previews a card rested on, and closes when the pointer leaves it", () => {
+    setup(openingHand());
+    const goyf = screen.getByRole("button", { name: "Tarmogoyf" });
+    const preview = () => screen.queryByTestId("goldfish-inspect");
+
+    fireEvent.mouseEnter(goyf);
+    act(() => vi.advanceTimersByTime(INSPECT_DELAY));
+    expect(preview()).toHaveTextContent("Tarmogoyf · in your opening hand");
+
+    fireEvent.mouseLeave(goyf);
+    expect(preview()).not.toBeInTheDocument();
   });
 });
 

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GameCard, GoldfishView } from "@/lib/ipc";
 import { GoldfishBoard } from "./GoldfishBoard";
 import { INSPECT_DELAY } from "./Inspect";
-import { discardView, gameCard, turnNineView } from "./fixtures";
+import { discardView, gameCard, openingHandView, turnNineView } from "./fixtures";
 
 function board(view: GoldfishView, onAct = vi.fn()) {
   return (
@@ -101,6 +101,18 @@ describe("GoldfishBoard's inspect preview", () => {
     expect(preview()).toBeInTheDocument();
 
     fireEvent.mouseLeave(card);
+    expect(preview()).not.toBeInTheDocument();
+  });
+
+  it("opens on a card of the opening hand, and closes when the pointer leaves it", () => {
+    render(board(openingHandView()));
+    const ring = screen.getByRole("button", { name: "Sol Ring" });
+
+    fireEvent.mouseEnter(ring);
+    rest(INSPECT_DELAY);
+    expect(preview()).toHaveTextContent("Sol Ring · in your opening hand");
+
+    fireEvent.mouseLeave(ring);
     expect(preview()).not.toBeInTheDocument();
   });
 
