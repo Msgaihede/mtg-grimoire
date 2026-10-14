@@ -161,6 +161,8 @@ export type Happened =
   | { type: "shuffled" }
   | { type: "lifeSet"; seat: GoldfishSeat; life: number; was: number }
   | { type: "turnBegan"; turn: number }
+  | { type: "life"; seat: GoldfishSeat; amount: number; total: number }
+  | { type: "opponentTurn"; drew: number; discarded: number }
   | { type: "chose"; what: string };
 
 export interface GoldfishStep {

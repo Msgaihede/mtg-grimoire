@@ -35,6 +35,31 @@ describe("sentence", () => {
   });
 });
 
+describe("the opponent's side", () => {
+  it("says the goldfish's turn", () => {
+    expect(sentence({ type: "opponentTurn", drew: 1, discarded: 0 })).toBe(
+      "The opponent drew a card and passed",
+    );
+    expect(sentence({ type: "opponentTurn", drew: 2, discarded: 1 })).toBe(
+      "The opponent drew two cards, discarded one and passed",
+    );
+    expect(sentence({ type: "opponentTurn", drew: 0, discarded: 0 })).toBe(
+      "The opponent passed the turn",
+    );
+  });
+
+  it("says a life total the rules changed, either seat's", () => {
+    expect(sentence({ type: "life", seat: "opponent", amount: -3, total: 37 })).toBe(
+      "The opponent took 3, down to 37",
+    );
+    expect(sentence({ type: "life", seat: "you", amount: 2, total: 42 })).toBe(
+      "You gained 2, up to 42",
+    );
+    expect(sentence({ type: "life", seat: "opponent", amount: 0, total: 40 })).toBeNull();
+    expect(kindOf({ type: "life", seat: "you", amount: 2, total: 42 })).toBe("life");
+  });
+});
+
 describe("lifeSentence", () => {
   it("says damage, gain and a death", () => {
     expect(lifeSentence("opponent", 19, 12)).toBe("The opponent took 7, down to 12");
@@ -55,6 +80,22 @@ describe("linesFor", () => {
     expect(lines).toEqual([
       { turn: 2, text: "Drew Forest", kind: "draw" },
       { turn: 2, text: "Untapped · turn 2 begins", kind: "turn" },
+    ]);
+  });
+
+  it("files the goldfish's turn under the reader's turn it followed", () => {
+    const lines = linesFor(
+      [
+        { type: "opponentTurn", drew: 1, discarded: 1 },
+        { type: "turnBegan", turn: 3 },
+        { type: "moved", name: "Forest", from: "libraryTop", to: "hand" },
+      ],
+      3,
+    );
+    expect(lines).toEqual([
+      { turn: 3, text: "Drew Forest", kind: "draw" },
+      { turn: 3, text: "Untapped · turn 3 begins", kind: "turn" },
+      { turn: 2, text: "The opponent drew a card, discarded one and passed", kind: "turn" },
     ]);
   });
 

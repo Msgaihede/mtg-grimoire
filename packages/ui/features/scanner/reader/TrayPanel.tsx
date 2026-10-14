@@ -1,4 +1,4 @@
-import { useId, useMemo, useRef, useState } from "react";
+import { useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { motion } from "motion/react";
 import {
   Archive,
@@ -198,11 +198,11 @@ const TILE_VARIANT: ImageVariant = "grid";
  * `auto-fill` over a 9rem floor is the design: the tray is a third of a wide view and a 25rem
  * column below that, so the count falls out of the width — two columns at the narrow end, three
  * or four at the wide one. **The floor is `min(9rem, 50% − half a gap)` rather than 9rem alone**
- * because a waiting tile spans two columns, and in a grid that fits only one, a two-column span
- * adds an implicit second track sized to its content and the tile hangs out of the tray. The
- * `min()` keeps two columns at any width, and it is exactly 9rem wherever two 9rem columns fit —
- * which is every width the page draws the tray at. The half gap is `gap-x-3`'s, so the two have
- * to move together.
+ * so a tray squeezed under two 9rem columns still draws two rather than one card the width of the
+ * tray; it is exactly 9rem wherever two 9rem columns fit — which is every width the page draws the
+ * tray at. The half gap is `gap-x-3`'s, so the two have to move together, and a waiting tile lays
+ * its candidates out on the same template with the same gap, so they are the size of the tiles
+ * around them (issue #1004).
  */
 const TILE_COLUMNS = "repeat(auto-fill, minmax(min(9rem, calc(50% - 0.375rem)), 1fr))";
 
@@ -1017,6 +1017,9 @@ function TrayTile({
 
   return (
     <li data-tray-row={row.key} className="flex min-w-0 flex-col">
+      {/* The name and its remove over the card, so the remove is the tile's top-right corner — where
+          a waiting tile's is too (issue #1004). */}
+      <TileName name={row.name} label={label} onRemove={onRemove} />
       {row.oracleId !== null ? (
         // `overflow-hidden` clips what is laid on the card to its corners, and costs the lift
         // nothing: an element's own shadow and focus outline are outside what its overflow clips.
@@ -1048,12 +1051,11 @@ function TrayTile({
         </div>
       )}
 
-      <TileName name={row.name} label={label} onRemove={onRemove} />
       {/* The printing and its price share a line, the price at the right end where a column of
           tiles lines its figures up. A tile with neither — a printing the corpus has no number
           for, its price not read yet — draws no empty line. */}
       {(printing !== "" || price !== undefined) && (
-        <div className="flex min-w-0 items-baseline gap-2">
+        <div className="mt-1.5 flex min-w-0 items-baseline gap-2">
           {printing !== "" && (
             <span className="min-w-0 truncate font-mono text-[11px] leading-4 text-dim">
               {printing}
@@ -1089,14 +1091,17 @@ function TrayTile({
 }
 
 /**
- * A card still waiting on a pick, as a question two columns wide.
+ * A card still waiting on a pick, as a question the whole width of the tray.
  *
  * **Its candidates are the tile**, laid out at the size of the cards around them, because what
  * tells two printings of one card apart is the frame — the set symbol, the border, the treatment
- * — and that is exactly what the list's 64px candidates reduce to a smudge. Two to a line, so each
- * is drawn as large as a resolved tile's card; a third or fourth adds a line rather than shrinking
- * the first two. The dashed gold edge marks the tray's open question, the thing the header's
- * *N cards to pick* is counting.
+ * — and that is exactly what the list's 64px candidates reduce to a smudge. **Across the whole
+ * tray, on the tray's own column template** (issue #1004): a question two columns wide stacked its
+ * candidates two to a line, so three or four of them stood several cards tall and pushed the tiles
+ * after them out of view. Full width, they take one line of the grid wherever the tray has as
+ * many columns as there are candidates. The name, *Pick a printing* and the remove head the box,
+ * the remove in its top-right corner where a resolved tile's is. The dashed gold edge marks the
+ * tray's open question, the thing the header's *N cards to pick* is counting.
  *
  * **No finish, no stepper, no card to open** — the row's rule: none of them means anything until
  * the reader has said which printing this is. What stays is the way out: remove.
@@ -1113,22 +1118,25 @@ function WaitingTile({
   onRemove: () => void;
 }) {
   return (
-    <li data-tray-row={row.key} className="col-span-2 flex min-w-0 flex-col">
-      <div className="relative">
-        <div
-          role="group"
-          aria-label={`Printings of ${row.name}`}
-          data-decision=""
-          className="grid grid-cols-2 gap-2 rounded-lg border border-dashed border-accent/60 p-2"
-        >
-          {row.choices.map((choice) => (
-            <ChoiceCard key={choice.cardId} choice={choice} onPick={() => onPick(choice.cardId)} />
-          ))}
-        </div>
-        {flash && <TrayFlash stamp={row.addedAt} className="rounded-lg" />}
+    <li
+      data-tray-row={row.key}
+      className="relative col-span-full flex min-w-0 flex-col rounded-lg border border-dashed border-accent/60 px-2.5 pt-1.5 pb-2.5"
+    >
+      {flash && <TrayFlash stamp={row.addedAt} className="rounded-lg" />}
+      <TileName name={row.name} label={rowLabel(row)} onRemove={onRemove}>
+        <span className="shrink-0 text-xs font-medium text-accent">Pick a printing</span>
+      </TileName>
+      <div
+        role="group"
+        aria-label={`Printings of ${row.name}`}
+        data-decision=""
+        className="grid gap-3"
+        style={{ gridTemplateColumns: TILE_COLUMNS }}
+      >
+        {row.choices.map((choice) => (
+          <ChoiceCard key={choice.cardId} choice={choice} onPick={() => onPick(choice.cardId)} />
+        ))}
       </div>
-      <TileName name={row.name} label={rowLabel(row)} onRemove={onRemove} />
-      <p className="text-xs font-medium text-accent">Pick a printing</p>
     </li>
   );
 }
@@ -1166,28 +1174,32 @@ function ChoiceCard({ choice, onPick }: { choice: ScannerTrayChoice; onPick: () 
 }
 
 /**
- * A tile's name line: the card's name, cut short with the whole of it on hover, and the remove
- * press at its right end — 24px, a size down from the row's, because it shares a line with 13px
- * type rather than with a stepper.
+ * A tile's name line, at the top of the tile: the card's name, cut short with the whole of it on
+ * hover, anything the tile adds after it, and the remove press at its right end — the tile's
+ * top-right corner (issue #1004). 24px, a size down from the row's, because it shares a line with
+ * 13px type rather than with a stepper.
  */
 function TileName({
   name,
   label,
   onRemove,
+  children,
 }: {
   name: string;
   label: string;
   onRemove: () => void;
+  children?: ReactNode;
 }) {
   const tip = useTooltip();
   return (
-    <div className="mt-2 flex min-w-0 items-center gap-1">
+    <div className="relative mb-1.5 flex min-w-0 items-center gap-2">
       <span
         {...tip(name, { whenClipped: true })}
         className="min-w-0 flex-1 truncate text-[13px] leading-5"
       >
         {name}
       </span>
+      {children}
       <button
         type="button"
         aria-label={`Remove ${label}`}

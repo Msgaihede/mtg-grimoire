@@ -262,6 +262,24 @@ fn the_next_turn_untaps_draws_and_counts_only_the_readers_turns() {
     assert_eq!(next.view.turn, 2);
     assert!(next.view.battlefield.iter().all(|c| !c.tapped), "untapped");
     assert!(next.happened.contains(&Happened::TurnBegan { turn: 2 }));
+    // The goldfish's turn is in the log too (issue #1026): it kept seven, drew its eighth and
+    // discarded down to seven — told before the reader's turn begins.
+    let fish = next
+        .happened
+        .iter()
+        .position(|h| {
+            *h == Happened::OpponentTurn {
+                drew: 1,
+                discarded: 1,
+            }
+        })
+        .expect("the goldfish's turn is told");
+    let began = next
+        .happened
+        .iter()
+        .position(|h| *h == Happened::TurnBegan { turn: 2 })
+        .unwrap();
+    assert!(fish < began, "{:?}", next.happened);
     assert!(next.happened.iter().any(|h| matches!(
         h,
         Happened::Moved {
@@ -696,4 +714,44 @@ fn the_mana_table_counts_each_type_the_open_sources_could_make() {
         [1, 1, 0, 0, 2, 0],
         "a tapped Sol Ring makes none"
     );
+}
+
+#[test]
+fn a_life_total_the_rules_change_is_told_for_either_seat() {
+    let step = engine(|| {
+        let mut cards = deck();
+        cards.push(card(
+            "Fish Feast",
+            Some("{G}"),
+            "Sorcery",
+            "Each opponent loses 2 life and you gain 2 life.",
+            None,
+            1,
+        ));
+        let mut game = Goldfish::new(&cards, &[], 7).expect("a game starts");
+        game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+        let forest = in_hand(&mut game, "Forest");
+        game.act(A::Play { id: forest }).unwrap();
+        let feast = in_hand(&mut game, "Fish Feast");
+        game.act(A::Play { id: feast }).unwrap()
+    });
+    assert!(
+        step.happened.contains(&Happened::Cast {
+            name: "Fish Feast".into(),
+            from: Place::Hand
+        }),
+        "{:?}",
+        step.happened
+    );
+    assert!(step.happened.contains(&Happened::Life {
+        seat: Seat::Opponent,
+        amount: -2,
+        total: 38
+    }));
+    assert!(step.happened.contains(&Happened::Life {
+        seat: Seat::You,
+        amount: 2,
+        total: 42
+    }));
+    assert_eq!(step.view.opponent_life, 38);
 }

@@ -296,11 +296,22 @@ background stays readable on it.
 **The log is cut into turns.** Each turn sits under a heading with a rule across it. The turn being
 played is in the accent, and each line has a glyph for its kind (`LogKind`: a draw, a land, a cast).
 
+**The log tells the goldfish's side too** (issue #1026). The goldfish plays its own turn: it
+draws, plays nothing, and discards down to seven (it keeps seven, so from its first turn on that
+is one card a turn). The session counts its draws and discards from the engine's events and says
+the turn once, as it ends (`Happened::OpponentTurn`): "The opponent drew a card, discarded one and
+passed". That line is filed under the reader's turn it followed: `linesFor` puts what came before
+a `turnBegan` under the turn before it. A life total the rules change — a drain, a gain, either
+seat's — is `Happened::Life` ("The opponent took 2, down to 38"), as against one the reader set
+by hand (`LifeSet`). The playtest board's log already told every seat's doing, from phase's
+events (`playtest/session.rs`' `tell`).
+
 **The table is laid out by the rules, not by where a card is let go.** Creatures are in front.
 Behind them, lands are on the left and every other permanent on the right. Each lane is one row,
 and its card size is solved so every pile fits (`layout.ts`). Cards of one name that look the same
-— same printing, same tapped state, same counters — are one pile, edged 3 px a card underneath
-and marked ×N.
+— same printing, same tapped state, same counters — are one pile: the cards themselves stacked,
+each edged 5 px up and to the right of the one above it, five drawn at most, and a ×N chip on the
+pile's bottom edge for the count (issue #1001).
 
 **Drags are dnd-kit, as everywhere in the app** (`goldfishDrag.ts`, with a mark of its own). A drop
 is a zone, never a coordinate:
