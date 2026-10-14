@@ -626,8 +626,8 @@ function Binder({
           </p>
         )}
         <p className="mt-4 max-w-[54ch] text-sm text-dim">
-          Read-only snapshot. It won't change until {owner === "" ? "its owner" : owner} shares it
-          again.
+          Read-only snapshot. {owner === "" ? "Its owner's" : `${owner}’s`} app republishes it when
+          the collection changes; this view checks for that every few minutes.
         </p>
       </header>
 

@@ -542,7 +542,7 @@ describe("a snapshot missing everything the parser does not promise", () => {
     // `Invalid Date`.
     expect(screen.queryByText(/as of/)).toBeNull();
     expect(screen.getByText(/Read-only snapshot/)).toHaveTextContent(
-      /until its owner shares it again/,
+      /Its owner's app republishes it/,
     );
     // `fields` absent means the publisher answered no optional question, so no money slot and no
     // Price sort — the same reading a snapshot with `fields: []` gets.
