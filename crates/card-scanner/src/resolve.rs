@@ -41,6 +41,15 @@ pub const EXACT_MAX_CHOICES: usize = 12;
 /// right answers went as low as 0.04, and a floor that caught the failures held back one right
 /// answer in five.
 pub const EXACT_ALONE_DISTANCE: f32 = 0.25;
+/// How far, normalized, the answer must stand clear of the nearest printing of **another card**
+/// when only the hash vouches for it — the gap gate ([`resolve_gated`]). About three bits of 256.
+///
+/// **Swept on the replay of 86 readers' scans, 2026-10-14**, against the same scans ungated:
+/// 0.012 turned 12 of the 19 wrong cards into not-found and lost no right answer; 0.02 turned 15
+/// and lost one right card (Raubahn, Bull of Ala Mhigo FIN 388); 0.03 the same 15 and lost a
+/// right printing besides. Every one of the 19 was an ambiguous list without the reader's card
+/// in it, so what the gate takes away is a picker of strangers.
+pub const EXACT_MIN_GAP: f32 = 0.012;
 
 type Id = [u8; ID_LEN];
 
@@ -180,6 +189,27 @@ pub fn resolve(
     burst: &[BurstView<'_>],
     readers: &dyn Readers,
     max_normalized: f32,
+) -> ResolutionView {
+    resolve_gated(r, mask, burst, readers, max_normalized, None)
+}
+
+/// [`resolve`], holding back an answer only the hash vouches for when it stands less than
+/// `min_gap` clear of the nearest printing of **another card** — the gap gate. `None` is
+/// [`resolve`] exactly; a session passes [`EXACT_MIN_GAP`] unless told otherwise.
+///
+/// **The gap, not the distance, tells a real match from an impostor.** Surveyed over every
+/// detected frame of the 86 replay scans, the quad read as the card: the right card's gap had a
+/// median of 0.035 normalized, the wrong one's 0.008 with its 90th percentile at 0.020, while
+/// their distances overlapped across most of the range. A wrong crop — a sleeve pocket, an art
+/// window turned sideways — lands among a crowd of strangers at nearly the same distance; a
+/// real card, even badly framed, stands out from it.
+pub fn resolve_gated(
+    r: &Reference,
+    mask: &Mask,
+    burst: &[BurstView<'_>],
+    readers: &dyn Readers,
+    max_normalized: f32,
+    min_gap: Option<f32>,
 ) -> ResolutionView {
     let started = crate::host::Stopwatch::start();
     let mut tiers = Vec::with_capacity(6);
@@ -462,12 +492,33 @@ pub fn resolve(
         .copied()
         .filter(|d| *d > EXACT_ALONE_DISTANCE);
     let unvouched = survivors.len() == 1 && title_cards.is_empty() && !pinned && far.is_some();
+    // The gap gate ([`resolve_gated`]): how far the nearest printing of another card stands
+    // behind the answer, over everything the whole-card tier found. `None` when nothing else
+    // came inside the gate at all — which is the answer standing out, not doubt.
+    let gap = survivors.first().and_then(|p0| {
+        let (d0, card) = (*best.get(p0)?, r.oracle_for(p0));
+        best.iter()
+            .filter(|(p, _)| r.oracle_for(p) != card)
+            .map(|(_, d)| *d - d0)
+            .reduce(f32::min)
+    });
+    let crowded = match (min_gap, gap) {
+        (Some(g), Some(gap)) => title_cards.is_empty() && !pinned && gap < g,
+        _ => false,
+    };
     let detail = match far {
+        _ if crowded => format!(
+            "not implemented; the hash alone, {:.3} clear of another card — no card stands out",
+            gap.unwrap_or_default()
+        ),
         Some(d) if unvouched => {
             format!("not implemented; the hash alone, at {d:.3} — the reader confirms")
         }
         _ => "not implemented".to_string(),
     };
+    if crowded {
+        survivors.clear();
+    }
     tiers.push(tier("classifier", survivors.len(), detail));
 
     let outcome = match survivors.len() {
@@ -1182,6 +1233,32 @@ mod tests {
         let v = resolve(&r, &Mask::all(), &burst(&up, &down), &NoReaders, GATE);
         assert_eq!(v.outcome, Outcome::Resolved, "{:?}", v.tiers);
         assert_eq!(v.tiers[5].detail, "not implemented");
+    }
+
+    #[test]
+    fn the_gap_gate_holds_back_a_hash_alone_answer_crowded_by_another_card() {
+        // Two different cards four bits apart: the hash has no reason to prefer either.
+        let (up, down) = (img(5), img(99));
+        let crowded = bits_away(&[40, 44]);
+        let v = resolve(&crowded, &Mask::all(), &burst(&up, &down), &NoReaders, GATE);
+        assert_eq!(v.outcome, Outcome::Ambiguous, "the premise, ungated: {:?}", v.tiers);
+        let gated = |r: &Reference, readers: &dyn Readers| {
+            resolve_gated(r, &Mask::all(), &burst(&up, &down), readers, GATE, Some(0.02))
+        };
+        let v = gated(&crowded, &NoReaders);
+        assert_eq!(v.outcome, Outcome::NotFound, "{:?}", v.tiers);
+        assert!(v.choices.is_empty());
+        assert!(v.tiers[5].detail.contains("no card stands out"), "says why: {:?}", v.tiers[5]);
+
+        // A title read vouches for the card, so the gate does not apply.
+        let v = gated(&crowded, &reads(Some("card 0"), &[]));
+        assert_eq!(v.outcome, Outcome::Resolved, "a title: {:?}", v.tiers);
+
+        // Twenty bits clear of the other card is a card that stands out.
+        let clear = bits_away(&[40, 60]);
+        let v = gated(&clear, &NoReaders);
+        assert_eq!(v.outcome, Outcome::Resolved, "{:?}", v.tiers);
+        assert_eq!(ids(&v), [format_uuid(&id(1))]);
     }
 
     #[test]

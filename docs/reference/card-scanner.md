@@ -554,6 +554,56 @@ bare card: where the lower card peeks out along a whole side with no step at the
 outline has no empty corner and still wins. And the fine-striped table still hides Tobias Andrion
 LEG 264 and Elektra MSH 326 on most frames.
 
+### Reframe — the quad read as an inner box (2026-10-14)
+
+**The winning quad is a hypothesis, not the card.** On the replay of 86 readers' scans (§10, *The
+replay*), 28 of the 56 failures rectified an inner box — the art window, or the type line and text
+box, usually turned 90° — and 13 more the sleeve pocket. Inside a pocket, or held against a black
+stack, the card's own outer edge is often no contour at all: the containment filter has no
+container to drop the inner box for, and a landscape box read sideways passes the 63:88 prior.
+`reframe.rs` reads the quad four more ways, each from either long side, extrapolates each to the
+card it implies with a homography, and lets the match choose. It runs before the lock, so the lock,
+the rectification and every band the readers cut follow the card the reading implies.
+
+The regions are the M15 frame's, in fractions of the card, read off the mean of 200 cached
+`display` renders of black-bordered normal M15 printings (their strongest row and column
+gradients). Older frames and borderless printings put the boxes elsewhere; a reading that does not
+fit loses the match to one that does.
+
+| Region | x | y | What it is |
+| --- | --- | --- | --- |
+| `art` | 0.073–0.924 | 0.108–0.557 | the art window, inside its frame line |
+| `lower` | 0–1 | 0.557–1 | the type line down to the card's bottom edge |
+| `text_block` | 0.073–0.924 | 0.560–0.920 | the type line and text box, inside the frame lines |
+| `upper` | 0–1 | 0–0.557 | the card's top edge down to the bottom of the art |
+
+**Two designs failed before this one, and each failure is a rule now** (replay, As scanned, against
+19 wrong cards and 25 never resolved):
+
+- **Chosen afresh each frame, by distance**: wrong 19 → 6, never resolved 25 → **44**. The readings
+  of one inner box imply cards a third of a card apart, the winner jumped between them, and the lock
+  — which trusts a quad only once it has stayed put — never settled. **A reading is held** from frame
+  to frame while it still matches better than the quad as found.
+- **Held, chosen by distance**: wrong 19 → 11, but four scans that had the right printing went
+  undecided or wrong. **Distance is not the signal.** The survey (§10) put a right reading's median
+  distance at 0.250 against a wrong one's 0.301, overlapping across most of the range, and its gap
+  to the nearest other card at 0.023 against 0.008. A reading must beat the quad by
+  `Options::margin` (0.03) **and** stand `Options::min_gap` (0.04) clear of the nearest other card,
+  and clearer than the quad does.
+
+**The ceiling is low, and the survey says so.** Over 1,452 detected frames the quad as found named the
+right card on 440, and some other reading did where it did not on only 84 more — mostly `lower`
+(43) and `text_block` (33), not `art` (11). Extrapolating outward from an inner box roughly doubles
+whatever error its corners had. On the replay it decides one more printing and two more cards in
+Exact and makes nothing worse (§10).
+
+**Asked only while the answer is in doubt.** Choosing costs a match of the quad as found and, when
+that is poorer than `Options::only_above` (0.20), one of each of the eight readings. After a locked
+frame matched within 0.20 (`Session::reframe_plain`), or once the card is decided, nothing is asked:
+a held reading is applied as geometry alone, so the quad the lock follows does not jump back to the
+inner box. The replay took 184 s with it against 129 s without, on 12 workers — a figure under
+load, and paid on the frames that were failing anyway. **Not measured on a phone or in WebAssembly.**
+
 ### Lock — a filter, not a gate
 
 A card and a card-shaped thing are indistinguishable in a single frame. What a card does that a
@@ -3150,7 +3200,7 @@ before and records a `detail` in words.
 | 2 `title` | read the most card-like view, and the next only on no read | **exact read** (0 edits): every permitted printing of that card, whether or not tier 1 found it — the foil rescue. **Corrected read** (≥ 1 edit): only the tier-1 survivors that are that card; if none are, the read is **ignored** (`… not among survivors — ignored`); if tier 1 found nothing at all, it replaces, bounded by the lookup's edit budget. No read, or a read naming no card: unchanged |
 | 3 `collector` | read the collector line the same way | a resolved printing pins itself **only if** its card is among the survivors **and** it is the card the title settled on — or, with no title, a card whose nearest surviving printing is less than `EXACT_MARGIN_BITS` (6) behind the nearest card. Otherwise a `conflict: …` detail naming why (`not among survivors`, `not the card the title read`, `N bits behind the nearest card`, `which has no distance`) and survivors unchanged |
 | 4 `re_rank` | best distance per survivor; a survivor a name read brought in is scored by a search restricted to the survivors | the best alone if it leads the second by ≥ 6 bits; otherwise every survivor less than 6 bits behind the best |
-| 5 `classifier` | the trait slot | unchanged (`not implemented`; with the note below when it holds a lone survivor back) |
+| 5 `classifier` | the trait slot, and the gap gate | unchanged (`not implemented`; with the note below when it holds a lone survivor back) — or **none**, when only the hash vouches for the answer and it stands less than `EXACT_MIN_GAP` clear of another card (`… no card stands out`) |
 
 The outcome is `resolved` for one survivor, `ambiguous` for several (best first, reported to
 `EXACT_MAX_CHOICES`, 12), `not_found` for none — **and `ambiguous`, a choice of one, for a lone
@@ -3179,6 +3229,32 @@ answers went as low as 0.04: Exact's ambiguous share rose from 6.2% to 15.0% fil
 set, plain, and from 6.9% to 16.9% sleeved, every stratum, accuracy unchanged. A floor low enough
 to spare those caught neither failure. That is the cardness note's own finding (`MIN_SCORE`),
 met again.
+
+**The gap gate (2026-10-14) catches what the distance could not.** An answer only the hash vouches
+for — no title settled the card, no collector line pinned or fitted the printing — must stand
+`EXACT_MIN_GAP` (0.012 normalized, about 3 bits) clear of the nearest printing of **another card**
+among everything the whole-card tier found, or the resolve is `not_found` and the classifier says
+`no card stands out`. A reprint of the answer is not a rival: same-art printings tie by design. The
+survey of every detected replay frame (§10) is why it is the gap and not the distance: read as the
+card, a right answer's gap had a median of 0.035 and a wrong one's 0.008, its 90th percentile at
+0.020, while their distances overlapped. Swept on the replay against the same scans ungated:
+
+| `EXACT_MIN_GAP` | wrong card | right answers lost |
+| --- | ---: | --- |
+| off | 19 | — |
+| **0.012** | **7** | none |
+| 0.02 | 4 | one card (Raubahn, Bull of Ala Mhigo FIN 388) |
+| 0.03 | 4 | that card, and Beastcaller Savant BFZ 170, right to the printing, now undecided |
+
+All 19 were ambiguous lists without the reader's card in them, so what the gate takes away is a picker
+of strangers; undecided rose 36.0% → 50.0% at 0.012. `resolve_gated` is the gated tiers and `resolve`
+the ungated, which the tier tests call; a session passes `GapGate::exact`, on by default.
+
+**Fast's half is built and off** (`GapGate::fast`): a frame whose appearance candidates are crowded
+votes nothing — kept at weight 0 rather than dropped, since an empty frame is a miss and ten misses
+reset a decision. It cost right answers at every value tried: at 0.008 it made 6 of Fast's 9 wrong
+cards undecided and cost two printings (Esquire of the King LTR 13, undecided; Decorum Dissertation
+SOS 78, the card but not the printing). One frame's gap says less than a burst's.
 
 **Rows 2 and 3 were tightened by the synthetic evaluation, and the rule behind both is that Exact
 must never be less right about the card than Fast.** As first built, any resolved name *replaced*
@@ -4023,6 +4099,25 @@ Basic lands go 90 → 100% decided in Fast, borderless/full-art 66.7 → 80%. Th
 decides that the merge does not is Super Shredder again. Mean ms is 3–7% higher, under load, and
 not separated from the noise of a shared machine.
 
+**Reframing and the gap gate (§3 *Reframe*, § *Exact*), 2026-10-14** — Windows, release, seed 7,
+against the shipped 122,390-printing bundle, each scene run with both off (`SCANNER_REFRAME=off
+SCANNER_GAP=off`) and as shipped. Every headline column of Fast is identical in both scenes. Four
+cards of 160 changed anywhere, and these are all of them:
+
+| scene | card | pass | off → as shipped | what moved it |
+| --- | --- | --- | --- | --- |
+| plain | Elektra, Daughter of the Hand MSH 326 | Exact, + own set | not found → undecided | reframing (corners 101 → 57 px) |
+| sleeved | Bruna, the Fading Light INR 14 | Exact | **wrong** → not found | the gap gate |
+| sleeved | Phantasmal Terrain 2ED 69 | Exact | printing ✓ (first of a list) → not found | the gap gate |
+| sleeved | Forest LTR 721 | all three | card ✓ either way, 9 → 12 frames in Exact | reframing (corners 4.3 → 18.4 px) |
+
+So the evaluation's verdict is a wash on clean cards — one wrong card gone, one right list gone,
+both in sleeved Exact — where the replay's is thirteen better and none worse. **The first build
+judged a reading under the session's mask**, and sleeved and filtered to its own set it reframed
+Hypnotic Specter LEB 113 off the card and named it wrong; readings are judged against every printing
+since. Mean ms rose 14–22% in the runs taken back to back with their off arms (Fast 295 → 337
+plain, 305 → 372 sleeved); a later run under other load read twice that. Not a latency.
+
 ### The replay
 
 `replay` is `eval`'s sibling on real footage: where `eval` degrades Scryfall's renders in software,
@@ -4161,6 +4256,39 @@ changes no other pass.
 
 The 0.92 framing (§3 *Rectify*) was measured against the binder batch the same day: 23 → 19
 wrong cards in Exact over all 86, the pocket scans that show the failure most plainly unchanged.
+
+**Why the 56 failures fail**, read off each one's rectified slice the same afternoon (against the
+shipped bundle of 122,390 printings, which moved only two scans from the 113,494 one): 28 rectified
+an inner box — the art window or the type line and text box, usually turned 90° — 13 the sleeve
+pocket with the card inset in it, 6 were the right card in a sibling printing (a prerelease promo for
+the set's, a variant frame), 6 a decent crop that still missed (foils, a basic land, runs too short to
+resolve) and 3 something else. **Three quarters fail before the hash runs**, and the hash, the
+title band and the collector band all read that one crop. That is what §3 *Reframe* and § *Exact*'s
+gap gate answer:
+
+| As scanned, 86 scans, 2026-10-14 | printing ✓ % | card ✓ % | wrong card | undecided % | never resolved |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| both off (`SCANNER_REFRAME=off SCANNER_GAP=off`) — identical to before, scan for scan | 34.9 | 41.9 | 19 | 36.0 | 25 |
+| reframing alone ¹ | 36.0 | 44.2 | 14 | 39.5 | 29 |
+| the gap gate alone | 34.9 | 41.9 | 7 | 50.0 | 25 |
+| **both — what ships** | **36.0** | **44.2** | **7** | 47.7 | 29 |
+
+Thirteen scans better and none worse in Exact; Fast 31.4 → 32.6% printing and 38.4 → 40.7% card,
+two better and none worse, its wrong cards unchanged at 9. (¹ Measured before reframing learned to skip frames after a plain match; both together came out the same in Exact, scan for scan, with and without the skip.) **Every threshold was set on these 86**,
+mostly one reader's binder pages, so read it as the corpus's verdict rather than a camera's; the
+synthetic evaluation (§ *The synthetic evaluation*) is the check that clean cards did not pay for it.
+
+**The survey** is the measurement both rules were set by: `SCANNER_REFRAME_SURVEY=<file>` makes the
+replay binary detect every frame of every run, read the quad as the card and as each of §3's eight
+readings, match each, and write one JSON line per frame and reading — distance, the gap to the
+nearest other card, whether it named the reader's card. No session and no tracker: it asks what a
+reading's match looks like when it is right and when it is not. 1,452 detected frames, 59 s.
+
+**The measured switches** are environment variables that `replay` and `eval` both read
+(`src/bin/support/ab.rs`), so a change is measured against the scanner without it on one binary and
+through `pnpm scanner:replay`, which passes the environment on and no unknown argument:
+`SCANNER_REFRAME=off | <margin>[,<only above>[,<min gap>]]`, `SCANNER_REFRAME_LOG=1` (a stderr line per
+reframed frame) and `SCANNER_GAP=off | [<exact>],[<fast>]`. Unset is what ships.
 
 ### Measured in the app
 
