@@ -1,7 +1,7 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { PlaytestPrompt } from "@/lib/ipc";
-import { castChoicePrompt, targetPrompt } from "./fixtures";
+import { castChoicePrompt, orderTriggersPrompt, targetPrompt } from "./fixtures";
 import { PromptPanel } from "./PromptPanel";
 
 function setup(prompt: PlaytestPrompt, disabled = false) {
@@ -46,6 +46,22 @@ describe("PromptPanel", () => {
     expect(onAct).toHaveBeenLastCalledWith({ type: "auto" });
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onAct).toHaveBeenLastCalledWith({ type: "cancel" });
+  });
+
+  it("says what an order of triggers decides, and each answer's order with its pictures", () => {
+    const prompt = orderTriggersPrompt().view.prompt!;
+    const { onAct } = setup(prompt);
+    expect(screen.getByRole("heading", { name: "Put your triggers in order" })).toBeInTheDocument();
+    expect(screen.getByText("Pick which one resolves first")).toBeInTheDocument();
+    const answers = screen.getAllByRole("button", { name: /resolves first/ });
+    expect(answers).toHaveLength(2);
+    expect(answers[0]).toHaveTextContent("then Delver of Secrets");
+    expect(answers[0].getAttribute("title")).toMatch(/^1\. Delver of Secrets.*: At the beginning/);
+    // A picture per trigger, numbered in the order they resolve.
+    expect(within(answers[0]).getByText("1")).toBeInTheDocument();
+    expect(within(answers[0]).getByText("2")).toBeInTheDocument();
+    fireEvent.click(answers[1]);
+    expect(onAct).toHaveBeenCalledWith({ type: "choose", index: 1 });
   });
 
   it("offers only the engine's choice for a question it cannot draw", () => {
