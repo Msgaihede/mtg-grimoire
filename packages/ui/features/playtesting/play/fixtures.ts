@@ -150,7 +150,7 @@ export function attackStep(): TurnFive {
           { id: t.elves.id, player: true, targets: [] },
           { id: t.delver.id, player: true, targets: [] },
         ],
-        targets: [{ id: t.jace.id, name: t.jace.name, cardId: t.jace.cardId }],
+        targets: [{ id: t.jace.id, name: t.jace.name, cardId: t.jace.cardId, text: null }],
       },
     },
   };
@@ -192,7 +192,7 @@ export function blockStep(): TurnFive {
  */
 export function targetPrompt(): TurnFive {
   const t = turnFive();
-  const ref = (c: GameCard) => ({ id: c.id, name: c.name, cardId: c.cardId });
+  const ref = (c: GameCard) => ({ id: c.id, name: c.name, cardId: c.cardId, text: null });
   const option = (index: number, c: GameCard) => ({
     index,
     kind: "ChooseTarget",
@@ -219,11 +219,50 @@ export function targetPrompt(): TurnFive {
   };
 }
 
+/**
+ * The reader's upkeep with two Delvers of Secrets out: their two triggers go on the stack at once,
+ * and the engine asks for their order — each answer the two triggers, the first placed first.
+ */
+export function orderTriggersPrompt(): TurnFive {
+  const t = turnFive();
+  const second = gameCard("Delver of Secrets // Insectile Aberration", { power: 1, toughness: 1 });
+  const text =
+    "At the beginning of your upkeep, look at the top card of your library. You may reveal that card. If an instant or sorcery card is revealed this way, transform Delver of Secrets.";
+  const ref = (c: GameCard) => ({ id: c.id, name: c.name, cardId: c.cardId, text });
+  const order = (index: number, cards: GameCard[]) => ({
+    index,
+    kind: "OrderTriggers",
+    cards: cards.map(ref),
+    players: [],
+    number: null,
+    yes: null,
+    label: null,
+  });
+  return {
+    ...t,
+    view: {
+      ...t.view,
+      stage: "prompt",
+      phase: "beginning",
+      step: "upkeep",
+      you: { ...t.view.you, battlefield: [...t.view.you.battlefield, second] },
+      prompt: {
+        kind: "OrderTriggers",
+        source: null,
+        options: [order(0, [t.delver, second]), order(1, [second, t.delver])],
+        cancellable: false,
+        pick: null,
+      },
+      stack: [],
+    },
+  };
+}
+
 /** Bonecrusher Giant from hand: cast the creature, or its adventure. */
 export function castChoicePrompt(): TurnFive {
   const t = turnFive();
   const giant = gameCard("Bonecrusher Giant // Stomp");
-  const ref = { id: giant.id, name: giant.name, cardId: giant.cardId };
+  const ref = { id: giant.id, name: giant.name, cardId: giant.cardId, text: null };
   return {
     ...t,
     view: {
@@ -420,7 +459,7 @@ export function scryPick(): TurnFive {
   const t = turnFive();
   const cards = t.view.you.libraryCards
     .slice(0, 3)
-    .map((c) => ({ id: c.id, name: c.name, cardId: c.cardId }));
+    .map((c) => ({ id: c.id, name: c.name, cardId: c.cardId, text: null }));
   return pickPrompt(t, "ScryChoice", "Opt", {
     purpose: "scry",
     cards,
@@ -434,7 +473,12 @@ export function scryPick(): TurnFive {
 /** Discard exactly two of the hand; the land cannot be picked (a "discard a nonland card"). */
 export function discardPick(): TurnFive {
   const t = turnFive();
-  const cards = t.view.you.hand.map((c) => ({ id: c.id, name: c.name, cardId: c.cardId }));
+  const cards = t.view.you.hand.map((c) => ({
+    id: c.id,
+    name: c.name,
+    cardId: c.cardId,
+    text: null,
+  }));
   return pickPrompt(t, "DiscardChoice", "Thoughtseize", {
     purpose: "discard",
     cards,
@@ -464,7 +508,12 @@ export function replayStep(): { step: PlaytestStep; start: PlaytestView } {
   const played = mountain();
   const f1Bf = [...start.opponent.battlefield, played];
   const f1 = theirs(start, f1Bf, { phase: "main1" });
-  const bolt = { id: 9001, name: "Lightning Bolt", cardId: gameCard("Lightning Bolt").cardId };
+  const bolt = {
+    id: 9001,
+    name: "Lightning Bolt",
+    cardId: gameCard("Lightning Bolt").cardId,
+    text: null,
+  };
   const f2 = {
     ...theirs(start, f1Bf, { phase: "main1" }),
     stack: [{ ...bolt, seat: "opponent" as const, ability: false }],

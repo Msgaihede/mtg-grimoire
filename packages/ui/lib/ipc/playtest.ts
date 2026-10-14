@@ -192,6 +192,9 @@ export interface PlaytestCardRef {
   id: number;
   name: string;
   cardId: string | null;
+  /** The ref stands for one of the card's abilities — a trigger to order, a replacement effect
+   *  to choose: the ability's words, as the engine gives them. */
+  text: string | null;
 }
 
 export interface PlaytestStackItem {

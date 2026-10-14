@@ -295,6 +295,10 @@ pub struct PlaytestCardRef {
     pub id: u64,
     pub name: String,
     pub card_id: Option<String>,
+    /// Present when the ref stands for one of the card's abilities rather than the card: a
+    /// trigger to put in order, a replacement effect to choose — the ability's words, as the
+    /// engine gives them.
+    pub text: Option<String>,
 }
 
 /// One spell or ability on the stack.
