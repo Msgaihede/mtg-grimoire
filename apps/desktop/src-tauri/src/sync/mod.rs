@@ -68,6 +68,10 @@ pub struct AppState {
     /// [`crate::changes`]. An `Arc` for [`AppState::mirror`]'s reason: the update hook on `db`
     /// holds a clone of it for the life of the process, as a second observer.
     pub changes: Arc<crate::changes::Changes>,
+    /// What the Tabletop Simulator integration owes the disk and what its last pass did — see
+    /// [crate::tabletop::watch::Tabletop]. An Arc for [AppState::mirror]'s reason: the hook
+    /// holds a clone as its fourth observer.
+    pub tabletop: Arc<crate::tabletop::watch::Tabletop>,
 }
 
 /// **What keeps every reader of `state.db` unedited.** `AppState` is named in seventy-odd files

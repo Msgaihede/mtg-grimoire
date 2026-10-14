@@ -29,6 +29,7 @@ vi.mock("@/features/settings/MarketplacePanel", () => ({
 vi.mock("@/features/settings/ReviewPanel", () => ({ ReviewPanel: stub("panel:review") }));
 vi.mock("@/features/settings/StartViewPanel", () => ({ StartViewPanel: stub("panel:start") }));
 vi.mock("@/features/settings/SyncPanel", () => ({ SyncPanel: stub("panel:sync") }));
+vi.mock("@/features/settings/TabletopPanel", () => ({ TabletopPanel: stub("panel:tabletop") }));
 vi.mock("@/features/settings/TheoryMarksPanel", () => ({
   TheoryMarksPanel: stub("panel:theory"),
 }));
@@ -125,6 +126,16 @@ describe("Settings in the light edition", () => {
     await userEvent.type(screen.getByRole("searchbox", { name: "Search settings" }), "dropbox");
     expect(screen.getByText("No matching settings.")).toBeInTheDocument();
     expect(screen.queryByText("panel:backup")).toBeNull();
+  });
+
+  /** Tabletop Simulator is a desktop program (issue #1038): no panel, and so no `Integrations`
+   *  entry — the rail above already leaves it out — and a search for it finds nothing. */
+  it("draws no Tabletop Simulator panel, even when asked for by name", async () => {
+    render(light(<SettingsPage update={NO_UPDATE} />));
+    expect(within(rail()).queryByRole("button", { name: "Integrations" })).toBeNull();
+    await userEvent.type(screen.getByRole("searchbox", { name: "Search settings" }), "tts");
+    expect(screen.getByText("No matching settings.")).toBeInTheDocument();
+    expect(screen.queryByText("panel:tabletop")).toBeNull();
   });
 
   it("drops a hand-off naming a panel it does not draw", async () => {

@@ -85,7 +85,8 @@ describe("the editions' Settings entries", () => {
     ]);
     // Backup (the mirror) by the spec's name; the folder's path and the stored start view because
     // a light install has neither to offer. Updates is drawn, without the updater (below).
-    for (const gone of ["backup", "data-folder", "start-view"] as const) {
+    // Tabletop Simulator (issue #1038) because it is a desktop program the light hosts cannot reach.
+    for (const gone of ["backup", "tabletop", "data-folder", "start-view"] as const) {
       expect(panelsOf(LIGHT_EDITION.settings)).not.toContain(gone);
     }
   });
@@ -101,6 +102,9 @@ describe("the editions' Settings entries", () => {
       "storage",
       "errors",
     ]);
+    // `Integrations` is the one entry the light rail loses whole: Tabletop Simulator is its only
+    // panel, and an entry over nothing would be a destination that draws an empty pane.
+    expect(groupsOf(panelsOf(FULL_EDITION.settings))).toContain("integrations");
     for (const group of groups) {
       expect(visiblePanels(group, "", panelsOf(LIGHT_EDITION.settings)).length).toBeGreaterThan(0);
     }
@@ -111,6 +115,8 @@ describe("the editions' Settings entries", () => {
     expect(visiblePanels("carddata", "dropbox", light)).toEqual([]);
     expect(visiblePanels("carddata", "dropbox")).toEqual(["backup"]);
     expect(visiblePanels("carddata", "patreon", light)).toEqual(["sync"]);
+    expect(visiblePanels("carddata", "tts", light)).toEqual([]);
+    expect(visiblePanels("carddata", "tts")).toEqual(["tabletop"]);
   });
 
   it("gives only the full edition an updater", () => {

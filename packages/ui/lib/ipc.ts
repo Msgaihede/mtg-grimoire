@@ -41,6 +41,7 @@
  * `ComboCountBucket`/`CardCombosPage`            — `crates/grimoire-core/src/combos.rs`
  * `MirrorStatus`                                 — `apps/desktop/src-tauri/src/mirror/settings.rs`
  * `PassReport`                                   — `apps/desktop/src-tauri/src/mirror/run.rs`
+ * `TabletopStatus`                               — `apps/desktop/src-tauri/src/tabletop/settings.rs`
  * `TagTerms`                                     — `crates/grimoire-core/src/filters.rs`
  * `PairingStatus`/`PairingOffer`/`PairingHandshake`/`PairingSealedKey`/
  * `PairingProgress`/`QrMatrix`/`PairedDevice`      — `crates/grimoire-core/src/sync_pair/pairing.rs`,

@@ -70,6 +70,26 @@ const DESKTOP_ONLY: &[(&str, &str)] = &[
     ("mirror_set_enabled", "the plain-text mirror is this host's"),
     ("mirror_rebuild", "the plain-text mirror is this host's"),
     (
+        "tabletop_status",
+        "the Tabletop Simulator integration writes this host's disk",
+    ),
+    (
+        "tabletop_set_enabled",
+        "the Tabletop Simulator integration writes this host's disk",
+    ),
+    (
+        "tabletop_set_local_images",
+        "the Tabletop Simulator integration writes this host's disk",
+    ),
+    (
+        "tabletop_pick_folder",
+        "a native folder picker, for Tabletop Simulator's saves",
+    ),
+    (
+        "tabletop_rebuild",
+        "the Tabletop Simulator integration writes this host's disk",
+    ),
+    (
         "startup_status",
         "the window this host draws before its state exists",
     ),

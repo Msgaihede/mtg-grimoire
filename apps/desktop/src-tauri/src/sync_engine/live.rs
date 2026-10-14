@@ -97,6 +97,7 @@ mod tests {
             mirror,
             mirror_status: Mutex::new(crate::mirror::watch::LastPass::default()),
             changes,
+            tabletop: Default::default(),
         })
     }
 

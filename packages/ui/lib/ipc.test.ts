@@ -4365,6 +4365,57 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
+   * The Tabletop Simulator integration's four (issue #1038), the mirror's four one feature over.
+   * The switch's argument is the crate's parameter name, `tabletop_set_enabled(enabled)`, and
+   * the folder is not an argument at all — `tabletop_pick_folder` opens the picker itself. The
+   * status' fields are held to `tabletop/settings.rs` by the interface walk below.
+   */
+  it("asks for the Tabletop Simulator integration's state with no arguments", async () => {
+    invoke.mockResolvedValue({
+      enabled: false,
+      localImages: false,
+      savesFolder: "C:\\Users\\me\\Documents\\My Games\\Tabletop Simulator\\Saves",
+      savesFound: false,
+      folder: "C:\\Users\\me\\Documents\\My Games\\Tabletop Simulator\\Saves\\MTG Grimoire",
+      lastRunAt: null,
+      lastReport: null,
+      lastError: null,
+    });
+
+    const status = await ipc.tabletopStatus();
+
+    expect(invoke).toHaveBeenCalledWith("tabletop_status");
+    expect(status.savesFound).toBe(false);
+    expect(status.lastRunAt).toBeNull();
+  });
+
+  it("sends the Tabletop Simulator switch under `enabled`", async () => {
+    invoke.mockResolvedValue(undefined);
+    await ipc.tabletopSetEnabled(true);
+    expect(invoke).toHaveBeenCalledWith("tabletop_set_enabled", { enabled: true });
+  });
+
+  it("sends the local-images switch under `enabled` too", async () => {
+    invoke.mockResolvedValue(undefined);
+    await ipc.tabletopSetLocalImages(true);
+    expect(invoke).toHaveBeenCalledWith("tabletop_set_local_images", { enabled: true });
+  });
+
+  it("asks for the saves folder picker with no arguments, and hears whether it moved", async () => {
+    invoke.mockResolvedValue(true);
+    expect(await ipc.tabletopPickFolder()).toBe(true);
+    expect(invoke).toHaveBeenLastCalledWith("tabletop_pick_folder");
+  });
+
+  it("asks for a Tabletop Simulator pass with no arguments and gets the pass back", async () => {
+    const pass = { written: 12, unchanged: 0, skipped: 0, pruned: 1, failed: 0 };
+    invoke.mockResolvedValue(pass);
+
+    expect(await ipc.tabletopRebuild()).toEqual(pass);
+    expect(invoke).toHaveBeenCalledWith("tabletop_rebuild");
+  });
+
+  /**
    * **The call shape, and this is the only pin it has.**
    *
    * A camera frame has no fields to name, so it is Tauri's raw byte body with the detector

@@ -65,6 +65,10 @@ The desktop manages two SQLite databases in the application data folder:
 - Listens to database commits via `WriteObserver`. Corpus swaps trigger full resynchronization.
 - Employs dedicated Rust export writers in `apps/desktop/src-tauri/src/transfer/`, validated for byte-for-byte parity against TypeScript export logic via `__golden__/` files.
 
+### Tabletop Simulator Saves (`src/tabletop/`)
+- Off by default (Settings → Integrations). Writes every deck as a TTS save into `<TTS Saves>/MTG Grimoire/` on its own thread, a fourth write-hook observer (`watch::Tabletop`) — never the mirror's mask, which its thread takes.
+- Reuses the mirror's deck tree (`mirror::layout::plan_files`) for paths and its manifest-pruning rule; never creates TTS's own `Saves` folder. See [tabletop-simulator.md](../../../docs/reference/tabletop-simulator.md).
+
 ### Images & `mtgimg://` Protocol
 - Custom protocol handler `images::answer` serves cached images or placeholders directly to webviews.
 - Background upkeep thread (`spawn_upkeep`) periodically triggers `images::upkeep_tick` to evict stale image files.

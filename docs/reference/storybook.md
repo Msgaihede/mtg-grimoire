@@ -103,6 +103,11 @@ it says `tags: ["autodocs"]`.
   state the app cannot be in. Nothing else about the world changes, which is the fault's whole
   point: no database write ever waits on a mirror write, so the story still edits decks and
   still shows every number it showed before. What is lost is a folder of text files.
+  **`tabletopSavesMissing` is the Tabletop Simulator integration's one fault** (issue #1038,
+  2026-10-14): TTS's `Saves` folder is not there — never installed, never started, or saves kept
+  on another drive. A handler branch only: `tabletop_status` answers `savesFound: false`, which
+  the Integrations panel draws as a plain note pointing at Change folder…, and `tabletop_rebuild`
+  refuses in `run_pass`' own sentence, because the crate never makes TTS's folder for it.
   **`artTagsMissing` and `artTagsFetchError` are the Oracle pair below, one dataset over**, and
   they are two more faults rather than a reuse of those two because the taxonomies are two files
   on two schedules: either can be absent, or failing, while the other is fine, and the Tags page

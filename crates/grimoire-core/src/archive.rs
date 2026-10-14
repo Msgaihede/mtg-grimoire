@@ -94,7 +94,7 @@ pub fn dump(conn: &Connection) -> Result<Value, String> {
     for table in tables() {
         let names = columns(&tx, table)?;
         let filter = if table == "app_meta" {
-            " WHERE key NOT IN ('mirror_root','mirror_installation')"
+            " WHERE key NOT IN ('mirror_root','mirror_installation','tabletop_saves')"
         } else {
             ""
         };
@@ -151,7 +151,10 @@ fn parse(conn: &Connection, dump: &Value) -> Result<Snapshot, String> {
                 decode(cell)?;
             }
             if table == "app_meta"
-                && matches!(row[0].as_str(), Some("mirror_root" | "mirror_installation"))
+                && matches!(
+                    row[0].as_str(),
+                    Some("mirror_root" | "mirror_installation" | "tabletop_saves")
+                )
             {
                 return Err(
                     "An archive must not carry another installation's mirror path or identity."
@@ -208,7 +211,7 @@ fn replace(conn: &Connection, snapshot: &Snapshot) -> Result<(), String> {
     for table in tables() {
         // A restored mirror cannot inherit another writer's pruning authority or path.
         let filter = if table == "app_meta" {
-            " WHERE key NOT IN ('mirror_root','mirror_installation')"
+            " WHERE key NOT IN ('mirror_root','mirror_installation','tabletop_saves')"
         } else {
             ""
         };

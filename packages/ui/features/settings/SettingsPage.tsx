@@ -12,6 +12,7 @@ import { ReviewPanel } from "@/features/settings/ReviewPanel";
 import { SettingsNav } from "@/features/settings/SettingsNav";
 import { StartViewPanel } from "@/features/settings/StartViewPanel";
 import { SyncPanel } from "@/features/settings/SyncPanel";
+import { TabletopPanel } from "@/features/settings/TabletopPanel";
 import { TheoryMarksPanel } from "@/features/settings/TheoryMarksPanel";
 import { UpdatePanel } from "@/features/settings/UpdatePanel";
 import { VersionPanel } from "@/features/settings/VersionPanel";
@@ -417,6 +418,13 @@ export function SettingsPage({ update }: { update: Update }) {
             dialogs already read, so a hook here would be a second reader of one cached answer and
             threading it down would buy a prop. */}
         {shown("labels") && <LabelsPanel />}
+
+        {/* **The whole of `Integrations`** (issue #1038): every deck as a Tabletop Simulator save,
+            written into that program's folder. Desktop only — the light edition's whitelist does
+            not name it, so neither the panel nor its entry is drawn there. It reaches the backend
+            itself, `BackupPanel`'s rule and reason: nothing else in the window reads
+            `tabletop_status`. */}
+        {shown("tabletop") && <TabletopPanel />}
 
         {/* **The two facts that reached the reader at exactly one place each, and that place was a
             hover tooltip** on the ribbon's status line — `ChromeStatus.tsx` names the folder and

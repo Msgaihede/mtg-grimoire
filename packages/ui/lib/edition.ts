@@ -57,6 +57,11 @@ export type LightView = (typeof LIGHT_VIEWS)[number];
  *
  * - **`backup`** — the plain-text mirror, a desktop feature (spec §4): a folder of files the
  *   reader's own sync client picks up, which a browser and a phone do not have.
+ * - **`tabletop`** — the Tabletop Simulator integration (issue #1038): a save for every deck,
+ *   written into another program's folder on this computer. Tabletop Simulator is a desktop
+ *   program and the light hosts refuse its commands, so there is nothing for the panel to
+ *   switch. It is the `Integrations` entry's only panel, so the light rail has no such entry —
+ *   `groupsOf` draws no group with nothing in it.
  * - **`data-folder`** — a path on disk and the image-write failures in it. A browser's storage
  *   has no path a reader can open, and a phone's is the app's own; a line that names one would
  *   name nothing the reader can act on.

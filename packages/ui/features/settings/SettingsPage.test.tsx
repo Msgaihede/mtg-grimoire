@@ -33,6 +33,7 @@ vi.mock("@/features/settings/HiddenTagsPanel", () => ({
 vi.mock("@/features/settings/MarketplacePanel", () => ({
   MarketplacePanel: stub("panel:prices"),
 }));
+vi.mock("@/features/settings/TabletopPanel", () => ({ TabletopPanel: stub("panel:tabletop") }));
 /**
  * **The one stub that reads a prop**, because the one prop this page computes for a panel is
  * the window count and nothing else on the page draws it. `data-windows` rather than text, so
@@ -177,6 +178,18 @@ describe("the Backup panel", () => {
     await pickGroup("Storage and data");
 
     expect(screen.getByText("panel:backup")).toBeInTheDocument();
+  });
+});
+
+describe("the Tabletop Simulator panel", () => {
+  it("is on the page under Integrations, and nowhere else", async () => {
+    render(wrap(<SettingsPage update={NO_UPDATE} />));
+    expect(screen.queryByText("panel:tabletop")).not.toBeInTheDocument();
+
+    await pickGroup("Integrations");
+
+    expect(screen.getByText("panel:tabletop")).toBeInTheDocument();
+    expect(screen.queryByText("panel:backup")).not.toBeInTheDocument();
   });
 });
 

@@ -21,8 +21,8 @@ use crate::{
     marketplace_feed, mirror, nav, new_printings, panelwidth, paths, playtest, price_history,
     recent_cards, reset, scan_history, scanner, schema, scryfall, search, searchopen, searchwidth,
     set_completion, share, shelffolds, stackhide, startup, startview, sticky_notes, sync,
-    sync_engine, sync_pair, tags, trade, upcoming_sets, update, value_history, window, wishlist,
-    wishlist_folders, wishlist_optimize, zoom,
+    sync_engine, sync_pair, tabletop, tags, trade, upcoming_sets, update, value_history, window,
+    wishlist, wishlist_folders, wishlist_optimize, zoom,
 };
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -750,6 +750,13 @@ pub fn run() {
             mirror::settings::mirror_set_enabled,
             mirror::settings::mirror_pick_root,
             mirror::settings::mirror_rebuild,
+            // The Tabletop Simulator integration (issue #1038): the Integrations panel's read,
+            // its switch, its folder picker and its rebuild — the mirror's four, for TTS saves.
+            tabletop::settings::tabletop_status,
+            tabletop::settings::tabletop_set_enabled,
+            tabletop::settings::tabletop_pick_folder,
+            tabletop::settings::tabletop_set_local_images,
+            tabletop::settings::tabletop_rebuild,
             // Pairing (spec §7.5 and §7.6). The panel's read, the presses (offer, accept,
             // confirm, cancel), the one poll that carries both `respond` and `complete` now
             // that the relay carries the two blobs those used to be commands for, the two
@@ -981,6 +988,9 @@ fn start(app: &tauri::AppHandle) {
         // editing. It reads through a connection of its own and never takes the write
         // connection, so no press it overlaps can be answered `db::BUSY` by it.
         mirror::watch::spawn(state.clone());
+        // The Tabletop Simulator saves — the mirror's sibling, on a thread of its own and idle
+        // while the integration is off (its default).
+        tabletop::watch::spawn(state.clone());
 
         // The other windows' refresh — see `crate::changes`. After the hook, and the order
         // costs nothing either way: a commit that rings before this task is waiting leaves
@@ -1375,6 +1385,13 @@ fn init_state(
     // the truth — and the mirror's startup pass is `Dirty::ALL` regardless.
     let mirror = Arc::new(mirror::watch::Mask::default());
     let changes = Arc::new(crate::changes::Changes::new());
+    // The Tabletop Simulator integration's observer, a fourth rider after the mirror's. Documents
+    // is resolved here because this is where an AppHandle is in reach; the thread has none.
+    let tabletop = Arc::new(crate::tabletop::watch::Tabletop::new(
+        app.path().document_dir().ok(),
+    ));
+    let mut observers = mirror::watch::observers(mirror.clone(), changes.clone(), writes.clone());
+    observers.push(tabletop.clone());
 
     // **The hook goes on here**, inside `State::new`, before the write connection is behind its
     // mutex: the cross-file fence, which is the core's own, and the desktop's three observers
@@ -1389,7 +1406,7 @@ fn init_state(
         Some(conn_read),
         data_dir,
         Arc::new(WindowEvents(app.clone())),
-        mirror::watch::observers(mirror.clone(), changes.clone(), writes.clone()),
+        observers,
         client,
         images,
     );
@@ -1399,6 +1416,7 @@ fn init_state(
         mirror,
         mirror_status: Mutex::new(mirror::watch::LastPass::default()),
         changes,
+        tabletop,
     })
 }
 

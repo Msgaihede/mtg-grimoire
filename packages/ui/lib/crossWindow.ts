@@ -43,6 +43,9 @@ export const FOLLOW_LIVE_APP_META: readonly QueryKey[] = [
   ["recentCards"],
   ["decks", "lastFormat"],
   ["mirror"],
+  // `features/settings/TabletopPanel.tsx`' `TABLETOP_KEY` (issue #1038), `["mirror"]`'s twin: its
+  // switch and saves folder are `app_meta` rows another window's Settings can write.
+  ["tabletop"],
   ["scanner", "trayCount"],
 ];
 

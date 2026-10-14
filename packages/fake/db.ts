@@ -283,6 +283,7 @@ import type {
   TagHit,
   TagNamespace,
   TagRef,
+  TabletopStatus,
   TagStatus,
   TcgplayerIds,
   GlobalLabel,
@@ -1634,6 +1635,12 @@ export interface FakeUpdate {
  * (`packages/ui/lib/core/hostMembership.ts`) with one sentence saying how sync turns on there, where
  * every other host refuses the name; and the Sync panel draws that sentence in place of its
  * membership half. `world.ts` puts the handler over the one world's table.
+ *
+ * **`tabletopSavesMissing`** is Tabletop Simulator's `Saves` folder not being there — TTS never
+ * installed, never started, or keeping its saves on another drive (issue #1038). A handler branch
+ * and nothing else: `tabletop_status` answers `savesFound: false`, and `tabletop_rebuild` refuses
+ * in the pass's own sentence, because the crate never makes TTS's folder for it. It is not a
+ * failure the panel raises as one — the Integrations panel draws a plain note and a way out.
  */
 export type Fault =
   | "busy"
@@ -1668,7 +1675,8 @@ export type Fault =
   | "scanInboxFull"
   | "shareLapsed"
   | "lentStorage"
-  | "pairOnly";
+  | "pairOnly"
+  | "tabletopSavesMissing";
 
 /**
  * What the picture cache costs, as the Settings page's one button sees it.
@@ -1710,6 +1718,27 @@ export interface FakeMirror {
   root: string | null;
   /** Unix **seconds**, or `null` for no pass having finished. `null` is the state the panel has
    *  a sentence of its own for — see `BackupPanel`'s `lastPassLine`. */
+  lastRunAt: number | null;
+  lastReport: PassReport | null;
+  lastError: string | null;
+}
+
+/**
+ * The Tabletop Simulator integration (issue #1038), {@link FakeMirror}'s shape one program over:
+ * two stored settings and this session's last pass, and the same concession — no filesystem, so
+ * `tabletop_rebuild` counts the saves a pass would write and stamps the time.
+ */
+export interface FakeTabletop {
+  /** `app_meta.tabletop_enabled` — **off** until somebody says otherwise, the crate's
+   *  `DEFAULT_ENABLED`: it writes into another program's folder. */
+  enabled: boolean;
+  /** `app_meta`'s local-images row — **off**, so a save points at Scryfall's images, which every
+   *  player at the table can load. */
+  localImages: boolean;
+  /** `app_meta.tabletop_saves`, or `null` for TTS's own folder under this invented machine's
+   *  Documents. Stored as written; `tabletopSaves` filters it as `settings::saves` does. */
+  saves: string | null;
+  /** Unix **seconds**, or `null` for no pass having finished this session. */
   lastRunAt: number | null;
   lastReport: PassReport | null;
   lastError: string | null;
@@ -2463,6 +2492,11 @@ export interface FakeDb {
    * thing that draws them.
    */
   mirror: FakeMirror;
+  /**
+   * The Tabletop Simulator integration's settings and this session's last pass — one object for
+   * {@link FakeDb.mirror}'s reason: one feature, answered by one command in one round trip.
+   */
+  tabletop: FakeTabletop;
   /**
    * Pairing — this device, the group it is in, who else is in it, and any offer on screen.
    *
@@ -3779,6 +3813,16 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // now is what a story presses to leave it. `mirrorRootUnwritable` is the one world that
     // opens with a pass already behind it, because that fault *is* a pass having failed.
     mirror: { enabled: true, root: null, lastRunAt: null, lastReport: null, lastError: null },
+    // **Off**, at the folder Tabletop Simulator makes, with no pass — the crate's defaults, and
+    // the opening state the Integrations panel has a sentence for.
+    tabletop: {
+      enabled: false,
+      localImages: false,
+      saves: null,
+      lastRunAt: null,
+      lastReport: null,
+      lastError: null,
+    },
     // **Unpaired, which is what every install is until somebody presses Pair.** The device id
     // is fixed rather than random so a story can assert against it — this is the one place the
     // fake diverges from `identity::ensure`, which mints on first read.
@@ -13386,6 +13430,26 @@ export function readHandlers(db: FakeDb) {
     }),
 
     /**
+     * `tabletop::settings::tabletop_status` — everything the Integrations panel draws, in one
+     * round trip (issue #1038). Infallible, `mirror_status`' contract. `savesFound` is the one
+     * fact about a disk, and with no disk here it is `true` unless the `tabletopSavesMissing`
+     * fault says TTS's folder is not there.
+     */
+    tabletop_status: (): TabletopStatus => {
+      const saves = tabletopSaves(db);
+      return {
+        enabled: db.tabletop.enabled,
+        localImages: db.tabletop.localImages,
+        savesFolder: saves,
+        savesFound: db.fault !== "tabletopSavesMissing",
+        folder: `${saves}\\${TABLETOP_FOLDER_NAME}`,
+        lastRunAt: db.tabletop.lastRunAt === null ? null : String(db.tabletop.lastRunAt),
+        lastReport: db.tabletop.lastReport,
+        lastError: db.tabletop.lastError,
+      };
+    },
+
+    /**
      * `marketplace_feed::status` — one row per **feed-backed** marketplace, whether or not it
      * has ever been fetched.
      *
@@ -14570,6 +14634,38 @@ function mirrorFileCount(db: FakeDb): number {
   const decks = db.decks.length + db.decks.filter((d) => d.theoryEnabled).length;
   const lists = 1 + db.collectionFolders.length + 1 + db.wishlistFolders.length;
   return FORMATS * (decks + lists) + 1;
+}
+
+/** `tabletop::settings::FOLDER_NAME` — the one folder a pass writes into, inside TTS's `Saves`. */
+const TABLETOP_FOLDER_NAME = "MTG Grimoire";
+
+/** `tabletop::settings::default_saves` under this invented machine's Documents folder. */
+const TABLETOP_DEFAULT_SAVES =
+  "C:\\Users\\Storybook\\Documents\\My Games\\Tabletop Simulator\\Saves";
+
+/**
+ * `tabletop::settings::saves` — the chosen folder when it is absolute, else TTS's own. Filtered
+ * rather than trusted, `mirrorRoot`'s rule: a row this build did not write must not aim a pass
+ * anywhere.
+ */
+function tabletopSaves(db: FakeDb): string {
+  const stored = db.tabletop.saves;
+  return stored !== null && isAbsolutePath(stored) ? stored : TABLETOP_DEFAULT_SAVES;
+}
+
+/** `tabletop::run::run_pass`' refusal when the `Saves` folder is not there, in its words. */
+const tabletopSavesGone = (saves: string) =>
+  `Tabletop Simulator's saves folder was not found at ${saves}. Start Tabletop Simulator once ` +
+  "so it makes the folder, or choose where your saves are.";
+
+/**
+ * How many saves a full pass would write: one per deck, archived ones included, and a second for
+ * a deck that keeps a theory list beside its actual one (`tabletop::run::save_paths` — a folder
+ * with both). A virtual deck has one list whatever its theory switch says, the crate's rule.
+ * Derived from the rows, `mirrorFileCount`'s reason.
+ */
+function tabletopSaveCount(db: FakeDb): number {
+  return db.decks.length + db.decks.filter((d) => d.theoryEnabled && !d.virtualOnly).length;
 }
 
 /** `collection::valid_quantity`. **Zero is allowed here** — what zero *means* is each
@@ -24267,6 +24363,70 @@ export function writeHandlers(db: FakeDb) {
       db.mirror.lastRunAt = Math.floor(Date.now() / 1000);
       db.mirror.lastReport = report;
       db.mirror.lastError = null;
+      return report;
+    },
+
+    /**
+     * `tabletop::settings::tabletop_set_enabled` (issue #1038) — `mirror_set_enabled` one feature
+     * over: a `sync::with_write`, so `busy` is the whole of what it can refuse. Switching it off
+     * keeps every save already written, in the crate and so in the panel's copy.
+     */
+    tabletop_set_enabled: (args: { enabled: boolean }): void => {
+      refuseIfBusy(db);
+      db.tabletop.enabled = args.enabled;
+    },
+
+    /**
+     * `tabletop::settings::tabletop_set_local_images` — store card images in the `MTG Grimoire`
+     * folder or load them from Scryfall. `tabletop_set_enabled`'s twin: a `sync::with_write`, so
+     * `busy` is the whole of what it can refuse. The fake downloads nothing; the row is the model.
+     */
+    tabletop_set_local_images: (args: { enabled: boolean }): void => {
+      refuseIfBusy(db);
+      db.tabletop.localImages = args.enabled;
+    },
+
+    /**
+     * `tabletop::settings::tabletop_pick_folder` — refused as the picker, always, with
+     * {@link NO_FOLDER_PICKER}: `mirror_pick_root`'s answer and its reason. On the `unlocked`
+     * list in `db.test.ts` for the same order: the crate opens the picker before the write lock.
+     * A story that wants the saves elsewhere sets `db.tabletop.saves` on the world.
+     */
+    tabletop_pick_folder: (): boolean => {
+      throw refuse(NO_FOLDER_PICKER);
+    },
+
+    /**
+     * `tabletop::settings::tabletop_rebuild` — write every deck's saves now. On the `unlocked`
+     * list for `mirror_rebuild`'s reason: the crate runs the pass on the blocking pool against
+     * the read connection, so there is no BUSY for it to answer. It refuses, in `run_pass`' own
+     * sentence and recorded as the pass's failure, when the `tabletopSavesMissing` fault says
+     * TTS's folder is not there — a pass never makes it.
+     *
+     * Written, then unchanged — `tabletopSaveCount` saves the first time and the same number
+     * unchanged every time after, `mirror_rebuild`'s two answers. `skipped`, `pruned` and
+     * `failed` are `0` for that handler's reason: no filesystem, nothing to remove or decline.
+     */
+    tabletop_rebuild: (): PassReport => {
+      const at = Math.floor(Date.now() / 1000);
+      if (db.fault === "tabletopSavesMissing") {
+        const sentence = tabletopSavesGone(tabletopSaves(db));
+        db.tabletop.lastRunAt = at;
+        db.tabletop.lastError = sentence;
+        throw refuse(sentence);
+      }
+      const total = tabletopSaveCount(db);
+      const first = db.tabletop.lastReport === null;
+      const report: PassReport = {
+        written: first ? total : 0,
+        unchanged: first ? 0 : total,
+        skipped: 0,
+        pruned: 0,
+        failed: 0,
+      };
+      db.tabletop.lastRunAt = at;
+      db.tabletop.lastReport = report;
+      db.tabletop.lastError = null;
       return report;
     },
 

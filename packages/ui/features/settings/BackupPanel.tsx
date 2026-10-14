@@ -59,8 +59,11 @@ export function passSummary(report: PassReport): string {
  * stamp will not parse, and the stamp is not a time. **`Number("")` is `0`, not `NaN`** — and
  * so is `Number("  ")` — so a blank row would otherwise sail past a finiteness check and print
  * `Last written 20,600 days ago`. Nothing this app has ever written happened in 1970.
+ *
+ * Exported, and typed by the one field it reads, for `TabletopPanel` (issue #1038): its status
+ * carries the same `lastRunAt` and its passes are ranked by the same clock.
  */
-function passRanAt(status: MirrorStatus): number | null {
+export function passRanAt(status: Pick<MirrorStatus, "lastRunAt">): number | null {
   const at = status.lastRunAt === null ? Number.NaN : Number(status.lastRunAt.trim());
   return Number.isFinite(at) && at > 0 ? at : null;
 }
@@ -105,7 +108,7 @@ type Note = { tone: "problem" | "plain"; text: string } | null;
  * Unix seconds, because {@link MirrorStatus.lastRunAt} is the only clock the backend offers
  * and the two have to be comparable.
  */
-type Rebuilt = { report: PassReport; at: number };
+export type Rebuilt = { report: PassReport; at: number };
 
 /**
  * The plain-text mirror: whether it runs, where it writes, and how the last pass went.
@@ -315,8 +318,13 @@ export function BackupPanel(): JSX.Element {
  * `isSuccess` for the life of the component, so one successful press would have hidden **every**
  * later failure until the reader navigated away — the panel showing a stale "Rebuilt — 350 files
  * written" while the mirror was quietly failing.
+ *
+ * Exported for `TabletopPanel`, whose one line of news is ranked by exactly this rule.
  */
-function errorOutranks(status: MirrorStatus, rebuilt: Rebuilt | null): boolean {
+export function errorOutranks(
+  status: Pick<MirrorStatus, "lastRunAt">,
+  rebuilt: Rebuilt | null,
+): boolean {
   if (rebuilt === null) return true;
   const at = passRanAt(status);
   return at === null || at >= rebuilt.at;

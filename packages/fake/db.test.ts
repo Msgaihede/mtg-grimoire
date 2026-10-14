@@ -1984,6 +1984,108 @@ describe("the plain-text mirror", () => {
 });
 
 /**
+ * The Tabletop Simulator integration's four commands (issue #1038) — the mirror's four one program
+ * over, with the opposite default and one fault of its own: TTS's `Saves` folder not being there.
+ */
+describe("the Tabletop Simulator integration", () => {
+  const SAVES = "C:\\Users\\Storybook\\Documents\\My Games\\Tabletop Simulator\\Saves";
+
+  it("is off, at Tabletop Simulator's own folder, with no pass behind it", () => {
+    expect(readHandlers(makeDb()).tabletop_status()).toEqual({
+      enabled: false,
+      localImages: false,
+      savesFolder: SAVES,
+      savesFound: true,
+      folder: `${SAVES}\\MTG Grimoire`,
+      lastRunAt: null,
+      lastReport: null,
+      lastError: null,
+    });
+  });
+
+  /** `settings::saves`' filter: a relative row reads as no row, an absolute one is answered. */
+  it("follows an absolute stored saves folder and ignores a relative one", () => {
+    const db = makeDb();
+    db.tabletop.saves = "Saves";
+    expect(readHandlers(db).tabletop_status().savesFolder).toBe(SAVES);
+    db.tabletop.saves = "E:\\TTS\\Saves";
+    expect(readHandlers(db).tabletop_status().folder).toBe("E:\\TTS\\Saves\\MTG Grimoire");
+  });
+
+  it("switches on and off again", () => {
+    const db = makeDb();
+    writeHandlers(db).tabletop_set_enabled({ enabled: true });
+    expect(readHandlers(db).tabletop_status().enabled).toBe(true);
+    writeHandlers(db).tabletop_set_enabled({ enabled: false });
+    expect(readHandlers(db).tabletop_status().enabled).toBe(false);
+  });
+
+  it("stores card images locally on request, and back", () => {
+    const db = makeDb();
+    writeHandlers(db).tabletop_set_local_images({ enabled: true });
+    expect(readHandlers(db).tabletop_status().localImages).toBe(true);
+    writeHandlers(db).tabletop_set_local_images({ enabled: false });
+    expect(readHandlers(db).tabletop_status().localImages).toBe(false);
+  });
+
+  /** Before the write lock in the crate, so a running sync does not change the answer. */
+  it("has no folder picker, says so as the picker, and keeps the folder it had", () => {
+    for (const fault of [undefined, "busy"] as const) {
+      const db = makeDb({ fault });
+      db.tabletop.saves = "E:\\TTS\\Saves";
+
+      expect(() => writeHandlers(db).tabletop_pick_folder()).toThrow(
+        /^The folder picker could not be opened — /,
+      );
+      expect(readHandlers(db).tabletop_status().savesFolder).toBe("E:\\TTS\\Saves");
+    }
+  });
+
+  /** One save a deck and a second for a theory list — the crate's folder with both versions —
+   *  counted off the rows; written once, then unchanged; stamped. */
+  it("counts a pass off the decks, writes it once and reports it unchanged after", () => {
+    const db = makeDb({
+      decks: [
+        deck({ id: 1, theoryEnabled: false }),
+        deck({ id: 2, theoryEnabled: true }),
+        deck({ id: 3, theoryEnabled: false, virtualOnly: true }),
+      ],
+    });
+
+    const first = writeHandlers(db).tabletop_rebuild();
+    expect(first).toEqual({ written: 4, unchanged: 0, skipped: 0, pruned: 0, failed: 0 });
+    expect(Number(readHandlers(db).tabletop_status().lastRunAt)).toBeGreaterThan(1_700_000_000);
+
+    expect(writeHandlers(db).tabletop_rebuild()).toEqual({
+      written: 0,
+      unchanged: 4,
+      skipped: 0,
+      pruned: 0,
+      failed: 0,
+    });
+  });
+
+  /** A pass holds the read connection: the busy sweep proves the name is exempt, this that the
+   *  exemption is true. */
+  it("rebuilds through a running sync", () => {
+    expect(() => writeHandlers(makeDb({ fault: "busy" })).tabletop_rebuild()).not.toThrow();
+  });
+
+  describe("the tabletopSavesMissing fault", () => {
+    it("reports the saves folder missing, and refuses a rebuild in the pass's words", () => {
+      const db = makeDb({ fault: "tabletopSavesMissing" });
+      expect(readHandlers(db).tabletop_status().savesFound).toBe(false);
+
+      expect(() => writeHandlers(db).tabletop_rebuild()).toThrow(
+        /^Tabletop Simulator's saves folder was not found at C:\\Users\\Storybook/,
+      );
+      // Recorded as the pass's failure, as `rebuild_now` records every outcome.
+      expect(readHandlers(db).tabletop_status().lastError).toMatch(/was not found/);
+    });
+  });
+});
+
+/**
  * The two Tauri **plugin** commands, which mirror no module in the crate and belong to neither
  * table above.
  *
@@ -12472,6 +12574,13 @@ describe("the busy fault", () => {
       // every press here is refused as the picker, busy or not. Where it took a path, as
       // `mirror_set_root`, it was in the loop below.
       "mirror_pick_root",
+      // The Tabletop Simulator integration's two (issue #1038), unlocked for exactly the mirror's
+      // two reasons above: `tabletop_rebuild` runs its pass on the blocking pool against the read
+      // connection, and `tabletop_pick_folder` opens the folder picker before it asks for the
+      // write lock — and this fake has no picker to get past. `tabletop_set_enabled` and
+      // `tabletop_set_local_images` take `sync::with_write` and are in the loop below.
+      "tabletop_rebuild",
+      "tabletop_pick_folder",
       // The eleventh, and the first that touches **no connection of any kind**: pairing's
       // cancel clears the core's `State.pairing`, a lock of its own that has nothing to do with
       // the database, so there is no `BUSY` for it to answer. Its seven neighbours all take
@@ -13256,7 +13365,12 @@ describe("the busy fault", () => {
     // after a merge.
     // 147 → 148 on 2026-10-14 with `share_auto_update` (issue #1025), which republishes changed
     // shares on the write connection and reaches `refuseIfBusy` first. Count again after a merge.
-    expect(names).toHaveLength(148);
+    // 148 → 150 on 2026-10-14 with the Tabletop Simulator integration's two switches (issue
+    // #1038), `tabletop_set_enabled` and `tabletop_set_local_images` — plain `sync::with_write`
+    // `app_meta` writes whose `enabled` this record already names; `tabletop_rebuild` and
+    // `tabletop_pick_folder` joined `unlocked` above and `tabletop_status` sits in
+    // `readHandlers`. Count again after a merge.
+    expect(names).toHaveLength(150);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

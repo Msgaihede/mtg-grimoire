@@ -2052,6 +2052,7 @@ mod tests {
                 mirror,
                 mirror_status: std::sync::Mutex::new(crate::mirror::watch::LastPass::default()),
                 changes,
+                tabletop: Default::default(),
             }),
             dir,
         )

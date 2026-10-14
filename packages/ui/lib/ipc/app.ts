@@ -357,6 +357,45 @@ export interface MirrorStatus {
 }
 
 /**
+ * Everything the Integrations panel draws about Tabletop Simulator —
+ * `apps/desktop/src-tauri/src/tabletop/settings.rs` (issue #1038). Desktop only.
+ *
+ * {@link MirrorStatus}' shape and its split: `enabled` and the chosen saves folder are stored
+ * `app_meta` rows, and the last three fields describe this process run's passes, `null` until one
+ * has finished. The pass is the mirror's {@link PassReport}, because the integration borrows the
+ * mirror's deck tree and its manifest-pruning rule and counts the same five things.
+ */
+export interface TabletopStatus {
+  enabled: boolean;
+  /**
+   * Whether a pass downloads each card's image into the `MTG Grimoire` folder and points the save
+   * at that file, rather than at Scryfall's address. **Off by default**: a Scryfall address is
+   * what every other player at the table can load too, and a file on this computer is not. On is
+   * for a reader whose Tabletop Simulator draws cards blank.
+   */
+  localImages: boolean;
+  /**
+   * Tabletop Simulator's `Saves` folder — the reader's choice, else the one TTS makes under
+   * Documents. `null` only when there is neither: no Documents folder the OS will name, and
+   * nothing chosen.
+   */
+  savesFolder: string | null;
+  /**
+   * Whether {@link TabletopStatus.savesFolder} exists. **`false` is not an error**: it is
+   * Tabletop Simulator not installed, never started, or keeping its saves somewhere else — and a
+   * pass will not make TTS's own folder for it, so the panel says to choose one.
+   */
+  savesFound: boolean;
+  /** The `MTG Grimoire` folder inside the saves folder, which is all a pass ever writes to. */
+  folder: string | null;
+  /** Unix **seconds as a string**, or `null` — {@link MirrorStatus.lastRunAt}'s rule exactly. */
+  lastRunAt: string | null;
+  lastReport: PassReport | null;
+  /** The sentence to show when the last pass could not write, or `null` when it went fine. */
+  lastError: string | null;
+}
+
+/**
  * `changes::DbChanged` — which user tables a commit wrote. Sent to every window, and only while
  * two or more are open; `useCrossWindowRefresh` turns it into invalidations.
  */
@@ -527,4 +566,38 @@ export const appCommands = {
    * by hand read as unchanged, which is the one state this command exists to get out of.
    */
   mirrorRebuild: () => invoke<PassReport>("mirror_rebuild"),
+
+  /**
+   * The Tabletop Simulator integration's whole state, in one round trip — the Integrations
+   * panel's only read (issue #1038). Infallible at the far end, `mirror_status`' contract.
+   * **Desktop only**: the light and web hosts refuse the name.
+   */
+  tabletopStatus: () => invoke<TabletopStatus>("tabletop_status"),
+  /**
+   * Switch the integration on or off. **Off by default**, because it writes into another
+   * program's folder. On runs a full pass within a tick; off leaves every save already written
+   * where it is. Answers `BUSY` if a sync holds the write connection, like
+   * {@link appCommands.mirrorSetEnabled}.
+   */
+  tabletopSetEnabled: (enabled: boolean) => invoke<void>("tabletop_set_enabled", { enabled }),
+  /**
+   * Store card images on this computer, or load them from Scryfall — see
+   * {@link TabletopStatus.localImages}. An `app_meta` write like the switch above it, so it can
+   * answer `BUSY`. The argument is named `enabled`, the crate's parameter name.
+   */
+  tabletopSetLocalImages: (enabled: boolean) =>
+    invoke<void>("tabletop_set_local_images", { enabled }),
+  /**
+   * Let the reader choose Tabletop Simulator's saves folder — the OS picker, opened at the
+   * current one — for saves kept somewhere other than where TTS puts them. `true` when it moved,
+   * `false` for Cancel. **Takes no path**, {@link appCommands.mirrorPickRoot}'s rule (issue
+   * #545): nothing on this side can aim a background writer at a folder.
+   */
+  tabletopPickFolder: () => invoke<boolean>("tabletop_pick_folder"),
+  /**
+   * Write every deck's saves now and answer what the pass did. Runs whether or not the
+   * integration is on, on the read connection — `mirror_rebuild`'s shape. Rejects with the
+   * pass's sentence when the saves folder is not there.
+   */
+  tabletopRebuild: () => invoke<PassReport>("tabletop_rebuild"),
 };

@@ -251,6 +251,7 @@ pub mod sync_engine;
 /// `AppState`; `crypto`, `invite` and `identity` are pure functions and three SQLite tables, and
 /// [`sync_engine::wire`] seals every batch with the first of them.
 pub mod sync_pair;
+pub mod tabletop;
 pub mod tags;
 /// **Trades** — `grimoire-core`'s module, and the thirteen wrappers over it. Twelve go
 /// through the read connection or [`sync::with_write`]; the finish takes copies out of the

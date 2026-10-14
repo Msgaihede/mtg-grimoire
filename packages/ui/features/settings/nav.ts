@@ -3,7 +3,7 @@
  *
  * The page was one scroll of twelve panels until 2026-09-03 — ordered by what a press costs,
  * which is a real rule and still the rule *inside* a group, but an ordering only helps somebody
- * who already knows what they are scrolling towards. This module is the other half: seven groups
+ * who already knows what they are scrolling towards. This module is the other half: the groups
  * a reader picks from, and a keyword per panel so that typing the word they actually have in
  * mind ("dropbox", "tcgplayer", "patreon") lands on the panel that answers it.
  *
@@ -35,19 +35,21 @@ export type PanelId =
   | "start-view"
   | "theory-marks"
   | "labels"
+  | "tabletop"
   | "data-folder"
   | "backup"
   | "cache"
   | "errors"
   | "danger";
 
-/** The seven entries in the rail. */
+/** The entries in the rail. */
 export type GroupId =
   | "updates"
   | "carddata"
   | "sync"
   | "tags"
   | "appearance"
+  | "integrations"
   | "storage"
   | "errors";
 
@@ -170,6 +172,22 @@ export const PANELS: Record<PanelId, PanelMeta> = {
     group: "appearance",
     keywords: "colour color rename recolour recolor delete swatch dot cut candidate deck card",
   },
+  /**
+   * **The first panel under `Integrations`, and a group of one on purpose** (issue #1038).
+   * It is about another program on the reader's computer, which is a question none of the other
+   * entries answers: it is not how this app looks, and not where this app keeps its data —
+   * `Backup` writes files *for the reader*, this writes files *for Tabletop Simulator*. Desktop
+   * only, so the light edition draws neither the panel nor the entry (`edition.ts`).
+   *
+   * `tts` leads the line because it is what players call it; `steam` because that is where
+   * a reader goes looking for the program; `save`, `load` and `games` because those are the
+   * words on Tabletop Simulator's own menu where the decks appear.
+   */
+  tabletop: {
+    title: "Tabletop Simulator",
+    group: "integrations",
+    keywords: "tts steam saves save load games export play table deck",
+  },
   "data-folder": {
     title: "Data folder",
     group: "storage",
@@ -225,7 +243,7 @@ type GroupMeta = {
 /**
  * The rail, top to bottom.
  *
- * **Seven entries, fewer than the panels they index**, which is the whole point: a list as long
+ * **Fewer entries than the panels they index**, which is the whole point: a list as long
  * as the page it indexes is a second scroll rather than a way through the first. Where two
  * panels answer one question they share an entry — `Needs review` is what sync asks of a reader,
  * and `Appearance`'s panels are what this app looks like when the reader is in front of it (the
@@ -251,6 +269,12 @@ type GroupMeta = {
  * section *of* `Tags`: see the comment on `theory-marks` in {@link PANELS} for the vocabulary
  * rule that decides it.
  *
+ * **`Integrations` sits after `Appearance` and before `Storage and data`** (issue #1038): it is the
+ * last entry about what the app *does* — reaching out to another program — before the two about
+ * where its own data lives and what went wrong. Not inside `Storage and data`, although it writes
+ * files as `Backup` does, because that entry is about the app's own folder and its own copies;
+ * a save written into Tabletop Simulator's folder is for playing, not for keeping.
+ *
  * **`Clear data` has no entry of its own and sits at the foot of `Storage and data`.** The
  * three clears empty the part of the app the data folder holds, so that is the question they
  * answer; and `DangerZonePanel`'s distance is kept *inside* the pane, where it has always been,
@@ -263,6 +287,7 @@ export const GROUPS: Record<GroupId, GroupMeta> = {
   sync: { label: "Sync", badge: "review" },
   tags: { label: "Tags" },
   appearance: { label: "Appearance" },
+  integrations: { label: "Integrations" },
   storage: { label: "Storage and data" },
   errors: { label: "Errors", badge: "errors" },
 };
