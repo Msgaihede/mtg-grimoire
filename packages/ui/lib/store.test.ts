@@ -310,6 +310,30 @@ describe("the set Search was asked to show", () => {
   });
 });
 
+/** The wishlist's owned chips (issue #988): the same one-shot shape, aimed at the collection. */
+describe("the search the Collection was asked to open on", () => {
+  it("goes to the Collection and leaves the query for the page to read", () => {
+    useAppStore.getState().setActiveView("wishlist");
+
+    useAppStore.getState().showInCollection('!"Lightning Bolt"');
+
+    const s = useAppStore.getState();
+    expect(s.activeView).toBe("collection");
+    expect(s.pendingCollectionQuery).toBe('!"Lightning Bolt"');
+
+    s.clearPendingCollectionQuery();
+    expect(useAppStore.getState().pendingCollectionQuery).toBeNull();
+  });
+
+  it("is spent by a later view change, read or not", () => {
+    useAppStore.getState().showInCollection('!"Lightning Bolt"');
+
+    useAppStore.getState().setActiveView("decks");
+
+    expect(useAppStore.getState().pendingCollectionQuery).toBeNull();
+  });
+});
+
 /**
  * **The home page's three other one-shot hand-offs** (2026-09-26) — To review's needs-review filter
  * and its Settings group, and Wishlist savings' whole-list price sweep.

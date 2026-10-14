@@ -490,6 +490,8 @@ const BOLT_WISH: WishRow = {
   // the wishlist rather than about the cabinet inside it.
   folderId: null,
   elsewhere: 0,
+  ownedExact: 0,
+  ownedOther: 0,
   name: "Lightning Bolt",
   setCode: "lea",
   collectorNumber: "161",

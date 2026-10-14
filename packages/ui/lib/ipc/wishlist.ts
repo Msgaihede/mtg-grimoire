@@ -170,6 +170,19 @@ export interface WishRow {
    * printings of one card are still two chances to order it twice over.
    */
   elsewhere: number;
+  /**
+   * Copies the collection holds **that answer this wish's printing** — every finish, condition
+   * and folder (issue #988). A pinned wish counts its own printing; an any-printing wish is
+   * answered by every printing, so it counts the whole card here and {@link WishRow.ownedOther}
+   * is `0`.
+   *
+   * A report and never arithmetic: nothing subtracts it from {@link WishRow.quantity} or costs
+   * the wish by it — the reader decides whether the wish still stands.
+   */
+  ownedExact: number;
+  /** Copies the collection holds of **other printings of the same card** — `0` for an
+   *  any-printing wish and for an orphan with no oracle id. */
+  ownedOther: number;
   notes: string | null;
   needsReview: string | null;
   /** Unix seconds. */
