@@ -22,10 +22,15 @@ export const shareSnapshotKey = (url: string): QueryKey => [...SHARE_KEY, "snaps
  *   newer build *told about* rather than refused at the wrong layer — so the value is already
  *   parsed when it arrives here. Re-serialising it is a full JSON round trip over what a
  *   50 000-card binder weighs (2.07 MB measured) to learn nothing new.
- * * **`staleTime: Infinity`.** A snapshot does not change on its own: it is what the publisher
- *   uploaded, and it changes when they publish again and not before. Refetching on a remount
- *   would spend the publisher's Worker requests to be handed the same document. The view offers
- *   a *Check for an update* press, which is `refetch()`.
+ * * **`staleTime` of {@link SNAPSHOT_STALE_MS}, and a re-check every
+ *   {@link SNAPSHOT_RECHECK_MS} on the binder on screen** (issue #1025). It was `Infinity`
+ *   while a share changed only when its owner remembered to press *Update now*; since the
+ *   owner's app republishes a changed folder on its own, the reader's copy has to go and look.
+ *   Only the binder being *viewed* polls — {@link useSharedSnapshot} adds the interval, and the
+ *   switcher's observers on every other open link do not — and never while the window is in the
+ *   background, so the cost to the publisher's Worker budget is one request per open view per
+ *   interval. `refetchOnWindowFocus` is off for the same budget: a reader alt-tabbing is not a
+ *   reader asking for news. The *Check for an update* press is still `refetch()`, at once.
  * * **`retry: false`**, against the app's default of one. Every refusal the crate returns is a
  *   sentence and every one of them is terminal — withdrawn, no longer available, not a shared
  *   collection link, not finished publishing — so a retry buys a second request to be told the
@@ -36,9 +41,18 @@ export function useSharedSnapshot(url: string | null) {
     url === null
       ? // A stable key for the nothing-open case; `skipToken` means nothing is ever filed under it.
         { queryKey: shareSnapshotKey(""), queryFn: skipToken }
-      : sharedSnapshotQuery(url),
+      : { ...sharedSnapshotQuery(url), refetchInterval: SNAPSHOT_RECHECK_MS },
   );
 }
+
+/** How long a fetched snapshot is taken as current — a remount or a tab switch inside it asks
+ *  nothing. */
+export const SNAPSHOT_STALE_MS = 5 * 60_000;
+
+/** How often the binder on screen asks its link for a newer snapshot. The owner's app publishes
+ *  a change within five minutes of it (`useShareAutoUpdate`), so a reader sees it within about
+ *  twenty. */
+export const SNAPSHOT_RECHECK_MS = 15 * 60_000;
 
 /**
  * The same query as an options object, for the paste dialog's `fetchQuery`.
@@ -54,7 +68,8 @@ export function sharedSnapshotQuery(url: string) {
   return {
     queryKey: shareSnapshotKey(url),
     queryFn: async (): Promise<ShareSnapshot> => parseSnapshotValue(await ipc.shareOpen(url)),
-    staleTime: Infinity,
+    staleTime: SNAPSHOT_STALE_MS,
+    refetchOnWindowFocus: false,
     retry: false,
   };
 }

@@ -47,6 +47,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
+#[path = "support/ab.rs"]
+mod ab;
 #[path = "support/labels.rs"]
 mod labels;
 use labels::{attach, labels_agree, open_corpus, rows_from_corpus, LabelRow};
@@ -103,7 +105,16 @@ impl Ingredients {
         };
         let mut session = Session::new(Some(reference), reader, TOP);
         session.set_resolve_on(ResolveOn::Inline);
+        // The measured switches, from the environment — see support/ab.rs.
+        ab::apply(&mut session);
         Ok(session)
+    }
+
+    fn reference(&self) -> Result<Reference, String> {
+        let bundle = Bundle::from_bytes(&self.bundle).map_err(|e| format!("bundle: {e}"))?;
+        let mut reference = Reference::new(bundle);
+        attach(&mut reference, &self.labels);
+        Ok(reference)
     }
 
     fn oracle_of(&self, printing: &str) -> Option<String> {
@@ -615,6 +626,53 @@ fn replay_file(
     Ok(done)
 }
 
+/// The reframing survey (prototype, `SCANNER_REFRAME_SURVEY=<file>`): every frame's detected
+/// quad, read as the card and as each region `card_scanner::reframe` knows, matched, and scored
+/// against the reader's card — one JSON line per frame and reading. No session, no tracker: the
+/// question is what each reading's match looks like when it is right and when it is not.
+fn survey_file((label, path): &Ready, r: &Reference, ingredients: &Ingredients) -> Vec<String> {
+    use card_scanner::detect::{locate, rectify, rgb_of, DetectOptions, EdgeMethod};
+    let Ok(run) = std::fs::read(path) else { return Vec::new() };
+    let Ok(frames) = cut(label, &run) else { return Vec::new() };
+    let truth = ingredients.oracle_of(&label.card.id);
+    let mask = card_scanner::index::Mask::all();
+    let mut lines = Vec::new();
+    for (i, jpeg) in frames.iter().enumerate() {
+        let Ok(source) = image::load_from_memory(jpeg) else { continue };
+        let rgb = rgb_of(&source);
+        let found = [EdgeMethod::Canny, EdgeMethod::Otsu]
+            .into_iter()
+            .filter_map(|m| locate(&source, &rgb, &DetectOptions { method: m, ..Default::default() }).0.ok())
+            .max_by(|a, b| a.rank().total_cmp(&b.rank()));
+        let Some(found) = found else { continue };
+        let mut readings = vec![("card".to_string(), found.quad)];
+        readings.extend(card_scanner::reframe::hypotheses(&found.quad).into_iter().map(|h| {
+            (format!("{}{}", h.region, if h.flipped { "^" } else { "" }), h.card)
+        }));
+        for (name, quad) in readings {
+            let in_frame = card_scanner::reframe::mostly_in_frame(&quad, rgb.width(), rgb.height());
+            let (Some(a), Some(b)) = (rectify(&rgb, &quad), rectify(&rgb, &quad.flipped())) else {
+                continue;
+            };
+            let report = r.match_views(&[(&a, &b)], 10, &mask);
+            let Some(top) = report.candidates.first() else { continue };
+            let top_oracle = ingredients.oracle_of(&top.id);
+            // The nearest candidate that is another card — a reprint of the top one is not doubt.
+            let rival = report.candidates.iter().skip(1)
+                .find(|c| ingredients.oracle_of(&c.id) != top_oracle)
+                .map(|c| c.normalized);
+            let truth_at = report.candidates.iter()
+                .position(|c| truth.is_some() && ingredients.oracle_of(&c.id) == truth);
+            lines.push(serde_json::json!({
+                "run": label.id, "frame": i + 1, "reading": name, "in_frame": in_frame,
+                "d": top.normalized, "rival": rival, "card_ok": truth.is_some() && top_oracle == truth,
+                "printing_ok": top.id == label.card.id, "truth_at": truth_at,
+            }).to_string());
+        }
+    }
+    lines
+}
+
 /// The runs whose id or card name contains any of `only`, ignoring case; all when it is empty.
 fn select(runs: Vec<Ready>, only: &[String]) -> Vec<Ready> {
     let needles: Vec<String> = only.iter().map(|s| s.to_lowercase()).collect();
@@ -682,6 +740,17 @@ fn run(args: Args) -> Result<(), String> {
         .jobs
         .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get() / 2));
     let done = AtomicUsize::new(0);
+    if let Some(file) = std::env::var_os("SCANNER_REFRAME_SURVEY") {
+        let r = ingredients.reference()?;
+        let lines = parallel(ready.len(), jobs, |i| {
+            let lines = survey_file(&ready[i], &r, &ingredients);
+            eprintln!("[{}/{}] {} — surveyed", done.fetch_add(1, Ordering::Relaxed) + 1, ready.len(),
+                ready[i].0.card.name);
+            lines
+        });
+        let text: String = lines.into_iter().flatten().map(|l| l + "\n").collect();
+        return std::fs::write(&file, text).map_err(|e| format!("survey: {e}"));
+    }
     let replayed = parallel(ready.len(), jobs, |i| {
         let result = replay_file(&ready[i], &args.out, &ingredients);
         if let Ok(out) = &result {

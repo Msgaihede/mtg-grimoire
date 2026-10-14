@@ -1,16 +1,18 @@
 # Playtesting against phase.rs's AI
 
-A **playtest** is a game of the reader's deck against another of their decks, the opponent's seat
-played by **phase.rs's AI** (`phase-ai`). It runs on the same rules engine as the goldfish board,
-and its board is the goldfish's, with the opponent's half drawn above it, turned around.
+A **playtest** is a game of the reader's deck against another of their decks, or against three in
+a four-player game, each opponent's seat played by **phase.rs's AI** (`phase-ai`). It runs on the
+same rules engine as the goldfish board, and its board is the goldfish's, with the opponents' half
+drawn above it, turned around.
 
-Built 2026-10-13. The owner's four choices that shape it:
+Built 2026-10-13; four players added 2026-10-14 (issue #994). The owner's choices that shape it:
 
 | Question                 | Choice                                                                                                                                     |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | Who plays the opponent   | phase-ai, at a difficulty the reader picks                                                                                                 |
 | How strict the rules are | The rules decide, with a prompt for targets, modes and the rest. The goldfish's sandbox stays on the reader's own cards as an escape hatch |
 | Where a game starts      | The Playtesting page: your deck, the opponent's deck (any of your own), a difficulty                                                       |
+| How many opponents       | One, or three for a four-player game (issue #994): one player against three AI seats                                                       |
 | Priority                 | Arena-style auto-pass: the reader decides only in their main phases, in combat, and when the engine asks                                   |
 
 The engine, the nightly pin, the 16 MiB stack and the licences are [goldfish.md](goldfish.md)'s.
@@ -20,6 +22,7 @@ The binding rules are in [`crates/grimoire-play/CLAUDE.md`](../../crates/grimoir
 
 - [The AI](#the-ai)
 - [The session: playing on until the reader decides](#the-session-playing-on-until-the-reader-decides)
+- [Four players](#four-players)
 - [Prompts](#prompts)
 - [Casting, cancelling and the sandbox](#casting-cancelling-and-the-sandbox)
 - [What the reader may see](#what-the-reader-may-see)
@@ -37,14 +40,17 @@ the global allocator. Only phase's own binaries do.
 
 The session drives it the way phase's own server does: `auto_play::run_ai_actions` takes every
 decision the AI seat can take now, in one batch, on a per-game `AiSession`. That session is phase's
-analysis of both decks, and it is built the first time the AI decides. The config is
-`create_config_for_players(difficulty, Native, 2)`. The wire offers phase's five presets, from
-`veryEasy` to `veryHard`. Its sixth preset, cEDH, is a four-player Commander preset and is left out.
+analysis of every deck, and it is built the first time the AI decides. The config is
+`create_config_for_players(difficulty, Native, players)`, one per AI seat, every seat at the one
+difficulty: with four players phase caps each preset's search (depth 2, two thirds of the nodes,
+its "paranoid" cap), so a four-player AI thinks less a decision than a duel's. The wire offers
+phase's five presets, from `veryEasy` to `veryHard`. Its sixth preset, cEDH, is a competitive
+four-player Commander preset with bracket validation of the decks, and is left out.
 
 **The dice are seeded.** The AI's `ChaCha8Rng` is seeded from the game's seed, XORed with a
 constant so that it is not the shuffle's own stream. The same seed and decks play the same game,
-and the session's tests rely on that. The seed's lowest bit is the coin flip: even, the reader
-plays first.
+and the session's tests rely on that. The seed modulo the player count is the coin flip: 0, the
+reader plays first (in a duel, an even seed).
 
 **Measured** (debug build, this container, 2026-10-13): a Medium AI's keep and first turn took
 1.8 s. The crate's fourteen playtest tests, six AI turns among them at VeryEasy, ran in about 4 s
@@ -100,13 +106,43 @@ phase otherwise. In the second main phase it ends the turn and plays the AI's. `
 main phases passed, and on the opponent's turn with no response or step stop. A block or a
 question still stops it. `view.endingTurn` says it is running.
 
-**Commander.** A commander on either side makes the game a Commander game: 40 life, the command
-zone and tax. Without one, the format is phase's `freeform` at 20 life.
+**Commander.** A commander on any side makes the game a Commander game: 40 life, the command
+zone, tax and 21 commander damage. Without one, the format is phase's `freeform` at 20 life.
 
 **The first turn's start is told by the session.** phase begins turn 1 inside `start_game`, before
 the hands are kept, and that event is never returned. The keep inserts `turnBegan` for turn 1, so
 the log opens on the right turn. While the hands are being decided, the view's `turn` is 0, even
 though phase already counts 1.
+
+## Four players
+
+Issue #994: one player against three AI opponents, the way a Commander pod sits. The session is the
+duel's, widened rather than forked: `Playtest::new` takes a list of `OpponentDeck`s, one to
+three (`MAX_OPPONENTS`), and a duel is the list of one.
+
+- **The seats.** The reader is `PlayerId(0)`, and the opponents `PlayerId(1)` on, in turn order.
+  phase seats the first opponent as `DeckList.opponent` and the others as `ai_decks`. On the wire
+  a player is a `PlaytestPlayer`: `you`, `opponent`, `opponent2`, `opponent3`. A duel's two are
+  spelled as the goldfish's `Seat`, so a duel's facts read as they always did. `view.opponents`
+  holds each opponent's `PlaytestSeat`, which says whose it is (`player`) and whether they are out
+  (`out`).
+- **The AI seats** are every opponent, one `run_ai_actions` batch for all of them: phase plays each
+  seat whose decision it is, including an attack of one AI on another and its blocks.
+- **Stops are per side, not per opponent.** `PlaytestStop.seat` stays `Seat`: an `opponent` stop
+  stops on each opponent's turn. The smart stops are unchanged: any opponent's spell on top, and
+  any combat after blocks, when the reader could answer it.
+- **Attacks name a player.** `PlaytestAttacker.players` lists the players a creature can attack,
+  and a `PlaytestAttackPair` carries `player`, the one attacked when `target` is `null`. From the
+  reader, a `null` player is the first opponent the creature can attack.
+- **A player who loses leaves** (CR 800.4a), and the others play on. phase marks them
+  `is_eliminated`, and the session tells it as `eliminated` (`tell_out`), read off the players
+  rather than an event so that a life total set by hand counts too. The last opponent out ends the game,
+  `gameOver` with the reader the winner. **The reader out is the end of their game**: phase would
+  play the three AIs on among themselves, but the session stops there (`reader_out`): the stage
+  is `over`, `you.out` is set and `winner` is `null`, which the board reads as a loss. A duel's
+  loser is told by `gameOver` alone, as before.
+- **Replay frames** are bounded at 80 an opponent, since one `endTurn` plays all three of their
+  turns.
 
 ## Prompts
 
@@ -121,12 +157,31 @@ generically, never matched variant by variant.
     `target`, `cards`, `keep` and the like, where a target is `{"Object": id}` or `{"Player": id}`;
   - a number (`value`, `index`, `ability_index`, the first of `indices`), which is 0-based;
   - a yes or no (`accept`, `pay`, `top`);
-  - a named choice's word (`choice`).
+  - a named choice's word (`choice`);
+  - the abilities it names, when the question lists them (`Playtest::abilities`): a question
+    whose data holds a list of `{ source_id, source_name, description }` — the triggers of
+    `OrderTriggers`, the effects of `ReplacementChoice` — is answered by counting into it, an
+    `order` (a permutation of the list) or an `index` (one of it). Each is sent as its source
+    card with the ability's words in `text`, never as bare numbers (issue #1027).
 
   An answer of a kind the board has never seen still shows what it points at.
 
+- **An order of triggers reads first-to-resolve first.** phase's `order` lists the triggers as
+  they are placed on the stack, so the first placed resolves last; the page reverses it, says
+  "Clavileño resolves first, then Carmen", and numbers each picture. Two different triggers of
+  cards of one name are told apart by their words. An answer standing for abilities carries
+  their words in its tooltip.
+
 - **`auto`** answers any prompt with `phase_ai::choose_action` for the reader, at Medium.
   `Happened::Chose` says so. It is also the answer to a prompt with no options the board can draw.
+- **A question with one answer is never asked** (issue #999, `sole_answer`). phase already fills
+  in a cast whose targets have one combination, and a discard of every card in hand. What it still
+  asks with one answer, `advance` takes and tells as `Chose`: a target slot with one card left
+  once the reader answered the first, a payment with nothing to choose, a sole mana source. phase's
+  own way back out of a cast (`CancelCast`, `BackToManaPayment`) is not counted, since the board's
+  `cancel` is there for that. A pick has one answer only when every eligible card must be picked
+  and their order cannot matter. Should the engine refuse that answer, the question is asked
+  after all.
 - A card named alone by an option lights up on the table, and clicking it answers.
 
 **A pick: the answer that is a set of cards.** For a scry of three, `legal_actions` offers four
@@ -187,7 +242,7 @@ reads the state as it is. Tokens wear each deck's own printings, both seats', as
 
 ## What the reader may see
 
-The opponent's hand and library are **counts** (`handCount`, `library`). Their `hand` and
+Each opponent's hand and library are **counts** (`handCount`, `library`). Their `hand` and
 `libraryCards` are always empty on the wire. An opponent's draw is `drew` with no name, and a card
 going back from their hand to their library is not told at all. The AI itself reads the whole
 `GameState`. Whether it plays as if it knows the reader's hand is phase's business, not this
@@ -195,21 +250,21 @@ board's.
 
 ## The commands and the wire
 
-| Command                                                                                  | Does                                                                                                                                           |
-| ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `playtest_start(deck_id, variant, opponent_deck_id, opponent_variant, difficulty, seed)` | Reads both decks (`play::deck_cards`), deals, and answers with a `PlaytestStep` at the reader's opening hand. A fresh game replaces any other. |
-| `playtest_act(action)`                                                                   | One `PlaytestAction`, and everything the AI does after it until the reader next decides. A refusal is one sentence.                            |
-| `playtest_end()`                                                                         | Drops the game.                                                                                                                                |
+| Command                                                         | Does                                                                                                                                                                                                               |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `playtest_start(deck_id, variant, opponents, difficulty, seed)` | Reads every deck (`play::deck_cards`), deals, and answers with a `PlaytestStep` at the reader's opening hand. `opponents` is one to three `PlaytestOpponent { deckId, variant }`. A fresh game replaces any other. |
+| `playtest_act(action)`                                          | One `PlaytestAction`, and everything the AI does after it until the reader next decides. A refusal is one sentence.                                                                                                |
+| `playtest_end()`                                                | Drops the game.                                                                                                                                                                                                    |
 
 **The goldfish's slot arrangement, in a slot of its own** (`PlaytestSlot`: `Empty | Busy | Game`).
 A goldfish game and a playtest can be held at once. A call while the AI is thinking is told "The
 opponent is still thinking." All three commands are on `command_table::DESKTOP_ONLY`.
 
 **The wire** is `playtest/view.rs` ↔ `packages/ui/lib/ipc/playtest.ts`. It reuses the goldfish's
-`GameCard`, `MulliganView`, `TokenOffer`, `Place` and `Seat`, so the goldfish's table pieces draw
-both boards. `ipc.test.ts` holds every struct field for field, every `PlaytestAction` and
-`PlaytestHappened` variant and field, and the three string unions (`PlaytestStage`,
-`PlaytestPhase`, `Difficulty`).
+`GameCard`, `MulliganView`, `TokenOffer` and `Place`, so the goldfish's table pieces draw both
+boards, and the goldfish's `Seat` for a stop's side. A player is `PlaytestPlayer`. `ipc.test.ts`
+holds every struct field for field, every `PlaytestAction` and `PlaytestHappened` variant and
+field, and the string unions (`PlaytestStage`, `PlaytestPhase`, `Difficulty` and the rest).
 
 **Facts come from phase's events** (`tell`). Each applied action returns `GameEvent`s, and so does
 each of the AI's actions. They become the log's facts:
@@ -255,12 +310,28 @@ from "Very easy" to "Very hard", and starts on Medium. Start is `aria-disabled` 
 picked. The same deck on both sides is allowed, and labelled "A mirror match." The last picks are
 kept for the window's life in `viewMemory("playtesting.setup")`, never in storage.
 
+**The table** is a two-button group, "1 opponent" (the default) or "3 opponents". Three opponents
+show three dropdowns, "Opponent 1's deck" to "Opponent 3's", and Start waits for all four decks.
+Any deck may sit in any seat, twice over. The seats a duel hides keep their picks.
+
 ## The board
 
 `packages/ui/features/playtesting/play/`. `PlaytestPage` covers the window below the caption at
 `LAYER.stage`, as the goldfish's page does, and Escape goes back to the setup page.
 `PlaytestBoard` is presentational: a view in, actions out. `usePlaytestGame` is
 `useGoldfishGame`'s serial queue.
+
+**Four players.** A duel's board is drawn exactly as before. At a four-player table the
+opponent's table, band and zone columns give way to three `OpponentArea`s side by side in the same
+box (96 px in from either side, from the band to the middle line), about 357 × 289 each in a
+1280 × 800 window. Each has a compact plate row (glow, poison, its own aim target), a two-wide
+grid of 40 × 56 tiles (hand face down with its count, library, graveyard, exile, command) and its
+flipped, read-only battlefield, `data-table` and `data-plate` named by its `PlaytestPlayer`. An
+opponent who is out stays drawn, dimmed under an "Out" chip. The words name each one "Opponent 1",
+"Opponent 2", "Opponent 3" in turn order (`play/players.ts`), never by deck, since one deck can sit
+twice; a duel keeps "the opponent". An attacker with more than one player to attack waits to be
+aimed at a plate, and an AI's attack on another AI is drawn in red too. The banner reads "You
+lost" when the reader is out, or when any opponent wins.
 
 **The opponent's half is the reader's, turned around.** The cosmetic overhaul of 2026-10-13
 gave the tables most of the height: the chrome is thinner and the zone columns narrower. Measured
@@ -343,7 +414,9 @@ facts are found as a run of `step.happened`, and the end takes the rest.
 - **Prompt:** the docked panel is not modal, so the table stays inspectable. Hovering an answer
   previews its card. "Let the engine choose" is always offered, and "Cancel" is offered when the
   question came out of the reader's own cast. A card that an option names alone lights up on the
-  table.
+  table — unless it stands for one of its abilities (a replacement effect), which only the panel
+  answers. Each answer shows the pictures of the cards it names; a question whose title does not
+  say what an answer decides (an order of triggers, a replacement) has a line under it.
 - **Picker:** a `pick` opens the cards at 92 × 129, with a counter ("2 of up to 3"). Confirm stays
   `aria-disabled` until the count is within the pick's bounds. An ordered pick numbers its cards;
   scry sorts into "Keep on top" and "Bottom", surveil into "Top" and "Graveyard". Cards that may
@@ -377,3 +450,8 @@ The views these pieces take are narrowed to `Pick<…>`s of the fields they read
 - **A split or a pile.** A search that splits its finds between zones, separate piles and
   distributions are still their generic options or `auto`.
 - **The light app.** Playtesting is not a destination there.
+- **A difficulty per opponent.** Every AI seat plays at the one difficulty.
+- **Two opponents, five or six.** phase seats up to six; the setup page offers a duel or four
+  players. `Playtest::new` takes one to three.
+- **Commander damage on the board.** The rules count it (21 loses), but no plate shows it yet.
+- **Watching the AIs play on** after the reader is out.

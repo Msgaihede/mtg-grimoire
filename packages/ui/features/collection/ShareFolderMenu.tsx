@@ -474,8 +474,8 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
         }}
         onClose={() => setWithdrawing(false)}
       >
-        The link will become inactive for everyone, and cannot be restored. Your
-        local cards are unaffected.
+        The link will become inactive for everyone, and cannot be restored. Your local cards are
+        unaffected.
       </ConfirmDialog>
 
     </div>
@@ -519,7 +519,7 @@ function PublishDialog({
     <Dialog
       open={open}
       title={shareNameOf(target)}
-      subtitle="Anyone with the link can view a read-only snapshot. No account required."
+      subtitle="Anyone with the link can view a read-only copy, kept up to date while this app is open. No account required."
       closeLabel="Close share"
       size="w-[32rem]"
       onDismiss={onClose}

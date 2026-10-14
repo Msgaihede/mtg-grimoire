@@ -8,6 +8,7 @@
  * ("ChooseRingBearer" → "Choose ring bearer"), which is clumsy but never wrong.
  */
 import type { GameCard, PlaytestCardRef, PlaytestOption, PlaytestPrompt } from "@/lib/ipc";
+import { opponentNumber } from "./players";
 
 /** "TriggerTargetSelection" → "Trigger target selection". */
 export function words(kind: string): string {
@@ -38,12 +39,45 @@ const TITLES: Record<string, string> = {
   OptionalCostChoice: "Pay the optional cost?",
   UnlessPayment: "Pay?",
   ReplacementChoice: "Choose a replacement effect",
-  OrderTriggers: "Order triggers",
+  OrderTriggers: "Put your triggers in order",
+};
+
+/** What the reader is choosing, for the questions whose title alone does not say it. */
+const HELP: Record<string, string> = {
+  OrderTriggers: "Pick which one resolves first",
+  ReplacementChoice: "Pick the effect that applies",
 };
 
 /** The panel's title for a kind of question. */
 export function promptTitle(kind: string): string {
   return TITLES[kind] ?? words(kind);
+}
+
+/** A line under the title saying what an answer decides, when the title does not. */
+export function promptHelp(kind: string): string | null {
+  return HELP[kind] ?? null;
+}
+
+/**
+ * The cards an answer names, in the order the panel shows them. An order of triggers is sent as
+ * phase places them on the stack — the first placed resolves last — and is shown the way the
+ * reader thinks of it: the first to resolve first.
+ */
+export function optionCards(
+  option: Pick<PlaytestOption, "cards">,
+  prompt: Pick<PlaytestPrompt, "kind">,
+): PlaytestCardRef[] {
+  return prompt.kind === "OrderTriggers" ? [...option.cards].reverse() : option.cards;
+}
+
+/** A card standing for one of its abilities, named by its card — or, between two different
+ *  abilities of cards of one name, by the ability's words, since the name tells them apart no
+ *  more. Two of one ability are the same either way round, and keep the name. */
+function abilityName(ref: PlaytestCardRef, refs: readonly PlaytestCardRef[]): string {
+  const twin = refs.some(
+    (other) => other !== ref && other.name === ref.name && other.text !== ref.text,
+  );
+  return twin && ref.text !== null ? ref.text : ref.name;
 }
 
 /** One answer, as the panel's row says it: the line, and a dim second fact when there is one. */
@@ -60,13 +94,29 @@ const BY_KIND = new Set(["CastChoice", "AbilityChoice"]);
  * number, the cards it points at, the players. A target answer that points at nothing is the one
  * that stops choosing ("No more targets"). The board's own two questions — how to cast, which
  * ability — say the answer's kind beside it, since every answer names the same card.
+ *
+ * A player is "You" or "Opponent", and at a four-player table (`opponents` of 3) the opponent's
+ * number too: "Opponent 2".
  */
 export function optionLabel(
   option: PlaytestOption,
   prompt: Pick<PlaytestPrompt, "kind">,
+  opponents = 1,
 ): OptionLabel {
-  const hint = BY_KIND.has(prompt.kind) ? words(option.kind) : null;
-  const players = option.players.map((p) => (p === "you" ? "You" : "Opponent"));
+  if (prompt.kind === "OrderTriggers" && option.cards.length > 0) {
+    const refs = optionCards(option, prompt);
+    const [first, ...rest] = refs.map((ref) => abilityName(ref, refs));
+    return {
+      text: `${first} resolves first`,
+      hint: rest.length === 0 ? null : `then ${rest.join(", then ")}`,
+    };
+  }
+  // A card standing for one of its abilities (a replacement effect) is said with the ability.
+  const ability = option.cards.length === 1 ? option.cards[0].text : null;
+  const hint = BY_KIND.has(prompt.kind) ? words(option.kind) : ability;
+  const players = option.players.map((p) =>
+    p === "you" ? "You" : opponents > 1 ? `Opponent ${opponentNumber(p)}` : "Opponent",
+  );
   const cards = option.cards.map((c) => c.name);
   const text =
     option.label ??
@@ -89,13 +139,31 @@ function numberText(n: number | null, kind: string): string | null {
 }
 
 /**
+ * An answer in full, for its row's tooltip: each ability it names with its words, in the order
+ * shown — the row itself has room for names only. `null` when the row already says it all.
+ */
+export function optionDetail(
+  option: Pick<PlaytestOption, "cards">,
+  prompt: Pick<PlaytestPrompt, "kind">,
+): string | null {
+  const refs = optionCards(option, prompt);
+  if (!refs.some((ref) => ref.text !== null)) return null;
+  const line = (ref: PlaytestCardRef) =>
+    ref.text === null ? ref.name : `${ref.name}: ${ref.text}`;
+  if (refs.length === 1) return line(refs[0]);
+  return refs.map((ref, i) => `${i + 1}. ${line(ref)}`).join("\n");
+}
+
+/**
  * The cards on the table a click answers with: each option that names exactly one card makes that
- * card pickable, and picking it sends that option. The first option to name a card keeps it.
+ * card pickable, and picking it sends that option. The first option to name a card keeps it. A
+ * card standing for one of its abilities is not the card — two answers can name one card's two
+ * replacement effects — so it is answered from the panel alone.
  */
 export function pickableCards(prompt: PlaytestPrompt | null): Map<number, number> {
   const out = new Map<number, number>();
   for (const option of prompt?.options ?? []) {
-    if (option.cards.length !== 1) continue;
+    if (option.cards.length !== 1 || option.cards[0].text !== null) continue;
     const id = option.cards[0].id;
     if (!out.has(id)) out.set(id, option.index);
   }

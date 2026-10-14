@@ -164,6 +164,35 @@ describe("useUpdate's status effect", () => {
   });
 
   /**
+   * **A busy answer is followed within seconds, not a minute** (issue #1033). The first read
+   * lands while the startup check is running, and `busy` greys out Check now; a minute poll
+   * held it grey, over yesterday's "you're on the latest version", long after the check had
+   * found the release.
+   */
+  it("re-reads quickly while the backend is busy, then goes back to the minute", async () => {
+    backend.updateStatus
+      .mockResolvedValueOnce(status({ busy: true, available: null, asset: null }))
+      .mockResolvedValue(status());
+    const { result } = renderHook(() => useUpdate());
+    await settle();
+    expect(result.current.busy).toBe(true);
+
+    await act(async () => {
+      vi.advanceTimersByTime(1_000);
+    });
+    await settle();
+    expect(backend.updateStatus).toHaveBeenCalledTimes(2);
+    expect(result.current.busy).toBe(false);
+    expect(result.current.status?.available?.version).toBe("0.3.0");
+
+    await act(async () => {
+      vi.advanceTimersByTime(30_000);
+    });
+    await settle();
+    expect(backend.updateStatus).toHaveBeenCalledTimes(2);
+  });
+
+  /**
    * **A read still in flight when the effect is torn down must not reschedule** (issue #556). The
    * cleanup clears a timer that has not been set yet, so the reschedule after the `await` was the
    * one thing nothing could stop: every StrictMode remount and every failed install's re-run left

@@ -15,9 +15,24 @@ import type {
   GoldfishLane,
   GoldfishPlace,
   GoldfishView,
+  ManaByType,
+  ManaTable,
 } from "@/lib/ipc";
 
 let nextId = 1000;
+
+/** A mana table: `open` by type, WUBRG then colorless, and `floating` the same way (none). */
+export function manaTable(open: number[] = [], floating: number[] = []): ManaTable {
+  const by = ([
+    white = 0,
+    blue = 0,
+    black = 0,
+    red = 0,
+    green = 0,
+    colorless = 0,
+  ]: number[]): ManaByType => ({ white, blue, black, red, green, colorless });
+  return { open: by(open), floating: by(floating) };
+}
 
 /** One card of the fake's by name, as the engine would answer it. */
 export function gameCard(name: string, over: Partial<GameCard> = {}): GameCard {
@@ -83,6 +98,7 @@ export function openingHandView(): GoldfishView {
     libraryLands: 37,
     libraryCards: library(92),
     manaOpen: 0,
+    mana: manaTable(),
     tokens: [],
   };
 }
@@ -132,6 +148,8 @@ export function turnNineView({ extraLands = 0 }: { extraLands?: number } = {}): 
     libraryLands: 22,
     libraryCards: library(76),
     manaOpen: 16,
+    // Five Treasures make any color; the Elves and two Forests green, two Islands blue, the Saga {C}.
+    mana: manaTable([5, 7, 5, 5, 8, 1]),
     tokens: [
       {
         preset: "treasure",

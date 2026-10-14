@@ -106,6 +106,16 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   the operation is still running and the panel disables the button it just earned. Measured:
   "Restart to finish" arrived already disabled. Every `Ok` path drops the guard first. Invisible
   to unit tests, which pass `busy` in by hand.
+- **Check now stayed grey, and a release stayed unseen, for a minute after launch**
+  ([issue #1033](https://github.com/Msgaihede/mtg-grimoire/issues/1033), 2026-10-14). The
+  panel's first status read lands while the startup check is still running, so it says
+  `busy: true`, and the startup check emits nothing — so `useUpdate` held that answer, the
+  disabled button and the pre-check "latest version" with it, until its 60 s poll. **A busy
+  status is now re-read every second until it clears** (`BUSY_POLL_MS`), and a refused
+  manual check ("already running") re-reads at once. **A check is also bounded end to end at
+  30 s** (`CHECK_TIMEOUT`): the client's `read_timeout` is per read, so a connection trickling
+  bytes never tripped it and held `busy` — and the button — for as long as it lasted. The
+  download keeps no such bound.
 - **Installing ends every window, and past one the button says so** (2026-09-20). `update_apply`
   calls `app.exit(0)`, which is the *process* — so when `useWindowCount() >= 2` the panel draws
   *Restarting closes all N windows.* under **Restart to finish**, as an `aria-describedby` hint

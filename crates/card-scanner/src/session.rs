@@ -890,6 +890,44 @@ pub struct Session {
     /// from the detail frame this asks for — runs on the next locked frame. Until it has, the
     /// decision is not announced.
     decision_read_due: bool,
+    /// Read a quad as an inner box of the card as well as the card itself — see
+    /// [`crate::reframe`]. On by default; [`Session::set_reframe`] changes it.
+    reframe: Option<crate::reframe::Options>,
+    /// The reading the last reframed frame used, held while it keeps matching better than the
+    /// quad as found. See [`crate::reframe::choose`].
+    reframe_held: Option<crate::reframe::Reading>,
+    /// The last locked frame's appearance match came in at [`crate::reframe::Options::only_above`]
+    /// or nearer, so this frame need not ask again whether its quad is the card. Cleared at the
+    /// start of every frame and set by [`Session::match_locked`].
+    reframe_plain: bool,
+    /// Hold back answers whose appearance match does not stand out — see [`GapGate`].
+    /// [`GapGate::default`] unless [`Session::set_gap_gate`] changed it.
+    gap_gate: Option<GapGate>,
+}
+
+/// The gap gate: an appearance match that stands less than this clear of the nearest match naming
+/// **another card** is treated as no evidence. See [`crate::resolve::resolve_gated`] for the
+/// survey behind it and [`crate::resolve::EXACT_MIN_GAP`] for the sweep.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GapGate {
+    /// Exact: a resolve only the hash vouches for — no title, no collector line — is not found.
+    pub exact: Option<f32>,
+    /// Fast: the frame's appearance candidates vote nothing. They are kept at weight 0 rather
+    /// than dropped, so the tracker still sees a card in front of the lens: an empty frame is a
+    /// miss, and ten misses reset a decision.
+    ///
+    /// **Off by default, because it cost right answers.** On the replay of 86 readers' scans a
+    /// gate of 0.008 made 6 of Fast's 9 wrong cards undecided and cost two right printings
+    /// (Esquire of the King LTR 13, undecided; Decorum Dissertation SOS 78, the card but not
+    /// the printing); 0.012, 0.02 and 0.03 cost two, three and four. A frame is a smaller sample
+    /// than Exact's burst, and the gap of one frame says less.
+    pub fast: Option<f32>,
+}
+
+impl Default for GapGate {
+    fn default() -> Self {
+        GapGate { exact: Some(crate::resolve::EXACT_MIN_GAP), fast: None }
+    }
 }
 
 /// The card a change forgot: what the watch held of it, and what its decision named. See
@@ -940,7 +978,25 @@ impl Session {
             decided_mark: None,
             fast_decided: None,
             decision_read_due: false,
+            reframe: Some(crate::reframe::Options::default()),
+            reframe_held: None,
+            reframe_plain: false,
+            gap_gate: Some(GapGate::default()),
         }
+    }
+
+    /// Hold back answers whose appearance match does not stand out from another card's — see
+    /// [`GapGate`]. `None` turns the gate off, which is how the replay measures it.
+    pub fn set_gap_gate(&mut self, gate: Option<GapGate>) {
+        self.gap_gate = gate;
+    }
+
+    /// Read each frame's quad as an inner box of the card too, and rectify whichever reading
+    /// matches best — see [`crate::reframe`]. `None` turns it off, which is how the replay
+    /// measures it.
+    pub fn set_reframe(&mut self, opts: Option<crate::reframe::Options>) {
+        self.reframe = opts;
+        self.reframe_held = None;
     }
 
     /// Narrow every tier to the printings these filters admit.
@@ -1058,6 +1114,8 @@ impl Session {
         self.stacked.clear();
         self.laid_over = None;
         self.held_rotated = None;
+        // A reading of the last card's quad is no reading of the next one's.
+        self.reframe_held = None;
         self.forget_reads();
         self.fast_decided = None;
         self.decided_mark = None;
@@ -1173,6 +1231,11 @@ impl Session {
             // And may come back the other way up — and what was read off it is about a card
             // that may not be here.
             self.held_rotated = None;
+            // **Not `reframe_held`.** The untrusted frames are the ones a held reading exists
+            // for: the lock forms on the quad the reading implies, and clearing it here lets the
+            // quad jump back to the inner box on every one of them (Archfiend of Despair FRC 46,
+            // on the replay, right card → undecided). A reading that no longer fits is dropped
+            // by `reframe::choose` when the quad as found matches better.
             self.forget_reads();
             self.drop_pending_resolve();
             // A refused early decision was about a card the lock has now let go of. Its votes
@@ -1549,6 +1612,57 @@ impl Session {
             }
         }
 
+        // ---- reframe: the quad read as an inner box, when that matches better ---------------
+        // Before the lock sees it, so the lock, the rectification and every band the readers cut
+        // follow the card the reading implies. See `crate::reframe`.
+        //
+        // **Asked only while the answer is in doubt.** Choosing costs a match of the quad as found
+        // and, when that is poor, one of each reading — eight more. After a locked frame matched
+        // plainly, or once the card is decided, nothing is asked: a held reading is applied as
+        // geometry alone, so the quad the lock follows does not jump back to the inner box.
+        let plain = std::mem::take(&mut self.reframe_plain) || settled;
+        if let (Some(ro), Some(r), Some((_, d, _))) =
+            (self.reframe, self.reference.as_deref(), best.as_mut())
+        {
+            let found = if plain {
+                self.reframe_held.and_then(|held| {
+                    crate::reframe::hypotheses(&d.quad)
+                        .into_iter()
+                        .find(|h| h.reading() == held)
+                        .filter(|h| crate::reframe::mostly_in_frame(&h.card, rgb.width(), rgb.height()))
+                        .map(|h| crate::reframe::Reframed {
+                            quad: h.card,
+                            reading: held,
+                            as_card: f32::NAN,
+                            distance: f32::NAN,
+                            held: true,
+                        })
+                })
+            } else {
+                // **Against every printing, not the filters' few.** A reading's gap is how far it
+                // stands clear of everything else it could be, and a set filter leaves a few
+                // hundred rivals for an impostor to stand clear of: on the synthetic evaluation,
+                // sleeved and filtered to its own set, Hypnotic Specter LEB 113 was reframed off
+                // the card and named wrong. The survey the rules were set by searched them all;
+                // the frame's own match, below, still keeps to the mask.
+                crate::reframe::choose(&rgb, &d.quad, r, &Mask::all(), &ro, self.reframe_held)
+            };
+            self.reframe_held = found.map(|f| f.reading);
+            if let Some(found) = found {
+                if ro.log && found.distance.is_finite() {
+                    eprintln!(
+                        "reframe: {}{} {:.3} -> {:.3}{}",
+                        found.reading.region,
+                        if found.reading.flipped { "^" } else { "" },
+                        found.as_card,
+                        found.distance,
+                        if found.held { " held" } else { "" }
+                    );
+                }
+                d.quad = found.quad;
+            }
+        }
+
         let mut v =
             Verdict::failed(String::new(), frame, decode_ms, matcher, self.mode, self.decision_seq);
         v.error = None;
@@ -1810,6 +1924,10 @@ impl Session {
         let (report, hold) =
             r.match_views_held(&views, self.top, &self.mask, self.held_rotated, gate);
         self.held_rotated = hold;
+        // The next frame's reframing asks nothing if this one matched plainly. See `reframe_plain`.
+        self.reframe_plain = self.reframe.is_some_and(|ro| {
+            report.candidates.first().is_some_and(|c| c.normalized <= ro.only_above)
+        });
 
         // Accumulate across frames. A per-frame top-1 flickers between near-ties several times a
         // second; the stable answer is the one that keeps recurring. Grouped by oracle id: a
@@ -1828,6 +1946,24 @@ impl Session {
                     .map(|id| Observation::appearance(r.oracle_for(&id), id, c.normalized))
             })
             .collect();
+        // The gap gate, Fast's half (see `GapGate::fast`): a match crowded by another card votes
+        // nothing. Before the readers below add theirs, so only appearance is gated.
+        if let Some(g) = self.gap_gate.and_then(|g| g.fast).filter(|_| self.mode == ScanMode::Fast) {
+            let top = observations.iter().min_by(|a, b| a.normalized.total_cmp(&b.normalized));
+            let gap = top.and_then(|top| {
+                observations
+                    .iter()
+                    .filter(|o| o.key != top.key)
+                    .map(|o| o.normalized - top.normalized)
+                    .reduce(f32::min)
+            });
+            if gap.is_some_and(|gap| gap < g) {
+                for o in &mut observations {
+                    o.weight = 0.0;
+                    o.member_weight = 0.0;
+                }
+            }
+        }
 
         // Whether this frame's readers ran — what lets a commit on it settle at once.
         #[cfg_attr(not(feature = "ocr"), allow(unused_mut))]
@@ -1984,6 +2120,7 @@ impl Session {
         let reader = self.reader.clone();
         let mask = self.mask.clone();
         let gate = self.tracker.options().max_normalized;
+        let min_gap = self.gap_gate.and_then(|g| g.exact);
         let burst: Vec<StoredView> = self.burst.drain(..).collect();
         let (tx, rx) = std::sync::mpsc::channel();
         // Caught here, on the thread that panics, because nothing else would see it: a panic on
@@ -1991,7 +2128,7 @@ impl Session {
         let job = move || {
             let result = host::guard(|| {
                 let views: Vec<BurstView<'_>> = burst.iter().map(StoredView::view).collect();
-                run_resolve(&r, &mask, &views, reader.as_deref(), gate)
+                run_resolve(&r, &mask, &views, reader.as_deref(), gate, min_gap)
             });
             // Refused when the result was dropped while this ran, which is the point of
             // dropping it.
@@ -2085,6 +2222,7 @@ fn run_resolve(
     burst: &[BurstView<'_>],
     reader: Option<&Reader>,
     gate: f32,
+    min_gap: Option<f32>,
 ) -> (ResolutionView, Option<OcrView>, Option<CollectorView>) {
     #[cfg(feature = "ocr")]
     if let Some(reader) = reader {
@@ -2096,7 +2234,7 @@ fn run_resolve(
             collector: std::sync::Mutex::new(None),
             bands: std::sync::Mutex::new(Vec::new()),
         };
-        let resolution = crate::resolve::resolve(r, mask, burst, &readers, gate);
+        let resolution = crate::resolve::resolve_gated(r, mask, burst, &readers, gate, min_gap);
         let ocr = readers.ocr.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut collector =
             readers.collector.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -2117,7 +2255,7 @@ fn run_resolve(
     }
     #[cfg(not(feature = "ocr"))]
     let _ = reader;
-    (crate::resolve::resolve(r, mask, burst, &NoReaders, gate), None, None)
+    (crate::resolve::resolve_gated(r, mask, burst, &NoReaders, gate, min_gap), None, None)
 }
 
 /// The production [`crate::resolve::Readers`]: the OCR models, under the session's mask.
@@ -2714,10 +2852,40 @@ mod tests {
 
     /// A session over `r` whose resolves run inside the frame that starts them, so a test can
     /// say which frame decides. See [`ResolveOn::Inline`].
+    ///
+    /// **With the gap gate off.** [`labelled`]'s three printings hash within a few bits of each
+    /// other — a crowd, which is exactly what the gate holds back by design — and these tests are
+    /// about which frame decides and how often, not about whether the card stands out. The gate's
+    /// own session test is `the_gap_gate_holds_back_a_crowded_resolve_by_default`.
     fn inline(r: Reference) -> Session {
         let mut s = Session::new(Some(r), None, 5);
         s.set_resolve_on(ResolveOn::Inline);
+        s.set_gap_gate(None);
         s
+    }
+
+    #[test]
+    fn the_gap_gate_holds_back_a_crowded_resolve_by_default() {
+        // Card three's nearest other card is two bits away, and nothing but the hash vouches for
+        // it: a session as built holds it back, and one with the gate off resolves it.
+        let mut s = Session::new(Some(labelled()), None, 5);
+        s.set_resolve_on(ResolveOn::Inline);
+        s.mode = ScanMode::Exact;
+        let mut resolution = None;
+        for _ in 0..EXACT_STEADY_FRAMES {
+            resolution = locked_frame(&mut s, &card_image(3)).resolution.or(resolution);
+        }
+        let res = resolution.expect("the steady frames ran a resolve");
+        assert_eq!(res.outcome, Outcome::NotFound, "{:?}", res.tiers);
+        assert!(res.tiers[5].detail.contains("no card stands out"), "{:?}", res.tiers[5]);
+        assert_eq!(s.decision_seq, 0, "a held-back resolve decides nothing");
+
+        let mut s = inline(labelled());
+        s.mode = ScanMode::Exact;
+        for _ in 0..EXACT_STEADY_FRAMES {
+            locked_frame(&mut s, &card_image(3));
+        }
+        assert_eq!(s.decision_seq, 1, "ungated, the same frames decide");
     }
 
     fn sets(codes: &[&str]) -> ScanFilters {
@@ -3658,6 +3826,8 @@ mod tests {
         // is already the decided one, and it decides once.
         let mut s = Session::new(Some(labelled()), None, 5);
         assert_eq!(s.resolve_on, ResolveOn::Background, "the app's default");
+        // `labelled`'s printings are a crowd — see `inline`.
+        s.set_gap_gate(None);
         s.mode = ScanMode::Exact;
         let card = card_image(3);
         let mut landed = None;

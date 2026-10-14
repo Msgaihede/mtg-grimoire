@@ -749,14 +749,14 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     `repos/…/releases/latest` with the run's own token and **refuses a tag older than the
     newest published release** (`sort -V`). On a first run that release is the previous one,
     which is older; on a re-run after its own publish it is itself.
-  - **The order with the relay is the release's to keep, since 2026-10-11 — once
-    `CLOUDFLARE_INFRA_API_TOKEN` is in the `release` environment.** The web app asks
+  - **The order with the relay is the release's to keep, since 2026-10-11** —
+    `CLOUDFLARE_INFRA_API_TOKEN` is set, first used by 0.44.0's release run. The web app asks
     the relay from a page, and the relay answers only an origin and a protocol it knows.
     *(Until then: a release whose web build needed new relay behaviour needed the relay
     deployed first, by hand, before the release PR was merged, because the job asked the relay
     nothing.)* `relay-deploy` now goes first and `web-deploy` needs it, through `share-deploy`;
-    **without the token those two end green having deployed nothing and `web-deploy` still
-    deploys the web app, so until it is set the earlier rule holds.**
+    **were the token removed, those two would end green having deployed nothing and
+    `web-deploy` would still deploy the web app, so the earlier rule would hold again.**
     A **deploy between releases** is still by hand, and a web deploy whose build needs new
     relay behaviour still needs the relay's first.
   - **`scripts/release-rule.test.ts` is the fence**, and every line of this list was checked

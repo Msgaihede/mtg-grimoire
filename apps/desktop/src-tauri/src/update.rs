@@ -68,6 +68,17 @@ const K_HISTORY: &str = "update_release_history";
 /// eleven releases today; the cap matters the year it does not.
 const HISTORY_PER_PAGE: u32 = 30;
 
+/// The most one check may take, from connecting to the last byte of the page.
+///
+/// **The client's timeouts do not bound a check** (issue #1033): `read_timeout` is per read, so
+/// a connection that trickles a byte a minute — a stalled proxy, an inspecting antivirus —
+/// never trips it, and the check holds [`Updater::claim`]'s flag for as long as it lasts.
+/// That flag is what `status` reports as `busy`, and `busy` greys out Check now: the one
+/// control a reader has for getting past it. A page of thirty releases is tens of kilobytes,
+/// so thirty seconds is generous for it and short enough that a hung check gives the button
+/// back. The download keeps no such bound — tens of seconds is legitimate there.
+const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// What the two Windows artifacts are called, as **suffixes**.
 ///
 /// Never a literal file name. v0.2.0's assets still read
@@ -238,6 +249,8 @@ pub struct Updater {
     /// rule, for its reason.
     busy: AtomicBool,
     staged: Mutex<Option<Staged>>,
+    /// [`CHECK_TIMEOUT`], held here so a test can wait less than thirty seconds for a stall.
+    check_timeout: Duration,
 }
 
 /// Clears `busy` however the operation ends.
@@ -270,6 +283,7 @@ impl Updater {
             kind,
             busy: AtomicBool::new(false),
             staged: Mutex::new(None),
+            check_timeout: CHECK_TIMEOUT,
         }
     }
 
@@ -763,6 +777,7 @@ async fn check_inner(
         .get(&url)
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
+        .timeout(updater.check_timeout)
         .send()
         .await
         .map_err(|e| format!("could not reach GitHub: {e}"))?;
@@ -2148,6 +2163,45 @@ mod tests {
 
     /// An MSI install, a Linux build: the release is still reported — the user should know
     /// a new version exists — but there is nothing for it to download.
+    /// **A check that stalls must give the button back** (issue #1033). The page here never
+    /// finishes arriving inside the bound, and the client's own timeouts would wait it out; the
+    /// check's bound ends it, and the flag `status` reports as `busy` is clear after.
+    #[tokio::test]
+    async fn a_stalled_check_times_out_and_is_no_longer_busy() {
+        let server = httpmock::MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method("GET").path(format!("/repos/{REPO}/releases"));
+                then.status(200)
+                    .delay(Duration::from_secs(5))
+                    .json_body(serde_json::json!([]));
+            })
+            .await;
+
+        let (state, dir) = file_state("check-stall");
+        let mut u = Updater::new(
+            server.base_url(),
+            PathBuf::from("D:\\Apps\\mtg\\mtg-grimoire.exe"),
+        );
+        u.kind = InstallKind::Portable;
+        u.check_timeout = Duration::from_millis(200);
+        let updater = Arc::new(u);
+
+        let refused = check(&state, &updater, true).await.unwrap_err();
+        assert!(refused.contains("could not reach GitHub"), "{refused}");
+        assert!(
+            !status(&state, &updater).busy,
+            "a timed-out check must not leave the updater busy"
+        );
+        assert!(
+            last_check_at(&crate::sync::lock_db_read(&state)).is_none(),
+            "a check that learned nothing must not stamp the throttle"
+        );
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[tokio::test]
     async fn an_install_kind_that_cannot_update_still_hears_about_the_release() {
         let server = httpmock::MockServer::start_async().await;

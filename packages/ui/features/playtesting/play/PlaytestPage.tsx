@@ -9,7 +9,8 @@ import { usePlaytestGame, type PlaytestPicks } from "./usePlaytestGame";
 
 /**
  * The playtest board over the whole window: a game of the reader's deck against another of their
- * decks, the opponent played by phase.rs's AI (`crates/grimoire-play`'s `playtest`).
+ * decks, or three of them at a four-player table, each opponent played by phase.rs's AI
+ * (`crates/grimoire-play`'s `playtest`).
  *
  * **`GoldfishPage`'s frame**: below the caption, over the rail and `main` both, at `LAYER.stage`
  * — above the shell, below every popup and dialog, so the board's own menus open over it. The
@@ -24,12 +25,13 @@ import { usePlaytestGame, type PlaytestPicks } from "./usePlaytestGame";
 export function PlaytestPage({
   picks,
   deckName,
-  opponentName,
+  opponentNames,
   onBack,
 }: {
   picks: PlaytestPicks;
   deckName: string;
-  opponentName: string;
+  /** Each opponent's deck, in `picks.opponents`' order, for their plates. */
+  opponentNames: readonly string[];
   onBack: () => void;
 }): JSX.Element {
   const game = usePlaytestGame(picks);
@@ -51,7 +53,7 @@ export function PlaytestPage({
     >
       <PlaytestBoard
         deckName={deckName}
-        opponentName={opponentName}
+        opponentNames={opponentNames}
         view={game.view}
         log={game.log}
         error={game.error}

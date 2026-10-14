@@ -60,8 +60,7 @@ describe("PlaytestSetup", () => {
     expect(onStart).toHaveBeenCalledWith({
       deckId: 1,
       variant: "live",
-      opponentDeckId: 2,
-      opponentVariant: "live",
+      opponents: [{ deckId: 2, variant: "live" }],
       difficulty: "veryHard",
     });
   });
@@ -72,7 +71,45 @@ describe("PlaytestSetup", () => {
     await pickDeck("Opponent’s deck", "Boros Aggro");
     expect(screen.getByText("A mirror match.")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Start" }));
-    expect(onStart).toHaveBeenCalledWith(expect.objectContaining({ deckId: 2, opponentDeckId: 2 }));
+    expect(onStart).toHaveBeenCalledWith(
+      expect.objectContaining({ deckId: 2, opponents: [{ deckId: 2, variant: "live" }] }),
+    );
+  });
+
+  it("seats three opponents at a four-player table, and starts only once each has a deck", async () => {
+    const { onStart } = setup();
+    const table = screen.getByRole("group", { name: "Table" });
+    expect(within(table).getByRole("button", { name: "1 opponent" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await userEvent.click(within(table).getByRole("button", { name: "3 opponents" }));
+    await pickDeck("Your deck", "Simic Tempo");
+    await pickDeck("Opponent 1’s deck", "Boros Aggro");
+    await pickDeck("Opponent 2’s deck", "Boros Aggro");
+    const start = screen.getByRole("button", { name: "Start" });
+    expect(start).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByText("Pick all four decks to start.")).toBeInTheDocument();
+    await pickDeck("Opponent 3’s deck", "Simic Tempo");
+    // Opponent 3's deck keeps a plan: Theory is its first list.
+    await userEvent.click(start);
+    expect(onStart).toHaveBeenCalledWith({
+      deckId: 1,
+      variant: "theory",
+      opponents: [
+        { deckId: 2, variant: "live" },
+        { deckId: 2, variant: "live" },
+        { deckId: 1, variant: "theory" },
+      ],
+      difficulty: "medium",
+    });
+    // Back to a duel: one opponent, the first seat's pick.
+    await userEvent.click(within(table).getByRole("button", { name: "1 opponent" }));
+    expect(screen.queryByRole("button", { name: "Opponent 2’s deck" })).not.toBeInTheDocument();
+    await userEvent.click(start);
+    expect(onStart).toHaveBeenLastCalledWith(
+      expect.objectContaining({ opponents: [{ deckId: 2, variant: "live" }] }),
+    );
   });
 
   it("asks for a deck when there is none", () => {

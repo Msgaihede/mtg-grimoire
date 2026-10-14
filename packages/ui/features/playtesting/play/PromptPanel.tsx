@@ -5,7 +5,14 @@ import { LAYER } from "@/lib/layers";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { CardFace } from "../goldfish/Inspect";
-import { cardOfRef, optionLabel, promptTitle } from "./prompt";
+import {
+  cardOfRef,
+  optionCards,
+  optionDetail,
+  optionLabel,
+  promptHelp,
+  promptTitle,
+} from "./prompt";
 
 /**
  * The engine's question, docked at the foot of the board over the reader's hand — `stage:
@@ -20,6 +27,11 @@ import { cardOfRef, optionLabel, promptTitle } from "./prompt";
  * the preview opens as it does on the table), and an answer that names one card on the table is
  * also that card, clickable where it lies (`tablePicks`).
  *
+ * **An answer says what it does.** A row names the cards it points at with their pictures; an
+ * order of triggers is shown first-to-resolve first, each picture numbered, and a row standing
+ * for abilities (triggers, replacement effects) carries their words in its tooltip. A question
+ * whose title alone does not say what an answer decides has a line under it (`promptHelp`).
+ *
  * **"Let the engine choose" is always there** (`auto`): phase's engine has well over a hundred
  * kinds of question, and a kind whose answers the board cannot draw — none sent, or none it can
  * name — is still one the reader can get past. Cancel only when the question came out of the
@@ -32,19 +44,23 @@ export function PromptPanel({
   onAct,
   onPoint,
   onUnpoint,
+  opponents = 1,
   className,
 }: {
   prompt: PlaytestPrompt;
-  /** Every card on both tables, so a row names the card as it lies (its state, its counters). */
+  /** Every card on the tables, so a row names the card as it lies (its state, its counters). */
   table: readonly GameCard[];
   /** An action is with the engine: nothing more can be sent until it answers. */
   disabled: boolean;
   onAct: (action: PlaytestAction) => void;
   onPoint: (card: GameCard, e: MouseEvent) => void;
   onUnpoint: () => void;
+  /** How many opponents the game has, so an answer naming one says which (`optionLabel`). */
+  opponents?: number;
   className?: string;
 }): JSX.Element {
   const title = promptTitle(prompt.kind);
+  const help = promptHelp(prompt.kind);
   return (
     <section
       aria-label={title}
@@ -56,8 +72,8 @@ export function PromptPanel({
     >
       <header className="flex flex-none items-center gap-2 border-b border-border py-1.5 pr-1.5 pl-3">
         <h2 className="m-0 flex-none text-[14px] font-semibold">{title}</h2>
-        {prompt.source !== null && (
-          <span className="min-w-0 truncate text-xs text-dim">{prompt.source}</span>
+        {(help ?? prompt.source) !== null && (
+          <span className="min-w-0 truncate text-xs text-dim">{help ?? prompt.source}</span>
         )}
         <span className="ml-auto flex flex-none gap-1.5">
           {prompt.cancellable && (
@@ -97,6 +113,7 @@ export function PromptPanel({
           onAct={onAct}
           onPoint={onPoint}
           onUnpoint={onUnpoint}
+          opponents={opponents}
         />
       )}
     </section>
@@ -112,6 +129,7 @@ export function OptionChips({
   onAct,
   onPoint,
   onUnpoint,
+  opponents = 1,
 }: {
   prompt: PlaytestPrompt;
   table: readonly GameCard[];
@@ -119,12 +137,14 @@ export function OptionChips({
   onAct: (action: PlaytestAction) => void;
   onPoint: (card: GameCard, e: MouseEvent) => void;
   onUnpoint: () => void;
+  opponents?: number;
 }): JSX.Element {
   return (
     <ul className="m-0 flex min-h-0 list-none flex-wrap gap-1.5 overflow-y-auto p-1.5">
       {prompt.options.map((option) => {
-        const { text, hint } = optionLabel(option, prompt);
-        const cards = option.cards.map((ref) => cardOfRef(ref, table));
+        const { text, hint } = optionLabel(option, prompt, opponents);
+        const cards = optionCards(option, prompt).map((ref) => cardOfRef(ref, table));
+        const numbered = prompt.kind === "OrderTriggers" && cards.length > 1;
         const first = cards[0];
         return (
           <li key={option.index} className="min-w-0">
@@ -138,15 +158,26 @@ export function OptionChips({
               onMouseEnter={first === undefined ? undefined : (e) => onPoint(first, e)}
               onMouseLeave={first === undefined ? undefined : onUnpoint}
               data-point={first?.id}
+              title={optionDetail(option, prompt) ?? undefined}
               className={cn(
                 "flex h-11 max-w-[260px] items-center gap-2 rounded-lg border border-border px-1.5 text-left text-[13px]",
                 "transition-colors motion-reduce:transition-none hover:border-accent disabled:opacity-45",
                 FOCUS,
               )}
             >
-              {cards.slice(0, 3).map((card) => (
-                <span key={card.id} aria-hidden="true" className="h-[34px] w-6 flex-none">
+              {cards.slice(0, 3).map((card, i) => (
+                // By place, not id: an order can name one card's two triggers.
+                <span
+                  key={`${card.id}-${i}`}
+                  aria-hidden="true"
+                  className="relative h-[34px] w-6 flex-none"
+                >
                   <CardFace card={card} />
+                  {numbered && (
+                    <span className="absolute -top-1 -left-1 inline-flex size-3.5 items-center justify-center rounded-full bg-accent font-mono text-[9px] leading-none font-semibold text-accent-fg">
+                      {i + 1}
+                    </span>
+                  )}
                 </span>
               ))}
               <span className={cn("flex min-w-0 flex-col", cards.length === 0 && "px-1.5")}>

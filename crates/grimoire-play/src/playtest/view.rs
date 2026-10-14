@@ -4,15 +4,52 @@
 //! **Facts, not sentences**, as the goldfish's wire (`crate::view`): the page writes the log
 //! (`features/playtesting/play/log.ts`). Mirrored by hand in `packages/ui/lib/ipc/playtest.ts`,
 //! held field for field by `ipc.test.ts`. The card, its lane, its counters, the places a card can
-//! be put and the two seats are the goldfish's own types: a card on this table is drawn by the
-//! same components as a card on that one.
+//! be put and the stops' two sides are the goldfish's own types: a card on this table is drawn by
+//! the same components as a card on that one. A player is a `PlaytestPlayer` rather than the
+//! goldfish's `Seat`: a game may have up to three opponents (issue #994), and a fact says which.
 //!
-//! **What the reader may not see is not sent.** The opponent's hand and library are counts, never
-//! cards; a card the opponent draws is "drew a card" with no name.
+//! **What the reader may not see is not sent.** An opponent's hand and library are counts, never
+//! cards; a card an opponent draws is "drew a card" with no name.
 
 use serde::{Deserialize, Serialize};
 
-use crate::view::{GameCard, MulliganView, Place, Seat, TokenOffer};
+use crate::view::{GameCard, ManaTable, MulliganView, Place, Seat, TokenOffer};
+
+/// A player at the table, from the reader's seat: the reader, or one of up to three opponents in
+/// turn order after them. On the wire `"you"`, `"opponent"`, `"opponent2"` and `"opponent3"`, so a
+/// duel's players are spelled as the goldfish's `Seat`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PlaytestPlayer {
+    You,
+    Opponent,
+    Opponent2,
+    Opponent3,
+}
+
+impl PlaytestPlayer {
+    /// Every player, the reader first: index `n` is the engine's `PlayerId(n)`.
+    pub const ALL: [PlaytestPlayer; 4] = [
+        PlaytestPlayer::You,
+        PlaytestPlayer::Opponent,
+        PlaytestPlayer::Opponent2,
+        PlaytestPlayer::Opponent3,
+    ];
+
+    /// The engine's player number for this player.
+    pub fn index(self) -> u8 {
+        self as u8
+    }
+
+    /// The stops' side: the reader's own turn, or an opponent's.
+    pub fn side(self) -> Seat {
+        if self == PlaytestPlayer::You {
+            Seat::You
+        } else {
+            Seat::Opponent
+        }
+    }
+}
 
 /// The whole table after an action, from the reader's seat.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -23,9 +60,9 @@ pub struct PlaytestView {
     /// The game's turn number, both seats' turns counted, from 1. 0 during the opening hands.
     pub turn: u32,
     /// Whose turn it is.
-    pub active: Seat,
+    pub active: PlaytestPlayer,
     /// Who played first (the seed's coin flip).
-    pub started: Seat,
+    pub started: PlaytestPlayer,
     pub phase: PlaytestPhase,
     /// The step within `phase`, for the steps a player gets priority in (`None` in the untap step,
     /// at the end of combat and in cleanup) — the stops' names for them.
@@ -33,9 +70,10 @@ pub struct PlaytestView {
     /// Present while the reader's opening hand is being decided.
     pub mulligan: Option<MulliganView>,
     pub you: PlaytestSeat,
-    /// The opponent's side. `hand` and `library_cards` are always empty: their counts are what the
+    /// Each opponent's side, in turn order after the reader: one in a duel, three in a
+    /// four-player game. `hand` and `library_cards` are always empty: their counts are what the
     /// reader may know.
-    pub opponent: PlaytestSeat,
+    pub opponents: Vec<PlaytestSeat>,
     /// The creatures in combat right now, both seats', while a combat is on.
     pub combat: Option<PlaytestCombat>,
     /// Present in `Stage::Attack`: which of the reader's creatures may attack.
@@ -47,8 +85,9 @@ pub struct PlaytestView {
     pub prompt: Option<PlaytestPrompt>,
     /// Spells and abilities waiting to resolve, the top **first**.
     pub stack: Vec<PlaytestStackItem>,
-    /// Present in `Stage::Over`: who won, or `None` for a draw.
-    pub winner: Option<Seat>,
+    /// Present in `Stage::Over`: who won, or `None` for a draw — and `None` too when the reader is
+    /// out of a game the others play on (`you.out`), which the reader has lost.
+    pub winner: Option<PlaytestPlayer>,
     /// The tokens the reader's deck makes, for the game menu's "Create a token".
     pub tokens: Vec<TokenOffer>,
     /// The steps the reader asked to be stopped at (the game menu's stops), as `setStops` set
@@ -102,6 +141,10 @@ pub enum PlaytestPhase {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaytestSeat {
+    /// Whose side it is.
+    pub player: PlaytestPlayer,
+    /// This player has lost and left the game (CR 800.4a), which the others play on without them.
+    pub out: bool,
     pub life: i32,
     pub poison: u32,
     /// The reader's hand; empty for the opponent.
@@ -119,6 +162,8 @@ pub struct PlaytestSeat {
     pub library_cards: Vec<GameCard>,
     /// What this seat's untapped permanents could make right now (phase's `max_mana_yield`).
     pub mana_open: u32,
+    /// The same open mana by type, and what is floating in the pool (`crate::view::ManaTable`).
+    pub mana: ManaTable,
 }
 
 /// The creatures in combat: each attacker and what it attacks, and each block.
@@ -130,13 +175,16 @@ pub struct PlaytestCombat {
     pub blocks: Vec<PlaytestBlockPair>,
 }
 
-/// One attacker and what it attacks: `target` is a planeswalker's or a battle's id, or `None`
-/// for the defending player.
+/// One attacker and what it attacks: `target` is a planeswalker's or a battle's id, or `None` for
+/// a player — `player`, the one it attacks. In the view `player` is always given for an attack on
+/// a player; from the reader, `None` is the first opponent the creature can attack.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaytestAttackPair {
     pub attacker: u64,
     pub target: Option<u64>,
+    #[serde(default)]
+    pub player: Option<PlaytestPlayer>,
 }
 
 /// One blocker on one attacker.
@@ -162,8 +210,8 @@ pub struct PlaytestAttack {
 #[serde(rename_all = "camelCase")]
 pub struct PlaytestAttacker {
     pub id: u64,
-    /// It can attack the opponent.
-    pub player: bool,
+    /// The players it can attack.
+    pub players: Vec<PlaytestPlayer>,
     /// The planeswalkers and battles it can attack.
     pub targets: Vec<u64>,
 }
@@ -245,7 +293,8 @@ pub enum PlaytestPickPurpose {
     Choose,
 }
 
-/// A step the reader asked the game to stop at, on whose turn.
+/// A step the reader asked the game to stop at, on whose turn: the reader's own, or an
+/// opponent's (`Seat::Opponent` stops on every opponent's turn).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaytestStop {
@@ -279,7 +328,7 @@ pub struct PlaytestOption {
     /// The cards the answer names, in order.
     pub cards: Vec<PlaytestCardRef>,
     /// The players the answer names.
-    pub players: Vec<Seat>,
+    pub players: Vec<PlaytestPlayer>,
     /// A number the answer carries: X, a mode's index, an ability's index.
     pub number: Option<i64>,
     /// A yes or a no: accept the "may", pay the cost, put it on top.
@@ -295,6 +344,10 @@ pub struct PlaytestCardRef {
     pub id: u64,
     pub name: String,
     pub card_id: Option<String>,
+    /// Present when the ref stands for one of the card's abilities rather than the card: a
+    /// trigger to put in order, a replacement effect to choose — the ability's words, as the
+    /// engine gives them.
+    pub text: Option<String>,
 }
 
 /// One spell or ability on the stack.
@@ -305,7 +358,7 @@ pub struct PlaytestStackItem {
     /// The spell, or the ability's source.
     pub name: String,
     pub card_id: Option<String>,
-    pub seat: Seat,
+    pub seat: PlaytestPlayer,
     /// An ability rather than a spell.
     pub ability: bool,
 }
@@ -409,7 +462,7 @@ pub enum PlaytestAction {
     },
     Shuffle,
     SetLife {
-        seat: Seat,
+        seat: PlaytestPlayer,
         life: i32,
     },
 }
@@ -432,39 +485,39 @@ pub enum PlaytestHappened {
     },
     TurnBegan {
         turn: u32,
-        seat: Seat,
+        seat: PlaytestPlayer,
     },
     /// A land played by the turn's land drop.
     Played {
-        seat: Seat,
+        seat: PlaytestPlayer,
         name: String,
     },
     Cast {
-        seat: Seat,
+        seat: PlaytestPlayer,
         name: String,
     },
     Activated {
-        seat: Seat,
+        seat: PlaytestPlayer,
         name: String,
     },
     /// A card the rules moved: a resolving spell, a dying creature, a discard, a mill.
     Moved {
-        seat: Seat,
+        seat: PlaytestPlayer,
         name: String,
         from: Place,
         to: Place,
     },
-    /// Cards drawn. `name` is the card for the reader's draw, `None` for the opponent's.
+    /// Cards drawn. `name` is the card for the reader's draw, `None` for an opponent's.
     Drew {
-        seat: Seat,
+        seat: PlaytestPlayer,
         name: Option<String>,
     },
     Attacked {
-        seat: Seat,
+        seat: PlaytestPlayer,
         names: Vec<String>,
     },
     Blocked {
-        seat: Seat,
+        seat: PlaytestPlayer,
         blocker: String,
         attacker: String,
     },
@@ -474,17 +527,17 @@ pub enum PlaytestHappened {
         source: String,
         target: String,
         target_id: u64,
-        seat: Seat,
+        seat: PlaytestPlayer,
         amount: u32,
     },
     /// A life total changed by the rules: damage, a drain, a gain. `total` is the life after it.
     Life {
-        seat: Seat,
+        seat: PlaytestPlayer,
         amount: i32,
         total: i32,
     },
     TokensCreated {
-        seat: Seat,
+        seat: PlaytestPlayer,
         name: String,
         count: u32,
     },
@@ -508,16 +561,22 @@ pub enum PlaytestHappened {
     Shuffled,
     /// A life total the reader set by hand.
     LifeSet {
-        seat: Seat,
+        seat: PlaytestPlayer,
         life: i32,
         was: i32,
     },
-    /// The engine's AI answered a question for the reader (`auto`, or one the board does not ask).
+    /// The engine's AI answered a question for the reader (`auto`, or one the board does not ask),
+    /// or the question had only one answer and the session took it (`sole_answer`).
     Chose {
         what: String,
     },
+    /// A player lost and left the game, which the others play on without them (CR 800.4a). The
+    /// reader's own is the end of their game; in a duel the loser's is told by `GameOver` alone.
+    Eliminated {
+        seat: PlaytestPlayer,
+    },
     GameOver {
-        winner: Option<Seat>,
+        winner: Option<PlaytestPlayer>,
     },
 }
 

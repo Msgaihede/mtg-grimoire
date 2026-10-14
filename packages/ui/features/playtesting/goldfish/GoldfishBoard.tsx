@@ -14,6 +14,7 @@ import { HandFan } from "./HandFan";
 import { INSPECT_WIDTH, Inspect } from "./Inspect";
 import { LibraryDialog } from "./LibraryDialog";
 import { LifePlate } from "./LifePlate";
+import { ManaTableView } from "./ManaTable";
 import { gameMenu } from "./menus";
 import { OpeningHand } from "./OpeningHand";
 import { HelpPanel, LogPanel } from "./Panels";
@@ -394,6 +395,7 @@ export function GoldfishBoard({
 
       {view !== null && view.stage !== "mulligan" && (
         <div className="absolute right-4 bottom-4 flex flex-col items-end gap-2">
+          <ManaTableView mana={view.mana} />
           <span className="text-xs text-dim">
             Turn {view.turn} · {view.manaOpen} mana open · hand {view.hand.length}
           </span>

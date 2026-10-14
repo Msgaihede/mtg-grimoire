@@ -34,7 +34,7 @@ deploy's own record, with what it has not proved.
 ## Why it is not a route on either of the other two
 
 **Blast radius**, the reason `infrastructure/share-worker/` gives for itself. Sync is a paid feature people
-depend on, the relay's deploys were done by hand by one person (a release's `relay-deploy` does them since 2026-10-11, once its token is set), and a deploy of a *page* happens
+depend on, the relay's deploys were done by hand by one person (a release's `relay-deploy` does them since 2026-10-11), and a deploy of a *page* happens
 far more often than a deploy of the relay — at every release, by a job, since 2026-10-04
 (*Deploying*). One Worker carrying both makes a bad build of the app a
 sync outage.
@@ -408,8 +408,8 @@ and the three hosts ship from one tag ([ci-and-releases.md](../../docs/reference
   asks the relay nothing, and runs three of step 0's questions, not its twenty probes**: a release whose
   web build needs new relay behaviour needed **the relay deployed first, by hand, before the
   release PR was merged** — until 2026-10-11, when `relay-deploy` began to go first in the same
-  release, **once `CLOUDFLARE_INFRA_API_TOKEN` is set in the `release` environment; until it is,
-  `relay-deploy` deploys nothing, `web-deploy` still deploys, and that rule holds** — and the full table is still somebody's to run after a release that
+  release, with `CLOUDFLARE_INFRA_API_TOKEN` (set; **were it removed, `relay-deploy` would
+  deploy nothing, `web-deploy` would still deploy, and that rule would hold again**) — and the full table is still somebody's to run after a release that
   changed `_headers`, `wrangler.jsonc` or the script. **No release has run it yet.**
 - **Between releases, by hand** — the rest of this section. Step 6 of *The steps, in order* is
   the rule's guard for this way: `pnpm web:deploy-guard`.

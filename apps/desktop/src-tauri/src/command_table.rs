@@ -129,6 +129,7 @@ const NOT_YET: &[&str] = &[
     "share_list",
     "share_create",
     "share_refresh",
+    "share_auto_update",
     "share_revoke",
     "share_open",
 ];

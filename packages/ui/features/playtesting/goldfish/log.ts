@@ -148,11 +148,19 @@ export function sentence(h: Happened): string | null {
   }
 }
 
-/** "The opponent took 7, down to 12" / "You gained 3, up to 43" / "The opponent is dead". */
-export function lifeSentence(seat: "you" | "opponent", was: number, life: number): string {
-  const who = seat === "you" ? "You" : "The opponent";
+/**
+ * "The opponent took 7, down to 12" / "You gained 3, up to 43" / "The opponent is dead".
+ * `opponent` names the opponent, for the playtest board's four-player table ("Opponent 2").
+ */
+export function lifeSentence(
+  seat: "you" | "opponent",
+  was: number,
+  life: number,
+  opponent = "The opponent",
+): string {
+  const who = seat === "you" ? "You" : opponent;
   const diff = life - was;
-  if (seat === "opponent" && life <= 0 && was > 0) return "The opponent is dead";
+  if (seat === "opponent" && life <= 0 && was > 0) return `${opponent} is dead`;
   if (diff < 0) return `${who} took ${-diff}, down to ${life}`;
   if (diff > 0) return `${who} gained ${diff}, up to ${life}`;
   return `${who} ${seat === "you" ? "are" : "is"} at ${life}`;

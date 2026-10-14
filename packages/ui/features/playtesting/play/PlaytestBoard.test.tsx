@@ -7,6 +7,9 @@ import {
   attackStep,
   blockStep,
   combatArrowsView,
+  fourPlayer,
+  fourPlayerAttack,
+  fourPlayerLost,
   gameOver,
   openingHand,
   respondStep,
@@ -22,7 +25,10 @@ vi.mock("../goldfish/goldfishDrag", async (importOriginal) => {
   return { ...actual, goldfishDraggable: vi.fn(actual.goldfishDraggable) };
 });
 
-function setup(view: PlaytestView | null, { busy = false, replaying = false } = {}) {
+function setup(
+  view: PlaytestView | null,
+  { busy = false, replaying = false, opponentNames = ["Boros Aggro"] } = {},
+) {
   const onAct = vi.fn();
   const onBack = vi.fn();
   const onNewGame = vi.fn();
@@ -30,7 +36,7 @@ function setup(view: PlaytestView | null, { busy = false, replaying = false } = 
   render(
     <PlaytestBoard
       deckName="Simic Tempo"
-      opponentName="Boros Aggro"
+      opponentNames={opponentNames}
       view={view}
       log={[]}
       error={null}
@@ -116,7 +122,7 @@ describe("PlaytestBoard's attack step", () => {
     fireEvent.click(screen.getByRole("button", { name: /Attack with 1/ }));
     expect(onAct).toHaveBeenCalledWith({
       type: "attack",
-      attacks: [{ attacker: goyf.id, target: null }],
+      attacks: [{ attacker: goyf.id, target: null, player: "opponent" }],
     });
     expect(onAct).not.toHaveBeenCalledWith(
       expect.objectContaining({
@@ -209,7 +215,7 @@ describe("PlaytestBoard's aimed attacks", () => {
     fireEvent.click(screen.getByRole("button", { name: /Attack with 1/ }));
     expect(onAct).toHaveBeenCalledWith({
       type: "attack",
-      attacks: [{ attacker: goyf.id, target: jace.id }],
+      attacks: [{ attacker: goyf.id, target: jace.id, player: null }],
     });
   });
 
@@ -224,7 +230,7 @@ describe("PlaytestBoard's aimed attacks", () => {
     fireEvent.keyDown(window, { key: " " });
     expect(onAct).toHaveBeenCalledWith({
       type: "attack",
-      attacks: [{ attacker: goyf.id, target: null }],
+      attacks: [{ attacker: goyf.id, target: null, player: "opponent" }],
     });
     expect(jace.id).not.toBe(goyf.id);
   });
@@ -300,5 +306,54 @@ describe("PlaytestBoard's tracker", () => {
       name: "Turn 5 · Your declare blockers step — you may respond",
     });
     expect(tracker.querySelector("[data-lit]")).toHaveTextContent("Combat");
+  });
+});
+
+const FOUR = ["Boros Aggro", "Partners", "Mono-White"];
+
+describe("PlaytestBoard at a four-player table", () => {
+  it("draws each opponent's own area, plate and table, and the duel's single table not at all", () => {
+    setup(fourPlayer().view, { opponentNames: FOUR });
+    for (const [name, player] of [
+      ["Opponent 1's battlefield", "opponent"],
+      ["Opponent 2's battlefield", "opponent2"],
+      ["Opponent 3's battlefield", "opponent3"],
+    ]) {
+      const table = screen.getByRole("region", { name });
+      expect(table.closest("[data-table]")).toHaveAttribute("data-table", player);
+    }
+    expect(screen.queryByRole("region", { name: "The opponent's battlefield" })).toBeNull();
+    expect(document.querySelectorAll("[data-plate]")).toHaveLength(4);
+    expect(screen.getByRole("img", { name: "Opponent 2's hand, 6 cards" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Opponent 2 · Partners" })).toBeInTheDocument();
+  });
+
+  it("marks an opponent who is out", () => {
+    setup(fourPlayer().view, { opponentNames: FOUR });
+    const out = screen.getByRole("region", { name: "Opponent 3 · Mono-White" });
+    expect(out).toHaveAttribute("data-out", "true");
+    expect(within(out).getByText("Out")).toBeInTheDocument();
+    const inPlay = screen.getByRole("region", { name: "Opponent 2 · Partners" });
+    expect(within(inPlay).queryByText("Out")).toBeNull();
+  });
+
+  it("aims an attacker at the opponent whose plate is clicked", () => {
+    const { view, elves } = fourPlayerAttack();
+    const { onAct } = setup(view, { opponentNames: FOUR });
+    fireEvent.click(within(yours()).getByRole("button", { name: /^Llanowar Elves/ }));
+    // Waiting to be aimed: each opponent it may attack is a target, and the one out is not.
+    expect(screen.getByRole("button", { name: "Attack Opponent 1" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Attack Opponent 3" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Attack Opponent 2" }));
+    fireEvent.click(screen.getByRole("button", { name: /Attack with 1/ }));
+    expect(onAct).toHaveBeenCalledWith({
+      type: "attack",
+      attacks: [{ attacker: elves.id, target: null, player: "opponent2" }],
+    });
+  });
+
+  it("says the reader lost once they are out, though nobody has won", () => {
+    setup(fourPlayerLost().view, { opponentNames: FOUR });
+    expect(screen.getByRole("heading", { name: "You lost" })).toBeInTheDocument();
   });
 });
