@@ -1436,7 +1436,7 @@ pub fn folder_summary(
           WHERE e.folder_id IS NOT NULL
           GROUP BY e.folder_id
           ORDER BY e.folder_id",
-        price = crate::sorting::price_expr(marketplace, ENTRY_FINISH)
+        price = crate::sorting::held_price_expr(marketplace, ENTRY_FINISH)
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt

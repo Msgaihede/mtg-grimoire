@@ -2268,7 +2268,10 @@ pub fn fold_entry(tx: &Connection, target: i64, source: i64) -> rusqlite::Result
 }
 
 /// What one owned card is worth at the reader's marketplace, **by finish** — the entry's own
-/// `e.finish`, handed to [`crate::sorting::price_expr`].
+/// `e.finish`, handed to [`crate::sorting::held_price_expr`], whose named arm is
+/// [`crate::sorting::price_expr`] at that finish. A `nonfoil` entry of a printing not sold in
+/// nonfoil (a surge-foil-only printing, issue #983) is priced at the finish the printing *is*
+/// sold in rather than drawn as unpriced; that function's doc says why.
 ///
 /// Never `cards.price_usd`: that column is a display/sort fallback chain
 /// (`usd → usd_foil → usd_etched`) and would price a plain copy of a card whose only
@@ -2829,7 +2832,7 @@ fn scope(q: &CollectionQuery) -> crate::filters::Predicates {
     // the full count beside it and `summary`'s value all read this one predicate list, so a band
     // cannot leave a total describing rows the list does not draw.
     if q.price_min.is_some() || q.price_max.is_some() {
-        let price = crate::sorting::price_expr(q.marketplace, ENTRY_FINISH);
+        let price = crate::sorting::held_price_expr(q.marketplace, ENTRY_FINISH);
         if let Some(min) = q.price_min {
             p.push(format!("{price} >= ?"), Box::new(min));
         }
@@ -3053,7 +3056,7 @@ fn list_statements(q: &CollectionQuery) -> ListStatements {
                 c.legalities, e.folder_id,
                 (SELECT f.name FROM collection_folders f WHERE f.id = e.folder_id)
          FROM {from} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?",
-        price = crate::sorting::price_expr(q.marketplace, ENTRY_FINISH),
+        price = crate::sorting::held_price_expr(q.marketplace, ENTRY_FINISH),
     );
     params.push(Box::new(limit));
     params.push(Box::new(q.offset));
@@ -3153,7 +3156,7 @@ pub fn summarise(conn: &Connection, q: &CollectionQuery) -> Result<CollectionSum
                 coalesce(sum(CASE WHEN e.needs_review IS NOT NULL THEN 1 ELSE 0 END), 0)
          FROM {from} WHERE {where_sql}",
         from = from_sql(),
-        price = crate::sorting::price_expr(q.marketplace, ENTRY_FINISH)
+        price = crate::sorting::held_price_expr(q.marketplace, ENTRY_FINISH)
     );
     conn.query_row(
         &sql,
@@ -3306,7 +3309,7 @@ pub fn shelf_counts(conn: &Connection, q: &CollectionQuery) -> Result<Vec<ShelfC
           GROUP BY shelf
           ORDER BY shelf",
         from = from_sql(),
-        price = crate::sorting::price_expr(q.marketplace, ENTRY_FINISH)
+        price = crate::sorting::held_price_expr(q.marketplace, ENTRY_FINISH)
     );
     let mut counts = {
         let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
@@ -3462,7 +3465,7 @@ pub fn breakdown(
           GROUP BY b.bucket
           ORDER BY b.bucket",
         from = from_sql(),
-        price = crate::sorting::price_expr(marketplace, ENTRY_FINISH)
+        price = crate::sorting::held_price_expr(marketplace, ENTRY_FINISH)
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
@@ -6236,6 +6239,79 @@ mod tests {
         );
         let s = summarise(&conn, &CollectionQuery::default()).unwrap();
         assert_eq!(s.total_cards, 2, "the cards are still owned");
+        assert_eq!(s.unpriced, 2);
+    }
+
+    /// **A `nonfoil` copy of a printing not sold in nonfoil is priced at the finish it is**
+    /// (issue #983).
+    ///
+    /// A surge-foil-only printing holds a `nonfoil` entry — the finish an import or an add files
+    /// when nobody chose one, and nothing polices it against `cards.finishes` — and was drawn as
+    /// an em dash beside a printings list quoting it at $47.97. A finish somebody *named* keeps
+    /// its rule: a `foil` copy of nonfoil-only `bolt-lea` stays unpriced rather than taking the
+    /// nonfoil rate, and so does `card-1`'s foil, sold but quoted only nonfoil.
+    #[test]
+    fn a_nonfoil_copy_of_a_printing_not_sold_in_nonfoil_is_priced_at_the_finish_it_is() {
+        let conn = seeded();
+        conn.execute(
+            "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                rarity,finishes,prices,raw)
+             VALUES ('palantir-hoc','o3','Palantir of Orthanc','hoc','85','en','normal',
+                'mythic','[\"foil\"]','{\"usd\":null,\"usd_foil\":\"47.97\"}','{}')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                rarity,finishes,prices,raw)
+             VALUES ('sol-etched','o4','Sol Ring','cmm','400','en','normal','uncommon',
+                '[\"etched\"]','{\"usd\":null,\"usd_etched\":\"5.00\"}','{}')",
+            [],
+        )
+        .unwrap();
+        add_entry(&conn, &input("palantir-hoc", "nonfoil", 1)).unwrap();
+        add_entry(&conn, &input("sol-etched", "nonfoil", 1)).unwrap();
+        add_entry(&conn, &input("bolt-lea", "foil", 1)).unwrap();
+        add_entry(&conn, &input("card-1", "foil", 1)).unwrap();
+
+        let page = list_entries(
+            &conn,
+            &CollectionQuery {
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let price_of = |id: &str| {
+            page.items
+                .iter()
+                .find(|r| r.card_id == id)
+                .map(|r| r.unit_price)
+                .unwrap()
+        };
+        assert_eq!(
+            price_of("palantir-hoc"),
+            Some(47.97),
+            "a nonfoil copy of a foil-only printing is the foil"
+        );
+        assert_eq!(
+            price_of("sol-etched"),
+            Some(5.00),
+            "and of an etched-only printing, the etched"
+        );
+        assert_eq!(
+            price_of("bolt-lea"),
+            None,
+            "a named finish the printing lacks is still unpriced — never the nonfoil rate"
+        );
+        assert_eq!(
+            price_of("card-1"),
+            None,
+            "a sold finish nobody quotes is still unpriced — never the nonfoil rate"
+        );
+
+        let s = summarise(&conn, &CollectionQuery::default()).unwrap();
+        assert!((s.value - 52.97).abs() < 1e-9, "{}", s.value);
         assert_eq!(s.unpriced, 2);
     }
 

@@ -63,7 +63,7 @@ use serde_json::json;
 
 use crate::card::FinishPrices;
 use crate::schema::FINISHES;
-use crate::sorting::{finish_literals, price_expr, Marketplace};
+use crate::sorting::{finish_literals, held_price_expr, price_expr, Marketplace};
 
 /// The three things a trade can be. `open` is the only one it can be edited in.
 pub const STATUSES: [&str; 3] = ["open", "finished", "archived"];
@@ -482,7 +482,7 @@ fn wish_for(card: &str) -> String {
 /// copy once it is not.
 fn unit_price_sql(market: Marketplace, open: bool) -> String {
     if open {
-        price_expr(market, "l.finish")
+        held_price_expr(market, "l.finish")
     } else {
         "l.unit_price".to_owned()
     }
@@ -1393,7 +1393,7 @@ pub fn swap_trade_sides(conn: &Connection, id: i64) -> Result<(), String> {
 
 /// Copy every line's live price into the line — what makes a closed trade keep its figures.
 ///
-/// The same [`price_expr`] the open trade was drawn with, at the same marketplace, so the
+/// The same [`held_price_expr`] the open trade was drawn with, at the same marketplace, so the
 /// number frozen is the number that was on screen. A printing that has left `cards` matches no
 /// row and freezes `NULL`, which is what it was showing.
 fn freeze_prices(conn: &Connection, id: i64, market: Marketplace) -> Result<(), String> {
@@ -1402,7 +1402,7 @@ fn freeze_prices(conn: &Connection, id: i64, market: Marketplace) -> Result<(), 
             "UPDATE trade_lines AS l
                 SET unit_price = (SELECT {price} FROM cards c WHERE c.id = l.card_id)
               WHERE l.trade_id = ?1",
-            price = price_expr(market, "l.finish")
+            price = held_price_expr(market, "l.finish")
         ),
         params![id],
     )
