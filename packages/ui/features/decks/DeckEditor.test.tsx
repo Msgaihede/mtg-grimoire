@@ -1952,6 +1952,26 @@ describe("DeckEditor", () => {
     expect(screen.getByRole("button", { name: /^Lightning Bolt/ })).toBeInTheDocument();
   });
 
+  /** Each chip wears its label's colour (issue #995), the same square the card modal's label
+   *  dropdown draws — and only as decoration: the chip's name is still the label's alone. */
+  it("draws each label chip with its colour swatch", async () => {
+    deckGet.mockResolvedValue(
+      detail(
+        {},
+        [bolt({ labelId: 7, labelName: "Wincon", labelColor: "#3a7bd5" }), card({ name: "Bear" })],
+        CATEGORIES,
+        [{ id: 7, name: "Wincon", color: "#3a7bd5", cardCount: 4 }],
+      ),
+    );
+
+    await open();
+    const chip = await within(screen.getByRole("group", { name: CHIP_ROW })).findByRole("button", {
+      name: "Wincon",
+    });
+    const swatch = chip.querySelector('[aria-hidden="true"]');
+    expect(swatch).toHaveStyle({ backgroundColor: "#3a7bd5" });
+  });
+
   /**
    * What the deck adds up to, over the same rows the view is drawn from — one query, so a curve
    * and a legality panel can never disagree. A band at the foot of the page rather than an aside
