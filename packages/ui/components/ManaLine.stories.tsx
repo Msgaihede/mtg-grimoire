@@ -10,9 +10,10 @@ const meta = {
     docs: {
       description: {
         component:
-          "The app's signature, and its only progress bar: a 2px W→U→B→R→G rule under the " +
-          "ribbon, present on every screen. During a sync the rule dims and a full-strength " +
-          "copy of itself fills across it behind a gold cap — the one place where the " +
+          "The app's signature, and its only progress bar: a 2px rule under the ribbon, " +
+          "present on every screen — greyed out at rest, the W→U→B→R→G gradient only while " +
+          "something is happening. During a sync the gradient comes in dimmed and a " +
+          "full-strength copy of itself fills across it behind a gold cap — the one place where the " +
           "identity element and a functional one are the same element. Every `label` below is " +
           "a string `syncActivity` can actually return — a value of `PHASE_LABEL`, or the " +
           '`"Syncing card data"` it falls back to while busy with no event in hand.',
@@ -24,8 +25,9 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** At rest it is decoration and nothing else — `aria-hidden`, no `progressbar` role.
- *  Announcing a 0% bar on every screen in the app would be noise. */
+/** At rest it is decoration and nothing else — greyed out to a `border`-grey hairline,
+ *  `aria-hidden`, no `progressbar` role. Announcing a 0% bar on every screen in the app would
+ *  be noise, and a full-colour line would read as busy. */
 export const Idle: Story = { args: { sync: null } };
 
 /** The ingest, the phase that takes ~81 s of a ~93 s sync and the only one a reader watches

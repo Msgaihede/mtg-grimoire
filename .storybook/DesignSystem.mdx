@@ -182,10 +182,10 @@ either way.
 
 ## The mana line
 
-The signature: a 2px W→U→B→R→G rule under the window header, present on every screen and never
-repeated anywhere else in the app — which is what makes it a signature rather than a motif.
-During a sync it becomes the app's **only** progress bar, the one place where the identity
-element and a functional one are the same element (`packages/ui/components/ManaLine.tsx`, line 12).
+The signature: a 2px rule under the window header — grey at rest, W→U→B→R→G while busy —
+present on every screen and never repeated anywhere else in the app, which is what makes it a
+signature rather than a motif. During a sync it becomes the app's **only** progress bar, the one place where the identity
+element and a functional one are the same element (`packages/ui/components/ManaLine.tsx`, line 14).
 
 The gradient is one exported constant, written against the theme tokens so the line and the
 chips can never drift apart (`packages/ui/lib/mana.ts`, line 138). The strip below is that constant at
@@ -197,8 +197,9 @@ Three states, each the shipped component at its real 2px:
 
 <ManaLineState caption="Idle" sync={null} />
 
-At rest it is decoration and nothing else — `aria-hidden`, no `progressbar` role. Announcing a
-0% bar on every screen in the app would be noise.
+At rest it is greyed out — a plain `bg-border` hairline — and decoration and nothing else:
+`aria-hidden`, no `progressbar` role. The five colours appear only while something is happening,
+so an idle window does not read as busy; announcing a 0% bar on every screen would be noise.
 
 <ManaLineState caption="Determinate — 62%" sync={{ label: "Importing cards", value: 0.62 }} />
 
@@ -216,7 +217,7 @@ legible against five shifting hues.
 A short segment sweeps instead of a bar filling, and `aria-valuenow` is **omitted** rather than
 sent as zero: `0` is a claim that no progress has been made, while an absent value is ARIA's way
 of saying the length is unknown. Under `prefers-reduced-motion` the sweeping segment is dropped
-entirely (`motion-reduce:hidden`, `packages/ui/components/ManaLine.tsx`, line 41) — a parked segment
+entirely (`motion-reduce:hidden`, `packages/ui/components/ManaLine.tsx`, line 38) — a parked segment
 would read as a third of the way done, and the dimmed line alone says "busy, length unknown".
 
 That sweep is the one animation in the app (`--animate-mana-sweep`, `packages/ui/index.css` line 228).
