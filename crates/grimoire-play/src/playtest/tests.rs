@@ -415,6 +415,73 @@ fn a_spell_with_a_choice_of_targets_asks_and_is_cast_at_the_answer() {
     assert!(find(&cast.view.you.graveyard, "Lightning Bolt").is_some());
 }
 
+/// Issue #999: a spell with one legal target is cast at it, with no question.
+#[test]
+fn a_spell_with_one_legal_target_is_cast_without_asking() {
+    let (bear, cast) = engine(|| {
+        let (mut game, _) = kept(2);
+        put_down(&mut game, "Grizzly Bears");
+        put_down(&mut game, "Forest");
+        let bear = find(&game.view().you.battlefield, "Grizzly Bears")
+            .unwrap()
+            .id;
+        assert!(game.view().opponent.battlefield.is_empty());
+        let growth = in_hand(&mut game, "Giant Growth");
+        (bear, game.act(A::Play { id: growth }).unwrap())
+    });
+    assert_eq!(cast.view.stage, Stage::Main, "{:?}", cast.view.prompt);
+    assert!(find(&cast.view.you.graveyard, "Giant Growth").is_some());
+    let grown = cast.view.you.battlefield.iter().find(|c| c.id == bear);
+    assert_eq!(grown.and_then(|c| c.power), Some(5));
+}
+
+/// Issue #999: the second target of a spell, once only one is left for it, is taken without
+/// asking. phase fills in a cast whose targets have one combination itself; a slot left with one
+/// answer after the reader picked the first is the session's.
+#[test]
+fn a_target_slot_with_one_answer_left_is_taken_without_asking() {
+    let (asked, answered) = engine(|| {
+        let mut deck = green();
+        deck.push(card(
+            "Bear Brawl",
+            Some("{1}{G}"),
+            "Sorcery",
+            "Target creature deals damage equal to its power to another target creature.",
+            None,
+            "G",
+            4,
+        ));
+        let (mut game, _) = deal(deck, 2);
+        game.act(A::Keep { bottom: vec![] }).unwrap();
+        put_down(&mut game, "Grizzly Bears");
+        put_down(&mut game, "Forest");
+        put_down(&mut game, "Forest");
+        game.put_for_test(AI_SEAT, "Raging Goblin");
+        let brawl = in_hand(&mut game, "Bear Brawl");
+        let asked = game.act(A::Play { id: brawl }).unwrap();
+        let first = asked.view.prompt.clone().expect("which of two creatures");
+        let bear = first
+            .options
+            .iter()
+            .find(|o| o.cards.iter().any(|c| c.name == "Grizzly Bears"))
+            .expect("a bear is offered")
+            .index;
+        (asked, game.act(A::Choose { index: bear }).unwrap())
+    });
+    assert_eq!(asked.view.stage, Stage::Prompt);
+    assert_eq!(
+        answered.view.stage,
+        Stage::Main,
+        "{:?}",
+        answered.view.prompt
+    );
+    assert!(answered.happened.contains(&H::Chose {
+        what: "TargetSelection".into()
+    }));
+    assert!(find(&answered.view.opponent.graveyard, "Raging Goblin").is_some());
+    assert!(find(&answered.view.you.graveyard, "Bear Brawl").is_some());
+}
+
 #[test]
 fn a_cast_with_a_question_is_taken_back_by_cancel() {
     let (asked, cancelled) = engine(|| {

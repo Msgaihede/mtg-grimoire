@@ -16,7 +16,8 @@
 //! of question, so no board draws each one: the view lists `legal_actions` with the facts in each
 //! (`option_of`), and `auto` answers any of them with the AI's choice for the reader. A question
 //! answered by a set of cards — a scry, a discard, a search — also carries a `pick` (`pick`): the
-//! enumeration offers only a few of its answers.
+//! enumeration offers only a few of its answers. A question with one answer is not asked at all
+//! (`sole_answer`): `advance` takes it, as the reader would have.
 //!
 //! **The goldfish's sandbox stays, on the reader's own cards.** Moving a card by hand, tapping,
 //! counters, tokens, draws and life totals are phase's debug actions, as on the goldfish board: the
@@ -887,6 +888,26 @@ impl Playtest {
         legal_actions(&self.state)
     }
 
+    /// The question's answer when it has only one, which `advance` takes without asking (issue
+    /// #999): a target slot with one card left, a payment with nothing to choose, a sole mana
+    /// source. phase itself fills in a cast whose targets have one combination. Taking a cast back
+    /// (`CancelCast`, `BackToManaPayment`) is not an answer to it — the board's `cancel` is there
+    /// for that. A pick has one answer when every eligible card must be picked, in no order that
+    /// matters.
+    fn sole_answer(&self) -> Option<GameAction> {
+        if let Some((pick, targets)) = self.pick() {
+            let all = pick.min == pick.max && pick.eligible.len() == pick.min as usize;
+            return (all && (!pick.ordered || pick.min <= 1))
+                .then(|| pick_answer(pick.eligible, targets));
+        }
+        let mut answers = self
+            .answers()
+            .into_iter()
+            .filter(|a| !matches!(a, GameAction::CancelCast | GameAction::BackToManaPayment));
+        let only = answers.next()?;
+        answers.next().is_none().then_some(only)
+    }
+
     /// One answer, by the facts in it. phase's actions are `{ "type": …, "data": { … } }` on the
     /// wire, and the data names its cards and players by a handful of field names across every
     /// kind of answer — read from there rather than matched variant by variant, so an answer of a
@@ -1120,19 +1141,7 @@ impl Playtest {
                 {
                     return Err(NOT_IN_GAME.into());
                 }
-                let answer = if targets {
-                    GameAction::SelectTargets {
-                        targets: ids
-                            .into_iter()
-                            .map(|id| TargetRef::Object(ObjectId(id)))
-                            .collect(),
-                    }
-                } else {
-                    GameAction::SelectCards {
-                        cards: ids.into_iter().map(ObjectId).collect(),
-                    }
-                };
-                self.apply(YOU, answer, out)?;
+                self.apply(YOU, pick_answer(ids, targets), out)?;
                 self.advance(out)
             }
             PlaytestAction::Cancel => {
@@ -1616,8 +1625,22 @@ impl Playtest {
                         out,
                     )?;
                 }
-                // A question for the reader.
-                _ => return Ok(()),
+                // A question for the reader — asked only when there is something to decide.
+                _ => {
+                    let Some(answer) = self.sole_answer() else {
+                        return Ok(());
+                    };
+                    let asked = self.state.clone();
+                    out.push(PlaytestHappened::Chose {
+                        what: self.state.waiting_for.variant_name().to_string(),
+                    });
+                    if self.apply(YOU, answer, out).is_err() {
+                        // The engine refused its own one answer: the question is asked after all.
+                        self.state = asked;
+                        out.truncate(from);
+                        return Ok(());
+                    }
+                }
             }
             self.frame(from, out);
         }
@@ -1799,6 +1822,23 @@ fn seat_of(player: PlayerId) -> Seat {
         Seat::You
     } else {
         Seat::Opponent
+    }
+}
+
+/// A pick's answer: the cards, as `SelectTargets` when the question takes targets (`pick`'s
+/// second value), else `SelectCards`.
+fn pick_answer(ids: Vec<u64>, targets: bool) -> GameAction {
+    if targets {
+        GameAction::SelectTargets {
+            targets: ids
+                .into_iter()
+                .map(|id| TargetRef::Object(ObjectId(id)))
+                .collect(),
+        }
+    } else {
+        GameAction::SelectCards {
+            cards: ids.into_iter().map(ObjectId).collect(),
+        }
     }
 }
 
