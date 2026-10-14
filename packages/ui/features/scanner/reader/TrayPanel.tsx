@@ -7,6 +7,7 @@ import {
   LayoutGrid,
   List as ListIcon,
   LoaderCircle,
+  Plus,
   Trash2,
   X,
   type LucideIcon,
@@ -38,6 +39,7 @@ import type {
 import { DURATION, PRESS, TRANSITION, seconds } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import type { TrayDestinationFace } from "../useTrayDestination";
+import { ADD_CARD_LABEL } from "./AddCardDialog";
 import {
   addLabel,
   addRefusal,
@@ -94,6 +96,12 @@ export interface TrayPanelProps {
    * to come back to.
    */
   onClearAll: (opener: HTMLElement) => void;
+  /**
+   * *Add card…* was pressed — a card the camera will not read, to be searched for by hand (issue
+   * #978). A request, like *Clear all…*, for the same `@container` reason: the page mounts the
+   * dialog and pauses the scanner under it. Absent draws no button.
+   */
+  onAddCard?: (opener: HTMLElement) => void;
   /**
    * The tray is filing somewhere that is not the collection (`useTrayDestination.ts`) — a side of
    * a trade. **Absent is the Scanner view's tray, drawn exactly as it was before this prop.** With
@@ -260,6 +268,7 @@ export function TrayPanel({
   layout,
   onLayout,
   onClearAll,
+  onAddCard,
   destination,
   notice = null,
 }: TrayPanelProps) {
@@ -358,6 +367,22 @@ export function TrayPanel({
             >
               <ArrowDown className="size-3.5" aria-hidden="true" />
               {NEXT_DECISION_LABEL}
+            </button>
+          )}
+          {onAddCard && (
+            <button
+              type="button"
+              aria-haspopup="dialog"
+              onClick={(e) => onAddCard(e.currentTarget)}
+              className={cn(
+                "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs text-dim",
+                "hover:text-accent",
+                PRESS,
+                FOCUS,
+              )}
+            >
+              <Plus className="size-3.5" aria-hidden="true" />
+              {ADD_CARD_LABEL}
             </button>
           )}
           {/* **Drawn greyed rather than hidden on an empty tray**: a confirmed clear empties the

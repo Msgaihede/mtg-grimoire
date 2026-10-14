@@ -169,6 +169,56 @@ export function addDecision(
   };
 }
 
+/** A printing the reader named by hand — the tray's own spelling of the fields a row needs. */
+export interface PickedPrinting {
+  cardId: string;
+  oracleId: string | null;
+  name: string;
+  setCode: string;
+  collectorNumber: string;
+}
+
+/**
+ * Put a printing the reader searched for into the tray — *Add a card…*, for the card the camera
+ * would not read (issue #978).
+ *
+ * **The reader's answer is already settled**, so the row never waits on a pick, and it lands
+ * newest first like any scan. It bumps the newest row by {@link addDecision}'s rule for a
+ * resolved decision — the same printing in the same known finish — so adding a card by hand and
+ * then scanning another copy of it (or the other way round) reads as one row of two, never as two
+ * rows the reader has to fold together.
+ */
+export function addPicked(
+  rows: readonly ScannerTrayRow[],
+  picked: PickedPrinting,
+  finish: ScannerTrayFinish,
+  now: number,
+  key: string,
+): { rows: ScannerTrayRow[]; bumped: boolean } {
+  const newest = rows[0];
+  if (
+    newest !== undefined &&
+    newest.choices.length === 0 &&
+    newest.cardId === picked.cardId &&
+    isKnownFinish(newest.finish) &&
+    newest.finish === finish
+  ) {
+    return {
+      rows: [{ ...newest, quantity: newest.quantity + 1, addedAt: now }, ...rows.slice(1)],
+      bumped: true,
+    };
+  }
+  const row: ScannerTrayRow = {
+    key,
+    ...picked,
+    finish,
+    quantity: 1,
+    choices: [],
+    addedAt: now,
+  };
+  return { rows: [row, ...rows], bumped: false };
+}
+
 /** The one row a write is about, changed by `change`; every other row is the same object. */
 function update(
   rows: readonly ScannerTrayRow[],
