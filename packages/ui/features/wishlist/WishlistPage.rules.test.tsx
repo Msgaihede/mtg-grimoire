@@ -90,6 +90,8 @@ const BOLT: WishRow = {
   cardId: "c1",
   folderId: 1,
   elsewhere: 0,
+  ownedExact: 0,
+  ownedOther: 0,
   name: "Lightning Bolt",
   setCode: "lea",
   collectorNumber: "161",
