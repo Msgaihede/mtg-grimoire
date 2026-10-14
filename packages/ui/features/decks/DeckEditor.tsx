@@ -73,7 +73,7 @@ import { useDeckNotes } from "./useDeckNotes";
 import { useHiddenStacks } from "./useHiddenStacks";
 import { DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
 import { usePrefetchDeckSearchWidth } from "./useDeckSearchWidth";
-import { DeckStats } from "./DeckStats";
+import { DeckStats, isShort } from "./DeckStats";
 import { DeckTokensPanel, tokenWallDrawn } from "./DeckTokensPanel";
 import { TokenArtPicker } from "./TokenArtPicker";
 import { entryRef, pileTokens, type DeckTokenView } from "./deckTokens";
@@ -459,6 +459,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * it is {@link gcFilter}, and the derivation is the fence — see it.
    */
   const [gcOnly, setGcOnly] = useState(false);
+  /**
+   * Whether the ledger's red `N missing` is pressed (issue #985) — the game-changer chip's twin,
+   * held the same way and for the same reasons: a fact about the sitting, never persisted, and
+   * read only through {@link missingFilter}, whose derivation is the fence.
+   */
+  const [missingOnly, setMissingOnly] = useState(false);
   const [layer, setLayer] = useState<Layer>(null);
   /**
    * The pile whose heading is showing its rename field, or `null`.
@@ -2767,6 +2773,22 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const gcFilter = gcOnly && hasGameChangers;
 
   /**
+   * Whether the ledger draws its `N missing` press at all: a deck with a binder behind it
+   * ({@link tracks}) and a row it is short of. `isShort` is the per-row half of `deckStats`'
+   * shortfall, so this is `true` exactly when the ledger's figure is above zero.
+   */
+  const hasMissing = useMemo(() => tracks && deck.cards.some(isShort), [tracks, deck.cards]);
+
+  /**
+   * The shortfall press **as the filter reads it** (issue #985) — fenced exactly as
+   * {@link gcFilter} is. Buying or pulling the last missing copy takes the press off the ledger,
+   * and a stored flag left standing would narrow the deck to nothing with nothing on screen to
+   * press to get it back; gating the derivation keeps that a read, and an undo that brings the
+   * shortfall back finds the press where the reader left it.
+   */
+  const missingFilter = missingOnly && hasMissing;
+
+  /**
    * Whether the `{X}` spells get a heading of their own — **the deck's, not this editor's.**
    *
    * `decks.separate_x_group` (schema v13), so it survives closing the deck and is answered per
@@ -3297,6 +3319,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const toggleNotes = useCallback((next: boolean) => updateDeck({ notesOpen: next }), [updateDeck]);
   const toggleTodos = useCallback((next: boolean) => updateDeck({ todosOpen: next }), [updateDeck]);
   const toggleGcOnly = useCallback(() => setGcOnly((on) => !on), []);
+  const toggleMissingOnly = useCallback(() => setMissingOnly((on) => !on), []);
 
   /**
    * The ledger's two controls, built here because each opens one of this editor's layers — and
@@ -3423,6 +3446,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           hasGameChangers={hasGameChangers}
           gameChangersOnly={gcFilter}
           onGameChangersOnlyToggle={toggleGcOnly}
+          missingOnly={missingFilter}
+          onMissingOnlyToggle={toggleMissingOnly}
           tight={tightHeader}
           // Four terms rather than five on a Virtual deck — the `Owned` figure is the one thing
           // on this line that is about a *binder* rather than about the deck. See {@link tracks}.
@@ -3741,6 +3766,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         categories={categories}
         separateX={separateX}
         gcFilter={gcFilter}
+        missingFilter={missingFilter}
         emptyGroupRules={emptyGroupRules}
         theoryPlan={theoryPlan}
         marketplace={marketplace}

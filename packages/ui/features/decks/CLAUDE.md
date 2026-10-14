@@ -77,6 +77,7 @@ Normalized via `deckKind.ts` (`regular`, `theory`, `virtual`):
   - `Text`: Compact line-oriented decklist view.
 - **Zoom & geometry**: Deck views scale geometry independently via Ctrl+wheel; zoom values persist per view in `app_meta` (`useCardZoomPersistence`).
 - **Multi-selection & drag**: `Ctrl/Cmd` toggles, `Shift` selects ranges (`useCardSelection`). Multi-card dragging moves all selected cards into the destination pile in one atomic operation.
+- **Ledger presses filter the desk**: the `Game Changers` chip and the red `N missing` figure (issue #985) are toggles in `DeckLedger`, held as editor state (`gcOnly`/`missingOnly`) and read only through fenced derivations (`gcFilter`/`missingFilter`) that drop when the control is no longer drawn. `DeckDesk` ORs them with the label chips and ANDs the lot with the text box. The missing filter matches `isShort` (`DeckStats.tsx`) — the exact rows the figure counts.
 - **Undocked bar (`UndockedBar.tsx`)**: Floating bottom controls hosting view mode toggles, zoom steppers, card search dock toggle, and bulk selection actions.
 - **Quick Add (`QuickAdd.tsx`)**: High-speed keyboard card entry supporting instant search, quantity increments, and category targeting without leaving the keyboard (Enter commits, Escape reverts).
 - **Tokens & Emblems (`DeckTokensPanel`)**: Dedicated token management (`deck_token_printings`), supporting three modes (`managed`, `collection`, `hidden`).
