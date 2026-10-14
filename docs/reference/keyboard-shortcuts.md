@@ -547,3 +547,10 @@ straight into the rectangle the open panel occupies. Measured on 2026-09-03: the
 clears when the pointer leaves (0 stale nodes remained). **The ruling is to leave it.** It costs
 nothing a reader needs — the open panel *is* the answer the hint points at — and fixing it means a
 second prop on `CaptionButton`, whose whole shape is that it has almost none.
+
+**Superseded 2026-10-14 (issue #976): the hint is now drawn over the open panel.** `LAYER.tooltip`
+moved to `z-70`, above the caption, because a hint opening upward from a control just under the bar
+was drawn behind it. The press that opens the panel still dismisses the hint (the provider closes
+it on any `pointerdown`), so it covers the panel's top edge only if the pointer leaves the trigger
+and comes back while the panel is open — and clears again the moment it leaves. Same ruling, from
+the other side: it costs nothing a reader needs.
