@@ -127,8 +127,9 @@ export interface PlaytestBoardProps {
   onSkip?: () => void;
 }
 
-/** The zone columns' cards: a third of the goldfish's 180 × 252, their counts drawn on them. */
-const ZONE: ZoneSize = { width: 60, height: 84, compact: true };
+/** The zone columns' cards: 72 × 101, two fifths of the goldfish's 180 × 252 (issue #992 grew
+ *  them a fifth from 60 × 84), their counts drawn on them. */
+const ZONE: ZoneSize = { width: 72, height: 101, compact: true };
 
 const NONE: readonly PlaytestHappened[] = [];
 
@@ -423,7 +424,7 @@ export function PlaytestBoard({
       />
 
       {view === null ? (
-        <div className="absolute inset-x-[84px] top-[48px] bottom-[112px] flex items-center justify-center text-dim">
+        <div className="absolute inset-x-[96px] top-[48px] bottom-[112px] flex items-center justify-center text-dim">
           {error ?? "Shuffling both decks…"}
         </div>
       ) : view.stage === "mulligan" ? (
@@ -450,6 +451,8 @@ export function PlaytestBoard({
               libraryLands: view.you.libraryCards.filter((c) => c.isLand).length,
             }}
             onAct={goldfishAct}
+            onPoint={pointYou}
+            onUnpoint={unpoint}
           />
         </div>
       ) : (
@@ -476,7 +479,7 @@ export function PlaytestBoard({
             status={status}
             failed={error !== null}
             onStops={locked ? undefined : (stops) => act({ type: "setStops", stops })}
-            className="absolute inset-x-[84px] top-[calc(50%-46px)] h-7"
+            className="absolute inset-x-[96px] top-[calc(50%-46px)] h-7"
           />
           <div data-table="you" className={YOUR_TABLE}>
             <Battlefield
@@ -855,11 +858,11 @@ export function PlaytestBoard({
  * **The frame**, measured from the board's box: the opponent's band is the top 48 px, the reader's
  * foot the bottom 112, the middle line 28 px tall just above the centre, and the two tables share
  * the rest equally — `calc(50% - 94px)` each, 289 px in a 766 px board (1280 × 800 less the
- * caption), 339 in an 866 px one. The tables are 84 px in from either side: a 60 px zone column
+ * caption), 339 in an 866 px one. The tables are 96 px in from either side: a 72 px zone column
  * 12 px from the edge, and 12 px between it and the table.
  */
-const OPPONENT_TABLE = "absolute inset-x-[84px] top-[48px] bottom-[calc(50%+46px)]";
-const YOUR_TABLE = "absolute inset-x-[84px] top-[calc(50%-18px)] bottom-[112px]";
+const OPPONENT_TABLE = "absolute inset-x-[96px] top-[48px] bottom-[calc(50%+46px)]";
+const YOUR_TABLE = "absolute inset-x-[96px] top-[calc(50%-18px)] bottom-[112px]";
 /** A zone column, centred on its table's height. */
 const OPPONENT_COLUMN =
   "absolute top-[48px] bottom-[calc(50%+46px)] flex flex-col justify-center gap-2";

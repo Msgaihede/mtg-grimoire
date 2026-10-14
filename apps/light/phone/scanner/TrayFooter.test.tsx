@@ -9,7 +9,7 @@ vi.mock("@tauri-apps/api/window", () => import("@grimoire/fake/window"));
 import { NEEDS_A_FINISH_ROW, TRAY_ROWS } from "@grimoire/ui/features/scanner/fixtures";
 import type { CollectionFolder, ScannerTrayRow } from "@grimoire/ui/lib/ipc";
 import { renderPhone } from "../testing";
-import { destinationName, TrayFooter, UNREAD_FOLDER } from "./TrayFooter";
+import { ARCHIVING, destinationName, TrayFooter, UNREAD_FOLDER } from "./TrayFooter";
 
 const RESOLVED = TRAY_ROWS.filter((row) => row.choices.length === 0);
 
@@ -41,6 +41,8 @@ function mount(over: Partial<Parameters<typeof TrayFooter>[0]> = {}) {
     commitError: null as string | null,
     onCreateDeck: vi.fn(),
     onClearAll: vi.fn(),
+    onArchive: vi.fn(),
+    onHistory: vi.fn(),
     ...over,
   };
   renderPhone(<TrayFooter {...props} />);
@@ -227,6 +229,72 @@ describe("the tray's footer", () => {
       within(sheet).getByRole("button", { name: /^Create deck…\s*Nothing scanned yet$/ }),
     ).toHaveAttribute("aria-disabled", "true");
   });
+
+  /** Archive (issue #989): the desktop tray's press, as a row of the `⋯` sheet. */
+  it("archives from the tray's sheet, closing it and handing the caret back to the ⋯", async () => {
+    const props = mount();
+    const more = screen.getByRole("button", { name: "Tray actions" });
+    await userEvent.click(more);
+    const sheet = await screen.findByRole("dialog", { name: "Scanned cards" });
+    await userEvent.click(within(sheet).getByRole("button", { name: "Archive" }));
+    expect(props.onArchive).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(more).toHaveFocus();
+  });
+
+  it("refuses Archive on an empty tray in words, as it refuses Clear all…", async () => {
+    const props = mount({ rows: [] });
+    await userEvent.click(screen.getByRole("button", { name: "Tray actions" }));
+    const sheet = await screen.findByRole("dialog", { name: "Scanned cards" });
+    const archive = within(sheet).getByRole("button", { name: /^Archive\s*Nothing scanned yet$/ });
+    expect(archive).toHaveAttribute("aria-disabled", "true");
+    await userEvent.click(archive);
+    expect(props.onArchive).not.toHaveBeenCalled();
+  });
+
+  it("leaves a card waiting on a printing to the press, which says the plan's sentence", async () => {
+    // Clear all's terms, not Add's: the press goes, and `useTrayCommit` refuses it in words.
+    mount({ rows: [...TRAY_ROWS] });
+    await userEvent.click(screen.getByRole("button", { name: "Tray actions" }));
+    const sheet = await screen.findByRole("dialog", { name: "Scanned cards" });
+    expect(within(sheet).getByRole("button", { name: "Archive" })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+  });
+
+  it("holds Add and every other act while an archive is out, saying where the cards are going", async () => {
+    const props = mount({ archiving: true });
+    const add = screen.getByRole("button", { name: "Add 5 to collection" });
+    expect(add).toHaveAttribute("aria-disabled", "true");
+    await userEvent.click(add);
+    expect(props.onCommit).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Tray actions" }));
+    const sheet = await screen.findByRole("dialog", { name: "Scanned cards" });
+    for (const label of ["Archive", "Create deck…", "Clear all…"]) {
+      expect(
+        within(sheet).getByRole("button", { name: new RegExp(`^${label}\\s*${ARCHIVING}$`) }),
+      ).toHaveAttribute("aria-disabled", "true");
+    }
+  });
+
+  it("opens the scan history from the tray's sheet, handing the page the ⋯", async () => {
+    const props = mount({ rows: [] });
+    const more = screen.getByRole("button", { name: "Tray actions" });
+    await userEvent.click(more);
+    const sheet = await screen.findByRole("dialog", { name: "Scanned cards" });
+    // Never refused: an empty tray is the usual moment to look back.
+    await userEvent.click(within(sheet).getByRole("button", { name: "Scan history" }));
+    expect(props.onHistory).toHaveBeenCalledWith(more);
+  });
+
+  it("draws neither row where the page hands it neither", async () => {
+    mount({ onArchive: undefined, onHistory: undefined });
+    await userEvent.click(screen.getByRole("button", { name: "Tray actions" }));
+    const sheet = await screen.findByRole("dialog", { name: "Scanned cards" });
+    expect(within(sheet).queryByRole("button", { name: /Archive/ })).toBeNull();
+    expect(within(sheet).queryByRole("button", { name: /Scan history/ })).toBeNull();
+  });
 });
 
 describe("the tray's footer, filing somewhere that is not the collection", () => {
@@ -260,6 +328,9 @@ describe("the tray's footer, filing somewhere that is not the collection", () =>
     await userEvent.click(more);
     const sheet = await screen.findByRole("dialog", { name: "Scanned cards" });
     expect(within(sheet).queryByRole("button", { name: /Create deck/ })).toBeNull();
+    // The archive and its history are the Scanner tab's record, whatever the page hands in.
+    expect(within(sheet).queryByRole("button", { name: /Archive/ })).toBeNull();
+    expect(within(sheet).queryByRole("button", { name: /Scan history/ })).toBeNull();
     await userEvent.click(within(sheet).getByRole("button", { name: "Clear all…" }));
     expect(props.onClearAll).toHaveBeenCalledWith(more);
     expect(props.onCreateDeck).not.toHaveBeenCalled();

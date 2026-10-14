@@ -24,6 +24,11 @@
 //! can't lose the game" (CR 104.3b, no `affected` — every player) is granted at the start, so a
 //! life total the reader sets to 0 is a number on the board and not the end of the game. The
 //! board says "dead on turn N"; the game goes on until the reader starts another.
+//!
+//! **The log hears the other seat too** (issue #1026): the goldfish's own turn — it draws, plays
+//! nothing and, past seven cards, discards — is told as one fact as it ends
+//! (`Happened::OpponentTurn`), and a life total the rules change, either seat's, as
+//! `Happened::Life` (`tell`).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -41,6 +46,7 @@ use engine::game::{
 use engine::types::ability::LibraryPosition;
 use engine::types::actions::{DebugAction, DebugTokenRequest, GameAction, MulliganChoice};
 use engine::types::card_type::CoreType;
+use engine::types::events::GameEvent;
 use engine::types::format::FormatConfig;
 use engine::types::game_state::{MulliganDecisionPhase, WaitingFor};
 use engine::types::identifiers::ObjectId;
@@ -94,6 +100,15 @@ pub struct Goldfish {
     tokens: Vec<TokenOffer>,
     /// The printing the reader set for each of the deck's tokens, which a token is drawn by.
     deck_tokens: DeckTokens,
+    /// While the goldfish's turn is on: how many cards it has drawn and discarded so far, told
+    /// as `Happened::OpponentTurn` when the next turn starts.
+    fish_turn: Option<FishTurn>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct FishTurn {
+    drew: u32,
+    discarded: u32,
 }
 
 impl Goldfish {
@@ -181,6 +196,7 @@ impl Goldfish {
             mulligans: 0,
             tokens,
             deck_tokens,
+            fish_turn: None,
         };
         game.assign_printings(cards);
         start_game_with_starting_player(&mut game.state, YOU);
@@ -592,7 +608,16 @@ impl Goldfish {
             let printing = self.printings.get(&id).cloned();
             let before = self.zones();
             let land = matches!(action, GameAction::PlayLand { .. });
-            if self.apply(YOU, action).is_ok() && self.resolve_stack().is_ok() {
+            // What the rules did on the way — a drain, a gain — said after the cast itself.
+            let mut told = Vec::new();
+            let cast = match self.apply(YOU, action) {
+                Ok(events) => {
+                    self.tell(&events, &mut told);
+                    self.resolve_stack(&mut told).is_ok()
+                }
+                Err(_) => false,
+            };
+            if cast {
                 if let Some(printing) = printing {
                     self.carry_printing(&name, printing);
                 }
@@ -604,6 +629,7 @@ impl Goldfish {
                         from,
                     }
                 });
+                out.append(&mut told);
                 self.report_moves(&before, Some(&name), out);
                 return Ok(());
             }
@@ -773,23 +799,28 @@ impl Goldfish {
                 first
             }
         };
-        self.apply(actor, action)
+        let events = self.apply(actor, action)?;
+        self.tell(&events, out);
+        Ok(())
     }
 
     /// After a cast: pass priority until the stack is empty, both seats passing. A question the
     /// reader would have to answer is an `Err`, which `play` takes back.
-    fn resolve_stack(&mut self) -> Result<(), String> {
+    fn resolve_stack(&mut self, out: &mut Vec<Happened>) -> Result<(), String> {
         for _ in 0..STEP_LIMIT {
             if self.state.stack.is_empty() && self.reader_has_priority() {
                 return Ok(());
             }
             let actors = authorized_submitters(&self.state);
             if actors.contains(&FISH) {
-                self.step(&mut Vec::new())?;
+                self.step(out)?;
                 continue;
             }
             match self.state.waiting_for {
-                WaitingFor::Priority { .. } => self.apply(YOU, GameAction::PassPriority)?,
+                WaitingFor::Priority { .. } => {
+                    let events = self.apply(YOU, GameAction::PassPriority)?;
+                    self.tell(&events, out);
+                }
                 _ => return Err("asks a question".into()),
             }
         }
@@ -897,6 +928,63 @@ impl Goldfish {
         }
     }
 
+    /// What the engine's events say that the board did not do itself: a life total the rules
+    /// changed, either seat's, and the goldfish's turn — counted as it goes and told once, when
+    /// the next turn starts. The reader's own cards are told by `report_moves`, and a sandbox
+    /// action's events are never told: its own fact says what the reader did.
+    fn tell(&mut self, events: &[GameEvent], out: &mut Vec<Happened>) {
+        for event in events {
+            match event {
+                GameEvent::TurnStarted { player_id, .. } => {
+                    if let Some(FishTurn { drew, discarded }) = self.fish_turn.take() {
+                        out.push(Happened::OpponentTurn { drew, discarded });
+                    }
+                    if *player_id == FISH {
+                        self.fish_turn = Some(FishTurn::default());
+                    }
+                }
+                GameEvent::ZoneChanged {
+                    object_id,
+                    from: Some(from),
+                    to,
+                    record,
+                } => {
+                    let owner = self
+                        .state
+                        .objects
+                        .get(object_id)
+                        .map_or(record.controller, |o| o.owner);
+                    let Some(turn) = self.fish_turn.as_mut().filter(|_| owner == FISH) else {
+                        continue;
+                    };
+                    match (from, to) {
+                        (Zone::Library, Zone::Hand) => turn.drew += 1,
+                        (Zone::Hand, Zone::Graveyard) => turn.discarded += 1,
+                        _ => {}
+                    }
+                }
+                GameEvent::LifeChanged {
+                    player_id,
+                    amount,
+                    new_total,
+                } if *amount != 0 => out.push(Happened::Life {
+                    seat: if *player_id == YOU {
+                        Seat::You
+                    } else {
+                        Seat::Opponent
+                    },
+                    amount: *amount,
+                    // phase reports the total with the change when it can; the life after the
+                    // action is the fallback, the same unless one action changed it twice.
+                    total: new_total
+                        .0
+                        .unwrap_or(self.state.players[player_id.0 as usize].life),
+                }),
+                _ => {}
+            }
+        }
+    }
+
     // ── Plumbing ──────────────────────────────────────────────────────────────────────────
 
     fn you(&self) -> &engine::types::player::Player {
@@ -911,14 +999,15 @@ impl Goldfish {
             .ok_or_else(|| NOT_IN_GAME.to_string())
     }
 
-    fn apply(&mut self, actor: PlayerId, action: GameAction) -> Result<(), String> {
+    /// One action by `actor`, answered with the engine's events, which `tell` reads.
+    fn apply(&mut self, actor: PlayerId, action: GameAction) -> Result<Vec<GameEvent>, String> {
         apply(&mut self.state, actor, action)
-            .map(|_| ())
+            .map(|result| result.events)
             .map_err(|e| e.to_string())
     }
 
     fn debug(&mut self, action: DebugAction) -> Result<(), String> {
-        self.apply(YOU, GameAction::Debug(action))
+        self.apply(YOU, GameAction::Debug(action)).map(|_| ())
     }
 
     fn clone_state(&self) -> (GameState, HashMap<ObjectId, String>, u32) {
@@ -929,6 +1018,9 @@ impl Goldfish {
         self.state = state;
         self.printings = printings;
         self.turn = turn;
+        // The goldfish's turn always ends within the action that started it, so a checkpoint is
+        // never taken in the middle of one.
+        self.fish_turn = None;
     }
 }
 

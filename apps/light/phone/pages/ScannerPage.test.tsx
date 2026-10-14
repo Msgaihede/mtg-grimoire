@@ -59,6 +59,7 @@ import type {
   ScannerVerdict,
   SupporterStatus,
 } from "@grimoire/ui/lib/ipc";
+import { useNotifications } from "@grimoire/ui/lib/notifications";
 import { supporterState } from "@grimoire/ui/lib/query";
 import type { FakeParams } from "@grimoire/fake/world";
 import type { TrayDestination } from "@grimoire/ui/features/scanner/useTrayDestination";
@@ -739,6 +740,86 @@ describe("the phone's Scanner page", () => {
     expect(more).toHaveFocus();
   });
 
+  /**
+   * *Archive* (issue #989): the rows an Add would take, into the scan history and **not** the
+   * collection — one `scanner_tray_archive` over the fake's own, and one toast in the desktop's
+   * words.
+   */
+  it("archives the tray into the scan history, filing nothing, and says so in one toast", async () => {
+    noCamera("NotAllowedError");
+    const archived: { items: CollectionImportItem[]; remaining: ScannerTrayRow[] }[] = [];
+    const { seen } = mount({
+      tray: [NEEDS_A_FINISH_ROW, ...RESOLVED],
+      over: (own) => ({
+        scanner_tray_archive: (args: (typeof archived)[number]) => {
+          archived.push(args);
+          return (own.scanner_tray_archive as (a: unknown) => unknown)(args);
+        },
+      }),
+    });
+    const more = await screen.findByRole("button", { name: "Tray actions" }, SETTLE);
+    await userEvent.click(more);
+    await userEvent.click(
+      within(await screen.findByRole("dialog", { name: "Scanned cards" })).getByRole("button", {
+        name: "Archive",
+      }),
+    );
+
+    await waitFor(() => expect(archived).toHaveLength(1), SETTLE);
+    expect(archived[0].items.map((item) => item.cardId)).toEqual(RESOLVED.map((row) => row.cardId));
+    // The row of unknown finish stays, as it would for an Add; nothing went to the collection.
+    expect(archived[0].remaining.map((row) => row.key)).toEqual([NEEDS_A_FINISH_ROW.key]);
+    expect(seen.commits).toEqual([]);
+    await waitFor(() => expect(trayRows()).toEqual([["Lightning Bolt", "1"]]), SETTLE);
+    await waitFor(
+      () =>
+        expect(useNotifications.getState().notices[0]).toMatchObject({
+          title: "Archived 5 cards to Scan history",
+          tone: "success",
+        }),
+      SETTLE,
+    );
+    expect(more).toHaveFocus();
+  });
+
+  it("keeps every row and says the backend's sentence over the footer when the archive is refused", async () => {
+    noCamera("NotAllowedError");
+    mount({
+      tray: [...RESOLVED],
+      over: () => ({
+        scanner_tray_archive: () => {
+          throw new Error(DB_BUSY);
+        },
+      }),
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Tray actions" }, SETTLE));
+    await userEvent.click(
+      within(await screen.findByRole("dialog", { name: "Scanned cards" })).getByRole("button", {
+        name: "Archive",
+      }),
+    );
+    const footer = screen.getByRole("button", { name: "Add 5 to collection" }).closest("footer");
+    await waitFor(() => expect(within(footer as HTMLElement).getByRole("alert")).toHaveTextContent(DB_BUSY), SETTLE);
+    expect(trayRows()).toHaveLength(3);
+  });
+
+  it("opens the scan history from the tray's sheet, and hands the caret back to the ⋯", async () => {
+    noCamera("NotAllowedError");
+    mount({ fake: { seed: "scanHistory" } });
+    const more = await screen.findByRole("button", { name: "Tray actions" }, SETTLE);
+    await userEvent.click(more);
+    await userEvent.click(
+      within(await screen.findByRole("dialog", { name: "Scanned cards" })).getByRole("button", {
+        name: "Scan history",
+      }),
+    );
+    const sheet = await screen.findByRole("dialog", { name: "Scan history" }, SETTLE);
+    expect(await within(sheet).findByRole("button", { name: /^Bob's binder/ }, SETTLE)).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Scan history" })).toBeNull(), SETTLE);
+    expect(more).toHaveFocus();
+  });
+
   it("throws the scanner's evidence away on Reset evidence", async () => {
     camera();
     restoreVideo = shimVideo();
@@ -1073,6 +1154,11 @@ describe("sending a scan from the Scanner page", () => {
     expect(answers.map(supporterState)).toContain("active");
     await framesGoBy(cards, 6);
     expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
+    // Nor an archive or the history: both are the Scanner tab's own record.
+    await userEvent.click(screen.getByRole("button", { name: "Tray actions" }));
+    const sheet = await screen.findByRole("dialog", { name: "Scanned cards" }, SETTLE);
+    expect(within(sheet).queryByRole("button", { name: /Archive/ })).toBeNull();
+    expect(within(sheet).queryByRole("button", { name: /Scan history/ })).toBeNull();
   });
 
   /**

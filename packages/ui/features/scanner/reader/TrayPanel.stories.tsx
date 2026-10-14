@@ -276,7 +276,7 @@ export const CommitRefused: Story = {
 
 /**
  * The grid, as the page opens on it, a third of a wide window across — `TRAY_ROWS` as tiles: the
- * waiting Lightning Bolt two columns wide with its candidates to press, the playset in progress
+ * waiting Lightning Bolt across the whole grid with its candidates to press, the playset in progress
  * wearing its count, the foil wearing its chip, and the first card scanned. The second row is
  * flashed as a bump would leave it.
  */

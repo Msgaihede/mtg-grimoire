@@ -52,6 +52,20 @@ describe("Battlefield", () => {
     expect(screen.getByText("×2")).toBeInTheDocument();
   });
 
+  it("draws a pile as its cards stacked, five at most, with the count on the chip", () => {
+    setup(Array.from({ length: 8 }, () => card("Forest")));
+    const pile = document.querySelector("[data-land]");
+    // The top card is the button; the four under it are drawn and hidden from a screen reader.
+    expect(pile?.querySelectorAll(':scope > div[aria-hidden="true"]')).toHaveLength(4);
+    expect(screen.getByText("×8")).toBeInTheDocument();
+  });
+
+  it("draws every card of a pile shorter than five", () => {
+    setup([card("Island"), card("Island"), card("Island")]);
+    const pile = document.querySelector("[data-land]");
+    expect(pile?.querySelectorAll(':scope > div[aria-hidden="true"]')).toHaveLength(2);
+  });
+
   it("keeps a tapped Forest apart from an untapped one, and says which is tapped", () => {
     setup([card("Forest"), card("Forest", { tapped: true })]);
     expect(screen.getByRole("button", { name: "Forest" })).toBeInTheDocument();

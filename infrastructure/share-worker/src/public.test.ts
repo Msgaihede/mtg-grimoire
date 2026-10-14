@@ -802,9 +802,41 @@ describe("GET /s/{id}", () => {
   it("dates the snapshot in the OpenGraph card", async () => {
     const day = 24 * 60 * 60 * 1000;
     const fake = shareEnv({
-      shares: [shareRow({ id: "DATEDDATEDDATEDD", state: "live", updated_at: Date.now() - 2 * day })],
+      shares: [
+        shareRow({ id: "DATEDDATEDDATEDD", state: "live", updated_at: Date.now() - 2 * day }),
+      ],
     });
     const html = await (await worker.fetch(shell("DATEDDATEDDATEDD"), fake.env)).text();
     expect(html).toContain("updated 2 days ago");
+  });
+
+  it("names what a share is in its OpenGraph card — collection or wishlist, whole or a folder", async () => {
+    // Issue #1019. A wishlist folder's title is just a folder name, so without the kind its card
+    // reads exactly like a binder's.
+    const cases: [string, string | null, string][] = [
+      ["WHOLECOLLECTIONA", null, "Collection"],
+      ["COLLECTIONFOLDER", "uid-9", "Collection folder"],
+      ["WHOLEWISHLISTAAA", "wishlist:", "Wishlist"],
+      ["WISHLISTFOLDERAA", "wishlist:folder:uid-3", "Wishlist folder"],
+      ["WISHLISTDECKAAAA", "wishlist:deck:deck-1", "Wishlist folder"],
+    ];
+    const fake = shareEnv({
+      shares: cases.map(([id, folder]) =>
+        shareRow({ id, folder_uid: folder, state: "live", updated_at: Date.now() }),
+      ),
+    });
+    for (const [id, folder, label] of cases) {
+      const html = await (await worker.fetch(shell(id), fake.env)).text();
+      expect(html).toContain(
+        `<meta property="og:description" content="${label} · 5 cards · updated today">`,
+      );
+      expect(html).toContain(
+        `<meta name="description" content="${label} · 5 cards · updated today">`,
+      );
+      expect(html).toContain('<meta property="og:site_name" content="MTG Grimoire">');
+      expect(html).toContain('<meta name="twitter:card" content="summary">');
+      // The key itself never reaches the page: a folder's uid is the sync side's, not a viewer's.
+      if (folder !== null && folder !== "wishlist:") expect(html).not.toContain(folder);
+    }
   });
 });

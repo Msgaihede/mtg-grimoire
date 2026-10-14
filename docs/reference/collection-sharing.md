@@ -582,6 +582,18 @@ card is the concrete thing decision 2's plaintext storage buys, and it is worth 
 Every response the page module produces carries `noindex`, the shell and both 410s and the 404
 alike, because it sits in one shared template.
 
+**The card names what a share is** (2026-10-14, [issue #1019](https://github.com/Msgaihede/mtg-grimoire/issues/1019)).
+`og:description` (and a plain `description` beside it) leads with *Collection*, *Collection
+folder*, *Wishlist* or *Wishlist folder* — *"Collection folder · 412 cards · updated 2 days
+ago"* — because a wishlist share's title is a bare folder name and its card otherwise read exactly
+like a binder's. `publicShare` reads `folder_uid` only to derive that kind from the key's shape
+(`null`, `wishlist:`, `wishlist:…`, anything else; see
+[issue #941](#issue-941--every-folder-kind-and-the-wishlist)) and drops the uid before the page
+module holds it. The shell also carries `og:site_name` and `twitter:card` `summary`. Still no
+`og:image`: the Worker has no image of its own to point at, and a card's Scryfall art would
+need the snapshot read the shell exists to avoid. The 410s and the 404 are unchanged — still no
+metadata at all.
+
 ⚠️ **`page.ts` interpolates a title and an owner's name that a reader typed, and there is no
 template engine.** One `esc()` — five characters, `&` first — covers every interpolation site,
 including inside `content="…"` and `href="…"`. **A new field rendered without it is an XSS on a

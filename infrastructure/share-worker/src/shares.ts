@@ -164,10 +164,7 @@ function mintId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(12));
   let binary = "";
   for (const b of bytes) binary += String.fromCharCode(b);
-  return btoa(binary)
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 /**
@@ -263,16 +260,39 @@ function wireRow(env: Env, row: ShareRow): Record<string, unknown> {
 // ---------------------------------------------------------------------------------------
 
 /**
+ * What a share publishes, as the OpenGraph card names it: the whole collection, one folder of
+ * it, the whole wishlist, or one folder of that (issue #1019).
+ *
+ * Read off the folder key's *shape* and nothing else — `null` is the whole collection,
+ * `wishlist:` the whole wishlist, `wishlist:…` one wishlist level (`wishlistShare.ts`'s four
+ * keys), and any other string a collection folder's `sync_uid`.
+ */
+export type ShareKind = "collection" | "collection-folder" | "wishlist" | "wishlist-folder";
+
+/** `share::wishlist::PREFIX` and `WISHLIST_SHARE_PREFIX`, the third spelling of one string. */
+const WISHLIST_PREFIX = "wishlist:";
+
+/** The kind a folder key names. Pure, so the page's four cards are tested without a row. */
+export function shareKind(folderUid: string | null): ShareKind {
+  if (folderUid === null || folderUid === "") return "collection";
+  if (folderUid === WISHLIST_PREFIX) return "wishlist";
+  if (folderUid.startsWith(WISHLIST_PREFIX)) return "wishlist-folder";
+  return "collection-folder";
+}
+
+/**
  * What a share looks like to a stranger holding the link: the metadata the shell renders, the
  * object the snapshot lives in, and the state that decides whether either is answered at all.
  *
  * **`group_id` is deliberately absent, and so are `folder_uid` and `marketplace`.** A viewer is
  * never told which group published a share — that is the sync side's identifier — and a projection
  * is the cheapest place to make that true, rather than a rule about what the page happens to
- * interpolate.
+ * interpolate. `folder_uid` is read, but only as far as `kind`: the uid itself is dropped here,
+ * before the page module ever holds it.
  */
 export interface PublicRow {
   id: string;
+  kind: ShareKind;
   title: string;
   owner_name: string;
   card_count: number;
@@ -281,7 +301,7 @@ export interface PublicRow {
   updated_at: number;
 }
 
-const PUBLIC_COLUMNS = `id, title, owner_name, card_count, object_key, state, updated_at`;
+const PUBLIC_COLUMNS = `id, folder_uid, title, owner_name, card_count, object_key, state, updated_at`;
 
 /**
  * The one row `GET /s/{id}` and `GET /s/{id}/{hash}.json.gz` each read, or `null` for an id
@@ -298,9 +318,12 @@ const PUBLIC_COLUMNS = `id, title, owner_name, card_count, object_key, state, up
  * withdrawn"* rather than 404 *"you mistyped it"* is the only reason the row was kept.
  */
 export async function publicShare(env: Env, id: string): Promise<PublicRow | null> {
-  return env.DB.prepare(`SELECT ${PUBLIC_COLUMNS} FROM shares WHERE id = ?`)
+  const row = await env.DB.prepare(`SELECT ${PUBLIC_COLUMNS} FROM shares WHERE id = ?`)
     .bind(id)
-    .first<PublicRow>();
+    .first<Omit<PublicRow, "kind"> & { folder_uid: string | null }>();
+  if (row === null) return null;
+  const { folder_uid, ...rest } = row;
+  return { ...rest, kind: shareKind(folder_uid) };
 }
 
 // ---------------------------------------------------------------------------------------
@@ -380,7 +403,8 @@ export async function handleCreate(
   if (results.length >= MAX_SHARES_PER_GROUP) {
     return json(
       {
-        error: `that group has already shared ${MAX_SHARES_PER_GROUP} collections. ` +
+        error:
+          `that group has already shared ${MAX_SHARES_PER_GROUP} collections. ` +
           `Revoke one before sharing another.`,
         code: SHARE_LIMIT,
       },

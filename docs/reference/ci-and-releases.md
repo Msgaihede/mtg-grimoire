@@ -749,14 +749,14 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     `repos/…/releases/latest` with the run's own token and **refuses a tag older than the
     newest published release** (`sort -V`). On a first run that release is the previous one,
     which is older; on a re-run after its own publish it is itself.
-  - **The order with the relay is the release's to keep, since 2026-10-11 — once
-    `CLOUDFLARE_INFRA_API_TOKEN` is in the `release` environment.** The web app asks
+  - **The order with the relay is the release's to keep, since 2026-10-11** —
+    `CLOUDFLARE_INFRA_API_TOKEN` is set, first used by 0.44.0's release run. The web app asks
     the relay from a page, and the relay answers only an origin and a protocol it knows.
     *(Until then: a release whose web build needed new relay behaviour needed the relay
     deployed first, by hand, before the release PR was merged, because the job asked the relay
     nothing.)* `relay-deploy` now goes first and `web-deploy` needs it, through `share-deploy`;
-    **without the token those two end green having deployed nothing and `web-deploy` still
-    deploys the web app, so until it is set the earlier rule holds.**
+    **were the token removed, those two would end green having deployed nothing and
+    `web-deploy` would still deploy the web app, so the earlier rule would hold again.**
     A **deploy between releases** is still by hand, and a web deploy whose build needs new
     relay behaviour still needs the relay's first.
   - **`scripts/release-rule.test.ts` is the fence**, and every line of this list was checked
@@ -1269,6 +1269,13 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   - **Nothing in it can ping or unfold**: `allowed_mentions: { parse: [] }` and the
     `SUPPRESS_EMBEDS` flag. A webhook address that is not `https://discord.com/api/webhooks/…`
     (or `discordapp.com`, `ptb.`, `canary.`) is refused without being printed.
+  - **One webhook or several** (2026-10-14): `DISCORD_WEBHOOK_URL` may hold more than one
+    address, separated by `;` (whitespace around each is dropped) — one secret, because the
+    release fence refuses a secret named by expression (`secrets[matrix.…]`), and so another
+    channel is a secret edit and no workflow change. Every address is checked before a byte is
+    sent; the announcement goes to each in turn, a webhook named twice once. A webhook that fails
+    does not stop the ones after it, and the job still fails, naming it by position (`webhook 2
+    of 2`) and never by address. A re-run posts to every webhook again.
   - **An announcement never holds a release up**: it runs after the flip, so a failure turns a
     run red whose release is already published. **It is not idempotent** — a re-run of the job
     posts again, and a failure part-way leaves the messages already posted (the log says how
@@ -1344,6 +1351,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   #    Check it: this prints `main` and nothing else.
   gh api repos/Msgaihede/mtg-grimoire/environments/discord/deployment-branch-policies --jq ".branch_policies[].name"
   gh secret set DISCORD_WEBHOOK_URL --env discord --repo Msgaihede/mtg-grimoire
+  #    For more than one channel, give it every address, separated by `;`: GitHub never
+  #    gives a secret back, so setting it again needs each address.
   #    The next release is announced. To announce the last one, re-run its Release run's
   #    `announce (Discord)` job.
   ```
