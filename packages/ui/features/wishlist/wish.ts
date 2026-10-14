@@ -10,7 +10,8 @@
  * omission.** A wishlist is the reader's own list: they take a card off it when they acquire
  * one, so no figure on this page is a subtraction against `collection_entries`. `missingOf`
  * lived here until then, and the whole of what it computed — copies wanted minus copies owned —
- * is now simply copies wanted.
+ * is now simply copies wanted. {@link collectionQueryOf} is the one reader of the collection here,
+ * and it subtracts nothing: it names the copies the owned chips report, so a press can show them.
  */
 import { finishLabel, isFinish, type Finish } from "@/lib/finish";
 import type { WishRow } from "@/lib/ipc";
@@ -92,4 +93,38 @@ export function wallPrinting(wish: WishRow): string {
   return spoken !== null && spoken !== "nonfoil"
     ? printingOf({ ...wish, preferredFinish: null })
     : printingOf(wish);
+}
+
+/**
+ * Which of a wish's owned copies a chip is about (issue #988): the printing the wish is for, or
+ * the same card in another printing. An any-printing wish is answered by every printing, so all
+ * its copies are `"exact"`.
+ */
+export type OwnedSide = "exact" | "other";
+
+/** A value the query box reads as one token — quoted when it holds a space, with whichever quote
+ *  it does not contain (`unquote` in `queryLanguage.ts` takes either). */
+function token(value: string): string {
+  if (!/[\s"'()]/.test(value)) return value;
+  return value.includes('"') ? `'${value}'` : `"${value}"`;
+}
+
+/**
+ * The collection search that shows the copies one of a wish's owned chips counts — in the box's
+ * own syntax, so the reader lands on a filter they can read and edit rather than on a hidden one.
+ *
+ * `!name` is the card (both faces of a double-faced one, `exact_name_clause`), and a pinned
+ * wish's printing is its set, number and language. `"other"` is the card minus that printing, as
+ * one negated group. A pinned wish missing its set or number names the card alone rather than
+ * guess a printing.
+ */
+export function collectionQueryOf(wish: WishRow, side: OwnedSide): string {
+  const card = `!${token(wish.name)}`;
+  if (wish.cardId === null || wish.setCode === null || wish.collectorNumber === null) return card;
+  const printing = [
+    `e:${token(wish.setCode)}`,
+    `cn:${token(wish.collectorNumber)}`,
+    ...(wish.lang ? [`lang:${token(wish.lang)}`] : []),
+  ].join(" ");
+  return side === "exact" ? `${card} ${printing}` : `${card} -(${printing})`;
 }

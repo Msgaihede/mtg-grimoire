@@ -1026,6 +1026,8 @@ beforeEach(() => {
     // **The needs-review hand-off, for the folder's reason one line up** — this page consumes it,
     // and a case that left one written would open the next case on the flagged rows.
     pendingReviewFilter: null,
+    // The wishlist's owned-chip hand-off, for the same reason.
+    pendingCollectionQuery: null,
   });
 });
 
@@ -8052,6 +8054,27 @@ describe("a needs-review filter another page asked for", () => {
     await waitFor(() => expect(collectionList).toHaveBeenCalled());
     expect(lastQuery().needsReview).toBeUndefined();
     expect(useAppStore.getState().pendingReviewFilter).toEqual({ scope: "wishlist" });
+  });
+});
+
+/**
+ * **The search the wishlist's owned chips asked this page to open on** (issue #988) — `store.ts`'s
+ * `pendingCollectionQuery`. Seeded on a mount, so no unfiltered list is ever asked for, written
+ * into the box the reader can see, and spent.
+ */
+describe("a search another page asked for", () => {
+  it("asks for the named card from its first request, shows the query, and spends it", async () => {
+    useAppStore.setState({ pendingCollectionQuery: '!"Lightning Bolt"' });
+    wrap(<CollectionPage />);
+
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+    expect(
+      collectionList.mock.calls.every(([q]) =>
+        ((q as CollectionQuery).predicates ?? []).some((p) => p.field === "name"),
+      ),
+    ).toBe(true);
+    expect(screen.getByDisplayValue('!"Lightning Bolt"')).toBeInTheDocument();
+    await waitFor(() => expect(useAppStore.getState().pendingCollectionQuery).toBeNull());
   });
 });
 

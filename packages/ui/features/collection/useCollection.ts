@@ -276,6 +276,10 @@ function answered(read: { isPending: boolean; isPlaceholderData: boolean }): boo
  *   rendering still fetched the unfiltered list once. `useReviewHandoff` has the measurement.
  *   **There is no `flattenLocally` beside it any more**: that was the hand-off's sweep, a flat read
  *   of every drawer, and the root's shelves are every drawer already.
+ * @param options.initialText The search box this list **mounts** with — read once, like
+ *   `initialNeedsReview` and for its reason: the first fetch must already be the filtered one.
+ *   `CollectionPage` passes the wishlist's owned-chip hand-off (`pendingCollectionQuery`, issue
+ *   #988). It seeds the debounced text too, so the first request does not wait out `DEBOUNCE_MS`.
  * @param options.folds The folds the shelves are built from, **in place of the stored ones** —
  *   `useShelfFolds("collection")`'s, which is what every caller that passes nothing gets.
  *   **No caller passes it since 2026-10-03**: the light app's phone face held its folds in the page
@@ -286,15 +290,17 @@ function answered(read: { isPending: boolean; isPlaceholderData: boolean }): boo
  */
 export function useCollection({
   initialNeedsReview,
+  initialText,
   folds: foldsOverride,
 }: {
   initialNeedsReview?: boolean;
+  initialText?: string;
   folds?: Readonly<Record<string, boolean>>;
 } = {}) {
   // Which marketplace this list quotes — an input to both queries below, and part of both
   // keys: it decides what a Value cell contains, not merely how it is written.
   const { marketplace } = useMarketplace();
-  const [text, setText] = useState("");
+  const [text, setText] = useState(initialText ?? "");
   const [format, setFormat] = useState("");
   // **One state for the row and its `Exact` flag, not two** — see {@link ColorFilter}, which
   // is shared with the other three hooks that own a colour filter and carries the reason.
@@ -367,7 +373,7 @@ export function useCollection({
    */
   const [viewAll, setViewAllState] = useState(false);
   const level = viewAll ? null : asked;
-  const [debouncedText, setDebouncedText] = useState("");
+  const [debouncedText, setDebouncedText] = useState(initialText ?? "");
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedText(text), DEBOUNCE_MS);

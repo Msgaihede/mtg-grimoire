@@ -185,6 +185,8 @@ const BOLT: WishRow = {
   // whole first block below is about. `FILED` further down is the same card in a folder.
   folderId: null,
   elsewhere: 0,
+  ownedExact: 0,
+  ownedOther: 0,
   name: "Lightning Bolt",
   setCode: "lea",
   collectorNumber: "161",
@@ -235,6 +237,8 @@ const FILED: WishRow = {
   id: 12,
   folderId: 1,
   elsewhere: 1,
+  ownedExact: 0,
+  ownedOther: 0,
   name: "Rhystic Study",
   cardId: "c-rhystic",
   artCardId: "c-rhystic",
