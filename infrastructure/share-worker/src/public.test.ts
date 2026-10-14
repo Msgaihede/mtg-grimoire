@@ -240,6 +240,9 @@ function shareRow(overrides: Partial<Row> = {}): Row {
     state: "lapsed",
     created_at: 0,
     updated_at: 0,
+    format: null,
+    image: null,
+    image_artist: null,
     ...overrides,
   };
 }
@@ -327,7 +330,9 @@ describe("PUT /g/{group}/share/{id}", () => {
    * moves the row — the one window in which two requests about one share can interleave.
    */
   function interleave(fake: Fake, during: () => Promise<void>): void {
-    const bucket = fake.env.SHARES as unknown as { put: (k: string, v: unknown) => Promise<unknown> };
+    const bucket = fake.env.SHARES as unknown as {
+      put: (k: string, v: unknown) => Promise<unknown>;
+    };
     const real = bucket.put;
     let fired = false;
     bucket.put = async (key, value) => {
@@ -431,9 +436,9 @@ describe("PUT /g/{group}/share/{id}", () => {
     const id = await publish(fake);
 
     expect((await worker.fetch(put("g1", null, id, gz("x")), fake.env)).status).toBe(401);
-    expect(
-      (await worker.fetch(put("g1", await token("g2"), id, gz("x")), fake.env)).status,
-    ).toBe(401);
+    expect((await worker.fetch(put("g1", await token("g2"), id, gz("x")), fake.env)).status).toBe(
+      401,
+    );
     expect(
       (await worker.fetch(put("g1", await token("g1", Date.now() - 1), id, gz("x")), fake.env))
         .status,
@@ -518,7 +523,9 @@ describe("GET /s/{id}/{hash}.json.gz", () => {
     vi.stubGlobal("Response", Real);
 
     expect(res.status).toBe(200);
-    const served = inits.filter((init) => new Headers(init.headers).get("content-encoding") === "gzip");
+    const served = inits.filter(
+      (init) => new Headers(init.headers).get("content-encoding") === "gzip",
+    );
     expect(served).not.toHaveLength(0);
     for (const init of served) expect(init.encodeBody).toBe("manual");
   });
@@ -810,15 +817,17 @@ describe("GET /s/{id}", () => {
     expect(html).toContain("updated 2 days ago");
   });
 
-  it("names what a share is in its OpenGraph card — collection or wishlist, whole or a folder", async () => {
+  it("names what a share is in its OpenGraph card — collection, wishlist or deck", async () => {
     // Issue #1019. A wishlist folder's title is just a folder name, so without the kind its card
-    // reads exactly like a binder's.
+    // reads exactly like a binder's. Issue #1032 added the deck, whose title is its name.
     const cases: [string, string | null, string][] = [
       ["WHOLECOLLECTIONA", null, "Collection"],
       ["COLLECTIONFOLDER", "uid-9", "Collection folder"],
       ["WHOLEWISHLISTAAA", "wishlist:", "Wishlist"],
       ["WISHLISTFOLDERAA", "wishlist:folder:uid-3", "Wishlist folder"],
+      // A deck's *managed wishlist* is a wishlist folder, never the deck itself.
       ["WISHLISTDECKAAAA", "wishlist:deck:deck-1", "Wishlist folder"],
+      ["SHAREDDECKAAAAAA", "deck:deck-1", "Deck"],
     ];
     const fake = shareEnv({
       shares: cases.map(([id, folder]) =>
@@ -838,5 +847,84 @@ describe("GET /s/{id}", () => {
       // The key itself never reaches the page: a folder's uid is the sync side's, not a viewer's.
       if (folder !== null && folder !== "wishlist:") expect(html).not.toContain(folder);
     }
+  });
+
+  /**
+   * Issue #1032: a deck's card leads with its format and shows its commander, and a binder's
+   * stays text — the Worker has no picture of a binder to show.
+   */
+  it("previews a shared deck with its format and its commander's picture", async () => {
+    const image = "https://cards.scryfall.io/display/front/k/1/k1.webp?1757308800&x=1";
+    const fake = shareEnv({
+      shares: [
+        shareRow({
+          id: "SHAREDDECKAAAAAA",
+          folder_uid: "deck:deck-1",
+          title: "Krenko <Goblins>",
+          card_count: 100,
+          state: "live",
+          updated_at: Date.now(),
+          format: "Commander",
+          image,
+        }),
+        shareRow({ id: "PLAINBINDERAAAAA", state: "live", updated_at: Date.now() }),
+      ],
+    });
+    const html = await (await worker.fetch(shell("SHAREDDECKAAAAAA"), fake.env)).text();
+    expect(html).toContain(
+      '<meta property="og:description" content="Commander deck · 100 cards · updated today">',
+    );
+    // Escaped like every other interpolation: `&` in the URL, `<` in the title.
+    expect(html).toContain(
+      '<meta property="og:image" content="https://cards.scryfall.io/display/front/k/1/k1.webp?1757308800&amp;x=1">',
+    );
+    expect(html).toContain('<meta property="og:image:alt" content="Krenko &lt;Goblins&gt;">');
+    expect(html).toContain('<meta name="twitter:card" content="summary_large_image">');
+    expect(html).not.toContain("<Goblins>");
+
+    const binder = await (await worker.fetch(shell("PLAINBINDERAAAAA"), fake.env)).text();
+    expect(binder).not.toContain("og:image");
+    expect(binder).toContain('<meta name="twitter:card" content="summary">');
+  });
+
+  it("credits a cover crop's illustrator in the card's text", async () => {
+    // A cover is an art crop with no printed frame, shown only beside its painter's name.
+    const fake = shareEnv({
+      shares: [
+        shareRow({
+          id: "COVEREDDECKAAAAA",
+          folder_uid: "deck:deck-1",
+          card_count: 60,
+          state: "live",
+          updated_at: Date.now(),
+          format: "Modern",
+          image: "https://cards.scryfall.io/art_crop/front/c/1/c1.jpg?1",
+          image_artist: "Rush & Co",
+        }),
+      ],
+    });
+    const html = await (await worker.fetch(shell("COVEREDDECKAAAAA"), fake.env)).text();
+    expect(html).toContain(
+      '<meta property="og:description" content="Modern deck · 60 cards · updated today · Art by Rush &amp; Co">',
+    );
+    expect(html).toContain(
+      '<meta property="og:image" content="https://cards.scryfall.io/art_crop/front/c/1/c1.jpg?1">',
+    );
+  });
+
+  it("previews a deck published before its format travelled as a plain Deck", async () => {
+    const fake = shareEnv({
+      shares: [
+        shareRow({
+          id: "OLDDECKAAAAAAAAA",
+          folder_uid: "deck:deck-1",
+          state: "live",
+          updated_at: Date.now(),
+        }),
+      ],
+    });
+    const html = await (await worker.fetch(shell("OLDDECKAAAAAAAAA"), fake.env)).text();
+    expect(html).toContain('content="Deck · 5 cards · updated today"');
+    expect(html).not.toContain("og:image");
   });
 });

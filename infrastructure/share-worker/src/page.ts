@@ -83,7 +83,20 @@ const KIND_LABEL: Record<ShareKind, string> = {
   "collection-folder": "Collection folder",
   wishlist: "Wishlist",
   "wishlist-folder": "Wishlist folder",
+  deck: "Deck",
 };
+
+/**
+ * What the card says a share is, for this row: {@link KIND_LABEL}, and for a deck its format too —
+ * *"Commander deck"* (issue #1032), which is the first thing a player deciding whether to open
+ * somebody's deck list wants to know. The format is a publisher's string, so it is escaped.
+ */
+function kindLabel(row: PublicRow): string {
+  if (row.kind === "deck" && row.format !== null && row.format !== "") {
+    return `${esc(row.format)} deck`;
+  }
+  return KIND_LABEL[row.kind];
+}
 
 /**
  * The document every answer here shares. Kept as one template rather than three so a change to
@@ -166,7 +179,27 @@ function shell(env: Env, row: PublicRow, now: number): Response {
     row.updated_at,
     now,
   )}`;
-  const description = `${KIND_LABEL[row.kind]} · ${summary}`;
+  // A cover crop has no printed frame, so Scryfall's rule is that it is shown only beside its
+  // illustrator's name — which, on a card in somebody's chat, is the card's own text.
+  const credit =
+    row.kind === "deck" &&
+    row.image !== null &&
+    row.image_artist !== null &&
+    row.image_artist !== ""
+      ? ` · Art by ${esc(row.image_artist)}`
+      : "";
+  const description = `${kindLabel(row)} · ${summary}${credit}`;
+  // A deck's picture (issue #1032) — its cover, else its commander, chosen by the publisher and held by
+  // `metaProblem` to Scryfall's card host, so an unfurl fetches nothing else. Escaped like every
+  // other interpolation here: it is a string a publisher sent.
+  const image = row.kind === "deck" && row.image !== null ? esc(row.image) : "";
+  const preview =
+    image === ""
+      ? `\n<meta name="twitter:card" content="summary">`
+      : `\n<meta property="og:image" content="${image}">` +
+        `\n<meta property="og:image:alt" content="${title}">` +
+        `\n<meta name="twitter:card" content="summary_large_image">` +
+        `\n<meta name="twitter:image" content="${image}">`;
 
   // The key is `shares/{id}/{hash}.json.gz` and the URL is its last two segments under `/s/`,
   // which is what carries the content addressing all the way into the browser's cache. A key
@@ -184,8 +217,7 @@ function shell(env: Env, row: PublicRow, now: number): Response {
 <meta property="og:site_name" content="${SITE_NAME}">
 <meta property="og:title" content="${heading}">
 <meta property="og:description" content="${description}">
-<meta property="og:url" content="${esc(shareUrl(env, row.id))}">
-<meta name="twitter:card" content="summary">${link}
+<meta property="og:url" content="${esc(shareUrl(env, row.id))}">${preview}${link}
 <script type="module" src="/assets/share.js"></script>`;
 
   // The pending sentence sits outside `#root` so the bundle can render over the container without

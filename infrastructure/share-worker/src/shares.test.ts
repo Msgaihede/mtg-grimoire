@@ -179,6 +179,45 @@ describe("POST /g/{group}/share", () => {
     expect(rows.shares[0].title).toBe("Renamed");
   });
 
+  /**
+   * A deck's link preview (issue #1032). The picture is rendered into `og:image` and fetched by
+   * every app that unfurls the link, so it is held to Scryfall's card host: a publisher cannot
+   * point strangers' chat clients at a host of their choosing.
+   */
+  it("takes a deck's format and preview picture, and only a Scryfall card picture", async () => {
+    const env = shareEnv();
+    const deck = {
+      ...META,
+      folderUid: "deck:uid-7",
+      format: "Commander",
+      image: "https://cards.scryfall.io/display/front/k/1/k1.webp",
+    };
+    expect((await worker.fetch(post("g1", await token(), deck), env)).status).toBe(200);
+    for (const image of [
+      "https://evil.example/track.png",
+      "http://cards.scryfall.io/display/front/k/1/k1.webp",
+      "javascript:alert(1)",
+      7,
+      `https://cards.scryfall.io/${"a".repeat(600)}`,
+    ]) {
+      const res = await worker.fetch(post("g1", await token(), { ...deck, image }), env);
+      expect(res.status, String(image)).toBe(400);
+    }
+    const res = await worker.fetch(
+      post("g1", await token(), { ...deck, format: "x".repeat(201) }),
+      env,
+    );
+    expect(res.status).toBe(400);
+    // A cover crop travels with its illustrator, who must be a name.
+    const credited = await worker.fetch(
+      post("g1", await token(), { ...deck, imageArtist: "Christopher Rush" }),
+      env,
+    );
+    expect(credited.status).toBe(200);
+    const unnamed = await worker.fetch(post("g1", await token(), { ...deck, imageArtist: 7 }), env);
+    expect(unnamed.status).toBe(400);
+  });
+
   it("tells a folder share apart from a whole-collection one", async () => {
     // ⚠️ SQLite treats NULLs as distinct, so the folder key is `coalesce(folder_uid, '')` on both
     // sides of this: a naive `folder_uid = ?` matches no row for a whole-collection share, and
@@ -204,7 +243,10 @@ describe("POST /g/{group}/share", () => {
     for (let i = 1; i < 20; i += 1) {
       await worker.fetch(post("g1", await token(), { ...META, folderUid: `uid-${i}` }), env);
     }
-    const res = await worker.fetch(post("g1", await token(), { ...META, folderUid: "uid-over" }), env);
+    const res = await worker.fetch(
+      post("g1", await token(), { ...META, folderUid: "uid-over" }),
+      env,
+    );
     expect(res.status).toBe(403);
     const refusal = (await res.json()) as { error: string; code: string };
     // The number comes out of the message and never out of the binding — an assertion that read
@@ -220,7 +262,10 @@ describe("POST /g/{group}/share", () => {
     // give its slot back, or a reader who publishes and withdraws twenty times is locked out for
     // ever.
     expect((await worker.fetch(revoke("g1", await token(), first), env)).status).toBe(204);
-    const after = await worker.fetch(post("g1", await token(), { ...META, folderUid: "uid-over" }), env);
+    const after = await worker.fetch(
+      post("g1", await token(), { ...META, folderUid: "uid-over" }),
+      env,
+    );
     expect(after.status).toBe(200);
   });
 
@@ -381,7 +426,11 @@ describe("GET /g/{group}/shares and DELETE", () => {
         return {
           bind: (...values: unknown[]) => ({
             run: async () => {
-              if (raced) return real.prepare(sql).bind(...values).run();
+              if (raced)
+                return real
+                  .prepare(sql)
+                  .bind(...values)
+                  .run();
               raced = true;
               await real
                 .prepare(sql)
@@ -499,7 +548,10 @@ describe("a device the group has removed", () => {
     // A device that stayed keeps its cached token: refusing it would cost every remaining device a
     // day of failed publishes after any removal.
     const { env, rotatedAt } = rotatedEnv();
-    const res = await worker.fetch(post("g1", await mintedAt(rotatedAt - 1_000, STAYED), META), env);
+    const res = await worker.fetch(
+      post("g1", await mintedAt(rotatedAt - 1_000, STAYED), META),
+      env,
+    );
     expect(res.status).toBe(200);
   });
 
@@ -515,22 +567,28 @@ describe("a device the group has removed", () => {
   it("refuses a token with no device that predates the rotation, and accepts one after it", async () => {
     // An older relay minted no `dev`; such a token can say when it was minted and nothing more.
     const { env, rotatedAt } = rotatedEnv();
-    expect((await worker.fetch(post("g1", await mintedAt(rotatedAt - 1_000), META), env)).status).toBe(
-      401,
-    );
+    expect(
+      (await worker.fetch(post("g1", await mintedAt(rotatedAt - 1_000), META), env)).status,
+    ).toBe(401);
     expect((await worker.fetch(post("g1", await mintedAt(rotatedAt), META), env)).status).toBe(200);
   });
 
   it("refuses the last device out when its departure left an empty manifest", async () => {
     const { env, rotatedAt } = rotatedEnv({});
-    const res = await worker.fetch(post("g1", await mintedAt(rotatedAt - 1_000, STAYED), META), env);
+    const res = await worker.fetch(
+      post("g1", await mintedAt(rotatedAt - 1_000, STAYED), META),
+      env,
+    );
     expect(res.status).toBe(401);
   });
 
   it("asks nothing of a group that has never rotated", async () => {
     // No `group_keys` row is a group nobody has ever been removed from.
     const env = shareEnv();
-    const res = await worker.fetch(post("g1", await mintedAt(Date.now() - 1_000, REMOVED), META), env);
+    const res = await worker.fetch(
+      post("g1", await mintedAt(Date.now() - 1_000, REMOVED), META),
+      env,
+    );
     expect(res.status).toBe(200);
   });
 });

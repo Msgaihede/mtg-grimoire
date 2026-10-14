@@ -12,6 +12,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { FILTER_FOCUS } from "@/components/FilterChips";
+import { ShareFolderMenu, type ShareTarget } from "@/features/collection/ShareFolderMenu";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FOCUS } from "@/lib/focus";
 import type { DeckVariant } from "@/lib/ipc";
@@ -154,6 +155,11 @@ export interface DeckEditorHeaderProps {
    * and browser faces, whose hosts have no engine), and then there is no button.
    */
   openGoldfish?: () => void;
+  /**
+   * What the Share control publishes — {@link deckShareTarget}'s answer (issue #1032), held still
+   * by the editor so this memoised header is not redrawn for it. `null` draws no Share half.
+   */
+  share?: ShareTarget | null;
 }
 
 export const DeckEditorHeader = memo(function DeckEditorHeader({
@@ -170,6 +176,7 @@ export const DeckEditorHeader = memo(function DeckEditorHeader({
   wideHeader,
   settingsIcon,
   openGoldfish,
+  share = null,
 }: DeckEditorHeaderProps) {
   const tip = useTooltip();
   return (
@@ -434,6 +441,12 @@ export const DeckEditorHeader = memo(function DeckEditorHeader({
                   </button>
                 ))}
               </div>
+
+              {/* **Share** (issue #1032) — publish this deck as a read-only link, update it, copy
+                  it, withdraw it. The cabinets' own control, so a deck share is offered, refused
+                  and receipted exactly as a binder's is: hidden for a reader who has connected
+                  nothing. */}
+              {share !== null && <ShareFolderMenu target={share} />}
 
               {/* Each row carries the layer it opens rather than a kind — see {@link ACTIONS},
                   which is where every one of these buttons' names is argued. The word is what

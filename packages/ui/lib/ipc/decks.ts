@@ -1929,6 +1929,15 @@ export interface DeckRow {
    * is a `Meme` deck.
    */
   tags: string[];
+  /**
+   * `decks.sync_uid` — the deck's identity on every device in the group, and the key a deck share
+   * is published under (`deck:<syncUid>`, issue #1032; `features/decks/deckShare.ts`).
+   *
+   * **`null` is a deck that cannot be shared yet rather than an error** — `CollectionFolder`'s
+   * `syncUid` rule: the column is nullable, and a share keyed on {@link id} would name a deck no
+   * other device can find.
+   */
+  syncUid: string | null;
 }
 
 /**

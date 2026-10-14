@@ -175,6 +175,7 @@ function deckRow(over: Partial<DeckRow> & { id: number; name: string }): DeckRow
     statsOpen: true,
     curveCreatures: false,
     todosOpen: false,
+    syncUid: null,
     ...over,
   };
 }

@@ -7,8 +7,14 @@ import { FOCUS } from "@grimoire/ui/lib/focus";
 import { LAYER } from "@grimoire/ui/lib/layers";
 import { type Currency, resolveMarketplace } from "@grimoire/ui/lib/marketplace";
 import { formatPrice } from "@grimoire/ui/lib/prices";
-import type { ShareCard, ShareFolder, ShareSnapshot } from "@grimoire/ui/lib/shareSnapshot";
+import {
+  shareDeckOf,
+  type ShareCard,
+  type ShareFolder,
+  type ShareSnapshot,
+} from "@grimoire/ui/lib/shareSnapshot";
 import { cn } from "@grimoire/ui/lib/utils";
+import { ShareDeck } from "./ShareDeck";
 import { ShareTile } from "./ShareTile";
 
 /**
@@ -19,8 +25,7 @@ import { ShareTile } from "./ShareTile";
  * Word for word the shell's own `<noscript>` (`infrastructure/share-worker/src/page.ts`), so a reader with
  * scripting off and one with it on are told the same thing.
  */
-export const READ_ONLY_NOTICE =
-  "This is a read-only snapshot. Anyone with this link can see it.";
+export const READ_ONLY_NOTICE = "This is a read-only snapshot. Anyone with this link can see it.";
 
 /**
  * Metadata posted, blob never uploaded — the state a publish that died between its two steps
@@ -200,6 +205,8 @@ export function SharePage({ snapshot }: { snapshot: ShareSnapshot }) {
   const stamp = asOf(snapshot.updatedAt);
 
   const rail = useMemo(() => folderRail(snapshot), [snapshot]);
+  /** The deck half, or `null` for a binder (issue #1032). One place asks: `shareDeckOf`. */
+  const deck = useMemo(() => shareDeckOf(snapshot), [snapshot]);
   const copies = useMemo(() => snapshot.cards.reduce((n, c) => n + c.q, 0), [snapshot]);
   /**
    * What the binder comes to, or **`null` where nothing at all is quoted**.
@@ -274,8 +281,7 @@ export function SharePage({ snapshot }: { snapshot: ShareSnapshot }) {
         (drawer === null || (card.fo !== null && drawer.has(card.fo))) &&
         matches(card) &&
         (finish === "" || card.f === finish) &&
-        (condition === "" ||
-          (condition === UNGRADED ? card.c == null : card.c === condition)),
+        (condition === "" || (condition === UNGRADED ? card.c == null : card.c === condition)),
     );
 
     const by: Record<Sort, (a: ShareCard, b: ShareCard) => number> = {
@@ -301,7 +307,7 @@ export function SharePage({ snapshot }: { snapshot: ShareSnapshot }) {
 
   return (
     <div className="flex min-h-dvh flex-col bg-bg text-text">
-      <Ribbon />
+      <Ribbon what={deck === null ? "A shared collection" : "A shared deck"} />
       <div className="mx-auto w-full max-w-[84rem] px-5 pb-20 sm:px-8">
         <header className="border-b border-border py-8">
           {/* The owner above the binder's name rather than beside it: the issue asks that a
@@ -320,18 +326,19 @@ export function SharePage({ snapshot }: { snapshot: ShareSnapshot }) {
               phrase is spelled once, from the same two strings the spans draw, and
               `SharePage.test.tsx` asserts the **computed name** rather than the two texts —
               asserting the parts is exactly what let this ship. */}
-          <h1
-            className="max-w-[34rem]"
-            aria-label={owner === "" ? title : `${owner}’s ${title}`}
-          >
+          <h1 className="max-w-[34rem]" aria-label={owner === "" ? title : `${owner}’s ${title}`}>
             {owner !== "" && <span className="block text-sm text-dim">{owner}’s</span>}
             <span className="block font-heading text-[1.75rem] leading-tight sm:text-[2.125rem]">
               {title}
             </span>
           </h1>
           <p className="mt-4 font-mono text-[0.8125rem] text-dim">
+            {deck !== null && deck.format !== "" && `${deck.format} deck · `}
             {COUNT.format(copies)} {copies === 1 ? "card" : "cards"}
-            {rail.length > 0 &&
+            {/* A deck's piles are its folders on the wire, and "in 6 folders" is no way to
+                describe a deck — the view below draws them as what they are. */}
+            {deck === null &&
+              rail.length > 0 &&
               ` in ${COUNT.format(rail.length)} ${rail.length === 1 ? "folder" : "folders"}`}
             {stamp !== null && `, as of ${stamp}`}
           </p>
@@ -349,142 +356,154 @@ export function SharePage({ snapshot }: { snapshot: ShareSnapshot }) {
           <p className="mt-5 max-w-[54ch] text-sm text-dim">{READ_ONLY_NOTICE}</p>
         </header>
 
-        <div className="flex flex-col gap-8 pt-6 md:flex-row md:gap-10">
-          {rail.length > 0 && (
-            <nav className="md:w-52 md:shrink-0">
-              <ul role="list" aria-label="Folders" className="flex flex-col gap-px">
-                <RailRow
-                  name="All cards"
-                  count={copies}
-                  depth={0}
-                  active={folder === null}
-                  onPick={() => setFolder(null)}
-                />
-                {rail.map((node) => (
-                  <RailRow
-                    key={node.uid}
-                    name={node.name}
-                    count={node.count}
-                    depth={node.depth + 1}
-                    active={folder === node.uid}
-                    onPick={() => setFolder(node.uid)}
-                  />
-                ))}
-              </ul>
-            </nav>
-          )}
-
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <label htmlFor="share-text" className="sr-only">
-                Search this collection
-              </label>
-              <input
-                id="share-text"
-                type="search"
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                placeholder="Search this collection…"
-                className={cn(
-                  "h-9 min-w-0 flex-1 basis-56 rounded-md border border-border bg-surface px-3",
-                  "text-sm text-text placeholder:text-dim",
-                  FOCUS,
-                )}
-              />
-              {finishes.length > 1 && (
-                <div className="flex flex-wrap items-center gap-1">
-                  <Chip pressed={finish === ""} onPick={() => setFinish("")}>
-                    All finishes
-                  </Chip>
-                  {finishes.map((f) => (
-                    <Chip key={f} pressed={finish === f} onPick={() => setFinish(f)}>
-                      {FINISH_LABEL[f]}
-                    </Chip>
-                  ))}
-                </div>
-              )}
-              {showCondition && grades.length > 0 && (
-                <Picker
-                  id="share-condition"
-                  label="Condition"
-                  value={condition}
-                  onPick={setCondition}
-                  options={[
-                    { value: "", label: "Any condition" },
-                    ...grades.map((g) => ({
-                      value: g,
-                      label: g === UNGRADED ? "Not graded" : (CONDITION_LABEL[g as Condition] ?? g),
-                    })),
-                  ]}
-                />
-              )}
-              <Picker
-                id="share-sort"
-                label="Sort"
-                value={sort}
-                onPick={(v) => setSort(v as Sort)}
-                options={[
-                  { value: "name", label: "Name" },
-                  { value: "set", label: "Set" },
-                  ...(showValue ? [{ value: "price", label: "Price" }] : []),
-                  { value: "quantity", label: "Copies" },
-                ]}
-              />
-              {filtered && (
-                <button
-                  type="button"
-                  onClick={reset}
-                  className={cn(
-                    "h-9 shrink-0 rounded-md border border-accent/50 px-3 text-sm text-accent",
-                    "transition-colors duration-150 hover:bg-accent/10 motion-reduce:transition-none",
-                    FOCUS,
-                  )}
-                >
-                  Reset all
-                </button>
-              )}
-            </div>
-
-            {/* Copies, like the rail's counts and the header's — a wall that said "32" beside a
-                rail saying "62" is one list measured two ways. */}
-            <p className="mt-4 font-mono text-xs text-dim">
-              {shownCopies === copies
-                ? `${COUNT.format(copies)} ${copies === 1 ? "card" : "cards"}`
-                : `${COUNT.format(shownCopies)} of ${COUNT.format(copies)} cards`}
-            </p>
-
-            {shown.length === 0 ? (
-              <p className="mt-8 text-sm text-dim">
-                No cards match. Try a broader search or another folder.
-              </p>
-            ) : (
-              <ul
-                role="list"
-                aria-label="Cards"
-                className="mt-3 grid gap-3"
-                // An inline template rather than an arbitrary Tailwind value: the class scanner
-                // reads whole class names out of source text, and a template built by
-                // interpolation emits no rule at all.
-                style={{ gridTemplateColumns: "repeat(auto-fill, minmax(9.5rem, 1fr))" }}
-              >
-                {shown.map(({ card, key }) => (
-                  <ShareTile
-                    key={key}
-                    card={card}
-                    currency={currency}
-                    showValue={showValue}
-                    showCondition={showCondition}
-                    showLang={showLang}
-                  />
-                ))}
-              </ul>
-            )}
-
+        {deck !== null ? (
+          // A deck share (issue #1032): drawn as a deck — Stacks, Grid, Table or Text — rather
+          // than as a binder with a drawer per pile, which is what a page before it would draw.
+          <>
+            <ShareDeck snapshot={snapshot} deck={deck} currency={currency} showValue={showValue} />
             <p className="mt-12 max-w-[54ch] text-xs text-dim">
               This snapshot won't update until it's shared again.
             </p>
+          </>
+        ) : (
+          <div className="flex flex-col gap-8 pt-6 md:flex-row md:gap-10">
+            {rail.length > 0 && (
+              <nav className="md:w-52 md:shrink-0">
+                <ul role="list" aria-label="Folders" className="flex flex-col gap-px">
+                  <RailRow
+                    name="All cards"
+                    count={copies}
+                    depth={0}
+                    active={folder === null}
+                    onPick={() => setFolder(null)}
+                  />
+                  {rail.map((node) => (
+                    <RailRow
+                      key={node.uid}
+                      name={node.name}
+                      count={node.count}
+                      depth={node.depth + 1}
+                      active={folder === node.uid}
+                      onPick={() => setFolder(node.uid)}
+                    />
+                  ))}
+                </ul>
+              </nav>
+            )}
+
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <label htmlFor="share-text" className="sr-only">
+                  Search this collection
+                </label>
+                <input
+                  id="share-text"
+                  type="search"
+                  value={text}
+                  onChange={(e) => setText(e.target.value)}
+                  placeholder="Search this collection…"
+                  className={cn(
+                    "h-9 min-w-0 flex-1 basis-56 rounded-md border border-border bg-surface px-3",
+                    "text-sm text-text placeholder:text-dim",
+                    FOCUS,
+                  )}
+                />
+                {finishes.length > 1 && (
+                  <div className="flex flex-wrap items-center gap-1">
+                    <Chip pressed={finish === ""} onPick={() => setFinish("")}>
+                      All finishes
+                    </Chip>
+                    {finishes.map((f) => (
+                      <Chip key={f} pressed={finish === f} onPick={() => setFinish(f)}>
+                        {FINISH_LABEL[f]}
+                      </Chip>
+                    ))}
+                  </div>
+                )}
+                {showCondition && grades.length > 0 && (
+                  <Picker
+                    id="share-condition"
+                    label="Condition"
+                    value={condition}
+                    onPick={setCondition}
+                    options={[
+                      { value: "", label: "Any condition" },
+                      ...grades.map((g) => ({
+                        value: g,
+                        label:
+                          g === UNGRADED ? "Not graded" : (CONDITION_LABEL[g as Condition] ?? g),
+                      })),
+                    ]}
+                  />
+                )}
+                <Picker
+                  id="share-sort"
+                  label="Sort"
+                  value={sort}
+                  onPick={(v) => setSort(v as Sort)}
+                  options={[
+                    { value: "name", label: "Name" },
+                    { value: "set", label: "Set" },
+                    ...(showValue ? [{ value: "price", label: "Price" }] : []),
+                    { value: "quantity", label: "Copies" },
+                  ]}
+                />
+                {filtered && (
+                  <button
+                    type="button"
+                    onClick={reset}
+                    className={cn(
+                      "h-9 shrink-0 rounded-md border border-accent/50 px-3 text-sm text-accent",
+                      "transition-colors duration-150 hover:bg-accent/10 motion-reduce:transition-none",
+                      FOCUS,
+                    )}
+                  >
+                    Reset all
+                  </button>
+                )}
+              </div>
+
+              {/* Copies, like the rail's counts and the header's — a wall that said "32" beside a
+                rail saying "62" is one list measured two ways. */}
+              <p className="mt-4 font-mono text-xs text-dim">
+                {shownCopies === copies
+                  ? `${COUNT.format(copies)} ${copies === 1 ? "card" : "cards"}`
+                  : `${COUNT.format(shownCopies)} of ${COUNT.format(copies)} cards`}
+              </p>
+
+              {shown.length === 0 ? (
+                <p className="mt-8 text-sm text-dim">
+                  No cards match. Try a broader search or another folder.
+                </p>
+              ) : (
+                <ul
+                  role="list"
+                  aria-label="Cards"
+                  className="mt-3 grid gap-3"
+                  // An inline template rather than an arbitrary Tailwind value: the class scanner
+                  // reads whole class names out of source text, and a template built by
+                  // interpolation emits no rule at all.
+                  style={{ gridTemplateColumns: "repeat(auto-fill, minmax(9.5rem, 1fr))" }}
+                >
+                  {shown.map(({ card, key }) => (
+                    <ShareTile
+                      key={key}
+                      card={card}
+                      currency={currency}
+                      showValue={showValue}
+                      showCondition={showCondition}
+                      showLang={showLang}
+                    />
+                  ))}
+                </ul>
+              )}
+
+              <p className="mt-12 max-w-[54ch] text-xs text-dim">
+                This snapshot won't update until it's shared again.
+              </p>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );
@@ -496,13 +515,13 @@ export function SharePage({ snapshot }: { snapshot: ShareSnapshot }) {
  * The mana line is 2px of W→U→B→R→G and appears **once** on any screen that draws it. It is what
  * makes a page opened from a Discord link recognisably the same program the binder was kept in.
  */
-function Ribbon() {
+function Ribbon({ what = "A shared collection" }: { what?: string }) {
   return (
     <div className={cn("sticky top-0", LAYER.header)}>
       <div className="flex h-14 items-center gap-3 bg-surface px-5 sm:px-8">
         <GrimoireMark size={26} label="MTG Grimoire" />
         <span className="font-heading text-lg">MTG Grimoire</span>
-        <span className="ml-auto hidden text-sm text-dim sm:inline">A shared collection</span>
+        <span className="ml-auto hidden text-sm text-dim sm:inline">{what}</span>
       </div>
       <ManaLine sync={null} />
     </div>

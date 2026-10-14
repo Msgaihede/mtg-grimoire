@@ -2760,6 +2760,11 @@ export interface FakeRelayShare {
    * fourth state that needs no row at all.
    */
   state: string;
+  /**
+   * A deck share's deck half (`share::deck`, issue #1032) — absent on every other kind, exactly
+   * as the crate omits the key. Its piles' names are {@link folders}', one folder per pile.
+   */
+  deck?: { format: string; piles: { uid: string; kind: string; active: boolean }[] };
 }
 
 /** One row of `marketplace_prices`: what one feed quotes for one printing in one finish. */
@@ -8147,6 +8152,9 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     // caller could change in place, and a story that sorted the answer it was handed must not
     // have reordered the deck's own tags behind the next read.
     tags: [...(d.tags ?? [])],
+    // Issue #1032's share key — {@link fakeDeckUid}, the one spelling the managed wishlist's
+    // `managedDeckUid` already uses, so a deck and its managed folder agree on whose they are.
+    syncUid: fakeDeckUid(d.id),
   };
 }
 
@@ -25977,6 +25985,10 @@ const SHARE_WISHLIST_FOLDER_NOT_FOUND = "That folder is not in this wishlist.";
 const WHOLE_WISHLIST_TITLE = "Wishlist";
 /** `share::wishlist::PREFIX` — what every wishlist share key begins with (issue #941). */
 const WISHLIST_SHARE_PREFIX = "wishlist:";
+/** `share::deck::PREFIX` — what a deck share key begins with (issue #1032). */
+const DECK_SHARE_PREFIX = "deck:";
+/** `share::deck::DECK_NOT_FOUND` — a deck key nothing answers to. */
+const SHARE_DECK_NOT_FOUND = "That deck is not in your decks.";
 /** `share::snapshot::FOLDER_IS_LOCKED`. **Not {@link FOLDER_IS_LOCKED}**, which is the *delete*
  *  refusal one cabinet over and ends "before deleting it" — two presses, two sentences. */
 const SHARE_FOLDER_IS_LOCKED = "That folder is locked. Unlock it before sharing it.";
@@ -26137,6 +26149,9 @@ function buildRelayShare(
   if (folderUid?.startsWith(WISHLIST_SHARE_PREFIX) === true) {
     return buildWishlistShare(db, id, folderUid, ownerName, fields, at);
   }
+  if (folderUid?.startsWith(DECK_SHARE_PREFIX) === true) {
+    return buildDeckShare(db, id, folderUid.slice(DECK_SHARE_PREFIX.length), ownerName, fields, at);
+  }
   let title = WHOLE_COLLECTION_TITLE;
   if (folderUid !== null) {
     const named = db.collectionFolders.find((f) => uidOfFolder(f) === folderUid);
@@ -26270,6 +26285,62 @@ function buildWishlistShare(
 }
 
 /**
+ * `share::deck::snapshot` — a deck's live list, pile by pile (issue #1032).
+ *
+ * Each pile that holds a live row is a folder named as the reader named it, at its position
+ * (`pile-0`, …) and never its id; its role rides in `deck`. The plan's rows stay home, and a deck
+ * row has no condition, so `condition` is switched off whatever was sent.
+ */
+function buildDeckShare(
+  db: FakeDb,
+  id: string,
+  deckUid: string,
+  ownerName: string,
+  fields: ShareFieldsArg,
+  at: number,
+): FakeRelayShare {
+  const deck = deckUid === "" ? undefined : db.decks.find((d) => fakeDeckUid(d.id) === deckUid);
+  if (deck === undefined) throw refuse(SHARE_DECK_NOT_FOUND);
+  const live = db.deckCards.filter((dc) => dc.deckId === deck.id && dc.variant === LIVE);
+  const piles = db.deckCategories
+    .filter((c) => c.deckId === deck.id && c.variant === LIVE)
+    .filter((c) => live.some((dc) => dc.categoryId === c.id))
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id);
+  const uids = new Map(piles.map((c, position) => [c.id, `pile-${position}`]));
+  const order = new Map(piles.map((c, position) => [c.id, position]));
+  return {
+    id,
+    owner: ownerName,
+    title: deck.name,
+    updatedAt: at,
+    marketplace: marketplaceOf(db.marketplace),
+    fields: { ...fields, condition: false },
+    folders: piles.map((c) => ({ uid: uids.get(c.id) ?? "", name: c.name, parent: null })),
+    copies: live
+      .filter((dc) => uids.has(dc.categoryId))
+      .sort(
+        (a, b) =>
+          (order.get(a.categoryId) ?? 0) - (order.get(b.categoryId) ?? 0) ||
+          a.name.localeCompare(b.name) ||
+          a.id - b.id,
+      )
+      .map((dc) => ({
+        cardId: dc.cardId,
+        finish: dc.finish ?? "nonfoil",
+        quantity: dc.quantity,
+        folderUid: uids.get(dc.categoryId) ?? null,
+        condition: "NONE",
+        lang: dc.lang,
+      })),
+    state: "live",
+    deck: {
+      format: SPECS[deck.formatKey]?.displayName ?? deck.formatKey,
+      piles: piles.map((c) => ({ uid: uids.get(c.id) ?? "", kind: c.kind, active: c.isActive })),
+    },
+  };
+}
+
+/**
  * One held document as the wire carries it — `share_open`'s answer, and the **whole** of where
  * this format's three absences come from.
  *
@@ -26318,8 +26389,14 @@ function toShareSnapshot(db: FakeDb, held: FakeRelayShare): ShareSnapshot {
         ...(held.fields.condition && copy.condition !== "NONE" ? { c: copy.condition } : {}),
         ...(held.fields.lang ? { l: copy.lang } : {}),
         ...(price !== null ? { p: price } : {}),
+        // A deck share's three facts (issue #1032), each absent where the corpus has none — and
+        // on every other kind of share, as the crate writes them.
+        ...(held.deck && card?.typeLine ? { t: card.typeLine } : {}),
+        ...(held.deck && card?.manaCost ? { mc: card.manaCost } : {}),
+        ...(held.deck && card?.cmc != null ? { mv: card.cmc } : {}),
       };
     }),
+    ...(held.deck ? { deck: held.deck } : {}),
   };
 }
 

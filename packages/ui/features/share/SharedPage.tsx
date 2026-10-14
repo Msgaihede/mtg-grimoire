@@ -44,11 +44,12 @@ import { FOCUS } from "@/lib/focus";
 import { ipcError } from "@/lib/ipc";
 import { resolveMarketplace, type Currency } from "@/lib/marketplace";
 import { formatPrice } from "@/lib/prices";
-import type { ShareCard, ShareSnapshot } from "@/lib/shareSnapshot";
+import { shareDeckOf, type ShareCard, type ShareSnapshot } from "@/lib/shareSnapshot";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { AddToWishlist } from "./AddToWishlist";
 import { OpenShareDialog } from "./OpenShareDialog";
+import { SharedDeck } from "./SharedDeck";
 import { drawers, subtreeOf } from "./shareTree";
 import { crossReference, useOwnedIndex, type OwnedIndex } from "./useOwnedIndex";
 import { sharedSnapshotQuery, useSharedSnapshot } from "./useSharedSnapshot";
@@ -202,9 +203,12 @@ function SharedView() {
   const url = openedShares[0] ?? null;
   const share = useSharedSnapshot(url);
   const snapshot = share.data;
+  /** The deck half, or `null` for a binder — `shareDeckOf` is the one place that asks. */
+  const deck = useMemo(() => (snapshot === undefined ? null : shareDeckOf(snapshot)), [snapshot]);
   // Only once there is a binder to draw the figures against: this sweeps the reader's whole
-  // collection, and somebody who never opens a share must never pay for it.
-  const cross = useOwnedIndex(snapshot !== undefined);
+  // collection, and somebody who never opens a share must never pay for it — nor a reader looking
+  // at a deck, which draws no figure (issue #1032).
+  const cross = useOwnedIndex(snapshot !== undefined && deck === null);
 
   const paste = (
     <OpenShareDialog
@@ -237,6 +241,20 @@ function SharedView() {
         <Refused
           sentence={ipcError(share.error)}
           onRetry={() => void share.refetch()}
+          onClose={() => closeShare(url)}
+        />
+      ) : deck !== null ? (
+        // A deck share (issue #1032) — drawn by the deck editor's own views, read-only. Keyed for
+        // the binder's reason below: every piece of its state is about one deck.
+        <SharedDeck
+          key={url}
+          snapshot={share.data}
+          deck={deck}
+          owner={asText(share.data.owner)}
+          title={asText(share.data.title) || "Shared deck"}
+          stamp={asOf(share.data.updatedAt)}
+          refreshing={share.isFetching}
+          onRefresh={() => void share.refetch()}
           onClose={() => closeShare(url)}
         />
       ) : (

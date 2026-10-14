@@ -342,7 +342,9 @@ vi.mock("./NoteEditor", () => ({
     value: string;
     onChange: (markdown: string) => void;
     ariaLabel: string;
-  }) => <textarea aria-label={ariaLabel} value={value} onChange={(e) => onChange(e.target.value)} />,
+  }) => (
+    <textarea aria-label={ariaLabel} value={value} onChange={(e) => onChange(e.target.value)} />
+  ),
 }));
 
 import {
@@ -419,6 +421,7 @@ const DECK: DeckRow = {
   // Schema v58, `notes_open`'s twin one column along and `0` for its reason: the To-do band is
   // new, so a shut default takes nothing from anybody.
   todosOpen: false,
+  syncUid: null,
   // Schema v16, and `0` is `AUTO_CATEGORY` — the column's own default and the state every deck
   // is born in: an add that names no pile is filed by what the card does. A test about the
   // setting overrides it through `detail()`, which is the *only* way to move it now — it was a
@@ -831,8 +834,7 @@ const COPIES = "Copies of Lightning Bolt in Main deck";
  *  out once because three tests address the control, and a regex over its two-word label alone
  *  would keep passing on the day the sentence went missing — which is the half of the name that
  *  has to stand up read out of context, with no Group by picker beside it. */
-const SPLIT_X =
-  "Split X — group X-cost cards separately instead of counting X as 0";
+const SPLIT_X = "Split X — group X-cost cards separately instead of counting X as 0";
 
 /** `VIEWS`' own `id → label` map, read back here because it is not exported: the two
  *  `it.each(["stacks", "table", "text", "grid"])` sweeps below pass the id as both the test's
@@ -990,9 +992,7 @@ beforeEach(() => {
   // which `Quick add N and remove from wishlist` is exactly `Quick add N` — and every test about
   // the dialog states its own two rows.
   deckQuickAddWishes.mockReset().mockResolvedValue([]);
-  deckQuickAddToCollection
-    .mockReset()
-    .mockResolvedValue({ copies: 1, entryId: 91, wishCopies: 0 });
+  deckQuickAddToCollection.mockReset().mockResolvedValue({ copies: 1, entryId: 91, wishCopies: 0 });
   deckSwapPrinting.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
   deckSetCardFinish.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
   deckSetViewState.mockReset().mockResolvedValue(undefined);
@@ -1058,9 +1058,7 @@ beforeEach(() => {
   deckFolderList.mockReset().mockResolvedValue([]);
   // One printing, so a one-line paste has something to resolve to and the Import button is
   // live. What the plan makes of it is `plan.test.ts`'s and the dialog's own to prove.
-  importResolve
-    .mockReset()
-    .mockResolvedValue([{ index: 0, matched: SOL_RING, hintMissed: false }]);
+  importResolve.mockReset().mockResolvedValue([{ index: 0, matched: SOL_RING, hintMissed: false }]);
   deckImportCommit.mockReset().mockResolvedValue({ added: 1, removed: 0, categoriesCreated: 0 });
   importPickFile.mockReset().mockResolvedValue(null);
   syncStatus.mockReset().mockResolvedValue(SYNCED);
@@ -1106,9 +1104,7 @@ describe("DeckEditor", () => {
     expect(screen.getByLabelText("Deck name")).toHaveValue("Burn");
     // Scoped to the term, because `Modern` is also an `<option>` of the docked panel's own
     // format filter — which is the pair the four tests further down are about.
-    expect(
-      await screen.findByText("Format", { selector: "dt" }),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("Format", { selector: "dt" })).toBeInTheDocument();
     expect(screen.getByText("Format", { selector: "dt" }).closest("div")).toHaveTextContent(
       "Modern",
     );
@@ -2359,7 +2355,9 @@ describe("DeckEditor", () => {
   it("marks a noted card in all four views, and leaves its neighbour alone", async () => {
     deckNotes.mockResolvedValue([
       noteRow({
-        cards: [{ oracleId: "o-Lightning Bolt", name: "Lightning Bolt", cardId: "c-Lightning Bolt" }],
+        cards: [
+          { oracleId: "o-Lightning Bolt", name: "Lightning Bolt", cardId: "c-Lightning Bolt" },
+        ],
       }),
     ]);
     const user = userEvent.setup();
@@ -2372,9 +2370,7 @@ describe("DeckEditor", () => {
           /has a note/,
         ),
       );
-      expect(screen.getByRole("button", { name: /^Bear/ })).not.toHaveAccessibleName(
-        /has a note/,
-      );
+      expect(screen.getByRole("button", { name: /^Bear/ })).not.toHaveAccessibleName(/has a note/);
     };
 
     await bothCards();
@@ -2387,9 +2383,7 @@ describe("DeckEditor", () => {
     // mark names itself — one card noted, so one mark, and the neighbour's absence is the other
     // half of the same count.
     await pickOption(user, "View", "Table");
-    await waitFor(() =>
-      expect(screen.getAllByRole("img", { name: "Has a note" })).toHaveLength(1),
-    );
+    await waitFor(() => expect(screen.getAllByRole("img", { name: "Has a note" })).toHaveLength(1));
   });
 
   /**
@@ -2465,9 +2459,7 @@ describe("DeckEditor", () => {
     // `*=` rather than `$=`: a slot ends in its **finish** since v18 (`c-Lightning Bolt:` for
     // the regular copy), so a suffix match on the card id stopped matching anything at all —
     // which would have made this fixture check pass vacuously at zero had it been a `>=`.
-    expect(
-      document.querySelectorAll(`[${DECK_CARD_ATTR}*="c-Lightning Bolt"]`),
-    ).toHaveLength(2);
+    expect(document.querySelectorAll(`[${DECK_CARD_ATTR}*="c-Lightning Bolt"]`)).toHaveLength(2);
 
     await userEvent.click(
       within(group("Main deck")).getByRole("button", { name: /^Lightning Bolt/ }),
@@ -2660,7 +2652,15 @@ describe("DeckEditor", () => {
     await userEvent.type(screen.getByLabelText("Quick add a card"), "goblin guide{Enter}");
 
     await waitFor(() =>
-      expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", null, "Creature", "live", null, 1),
+      expect(deckAddCard).toHaveBeenCalledWith(
+        4,
+        "s-Goblin Guide",
+        null,
+        "Creature",
+        "live",
+        null,
+        1,
+      ),
     );
     // Cleared on a hit, because the next action is the next card.
     expect(screen.getByLabelText("Quick add a card")).toHaveValue("");
@@ -2955,7 +2955,15 @@ describe("DeckEditor", () => {
       await screen.findByRole("button", { name: "Add Goblin Guide to Creature" }),
     );
 
-    expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", null, "Creature", "live", null, 1);
+    expect(deckAddCard).toHaveBeenCalledWith(
+      4,
+      "s-Goblin Guide",
+      null,
+      "Creature",
+      "live",
+      null,
+      1,
+    );
   });
 
   /**
@@ -3579,7 +3587,9 @@ describe("DeckEditor", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "1 issue · Commander" }));
     expect(
-      screen.getByText("Commander decks are exactly 100 cards including the commander; you have 1."),
+      screen.getByText(
+        "Commander decks are exactly 100 cards including the commander; you have 1.",
+      ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/color identity/)).not.toBeInTheDocument();
   });
@@ -3654,9 +3664,7 @@ describe("DeckEditor", () => {
 
     await userEvent.click(chip);
     expect(chip).toHaveAttribute("aria-pressed", "false");
-    expect(
-      within(group("Main deck")).getByRole("button", { name: /^Bear/ }),
-    ).toBeInTheDocument();
+    expect(within(group("Main deck")).getByRole("button", { name: /^Bear/ })).toBeInTheDocument();
   });
 
   /**
@@ -3755,9 +3763,7 @@ describe("DeckEditor", () => {
       expect(screen.queryByRole("button", { name: /game changers?$/i })).not.toBeInTheDocument(),
     );
     // The wall is not empty: the chip went, and the filter it was driving went with it.
-    expect(
-      within(group("Main deck")).getByRole("button", { name: /^Bear/ }),
-    ).toBeInTheDocument();
+    expect(within(group("Main deck")).getByRole("button", { name: /^Bear/ })).toBeInTheDocument();
 
     // …and comes back. Nothing cleared the flag, so this is the state the reader left.
     deckGet.mockResolvedValue(detail({}, [bolt({ gameChanger: true, quantity: 2 }), bear()]));
@@ -3961,9 +3967,9 @@ describe("DeckEditor", () => {
       // `top` invalid and drops the pinning without a word.
       const dock = screen.getByRole("region", { name: "Add cards" }).parentElement!;
       expect(dock.style.top).toBe("41px");
-      expect((dock.previousElementSibling as HTMLElement).style.getPropertyValue("--sticky-top")).toBe(
-        "41px",
-      );
+      expect(
+        (dock.previousElementSibling as HTMLElement).style.getPropertyValue("--sticky-top"),
+      ).toBe("41px");
       // And a caret scrolled to is parked below the bar rather than under it.
       expect(screen.getByTestId("page").style.scrollPaddingTop).toBe("41px");
     });
@@ -4087,15 +4093,11 @@ describe("DeckEditor", () => {
     const trigger = await screen.findByRole("button", { name: "Pull from collection" });
 
     await userEvent.click(trigger);
-    expect(
-      await screen.findByRole("dialog", { name: "Pull from collection" }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "Pull from collection" })).toBeInTheDocument();
 
     await userEvent.keyboard("{Escape}");
 
-    expect(
-      screen.queryByRole("dialog", { name: "Pull from collection" }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Pull from collection" })).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
     // One press, one layer: the deck is still open behind it, which is the floor Escape falls
     // to once every dismissible rung above it has passed.
@@ -4150,13 +4152,13 @@ describe("DeckEditor", () => {
     );
 
     await waitFor(() =>
-      expect(screen.queryByRole("button", { name: "Pull from collection" })).not.toBeInTheDocument(),
+      expect(
+        screen.queryByRole("button", { name: "Pull from collection" }),
+      ).not.toBeInTheDocument(),
     );
     // The other half of the line is still there, so the absence above is this one prop: a plan
     // is exactly the list a reader wants a shopping list for.
-    expect(
-      screen.getByRole("button", { name: "Send missing to wishlist" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send missing to wishlist" })).toBeInTheDocument();
   });
 
   /**
@@ -4797,10 +4799,11 @@ describe("DeckEditor", () => {
     await open();
 
     const group = await screen.findByRole("group", { name: "Deck list" });
-    expect(within(group).getAllByRole("button").map((b) => b.textContent)).toEqual([
-      "Theory",
-      "Actual",
-    ]);
+    expect(
+      within(group)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["Theory", "Actual"]);
 
     // Outside the group, and immediately after it in the row.
     const compare = screen.getByRole("button", { name: "Compare" });
@@ -5364,7 +5367,9 @@ describe("DeckEditor", () => {
     });
     // `Regular` rather than a `Theory deck` switch since issue #401 — the plan is one of three
     // kinds now, and the write names both columns. Scoped to the dialog: these are short words.
-    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Regular" }));
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Regular" }),
+    );
 
     await waitFor(() =>
       expect(deckUpdate).toHaveBeenCalledWith(4, { theoryEnabled: false, virtualOnly: false }),
@@ -5390,9 +5395,7 @@ describe("DeckEditor", () => {
     // that the editor's press still lands on the root.
     await waitFor(() => expect(deckMissingToWishlist).toHaveBeenCalledWith(4, null));
     // Wishes are cards and the shortfall is copies, so the sentence says which it counts.
-    expect(
-      await screen.findByText("Added 3 cards to your wishlist."),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("Added 3 cards to your wishlist.")).toBeInTheDocument();
   });
 
   /** Spec §5: a price is never shown without saying how old it is. */
@@ -5629,7 +5632,15 @@ describe("DeckEditor drag and drop", () => {
     await pointerDrag(card_("Lightning Bolt"), boxedGroup("Sideboard"));
 
     await waitFor(() =>
-      expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, SIDE, null, "live", null),
+      expect(deckMoveCard).toHaveBeenCalledWith(
+        4,
+        "c-Lightning Bolt",
+        MAIN,
+        SIDE,
+        null,
+        "live",
+        null,
+      ),
     );
     await waitFor(() => expect(group("Sideboard")).toHaveFocus());
   });
@@ -5762,7 +5773,6 @@ describe("DeckEditor drag and drop", () => {
    * them do, and that the two-step New category really makes a pile and then files into it.
    */
   describe("quick zones", () => {
-
     /**
      * **They answer for a card dragged *in*, which is exactly what the remove tray does not** —
      * and it is the whole reason they own a monitor of their own rather than reading the state
@@ -5806,7 +5816,15 @@ describe("DeckEditor drag and drop", () => {
       await held.drop();
 
       await waitFor(() =>
-        expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, SIDE, null, "live", null),
+        expect(deckMoveCard).toHaveBeenCalledWith(
+          4,
+          "c-Lightning Bolt",
+          MAIN,
+          SIDE,
+          null,
+          "live",
+          null,
+        ),
       );
     });
 
@@ -5837,7 +5855,9 @@ describe("DeckEditor drag and drop", () => {
           MAIN,
           null,
           "Removal",
-          "live", null),
+          "live",
+          null,
+        ),
       );
     });
 
@@ -6068,9 +6088,7 @@ describe("layerMatches", () => {
     expect(layerMatches(perCard, deckWide)).toBe(false);
     expect(layerMatches(deckWide, perCard)).toBe(false);
     expect(layerMatches(perCard, { kind: "pull", cards: [bolt()] })).toBe(true);
-    expect(
-      layerMatches(perCard, { kind: "pull", cards: [bolt({ finish: "foil" })] }),
-    ).toBe(false);
+    expect(layerMatches(perCard, { kind: "pull", cards: [bolt({ finish: "foil" })] })).toBe(false);
   });
 });
 
@@ -6233,7 +6251,14 @@ describe("DeckEditor — a card's menu", () => {
 
     // One copy, of that printing and finish, out of the pile it is in on the plan.
     await waitFor(() =>
-      expect(deckAddCardToOtherList).toHaveBeenCalledWith(4, "c-Lightning Bolt", SIDE, "live", null, 1),
+      expect(deckAddCardToOtherList).toHaveBeenCalledWith(
+        4,
+        "c-Lightning Bolt",
+        SIDE,
+        "live",
+        null,
+        1,
+      ),
     );
     expect(deckAddCardToOtherList).toHaveBeenCalledTimes(1);
     expect(deckAddCard).not.toHaveBeenCalled();
@@ -6321,7 +6346,9 @@ describe("DeckEditor — a card's menu", () => {
       MAIN,
       RECURSION.id,
       null,
-      "live", null);
+      "live",
+      null,
+    );
   });
 
   /**
@@ -6348,7 +6375,9 @@ describe("DeckEditor — a card's menu", () => {
       MAIN,
       RECURSION.id,
       null,
-      "live", null);
+      "live",
+      null,
+    );
   });
 
   /**
@@ -6450,7 +6479,9 @@ describe("DeckEditor — a card's menu", () => {
       MAIN,
       CATEGORIES[2].id,
       null,
-      "live", null);
+      "live",
+      null,
+    );
   });
 
   /** A deck card wears at most one label, so the rows are radios and the card's own is ticked. */
@@ -6613,9 +6644,7 @@ describe("DeckEditor — a card's menu", () => {
       { id: 9, name: "Wincon", color: "gold", cardCount: 1, deckCount: 1 },
     ]);
     deckGet.mockResolvedValue(
-      detail({}, [bolt()], CATEGORIES, [
-        { id: 9, name: "Wincon", color: "gold", cardCount: 1 },
-      ]),
+      detail({}, [bolt()], CATEGORIES, [{ id: 9, name: "Wincon", color: "gold", cardCount: 1 }]),
     );
     await open();
     await rightClickCard("Lightning Bolt");
@@ -6676,7 +6705,9 @@ describe("DeckEditor — a card's menu", () => {
       noteRow({
         id: 3,
         title: "Why four",
-        cards: [{ oracleId: "o-Lightning Bolt", name: "Lightning Bolt", cardId: "c-Lightning Bolt" }],
+        cards: [
+          { oracleId: "o-Lightning Bolt", name: "Lightning Bolt", cardId: "c-Lightning Bolt" },
+        ],
       }),
     ]);
     await open();
@@ -6763,7 +6794,9 @@ describe("DeckEditor — a card's menu", () => {
       noteRow({
         id: 3,
         title: "Why four",
-        cards: [{ oracleId: "o-Lightning Bolt", name: "Lightning Bolt", cardId: "c-Lightning Bolt" }],
+        cards: [
+          { oracleId: "o-Lightning Bolt", name: "Lightning Bolt", cardId: "c-Lightning Bolt" },
+        ],
       }),
     ]);
     await open();
@@ -7149,9 +7182,7 @@ describe("DeckEditor — the Collection submenu", () => {
     await open();
     await collectionMenu();
 
-    expect(
-      await screen.findByRole("menuitem", { name: "Quick add 4 copies" }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("menuitem", { name: "Quick add 4 copies" })).toBeInTheDocument();
     expect(deckQuickAddWishes).not.toHaveBeenCalled();
     expect(deckPullPlan).not.toHaveBeenCalled();
   });
@@ -7311,7 +7342,9 @@ describe("DeckEditor — the Collection submenu", () => {
       ),
     );
     await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Which wishlist item?" })).not.toBeInTheDocument(),
+      expect(
+        screen.queryByRole("dialog", { name: "Which wishlist item?" }),
+      ).not.toBeInTheDocument(),
     );
   });
 
@@ -7336,7 +7369,9 @@ describe("DeckEditor — the Collection submenu", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
 
     await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Which wishlist item?" })).not.toBeInTheDocument(),
+      expect(
+        screen.queryByRole("dialog", { name: "Which wishlist item?" }),
+      ).not.toBeInTheDocument(),
     );
     expect(deckQuickAddToCollection).not.toHaveBeenCalled();
   });
@@ -7385,7 +7420,9 @@ describe("DeckEditor — the Collection submenu", () => {
     expect(await within(first).findByRole("alert")).toBeInTheDocument();
     await userEvent.click(within(first).getByRole("button", { name: "Cancel" }));
     await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Pull from collection" })).not.toBeInTheDocument(),
+      expect(
+        screen.queryByRole("dialog", { name: "Pull from collection" }),
+      ).not.toBeInTheDocument(),
     );
 
     await collectionMenu();
@@ -7484,9 +7521,7 @@ describe("DeckEditor — the Collection submenu", () => {
 
     const dialog = await screen.findByRole("dialog", { name: "Pull from collection" });
     expect(
-      await within(dialog).findByText(
-        "Cards you own that Burn is missing",
-      ),
+      await within(dialog).findByText("Cards you own that Burn is missing"),
     ).toBeInTheDocument();
     expect(within(dialog).getByRole("checkbox", { name: /^Pull Bear/ })).toBeInTheDocument();
   });
@@ -7625,7 +7660,9 @@ describe("DeckEditor — the Collection submenu", () => {
     await userEvent.keyboard("{Escape}");
 
     await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Which wishlist item?" })).not.toBeInTheDocument(),
+      expect(
+        screen.queryByRole("dialog", { name: "Which wishlist item?" }),
+      ).not.toBeInTheDocument(),
     );
     expect(opener).toHaveFocus();
     expect(deckQuickAddToCollection).not.toHaveBeenCalled();
@@ -7655,8 +7692,7 @@ describe("DeckEditor — the Collection submenu", () => {
  */
 describe("DeckEditor — a virtual deck", () => {
   /** A deck of the third kind, holding a card it is four copies "short" of. */
-  const VIRTUAL = () =>
-    detail({ virtualOnly: true }, [bolt({ quantity: 4, ownedQuantity: 0 })]);
+  const VIRTUAL = () => detail({ virtualOnly: true }, [bolt({ quantity: 4, ownedQuantity: 0 })]);
 
   /** Right-click a deck card and hand back its menu — `a card's menu`'s own helper, local here
    *  because that one is scoped to its describe. */
@@ -7877,9 +7913,10 @@ describe("DeckEditor — a category's menu", () => {
     await open();
     await waitFor(() =>
       expect(
-        within(
-          document.querySelector<HTMLElement>(`[${DECK_GROUP_ATTR}="${MAIN}"]`)!,
-        ).getByRole("button", { name: "Show Main deck" }),
+        within(document.querySelector<HTMLElement>(`[${DECK_GROUP_ATTR}="${MAIN}"]`)!).getByRole(
+          "button",
+          { name: "Show Main deck" },
+        ),
       ).toBeInTheDocument(),
     );
     expect(hiddenStacks).toHaveBeenCalledWith(DECK.id);
@@ -7953,7 +7990,9 @@ describe("DeckEditor — a category's menu", () => {
 
     const dialog = await screen.findByRole("dialog", { name: /Clear “Main deck”/ });
     await waitFor(() =>
-      expect(within(dialog).getByText(/4 cards will be removed from the actual list/)).toBeVisible(),
+      expect(
+        within(dialog).getByText(/4 cards will be removed from the actual list/),
+      ).toBeVisible(),
     );
     expect(within(dialog).queryByText(/in the other list/)).not.toBeInTheDocument();
   });
@@ -9005,8 +9044,20 @@ describe("DeckEditor — the token pile (issue #507)", () => {
    * addresses each by its printing and finish rather than by `null`.
    */
   const twoEntries = (): DeckTokenRow[] => [
-    treasure({ cardId: "t-a", finish: "nonfoil", quantity: 2, implicit: false, finishes: `["nonfoil","foil"]` }),
-    treasure({ cardId: "t-a", finish: "foil", quantity: 1, implicit: false, finishes: `["nonfoil","foil"]` }),
+    treasure({
+      cardId: "t-a",
+      finish: "nonfoil",
+      quantity: 2,
+      implicit: false,
+      finishes: `["nonfoil","foil"]`,
+    }),
+    treasure({
+      cardId: "t-a",
+      finish: "foil",
+      quantity: 1,
+      implicit: false,
+      finishes: `["nonfoil","foil"]`,
+    }),
   ];
 
   /** One printing the picker offers — the card modal's shape, filled in as nothing, sold in the
@@ -9085,9 +9136,7 @@ describe("DeckEditor — the token pile (issue #507)", () => {
     expect(within(drawn).getAllByRole("button", { name: ART }).length).toBeGreaterThan(0);
     expect(within(drawn).queryAllByRole("button", { name: /Wurm/ })).toHaveLength(0);
     // The band keeps every row, the zero included.
-    expect(
-      within(band()).getByRole("spinbutton", { name: /^Quantity of Wurm/ }),
-    ).toHaveValue(0);
+    expect(within(band()).getByRole("spinbutton", { name: /^Quantity of Wurm/ })).toHaveValue(0);
   });
 
   /**
@@ -9116,9 +9165,11 @@ describe("DeckEditor — the token pile (issue #507)", () => {
     await open();
 
     await waitFor(() =>
-      expect(useAppStore.getState().cardWalk.stops.map((stop: CardWalkStop) => stop.name)).toEqual(
-        ["Bear", "Lightning Bolt", "Treasure"],
-      ),
+      expect(useAppStore.getState().cardWalk.stops.map((stop: CardWalkStop) => stop.name)).toEqual([
+        "Bear",
+        "Lightning Bolt",
+        "Treasure",
+      ]),
     );
     const { stops } = useAppStore.getState().cardWalk;
     expect(stops[stops.length - 1]).toEqual({
@@ -9186,7 +9237,9 @@ describe("DeckEditor — the token pile (issue #507)", () => {
     await waitFor(() => expect(pile()).not.toBeNull());
     // The foil entry by the terms that tell it from its regular twin — the printing and the
     // finish, spelled as the band spells them (`<SET · number>, <Finish>`).
-    await user.click(within(pile()!).getByRole("button", { name: /\bart\b.*Treasure.*TMH3 · 12, Foil$/ }));
+    await user.click(
+      within(pile()!).getByRole("button", { name: /\bart\b.*Treasure.*TMH3 · 12, Foil$/ }),
+    );
 
     // One dialog — the band's and the pile's alike.
     const dialog = await screen.findByRole("dialog");
@@ -9557,7 +9610,12 @@ describe("DeckEditor — the token pile (issue #507)", () => {
 
     it("picker: an added printing hands the caret to the tile just added", async () => {
       const held = treasure({ cardId: "t-a", implicit: false, quantity: 2 });
-      const added = treasure({ cardId: "t-new", implicit: false, quantity: 1, collectorNumber: "99" });
+      const added = treasure({
+        cardId: "t-new",
+        implicit: false,
+        quantity: 1,
+        collectorNumber: "99",
+      });
       answers(deckTokenAddPrinting, [held], [held, added]);
       cardPrintings.mockResolvedValue({ items: [printing("t-new")], total: 1 });
       deckWith({ tokensOpen: true });
@@ -9580,7 +9638,12 @@ describe("DeckEditor — the token pile (issue #507)", () => {
 
     it("picker: a swap from the pile hands the caret to the swapped tile", async () => {
       const [plain] = twoEntries();
-      const swapped = treasure({ cardId: "t-new", implicit: false, quantity: 1, collectorNumber: "99" });
+      const swapped = treasure({
+        cardId: "t-new",
+        implicit: false,
+        quantity: 1,
+        collectorNumber: "99",
+      });
       answers(deckTokenSwap, twoEntries(), [plain, swapped]);
       cardPrintings.mockResolvedValue({ items: [printing("t-new")], total: 1 });
       deckWith({ tokensOpen: false });
@@ -9612,7 +9675,9 @@ describe("DeckEditor — the token pile (issue #507)", () => {
       await open();
       await waitFor(() => expect(pile()).not.toBeNull());
 
-      const art = within(pile()!).getByRole("button", { name: /\bart\b.*Treasure.*TMH3 · 12, Foil$/ });
+      const art = within(pile()!).getByRole("button", {
+        name: /\bart\b.*Treasure.*TMH3 · 12, Foil$/,
+      });
       await press(user, art);
       await screen.findByRole("dialog");
       await user.keyboard("{Escape}");
@@ -9635,7 +9700,9 @@ describe("DeckEditor — the token pile (issue #507)", () => {
 
       await press(
         user,
-        within(pile()!).getByRole("button", { name: /^Show details for Treasure.*TMH3 · 12, Foil$/ }),
+        within(pile()!).getByRole("button", {
+          name: /^Show details for Treasure.*TMH3 · 12, Foil$/,
+        }),
       );
 
       expect(useAppStore.getState().selectedCardId).toBe("t-a");
