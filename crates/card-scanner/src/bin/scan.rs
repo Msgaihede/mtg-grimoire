@@ -57,7 +57,7 @@ struct Args {
     no_trim: bool,
     /// Extra framings to hand the matcher, as multipliers on --inset. Empty for one framing.
     /// See DetectOptions::query_insets.
-    #[arg(long, default_value = "0.96,1.04", value_delimiter = ',')]
+    #[arg(long, default_value = "0.92,0.96,1.04", value_delimiter = ',')]
     query_insets: Vec<f32>,
     /// Hash one framing only, at --inset exactly. The A/B against --query-insets.
     #[arg(long)]

@@ -807,6 +807,26 @@ so three collect nearly all of it; five reach 41.7, which is not worth the fourt
 **The tightest framing is kept even though it wins only 3 of 39** — the outermost wins 26 — but
 every set that drops it scores 10/11 rather than 11/11 while looking identical on distance.
 
+**A fourth, at 0.92, since 2026-10-14**, for a card in a binder's pocket: the detector's quad is
+often the pocket, whose margin is wider than the sleeve's that 0.96 covers (§ *The replay*). It was
+measured on the replay of 86 readers' scans and on the synthetic evaluation, beside 0.96 and 1.04:
+
+| | 0.96, 1.04 | 0.92, 0.96, 1.04 |
+| --- | ---: | ---: |
+| replay, Exact: wrong card | 23 | **19** |
+| replay, Exact: card ✓ / printing ✓ | 38.4 / 31.4% | **41.9 / 33.7%** |
+| replay, Fast: wrong card | 9 | 10 |
+| synthetic Fast printing ✓, plain / sleeved | 81.2 / 76.9% | 81.9 / 78.1% |
+| synthetic Exact, plain and sleeved | — | unchanged, every column |
+| hashes a match (synthetic, plain) | 3.15 | 4.13 |
+
+Agna Qel'a and Culling Ritual went from a wrong card to their printing, Nykthos Paragon to its
+card and Bloom Tender to undecided; Chimil, the Inner Sun went from its printing to its card, and
+Fast decided The Darkness Crystal wrong where it had stayed undecided. The two pocket scans that
+show the failure most plainly — Tannuk, Steadfast Second and The Earth Crystal — stayed wrong. A
+framing scales the quad about its centre, every side alike; why those two still miss was not
+measured.
+
 **A card is 180°-symmetric**, so every framing is warped both ways up and both are hashed. A card
 photographed upside-down rectifies perfectly and then matches nothing; an implementation that
 skips this fails on roughly half of hand-held scans for no visible reason. Which orientation won
@@ -864,7 +884,8 @@ straight from a 488×680 rectification to a 15×8 grid is the most expensive thi
 its kernel support scales with the ratio, so a 30-to-80× reduction reads the whole source
 several times over. Measured on a 720 px frame: **32 ms of hashing against 3.5 ms of searching
 113,375 cards**, and the multi-framing search pays it six times a frame rather than twice — three,
-since 2026-09-30, once a stretch holds its orientation (below).
+since 2026-09-30, once a stretch holds its orientation (below). Eight and four since 0.92 joined the
+framings (2026-10-14).
 
 | pre-scale | hashing, a 720 px frame | over the labelled corpus |
 | --- | --- | --- |
@@ -4078,6 +4099,9 @@ the combinations scored within 0.01 of each other and kept the stitched top.
 With `EXACT_ALONE_DISTANCE` (§ *Exact*'s tiers) the replay holds back the three lone answers that
 were wrong — ambiguous 27 → 30 of 86, the 23 wrong cards still judged on the first choice — and
 changes no other pass.
+
+The 0.92 framing (§3 *Rectify*) was measured against the binder batch the same day: 23 → 19
+wrong cards in Exact over all 86, the pocket scans that show the failure most plainly unchanged.
 
 ### Measured in the app
 
