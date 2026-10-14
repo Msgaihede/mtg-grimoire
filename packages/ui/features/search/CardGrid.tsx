@@ -2934,14 +2934,14 @@ function Tile<T extends GridCard>({
             // the three classes that make a chip, because the marks inside it bring their own.
             //
             // **Lifted over an unreleased printing's chip**, which `CardArt` draws in this same
-            // corner (issue #965). The chip is this box's height — 1rem of line and 0.125rem of
-            // padding either side — so 0.25rem of inset, 1.25rem of chip and 0.25rem of gap put
-            // the badge exactly one row up, at every zoom.
+            // corner (issue #965). The chip is a 0.75rem scaled line plus 4px of unscaled hairline
+            // and padding, so 0.25rem of inset, the chip and 0.25rem of gap put the badge just
+            // above it, at every zoom.
             className={cn(
               "pointer-events-auto absolute empty:hidden",
               "left-[calc(0.25rem*var(--mark-scale,1))]",
               stamp
-                ? "bottom-[calc(1.75rem*var(--mark-scale,1))]"
+                ? "bottom-[calc(1.25rem*var(--mark-scale,1)+4px)]"
                 : "bottom-[calc(0.25rem*var(--mark-scale,1))]",
               badgeChrome === "chip" && [
                 "bg-bg/85",
