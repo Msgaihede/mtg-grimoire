@@ -15,12 +15,15 @@ import type { GameCard, GoldfishLane } from "@/lib/ipc";
 
 /** The gap between two piles in a row. */
 export const GAP = 10;
-/** Each card under the top one of a pile sits this many px up and to the right of it. */
-export const PILE = 3;
-/** At most this many cards are drawn underneath; the ×N marker says the rest. */
-export const UNDER = 3;
-/** Room under a pile for the half of its ×N marker that hangs below the card. */
-export const MARK = 11;
+/** Each card under the top one of a pile sits this many px up and to the right of it — enough
+ *  of its edge to count the cards at a glance (issue #1001). */
+export const PILE = 5;
+/** At most this many cards are drawn underneath, so a pile shows five cards at most; the ×N
+ *  marker says the rest. */
+export const UNDER = 4;
+/** Room under a pile for the half of its ×N marker that hangs below the card (the marker is
+ *  26 px tall). */
+export const MARK = 14;
 /** The back row's divider: 14 px either side of a 1 px rule. */
 export const SPLIT = 29;
 /** A card's height over its width (the 5:7 frame). */
@@ -117,7 +120,7 @@ export function underOf(pile: Pile): number {
 }
 
 /** How wide a pile is at card width `w`: a tapped card lies on its side, and each card underneath
- *  adds its 3 px of edge. */
+ *  adds its {@link PILE} px of edge. */
 export function pileWidth(pile: Pile, w: number): number {
   return Math.round(w * (pile.tapped ? TAPPED : 1)) + underOf(pile) * PILE;
 }

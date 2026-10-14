@@ -3607,10 +3607,12 @@ tray write. The caret returns to the button, which is why it stays drawn on the 
 **The tray has two layouts, a grid of card tiles and the list of rows** (2026-10-01), switched in
 its header and stored as the prefs' `trayLayout`. A grid tile is `CardArt` at the `grid` variant —
 a tile is 144–221px wide, and `thumb` is 146px — inside a button that opens *More printings…*, with
-the count as a `CountTag`, the finish and quantity controls under it, and a row waiting on a pick
-spanning two columns with its candidates as whole cards. The column template guarantees two columns
-(`minmax(min(9rem, calc(50% - 0.375rem)), 1fr)`), so a two-column waiting tile can never hang out of
-a one-column grid. **Every tray picture is the whole card, never the `art` crop** — the list row's
+the count as a `CountTag`, the name and its remove over the card, the finish and quantity controls
+under it, and a row waiting on a pick spanning the whole grid (`col-span-full`) with its candidates
+as whole cards on the grid's own column template, its name and remove heading the dashed box
+(issue #1004: a question two columns wide stood its candidates several cards tall and scrolled the
+tiles after it out of view; every remove in the grid is now its tile's top-right corner). The column
+template keeps two columns at any width (`minmax(min(9rem, calc(50% - 0.375rem)), 1fr)`). **Every tray picture is the whole card, never the `art` crop** — the list row's
 is the `thumb` variant in a 5:7 slot with `object-contain`. A crop has no printed frame and so no artist credit, a tray row carries no
 artist to name beside one, and the Scanner shows no other full card a reader could read the credit
 off — [`packages/ui/CLAUDE.md`](../../packages/ui/CLAUDE.md)'s art-credit rule, met by its second arm. The candidate

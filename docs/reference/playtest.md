@@ -304,7 +304,7 @@ Any deck may sit in any seat, twice over. The seats a duel hides keep their pick
 
 **Four players.** A duel's board is drawn exactly as before. At a four-player table the
 opponent's table, band and zone columns give way to three `OpponentArea`s side by side in the same
-box (84 px in from either side, from the band to the middle line), about 365 × 289 each in a
+box (96 px in from either side, from the band to the middle line), about 357 × 289 each in a
 1280 × 800 window. Each has a compact plate row (glow, poison, its own aim target), a two-wide
 grid of 40 × 56 tiles (hand face down with its count, library, graveyard, exile, command) and its
 flipped, read-only battlefield, `data-table` and `data-plate` named by its `PlaytestPlayer`. An
@@ -330,9 +330,9 @@ Before the overhaul, a table at 1280 was 275 px and its cards about 61 px wide.
 
 - **The opponent's band** holds their face-down hand ("Hand · N"), their life plate, and the
   chrome.
-- **The tables** are inset 84 px from either side. On the opponent's table the creature lane is
+- **The tables** are inset 96 px from either side. On the opponent's table the creature lane is
   nearest the middle line and the back row is at the top.
-- **The zone columns** sit 12 px in, with 60 × 84 cards (the goldfish's are 180 × 252), each zone's count on its card. On the
+- **The zone columns** sit 12 px in, with 72 × 101 cards (the goldfish's are 180 × 252; 60 × 84 until issue #992 grew them a fifth), each zone's count on its card. On the
   opponent's side, library over graveyard is on the left and exile over command on the right. On
   the reader's side, command over exile is on the left and graveyard over library on the right.
 - **The stack** is real cards (52 × 73, up to three, then "+N") in the right gutter between the

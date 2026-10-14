@@ -62,7 +62,10 @@ export function kindOf(h: Happened): LogKind {
     case "lifeSet":
       return "life";
     case "turnBegan":
+    case "opponentTurn":
       return "turn";
+    case "life":
+      return "life";
     case "chose":
       return "engine";
   }
@@ -136,6 +139,10 @@ export function sentence(h: Happened): string | null {
       return lifeSentence(h.seat, h.was, h.life);
     case "turnBegan":
       return `Untapped · turn ${h.turn} begins`;
+    case "life":
+      return h.amount === 0 ? null : lifeSentence(h.seat, h.total - h.amount, h.total);
+    case "opponentTurn":
+      return opponentTurnSentence(h.drew, h.discarded);
     case "chose":
       return `The rules engine answered a ${h.what} prompt for you`;
   }
@@ -159,15 +166,32 @@ export function lifeSentence(
   return `${who} ${seat === "you" ? "are" : "is"} at ${life}`;
 }
 
+/** The goldfish's turn: "The opponent drew a card and passed", "…, discarded one and passed". */
+function opponentTurnSentence(drew: number, discarded: number): string {
+  const did: string[] = [];
+  if (drew > 0) did.push(drew === 1 ? "drew a card" : `drew ${spelled(drew)} cards`);
+  if (discarded > 0) did.push(`discarded ${spelled(discarded)}`);
+  return did.length === 0
+    ? "The opponent passed the turn"
+    : `The opponent ${did.join(", ")} and passed`;
+}
+
 /**
  * The lines one action adds, newest first, ready to go on top of the log. `turn` is the turn the
  * view after the action is on, so a "turn begins" and the draw that follows it carry the new turn.
+ *
+ * **What came before a `turnBegan` belongs to the turn before it**: a next turn carries the end
+ * of the reader's turn and the goldfish's whole turn ahead of the new one, and those lines are
+ * filed under the turn they happened in.
  */
 export function linesFor(happened: readonly Happened[], turn: number): LogLine[] {
+  const began = happened.find((h) => h.type === "turnBegan");
+  let now = began?.type === "turnBegan" ? Math.max(0, began.turn - 1) : turn;
   const out: LogLine[] = [];
   for (const h of happened) {
+    if (h.type === "turnBegan") now = h.turn;
     const text = sentence(h);
-    if (text !== null) out.push({ turn, text, kind: kindOf(h) });
+    if (text !== null) out.push({ turn: now, text, kind: kindOf(h) });
   }
   return out.reverse();
 }

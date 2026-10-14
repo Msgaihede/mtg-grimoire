@@ -847,6 +847,23 @@ describe("TrayPanel's grid", () => {
     expect(edit(onRows, [waiting, newer]).map((r) => r.key)).toEqual(["newer"]);
   });
 
+  /**
+   * Issue #1004: a waiting tile spans every column the grid has, and every tile's remove is the
+   * first press in it — its top-right corner, before the card or the candidates under it.
+   */
+  it("lays a waiting tile across the whole grid, with each tile's remove ahead of its card", () => {
+    const waiting = rowFromDecision(ambiguous, { finish: "nonfoil" }, 3, "waiting");
+    wrap(<TrayPanel {...grid({ rows: [waiting, newer] })} />);
+    const [question, tile] = screen.getAllByRole("listitem");
+    expect(question).toHaveClass("col-span-full");
+    expect(within(question).getAllByRole("button")[0]).toHaveAccessibleName(
+      `Remove ${waiting.name}`,
+    );
+    expect(within(tile).getAllByRole("button")[0]).toHaveAccessibleName(
+      "Remove Storm of Saruman — LTR 72",
+    );
+  });
+
   it("flashes only the tile it is told to", () => {
     const { container } = wrap(<TrayPanel {...grid({ flashKey: "older" })} />);
     const flashes = container.querySelectorAll("[data-tray-flash]");

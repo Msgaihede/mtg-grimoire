@@ -7,7 +7,9 @@ import { cardImageUrl } from "@/lib/images";
 import { FOCUS } from "@/lib/focus";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
+import { pointerAt } from "./Inspect";
 import { landsFirst } from "./layout";
+import type { Pointed } from "./types";
 
 /**
  * The opening hand — the artboard `Goldfish · opening hand` (2026-10-12): seven cards, the ones
@@ -26,21 +28,29 @@ import { landsFirst } from "./layout";
  * the only thing on the table worth reading, so both boards hand it the whole board below their
  * top band, and the row sizes each card to the smaller of what seven fit across and what fits
  * down — see {@link CARD_WIDTH}.
+ *
+ * **A card rested on opens the board's inspect preview** (issue #1023), as a card in the fan does:
+ * each card points itself at the board through `onPoint` / `onUnpoint` and carries `data-point`,
+ * so the board's own guard lets go of it when the pointer leaves. The board's keys stay off — the
+ * card is only being read, not acted on, before the first turn.
  */
 export type OpeningHandView = Pick<GoldfishView, "hand" | "mulligan" | "library" | "libraryLands">;
 
-export function OpeningHand({
-  view,
-  onAct,
-}: {
+export interface OpeningHandProps {
   view: OpeningHandView;
   onAct: (a: GoldfishAction) => void;
-}): JSX.Element {
+  /** The pointer has come onto a card: the board's inspect preview shows it once it rests. */
+  onPoint?: (pointed: Pointed) => void;
+  /** The pointer has left the card. Takes no argument — it is handed to `onMouseLeave` as is. */
+  onUnpoint?: () => void;
+}
+
+export function OpeningHand({ view, onAct, onPoint, onUnpoint }: OpeningHandProps): JSX.Element {
   // Keyed on the hand's ids so a mulligan's new seven start with nothing picked: the ids are new
   // whenever a card changes zone (CR 400.7), so a pick held across the redraw would name a card
   // that is no longer in the hand — and `keep` would be refused for it.
   const key = view.hand.map((c) => c.id).join(",");
-  return <Deciding key={key} view={view} onAct={onAct} />;
+  return <Deciding key={key} view={view} onAct={onAct} onPoint={onPoint} onUnpoint={onUnpoint} />;
 }
 
 /** The size of every London mulligan's draw: always seven, whatever is then put back. */
@@ -57,13 +67,7 @@ const DRAW = 7;
  */
 const CARD_WIDTH = "w-[min(calc((100cqw_-_84px)/7),calc((100cqh_-_28px)*5/7),672px)]";
 
-function Deciding({
-  view,
-  onAct,
-}: {
-  view: OpeningHandView;
-  onAct: (a: GoldfishAction) => void;
-}): JSX.Element {
+function Deciding({ view, onAct, onPoint, onUnpoint }: OpeningHandProps): JSX.Element {
   const mulligans = view.mulligan?.mulligans ?? 0;
   const need = view.mulligan?.bottom ?? 0;
   const freeFirst = view.mulligan?.freeFirst ?? false;
@@ -134,6 +138,8 @@ function Deciding({
               card={card}
               picked={picked.includes(card.id)}
               onPick={() => pick(card.id)}
+              onPoint={onPoint}
+              onUnpoint={onUnpoint}
             />
           ))}
         </div>
@@ -206,10 +212,14 @@ function HandCard({
   card,
   picked,
   onPick,
+  onPoint,
+  onUnpoint,
 }: {
   card: GameCard;
   picked: boolean;
   onPick: () => void;
+  onPoint?: (pointed: Pointed) => void;
+  onUnpoint?: () => void;
 }): JSX.Element {
   return (
     <button
@@ -217,6 +227,17 @@ function HandCard({
       aria-pressed={picked}
       aria-label={picked ? `${card.name}, going to the bottom` : card.name}
       onClick={onPick}
+      onMouseEnter={(e) =>
+        onPoint?.({
+          card,
+          ids: [card.id],
+          place: "hand",
+          line: `${card.name} · in your opening hand`,
+          at: pointerAt(e),
+        })
+      }
+      onMouseLeave={() => onUnpoint?.()}
+      data-point={card.id}
       className={cn(
         "relative aspect-[5/7] flex-none rounded-lg p-0",
         CARD_WIDTH,
