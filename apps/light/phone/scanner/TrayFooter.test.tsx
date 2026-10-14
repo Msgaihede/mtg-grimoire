@@ -14,6 +14,7 @@ import { destinationName, TrayFooter, UNREAD_FOLDER } from "./TrayFooter";
 const RESOLVED = TRAY_ROWS.filter((row) => row.choices.length === 0);
 
 const folder = (over: Partial<CollectionFolder> & { id: number; name: string }): CollectionFolder => ({
+  rules: [],
   parentId: null,
   kind: "user",
   deckId: null,

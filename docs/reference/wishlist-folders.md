@@ -1575,3 +1575,9 @@ their folders.
   because every deck write can rewrite a folder. Since 2026-09-26 the folders are shelves under
   **Managed by decks**, shut by default — see
   [Managed folders are shelves](#managed-folders-are-shelves-under-managed-by-decks).
+
+## Folder rules (user schema v64, issue #980)
+
+A wishlist folder can carry folder rules — criteria its cards are expected to meet, inherited by
+its subfolders and never a reason to refuse a card. They have a page of their own:
+[folder-rules.md](folder-rules.md).

@@ -149,7 +149,20 @@ pub const TABLES: [Spec; 18] = [
         // not a counter, not a parent and not part of any unique index, so `apply::META` needs
         // no entry and the merge is last-writer-wins per field — which is the right rule: "is
         // this drawer set aside" is a decision, and the last device to make it wins.
-        fields: &["name", "kind", "sort_order", "locked", "needs_review"],
+        //
+        // **`rules` is the folder's own rules** (user schema v64, issue #980): a JSON array in
+        // one column, so two devices editing one folder's rules while apart keep the later list
+        // whole — `decks.tags`' price. Never the inherited ones, which are read, not stored. The
+        // NULL default keeps the old-peer direction safe: a row from a peer that never names the
+        // column reads as no rules.
+        fields: &[
+            "name",
+            "kind",
+            "sort_order",
+            "locked",
+            "needs_review",
+            "rules",
+        ],
         counters: &[],
         parents: &[
             Parent {
@@ -656,7 +669,9 @@ pub const TABLES: [Spec; 18] = [
     Spec {
         table: "wishlist_folders",
         keys: &["id"],
-        fields: &["name", "sort_order", "needs_review"],
+        // `rules` as on `collection_folders` (user schema v64, issue #980): the folder's own
+        // rules, a JSON array in one column, whole-list last-writer-wins like `decks.tags`.
+        fields: &["name", "sort_order", "needs_review", "rules"],
         counters: &[],
         parents: &[Parent {
             key: "parent",
@@ -1616,6 +1631,62 @@ mod tests {
             Some(&serde_json::json!("[]")),
             "and so must taking the last one off, in {fields}"
         );
+    }
+
+    /// **A folder's rules travel** (user schema v64, issue #980), on both kinds of folder — a
+    /// rule that stayed behind would file a new card into a binder on one device and leave it
+    /// loose on the next, with nothing on screen saying why. As the column's JSON text, the way
+    /// `decks.tags` goes out, and clearing the rules is an op too: NULL has to reach the other
+    /// devices as surely as the first rule did.
+    #[test]
+    fn a_folders_rules_are_captured() {
+        let conn = db();
+        conn.execute_batch(
+            "INSERT INTO collection_folders (id, name, kind, sort_order, created_at, updated_at)
+             VALUES (100, 'Binder', 'user', 0, 0, 0);
+             INSERT INTO wishlist_folders (id, name, sort_order, created_at, updated_at)
+             VALUES (100, 'Upgrades', 0, 0, 0);",
+        )
+        .unwrap();
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+
+        let rules = r#"[{"kind":"set","sets":["lea"]}]"#;
+        for (n, table) in ["collection_folders", "wishlist_folders"]
+            .into_iter()
+            .enumerate()
+        {
+            conn.execute(
+                &format!("UPDATE {table} SET rules = ?1 WHERE id = 100"),
+                [rules],
+            )
+            .unwrap();
+            let rows = ops(&conn);
+            assert_eq!(rows.len(), 2 * n + 1, "one write, one op, on {table}");
+            let fields: serde_json::Value = serde_json::from_str(&rows[2 * n].2).unwrap();
+            assert_eq!(
+                fields.get("rules"),
+                Some(&serde_json::json!(rules)),
+                "{table}'s rules must reach the reader's other devices, in {fields}"
+            );
+
+            conn.execute(
+                &format!("UPDATE {table} SET rules = NULL WHERE id = 100"),
+                [],
+            )
+            .unwrap();
+            let rows = ops(&conn);
+            assert_eq!(
+                rows.len(),
+                2 * n + 2,
+                "a second write, a second op, on {table}"
+            );
+            let fields: serde_json::Value = serde_json::from_str(&rows[2 * n + 1].2).unwrap();
+            assert_eq!(
+                fields.get("rules"),
+                Some(&serde_json::Value::Null),
+                "and so must clearing {table}'s rules, in {fields}"
+            );
+        }
     }
 
     /// **No captured column may be `created_at` or `updated_at`.** They are facts about when

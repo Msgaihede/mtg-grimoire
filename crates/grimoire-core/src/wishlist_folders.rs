@@ -47,6 +47,7 @@ use crate::collection::EntryChange;
 // is a second thing to drift. `crate::deck::set_folder` already reaches across for
 // `FOLDER_GONE` for exactly this reason, so this is the crate's habit and not a new one.
 use crate::deck_meta::{FOLDER_CYCLE, FOLDER_GONE};
+use crate::folder_rules::{FolderRule, RuleConflicts, Scope};
 use crate::sorting::Marketplace;
 use crate::wishlist::WISH_PREFERRED_FINISH;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -96,6 +97,9 @@ pub struct WishlistFolder {
     /// made. A managed folder's own uid is per device, so a share of it is named by its deck's —
     /// which syncs — and a second device resolves the same key to its own copy of the folder.
     pub managed_deck_uid: Option<String>,
+    /// The folder's **own** rules (`wishlist_folders.rules`, user schema v64), `[]` for none —
+    /// never what it inherits. Read leniently ([`crate::folder_rules::read_rules`]).
+    pub rules: Vec<FolderRule>,
 }
 
 /// What one folder tile is drawn from — the four numbers, per folder, in one round trip.
@@ -136,7 +140,7 @@ fn valid_name(name: &str) -> Result<&str, String> {
 /// What [`folder_row`] reads, in its order, off `wishlist_folders f`.
 const FOLDER_COLUMNS: &str = "f.id, f.parent_id, f.name, f.sort_order, f.managed_deck_id,
      f.managed_tokens, f.sync_uid,
-     (SELECT d.sync_uid FROM decks d WHERE d.id = f.managed_deck_id)";
+     (SELECT d.sync_uid FROM decks d WHERE d.id = f.managed_deck_id), f.rules";
 
 fn folder_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<WishlistFolder> {
     Ok(WishlistFolder {
@@ -149,6 +153,7 @@ fn folder_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<WishlistFolder> {
         managed_tokens: r.get(5)?,
         sync_uid: r.get(6)?,
         managed_deck_uid: r.get(7)?,
+        rules: crate::folder_rules::read_rules(r.get::<_, Option<String>>(8)?.as_deref()),
     })
 }
 
@@ -294,6 +299,37 @@ pub fn rename_folder(conn: &Connection, id: i64, name: &str) -> Result<WishlistF
         record_folder(conn, "rename", name, Some(&before.name))?;
         read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())
     })
+}
+
+/// Replace a folder's own rules — [`rename_folder`]'s shape over the `rules` column, and every
+/// folder may carry them, a deck's managed one included (its guard fences what is filed, and a
+/// rule changes nothing filed). [`crate::folder_rules::tidy`] refuses in one sentence; an
+/// emptied list is stored as NULL. Nothing is written to the sub-tree, which inherits on read.
+pub fn set_folder_rules(
+    conn: &Connection,
+    id: i64,
+    rules: Vec<FolderRule>,
+) -> Result<WishlistFolder, String> {
+    let rules = crate::folder_rules::tidy(rules)?;
+    let changed = conn
+        .execute(
+            "UPDATE wishlist_folders SET rules = ?2, updated_at = unixepoch() WHERE id = ?1",
+            params![id, crate::folder_rules::write_rules(&rules)],
+        )
+        .map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err(FOLDER_GONE.to_owned());
+    }
+    read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())
+}
+
+/// Which wishes break a rule of the folder they are filed in, priced at `marketplace` as the
+/// wall prices them — see [`crate::folder_rules::conflicts`].
+pub fn rule_conflicts(
+    conn: &Connection,
+    marketplace: Marketplace,
+) -> Result<RuleConflicts, String> {
+    crate::folder_rules::conflicts(conn, Scope::Wishlist, marketplace)
 }
 
 /// The destination fence, in one place because every write that is handed a folder id owes it:
@@ -1066,7 +1102,9 @@ mod tests {
                 "managedDeckId": 7, "managedTokens": true,
                 // Issue #941's share key: a managed folder has no uid of its own here and names
                 // its deck's, which syncs.
-                "syncUid": null, "managedDeckUid": "deckuid-7"
+                "syncUid": null, "managedDeckUid": "deckuid-7",
+                // Folder rules (issue #980): the folder's own, none here.
+                "rules": []
             })
         );
     }
@@ -2158,5 +2196,56 @@ mod tests {
         assert!(rename_folder(&conn, shelf.id, "Trade box").is_err());
         assert_eq!(user_folder_names(&conn), ["Shelf"]);
         assert_eq!(feed(&conn).len(), 1, "the create's line, and no rename's");
+    }
+
+    /// **Rules round-trip through [`list_folders`] tidied, an emptied list is NULL, and a
+    /// folder that is gone is [`FOLDER_GONE`]** — [`rename_folder`]'s refusal, one column over.
+    #[test]
+    fn a_folders_rules_round_trip_and_clear_to_null() {
+        use crate::folder_rules::{FolderRule, BAD_RANGE};
+        let conn = conn();
+        let wants = create_folder(&conn, None, "Wants").unwrap().id;
+        let rule = || {
+            vec![FolderRule::Colors {
+                values: vec!["u".to_owned(), "C".to_owned()],
+            }]
+        };
+        assert_eq!(
+            set_folder_rules(&conn, 404, rule()).unwrap_err(),
+            FOLDER_GONE
+        );
+        assert_eq!(
+            set_folder_rules(
+                &conn,
+                wants,
+                vec![FolderRule::ManaValue {
+                    min: None,
+                    max: None
+                }]
+            )
+            .unwrap_err(),
+            BAD_RANGE
+        );
+        let tidied = vec![FolderRule::Colors {
+            values: vec!["C".to_owned(), "U".to_owned()],
+        }];
+        assert_eq!(
+            set_folder_rules(&conn, wants, rule()).unwrap().rules,
+            tidied
+        );
+        assert_eq!(list_folders(&conn).unwrap()[0].rules, tidied);
+
+        assert!(set_folder_rules(&conn, wants, vec![])
+            .unwrap()
+            .rules
+            .is_empty());
+        let stored: Option<String> = conn
+            .query_row(
+                "SELECT rules FROM wishlist_folders WHERE id = ?1",
+                params![wants],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, None);
     }
 }

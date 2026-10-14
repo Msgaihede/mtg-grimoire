@@ -2,13 +2,18 @@ import { useMemo } from "react";
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { offerUndo } from "@/lib/bulkUndo";
 import { plural } from "@/lib/counts";
-import { ipc, type CollectionFolder } from "@/lib/ipc";
+import { ipc, type CollectionFolder, type FolderConflicts, type FolderRule } from "@/lib/ipc";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { refreshCardSearches } from "@/lib/searchMarks";
 
 /** Stable identity for "no folders yet" — a collection nobody has filed is the ordinary case, and
  *  the tree builder's `useMemo` does not see a new identity every render. */
 const NONE: readonly CollectionFolder[] = [];
+
+/** Stable identities for "no rule conflicts" — `NONE`'s reason, for the two readers of
+ *  {@link useCollectionRuleConflicts} that memoise on them. */
+const NO_CONFLICT_IDS: ReadonlySet<number> = new Set();
+const NO_CONFLICT_FOLDERS: readonly FolderConflicts[] = [];
 
 /**
  * Every folder there is, and nothing else — one query, no summary, no writes.
@@ -160,7 +165,8 @@ export function useCollectionFolders() {
   });
 
   const rename = useMutation({
-    mutationFn: ({ id, name }: { id: number; name: string }) => ipc.collectionFolderRename(id, name),
+    mutationFn: ({ id, name }: { id: number; name: string }) =>
+      ipc.collectionFolderRename(id, name),
     ...writes,
   });
 
@@ -300,6 +306,21 @@ export function useCollectionFolders() {
     ...writes,
   });
 
+  /**
+   * Replace a folder's own rules (issue #980) — the whole list; `[]` clears them.
+   *
+   * On `writes`, the whole `["collection"]` root, because a rule changes no row and yet changes
+   * what the page says about rows: `["collection", "ruleConflicts", marketplace]` is under that
+   * root, so the wall's red outlines and the folder badges' counts follow the edit. The other
+   * two roots are spent for nothing here and that is `writes`' own rule — one helper, not a
+   * decision per call site.
+   */
+  const setRules = useMutation({
+    mutationFn: ({ id, rules }: { id: number; rules: FolderRule[] }) =>
+      ipc.collectionFolderSetRules(id, rules),
+    ...writes,
+  });
+
   return {
     // Both passed straight through, so this hook's public surface is exactly what it would have
     // been without the split: the page reads `query` and `folders` off this object and must not
@@ -314,6 +335,39 @@ export function useCollectionFolders() {
     reorder,
     remove,
     setLocked,
+    setRules,
+  };
+}
+
+/**
+ * Which collection entries break their folder's rules, and how many each folder holds (issue
+ * #980, spec §4).
+ *
+ * **Keyed on the marketplace** for the folder summary's reason: a price rule is judged at the
+ * page's marketplace, so two marketplaces are two answers. **Under `["collection"]`**, so every
+ * collection write that already settles that root — a quantity, a move, a delete, a rule edit —
+ * refreshes the outlines without knowing they exist.
+ *
+ * `enabled` for a surface that draws no outlines until the reader asks; off, it answers the empty
+ * identities below rather than `undefined`.
+ */
+export function useCollectionRuleConflicts({ enabled = true }: { enabled?: boolean } = {}) {
+  const { marketplace } = useMarketplace();
+  const query = useQuery({
+    queryKey: ["collection", "ruleConflicts", marketplace.id],
+    queryFn: () => ipc.collectionRuleConflicts(marketplace.id),
+    enabled,
+  });
+  const ids = useMemo<ReadonlySet<number>>(
+    () => (query.data ? new Set(query.data.ids) : NO_CONFLICT_IDS),
+    [query.data],
+  );
+  return {
+    query,
+    /** Every conflicting `collection_entries.id` — what the wall outlines. */
+    ids,
+    /** Per folder, counted in that folder alone; `subtreeConflicts` sums a sub-tree. */
+    folders: query.data?.folders ?? NO_CONFLICT_FOLDERS,
   };
 }
 

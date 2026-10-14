@@ -26,6 +26,7 @@ import { finishLabel, isFinish } from "@/lib/finish";
 import { finishTreatments } from "@/lib/treatment";
 import { FOCUS } from "@/lib/focus";
 import { readFolderDrag } from "@/lib/folderDrag";
+import { RULE_BREAK, RULE_BREAK_EDGE } from "@/lib/folderRules";
 import type { CollectionRow, CollectionSortKey } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
@@ -253,7 +254,10 @@ function columnsFor(
               the hover/focus panel is bound separately, with `describes: false` so it does
               not also wire `aria-describedby` onto a sentence the accessibility tree already
               has. */}
-            <abbr className="no-underline" {...tip(conditionLabel(condition), { describes: false })}>
+            <abbr
+              className="no-underline"
+              {...tip(conditionLabel(condition), { describes: false })}
+            >
               {condition}
             </abbr>
             <span className="sr-only"> ({conditionLabel(condition)})</span>
@@ -644,6 +648,7 @@ export const CollectionTable = memo(function CollectionTable({
   marketplace,
   shelves,
   folderOf,
+  ruleBreaks,
 }: {
   rows: CollectionRow[];
   /** Rows matching the filters, not rows loaded — what assistive tech is told the list is. */
@@ -718,6 +723,13 @@ export const CollectionTable = memo(function CollectionTable({
    * ({@link shelfColumn}). Absent: the six columns, as on the shelves.
    */
   folderOf?: (row: CollectionRow) => Shelf | undefined;
+  /**
+   * The entries that break their folder's rules (issue #980, `useCollectionRuleConflicts().ids`):
+   * such a row wears a red left edge and says {@link RULE_BREAK} as its description — the wall's
+   * red outline, in a table's terms. Held still by the caller (the hook's set moves only with its
+   * answer), since this table is memoised. Absent marks nothing.
+   */
+  ruleBreaks?: ReadonlySet<number>;
 }) {
   // Opening a card is a store write and nothing else — `App` owns the pane, so the list
   // never has to know whether one is open, only which card is in it.
@@ -813,24 +825,25 @@ export const CollectionTable = memo(function CollectionTable({
   // indented by its shelf's depth, so the name lines up under its heading's title.
   const columns = useMemo(
     () =>
-      withFolder(columnsFor(onSetQuantity, onRemove, marketplace, tip, quantityBlocked), folderOf).map(
-        (column, index): TableColumn<TableRow> => ({
-          ...column,
-          cell: (row) => {
-            if (isBand(row)) return null;
-            const indent = index === 0 ? (shelved?.indentOf.get(row) ?? 0) : 0;
-            if (indent === 0) return column.cell(row);
-            return (
-              <>
-                <TableRails indent={indent} />
-                <span className="block min-w-0" style={{ paddingLeft: indent * SHELF_INDENT_PX }}>
-                  {column.cell(row)}
-                </span>
-              </>
-            );
-          },
-        }),
-      ),
+      withFolder(
+        columnsFor(onSetQuantity, onRemove, marketplace, tip, quantityBlocked),
+        folderOf,
+      ).map((column, index): TableColumn<TableRow> => ({
+        ...column,
+        cell: (row) => {
+          if (isBand(row)) return null;
+          const indent = index === 0 ? (shelved?.indentOf.get(row) ?? 0) : 0;
+          if (indent === 0) return column.cell(row);
+          return (
+            <>
+              <TableRails indent={indent} />
+              <span className="block min-w-0" style={{ paddingLeft: indent * SHELF_INDENT_PX }}>
+                {column.cell(row)}
+              </span>
+            </>
+          );
+        },
+      })),
     [onSetQuantity, onRemove, marketplace, tip, quantityBlocked, shelved, folderOf],
   );
 
@@ -919,7 +932,14 @@ export const CollectionTable = memo(function CollectionTable({
         // Last, so it wins over the selection colour: a row holding no copies is a record of a
         // card the user no longer holds, and it says so by receding rather than by
         // disappearing (see the removal button's comment for the one write that still makes one).
-        rowClassName={(row) => (!isBand(row) && row.quantity === 0 ? "text-dim" : undefined)}
+        //
+        // A row whose card breaks its folder's rules adds a red left edge, which no other state on
+        // the row draws — so it reads alongside the dimming and the selection rather than instead.
+        rowClassName={(row) =>
+          isBand(row)
+            ? undefined
+            : cn(row.quantity === 0 && "text-dim", ruleBreaks?.has(row.id) && RULE_BREAK_EDGE)
+        }
         onNeedNextPage={onNeedNextPage}
         // A right-click is not an activation: `onActivate` above is a left click and the two
         // keys, and neither of them fires for this one — so the menu asks about the row without
@@ -942,6 +962,8 @@ export const CollectionTable = memo(function CollectionTable({
               typeLine={row.typeLine}
               folderId={row.folderId}
               {...props}
+              // The red edge's reason, in words — see `ruleBreaks`.
+              aria-description={ruleBreaks?.has(row.id) ? RULE_BREAK : undefined}
               onContextMenu={rowMenu?.(row)}
               onKeyDown={(e) => {
                 props.onKeyDown?.(e);

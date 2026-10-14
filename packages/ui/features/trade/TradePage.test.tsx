@@ -238,6 +238,7 @@ const changeLine = (lineId: number, over: (l: TradeLine) => TradeLine | null) =>
 
 function folder(id: number, name: string, over: Partial<CollectionFolder> = {}): CollectionFolder {
   return {
+    rules: [],
     id,
     parentId: null,
     name,

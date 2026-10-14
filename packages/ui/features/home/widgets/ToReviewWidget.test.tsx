@@ -100,7 +100,7 @@ function summary(needsReview: number): CollectionSummary {
 function folder(
   over: Partial<CollectionFolder> & { id: number; name: string; kind: string },
 ): CollectionFolder {
-  return { parentId: null, deckId: null, sortOrder: 0, locked: false, syncUid: null, ...over };
+  return { rules: [], parentId: null, deckId: null, sortOrder: 0, locked: false, syncUid: null, ...over };
 }
 
 /** A binder drawer, one deck's group, and the one holding area — the app's three folder kinds. */

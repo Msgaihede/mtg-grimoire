@@ -1708,7 +1708,7 @@ pub struct WishlistSummary {
 /// the two figures to believe. That is why `price` is threaded through *both* holes — the
 /// `ORDER BY` that chooses the printing and the column that prices it — rather than the choice
 /// being made once and reused.
-fn priced_wishes(price: &str) -> String {
+pub(crate) fn priced_wishes(price: &str) -> String {
     format!(
         "wishlist_entries w
            LEFT JOIN cards c

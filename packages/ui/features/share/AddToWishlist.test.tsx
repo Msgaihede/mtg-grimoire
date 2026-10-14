@@ -36,6 +36,7 @@ const card = (over: Partial<ShareCard> = {}): ShareCard => ({
 });
 
 const folder = (id: number, name: string, parentId: number | null = null): WishlistFolder => ({
+  rules: [],
   id,
   parentId,
   name,

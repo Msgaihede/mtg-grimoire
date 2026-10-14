@@ -18,6 +18,7 @@ import {
 } from "./collectionShelfModel";
 
 const folder = (id: number, over: Partial<CollectionFolder> = {}): CollectionFolder => ({
+  rules: [],
   id,
   parentId: null,
   name: `F${id}`,

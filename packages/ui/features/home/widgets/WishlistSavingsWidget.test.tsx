@@ -125,6 +125,7 @@ function widget(config: unknown = null): HomeWidget {
 
 function folder(over: Partial<WishlistFolder> & { id: number; name: string }): WishlistFolder {
   return {
+    rules: [],
     parentId: null,
     sortOrder: over.id,
     managedDeckId: null,

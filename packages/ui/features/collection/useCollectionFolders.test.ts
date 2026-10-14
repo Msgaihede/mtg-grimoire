@@ -2,7 +2,7 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement, type ReactNode } from "react";
-import type { CollectionFolder, CollectionFolderSummary } from "@/lib/ipc";
+import type { CollectionFolder, CollectionFolderSummary, FolderRule } from "@/lib/ipc";
 
 const collectionFolderList = vi.hoisted(() => vi.fn());
 const collectionFolderCreate = vi.hoisted(() => vi.fn());
@@ -12,6 +12,9 @@ const collectionFolderReorder = vi.hoisted(() => vi.fn());
 const collectionFolderDelete = vi.hoisted(() => vi.fn());
 const collectionFolderSetLocked = vi.hoisted(() => vi.fn());
 const collectionFolderSummary = vi.hoisted(() => vi.fn());
+/** Folder rules (issue #980): the write and the conflict read. */
+const collectionFolderSetRules = vi.hoisted(() => vi.fn());
+const collectionRuleConflicts = vi.hoisted(() => vi.fn());
 /** Filing several entries in one write — issue #555's `collection_set_folder_many`. */
 const collectionSetFolderMany = vi.hoisted(() => vi.fn());
 // `useCollectionFolders` reads `useMarketplace()`, which is the real hook here rather than a
@@ -30,6 +33,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     collectionFolderDelete,
     collectionFolderSetLocked,
     collectionFolderSummary,
+    collectionFolderSetRules,
+    collectionRuleConflicts,
     collectionSetFolderMany,
     getMarketplace,
     marketplaceFeedStatus,
@@ -40,6 +45,7 @@ import { resetBulkUndo, useBulkUndo } from "@/lib/bulkUndo";
 import {
   useCollectionFolderList,
   useCollectionFolders,
+  useCollectionRuleConflicts,
   useSetCollectionFolderMany,
 } from "./useCollectionFolders";
 
@@ -56,6 +62,7 @@ const BINDER: CollectionFolder = {
   // The row's cross-device name. Nothing in this hook reads it — it is carried so the list a
   // surface receives is the list the command answers.
   syncUid: "uid-binder",
+  rules: [],
 };
 const FOILS: CollectionFolder = {
   id: 2,
@@ -66,7 +73,11 @@ const FOILS: CollectionFolder = {
   sortOrder: 0,
   locked: false,
   syncUid: "uid-foils",
+  rules: [],
 };
+
+/** A rule a folder may carry — under $1 at the page's marketplace. */
+const CHEAP: FolderRule = { kind: "price", min: null, max: 1 };
 
 /** One summary row per folder above — direct per folder, never recursive, and copies rather than
  *  rows. */
@@ -88,13 +99,18 @@ beforeEach(() => {
   collectionFolderMove.mockReset().mockResolvedValue({ ...FOILS, parentId: null });
   // The whole cabinet, flat, as it now stands — `collection_folders::reorder_folders` ends in the
   // same `list_folders` the plain read does, so this is not scoped to the level that was written.
-  collectionFolderReorder
-    .mockReset()
-    .mockResolvedValue([{ ...FOILS, parentId: null, sortOrder: 0 }, { ...BINDER, sortOrder: 1 }]);
+  collectionFolderReorder.mockReset().mockResolvedValue([
+    { ...FOILS, parentId: null, sortOrder: 0 },
+    { ...BINDER, sortOrder: 1 },
+  ]);
   collectionFolderDelete.mockReset().mockResolvedValue(undefined);
   // The folder re-read, `rename`'s shape: the row as it now stands, with its own flag written.
   collectionFolderSetLocked.mockReset().mockResolvedValue({ ...BINDER, locked: true });
   collectionFolderSummary.mockReset().mockResolvedValue([BINDER_SUMMARY, FOILS_SUMMARY]);
+  collectionFolderSetRules.mockReset().mockResolvedValue({ ...BINDER, rules: [CHEAP] });
+  collectionRuleConflicts
+    .mockReset()
+    .mockResolvedValue({ folders: [{ folderId: 1, entries: 2, copies: 5 }], ids: [7, 8] });
   // Matches `DEFAULT_MARKETPLACE`, so a test that does not care about marketplace settles with no
   // observable change from the hook's own initial guess.
   getMarketplace.mockReset().mockResolvedValue("tcgplayer");
@@ -457,6 +473,80 @@ describe("useCollectionFolders", () => {
 });
 
 /**
+ * Folder rules (issue #980). The write is a folder write like the lock — the whole list replaced,
+ * on `writes` — and the conflict read sits under `["collection"]` keyed on the marketplace, so
+ * every collection write already refreshes the outlines.
+ */
+describe("folder rules", () => {
+  it("replaces a folder's rules by id, whole", async () => {
+    const { result } = renderHook(() => useCollectionFolders(), { wrapper });
+    await waitFor(() => expect(result.current.folders).toHaveLength(2));
+
+    await result.current.setRules.mutateAsync({ id: 1, rules: [CHEAP] });
+    expect(collectionFolderSetRules).toHaveBeenCalledWith(1, [CHEAP]);
+
+    await result.current.setRules.mutateAsync({ id: 1, rules: [] });
+    expect(collectionFolderSetRules).toHaveBeenLastCalledWith(1, []);
+  });
+
+  /** The lock's settle set exactly: the conflicts query is under `["collection"]`, so the root is
+   *  what refreshes the red outlines after an edit. */
+  it("settles what the lock settles, on success and on refusal", async () => {
+    const { result } = renderHook(() => useCollectionFolders(), { wrapper });
+    await waitFor(() => expect(result.current.folders).toHaveLength(2));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await result.current.setRules.mutateAsync({ id: 1, rules: [CHEAP] });
+    expect(invalidate.mock.calls).toEqual([
+      [{ queryKey: ["collection"] }],
+      [{ queryKey: ["cards", "search"] }],
+      [{ queryKey: ["decks"] }],
+    ]);
+
+    invalidate.mockClear();
+    collectionFolderSetRules.mockRejectedValue("Pick at least one value for each rule.");
+    await expect(result.current.setRules.mutateAsync({ id: 1, rules: [] })).rejects.toBe(
+      "Pick at least one value for each rule.",
+    );
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection"] }));
+  });
+
+  it("reads the conflicts at the page's marketplace, keyed by it under the collection root", async () => {
+    getMarketplace.mockResolvedValue("manapool");
+    const { result } = renderHook(() => useCollectionRuleConflicts(), { wrapper });
+
+    await waitFor(() => expect(result.current.ids.has(7)).toBe(true));
+    expect(collectionRuleConflicts).toHaveBeenLastCalledWith("manapool");
+    expect([...result.current.ids]).toEqual([7, 8]);
+    expect(result.current.folders).toEqual([{ folderId: 1, entries: 2, copies: 5 }]);
+    expect(client.getQueryData(["collection", "ruleConflicts", "manapool"])).toBeDefined();
+  });
+
+  it("answers stable empty identities before the read lands and while switched off", () => {
+    const { result, rerender } = renderHook(() => useCollectionRuleConflicts({ enabled: false }), {
+      wrapper,
+    });
+    const { ids, folders } = result.current;
+
+    expect(ids.size).toBe(0);
+    expect(folders).toEqual([]);
+    rerender();
+    expect(result.current.ids).toBe(ids);
+    expect(result.current.folders).toBe(folders);
+    expect(collectionRuleConflicts).not.toHaveBeenCalled();
+  });
+
+  it("keeps one Set identity across renders of the same answer", async () => {
+    const { result, rerender } = renderHook(() => useCollectionRuleConflicts(), { wrapper });
+    await waitFor(() => expect(result.current.ids.size).toBe(2));
+    const ids = result.current.ids;
+
+    rerender();
+    expect(result.current.ids).toBe(ids);
+  });
+});
+
+/**
  * `Move to` over several entries — **one** write (issue #555), where it used to be one
  * `collection_set_folder` per id. The settle set is the single write's, and the undo offer is the
  * hook's own so neither of its two callers can forget it.
@@ -465,7 +555,11 @@ describe("useSetCollectionFolderMany", () => {
   it("files every entry in one call and offers the press back, in entries", async () => {
     const { result } = renderHook(() => useSetCollectionFolderMany(), { wrapper });
 
-    await result.current.mutateAsync({ entryIds: [7, 8], folderId: 1, destination: "Trade binder" });
+    await result.current.mutateAsync({
+      entryIds: [7, 8],
+      folderId: 1,
+      destination: "Trade binder",
+    });
 
     expect(collectionSetFolderMany).toHaveBeenCalledTimes(1);
     expect(collectionSetFolderMany).toHaveBeenCalledWith([7, 8], 1);
@@ -479,7 +573,11 @@ describe("useSetCollectionFolderMany", () => {
   /** The root is a destination, spelled `null` on the wire and named by the caller. */
   it("sends null for the root", async () => {
     const { result } = renderHook(() => useSetCollectionFolderMany(), { wrapper });
-    await result.current.mutateAsync({ entryIds: [7, 8], folderId: null, destination: "Collection" });
+    await result.current.mutateAsync({
+      entryIds: [7, 8],
+      folderId: null,
+      destination: "Collection",
+    });
     expect(collectionSetFolderMany).toHaveBeenCalledWith([7, 8], null);
     expect(useBulkUndo.getState().offers.collection?.label).toBe("Moved 2 cards to Collection.");
   });

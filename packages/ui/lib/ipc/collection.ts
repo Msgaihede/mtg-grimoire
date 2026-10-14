@@ -725,6 +725,63 @@ export interface CollectionFolder {
    * the type, so a surface greys the Share row for a `null` rather than sending it.
    */
   syncUid: string | null;
+  /**
+   * The folder's **own** rules ({@link FolderRule}), `[]` for none — criteria a card filed here is
+   * expected to meet, which never stop a card being filed. Inherited ones are not repeated here:
+   * `lib/folderRules.ts` walks the ancestors for the effective list.
+   */
+  rules: FolderRule[];
+}
+
+/**
+ * One criterion a card filed in a collection or wishlist folder is expected to meet — issue #980,
+ * `folder_rules::FolderRule`, an internally tagged enum on the wire (`kind`). **Not** a deck
+ * validation rule, a Scryfall tag, a deck label or the folder lock (`DOMAIN_VOCABULARY.md`).
+ *
+ * A card must satisfy every rule that applies to its folder; a rule with several `values` is
+ * satisfied by any one of them. A range or date pair may leave either end `null`, never both.
+ * `released` takes `YYYY`, `YYYY-MM` or `YYYY-MM-DD`, compared on its own length, so
+ * `to: "2000"` is through the end of 2000. `conditions` is ignored on a wishlist folder.
+ *
+ * A union `type` rather than an interface: the walk in `ipc.test.ts` holds interfaces to Rust
+ * structs, and this is an enum.
+ */
+export type FolderRule =
+  | { kind: "price"; min: number | null; max: number | null }
+  | { kind: "manaValue"; min: number | null; max: number | null }
+  | { kind: "colors"; values: string[] }
+  | { kind: "types"; values: string[] }
+  | { kind: "sets"; values: string[] }
+  | { kind: "rarities"; values: string[] }
+  | { kind: "finishes"; values: string[] }
+  | { kind: "conditions"; values: string[] }
+  | { kind: "borders"; values: string[] }
+  | { kind: "released"; from: string | null; to: string | null };
+
+/** The discriminant of {@link FolderRule} — what `Add rule` picks. */
+export type FolderRuleKind = FolderRule["kind"];
+
+/**
+ * One folder holding cards that break its effective rules — counted in **that folder alone**,
+ * not its sub-tree (`lib/folderRules.ts`' `subtreeConflicts` sums those).
+ */
+export interface FolderConflicts {
+  folderId: number;
+  /** Conflicting rows filed directly here. */
+  entries: number;
+  /** `sum(quantity)` over those rows. */
+  copies: number;
+}
+
+/**
+ * `collection_rule_conflicts` / `wishlist_rule_conflicts`' answer: a {@link FolderConflicts} per
+ * folder holding at least one conflicting row, and `ids`, every conflicting entry's id — what the
+ * wall outlines in red. A rule only breaks on a fact the app knows (an unpriced card passes a
+ * price rule).
+ */
+export interface RuleConflicts {
+  folders: FolderConflicts[];
+  ids: number[];
 }
 
 /**
@@ -977,6 +1034,23 @@ export const collectionCommands = {
    */
   collectionFolderSetLocked: (id: number, locked: boolean) =>
     invoke<CollectionFolder>("collection_folder_set_locked", { id, locked }),
+  /**
+   * Replace a folder's own rules ({@link CollectionFolder.rules}) with `rules`, whole — an empty
+   * list clears them. Answers the folder re-read, with the rules as the backend tidied them
+   * (values deduplicated and sorted). User folders only: a deck's group and `Recently removed`
+   * are refused in words, as {@link ipc.collectionFolderSetLocked} refuses them. A rule list the
+   * backend cannot accept (too many, an empty value list, a range with no end) is refused in one
+   * sentence.
+   */
+  collectionFolderSetRules: (id: number, rules: FolderRule[]) =>
+    invoke<CollectionFolder>("collection_folder_set_rules", { id, rules }),
+  /**
+   * Which collection rows break their folder's effective rules (own and inherited), priced at
+   * `marketplace` for a `price` rule — {@link RuleConflicts}. Counts are per folder, not
+   * recursive.
+   */
+  collectionRuleConflicts: (marketplace: MarketplaceId) =>
+    invoke<RuleConflicts>("collection_rule_conflicts", { marketplace }),
   /**
    * Move one owned row into a folder — `folderId: null` is the root of the collection, a real
    * destination and not an omission.

@@ -64,3 +64,22 @@ reader's own prose rather than three of one thing and one of another.**
 **The overlap is not cosmetic**: `deck_notes` and `sticky_notes` share a title-and-body shape, a
 CommonMark dialect and a renderer, so a sentence that says "notes" and means one of them reads
 perfectly as the other. Say which.
+
+## Rule (a folder's, a deck's, and the game's)
+
+**_Rule_ names three unrelated things, and a sentence about one reads perfectly as another.**
+
+- A **folder rule** is a criterion the reader set on a collection or wishlist folder — a price
+  range, a colour, a set, a release window (issue #980, user schema v64:
+  `collection_folders.rules` / `wishlist_folders.rules`, a JSON array). It is advisory: it never
+  refuses a card, it outlines the cards that do not match in red and counts them. A subfolder
+  inherits its ancestors' folder rules. Say **folder rule**, and its mismatch a **rule
+  conflict** — never "invalid card".
+- A **deck validation rule** is a format's constraint checked by
+  `packages/ui/features/decks/validation/` (singleton, deck size, banned cards) — a *rule break*
+  in the deck editor. It wears the same red outline, which is the only thing the two share.
+- **The game's rules** are phase.rs's rules engine (`crates/grimoire-play`), what the goldfish
+  and playtest boards play by.
+
+The folder **lock** is not a rule either: a lock changes what the app offers your decks, a rule
+changes only what is drawn.

@@ -3310,3 +3310,9 @@ build, not a description of this one.
 | `packages/ui/features/decks/useCollectionSearch.ts` | `collection_list` with `allocation`, `CopySource`'s three answers, and the invalidation a move fires |
 | `packages/ui/features/decks/useDeck.ts` | `setQuantity`, which routes a **live** decrease through `deckToCollection`, and `invalidateCollection`, which fires only when the outcome says copies moved |
 | `packages/ui/features/decks/DeckEditor.tsx` | `setQuantityAt` — the app's one removal path, and where the `CutFrom` row is looked up |
+
+## Folder rules (user schema v64, issue #980)
+
+A collection folder can carry folder rules — criteria its cards are expected to meet, inherited by
+its subfolders and never a reason to refuse a card. They have a page of their own:
+[folder-rules.md](folder-rules.md).

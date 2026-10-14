@@ -1151,7 +1151,8 @@ const RARITY_ORDER: [&str; 4] = ["common", "uncommon", "rare", "mythic"];
 
 /// Every rarity word `cards.rarity` holds — the ladder plus the two off it. `in:` reads a value
 /// against this list before it decides the value is a set code.
-const ALL_RARITIES: [&str; 6] = ["common", "uncommon", "rare", "mythic", "special", "bonus"];
+pub(crate) const ALL_RARITIES: [&str; 6] =
+    ["common", "uncommon", "rare", "mythic", "special", "bonus"];
 
 /// The games Scryfall's `games` array names. `in:` reads a value against this list first.
 const GAMES: [&str; 5] = ["paper", "arena", "mtgo", "astral", "sega"];

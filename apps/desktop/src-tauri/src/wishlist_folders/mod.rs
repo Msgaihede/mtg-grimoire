@@ -8,6 +8,7 @@
 pub use grimoire_core::wishlist_folders::*;
 
 use crate::collection::EntryChange;
+use crate::folder_rules::{FolderRule, RuleConflicts};
 use crate::sorting::Marketplace;
 use crate::sync::{lock_db_read, with_write, AppState};
 use std::sync::Arc;
@@ -57,6 +58,21 @@ pub async fn wishlist_folder_rename(
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         with_write(&state, |c| rename_folder(c, id, &name))
+    })
+    .await
+    .map_err(unfinished)?
+}
+
+/// Replace a folder's own rules — see [`set_folder_rules`]; an emptied list clears them.
+#[tauri::command]
+pub async fn wishlist_folder_set_rules(
+    state: tauri::State<'_, Arc<AppState>>,
+    id: i64,
+    rules: Vec<FolderRule>,
+) -> Result<WishlistFolder, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        with_write(&state, |c| set_folder_rules(c, id, rules))
     })
     .await
     .map_err(unfinished)?
@@ -165,4 +181,18 @@ pub async fn wishlist_folder_summary(
     tauri::async_runtime::spawn_blocking(move || folder_summary(&lock_db_read(&state), marketplace))
         .await
         .map_err(|e| format!("the wishlist folder totals could not be read: {e}"))?
+}
+
+/// **Read-only**: which entries break a rule of the folder they are filed in — see
+/// [`rule_conflicts`] — priced at the marketplace the caller names, `from_opt`'s rule.
+#[tauri::command]
+pub async fn wishlist_rule_conflicts(
+    state: tauri::State<'_, Arc<AppState>>,
+    marketplace: Option<String>,
+) -> Result<RuleConflicts, String> {
+    let state = state.inner().clone();
+    let marketplace = Marketplace::from_opt(marketplace.as_deref());
+    tauri::async_runtime::spawn_blocking(move || rule_conflicts(&lock_db_read(&state), marketplace))
+        .await
+        .map_err(|e| format!("the wishlist folder rules could not be read: {e}"))?
 }

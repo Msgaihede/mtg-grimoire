@@ -186,6 +186,7 @@ const lastCounts = () =>
 
 /** A folder row. `sortOrder` follows the id, so siblings draw in id order. */
 const folder = (id: number, over: Partial<CollectionFolder> = {}): CollectionFolder => ({
+  rules: [],
   id,
   parentId: null,
   name: `F${id}`,
