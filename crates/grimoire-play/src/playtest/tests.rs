@@ -332,6 +332,10 @@ fn a_land_is_played_by_the_land_drop_and_a_second_is_refused_unchanged() {
         name: "Forest".into()
     }));
     assert_eq!(first.view.you.mana_open, 1);
+    assert_eq!(
+        first.view.you.mana.open.green, 1,
+        "the mana table has the Forest's green"
+    );
     let forest = find(&first.view.you.battlefield, "Forest").unwrap();
     assert_eq!(forest.lane, Lane::Land);
     assert_eq!(forest.card_id.as_deref(), Some("print-forest"));

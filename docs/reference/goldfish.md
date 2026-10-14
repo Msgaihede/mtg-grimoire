@@ -215,6 +215,14 @@ the game is lost and the slot empties.
 what a board draws: each zone's cards, the lives, the mana open, the library, and the tokens the
 deck makes. The library goes top first, because the board shows it when the reader asks to look.
 
+**The mana table** (issue #1002) is the mana open by type, beside the Next turn button on both
+boards (`ManaTableView`). `session.rs`' `mana_table` reads phase's `activatable_mana_options` for
+each untapped source: a source counts toward every type it can make, the most of that type one
+activation adds, capped at its net yield (`max_mana_yield`). So a dual land is in two columns and
+the columns sum to more than the mana open; that is the question a reader asks of a table ("can I
+cast {W}{W}?"), where the total answers "how much can I spend". A second row, the pool, is drawn
+only while mana floats (CR 106.4) — mid-payment in a playtest.
+
 **An object's id changes when it changes zone** (CR 400.7), so the page keeps an id only as long as
 the view it came from. The page sends actions one at a time, in order, for that reason
 (`useGoldfishGame`). A printing follows its card across a zone change: the session hands it to the

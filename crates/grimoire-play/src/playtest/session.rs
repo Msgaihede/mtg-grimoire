@@ -56,7 +56,7 @@ use rand_chacha::ChaCha8Rng;
 use serde_json::Value;
 
 use crate::cards::{self, CardFacts};
-use crate::session::{game_card, place_of};
+use crate::session::{game_card, mana_table, place_of};
 use crate::tokens::{DeckTokens, TokenFacts};
 use crate::view::{GameCard, MulliganView, Place, Seat, TokenOffer};
 
@@ -574,6 +574,7 @@ impl Playtest {
                 .iter()
                 .map(|id| max_mana_yield(s, *id, seat))
                 .sum(),
+            mana: mana_table(s, seat),
         }
     }
 
