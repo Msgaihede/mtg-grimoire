@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { damageHappened, turnFive } from "./fixtures";
+import { damageHappened, fourPlayer, turnFive } from "./fixtures";
 import { popsFor } from "./pops";
 
 describe("popsFor", () => {
@@ -40,5 +40,28 @@ describe("popsFor", () => {
         t.view,
       ),
     ).toEqual([]);
+  });
+
+  it("finds the creature on the very opponent's table, and pops by that opponent's plate", () => {
+    const f = fourPlayer();
+    expect(
+      popsFor(
+        [
+          {
+            type: "dealt",
+            source: "Lightning Bolt",
+            target: f.lurrus.name,
+            targetId: f.lurrus.id,
+            seat: "opponent2",
+            amount: 2,
+          },
+          { type: "life", seat: "opponent2", amount: -5, total: 26 },
+        ],
+        f.view,
+      ),
+    ).toEqual([
+      { key: "0", anchor: { card: f.lurrus.id }, text: "−2", tone: "damage" },
+      { key: "1", anchor: { plate: "opponent2" }, text: "−5", tone: "loss" },
+    ]);
   });
 });

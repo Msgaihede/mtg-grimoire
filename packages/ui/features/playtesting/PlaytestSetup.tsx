@@ -12,12 +12,25 @@ import type { PlaytestPicks } from "./play/usePlaytestGame";
 /** What the setup screen reads of a deck. */
 export type SetupDeck = Pick<DeckRow, "id" | "name" | "formatName" | "archived" | "theoryEnabled">;
 
+/** One opponent's seat as the screen holds it: it may have no deck yet. */
+export interface SetupSeat {
+  deckId: number | null;
+  variant: DeckVariant;
+}
+
+/** How many sit at the table: the reader and one opponent, or the reader and three. */
+export type TableSize = "duel" | "fourPlayer";
+
 /** The picks as the screen holds them: a seat may have no deck yet. */
 export interface SetupPicks {
   deckId: number | null;
   variant: DeckVariant;
-  opponentDeckId: number | null;
-  opponentVariant: DeckVariant;
+  table: TableSize;
+  /**
+   * The three opponents' seats, always three: a duel plays the first, and the other two keep
+   * their picks while the reader goes back and forth between the two tables.
+   */
+  opponents: SetupSeat[];
   difficulty: PlaytestDifficulty;
 }
 
@@ -29,18 +42,26 @@ export const DIFFICULTIES: readonly { id: PlaytestDifficulty; label: string }[] 
   { id: "veryHard", label: "Very hard" },
 ];
 
+export const TABLES: readonly { id: TableSize; label: string; opponents: number }[] = [
+  { id: "duel", label: "1 opponent", opponents: 1 },
+  { id: "fourPlayer", label: "3 opponents", opponents: 3 },
+];
+
+const EMPTY_SEAT: SetupSeat = { deckId: null, variant: "live" };
+
 const NOTHING_PICKED: SetupPicks = {
   deckId: null,
   variant: "live",
-  opponentDeckId: null,
-  opponentVariant: "live",
+  table: "duel",
+  opponents: [EMPTY_SEAT, EMPTY_SEAT, EMPTY_SEAT],
   difficulty: "medium",
 };
 
 /**
  * **The last picks, for the rest of the window's life** (`lib/viewMemory.ts`): a reader who plays
- * a game, comes back and wants another against a harder opponent should find both decks still
- * picked. Module memory and never storage, for that module's reason — a restart opens fresh.
+ * a game, comes back and wants another against a harder opponent should find every deck still
+ * picked, and the table as they set it. Module memory and never storage, for that module's
+ * reason — a restart opens fresh.
  */
 const memory = viewMemory<SetupPicks>("playtesting.setup");
 
@@ -50,13 +71,19 @@ function firstVariant(deck: SetupDeck | undefined): DeckVariant {
 }
 
 /**
- * The Playtesting page's setup: the reader's deck and the opponent's, each in one of its lists,
- * and how well the AI plays — then Start.
+ * The Playtesting page's setup: the reader's deck and the opponent's — or, at a four-player
+ * table, three opponents' (issue #994) — each in one of its lists, and how well the AI plays;
+ * then Start.
  *
- * **Any two of the reader's decks, the same one twice included**: a mirror match is a real test
- * of a deck. Archived decks are left out, as the gallery puts them last and out of the way. Which
- * list a deck is dealt from is the editor's own pair, **Theory first, Actual second**, and only
- * for a deck that keeps a plan (`theoryEnabled`); a deck with one list has nothing to choose.
+ * **Any of the reader's decks in any seat, the same one twice included**: a mirror match is a
+ * real test of a deck, and a pod of one deck three times is a fair one for a Commander list.
+ * Every opponent plays at the one skill. Archived decks are left out, as the gallery puts them
+ * last and out of the way. Which list a deck is dealt from is the editor's own pair, **Theory
+ * first, Actual second**, and only for a deck that keeps a plan (`theoryEnabled`); a deck with
+ * one list has nothing to choose.
+ *
+ * **The table** is a duel by default, and "3 opponents" adds two more seats below the first. Start
+ * waits for a deck in every seat shown; the seats a duel hides keep their picks.
  *
  * Presentational over the deck rows, so the page's `useDecks` is the one read and the tests and
  * stories hand it rows.
@@ -80,10 +107,15 @@ export function PlaytestSetup({
 
   const playable = decks.filter((d) => !d.archived);
   const byId = (id: number | null) => playable.find((d) => d.id === id);
+  const seated = TABLES.find((t) => t.id === held.table)?.opponents ?? 1;
+  const four = seated > 1;
   // A remembered deck since archived or deleted is no longer a pick.
   const yours = byId(held.deckId);
-  const theirs = byId(held.opponentDeckId);
-  const ready = yours !== undefined && theirs !== undefined;
+  const seats = held.opponents.slice(0, seated);
+  const theirs = seats.map((s) => byId(s.deckId));
+  const ready = yours !== undefined && theirs.every((d) => d !== undefined);
+  const pickSeat = (i: number, next: Partial<SetupSeat>) =>
+    pick({ opponents: held.opponents.map((s, j) => (j === i ? { ...s, ...next } : s)) });
 
   const options: DropdownOption[] = playable.map((d) => ({
     value: String(d.id),
@@ -92,12 +124,19 @@ export function PlaytestSetup({
   }));
 
   const start = () => {
-    if (yours === undefined || theirs === undefined) return;
+    if (yours === undefined) return;
+    const opponents: PlaytestPicks["opponents"] = [];
+    for (const [i, deck] of theirs.entries()) {
+      if (deck === undefined) return;
+      opponents.push({
+        deckId: deck.id,
+        variant: deck.theoryEnabled ? seats[i].variant : "live",
+      });
+    }
     onStart({
       deckId: yours.id,
       variant: yours.theoryEnabled ? held.variant : "live",
-      opponentDeckId: theirs.id,
-      opponentVariant: theirs.theoryEnabled ? held.opponentVariant : "live",
+      opponents,
       difficulty: held.difficulty,
     });
   };
@@ -107,9 +146,9 @@ export function PlaytestSetup({
       <h2 className="sr-only">Playtesting</h2>
       <div className="flex w-full max-w-[640px] flex-col gap-7">
         <p className="m-0 text-sm text-dim">
-          Play one of your decks against another, the opponent played by the rules engine’s AI. You
-          decide in your main phases, when you attack and block, and when a card asks you something;
-          the rest plays itself.
+          Play one of your decks against another, or against three in a four-player game, each
+          opponent played by the rules engine’s AI. You decide in your main phases, when you attack
+          and block, and when a card asks you something; the rest plays itself.
         </p>
 
         {loading ? (
@@ -120,6 +159,26 @@ export function PlaytestSetup({
           </p>
         ) : (
           <>
+            <div className="flex flex-col gap-2">
+              <span id="playtest-table" className={LABEL}>
+                Table
+              </span>
+              <div
+                role="group"
+                aria-labelledby="playtest-table"
+                className="flex w-fit overflow-hidden rounded-md border border-border"
+              >
+                {TABLES.map(({ id, label }) => (
+                  <Segment
+                    key={id}
+                    label={label}
+                    pressed={held.table === id}
+                    onPress={() => pick({ table: id })}
+                  />
+                ))}
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
               <Seat
                 title="Your deck"
@@ -129,21 +188,23 @@ export function PlaytestSetup({
                 onDeck={(id) => pick({ deckId: id, variant: firstVariant(byId(id)) })}
                 onVariant={(variant) => pick({ variant })}
               />
-              <Seat
-                title="Opponent’s deck"
-                options={options}
-                deck={theirs}
-                variant={held.opponentVariant}
-                onDeck={(id) =>
-                  pick({ opponentDeckId: id, opponentVariant: firstVariant(byId(id)) })
-                }
-                onVariant={(opponentVariant) => pick({ opponentVariant })}
-              />
+              {seats.map((seat, i) => (
+                <Seat
+                  // A seat is its place at the table, which never moves.
+                  key={i}
+                  title={four ? `Opponent ${i + 1}’s deck` : "Opponent’s deck"}
+                  options={options}
+                  deck={theirs[i]}
+                  variant={seat.variant}
+                  onDeck={(id) => pickSeat(i, { deckId: id, variant: firstVariant(byId(id)) })}
+                  onVariant={(variant) => pickSeat(i, { variant })}
+                />
+              ))}
             </div>
 
             <div className="flex flex-col gap-2">
               <span id="playtest-difficulty" className={LABEL}>
-                Opponent’s skill
+                {four ? "Opponents’ skill" : "Opponent’s skill"}
               </span>
               <div
                 role="group"
@@ -181,8 +242,12 @@ export function PlaytestSetup({
                 <Play className="size-4" aria-hidden="true" />
                 Start
               </button>
-              {!ready && <span className="text-xs text-dim">Pick both decks to start.</span>}
-              {ready && yours.id === theirs.id && (
+              {!ready && (
+                <span className="text-xs text-dim">
+                  {four ? "Pick all four decks to start." : "Pick both decks to start."}
+                </span>
+              )}
+              {ready && !four && yours.id === theirs[0]?.id && (
                 <span className="text-xs text-dim">A mirror match.</span>
               )}
             </div>

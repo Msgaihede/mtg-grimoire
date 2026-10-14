@@ -132,6 +132,7 @@ const CASES: [PlaytestHappened, string | null, string][] = [
     "The rules engine chose for you: Choose a target",
     "engine",
   ],
+  [{ type: "eliminated", seat: "you" }, "You are out", "end"],
   [{ type: "gameOver", winner: "you" }, "You won", "end"],
   [{ type: "gameOver", winner: "opponent" }, "You lost", "end"],
   [{ type: "gameOver", winner: null }, "The game is a draw", "end"],
@@ -141,6 +142,31 @@ describe("playtestSentence", () => {
   it.each(CASES)("%j reads %j", (happened, text, kind) => {
     expect(playtestSentence(happened)).toBe(text);
     expect(playtestKind(happened)).toBe(kind);
+  });
+
+  it("names each opponent at a four-player table, and keeps the duel's words in a duel", () => {
+    const at4 = (h: PlaytestHappened) => playtestSentence(h, 3);
+    expect(at4({ type: "cast", seat: "opponent2", name: "Lightning Bolt" })).toBe(
+      "Opponent 2 cast Lightning Bolt",
+    );
+    expect(at4({ type: "turnBegan", turn: 7, seat: "opponent" })).toBe(
+      "Opponent 1's turn 7 begins",
+    );
+    expect(
+      at4({ type: "moved", seat: "opponent3", name: "Ragavan", from: "battlefield", to: "exile" }),
+    ).toBe("Opponent 3's Ragavan was exiled");
+    expect(at4({ type: "life", seat: "opponent2", amount: -4, total: 36 })).toBe(
+      "Opponent 2 lost 4, down to 36",
+    );
+    expect(at4({ type: "lifeSet", seat: "opponent3", life: 30, was: 40 })).toBe(
+      "Opponent 3 took 10, down to 30",
+    );
+    expect(at4({ type: "eliminated", seat: "opponent3" })).toBe("Opponent 3 is out");
+    expect(at4({ type: "gameOver", winner: "opponent2" })).toBe("Opponent 2 won");
+    expect(at4({ type: "gameOver", winner: "you" })).toBe("You won");
+    expect(playtestSentence({ type: "cast", seat: "opponent", name: "Lightning Bolt" })).toBe(
+      "The opponent cast Lightning Bolt",
+    );
   });
 
   it("lists names the way a reader does", () => {

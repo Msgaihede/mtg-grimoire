@@ -11,7 +11,15 @@ import {
   toggleAttacker,
   aimAttacker,
 } from "./combat";
-import { attackStep, blockStep, respondStep, turnFive } from "./fixtures";
+import {
+  attackStep,
+  blockStep,
+  fourPlayer,
+  fourPlayerAttack,
+  fourPlayerCombat,
+  respondStep,
+  turnFive,
+} from "./fixtures";
 
 describe("phaseLine", () => {
   it("says whose turn and where in it", () => {
@@ -46,7 +54,10 @@ describe("stageButtons", () => {
     expect(stageButtons(view, NO_PICKS).primary?.label).toBe("No attack");
     expect(stageButtons(view, toggleAttacker(NO_PICKS, view, goyf.id)).primary).toEqual({
       label: "Attack with 1",
-      action: { type: "attack", attacks: [{ attacker: goyf.id, target: null }] },
+      action: {
+        type: "attack",
+        attacks: [{ attacker: goyf.id, target: null, player: "opponent" }],
+      },
     });
   });
 
@@ -124,18 +135,18 @@ describe("attacking", () => {
     let picks = toggleAttacker(NO_PICKS, view, goyf.id);
     expect(picks).toEqual({
       ...NO_PICKS,
-      attacks: [{ attacker: goyf.id, target: null }],
+      attacks: [{ attacker: goyf.id, target: null, player: "opponent" }],
       aiming: goyf.id,
     });
     expect(tablePicks(view, picks).opponent).toEqual(new Set([jace.id]));
     picks = aimAttacker(picks, view, jace.id);
-    expect(picks.attacks).toEqual([{ attacker: goyf.id, target: jace.id }]);
+    expect(picks.attacks).toEqual([{ attacker: goyf.id, target: jace.id, player: null }]);
     expect(picks.aiming).toBeNull();
     // Clicked again it waits to be aimed; clicked a third time it is put back.
     picks = toggleAttacker(picks, view, goyf.id);
     expect(picks.aiming).toBe(goyf.id);
-    picks = aimAttacker(picks, view, null);
-    expect(picks.attacks).toEqual([{ attacker: goyf.id, target: null }]);
+    picks = aimAttacker(picks, view, "opponent");
+    expect(picks.attacks).toEqual([{ attacker: goyf.id, target: null, player: "opponent" }]);
     picks = toggleAttacker(toggleAttacker(picks, view, goyf.id), view, goyf.id);
     expect(picks).toEqual(NO_PICKS);
   });
@@ -159,5 +170,41 @@ describe("phaseLine when responding", () => {
     expect(phaseLine(respondStep().view)).toBe(
       "Turn 6 · Opponent's turn · Upkeep — you may respond",
     );
+  });
+});
+
+describe("a four-player table", () => {
+  it("names whose turn it is by the opponent's number", () => {
+    const { view } = fourPlayer();
+    expect(phaseLine({ ...view, active: "opponent2", phase: "main1", step: "main1" })).toBe(
+      "Turn 13 · Opponent 2's turn · Main phase",
+    );
+    expect(combatLine(fourPlayerCombat().view, NO_PICKS)).toBe("Opponent 2 attacks with 1");
+  });
+
+  it("attacks the first player an attacker can, and aims it at another by name", () => {
+    const { view, goyf, elves } = fourPlayerAttack();
+    let picks = toggleAttacker(NO_PICKS, view, elves.id);
+    // Two players to choose from is a choice: it waits to be aimed.
+    expect(picks.aiming).toBe(elves.id);
+    expect(picks.attacks).toEqual([{ attacker: elves.id, target: null, player: "opponent" }]);
+    picks = aimAttacker(picks, view, "opponent2");
+    expect(picks.attacks).toEqual([{ attacker: elves.id, target: null, player: "opponent2" }]);
+    // Opponent 3 is out: not a player it may attack.
+    const goyfWaits = toggleAttacker(picks, view, goyf.id);
+    expect(aimAttacker(goyfWaits, view, "opponent3")).toBe(goyfWaits);
+  });
+
+  it("keeps each opponent's marks and picks on their own table", () => {
+    const { view, lurrus } = fourPlayerCombat();
+    expect(tableMarks(view, NO_PICKS).opponent2.get(lurrus.id)).toEqual({
+      tone: "attack",
+      word: "attacking",
+    });
+    expect(tableMarks(view, NO_PICKS).opponent.size).toBe(0);
+    const attack = fourPlayerAttack();
+    const picks = toggleAttacker(NO_PICKS, attack.view, attack.goyf.id);
+    expect(tablePicks(attack.view, picks).opponent).toEqual(new Set([attack.jace.id]));
+    expect(tablePicks(attack.view, picks).opponent2.size).toBe(0);
   });
 });

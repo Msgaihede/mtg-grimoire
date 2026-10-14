@@ -13,13 +13,13 @@ import { appendLog, type LogLine } from "../goldfish/log";
 import { playtestLines } from "./log";
 import { framesOf, replayEntries, useReplay, type ReplayEntry } from "./useReplay";
 
-/** What a game is dealt from: the reader's deck and the opponent's, each in one of its lists,
- *  and how well the AI plays. */
+/** What a game is dealt from: the reader's deck and each opponent's — one for a duel, three for a
+ *  four-player game — each in one of its lists, and how well the AI plays. */
 export interface PlaytestPicks {
   deckId: number;
   variant: DeckVariant;
-  opponentDeckId: number;
-  opponentVariant: DeckVariant;
+  /** In turn order after the reader: `ipc.playtestStart`'s `opponents`. */
+  opponents: { deckId: number; variant: DeckVariant }[];
   difficulty: PlaytestDifficulty;
 }
 
@@ -68,7 +68,11 @@ function freshSeed(): number {
 }
 
 export function usePlaytestGame(picks: PlaytestPicks): PlaytestGame {
-  const { deckId, variant, opponentDeckId, opponentVariant, difficulty } = picks;
+  const { deckId, variant, difficulty } = picks;
+  // **The opponents by value, not by array**: a caller that builds the list afresh on every
+  // render must not deal a new game on every render, which is what a dependency on the array's
+  // identity would do. The same decks in the same seats are the same string.
+  const lineup = JSON.stringify(picks.opponents.map((o) => [o.deckId, o.variant]));
   const [view, setView] = useState<PlaytestView | null>(null);
   const [log, setLog] = useState<LogLine[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -84,7 +88,9 @@ export function usePlaytestGame(picks: PlaytestPicks): PlaytestGame {
   const apply = useCallback((entry: ReplayEntry) => {
     setView(entry.view);
     setLastHappened(entry.quiet ? NONE : entry.happened);
-    setLog((old) => appendLog(old, playtestLines(entry.happened, entry.view.turn)));
+    setLog((old) =>
+      appendLog(old, playtestLines(entry.happened, entry.view.turn, entry.view.opponents.length)),
+    );
   }, []);
   const replay = useReplay(apply);
   const { play, skip, cancel } = replay;
@@ -109,22 +115,23 @@ export function usePlaytestGame(picks: PlaytestPicks): PlaytestGame {
   /** Ask the engine for a game; its answer is drawn only if `mine` is still the page's deal. */
   const request = useCallback(
     (mine: number) => {
+      const seats = JSON.parse(lineup) as [number, string][];
+      const opponents = seats.map(([id, list]) => ({ deckId: id, variant: list }));
       enqueue(() =>
-        ipc
-          .playtestStart(deckId, variant, opponentDeckId, opponentVariant, difficulty, freshSeed())
-          .then(
-            (step) => {
-              if (mine !== generation.current) return;
-              setLog([{ turn: 0, text: "Shuffled both decks and drew seven", kind: "deal" }]);
-              show(step);
-            },
-            (e: unknown) => {
-              if (mine === generation.current) setError(ipcError(e));
-            },
-          ),
+        ipc.playtestStart(deckId, variant, opponents, difficulty, freshSeed()).then(
+          (step) => {
+            if (mine !== generation.current) return;
+            const dealt = opponents.length > 1 ? "every deck" : "both decks";
+            setLog([{ turn: 0, text: `Shuffled ${dealt} and drew seven`, kind: "deal" }]);
+            show(step);
+          },
+          (e: unknown) => {
+            if (mine === generation.current) setError(ipcError(e));
+          },
+        ),
       );
     },
-    [enqueue, show, deckId, variant, opponentDeckId, opponentVariant, difficulty],
+    [enqueue, show, deckId, variant, lineup, difficulty],
   );
 
   /** The game menu's New game, and the result banner's: clear the board, then deal. */

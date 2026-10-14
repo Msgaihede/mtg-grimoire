@@ -1,16 +1,17 @@
 /**
- * The playtest board: one game of a deck against another, the opponent played by phase.rs's AI
- * (`phase-ai`), over the same rules engine as the goldfish board (`crates/grimoire-play`, linked
+ * The playtest board: one game of a deck against one other, or against three in a four-player
+ * game (issue #994), each opponent played by phase.rs's AI (`phase-ai`), over the same rules engine as the goldfish board (`crates/grimoire-play`, linked
  * by the desktop host alone).
  *
  * **A domain of `../ipc.ts`** like the others, and read through `@/lib/ipc` only. The shapes are
  * `grimoire-play`'s `playtest/view.rs`, held field for field by `ipc.test.ts`. A card, its lane,
- * its counters, a place and a seat are the goldfish's own types, so the goldfish's table pieces
- * draw this board's cards too. **The engine supplies facts, the page writes the sentences**:
+ * its counters and a place are the goldfish's own types, so the goldfish's table pieces draw this
+ * board's cards too. A player is a {@link PlaytestPlayer}: a duel's two are spelled as the
+ * goldfish's seats, and a four-player game adds `opponent2` and `opponent3`. **The engine supplies facts, the page writes the sentences**:
  * `PlaytestHappened` is which card went where and whose doing it was, and
  * `features/playtesting/play/log.ts` turns it into "The opponent cast Lightning Bolt".
  *
- * **What the reader may not see is not sent**: the opponent's hand and library are counts.
+ * **What the reader may not see is not sent**: an opponent's hand and library are counts.
  *
  * **A web or phone host refuses all three** — they are on the desktop's `DESKTOP_ONLY` list, and
  * the light app draws no Playtesting.
@@ -52,6 +53,12 @@ export type PlaytestStopStep =
   | "main2"
   | "end";
 
+/**
+ * A player at the table, from the reader's seat: the reader, or an opponent in turn order after
+ * them. A duel has `you` and `opponent`; a four-player game `opponent2` and `opponent3` too.
+ */
+export type PlaytestPlayer = "you" | "opponent" | "opponent2" | "opponent3";
+
 /** What the AI opponent plays like: phase's presets, random to strong. */
 export type PlaytestDifficulty = "veryEasy" | "easy" | "medium" | "hard" | "veryHard";
 
@@ -60,16 +67,19 @@ export interface PlaytestView {
   stage: PlaytestStage;
   /** Both seats' turns counted, from 1; 0 during the opening hands. */
   turn: number;
-  active: GoldfishSeat;
+  active: PlaytestPlayer;
   /** Who played first (the seed's coin flip). */
-  started: GoldfishSeat;
+  started: PlaytestPlayer;
   phase: PlaytestPhase;
   /** The step within `phase` where a player gets priority; `null` in untap, end of combat, cleanup. */
   step: PlaytestStopStep | null;
   mulligan: MulliganView | null;
   you: PlaytestSeat;
-  /** `hand` and `libraryCards` are always empty: the counts are what the reader may know. */
-  opponent: PlaytestSeat;
+  /**
+   * Each opponent's side, in turn order after the reader: one in a duel, three in a four-player
+   * game. `hand` and `libraryCards` are always empty: the counts are what the reader may know.
+   */
+  opponents: PlaytestSeat[];
   combat: PlaytestCombat | null;
   /** In the `attack` stage: the reader's creatures that can attack. */
   attack: PlaytestAttack | null;
@@ -79,8 +89,11 @@ export interface PlaytestView {
   prompt: PlaytestPrompt | null;
   /** Waiting to resolve, the top first. */
   stack: PlaytestStackItem[];
-  /** In the `over` stage: who won, `null` for a draw. */
-  winner: GoldfishSeat | null;
+  /**
+   * In the `over` stage: who won, `null` for a draw — or for a reader who is out (`you.out`) of a
+   * game the others play on, which the reader has lost.
+   */
+  winner: PlaytestPlayer | null;
   /** The tokens the reader's deck makes. */
   tokens: TokenOffer[];
   /** The steps the reader asked to stop at, as `setStops` set them. */
@@ -89,13 +102,16 @@ export interface PlaytestView {
   endingTurn: boolean;
 }
 
-/** A step to stop at, on whose turn. */
+/** A step to stop at, on whose turn: the reader's, or any opponent's. */
 export interface PlaytestStop {
   seat: GoldfishSeat;
   step: PlaytestStopStep;
 }
 
 export interface PlaytestSeat {
+  player: PlaytestPlayer;
+  /** This player has lost and left the game, which the others play on without them. */
+  out: boolean;
   life: number;
   poison: number;
   /** The reader's hand; empty for the opponent. */
@@ -120,10 +136,14 @@ export interface PlaytestCombat {
   blocks: PlaytestBlockPair[];
 }
 
-/** An attacker and what it attacks: a planeswalker's or battle's id, `null` for the player. */
+/**
+ * An attacker and what it attacks: a planeswalker's or battle's id, or `null` for a player —
+ * `player`, the one attacked. From the reader, a `null` player is the first opponent it can attack.
+ */
 export interface PlaytestAttackPair {
   attacker: number;
   target: number | null;
+  player: PlaytestPlayer | null;
 }
 
 export interface PlaytestBlockPair {
@@ -140,8 +160,8 @@ export interface PlaytestAttack {
 
 export interface PlaytestAttacker {
   id: number;
-  /** It can attack the opponent. */
-  player: boolean;
+  /** The players it can attack. */
+  players: PlaytestPlayer[];
   /** The planeswalkers and battles it can attack. */
   targets: number[];
 }
@@ -190,7 +210,7 @@ export interface PlaytestOption {
   /** phase's name for the answer: `ChooseTarget`, `SelectCards`, `CastSpell`… */
   kind: string;
   cards: PlaytestCardRef[];
-  players: GoldfishSeat[];
+  players: PlaytestPlayer[];
   number: number | null;
   yes: boolean | null;
   /** A named choice's own word, as the card prints it. */
@@ -210,7 +230,7 @@ export interface PlaytestStackItem {
   id: number;
   name: string;
   cardId: string | null;
-  seat: GoldfishSeat;
+  seat: PlaytestPlayer;
   ability: boolean;
 }
 
@@ -238,39 +258,40 @@ export type PlaytestAction =
   | { type: "draw"; count: number }
   | { type: "mill"; count: number }
   | { type: "shuffle" }
-  | { type: "setLife"; seat: GoldfishSeat; life: number };
+  | { type: "setLife"; seat: PlaytestPlayer; life: number };
 
 /** What happened, one fact a row; `seat` is whose card or doing it was. */
 export type PlaytestHappened =
   | { type: "mulliganed"; mulligans: number }
   | { type: "kept"; size: number; bottomed: number }
-  | { type: "turnBegan"; turn: number; seat: GoldfishSeat }
-  | { type: "played"; seat: GoldfishSeat; name: string }
-  | { type: "cast"; seat: GoldfishSeat; name: string }
-  | { type: "activated"; seat: GoldfishSeat; name: string }
-  | { type: "moved"; seat: GoldfishSeat; name: string; from: GoldfishPlace; to: GoldfishPlace }
-  | { type: "drew"; seat: GoldfishSeat; name: string | null }
-  | { type: "attacked"; seat: GoldfishSeat; names: string[] }
-  | { type: "blocked"; seat: GoldfishSeat; blocker: string; attacker: string }
+  | { type: "turnBegan"; turn: number; seat: PlaytestPlayer }
+  | { type: "played"; seat: PlaytestPlayer; name: string }
+  | { type: "cast"; seat: PlaytestPlayer; name: string }
+  | { type: "activated"; seat: PlaytestPlayer; name: string }
+  | { type: "moved"; seat: PlaytestPlayer; name: string; from: GoldfishPlace; to: GoldfishPlace }
+  | { type: "drew"; seat: PlaytestPlayer; name: string | null }
+  | { type: "attacked"; seat: PlaytestPlayer; names: string[] }
+  | { type: "blocked"; seat: PlaytestPlayer; blocker: string; attacker: string }
   | {
       type: "dealt";
       source: string;
       target: string;
       /** The permanent hit and whose it is, so the board finds the very card. */
       targetId: number;
-      seat: GoldfishSeat;
+      seat: PlaytestPlayer;
       amount: number;
     }
-  | { type: "life"; seat: GoldfishSeat; amount: number; total: number }
-  | { type: "tokensCreated"; seat: GoldfishSeat; name: string; count: number }
+  | { type: "life"; seat: PlaytestPlayer; amount: number; total: number }
+  | { type: "tokensCreated"; seat: PlaytestPlayer; name: string; count: number }
   | { type: "put"; name: string; from: GoldfishPlace; to: GoldfishPlace }
   | { type: "tapped"; name: string; count: number; tapped: boolean }
   | { type: "untappedAll" }
   | { type: "counters"; name: string; kind: string; count: number }
   | { type: "shuffled" }
-  | { type: "lifeSet"; seat: GoldfishSeat; life: number; was: number }
+  | { type: "lifeSet"; seat: PlaytestPlayer; life: number; was: number }
   | { type: "chose"; what: string }
-  | { type: "gameOver"; winner: GoldfishSeat | null };
+  | { type: "eliminated"; seat: PlaytestPlayer }
+  | { type: "gameOver"; winner: PlaytestPlayer | null };
 
 export interface PlaytestStep {
   view: PlaytestView;
@@ -289,26 +310,31 @@ export interface PlaytestFrame {
   happened: PlaytestHappened[];
 }
 
+/** An opponent's deck for `playtestStart`: a deck and its `live` or `theory` variant. */
+export interface PlaytestOpponent {
+  deckId: number;
+  variant: string;
+}
+
 /** The playtest commands — spread into `ipc` by `../ipc.ts`. */
 export const playtestCommands = {
   /**
-   * A new game: the reader's deck as it stands in `variant` against `opponentDeckId`'s, the
-   * opponent played by the AI at `difficulty`. Answers at the reader's opening hand (or the first
-   * thing the reader decides). `seed` is the shuffle and the coin flip.
+   * A new game: the reader's deck as it stands in `variant` against each of `opponents` (one for a
+   * duel, three for a four-player game), each played by the AI at `difficulty`. Answers at the
+   * reader's opening hand (or the first thing the reader decides). `seed` is the shuffle and the
+   * coin flip.
    */
   playtestStart: (
     deckId: number,
     variant: string,
-    opponentDeckId: number,
-    opponentVariant: string,
+    opponents: PlaytestOpponent[],
     difficulty: PlaytestDifficulty,
     seed: number,
   ) =>
     invoke<PlaytestStep>("playtest_start", {
       deckId,
       variant,
-      opponentDeckId,
-      opponentVariant,
+      opponents,
       difficulty,
       seed,
     }),

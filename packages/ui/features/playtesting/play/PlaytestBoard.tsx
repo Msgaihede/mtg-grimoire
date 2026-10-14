@@ -6,15 +6,15 @@ import {
   useState,
   type JSX,
   type MouseEvent,
-  type ReactNode,
 } from "react";
-import { ArrowRight, ChevronLeft, LoaderCircle, Menu, Skull, SkipForward } from "lucide-react";
+import { ArrowRight, ChevronLeft, LoaderCircle, Menu, SkipForward } from "lucide-react";
 import type {
   GameCard,
   GoldfishAction,
   GoldfishPlace,
   PlaytestAction,
   PlaytestHappened,
+  PlaytestPlayer,
   PlaytestSeat,
   PlaytestStackItem,
   PlaytestView,
@@ -45,7 +45,7 @@ import { fromGoldfish } from "./actions";
 import {
   NO_PICKS,
   aimAttacker,
-  aimsAtPlayer,
+  aimablePlayers,
   pickAttacker,
   pickBlocker,
   stageButtons,
@@ -58,6 +58,7 @@ import { combatArrows } from "./arrows";
 import { CombatArrows } from "./CombatArrows";
 import { DamagePops } from "./DamagePops";
 import { MiddleLine, StackColumn } from "./MiddleLine";
+import { OpponentArea } from "./OpponentArea";
 import {
   OpponentCommand,
   OpponentHand,
@@ -65,6 +66,8 @@ import {
   OpponentPile,
   opponentHandWidth,
 } from "./OpponentZones";
+import { PlateFrame } from "./PlateFrame";
+import { OPPONENTS, playerPossessive, seatOfPlayer, tableCards } from "./players";
 import { pickableCards } from "./prompt";
 import { PickPanel } from "./PickPanel";
 import { PromptPanel } from "./PromptPanel";
@@ -82,6 +85,11 @@ import { PromptPanel } from "./PromptPanel";
  * behind toward the top edge (`Battlefield`'s `flipped`), their library and graveyard on the left
  * and exile and command zone on the right, their hand face down along the top edge. The reader's
  * half is the goldfish's own. Between them, the middle line: the turn, the stack, the combat.
+ *
+ * **Three opponents share that half** at a four-player table (issue #994): it is cut into three
+ * areas side by side over the reader's table, in turn order from the left, each a whole opponent
+ * — plate, hand, zones and battlefield — at a third of the width (`OpponentArea`). A duel is
+ * drawn exactly as it always was; nothing of the four-player layout reaches it.
  *
  * **The frame, measured from this element's box** so it fits a 1280 × 800 window with no scroll:
  * the opponent's band is the top 72 px (their hand, their plate, the chrome), the reader's
@@ -108,8 +116,9 @@ import { PromptPanel } from "./PromptPanel";
 export interface PlaytestBoardProps {
   /** The reader's deck. */
   deckName: string;
-  /** The opponent's deck, for their plate. */
-  opponentName: string;
+  /** Each opponent's deck, for their plates, in turn order: one in a duel, three at a
+   *  four-player table — which is also how the board knows which to draw while it deals. */
+  opponentNames: readonly string[];
   /** `null` while a game is being dealt. */
   view: PlaytestView | null;
   log: readonly LogLine[];
@@ -142,15 +151,15 @@ const CHROME_BUTTON = cn(
 );
 
 /**
- * Which side of the board a pointed card is on — a zone of that seat — or `loose`: a spell on the
- * stack, or a card an answer names that is on neither table (a library being searched). A loose
+ * Which side of the board a pointed card is on — a zone of that player — or `loose`: a spell on
+ * the stack, or a card an answer names that is on no table (a library being searched). A loose
  * card is let go of only when the pointer leaves it.
  */
-type Side = "you" | "opponent" | "loose";
+type Side = PlaytestPlayer | "loose";
 
 export function PlaytestBoard({
   deckName,
-  opponentName,
+  opponentNames,
   view,
   log,
   error,
@@ -165,7 +174,7 @@ export function PlaytestBoard({
 }: PlaytestBoardProps): JSX.Element {
   const [pointed, setPointed] = useState<{ pointed: Pointed; side: Side } | null>(null);
   const [panel, setPanel] = useState<"help" | "log" | null>(null);
-  const [look, setLook] = useState<{ look: ZoneLook; side: "you" | "opponent" } | null>(null);
+  const [look, setLook] = useState<{ look: ZoneLook; side: PlaytestPlayer } | null>(null);
   const [playmat, setPlaymat] = useState<Playmat>(initialPlaymat);
   const [previewWidth, setPreviewWidth] = useState(INSPECT_WIDTH);
   const { menuClick } = useContextMenu();
@@ -229,10 +238,18 @@ export function PlaytestBoard({
   );
 
   const pointYou = useCallback((p: Pointed) => setPointed({ pointed: p, side: "you" }), []);
-  const pointOpponent = useCallback(
-    (p: Pointed) => setPointed({ pointed: p, side: "opponent" }),
+  /** Each opponent's pointer, made once, so their tables' cards are not redrawn for a new one. */
+  const pointThem = useMemo(
+    () =>
+      Object.fromEntries(
+        OPPONENTS.map((player) => [
+          player,
+          (p: Pointed) => setPointed({ pointed: p, side: player }),
+        ]),
+      ) as Record<PlaytestPlayer, (p: Pointed) => void>,
     [],
   );
+  const pointOpponent = pointThem.opponent;
   // **It takes no argument, and must not grow one** — `GoldfishBoard`'s reason: every card hands
   // it to `onMouseLeave` as it is.
   const unpoint = useCallback(() => setPointed(null), []);
@@ -253,6 +270,7 @@ export function PlaytestBoard({
     },
     [view],
   );
+  const opponentCount = view?.opponents.length ?? opponentNames.length;
   const pointStack = useCallback(
     (card: GameCard, item: PlaytestStackItem, e: MouseEvent) =>
       setPointed({
@@ -260,12 +278,12 @@ export function PlaytestBoard({
           card,
           ids: [card.id],
           place: "battlefield",
-          line: `${item.name} · on the stack, ${item.seat === "you" ? "yours" : "the opponent's"}`,
+          line: `${item.name} · on the stack, ${item.seat === "you" ? "yours" : playerPossessive(item.seat, opponentCount, "mid")}`,
           at: pointerAt(e),
         },
         side: "loose",
       }),
-    [],
+    [opponentCount],
   );
 
   // `GoldfishBoard`'s guard against a card redrawn under a still pointer, for its reasons.
@@ -358,26 +376,34 @@ export function PlaytestBoard({
       },
     };
   }, [view, pickable, locked, stage, answers, act, setPicks]);
-  const theirPick = useMemo<TablePick | undefined>(() => {
-    if (view === null || pickable === null || pickable.opponent.size === 0 || locked)
-      return undefined;
-    return {
-      ids: pickable.opponent,
-      onPick: (id) => {
-        if (stage === "attack") setPicks((p) => aimAttacker(p, view, id));
-        else if (stage === "block") setPicks((p) => pickAttacker(p, view, id));
-        else if (stage === "prompt") {
-          const index = answers.get(id);
-          if (index !== undefined) act({ type: "choose", index });
-        }
-      },
+  /** Each opponent's table's picks: the same three clicks on whichever table the card is on. */
+  const theirPicks = useMemo(() => {
+    const out: Partial<Record<PlaytestPlayer, TablePick>> = {};
+    if (view === null || pickable === null || locked) return out;
+    const onPick = (id: number) => {
+      if (stage === "attack") setPicks((p) => aimAttacker(p, view, id));
+      else if (stage === "block") setPicks((p) => pickAttacker(p, view, id));
+      else if (stage === "prompt") {
+        const index = answers.get(id);
+        if (index !== undefined) act({ type: "choose", index });
+      }
     };
+    for (const player of OPPONENTS) {
+      if (pickable[player].size > 0) out[player] = { ids: pickable[player], onPick };
+    }
+    return out;
   }, [view, pickable, locked, stage, answers, act, setPicks]);
+  const theirPick = theirPicks.opponent;
   const onActivate = useCallback((id: number) => act({ type: "activate", id }), [act]);
   const arrows = useMemo(() => (view === null ? [] : combatArrows(view, picks)), [view, picks]);
 
   const you = view?.you ?? null;
-  const opponent = view?.opponent ?? null;
+  const opponent = view?.opponents[0] ?? null;
+  /** A four-player table: the opponents' half is three areas, not one turned-round table. */
+  const four = opponentCount > 1;
+  /** The players the attacker waiting to be aimed could attack, while the reader may aim it. */
+  const aimable =
+    view !== null && view.stage === "attack" && !locked ? aimablePlayers(picks, view) : [];
   const commander = you?.command[0] ?? you?.battlefield.find((c) => c.isCommander) ?? null;
   const felt = feltBackground(playmat);
   const status = error ?? log[0]?.text ?? "";
@@ -389,6 +415,7 @@ export function PlaytestBoard({
   const active = playing && view.turn > 0 ? view.active : null;
   const lookYou = (l: ZoneLook) => setLook({ look: l, side: "you" });
   const lookOpponent = (l: ZoneLook) => setLook({ look: l, side: "opponent" });
+  const lookedAt = look === null || view === null ? undefined : seatOfPlayer(view, look.side);
 
   return (
     <div
@@ -408,14 +435,17 @@ export function PlaytestBoard({
         <CommanderMat cardId={commander.cardId} name={commander.name} />
       )}
 
-      {/* The two tables' dashed edges, drawn under everything on them. */}
-      <div
-        aria-hidden="true"
-        className={cn(
-          OPPONENT_TABLE,
-          "pointer-events-none rounded-[22px] border border-dashed border-border opacity-50",
-        )}
-      />
+      {/* The two tables' dashed edges, drawn under everything on them (each opponent area draws
+          its own). */}
+      {!four && (
+        <div
+          aria-hidden="true"
+          className={cn(
+            OPPONENT_TABLE,
+            "pointer-events-none rounded-[22px] border border-dashed border-border opacity-50",
+          )}
+        />
+      )}
       <div
         aria-hidden="true"
         className={cn(
@@ -426,7 +456,7 @@ export function PlaytestBoard({
 
       {view === null ? (
         <div className="absolute inset-x-[96px] top-[48px] bottom-[112px] flex items-center justify-center text-dim">
-          {error ?? "Shuffling both decks…"}
+          {error ?? (four ? "Shuffling every deck…" : "Shuffling both decks…")}
         </div>
       ) : view.stage === "mulligan" ? (
         // The whole board below the opponent's band (issue #993), the zone columns and the
@@ -458,22 +488,48 @@ export function PlaytestBoard({
         </div>
       ) : (
         <>
-          <div data-table="opponent" className={OPPONENT_TABLE}>
-            <Battlefield
-              label="The opponent's battlefield"
-              cards={view.opponent.battlefield}
-              onAct={goldfishAct}
-              onDrop={drop}
-              onPoint={pointOpponent}
-              onUnpoint={unpoint}
-              flipped
-              readOnly
-              dense
-              marks={marks?.opponent}
-              pick={theirPick}
-              className="h-full w-full"
-            />
-          </div>
+          {four ? (
+            <div className={cn(OPPONENT_AREAS, "grid grid-cols-3 gap-2")}>
+              {view.opponents.map((seat, i) => (
+                <OpponentArea
+                  key={seat.player}
+                  seat={seat}
+                  deckName={opponentNames[i] ?? "Deck"}
+                  opponents={view.opponents.length}
+                  active={active === seat.player}
+                  won={view.winner === seat.player}
+                  disabled={locked}
+                  marks={marks?.[seat.player]}
+                  pick={theirPicks[seat.player]}
+                  aimable={aimable.includes(seat.player)}
+                  onAim={() => setPicks((p) => aimAttacker(p, view, seat.player))}
+                  onLife={(life) => act({ type: "setLife", seat: seat.player, life })}
+                  onAct={goldfishAct}
+                  onDrop={drop}
+                  onPoint={pointThem[seat.player]}
+                  onUnpoint={unpoint}
+                  onLook={(l) => setLook({ look: l, side: seat.player })}
+                />
+              ))}
+            </div>
+          ) : (
+            <div data-table="opponent" className={OPPONENT_TABLE}>
+              <Battlefield
+                label="The opponent's battlefield"
+                cards={view.opponents[0].battlefield}
+                onAct={goldfishAct}
+                onDrop={drop}
+                onPoint={pointOpponent}
+                onUnpoint={unpoint}
+                flipped
+                readOnly
+                dense
+                marks={marks?.opponent}
+                pick={theirPick}
+                className="h-full w-full"
+              />
+            </div>
+          )}
           <MiddleLine
             view={view}
             picks={picks}
@@ -513,7 +569,8 @@ export function PlaytestBoard({
       )}
 
       {/* The opponent's band, the top 48 px: the way back and the menu, their hand face down
-          hanging from the edge with their plate beside it, and help and the log. */}
+          hanging from the edge with their plate beside it, and help and the log. A four-player
+          table's opponents keep their hands and plates in their own areas below it. */}
       <div className={cn("absolute top-1.5 left-3 flex items-center gap-2", LAYER.raised)}>
         <button
           type="button"
@@ -553,44 +610,48 @@ export function PlaytestBoard({
         </button>
       </div>
 
-      <div className="absolute top-0 left-1/2 -translate-x-1/2">
-        <OpponentHand count={handCount} />
-      </div>
-      <div
-        className="absolute top-[5px]"
-        style={{ left: `calc(50% + ${opponentHandWidth(handCount) / 2 + 64}px)` }}
-      >
-        <PlateFrame
-          seat="opponent"
-          active={active === "opponent"}
-          poison={opponent?.poison ?? 0}
-          compact
-        >
-          <LifePlate
-            seat="opponent"
-            title={`Opponent · ${opponentName}`}
-            life={opponent?.life ?? 0}
-            highlight={view?.winner === "opponent"}
-            disabled={view === null || locked}
-            onChange={(life) => act({ type: "setLife", seat: "opponent", life })}
-            compact
-          />
-          {/* An attacker waiting to be aimed, that may attack the opponent: their plate is the
-              target to click. */}
-          {view !== null && view.stage === "attack" && !locked && aimsAtPlayer(picks, view) && (
-            <button
-              type="button"
-              onClick={() => setPicks((p) => aimAttacker(p, view, null))}
-              className={cn(
-                "absolute inset-0 rounded-full bg-transparent outline-2 outline-offset-2 outline-accent outline-dashed",
-                FOCUS,
-              )}
+      {!four && (
+        <>
+          <div className="absolute top-0 left-1/2 -translate-x-1/2">
+            <OpponentHand count={handCount} />
+          </div>
+          <div
+            className="absolute top-[5px]"
+            style={{ left: `calc(50% + ${opponentHandWidth(handCount) / 2 + 64}px)` }}
+          >
+            <PlateFrame
+              seat="opponent"
+              active={active === "opponent"}
+              poison={opponent?.poison ?? 0}
+              compact
             >
-              <span className="sr-only">Attack the opponent</span>
-            </button>
-          )}
-        </PlateFrame>
-      </div>
+              <LifePlate
+                seat="opponent"
+                title={`Opponent · ${opponentNames[0] ?? "Deck"}`}
+                life={opponent?.life ?? 0}
+                highlight={view?.winner === "opponent"}
+                disabled={view === null || locked}
+                onChange={(life) => act({ type: "setLife", seat: "opponent", life })}
+                compact
+              />
+              {/* An attacker waiting to be aimed, that may attack the opponent: their plate is
+                  the target to click. */}
+              {view !== null && aimable.includes("opponent") && (
+                <button
+                  type="button"
+                  onClick={() => setPicks((p) => aimAttacker(p, view, "opponent"))}
+                  className={cn(
+                    "absolute inset-0 rounded-full bg-transparent outline-2 outline-offset-2 outline-accent outline-dashed",
+                    FOCUS,
+                  )}
+                >
+                  <span className="sr-only">Attack the opponent</span>
+                </button>
+              )}
+            </PlateFrame>
+          </div>
+        </>
+      )}
 
       <div className={cn("absolute top-1.5 right-3 flex gap-2", LAYER.raised)}>
         <button
@@ -622,35 +683,39 @@ export function PlaytestBoard({
 
       {/* The opponent's columns, the reader's turned round: library and graveyard on the left,
           exile and the command zone on the right — each centred on their table's height. */}
-      <div className={cn(OPPONENT_COLUMN, "left-3")}>
-        <OpponentLibrary seat={opponent} size={ZONE} />
-        <OpponentPile
-          seat={opponent}
-          zone="graveyard"
-          size={ZONE}
-          onPoint={pointOpponent}
-          onUnpoint={unpoint}
-          onLook={lookOpponent}
-        />
-      </div>
-      <div className={cn(OPPONENT_COLUMN, "right-3 items-end")}>
-        <OpponentPile
-          seat={opponent}
-          zone="exile"
-          size={ZONE}
-          onPoint={pointOpponent}
-          onUnpoint={unpoint}
-          onLook={lookOpponent}
-          className="items-end"
-        />
-        <OpponentCommand
-          seat={opponent}
-          size={ZONE}
-          onPoint={pointOpponent}
-          onUnpoint={unpoint}
-          className="items-end"
-        />
-      </div>
+      {!four && (
+        <>
+          <div className={cn(OPPONENT_COLUMN, "left-3")}>
+            <OpponentLibrary seat={opponent} size={ZONE} />
+            <OpponentPile
+              seat={opponent}
+              zone="graveyard"
+              size={ZONE}
+              onPoint={pointOpponent}
+              onUnpoint={unpoint}
+              onLook={lookOpponent}
+            />
+          </div>
+          <div className={cn(OPPONENT_COLUMN, "right-3 items-end")}>
+            <OpponentPile
+              seat={opponent}
+              zone="exile"
+              size={ZONE}
+              onPoint={pointOpponent}
+              onUnpoint={unpoint}
+              onLook={lookOpponent}
+              className="items-end"
+            />
+            <OpponentCommand
+              seat={opponent}
+              size={ZONE}
+              onPoint={pointOpponent}
+              onUnpoint={unpoint}
+              className="items-end"
+            />
+          </div>
+        </>
+      )}
 
       {/* The reader's columns, the goldfish's: command and exile left, graveyard and library
           right. */}
@@ -738,7 +803,11 @@ export function PlaytestBoard({
                 className="size-[18px] animate-spin motion-reduce:animate-none"
                 aria-hidden="true"
               />
-              {passing ? "Passing turn…" : "Opponent is thinking…"}
+              {passing
+                ? "Passing turn…"
+                : four
+                  ? "Opponents are thinking…"
+                  : "Opponent is thinking…"}
             </span>
           ) : (
             buttons !== null &&
@@ -779,28 +848,36 @@ export function PlaytestBoard({
         <PickPanel
           key={view.prompt!.pick.cards.map((c) => c.id).join(",")}
           prompt={{ ...view.prompt!, pick: view.prompt!.pick }}
-          table={[...view.you.battlefield, ...view.opponent.battlefield, ...view.you.hand]}
+          table={[...tableCards(view), ...view.you.hand]}
           disabled={locked}
           onAct={act}
           onPoint={pointCard}
           onUnpoint={unpoint}
+          opponents={view.opponents.length}
           className="absolute top-[calc(50%-32px)] left-1/2 max-h-[calc(100%-200px)] w-[min(820px,calc(100%-200px))] -translate-x-1/2 -translate-y-1/2"
         />
       )}
       {prompting && view.prompt!.pick === null && (
         <PromptPanel
           prompt={view.prompt!}
-          table={[...view.you.battlefield, ...view.opponent.battlefield, ...view.you.hand]}
+          table={[...tableCards(view), ...view.you.hand]}
           disabled={locked}
           onAct={act}
           onPoint={pointCard}
           onUnpoint={unpoint}
+          opponents={view.opponents.length}
           className="absolute bottom-2 left-1/2 max-h-[104px] w-[min(640px,calc(100%-560px))] -translate-x-1/2"
         />
       )}
 
       {view !== null && view.stage === "over" && !replaying && (
-        <GameOver winner={view.winner} turn={view.turn} onNewGame={onNewGame} onBack={onBack} />
+        <GameOver
+          winner={view.winner}
+          out={view.you.out}
+          turn={view.turn}
+          onNewGame={onNewGame}
+          onBack={onBack}
+        />
       )}
 
       <CombatArrows root={root} arrows={arrows} />
@@ -827,7 +904,7 @@ export function PlaytestBoard({
               FOCUS,
             )}
           >
-            <span className="text-dim">Opponent’s turn</span>
+            <span className="text-dim">{four ? "Opponents’ turns" : "Opponent’s turn"}</span>
             <span className="font-semibold">Skip</span>
             <SkipForward className="size-4" aria-hidden="true" />
           </button>
@@ -843,11 +920,12 @@ export function PlaytestBoard({
       )}
       {panel === "log" && <LogPanel log={log} onClose={() => setPanel(null)} />}
 
-      {look !== null && view !== null && (
+      {look !== null && lookedAt !== undefined && (
         <LibraryDialog
           look={look.look}
-          view={look.side === "you" ? view.you : view.opponent}
-          opponent={look.side === "opponent"}
+          view={lookedAt}
+          opponent={look.side !== "you"}
+          owner={playerPossessive(look.side, opponentCount)}
           onAct={goldfishAct}
           onClose={() => setLook(null)}
         />
@@ -865,56 +943,19 @@ export function PlaytestBoard({
  */
 const OPPONENT_TABLE = "absolute inset-x-[96px] top-[48px] bottom-[calc(50%+46px)]";
 const YOUR_TABLE = "absolute inset-x-[96px] top-[calc(50%-18px)] bottom-[112px]";
+/**
+ * A four-player table's three opponent areas: the duel's opponent table, top to bottom and side
+ * to side — over the reader's table, the gutters left to the chrome and the stack — cut into
+ * thirds 8 px apart. 357 px each in a 1280 px board, 289 px tall in a 766 px one: a 38 px plate
+ * row, and below it the zones' 2 × 3 grid of 40 × 56 tiles (84 × 176) beside the battlefield
+ * (about 265 × 245).
+ */
+const OPPONENT_AREAS = "absolute inset-x-[96px] top-[48px] bottom-[calc(50%+46px)]";
 /** A zone column, centred on its table's height. */
 const OPPONENT_COLUMN =
   "absolute top-[48px] bottom-[calc(50%+46px)] flex flex-col justify-center gap-2";
 const YOUR_COLUMN =
   "absolute top-[calc(50%-18px)] bottom-[112px] flex flex-col justify-center gap-2";
-
-/**
- * A plate's frame: `data-plate`, which the combat's arrows and the life pops find it by, a gold
- * glow on the plate of the seat whose turn it is, and the seat's poison counters when it has any.
- */
-function PlateFrame({
-  seat,
-  active,
-  poison,
-  compact = false,
-  children,
-}: {
-  seat: "you" | "opponent";
-  active: boolean;
-  poison: number;
-  compact?: boolean;
-  children: ReactNode;
-}): JSX.Element {
-  return (
-    <div
-      data-plate={seat}
-      data-active={active || undefined}
-      className={cn(
-        "relative flex items-center gap-2 transition-shadow duration-200 motion-reduce:transition-none",
-        compact ? "rounded-full" : "rounded-[14px]",
-        active &&
-          "shadow-[0_0_0_2px_var(--color-accent),0_0_18px_color-mix(in_oklch,var(--color-accent)_45%,transparent)]",
-      )}
-    >
-      {children}
-      {poison > 0 && (
-        <span
-          aria-label={`${poison} poison`}
-          className={cn(
-            "inline-flex flex-none items-center gap-1 rounded-full border border-mana-g bg-surface px-2 font-mono text-xs/6 font-semibold text-mana-g tabular-nums",
-            !compact && "absolute -top-3 right-2",
-          )}
-        >
-          <Skull className="size-3.5" aria-hidden="true" />
-          {poison}
-        </span>
-      )}
-    </div>
-  );
-}
 
 /** The foot's primary button — the goldfish's "Next turn", saying what this one does. */
 function StageButton({ label, onPress }: { label: string; onPress: () => void }): JSX.Element {
@@ -942,19 +983,26 @@ function StageButton({ label, onPress }: { label: string; onPress: () => void })
   );
 }
 
-/** The result, over the middle of the board — the tables stay drawn around it to be looked at. */
+/**
+ * The result, over the middle of the board — the tables stay drawn around it to be looked at.
+ * **A reader who is out has lost**, though `winner` is `null` then (the others play on, unseen):
+ * only a game that ended with no winner and the reader still in is a draw.
+ */
 function GameOver({
   winner,
+  out,
   turn,
   onNewGame,
   onBack,
 }: {
   winner: PlaytestView["winner"];
+  /** The reader is out (`you.out`). */
+  out: boolean;
   turn: number;
   onNewGame: () => void;
   onBack: () => void;
 }): JSX.Element {
-  const title = winner === "you" ? "You won" : winner === "opponent" ? "You lost" : "Draw";
+  const title = winner === "you" ? "You won" : out || winner !== null ? "You lost" : "Draw";
   return (
     <section
       aria-label="Game over"
@@ -1025,10 +1073,10 @@ function PlaytestHelp(): JSX.Element {
   );
 }
 
-/** Every id a card can land as on this board: the reader's every zone, the opponent's open ones. */
+/** Every id a card can land as on this board: the reader's every zone, each opponent's open ones. */
 function seen(view: PlaytestView): Set<number> {
   const out = new Set<number>();
-  const { you, opponent } = view;
+  const { you } = view;
   for (const zone of [
     you.hand,
     you.battlefield,
@@ -1036,23 +1084,19 @@ function seen(view: PlaytestView): Set<number> {
     you.exile,
     you.command,
     you.libraryCards,
-    opponent.battlefield,
-    opponent.graveyard,
-    opponent.exile,
-    opponent.command,
+    ...view.opponents.flatMap((o) => [o.battlefield, o.graveyard, o.exile, o.command]),
   ]) {
     for (const c of zone) out.add(c.id);
   }
   return out;
 }
 
-/** Which seat's battlefield or hand holds `id`, for a card pointed at from the prompt panel. */
-function seatHolding(view: PlaytestView | null, id: number): "you" | "opponent" | null {
+/** Which player's battlefield or hand holds `id`, for a card pointed at from the prompt panel. */
+function seatHolding(view: PlaytestView | null, id: number): PlaytestPlayer | null {
   if (view === null) return null;
   if (view.you.battlefield.some((c) => c.id === id) || view.you.hand.some((c) => c.id === id))
     return "you";
-  if (view.opponent.battlefield.some((c) => c.id === id)) return "opponent";
-  return null;
+  return view.opponents.find((o) => o.battlefield.some((c) => c.id === id))?.player ?? null;
 }
 
 /** One seat's cards in `place`. */
@@ -1084,7 +1128,9 @@ function fresh(
   if (held === null || view === null) return null;
   const { pointed, side } = held;
   if (side === "loose") return held;
-  const zone = zoneOf(side === "you" ? view.you : view.opponent, pointed.place);
+  const seat = seatOfPlayer(view, side);
+  if (seat === undefined) return null;
+  const zone = zoneOf(seat, pointed.place);
   const card = zone.find((c) => c.id === pointed.card.id);
   if (card === undefined) return null;
   const ids = pointed.ids.filter((id) => zone.some((c) => c.id === id));

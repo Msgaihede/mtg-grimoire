@@ -44,6 +44,8 @@ describe("optionLabel", () => {
     expect(optionLabel(option({ cards: [card] }), target).text).toBe("Ragavan");
     expect(optionLabel(option({ players: ["opponent"] }), target).text).toBe("Opponent");
     expect(optionLabel(option({ players: ["you"] }), target).text).toBe("You");
+    // At a four-player table, which opponent.
+    expect(optionLabel(option({ players: ["opponent2"] }), target, 3).text).toBe("Opponent 2");
   });
 
   it("calls a target answer with nothing in it the end of choosing", () => {

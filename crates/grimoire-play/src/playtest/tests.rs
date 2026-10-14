@@ -6,11 +6,11 @@ use crate::cards::CardFacts;
 use crate::on_engine_stack;
 use crate::view::{GameCard, Lane, Place, Seat};
 
-use super::session::Playtest;
+use super::session::{OpponentDeck, Playtest};
 use super::view::{
     Difficulty, PlaytestAction as A, PlaytestAttackPair, PlaytestBlockPair, PlaytestHappened as H,
-    PlaytestPhase, PlaytestPickPurpose, PlaytestStage as Stage, PlaytestStep, PlaytestStop,
-    PlaytestStopStep, PlaytestView,
+    PlaytestPhase, PlaytestPickPurpose, PlaytestPlayer, PlaytestStage as Stage, PlaytestStep,
+    PlaytestStop, PlaytestStopStep, PlaytestView,
 };
 
 fn card(
@@ -128,7 +128,15 @@ fn red() -> Vec<CardFacts> {
 }
 
 /// The AI's seat, for `put_for_test`.
-const AI_SEAT: Seat = Seat::Opponent;
+const AI_SEAT: PlaytestPlayer = PlaytestPlayer::Opponent;
+
+/// A duel's one opponent: `cards`, with no tokens of its own.
+fn against(cards: Vec<CardFacts>) -> Vec<OpponentDeck> {
+    vec![OpponentDeck {
+        cards,
+        tokens: Vec::new(),
+    }]
+}
 
 fn engine<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
     on_engine_stack(work).expect("the engine ran")
@@ -139,7 +147,7 @@ fn deal(you: Vec<CardFacts>, seed: u64) -> (Playtest, PlaytestStep) {
     let mut red = red();
     // Haste is a keyword line the parser reads from Scryfall's keywords.
     red[1].keywords = vec!["Haste".into()];
-    Playtest::new(&you, &[], &red, &[], seed, Difficulty::VeryEasy).expect("a game starts")
+    Playtest::new(&you, &[], &against(red), seed, Difficulty::VeryEasy).expect("a game starts")
 }
 
 /// Issue #991: the reader's token is offered and drawn in the printing their deck sets for it.
@@ -159,7 +167,7 @@ fn a_token_is_offered_and_drawn_in_the_printing_the_deck_sets() {
     ));
     let view = engine(move || {
         let (mut game, _) =
-            Playtest::new(&you, &[token], &red(), &[], 2, Difficulty::VeryEasy).unwrap();
+            Playtest::new(&you, &[token], &against(red()), 2, Difficulty::VeryEasy).unwrap();
         game.act(A::Keep { bottom: vec![] }).unwrap();
         game.act(A::CreateToken { preset, count: 1 }).unwrap().view
     });
@@ -236,21 +244,21 @@ fn a_new_game_waits_on_the_opening_hand_and_hides_the_opponents_cards() {
     );
     assert_eq!(view.you.hand.len(), 7);
     assert_eq!(view.you.life, 20, "no commander: a freeform game at 20");
-    assert_eq!(view.opponent.life, 20);
+    assert_eq!(view.opponents[0].life, 20);
     assert!(view.mulligan.is_some());
     assert!(
-        view.opponent.hand.is_empty(),
+        view.opponents[0].hand.is_empty(),
         "the opponent's hand is a count"
     );
-    assert!(view.opponent.library_cards.is_empty());
+    assert!(view.opponents[0].library_cards.is_empty());
     // The AI has decided its own hand (it may have mulliganed): what it holds is a count.
-    assert!((5..=7).contains(&view.opponent.hand_count));
-    assert_eq!(view.opponent.hand_count + view.opponent.library, 40);
+    assert!((5..=7).contains(&view.opponents[0].hand_count));
+    assert_eq!(view.opponents[0].hand_count + view.opponents[0].library, 40);
     assert_eq!(view.you.library_cards.len(), 40 - 7);
     assert!(view.you.hand.iter().all(|c| c.card_id.is_some()));
     assert_eq!(
         view.started,
-        Seat::You,
+        PlaytestPlayer::You,
         "an even seed puts the reader on the play"
     );
 }
@@ -259,7 +267,7 @@ fn a_new_game_waits_on_the_opening_hand_and_hides_the_opponents_cards() {
 fn keeping_on_the_play_stops_at_the_readers_first_main_phase() {
     let step = engine(|| kept(2).1);
     assert_eq!(step.view.stage, Stage::Main);
-    assert_eq!(step.view.active, Seat::You);
+    assert_eq!(step.view.active, PlaytestPlayer::You);
     assert_eq!(step.view.phase, PlaytestPhase::Main1);
     assert_eq!(step.view.turn, 1);
     assert_eq!(
@@ -276,14 +284,14 @@ fn keeping_on_the_play_stops_at_the_readers_first_main_phase() {
 #[test]
 fn keeping_on_the_draw_plays_the_ais_first_turn_and_hides_its_draw() {
     let step = engine(|| kept(3).1);
-    assert_eq!(step.view.started, Seat::Opponent);
+    assert_eq!(step.view.started, PlaytestPlayer::Opponent);
     assert_eq!(step.view.stage, Stage::Main);
-    assert_eq!(step.view.active, Seat::You);
+    assert_eq!(step.view.active, PlaytestPlayer::You);
     assert_eq!(step.view.turn, 2);
     assert!(
         step.happened.contains(&H::TurnBegan {
             turn: 1,
-            seat: Seat::Opponent
+            seat: PlaytestPlayer::Opponent
         }),
         "{:?}",
         step.happened
@@ -292,7 +300,7 @@ fn keeping_on_the_draw_plays_the_ais_first_turn_and_hides_its_draw() {
         step.happened.iter().any(|h| matches!(
             h,
             H::Played {
-                seat: Seat::Opponent,
+                seat: PlaytestPlayer::Opponent,
                 ..
             }
         )),
@@ -300,14 +308,14 @@ fn keeping_on_the_draw_plays_the_ais_first_turn_and_hides_its_draw() {
         step.happened
     );
     assert!(step.happened.contains(&H::Drew {
-        seat: Seat::You,
+        seat: PlaytestPlayer::You,
         name: step.view.you.hand.last().map(|c| c.name.clone()),
     }));
     assert!(
         !step.happened.iter().any(|h| matches!(
             h,
             H::Drew {
-                seat: Seat::Opponent,
+                seat: PlaytestPlayer::Opponent,
                 name: Some(_)
             }
         )),
@@ -328,7 +336,7 @@ fn a_land_is_played_by_the_land_drop_and_a_second_is_refused_unchanged() {
         (first, refused, game.view())
     });
     assert!(first.happened.contains(&H::Played {
-        seat: Seat::You,
+        seat: PlaytestPlayer::You,
         name: "Forest".into()
     }));
     assert_eq!(first.view.you.mana_open, 1);
@@ -354,7 +362,7 @@ fn a_creature_is_cast_from_untapped_mana_and_resolves_past_the_ai() {
         game.act(A::Play { id: bear }).unwrap()
     });
     assert!(step.happened.contains(&H::Cast {
-        seat: Seat::You,
+        seat: PlaytestPlayer::You,
         name: "Grizzly Bears".into()
     }));
     assert_eq!(
@@ -387,7 +395,7 @@ fn a_spell_with_a_choice_of_targets_asks_and_is_cast_at_the_answer() {
         let at_face = prompt
             .options
             .iter()
-            .find(|o| o.players == vec![Seat::Opponent])
+            .find(|o| o.players == vec![PlaytestPlayer::Opponent])
             .expect("the opponent is a target");
         let cast = game
             .act(A::Choose {
@@ -407,12 +415,15 @@ fn a_spell_with_a_choice_of_targets_asks_and_is_cast_at_the_answer() {
     );
     assert_eq!(prompt.source.as_deref(), Some("Lightning Bolt"));
     assert!(prompt.cancellable);
-    assert!(prompt.options.iter().any(|o| o.players == vec![Seat::You]));
+    assert!(prompt
+        .options
+        .iter()
+        .any(|o| o.players == vec![PlaytestPlayer::You]));
 
     assert_eq!(cast.view.stage, Stage::Main);
-    assert_eq!(cast.view.opponent.life, 17);
+    assert_eq!(cast.view.opponents[0].life, 17);
     assert!(cast.happened.contains(&H::Life {
-        seat: Seat::Opponent,
+        seat: PlaytestPlayer::Opponent,
         amount: -3,
         total: 17,
     }));
@@ -429,7 +440,7 @@ fn a_spell_with_one_legal_target_is_cast_without_asking() {
         let bear = find(&game.view().you.battlefield, "Grizzly Bears")
             .unwrap()
             .id;
-        assert!(game.view().opponent.battlefield.is_empty());
+        assert!(game.view().opponents[0].battlefield.is_empty());
         let growth = in_hand(&mut game, "Giant Growth");
         (bear, game.act(A::Play { id: growth }).unwrap())
     });
@@ -482,7 +493,7 @@ fn a_target_slot_with_one_answer_left_is_taken_without_asking() {
     assert!(answered.happened.contains(&H::Chose {
         what: "TargetSelection".into()
     }));
-    assert!(find(&answered.view.opponent.graveyard, "Raging Goblin").is_some());
+    assert!(find(&answered.view.opponents[0].graveyard, "Raging Goblin").is_some());
     assert!(find(&answered.view.you.graveyard, "Bear Brawl").is_some());
 }
 
@@ -513,7 +524,7 @@ fn a_cast_with_a_question_is_taken_back_by_cancel() {
     assert_eq!(cancelled.view.stage, Stage::Main);
     assert!(find(&cancelled.view.you.hand, "Lightning Bolt").is_some());
     assert_eq!(cancelled.view.you.mana_open, 1, "nothing was paid");
-    assert_eq!(cancelled.view.opponent.life, 20);
+    assert_eq!(cancelled.view.opponents[0].life, 20);
 }
 
 #[test]
@@ -523,7 +534,7 @@ fn a_creature_attacks_the_opponent_and_the_turn_stops_in_the_second_main_phase()
         put_down(&mut game, "Grizzly Bears");
         // A turn cycle, so the bears are no longer summoning sick.
         let step = game.act(A::EndTurn).unwrap();
-        assert_eq!(step.view.active, Seat::You);
+        assert_eq!(step.view.active, PlaytestPlayer::You);
         assert_eq!(step.view.phase, PlaytestPhase::Main1);
         let offered = game.act(A::Pass).unwrap();
         let bears: Vec<u64> = offered
@@ -539,6 +550,7 @@ fn a_creature_attacks_the_opponent_and_the_turn_stops_in_the_second_main_phase()
             .map(|attacker| PlaytestAttackPair {
                 attacker,
                 target: None,
+                player: None,
             })
             .collect();
         let attacked = game.act(A::Attack { attacks }).unwrap();
@@ -551,8 +563,9 @@ fn a_creature_attacks_the_opponent_and_the_turn_stops_in_the_second_main_phase()
     let attack = offered.view.attack.as_ref().unwrap();
     assert_eq!(attack.attackers.len(), 1);
     assert_eq!(attack.attackers[0].id, bear);
-    assert!(
-        attack.attackers[0].player,
+    assert_eq!(
+        attack.attackers[0].players,
+        vec![PlaytestPlayer::Opponent],
         "the bears can attack the opponent"
     );
     assert!(
@@ -560,7 +573,7 @@ fn a_creature_attacks_the_opponent_and_the_turn_stops_in_the_second_main_phase()
         "the opponent has no planeswalker"
     );
     assert!(attacked.happened.contains(&H::Attacked {
-        seat: Seat::You,
+        seat: PlaytestPlayer::You,
         names: vec!["Grizzly Bears".into()]
     }));
     let blocked = attacked
@@ -568,7 +581,11 @@ fn a_creature_attacks_the_opponent_and_the_turn_stops_in_the_second_main_phase()
         .iter()
         .any(|h| matches!(h, H::Blocked { .. }));
     if !blocked {
-        assert_eq!(attacked.view.opponent.life, 18, "{:?}", attacked.happened);
+        assert_eq!(
+            attacked.view.opponents[0].life, 18,
+            "{:?}",
+            attacked.happened
+        );
     }
     if attacked.view.stage == Stage::Main {
         assert_eq!(attacked.view.phase, PlaytestPhase::Main2);
@@ -619,7 +636,7 @@ fn the_ai_attacks_and_the_reader_blocks() {
         after.happened.iter().any(|h| matches!(
             h,
             H::Blocked {
-                seat: Seat::You,
+                seat: PlaytestPlayer::You,
                 ..
             }
         )),
@@ -661,10 +678,10 @@ fn the_ai_plays_its_deck_over_several_turns() {
                 matches!(
                     h,
                     H::Played {
-                        seat: Seat::Opponent,
+                        seat: PlaytestPlayer::Opponent,
                         ..
                     } | H::Cast {
-                        seat: Seat::Opponent,
+                        seat: PlaytestPlayer::Opponent,
                         ..
                     }
                 )
@@ -699,14 +716,15 @@ fn a_medium_ai_plays_a_turn() {
     let step = engine(|| {
         let mut red = red();
         red[1].keywords = vec!["Haste".into()];
-        let (mut game, _) = Playtest::new(&green(), &[], &red, &[], 3, Difficulty::Medium).unwrap();
+        let (mut game, _) =
+            Playtest::new(&green(), &[], &against(red), 3, Difficulty::Medium).unwrap();
         game.act(A::Keep { bottom: vec![] }).unwrap()
     });
-    assert_eq!(step.view.active, Seat::You);
+    assert_eq!(step.view.active, PlaytestPlayer::You);
     assert!(step.happened.iter().any(|h| matches!(
         h,
         H::Played {
-            seat: Seat::Opponent,
+            seat: PlaytestPlayer::Opponent,
             ..
         }
     )));
@@ -718,7 +736,7 @@ fn the_opponent_at_zero_life_ends_the_game_and_the_board_refuses_more() {
         let (mut game, _) = kept(2);
         let over = game
             .act(A::SetLife {
-                seat: Seat::Opponent,
+                seat: PlaytestPlayer::Opponent,
                 life: 0,
             })
             .unwrap();
@@ -726,9 +744,9 @@ fn the_opponent_at_zero_life_ends_the_game_and_the_board_refuses_more() {
         (over, refused)
     });
     assert_eq!(over.view.stage, Stage::Over);
-    assert_eq!(over.view.winner, Some(Seat::You));
+    assert_eq!(over.view.winner, Some(PlaytestPlayer::You));
     assert!(over.happened.contains(&H::GameOver {
-        winner: Some(Seat::You)
+        winner: Some(PlaytestPlayer::You)
     }));
     assert!(refused.unwrap_err().contains("game is over"));
 }
@@ -738,7 +756,7 @@ fn the_sandbox_is_the_readers_main_phase_and_the_readers_cards() {
     engine(|| {
         let (mut game, step) = kept(3);
         // The AI's turn put its land on the battlefield; the reader may not move it.
-        let theirs = step.view.opponent.battlefield[0].id;
+        let theirs = step.view.opponents[0].battlefield[0].id;
         assert!(game
             .act(A::Move {
                 id: theirs,
@@ -776,14 +794,14 @@ fn a_stop_the_reader_asked_for_stops_the_opponents_turn_and_end_turn_skips_it() 
         assert_eq!(set.view.stage, Stage::Main, "a setting plays nothing on");
         // Pass the first main phase, and the second: the opponent's upkeep is the next stop.
         let mut step = game.act(A::Pass).unwrap();
-        while step.view.stage == Stage::Main && step.view.active == Seat::You {
+        while step.view.stage == Stage::Main && step.view.active == PlaytestPlayer::You {
             step = game.act(A::Pass).unwrap();
         }
         let stopped = step;
         let passed = game.act(A::Pass).unwrap();
         // The reader's next turn, ended at once: the opponent's upkeep is skipped this time.
         let mut step = passed.clone();
-        while step.view.active != Seat::You || step.view.stage != Stage::Main {
+        while step.view.active != PlaytestPlayer::You || step.view.stage != Stage::Main {
             step = match step.view.stage {
                 Stage::Block => game.act(A::Block { blocks: vec![] }).unwrap(),
                 Stage::Prompt => game.act(A::Auto).unwrap(),
@@ -794,7 +812,7 @@ fn a_stop_the_reader_asked_for_stops_the_opponents_turn_and_end_turn_skips_it() 
         (stopped, passed, ended)
     });
     assert_eq!(stopped.view.stage, Stage::Respond);
-    assert_eq!(stopped.view.active, Seat::Opponent);
+    assert_eq!(stopped.view.active, PlaytestPlayer::Opponent);
     assert_eq!(stopped.view.phase, PlaytestPhase::Beginning);
     assert_ne!(
         passed.view.stage,
@@ -952,7 +970,7 @@ fn a_creature_attacks_the_opponents_planeswalker() {
         );
         walker.loyalty = Some("5".into());
         red.push(walker);
-        let (mut game, _) = Playtest::new(&green(), &[], &red, &[], 2, Difficulty::VeryEasy)
+        let (mut game, _) = Playtest::new(&green(), &[], &against(red), 2, Difficulty::VeryEasy)
             .expect("a game starts");
         game.act(A::Keep { bottom: vec![] }).unwrap();
         game.put_for_test(AI_SEAT, "Test Walker");
@@ -962,7 +980,7 @@ fn a_creature_attacks_the_opponents_planeswalker() {
         while offered.view.stage == Stage::Respond {
             offered = game.act(A::Pass).unwrap();
         }
-        let walker = find(&offered.view.opponent.battlefield, "Test Walker")
+        let walker = find(&offered.view.opponents[0].battlefield, "Test Walker")
             .expect("the walker is on the opponent's battlefield")
             .id;
         let bear = find(&offered.view.you.battlefield, "Grizzly Bears")
@@ -973,6 +991,7 @@ fn a_creature_attacks_the_opponents_planeswalker() {
                 attacks: vec![PlaytestAttackPair {
                     attacker: bear,
                     target: Some(walker),
+                    player: None,
                 }],
             })
             .unwrap();
@@ -983,7 +1002,7 @@ fn a_creature_attacks_the_opponents_planeswalker() {
     assert!(attack.attackers[0].targets.contains(&walker));
     assert_eq!(attack.targets[0].name, "Test Walker");
     assert_eq!(
-        attacked.view.opponent.life, 20,
+        attacked.view.opponents[0].life, 20,
         "the walker took it, not the player"
     );
     assert!(
@@ -1008,7 +1027,7 @@ fn the_ais_turn_comes_back_as_replay_frames_that_hide_its_hand() {
     assert!(step.frames.iter().all(|f| f.view.prompt.is_none()
         && f.view.attack.is_none()
         && f.view.block.is_none()
-        && f.view.opponent.hand.is_empty()));
+        && f.view.opponents[0].hand.is_empty()));
     let told: Vec<_> = step
         .frames
         .iter()
@@ -1018,10 +1037,192 @@ fn the_ais_turn_comes_back_as_replay_frames_that_hide_its_hand() {
     assert!(told.iter().any(|h| matches!(
         h,
         H::Played {
-            seat: Seat::Opponent,
+            seat: PlaytestPlayer::Opponent,
             ..
         }
     )));
+}
+
+// ── Four players (issue #994) ─────────────────────────────────────────────────────────────────
+
+/// A four-player game, kept at seven: the reader against three red decks. A seed that is a
+/// multiple of four puts the reader on the play.
+fn four(seed: u64) -> (Playtest, PlaytestStep) {
+    let mut red = red();
+    red[1].keywords = vec!["Haste".into()];
+    four_against(red, seed)
+}
+
+/// A four-player game, kept at seven, against three copies of `deck`.
+fn four_against(deck: Vec<CardFacts>, seed: u64) -> (Playtest, PlaytestStep) {
+    let opponents = vec![
+        OpponentDeck {
+            cards: deck,
+            tokens: Vec::new(),
+        };
+        3
+    ];
+    let (mut game, _) = Playtest::new(&green(), &[], &opponents, seed, Difficulty::VeryEasy)
+        .expect("a four-player game starts");
+    let step = game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+    (game, step)
+}
+
+#[test]
+fn a_four_player_game_seats_three_opponents_in_turn_order_and_hides_their_hands() {
+    let (step, round) = engine(|| {
+        let (mut game, step) = four(4);
+        let round = to_main(&mut game);
+        (step, round)
+    });
+    let view = &step.view;
+    assert_eq!(view.started, PlaytestPlayer::You);
+    assert_eq!(view.active, PlaytestPlayer::You);
+    assert_eq!(
+        view.opponents.iter().map(|o| o.player).collect::<Vec<_>>(),
+        vec![
+            PlaytestPlayer::Opponent,
+            PlaytestPlayer::Opponent2,
+            PlaytestPlayer::Opponent3
+        ]
+    );
+    for seat in &view.opponents {
+        assert_eq!(seat.life, 20);
+        assert!(!seat.out);
+        assert!(seat.hand.is_empty() && seat.library_cards.is_empty());
+        assert_eq!(seat.hand_count, 7);
+    }
+    // Ending the turn plays each opponent's, in order, and comes back to the reader.
+    let turns: Vec<PlaytestPlayer> = round
+        .happened
+        .iter()
+        .filter_map(|h| match h {
+            H::TurnBegan { seat, .. } => Some(*seat),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        turns,
+        vec![
+            PlaytestPlayer::Opponent,
+            PlaytestPlayer::Opponent2,
+            PlaytestPlayer::Opponent3,
+            PlaytestPlayer::You
+        ]
+    );
+    assert_eq!(round.view.active, PlaytestPlayer::You);
+    assert_eq!(round.view.stage, Stage::Main);
+    for seat in [PlaytestPlayer::Opponent2, PlaytestPlayer::Opponent3] {
+        assert!(
+            round.happened.contains(&H::Drew { seat, name: None }),
+            "{seat:?} drew, unnamed"
+        );
+    }
+}
+
+#[test]
+fn a_four_player_game_goes_on_without_an_opponent_who_is_out() {
+    let (out, last) = engine(|| {
+        let (mut game, _) = four(4);
+        let out = game
+            .act(A::SetLife {
+                seat: PlaytestPlayer::Opponent2,
+                life: 0,
+            })
+            .unwrap();
+        for seat in [PlaytestPlayer::Opponent, PlaytestPlayer::Opponent3] {
+            game.act(A::SetLife { seat, life: 0 }).unwrap();
+        }
+        (out, game.view())
+    });
+    assert_eq!(out.view.stage, Stage::Main, "{:?}", out.happened);
+    assert!(out.view.opponents[1].out);
+    assert!(!out.view.opponents[0].out && !out.view.opponents[2].out);
+    assert!(out.happened.contains(&H::Eliminated {
+        seat: PlaytestPlayer::Opponent2
+    }));
+    assert_eq!(last.stage, Stage::Over);
+    assert_eq!(last.winner, Some(PlaytestPlayer::You));
+}
+
+#[test]
+fn the_reader_out_of_a_four_player_game_has_lost_it() {
+    let (out, refused) = engine(|| {
+        let (mut game, _) = four(4);
+        let out = game
+            .act(A::SetLife {
+                seat: PlaytestPlayer::You,
+                life: 0,
+            })
+            .unwrap();
+        (out, game.act(A::Pass))
+    });
+    assert_eq!(out.view.stage, Stage::Over);
+    assert!(out.view.you.out);
+    assert_eq!(out.view.winner, None);
+    assert!(out.happened.contains(&H::Eliminated {
+        seat: PlaytestPlayer::You
+    }));
+    assert!(refused.unwrap_err().contains("game is over"));
+}
+
+#[test]
+fn an_attack_names_the_opponent_it_is_at() {
+    let (offered, attacked) = engine(|| {
+        // Opponents with lands alone, so nothing of theirs answers the bears.
+        let (mut game, _) = four_against(vec![red().swap_remove(0)], 4);
+        put_down(&mut game, "Grizzly Bears");
+        // A round of turns, so the bears are no longer summoning sick.
+        to_main(&mut game);
+        let offered = game.act(A::Pass).unwrap();
+        let bear = find(&offered.view.you.battlefield, "Grizzly Bears")
+            .unwrap()
+            .id;
+        let attacked = game
+            .act(A::Attack {
+                attacks: vec![PlaytestAttackPair {
+                    attacker: bear,
+                    target: None,
+                    player: Some(PlaytestPlayer::Opponent3),
+                }],
+            })
+            .unwrap();
+        (offered, attacked)
+    });
+    let attack = offered.view.attack.as_ref().unwrap();
+    assert_eq!(
+        attack.attackers[0].players,
+        vec![
+            PlaytestPlayer::Opponent,
+            PlaytestPlayer::Opponent2,
+            PlaytestPlayer::Opponent3
+        ]
+    );
+    let life = |p: usize| attacked.view.opponents[p].life;
+    assert_eq!(
+        (life(0), life(1), life(2)),
+        (20, 20, 18),
+        "{:?}",
+        attacked.happened
+    );
+}
+
+#[test]
+fn a_game_has_from_one_to_three_opponents() {
+    let refused = engine(|| {
+        let none = Playtest::new(&green(), &[], &[], 4, Difficulty::VeryEasy).err();
+        let four = Playtest::new(
+            &green(),
+            &[],
+            &vec![OpponentDeck::default(); 4],
+            4,
+            Difficulty::VeryEasy,
+        )
+        .err();
+        (none, four)
+    });
+    assert!(refused.0.unwrap().contains("not 0"));
+    assert!(refused.1.unwrap().contains("not 4"));
 }
 
 /// Issue #1027: two of the reader's triggers at once are put in order, and each answer names the
@@ -1064,6 +1265,7 @@ fn two_triggers_at_once_are_ordered_by_answers_that_name_them() {
             .map(|c| PlaytestAttackPair {
                 attacker: c.id,
                 target: None,
+                player: None,
             })
             .collect();
         let asked = game.act(A::Attack { attacks }).unwrap();

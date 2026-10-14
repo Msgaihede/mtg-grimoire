@@ -11,6 +11,10 @@ import {
   combatArrowsView,
   damageHappened,
   discardPick,
+  fourPlayer,
+  fourPlayerAttack,
+  fourPlayerCombat,
+  fourPlayerLost,
   gameOver,
   openingHand,
   replayStep,
@@ -36,6 +40,7 @@ function Board({
   log = [],
   error = null,
   happened,
+  opponentNames = ["Boros Aggro"],
 }: {
   view: PlaytestView | null;
   onAct: (a: PlaytestAction) => void;
@@ -44,6 +49,8 @@ function Board({
   error?: string | null;
   /** Facts to pop once the board is drawn (the damage story). */
   happened?: PlaytestHappened[];
+  /** One deck a duel, three a four-player table. */
+  opponentNames?: string[];
 }): JSX.Element {
   // Handed over a moment after the first paint, as a step's facts arrive after its view.
   const [later, setLater] = useState<PlaytestHappened[] | undefined>(undefined);
@@ -55,7 +62,7 @@ function Board({
   return (
     <PlaytestBoard
       deckName="Simic Tempo"
-      opponentName="Boros Aggro"
+      opponentNames={opponentNames}
       view={view}
       log={log}
       error={error}
@@ -97,7 +104,7 @@ function Replayed({ onAct }: { onAct: (a: PlaytestAction) => void }): JSX.Elemen
   return (
     <PlaytestBoard
       deckName="Simic Tempo"
-      opponentName="Boros Aggro"
+      opponentNames={["Boros Aggro"]}
       view={view}
       log={log}
       error={null}
@@ -283,4 +290,53 @@ export const ScryPick: Story = {
 /** Discard exactly two; the land cannot be picked. */
 export const DiscardPick: Story = {
   args: { view: discardPick().view },
+};
+
+/** One deck in each of three opponents' seats. */
+const POD = ["Boros Aggro", "Thrasios & Tymna", "Bruna Angels"];
+
+/**
+ * A four-player Commander table (issue #994): three opponent areas side by side over the
+ * reader's table, in turn order from the left — Opponent 2 on three poison, Opponent 3 out.
+ */
+export const FourPlayer: Story = {
+  args: { view: fourPlayer().view, opponentNames: POD, log: [] },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByRole("region", { name: "Opponent 2's battlefield" })).toBeVisible();
+    await expect(canvas.getByRole("region", { name: "Opponent 3 · Bruna Angels" })).toHaveAttribute(
+      "data-out",
+      "true",
+    );
+  },
+};
+
+/** Aiming at a four-player table: the Elves picked, each opponent still in a plate to click. */
+export const FourPlayerAttack: Story = {
+  args: { view: fourPlayerAttack().view, opponentNames: POD, log: [] },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+    const yours = canvas.getByRole("region", { name: "Your battlefield" });
+    await userEvent.click(within(yours).getByRole("button", { name: /^Llanowar Elves/ }));
+    await userEvent.click(canvas.getByRole("button", { name: "Attack Opponent 2" }));
+    await userEvent.click(canvas.getByRole("button", { name: /Attack with 1/ }));
+    await expect(args.onAct).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        attacks: [expect.objectContaining({ player: "opponent2" })],
+      }),
+    );
+  },
+};
+
+/** One AI attacking another: Opponent 2's Lurrus at Opponent 1, the arrow between their areas. */
+export const FourPlayerCombat: Story = {
+  args: { view: fourPlayerCombat().view, opponentNames: POD, log: [] },
+};
+
+/** The reader out of a four-player game: "You lost", though the others play on. */
+export const FourPlayerLost: Story = {
+  args: { view: fourPlayerLost().view, opponentNames: POD, log: [] },
+  play: async ({ canvasElement }) => {
+    await expect(within(canvasElement).getByRole("heading", { name: "You lost" })).toBeVisible();
+  },
 };
