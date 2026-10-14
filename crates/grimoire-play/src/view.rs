@@ -220,7 +220,8 @@ pub enum GoldfishAction {
     },
 }
 
-/// What an action did, one fact a row, for the log.
+/// What an action did, one fact a row, for the log — the reader's doing, the rules', and the
+/// goldfish's own turn.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "type",
@@ -279,6 +280,19 @@ pub enum Happened {
     },
     TurnBegan {
         turn: u32,
+    },
+    /// A life total the rules changed — a drain, a gain, a spell's damage to a player — as
+    /// against one the reader set (`LifeSet`). `total` is the life after it.
+    Life {
+        seat: Seat,
+        amount: i32,
+        total: i32,
+    },
+    /// The goldfish's turn, which it plays by itself: it draws, plays nothing and, with more than
+    /// seven cards, discards. One fact for the whole turn, told as it ends.
+    OpponentTurn {
+        drew: u32,
+        discarded: u32,
     },
     /// The engine needed a decision the board does not ask, and took its first choice.
     Chose {
