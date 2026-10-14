@@ -201,7 +201,7 @@ fn type_key() -> String {
 ///   row's period is its day, an older one's its week, and the horizon's own week is read only
 ///   from the horizon on (the module doc says why).
 /// * `kept` — one row per printing per period, its latest, and the period's day as `at`.
-/// * `live` — `collection_entries` per printing and finish, at `sorting::price_expr` over the
+/// * `live` — `collection_entries` per printing and finish, at `sorting::held_price_expr` over the
 ///   entry's own finish; every printing with a copy is present today, a NULL price included.
 /// * `paired` — `lag` over each printing's own sequence of periods; the step counts toward
 ///   `moved` only when that previous period is the one immediately before, and a NULL price on
@@ -266,7 +266,7 @@ fn periods_sql(key: &str, name: &str, market: Marketplace) -> String {
           ORDER BY x.idx, x.bucket",
         row_week = week_bucket("p.day"),
         horizon_week = week_bucket("?3"),
-        price = sorting::price_expr(market, "e.finish"),
+        price = sorting::held_price_expr(market, "e.finish"),
     )
 }
 
@@ -640,6 +640,17 @@ mod tests {
         own(&conn, "free", "nonfoil", "NM", 3);
         own(&conn, "elf", "nonfoil", "NM", 4);
         own(&conn, "gone", "nonfoil", "NM", 1);
+        // Issue #983: a `nonfoil` copy of a printing sold only in foil is the foil's price on the
+        // widget, so it has to be on the graph's live point too.
+        conn.execute(
+            r#"INSERT INTO cards (id, oracle_id, name, set_code, set_name, collector_number, lang,
+                                  layout, type_line, color_identity, finishes, prices, raw)
+               VALUES ('surge', 'o6', 'Surge Only', 'hoc', 'Hobbit', '85', 'en', 'normal',
+                       'Artifact', '', '["foil"]', '{"usd":null,"usd_foil":"20.00"}', '{}')"#,
+            [],
+        )
+        .unwrap();
+        own(&conn, "surge", "nonfoil", "NM", 1);
 
         for market in crate::price_history::priced_markets() {
             let summary = summarise(
@@ -667,8 +678,12 @@ mod tests {
             }
         }
         // And the figure itself, so a summary that went wrong in step cannot hide here:
-        // 3 × 10 + 50 + 4 × 3 at TCGplayer — no etched price, none for `free` or the orphan.
-        assert_eq!(tcg(&conn, "total").points[0].total, 30.0 + 50.0 + 12.0);
+        // 3 × 10 + 50 + 4 × 3 + the surge foil at TCGplayer — no etched price, none for `free`
+        // or the orphan.
+        assert_eq!(
+            tcg(&conn, "total").points[0].total,
+            30.0 + 50.0 + 12.0 + 20.0
+        );
     }
 
     /// **The price part and the reader's part of each step.** Two copies rise from 8 to 9, a
