@@ -698,7 +698,7 @@ export const STATUS = { present, embedded, missing, noModels, corrupt, unlabelle
  */
 export const DEFAULT_SCANNER_PREFS: ScannerPrefs = {
   mode: "fast",
-  filters: { sets: [], released_from: null, released_to: null },
+  filters: { sets: [], released_from: null, released_to: null, exclude_promos: false },
   finish: "detect",
   condition: "NONE",
   folderId: null,

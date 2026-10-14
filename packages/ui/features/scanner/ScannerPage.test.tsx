@@ -1539,7 +1539,12 @@ describe("ScannerPage sending a scan", () => {
       );
 
       await narrowTo(user, "2020-01-01");
-      const pending = { sets: [], released_from: "2020-01-01", released_to: null };
+      const pending = {
+        sets: [],
+        released_from: "2020-01-01",
+        released_to: null,
+        exclude_promos: false,
+      };
       expect(ipc.scannerSetFilters).toHaveBeenCalledTimes(2);
       expect(ipc.scannerSetFilters).toHaveBeenLastCalledWith(pending);
 
@@ -1592,7 +1597,12 @@ describe("ScannerPage sending a scan", () => {
 
       // The reader narrows the scan, and the session takes it — which is when it is stored.
       await narrowTo(user, "2020-01-01");
-      const taken = { sets: [], released_from: "2020-01-01", released_to: null };
+      const taken = {
+        sets: [],
+        released_from: "2020-01-01",
+        released_to: null,
+        exclude_promos: false,
+      };
       await waitFor(() =>
         expect(ipc.setScannerPrefs).toHaveBeenLastCalledWith(
           expect.objectContaining({ filters: taken }),

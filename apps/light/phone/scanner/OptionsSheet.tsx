@@ -1,10 +1,12 @@
 import { useId, useState } from "react";
-import { Camera, Gauge, ListFilter, ScanLine, Sparkles } from "lucide-react";
+import { Camera, Check, Gauge, ListFilter, ScanLine, Sparkles } from "lucide-react";
 import {
   CAMERA_CHOICE_NOTE,
   filterSummary,
   NO_FILTERS,
   SCAN_MODES,
+  SKIP_PROMOS,
+  SKIP_PROMOS_NOTE,
 } from "@grimoire/ui/features/scanner/reader/readerText";
 import { DETECT, FINISH_PREF_LABEL } from "@grimoire/ui/features/scanner/reader/trayFinish";
 import type { CameraDevice } from "@grimoire/ui/features/scanner/useCamera";
@@ -48,7 +50,7 @@ const DATE_FIELD = cn(
  *
  * - **Scan mode** — the bar's switch again, with each mode's sentence under its name. On the
  *   desktop that sentence is a tooltip; here it has to be on the page to be read at all.
- * - **Filters** — the set picker and the release window, sent as they are changed. A refusal from
+ * - **Filters** — the set picker, the promo switch and the release window, sent as they are changed. A refusal from
  *   the session (*No printing matches these filters.*) is said in words under the fields, and the
  *   row itself is refused, with its reason, where the scanner has no card names to filter by.
  * - **Finish** and **Condition** — the tray's two defaults. A finish moves the *next* card; the
@@ -261,7 +263,7 @@ export function OptionsSheet({
 }
 
 /**
- * What the scan is narrowed to: sets, a release window, and the way back to everything.
+ * What the scan is narrowed to: sets, promos, a release window, and the way back to everything.
  *
  * **Every change is sent as it is made** — the desktop popover's rule and its reason: the camera
  * is running while this is open. **No language**, for the desktop's reason too: the bundle holds
@@ -286,6 +288,7 @@ function FiltersPage({
     });
   // A cleared date field reports `""`; the session's word for "no bound" is `null`.
   const dateOf = (raw: string): string | null => (raw === "" ? null : raw);
+  const skipPromos = filters.exclude_promos === true;
 
   return (
     <div className="flex flex-col gap-4 px-4 pt-3 pb-4">
@@ -297,6 +300,29 @@ function FiltersPage({
           Sets
         </span>
         <SetCombobox selected={filters.sets} onToggle={toggle} align="start" fill />
+      </div>
+
+      {/* Beside the set picker, as the desktop popover has it (issue #981), at the touch floor. */}
+      <div className="flex flex-col gap-1">
+        <button
+          type="button"
+          role="switch"
+          aria-checked={skipPromos}
+          aria-describedby={`${id}-promos`}
+          onClick={() => onFilters({ ...filters, exclude_promos: !skipPromos })}
+          className={cn(
+            "inline-flex h-11 items-center gap-2 self-start rounded-md border px-4 text-sm",
+            skipPromos ? "border-accent text-accent" : "border-border text-text",
+            PRESS,
+            FOCUS,
+          )}
+        >
+          {skipPromos && <Check className="size-4 shrink-0" aria-hidden="true" />}
+          {SKIP_PROMOS}
+        </button>
+        <p id={`${id}-promos`} className="text-xs leading-snug text-dim">
+          {SKIP_PROMOS_NOTE}
+        </p>
       </div>
 
       <fieldset>

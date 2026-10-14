@@ -15,7 +15,15 @@ import { sortOptions } from "@/lib/options";
 import { radioKeys } from "@/lib/radioGroup";
 import { cn } from "@/lib/utils";
 import type { CameraDevice } from "../useCamera";
-import { CAMERA_CHOICE_NOTE, filterSummary, NO_FILTERS, SCAN_MODES } from "./readerText";
+import {
+  CAMERA_CHOICE_NOTE,
+  filtering,
+  filterSummary,
+  NO_FILTERS,
+  SCAN_MODES,
+  SKIP_PROMOS,
+  SKIP_PROMOS_NOTE,
+} from "./readerText";
 import { DETECT, FINISH_PREF_LABEL } from "./trayFinish";
 
 export interface ScanBarProps {
@@ -109,8 +117,6 @@ export function ScanBar({
   developerSwitch = true,
 }: ScanBarProps) {
   const summary = filterSummary(filters);
-  const filtering =
-    filters.sets.length > 0 || Boolean(filters.released_from) || Boolean(filters.released_to);
   const conditionWords =
     condition === CONDITION_NOT_SET ? "Condition not set" : CONDITION_LABEL[condition];
   // `Detect` alone on the bar reads as a verb with no object; the menu row sits under a `Finish`
@@ -139,7 +145,7 @@ export function ScanBar({
       <BarPopover
         caption="Filters"
         value={summary}
-        active={filtering}
+        active={filtering(filters)}
         refusal={filtersDisabled}
         panelLabel="Filters"
         panelClassName="w-72"
@@ -348,6 +354,7 @@ function FiltersBody({
     });
   // A cleared date field reports `""`; the session's word for "no bound" is `null`.
   const dateOf = (raw: string): string | null => (raw === "" ? null : raw);
+  const skipPromos = filters.exclude_promos === true;
 
   return (
     <div className="flex flex-col gap-3">
@@ -358,6 +365,30 @@ function FiltersBody({
           Sets
         </span>
         <SetCombobox selected={filters.sets} onToggle={toggle} align="start" fill />
+      </div>
+
+      {/* Beside the set picker, as issue #981 asks: a promo is most often the printing a set's
+          own card is mistaken for. A switch named by its own word, as the bar's Developer is. */}
+      <div className="flex flex-col gap-1">
+        <button
+          type="button"
+          role="switch"
+          aria-checked={skipPromos}
+          aria-describedby={`${id}-promos`}
+          onClick={() => onFilters({ ...filters, exclude_promos: !skipPromos })}
+          className={cn(
+            FILTER_CONTROL,
+            "inline-flex items-center gap-1.5 self-start px-2.5",
+            FOCUS,
+            filterChipState(skipPromos),
+          )}
+        >
+          {skipPromos && <Check className="size-3.5 shrink-0" aria-hidden="true" />}
+          {SKIP_PROMOS}
+        </button>
+        <p id={`${id}-promos`} className="text-xs leading-snug text-dim">
+          {SKIP_PROMOS_NOTE}
+        </p>
       </div>
 
       {/* No flex on the fieldset: a rendered legend is not a flex item, so a gap there would

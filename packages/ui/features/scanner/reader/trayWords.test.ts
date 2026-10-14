@@ -84,7 +84,12 @@ describe("the two modes", () => {
   });
 
   it("clear to the unrestricted filter", () => {
-    expect(NO_FILTERS).toEqual({ sets: [], released_from: null, released_to: null });
+    expect(NO_FILTERS).toEqual({
+      sets: [],
+      released_from: null,
+      released_to: null,
+      exclude_promos: false,
+    });
   });
 });
 
