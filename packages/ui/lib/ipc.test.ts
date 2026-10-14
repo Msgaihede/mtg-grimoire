@@ -5491,6 +5491,14 @@ describe("the share wrappers name the commands `share/commands.rs` registers", (
     expect(invoke).toHaveBeenCalledWith(command, { id: "kQ2p7fMx9Lb0RtVw" });
   });
 
+  it("shareAutoUpdate takes no arguments", async () => {
+    invoke.mockResolvedValue([]);
+
+    await ipc.shareAutoUpdate();
+
+    expect(invoke).toHaveBeenCalledWith("share_auto_update");
+  });
+
   it("shareList takes no arguments", async () => {
     invoke.mockResolvedValue([]);
 

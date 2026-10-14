@@ -269,9 +269,7 @@ describe("a shared collection, opened in the app", () => {
     useAppStore.setState({ openedShares: [] });
     mount();
 
-    expect(
-      screen.getByRole("button", { name: "Open a shared collection" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open a shared collection" })).toBeInTheDocument();
     expect(shareOpen).not.toHaveBeenCalled();
   });
 
@@ -289,6 +287,27 @@ describe("a shared collection, opened in the app", () => {
     ).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Close this collection" }));
     expect(useAppStore.getState().openedShares).toEqual([]);
+  });
+
+  /**
+   * **A re-check that fails keeps the binder on screen** (issue #1025). The snapshot re-checks
+   * itself on a timer now, so a dropped network — or the owner withdrawing the link — can arrive
+   * while the reader is mid-read; taking the cards away for that is worse than saying so above
+   * them.
+   */
+  it("keeps the binder and says so when a re-check is refused", async () => {
+    mount();
+    expect(await screen.findByRole("heading", { level: 2 })).toBeInTheDocument();
+
+    shareOpen.mockRejectedValue("That shared collection is no longer available.");
+    await userEvent.click(screen.getByRole("button", { name: /Check for an update/ }));
+
+    expect(
+      await screen.findByText(/Couldn't check for an update: That shared collection/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2 })).toHaveAccessibleName(
+      "Giradeli’s Trade binder",
+    );
   });
 
   /** Two links open at once is the ordinary case for a reader trading with two people. */
@@ -322,7 +341,9 @@ describe("a shared collection, opened in the app", () => {
     collectionList.mockRejectedValue("the database is locked");
     mount();
 
-    expect(await screen.findByText(/couldn't load your collection and wishlist/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/couldn't load your collection and wishlist/i),
+    ).toBeInTheDocument();
     expect(screen.queryByText("You own 0")).not.toBeInTheDocument();
   });
 });
@@ -368,7 +389,9 @@ describe("building a want list out of somebody else's binder", () => {
     wishlistList.mockRejectedValue("the database is locked");
     mount();
 
-    expect(await screen.findByText(/couldn't load your collection and wishlist/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/couldn't load your collection and wishlist/i),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("checkbox")).toBeNull();
   });
 
@@ -433,9 +456,7 @@ describe("building a want list out of somebody else's binder", () => {
     expect(screen.getByText("1 picked")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Add to wishlist" }));
 
-    expect(
-      await screen.findByRole("listitem", { name: "Lightning Bolt" }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("listitem", { name: "Lightning Bolt" })).toBeInTheDocument();
   });
 
   /**
@@ -444,7 +465,7 @@ describe("building a want list out of somebody else's binder", () => {
    * `rows` keys each row by its index in the snapshot's own array — the only unique key this
    * document has, since two rows of a binder can agree on printing, finish, folder and grade and
    * still be two rows. Switching binders does not unmount anything: `Switcher` holds an observer
-   * on every open link at `staleTime: Infinity`, so the target is warm and `isPending` is false on
+   * on every open link, so the target is warm and `isPending` is false on
    * the same render. Without a key on `<Binder>` the ticks survived and resolved against the
    * *new* binder's rows, and *Add to wishlist* wrote two cards from a collection the reader had
    * never looked at — no error, no cue, into their own wishlist.
@@ -533,9 +554,7 @@ describe("a snapshot missing everything the parser does not promise", () => {
     useAppStore.setState({ openedShares: [LINK, OTHER] });
     mount();
 
-    expect(
-      await screen.findByRole("button", { name: "testshareid00000" }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "testshareid00000" })).toBeInTheDocument();
   });
 });
 
