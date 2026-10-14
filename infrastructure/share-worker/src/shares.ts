@@ -72,6 +72,8 @@ interface Meta {
   format: string | null;
   /** A deck share's preview picture, or `null` — always under {@link PREVIEW_IMAGE_ORIGIN}. */
   image: string | null;
+  /** Who painted {@link image} when it is the deck's cover crop, which is shown only credited. */
+  imageArtist: string | null;
 }
 
 /**
@@ -115,6 +117,7 @@ export function metaProblem(body: unknown): string | null {
     fields,
     format,
     image,
+    imageArtist,
   } = body as Record<string, unknown>;
 
   // `undefined` and `null` are both the whole collection. The app sends `null`; a body that
@@ -155,6 +158,7 @@ export function metaProblem(body: unknown): string | null {
   ) {
     return "that is not a card picture";
   }
+  if (!optionalText(imageArtist)) return "that is not an artist";
   if (!Array.isArray(fields)) return "malformed share";
   // ⚠️ **The ceiling is the format's own arity rather than a number somebody picked**: `fields` is
   // a set over three known names, so anything longer is duplicates or junk. Checking each element
@@ -186,6 +190,7 @@ function readMeta(body: unknown): Meta {
     fields: raw.fields as string[],
     format: (raw.format as string | null | undefined) ?? null,
     image: (raw.image as string | null | undefined) ?? null,
+    imageArtist: (raw.imageArtist as string | null | undefined) ?? null,
   };
 }
 
@@ -347,10 +352,12 @@ export interface PublicRow {
   /** A deck's format and preview picture (issue #1032); `null` on every other kind. */
   format: string | null;
   image: string | null;
+  /** The cover crop's illustrator, credited in the card's text; `null` for a whole card. */
+  image_artist: string | null;
 }
 
 const PUBLIC_COLUMNS = `id, folder_uid, title, owner_name, card_count, object_key, state, updated_at,
-   format, image`;
+   format, image, image_artist`;
 
 /**
  * The one row `GET /s/{id}` and `GET /s/{id}/{hash}.json.gz` each read, or `null` for an id
@@ -423,7 +430,8 @@ export async function handleCreate(
   if (existing !== null) {
     await env.DB.prepare(
       `UPDATE shares SET title = ?, owner_name = ?, card_count = ?, total_value = ?,
-         currency = ?, marketplace = ?, fields = ?, format = ?, image = ?, updated_at = ?
+         currency = ?, marketplace = ?, fields = ?, format = ?, image = ?, image_artist = ?,
+         updated_at = ?
        WHERE id = ?`,
     )
       .bind(
@@ -436,6 +444,7 @@ export async function handleCreate(
         JSON.stringify(meta.fields),
         meta.format,
         meta.image,
+        meta.imageArtist,
         now,
         existing.id,
       )
@@ -467,8 +476,8 @@ export async function handleCreate(
   const insert = env.DB.prepare(
     `INSERT INTO shares (id, group_id, folder_uid, title, owner_name, card_count, total_value,
        currency, marketplace, fields, object_key, bytes, state, created_at, updated_at,
-       format, image)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       format, image, image_artist)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).bind(
     id,
     group,
@@ -487,6 +496,7 @@ export async function handleCreate(
     now,
     meta.format,
     meta.image,
+    meta.imageArtist,
   );
 
   try {

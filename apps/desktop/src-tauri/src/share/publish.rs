@@ -591,8 +591,9 @@ async fn delete_share(
 
 /// The metadata body, built from the document that is about to be uploaded.
 ///
-/// A deck share also sends its `format` and a preview `image` (issue #1032) — what the Worker's
-/// OpenGraph card shows for a deck; both are `null` for a binder and a wishlist.
+/// A deck share also sends its `format`, a preview `image` and, for a cover crop, its
+/// `imageArtist` (issue #1032) — what the Worker's OpenGraph card shows for a deck; all three are
+/// `null` for a binder and a wishlist.
 ///
 /// `cardCount` is the copies rather than the rows, which is what the page prints; `totalValue`
 /// is `None` unless `value` crossed **and** at least one card carried a price, because a `0.0`
@@ -622,7 +623,10 @@ fn meta_body(
         // picture of the deck for `og:image`. `null` on every other kind — a binder's preview
         // stays text, as it always was.
         "format": snap.deck.as_ref().map(|deck| deck.format.as_str()).filter(|f| !f.is_empty()),
-        "image": super::deck::preview_image(snap),
+        "image": super::deck::preview(snap).map(|(img, _)| img),
+        // The illustrator, when the picture is the deck's cover crop — the Worker puts the credit
+        // in the card's text, because a crop with no frame is shown only beside it.
+        "imageArtist": super::deck::preview(snap).and_then(|(_, artist)| artist),
     }))
     .map_err(|e| e.to_string())
 }
@@ -784,6 +788,13 @@ pub fn digest(snap: &super::ShareSnapshot) -> Result<String, String> {
         &snap.cards,
     ))
     .map_err(|e| e.to_string())?;
+    // A deck's half — its piles' switches and its cover — is a change a viewer sees too (issue
+    // #1032). **Appended only when present**, so a binder's digest is the one it always was and
+    // no share published before decks republishes itself on the first pass after an upgrade.
+    let mut body = body;
+    if let Some(deck) = &snap.deck {
+        body.extend(serde_json::to_vec(deck).map_err(|e| e.to_string())?);
+    }
     Ok(Sha256::digest(&body)
         .iter()
         .map(|b| format!("{b:02x}"))
@@ -1998,6 +2009,7 @@ mod tests {
         card.img = Some("https://cards.scryfall.io/display/front/k/1/k1.webp".to_owned());
         let mut snap = wire_snapshot(vec![card]);
         snap.deck = Some(super::super::ShareDeck {
+            cover: None,
             format: "Commander".to_owned(),
             piles: vec![super::super::SharePile {
                 uid: "pile-0".to_owned(),

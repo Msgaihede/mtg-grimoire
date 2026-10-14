@@ -57,6 +57,22 @@ pub struct ShareDeck {
     /// One per published pile, in the reader's order. `uid` is the pile's folder in
     /// [`ShareSnapshot::folders`].
     pub piles: Vec<SharePile>,
+    /// The deck's own cover — the art the gallery draws for it — and the illustrator it is
+    /// credited to. **Absent** for a deck with no cover, and for one whose cover printing has no
+    /// artist on record: an art crop has no printed frame, so Scryfall's rule — the one
+    /// `deckCover.ts`' `coverUrl` keeps — is that it is shown only beside its illustrator's name,
+    /// and a cover nobody can credit is a cover nobody draws.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cover: Option<ShareCover>,
+}
+
+/// A deck's cover, as it travels.
+#[derive(Debug, Serialize)]
+pub struct ShareCover {
+    /// The cover printing's `art` crop — the same picture the gallery tile draws.
+    pub img: String,
+    /// Who painted it. Never absent: see [`ShareDeck::cover`].
+    pub artist: String,
 }
 
 /// One pile's role. Its name is its folder's.
@@ -163,6 +179,7 @@ pub fn snapshot(
                 active: *active,
             })
             .collect(),
+        cover: read_cover(conn, deck_id)?,
     };
     let cards = read_cards(conn, deck_id, &uids, fields, marketplace)?;
 
@@ -179,6 +196,32 @@ pub fn snapshot(
         cards,
         deck: Some(deck),
     })
+}
+
+/// The deck's cover, if it has one this app may draw: the cover printing's front-face `art`
+/// crop through [`crate::image_uri::for_face`] and [`crate::image_uri::is_fetchable`] — the rules
+/// every published picture is held to — and its illustrator, without whom it is not drawn.
+fn read_cover(conn: &Connection, deck_id: i64) -> Result<Option<ShareCover>, String> {
+    use crate::image_uri::{for_face, is_fetchable, FACE_COLUMN, TOP_LEVEL_COLUMN};
+    let row: Option<(Option<String>, Option<String>, Option<String>)> = conn
+        .query_row(
+            &format!(
+                "SELECT json_extract(c.{TOP_LEVEL_COLUMN}, '$.art'),
+                        json_extract(c.{FACE_COLUMN}, '$[0].art'),
+                        c.artist
+                   FROM decks d JOIN cards c ON c.id = d.cover_card_id
+                  WHERE d.id = ?1"
+            ),
+            params![deck_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    Ok(row.and_then(|(top, face, artist)| {
+        let img = for_face(top, face, 0).filter(|u| is_fetchable(u))?;
+        let artist = artist.filter(|a| !a.trim().is_empty())?;
+        Some(ShareCover { img, artist })
+    }))
 }
 
 /// The live list's rows, each filed under its pile's folder.
@@ -244,14 +287,27 @@ fn read_cards(
         .map_err(|e| e.to_string())
 }
 
-/// The picture a deck share's link preview shows (issue #1032): **its commander**, the card a
-/// Commander deck is known by, and otherwise the first card of the first pile played in the deck.
+/// The picture a deck share's link preview shows (issue #1032), and the illustrator to credit
+/// when it is an art crop.
+///
+/// **The deck's own cover first** — the picture the reader chose to stand for the deck — with its
+/// artist, since a crop is only shown beside its credit. Without one, **its commander**, the card
+/// a Commander deck is known by, and otherwise the first card of the first pile played in the
+/// deck; those are whole card pictures, whose printed frame carries its own credit.
 ///
 /// Read off the snapshot about to be uploaded rather than off the database, so the preview can
 /// only ever show a picture the published document itself carries — never one from a pile the
 /// share left home. `None` for a binder, and for a deck whose every printing lacks a picture.
-pub fn preview_image(snap: &ShareSnapshot) -> Option<&str> {
+pub fn preview(snap: &ShareSnapshot) -> Option<(&str, Option<&str>)> {
     let deck = snap.deck.as_ref()?;
+    if let Some(cover) = &deck.cover {
+        return Some((cover.img.as_str(), Some(cover.artist.as_str())));
+    }
+    preview_card(snap, deck).map(|img| (img, None))
+}
+
+/// [`preview`]'s fallback: the commander, else the first card played in the deck.
+fn preview_card<'a>(snap: &'a ShareSnapshot, deck: &'a ShareDeck) -> Option<&'a str> {
     let first_in = |wanted: &dyn Fn(&SharePile) -> bool| {
         deck.piles.iter().filter(|p| wanted(p)).find_map(|pile| {
             snap.cards

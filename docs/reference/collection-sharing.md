@@ -399,22 +399,37 @@ two rules.
 
 #### The deck's link preview
 
-A deck link unfurls as a deck: _"Commander deck · 100 cards · updated today"_, with **its
-commander's picture** as `og:image` (plus `og:image:alt`, `twitter:image` and
-`twitter:card` `summary_large_image`). The shell still reads one D1 row and no snapshot, so the
-two facts ride in the **metadata** the publish already posts — `format` and `image` — into two
-columns the Worker's first tracked migration adds,
-`infrastructure/share-worker/migrations/0001_deck-link-preview.sql` (additive, applied by the
-release's `share-deploy` before it deploys). `share::deck::preview_image` picks the picture off
-the document being uploaded — the active commander pile's first card, else the first card played
-in the deck — so the preview can only show a picture the share itself carries.
+A deck link unfurls as a deck: _"Commander deck · 100 cards · updated today"_, with a picture as
+`og:image` (plus `og:image:alt`, `twitter:image` and `twitter:card` `summary_large_image`). The
+picture is, in order:
+
+1. **The deck's own cover** — the art crop the gallery tile draws, travelling in the snapshot as
+   `deck.cover: { img, artist }`. An art crop has no printed frame, so Scryfall's rule (the one
+   `deckCover.ts`' `coverUrl` keeps) is that it is shown only beside its illustrator: the card's
+   text then ends _"· Art by Christopher Rush"_, and a cover printing with no artist on record
+   does not travel at all.
+2. **Its commander**, the card a Commander deck is known by, when there is no cover.
+3. **The first card played in the deck** otherwise.
+
+The shell still reads one D1 row and no snapshot, so the facts ride in the **metadata** the
+publish already posts — `format`, `image` and `imageArtist` — into three columns the Worker's
+first tracked migration adds, `infrastructure/share-worker/migrations/0001_deck-link-preview.sql`
+(additive, applied by the release's `share-deploy` before it deploys). `share::deck::preview`
+picks the picture off the document being uploaded, so the preview can only show a picture the
+share itself carries.
 
 ⚠️ **The picture is a URL a publisher sent, rendered on a page every chat app fetches**, so
 `metaProblem` takes it only under `PREVIEW_IMAGE_ORIGIN` (`https://cards.scryfall.io/`, the host
-every `img` in a snapshot names) and under 500 characters, and `page.ts` escapes it like every
-other interpolation. A publisher cannot point strangers' unfurls at a host of their choosing. A
-binder and a wishlist send `null` for both and their cards are unchanged; a deck published before
-the columns existed previews as a plain _Deck_ with no picture until its next _Update now_.
+every `img` in a snapshot names) and under 500 characters, and `page.ts` escapes it and the
+artist like every other interpolation. A publisher cannot point strangers' unfurls at a host of
+their choosing. A binder and a wishlist send `null` for all three and their cards are unchanged;
+a deck published before the columns existed previews as a plain _Deck_ with no picture until it
+is next republished.
+
+**Automatic updates (issue #1025) cover decks too**: `share::publish::changed` reads every share
+through `snapshot()`, which dispatches the `deck:` key. Its digest appends the `deck` half (piles'
+switches, the cover) **only when present**, so a binder's digest is unchanged and no share made
+before decks republishes itself on the first pass after an upgrade.
 
 ### The root arm, and the leak that sixteen green tests did not see
 

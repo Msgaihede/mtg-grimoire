@@ -242,6 +242,7 @@ function shareRow(overrides: Partial<Row> = {}): Row {
     updated_at: 0,
     format: null,
     image: null,
+    image_artist: null,
     ...overrides,
   };
 }
@@ -884,6 +885,31 @@ describe("GET /s/{id}", () => {
     const binder = await (await worker.fetch(shell("PLAINBINDERAAAAA"), fake.env)).text();
     expect(binder).not.toContain("og:image");
     expect(binder).toContain('<meta name="twitter:card" content="summary">');
+  });
+
+  it("credits a cover crop's illustrator in the card's text", async () => {
+    // A cover is an art crop with no printed frame, shown only beside its painter's name.
+    const fake = shareEnv({
+      shares: [
+        shareRow({
+          id: "COVEREDDECKAAAAA",
+          folder_uid: "deck:deck-1",
+          card_count: 60,
+          state: "live",
+          updated_at: Date.now(),
+          format: "Modern",
+          image: "https://cards.scryfall.io/art_crop/front/c/1/c1.jpg?1",
+          image_artist: "Rush & Co",
+        }),
+      ],
+    });
+    const html = await (await worker.fetch(shell("COVEREDDECKAAAAA"), fake.env)).text();
+    expect(html).toContain(
+      '<meta property="og:description" content="Modern deck · 60 cards · updated today · Art by Rush &amp; Co">',
+    );
+    expect(html).toContain(
+      '<meta property="og:image" content="https://cards.scryfall.io/art_crop/front/c/1/c1.jpg?1">',
+    );
   });
 
   it("previews a deck published before its format travelled as a plain Deck", async () => {

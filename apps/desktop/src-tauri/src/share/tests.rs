@@ -1186,7 +1186,7 @@ fn the_golden_deck_snapshot_is_what_the_writer_produces() {
 /// A deck share's link preview shows its commander (issue #1032) — read off the very document
 /// being uploaded — and the first card in the deck when there is no commander.
 #[test]
-fn a_deck_previews_as_its_commander_and_a_binder_as_nothing() {
+fn a_deck_previews_as_its_cover_then_its_commander_and_a_binder_as_nothing() {
     let conn = test_db();
     spell(
         &conn,
@@ -1204,18 +1204,48 @@ fn a_deck_previews_as_its_commander_and_a_binder_as_nothing() {
     // No commander yet: the first card played in the deck.
     let s = snap(&conn, Some("deck:deckuid-krenko"));
     assert_eq!(
-        super::deck::preview_image(&s),
-        Some(display_uri("b1").as_str())
+        super::deck::preview(&s),
+        Some((display_uri("b1").as_str(), None))
     );
 
     put(&conn, deck, "k1", zone(&conn, deck, "commander"), 1);
     let s = snap(&conn, Some("deck:deckuid-krenko"));
     assert_eq!(
-        super::deck::preview_image(&s),
-        Some(display_uri("k1").as_str())
+        super::deck::preview(&s),
+        Some((display_uri("k1").as_str(), None))
+    );
+
+    // The deck's own cover wins over its commander — the art crop, credited to its painter.
+    let crop = "https://cards.scryfall.io/art_crop/front/b/1/b1.jpg?1757308800";
+    conn.execute(
+        "UPDATE cards SET image_uris = json_set(image_uris, '$.art', ?2), artist = ?3 WHERE id = ?1",
+        params!["b1", crop, "Christopher Rush"],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE decks SET cover_card_id = 'b1' WHERE id = ?1",
+        params![deck],
+    )
+    .unwrap();
+    let s = snap(&conn, Some("deck:deckuid-krenko"));
+    assert_eq!(
+        super::deck::preview(&s),
+        Some((crop, Some("Christopher Rush")))
+    );
+    let json = serde_json::to_value(&s).unwrap();
+    assert_eq!(json["deck"]["cover"]["artist"], "Christopher Rush");
+
+    // A cover nobody can credit is a cover nobody draws: the commander again.
+    conn.execute("UPDATE cards SET artist = NULL WHERE id = 'b1'", [])
+        .unwrap();
+    let s = snap(&conn, Some("deck:deckuid-krenko"));
+    assert!(s.deck.as_ref().unwrap().cover.is_none());
+    assert_eq!(
+        super::deck::preview(&s),
+        Some((display_uri("k1").as_str(), None))
     );
 
     let (f, uid) = folder(&conn, None, "Binder", false);
     entry(&conn, "b1", Some(f), 1);
-    assert_eq!(super::deck::preview_image(&snap(&conn, Some(&uid))), None);
+    assert_eq!(super::deck::preview(&snap(&conn, Some(&uid))), None);
 }

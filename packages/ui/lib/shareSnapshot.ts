@@ -136,6 +136,11 @@ export interface ShareDeck {
   format: string;
   /** One per published pile, in the reader's order. Empty piles do not travel. */
   piles: SharePile[];
+  /**
+   * The deck's own cover — its art crop and the illustrator it must be shown beside — or absent
+   * for a deck with none, or with one nobody can credit. What the link preview shows first.
+   */
+  cover?: { img: string; artist: string };
 }
 
 /** One folder. The set of these is the tree the viewer draws the cards into. */

@@ -208,6 +208,14 @@ describe("POST /g/{group}/share", () => {
       env,
     );
     expect(res.status).toBe(400);
+    // A cover crop travels with its illustrator, who must be a name.
+    const credited = await worker.fetch(
+      post("g1", await token(), { ...deck, imageArtist: "Christopher Rush" }),
+      env,
+    );
+    expect(credited.status).toBe(200);
+    const unnamed = await worker.fetch(post("g1", await token(), { ...deck, imageArtist: 7 }), env);
+    expect(unnamed.status).toBe(400);
   });
 
   it("tells a folder share apart from a whole-collection one", async () => {

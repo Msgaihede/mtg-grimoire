@@ -179,8 +179,17 @@ function shell(env: Env, row: PublicRow, now: number): Response {
     row.updated_at,
     now,
   )}`;
-  const description = `${kindLabel(row)} · ${summary}`;
-  // A deck's picture (issue #1032) — its commander, chosen by the publisher and held by
+  // A cover crop has no printed frame, so Scryfall's rule is that it is shown only beside its
+  // illustrator's name — which, on a card in somebody's chat, is the card's own text.
+  const credit =
+    row.kind === "deck" &&
+    row.image !== null &&
+    row.image_artist !== null &&
+    row.image_artist !== ""
+      ? ` · Art by ${esc(row.image_artist)}`
+      : "";
+  const description = `${kindLabel(row)} · ${summary}${credit}`;
+  // A deck's picture (issue #1032) — its cover, else its commander, chosen by the publisher and held by
   // `metaProblem` to Scryfall's card host, so an unfurl fetches nothing else. Escaped like every
   // other interpolation here: it is a string a publisher sent.
   const image = row.kind === "deck" && row.image !== null ? esc(row.image) : "";
