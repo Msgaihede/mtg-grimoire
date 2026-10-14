@@ -3685,9 +3685,27 @@ on the right, with Rename and *Delete…*. It reads under one `["scanHistory"]` 
 its own and would put two scrims on one z-index. Both are siblings of the `@container/scan` box,
 the Clear-all question's reason.
 
-**Neither table syncs and the mirror writes neither**, for the trades' reasons. The light app's
-phone face records `filed` batches through the same command — every host commits through the
-core's table — **but has no Archive or History of its own yet.**
+**Neither table syncs and the mirror writes neither**, for the trades' reasons. Every host
+commits through the core's table, so the light app's hosts answer every command here with no
+code of their own.
+
+**On the phone face** (`apps/light/phone/`, 2026-10-14) both presses are rows of the tray
+footer's `⋯` sheet, beside *Create deck…* and *Clear all…*: **Archive**, through the same
+`useTrayCommit().archive` and refused on *Clear all…*'s terms in words on the row's second line
+(an empty tray, or either press in flight — the two hold each other, as on the desktop), and
+**Scan history**, never refused. A success toasts the desktop's *Archived N cards to Scan
+history*; a refusal is the backend's sentence in the footer's alert over Add — the one refusal
+slot both presses share — where the phone's Add says its own. Neither row is drawn with a
+`destination` (the page over a trade's side). The history is `scanner/HistorySheet.tsx`, an
+`ActionSheet` over the shared `useScanHistory` and `historyWords`: the desktop dialog's two
+columns as the sheet's pages, `OptionsSheet`'s grammar — the list (cover, name, `batchLine`, the
+status words in gold for filed and dim for archived), a batch drilled into with a `SheetBack` at
+its head, and that batch's *Rename* (`MoreSheet`'s rename page, a blank name the default back)
+and *Delete…* (`deleteSentence` and its two presses) as pages of their own. **The question is a
+page, not a second dialog**: one sheet is one Back step (`sheetHistory.ts`), and Back closes it
+whatever page it is on. It is not a place — the URL does not change — and every open starts on
+the list. A batch whose read answers `null` (deleted on the desktop face meanwhile) sends the
+sheet back to the list.
 
 ### The Developer switch and the Tiers panel
 
@@ -4801,7 +4819,7 @@ The arrangement, because each of the desktop's is built for a pointer and a wide
 | `MatchStrip`: pill, name, printing and instruction on one row | `MatchLine`: the pill, name and printing on one line, the instruction on the next; the same `matchStrip` value, tone maps and `MatchBar` | At 330px the one row is the pill and the instruction with no room for a name |
 | `TrayPanel`: a grid of tiles or a list; 28px finish dropdown and stepper; *More printings…* a chip under the pointer; the clipped name and every refusal a tooltip | `Tray`: one layout, rows. The name wraps; the printing (`MH2 259 ›`) and the finish are 44px presses opening sheets; a 44px stepper that stops at one; a waiting row is its candidates as whole cards three to a line | A finish and a stepper at 44px do not fit under a 156px tile, so there is no grid, and `trayLayout` is left unread and unwritten |
 | *More printings…* opens `AllPrintingsDialog` through the app store | A sheet of the card's printings under the card sheet's own key (`cardPrintingsKey`), each a press calling `setPrinting(tray.latest(), row.key, choice)` | The phone has no store and no all-printings wall. The choice carries the printing's `finishes`, so a printing sold one way settles an `Unknown` row — the desktop's hand-back does not carry them |
-| The tray's footer: *Create deck…*, a folder popover, Add; the header's *Clear all…* | `TrayFooter`, outside the page's scroller: a press naming the destination that opens the reader's own folders as a sheet, a `⋯` opening *Create deck…* and *Clear all…* as sheet rows, and Add | **A refusal is words on the page**: under Add, and on a sheet row's second line |
+| The tray's footer: *Create deck…*, a folder popover, Add; the header's *Archive* and *Clear all…*; the bar's *History* opening `ScanHistoryDialog` | `TrayFooter`, outside the page's scroller: a press naming the destination that opens the reader's own folders as a sheet, a `⋯` opening *Archive*, *Create deck…*, *Clear all…* and *Scan history* as sheet rows, and Add | **A refusal is words on the page**: under Add, and on a sheet row's second line |
 | A refused commit's sentence above the rows; a success says nothing | The same sentence above Add; a success is the page's receipt line (*Added 5 copies to Binder.*), with *Undo* only where a ticket came back — and `scanner_tray_commit` answers none (#555). Where the folder list would not load, the footer reads *Folder name unavailable* and the receipt *to your collection*: the stored id is what was sent, and neither prints a place it does not know | The phone's other writes report this way |
 | `useWindowParked`: Tauri's minimize | `usePageParked`: the document's own visibility, and **released from its first render on a page that mounts hidden** | A phone has no window to ask, and reports a hidden page, which WebView2 does not. A tab restored in the background at `/scanner` otherwise asked for the camera and held it for the grace; the desktop's window never mounts minimized as far as it knows, and is as it was |
 | A sheet or popover hands the caret back through `AnchoredPopup` and `Dialog` | Every sheet hands it back to the press that opened it on a choice, Escape and the ✕, and leaves it on a scrim press (`ActionSheet`'s `onDismiss`). The tray's rows find the press again **after the render**, by the row's key and what the press opens | A choice in a row's sheet is a write, drawn a tick after the sheet shuts: the *More printings…* of a row waiting on a pick is on screen at the close and gone when the row draws as settled — a target that is connected and doomed |
