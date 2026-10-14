@@ -1526,15 +1526,13 @@ export function usePullPlan(deckId: number | null, enabled: boolean) {
 }
 
 /**
- * The pull plan's key and fetcher, as options both readers build from.
+ * The pull plan's key and fetcher, as options.
  *
- * **Two things ask for this plan and they must not spell the key twice.** {@link usePullPlan}
- * mounts it for the dialog; the deck card menu's per-card pull *fetches* it imperatively at the
- * press (`queryClient.fetchQuery`) so that a right-click costs nothing and only a chosen row
- * pays. A second spelling here would be a fetch that never shares the dialog's cache — the two
- * would each hold their own answer to one question, and the silent half is that both would still
- * work: the menu's press would simply always miss, and every press would be a fresh
- * `deck_pull_plan` behind a dialog that already had one.
+ * **One reader since issue #987, and the factory is kept for {@link missingPlanQuery}'s reason**:
+ * the key is written once, beside its neighbour. It had two until then — a deck card's
+ * `Collection ▸ Pull …` *fetched* the plan imperatively at the press to decide whether to pull a
+ * lone candidate outright — and the factory is what kept that fetch on the dialog's cache. That
+ * press now always opens the dialog, which reads the plan through {@link usePullPlan}.
  *
  * The key is unchanged from what the hook spelled: `["decks", "pullPlan", deckId]`, under the
  * root {@link useDeck}'s own `invalidate` reaches, which is what keeps a plan from outliving the
@@ -1591,12 +1589,11 @@ export function useMissingPlan(deckId: number | null, enabled: boolean) {
 /**
  * The missing plan's key and fetcher, as options.
  *
- * **This one has a single reader, where {@link pullPlanQuery} has two — and the factory is kept
- * anyway, deliberately.** That one exists because the dialog mounts the plan and a deck card's
- * `Collection ▸ Pull …` *fetches* it imperatively at the press, and two spellings of the key
- * would be two caches for one question. Nothing presses this imperatively: the per-card form of
- * this feature is `Collection ▸ Quick add N copies`, a menu row that writes outright and reads
- * no plan at all. So what the factory buys here is not a shared cache but the *shape* — the key
+ * **This one has a single reader, and the factory is kept anyway, deliberately** — as
+ * {@link pullPlanQuery} is, whose second reader (a deck card's `Collection ▸ Pull …` fetching the
+ * plan at the press) went with issue #987. Nothing presses this imperatively either: the per-card
+ * form of this feature is `Collection ▸ Quick add N copies`, a menu row that writes outright and
+ * reads no plan at all. So what the factory buys here is not a shared cache but the *shape* — the key
  * is written once, beside its neighbour, in the file this folder's rule already names as the
  * home for these options ({@link quickAddWishesQuery} is the third), and a second reader added
  * later is a caller rather than a second key. The alternative — folding it into the hook — is
