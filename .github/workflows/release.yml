@@ -1341,6 +1341,10 @@ jobs:
   # tokens are not within this job's reach, nor it within theirs. It reaches one step, which
   # runs one file with no dependency; the step before it reads the body with the run's token and
   # never sees the webhook. **With no webhook it posts nothing and ends green**, saying so.
+  #
+  # **One webhook or several** (2026-10-14): `DISCORD_WEBHOOK_URL` may hold more than one
+  # address, separated by `;`, and each is posted to in turn. One secret, so another channel is
+  # a secret edit and not a workflow change.
   announce:
     name: announce (Discord)
     needs: [release-please, publish]

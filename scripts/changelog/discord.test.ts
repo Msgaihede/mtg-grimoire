@@ -11,6 +11,7 @@ import {
   releaseUrl,
   split,
   webhookUrl,
+  webhookUrls,
 } from "./discord.ts";
 import type { DiscordFetch, DiscordPayload, DiscordResponse } from "./discord.ts";
 
@@ -159,6 +160,39 @@ describe("webhookUrl", () => {
         expect(error).toBeInstanceOf(DiscordError);
         if (error instanceof Error) expect(error.message).not.toContain("secret");
       }
+    }
+  });
+});
+
+describe("webhookUrls", () => {
+  const OTHER = "https://discord.com/api/webhooks/2/other";
+
+  it("reads one address or several, separated by semicolons, whitespace around each dropped", () => {
+    expect(webhookUrls(`${HOOK}\n`)).toEqual([`${HOOK}?wait=true`]);
+    for (const raw of [`${HOOK};${OTHER}`, ` ${HOOK} ;\n${OTHER};`]) {
+      expect(webhookUrls(raw), raw).toEqual([`${HOOK}?wait=true`, `${OTHER}?wait=true`]);
+    }
+  });
+
+  it("splits on nothing but a semicolon", () => {
+    for (const raw of [`${HOOK} ${OTHER}`, `${HOOK},${OTHER}`, `${HOOK}\n${OTHER}`]) {
+      expect(() => webhookUrls(raw), raw).toThrow(/separate webhooks with `;`/);
+    }
+  });
+
+  it("posts to a webhook named twice once", () => {
+    expect(webhookUrls(`${HOOK};${HOOK}`)).toEqual([`${HOOK}?wait=true`]);
+  });
+
+  it("refuses an empty list, and names a bad address by position without repeating it", () => {
+    expect(() => webhookUrls(" ; ;")).toThrow(DiscordError);
+    expect(() => webhookUrls(`${HOOK};https://example.com/api/webhooks/1/secret`)).toThrow(
+      /^Address 2 of 2: DISCORD_WEBHOOK_URL is not a Discord webhook/,
+    );
+    try {
+      webhookUrls(`${HOOK};https://example.com/api/webhooks/1/secret`);
+    } catch (error) {
+      if (error instanceof Error) expect(error.message).not.toContain("secret");
     }
   });
 });
