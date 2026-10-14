@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useIsPresent } from "motion/react";
 import { describe, expect, it, vi } from "vitest";
@@ -810,20 +810,55 @@ describe("a dialog under a host that lends a finger's gestures", () => {
     expect(claimBack).not.toHaveBeenCalled();
   });
 
+  /** Fires a touch event with the timestamp given, not jsdom's clock: the swipe reads speed off
+   *  `timeStamp`, and two events fired back to back may or may not share a millisecond. Never 0,
+   *  which React's synthetic event swaps for `Date.now()`. */
+  const touchAt = (
+    kind: "pointerDown" | "pointerMove" | "pointerUp",
+    y: number,
+    timeStamp: number,
+  ) => {
+    const event = createEvent[kind](header(), touch(y));
+    Object.defineProperty(event, "timeStamp", { value: timeStamp });
+    fireEvent(header(), event);
+  };
+
   it("closes when the header is dragged down past the line, and not short of it", () => {
     const { onClose } = hosted({ claimBack: () => () => {}, swipeToClose: true });
-    // Held still before the let-go, so the release is no flick: only the distance decides.
+    // A brisk move, then held still for 100ms before the let-go, so the release is no flick:
+    // only the distance decides.
     const drag = (to: number) => {
-      fireEvent.pointerDown(header(), touch(0));
-      fireEvent.pointerMove(header(), touch(20));
-      fireEvent.pointerMove(header(), touch(to));
-      fireEvent.pointerMove(header(), touch(to));
-      fireEvent.pointerUp(header(), touch(to));
+      touchAt("pointerDown", 0, 1000);
+      touchAt("pointerMove", 20, 1010);
+      touchAt("pointerMove", to, 1011);
+      touchAt("pointerMove", to, 1111);
+      touchAt("pointerUp", to, 1111);
     };
     drag(SWIPE_CLOSE_PX - 20);
     expect(onClose).not.toHaveBeenCalled();
 
     drag(SWIPE_CLOSE_PX + 10);
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("reads a still sample as a held finger even when it shares the last move's timestamp", () => {
+    const { onClose } = hosted({ claimBack: () => () => {}, swipeToClose: true });
+    // The last move is a flick's speed (56px in 1ms); the still sample after it lands in the
+    // same millisecond, as coalesced events can. It still ends the flick.
+    touchAt("pointerDown", 0, 1000);
+    touchAt("pointerMove", 20, 1010);
+    touchAt("pointerMove", SWIPE_CLOSE_PX - 20, 1011);
+    touchAt("pointerMove", SWIPE_CLOSE_PX - 20, 1011);
+    touchAt("pointerUp", SWIPE_CLOSE_PX - 20, 1011);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("closes on a flick that stops short of the line", () => {
+    const { onClose } = hosted({ claimBack: () => () => {}, swipeToClose: true });
+    touchAt("pointerDown", 0, 1000);
+    touchAt("pointerMove", 20, 1010);
+    touchAt("pointerMove", SWIPE_CLOSE_PX - 20, 1011);
+    touchAt("pointerUp", SWIPE_CLOSE_PX - 20, 1011);
     expect(onClose).toHaveBeenCalledOnce();
   });
 
