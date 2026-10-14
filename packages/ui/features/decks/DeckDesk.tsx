@@ -28,6 +28,7 @@ import { clearFieldOnEscape } from "@/lib/useDismissOnEscape";
 import { useScrollPerView } from "@/lib/useScrollPerView";
 import { cn } from "@/lib/utils";
 import type { DeckCardActions, DeckCardGroupDrag, DeckCardMenuHandlers } from "./cardControl";
+import { LabelSwatch } from "./LabelColorPicker";
 import { DeckHeaderBar, type DeckHeaderBarProps } from "./DeckHeaderBar";
 import { deckSlotOrder, deckWalkStops, type WalkTokenPile } from "./deckWalk";
 import { deckCardSlot, type DeckWrite, type DragPayload } from "./dnd";
@@ -1050,10 +1051,14 @@ export function DeckDesk({
                       // back down to the toolbar's old height. Only the type size is still
                       // overridden: a deck's labels are a row of arbitrary user strings, and
                       // 14px of them is a line that pushes the filter field off the end.
-                      "px-2.5 text-xs",
+                      "inline-flex items-center gap-1.5 px-2.5 text-xs",
                       filterChipState(on),
                     )}
                   >
+                    {/* The label's colour, as the card modal's label dropdown draws it (issue
+                        #995). `aria-hidden` inside `LabelSwatch`, so the chip's name is still
+                        the label's own. */}
+                    <LabelSwatch color={label.color} />
                     {label.name}
                   </button>
                 );
