@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { PlaytestOption } from "@/lib/ipc";
-import { optionLabel, pickableCards, promptTitle, words } from "./prompt";
+import {
+  optionCards,
+  optionDetail,
+  optionLabel,
+  pickableCards,
+  promptTitle,
+  words,
+} from "./prompt";
 
 function option(over: Partial<PlaytestOption>): PlaytestOption {
   return {
@@ -33,7 +40,7 @@ describe("optionLabel", () => {
   const target = { kind: "TargetSelection" };
 
   it("names a target by its card or its player", () => {
-    const card = { id: 1, name: "Ragavan", cardId: null };
+    const card = { id: 1, name: "Ragavan", cardId: null, text: null };
     expect(optionLabel(option({ cards: [card] }), target).text).toBe("Ragavan");
     expect(optionLabel(option({ players: ["opponent"] }), target).text).toBe("Opponent");
     expect(optionLabel(option({ players: ["you"] }), target).text).toBe("You");
@@ -69,7 +76,7 @@ describe("optionLabel", () => {
       option({
         kind: "CastAdventure",
         label: "Stomp",
-        cards: [{ id: 1, name: "B", cardId: null }],
+        cards: [{ id: 1, name: "B", cardId: null, text: null }],
       }),
       { kind: "CastChoice" },
     );
@@ -77,10 +84,57 @@ describe("optionLabel", () => {
   });
 });
 
+describe("an order of triggers", () => {
+  const order = { kind: "OrderTriggers" };
+  const ability = (id: number, name: string, text: string) => ({ id, name, cardId: null, text });
+  const carmen = ability(1, "Carmen", "Whenever Carmen attacks, gain 1 life.");
+  const clavileno = ability(2, "Clavileño", "Whenever Clavileño attacks, make a Vampire.");
+
+  it("is said first-to-resolve first: the first placed resolves last", () => {
+    const answer = option({ kind: "OrderTriggers", cards: [carmen, clavileno] });
+    expect(optionCards(answer, order).map((c) => c.name)).toEqual(["Clavileño", "Carmen"]);
+    expect(optionLabel(answer, order)).toEqual({
+      text: "Clavileño resolves first",
+      hint: "then Carmen",
+    });
+    expect(optionDetail(answer, order)).toBe(
+      "1. Clavileño: Whenever Clavileño attacks, make a Vampire.\n" +
+        "2. Carmen: Whenever Carmen attacks, gain 1 life.",
+    );
+  });
+
+  it("names one card's two different triggers by their words", () => {
+    const a = ability(1, "Vito", "Gain 1 life.");
+    const b = ability(1, "Vito", "Draw a card.");
+    expect(optionLabel(option({ kind: "OrderTriggers", cards: [a, b] }), order)).toEqual({
+      text: "Draw a card. resolves first",
+      hint: "then Gain 1 life.",
+    });
+  });
+
+  it("chains three or more", () => {
+    const third = ability(3, "Bloodghast", "Return it.");
+    expect(
+      optionLabel(option({ kind: "OrderTriggers", cards: [carmen, clavileno, third] }), order).hint,
+    ).toBe("then Clavileño, then Carmen");
+  });
+});
+
+describe("a replacement effect", () => {
+  it("is named by its card, with its words beside", () => {
+    const effect = { id: 4, name: "Doubling Season", cardId: null, text: "Twice that many." };
+    expect(
+      optionLabel(option({ kind: "ChooseReplacement", cards: [effect] }), {
+        kind: "ReplacementChoice",
+      }),
+    ).toEqual({ text: "Doubling Season", hint: "Twice that many." });
+  });
+});
+
 describe("pickableCards", () => {
   it("makes each one-card answer its card, the first answer keeping a card twice named", () => {
-    const a = { id: 1, name: "A", cardId: null };
-    const b = { id: 2, name: "B", cardId: null };
+    const a = { id: 1, name: "A", cardId: null, text: null };
+    const b = { id: 2, name: "B", cardId: null, text: null };
     const picks = pickableCards({
       kind: "TargetSelection",
       source: null,
@@ -97,5 +151,17 @@ describe("pickableCards", () => {
       [1, 0],
       [2, 2],
     ]);
+  });
+
+  it("leaves a card standing for one of its abilities to the panel", () => {
+    const effect = { id: 1, name: "A", cardId: null, text: "Twice that many." };
+    const picks = pickableCards({
+      kind: "ReplacementChoice",
+      source: null,
+      cancellable: false,
+      pick: null,
+      options: [option({ index: 0, kind: "ChooseReplacement", cards: [effect] })],
+    });
+    expect(picks.size).toBe(0);
   });
 });

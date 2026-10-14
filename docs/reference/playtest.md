@@ -157,9 +157,20 @@ generically, never matched variant by variant.
     `target`, `cards`, `keep` and the like, where a target is `{"Object": id}` or `{"Player": id}`;
   - a number (`value`, `index`, `ability_index`, the first of `indices`), which is 0-based;
   - a yes or no (`accept`, `pay`, `top`);
-  - a named choice's word (`choice`).
+  - a named choice's word (`choice`);
+  - the abilities it names, when the question lists them (`Playtest::abilities`): a question
+    whose data holds a list of `{ source_id, source_name, description }` — the triggers of
+    `OrderTriggers`, the effects of `ReplacementChoice` — is answered by counting into it, an
+    `order` (a permutation of the list) or an `index` (one of it). Each is sent as its source
+    card with the ability's words in `text`, never as bare numbers (issue #1027).
 
   An answer of a kind the board has never seen still shows what it points at.
+
+- **An order of triggers reads first-to-resolve first.** phase's `order` lists the triggers as
+  they are placed on the stack, so the first placed resolves last; the page reverses it, says
+  "Clavileño resolves first, then Carmen", and numbers each picture. Two different triggers of
+  cards of one name are told apart by their words. An answer standing for abilities carries
+  their words in its tooltip.
 
 - **`auto`** answers any prompt with `phase_ai::choose_action` for the reader, at Medium.
   `Happened::Chose` says so. It is also the answer to a prompt with no options the board can draw.
@@ -395,7 +406,9 @@ facts are found as a run of `step.happened`, and the end takes the rest.
 - **Prompt:** the docked panel is not modal, so the table stays inspectable. Hovering an answer
   previews its card. "Let the engine choose" is always offered, and "Cancel" is offered when the
   question came out of the reader's own cast. A card that an option names alone lights up on the
-  table.
+  table — unless it stands for one of its abilities (a replacement effect), which only the panel
+  answers. Each answer shows the pictures of the cards it names; a question whose title does not
+  say what an answer decides (an order of triggers, a replacement) has a line under it.
 - **Picker:** a `pick` opens the cards at 92 × 129, with a counter ("2 of up to 3"). Confirm stays
   `aria-disabled` until the count is within the pick's bounds. An ordered pick numbers its cards;
   scry sorts into "Keep on top" and "Bottom", surveil into "Top" and "Graveyard". Cards that may

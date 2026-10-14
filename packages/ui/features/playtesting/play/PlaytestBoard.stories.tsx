@@ -7,6 +7,7 @@ import {
   attackStep,
   blockStep,
   castChoicePrompt,
+  orderTriggersPrompt,
   combatArrowsView,
   damageHappened,
   discardPick,
@@ -200,6 +201,11 @@ export const TargetPrompt: Story = {
 /** How to cast an adventurer. */
 export const CastChoice: Story = {
   args: { view: castChoicePrompt().view },
+};
+
+/** Two triggers at once: each answer is an order, said first-to-resolve first, with pictures. */
+export const OrderTriggers: Story = {
+  args: { view: orderTriggersPrompt().view },
 };
 
 /** The opponent's turn being played out. */

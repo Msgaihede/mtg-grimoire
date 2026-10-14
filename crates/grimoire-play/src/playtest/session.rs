@@ -682,7 +682,42 @@ impl Playtest {
             id: id.0,
             name: o.name.clone(),
             card_id: self.printing_of(id),
+            text: None,
         })
+    }
+
+    /// The abilities the question is about, when it lists them: the triggers to put in order,
+    /// the replacement effects to choose among. phase sends each as `{ source_id, source_name,
+    /// description }`, read from the question's data by those fields — as `option_of` reads an
+    /// answer — rather than matched kind by kind. An answer's `order` and a replacement's
+    /// `index` count into this list.
+    fn abilities(&self) -> Vec<PlaytestCardRef> {
+        let json = serde_json::to_value(&self.state.waiting_for).unwrap_or(Value::Null);
+        let Some(Value::Object(fields)) = json.get("data") else {
+            return Vec::new();
+        };
+        let ability = |v: &Value| -> Option<PlaytestCardRef> {
+            let id = ObjectId(v.get("source_id")?.as_u64()?);
+            let text = v.get("description")?.as_str()?.to_string();
+            let name = v.get("source_name")?.as_str()?.to_string();
+            // The source as it lies when it still exists; its name and the words alone when not.
+            let card = self.card_ref(id).unwrap_or(PlaytestCardRef {
+                id: id.0,
+                name,
+                card_id: None,
+                text: None,
+            });
+            Some(PlaytestCardRef {
+                text: Some(text),
+                ..card
+            })
+        };
+        fields
+            .values()
+            .filter_map(Value::as_array)
+            .find(|items| !items.is_empty() && items.iter().all(|v| ability(v).is_some()))
+            .map(|items| items.iter().filter_map(ability).collect())
+            .unwrap_or_default()
     }
 
     fn stage(&self) -> PlaytestStage {
@@ -748,7 +783,7 @@ impl Playtest {
                     .actions
                     .iter()
                     .enumerate()
-                    .map(|(i, a)| self.option_of(i, a))
+                    .map(|(i, a)| self.option_of(i, a, &[]))
                     .collect(),
                 cancellable: true,
                 pick: None,
@@ -763,6 +798,7 @@ impl Playtest {
                 .or_else(|| self.state.objects.get(&top.source_id))?;
             Some(o.name.clone())
         });
+        let abilities = self.abilities();
         PlaytestPrompt {
             kind: self.state.waiting_for.variant_name().into(),
             source,
@@ -770,7 +806,7 @@ impl Playtest {
                 .answers()
                 .iter()
                 .enumerate()
-                .map(|(i, a)| self.option_of(i, a))
+                .map(|(i, a)| self.option_of(i, a, &abilities))
                 .collect(),
             cancellable: self.pending.is_some(),
             pick: self.pick().map(|(pick, _)| pick),
@@ -973,7 +1009,16 @@ impl Playtest {
     /// wire, and the data names its cards and players by a handful of field names across every
     /// kind of answer — read from there rather than matched variant by variant, so an answer of a
     /// kind this board has never seen still shows what it points at.
-    fn option_of(&self, index: usize, action: &GameAction) -> PlaytestOption {
+    ///
+    /// `abilities` is the question's own list (`abilities`): an answer that counts into it —
+    /// `order`, a permutation of it; `index`, one of it — names those abilities, each its source
+    /// card with the ability's words, rather than bare numbers.
+    fn option_of(
+        &self,
+        index: usize,
+        action: &GameAction,
+        abilities: &[PlaytestCardRef],
+    ) -> PlaytestOption {
         let json = serde_json::to_value(action).unwrap_or(Value::Null);
         let kind = json
             .get("type")
@@ -986,6 +1031,8 @@ impl Playtest {
         let mut number = None;
         let mut yes = None;
         let mut label = None;
+        let mut named: Vec<PlaytestCardRef> = Vec::new();
+        let ability = |v: &Value| v.as_u64().and_then(|i| abilities.get(i as usize)).cloned();
         if let Value::Object(fields) = &data {
             for (key, value) in fields {
                 match key.as_str() {
@@ -994,6 +1041,13 @@ impl Playtest {
                     | "vehicle_id" | "cards" | "creature_ids" | "targets" | "target" => {
                         collect_refs(value, &mut ids, &mut players);
                     }
+                    "order" if !abilities.is_empty() => {
+                        named = value
+                            .as_array()
+                            .map(|v| v.iter().filter_map(ability).collect())
+                            .unwrap_or_default();
+                    }
+                    "index" if !abilities.is_empty() => named.extend(ability(value)),
                     "value" | "index" | "ability_index" => number = value.as_i64(),
                     "indices" => {
                         number = value
@@ -1014,7 +1068,11 @@ impl Playtest {
         PlaytestOption {
             index: index as u32,
             kind,
-            cards: ids.into_iter().filter_map(|id| self.card_ref(id)).collect(),
+            cards: ids
+                .into_iter()
+                .filter_map(|id| self.card_ref(id))
+                .chain(named)
+                .collect(),
             players,
             number,
             yes,

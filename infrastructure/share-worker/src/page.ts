@@ -1,15 +1,15 @@
 import { shareUrl, type Env } from "./env";
-import { LAPSED, publicShare, REVOKED, type PublicRow } from "./shares";
+import { LAPSED, publicShare, REVOKED, type PublicRow, type ShareKind } from "./shares";
 
 /**
  * `GET /s/{id}` — the one page this Worker renders, and the whole reason a snapshot is stored in
  * the clear.
  *
  * **The shell is rendered rather than served as a static file** (spec §7), which costs one Worker
- * request per cold view and buys the OpenGraph card: *"Giradeli's Trade binder · 412 cards ·
- * updated 2 days ago"* in every Discord the link is pasted into. Decision 2 — plaintext storage —
- * has no other payoff, so the four `og:` tags below are the feature rather than decoration. A
- * static shell could not carry them: they have to be built from the D1 row.
+ * request per cold view and buys the OpenGraph card: *"Giradeli's Trade binder" — "Collection
+ * folder · 412 cards · updated 2 days ago"* in every Discord the link is pasted into. Decision 2 —
+ * plaintext storage — has no other payoff, so the `og:` tags below are the feature rather than
+ * decoration. A static shell could not carry them: they have to be built from the D1 row.
  *
  * ⚠️ **There is no template engine standing between these strings and the browser.** `title` and
  * `ownerName` are typed by a reader into a dialog, `claim.ts:1112` carries this warning in words,
@@ -67,6 +67,24 @@ function since(updatedAt: number, now: number): string {
   return `updated ${days} days ago`;
 }
 
+/** Every page's `og:site_name`, and the name a gone share's page is titled with. */
+const SITE_NAME = "MTG Grimoire";
+
+/**
+ * What the card says a share *is*, ahead of its count (issue #1019).
+ *
+ * **A wishlist share's title is a folder name**, so without this its card read *"Giradeli's
+ * Commander upgrades · 12 cards"* — indistinguishable from a binder, to a reader deciding whether
+ * the link is somebody's trade stock or somebody's want list. Constants, so nothing here needs
+ * `esc`.
+ */
+const KIND_LABEL: Record<ShareKind, string> = {
+  collection: "Collection",
+  "collection-folder": "Collection folder",
+  wishlist: "Wishlist",
+  "wishlist-folder": "Wishlist folder",
+};
+
 /**
  * The document every answer here shares. Kept as one template rather than three so a change to
  * the ground colour cannot apply to the shell and miss the 410.
@@ -106,7 +124,7 @@ p{color:#A9A6BC}
  */
 function gone(status: number, sentence: string): Response {
   return html(
-    page("MTG Grimoire", "", `<main><h1>MTG Grimoire</h1><p>${esc(sentence)}</p></main>`),
+    page(SITE_NAME, "", `<main><h1>${SITE_NAME}</h1><p>${esc(sentence)}</p></main>`),
     status,
     "no-store",
   );
@@ -148,6 +166,7 @@ function shell(env: Env, row: PublicRow, now: number): Response {
     row.updated_at,
     now,
   )}`;
+  const description = `${KIND_LABEL[row.kind]} · ${summary}`;
 
   // The key is `shares/{id}/{hash}.json.gz` and the URL is its last two segments under `/s/`,
   // which is what carries the content addressing all the way into the browser's cache. A key
@@ -160,10 +179,13 @@ function shell(env: Env, row: PublicRow, now: number): Response {
       : `\n<link id="snapshot" rel="preload" as="fetch" crossorigin href="/s/${id}/${file}">`;
 
   const head = `
+<meta name="description" content="${description}">
 <meta property="og:type" content="website">
+<meta property="og:site_name" content="${SITE_NAME}">
 <meta property="og:title" content="${heading}">
-<meta property="og:description" content="${summary}">
-<meta property="og:url" content="${esc(shareUrl(env, row.id))}">${link}
+<meta property="og:description" content="${description}">
+<meta property="og:url" content="${esc(shareUrl(env, row.id))}">
+<meta name="twitter:card" content="summary">${link}
 <script type="module" src="/assets/share.js"></script>`;
 
   // The pending sentence sits outside `#root` so the bundle can render over the container without
@@ -171,11 +193,11 @@ function shell(env: Env, row: PublicRow, now: number): Response {
   // does not read the tags above — would otherwise get nothing of.
   const pending = file === "" ? `<main id="pending"><p>${esc(PENDING)}</p></main>` : "";
   const body = `<div id="root"></div>${pending}
-<noscript><main><h1>${heading}</h1><p>${summary}</p>
+<noscript><main><h1>${heading}</h1><p>${description}</p>
 <p>This is a read-only snapshot. Anyone with this link can see it.</p></main></noscript>`;
 
   return html(
-    page(`${heading} — MTG Grimoire`, head, body),
+    page(`${heading} — ${SITE_NAME}`, head, body),
     200,
     file === "" ? "no-store" : "public, max-age=300",
   );

@@ -1153,3 +1153,72 @@ fn a_game_has_from_one_to_three_opponents() {
     assert!(refused.0.unwrap().contains("not 0"));
     assert!(refused.1.unwrap().contains("not 4"));
 }
+
+/// Issue #1027: two of the reader's triggers at once are put in order, and each answer names the
+/// triggers in the order chosen — their sources and their words — rather than "Order triggers".
+#[test]
+fn two_triggers_at_once_are_ordered_by_answers_that_name_them() {
+    let (asked, answered) = engine(|| {
+        let mut deck = green();
+        deck.push(card(
+            "Dawn Scout",
+            Some("{G}"),
+            "Creature — Elf Scout",
+            "Whenever Dawn Scout attacks, you gain 1 life.",
+            Some(("1", "1")),
+            "G",
+            4,
+        ));
+        deck.push(card(
+            "Dusk Scout",
+            Some("{G}"),
+            "Creature — Elf Scout",
+            "Whenever Dusk Scout attacks, you gain 2 life.",
+            Some(("1", "1")),
+            "G",
+            4,
+        ));
+        let (mut game, _) = deal(deck, 2);
+        game.act(A::Keep { bottom: vec![] }).unwrap();
+        put_down(&mut game, "Dawn Scout");
+        put_down(&mut game, "Dusk Scout");
+        // A turn cycle, so the scouts are no longer summoning sick.
+        to_main(&mut game);
+        let offered = game.act(A::Pass).unwrap();
+        let attacks = offered
+            .view
+            .you
+            .battlefield
+            .iter()
+            .filter(|c| c.name.ends_with("Scout"))
+            .map(|c| PlaytestAttackPair {
+                attacker: c.id,
+                target: None,
+                player: None,
+            })
+            .collect();
+        let asked = game.act(A::Attack { attacks }).unwrap();
+        let answered = game.act(A::Choose { index: 0 }).unwrap();
+        (asked, answered)
+    });
+    assert_eq!(asked.view.stage, Stage::Prompt, "{:?}", asked.happened);
+    let prompt = asked.view.prompt.unwrap();
+    assert_eq!(prompt.kind, "OrderTriggers");
+    assert_eq!(prompt.options.len(), 2, "two triggers have two orders");
+    for option in &prompt.options {
+        let mut names: Vec<&str> = option.cards.iter().map(|c| c.name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["Dawn Scout", "Dusk Scout"], "{option:?}");
+        assert!(option.cards.iter().all(|c| c.card_id.is_some()));
+        assert!(
+            option.cards.iter().all(|c| c.text.is_some()),
+            "each trigger carries its words: {option:?}"
+        );
+        assert_eq!(option.number, None, "an order is its cards, not a number");
+    }
+    assert_ne!(
+        prompt.options[0].cards[0].id, prompt.options[1].cards[0].id,
+        "the two answers are the two orders"
+    );
+    assert_ne!(answered.view.stage, Stage::Prompt);
+}
