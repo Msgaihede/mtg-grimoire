@@ -3,21 +3,18 @@ import { MANA_LINE_GRADIENT, type ManaLineSync } from "@/lib/mana";
 /**
  * The app's signature, and its only progress bar.
  *
- * A 2px W→U→B→R→G rule under the ribbon, present on every screen. During a sync the rule
- * dims and a full-strength copy of itself fills across it behind a gold cap — the one
+ * A 2px rule under the ribbon, present on every screen. At rest it is greyed out — a plain
+ * `border`-grey hairline, so the five colours appear only while something is happening and
+ * an idle window does not read as busy. During a sync the W→U→B→R→G gradient comes in,
+ * dimmed, and a full-strength copy of itself fills across it behind a gold cap — the one
  * place where the identity element and a functional one are the same element. It is never
  * repeated anywhere else in the app, which is what makes it a signature rather than a
  * motif.
  */
 export function ManaLine({ sync }: { sync: ManaLineSync | null }) {
   if (!sync) {
-    return (
-      <div
-        aria-hidden="true"
-        className="h-0.5 w-full shrink-0"
-        style={{ background: MANA_LINE_GRADIENT }}
-      />
-    );
+    // Greyed out, not dimmed: a faded gradient still reads as a stalled progress bar.
+    return <div aria-hidden="true" className="h-0.5 w-full shrink-0 bg-border" />;
   }
 
   const percent = sync.value === null ? null : Math.round(sync.value * 100);

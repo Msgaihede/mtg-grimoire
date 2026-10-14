@@ -34,7 +34,7 @@ common `#9AA0A6` (silver-grey) · uncommon `#B3C7CE` · rare `#BFA35A` · mythic
 - **Data:** Geist Mono — collector numbers, prices, counts (tabular-nums stays).
 
 ### Signature: the mana line
-A 2px horizontal rule of the five-color gradient (W→U→B→R→G, soft blends) under the global ribbon. Always present, never animated, never repeated elsewhere. During an active sync it becomes the progress bar (fill sweeps left→right, gold cap) — the one place identity and function merge.
+A 2px horizontal rule of the five-color gradient (W→U→B→R→G, soft blends) under the global ribbon. Always present, never animated, never repeated elsewhere. Greyed out at rest (a plain `bg-border` hairline, 2026-10-14, issue #990) so the colours appear only while something is happening. During an active sync it becomes the progress bar (fill sweeps left→right, gold cap) — the one place identity and function merge.
 
 ## Layout
 
