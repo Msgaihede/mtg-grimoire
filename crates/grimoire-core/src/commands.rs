@@ -689,6 +689,7 @@ commands! {
 
     // deck_pull
     read deck_pull_plan in deck_pull(deck_id: i64) = |conn| plan(conn, deck_id);
+    read deck_owned_elsewhere in deck_pull(deck_id: i64) = |conn| elsewhere(conn, deck_id);
     owned deck_pull_from_collection in deck_pull(deck_id: i64, picks: Vec<Pick>) = |conn| {
         from_collection(conn, deck_id, &picks)
     };

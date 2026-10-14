@@ -79,3 +79,12 @@ The To-do band manages multiple titled checklist documents per deck (`DeckTodosP
 - **Category Assignment**: Cards are categorized by custom category, tag match, or automatic fallback (`type_line` heuristics).
 - **Excluded Piles**: A category may be marked as excluded from main deck totals. Cards in these piles do not contribute to copy limit warnings or format size constraints.
 - **Tokens & Emblems**: Token rows are managed via `DeckTokensPanel.tsx`, `TokenArtPicker.tsx`, and `views/TokenPile.tsx`. Tokens are separated from library cards and evaluated under dedicated token stack rules.
+
+## The Missing Figure's Colour (issue #986)
+
+The `owned/wanted` figure in a stacked card's and a grid tile's chin (`ShortfallFigure.tsx`) is drawn only on a live-list row that is short of copies (`deckCardShort`), and its colour says what the reader has to do about it:
+
+- **Red** (`text-destructive`): no copy of the card anywhere in the collection outside this deck's own group — it has to be bought.
+- **Gold** (`text-accent`, the app's warning colour, as the Toaster's `warning` tone): copies sit elsewhere — at the collection root, in a binder, in another deck's group, or in `Recently removed` — and the tooltip lists each place with its count (`3 in Binder`, `2 in Burn (deck)`). It has to be fetched, not bought.
+
+The answer is `deck_owned_elsewhere` (`grimoire-core`'s `deck_pull::elsewhere`), read once per deck by `DeckEditor` (`useOwnedElsewhere`, keyed under `["decks"]` so every deck write re-reads it) and handed to the figures through `OwnedElsewhereContext`, not through the four memoised view layers' props. **Its grain is the oracle card** — any printing and finish counts, one grain coarser than the pull plan's `(card_id, finish)` — because the colour answers *"do I own this card?"*. Unlike the pull, it counts another deck's group: a copy sleeved elsewhere is still owned. A virtual deck and the theory list never ask. With no provider (the light app) or no answer yet, the figure reads red as it always did.

@@ -6010,6 +6010,10 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["DeckPullCandidate", deckPullRs, "PullCandidate"],
     ["DeckPullPick", deckPullRs, "Pick"],
     ["DeckPullOutcome", deckPullRs, "PullOutcome"],
+    // Issue #986's pair: the missing figure's colour and tooltip. A renamed `quantity` would
+    // read `undefined` and every tooltip would say "undefined in Binder".
+    ["DeckOwnedElsewhere", deckPullRs, "ElsewhereRow"],
+    ["DeckElsewherePlace", deckPullRs, "ElsewherePlace"],
     // **The quick add's two, added with the feature** (2026-09-03, issue #350). Both are
     // read-only shapes, and both are exactly the kind of small row `CollectionFolder` above is
     // on this list for: `QuickAddOutcome`'s three numbers are all counts a sentence quotes, so a

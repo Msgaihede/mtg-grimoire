@@ -106,12 +106,14 @@ import {
 } from "./DeckHeaderBar";
 import { QuickAdd } from "./QuickAdd";
 import { QuickZones } from "./QuickZones";
+import { OwnedElsewhereContext, ownedElsewhereMap } from "./ShortfallFigure";
 import { asSortBy } from "./sorting";
 import { theoryMatchPlan, theoryProgress } from "./theoryMatch";
 import {
   quickAddWishesQuery,
   useDeck,
   useMissingPlan,
+  useOwnedElsewhere,
   usePullPlan,
 } from "./useDeck";
 import { NO_LAST_BATCH, useDeckDrops, type LastBatch } from "./useDeckDrops";
@@ -2079,6 +2081,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    */
   const notes = useDeckNotes(deckId);
   const noted = useMemo(() => notedOracleIds(notes.notes), [notes.notes]);
+  // Where the cards the live list is short of sit elsewhere in the collection — the missing
+  // figure's colour and tooltip (issue #986). Through a context rather than the views' props, so
+  // the four memoised view layers are not re-drawn when it lands; only the figures are.
+  const ownedElsewhere = useOwnedElsewhere(deckId, tracks && variant === "live");
+  const elsewhere = useMemo(
+    () => (ownedElsewhere.data ? ownedElsewhereMap(ownedElsewhere.data) : null),
+    [ownedElsewhere.data],
+  );
 
   /**
    * **Which stacks the reader hid in the Stacks view** (issue #618) — this device's, per window,
@@ -3753,50 +3763,52 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           themselves rather than the editor.) */}
       <QuickZones categories={categories} onDrop={applyDrops} onNewCategory={openQuickCategory} />
 
-      <DeckDesk
-        deckId={deckId}
-        row={row}
-        variant={variant}
-        theoryEnabled={theoryEnabled}
-        restoredView={restoredView}
-        rememberView={rememberView}
-        updateDeck={updateDeck}
-        cards={deck.cards}
-        labels={deck.labels}
-        categories={categories}
-        separateX={separateX}
-        gcFilter={gcFilter}
-        missingFilter={missingFilter}
-        emptyGroupRules={emptyGroupRules}
-        theoryPlan={theoryPlan}
-        marketplace={marketplace}
-        violations={violations}
-        noted={noted}
-        tracks={tracks}
-        openCard={openCard}
-        landed={landed}
-        selectedSlot={selectedSlot}
-        tokenPile={tokenPile}
-        walkTokens={walkTokens}
-        hiddenStacks={hiddenStacks}
-        showStack={showStack}
-        setQuantity={setQuantity}
-        applyDrops={applyDrops}
-        deckCardMenuFor={deckCardMenuFor}
-        categoryMenuFor={categoryMenuFor}
-        renameCategoryField={renameCategoryField}
-        moveCategory={moveCategory}
-        pickedRef={pickedRef}
-        deskRef={deskRef}
-        barClearance={barClearance}
-        tightHeader={tightHeader}
-        setToolbarLine={setToolbarLine}
-        bar={bar}
-        header={header}
-        tools={tools}
-        notices={notices}
-        dock={dock}
-      />
+      <OwnedElsewhereContext.Provider value={elsewhere}>
+        <DeckDesk
+          deckId={deckId}
+          row={row}
+          variant={variant}
+          theoryEnabled={theoryEnabled}
+          restoredView={restoredView}
+          rememberView={rememberView}
+          updateDeck={updateDeck}
+          cards={deck.cards}
+          labels={deck.labels}
+          categories={categories}
+          separateX={separateX}
+          gcFilter={gcFilter}
+          missingFilter={missingFilter}
+          emptyGroupRules={emptyGroupRules}
+          theoryPlan={theoryPlan}
+          marketplace={marketplace}
+          violations={violations}
+          noted={noted}
+          tracks={tracks}
+          openCard={openCard}
+          landed={landed}
+          selectedSlot={selectedSlot}
+          tokenPile={tokenPile}
+          walkTokens={walkTokens}
+          hiddenStacks={hiddenStacks}
+          showStack={showStack}
+          setQuantity={setQuantity}
+          applyDrops={applyDrops}
+          deckCardMenuFor={deckCardMenuFor}
+          categoryMenuFor={categoryMenuFor}
+          renameCategoryField={renameCategoryField}
+          moveCategory={moveCategory}
+          pickedRef={pickedRef}
+          deskRef={deskRef}
+          barClearance={barClearance}
+          tightHeader={tightHeader}
+          setToolbarLine={setToolbarLine}
+          bar={bar}
+          header={header}
+          tools={tools}
+          notices={notices}
+          dock={dock}
+        />
+      </OwnedElsewhereContext.Provider>
 
       {/* The strip under the deck: how old these prices are (spec §5, said once here rather
           than as a tooltip on every one of sixty cards), where a card cut from the Actual list

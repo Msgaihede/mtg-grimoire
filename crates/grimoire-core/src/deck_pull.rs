@@ -352,6 +352,114 @@ pub fn plan(conn: &Connection, deck_id: i64) -> Result<Vec<PullRow>, String> {
     Ok(rows)
 }
 
+/// One card the live list is short of, and every place outside this deck's group that holds a
+/// copy of it — the read behind the editor's missing-copies figure (issue #986).
+///
+/// The hand-written mirror of `DeckOwnedElsewhere` in `packages/ui/lib/ipc.ts`, field for field.
+///
+/// **The grain is the oracle card, one coarser than [`PullRow`]'s, and that is the question.**
+/// A pull moves one specific object, so it matches the printing and the finish exactly. This
+/// answers *"do I own this card at all, and where?"* — the colour the figure takes and the
+/// sentence its tooltip says — and an M10 Bolt in a binder is the answer to that question for an
+/// Alpha line, even though the pull will not offer it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElsewhereRow {
+    /// The card the short rows are printings of — what the editor keys its rows on.
+    pub oracle_id: String,
+    /// Where the copies sit, best first — see [`ELSEWHERE_SQL`]. **Never empty**: a card the
+    /// reader owns nowhere else is left out, so a missing key is the whole of "you own none".
+    pub places: Vec<ElsewherePlace>,
+}
+
+/// One place that holds copies of a card, summed over every printing, finish and grain term.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElsewherePlace {
+    /// The folder, or `None` at the root.
+    pub folder_id: Option<i64>,
+    /// What to call it, or `None` at the root — which the UI words. A deck's group is named by
+    /// its **deck**, because that is the name the reader knows the copies by.
+    pub name: Option<String>,
+    /// `"user"`, `"deck"` or `"removed"`; `None` at the root.
+    pub kind: Option<String>,
+    /// Copies held there, every printing and finish of the card together.
+    pub quantity: i64,
+}
+
+/// Every place outside one deck's group that holds a copy of one oracle card, best first.
+///
+/// **Every other folder counts, another deck's group included** — unlike [`CANDIDATE_SQL`],
+/// which may only offer what is on the reader's desk. The question here is whether the reader
+/// owns the card, and a copy sleeved into another deck is a copy they own; the tooltip names the
+/// deck so they know where to find it. Only this deck's own group is left out, because what sits
+/// there is already counted in the figure itself.
+///
+/// The `IS NULL` arm first, for [`CANDIDATE_SQL`]'s reason, and `?2` compared with `IS NOT` so a
+/// deck with no group (a hand-edited database) leaves out nothing rather than everything.
+///
+/// The order is the root, then the reader's own folders in their `sort_order`, then the other
+/// decks, then `Recently removed` — most deliberately filed last but one, the app's own bin last.
+const ELSEWHERE_SQL: &str = "SELECT e.folder_id, coalesce(d.name, f.name), f.kind,
+            sum(e.quantity)
+       FROM collection_entries e
+       JOIN cards c ON c.id = e.card_id
+       LEFT JOIN collection_folders f ON f.id = e.folder_id
+       LEFT JOIN decks d ON d.id = f.deck_id
+      WHERE c.oracle_id = ?1
+        AND e.quantity > 0
+        AND (e.folder_id IS NULL OR e.folder_id IS NOT ?2)
+      GROUP BY e.folder_id
+      ORDER BY CASE
+                 WHEN e.folder_id IS NULL THEN 0
+                 WHEN f.kind = ?3 THEN 3
+                 WHEN f.kind = ?4 THEN 2
+                 ELSE 1
+               END,
+               coalesce(f.sort_order, 0),
+               e.folder_id";
+
+/// Where the reader owns the cards this deck is short of, outside the deck's own group.
+///
+/// The shortfall is [`crate::deck::live_shortfall`]'s, so a card this answers for is exactly a
+/// card the editor draws a missing figure on, folded on to its oracle id. An orphan row (no
+/// `cards` row, so no oracle id) is left out: there is no card to look for.
+///
+/// **A card owned nowhere else is left out**, so an empty vector is the ordinary answer, and a
+/// virtual deck is refused in [`crate::deck::VIRTUAL_HOLDS_NOTHING`]'s words — [`plan`]'s
+/// fence, for its reason.
+pub fn elsewhere(conn: &Connection, deck_id: i64) -> Result<Vec<ElsewhereRow>, String> {
+    if crate::deck::is_virtual(conn, deck_id)? {
+        return Err(crate::deck::VIRTUAL_HOLDS_NOTHING.to_owned());
+    }
+    let shortfall = crate::deck::live_shortfall(conn, deck_id)?;
+    let group = crate::deck::deck_group(conn, deck_id)?;
+    let mut stmt = conn.prepare(ELSEWHERE_SQL).map_err(|e| e.to_string())?;
+    let mut rows: Vec<ElsewhereRow> = Vec::new();
+    for oracle_id in shortfall.into_iter().filter_map(|s| s.oracle_id) {
+        // Two printings of one card short in one deck are one question.
+        if rows.iter().any(|r| r.oracle_id == oracle_id) {
+            continue;
+        }
+        let places = stmt
+            .query_map(params![oracle_id, group, REMOVED_KIND, DECK_KIND], |r| {
+                Ok(ElsewherePlace {
+                    folder_id: r.get(0)?,
+                    name: r.get(1)?,
+                    kind: r.get(2)?,
+                    quantity: r.get(3)?,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| e.to_string())?;
+        if !places.is_empty() {
+            rows.push(ElsewhereRow { oracle_id, places });
+        }
+    }
+    Ok(rows)
+}
+
 /// Run [`CANDIDATE_SQL`] for one printing and finish.
 ///
 /// The finish arrives in the deck's spelling — the one the row **plays**, where `None` is regular
@@ -1175,6 +1283,106 @@ mod tests {
 
         assert_eq!(
             plan(&conn, deck).unwrap_err(),
+            crate::deck::VIRTUAL_HOLDS_NOTHING
+        );
+    }
+
+    // ---- owned elsewhere (issue #986) -----------------------------------------------
+
+    /// What [`elsewhere`] says for one card, as `(kind, name, quantity)` per place.
+    fn places_of(conn: &Connection, deck: i64) -> Vec<(Option<String>, Option<String>, i64)> {
+        let rows = elsewhere(conn, deck).unwrap();
+        assert!(rows.len() <= 1, "the fixtures here are about one card");
+        rows.into_iter()
+            .flat_map(|r| r.places)
+            .map(|p| (p.kind, p.name, p.quantity))
+            .collect()
+    }
+
+    #[test]
+    fn a_card_owned_nowhere_is_left_out_of_elsewhere() {
+        let (conn, deck, cat) = fixture();
+        add_deck_card(&conn, deck, cat, "bolt", 4, None);
+        assert!(elsewhere(&conn, deck).unwrap().is_empty());
+    }
+
+    #[test]
+    fn elsewhere_names_every_place_but_this_decks_own_group() {
+        // Another deck's group counts here, where the pull refuses it: the question is whether
+        // the reader owns the card, not whether it is free. Named by the deck, not the folder.
+        let (conn, deck, cat) = fixture();
+        add_deck_card(&conn, deck, cat, "bolt", 4, None);
+        let (other, _) = deck_with_group(&conn, "Burn");
+        conn.execute(
+            "UPDATE collection_folders SET name = 'stale' WHERE deck_id = ?1",
+            params![other],
+        )
+        .unwrap();
+        let binder = user_folder(&conn, "Binder", 0);
+        let removed = removed_folder(&conn);
+        seed_entry(
+            &conn,
+            "bolt",
+            1,
+            crate::deck::deck_group(&conn, deck).unwrap(),
+        );
+        seed_entry(
+            &conn,
+            "bolt",
+            2,
+            crate::deck::deck_group(&conn, other).unwrap(),
+        );
+        seed_entry(&conn, "bolt", 1, Some(removed));
+        seed_entry(&conn, "bolt", 3, Some(binder));
+        seed_entry(&conn, "bolt", 1, None);
+
+        assert_eq!(
+            places_of(&conn, deck),
+            vec![
+                (None, None, 1),
+                (Some("user".into()), Some("Binder".into()), 3),
+                (Some("deck".into()), Some("Burn".into()), 2),
+                (Some("removed".into()), Some("Recently removed".into()), 1),
+            ],
+            "root, binders, other decks, then the bin — and never this deck's own copy"
+        );
+    }
+
+    #[test]
+    fn elsewhere_counts_every_printing_and_finish_of_the_card() {
+        // One grain coarser than the pull: an M10 Bolt and a foil Alpha one are both a Bolt
+        // the reader owns, summed per place.
+        let (conn, deck, cat) = fixture();
+        seed_reprint(&conn, "bolt-m10", "bolt");
+        add_deck_card(&conn, deck, cat, "bolt", 4, None);
+        seed_entry(&conn, "bolt-m10", 2, None);
+        seed_entry_as(&conn, "bolt", 1, None, "foil", "NM");
+
+        assert_eq!(places_of(&conn, deck), vec![(None, None, 3)]);
+    }
+
+    #[test]
+    fn a_card_the_deck_is_not_short_of_is_not_asked_about() {
+        let (conn, deck, cat) = fixture();
+        add_deck_card(&conn, deck, cat, "bolt", 1, None);
+        seed_entry(
+            &conn,
+            "bolt",
+            1,
+            crate::deck::deck_group(&conn, deck).unwrap(),
+        );
+        seed_entry(&conn, "bolt", 4, None);
+        assert!(elsewhere(&conn, deck).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_virtual_deck_has_nothing_owned_elsewhere_to_read() {
+        let (conn, deck, cat) = fixture();
+        add_deck_card(&conn, deck, cat, "bolt", 4, None);
+        seed_entry(&conn, "bolt", 4, None);
+        make_virtual(&conn, deck);
+        assert_eq!(
+            elsewhere(&conn, deck).unwrap_err(),
             crate::deck::VIRTUAL_HOLDS_NOTHING
         );
     }
