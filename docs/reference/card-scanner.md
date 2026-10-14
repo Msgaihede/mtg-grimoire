@@ -880,6 +880,27 @@ show the failure most plainly — Tannuk, Steadfast Second and The Earth Crystal
 framing scales the quad about its centre, every side alike; why those two still miss was not
 measured.
 
+**A fifth, at 0.85, the same evening**, for a card deeper in its pocket, and it is the answer to
+those two. Surveyed over every detected frame (`SCANNER_SURVEY_INSETS=1`, below), reading the card
+smaller than the quad and centred named the right card where the four framings did not on 57 frames
+of 18 scans, and lost it on 2. Measured on one binary with `SCANNER_FRAMINGS`:
+
+| | 0.92, 0.96, 1.04 | **+ 0.85** | + 0.80, 0.85 |
+| --- | ---: | ---: | ---: |
+| replay, Exact: card ✓ / printing ✓ | 44.2 / 36.0% | **45.3 / 36.0%** | 45.3 / 36.0% |
+| replay, Exact: wrong card | 7 | 7 | 7 |
+| replay, Exact: scans better / worse | — | 2 / 1 | 3 / 2 |
+| replay, Fast: card ✓ / wrong card | 40.7% / 9 | **41.9% / 6** | 43.0% / 6 |
+| replay, Fast: scans better / worse | — | 3 / 0 | 4 / 1 |
+| synthetic, plain and sleeved | — | no card changed | Plains ZNR 268 lost in Fast |
+| hashes a match (synthetic, plain) | 4.10 | 5.08 | — |
+
+With 0.85, The Earth Crystal went from undecided to its card in Exact and to its printing in Fast,
+Raubahn, Bull of Ala Mhigo from its card to its printing; in Fast The Darkness Crystal went from a
+wrong card to its card, and Bloom Tender and Hideous Taskmaster from a wrong card to undecided. The
+one worse is Decorum Dissertation, still its card but in a sibling printing. 0.80 as well added The
+Darkness Crystal in Exact and cost Nykthos Paragon its card. **None went from right to wrong.**
+
 **A card is 180°-symmetric**, so every framing is warped both ways up and both are hashed. A card
 photographed upside-down rectifies perfectly and then matches nothing; an implementation that
 skips this fails on roughly half of hand-held scans for no visible reason. Which orientation won
@@ -938,7 +959,7 @@ its kernel support scales with the ratio, so a 30-to-80× reduction reads the wh
 several times over. Measured on a 720 px frame: **32 ms of hashing against 3.5 ms of searching
 113,375 cards**, and the multi-framing search pays it six times a frame rather than twice — three,
 since 2026-09-30, once a stretch holds its orientation (below). Eight and four since 0.92 joined the
-framings (2026-10-14).
+framings (2026-10-14), ten and five since 0.85 did.
 
 | pre-scale | hashing, a 720 px frame | over the labelled corpus |
 | --- | --- | --- |
@@ -4309,7 +4330,36 @@ reading's match looks like when it is right and when it is not. 1,452 detected f
 (`src/bin/support/ab.rs`), so a change is measured against the scanner without it on one binary and
 through `pnpm scanner:replay`, which passes the environment on and no unknown argument:
 `SCANNER_REFRAME=off | <margin>[,<only above>[,<min gap>]]`, `SCANNER_REFRAME_LOG=1` (a stderr line per
-reframed frame) and `SCANNER_GAP=off | [<exact>],[<fast>]`. Unset is what ships.
+reframed frame), `SCANNER_GAP=off | [<exact>],[<fast>]` and `SCANNER_FRAMINGS=<f>,<f>,…` (the framings
+a quad is matched at besides its own — §3 *Rectify*). Unset is what ships.
+
+**The sleeve pocket, the same evening.** `SCANNER_SURVEY_INSETS=1` beside `SCANNER_REFRAME_SURVEY`
+reads each detected quad as a pocket instead: the session's own match of it (every framing, trimmed)
+and the card read inside it on a 27-cell grid — 0.80, 0.85 and 0.90 of the quad's sides, its centre
+moved 0 or ±4% each way, laid out in the quad's perspective. 1,452 frames, 3 min:
+
+| frames that name the reader's card | |
+| --- | ---: |
+| the session's framings | 521 |
+| some cell of the grid | 806 |
+| only a cell of the grid | 332 |
+| the grid's lowest distance chosen over the framings | 632 (130 gained, 19 lost) |
+| the three centred cells alone, the same way | 576 (57 gained, 2 lost) |
+
+The centred cells are the 0.85 framing that ships (§3 *Rectify*). **The card off the quad's centre is
+where most of the rest is — and it did not survive the session.** Applied as §3's readings are — a
+cell chosen when it beats the quad by the margin and stands the gap clear, then held — the survey
+said 72 frames gained in 24 scans and none lost; the replay said Fast 4 better and none worse, Exact
+4 better and 3 worse, one of them Bloom Tender from undecided to Plains. One cell had named Plains
+0.051 clear of every rival, and the hold carried it into the burst. Requiring two frames in a row to
+name the same card before a cell was applied left no frame swapped in the survey, and on the replay
+was worse still (Exact 2 / 2, Fast 1 / 1, Loading Zone from its card to a wrong one). Traced on that
+scan, the cause is the lock: a reframe moves the quad the lock follows from the pocket to a box a
+fifth smaller, and each time the hold lapses it moves back, so the lock stops trusting the frames
+the burst needed. Both were removed; the grid is the survey's alone. **What is left to try** is the
+gain off-centre without moving the lock's quad — off-centre cells as framings (130 frames gained and
+19 lost in the survey, so the lost ones need a rule first), or a search inside the pocket for the
+card's own edge.
 
 ### Measured in the app
 

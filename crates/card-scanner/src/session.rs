@@ -279,7 +279,7 @@ impl FrameOptions {
         }
     }
 
-    fn detect_options(&self, method: EdgeMethod, settled: bool) -> DetectOptions {
+    fn detect_options(&self, method: EdgeMethod, settled: bool, insets: &[f32]) -> DetectOptions {
         DetectOptions {
             method,
             work_long_edge: self.work_long_edge.clamp(240, 2048),
@@ -296,7 +296,7 @@ impl FrameOptions {
             //
             // The same shape as the OCR tier, and for the same reason — an expensive tier
             // stands down when the cheap one has settled it.
-            query_insets: if settled { Vec::new() } else { DetectOptions::default().query_insets },
+            query_insets: if settled { Vec::new() } else { insets.to_vec() },
             ..Default::default()
         }
     }
@@ -896,6 +896,9 @@ pub struct Session {
     /// The reading the last reframed frame used, held while it keeps matching better than the
     /// quad as found. See [`crate::reframe::choose`].
     reframe_held: Option<crate::reframe::Reading>,
+    /// The framings a frame's quad is matched at besides its own — see
+    /// [`DetectOptions::query_insets`]. [`Session::set_query_insets`] changes them.
+    query_insets: Vec<f32>,
     /// The last locked frame's appearance match came in at [`crate::reframe::Options::only_above`]
     /// or nearer, so this frame need not ask again whether its quad is the card. Cleared at the
     /// start of every frame and set by [`Session::match_locked`].
@@ -980,6 +983,7 @@ impl Session {
             decision_read_due: false,
             reframe: Some(crate::reframe::Options::default()),
             reframe_held: None,
+            query_insets: DetectOptions::default().query_insets,
             reframe_plain: false,
             gap_gate: Some(GapGate::default()),
         }
@@ -997,6 +1001,12 @@ impl Session {
     pub fn set_reframe(&mut self, opts: Option<crate::reframe::Options>) {
         self.reframe = opts;
         self.reframe_held = None;
+    }
+
+    /// Match each frame's quad at these framings as well as its own — fractions of its size, about
+    /// its centre. See [`DetectOptions::query_insets`]; the replay measures other lists with it.
+    pub fn set_query_insets(&mut self, insets: Vec<f32>) {
+        self.query_insets = insets;
     }
 
     /// Narrow every tier to the printings these filters admit.
@@ -1512,6 +1522,7 @@ impl Session {
     }
 
     fn frame_inner(&mut self, jpeg: &[u8], detail: Option<&[u8]>, opts: &FrameOptions) -> Verdict {
+        let insets = self.query_insets.clone();
         // A mode switch forgets the card before anything reads the session, so even a frame
         // that fails to decode reports the mode it was judged in.
         self.set_mode(opts.mode);
@@ -1573,7 +1584,7 @@ impl Session {
             if self.windowed < FULL_SWEEP_EVERY {
                 let lock = self.lock.options();
                 let near = each_method(&methods, |m| {
-                    locate_near(&source, &held, lock, &opts.detect_options(m, settled))
+                    locate_near(&source, &held, lock, &opts.detect_options(m, settled, &insets))
                 });
                 if near.iter().any(|(_, (result, _))| result.is_ok()) {
                     attempts = near;
@@ -1585,8 +1596,9 @@ impl Session {
             self.windowed += 1;
         } else {
             self.windowed = 0;
-            attempts =
-                each_method(&methods, |m| locate(&source, &rgb, &opts.detect_options(m, settled)));
+            attempts = each_method(&methods, |m| {
+                locate(&source, &rgb, &opts.detect_options(m, settled, &insets))
+            });
         }
         for (m, (result, trace)) in attempts {
             match result {
@@ -1706,7 +1718,7 @@ impl Session {
         // homography falls back to the frame's own, as it did when both were always built.
         let rectify_started = Stopwatch::start();
         let views = best.as_ref().and_then(|(method, d, _)| {
-            let o = opts.detect_options(*method, settled);
+            let o = opts.detect_options(*method, settled, &insets);
             let relocked = match &held_quad {
                 Some(q) if trusted && q.corners != d.quad.corners => rectify_views(&rgb, q, &o),
                 _ => None,
@@ -1796,7 +1808,7 @@ impl Session {
                         frame: &rgb,
                         detail,
                         quad,
-                        inset: opts.detect_options(method, settled).inset,
+                        inset: opts.detect_options(method, settled, &insets).inset,
                         margin,
                         built: std::cell::OnceCell::new(),
                         used: std::cell::Cell::new(None),
@@ -2648,7 +2660,8 @@ mod tests {
     /// **One rectification a frame, whatever the method and whatever the lock** (issue #701).
     /// `Method::Both` used to flatten each method's winner inside `detect` and then, once
     /// locked, flatten the held quad a third time: 18 full-size warps to hash six views. One warp
-    /// a view is every framing both ways up — six at three framings, eight since 0.92 joined them
+    /// a view is every framing both ways up — six at three framings, eight since 0.92 joined them,
+    /// ten since 0.85 did
     /// — and it has to hold on the frames that rectify from the lock as well as on the ones that
     /// do not.
     #[test]
@@ -2660,7 +2673,8 @@ mod tests {
         // lock's third — without that, six here would prove nothing.
         let img = image::load_from_memory(&card_frame_jpeg(0)).expect("decode");
         for m in opts.method.edge_methods() {
-            let found = locate(&img, &rgb_of(&img), &opts.detect_options(m, false)).0;
+            let o = opts.detect_options(m, false, &DetectOptions::default().query_insets);
+            let found = locate(&img, &rgb_of(&img), &o).0;
             assert!(found.is_ok(), "{m:?} misses the test card: {:?}", found.err());
         }
         let views = 2 * (1 + crate::detect::DetectOptions::default().query_insets.len());
