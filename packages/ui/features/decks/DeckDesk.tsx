@@ -29,6 +29,7 @@ import { useScrollPerView } from "@/lib/useScrollPerView";
 import { cn } from "@/lib/utils";
 import type { DeckCardActions, DeckCardGroupDrag, DeckCardMenuHandlers } from "./cardControl";
 import { DeckHeaderBar, type DeckHeaderBarProps } from "./DeckHeaderBar";
+import { isShort } from "./DeckStats";
 import { deckSlotOrder, deckWalkStops, type WalkTokenPile } from "./deckWalk";
 import { deckCardSlot, type DeckWrite, type DragPayload } from "./dnd";
 import {
@@ -294,6 +295,8 @@ export interface DeckDeskProps {
   separateX: boolean;
   /** The ledger's `Game Changers` chip, as the filter reads it — the editor's `gcFilter`. */
   gcFilter: boolean;
+  /** The ledger's `N missing` press, as the filter reads it — the editor's `missingFilter`. */
+  missingFilter: boolean;
   emptyGroupRules: EmptyGroupRules;
   theoryPlan: TheoryPlan | undefined;
   marketplace: Marketplace;
@@ -351,6 +354,7 @@ export function DeckDesk({
   categories,
   separateX,
   gcFilter,
+  missingFilter,
   emptyGroupRules,
   theoryPlan,
   marketplace,
@@ -541,6 +545,12 @@ export function DeckDesk({
    * again**. The shape of the deck still changes as they type — that is what a filter is — but
    * an empty pile of theirs stays on screen and stays a drop target while it does.
    *
+   * **The ledger's `N missing` press joined the same `OR` (issue #985)**, for the chip's reason:
+   * it is the game-changer chip's twin on the same line, and a shortfall and a label are as
+   * unlikely to meet as a game changer and a label are. It matches `isShort` — the very rows the
+   * figure counts — so a parked Maybeboard card, which owns nothing by construction, is not
+   * offered as missing.
+   *
    * **The text box is two filters since issue #621, ANDed**: its free text (`needleMatches`, the
    * substring test it always was) and its typed terms (`matching`, a set of printings Rust
    * answered, or `null` while no term narrows). See {@link useDeckCardQuery}.
@@ -548,19 +558,20 @@ export function DeckDesk({
   const shown = useMemo(() => {
     // Whether *any* chip in that row is pressed, which is the one thing the OR needs to know:
     // no chip is no chip filter, exactly as an empty `labelIds` was on its own.
-    const chips = labelIds.length > 0 || gcFilter;
+    const chips = labelIds.length > 0 || gcFilter || missingFilter;
     if (!needle && !chips && matching === null) return cards;
     return cards.filter(
       (card) =>
         (!chips ||
           (gcFilter && card.gameChanger === true) ||
+          (missingFilter && isShort(card)) ||
           (card.labelId !== null && labelIds.includes(card.labelId))) &&
         needleMatches(card, needle) &&
         // The typed terms, answered per printing — so a foil and a regular copy of one card,
         // or one card in two piles, always stand or fall together.
         (matching === null || matching.has(card.cardId)),
     );
-  }, [cards, needle, matching, labelIds, gcFilter]);
+  }, [cards, needle, matching, labelIds, gcFilter, missingFilter]);
 
   const groups = useMemo(
     // No currency any more: the rows this groups arrived priced at the selected marketplace,

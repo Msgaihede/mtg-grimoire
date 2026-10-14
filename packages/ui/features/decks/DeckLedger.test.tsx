@@ -37,6 +37,8 @@ describe("DeckLedger", () => {
           hasGameChangers={false}
           gameChangersOnly={false}
           onGameChangersOnlyToggle={() => {}}
+          missingOnly={false}
+          onMissingOnlyToggle={() => {}}
           tight={false}
           // The ordinary deck, which is what every case above the virtual block is a claim
           // about — so the `Owned` term goes on being asserted exactly as it was before the prop
@@ -258,6 +260,35 @@ describe("DeckLedger", () => {
     expect(term("Owned").querySelector("dd")?.textContent).toBe("1 3 missing");
   });
 
+  /**
+   * **The shortfall is a press (issue #985)**, the game-changer chip's twin: the figure says how
+   * many and the press narrows the deck to which. A toggle, so the state is `aria-pressed` and the
+   * name is the figure's own words in both states — in the tight arm too, where the `sr-only`
+   * twin is the whole of the name.
+   */
+  it("presses the shortfall as a toggle, named by its own words at both widths", () => {
+    const presses: number[] = [];
+    ledger([card({ name: "Bolt", quantity: 4, ownedQuantity: 1 })], {
+      onMissingOnlyToggle: () => presses.push(1),
+    });
+
+    const press = screen.getByRole("button", { name: "3 missing" });
+    expect(press).toHaveAttribute("aria-pressed", "false");
+    expect(press).not.toHaveAttribute("aria-label");
+    fireEvent.click(press);
+    expect(presses).toHaveLength(1);
+
+    cleanup();
+    ledger([card({ name: "Bolt", quantity: 4, ownedQuantity: 1 })], {
+      missingOnly: true,
+      tight: true,
+    });
+    expect(screen.getByRole("button", { name: "3 missing" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
   it("says nothing about a shortfall for a deck it holds every copy of", () => {
     ledger([card({ name: "Bolt", quantity: 4, ownedQuantity: 4 })]);
 
@@ -315,7 +346,8 @@ describe("DeckLedger", () => {
   /** Nothing at all for a deck that draws none — no chip to press and no words. The gate is
    *  `hasGameChangers` rather than the count, which is the case below. */
   it("draws nothing at all for a deck that draws none", () => {
-    ledger([card({ name: "Bolt" })]);
+    // Fully owned, so the shortfall — a press of its own since issue #985 — is not drawn either.
+    ledger([card({ name: "Bolt", ownedQuantity: 1 })]);
 
     expect(screen.queryByText(/game changer/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("button")).toBeNull();

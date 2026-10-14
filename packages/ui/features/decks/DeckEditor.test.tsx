@@ -3713,6 +3713,81 @@ describe("DeckEditor", () => {
   });
 
   /**
+   * ## The ledger's `N missing` is a press too (issue #985)
+   *
+   * The game-changer chip's twin on the same line: the red figure says how many copies the
+   * collection cannot cover and pressing it narrows the deck to the cards it counts. It matches
+   * `isShort` — the rows `deckStats` counts — so a card parked in a switched-off pile, which owns
+   * nothing by construction, is not offered as missing.
+   */
+  it("narrows the deck to the missing cards, and a second press gives the rest back", async () => {
+    deckGet.mockResolvedValue(
+      detail({}, [
+        bolt({ quantity: 4, ownedQuantity: 4 }),
+        bear({ quantity: 2, ownedQuantity: 0 }),
+        card({
+          name: "Ornithopter",
+          categoryKind: "maybe",
+          categoryActive: false,
+          quantity: 1,
+          ownedQuantity: 0,
+        }),
+      ]),
+    );
+    await open();
+    const press = await screen.findByRole("button", { name: "2 missing" });
+    expect(press).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(press);
+    expect(press).toHaveAttribute("aria-pressed", "true");
+    expect(within(group("Main deck")).getByRole("button", { name: /^Bear/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Lightning Bolt/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Ornithopter/ })).not.toBeInTheDocument();
+
+    await userEvent.click(press);
+    expect(press).toHaveAttribute("aria-pressed", "false");
+    expect(
+      within(group("Main deck")).getByRole("button", { name: /^Lightning Bolt/ }),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * **The fence, as `gcFilter`'s:** `missingFilter` is `missingOnly && hasMissing`, derived at
+   * render. Covering the last missing copy takes the press off the ledger, and the deck must not
+   * stay narrowed to nothing with nothing on screen to press; a shortfall that comes back finds
+   * the press where the reader left it.
+   */
+  it("keeps the deck on screen when the last missing copy is covered, and remembers the press", async () => {
+    deckGet.mockResolvedValue(
+      detail({}, [bolt({ quantity: 4, ownedQuantity: 4 }), bear({ ownedQuantity: 0 })]),
+    );
+    await open();
+    await userEvent.click(await screen.findByRole("button", { name: "2 missing" }));
+    expect(screen.queryByRole("button", { name: /^Lightning Bolt/ })).not.toBeInTheDocument();
+
+    deckGet.mockResolvedValue(
+      detail({}, [bolt({ quantity: 4, ownedQuantity: 4 }), bear({ ownedQuantity: 2 })]),
+    );
+    await writeToDeck("Burn, bought");
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "2 missing" })).not.toBeInTheDocument(),
+    );
+    expect(
+      within(group("Main deck")).getByRole("button", { name: /^Lightning Bolt/ }),
+    ).toBeInTheDocument();
+
+    deckGet.mockResolvedValue(
+      detail({}, [bolt({ quantity: 4, ownedQuantity: 4 }), bear({ ownedQuantity: 0 })]),
+    );
+    await writeToDeck("Burn, sold");
+    expect(await screen.findByRole("button", { name: "2 missing" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.queryByRole("button", { name: /^Lightning Bolt/ })).not.toBeInTheDocument();
+  });
+
+  /**
    * Each toolbar button opens its own full-window dialog, and Escape closes the one that is up
    * and hands the caret back to the control that opened it — the editor stays a *view*, so the
    * deck is still on screen afterwards.

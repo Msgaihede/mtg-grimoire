@@ -70,6 +70,8 @@ export const DeckLedger = memo(function DeckLedger({
   hasGameChangers,
   gameChangersOnly,
   onGameChangersOnlyToggle,
+  missingOnly,
+  onMissingOnlyToggle,
   tight,
   tracksCollection,
   check,
@@ -127,6 +129,17 @@ export const DeckLedger = memo(function DeckLedger({
    * every other control on this line reports rather than decides.
    */
   onGameChangersOnlyToggle: () => void;
+  /**
+   * Whether the red `N missing` is pressed — the shortfall filter as the deck is actually being
+   * drawn under it (issue #985). See `DeckEditor`'s `missingFilter`, which is fenced the way
+   * `gcFilter` is and for the same reason.
+   */
+  missingOnly: boolean;
+  /**
+   * A press on the shortfall: narrow the deck to the cards it is short of, or give the rest back.
+   * The game-changer chip's twin — the figure says *how many* and the press answers *which ones*.
+   */
+  onMissingOnlyToggle: () => void;
   /**
    * The narrowest editor column this header reasons about, where the two counted figures that
    * carry a sentence say it in a number instead.
@@ -308,23 +321,50 @@ export const DeckLedger = memo(function DeckLedger({
                   `Missing2` bug it names: a name computation trims each element's contribution
                   before appending it, so the margin was drawing `103 3 missing` for the eye and
                   concatenating `1033 missing` for anything reading the text. */}
-              {stats.missing > 0 &&
-                (tight ? (
-                  <span className="text-[0.6875rem] text-destructive">
-                    {/* The words for a screen reader, the sign for the eye. `−3` is only
-                        legible beside the number it is short of, which is exactly what a reader
-                        hearing this line one term at a time does not have. */}
-                    <span className="sr-only">{count(stats.missing)} missing</span>
-                    <span aria-hidden="true">−{count(stats.missing)}</span>
-                  </span>
-                ) : (
-                  <>
-                    {" "}
-                    <span className="text-[0.6875rem] text-destructive">
-                      {count(stats.missing)} missing
-                    </span>
-                  </>
-                ))}
+              {stats.missing > 0 && (
+                <>
+                  {/* The word branch's real space sits outside the press, so the text is still
+                      `1 3 missing` for anything reading it; the sign branch stays tight. */}
+                  {!tight && " "}
+                  {/* **The shortfall is a press** (issue #985), the game-changer chip's twin: the
+                      figure says how many and pressing it narrows the deck to exactly the cards
+                      it counts — see `isShort`. A text-weight button rather than a bordered chip,
+                      because it sits inside a term on the baseline and a 28px edge would lift the
+                      whole line. `aria-pressed` carries the state; the tint and the underline are
+                      its sighted half. The name is the contents, never an `aria-label`, so the
+                      narrow arm's `sr-only` words go on naming it. */}
+                  <button
+                    type="button"
+                    aria-pressed={missingOnly}
+                    {...tip(
+                      missingOnly
+                        ? "Showing only missing cards. Click to show all cards."
+                        : "Show only missing cards",
+                    )}
+                    onClick={onMissingOnlyToggle}
+                    className={cn(
+                      "rounded-sm px-0.5 text-[0.6875rem] text-destructive underline-offset-2",
+                      "transition-colors duration-150 motion-reduce:transition-none",
+                      missingOnly
+                        ? "bg-destructive/15 underline"
+                        : "hover:underline focus-visible:underline",
+                      FOCUS,
+                    )}
+                  >
+                    {tight ? (
+                      <>
+                        {/* The words for a screen reader, the sign for the eye. `−3` is only
+                            legible beside the number it is short of, which is exactly what a
+                            reader hearing this line one term at a time does not have. */}
+                        <span className="sr-only">{count(stats.missing)} missing</span>
+                        <span aria-hidden="true">−{count(stats.missing)}</span>
+                      </>
+                    ) : (
+                      `${count(stats.missing)} missing`
+                    )}
+                  </button>
+                </>
+              )}
             </dd>
           </div>
         </>
