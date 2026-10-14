@@ -462,8 +462,15 @@ describe("the deck a search counts copies for", () => {
       decks: DECKS,
       collectionFolders: [
         ...groupsOf(DECKS),
-        { id: CASE_FOLDER, parentId: null, name: "Display case", kind: "user", deckId: null,
-          sortOrder: 0, locked: true },
+        {
+          id: CASE_FOLDER,
+          parentId: null,
+          name: "Display case",
+          kind: "user",
+          deckId: null,
+          sortOrder: 0,
+          locked: true,
+        },
       ],
       collectionEntries: [
         entry({ id: 1, cardId: BOLT.id, folderId: null }),
@@ -2380,9 +2387,7 @@ describe("what a deck owns", () => {
     const db = makeDeckDb({
       decks: [deck({ id: 1 })],
       deckCards: [deckCard({ cardId: BOLT_A.id, quantity: 4 })],
-      collectionEntries: [
-        entry({ id: 1, cardId: BOLT_B.id, quantity: 4, folderId: groupId(1) }),
-      ],
+      collectionEntries: [entry({ id: 1, cardId: BOLT_B.id, quantity: 4, folderId: groupId(1) })],
     });
     expect(liveDeck(db)!.cards[0].ownedQuantity).toBe(0);
   });
@@ -2424,9 +2429,7 @@ describe("what a deck owns", () => {
   it("gives the commander its copy before the main deck gets one", () => {
     const solRing = CARDS.filter((c) => c.name === "Sol Ring")[0];
     const db = makeDeckDb({
-      collectionEntries: [
-        entry({ id: 1, cardId: solRing.id, quantity: 1, folderId: groupId(1) }),
-      ],
+      collectionEntries: [entry({ id: 1, cardId: solRing.id, quantity: 1, folderId: groupId(1) })],
       decks: [deck({ id: 1, formatKey: "commander" })],
       deckCards: [
         // The main-deck row is first by id; the commander's category sorts ahead of it, and
@@ -2532,11 +2535,25 @@ describe("what a deck owns", () => {
         decks,
         collectionFolders: [
           ...groupsOf(decks),
-          { id: CASE_FOLDER, parentId: null, name: "Display case", kind: "user", deckId: null,
-            sortOrder: 0, locked: true },
+          {
+            id: CASE_FOLDER,
+            parentId: null,
+            name: "Display case",
+            kind: "user",
+            deckId: null,
+            sortOrder: 0,
+            locked: true,
+          },
           // Unlocked itself, and locked by its parent — the recursive rule, in one row.
-          { id: SHELF_FOLDER, parentId: CASE_FOLDER, name: "Top shelf", kind: "user",
-            deckId: null, sortOrder: 0, locked: false },
+          {
+            id: SHELF_FOLDER,
+            parentId: CASE_FOLDER,
+            name: "Top shelf",
+            kind: "user",
+            deckId: null,
+            sortOrder: 0,
+            locked: false,
+          },
         ],
         collectionEntries: [
           entry({ id: 1, cardId: BOLT.id, quantity: 2, folderId: CASE_FOLDER }),
@@ -2576,7 +2593,11 @@ describe("what a deck owns", () => {
         decks: [deck({ id: 1 })],
         deckCards: [
           deckCard({
-            id: 1, cardId: BOLT.id, variant: "theory", categoryKind: "maybe", quantity: 4,
+            id: 1,
+            cardId: BOLT.id,
+            variant: "theory",
+            categoryKind: "maybe",
+            quantity: 4,
           }),
         ],
       });
@@ -2584,8 +2605,7 @@ describe("what a deck owns", () => {
       expect(theoryOwned(db)).toBe(0);
       // Switched back on, the same four copies are attributed — so the zero above is the switch
       // and not an empty pool. The **plan's** Maybeboard, since v53 its own pile.
-      db.deckCategories.find((c) => c.kind === "maybe" && c.variant === "theory")!.isActive =
-        true;
+      db.deckCategories.find((c) => c.kind === "maybe" && c.variant === "theory")!.isActive = true;
       expect(theoryOwned(db)).toBe(4);
     });
 
@@ -2601,10 +2621,18 @@ describe("what a deck owns", () => {
         decks: [deck({ id: 1, formatKey: "commander" })],
         deckCards: [
           deckCard({
-            id: 1, cardId: BOLT.id, variant: "theory", categoryKind: "main", quantity: 2,
+            id: 1,
+            cardId: BOLT.id,
+            variant: "theory",
+            categoryKind: "main",
+            quantity: 2,
           }),
           deckCard({
-            id: 2, cardId: BOLT.id, variant: "theory", categoryKind: "commander", quantity: 2,
+            id: 2,
+            cardId: BOLT.id,
+            variant: "theory",
+            categoryKind: "commander",
+            quantity: 2,
           }),
         ],
       });
@@ -2624,7 +2652,11 @@ describe("what a deck owns", () => {
         decks: [deck({ id: 1 })],
         deckCards: [
           deckCard({
-            id: 1, cardId: BOLT.id, variant: "theory", finish: "foil", quantity: 4,
+            id: 1,
+            cardId: BOLT.id,
+            variant: "theory",
+            finish: "foil",
+            quantity: 4,
           }),
         ],
       });
@@ -3202,10 +3234,24 @@ describe("the collection grain", () => {
   it("refuses an add into a folder the app owns, and still takes the reader's own", () => {
     const db = makeDb({
       collectionFolders: [
-        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0,
-          locked: false },
-        { id: 2, parentId: null, name: "Burn", kind: "deck", deckId: 7, sortOrder: 1,
-          locked: false },
+        {
+          id: 1,
+          parentId: null,
+          name: "Binder",
+          kind: "user",
+          deckId: null,
+          sortOrder: 0,
+          locked: false,
+        },
+        {
+          id: 2,
+          parentId: null,
+          name: "Burn",
+          kind: "deck",
+          deckId: 7,
+          sortOrder: 1,
+          locked: false,
+        },
       ],
     });
     const w = writeHandlers(db);
@@ -3950,7 +3996,9 @@ describe("the wishlist's folders", () => {
     const db = stocked();
     // The number a folder card drew before the press, because `wishlist_folder_summary` is
     // direct per folder too — so the confirmation and the answer are the same figure.
-    const drawn = readHandlers(db).wishlist_folder_summary({}).find((r) => r.folderId === 1)!;
+    const drawn = readHandlers(db)
+      .wishlist_folder_summary({})
+      .find((r) => r.folderId === 1)!;
     expect(drawn.wishes).toBe(2);
 
     expect(writeHandlers(db).wishlist_folder_clear({ id: 1 })).toBe(2);
@@ -4587,10 +4635,24 @@ describe("the collection's folders", () => {
   function filed(over: Partial<FakeDb> = {}): FakeDb {
     return makeDb({
       collectionFolders: [
-        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0,
-          locked: false },
-        { id: 2, parentId: 1, name: "Trade binder", kind: "user", deckId: null, sortOrder: 0,
-          locked: false },
+        {
+          id: 1,
+          parentId: null,
+          name: "Binder",
+          kind: "user",
+          deckId: null,
+          sortOrder: 0,
+          locked: false,
+        },
+        {
+          id: 2,
+          parentId: 1,
+          name: "Trade binder",
+          kind: "user",
+          deckId: null,
+          sortOrder: 0,
+          locked: false,
+        },
       ],
       ...over,
     });
@@ -4629,12 +4691,33 @@ describe("the collection's folders", () => {
   it("refuses every write against a folder the app owns, and only those", () => {
     const db = filed({
       collectionFolders: [
-        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0,
-          locked: false },
-        { id: 2, parentId: null, name: "Burn", kind: "deck", deckId: 7, sortOrder: 1,
-          locked: false },
-        { id: 3, parentId: null, name: "Recently removed", kind: "removed", deckId: null,
-          sortOrder: 2, locked: false },
+        {
+          id: 1,
+          parentId: null,
+          name: "Binder",
+          kind: "user",
+          deckId: null,
+          sortOrder: 0,
+          locked: false,
+        },
+        {
+          id: 2,
+          parentId: null,
+          name: "Burn",
+          kind: "deck",
+          deckId: 7,
+          sortOrder: 1,
+          locked: false,
+        },
+        {
+          id: 3,
+          parentId: null,
+          name: "Recently removed",
+          kind: "removed",
+          deckId: null,
+          sortOrder: 2,
+          locked: false,
+        },
       ],
       collectionEntries: [entry({ id: 1, quantity: 1 })],
     });
@@ -4669,12 +4752,33 @@ describe("the collection's folders", () => {
   it("refuses to file a card out of a deck by hand, and only out of a deck", () => {
     const db = filed({
       collectionFolders: [
-        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0,
-          locked: false },
-        { id: 2, parentId: null, name: "Burn", kind: "deck", deckId: 7, sortOrder: 1,
-          locked: false },
-        { id: 3, parentId: null, name: "Recently removed", kind: "removed", deckId: null,
-          sortOrder: 2, locked: false },
+        {
+          id: 1,
+          parentId: null,
+          name: "Binder",
+          kind: "user",
+          deckId: null,
+          sortOrder: 0,
+          locked: false,
+        },
+        {
+          id: 2,
+          parentId: null,
+          name: "Burn",
+          kind: "deck",
+          deckId: 7,
+          sortOrder: 1,
+          locked: false,
+        },
+        {
+          id: 3,
+          parentId: null,
+          name: "Recently removed",
+          kind: "removed",
+          deckId: null,
+          sortOrder: 2,
+          locked: false,
+        },
       ],
       collectionEntries: [
         entry({ id: 1, quantity: 1, folderId: 2 }),
@@ -4696,18 +4800,43 @@ describe("the collection's folders", () => {
   it("answers every folder flat, in `sortOrder, id`, and hides none of them by kind", () => {
     const db = makeDb({
       collectionFolders: [
-        { id: 3, parentId: null, name: "Someday", kind: "user", deckId: null, sortOrder: 0,
-          locked: false },
-        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0,
-          locked: false },
-        { id: 2, parentId: null, name: "Burn", kind: "deck", deckId: 7, sortOrder: 1,
-          locked: false },
+        {
+          id: 3,
+          parentId: null,
+          name: "Someday",
+          kind: "user",
+          deckId: null,
+          sortOrder: 0,
+          locked: false,
+        },
+        {
+          id: 1,
+          parentId: null,
+          name: "Binder",
+          kind: "user",
+          deckId: null,
+          sortOrder: 0,
+          locked: false,
+        },
+        {
+          id: 2,
+          parentId: null,
+          name: "Burn",
+          kind: "deck",
+          deckId: 7,
+          sortOrder: 1,
+          locked: false,
+        },
       ],
     });
     // The reader's own arrangement, `sortOptions`' "they arranged it themselves" exemption — so
     // insertion order would look entirely plausible and be wrong. The `deck` folder is in the
     // answer: a page that could not see it would draw a tree the collection does not have.
-    expect(readHandlers(db).collection_folder_list().map((f) => f.id)).toEqual([1, 3, 2]);
+    expect(
+      readHandlers(db)
+        .collection_folder_list()
+        .map((f) => f.id),
+    ).toEqual([1, 3, 2]);
     expect(readHandlers(db).collection_folder_list()[2]).toMatchObject({
       kind: "deck",
       deckId: 7,
@@ -4759,12 +4888,33 @@ describe("the collection's folders", () => {
   it("clears every entry in Recently removed, and keeps the folder and everything else", () => {
     const db = filed({
       collectionFolders: [
-        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0,
-          locked: false },
-        { id: 2, parentId: null, name: "Burn", kind: "deck", deckId: 7, sortOrder: 1,
-          locked: false },
-        { id: 3, parentId: null, name: "Recently removed", kind: "removed", deckId: null,
-          sortOrder: 2, locked: false },
+        {
+          id: 1,
+          parentId: null,
+          name: "Binder",
+          kind: "user",
+          deckId: null,
+          sortOrder: 0,
+          locked: false,
+        },
+        {
+          id: 2,
+          parentId: null,
+          name: "Burn",
+          kind: "deck",
+          deckId: 7,
+          sortOrder: 1,
+          locked: false,
+        },
+        {
+          id: 3,
+          parentId: null,
+          name: "Recently removed",
+          kind: "removed",
+          deckId: null,
+          sortOrder: 2,
+          locked: false,
+        },
       ],
       collectionEntries: [
         entry({ id: 1, cardId: BOLT.id, quantity: 1, folderId: null }),
@@ -4811,12 +4961,17 @@ describe("the collection's folders", () => {
   it("merges the rows it un-files, onto the root row and onto each other", () => {
     const db = makeDb({
       collectionFolders: [
-        { id: 1, parentId: null, name: "Top", kind: "user", deckId: null, sortOrder: 0,
-          locked: false },
-        { id: 2, parentId: 1, name: "A", kind: "user", deckId: null, sortOrder: 0,
-          locked: false },
-        { id: 3, parentId: 1, name: "B", kind: "user", deckId: null, sortOrder: 1,
-          locked: false },
+        {
+          id: 1,
+          parentId: null,
+          name: "Top",
+          kind: "user",
+          deckId: null,
+          sortOrder: 0,
+          locked: false,
+        },
+        { id: 2, parentId: 1, name: "A", kind: "user", deckId: null, sortOrder: 0, locked: false },
+        { id: 3, parentId: 1, name: "B", kind: "user", deckId: null, sortOrder: 1, locked: false },
       ],
       collectionEntries: [
         entry({ id: 1, cardId: BOLT.id, quantity: 1, folderId: null }),
@@ -4945,12 +5100,33 @@ describe("the collection's folders", () => {
   it("drops only a deck folder's copies when the query asks for the unallocated ones", () => {
     const db = makeDb({
       collectionFolders: [
-        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0,
-          locked: false },
-        { id: 2, parentId: null, name: "Recently removed", kind: "removed", deckId: null,
-          sortOrder: 1, locked: false },
-        { id: 3, parentId: null, name: "Burn", kind: "deck", deckId: 7, sortOrder: 2,
-          locked: false },
+        {
+          id: 1,
+          parentId: null,
+          name: "Binder",
+          kind: "user",
+          deckId: null,
+          sortOrder: 0,
+          locked: false,
+        },
+        {
+          id: 2,
+          parentId: null,
+          name: "Recently removed",
+          kind: "removed",
+          deckId: null,
+          sortOrder: 1,
+          locked: false,
+        },
+        {
+          id: 3,
+          parentId: null,
+          name: "Burn",
+          kind: "deck",
+          deckId: 7,
+          sortOrder: 2,
+          locked: false,
+        },
       ],
       collectionEntries: [
         entry({ id: 1, cardId: BOLT.id, folderId: null }),
@@ -4988,12 +5164,33 @@ describe("the collection's folders", () => {
   it("counts copies per folder directly, leaves the root out, skips an empty one, and answers null for an unpriced folder", () => {
     const db = filed({
       collectionFolders: [
-        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0,
-          locked: false },
-        { id: 2, parentId: 1, name: "Trade binder", kind: "user", deckId: null, sortOrder: 0,
-          locked: false },
-        { id: 3, parentId: null, name: "Someday", kind: "user", deckId: null, sortOrder: 1,
-          locked: false },
+        {
+          id: 1,
+          parentId: null,
+          name: "Binder",
+          kind: "user",
+          deckId: null,
+          sortOrder: 0,
+          locked: false,
+        },
+        {
+          id: 2,
+          parentId: 1,
+          name: "Trade binder",
+          kind: "user",
+          deckId: null,
+          sortOrder: 0,
+          locked: false,
+        },
+        {
+          id: 3,
+          parentId: null,
+          name: "Someday",
+          kind: "user",
+          deckId: null,
+          sortOrder: 1,
+          locked: false,
+        },
       ],
       collectionEntries: [
         entry({ id: 1, cardId: BOLT.id, quantity: 2, folderId: 1 }),
@@ -5040,7 +5237,11 @@ describe("the collection's folders", () => {
   it("stores the lock on the folder the press named and carries it on the wire", () => {
     const db = filed();
     const w = writeHandlers(db);
-    expect(readHandlers(db).collection_folder_list().map((f) => f.locked)).toEqual([false, false]);
+    expect(
+      readHandlers(db)
+        .collection_folder_list()
+        .map((f) => f.locked),
+    ).toEqual([false, false]);
 
     expect(w.collection_folder_set_locked({ id: 1, locked: true })).toMatchObject({
       id: 1,
@@ -5048,7 +5249,11 @@ describe("the collection's folders", () => {
       locked: true,
     });
     expect(db.collectionFolders.find((f) => f.id === 1)!.locked).toBe(true);
-    expect(readHandlers(db).collection_folder_list().map((f) => f.locked)).toEqual([true, false]);
+    expect(
+      readHandlers(db)
+        .collection_folder_list()
+        .map((f) => f.locked),
+    ).toEqual([true, false]);
 
     // A new drawer is its own row and carries no flag, **even inside a locked parent**: it is
     // effectively locked by its ancestry the moment it exists, and a stored `true` would be
@@ -5057,7 +5262,11 @@ describe("the collection's folders", () => {
 
     // Reversible in one press, which is why the toggle asks for no confirmation.
     expect(w.collection_folder_set_locked({ id: 1, locked: false }).locked).toBe(false);
-    expect(readHandlers(db).collection_folder_list().every((f) => !f.locked)).toBe(true);
+    expect(
+      readHandlers(db)
+        .collection_folder_list()
+        .every((f) => !f.locked),
+    ).toBe(true);
   });
 
   /** The toggle takes `user_folder` before it takes an argument, like every other write in this
@@ -5067,12 +5276,33 @@ describe("the collection's folders", () => {
   it("refuses to lock a folder the app owns, at both of its kinds", () => {
     const db = filed({
       collectionFolders: [
-        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0,
-          locked: false },
-        { id: 2, parentId: null, name: "Burn", kind: "deck", deckId: 7, sortOrder: 1,
-          locked: false },
-        { id: 3, parentId: null, name: "Recently removed", kind: "removed", deckId: null,
-          sortOrder: 2, locked: false },
+        {
+          id: 1,
+          parentId: null,
+          name: "Binder",
+          kind: "user",
+          deckId: null,
+          sortOrder: 0,
+          locked: false,
+        },
+        {
+          id: 2,
+          parentId: null,
+          name: "Burn",
+          kind: "deck",
+          deckId: 7,
+          sortOrder: 1,
+          locked: false,
+        },
+        {
+          id: 3,
+          parentId: null,
+          name: "Recently removed",
+          kind: "removed",
+          deckId: null,
+          sortOrder: 2,
+          locked: false,
+        },
       ],
     });
     const w = writeHandlers(db);
@@ -5157,12 +5387,33 @@ describe("the collection's folders", () => {
   it("still renames and moves a locked folder, and files a card into one and back out", () => {
     const db = filed({
       collectionFolders: [
-        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0,
-          locked: false },
-        { id: 2, parentId: 1, name: "Trade binder", kind: "user", deckId: null, sortOrder: 0,
-          locked: false },
-        { id: 3, parentId: null, name: "Someday", kind: "user", deckId: null, sortOrder: 1,
-          locked: false },
+        {
+          id: 1,
+          parentId: null,
+          name: "Binder",
+          kind: "user",
+          deckId: null,
+          sortOrder: 0,
+          locked: false,
+        },
+        {
+          id: 2,
+          parentId: 1,
+          name: "Trade binder",
+          kind: "user",
+          deckId: null,
+          sortOrder: 0,
+          locked: false,
+        },
+        {
+          id: 3,
+          parentId: null,
+          name: "Someday",
+          kind: "user",
+          deckId: null,
+          sortOrder: 1,
+          locked: false,
+        },
       ],
       collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 2 })],
     });
@@ -5521,9 +5772,7 @@ describe("moving copies across the deck boundary", () => {
       ...init,
     });
   const copiesIn = (db: FakeDb, folderId: number | null) =>
-    db.collectionEntries
-      .filter((e) => e.folderId === folderId)
-      .reduce((n, e) => n + e.quantity, 0);
+    db.collectionEntries.filter((e) => e.folderId === folderId).reduce((n, e) => n + e.quantity, 0);
   const listed = (db: FakeDb, deckId: number) =>
     db.deckCards
       .filter((dc) => dc.deckId === deckId && dc.variant === "live" && dc.cardId === BOLT.id)
@@ -6405,9 +6654,7 @@ describe("pulling owned copies into a deck", () => {
     });
   const plan = (db: FakeDb, deckId = 1) => readHandlers(db).deck_pull_plan({ deckId });
   const copiesIn = (db: FakeDb, folderId: number | null) =>
-    db.collectionEntries
-      .filter((e) => e.folderId === folderId)
-      .reduce((n, e) => n + e.quantity, 0);
+    db.collectionEntries.filter((e) => e.folderId === folderId).reduce((n, e) => n + e.quantity, 0);
 
   /**
    * **The assertion the whole feature turns on**, and it is a pair rather than one number:
@@ -6856,9 +7103,7 @@ describe("quick-adding bought copies into a deck", () => {
       ...over,
     } as never);
   const copiesIn = (db: FakeDb, folderId: number | null) =>
-    db.collectionEntries
-      .filter((e) => e.folderId === folderId)
-      .reduce((n, e) => n + e.quantity, 0);
+    db.collectionEntries.filter((e) => e.folderId === folderId).reduce((n, e) => n + e.quantity, 0);
 
   /**
    * **The assertion the whole feature turns on**, and it is a pair rather than one number: the
@@ -7228,9 +7473,7 @@ describe("adding a deck's missing copies to the collection", () => {
       ...over,
     });
   const copiesIn = (db: FakeDb, folderId: number | null) =>
-    db.collectionEntries
-      .filter((e) => e.folderId === folderId)
-      .reduce((n, e) => n + e.quantity, 0);
+    db.collectionEntries.filter((e) => e.folderId === folderId).reduce((n, e) => n + e.quantity, 0);
 
   /**
    * **The assertion the whole feature turns on**, and it is a pair rather than one number: the
@@ -7356,7 +7599,10 @@ describe("adding a deck's missing copies to the collection", () => {
     expect(out).toEqual({ copies: 6, cards: 2, wishCopies: 0 });
     // And the two land as two collection rows, because the finish is a grain term there too.
     expect(
-      db.collectionEntries.filter((e) => e.folderId === groupId(1)).map((e) => e.finish).sort(),
+      db.collectionEntries
+        .filter((e) => e.folderId === groupId(1))
+        .map((e) => e.finish)
+        .sort(),
     ).toEqual(["foil", "nonfoil"]);
   });
 
@@ -7875,9 +8121,7 @@ describe("deck_clear", () => {
   /** Copies in one folder. The boundary suite above declares its own; this describe is not
    *  inside it, and a clear is not a move. */
   const copiesIn = (db: FakeDb, folderId: number | null) =>
-    db.collectionEntries
-      .filter((e) => e.folderId === folderId)
-      .reduce((n, e) => n + e.quantity, 0);
+    db.collectionEntries.filter((e) => e.folderId === folderId).reduce((n, e) => n + e.quantity, 0);
 
   /**
    * Two decks with their categories and their groups. Deck 1 lists **six** live copies over
@@ -8515,10 +8759,16 @@ describe("collection_remove_many", () => {
 describe("collection_set_folder_many", () => {
   /** `Binder` for the reader, and a deck's group for the fence. */
   const FOLDERS: FakeCollectionFolder[] = [
-    { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0,
-      locked: false },
-    { id: 2, parentId: null, name: "Burn", kind: "deck", deckId: 7, sortOrder: 1,
-      locked: false },
+    {
+      id: 1,
+      parentId: null,
+      name: "Binder",
+      kind: "user",
+      deckId: null,
+      sortOrder: 0,
+      locked: false,
+    },
+    { id: 2, parentId: null, name: "Burn", kind: "deck", deckId: 7, sortOrder: 1, locked: false },
   ];
 
   /**
@@ -8626,8 +8876,15 @@ describe("bulk_undo", () => {
   it("takes back a bulk remove and a bulk move, merge included", () => {
     const db = makeDb({
       collectionFolders: [
-        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0,
-          locked: false },
+        {
+          id: 1,
+          parentId: null,
+          name: "Binder",
+          kind: "user",
+          deckId: null,
+          sortOrder: 0,
+          locked: false,
+        },
       ],
       collectionEntries: [
         entry({ id: 1, cardId: BOLT.id, quantity: 2, notes: "root" }),
@@ -8935,7 +9192,14 @@ describe("the deck grain (deck, variant, category, card)", () => {
     const db = makeDeckDb({
       decks: [deck({ id: 1 })],
       deckCards: [
-        deckCard({ id: 7, deckId: 1, cardId: BOLT_A.id, categoryKind: "main", quantity: 4, labelId: 3 }),
+        deckCard({
+          id: 7,
+          deckId: 1,
+          cardId: BOLT_A.id,
+          categoryKind: "main",
+          quantity: 4,
+          labelId: 3,
+        }),
       ],
     });
     const w = writeHandlers(db);
@@ -9003,7 +9267,14 @@ describe("the deck grain (deck, variant, category, card)", () => {
     const db = makeDeckDb({
       decks: [deck({ id: 1 })],
       deckCards: [
-        deckCard({ id: 7, deckId: 1, cardId: BOLT_A.id, categoryKind: "main", quantity: 2, labelId: 3 }),
+        deckCard({
+          id: 7,
+          deckId: 1,
+          cardId: BOLT_A.id,
+          categoryKind: "main",
+          quantity: 2,
+          labelId: 3,
+        }),
       ],
     });
     writeHandlers(db).deck_swap_printing({
@@ -9020,7 +9291,14 @@ describe("the deck grain (deck, variant, category, card)", () => {
     const db = makeDeckDb({
       decks: [deck({ id: 1 })],
       deckCards: [
-        deckCard({ id: 1, deckId: 1, cardId: BOLT_A.id, categoryKind: "main", quantity: 2, labelId: 3 }),
+        deckCard({
+          id: 1,
+          deckId: 1,
+          cardId: BOLT_A.id,
+          categoryKind: "main",
+          quantity: 2,
+          labelId: 3,
+        }),
         deckCard({ id: 2, deckId: 1, cardId: BOLT_B.id, categoryKind: "main", quantity: 1 }),
       ],
     });
@@ -9037,8 +9315,22 @@ describe("the deck grain (deck, variant, category, card)", () => {
     const db = makeDeckDb({
       decks: [deck({ id: 1 })],
       deckCards: [
-        deckCard({ id: 1, deckId: 1, cardId: BOLT_A.id, categoryKind: "main", quantity: 2, labelId: 3 }),
-        deckCard({ id: 2, deckId: 1, cardId: BOLT_B.id, categoryKind: "main", quantity: 1, labelId: 4 }),
+        deckCard({
+          id: 1,
+          deckId: 1,
+          cardId: BOLT_A.id,
+          categoryKind: "main",
+          quantity: 2,
+          labelId: 3,
+        }),
+        deckCard({
+          id: 2,
+          deckId: 1,
+          cardId: BOLT_B.id,
+          categoryKind: "main",
+          quantity: 1,
+          labelId: 4,
+        }),
       ],
     });
     writeHandlers(db).deck_swap_printing({
@@ -9140,9 +9432,7 @@ describe("the deck grain (deck, variant, category, card)", () => {
 
   /** Copies in one folder — spec §2.2's sweep tests need it and no test above them did. */
   const copiesIn = (db: FakeDb, folderId: number | null) =>
-    db.collectionEntries
-      .filter((e) => e.folderId === folderId)
-      .reduce((n, e) => n + e.quantity, 0);
+    db.collectionEntries.filter((e) => e.folderId === folderId).reduce((n, e) => n + e.quantity, 0);
 
   /**
    * Copies of **one printing** in one folder, which the folded case needs and {@link copiesIn}
@@ -9165,7 +9455,9 @@ describe("the deck grain (deck, variant, category, card)", () => {
     const db = makeDeckDb({
       decks: [deck({ id: 1 })],
       collectionEntries: [entry({ id: 1, cardId: BOLT_A.id, quantity: 2, folderId: groupId(1) })],
-      deckCards: [deckCard({ id: 1, deckId: 1, cardId: BOLT_A.id, categoryKind: "main", quantity: 2 })],
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, cardId: BOLT_A.id, categoryKind: "main", quantity: 2 }),
+      ],
     });
 
     writeHandlers(db).deck_swap_printing({
@@ -9433,7 +9725,9 @@ describe("adding a card to the deck's other list", () => {
     const decks = [deck({ id: 1, theoryEnabled: true, updatedAt: 100 }), deck({ id: 2 })];
     return makeDeckDb({ decks, deckCategories: [...categoriesOf(decks), ...extra] });
   };
-  type OtherListAdd = Parameters<ReturnType<typeof writeHandlers>["deck_add_card_to_other_list"]>[0];
+  type OtherListAdd = Parameters<
+    ReturnType<typeof writeHandlers>["deck_add_card_to_other_list"]
+  >[0];
   /** From the actual list's Main deck into the plan — the press `Add to theory` makes. */
   const add: OtherListAdd = {
     deckId: 1,
@@ -9885,9 +10179,11 @@ describe("the deck row itself", () => {
     const left = writeHandlers(db).deck_update({ id: 1, patch: { notesOpen: true } });
     expect(left).toMatchObject({ todosOpen: true });
     // A disclosure is not a list: opening the band wrote nothing into one.
-    expect(readHandlers(db).deck_todo_lists({ deckId: 1 }).map((l) => l.body)).toEqual([
-      "- [ ] Revise tokens",
-    ]);
+    expect(
+      readHandlers(db)
+        .deck_todo_lists({ deckId: 1 })
+        .map((l) => l.body),
+    ).toEqual(["- [ ] Revise tokens"]);
   });
 
   /**
@@ -9945,7 +10241,11 @@ describe("the deck row itself", () => {
 
     const untitled = w.deck_todo_list_create({ deckId: 1, title: "", body: "- [ ] a" });
     expect(untitled).toMatchObject({ title: "", sortOrder: 6 });
-    expect(readHandlers(db).deck_todo_lists({ deckId: 1 }).map((l) => l.id)).toEqual([1, 3, 4]);
+    expect(
+      readHandlers(db)
+        .deck_todo_lists({ deckId: 1 })
+        .map((l) => l.id),
+    ).toEqual([1, 3, 4]);
 
     expect(() => w.deck_todo_list_create({ deckId: 404, title: "x", body: "" })).toThrow(
       "That deck is not there any more.",
@@ -10010,7 +10310,13 @@ describe("the deck row itself", () => {
     expect(db.decks[0].updatedAt).toBe(WHEN);
 
     // A tick: the body moves, the title is left.
-    w.deck_todo_list_update({ deckId: 1, id: 1, title: null, body: "- [x] a", expected: "- [ ] a" });
+    w.deck_todo_list_update({
+      deckId: 1,
+      id: 1,
+      title: null,
+      body: "- [x] a",
+      expected: "- [ ] a",
+    });
     expect(list()).toMatchObject({ title: "Mana", body: "- [x] a" });
     const ticked = list().updatedAt;
     expect(ticked).toBeGreaterThan(WHEN);
@@ -10056,7 +10362,13 @@ describe("the deck row itself", () => {
     const db = makeDeckDb({ decks: [deck({ id: 1 })] });
     const h = allHandlers(db);
     const made = h.deck_todo_list_create({ deckId: 1, title: "", body: "- [ ] a" });
-    h.deck_todo_list_update({ deckId: 1, id: made.id, title: "T", body: "- [x] a", expected: null });
+    h.deck_todo_list_update({
+      deckId: 1,
+      id: made.id,
+      title: "T",
+      body: "- [x] a",
+      expected: null,
+    });
     h.deck_todo_list_delete({ deckId: 1, id: made.id });
     expect(db.deckAudit).toHaveLength(0);
     expect(db.deckUndo).toHaveLength(0);
@@ -10122,10 +10434,18 @@ describe("the deck row itself", () => {
     const w = writeHandlers(db);
     // A write moves the list it touched to the front — the list, not the deck's other lists.
     w.deck_todo_list_update({ deckId: 2, id: 4, title: null, body: "- [ ] four", expected: null });
-    expect(readHandlers(db).every_deck_todo_list().map((l) => l.id)).toEqual([4, 3, 1]);
+    expect(
+      readHandlers(db)
+        .every_deck_todo_list()
+        .map((l) => l.id),
+    ).toEqual([4, 3, 1]);
     // A list emptied leaves the answer; its deck's other list stays.
     w.deck_todo_list_update({ deckId: 2, id: 3, title: null, body: "", expected: null });
-    expect(readHandlers(db).every_deck_todo_list().map((l) => l.id)).toEqual([4, 1]);
+    expect(
+      readHandlers(db)
+        .every_deck_todo_list()
+        .map((l) => l.id),
+    ).toEqual([4, 1]);
     // And the deck's name is joined at read time.
     w.deck_update({ id: 1, patch: { name: "Burn 2" } });
     expect(readHandlers(db).every_deck_todo_list()[1].deckName).toBe("Burn 2");
@@ -10144,7 +10464,11 @@ describe("the deck row itself", () => {
     });
     writeHandlers(db).deck_delete({ id: 1 });
     expect(db.deckTodoLists.map((l) => l.id)).toEqual([2]);
-    expect(readHandlers(db).every_deck_todo_list().map((l) => l.deckId)).toEqual([2]);
+    expect(
+      readHandlers(db)
+        .every_deck_todo_list()
+        .map((l) => l.deckId),
+    ).toEqual([2]);
 
     writeHandlers(db).decks_clear();
     expect(db.deckTodoLists).toEqual([]);
@@ -10160,7 +10484,11 @@ describe("the deck row itself", () => {
     const copy = writeHandlers(db).deck_duplicate({ id: 1 });
     expect(copy.todosOpen).toBe(false);
     expect(readHandlers(db).deck_todo_lists({ deckId: copy.id })).toEqual([]);
-    expect(readHandlers(db).every_deck_todo_list().map((l) => l.deckId)).toEqual([1]);
+    expect(
+      readHandlers(db)
+        .every_deck_todo_list()
+        .map((l) => l.deckId),
+    ).toEqual([1]);
   });
 
   /**
@@ -10459,9 +10787,17 @@ describe("the deck row itself", () => {
     expect(w.deck_duplicate({ id: 2 }).tags).toEqual([]);
 
     w.deck_update({ id: copy.id, patch: { tags: ["Meme"] } });
-    expect(readHandlers(db).deck_list().find((d) => d.id === 1)!.tags).toEqual(["Meme", "Budget"]);
+    expect(
+      readHandlers(db)
+        .deck_list()
+        .find((d) => d.id === 1)!.tags,
+    ).toEqual(["Meme", "Budget"]);
     w.deck_update({ id: 1, patch: { tags: [] } });
-    expect(readHandlers(db).deck_list().find((d) => d.id === copy.id)!.tags).toEqual(["Meme"]);
+    expect(
+      readHandlers(db)
+        .deck_list()
+        .find((d) => d.id === copy.id)!.tags,
+    ).toEqual(["Meme"]);
   });
 
   /** **The stored list is nobody else's array** — not the one a caller sent, and not the one a
@@ -10505,7 +10841,10 @@ describe("the deck row itself", () => {
     for (const name of ["virtualDeck", "tokenPlan"] as const) {
       const rows = worn(name);
       expect(rows.slice(0, 4), name).toEqual(STARTER);
-      expect(rows.slice(4).every(([, tags]) => tags.length === 0), name).toBe(true);
+      expect(
+        rows.slice(4).every(([, tags]) => tags.length === 0),
+        name,
+      ).toBe(true);
     }
     // And a seeded list is already tidy: writing it back is not a change.
     const db = seed("starter");
@@ -10620,9 +10959,7 @@ describe("deck notes", () => {
       body: "b",
       oracleIds: [BOLT_ORACLE, SPHINX_ORACLE, BOLT_ORACLE],
     });
-    expect(note.cards.map((c) => c.oracleId).sort()).toEqual(
-      [BOLT_ORACLE, SPHINX_ORACLE].sort(),
-    );
+    expect(note.cards.map((c) => c.oracleId).sort()).toEqual([BOLT_ORACLE, SPHINX_ORACLE].sort());
     expect(db.deckNoteCards).toHaveLength(2);
   });
 
@@ -10732,9 +11069,7 @@ describe("deck notes", () => {
     );
     expect(db.deckNoteCards).toEqual([]);
     // The detach folds into nothing, as it does for any id the note does not name.
-    expect(() =>
-      w.deck_note_detach({ deckId: 1, noteId: note.id, oracleId: "" }),
-    ).not.toThrow();
+    expect(() => w.deck_note_detach({ deckId: 1, noteId: note.id, oracleId: "" })).not.toThrow();
     // And the read answers an empty list: an orphan printing genuinely has no oracle id, and a
     // modal opened on one has to draw something.
     expect(readHandlers(db).card_notes({ oracleId: "" })).toEqual([]);
@@ -10912,11 +11247,19 @@ describe("deck notes", () => {
     const w = writeHandlers(db);
     const first = w.deck_note_create({ deckId: 1, title: "A", body: "b", oracleIds: [] });
     const second = w.deck_note_create({ deckId: 1, title: "B", body: "b", oracleIds: [] });
-    expect(readHandlers(db).deck_notes({ deckId: 1 }).map((n) => n.title)).toEqual(["A", "B"]);
+    expect(
+      readHandlers(db)
+        .deck_notes({ deckId: 1 })
+        .map((n) => n.title),
+    ).toEqual(["A", "B"]);
     // The unknown id is skipped rather than failing the reorder over one entry —
     // `deck_category_reorder`'s rule one table over.
     w.deck_note_reorder({ deckId: 1, ids: [second.id, first.id, 999] });
-    expect(readHandlers(db).deck_notes({ deckId: 1 }).map((n) => n.title)).toEqual(["B", "A"]);
+    expect(
+      readHandlers(db)
+        .deck_notes({ deckId: 1 })
+        .map((n) => n.title),
+    ).toEqual(["B", "A"]);
     const last = db.deckAudit[db.deckAudit.length - 1];
     expect(last.kind).toBe("deck");
     expect(JSON.parse(last.payload)).toEqual({
@@ -10940,7 +11283,11 @@ describe("deck notes", () => {
     const cursor = w.deck_undo_state({ deckId: 1, redoId: null });
     expect(cursor.undo).not.toBeNull();
     w.deck_undo_apply({ deckId: 1, auditId: cursor.undo!.id });
-    expect(readHandlers(db).deck_notes({ deckId: 1 }).map((n) => n.title)).toEqual(["A", "B"]);
+    expect(
+      readHandlers(db)
+        .deck_notes({ deckId: 1 })
+        .map((n) => n.title),
+    ).toEqual(["A", "B"]);
   });
 
   it("answers card_notes across every deck, and answers nothing for a blank oracle id", () => {
@@ -11016,9 +11363,9 @@ describe("deck notes", () => {
     // proves the refusal exists and this proves not one row moved behind it.
     const db = makeDeckDb({ decks: [deck({ id: 1 })], fault: "busy" });
     const w = writeHandlers(db);
-    expect(() =>
-      w.deck_note_create({ deckId: 1, title: "t", body: "b", oracleIds: [] }),
-    ).toThrow(/busy/i);
+    expect(() => w.deck_note_create({ deckId: 1, title: "t", body: "b", oracleIds: [] })).toThrow(
+      /busy/i,
+    );
     expect(db.deckNotes).toEqual([]);
   });
 
@@ -11031,10 +11378,7 @@ describe("deck notes", () => {
     const db = seed("starter");
     const notes = readHandlers(db).deck_notes({ deckId: 4 });
     expect(notes).toHaveLength(2);
-    expect(notes[0].cards.map((c) => c.name)).toEqual([
-      "Consecrated Sphinx",
-      "Rhystic Study",
-    ]);
+    expect(notes[0].cards.map((c) => c.name)).toEqual(["Consecrated Sphinx", "Rhystic Study"]);
     expect(notes[1].cards).toEqual([]);
     // Both attachments resolve to a card in the corpus — an oracle id that stopped resolving
     // would draw its own id as a name and the story would still look plausible.
@@ -11070,9 +11414,7 @@ describe("the third deck kind", () => {
   const groupOf = (db: FakeDb, deckId: number) =>
     db.collectionFolders.find((f) => f.deckId === deckId && f.kind === "deck");
   const copiesIn = (db: FakeDb, folderId: number | null) =>
-    db.collectionEntries
-      .filter((e) => e.folderId === folderId)
-      .reduce((n, e) => n + e.quantity, 0);
+    db.collectionEntries.filter((e) => e.folderId === folderId).reduce((n, e) => n + e.quantity, 0);
   const variantsOf = (db: FakeDb, deckId: number) =>
     db.deckCards.filter((dc) => dc.deckId === deckId).map((dc) => dc.variant);
   /** `deck::VIRTUAL_HOLDS_NOTHING`'s middle, which no other refusal in this file contains — so a
@@ -11496,9 +11838,7 @@ describe("missing to the wishlist", () => {
     const db = makeDeckDb({
       // In the deck's own group: what it *holds* is where its rows sit, so a copy in the binder
       // is a copy this button still shops for.
-      collectionEntries: [
-        entry({ id: 1, cardId: BOLT_A.id, quantity: 1, folderId: groupId(1) }),
-      ],
+      collectionEntries: [entry({ id: 1, cardId: BOLT_A.id, quantity: 1, folderId: groupId(1) })],
       decks: [deck({ id: 1 })],
       deckCards: [deckCard({ id: 1, cardId: BOLT_A.id, categoryKind: "main", quantity: 4 })],
     });
@@ -11515,9 +11855,7 @@ describe("missing to the wishlist", () => {
 
   it("shops for nothing when the deck is covered", () => {
     const db = makeDeckDb({
-      collectionEntries: [
-        entry({ id: 1, cardId: BOLT_A.id, quantity: 4, folderId: groupId(1) }),
-      ],
+      collectionEntries: [entry({ id: 1, cardId: BOLT_A.id, quantity: 4, folderId: groupId(1) })],
       decks: [deck({ id: 1 })],
       deckCards: [deckCard({ id: 1, cardId: BOLT_A.id, categoryKind: "main", quantity: 4 })],
     });
@@ -11556,9 +11894,7 @@ describe("missing to the wishlist", () => {
     const w = writeHandlers(db);
     expect(w.deck_missing_to_wishlist({ deckId: 1 })).toBe(1);
     expect(w.deck_missing_to_wishlist({ deckId: 1, folderId: null })).toBe(1);
-    expect(db.wishlistEntries).toEqual([
-      expect.objectContaining({ quantity: 8, folderId: null }),
-    ]);
+    expect(db.wishlistEntries).toEqual([expect.objectContaining({ quantity: 8, folderId: null })]);
   });
 
   /**
@@ -11788,9 +12124,7 @@ describe("the decklist import", () => {
     expect(db.deckCards.filter((dc) => dc.variant === "theory")).toHaveLength(1);
     expect(db.deckCards.filter((dc) => dc.variant === "live")).toHaveLength(1);
     // The cards go and the **filing stays**: a list's piles are the reader's, not its cards'.
-    expect(
-      db.deckCategories.filter((c) => c.deckId === 1 && c.variant === "live"),
-    ).toHaveLength(5);
+    expect(db.deckCategories.filter((c) => c.deckId === 1 && c.variant === "live")).toHaveLength(5);
     // One row per *effect*, never one per card.
     expect(db.deckAudit.map((a) => a.kind)).toEqual(["remove", "add"]);
     expect(db.deckAudit.map((a) => a.delta)).toEqual([-4, 1]);
@@ -11799,9 +12133,7 @@ describe("the decklist import", () => {
   /** Copies in one folder. `deck_clear` declares this too; an import is not a clear and this
    *  describe is not inside that one. */
   const copiesIn = (db: FakeDb, folderId: number | null) =>
-    db.collectionEntries
-      .filter((e) => e.folderId === folderId)
-      .reduce((n, e) => n + e.quantity, 0);
+    db.collectionEntries.filter((e) => e.folderId === folderId).reduce((n, e) => n + e.quantity, 0);
 
   /**
    * A deck whose group holds exactly the copies its live list claims — a reader who filed their
@@ -12922,7 +13254,9 @@ describe("the busy fault", () => {
     // `scan_history_rename` and `scan_history_delete`, each reaching `refuseIfBusy` first; the
     // two reads, `scan_history_list` and `scan_history_get`, sit in `readHandlers`. Count again
     // after a merge.
-    expect(names).toHaveLength(147);
+    // 147 → 148 on 2026-10-14 with `share_auto_update` (issue #1025), which republishes changed
+    // shares on the write connection and reaches `refuseIfBusy` first. Count again after a merge.
+    expect(names).toHaveLength(148);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -12949,7 +13283,9 @@ describe("the roster", () => {
     expect(db.pairing.devices).toHaveLength(3);
     expect(db.pairing.devices.filter((d) => d.revokedAt !== null)).toHaveLength(1);
 
-    const names = readHandlers(db).sync_pairing_status().devices.map((d) => d.name);
+    const names = readHandlers(db)
+      .sync_pairing_status()
+      .devices.map((d) => d.name);
     expect(names).toEqual(["Desk", "Phone"]);
   });
 
@@ -12961,7 +13297,11 @@ describe("the roster", () => {
     writeHandlers(db).sync_device_revoke({ deviceId: "c0ffee00c0ffee00c0ffee00c0ffee00" });
 
     expect(db.pairing.devices).toHaveLength(3);
-    expect(readHandlers(db).sync_pairing_status().devices.map((d) => d.name)).toEqual(["Desk"]);
+    expect(
+      readHandlers(db)
+        .sync_pairing_status()
+        .devices.map((d) => d.name),
+    ).toEqual(["Desk"]);
     // The rotation is the removal, so the epoch moves with it.
     expect(readHandlers(db).sync_pairing_status().epoch).toBe(3);
   });
@@ -14649,9 +14989,9 @@ describe("the tag search, the tag tree and muting", () => {
       "art",
     );
     expect(read.tag_resolve({ asks: [{ namespace: "oracle", value: "cat" }] })).toEqual([null]);
-    expect(() =>
-      read.tag_resolve({ asks: [{ namespace: "both", value: "cat" }] }),
-    ).toThrow(/unknown tag namespace/);
+    expect(() => read.tag_resolve({ asks: [{ namespace: "both", value: "cat" }] })).toThrow(
+      /unknown tag namespace/,
+    );
   });
 
   /**
@@ -15187,7 +15527,9 @@ describe("categories, labels, folders, history and the plan", () => {
     expect(db.deckLabels.some((l) => l.id === label.id)).toBe(true);
     // Nothing left to take off: a success that writes nothing, never a refusal.
     const audit = db.deckAudit.length;
-    expect(w.deck_label_remove_from_deck({ deckId: 4, labelId: label.id, variant: "live" })).toBe(0);
+    expect(w.deck_label_remove_from_deck({ deckId: 4, labelId: label.id, variant: "live" })).toBe(
+      0,
+    );
     expect(db.deckAudit).toHaveLength(audit);
   });
 
@@ -15614,14 +15956,14 @@ describe("categories, labels, folders, history and the plan", () => {
     const { db, w } = testbed();
     const before = db.wishlistEntries.length;
 
-    expect(() =>
-      w.deck_theory_missing_to_wishlist({ deckId: 4, folderId: GONE_FOLDER }),
-    ).toThrow(FOLDER_GONE);
+    expect(() => w.deck_theory_missing_to_wishlist({ deckId: 4, folderId: GONE_FOLDER })).toThrow(
+      FOLDER_GONE,
+    );
     expect(db.wishlistEntries).toHaveLength(before);
 
-    expect(() =>
-      w.deck_theory_missing_to_wishlist({ deckId: 1, folderId: GONE_FOLDER }),
-    ).toThrow(FOLDER_GONE);
+    expect(() => w.deck_theory_missing_to_wishlist({ deckId: 1, folderId: GONE_FOLDER })).toThrow(
+      FOLDER_GONE,
+    );
     expect(db.wishlistEntries).toHaveLength(before);
     // Nothing about the refusal depends on the ticks: `only` narrows what would have been
     // written, and there is nothing to narrow behind a folder that is not there.
@@ -15779,7 +16121,9 @@ describe("categories, labels, folders, history and the plan", () => {
     const { db, r, w } = testbed();
     const group = db.collectionFolders.find((f) => f.deckId === 1)!;
     const heldByFolder = () =>
-      db.collectionEntries.filter((e) => e.folderId === group.id).reduce((n, e) => n + e.quantity, 0);
+      db.collectionEntries
+        .filter((e) => e.folderId === group.id)
+        .reduce((n, e) => n + e.quantity, 0);
     const counterspell = (variant: "live" | "theory") =>
       r.deck_get({ id: 1, variant })!.cards.find((c) => c.name === "Counterspell")!;
     expect(counterspell("live").ownedQuantity).toBe(2);
@@ -15914,9 +16258,7 @@ describe("the four clears", () => {
     // the groups standing would draw a collection tree full of folders for decks that are gone.
     expect(db.collectionFolders.filter((f) => f.kind === "deck")).toHaveLength(0);
     const removed = db.collectionFolders.find((f) => f.kind === "removed")!;
-    expect(db.collectionEntries.filter((e) => e.folderId === removed.id).length).toBeGreaterThan(
-      0,
-    );
+    expect(db.collectionEntries.filter((e) => e.folderId === removed.id).length).toBeGreaterThan(0);
   });
 
   it("reports what the cache freed, and answers zero the second time", () => {
@@ -16160,7 +16502,9 @@ describe("the combos one card is in", () => {
       const after = page.combos[i];
       expect(before.cardCount).toBeLessThanOrEqual(after.cardCount);
       if (before.cardCount === after.cardCount) {
-        expect(before.popularity ?? -Infinity).toBeGreaterThanOrEqual(after.popularity ?? -Infinity);
+        expect(before.popularity ?? -Infinity).toBeGreaterThanOrEqual(
+          after.popularity ?? -Infinity,
+        );
       }
     }
   });
@@ -16528,7 +16872,9 @@ describe("the combos one card is in", () => {
   it("leaves the plural read untouched, having searched the same store", () => {
     const db = seed("starter");
     const deckTwo = db.deckCards.filter((c) => c.deckId === 2).map((c) => c.cardId);
-    const before = readHandlers(db).combos_for_cards({ cardIds: deckTwo }).map((c) => c.id);
+    const before = readHandlers(db)
+      .combos_for_cards({ cardIds: deckTwo })
+      .map((c) => c.id);
     const stored = db.combos.length;
     const storedCards = db.comboCards.length;
     expect(before).toEqual(["1268-2357"]);
@@ -16537,7 +16883,11 @@ describe("the combos one card is in", () => {
     ask(db, { search: "%" });
     ask(db, { search: "reckoner", cardCount: 3, ownedOnly: true });
 
-    expect(readHandlers(db).combos_for_cards({ cardIds: deckTwo }).map((c) => c.id)).toEqual(before);
+    expect(
+      readHandlers(db)
+        .combos_for_cards({ cardIds: deckTwo })
+        .map((c) => c.id),
+    ).toEqual(before);
     // And both stores themselves, counted rather than named: a `filter` assigned back would have
     // shortened one of them, and pinning the fixture's size here would break the day somebody
     // adds a combo for an unrelated reason.
@@ -16559,7 +16909,9 @@ describe("the combos one card is in", () => {
     const db = seed("starter");
 
     expect(ask(db, { limit: 0 }).combos).toHaveLength(1);
-    expect(idsOf(ask(db, { offset: -5, limit: 2 }))).toEqual(idsOf(ask(db, { offset: 0, limit: 2 })));
+    expect(idsOf(ask(db, { offset: -5, limit: 2 }))).toEqual(
+      idsOf(ask(db, { offset: 0, limit: 2 })),
+    );
   });
 
   /**
@@ -16595,9 +16947,9 @@ describe("the combos one card is in", () => {
     const db = seed("starter");
     const before = ask(db);
     expect(before.ownedTotal).toBe(5);
-    expect(
-      before.combos.find((c) => c.id === "3149-3587")!.pieces.map((p) => p.owned),
-    ).toEqual([1, 0]);
+    expect(before.combos.find((c) => c.id === "3149-3587")!.pieces.map((p) => p.owned)).toEqual([
+      1, 0,
+    ]);
 
     db.collectionEntries.push(entry({ id: 99, cardId: AVACYN.id, quantity: 2 }));
 
@@ -16693,17 +17045,19 @@ describe("the combos one card is in", () => {
   it("leaves what a deck contains exactly where it was", () => {
     const db = seed("starter");
     const deckTwo = db.deckCards.filter((c) => c.deckId === 2).map((c) => c.cardId);
-    expect(readHandlers(db).combos_for_cards({ cardIds: deckTwo }).map((c) => c.id)).toEqual([
-      "1268-2357",
-    ]);
+    expect(
+      readHandlers(db)
+        .combos_for_cards({ cardIds: deckTwo })
+        .map((c) => c.id),
+    ).toEqual(["1268-2357"]);
 
     const mismatch = seed("bracketMismatch");
     const testbed = mismatch.decks.find((d) => d.name === "Bracket Testbed")!;
-    const cards = mismatch.deckCards
-      .filter((c) => c.deckId === testbed.id)
-      .map((c) => c.cardId);
+    const cards = mismatch.deckCards.filter((c) => c.deckId === testbed.id).map((c) => c.cardId);
     expect(
-      readHandlers(mismatch).combos_for_cards({ cardIds: cards }).map((c) => c.id),
+      readHandlers(mismatch)
+        .combos_for_cards({ cardIds: cards })
+        .map((c) => c.id),
     ).toEqual(["4109-1983", "1076-1174", "1983-2309", "1268-2357", "4109-2030--17"]);
   });
 
@@ -17204,9 +17558,9 @@ describe("deck tokens", () => {
         implicit: false,
       }),
     ]);
-    expect(
-      db.deckTokenPrintings.filter((e) => e.oracleId === TOKEN_ORACLE.wurmDeathtouch),
-    ).toEqual([expect.objectContaining({ variant: "live", quantity: 3 })]);
+    expect(db.deckTokenPrintings.filter((e) => e.oracleId === TOKEN_ORACLE.wurmDeathtouch)).toEqual(
+      [expect.objectContaining({ variant: "live", quantity: 3 })],
+    );
   });
 
   /**
@@ -17762,7 +18116,12 @@ describe("deck tokens", () => {
         });
       } else {
         // Still held on the plan, so the remove leaves it the reader's.
-        w.deck_token_remove({ deckId: 2, variant: "live", oracleId: TOKEN_ORACLE.okoEmblem, entry });
+        w.deck_token_remove({
+          deckId: 2,
+          variant: "live",
+          oracleId: TOKEN_ORACLE.okoEmblem,
+          entry,
+        });
       }
       expect(storedTokenRows(db, 2, TOKEN_ORACLE.okoEmblem), write).toEqual([
         expect.objectContaining({ state: "manual" }),
@@ -17916,7 +18275,11 @@ describe("deck tokens", () => {
       const history = tokenHistory(db, 1);
       return history[history.length - 1].payload;
     };
-    const common = { field: "token", name: "Treasure", subtitle: expect.stringContaining("Colorless") };
+    const common = {
+      field: "token",
+      name: "Treasure",
+      subtitle: expect.stringContaining("Colorless"),
+    };
 
     w.deck_token_add_printing({
       deckId: 1,
@@ -18792,7 +19155,10 @@ describe("the managed wishlist's Tokens subfolder", () => {
    *  it — the mode left alone, as every absent `DeckPatch` field is. */
   it("reads the tokens switch off by default and round-trips a patch of it", () => {
     const db = world();
-    const row = () => readHandlers(db).deck_list().find((d) => d.id === 4);
+    const row = () =>
+      readHandlers(db)
+        .deck_list()
+        .find((d) => d.id === 4);
     expect(row()).toMatchObject({ managedWishlistTokens: false });
 
     tokens(db, true);
@@ -18874,9 +19240,10 @@ describe("the managed wishlist's Tokens subfolder", () => {
       mode(db, word);
       expect(parentOf(db), word).toBeDefined();
       expect(tokensOf(db), word).toBeUndefined();
-      expect(db.wishlistEntries.some((w) => w.cardId === TOKEN_PRINTING.treasureThob), word).toBe(
-        false,
-      );
+      expect(
+        db.wishlistEntries.some((w) => w.cardId === TOKEN_PRINTING.treasureThob),
+        word,
+      ).toBe(false);
     }
   });
 
@@ -18968,7 +19335,11 @@ describe("the managed wishlist's Tokens subfolder", () => {
     expect(db.wishlistEntries.some((w) => w.folderId !== null && ids.includes(w.folderId))).toBe(
       false,
     );
-    expect(readHandlers(db).deck_list().find((d) => d.id === 4)).toMatchObject({
+    expect(
+      readHandlers(db)
+        .deck_list()
+        .find((d) => d.id === 4),
+    ).toMatchObject({
       managedWishlist: "off",
       managedWishlistTokens: true,
     });
@@ -18987,7 +19358,11 @@ describe("the tokenPlan seed", () => {
   it("seeds a plan that counts tokens and a hand-added token on the live list", () => {
     const db = seed("tokenPlan");
 
-    expect(readHandlers(db).deck_theory_diff({ deckId: 4 }).some((row) => row.isToken)).toBe(true);
+    expect(
+      readHandlers(db)
+        .deck_theory_diff({ deckId: 4 })
+        .some((row) => row.isToken),
+    ).toBe(true);
     expect(
       readHandlers(db)
         .deck_tokens({ deckId: 4, variant: "live", marketplace: "tcgplayer" })
@@ -19127,7 +19502,12 @@ describe("sharing a collection", () => {
    *  is the state no press can reach and the whole of the reader's item 3. */
   it("publishes from a device that holds no secret of its own", () => {
     const db = connected();
-    db.supporter = { refreshSecret: false, status: "active", since: SUPPORTING_SINCE, groupBound: true };
+    db.supporter = {
+      refreshSecret: false,
+      status: "active",
+      since: SUPPORTING_SINCE,
+      groupBound: true,
+    };
     expect(() =>
       writeHandlers(db).share_create({
         folderUid: null,
@@ -19139,7 +19519,9 @@ describe("sharing a collection", () => {
 
   it("reads its own published drawer back through the link it minted", () => {
     const db = shared();
-    const row = writeHandlers(db).share_list().find((s) => s.title === "Binder")!;
+    const row = writeHandlers(db)
+      .share_list()
+      .find((s) => s.title === "Binder")!;
     const snapshot = writeHandlers(db).share_open({ url: row.url });
 
     expect(snapshot).toMatchObject({ v: 1, title: "Binder", owner: "Ada", currency: "USD" });
@@ -19188,9 +19570,7 @@ describe("sharing a collection", () => {
     const snapshot = writeHandlers(db).share_open({ url: row.url });
 
     expect(snapshot.title).toBe("Trade binder");
-    expect(snapshot.folders).toEqual([
-      { uid: "folder-uid-2", name: "Trade binder", parent: null },
-    ]);
+    expect(snapshot.folders).toEqual([{ uid: "folder-uid-2", name: "Trade binder", parent: null }]);
     // And only that drawer's copies — `Binder`'s own two are the parent's, not this share's.
     expect(snapshot.cards.map((c) => `${c.s} ${c.cn}`)).toEqual(["sld 913", "lea 232"]);
   });
@@ -19262,7 +19642,9 @@ describe("sharing a collection", () => {
 
   it("keeps the link across a refresh and moves the stamp", () => {
     const db = shared();
-    const before = writeHandlers(db).share_list().find((s) => s.title === "Binder")!;
+    const before = writeHandlers(db)
+      .share_list()
+      .find((s) => s.title === "Binder")!;
     const after = writeHandlers(db).share_refresh({ id: before.id });
 
     // **The link is the whole point of Refresh**: a reader who has handed the URL out must never
@@ -19281,13 +19663,19 @@ describe("sharing a collection", () => {
 
   it("withdraws a share without dropping its row", () => {
     const db = shared();
-    const row = writeHandlers(db).share_list().find((s) => s.title === "Binder")!;
+    const row = writeHandlers(db)
+      .share_list()
+      .find((s) => s.title === "Binder")!;
     writeHandlers(db).share_revoke({ id: row.id });
 
     // The row survives its own revocation, so the page can say *withdrawn* rather than the
     // folder's badge vanishing with no explanation.
     expect(db.shares.map((s) => s.id)).toContain(row.id);
-    expect(writeHandlers(db).share_list().find((s) => s.id === row.id)!.state).toBe("revoked");
+    expect(
+      writeHandlers(db)
+        .share_list()
+        .find((s) => s.id === row.id)!.state,
+    ).toBe("revoked");
     // And the link stops answering, which is the half a viewer meets.
     expect(() => writeHandlers(db).share_open({ url: row.url })).toThrow(/no longer available/);
   });
@@ -19353,7 +19741,9 @@ describe("sharing a collection", () => {
     db.relayShares.find((s) => s.id === row.id)!.owner = "Ada Lovelace";
     db.relayShares.find((s) => s.id === row.id)!.state = "revoked";
 
-    const listed = writeHandlers(db).share_list().find((s) => s.id === row.id)!;
+    const listed = writeHandlers(db)
+      .share_list()
+      .find((s) => s.id === row.id)!;
     expect(listed.ownerName).toBe("Ada Lovelace");
     expect(listed.state).toBe("revoked");
   });
@@ -19369,7 +19759,11 @@ describe("sharing a collection", () => {
     expect(row.state).toBe("live");
     db.relayShares.find((s) => s.id === row.id)!.state = "lapsed";
 
-    expect(writeHandlers(db).share_list().find((s) => s.id === row.id)!.state).toBe("lapsed");
+    expect(
+      writeHandlers(db)
+        .share_list()
+        .find((s) => s.id === row.id)!.state,
+    ).toBe("lapsed");
   });
 
   /**
@@ -19385,7 +19779,11 @@ describe("sharing a collection", () => {
     const row = db.shares.find((s) => s.title === "Binder")!;
     db.relayShares.find((s) => s.id === row.id)!.state = "pending";
 
-    expect(writeHandlers(db).share_list().find((s) => s.id === row.id)!.state).toBe("live");
+    expect(
+      writeHandlers(db)
+        .share_list()
+        .find((s) => s.id === row.id)!.state,
+    ).toBe("live");
   });
 
   /**
@@ -20118,10 +20516,11 @@ describe("the recently viewed cards", () => {
   it("skips a printing the corpus no longer holds without spending a place on it", () => {
     const db = viewing("gone", SOL_RING.id, BOLT.id);
 
-    expect(readHandlers(db).recent_cards({ limit: 2 }).map((c) => c.cardId)).toEqual([
-      SOL_RING.id,
-      BOLT.id,
-    ]);
+    expect(
+      readHandlers(db)
+        .recent_cards({ limit: 2 })
+        .map((c) => c.cardId),
+    ).toEqual([SOL_RING.id, BOLT.id]);
     // And the id stays in the row, for the day the card comes back.
     expect(db.recentCards[0].cardId).toBe("gone");
   });
@@ -20285,7 +20684,7 @@ describe("the reader's sticky notes", () => {
   });
 
   /** `coalesce(?n, col)`, and the two values a truthiness test would swallow. */
-  it("changes only the fields it names, and `\"\"` and `false` are real presses", () => {
+  it('changes only the fields it names, and `""` and `false` are real presses', () => {
     const db = board({ title: "Trade night", body: "Seven", color: "amber", pinned: true });
     const w = writeHandlers(db);
 
@@ -20330,7 +20729,11 @@ describe("the reader's sticky notes", () => {
 
     writeHandlers(db).sticky_note_delete({ id: 2 });
 
-    expect(readHandlers(db).sticky_notes().map((n) => [n.id, n.sortOrder])).toEqual([
+    expect(
+      readHandlers(db)
+        .sticky_notes()
+        .map((n) => [n.id, n.sortOrder]),
+    ).toEqual([
       [1, 0],
       [3, 2],
     ]);
@@ -20343,13 +20746,21 @@ describe("the reader's sticky notes", () => {
     const db = board({}, {}, {});
 
     writeHandlers(db).sticky_note_reorder({ ids: [3, 1, 2] });
-    expect(readHandlers(db).sticky_notes().map((n) => n.id)).toEqual([3, 1, 2]);
+    expect(
+      readHandlers(db)
+        .sticky_notes()
+        .map((n) => n.id),
+    ).toEqual([3, 1, 2]);
 
     // ⚠️ The number written is the position in the **argument**, strangers included — the
     // crate's `enumerate()` counts them — so the notes after one keep a hole. The reader still
     // sees the order they dragged, which is the only thing this command promises.
     writeHandlers(db).sticky_note_reorder({ ids: [2, 999, 1, 3] });
-    expect(readHandlers(db).sticky_notes().map((n) => [n.id, n.sortOrder])).toEqual([
+    expect(
+      readHandlers(db)
+        .sticky_notes()
+        .map((n) => [n.id, n.sortOrder]),
+    ).toEqual([
       [2, 0],
       [1, 2],
       [3, 3],
@@ -20363,7 +20774,11 @@ describe("the reader's sticky notes", () => {
   it("breaks a tie on the id", () => {
     const db = board({ sortOrder: 5 }, { sortOrder: 5 }, { sortOrder: 1 });
 
-    expect(readHandlers(db).sticky_notes().map((n) => n.id)).toEqual([3, 1, 2]);
+    expect(
+      readHandlers(db)
+        .sticky_notes()
+        .map((n) => n.id),
+    ).toEqual([3, 1, 2]);
   });
 
   /** A page holding a row it can mutate is a state the backend cannot produce, which is this
@@ -20463,10 +20878,11 @@ describe("set completion", () => {
       { cardId: at("dom", "168").id },
     );
 
-    expect(readHandlers(db).set_completion().map((s) => s.name)).toEqual([
-      "Dominaria",
-      "Tempest",
-    ]);
+    expect(
+      readHandlers(db)
+        .set_completion()
+        .map((s) => s.name),
+    ).toEqual(["Dominaria", "Tempest"]);
   });
 
   it("answers the starter collection's sets, both kinds, and none for empty", () => {
@@ -20747,8 +21163,11 @@ describe("deck completion", () => {
     expect(rows.some((r) => r.missing > 0)).toBe(true);
     for (const row of rows) {
       expect(row.list, `deck ${row.deckId} list`).toBe("live");
-      const cards = reads.deck_get({ id: row.deckId, variant: "live", marketplace: "tcgplayer" })!
-        .cards;
+      const cards = reads.deck_get({
+        id: row.deckId,
+        variant: "live",
+        marketplace: "tcgplayer",
+      })!.cards;
       const stats = deckStats(cards);
       expect(row.owned, `deck ${row.deckId} owned`).toBe(stats.owned);
       expect(row.missing, `deck ${row.deckId} missing`).toBe(stats.missing);
@@ -21032,7 +21451,13 @@ describe("upcoming sets", () => {
     expect(waiting.upcoming_sets({ days: 90 }).sets.map((s) => s.code)).toEqual(["ftf", "vgd"]);
     expect(waiting.upcoming_sets({ days: 365 }).sets).toEqual([
       { code: "ftf", name: "Foretold Frontiers", releasedAt: inDays(12), previewed: 4, inDecks: 2 },
-      { code: "vgd", name: "Vigil of the Drowned", releasedAt: inDays(40), previewed: 2, inDecks: 0 },
+      {
+        code: "vgd",
+        name: "Vigil of the Drowned",
+        releasedAt: inDays(40),
+        previewed: 2,
+        inDecks: 0,
+      },
       { code: "lmr", name: "Lumen Reach", releasedAt: inDays(200), previewed: 1, inDecks: 1 },
     ]);
   });
@@ -21326,9 +21751,7 @@ describe("the price history", () => {
     )!;
     const got = ask(db, owned.cardId, owned.finish);
 
-    expect(
-      db.priceHistory.some((s) => s.cardId === owned.cardId && s.takenAt >= TODAY),
-    ).toBe(true);
+    expect(db.priceHistory.some((s) => s.cardId === owned.cardId && s.takenAt >= TODAY)).toBe(true);
     expect(got.points.length).toBeGreaterThan(1);
     expect(got.points.every((p) => p.day < TODAY)).toBe(true);
     expect(got.points.every((p, i) => i === 0 || got.points[i - 1].day < p.day)).toBe(true);
@@ -21934,7 +22357,12 @@ describe("the new printings feed", () => {
    *  ones*. An ordinary land is not one. */
   it("drops a basic land unless it is asked for, the snow ones included", () => {
     const forest = CARDS.find((c) => c.typeLine === "Basic Land — Forest")!;
-    const snow = { ...forest, id: "snow", oracleId: "snow-o", typeLine: "Basic Snow Land — Forest" };
+    const snow = {
+      ...forest,
+      id: "snow",
+      oracleId: "snow-o",
+      typeLine: "Basic Snow Land — Forest",
+    };
     const tower = { ...forest, id: "tower", oracleId: "tower-o", typeLine: "Land" };
     const db = world(
       [
@@ -22074,7 +22502,9 @@ describe("the new printings feed", () => {
     // The newest of those two is unseen and the older one is read, which is the mix the gold dot
     // needs and the reason the cursor is derived rather than stamped.
     const feed = ask(starter, { days: 365 });
-    expect(feed.seenAt).toBeLessThan(Date.parse(`${feed.printings[0].releasedAt}T00:00:00Z`) / 1000);
+    expect(feed.seenAt).toBeLessThan(
+      Date.parse(`${feed.printings[0].releasedAt}T00:00:00Z`) / 1000,
+    );
     expect(feed.seenAt).toBeGreaterThan(
       Date.parse(`${feed.printings[1].releasedAt}T00:00:00Z`) / 1000,
     );
@@ -22137,10 +22567,42 @@ describe("shelves", () => {
     return makeDb({
       collectionFolders: [
         // Locked, so the precedence case can prove a shelves list serves it whole.
-        { id: 11, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0, locked: true },
-        { id: 12, parentId: 11, name: "Sleeve", kind: "user", deckId: null, sortOrder: 0, locked: false },
-        { id: 13, parentId: null, name: "Empty", kind: "user", deckId: null, sortOrder: 1, locked: false },
-        { id: 14, parentId: null, name: "Spare", kind: "user", deckId: null, sortOrder: 2, locked: false },
+        {
+          id: 11,
+          parentId: null,
+          name: "Binder",
+          kind: "user",
+          deckId: null,
+          sortOrder: 0,
+          locked: true,
+        },
+        {
+          id: 12,
+          parentId: 11,
+          name: "Sleeve",
+          kind: "user",
+          deckId: null,
+          sortOrder: 0,
+          locked: false,
+        },
+        {
+          id: 13,
+          parentId: null,
+          name: "Empty",
+          kind: "user",
+          deckId: null,
+          sortOrder: 1,
+          locked: false,
+        },
+        {
+          id: 14,
+          parentId: null,
+          name: "Spare",
+          kind: "user",
+          deckId: null,
+          sortOrder: 2,
+          locked: false,
+        },
       ],
       collectionEntries: [
         entry({ id: 1, cardId: BOLT.id, folderId: 11, condition: "NM", quantity: 2 }),
@@ -22169,12 +22631,21 @@ describe("shelves", () => {
 
     // Position first — the sleeve, Not sorted, the binder — then the default order inside a shelf.
     expect(ids({ shelves: [12, 0, 11], limit: 0, offset: 0 })).toEqual([4, 5, 1, 2, 3]);
-    expect(r.collection_list({ query: { shelves: [12, 0, 11], limit: 2, offset: 2 } })).toMatchObject({
+    expect(
+      r.collection_list({ query: { shelves: [12, 0, 11], limit: 2, offset: 2 } }),
+    ).toMatchObject({
       total: 5,
     });
     // A stale folder id, the root flag and the lock are all ignored beside a list.
     expect(
-      ids({ shelves: [11], folderId: 12, rootOnly: true, excludeLocked: true, limit: 0, offset: 0 }),
+      ids({
+        shelves: [11],
+        folderId: 12,
+        rootOnly: true,
+        excludeLocked: true,
+        limit: 0,
+        offset: 0,
+      }),
     ).toEqual([1, 2, 3]);
     // Review Focus 5: an id nothing answers to is nothing, not an error.
     expect(ids({ shelves: [99], limit: 0, offset: 0 })).toEqual([]);
@@ -22203,7 +22674,9 @@ describe("shelves", () => {
       { folderId: 12, tiles: 1, copies: 1, value: 620, unpriced: 0, peek: [BOLT.id] },
     ]);
     expect(
-      r.collection_shelf_counts({ query: { shelves: every, finishes: ["foil"], limit: 0, offset: 0 } }),
+      r.collection_shelf_counts({
+        query: { shelves: every, finishes: ["foil"], limit: 0, offset: 0 },
+      }),
     ).toEqual([
       { folderId: 11, tiles: 1, copies: 1, value: null, unpriced: 1, peek: [BOLT.id] },
       { folderId: 14, tiles: 1, copies: 1, value: 164.95, unpriced: 0, peek: [FOIL_ONLY.id] },
@@ -22215,12 +22688,23 @@ describe("shelves", () => {
     const ids = (query: WishlistQuery) => r.wishlist_list({ query }).items.map((row) => row.id);
 
     expect(ids({ shelves: [22, 0, 21], limit: 0, offset: 0 })).toEqual([3, 4, 1, 2]);
-    expect(ids({ shelves: [21], folderId: 22, flatten: true, limit: 0, offset: 0 })).toEqual([1, 2]);
+    expect(ids({ shelves: [21], folderId: 22, flatten: true, limit: 0, offset: 0 })).toEqual([
+      1, 2,
+    ]);
     expect(ids({ shelves: [99], limit: 0, offset: 0 })).toEqual([]);
 
-    expect(r.wishlist_shelf_counts({ query: { shelves: [0, 21, 22], limit: 0, offset: 0 } })).toEqual([
+    expect(
+      r.wishlist_shelf_counts({ query: { shelves: [0, 21, 22], limit: 0, offset: 0 } }),
+    ).toEqual([
       { folderId: 0, tiles: 1, copies: 4, value: 10, unpriced: 0, peek: [BOLT_2X2.id] },
-      { folderId: 21, tiles: 2, copies: 3, value: 1242.5, unpriced: 0, peek: [BOLT.id, BOLT_2X2.id].sort() },
+      {
+        folderId: 21,
+        tiles: 2,
+        copies: 3,
+        value: 1242.5,
+        unpriced: 0,
+        peek: [BOLT.id, BOLT_2X2.id].sort(),
+      },
       // A shelf priced nowhere is `null`, never `0`.
       { folderId: 22, tiles: 1, copies: 1, value: null, unpriced: 1, peek: [BOLT.id] },
     ]);
@@ -22232,7 +22716,9 @@ describe("shelves", () => {
     // the one wish is one.
     const r = readHandlers(
       makeDb({
-        collectionEntries: [entry({ id: 1, cardId: BOLT.id, folderId: null, finish: "foil", quantity: 3 })],
+        collectionEntries: [
+          entry({ id: 1, cardId: BOLT.id, folderId: null, finish: "foil", quantity: 3 }),
+        ],
         wishlistEntries: [wish({ id: 1, cardId: BOLT.id, quantity: 3, preferredFinish: "foil" })],
       }),
     );
@@ -22279,7 +22765,10 @@ describe("shelves", () => {
 
     w.set_shelf_folds({ page: "collection", changes: { "11": true, "0": false } });
     w.set_shelf_folds({ page: "wishlist", changes: { "21": true } });
-    expect(r.shelf_folds()).toEqual({ collection: { "0": false, "11": true }, wishlist: { "21": true } });
+    expect(r.shelf_folds()).toEqual({
+      collection: { "0": false, "11": true },
+      wishlist: { "21": true },
+    });
 
     w.set_shelf_folds({ page: "collection", changes: { "11": null, "404": null } });
     expect(r.shelf_folds()).toEqual({ collection: { "0": false }, wishlist: { "21": true } });
@@ -22709,7 +23198,11 @@ describe("trades", () => {
     // Urza's Saga comes in nonfoil and foil: etched is not kept, and its first listed finish is
     // taken instead.
     w.trade_update_line({ lineId, change: { cardId: URZA.id } });
-    expect(get().lines[0]).toMatchObject({ cardId: URZA.id, name: "Urza's Saga", finish: "nonfoil" });
+    expect(get().lines[0]).toMatchObject({
+      cardId: URZA.id,
+      name: "Urza's Saga",
+      finish: "nonfoil",
+    });
     expect(() => w.trade_update_line({ lineId, change: { finish: "etched" } })).toThrow(/finish/);
 
     // A finish the new printing has is kept across the change…
@@ -22754,12 +23247,11 @@ describe("trades", () => {
     const [ragavan, urza, , charm, swords] = get().lines;
 
     w.trade_update_line({ lineId: swords.id, change: { side: "theirs" } });
-    expect(get().lines.filter((l) => l.side === "theirs").map((l) => l.name)).toEqual([
-      "Urza's Saga",
-      "Ragavan, Nimble Pilferer",
-      "Boros Charm",
-      "Swords to Plowshares",
-    ]);
+    expect(
+      get()
+        .lines.filter((l) => l.side === "theirs")
+        .map((l) => l.name),
+    ).toEqual(["Urza's Saga", "Ragavan, Nimble Pilferer", "Boros Charm", "Swords to Plowshares"]);
 
     // Their side already has a nonfoil Ragavan: the moved line takes it in — and it is the moved
     // line that survives, at the end, where a line carried across always lands.
@@ -23143,7 +23635,14 @@ describe("trades", () => {
       ...NOTHING_MOVED,
       removedFromCollection: 3,
     });
-    expect(left(few.db)).toEqual([[1, 1], [2, 1], [3, 1], [4, 1], [5, 1], [6, 5]]);
+    expect(left(few.db)).toEqual([
+      [1, 1],
+      [2, 1],
+      [3, 1],
+      [4, 1],
+      [5, 1],
+      [6, 5],
+    ]);
     expect(few.db.collectionEntries[0]).toMatchObject({
       signed: true,
       purchasePrice: 80,
@@ -23160,9 +23659,9 @@ describe("trades", () => {
     expect(left(many.db)).toEqual([[6, 5]]);
     const again = many.w.trade_duplicate({ id: many.id });
     expect(many.get(again).lines[0].owned).toBe(0);
-    expect(
-      many.w.trade_finish({ id: again, options: { ...ALL_OFF, removeGiven: true } }),
-    ).toEqual(NOTHING_MOVED);
+    expect(many.w.trade_finish({ id: again, options: { ...ALL_OFF, removeGiven: true } })).toEqual(
+      NOTHING_MOVED,
+    );
     expect(left(many.db)).toEqual([[6, 5]]);
   });
 
@@ -24293,20 +24792,24 @@ describe("folder rules", () => {
   });
 
   it("refuses a rule list the crate refuses, in its sentences, and leaves the folder alone", () => {
-    const db = makeDb({ collectionFolders: [userFolder(1, null, [{ kind: "price", min: 1, max: null }])] });
+    const db = makeDb({
+      collectionFolders: [userFolder(1, null, [{ kind: "price", min: 1, max: null }])],
+    });
     const w = writeHandlers(db);
     const set = (rules: FolderRule[]) => () => w.collection_folder_set_rules({ id: 1, rules });
 
-    expect(set([{ kind: "colors", values: ["X"] }])).toThrow("Pick at least one value for each rule.");
+    expect(set([{ kind: "colors", values: ["X"] }])).toThrow(
+      "Pick at least one value for each rule.",
+    );
     expect(set([{ kind: "price", min: null, max: null }])).toThrow(/at least one end/);
     expect(set([{ kind: "manaValue", min: 5, max: 2 }])).toThrow(/lower end first/);
     expect(set([{ kind: "price", min: -1, max: null }])).toThrow(/lower end first/);
     expect(set([{ kind: "released", from: "1993/08", to: null }])).toThrow(
       "Write dates as YYYY, YYYY-MM or YYYY-MM-DD.",
     );
-    expect(set(Array.from({ length: 21 }, () => ({ kind: "price", min: 0, max: 1 }) as const))).toThrow(
-      "A folder can hold at most 20 rules.",
-    );
+    expect(
+      set(Array.from({ length: 21 }, () => ({ kind: "price", min: 0, max: 1 }) as const)),
+    ).toThrow("A folder can hold at most 20 rules.");
     expect(db.collectionFolders[0].rules).toEqual([{ kind: "price", min: 1, max: null }]);
   });
 
@@ -24314,9 +24817,24 @@ describe("folder rules", () => {
     const db = makeDb({
       collectionFolders: [
         userFolder(1, null),
-        { id: 2, parentId: null, name: "Burn", kind: "deck", deckId: 7, sortOrder: 1, locked: false },
-        { id: 3, parentId: null, name: "Recently removed", kind: "removed", deckId: null,
-          sortOrder: 2, locked: false },
+        {
+          id: 2,
+          parentId: null,
+          name: "Burn",
+          kind: "deck",
+          deckId: 7,
+          sortOrder: 1,
+          locked: false,
+        },
+        {
+          id: 3,
+          parentId: null,
+          name: "Recently removed",
+          kind: "removed",
+          deckId: null,
+          sortOrder: 2,
+          locked: false,
+        },
       ],
     });
     const w = writeHandlers(db);
@@ -24331,7 +24849,9 @@ describe("folder rules", () => {
   });
 
   it("stores a wishlist folder's rules, and refuses a folder that is gone", () => {
-    const db = makeDb({ wishlistFolders: [{ id: 1, parentId: null, name: "Ordered", sortOrder: 0 }] });
+    const db = makeDb({
+      wishlistFolders: [{ id: 1, parentId: null, name: "Ordered", sortOrder: 0 }],
+    });
     const w = writeHandlers(db);
     expect(readHandlers(db).wishlist_folder_list()[0].rules).toEqual([]);
     expect(
@@ -24396,12 +24916,30 @@ describe("folder rules", () => {
   it("marks the wishes that break their folder's rules, judging an any-printing wish by its card", () => {
     const db = makeDb({
       wishlistFolders: [
-        { id: 1, parentId: null, name: "Reprints", sortOrder: 0,
-          rules: [{ kind: "sets", values: [BOLT_2X2.setCode] }] },
-        { id: 2, parentId: null, name: "Foils", sortOrder: 1,
-          rules: [{ kind: "finishes", values: ["foil"] }, { kind: "conditions", values: ["NM"] }] },
-        { id: 3, parentId: null, name: "Colourless", sortOrder: 2,
-          rules: [{ kind: "colors", values: ["C"] }] },
+        {
+          id: 1,
+          parentId: null,
+          name: "Reprints",
+          sortOrder: 0,
+          rules: [{ kind: "sets", values: [BOLT_2X2.setCode] }],
+        },
+        {
+          id: 2,
+          parentId: null,
+          name: "Foils",
+          sortOrder: 1,
+          rules: [
+            { kind: "finishes", values: ["foil"] },
+            { kind: "conditions", values: ["NM"] },
+          ],
+        },
+        {
+          id: 3,
+          parentId: null,
+          name: "Colourless",
+          sortOrder: 2,
+          rules: [{ kind: "colors", values: ["C"] }],
+        },
       ],
       wishlistEntries: [
         // Any printing of Lightning Bolt: one of them is in the set, so it passes.
@@ -24433,7 +24971,11 @@ describe("folder rules", () => {
     const reads = readHandlers(db);
     expect(reads.collection_folder_list().filter((f) => f.rules.length > 0)).toHaveLength(1);
     expect(reads.wishlist_folder_list().filter((f) => f.rules.length > 0)).toHaveLength(1);
-    expect(reads.collection_rule_conflicts({ marketplace: "tcgplayer" }).ids.length).toBeGreaterThan(0);
-    expect(reads.wishlist_rule_conflicts({ marketplace: "tcgplayer" }).ids.length).toBeGreaterThan(0);
+    expect(
+      reads.collection_rule_conflicts({ marketplace: "tcgplayer" }).ids.length,
+    ).toBeGreaterThan(0);
+    expect(reads.wishlist_rule_conflicts({ marketplace: "tcgplayer" }).ids.length).toBeGreaterThan(
+      0,
+    );
   });
 });
