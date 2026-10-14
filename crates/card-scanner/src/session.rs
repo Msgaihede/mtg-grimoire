@@ -2509,11 +2509,12 @@ mod tests {
 
     /// **One rectification a frame, whatever the method and whatever the lock** (issue #701).
     /// `Method::Both` used to flatten each method's winner inside `detect` and then, once
-    /// locked, flatten the held quad a third time: 18 full-size warps to hash six views. Three
-    /// framings, both ways up, is six — and it has to be six on the frames that rectify from
-    /// the lock as well as on the ones that do not.
+    /// locked, flatten the held quad a third time: 18 full-size warps to hash six views. One warp
+    /// a view is every framing both ways up — six at three framings, eight since 0.92 joined them
+    /// — and it has to hold on the frames that rectify from the lock as well as on the ones that
+    /// do not.
     #[test]
-    fn a_locked_frame_makes_six_warps_not_eighteen() {
+    fn a_locked_frame_warps_each_view_once() {
         let mut s = Session::new(None, None, 5);
         let opts = FrameOptions::default();
         assert_eq!(opts.method, Method::Both, "the case the issue measured");
@@ -2524,13 +2525,14 @@ mod tests {
             let found = locate(&img, &rgb_of(&img), &opts.detect_options(m, false)).0;
             assert!(found.is_ok(), "{m:?} misses the test card: {:?}", found.err());
         }
+        let views = 2 * (1 + crate::detect::DetectOptions::default().query_insets.len());
         let (mut locked, mut relocked) = (0, 0);
         for i in 0..16 {
             crate::detect::WARPS.with(|w| w.set(0));
             let v = s.frame(&card_frame_jpeg(i % 3), &opts);
             let warps = crate::detect::WARPS.with(|w| w.get());
             assert!(v.ok, "frame {i}: {:?}", v.error);
-            assert_eq!(warps, 6, "frame {i} made {warps} warps (from_lock {})", v.from_lock);
+            assert_eq!(warps, views, "frame {i} made {warps} warps (from_lock {})", v.from_lock);
             if v.lock.as_ref().is_some_and(LockState::is_trusted) {
                 locked += 1;
                 relocked += usize::from(v.from_lock);
@@ -3486,7 +3488,10 @@ mod tests {
             v = locked_frame(&mut s, &card);
         }
         let res = v.resolution.as_ref().expect("the vote freeze held back the next stretch");
-        assert_eq!(res.outcome, Outcome::Resolved, "{:?}", res.tiers);
+        // A choice of one, not a resolution: the entry sits just inside the gate by construction,
+        // past `EXACT_ALONE_DISTANCE`. What matters here is that the stretch decided.
+        assert_eq!(res.outcome, Outcome::Ambiguous, "{:?}", res.tiers);
+        assert_eq!(res.choices.len(), 1, "{:?}", res.choices);
         assert_eq!(v.decision_seq, 1);
         assert!(v.decision.is_some());
         for _ in 0..10 {

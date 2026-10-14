@@ -164,6 +164,12 @@ pub struct DetectOptions {
     /// with accuracy unchanged, against an all-framings oracle of 40.5 — so three of them
     /// collect nearly all of what is available.
     ///
+    /// **0.92 joined them on 2026-10-14, for cards in a binder's pockets**, whose margin is wider
+    /// than the sleeve's that 0.96 covers. On the replay of 86 readers' scans Exact's wrong card
+    /// went 23 → 19 and card ✓ 38.4 → 41.9%; on the synthetic evaluation Fast's printing ✓ rose
+    /// (81.2 → 81.9% plain, 76.9 → 78.1% sleeved) and Exact did not move. One Fast scan went from
+    /// undecided to wrong, and a match took 4.13 hashes where it took 3.15.
+    ///
     /// Empty means one framing, at `inset` exactly.
     pub query_insets: Vec<f32>,
     /// Cut any background margin off the rectification. See [`crate::trim`].
@@ -228,7 +234,7 @@ impl Default for DetectOptions {
             aspect_tolerance: 0.18,
             max_angle_error_deg: 22.0,
             max_candidates: 8,
-            query_insets: vec![0.96, 1.04],
+            query_insets: vec![0.92, 0.96, 1.04],
             trim_margin: true,
             cardness_candidates: 4,
             min_cardness: crate::cardness::MIN_SCORE,
