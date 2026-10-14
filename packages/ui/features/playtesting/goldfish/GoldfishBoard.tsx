@@ -239,7 +239,7 @@ export function GoldfishBoard({
             LAYER.raised,
           )}
         >
-          <OpeningHand view={view} onAct={onAct} />
+          <OpeningHand view={view} onAct={onAct} onPoint={point} onUnpoint={unpoint} />
         </div>
       ) : (
         <Battlefield

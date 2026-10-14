@@ -450,6 +450,8 @@ export function PlaytestBoard({
               libraryLands: view.you.libraryCards.filter((c) => c.isLand).length,
             }}
             onAct={goldfishAct}
+            onPoint={pointYou}
+            onUnpoint={unpoint}
           />
         </div>
       ) : (
