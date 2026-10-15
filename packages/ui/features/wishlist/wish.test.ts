@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { WishRow } from "@/lib/ipc";
+import type { CollectionFolder, WishRow } from "@/lib/ipc";
 import { searchTerms } from "@/features/search/useCardSearch";
-import { collectionQueryOf, preferredFinishOf, wallPrinting } from "./wish";
+import { collectionQueryOf, heldOf, ownedPlacesOf, preferredFinishOf, wallPrinting } from "./wish";
 
 const wish = (over: Partial<WishRow> = {}): WishRow =>
   ({
@@ -73,5 +73,67 @@ describe("collectionQueryOf", () => {
       expect(terms.predicates?.length).toBeGreaterThan(0);
     }
     expect(searchTerms(collectionQueryOf(pinned, "other")).predicates).toHaveLength(2);
+  });
+});
+
+/** Issue #1055: where an owned chip's copies are filed, named from the collection's folders. */
+describe("ownedPlacesOf", () => {
+  const folder = (id: number, name: string, over: Partial<CollectionFolder> = {}) =>
+    ({
+      id,
+      parentId: null,
+      name,
+      kind: "user",
+      deckId: null,
+      sortOrder: 0,
+      ...over,
+    }) as CollectionFolder;
+  const FOLDERS = [
+    folder(1, "Binder"),
+    folder(2, "Staples", { parentId: 1 }),
+    folder(3, "Burn", { kind: "deck", deckId: 9 }),
+    folder(4, "Recently removed", { kind: "removed" }),
+  ];
+  const owned = wish({
+    ownedPlaces: [
+      { folderId: null, exact: 1, other: 0, held: false },
+      { folderId: 2, exact: 3, other: 1, held: false },
+      { folderId: 3, exact: 0, other: 2, held: true },
+      { folderId: 4, exact: 1, other: 0, held: false },
+    ],
+  });
+
+  it("names each folder's whole path, the most copies first, for the side asked about", () => {
+    expect(ownedPlacesOf(owned, "exact", FOLDERS)).toEqual([
+      { folderId: 2, kind: "folder", path: ["Binder", "Staples"], count: 3 },
+      { folderId: null, kind: "unfiled", path: ["Not sorted"], count: 1 },
+      { folderId: 4, kind: "removed", path: ["Recently removed"], count: 1 },
+    ]);
+    expect(ownedPlacesOf(owned, "other", FOLDERS)).toEqual([
+      { folderId: 3, kind: "deck", path: ["Burn"], count: 2 },
+      { folderId: 2, kind: "folder", path: ["Binder", "Staples"], count: 1 },
+    ]);
+  });
+
+  /** Issue #1054: the free chips and the in-use chip each list only their own places. */
+  it("narrows to the held places, or the free ones, when asked", () => {
+    expect(ownedPlacesOf(owned, "other", FOLDERS, false)).toEqual([
+      { folderId: 2, kind: "folder", path: ["Binder", "Staples"], count: 1 },
+    ]);
+    expect(ownedPlacesOf(owned, "card", FOLDERS, true)).toEqual([
+      { folderId: 3, kind: "deck", path: ["Burn"], count: 2 },
+    ]);
+  });
+
+  it("sums the held copies per side", () => {
+    expect(heldOf(owned)).toEqual({ exact: 0, other: 2 });
+    expect(heldOf(wish({ ownedPlaces: [] }))).toEqual({ exact: 0, other: 0 });
+  });
+
+  it("leaves out a folder the list does not know rather than guess its name", () => {
+    expect(ownedPlacesOf(owned, "other", [])).toEqual([]);
+    expect(ownedPlacesOf(owned, "exact", [])).toEqual([
+      { folderId: null, kind: "unfiled", path: ["Not sorted"], count: 1 },
+    ]);
   });
 });

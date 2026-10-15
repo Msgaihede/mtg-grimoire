@@ -138,8 +138,7 @@ const wish = (over: Partial<WishRow> = {}): WishRow =>
     elsewhere: 0,
     ownedExact: 0,
     ownedOther: 0,
-    heldExact: 0,
-    heldOther: 0,
+    ownedPlaces: [],
     ...over,
   }) as WishRow;
 
