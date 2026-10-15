@@ -7,6 +7,7 @@
 //! SCANNER_REFRAME_LOG=1                                       a stderr line per reframed frame
 //! SCANNER_FRAMINGS=<f>,<f>,…                                  Session::set_query_insets
 //! SCANNER_WIDE_TITLE=on|off                                   Session::set_wide_title
+//! SCANNER_PROMO_LAST=on|off                                   Session::set_promo_last
 //! SCANNER_GAP=off | [<exact>],[<fast>]                        session::GapGate, Exact's on by default
 //! ```
 //!
@@ -32,6 +33,11 @@ pub fn apply(session: &mut Session) {
             opts.min_gap = at(2).unwrap_or(opts.min_gap);
             session.set_reframe(Some(opts));
         }
+    }
+    match std::env::var("SCANNER_PROMO_LAST").ok().as_deref() {
+        Some("on") => session.set_promo_last(true),
+        Some("off") => session.set_promo_last(false),
+        _ => {}
     }
     match std::env::var("SCANNER_WIDE_TITLE").ok().as_deref() {
         Some("on") => session.set_wide_title(true),
