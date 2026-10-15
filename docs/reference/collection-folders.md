@@ -2085,12 +2085,26 @@ a deck group or `Recently removed` heading carries its chevron, its title, its f
 `→` and nothing a press could be refused for**, because every folder write refuses those two kinds in words
 (`headingFor` in `CollectionPage.tsx`). **Not sorted keeps its root role and offers a chevron,
 a clickable name to fold its cards, and Add folder at the collection root** (issue #778,
-2026-10-05). Its Add folder uses a `null` parent, never the synthetic shelf id `0`, and
-returns focus to that heading after creating or cancelling. Rename, Move, Lock, Delete and
+2026-10-05). Its Add folder uses a `null` parent, never the synthetic shelf id `0`, is named
+**Add top-level folder** (issue #1058 — "Add folder in Not sorted" read as if the folder went
+inside Not sorted), and returns focus to that heading after creating or cancelling. Rename, Move, Lock, Delete and
 Open remain stored-folder operations. Add folder draws a heading whose name is the naming field, last among its siblings, under the id
 `NEW_FOLDER_SHELF` (`-1`, `collectionShelfModel.ts`), which never reaches the wire. The field is
 `FolderNameField` at `size="heading"`: a 36px frame inside the 40px row, with ✓ and ✕ on the
 row's centre line.
+
+**Which folder a new one goes into, and a run of them** (issue #1058, 2026-10-15). A heading's Add
+folder stands in the `→` column at the row's far right (issue #599), a whole hairline from the name
+it belongs to, and readers could not tell whose button it was. So while it is hovered or keyed to
+(`data-shelf-add`), the row takes a `bg-surface/50` wash and the hairline, the glyph and the
+folder's name turn gold — one line from the button to its parent — and its tooltip says the parent
+in words, `Add folder in Bulk`, as its accessible name always did. The path row's Add folder keeps
+its words and names the level as its tooltip (`addFolderIn`: the folder stood in, or
+`Collection` / `Wishlist`). **A committed name asks for the next sibling**: the field stays where
+it is — the draft is drawn last among the siblings, so it is now just under the folder made —
+empties and keeps the caret (`FolderNameField`'s `round`, bumped by the page through the `Panel`
+updater, reset in place rather than remounted so the blur discard never sees the caret leave).
+Escape, ✕ or a click away ends the run and hands the caret back by the table below.
 
 **A heading's name folds its shelf, and the way into the folder is a `→` at the row's far right**
 (issue #599, 2026-09-28), which reverses the spec's decision 6 (*clicking a folder's title opens
@@ -2476,10 +2490,11 @@ The contract has two halves, both shared with the wishlist:
 
 | Gesture | Where the caret goes |
 | --- | --- |
-| Add folder in a heading: commit, Escape or ✕ | that heading's Add folder |
+| Add folder (either door): commit | nowhere new — the field empties for the next name and keeps it (issue #1058) |
+| Add folder in a heading: Escape or ✕ | that heading's Add folder |
 | Add folder in a heading: a blur that discards it | the same, decided one task later (`afterBlur`), and only if the caret is still nowhere |
-| Add folder on the path row: commit | the path row's Add folder, with `preventScroll`, so the page stays on the folder just made |
-| Add folder on the path row: a blur that discards it | the same one-task decision, with `preventScroll`; Escape and ✕ return it at once |
+| Add folder on the path row: Escape or ✕ | the path row's Add folder, with `preventScroll`, so the page stays on the folders just made |
+| Add folder on the path row: a blur that discards it | the same one-task decision, with `preventScroll` |
 | Move up / Move down | the moved heading's `⋯` |
 | Move to folder… into a heading this wall draws open, or onto the level itself | the moved heading's `⋯` |
 | Move to folder… anywhere else, and Delete… | the `⋯` of the heading the folder was filed under, or the path row's Add folder where it stood at the top of the level (`leave`, the final review's C-M5) |

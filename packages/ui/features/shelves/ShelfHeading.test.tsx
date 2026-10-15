@@ -365,7 +365,7 @@ describe("ShelfHeading", () => {
       "true",
     );
     expect(screen.getByRole("heading", { level: 3 })).toHaveAccessibleName("Not sorted");
-    await user.click(screen.getByRole("button", { name: "Add folder in Not sorted" }));
+    await user.click(screen.getByRole("button", { name: "Add top-level folder" }));
     expect(onAddFolder).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("button", { name: /^Rename/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /^Manage/ })).toBeNull();
@@ -375,6 +375,26 @@ describe("ShelfHeading", () => {
     expect(MENU.onContextMenu).not.toHaveBeenCalled();
     expect(row()).not.toHaveAttribute("tabindex");
     expect(dragRef).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **Which folder a new one goes into** (issue #1058): the button stands a whole hairline away
+   * from the name it belongs to, so pointing at it or keying to it lights the row, the hairline
+   * and the name — and its name says the parent in words.
+   */
+  it("ties Add folder to its own heading while it is pointed at or focused", () => {
+    mount({ onAddFolder });
+
+    const add = screen.getByRole("button", { name: "Add folder in Trade binder" });
+    expect(add).toHaveAttribute("data-shelf-add");
+    expect(marked(row(), "group-has-[[data-shelf-add]:hover]/shelf:bg-surface/50")).toBe(true);
+    expect(
+      marked(row(), "group-has-[[data-shelf-add]:focus-visible]/shelf:bg-surface/50"),
+    ).toBe(true);
+    const title = screen.getByRole("button", { name: "Trade binder" });
+    expect(marked(title, "group-has-[[data-shelf-add]:hover]/shelf:text-accent")).toBe(true);
+    const rule = row().querySelector<HTMLElement>("span.h-px")!;
+    expect(marked(rule, "group-has-[[data-shelf-add]:hover]/shelf:bg-accent")).toBe(true);
   });
 
   it("folds Not sorted from its name by pointer and keyboard", async () => {
@@ -414,7 +434,7 @@ describe("ShelfHeading", () => {
     await user.keyboard(" ");
     expect(onToggle).not.toHaveBeenCalled();
 
-    const add = screen.getByRole("button", { name: "Add folder in Not sorted" });
+    const add = screen.getByRole("button", { name: "Add top-level folder" });
     expect(add).not.toHaveAttribute("aria-disabled");
     await user.click(add);
     expect(onAddFolder).toHaveBeenCalledTimes(1);

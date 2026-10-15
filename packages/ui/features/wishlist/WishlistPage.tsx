@@ -187,7 +187,7 @@ const TABLE_FLOOR = 610;
  * reason: it is asked from the same heading's `⋯`.
  */
 type Panel =
-  | { kind: "newFolder"; parentId: number | null }
+  | { kind: "newFolder"; parentId: number | null; round?: number }
   | { kind: "renameFolder"; folderId: number }
   | { kind: "moveFolder"; folderId: number }
   | { kind: "deleteFolder"; folderId: number }
@@ -1044,11 +1044,15 @@ export function WishlistPage() {
   // the field is revealed at the end of the parent's subtree, so on a long wall the parent's heading
   // — and with it the opener — has been virtualised away by the time the field closes, and the focus
   // above is a no-op on a detached node. The heading takes the caret back as it is drawn.
+  //
+  // **The path row's Add folder takes it back without scrolling** (ledger 217): Escape is how a run
+  // of creates ends (issue #1058), and the folders just made are drawn last among their siblings,
+  // often well below the path row — a scrolling focus would take the reader off them.
   const dismiss = useCallback(() => {
-    openerRef.current?.focus();
+    openerRef.current?.focus({ preventScroll: panel?.kind === "newFolder" });
     if (headingAddedIn !== null) recordCaret(askCaret(headingAddedIn, "add"));
     setPanel(null);
-  }, [headingAddedIn, recordCaret, askCaret]);
+  }, [panel, headingAddedIn, recordCaret, askCaret]);
   const close = useCallback(() => setPanel(null), []);
 
   /**
@@ -1172,28 +1176,28 @@ export function WishlistPage() {
    * id — and with it whatever fold was stored under that id. The create clears it, and only where
    * something is stored, so an ordinary create writes nothing.
    *
-   * **The path row's caret comes back without scrolling** (ledger 217): the new heading is drawn
-   * last among its siblings, and an ordinary `focus()` on the path row's button took the page to
-   * the top and off it. A heading's Add folder is `dismiss`'s request, which reveals the heading.
+   * **A made folder asks for its next sibling** (issue #1058): the field empties and keeps the
+   * caret until the reader ends the run. Its ways out hand the caret back as before — the path row's
+   * without scrolling (ledger 217), a heading's by `dismiss`'s request, which reveals the heading.
    */
   const nameFolder = useCallback(
     (name: string) => {
       if (panel?.kind === "newFolder") {
         const { parentId } = panel;
-        const pathRow = headingAddedIn === null;
         createMutate(
           { parentId, name },
           {
             onSuccess: (made) => {
               if (folds[String(made.id)] !== undefined) setFold(made.id, null);
-              // Opened from a heading, `dismiss` also hands the caret back to that heading's Add
-              // folder, wherever the field took the wall (`useHeadingCaret`).
-              if (!pathRow) {
-                dismiss();
-                return;
-              }
-              openerRef.current?.focus({ preventScroll: true });
-              setPanel(null);
+              // A made folder asks for its next sibling (issue #1058) — the collection's run, for
+              // its reason: the field empties and keeps the caret until Escape, ✕ or a click away
+              // ends the run, and those hand the caret back as they always did. Through the
+              // updater, so a run ended while the write was in flight stays ended.
+              setPanel((current) =>
+                current?.kind === "newFolder"
+                  ? { ...current, round: (current.round ?? 0) + 1 }
+                  : current,
+              );
             },
           },
         );
@@ -1201,7 +1205,7 @@ export function WishlistPage() {
         renameMutate({ id: panel.folderId, name }, { onSuccess: dismiss });
       }
     },
-    [panel, headingAddedIn, createMutate, renameMutate, folds, setFold, dismiss],
+    [panel, createMutate, renameMutate, folds, setFold, dismiss],
   );
 
   /**
@@ -1600,6 +1604,7 @@ export function WishlistPage() {
               initial: "",
               mode: "create" as const,
               pending: folders.create.isPending,
+              round: openPanel?.kind === "newFolder" ? openPanel.round : undefined,
               onCommit: nameFolder,
               // Its ✕ and its blur-discard, told apart there (Escape reaches `dismiss` directly).
               onCancel: cancelNewFolder,
@@ -2241,6 +2246,7 @@ export function WishlistPage() {
                       ? () => startNewFolder(folderId, pressedElement())
                       : undefined
                   }
+                  addFolderIn={trail.length === 0 ? "Wishlist" : trail[trail.length - 1].name}
                   onExpandAll={expandAll}
                   onCollapseAll={collapseAll}
                   foldPaused={foldPaused}

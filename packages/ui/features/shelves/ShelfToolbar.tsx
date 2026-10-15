@@ -35,14 +35,22 @@ export const FOLD_PAUSED_LOOK =
  * the reason on a hover a keyboard reader cannot perform — the reason as their description, and a
  * press that calls nothing. Add folder is not about folding and is untouched. Absent (or empty) is
  * the toolbar exactly as it always was.
+ *
+ * **`addFolderIn` names the level Add folder makes a folder in** (issue #1058) — `Collection`,
+ * `Wishlist`, or the folder the reader stands in — as the button's tooltip and description, so the
+ * parent is said where the press is made. The visible words stay `Add folder`: the breadcrumb at the
+ * row's other end already draws the level.
  */
 export function ShelfToolbar({
   onAddFolder,
+  addFolderIn,
   onExpandAll,
   onCollapseAll,
   foldPaused,
 }: {
   onAddFolder?: () => void;
+  /** The level's name, for Add folder's tooltip — `Add folder in Binder`. */
+  addFolderIn?: string;
   onExpandAll: () => void;
   onCollapseAll: () => void;
   /** Why folding is refused right now — {@link FOLD_PAUSED_REASON} while a filter is on. */
@@ -63,7 +71,12 @@ export function ShelfToolbar({
   return (
     <div role="group" aria-label="Shelves" className="flex flex-wrap items-center justify-end gap-1">
       {onAddFolder && (
-        <button type="button" onClick={onAddFolder} className={SHELF_TEXT_BUTTON}>
+        <button
+          type="button"
+          onClick={onAddFolder}
+          className={SHELF_TEXT_BUTTON}
+          {...(addFolderIn === undefined ? {} : tip(`Add folder in ${addFolderIn}`))}
+        >
           <FolderPlus className="size-3.5" aria-hidden="true" />
           Add folder
         </button>

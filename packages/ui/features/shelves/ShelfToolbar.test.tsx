@@ -1,6 +1,7 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { FOLD_PAUSED_REASON, ShelfToolbar } from "./ShelfToolbar";
 
 const onAddFolder = vi.fn();
@@ -35,6 +36,27 @@ describe("ShelfToolbar", () => {
     render(<ShelfToolbar onExpandAll={onExpandAll} onCollapseAll={onCollapseAll} />);
     expect(screen.queryByRole("button", { name: "Add folder" })).toBeNull();
     expect(screen.getByRole("button", { name: "Expand all" })).toBeInTheDocument();
+  });
+
+  /** Issue #1058: the press says which level the folder goes into — the button's name stays
+   *  `Add folder`, its words on screen, and the level is its tooltip. */
+  it("names the level Add folder makes a folder in, as its tooltip", async () => {
+    render(
+      <TooltipProvider>
+        <ShelfToolbar
+          onAddFolder={onAddFolder}
+          addFolderIn="Bulk"
+          onExpandAll={onExpandAll}
+          onCollapseAll={onCollapseAll}
+        />
+      </TooltipProvider>,
+    );
+
+    const add = screen.getByRole("button", { name: "Add folder" });
+    fireEvent.pointerEnter(add);
+    expect(await screen.findByRole("tooltip", {}, { timeout: 3000 })).toHaveTextContent(
+      "Add folder in Bulk",
+    );
   });
 
   /** The words both pages pass, fenced as a literal so a rewording is a diff about them. */
