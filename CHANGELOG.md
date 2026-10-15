@@ -30,6 +30,49 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.52.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.51.0...v0.52.0) (2026-10-15)
+
+
+### Features
+
+* add a mana table to the goldfish and playtest boards ([6409eff](https://github.com/Msgaihede/mtg-grimoire/commit/6409eff0bda4f18602a66780c075012a70ffe427))
+* add a mana table to the goldfish and playtest boards ([5246049](https://github.com/Msgaihede/mtg-grimoire/commit/52460499cdbac797996394692ec732ced8821239)), closes [#1002](https://github.com/Msgaihede/mtg-grimoire/issues/1002)
+* **collection:** remove the Open a shared collection button ([9d443d3](https://github.com/Msgaihede/mtg-grimoire/commit/9d443d3f82519c19a76195ee409c7bdadce9f3a5))
+* **collection:** remove the Open a shared collection button ([c9788ca](https://github.com/Msgaihede/mtg-grimoire/commit/c9788ca2960c96bbcadef961e1422cee75ad907f)), closes [#1028](https://github.com/Msgaihede/mtg-grimoire/issues/1028)
+* draw the unreleased chip in the rule-break mark's style ([8cfb4c8](https://github.com/Msgaihede/mtg-grimoire/commit/8cfb4c8c8c30bbc5bfe57bbe94bf191930d40f6f))
+* draw the unreleased chip in the rule-break mark's style ([4d421ee](https://github.com/Msgaihede/mtg-grimoire/commit/4d421eea9c411f56a55a1264e5225b7be84cf5df))
+* four-player Commander games in the playtesting tool ([#1043](https://github.com/Msgaihede/mtg-grimoire/issues/1043)) ([9f13795](https://github.com/Msgaihede/mtg-grimoire/commit/9f1379565e242395c09b814b3115a07394d398d8)), closes [#994](https://github.com/Msgaihede/mtg-grimoire/issues/994)
+* grow the playtest board's zone cards a fifth ([ad6487c](https://github.com/Msgaihede/mtg-grimoire/commit/ad6487c9adaf109cfbb68151c4830672f3cda816))
+* grow the playtest board's zone cards a fifth ([941cd0c](https://github.com/Msgaihede/mtg-grimoire/commit/941cd0c8ae0d895ba9689b1d936ca952147dfbef)), closes [#992](https://github.com/Msgaihede/mtg-grimoire/issues/992)
+* name triggers and show their pictures in playtest prompts ([cae8c4c](https://github.com/Msgaihede/mtg-grimoire/commit/cae8c4c36f7138c6e21f6c95f185c16a278a8a82))
+* name triggers and show their pictures in playtest prompts ([46fe563](https://github.com/Msgaihede/mtg-grimoire/commit/46fe563c81cc8b68798656fe1561eb27f0cbb4a3)), closes [#1027](https://github.com/Msgaihede/mtg-grimoire/issues/1027)
+* **playtesting:** stack up to five cards in a pile and enlarge its quantity chip ([df0d32a](https://github.com/Msgaihede/mtg-grimoire/commit/df0d32a5f26103f0cf41c377cde7e64f888d6ff2))
+* **playtesting:** stack up to five cards in a pile and enlarge its quantity chip ([60b47d5](https://github.com/Msgaihede/mtg-grimoire/commit/60b47d581870815d12a144c879b0aa461bc2d7bd)), closes [#1001](https://github.com/Msgaihede/mtg-grimoire/issues/1001)
+* **playtesting:** undo and redo on the goldfish and playtest boards ([3f9cee0](https://github.com/Msgaihede/mtg-grimoire/commit/3f9cee0add100bc5fd96820c2285bcc02e285e77))
+* **playtesting:** undo and redo on the goldfish and playtest boards ([#1022](https://github.com/Msgaihede/mtg-grimoire/issues/1022)) ([802a58c](https://github.com/Msgaihede/mtg-grimoire/commit/802a58c258a6bbbaa24e66b2215133213c7af0e4))
+* **playtest:** take a question's only answer without asking ([#1040](https://github.com/Msgaihede/mtg-grimoire/issues/1040)) ([53ce767](https://github.com/Msgaihede/mtg-grimoire/commit/53ce7672588aaa31865c4a0861232d41ff93a9b9)), closes [#999](https://github.com/Msgaihede/mtg-grimoire/issues/999)
+* **scanner:** lay a waiting tile across the whole tray and put removes top right ([cd1da8c](https://github.com/Msgaihede/mtg-grimoire/commit/cd1da8c56bd92853d826fc55eb93e4720d4847bb))
+* **scanner:** lay a waiting tile across the whole tray and put removes top right ([4f91f49](https://github.com/Msgaihede/mtg-grimoire/commit/4f91f49664597e3c9344b99519f482f4d07c84f1)), closes [#1004](https://github.com/Msgaihede/mtg-grimoire/issues/1004)
+* **scanner:** match a quad at 0.85 too, for a card deep in its pocket ([d756b96](https://github.com/Msgaihede/mtg-grimoire/commit/d756b964c9efede2258f7fc9417d552af050af82))
+* **scanner:** match a quad at 0.85 too, for a card deep in its pocket ([999e446](https://github.com/Msgaihede/mtg-grimoire/commit/999e4467e2c49409bab40083bb73825a95275345))
+* **scanner:** read an inner box as the card it implies, and hold back crowded hash-only answers ([#1046](https://github.com/Msgaihede/mtg-grimoire/issues/1046)) ([f4ea621](https://github.com/Msgaihede/mtg-grimoire/commit/f4ea6211cd8ce569b021fb78934c74cdef79352b))
+* share a deck read-only, drawn as a deck ([0d35430](https://github.com/Msgaihede/mtg-grimoire/commit/0d35430b0cfbff3d3ed9257324c376209f58d14b))
+* share a deck read-only, drawn as a deck ([#1032](https://github.com/Msgaihede/mtg-grimoire/issues/1032)) ([ab858cf](https://github.com/Msgaihede/mtg-grimoire/commit/ab858cf9ffd9192295c57b62463437343a3a8578))
+* **share:** keep shared folders up to date automatically ([8027e43](https://github.com/Msgaihede/mtg-grimoire/commit/8027e436514a5cc6a323d6a08878dfeec06f2563))
+* **share:** keep shared folders up to date automatically ([a1ae73e](https://github.com/Msgaihede/mtg-grimoire/commit/a1ae73ef0c3969637a8c4f2c1110942ab8196ac5))
+* **share:** name collection and wishlist folders in the OpenGraph card ([82e9a23](https://github.com/Msgaihede/mtg-grimoire/commit/82e9a23a0563f231c57163d9ad9c15ccf2f62ef2))
+* **share:** name collection and wishlist folders in the OpenGraph card ([95c0c5e](https://github.com/Msgaihede/mtg-grimoire/commit/95c0c5e87f51eedae0a962d260d78ca564f09409)), closes [#1019](https://github.com/Msgaihede/mtg-grimoire/issues/1019)
+
+
+### Bug Fixes
+
+* preview opening-hand cards on hover in goldfish and playtest ([983f3d6](https://github.com/Msgaihede/mtg-grimoire/commit/983f3d6df5e7cd2515b23afd35fa9c7ce644ae33))
+* preview opening-hand cards on hover in goldfish and playtest ([7c4163c](https://github.com/Msgaihede/mtg-grimoire/commit/7c4163c387f58522a49a696e089a471f403cb91c)), closes [#1023](https://github.com/Msgaihede/mtg-grimoire/issues/1023)
+* tell the goldfish's own turn and rules life changes in the game log ([724853c](https://github.com/Msgaihede/mtg-grimoire/commit/724853c1e0a7e77061873cc1a20625c61cf87da5))
+* tell the goldfish's own turn and rules life changes in the game log ([bf4eb8f](https://github.com/Msgaihede/mtg-grimoire/commit/bf4eb8f18ce6235c5bb86067a2d3a51db1aea979)), closes [#1026](https://github.com/Msgaihede/mtg-grimoire/issues/1026)
+* **update:** stop Check now staying greyed out after launch ([0d4b41f](https://github.com/Msgaihede/mtg-grimoire/commit/0d4b41f6f44c1220d0b9bca043520c828fb5d101))
+* **update:** stop Check now staying greyed out after launch ([#1033](https://github.com/Msgaihede/mtg-grimoire/issues/1033)) ([edb8d5a](https://github.com/Msgaihede/mtg-grimoire/commit/edb8d5ab48320f9b7f61b714f822e12be2269b55))
+
 ## [0.51.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.50.0...v0.51.0) (2026-10-14)
 
 
