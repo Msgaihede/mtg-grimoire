@@ -5,7 +5,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { NOT_A_DRAG, readDragData } from "@/features/decks/dnd";
 import { DEFAULT_SECTION_ZOOMS } from "@/lib/cardZoom";
 import type { FolderNode } from "@/lib/folderTree";
-import type { WishlistFolder, WishRow } from "@/lib/ipc";
+import type { CollectionFolder, WishlistFolder, WishRow } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import type { Shelf } from "@/lib/shelves";
 import { useAppStore } from "@/lib/store";
@@ -58,6 +58,7 @@ const BOLT: WishRow = {
   elsewhere: 0,
   ownedExact: 0,
   ownedOther: 0,
+  ownedPlaces: [],
   notes: null,
   needsReview: null,
   updatedAt: 1_800_000_000,
@@ -94,11 +95,13 @@ const noop = () => {};
 /** What either view may be handed instead of a `noop` — the two writes a case below drives. */
 interface Overrides {
   onSetQuantity?: (row: WishRow, quantity: number) => void;
+  collectionFolders?: readonly CollectionFolder[];
 }
 
 function wall(rows: WishRow[], over: Overrides = {}) {
   return render(
     <WishlistGrid
+      collectionFolders={over.collectionFolders}
       rows={rows}
       listKey="k"
       folders={[EXPENSIVE]}
@@ -415,6 +418,47 @@ describe("the owned chips", () => {
     wall([{ ...ANY, ownedExact: 5 }]);
     expect(
       screen.getByRole("button", { name: /^5 copies in your collection/ }),
+    ).toBeInTheDocument();
+  });
+
+  /** Issue #1055: the places the copies are filed, said by the chip before it is pressed. */
+  it("names the folders the copies are filed in, with how many are in each", () => {
+    const folders = [
+      { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0 },
+      { id: 2, parentId: 1, name: "Staples", kind: "user", deckId: null, sortOrder: 0 },
+    ] as CollectionFolder[];
+    wall(
+      [
+        {
+          ...BOLT,
+          ownedExact: 3,
+          ownedOther: 1,
+          ownedPlaces: [
+            { folderId: null, exact: 1, other: 0 },
+            { folderId: 2, exact: 2, other: 1 },
+          ],
+        },
+      ],
+      { collectionFolders: folders },
+    );
+    expect(
+      screen.getByRole("button", {
+        name: "3 copies of this printing in your collection, in Binder › Staples (2), Not sorted (1). Show in collection",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: "1 copy of another printing in your collection, in Binder › Staples (1). Show in collection",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("says no places while the collection's folders are unknown, and still draws the count", () => {
+    wall([{ ...BOLT, ownedExact: 2, ownedPlaces: [{ folderId: 7, exact: 2, other: 0 }] }]);
+    expect(
+      screen.getByRole("button", {
+        name: "2 copies of this printing in your collection. Show in collection",
+      }),
     ).toBeInTheDocument();
   });
 

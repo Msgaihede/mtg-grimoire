@@ -318,6 +318,7 @@ import type {
   WishOptimizeApplyItem,
   WishOptimizeMove,
   WishOptimizeResult,
+  WishOwnedPlace,
   WishRow,
   WishlistFolder,
   WishlistFolderSummary,
@@ -7792,20 +7793,43 @@ function elsewhereWishes(db: FakeDb, w: FakeWish): number {
  * folder; an any-printing wish counts the whole card as exact, and an orphan with no oracle id
  * counts only its pinned printing.
  */
-function ownedForWish(db: FakeDb, w: FakeWish): { exact: number; other: number } {
+function ownedForWish(
+  db: FakeDb,
+  w: FakeWish,
+): { exact: number; other: number; places: WishOwnedPlace[] } {
   let exact = 0;
   let other = 0;
+  // `owned_places` (issue #1055): the same copies by collection folder, `null` for none.
+  const byFolder = new Map<number | null, WishOwnedPlace>();
+  const at = (folderId: number | null): WishOwnedPlace => {
+    let place = byFolder.get(folderId);
+    if (place === undefined) {
+      place = { folderId, exact: 0, other: 0 };
+      byFolder.set(folderId, place);
+    }
+    return place;
+  };
   for (const e of db.collectionEntries) {
     if (w.cardId !== null && e.cardId === w.cardId) {
       exact += e.quantity;
+      at(e.folderId).exact += e.quantity;
       continue;
     }
     if (w.oracleId === null) continue;
     if (cardById(db, e.cardId)?.oracleId !== w.oracleId) continue;
-    if (w.cardId === null) exact += e.quantity;
-    else other += e.quantity;
+    if (w.cardId === null) {
+      exact += e.quantity;
+      at(e.folderId).exact += e.quantity;
+    } else {
+      other += e.quantity;
+      at(e.folderId).other += e.quantity;
+    }
   }
-  return { exact, other };
+  // Rust's `ORDER BY folder_id`: SQLite sorts NULL first.
+  const places = [...byFolder.values()].sort(
+    (a, b) => (a.folderId ?? -Infinity) - (b.folderId ?? -Infinity),
+  );
+  return { exact, other, places };
 }
 
 function toWishRow(db: FakeDb, w: FakeWish, mp: MarketplaceId): WishRow {
@@ -7842,6 +7866,7 @@ function toWishRow(db: FakeDb, w: FakeWish, mp: MarketplaceId): WishRow {
     elsewhere: elsewhereWishes(db, w),
     ownedExact: owned.exact,
     ownedOther: owned.other,
+    ownedPlaces: owned.places,
     notes: w.notes,
     needsReview: w.needsReview,
     updatedAt: w.updatedAt,
