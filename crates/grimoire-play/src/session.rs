@@ -58,6 +58,7 @@ use engine::types::StaticDefinition;
 use engine::types::{parse_counter_type, GameState, PlayerId};
 
 use crate::cards::{self, CardFacts};
+use crate::history::{History, NOTHING_TO_REDO, NOTHING_TO_UNDO};
 use crate::tokens::{DeckTokens, TokenFacts};
 use crate::view::{
     CardCounter, GameCard, GoldfishAction, GoldfishStep, GoldfishView, Happened, Lane, ManaByType,
@@ -104,6 +105,18 @@ pub struct Goldfish {
     /// While the goldfish's turn is on: how many cards it has drawn and discarded so far, told
     /// as `Happened::OpponentTurn` when the next turn starts.
     fish_turn: Option<FishTurn>,
+    /// The game before each of the reader's actions, for undo and redo (`crate::history`).
+    history: History<Moment>,
+}
+
+/// The part of a goldfish game an action changes: what a refusal puts back and what undo goes
+/// back to. The rest — the deck's printings by name, its commanders and tokens, the emblem — is
+/// the same for the whole game.
+struct Moment {
+    state: GameState,
+    printings: HashMap<ObjectId, String>,
+    turn: u32,
+    mulligans: u8,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -198,6 +211,7 @@ impl Goldfish {
             tokens,
             deck_tokens,
             fish_turn: None,
+            history: History::default(),
         };
         game.assign_printings(cards);
         start_game_with_starting_player(&mut game.state, YOU);
@@ -293,6 +307,8 @@ impl Goldfish {
             mana_open,
             mana: mana_table(s, YOU),
             tokens: self.tokens.clone(),
+            can_undo: self.history.can_undo(),
+            can_redo: self.history.can_redo(),
         }
     }
 
@@ -365,15 +381,24 @@ impl Goldfish {
     // ── Actions ───────────────────────────────────────────────────────────────────────────
 
     /// Do what the board asked, and answer with the board after it. A refusal is one sentence
-    /// and leaves the game exactly as it was.
+    /// and leaves the game exactly as it was. Every action taken can be undone; undo and redo
+    /// themselves move along that history and happen nothing.
     pub fn act(&mut self, action: GoldfishAction) -> Result<GoldfishStep, String> {
+        match action {
+            GoldfishAction::Undo => return self.travel(true),
+            GoldfishAction::Redo => return self.travel(false),
+            _ => {}
+        }
         let checkpoint = self.clone_state();
         let mut happened = Vec::new();
         match self.run(action, &mut happened) {
-            Ok(()) => Ok(GoldfishStep {
-                view: self.view(),
-                happened,
-            }),
+            Ok(()) => {
+                self.history.record(checkpoint);
+                Ok(GoldfishStep {
+                    view: self.view(),
+                    happened,
+                })
+            }
             Err(e) => {
                 self.restore(checkpoint);
                 Err(e)
@@ -381,9 +406,26 @@ impl Goldfish {
         }
     }
 
+    /// Undo (`back`) or redo: the game as it was before the last action, or before the last undo.
+    fn travel(&mut self, back: bool) -> Result<GoldfishStep, String> {
+        let now = self.clone_state();
+        let then = if back {
+            self.history.undo(now).ok_or(NOTHING_TO_UNDO)?
+        } else {
+            self.history.redo(now).ok_or(NOTHING_TO_REDO)?
+        };
+        self.restore(then);
+        Ok(GoldfishStep {
+            view: self.view(),
+            happened: Vec::new(),
+        })
+    }
+
     fn run(&mut self, action: GoldfishAction, out: &mut Vec<Happened>) -> Result<(), String> {
         let mulliganing = self.stage() == Stage::Mulligan;
         match action {
+            // `act` takes these before a checkpoint is made: they move along the history.
+            GoldfishAction::Undo | GoldfishAction::Redo => {}
             GoldfishAction::Mulligan => {
                 if !mulliganing {
                     return Err(ALREADY_KEPT.into());
@@ -1012,15 +1054,21 @@ impl Goldfish {
         self.apply(YOU, GameAction::Debug(action)).map(|_| ())
     }
 
-    fn clone_state(&self) -> (GameState, HashMap<ObjectId, String>, u32) {
-        (self.state.clone(), self.printings.clone(), self.turn)
+    fn clone_state(&self) -> Moment {
+        Moment {
+            state: self.state.clone(),
+            printings: self.printings.clone(),
+            turn: self.turn,
+            mulligans: self.mulligans,
+        }
     }
 
-    fn restore(&mut self, (state, printings, turn): (GameState, HashMap<ObjectId, String>, u32)) {
-        self.state = state;
-        self.printings = printings;
-        self.turn = turn;
-        // The goldfish's turn always ends within the action that started it, so a checkpoint is
+    fn restore(&mut self, moment: Moment) {
+        self.state = moment.state;
+        self.printings = moment.printings;
+        self.turn = moment.turn;
+        self.mulligans = moment.mulligans;
+        // The goldfish's turn always ends within the action that started it, so a moment is
         // never taken in the middle of one.
         self.fish_turn = None;
     }

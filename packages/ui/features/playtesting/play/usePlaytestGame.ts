@@ -9,7 +9,8 @@ import {
   type PlaytestStep,
   type PlaytestView,
 } from "@/lib/ipc";
-import { appendLog, type LogLine } from "../goldfish/log";
+import type { LogLine } from "../goldfish/log";
+import { freshBook, redoLog, rememberLog, undoLog, writeLog, type LogBook } from "../undo";
 import { playtestLines } from "./log";
 import { framesOf, replayEntries, useReplay, type ReplayEntry } from "./useReplay";
 
@@ -38,6 +39,12 @@ export interface PlaytestPicks {
  * between the AI's actions shows them one by one before it settles, each beat's facts going to the
  * log and to the board's pops (`lastHappened`) as it is shown. While one plays the board is
  * read-only (`replaying`), and `skip` shows the end at once.
+ *
+ * **Undo and redo are actions** (`{ type: "undo" }`, issue #1022), as on the goldfish board: the
+ * engine goes back to the reader's last decision with all the opponent did after it, and answers
+ * with no facts and no frames, so nothing plays back. The log is kept beside the engine's history
+ * as it stood before each action (`../undo.ts`' `LogBook`), once the last replay has been logged
+ * whole.
  */
 const NONE: readonly PlaytestHappened[] = [];
 
@@ -74,7 +81,7 @@ export function usePlaytestGame(picks: PlaytestPicks): PlaytestGame {
   // identity would do. The same decks in the same seats are the same string.
   const lineup = JSON.stringify(picks.opponents.map((o) => [o.deckId, o.variant]));
   const [view, setView] = useState<PlaytestView | null>(null);
-  const [log, setLog] = useState<LogLine[]>([]);
+  const [book, setBook] = useState<LogBook>(() => freshBook());
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [lastHappened, setLastHappened] = useState<readonly PlaytestHappened[]>(NONE);
@@ -88,8 +95,8 @@ export function usePlaytestGame(picks: PlaytestPicks): PlaytestGame {
   const apply = useCallback((entry: ReplayEntry) => {
     setView(entry.view);
     setLastHappened(entry.quiet ? NONE : entry.happened);
-    setLog((old) =>
-      appendLog(old, playtestLines(entry.happened, entry.view.turn, entry.view.opponents.length)),
+    setBook((b) =>
+      writeLog(b, playtestLines(entry.happened, entry.view.turn, entry.view.opponents.length)),
     );
   }, []);
   const replay = useReplay(apply);
@@ -122,7 +129,9 @@ export function usePlaytestGame(picks: PlaytestPicks): PlaytestGame {
           (step) => {
             if (mine !== generation.current) return;
             const dealt = opponents.length > 1 ? "every deck" : "both decks";
-            setLog([{ turn: 0, text: `Shuffled ${dealt} and drew seven`, kind: "deal" }]);
+            setBook(
+              freshBook([{ turn: 0, text: `Shuffled ${dealt} and drew seven`, kind: "deal" }]),
+            );
             show(step);
           },
           (e: unknown) => {
@@ -141,7 +150,7 @@ export function usePlaytestGame(picks: PlaytestPicks): PlaytestGame {
     setLastHappened(NONE);
     setView(null);
     setError(null);
-    setLog([]);
+    setBook(freshBook());
     request(mine);
   }, [request, cancel]);
 
@@ -166,6 +175,20 @@ export function usePlaytestGame(picks: PlaytestPicks): PlaytestGame {
           (step) => {
             if (mine !== generation.current) return;
             setError(null);
+            // The replay of an earlier answer, if one is still playing, is logged whole first:
+            // the log before this action is the one with all of that action's lines in it.
+            if (action.type === "undo" || action.type === "redo") {
+              skip();
+              setBook(action.type === "undo" ? undoLog : redoLog);
+              setLastHappened(NONE);
+              setView(step.view);
+              return;
+            }
+            // The stops are a setting, which the engine does not remember as an action.
+            if (action.type !== "setStops") {
+              skip();
+              setBook(rememberLog);
+            }
             show(step);
           },
           (e: unknown) => {
@@ -179,7 +202,7 @@ export function usePlaytestGame(picks: PlaytestPicks): PlaytestGame {
 
   return {
     view,
-    log,
+    log: book.log,
     error,
     busy,
     act,

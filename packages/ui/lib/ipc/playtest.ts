@@ -100,6 +100,11 @@ export interface PlaytestView {
   stops: PlaytestStop[];
   /** The reader is ending the turn: until it changes, only a block or a question stops it. */
   endingTurn: boolean;
+  /** The reader's last action can be taken back (`undo`), with all the opponent did after it.
+   *  Never in a replay frame. */
+  canUndo: boolean;
+  /** An undone action can be taken again (`redo`). Never in a replay frame. */
+  canRedo: boolean;
 }
 
 /** A step to stop at, on whose turn: the reader's, or any opponent's. */
@@ -258,7 +263,11 @@ export type PlaytestAction =
   | { type: "draw"; count: number }
   | { type: "mill"; count: number }
   | { type: "shuffle" }
-  | { type: "setLife"; seat: PlaytestPlayer; life: number };
+  | { type: "setLife"; seat: PlaytestPlayer; life: number }
+  /** Back to the reader's last decision, exactly. Happens nothing and plays nothing back. */
+  | { type: "undo" }
+  /** The game as it was before the last undo. Happens nothing. */
+  | { type: "redo" };
 
 /** What happened, one fact a row; `seat` is whose card or doing it was. */
 export type PlaytestHappened =

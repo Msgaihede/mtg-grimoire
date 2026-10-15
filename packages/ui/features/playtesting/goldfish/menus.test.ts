@@ -236,6 +236,30 @@ describe("gameMenu", () => {
     expect(act(tokens, "This deck makes no tokens").disabled).toBe(true);
   });
 
+  // Issue #1022: the menu's way to the same actions Ctrl+Z and Ctrl+Y send.
+  it("heads the menu with undo and redo, greyed when there is nowhere to go", () => {
+    const onAct = vi.fn();
+    const items = gameMenu({
+      ...base,
+      view: { ...turnNineView(), canUndo: true, canRedo: false },
+      onAct,
+    });
+    expect(labels(items).slice(0, 2)).toEqual(["Undo", "Redo"]);
+    expect(act(items, "Undo").disabled).toBeUndefined();
+    expect(act(items, "Redo").disabled).toBe(true);
+    act(items, "Undo").onSelect();
+    expect(onAct).toHaveBeenLastCalledWith({ type: "undo" });
+    const back = gameMenu({
+      ...base,
+      view: { ...turnNineView(), canUndo: false, canRedo: true },
+      onAct,
+    });
+    expect(act(back, "Undo").disabled).toBe(true);
+    act(back, "Redo").onSelect();
+    expect(onAct).toHaveBeenLastCalledWith({ type: "redo" });
+    expect(act(gameMenu({ ...base, view: null }), "Undo").disabled).toBe(true);
+  });
+
   it("greys the game's own moves during the opening hand and while dealing", () => {
     for (const view of [openingHandView(), null]) {
       const items = gameMenu({ ...base, view });

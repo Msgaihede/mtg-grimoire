@@ -100,6 +100,8 @@ export function openingHandView(): GoldfishView {
     manaOpen: 0,
     mana: manaTable(),
     tokens: [],
+    canUndo: false,
+    canRedo: false,
   };
 }
 
@@ -150,6 +152,8 @@ export function turnNineView({ extraLands = 0 }: { extraLands?: number } = {}): 
     manaOpen: 16,
     // Five Treasures make any color; the Elves and two Forests green, two Islands blue, the Saga {C}.
     mana: manaTable([5, 7, 5, 5, 8, 1]),
+    canUndo: true,
+    canRedo: false,
     tokens: [
       {
         preset: "treasure",

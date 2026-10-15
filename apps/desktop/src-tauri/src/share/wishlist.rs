@@ -209,6 +209,7 @@ pub fn snapshot(
         fields: fields.names(),
         folders,
         cards,
+        deck: None,
     })
 }
 
@@ -267,6 +268,9 @@ fn read_wishes(
                 // `Option<f64>` for `snapshot::read_cards`' reason: an unquoted printing is an
                 // absent `p`, never a zero.
                 p: if fields.value { r.get(8)? } else { None },
+                t: None,
+                mc: None,
+                mv: None,
             })
         })
         .map_err(|e| e.to_string())?;

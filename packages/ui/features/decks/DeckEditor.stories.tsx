@@ -176,8 +176,8 @@ const meta = {
           "**Owned is where the card physically is, never a claim staked over it.** A deck's " +
           "copies are the collection rows filed into that deck's group, so every deck blocks " +
           "every other by construction and there is no reservation to switch on. The header " +
-          "carried a `Built` toggle until the claim ledger was deleted — it meant \"this deck " +
-          "is on a table, so its claims come off what the others can reach\", which is now " +
+          'carried a `Built` toggle until the claim ledger was deleted — it meant "this deck ' +
+          'is on a table, so its claims come off what the others can reach", which is now ' +
           "what *being in the deck at all* means. {@link Modern60} reads one of those marks." +
           "\n\n" +
           "**Every card carries the same three affordances in every view, from one module.** A " +
@@ -761,9 +761,7 @@ export const CollectionSubmenu: Story = {
     // The innermost panel, which is the one just opened. `.at(-1)` is not in this build's
     // `lib` target — see the TS 6.0.x pin.
     const panel = panels[panels.length - 1];
-    await expect(
-      within(panel).getByRole("menuitem", { name: "Quick add 2 copies" }),
-    ).toBeVisible();
+    await expect(within(panel).getByRole("menuitem", { name: "Quick add 2 copies" })).toBeVisible();
     await expect(
       within(panel).getByRole("menuitem", { name: "Quick add 2 and remove from wishlist" }),
     ).toBeVisible();
@@ -807,9 +805,7 @@ export const QuickAddSettlesTheShortfall: Story = {
     // The innermost panel, which is the one just opened. `.at(-1)` is not in this build's
     // `lib` target — see the TS 6.0.x pin.
     const panel = panels[panels.length - 1];
-    await userEvent.click(
-      within(panel).getByRole("menuitem", { name: "Quick add 2 copies" }),
-    );
+    await userEvent.click(within(panel).getByRole("menuitem", { name: "Quick add 2 copies" }));
 
     // The deck re-reads and the card says so itself. **The shortage clause is _gone_ rather than
     // reading `you own 4 of 4`** — `deckCardShort` is one predicate behind both the red figure in
@@ -873,9 +869,10 @@ export const FilterAndStats: Story = {
     // control answering a different question: it is on the band's own header, it trades height
     // rather than width, and it takes nothing off the desk. Both claims are worth keeping.
     await expect(canvas.queryByRole("button", { name: "Stats" })).toBeNull();
-    await expect(
-      within(stats).getByRole("button", { name: "Deck stats" }),
-    ).toHaveAttribute("aria-expanded", "true");
+    await expect(within(stats).getByRole("button", { name: "Deck stats" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
   },
 };
 
@@ -1202,9 +1199,7 @@ export const Gone: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(
-      await canvas.findByText(
-        "This deck no longer exists. It may have been deleted.",
-      ),
+      await canvas.findByText("This deck no longer exists. It may have been deleted."),
     ).toBeInTheDocument();
     // Not an alert: nothing failed, and a red band would make a deleted deck read as a fault.
     await expect(canvas.queryByRole("alert")).toBeNull();
@@ -1291,10 +1286,7 @@ export const SwapFolds: Story = {
     // The wall is searched rather than scrolled: it is virtualised, one column wide under
     // `packages/ui/stories.test.tsx`'s layout stub, and Sol Ring is far enough down an alphabetical list
     // of 36 cards that its tile is not mounted.
-    await user.type(
-      await canvas.findByRole("searchbox", { name: "Search cards" }),
-      "Sol Ring",
-    );
+    await user.type(await canvas.findByRole("searchbox", { name: "Search cards" }), "Sol Ring");
 
     // **The add target is chosen, not assumed** — and since 2026-08-15 it is chosen in **deck
     // settings**, because where an unfiled add lands is a fact about the deck rather than about

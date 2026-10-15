@@ -25,6 +25,7 @@ The binding rules are in [`crates/grimoire-play/CLAUDE.md`](../../crates/grimoir
 - [Four players](#four-players)
 - [Prompts](#prompts)
 - [Casting, cancelling and the sandbox](#casting-cancelling-and-the-sandbox)
+- [Undo and redo](#undo-and-redo)
 - [What the reader may see](#what-the-reader-may-see)
 - [The commands and the wire](#the-commands-and-the-wire)
 - [The setup page](#the-setup-page)
@@ -239,6 +240,28 @@ reads the state as it is. Tokens wear each deck's own printings, both seats', as
 
 **A refused action changes nothing**, as on the goldfish: `act` restores its checkpoint on any
 `Err`.
+
+## Undo and redo
+
+**`Ctrl+Z` goes back to the reader's last decision, with everything the opponent did after it;
+`Ctrl+Y` or `Ctrl+Shift+Z` comes forward again** (issue #1022, 2026-10-14). The goldfish's design
+([goldfish.md](goldfish.md#undo-and-redo)): the session keeps the whole game before each of the
+reader's actions, `{ type: "undo" }` and `{ type: "redo" }` on `playtest_act` restore one, and the
+view's `canUndo` and `canRedo` say whether either has anywhere to go.
+
+**What a moment holds here is more than the goldfish's**: the checkpoint (the `GameState`, the
+printings, the mulligan count, **and the AI's dice**), and the session's place around it — a cast
+half made (`Pending`), the board's own question, the end told, the turn being ended, the stop last
+stopped at. The dice are why redo restores rather than replays: the AI's turn after a redo is the
+one the reader saw, not a new roll. An undo after a different choice is a new roll, and the AI may
+well play otherwise.
+
+**One action is one step back, and an action is the reader's.** The AI's turn is never a moment of
+its own: it happened inside the reader's action that passed to it, so undo lands where the reader
+last decided, never in the middle of the opponent's turn. Undo and redo answer with no facts and no
+frames, so nothing plays back. **The stops are a setting** (`setStops`): not remembered, and left
+as they are by undo. A finished game can be undone too, which is how a reader takes back the play
+that lost it.
 
 ## What the reader may see
 

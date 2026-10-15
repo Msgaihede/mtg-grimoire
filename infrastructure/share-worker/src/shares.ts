@@ -68,7 +68,27 @@ interface Meta {
   currency: string | null;
   marketplace: string | null;
   fields: string[];
+  /** A deck share's format (`Commander`), or `null` — issue #1032. */
+  format: string | null;
+  /** A deck share's preview picture, or `null` — always under {@link PREVIEW_IMAGE_ORIGIN}. */
+  image: string | null;
+  /** Who painted {@link image} when it is the deck's cover crop, which is shown only credited. */
+  imageArtist: string | null;
 }
+
+/**
+ * Where a link preview's picture may live: Scryfall's card images, the host every `img` in a
+ * snapshot already names (issue #1032).
+ *
+ * **One host and nothing else**, because this URL is rendered into `og:image` on a page strangers
+ * open and every chat app that unfurls the link will fetch it. A publisher able to name any URL
+ * could make every unfurl of their link a request to a host of their choosing — a tracker, or a
+ * picture that is not of their deck. The bound on its length is {@link MAX_TEXT_CHARS}'s reason.
+ */
+export const PREVIEW_IMAGE_ORIGIN = "https://cards.scryfall.io/";
+
+/** A preview picture's ceiling — a Scryfall URL is about a hundred characters. */
+const MAX_IMAGE_CHARS = 500;
 
 /** A nullable text column arriving from a caller: absent, null, or a string within the ceiling. */
 function optionalText(value: unknown): boolean {
@@ -86,8 +106,19 @@ function optionalText(value: unknown): boolean {
  */
 export function metaProblem(body: unknown): string | null {
   if (typeof body !== "object" || body === null || Array.isArray(body)) return "malformed share";
-  const { folderUid, title, ownerName, cardCount, totalValue, currency, marketplace, fields } =
-    body as Record<string, unknown>;
+  const {
+    folderUid,
+    title,
+    ownerName,
+    cardCount,
+    totalValue,
+    currency,
+    marketplace,
+    fields,
+    format,
+    image,
+    imageArtist,
+  } = body as Record<string, unknown>;
 
   // `undefined` and `null` are both the whole collection. The app sends `null`; a body that
   // omits the key entirely means the same thing and there is nothing to be gained by refusing it.
@@ -117,6 +148,17 @@ export function metaProblem(body: unknown): string | null {
   }
   if (!optionalText(currency)) return "that is not a currency";
   if (!optionalText(marketplace)) return "that is not a marketplace";
+  if (!optionalText(format)) return "that is not a format";
+  if (
+    image !== undefined &&
+    image !== null &&
+    (typeof image !== "string" ||
+      image.length > MAX_IMAGE_CHARS ||
+      !image.startsWith(PREVIEW_IMAGE_ORIGIN))
+  ) {
+    return "that is not a card picture";
+  }
+  if (!optionalText(imageArtist)) return "that is not an artist";
   if (!Array.isArray(fields)) return "malformed share";
   // ⚠️ **The ceiling is the format's own arity rather than a number somebody picked**: `fields` is
   // a set over three known names, so anything longer is duplicates or junk. Checking each element
@@ -146,6 +188,9 @@ function readMeta(body: unknown): Meta {
     currency: (raw.currency as string | null | undefined) ?? null,
     marketplace: (raw.marketplace as string | null | undefined) ?? null,
     fields: raw.fields as string[],
+    format: (raw.format as string | null | undefined) ?? null,
+    image: (raw.image as string | null | undefined) ?? null,
+    imageArtist: (raw.imageArtist as string | null | undefined) ?? null,
   };
 }
 
@@ -261,22 +306,27 @@ function wireRow(env: Env, row: ShareRow): Record<string, unknown> {
 
 /**
  * What a share publishes, as the OpenGraph card names it: the whole collection, one folder of
- * it, the whole wishlist, or one folder of that (issue #1019).
+ * it, the whole wishlist, one folder of that (issue #1019), or a deck (issue #1032).
  *
  * Read off the folder key's *shape* and nothing else — `null` is the whole collection,
  * `wishlist:` the whole wishlist, `wishlist:…` one wishlist level (`wishlistShare.ts`'s four
- * keys), and any other string a collection folder's `sync_uid`.
+ * keys), `deck:…` a deck (`deckShare.ts`), and any other string a collection folder's `sync_uid`.
  */
-export type ShareKind = "collection" | "collection-folder" | "wishlist" | "wishlist-folder";
+export type ShareKind =
+  "collection" | "collection-folder" | "wishlist" | "wishlist-folder" | "deck";
 
 /** `share::wishlist::PREFIX` and `WISHLIST_SHARE_PREFIX`, the third spelling of one string. */
 const WISHLIST_PREFIX = "wishlist:";
 
-/** The kind a folder key names. Pure, so the page's four cards are tested without a row. */
+/** `share::deck::PREFIX` and `DECK_SHARE_PREFIX`, the third spelling of another. */
+const DECK_PREFIX = "deck:";
+
+/** The kind a folder key names. Pure, so the page's cards are tested without a row. */
 export function shareKind(folderUid: string | null): ShareKind {
   if (folderUid === null || folderUid === "") return "collection";
   if (folderUid === WISHLIST_PREFIX) return "wishlist";
   if (folderUid.startsWith(WISHLIST_PREFIX)) return "wishlist-folder";
+  if (folderUid.startsWith(DECK_PREFIX)) return "deck";
   return "collection-folder";
 }
 
@@ -299,9 +349,15 @@ export interface PublicRow {
   object_key: string | null;
   state: string;
   updated_at: number;
+  /** A deck's format and preview picture (issue #1032); `null` on every other kind. */
+  format: string | null;
+  image: string | null;
+  /** The cover crop's illustrator, credited in the card's text; `null` for a whole card. */
+  image_artist: string | null;
 }
 
-const PUBLIC_COLUMNS = `id, folder_uid, title, owner_name, card_count, object_key, state, updated_at`;
+const PUBLIC_COLUMNS = `id, folder_uid, title, owner_name, card_count, object_key, state, updated_at,
+   format, image, image_artist`;
 
 /**
  * The one row `GET /s/{id}` and `GET /s/{id}/{hash}.json.gz` each read, or `null` for an id
@@ -374,7 +430,8 @@ export async function handleCreate(
   if (existing !== null) {
     await env.DB.prepare(
       `UPDATE shares SET title = ?, owner_name = ?, card_count = ?, total_value = ?,
-         currency = ?, marketplace = ?, fields = ?, updated_at = ?
+         currency = ?, marketplace = ?, fields = ?, format = ?, image = ?, image_artist = ?,
+         updated_at = ?
        WHERE id = ?`,
     )
       .bind(
@@ -385,6 +442,9 @@ export async function handleCreate(
         meta.currency,
         meta.marketplace,
         JSON.stringify(meta.fields),
+        meta.format,
+        meta.image,
+        meta.imageArtist,
         now,
         existing.id,
       )
@@ -415,8 +475,9 @@ export async function handleCreate(
   const id = mintId();
   const insert = env.DB.prepare(
     `INSERT INTO shares (id, group_id, folder_uid, title, owner_name, card_count, total_value,
-       currency, marketplace, fields, object_key, bytes, state, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       currency, marketplace, fields, object_key, bytes, state, created_at, updated_at,
+       format, image, image_artist)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).bind(
     id,
     group,
@@ -433,6 +494,9 @@ export async function handleCreate(
     LIVE,
     now,
     now,
+    meta.format,
+    meta.image,
+    meta.imageArtist,
   );
 
   try {

@@ -65,7 +65,7 @@ export interface Shortcut {
  * surface `App.tsx` swaps *in place of* `DecksPage`, which is why {@link activeScopes} replaces
  * rather than nests.
  */
-export type ShortcutScope = "global" | ViewId | "deckEditor";
+export type ShortcutScope = "global" | ViewId | "deckEditor" | "goldfish";
 
 /**
  * The catalogue.
@@ -193,7 +193,22 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
   shared: [],
   scanner: [],
   trade: [],
-  playtesting: [],
+  /**
+   * The playtest board's undo and redo (issue #1022): back to the reader's last decision, with all
+   * the opponent did after it. The deck editor's spellings, for the deck editor's reason — the
+   * argument for the pair is at `deckEditor.redo` — and bound by `useUndoKeys`.
+   */
+  playtesting: [
+    { id: "undo", label: "Undo", chords: [{ key: "z", ctrl: true }] },
+    {
+      id: "redo",
+      label: "Redo",
+      chords: [
+        { key: "y", ctrl: true },
+        { key: "z", ctrl: true, shift: true },
+      ],
+    },
+  ],
   settings: [],
   deckEditor: [
     { id: "undo", label: "Undo", chords: [{ key: "z", ctrl: true }] },
@@ -219,6 +234,22 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
       ],
     },
     { id: "remove", label: "Remove selected cards", chords: [{ key: "Delete" }] },
+  ],
+  /**
+   * The goldfish board, which — like the editor — is drawn *in place of* what the `decks` view
+   * would show (`App.tsx`), so it is a scope of its own rather than a view's. Undo and redo there
+   * (issue #1022) are the editor's spellings, bound by `useUndoKeys`.
+   */
+  goldfish: [
+    { id: "undo", label: "Undo", chords: [{ key: "z", ctrl: true }] },
+    {
+      id: "redo",
+      label: "Redo",
+      chords: [
+        { key: "y", ctrl: true },
+        { key: "z", ctrl: true, shift: true },
+      ],
+    },
   ],
 };
 
@@ -341,6 +372,8 @@ function cap(name: string): string {
  * `"global"` first and always, then exactly one more. **The editor replaces `decks` rather than
  * nesting under it**: `App.tsx` renders `openDeckId === null ? <DecksPage/> : <DeckEditor/>`, so
  * a `decks` section under an open editor would list chords for a page that is not on screen.
+ * **The goldfish board replaces the editor the same way** (`goldfish`, the store's board open over
+ * the open deck), so its section is drawn instead of the editor's.
  *
  * Two fields already in the store and no registration machinery — a scope that registered itself
  * on mount would be a second source of truth about what is drawn, and the store already answers
@@ -349,7 +382,10 @@ function cap(name: string): string {
 export function activeScopes(s: {
   activeView: ViewId;
   openDeckId: number | null;
+  /** The goldfish board is drawn over the open deck. */
+  goldfish?: boolean;
 }): readonly ShortcutScope[] {
+  if (s.openDeckId !== null && s.goldfish === true) return ["global", "goldfish"];
   return ["global", s.openDeckId !== null ? "deckEditor" : s.activeView];
 }
 

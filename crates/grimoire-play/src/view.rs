@@ -48,6 +48,10 @@ pub struct GoldfishView {
     pub mana: ManaTable,
     /// The tokens this deck's cards make, for the game menu's "Create a token".
     pub tokens: Vec<TokenOffer>,
+    /// An action can be taken back (`GoldfishAction::Undo`).
+    pub can_undo: bool,
+    /// An undone action can be taken again (`GoldfishAction::Redo`).
+    pub can_redo: bool,
 }
 
 /// A seat's mana by type: the board's mana table. Shared by the goldfish and the playtest board.
@@ -245,6 +249,10 @@ pub enum GoldfishAction {
     Discard {
         ids: Vec<u64>,
     },
+    /// Take the last action back: the game as it was before it, exactly. Happens nothing.
+    Undo,
+    /// Take the last undone action again: the game as it was before the undo. Happens nothing.
+    Redo,
 }
 
 /// What an action did, one fact a row, for the log — the reader's doing, the rules', and the

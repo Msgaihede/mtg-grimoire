@@ -44,6 +44,8 @@ function view(over: Partial<GoldfishView> = {}): GoldfishView {
     manaOpen: 0,
     mana: manaTable(),
     tokens: [],
+    canUndo: false,
+    canRedo: false,
     ...over,
   };
 }

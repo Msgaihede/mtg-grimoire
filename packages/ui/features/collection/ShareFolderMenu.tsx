@@ -67,11 +67,15 @@ import { cn } from "@/lib/utils";
  *
  * `wishlist`'s `uid` is a key `features/wishlist/wishlistShare.ts` builds — the whole list
  * included, which is a key of its own and never `null`. A wishlist has no lock to carry.
+ *
+ * `deck`'s `uid` is the key `features/decks/deckShare.ts` builds, `deck:<syncUid>` (issue
+ * #1032). A deck has no lock either, and no condition to offer.
  */
 export type ShareTarget =
   | { kind: "collection"; title: string }
   | { kind: "folder"; uid: string; title: string; locked: boolean }
-  | { kind: "wishlist"; uid: string; title: string };
+  | { kind: "wishlist"; uid: string; title: string }
+  | { kind: "deck"; uid: string; title: string };
 
 /** `share::snapshot::WHOLE_COLLECTION_TITLE`, and what the viewer draws as the binder's name. */
 export const WHOLE_COLLECTION_TITLE = "Collection";
@@ -143,6 +147,11 @@ function uidOf(target: ShareTarget): string | null {
   return target.kind === "collection" ? null : target.uid;
 }
 
+/** Whether this target publishes rows that carry no condition — a wish, or a deck row. */
+function hasNoCondition(target: ShareTarget): boolean {
+  return target.kind === "wishlist" || target.kind === "deck";
+}
+
 /** Whether this target's folder is set aside. The root is never locked, nor is a wishlist. */
 function lockedOf(target: ShareTarget): boolean {
   return target.kind === "folder" && target.locked;
@@ -177,6 +186,7 @@ function publishLabel(target: ShareTarget): string {
   if (target.kind === "collection") return "Share your collection…";
   if (target.kind === "wishlist" && target.uid === WHOLE_WISHLIST_KEY)
     return "Share your wishlist…";
+  if (target.kind === "deck") return "Share this deck…";
   return "Share this folder…";
 }
 
@@ -618,8 +628,9 @@ function PublishForm({
         <legend className="text-sm text-dim">Also send</legend>
         <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm">
           {/* A wish has no condition, so a wishlist share offers no switch for one —
-              `share::wishlist` drops it from the snapshot whatever is sent. */}
-          {FIELD_ROWS.filter(({ key }) => key !== "condition" || target.kind !== "wishlist").map(
+              `share::wishlist` drops it from the snapshot whatever is sent. Nor does a deck row
+              (`share::deck`, issue #1032). */}
+          {FIELD_ROWS.filter(({ key }) => key !== "condition" || !hasNoCondition(target)).map(
             ({ key, label }) => (
               <label key={key} className="flex items-center gap-2">
                 <input

@@ -96,6 +96,11 @@ pub struct PlaytestView {
     /// The reader is ending the turn (`endTurn`): until it changes, the game stops only to block
     /// or to answer a question.
     pub ending_turn: bool,
+    /// The reader's last action can be taken back (`PlaytestAction::Undo`), with all the opponent
+    /// did after it. Never in a replay frame.
+    pub can_undo: bool,
+    /// An undone action can be taken again (`PlaytestAction::Redo`). Never in a replay frame.
+    pub can_redo: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -465,6 +470,11 @@ pub enum PlaytestAction {
         seat: PlaytestPlayer,
         life: i32,
     },
+    /// Take the reader's last action back, and all the opponent did after it: the game as it was
+    /// at their last decision, exactly. Happens nothing.
+    Undo,
+    /// Take the last undone action again: the game as it was before the undo. Happens nothing.
+    Redo,
 }
 
 /// What happened, one fact a row, for the log — the reader's doing, the opponent's, and the

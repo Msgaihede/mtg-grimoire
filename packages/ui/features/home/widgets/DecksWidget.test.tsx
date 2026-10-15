@@ -78,6 +78,7 @@ function deck(over: Partial<DeckRow> & { name: string }): DeckRow {
     statsOpen: true,
     curveCreatures: false,
     todosOpen: false,
+    syncUid: null,
     ...over,
   };
 }

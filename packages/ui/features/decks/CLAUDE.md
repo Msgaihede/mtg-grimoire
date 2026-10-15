@@ -86,6 +86,7 @@ Normalized via `deckKind.ts` (`regular`, `theory`, `virtual`):
   - Notes band: Titled multi-document rich text notes (`deck_notes`) with Markdown/ProseMirror formatting.
   - `NoteEditor.tsx` (both bands' editor) passes `injectCSS: false`: Tiptap's default appends a runtime stylesheet the shipped CSP refuses. Its header has what that sheet carried and why no rule replaced it.
   - To-do band: Structured deck checklists (`deck_todo_lists`) supporting item completion and ordering.
+- **Sharing (issue #1032)**: the header's Share control is the cabinets' `ShareFolderMenu` with a `deck` target (`deckShare.ts`, key `deck:<syncUid>`). It publishes the live list read-only; the shared viewers reuse the four views with **no `actions` and no `onSelect`** — keep every write behind `actions` so that stays a read-only mount. See [collection-sharing.md](../../../../docs/reference/collection-sharing.md#issue-1032--a-deck-through-the-same-pipe).
 - **Keyboard focus handling**: Floating toolbars automatically avoid intercepting typing gestures while text inputs or note editors have active focus.
 - **Deck tags (`deckTags.ts`, `DeckTagsField.tsx`)**: The reader's free text about a whole deck (`decks.tags`, user schema v62) — not Scryfall tags and not deck labels ([DOMAIN_VOCABULARY.md](../../../../docs/agent/DOMAIN_VOCABULARY.md)).
   - Typed in Deck settings; `DeckSettingsForm` draws the field when a host passes `tagsInUse`, so the create dialog draws none.

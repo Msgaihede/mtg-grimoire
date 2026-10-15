@@ -103,6 +103,44 @@ export interface ShareCard {
   l?: string;
   /** Price in `currency`. Absent when the marketplace does not quote this finish — absence 2. */
   p?: number;
+  /**
+   * The type line — **a deck share's alone** (issue #1032), like the two below it. A deck is read
+   * by type and by cost, and a viewer with no corpus has no other way to know either. Absent on a
+   * binder's and a wishlist's cards, and on a deck card whose printing left the publisher's corpus.
+   */
+  t?: string;
+  /** The printed mana cost, verbatim (`{1}{R}`). A deck share's alone; absent for a land. */
+  mc?: string;
+  /** The mana value. A deck share's alone. */
+  mv?: number;
+}
+
+/**
+ * One pile of a shared deck — its role and its switch. Its **name** is its folder's: every pile
+ * travels as a folder too, so a viewer that predates deck shares draws a deck as a binder with a
+ * drawer per pile, which is a correct reading of the same document.
+ */
+export interface SharePile {
+  /** The pile's folder in {@link ShareSnapshot.folders}. */
+  uid: string;
+  /** `main` | `side` | `commander` | `companion` | `maybe` — the five words the rules read. */
+  kind: string;
+  /** Whether the pile counts toward the deck. A switched-off pile — the Maybeboard above all —
+   *  is drawn beside the deck, never in it. */
+  active: boolean;
+}
+
+/** The deck half of a deck share (issue #1032). */
+export interface ShareDeck {
+  /** The format's display name — `Commander` — or its key when the publisher's seed lacked it. */
+  format: string;
+  /** One per published pile, in the reader's order. Empty piles do not travel. */
+  piles: SharePile[];
+  /**
+   * The deck's own cover — its art crop and the illustrator it must be shown beside — or absent
+   * for a deck with none, or with one nobody can credit. What the link preview shows first.
+   */
+  cover?: { img: string; artist: string };
 }
 
 /** One folder. The set of these is the tree the viewer draws the cards into. */
@@ -136,6 +174,42 @@ export interface ShareSnapshot {
   fields: string[];
   folders: ShareFolder[];
   cards: ShareCard[];
+  /**
+   * Present on a deck share and on nothing else (issue #1032). **Absent rather than `null`** on a
+   * binder, so a binder's document is unchanged and `v` stays 1. Read it through
+   * {@link shareDeckOf}, never directly: like every key past the three {@link parseSnapshotValue}
+   * promises, nothing has checked its shape.
+   */
+  deck?: ShareDeck;
+}
+
+/**
+ * The deck half of a snapshot, or `null` for a binder — **and for a deck half this build cannot
+ * read**, which then draws as the binder the format's folders already make of it.
+ *
+ * The one place either viewer asks, so "is this a deck" has one answer. It checks only what a
+ * deck view leans on: an object with a `piles` array, each pile carrying a string `uid` and
+ * `kind`. A pile that names no folder is dropped rather than drawn as a nameless column.
+ */
+export function shareDeckOf(snapshot: ShareSnapshot): ShareDeck | null {
+  const deck: unknown = (snapshot as { deck?: unknown }).deck;
+  if (typeof deck !== "object" || deck === null || Array.isArray(deck)) return null;
+  const { format, piles } = deck as { format?: unknown; piles?: unknown };
+  if (!Array.isArray(piles)) return null;
+  const folders = new Set(snapshot.folders.map((f) => f.uid));
+  return {
+    format: typeof format === "string" ? format : "",
+    piles: piles
+      .filter(
+        (p): p is SharePile =>
+          typeof p === "object" &&
+          p !== null &&
+          typeof (p as SharePile).uid === "string" &&
+          typeof (p as SharePile).kind === "string" &&
+          folders.has((p as SharePile).uid),
+      )
+      .map((p) => ({ uid: p.uid, kind: p.kind, active: p.active !== false })),
+  };
 }
 
 /**

@@ -152,6 +152,7 @@ const DECK: DeckRow = {
   statsOpen: true,
   curveCreatures: false,
   todosOpen: false,
+  syncUid: null,
   defaultCategoryId: 0,
   bracket: 0,
   tags: [],

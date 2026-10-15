@@ -140,7 +140,22 @@ const SHARE_WRITES: readonly string[] = ["shareCreate", "shareRefresh", "shareRe
  * `@/lib/*` and `@/components/*` are deliberately outside this list: they are the app's shared
  * floor rather than another feature's surface, and `ipc.ts` is already fenced by name.
  */
-const OUTSIDE_IMPORTS: readonly string[] = ["BUTTON", "useWishlistFolderList", "userWishFolders"];
+const OUTSIDE_IMPORTS: readonly string[] = [
+  "BUTTON",
+  "useWishlistFolderList",
+  "userWishFolders",
+  // A shared deck is drawn by the deck editor's own views (issue #1032). **Renderers and a pure
+  // grouping, not one write**: every write a deck view can make arrives through its `actions`
+  // prop, which `SharedDeck` never passes — absent is the whole of each switch.
+  "buildGroups",
+  "DEFAULT_EMPTY_GROUP_RULES",
+  "GroupBy",
+  "SortBy",
+  "StackView",
+  "GridView",
+  "TableView",
+  "TextView",
+];
 
 /** A named-import list taken from another feature — `import { a, b as c } from "@/features/…"`. */
 const CROSS_FEATURE = /import\s+(?:type\s+)?\{([^}]*)\}\s+from\s+"@\/features\/([^"]*)"/g;
@@ -197,7 +212,10 @@ describe("the shared view", () => {
         // are already covered by the sweep, since they are swept files too.
         if (from.startsWith("share/")) continue;
         for (const spec of names.split(",")) {
-          const name = spec.trim().split(/\s+as\s+/)[0].trim();
+          const name = spec
+            .trim()
+            .split(/\s+as\s+/)[0]
+            .trim();
           if (name === "") continue;
           seen += 1;
           expect(
@@ -251,5 +269,20 @@ describe("the shared view", () => {
         expect(source, `${path} uses ${what}`).not.toMatch(form);
       }
     }
+  });
+
+  /**
+   * The deck views' one door to a write is their `actions` prop, and the card pane's is
+   * `onSelect` (issue #1032). A shared deck is read-only exactly because neither is handed down —
+   * so the file that mounts them is held to it here, where adding either goes red.
+   */
+  it("hands the deck views no actions and no card pane", () => {
+    const deck = SOURCES.find(([path]) => path.endsWith("/SharedDeck.tsx"));
+    expect(deck, "SharedDeck.tsx is swept").toBeDefined();
+    const source = deck?.[1] ?? "";
+    expect(source).toMatch(/<StackView /);
+    expect(source).not.toMatch(/\bactions[=:]/);
+    expect(source).not.toMatch(/\bonSelect[=:]/);
+    expect(source).not.toMatch(/\bonShowStack[=:]/);
   });
 });

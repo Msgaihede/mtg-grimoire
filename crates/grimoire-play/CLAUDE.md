@@ -56,6 +56,11 @@ the pin, the goldfish) and [playtest.md](../../docs/reference/playtest.md) (the 
   (`session.rs`' module doc); in a playtest the question is asked, and the cast's checkpoint
   (`Pending`) is what `cancel` goes back to until the spell is on the stack. Keep all three: both
   boards rely on a refusal leaving the game as it was.
+- **Undo and redo restore whole moments, never inverses** (`history.rs`, issue #1022). Both games
+  keep the game before each successful action (`Moment`) and `Undo` / `Redo` restore one exactly;
+  redo never replays, so the AI's dice cannot change a redone turn. Anything an action changes is
+  in its `Moment`: a new field of game state on either session is a field there too. `UNDO_LIMIT`
+  is mirrored by `packages/ui/features/playtesting/undo.ts`.
 - **Only the deck's cards are parsed**, with phase's own `build_oracle_face`. Never fetch phase's
   `card-data.json`: it is a 93 MB external host this app does not use.
 
