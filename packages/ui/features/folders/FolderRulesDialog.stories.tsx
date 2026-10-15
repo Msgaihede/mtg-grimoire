@@ -83,6 +83,44 @@ export const WithRules: Story = {
   },
 };
 
+/**
+ * **AND and OR through groups** (issue #1053) — the issue's "greater than $10 and land" as two
+ * rules side by side, beside its "rare or (full art and land)" as an `any of` holding an `all
+ * of`. Each group's header picks its join, and the join is drawn between its members.
+ */
+export const Groups: Story = {
+  args: {
+    folderName: "Showcase",
+    rules: [
+      { kind: "price", min: 10, max: null },
+      { kind: "types", values: ["Land"] },
+      {
+        kind: "group",
+        op: "or",
+        rules: [
+          { kind: "rarities", values: ["rare"] },
+          {
+            kind: "group",
+            op: "and",
+            rules: [
+              { kind: "borders", values: ["fullart"] },
+              { kind: "types", values: ["Land"] },
+            ],
+          },
+        ],
+      },
+    ],
+  },
+  play: async ({ canvas }) => {
+    await expect(await canvas.findByRole("group", { name: "Group 3: any of" })).toBeInTheDocument();
+    await expect(canvas.getByRole("group", { name: "Group 3.2: all of" })).toBeInTheDocument();
+    await expect(canvas.getByRole("group", { name: "Rule 3.2.1: Border" })).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "Save rules" })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+  },
+};
+
 /** A rule just added and not yet filled in: Save greys with the reason beside it. */
 export const Incomplete: Story = {
   args: { rules: [{ kind: "borders", values: [] }] },

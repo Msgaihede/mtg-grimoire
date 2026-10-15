@@ -11,7 +11,13 @@ import { BORDERS, BORDER_LABEL, type Border } from "@/lib/border";
 import { CONDITIONS, CONDITION_LABEL, type Condition } from "@/lib/conditions";
 import { count, verb } from "@/lib/counts";
 import { FINISHES, FINISH_LABEL, type Finish } from "@/lib/finish";
-import type { FolderConflicts, FolderRule, FolderRuleKind } from "@/lib/ipc";
+import type {
+  FolderConflicts,
+  FolderRule,
+  FolderRuleGroup,
+  FolderRuleKind,
+  FolderRuleOp,
+} from "@/lib/ipc";
 import { MANA_KEYS, MANA_LABEL, type ManaKey } from "@/lib/mana";
 
 /** The order `Add rule` offers the kinds in, and the order a fresh reader meets them. */
@@ -43,9 +49,32 @@ export const RULE_KIND_LABEL: Record<FolderRuleKind, string> = {
 
 /**
  * `folder_rules::MAX_RULES` — the tidy refuses a twenty-first rule, so the dialog stops offering
- * one at twenty rather than letting Save find out.
+ * one at twenty rather than letting Save find out. **Counted by {@link countRules}**: the rules
+ * that test a card, wherever they sit, and never a group.
  */
 export const MAX_RULES = 20;
+
+/**
+ * `folder_rules::MAX_GROUP_DEPTH` — a group in the folder's list is depth 1, a group inside it 2
+ * (issue #1053). The dialog stops offering a group inside the deepest one.
+ */
+export const MAX_GROUP_DEPTH = 3;
+
+/** How a group's members read joined — `Any of` / `All of`, the dialog's picker and the words. */
+export const RULE_OP_LABEL: Record<FolderRuleOp, string> = {
+  and: "All of",
+  or: "Any of",
+};
+
+export function isGroup(rule: FolderRule): rule is FolderRuleGroup {
+  return rule.kind === "group";
+}
+
+/** The rules in `rules` that test a card, counting into every group — what {@link MAX_RULES}
+ *  bounds. */
+export function countRules(rules: readonly FolderRule[]): number {
+  return rules.reduce((n, r) => n + (isGroup(r) ? countRules(r.rules) : 1), 0);
+}
 
 /** A wish has no condition (spec §1): the wishlist's editor never offers the kind. */
 const WISHLIST_KINDS = RULE_KINDS.filter((k) => k !== "conditions");
@@ -61,7 +90,12 @@ export type RangeRule = Extract<FolderRule, { kind: "price" | "manaValue" }>;
 export type DateRule = Extract<FolderRule, { kind: "released" }>;
 
 export function isValuesRule(rule: FolderRule): rule is ValuesRule {
-  return rule.kind !== "price" && rule.kind !== "manaValue" && rule.kind !== "released";
+  return (
+    rule.kind !== "price" &&
+    rule.kind !== "manaValue" &&
+    rule.kind !== "released" &&
+    rule.kind !== "group"
+  );
 }
 
 /** `cardtypes::TYPE_KEYS`, in its order (alphabetical). */
@@ -125,7 +159,7 @@ export function valueLabel(kind: ValuesRuleKind, value: string): string {
 
 /** What `Add rule` appends: no ends, no values — invalid until the reader fills it in, which is
  *  what greys Save with the reason rather than saving a rule that matches everything. */
-export function blankRule(kind: FolderRuleKind): FolderRule {
+export function blankRule(kind: FolderRuleKind): Exclude<FolderRule, FolderRuleGroup> {
   switch (kind) {
     case "price":
     case "manaValue":
@@ -162,10 +196,24 @@ function rangeWords(
  * One rule in a phrase: `Price up to $1.00`, `Mana value 2–4`, `Colour: Blue or Red`,
  * `Released 2001–2005`, `Border: Borderless or Full art`.
  *
+ * **A group is its members in brackets** (issue #1053): `Any of (Rarity: Rare; all of (Border:
+ * Full art; Card type: Land))`. Semicolons and brackets rather than the words `and`/`or` between
+ * members, because a values rule already says `or` inside itself (`Colour: Blue or Red`) and a
+ * reader could not tell which `or` joined what.
+ *
  * `money` is the caller's — `formatPrice` at the page's marketplace — because a price rule holds a
  * bare number and the currency it is read in is the page's, not the rule's.
  */
 export function describeRule(rule: FolderRule, money: (value: number) => string): string {
+  return describe(rule, money, true);
+}
+
+function describe(rule: FolderRule, money: (value: number) => string, outer: boolean): string {
+  if (isGroup(rule)) {
+    const op = RULE_OP_LABEL[rule.op];
+    const members = rule.rules.map((r) => describe(r, money, false)).join("; ");
+    return `${outer ? op : op.toLowerCase()} (${members})`;
+  }
   const label = RULE_KIND_LABEL[rule.kind];
   switch (rule.kind) {
     case "price":
@@ -312,9 +360,12 @@ export const RULE_BREAK = "Doesn't match its folder's rules";
  */
 export const RULE_BREAK_EDGE = "shadow-[inset_2px_0_0_var(--color-destructive)]";
 
-/** The tidy's four sentences (spec §4), spelled once so the dialog and its tests agree. */
+/** The tidy's sentences (spec §4, and issue #1053's two for groups), spelled once so the dialog
+ *  and its tests agree. */
 export const RULE_REFUSAL = {
   tooMany: `A folder can hold at most ${MAX_RULES} rules.`,
+  emptyGroup: "Put at least one rule in each group.",
+  tooDeep: `Groups can nest at most ${MAX_GROUP_DEPTH} deep.`,
   noValues: "Pick at least one value for each rule.",
   range: "Give each range at least one end, with the lower end first.",
   date: "Write dates as YYYY, YYYY-MM or YYYY-MM-DD.",
@@ -338,8 +389,17 @@ function keptValues(rule: ValuesRule): string[] {
  * Two dates are ordered on their common prefix: `to` is read through the end of its own length
  * (`2000` is all of 2000), so `from: "2000-06", to: "2000"` is a range and not a reversal.
  */
-export function validateRule(rule: FolderRule): string | null {
+export function validateRule(rule: FolderRule, depth = 0): string | null {
   switch (rule.kind) {
+    case "group": {
+      if (depth + 1 > MAX_GROUP_DEPTH) return RULE_REFUSAL.tooDeep;
+      if (rule.rules.length === 0) return RULE_REFUSAL.emptyGroup;
+      for (const member of rule.rules) {
+        const reason = validateRule(member, depth + 1);
+        if (reason !== null) return reason;
+      }
+      return null;
+    }
     case "price":
     case "manaValue": {
       const { min, max } = rule;
@@ -370,9 +430,10 @@ export function validateRule(rule: FolderRule): string | null {
   }
 }
 
-/** The first refusal over a whole list — the count first, then each rule in order. */
+/** The first refusal over a whole list — the count first, then each rule in order, into each
+ *  group. */
 export function validateRules(rules: readonly FolderRule[]): string | null {
-  if (rules.length > MAX_RULES) return RULE_REFUSAL.tooMany;
+  if (countRules(rules) > MAX_RULES) return RULE_REFUSAL.tooMany;
   for (const rule of rules) {
     const reason = validateRule(rule);
     if (reason !== null) return reason;

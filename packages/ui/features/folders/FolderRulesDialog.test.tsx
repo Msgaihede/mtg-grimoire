@@ -67,7 +67,7 @@ function open(over: Partial<FolderRulesDialogProps> = {}) {
   return { ...view, onSave, onClose };
 }
 
-async function addRule(user: ReturnType<typeof userEvent.setup>, label: string) {
+async function addRule(user: ReturnType<typeof userEvent.setup>, label: string | RegExp) {
   await user.click(screen.getByRole("button", { name: "Add rule" }));
   await user.click(screen.getByRole("option", { name: label }));
 }
@@ -296,5 +296,101 @@ describe("FolderRulesDialog", () => {
     rerender(tree(props));
 
     expect(await screen.findByRole("group", { name: "Rule 1: Colour" })).toBeInTheDocument();
+  });
+
+  /**
+   * **AND and OR through groups** (issue #1053). The issue's own example, built the way a reader
+   * would: "rare or full art and land" is an `any of` holding `Rarity` and an `all of`.
+   */
+  it("builds “rare or (full art and land)” out of groups and saves the tree", async () => {
+    const user = userEvent.setup();
+    const { onSave } = open();
+
+    await addRule(user, /^Group: any of/);
+    expect(screen.getByRole("group", { name: "Group 1: any of" })).toBeInTheDocument();
+    const addTo = async (group: string, label: string | RegExp) => {
+      await user.click(screen.getByRole("button", { name: `Add rule to group ${group}` }));
+      await user.click(screen.getByRole("option", { name: label }));
+    };
+    await addTo("1", "Rarity");
+    await user.click(
+      within(screen.getByRole("group", { name: "Rule 1.1: Rarity" })).getByRole("button", {
+        name: "Rare",
+      }),
+    );
+    await addTo("1", /^Group: all of/);
+    await addTo("1.2", "Border");
+    await user.click(screen.getByRole("button", { name: "Full art" }));
+    await addTo("1.2", "Card type");
+    await user.click(
+      within(screen.getByRole("group", { name: "Rule 1.2.2: Card type" })).getByRole("button", {
+        name: "Land",
+      }),
+    );
+    await user.click(save());
+
+    expect(onSave).toHaveBeenCalledWith([
+      {
+        kind: "group",
+        op: "or",
+        rules: [
+          { kind: "rarities", values: ["rare"] },
+          {
+            kind: "group",
+            op: "and",
+            rules: [
+              { kind: "borders", values: ["fullart"] },
+              { kind: "types", values: ["Land"] },
+            ],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("flips a group's join, greys Save on an empty group, and removes a group whole", async () => {
+    const user = userEvent.setup();
+    const { onSave } = open({
+      rules: [{ kind: "group", op: "and", rules: [{ kind: "colors", values: ["U"] }] }],
+    });
+
+    await user.click(screen.getByRole("button", { name: "Join of group 1" }));
+    await user.click(screen.getByRole("option", { name: /^Any of these/ }));
+    expect(screen.getByRole("group", { name: "Group 1: any of" })).toBeInTheDocument();
+
+    await addRule(user, /^Group: all of/);
+    expect(screen.getByText(RULE_REFUSAL.emptyGroup)).toBeInTheDocument();
+    await user.click(save());
+    expect(onSave).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Remove group 2 (all of)" }));
+    await user.click(save());
+    expect(onSave).toHaveBeenCalledWith([
+      { kind: "group", op: "or", rules: [{ kind: "colors", values: ["U"] }] },
+    ]);
+  });
+
+  it("offers no group inside the deepest one", async () => {
+    const user = userEvent.setup();
+    const blue: FolderRule = { kind: "colors", values: ["U"] };
+    open({
+      rules: [
+        {
+          kind: "group",
+          op: "or",
+          rules: [
+            blue,
+            { kind: "group", op: "and", rules: [{ kind: "group", op: "or", rules: [blue] }] },
+          ],
+        },
+      ],
+    });
+
+    await user.click(screen.getByRole("button", { name: "Add rule to group 1.2" }));
+    expect(screen.getByRole("option", { name: /^Group: any of/ })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "Add rule to group 1.2.1" }));
+    expect(screen.getByRole("option", { name: "Colour" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /^Group:/ })).not.toBeInTheDocument();
   });
 });

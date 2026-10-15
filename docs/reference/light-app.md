@@ -7904,7 +7904,9 @@ frame's parse — and 7 291 289 B once `main`'s #855 was merged under it, a sync
 251 kB of the engine's own). **And `scripts/build-wasm.ts` now refuses an engine module over
 8 000 000 B**, with the reason and the way to raise it written beside the number: a tenth of
 headroom for growth like that, and two megabytes short of where the runtime put the module,
-so the three megabytes cannot come back unseen. `Cargo.toml`'s rule ("no command in the table reaches its session")
+so the three megabytes cannot come back unseen (raised to 10 000 000 B on 2026-10-15, when
+folder rules' AND/OR groups, #1053, took the engine's own code past 8 000 000 B — the figure and
+its reading are beside the number). `Cargo.toml`'s rule ("no command in the table reaches its session")
 had been false for one step.
 
 **The page's half** is `packages/ui/lib/core/web/`, in front of the engine's `Core` and below

@@ -7605,7 +7605,7 @@ function collectionRuleConflicts(db: FakeDb, marketplace?: MarketplaceId): RuleC
       finish: e.finish,
       condition: e.condition,
     };
-    return rules.some((r) => cardBreaksRule(card, r) || rowBreaksRule(facts, r));
+    return !rulesAllPass(rules, card, facts);
   });
 }
 
@@ -10847,7 +10847,9 @@ export function readHandlers(db: FakeDb) {
      * `folder_rules::collection_conflicts` (issue #980) — which owned rows break their folder's
      * effective rules (spec §1–§2), priced at `marketplace` off {@link finishPriceAt}, the
      * folder summary's own figure. An orphan breaks nothing, and an unpriced row passes a price
-     * rule: a rule only breaks on a fact the app knows.
+     * rule: a rule only breaks on a fact the app knows. **A row breaks when not every effective
+     * rule passes** ({@link rulesAllPass}) — a group (issue #1053) answering as its `and`/`or`
+     * over its members, each read on the row's printing and the row's own facts at once.
      */
     collection_rule_conflicts: (args: { marketplace?: MarketplaceId }): RuleConflicts =>
       collectionRuleConflicts(db, args.marketplace),
@@ -10855,8 +10857,12 @@ export function readHandlers(db: FakeDb) {
     /**
      * `folder_rules::wishlist_conflicts` (issue #980) — {@link collection_rule_conflicts} over
      * the wishes. The price is the row price the wall shows ({@link wishPriceAt}); a wish naming
-     * no finish passes a finish rule, and `conditions` is ignored. **An any-printing wish** breaks
-     * the card-level rules only when no printing of its card satisfies them all together.
+     * no finish passes a finish rule, and `conditions` is ignored. A pinned wish is its printing
+     * (one that is gone passes every card-level rule). **An any-printing wish** breaks only when
+     * no printing of its card passes **all** the rules at once, each card-level leaf read on that
+     * printing and each row-level one on the wish — so an `or` (issue #1053) mixing the two, say
+     * "foil or from 2X2", is still one printing's answer, never a set's from one printing and a
+     * finish's from none. A card with no printing at all reads every card-level leaf as a pass.
      */
     wishlist_rule_conflicts: (args: { marketplace?: MarketplaceId }): RuleConflicts => {
       const mp = marketplaceOf(args.marketplace);
@@ -10866,15 +10872,11 @@ export function readHandlers(db: FakeDb) {
           finish: w.preferredFinish,
           condition: null,
         };
-        if (rules.some((r) => rowBreaksRule(facts, r))) return true;
-        if (w.cardId !== null) {
-          const card = cardById(db, w.cardId);
-          return card !== null && rules.some((r) => cardBreaksRule(card, r));
-        }
+        if (w.cardId !== null) return !rulesAllPass(rules, cardById(db, w.cardId), facts);
         const printings = db.cards.filter((c) => c.oracleId === w.oracleId);
-        // No printing at all is no known fact — the orphan's rule, not a conflict.
-        if (printings.length === 0) return false;
-        return !printings.some((c) => !rules.some((r) => cardBreaksRule(c, r)));
+        // No printing at all is no known fact — the orphan's rule: only the wish's own can break.
+        if (printings.length === 0) return !rulesAllPass(rules, null, facts);
+        return !printings.some((c) => rulesAllPass(rules, c, facts));
       });
     },
 
@@ -16070,14 +16072,59 @@ const RULES_TOO_MANY = "A folder can hold at most 20 rules.";
 const RULES_NO_VALUE = "Pick at least one value for each rule.";
 const RULES_BAD_RANGE = "Give each range at least one end, with the lower end first.";
 const RULES_BAD_DATE = "Write dates as YYYY, YYYY-MM or YYYY-MM-DD.";
+/** `folder_rules::MAX_GROUP_DEPTH` — a group in the folder's list is depth 1, one inside it 2. */
+const MAX_RULE_GROUP_DEPTH = 3;
+const RULES_EMPTY_GROUP = "Put at least one rule in each group.";
+const RULES_TOO_DEEP = "Groups can nest at most 3 deep.";
+/** Every leaf kind this build reads — what `folder_rules::FolderRule` deserialises; anything else
+ *  is a newer peer's and is skipped, as the crate's lenient read skips it. */
+const RULE_LEAF_KINDS: ReadonlySet<string> = new Set([
+  "price",
+  "manaValue",
+  "colors",
+  "types",
+  "sets",
+  "rarities",
+  "finishes",
+  "conditions",
+  "borders",
+  "released",
+]);
 /** The colour rule's vocabulary — `filters::COLORS` and `C` for colourless. */
 const RULE_COLORS = ["W", "U", "B", "R", "G", "C"];
 /** The rarity rule's vocabulary, which is wider than the rarity chips' {@link RARITY_KEYS}. */
 const RULE_RARITIES = ["common", "uncommon", "rare", "mythic", "special", "bonus"];
 
-/** A copy deep enough that nobody edits the store through a rule they were handed. */
+/** A copy deep enough that nobody edits the store through a rule they were handed — into every
+ *  group (issue #1053), since a group's `rules` is as much the store's as a values list is. */
 function cloneRules(rules: readonly FolderRule[]): FolderRule[] {
-  return rules.map((r) => ("values" in r ? { ...r, values: [...r.values] } : { ...r }));
+  return rules.map((r): FolderRule => {
+    if (r.kind === "group") return { kind: "group", op: r.op, rules: cloneRules(r.rules) };
+    return "values" in r ? { ...r, values: [...r.values] } : { ...r };
+  });
+}
+
+/**
+ * The rules `rules` holds that this build can read, into every group — the crate's
+ * `read_rules`/`lenient_rules`, which skip a kind they do not know (or a group whose `op` is not
+ * `and`/`or`) and never the group around it. Run **before** {@link tidyFolderRules} counts or
+ * checks anything, as serde runs before `tidy`: a group whose only member is a newer peer's kind
+ * reaches the empty-group refusal, and a skipped kind is no rule against the limit.
+ */
+function readableRules(rules: readonly FolderRule[]): FolderRule[] {
+  return rules.flatMap((r): FolderRule[] => {
+    if (r.kind === "group") {
+      if ((r.op !== "and" && r.op !== "or") || !Array.isArray(r.rules)) return [];
+      return [{ kind: "group", op: r.op, rules: readableRules(r.rules) }];
+    }
+    return RULE_LEAF_KINDS.has(r.kind) ? [r] : [];
+  });
+}
+
+/** `folder_rules::leaves` — how many rules in `rules` test a card, counting into every group. A
+ *  group tests nothing itself, so wrapping two rules in one never costs a reader a third. */
+function ruleLeaves(rules: readonly FolderRule[]): number {
+  return rules.reduce((n, r) => n + (r.kind === "group" ? ruleLeaves(r.rules) : 1), 0);
 }
 
 /**
@@ -16085,10 +16132,17 @@ function cloneRules(rules: readonly FolderRule[]): FolderRule[] {
  * §4). A values rule keeps only words of its vocabulary, deduplicated and sorted, and is refused
  * left empty; a range needs an end and its ends in order, never negative; a date is `YYYY`,
  * `YYYY-MM` or `YYYY-MM-DD`. A kind this build does not know is dropped, as the crate skips one
- * on read.
+ * on read ({@link readableRules}).
+ *
+ * **A group (issue #1053) is tidied member by member**, `tidy_one`'s order: past
+ * {@link MAX_RULE_GROUP_DEPTH} it is refused before anything in it is looked at, then refused
+ * empty, then each member tidied a level deeper. The limit of {@link MAX_FOLDER_RULES} counts
+ * **leaves** wherever they sit ({@link ruleLeaves}), never groups. Shape and order are kept — a
+ * group of one is the reader's, not folded away, and nothing is flattened.
  */
-function tidyFolderRules(rules: readonly FolderRule[]): FolderRule[] {
-  if (rules.length > MAX_FOLDER_RULES) throw refuse(RULES_TOO_MANY);
+function tidyFolderRules(input: readonly FolderRule[]): FolderRule[] {
+  const rules = readableRules(input);
+  if (ruleLeaves(rules) > MAX_FOLDER_RULES) throw refuse(RULES_TOO_MANY);
   const keep = (values: readonly string[], vocabulary: readonly string[]): string[] => {
     const kept = [...new Set(values.filter((v) => vocabulary.includes(v)))].sort();
     if (kept.length === 0) throw refuse(RULES_NO_VALUE);
@@ -16102,8 +16156,15 @@ function tidyFolderRules(rules: readonly FolderRule[]): FolderRule[] {
   const date = (d: string | null): void => {
     if (d !== null && !/^\d{4}(-\d{2}(-\d{2})?)?$/.test(d)) throw refuse(RULES_BAD_DATE);
   };
-  return rules.flatMap((rule): FolderRule[] => {
+  // `depth` is how many groups `rule` sits inside — `tidy_one`'s argument.
+  const tidyOne = (rule: FolderRule, depth: number): FolderRule[] => {
     switch (rule.kind) {
+      case "group":
+        if (depth + 1 > MAX_RULE_GROUP_DEPTH) throw refuse(RULES_TOO_DEEP);
+        if (rule.rules.length === 0) throw refuse(RULES_EMPTY_GROUP);
+        return [
+          { kind: "group", op: rule.op, rules: rule.rules.flatMap((r) => tidyOne(r, depth + 1)) },
+        ];
       case "price":
       case "manaValue":
         range(rule.min, rule.max);
@@ -16132,7 +16193,8 @@ function tidyFolderRules(rules: readonly FolderRule[]): FolderRule[] {
       default:
         return [];
     }
-  });
+  };
+  return rules.flatMap((rule) => tidyOne(rule, 0));
 }
 
 /**
@@ -16219,6 +16281,33 @@ function rowBreaksRule(facts: RuleRowFacts, rule: FolderRule): boolean {
     default:
       return false;
   }
+}
+
+/**
+ * `folder_rules::passes` — whether a row **satisfies** `rule`, its card-level leaves read on
+ * `card` and its row-level ones on `facts` (issue #1053). A leaf passes unless it breaks on a
+ * known fact, so `null` — no printing to read — passes every card-level leaf, and a rule that
+ * tests nothing in this cabinet (`conditions` on the wishlist) always passes. A group is a plain
+ * `and`/`or` of its members' passes, which is the crate's `coalesce(pred, 1)` joined: an `or`
+ * holding a member that always passes always passes, and an `and` simply carries it.
+ */
+function rulePasses(rule: FolderRule, card: FakeCard | null, facts: RuleRowFacts): boolean {
+  if (rule.kind === "group") {
+    return rule.op === "or"
+      ? rule.rules.some((r) => rulePasses(r, card, facts))
+      : rule.rules.every((r) => rulePasses(r, card, facts));
+  }
+  return !(card !== null && cardBreaksRule(card, rule)) && !rowBreaksRule(facts, rule);
+}
+
+/** Whether a row passes a folder's **effective** rules — own and inherited, which stay an
+ *  implicit `and` whatever groups they hold (`folder_rules::breaks`, `joined(And, …)`). */
+function rulesAllPass(
+  rules: readonly FolderRule[],
+  card: FakeCard | null,
+  facts: RuleRowFacts,
+): boolean {
+  return rules.every((r) => rulePasses(r, card, facts));
 }
 
 /**

@@ -1,4 +1,4 @@
-# Folder rules — criteria a folder's cards are expected to meet (issue #980)
+# Folder rules — criteria a folder's cards are expected to meet (issues #980, #1053)
 
 A collection or wishlist folder can carry any number of **folder rules** — "cards under $1",
 "blue cards", "printed 2001–2005". The design is
@@ -35,7 +35,31 @@ Ten kinds, the table in the design's §1: `price`, `manaValue`, `colors`, `types
 **every** rule (AND); a rule with several values is satisfied by **any** of them (OR). Ranges
 (`price`, `manaValue`, `released`) may be open at either end — `released { from: null, to: "2000" }`
 is "through the end of 2000", because a partial date compares the same-length prefix of
-`cards.released_at`.
+`cards.released_at`. Rules combine further with AND/OR groups — below.
+
+## AND and OR — groups (issue #1053)
+
+A **group** is a rule that joins rules: `{ kind: "group", op: "and" | "or", rules: [...] }`. A
+group is a rule, so groups nest — "rare **or** (full art **and** land)" is an `or` group holding a
+`rarities` rule and an `and` group. The folder's own list, and what it inherits, stays the
+outermost AND. Bounds: at most `MAX_GROUP_DEPTH = 3` deep (a group in the folder's list is depth
+1), never empty, and `MAX_RULES` counts the rules that test a card wherever they sit — a group is
+not one. A group's members are read as leniently as the list (a newer peer's kind inside one is
+skipped, never the group).
+
+In SQL every rule is built as a *pass* (`folder_rules::passes`): a leaf is `coalesce((pred), 1)`,
+so a group is a plain `AND`/`OR` of its members' passes and never NULL; the conflict test is `NOT`
+of the folder's list. A rule that tests nothing in its cabinet (`conditions` on the wishlist) is
+an always-pass, so an `or` holding one always passes. **An any-printing wish** is one printing's
+answer to the whole list: it breaks only when no printing of its card passes every rule at once,
+card-level rules read on that printing and the wish's own facts on the wish — so "foil **or** from
+2X2" passes a nonfoil wish when a 2X2 printing exists.
+
+The dialog's `Add rule` offers `Group: any of` / `Group: all of` beside the kinds; a group's header
+picks its join (flipping AND to OR keeps its members), and the join is drawn between members.
+`describeRule` says a group as its members in brackets — `Any of (Rarity: Rare; all of (Border:
+Full art; Card type: Land))` — semicolons rather than `and`/`or`, since a values rule already says
+`or` inside itself.
 
 **A rule only breaks on a fact the app knows.** An unpriced card passes a price rule; an orphaned
 entry with no card row passes everything; a wish with no preferred finish passes a finish rule.
@@ -63,7 +87,9 @@ rules travel with the folder as one field — whole-list last-writer-wins, `deck
 **Reading is lenient**: an element of an unknown `kind` (a newer peer's) or a malformed one is
 skipped, never an error. Writing is strict: `folder_rules::tidy` normalises the values against the
 app's own vocabularies and refuses an empty values rule, a range with no end or with its ends
-reversed, and a malformed date, each in one sentence.
+reversed, a malformed date, an empty group and one nested too deep, each in one sentence
+(`lib/folderRules.ts`' `RULE_REFUSAL` holds the same sentences, pinned to the Rust source by
+`folderRules.test.ts`).
 
 ## Commands
 

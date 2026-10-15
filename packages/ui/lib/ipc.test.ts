@@ -160,6 +160,7 @@ import {
   type DeckTodoListEntry,
   type DeckTokenRow,
   type FeedProgressEvent,
+  type FolderRule,
   type OracleTagProgressEvent,
   type RelayOutcome,
   type ScannerAssetsProgress,
@@ -5240,9 +5241,18 @@ describe("the collection folder wrappers name the commands `collection_folders.r
    * reshaped one would be refused by serde at the boundary.
    */
   it("sends the folder-rule writes and conflict reads under the names their commands declare", async () => {
-    const rules = [
-      { kind: "price" as const, min: null, max: 1 },
-      { kind: "colors" as const, values: ["U"] },
+    const rules: FolderRule[] = [
+      { kind: "price", min: null, max: 1 },
+      { kind: "colors", values: ["U"] },
+      // A group (issue #1053) travels as it nests — the wrapper never flattens one.
+      {
+        kind: "group",
+        op: "or",
+        rules: [
+          { kind: "rarities", values: ["rare"] },
+          { kind: "group", op: "and", rules: [{ kind: "types", values: ["Land"] }] },
+        ],
+      },
     ];
 
     invoke.mockResolvedValue({ id: 2, rules });

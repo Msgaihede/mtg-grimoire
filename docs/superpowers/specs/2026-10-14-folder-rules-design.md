@@ -132,3 +132,31 @@ TypeScript mirrors `FolderRule` as a discriminated union `type` (not an interfac
 - Conflicts are a query under `["collection", "ruleConflicts", marketplace]` /
   `["wishlist", "ruleConflicts", marketplace]`, so every existing collection/wishlist write's
   root invalidation refreshes them.
+
+## 6. AND and OR groups (issue #1053)
+
+[#1053](https://github.com/Msgaihede/mtg-grimoire/issues/1053) asked for combined conditions —
+"greater than $10 AND land", "rare cards OR full art AND land". Shipped as one more rule kind:
+
+```rust
+Group { op: GroupOp, #[serde(deserialize_with = "lenient_rules")] rules: Vec<FolderRule> }
+#[serde(rename_all = "lowercase")] pub enum GroupOp { And, Or }
+```
+
+- **A group is a rule**, so groups nest and inheritance needs no change: a folder's effective list
+  stays an AND of its own rules and its ancestors', groups among them. The first example is two
+  rules side by side; the second (AND binding tighter, as in the search language) is an `or`
+  holding `rarities` and an `and` of `borders` and `types`.
+- **No top-level operator.** The folder's list is always AND — an inherited rule must hold
+  whatever the subfolder says — and an `or` is written as a group.
+- **Tidy**: at most `MAX_GROUP_DEPTH = 3` deep — "Groups can nest at most 3 deep."; never empty —
+  "Put at least one rule in each group."; `MAX_RULES` counts leaves wherever they sit. Shape is
+  kept: a group of one is not folded away.
+- **Read leniently**: a group's members go through the same skip-what-you-cannot-read as the list.
+- **Evaluation** is a *pass* per rule (`coalesce(pred, 1)`), joined by `AND`/`OR`; a member that
+  tests nothing (a wishlist `conditions` rule) is an always-pass, which makes an `or` holding it
+  always pass. An any-printing wish breaks only when no single printing passes the whole list,
+  card-level leaves on the printing and the row's own facts on the row — the §1 rule, generalised.
+- **Sync** is untouched: the column is the same JSON. A build without groups skips a group on read
+  (the folder then holds it to fewer rules), and a whole-list write from such a build drops it.
+

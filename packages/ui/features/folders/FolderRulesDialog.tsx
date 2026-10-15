@@ -13,9 +13,15 @@
  * **Inherited rules are read-only here** and listed under the folder they come from: they are
  * that folder's to edit, and a subfolder that could rewrite its parent's rules from inside itself
  * would be editing a drawer the reader did not open.
+ *
+ * **Rules combine with AND and OR through groups** (issue #1053): the folder's own list is an AND,
+ * and `Add rule` also offers a group — "all of" (AND) or "any of" (OR) — that holds rules and
+ * groups of its own, up to `MAX_GROUP_DEPTH` deep. "Rare or full art and land" is an `any of`
+ * holding `Rarity` and an `all of` holding `Border` and `Card type`. A group's join is a picker on
+ * its header, so turning an AND into an OR never rebuilds what is inside it.
  */
-import { useId, useRef, useState, type ReactElement } from "react";
-import { Plus, X } from "lucide-react";
+import { useId, useState, type ReactElement } from "react";
+import { Brackets, Plus, X } from "lucide-react";
 import { Dialog } from "@/components/Dialog";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import { ManaChip, RarityChip, ToggleChip } from "@/components/FilterChips";
@@ -24,10 +30,13 @@ import { CONFIRM_CANCEL, META_SUBMIT_TYPED } from "@/features/decks/metaRows";
 import { FIELD } from "@/features/decks/formFields";
 import { SetCombobox } from "@/features/search/SetCombobox";
 import {
+  countRules,
   describeRule,
   kindsFor,
+  MAX_GROUP_DEPTH,
   MAX_RULES,
   RULE_KIND_LABEL,
+  RULE_OP_LABEL,
   RULE_VALUES,
   validateRules,
   valueLabel,
@@ -35,7 +44,7 @@ import {
   type ValuesRuleKind,
 } from "@/lib/folderRules";
 import { FOCUS } from "@/lib/focus";
-import type { FolderRule, FolderRuleKind } from "@/lib/ipc";
+import type { FolderRule, FolderRuleKind, FolderRuleOp } from "@/lib/ipc";
 import type { ManaKey } from "@/lib/mana";
 import { formatPrice } from "@/lib/prices";
 import { useMarketplace } from "@/lib/useMarketplace";
@@ -73,7 +82,7 @@ export function FolderRulesDialog({
     <Dialog
       open={open}
       title={`Rules for “${folderName}”`}
-      subtitle="Cards filed here should match every rule. Nothing is refused for breaking one — it is outlined in red."
+      subtitle="Cards filed here should match every rule — group rules to match any of them instead. Nothing is refused for breaking one — it is outlined in red."
       closeLabel="Close"
       size="w-[44rem]"
       onDismiss={onClose}
@@ -97,7 +106,7 @@ export function FolderRulesDialog({
  * on its way to `1.5` is not a number yet, and a draft that parsed on every keystroke would eat
  * the dot. The text becomes a rule only when it is validated and when it is saved.
  */
-interface Row {
+interface LeafRow {
   key: number;
   kind: FolderRuleKind;
   /** `min` / `from`. */
@@ -107,8 +116,29 @@ interface Row {
   values: string[];
 }
 
-function toRow(rule: FolderRule, key: number): Row {
+/** A group as the reader is editing it — its join and its members, which may be groups. */
+interface GroupRow {
+  key: number;
+  kind: "group";
+  op: FolderRuleOp;
+  rows: Row[];
+}
+
+type Row = LeafRow | GroupRow;
+
+/**
+ * A row's React key. **Module-wide rather than per dialog**: a key only has to be unique among
+ * one list's siblings, and a counter that never repeats is that across every group of every
+ * draft without a ref read during render to seed it.
+ */
+let lastKey = 0;
+const freshKey = (): number => (lastKey += 1);
+
+function toRow(rule: FolderRule): Row {
+  const key = freshKey();
   switch (rule.kind) {
+    case "group":
+      return { key, kind: "group", op: rule.op, rows: rule.rules.map(toRow) };
     case "price":
     case "manaValue":
       return { key, kind: rule.kind, lo: num(rule.min), hi: num(rule.max), values: [] };
@@ -133,6 +163,8 @@ function parseEnd(text: string): number | null {
 
 function toRule(row: Row): FolderRule {
   switch (row.kind) {
+    case "group":
+      return { kind: "group", op: row.op, rules: row.rows.map(toRule) };
     case "price":
     case "manaValue":
       return { kind: row.kind, min: parseEnd(row.lo), max: parseEnd(row.hi) };
@@ -146,16 +178,47 @@ function toRule(row: Row): FolderRule {
   }
 }
 
+/** Whether a range box anywhere in `rows` holds text that is not a number. */
+function unparsed(rows: readonly Row[]): boolean {
+  return rows.some((r) =>
+    r.kind === "group"
+      ? unparsed(r.rows)
+      : (r.kind === "price" || r.kind === "manaValue") &&
+        [r.lo, r.hi].some((t) => Number.isNaN(parseEnd(t))),
+  );
+}
+
 /** The first reason Save is out of reach, or `null`. A box that is not a number is said first,
  *  because `validateRules` would read its `NaN` as a range with no lower end. */
 function draftRefusal(rows: readonly Row[]): string | null {
-  const unparsed = rows.some(
-    (r) =>
-      (r.kind === "price" || r.kind === "manaValue") &&
-      [r.lo, r.hi].some((t) => Number.isNaN(parseEnd(t))),
-  );
-  if (unparsed) return NOT_A_NUMBER;
+  if (unparsed(rows)) return NOT_A_NUMBER;
   return validateRules(rows.map(toRule));
+}
+
+/** `rows` with the row keyed `key` replaced by what `change` makes of it — or taken out, for
+ *  `null` — wherever in the tree it sits. */
+function changeRow(rows: readonly Row[], key: number, change: (row: Row) => Row | null): Row[] {
+  return rows.flatMap((r) => {
+    if (r.key === key) {
+      const next = change(r);
+      return next === null ? [] : [next];
+    }
+    return r.kind === "group" ? [{ ...r, rows: changeRow(r.rows, key, change) }] : [r];
+  });
+}
+
+/** What the `Add rule` picker answers for a group, beside the kinds. */
+const ADD_GROUP: Record<FolderRuleOp, string> = { or: "group:or", and: "group:and" };
+
+/** The draft's edits, handed down the tree so a group's members edit the one draft. */
+interface Edits {
+  scope: "collection" | "wishlist";
+  currency: string;
+  /** No rule may be added anywhere: the draft holds {@link MAX_RULES}. */
+  full: boolean;
+  /** Append a fresh row to the group keyed `parent`, or to the folder's own list for `null`. */
+  add: (parent: number | null, row: Row) => void;
+  change: (key: number, change: (row: Row) => Row | null) => void;
 }
 
 /**
@@ -178,20 +241,22 @@ function Body({
   const id = useId();
   const { marketplace } = useMarketplace();
   const money = (v: number) => formatPrice(v, marketplace.currency);
-  const nextKey = useRef(rules.length);
   const [rows, setRows] = useState<Row[]>(() => rules.map(toRow));
 
   const refusal = draftRefusal(rows);
-  const full = rows.length >= MAX_RULES;
-
-  const update = (key: number, patch: Partial<Row>) =>
-    setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
-  const remove = (key: number) => setRows((rs) => rs.filter((r) => r.key !== key));
-  const add = (kind: string) => {
-    const known = kindsFor(scope).find((k) => k === kind);
-    if (known === undefined) return;
-    const key = nextKey.current++;
-    setRows((rs) => [...rs, { key, kind: known, lo: "", hi: "", values: [] }]);
+  const edits: Edits = {
+    scope,
+    currency: marketplace.currency.toUpperCase(),
+    full: countRules(rows.map(toRule)) >= MAX_RULES,
+    add: (parent, row) =>
+      setRows((rs) =>
+        parent === null
+          ? [...rs, row]
+          : changeRow(rs, parent, (g) =>
+              g.kind === "group" ? { ...g, rows: [...g.rows, row] } : g,
+            ),
+      ),
+    change: (key, change) => setRows((rs) => changeRow(rs, key, change)),
   };
 
   return (
@@ -202,36 +267,10 @@ function Body({
             No rules of its own. Add one, and every card filed here is checked against it.
           </p>
         ) : (
-          <ol className="flex flex-col gap-3">
-            {rows.map((row, i) => (
-              <RuleRow
-                key={row.key}
-                row={row}
-                n={i + 1}
-                currency={marketplace.currency.toUpperCase()}
-                onChange={(patch) => update(row.key, patch)}
-                onRemove={() => remove(row.key)}
-              />
-            ))}
-          </ol>
+          <RowList rows={rows} op="and" path="" edits={edits} />
         )}
 
-        <div className="flex items-center gap-2">
-          <Dropdown
-            label={full ? `Add rule (at most ${MAX_RULES})` : "Add rule"}
-            placeholder="Add rule"
-            value=""
-            size="sm"
-            align="start"
-            disabled={full}
-            options={kindsFor(scope).map((k) => ({
-              value: k,
-              label: RULE_KIND_LABEL[k],
-              icon: <Plus className="size-3.5" aria-hidden="true" />,
-            }))}
-            onChange={add}
-          />
-        </div>
+        <AddRule parent={null} depth={0} label="Add rule" edits={edits} />
 
         {inherited.map((group) => (
           <section
@@ -288,10 +327,166 @@ function Body({
   );
 }
 
+/**
+ * The `Add rule` picker: every kind the page offers, then — while there is room to nest — the two
+ * groups. `depth` is how many groups the new row would sit inside.
+ */
+function AddRule({
+  parent,
+  depth,
+  label,
+  edits,
+}: {
+  parent: number | null;
+  depth: number;
+  label: string;
+  edits: Edits;
+}) {
+  const kinds = kindsFor(edits.scope);
+  const groups = depth < MAX_GROUP_DEPTH ? (["or", "and"] as const) : [];
+  const add = (value: string) => {
+    const op = groups.find((o) => ADD_GROUP[o] === value);
+    if (op !== undefined) {
+      edits.add(parent, { key: freshKey(), kind: "group", op, rows: [] });
+      return;
+    }
+    const kind = kinds.find((k) => k === value);
+    if (kind === undefined) return;
+    edits.add(parent, { key: freshKey(), kind, lo: "", hi: "", values: [] });
+  };
+  return (
+    <div className="flex items-center gap-2">
+      <Dropdown
+        label={edits.full ? `${label} (at most ${MAX_RULES})` : label}
+        placeholder="Add rule"
+        value=""
+        size="sm"
+        align="start"
+        disabled={edits.full}
+        options={[
+          ...kinds.map((k) => ({
+            value: k,
+            label: RULE_KIND_LABEL[k],
+            icon: <Plus className="size-3.5" aria-hidden="true" />,
+          })),
+          ...groups.map((op) => ({
+            value: ADD_GROUP[op],
+            label: `Group: ${RULE_OP_LABEL[op].toLowerCase()}`,
+            hint: op.toUpperCase(),
+            icon: <Brackets className="size-3.5" aria-hidden="true" />,
+          })),
+        ]}
+        onChange={add}
+      />
+    </div>
+  );
+}
+
+/**
+ * One list of rows — the folder's own, or a group's members — with the word that joins them drawn
+ * between each pair. `path` is the list's number (`""` for the folder's, `"2."` inside its second
+ * row), so a member is named `Rule 2.1` and a reader hears where it sits.
+ */
+function RowList({
+  rows,
+  op,
+  path,
+  depth = 0,
+  edits,
+}: {
+  rows: readonly Row[];
+  op: FolderRuleOp;
+  path: string;
+  depth?: number;
+  edits: Edits;
+}) {
+  return (
+    <ol className="flex flex-col gap-1.5">
+      {rows.map((row, i) => (
+        <li key={row.key} className="flex flex-col gap-1.5">
+          {i > 0 && (
+            // The join is said by the group's own name ("any of"); this is for the eye.
+            <span
+              aria-hidden="true"
+              className="pl-2.5 text-[0.6875rem] font-medium uppercase tracking-wide text-dim"
+            >
+              {op}
+            </span>
+          )}
+          {row.kind === "group" ? (
+            <GroupBox group={row} n={`${path}${i + 1}`} depth={depth + 1} edits={edits} />
+          ) : (
+            <RuleRow
+              row={row}
+              n={`${path}${i + 1}`}
+              currency={edits.currency}
+              onChange={(patch) =>
+                edits.change(row.key, (r) => (r.kind === "group" ? r : { ...r, ...patch }))
+              }
+              onRemove={() => edits.change(row.key, () => null)}
+            />
+          )}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/** A group: its join, its members, an `Add rule` of its own, and a remove for the whole group. */
+function GroupBox({
+  group,
+  n,
+  depth,
+  edits,
+}: {
+  group: GroupRow;
+  n: string;
+  depth: number;
+  edits: Edits;
+}) {
+  const opLabel = RULE_OP_LABEL[group.op].toLowerCase();
+  return (
+    <div
+      role="group"
+      aria-label={`Group ${n}: ${opLabel}`}
+      className="flex flex-col gap-2 rounded-md border border-dashed border-border p-2.5"
+    >
+      <div className="flex items-center gap-3">
+        <Dropdown
+          label={`Join of group ${n}`}
+          value={group.op}
+          size="sm"
+          align="start"
+          options={(["and", "or"] as const).map((op) => ({
+            value: op,
+            label: `${RULE_OP_LABEL[op]} these`,
+            hint: op.toUpperCase(),
+          }))}
+          onChange={(value) => {
+            const op = (["and", "or"] as const).find((o) => o === value);
+            if (op === undefined) return;
+            edits.change(group.key, (r) => (r.kind === "group" ? { ...r, op } : r));
+          }}
+        />
+        <span className="min-w-0 flex-1" />
+        <RemoveButton
+          name={`Remove group ${n} (${opLabel})`}
+          onRemove={() => edits.change(group.key, () => null)}
+        />
+      </div>
+      {group.rows.length === 0 ? (
+        <p className="text-xs text-dim">Empty — add the rules this group joins.</p>
+      ) : (
+        <RowList rows={group.rows} op={group.op} path={`${n}.`} depth={depth} edits={edits} />
+      )}
+      <AddRule parent={group.key} depth={depth} label={`Add rule to group ${n}`} edits={edits} />
+    </div>
+  );
+}
+
 /** The remove button's tooltip and name. */
-function RemoveButton({ n, label, onRemove }: { n: number; label: string; onRemove: () => void }) {
+function RemoveButton({ name, onRemove }: { name: string; onRemove: () => void }) {
   const tip = useTooltip();
-  const name = `Remove rule ${n} (${label})`;
   return (
     <button
       type="button"
@@ -315,15 +510,15 @@ function RuleRow({
   onChange,
   onRemove,
 }: {
-  row: Row;
-  n: number;
+  row: LeafRow;
+  n: string;
   currency: string;
-  onChange: (patch: Partial<Row>) => void;
+  onChange: (patch: Partial<LeafRow>) => void;
   onRemove: () => void;
 }) {
   const label = RULE_KIND_LABEL[row.kind];
   return (
-    <li
+    <div
       role="group"
       aria-label={`Rule ${n}: ${label}`}
       className="flex items-start gap-3 rounded-md border border-border p-2.5"
@@ -332,8 +527,8 @@ function RuleRow({
       <div className="min-w-0 flex-1">
         <Editor row={row} currency={currency} onChange={onChange} />
       </div>
-      <RemoveButton n={n} label={label} onRemove={onRemove} />
-    </li>
+      <RemoveButton name={`Remove rule ${n} (${label})`} onRemove={onRemove} />
+    </div>
   );
 }
 
@@ -348,12 +543,12 @@ function Ends({
   inputMode,
   onChange,
 }: {
-  row: Row;
+  row: LeafRow;
   names: [string, string];
   captions: [string, string];
   hint?: string;
   inputMode: "decimal" | "text";
-  onChange: (patch: Partial<Row>) => void;
+  onChange: (patch: Partial<LeafRow>) => void;
 }) {
   const id = useId();
   return (
@@ -388,9 +583,9 @@ function Editor({
   currency,
   onChange,
 }: {
-  row: Row;
+  row: LeafRow;
   currency: string;
-  onChange: (patch: Partial<Row>) => void;
+  onChange: (patch: Partial<LeafRow>) => void;
 }) {
   const toggle = (value: string) =>
     onChange({

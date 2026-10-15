@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
+import folderRulesRs from "../../../crates/grimoire-core/src/folder_rules.rs?raw";
 import type { FolderRule } from "@/lib/ipc";
 import {
   blankRule,
   conflictSentence,
+  countRules,
   describeRule,
   effectiveRules,
   hasRules,
   kindsFor,
+  MAX_GROUP_DEPTH,
   MAX_RULES,
   RULE_KINDS,
   RULE_KIND_LABEL,
@@ -182,5 +185,66 @@ describe("validateRule", () => {
       RULE_REFUSAL.tooMany,
     );
     expect(validateRules([one, blankRule("sets")])).toBe(RULE_REFUSAL.noValues);
+  });
+});
+
+describe("groups (issue #1053)", () => {
+  const rare: FolderRule = { kind: "rarities", values: ["rare"] };
+  const fullArt: FolderRule = { kind: "borders", values: ["fullart"] };
+  const land: FolderRule = { kind: "types", values: ["Land"] };
+  const any = (...rules: FolderRule[]): FolderRule => ({ kind: "group", op: "or", rules });
+  const all = (...rules: FolderRule[]): FolderRule => ({ kind: "group", op: "and", rules });
+
+  it("says a group as its members in brackets, the outer one capitalised", () => {
+    expect(describeRule(any(rare, all(fullArt, land)), money)).toBe(
+      "Any of (Rarity: Rare; all of (Border: Full art; Card type: Land))",
+    );
+    expect(describeRule(all({ kind: "price", min: 10, max: null }, land), money)).toBe(
+      "All of (Price $10.00 or more; Card type: Land)",
+    );
+  });
+
+  it("counts the rules that test a card, never a group", () => {
+    expect(countRules([rare, any(fullArt, all(land, rare))])).toBe(4);
+    expect(countRules([any()])).toBe(0);
+    const one: FolderRule = { kind: "colors", values: ["U"] };
+    const twenty = Array.from({ length: MAX_RULES }, () => one);
+    expect(validateRules([any(...twenty)])).toBeNull();
+    expect(validateRules([any(...twenty), one])).toBe(RULE_REFUSAL.tooMany);
+  });
+
+  it("refuses an empty group, one nested too deep and an incomplete member", () => {
+    expect(validateRule(any())).toBe(RULE_REFUSAL.emptyGroup);
+    expect(validateRule(any(rare, all()))).toBe(RULE_REFUSAL.emptyGroup);
+    expect(validateRule(any(rare, blankRule("sets")))).toBe(RULE_REFUSAL.noValues);
+    let deepest: FolderRule = rare;
+    for (let d = 0; d < MAX_GROUP_DEPTH; d += 1) deepest = any(deepest);
+    expect(validateRule(deepest)).toBeNull();
+    expect(validateRule(all(deepest))).toBe(RULE_REFUSAL.tooDeep);
+    expect(RULE_REFUSAL.tooDeep).toContain(String(MAX_GROUP_DEPTH));
+  });
+});
+
+/**
+ * **The dialog's refusals are the tidy's, word for word**: the dialog greys Save with a sentence
+ * the backend would answer, so a Rust edit to one that left this side behind would have the two
+ * say different things about the same rule. Read off `folder_rules.rs` itself.
+ */
+describe("RULE_REFUSAL and the limits against folder_rules.rs", () => {
+  const constant = (name: string): string => {
+    const m = new RegExp(`pub const ${name}: [^=]+= "?([^";]+)"?;`).exec(folderRulesRs);
+    if (m === null) throw new Error(`folder_rules.rs has no ${name}`);
+    return m[1];
+  };
+
+  it("spells each sentence and limit as the crate does", () => {
+    expect(RULE_REFUSAL.tooMany).toBe(constant("TOO_MANY_RULES"));
+    expect(RULE_REFUSAL.noValues).toBe(constant("NO_VALUES"));
+    expect(RULE_REFUSAL.range).toBe(constant("BAD_RANGE"));
+    expect(RULE_REFUSAL.date).toBe(constant("BAD_DATE"));
+    expect(RULE_REFUSAL.emptyGroup).toBe(constant("EMPTY_GROUP"));
+    expect(RULE_REFUSAL.tooDeep).toBe(constant("TOO_DEEP"));
+    expect(String(MAX_RULES)).toBe(constant("MAX_RULES"));
+    expect(String(MAX_GROUP_DEPTH)).toBe(constant("MAX_GROUP_DEPTH"));
   });
 });

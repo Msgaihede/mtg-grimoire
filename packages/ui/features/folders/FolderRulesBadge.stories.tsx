@@ -95,6 +95,40 @@ export const InheritedOnly: Story = {
   },
 };
 
+/** A group (issue #1053) is one line of the tooltip, its members in brackets. */
+export const Grouped: Story = {
+  args: {
+    effective: {
+      own: [
+        {
+          kind: "group",
+          op: "or",
+          rules: [
+            { kind: "rarities", values: ["rare"] },
+            {
+              kind: "group",
+              op: "and",
+              rules: [
+                { kind: "borders", values: ["fullart"] },
+                { kind: "types", values: ["Land"] },
+              ],
+            },
+          ],
+        },
+      ],
+      inherited: [],
+    },
+    conflicts: 0,
+  },
+  play: async ({ canvas }) => {
+    await expect(
+      canvas.getByRole("img", {
+        name: "This folder's rules: Any of (Rarity: Rare; all of (Border: Full art; Card type: Land)).",
+      }),
+    ).toBeInTheDocument();
+  },
+};
+
 /** No rules anywhere up the tree: nothing is drawn. */
 export const NoRules: Story = {
   args: { effective: { own: [], inherited: [] }, conflicts: 0 },

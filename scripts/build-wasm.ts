@@ -143,7 +143,7 @@ const MODULES: Record<
 const KEEP_NAMES = process.argv.includes("--names");
 
 /**
- * **The most the engine's module may be: 8 000 000 bytes**, names stripped — and the build
+ * **The most the engine's module may be: 10 000 000 bytes**, names stripped — and the build
  * refuses one that is over.
  *
  * The engine links `card-scanner` on every target and is kept clear of its session — the
@@ -162,13 +162,22 @@ const KEEP_NAMES = process.argv.includes("--names");
  * three changes of that size away, and still 1.96 MB under what the runtime's arrival made
  * the module — the runtime is 2.6 MB and more, so it cannot come back under this number.
  *
+ * **Raised to 10 000 000 B on 2026-10-15** (the owner's figure), when folder rules' AND/OR
+ * groups (#1053) took the module to 8 012 791 B here (about 8.02 MB on CI's runner) over
+ * 8 000 000. Read off the name section first, as below: +24 321 B, every function of it
+ * `folder_rules` — the group's tidy and SQL, and the serde a recursive `FolderRule`
+ * instantiates — with nothing of `card-scanner`'s session among it. ⚠️ The headroom is now
+ * about 1.98 MB, under the runtime's 2.6 MB and more, so the runtime still cannot come back
+ * unseen — **but only while the module stays over about 7.4 MB**; were it to shrink much below
+ * that, lower this number with it.
+ *
  * **To raise it, deliberately**: build, read what grew off the name section
  * (`node scripts/build-wasm.ts --only engine --names`, then the names by crate), and if the
  * growth is the engine's own, change this number and the date and size above in the same
  * commit. A module over the ceiling for a reason nobody has read is the case it is for.
  * The scanner's module has no ceiling: it *is* the runtime.
  */
-const ENGINE_CEILING_BYTES = 8_000_000;
+const ENGINE_CEILING_BYTES = 10_000_000;
 /** `sqlite-wasm-rs` needs clang 18 or newer to compile SQLite for wasm32. */
 const CLANG_FLOOR = 18;
 /** Where the LLVM installer puts clang on Windows — not on `PATH`, and `cc` does not look. */
