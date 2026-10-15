@@ -899,6 +899,8 @@ pub struct Session {
     /// The framings a frame's quad is matched at besides its own — see
     /// [`DetectOptions::query_insets`]. [`Session::set_query_insets`] changes them.
     query_insets: Vec<f32>,
+    /// See [`crate::resolve::Rules::promo_last`]. [`Session::set_promo_last`] changes it.
+    promo_last: bool,
     /// The last locked frame's appearance match came in at [`crate::reframe::Options::only_above`]
     /// or nearer, so this frame need not ask again whether its quad is the card. Cleared at the
     /// start of every frame and set by [`Session::match_locked`].
@@ -984,6 +986,7 @@ impl Session {
             reframe: Some(crate::reframe::Options::default()),
             reframe_held: None,
             query_insets: DetectOptions::default().query_insets,
+            promo_last: true,
             reframe_plain: false,
             gap_gate: Some(GapGate::default()),
         }
@@ -1010,6 +1013,12 @@ impl Session {
         if let Some(reader) = self.reader.as_mut().and_then(Arc::get_mut) {
             reader.set_wide_title(on);
         }
+    }
+
+    /// Order a set's promo after the printing it stamps when the hash ties them — see
+    /// [`crate::resolve::Rules::promo_last`]. On by default; the replay turns it off to measure.
+    pub fn set_promo_last(&mut self, on: bool) {
+        self.promo_last = on;
     }
 
     /// Match each frame's quad at these framings as well as its own — fractions of its size, about
@@ -2141,7 +2150,10 @@ impl Session {
         let reader = self.reader.clone();
         let mask = self.mask.clone();
         let gate = self.tracker.options().max_normalized;
-        let min_gap = self.gap_gate.and_then(|g| g.exact);
+        let rules = crate::resolve::Rules {
+            min_gap: self.gap_gate.and_then(|g| g.exact),
+            promo_last: self.promo_last,
+        };
         let burst: Vec<StoredView> = self.burst.drain(..).collect();
         let (tx, rx) = std::sync::mpsc::channel();
         // Caught here, on the thread that panics, because nothing else would see it: a panic on
@@ -2149,7 +2161,7 @@ impl Session {
         let job = move || {
             let result = host::guard(|| {
                 let views: Vec<BurstView<'_>> = burst.iter().map(StoredView::view).collect();
-                run_resolve(&r, &mask, &views, reader.as_deref(), gate, min_gap)
+                run_resolve(&r, &mask, &views, reader.as_deref(), gate, rules)
             });
             // Refused when the result was dropped while this ran, which is the point of
             // dropping it.
@@ -2243,7 +2255,7 @@ fn run_resolve(
     burst: &[BurstView<'_>],
     reader: Option<&Reader>,
     gate: f32,
-    min_gap: Option<f32>,
+    rules: crate::resolve::Rules,
 ) -> (ResolutionView, Option<OcrView>, Option<CollectorView>) {
     #[cfg(feature = "ocr")]
     if let Some(reader) = reader {
@@ -2255,7 +2267,7 @@ fn run_resolve(
             collector: std::sync::Mutex::new(None),
             bands: std::sync::Mutex::new(Vec::new()),
         };
-        let resolution = crate::resolve::resolve_gated(r, mask, burst, &readers, gate, min_gap);
+        let resolution = crate::resolve::resolve_gated(r, mask, burst, &readers, gate, rules);
         let ocr = readers.ocr.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut collector =
             readers.collector.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -2276,7 +2288,7 @@ fn run_resolve(
     }
     #[cfg(not(feature = "ocr"))]
     let _ = reader;
-    (crate::resolve::resolve_gated(r, mask, burst, &NoReaders, gate, min_gap), None, None)
+    (crate::resolve::resolve_gated(r, mask, burst, &NoReaders, gate, rules), None, None)
 }
 
 /// The production [`crate::resolve::Readers`]: the OCR models, under the session's mask.

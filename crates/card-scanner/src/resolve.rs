@@ -214,12 +214,28 @@ pub fn resolve(
     readers: &dyn Readers,
     max_normalized: f32,
 ) -> ResolutionView {
-    resolve_gated(r, mask, burst, readers, max_normalized, None)
+    resolve_gated(r, mask, burst, readers, max_normalized, Rules::default())
+}
+
+/// The choices a session makes about a resolve, besides its filters and its gate.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Rules {
+    /// The gap gate — see [`resolve_gated`]. `None` holds nothing back.
+    pub min_gap: Option<f32>,
+    /// Among printings tied on the hash, a set's promo goes after the printing it stamps — see
+    /// [`promo_of`].
+    pub promo_last: bool,
+}
+
+impl Default for Rules {
+    fn default() -> Self {
+        Rules { min_gap: None, promo_last: true }
+    }
 }
 
 /// [`resolve`], holding back an answer only the hash vouches for when it stands less than
-/// `min_gap` clear of the nearest printing of **another card** — the gap gate. `None` is
-/// [`resolve`] exactly; a session passes [`EXACT_MIN_GAP`] unless told otherwise.
+/// `rules.min_gap` clear of the nearest printing of **another card** — the gap gate. `None` holds
+/// nothing back; a session passes [`EXACT_MIN_GAP`] unless told otherwise.
 ///
 /// **The gap, not the distance, tells a real match from an impostor.** Surveyed over every
 /// detected frame of the 86 replay scans, the quad read as the card: the right card's gap had a
@@ -239,9 +255,9 @@ pub fn resolve_gated(
     burst: &[BurstView<'_>],
     readers: &dyn Readers,
     max_normalized: f32,
-    min_gap: Option<f32>,
+    rules: Rules,
 ) -> ResolutionView {
-    let first = resolve_once(r, mask, burst, readers, max_normalized, min_gap);
+    let first = resolve_once(r, mask, burst, readers, max_normalized, rules);
     if !names_no_one_card(&first) {
         return first;
     }
@@ -249,7 +265,7 @@ pub fn resolve_gated(
     let wide = reading_order(burst).into_iter().take(2).find_map(|v| readers.title_wide(v));
     let Some(wide) = wide else { return first };
     let again = WithTitle { inner: readers, title: &wide };
-    let mut again = resolve_once(r, mask, burst, &again, max_normalized, min_gap);
+    let mut again = resolve_once(r, mask, burst, &again, max_normalized, rules);
     again.elapsed_ms += first.elapsed_ms + started.ms();
     if let Some(t) = again.tiers.iter_mut().find(|t| t.tier == "title") {
         t.detail = format!("wide, {}", t.detail);
@@ -286,7 +302,7 @@ fn resolve_once(
     burst: &[BurstView<'_>],
     readers: &dyn Readers,
     max_normalized: f32,
-    min_gap: Option<f32>,
+    rules: Rules,
 ) -> ResolutionView {
     let started = crate::host::Stopwatch::start();
     let mut tiers = Vec::with_capacity(6);
@@ -551,6 +567,21 @@ fn resolve_once(
                     survivors.truncate(1);
                 } else {
                     survivors.retain(|p| bits_of(p).is_some_and(|d| d - first < within));
+                    if rules.promo_last {
+                        // Tied on the hash, so the order is a guess, not a measurement: the
+                        // printing a promo stamps comes before the promo, and the promo goes
+                        // straight after it — every other printing keeps its place.
+                        let stamps: HashMap<Id, Id> = survivors
+                            .iter()
+                            .filter_map(|p| promo_of(r, p, &survivors).map(|of| (*p, of)))
+                            .collect();
+                        let mut ordered = Vec::with_capacity(survivors.len());
+                        for p in survivors.iter().filter(|p| !stamps.contains_key(*p)) {
+                            ordered.push(*p);
+                            ordered.extend(survivors.iter().filter(|q| stamps.get(*q) == Some(p)));
+                        }
+                        survivors = ordered;
+                    }
                 }
                 format!("margin {margin} bits")
             }
@@ -577,7 +608,7 @@ fn resolve_once(
             .map(|(_, d)| *d - d0)
             .reduce(f32::min)
     });
-    let crowded = match (min_gap, gap) {
+    let crowded = match (rules.min_gap, gap) {
         (Some(g), Some(gap)) => title_cards.is_empty() && !pinned && gap < g,
         _ => false,
     };
@@ -657,6 +688,29 @@ fn keep_best(best: &mut HashMap<Id, f32>, p: Id, normalized: f32) {
 
 /// Nearest first; a printing with no distance last; ties by id, so the order never depends on
 /// a hash map's iteration.
+/// The printing among `among` that `p` is a promo of — the same card, numbered the same less a
+/// promo's suffix, in the set whose promo set `p` is in: EOE 182 for PEOE 182p, FIN 96 for
+/// PFIN 96s.
+///
+/// **The hash cannot tell them apart, and a reader far more often owns the set's printing.** A
+/// prerelease or promo-pack stamp is a few millimetres of foil over the same art, so the two sit
+/// a bit or two apart — noise — and which one a list put first was whichever the noise favoured.
+/// On the replay of 86 readers' scans, five lists of a card's printings put the promo ahead of the
+/// reader's own; one reader's card in 86 was such a promo. The collector line is what knows, and
+/// pins the printing before this is reached; this only orders a tie.
+fn promo_of(r: &Reference, p: &Id, among: &[Id]) -> Option<Id> {
+    let label = r.label_for(p)?;
+    let parent = label.set.strip_prefix('p')?;
+    let number = label.number.trim_end_matches(['p', 's', '\u{2605}']);
+    if number == label.number {
+        return None;
+    }
+    let card = r.oracle_for(p);
+    among.iter().filter(|q| *q != p && r.oracle_for(q) == card).copied().find(|q| {
+        r.label_for(q).is_some_and(|l| l.set == parent && l.number == number)
+    })
+}
+
 fn by_distance(printings: &mut [Id], best: &HashMap<Id, f32>) {
     printings.sort_by(|a, b| match (best.get(a), best.get(b)) {
         (Some(x), Some(y)) => x.total_cmp(y).then_with(|| a.cmp(b)),
@@ -942,6 +996,10 @@ mod tests {
     /// A reference whose entries are `img(5)`'s own descriptor with the given number of bits
     /// flipped — distances chosen exactly rather than hoped for from generated images. Each
     /// entry is a different card.
+    fn gap_of(min_gap: f32) -> Rules {
+        Rules { min_gap: Some(min_gap), ..Rules::default() }
+    }
+
     fn bits_away(flips: &[u32]) -> Reference {
         let exact = hash_rgb(&img(5), HashKind::DHash, 256);
         let mut b = BundleBuilder::new(HashKind::DHash, 256);
@@ -964,6 +1022,43 @@ mod tests {
             r.add_label(id(i + 1), Some(id(100 + i)), None, label);
         }
         r
+    }
+
+    #[test]
+    fn a_promo_tied_with_the_printing_it_stamps_is_listed_after_it() {
+        // One card in three printings, a bit or two apart on the hash: its prerelease promo
+        // nearest, the set's own printing, and a promo-pack printing the list has no twin for.
+        let exact = hash_rgb(&img(5), HashKind::DHash, 256);
+        let mut b = BundleBuilder::new(HashKind::DHash, 256);
+        let printings = [(40, "peoe", "182p"), (42, "eoe", "182"), (43, "peoe", "190s")];
+        for (i, (flips, _, _)) in printings.iter().enumerate() {
+            let mut d = exact;
+            for bit in 0..*flips as usize {
+                d.words[bit / 64] ^= 1 << (bit % 64);
+            }
+            b.push(Section::Card, id(i as u8 + 1), &d);
+        }
+        let mut r = Reference::new(b.finish(0));
+        for (i, (_, set, number)) in printings.iter().enumerate() {
+            let label = Label {
+                name: "Famished Worldsire".into(),
+                set: (*set).into(),
+                number: (*number).into(),
+                lang: "en".into(),
+                released: "2025-07-25".into(),
+            };
+            r.add_label(id(i as u8 + 1), Some(id(100)), None, label);
+        }
+        let (up, down) = (img(5), img(99));
+        let order = |promo_last| {
+            let rules = Rules { promo_last, ..Rules::default() };
+            let v = resolve_gated(&r, &Mask::all(), &burst(&up, &down), &NoReaders, GATE, rules);
+            assert_eq!(v.outcome, Outcome::Ambiguous, "the premise: a tie, {:?}", v.tiers);
+            ids(&v)
+        };
+        let [promo, set, other] = [1, 2, 3].map(|n| format_uuid(&id(n)));
+        assert_eq!(order(false), [promo.clone(), set.clone(), other.clone()], "by distance alone");
+        assert_eq!(order(true), [set, promo, other], "the set's printing first");
     }
 
     #[test]
@@ -1318,7 +1413,7 @@ mod tests {
         let v = resolve(&crowded, &Mask::all(), &burst(&up, &down), &NoReaders, GATE);
         assert_eq!(v.outcome, Outcome::Ambiguous, "the premise, ungated: {:?}", v.tiers);
         let gated = |r: &Reference, readers: &dyn Readers| {
-            resolve_gated(r, &Mask::all(), &burst(&up, &down), readers, GATE, Some(0.02))
+            resolve_gated(r, &Mask::all(), &burst(&up, &down), readers, GATE, gap_of(0.02))
         };
         let v = gated(&crowded, &NoReaders);
         assert_eq!(v.outcome, Outcome::NotFound, "{:?}", v.tiers);
@@ -1359,7 +1454,7 @@ mod tests {
         let asked = |w: &Wide| w.asked.load(std::sync::atomic::Ordering::Relaxed);
         let (up, down) = (img(5), img(99));
         let gated = |r: &Reference, readers: &dyn Readers| {
-            resolve_gated(r, &Mask::all(), &burst(&up, &down), readers, GATE, Some(0.02))
+            resolve_gated(r, &Mask::all(), &burst(&up, &down), readers, GATE, gap_of(0.02))
         };
 
         let crowded = bits_away(&[40, 44]);

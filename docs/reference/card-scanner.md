@@ -1744,6 +1744,7 @@ locked, and the session test that covered this case asserted that the freeze lif
 the decided one's. A card that really is swapped in is some other card — and the session's watch
 sees it laid down (§10 *A card laid on the last*). The replay gained Abandoned Air Temple (undecided
 → its card) and changed nothing else; the synthetic evaluation changed no card in either scene.
+
 ### The measured failures each rule element came from
 
 | Element | The failure that produced it |
@@ -3278,7 +3279,7 @@ before and records a `detail` in words.
 | 1 `whole_card` | a masked search of every framing of every view, top `EXACT_TOP` (32), inside `max_normalized`; each printing's best distance across the burst is kept for every later tier | those printings (`P printings of C cards`) |
 | 2 `title` | read the most card-like view, and the next only on no read | **exact read** (0 edits): every permitted printing of that card, whether or not tier 1 found it — the foil rescue. **Corrected read** (≥ 1 edit): only the tier-1 survivors that are that card; if none are, the read is **ignored** (`… not among survivors — ignored`); if tier 1 found nothing at all, it replaces, bounded by the lookup's edit budget. No read, or a read naming no card: unchanged |
 | 3 `collector` | read the collector line the same way | a resolved printing pins itself **only if** its card is among the survivors **and** it is the card the title settled on — or, with no title, a card whose nearest surviving printing is less than `EXACT_MARGIN_BITS` (6) behind the nearest card. Otherwise a `conflict: …` detail naming why (`not among survivors`, `not the card the title read`, `N bits behind the nearest card`, `which has no distance`) and survivors unchanged |
-| 4 `re_rank` | best distance per survivor; a survivor a name read brought in is scored by a search restricted to the survivors | the best alone if it leads the second by ≥ 6 bits; otherwise every survivor less than 6 bits behind the best |
+| 4 `re_rank` | best distance per survivor; a survivor a name read brought in is scored by a search restricted to the survivors | the best alone if it leads the second by ≥ 6 bits; otherwise every survivor less than 6 bits behind the best; among those, a set's promo is listed straight after the printing it stamps (below) |
 | 5 `classifier` | the trait slot, and the gap gate | unchanged (`not implemented`; with the note below when it holds a lone survivor back) — or **none**, when only the hash vouches for the answer and it stands less than `EXACT_MIN_GAP` clear of another card (`… no card stands out`) |
 
 The outcome is `resolved` for one survivor, `ambiguous` for several (best first, reported to
@@ -3287,6 +3288,30 @@ survivor that only the hash vouches for, and only just**: no title settled the c
 line pinned or fitted the printing, and its distance is past `EXACT_ALONE_DISTANCE` (0.25, against
 the gate's 0.30). The `classifier` detail then says so, with the distance. The reader confirms it in
 the tray, as for any ambiguous row.
+
+**A set's promo is listed after the printing it stamps (2026-10-15).** A prerelease or promo-pack
+stamp is a few millimetres of foil over the same art, so PEOE 182p and EOE 182 sit a bit or two
+apart on the hash — noise — and which came first in the list was whichever the noise favoured. When
+the re-rank keeps several printings of one card, a printing in a set's promo set (`p` + the set's
+code) numbered as another survivor is with a `p`, `s` or `★` after it goes straight after that
+printing; every other printing keeps its place (`resolve::promo_of`, `Rules::promo_last`;
+`SCANNER_PROMO_LAST=off` measures without it). The collector line is what knows the printing, and
+when it reads, it pins one before this is reached — but on the readers' binder scans it read on
+none of these.
+
+| | distance order | promo after its printing |
+| --- | ---: | ---: |
+| replay, As scanned: printing ✓ / card ✓ | 39.5 / 50.0% | **46.5 / 50.0%** |
+| synthetic, Exact printing ✓, plain / sleeved | 78.8 / 78.1% | **80.6 / 80.0%** |
+
+On the replay six lists put the reader's printing first that put the promo first before — The
+Darkness Crystal, The Earth Crystal, Famished Worldsire, Loading Zone, Chimil, the Inner Sun (its promo, PLCI 249s, stamps LCI 249; the reader's ECC 137
+came first once it moved) and Decorum Dissertation —
+and none went the other way: one reader's card in 86 was such a promo, and that scan names another
+card. On the synthetic evaluation three cards gained their printing in the plain scene and five in
+the sleeved, and **two lost it**: Argoth, Sanctum of Nature PBRO 256s and Damnable Pact PDTK 93s,
+whose true printing is the promo, are now second in their list — still their card. A reader of
+promos pays that; a reader of a set's binder, the common case, gains it.
 
 **It is mostly for binders.** There the card's own outer edge is often no contour at all — a black border
 on the page's dark backing, or an edge welded to the pocket's seam, which runs off the frame and is
