@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect } from "storybook/test";
+import { expect, fn, userEvent } from "storybook/test";
 import type { EffectiveRules } from "@/lib/folderRules";
 import { FolderRulesBadge } from "./FolderRulesBadge";
 
@@ -64,6 +64,17 @@ export const Conflicts: Story = {
   },
   play: async ({ canvas }) => {
     await expect(canvas.getByRole("img")).toHaveTextContent("3");
+  },
+};
+
+/** Conflicts and an `onShow`: the mark is a button, and a press asks the page to show them
+ *  (issue #1057). */
+export const ShowsBreakers: Story = {
+  args: { ...Conflicts.args, onShow: fn() },
+  play: async ({ args, canvas }) => {
+    const badge = canvas.getByRole("button", { name: /Press to show them\.$/ });
+    await userEvent.click(badge);
+    await expect(args.onShow).toHaveBeenCalledTimes(1);
   },
 };
 

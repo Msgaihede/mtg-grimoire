@@ -120,6 +120,10 @@ TypeScript mirrors `FolderRule` as a discriminated union `type` (not an interfac
 - **A folder with effective rules wears a `ListChecks` icon** on its heading/card, whose tooltip
   lists the rules in words (`describeRule`), inherited ones named by folder — and, when it holds
   conflicting cards, a red count: "3 cards don't match this folder's rules".
+- **Pressing the badge shows the breakers** (issue #1057, added after this spec): on the
+  collection page a badge with a red count is a button, and a press opens that folder with the
+  wall narrowed to the cards that break their rules (`CollectionQuery.ruleBreaks`) — see
+  [folder-rules.md](../../reference/folder-rules.md#showing-the-breakers).
 - **A conflicting card is outlined in destructive red** on the wall (`CardGrid`'s `ruleBreak`
   slot: the tile's `ring-2 ring-destructive` and `CardChin`'s `tone="destructive"`), with the
   reason in its accessible name. The table views mark the row with the same red edge.

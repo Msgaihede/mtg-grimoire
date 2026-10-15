@@ -43,7 +43,7 @@ import {
   sortDirectionName,
   useFormatOptions,
 } from "./filterOptions";
-import { SEARCH_TRAY, type TrayCell } from "./filterOptions";
+import { BREAKS_FOLDER_RULES, SEARCH_TRAY, type TrayCell } from "./filterOptions";
 import { SetCombobox } from "./SetCombobox";
 import { TagQueryRow, type TagQuerySurface } from "./TagQueryRow";
 import {
@@ -295,6 +295,10 @@ export interface FilterSurface<SortKey extends string = string> extends TagQuery
    */
   needsReview?: boolean | undefined;
   setNeedsReview?: (next: boolean | undefined) => void;
+  /** Only the copies that break their folder's rules (issue #1057) — a collection's question,
+   *  which a folder's rules badge asks when pressed. Absent on every surface that cannot ask. */
+  ruleBreaks?: boolean;
+  setRuleBreaks?: (next: boolean) => void;
 }
 
 /**
@@ -1323,6 +1327,19 @@ export function FilterTray<SortKey extends string>({
           label={search.needsReview === false ? "Not flagged" : "Needs review"}
           pressed={search.needsReview !== undefined}
           onClick={() => search.setNeedsReview?.(cycleTriState(search.needsReview, true))}
+          className="w-full"
+        />
+      </TrayField>
+    ) : null,
+
+    /* What a folder's rules badge turns on when pressed (issue #1057): the red-outlined copies
+       alone, here so the reader can see it is on and press it off. */
+    ruleBreaks: search.setRuleBreaks ? (
+      <TrayField key="ruleBreaks" label="Folder rules">
+        <ToggleChip
+          label={BREAKS_FOLDER_RULES}
+          pressed={search.ruleBreaks ?? false}
+          onClick={() => search.setRuleBreaks?.(!(search.ruleBreaks ?? false))}
           className="w-full"
         />
       </TrayField>

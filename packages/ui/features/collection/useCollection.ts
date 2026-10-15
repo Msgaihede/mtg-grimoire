@@ -70,6 +70,7 @@ export const COLLECTION_TRAY: readonly TrayCell[] = [
   "finish",
   "condition",
   "needsReview",
+  "ruleBreaks",
 ];
 
 /**
@@ -155,6 +156,9 @@ export interface CollectionFilterState {
   /** `true` is the rows a sync flagged, `false` everything it did not touch. Three-way like
    *  the wishlist's twin, because the complement is a real question. */
   needsReview: boolean | undefined;
+  /** Only the entries that break their folder's rules (issue #1057) — what a folder's rules
+   *  badge turns on when pressed. */
+  ruleBreaks: boolean;
 }
 
 /**
@@ -191,6 +195,7 @@ export function activeFilterCount(f: CollectionFilterState): number {
     // flagged" — is a filter that is on, and is where the reader lands once the flagged ones
     // are dealt with.
     f.needsReview !== undefined,
+    f.ruleBreaks,
   ].filter(Boolean).length;
 }
 
@@ -332,6 +337,7 @@ export function useCollection({
   const [finishes, setFinishes] = useState<readonly Finish[]>([]);
   const [conditions, setConditions] = useState<readonly Condition[]>([]);
   const [needsReview, setNeedsReview] = useState<boolean | undefined>(initialNeedsReview);
+  const [ruleBreaks, setRuleBreaks] = useState(false);
   // Empty is name order — the view's own default, which is what a cleared sort falls back
   // to. Not a filter, so `resetAll` leaves it alone.
   const [sort, setSort] = useState<SortSpec<CollectionSortKey>>([]);
@@ -459,6 +465,7 @@ export function useCollection({
       finishes,
       conditions,
       needsReview,
+      ruleBreaks,
     }) > 0;
   /** The shelves at the level the reader **asked** for — what the three queries below cover. The
    *  wall is drawn from `shelves` further down, which is these once that level has answered. */
@@ -511,6 +518,8 @@ export function useCollection({
     // three ways over this; dropping the complement the way a blank string is dropped would
     // silently turn it back into "ask nothing".
     needsReview,
+    // Absent rather than `false` when off, `manaX`'s rule.
+    ruleBreaks: ruleBreaks || undefined,
     // `paperOnly` is deliberately absent: the collection forces it off. A paper test over a
     // printing that has left `cards` would throw away exactly the rows this list exists to
     // keep showing.
@@ -574,6 +583,7 @@ export function useCollection({
     // Three terms, not two: the flagged rows and the rows nothing flagged are two different
     // sets, so a key that spelled both `""` would serve the complement from the other's cache.
     needsReview === undefined ? "" : needsReview ? "review" : "clear",
+    ruleBreaks ? "breaks" : "",
     marketplace.id,
     // The level. `String(n)` is digits, so it cannot collide with `"root"`. The shelves
     // themselves are keyed beside this rather than in it — see `countKey` and `fetchKey` below —
@@ -851,6 +861,10 @@ export function useCollection({
     /** The banner's "Show them", which has a destination rather than a next state — it is
      *  offering the flagged rows, not cycling the chip the reader has not touched. */
     setNeedsReview,
+    /** Only the entries that break their folder's rules (issue #1057). */
+    ruleBreaks,
+    /** A folder's rules badge sets it; the tray chip and the filter row clear it. */
+    setRuleBreaks,
     /**
      * Which folder the reader is standing in **as the page draws it**. `null` is the root of the
      * cabinet — a real destination, the drawer every unfiled copy lands in, and not "no folder
@@ -1013,6 +1027,7 @@ export function useCollection({
       finishes,
       conditions,
       needsReview,
+      ruleBreaks,
     }),
     /** Clear every filter at once, including the search box. The sort is not a filter and
      *  stays: it is how the reader reads, not what they are looking at. `folderId` stays for the
@@ -1037,6 +1052,7 @@ export function useCollection({
       setFinishes([]);
       setConditions([]);
       setNeedsReview(undefined);
+      setRuleBreaks(false);
     },
     /**
      * The marketplace every price on this view is quoted from — its label for the as-of

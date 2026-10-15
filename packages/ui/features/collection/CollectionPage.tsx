@@ -539,7 +539,12 @@ export function CollectionPage() {
     return out;
   }, [folders.folders]);
   /** The badge a folder with rules wears — its sub-tree's conflicts counted in **copies**, since a
-   *  heading speaks of cards and a row holding three copies is three cards out of place. */
+   *  heading speaks of cards and a row holding three copies is three cards out of place.
+   *
+   *  **A press shows them** (issue #1057): the folder opens — its sub-tree is what the count
+   *  counted — with the wall narrowed to the entries that break their rules, a filter like any
+   *  other, so the row of stated filters says it is on and its × or Reset all takes it off. */
+  const { openFolder, setRuleBreaks } = collection;
   const rulesBadge = useCallback(
     (id: number): ReactNode => {
       const effective = rulesById.get(id);
@@ -548,10 +553,14 @@ export function CollectionPage() {
         <FolderRulesBadge
           effective={effective}
           conflicts={subtreeConflicts(folders.folders, conflicts.folders, id).copies}
+          onShow={() => {
+            openFolder(id);
+            setRuleBreaks(true);
+          }}
         />
       );
     },
-    [rulesById, folders.folders, conflicts.folders],
+    [rulesById, folders.folders, conflicts.folders, openFolder, setRuleBreaks],
   );
 
   /**

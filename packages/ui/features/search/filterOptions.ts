@@ -405,6 +405,11 @@ export function activeChips<SortKey extends string>(
     });
   }
 
+  const { setRuleBreaks } = search;
+  if (setRuleBreaks && search.ruleBreaks) {
+    chips.push({ label: BREAKS_FOLDER_RULES, remove: () => setRuleBreaks(false) });
+  }
+
   const { setPriceRange } = search;
   if (setPriceRange && (search.priceMin !== undefined || search.priceMax !== undefined)) {
     const low = search.priceMin === undefined ? null : formatPrice(search.priceMin, currency);
@@ -503,7 +508,12 @@ export type TrayCell =
   | "condition"
   // `"fulfilled"` sat here until 2026-09-08. It was the wishlist's alone — the Fulfilled / Still
   // missing pair — and it went with every other comparison that list made against the collection.
-  | "needsReview";
+  | "needsReview"
+  /** The copies that break their folder's rules (issue #1057) — the collection's alone. */
+  | "ruleBreaks";
+
+/** The words on the `ruleBreaks` chip, in the tray and on the stated-filter row alike. */
+export const BREAKS_FOLDER_RULES = "Breaks folder rules";
 
 /**
  * What the card search offers: every cell that asks about a card or a printing, and none of the

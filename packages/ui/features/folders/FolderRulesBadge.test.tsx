@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -78,6 +79,34 @@ describe("FolderRulesBadge", () => {
     expect(panel).toHaveTextContent("From “Binder”:");
     expect(panel).toHaveTextContent("Colour: Blue");
     expect(panel).toHaveTextContent("1 card doesn't match this folder's rules");
+  });
+
+  it("is a button that shows the breakers when given `onShow` and a count", async () => {
+    const onShow = vi.fn();
+    wrap(<FolderRulesBadge effective={BOTH} conflicts={2} onShow={onShow} />);
+    const badge = screen.getByRole("button", {
+      name:
+        "This folder's rules: Price up to $1.00. From “Binder”: Colour: Blue. " +
+        "2 cards don't match this folder's rules. Press to show them.",
+    });
+    expect(screen.queryByRole("img")).toBeNull();
+    await userEvent.setup().click(badge);
+    expect(onShow).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays an image with `onShow` when nothing breaks the rules, or inside a control", () => {
+    const onShow = vi.fn();
+    const { rerender } = wrap(<FolderRulesBadge effective={BOTH} conflicts={0} onShow={onShow} />);
+    expect(screen.getByRole("img")).toBeInTheDocument();
+    expect(screen.queryByRole("button")).toBeNull();
+    rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <TooltipProvider>
+          <FolderRulesBadge effective={BOTH} conflicts={2} onShow={onShow} focusable={false} />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    expect(screen.queryByRole("button")).toBeNull();
   });
 
   it("takes no tab stop when told it sits inside a control", () => {
