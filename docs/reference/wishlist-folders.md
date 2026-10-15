@@ -521,6 +521,12 @@ is typed on the heading where the folder will appear, and Rename is a button on 
 when its heading is no longer on the wall (`panelGone` in `WishlistPage.tsx`). See
 [Shelves](#shelves-2026-09-26). The strip still holds `Move to folder…`, `Delete…` and `Clear…`.
 
+**Since issue #1058 (2026-10-15)** a heading's Add folder lights its own row, hairline and name
+while it is hovered or focused, the path row's names its level as a tooltip, and a committed name
+leaves the field open, emptied, for the next folder in the same parent until Escape, ✕ or a click
+away — the collection's rules, written once in `collection-folders.md` under the shelves' heading
+section.
+
 **2026-09-03.** `New folder` and a folder card's `⋯ → Rename…` used to raise a **bordered strip
 under the breadcrumb** — a box with its own edge, an input, `Create folder` and `Cancel` spelled
 out in words, and, on a create, a line reading *in Wishlist* to say which level the strip was

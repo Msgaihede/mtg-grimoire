@@ -6,7 +6,7 @@ const meta = {
   title: "Shelves/Toolbar",
   component: ShelfToolbar,
   tags: ["autodocs"],
-  args: { onAddFolder: fn(), onExpandAll: fn(), onCollapseAll: fn() },
+  args: { onAddFolder: fn(), addFolderIn: "Collection", onExpandAll: fn(), onCollapseAll: fn() },
   parameters: {
     docs: {
       description: {

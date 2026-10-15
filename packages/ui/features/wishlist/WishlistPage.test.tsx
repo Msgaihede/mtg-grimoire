@@ -749,6 +749,18 @@ beforeEach(() => {
   });
 });
 
+/**
+ * **A made folder asks for its next sibling** (issue #1058): the field stays on screen, emptied,
+ * with the caret in it — and Escape is how the reader ends the run.
+ */
+const endRun = async () => {
+  const field = screen.getByRole("textbox", { name: "Folder name" });
+  await waitFor(() => expect(field).toHaveValue(""));
+  expect(field).toHaveFocus();
+  await userEvent.keyboard("{Escape}");
+  await waitFor(() => expect(screen.queryByRole("textbox", { name: "Folder name" })).toBeNull());
+};
+
 describe("WishlistPage", () => {
   /**
    * **The list says nothing about the collection, anywhere** — the shape of this page since
@@ -2728,6 +2740,7 @@ describe("the shelves", () => {
         await userEvent.type(field, "Paid for{Enter}");
 
         await waitFor(() => expect(wishlistFolderCreate).toHaveBeenCalledWith(ORDERED.id, "Paid for"));
+        await endRun();
         await waitFor(() => expect(document.activeElement).toBe(addFolderOn(ORDERED.id)));
       },
     );
@@ -3830,8 +3843,27 @@ describe("the folders", () => {
     await userEvent.keyboard("Paid for{Enter}");
 
     expect(wishlistFolderCreate).toHaveBeenCalledWith(null, "Paid for");
+    await endRun();
     await waitFor(() => expect(queryHeading(NEW_FOLDER_SHELF)).toBeNull());
     expect(pathAddFolder()).toHaveFocus();
+  });
+
+  /** Issue #1058: filling a level with folders is one Add folder and a name per folder. */
+  it("asks for the next folder at the same level after each create, until Escape", async () => {
+    wrap(<WishlistPage />);
+    await findHeading(ORDERED.id);
+
+    await userEvent.click(pathAddFolder());
+    const field = await nameField();
+    await userEvent.type(field, "Paid for{Enter}");
+    await waitFor(() => expect(wishlistFolderCreate).toHaveBeenCalledWith(null, "Paid for"));
+    await waitFor(() => expect(field).toHaveValue(""));
+    await userEvent.type(field, "Gifts{Enter}");
+    await waitFor(() => expect(wishlistFolderCreate).toHaveBeenCalledWith(null, "Gifts"));
+
+    await endRun();
+    expect(pathAddFolder()).toHaveFocus();
+    expect(wishlistFolderCreate).toHaveBeenCalledTimes(2);
   });
 
   /** Replaces "draws the naming field in the wall, in the tile's own place": the field is a heading
@@ -5871,6 +5903,7 @@ describe("the caret after the path row's Add folder, Move to folder… and Delet
       await user.type(field, "Someday{Enter}");
 
       await waitFor(() => expect(wishlistFolderCreate).toHaveBeenCalledWith(null, "Someday"));
+      await endRun();
       await waitFor(() => expect(add).toHaveFocus());
       expect(focus.on(add)).toEqual([{ preventScroll: true }]);
     } finally {

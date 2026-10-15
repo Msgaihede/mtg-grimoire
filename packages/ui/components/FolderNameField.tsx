@@ -140,6 +140,14 @@ export type FolderNameFieldProps = {
   /** The figures line, drawn under the field on a rename so the drawer still says what is in it.
    *  Nothing to say on a create — the folder does not exist yet. */
   footer?: ReactNode;
+  /**
+   * Bumped by the page to ask the **same** field for another name (issue #1058's run of creates:
+   * a folder made, and the field opens again for its next sibling). A new value empties the box
+   * back to `initial` and puts the caret in it. Reset in place rather than by a `key`, because a
+   * remount would drop the caret to `<body>` between the two fields — and the blur discard reads
+   * a caret that left the form as the reader looking away.
+   */
+  round?: number;
   onSubmit: (name: string) => void;
   onCancel: () => void;
 };
@@ -152,12 +160,20 @@ export function FolderNameField({
   submitLabel,
   pending,
   footer,
+  round = 0,
   onSubmit,
   onCancel,
 }: FolderNameFieldProps): ReactElement {
   const rootRef = useRef<HTMLFormElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const [name, setName] = useState(initial);
+  // A new round empties the box during render — React's way to reset state on a prop change
+  // without an effect drawing one frame of the old name first.
+  const [seenRound, setSeenRound] = useState(round);
+  if (round !== seenRound) {
+    setSeenRound(round);
+    setName(initial);
+  }
 
   // Both calls, in this order. The spec says `select()` only sets the selection, and jsdom
   // implements the spec — where Chromium focuses on select, which is what makes a missing
@@ -168,7 +184,7 @@ export function FolderNameField({
     if (input === null) return;
     input.focus();
     input.select();
-  }, []);
+  }, [round]);
 
   const trimmed = name.trim();
   const Glyph = mode === "create" ? FolderPlus : Folder;

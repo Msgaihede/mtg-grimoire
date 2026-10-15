@@ -114,6 +114,27 @@ describe("FolderNameField", () => {
   });
 
   /**
+   * **A new round asks the same field for another name** (issue #1058's run of creates): the box
+   * empties and keeps the caret — the same input, not a remount, so the caret never drops to
+   * `<body>` on the way and the blur discard never mistakes the run for the reader looking away.
+   */
+  it("empties and keeps the caret for the next name on a new round", async () => {
+    const user = userEvent.setup();
+    const props = stubs();
+    const view = render(<FolderNameField mode="create" label="New folder name" submitLabel="Create folder" round={0} {...props} />);
+
+    const input = screen.getByRole("textbox", { name: "New folder name" });
+    await user.type(input, "Foils{Enter}");
+    expect(props.onSubmit).toHaveBeenCalledWith("Foils");
+
+    view.rerender(<FolderNameField mode="create" label="New folder name" submitLabel="Create folder" round={1} {...props} />);
+    expect(screen.getByRole("textbox", { name: "New folder name" })).toBe(input);
+    expect(input).toHaveValue("");
+    expect(input).toHaveFocus();
+    expect(props.onCancel).not.toHaveBeenCalled();
+  });
+
+  /**
    * **`pending` does two jobs and the second one is the one that is easy to drop.** Greying the
    * tick while the write is in flight is the obvious half. The other is that it suspends the blur
    * discard — because a control that disables itself on the press is blurred **by the browser**

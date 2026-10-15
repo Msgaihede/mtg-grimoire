@@ -99,6 +99,9 @@ export interface ShelfHeadingProps {
     pending?: boolean;
     /** `"create"` names a folder that does not exist yet (spec §3.8). Default `"rename"`. */
     mode?: "rename" | "create";
+    /** `FolderNameField`'s `round`: a create that has just landed asks for the next sibling's
+     *  name in the same field (issue #1058). */
+    round?: number;
   };
   /** From `useContextMenu`; absent ⇒ no ⋯. Ignored on Not sorted. */
   menu?: {
@@ -203,6 +206,33 @@ const TITLE_ATTR = "data-shelf-title";
 const CHEVRON_LIT_BY_TITLE =
   "group-has-[[data-shelf-title]:hover]/shelf:bg-surface group-has-[[data-shelf-title]:hover]/shelf:text-text";
 
+/** Marks the heading's Add folder, so the row can say which folder the button belongs to. */
+const ADD_ATTR = "data-shelf-add";
+
+/**
+ * **Which folder a new one goes into, drawn while Add folder is pointed at or keyed to** (issue
+ * #1058). The button stands at the row's far right — one column on every heading (issue #599) —
+ * so on a wide wall a whole hairline lies between it and the name it belongs to, and readers could
+ * not tell whose button it was. While it is hovered or focused the row takes a wash, the hairline
+ * between them turns gold and so does the folder's name: one line from the button to its parent.
+ * Spelt out whole, for Tailwind's scanner, as {@link CHEVRON_LIT_BY_TITLE} is.
+ */
+const ROW_LIT_BY_ADD =
+  "group-has-[[data-shelf-add]:hover]/shelf:bg-surface/50 group-has-[[data-shelf-add]:focus-visible]/shelf:bg-surface/50";
+const RULE_LIT_BY_ADD =
+  "group-has-[[data-shelf-add]:hover]/shelf:bg-accent group-has-[[data-shelf-add]:focus-visible]/shelf:bg-accent";
+const NAME_LIT_BY_ADD =
+  "group-has-[[data-shelf-add]:hover]/shelf:text-accent group-has-[[data-shelf-add]:focus-visible]/shelf:text-accent";
+
+/**
+ * What a heading's Add folder says it does. Not sorted's makes a folder at the top level — it is
+ * not a folder and nothing is made *in* it (issue #778) — so it says so rather than naming itself
+ * as the parent (issue #1058).
+ */
+export function addFolderLabel(shelf: Pick<Shelf, "kind" | "name">): string {
+  return shelf.kind === "unfiled" ? "Add top-level folder" : `Add folder in ${shelf.name}`;
+}
+
 export function ShelfHeading({
   shelf,
   stat,
@@ -271,6 +301,7 @@ export function ShelfHeading({
         // `border-transparent` so the row owns an edge all day and a drag recolours it rather than
         // adding one — `DROP_EDGE`'s rule for a target that has an edge.
         "group/shelf relative flex h-10 w-full min-w-0 items-center gap-2 rounded-lg border border-transparent px-1",
+        ROW_LIT_BY_ADD,
         (dropMark === "armed" || edge !== null) && DROP_EDGE,
         (dropMark === "over" || dropMark === "inside") && cn("border-accent", DROP_OVER),
       )}
@@ -306,7 +337,9 @@ export function ShelfHeading({
       )}
 
       {/* The field carries a glyph of its own, so the row's steps aside while it is open. */}
-      {renaming === undefined && <ShelfGlyph kind={shelf.kind} open={open} className="size-4" />}
+      {renaming === undefined && (
+        <ShelfGlyph kind={shelf.kind} open={open} className={cn("size-4", NAME_LIT_BY_ADD)} />
+      )}
 
       <div
         role={renaming === undefined ? "heading" : undefined}
@@ -350,6 +383,7 @@ export function ShelfHeading({
               initial={renaming.initial}
               submitLabel={creating ? "Create folder" : "Rename folder"}
               pending={renaming.pending ?? false}
+              round={renaming.round}
               onSubmit={renaming.onCommit}
               onCancel={renaming.onCancel}
             />
@@ -362,7 +396,7 @@ export function ShelfHeading({
             aria-expanded={open}
             onClick={toggle}
             onKeyDown={manage?.onKeyDown}
-            className={TITLE}
+            className={cn(TITLE, NAME_LIT_BY_ADD)}
             // Refused with the chevron, and in the chevron's words — but the clipped-name tooltip
             // stays, since the name is still what this button shows.
             {...(foldRefused
@@ -404,16 +438,17 @@ export function ShelfHeading({
           ))}
         </span>
       )}
-      <span aria-hidden="true" className="h-px min-w-6 flex-1 bg-border" />
+      <span aria-hidden="true" className={cn("h-px min-w-6 flex-1 bg-border", RULE_LIT_BY_ADD)} />
 
       {renaming === undefined && addFolder && (
         <button
           type="button"
-          aria-label={`Add folder in ${shelf.name}`}
+          aria-label={addFolderLabel(shelf)}
+          {...{ [ADD_ATTR]: "" }}
           data-no-drag=""
           onClick={addFolder}
           className={SHELF_ICON_BUTTON}
-          {...tip("Add folder", { describes: false })}
+          {...tip(addFolderLabel(shelf), { describes: false })}
         >
           <FolderPlus className="size-4" aria-hidden="true" />
         </button>
