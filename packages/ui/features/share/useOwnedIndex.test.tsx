@@ -23,18 +23,18 @@ import type { CollectionRow, WishRow } from "@/lib/ipc";
 import type { ShareCard } from "@/lib/shareSnapshot";
 import { crossReference, INDEX_PAGE, useOwnedIndex, wishGrainKey } from "./useOwnedIndex";
 
-const owned = (cardId: string, quantity: number): CollectionRow =>
-  ({ cardId, quantity }) as unknown as CollectionRow;
+const owned = (cardId: string, quantity: number, finish = "nonfoil"): CollectionRow =>
+  ({ cardId, quantity, finish }) as unknown as CollectionRow;
 
 const wished = (cardId: string | null, name: string, quantity: number): WishRow =>
   ({ cardId, name, quantity }) as unknown as WishRow;
 
-const shared = (id: string, n: string): ShareCard => ({
+const shared = (id: string, n: string, f = "nonfoil"): ShareCard => ({
   id,
   n,
   s: "tsp",
   cn: "157",
-  f: "nonfoil",
+  f,
   q: 1,
   fo: null,
 });
@@ -54,9 +54,9 @@ beforeEach(() => {
 });
 
 describe("the reader's own copies, indexed", () => {
-  it("counts every copy of one printing, however many rows it is spread over", async () => {
-    // Two rows of one printing — a foil and a nonfoil, or two conditions — which is the ordinary
-    // shape of `collection_entries` and the reason this is a sum rather than a lookup.
+  it("counts every copy of one printing and finish, however many rows it is spread over", async () => {
+    // Two rows of one printing and finish — two conditions, or two folders — which is the
+    // ordinary shape of `collection_entries` and the reason this is a sum rather than a lookup.
     collectionList.mockResolvedValue(onePage([owned("bolt", 2), owned("bolt", 1), owned("sol", 4)]));
     const { result } = renderHook(() => useOwnedIndex(true), { wrapper });
 
@@ -64,6 +64,26 @@ describe("the reader's own copies, indexed", () => {
     expect(crossReference(shared("bolt", "Lightning Bolt"), result.current.index).own).toBe(3);
     expect(crossReference(shared("sol", "Sol Ring"), result.current.index).own).toBe(4);
     expect(crossReference(shared("tundra", "Tundra"), result.current.index).own).toBe(0);
+  });
+
+  /**
+   * A shared row is a printing **in a finish**, and only copies in that finish answer it (issue
+   * #1056): two nonfoils beside a foil row read as "you own 2" foils, which is the figure that
+   * sends a reader into a trade believing they already hold the card they came for.
+   */
+  it("counts only the copies in the shared row's own finish", async () => {
+    collectionList.mockResolvedValue(
+      onePage([owned("bolt", 2, "nonfoil"), owned("bolt", 1, "etched"), owned("sol", 1, "foil")]),
+    );
+    const { result } = renderHook(() => useOwnedIndex(true), { wrapper });
+
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    const { index } = result.current;
+    expect(crossReference(shared("bolt", "Lightning Bolt", "foil"), index).own).toBe(0);
+    expect(crossReference(shared("bolt", "Lightning Bolt", "nonfoil"), index).own).toBe(2);
+    expect(crossReference(shared("bolt", "Lightning Bolt", "etched"), index).own).toBe(1);
+    expect(crossReference(shared("sol", "Sol Ring", "foil"), index).own).toBe(1);
+    expect(crossReference(shared("sol", "Sol Ring", "nonfoil"), index).own).toBe(0);
   });
 
   /**
