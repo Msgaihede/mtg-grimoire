@@ -27,6 +27,7 @@ import { buildCardMenu, type CardMenuDeps, type CardMenuTarget } from "@/feature
 import { ShareFolderMenu } from "@/features/collection/ShareFolderMenu";
 import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
+import { useCollectionFolderList } from "@/features/collection/useCollectionFolders";
 import { FolderRulesBadge } from "@/features/folders/FolderRulesBadge";
 import { FolderRulesDialog } from "@/features/folders/FolderRulesDialog";
 import { deckListKey } from "@/features/home/keys";
@@ -727,6 +728,9 @@ export function WishlistPage() {
    */
   const { menu, menuKey, menuClick } = useContextMenu();
   const { deps: menuDeps } = useCardMenuDeps();
+  // What the owned chips' tooltips name the reader's copies' places by (issue #1055). The card
+  // menu above already reads this list for `Add to → Collection`, so it is one cache entry.
+  const { folders: collectionFolders } = useCollectionFolderList();
   /**
    * The deps a press builds on: the page's own, plus the wall's picked set when the right-clicked
    * wish is a member of it (issue #954), so `Add N cards to` files every picked wish. A wish with
@@ -2337,6 +2341,7 @@ export function WishlistPage() {
                 // shows over it.
                 stickyTop={quick.stickyTop}
                 ruleBreaks={conflicts.ids}
+                collectionFolders={collectionFolders}
                 {...filing}
               />
             ) : (
