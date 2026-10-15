@@ -283,7 +283,35 @@ pub struct WishOwnedPlace {
     pub exact: i64,
     /// Copies here of another printing of the same card — [`WishRow::owned_other`]'s reading.
     pub other: i64,
+    /// Whether the copies here are **not free to use** (issue #1054): this folder is a deck's
+    /// group, or is locked by its own flag or an ancestor's. [`HELD_FOLDER`] is the rule.
+    ///
+    /// The question a reader asks of a wish is "is there a copy sitting somewhere I can just
+    /// take", and a copy sleeved into another deck usually is not one — owning duplicates a deck
+    /// already needs is the ordinary case. So the wall draws the free places as the `Own` / `Other`
+    /// chips and the held ones as a lighter chip beside them, rather than dropping them: once in a
+    /// while the copy in another deck is the one to move. `false` for `Not sorted`.
+    pub held: bool,
 }
+
+/// Is the collection folder `folder_id` one whose copies a wish's owned chips call **held** —
+/// any deck's group, or a folder locked by its own flag or an ancestor's
+/// ([`crate::collection_folders::LOCKED_FOLDER_IDS`])? Issue #1054.
+///
+/// Exactly the complement of `deck_theory`'s `OWNED_SPARE_SQL` arms, so the wishlist and the deck
+/// builder agree on which copies are free: the root, a folder the reader made and `Recently
+/// removed` are free, which is where a card that left a deck is meant to be available again.
+/// `folder_id IS NOT NULL` first because the root is free and an `IN` over a NULL is NULL rather
+/// than an answer.
+static HELD_FOLDER: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "(folder_id IS NOT NULL
+          AND (folder_id IN (SELECT f.id FROM collection_folders f WHERE f.kind = '{deck}')
+               OR folder_id IN ({locked})))",
+        deck = crate::schema::COLLECTION_FOLDER_KINDS[1],
+        locked = crate::collection_folders::LOCKED_FOLDER_IDS,
+    )
+});
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1626,7 +1654,7 @@ fn fill_owned_places(conn: &Connection, items: &mut [WishRow]) -> Result<(), Str
     }
     let marks = vec!["?"; ids.len()].join(",");
     let sql = format!(
-        "SELECT wish, folder_id, sum(exact), sum(other) FROM (
+        "SELECT wish, folder_id, sum(exact), sum(other), {held} FROM (
              SELECT w.id AS wish, e.folder_id AS folder_id, e.quantity AS exact, 0 AS other
                FROM wishlist_entries w JOIN collection_entries e ON e.card_id = w.card_id
               WHERE w.card_id IS NOT NULL AND w.id IN ({marks})
@@ -1641,7 +1669,8 @@ fn fill_owned_places(conn: &Connection, items: &mut [WishRow]) -> Result<(), Str
                 AND (w.card_id IS NULL OR k.id <> w.card_id)
          )
          GROUP BY wish, folder_id
-         ORDER BY wish, folder_id"
+         ORDER BY wish, folder_id",
+        held = *HELD_FOLDER,
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let params = ids.iter().chain(ids.iter());
@@ -1653,6 +1682,7 @@ fn fill_owned_places(conn: &Connection, items: &mut [WishRow]) -> Result<(), Str
                     folder_id: r.get(1)?,
                     exact: r.get(2)?,
                     other: r.get(3)?,
+                    held: r.get(4)?,
                 },
             ))
         })
@@ -2802,6 +2832,7 @@ mod tests {
                 folder_id: None,
                 exact: 2,
                 other: 3,
+                held: false,
             }],
         })
         .unwrap();
@@ -2817,7 +2848,7 @@ mod tests {
                 "legalities": "{\"timeless\":\"legal\"}",
                 "folderId": 7, "elsewhere": 1,
                 "ownedExact": 2, "ownedOther": 3,
-                "ownedPlaces": [{ "folderId": null, "exact": 2, "other": 3 }]
+                "ownedPlaces": [{ "folderId": null, "exact": 2, "other": 3, "held": false }]
             })
         );
     }
@@ -4776,6 +4807,7 @@ mod tests {
             folder_id,
             exact,
             other,
+            held: false,
         };
         assert_eq!(
             row(lea).owned_places,
@@ -4803,6 +4835,90 @@ mod tests {
                 (r.owned_exact, r.owned_other)
             );
         }
+    }
+
+    /// **Issue #1054: a deck's group and a locked folder hold copies that are owned but not
+    /// free.** They stay in the places — a report of where the binder's copies are — flagged
+    /// `held`, so the wall can draw the free places as the owned chips and these as a lighter one.
+    /// The root, a folder the reader made and `Recently removed` are free; a deck's group, a
+    /// locked folder and a folder inside a locked one are not.
+    #[test]
+    fn a_place_in_a_deck_or_a_locked_folder_is_held() {
+        let conn = seeded();
+        let folder = |name: &str, kind: &str, parent: Option<i64>, locked: bool| -> i64 {
+            let deck_id: Option<i64> = (kind == "deck").then(|| {
+                conn.query_row(
+                    "INSERT INTO decks (name, created_at, updated_at)
+                     VALUES (?1, unixepoch(), unixepoch()) RETURNING id",
+                    params![name],
+                    |r| r.get(0),
+                )
+                .unwrap()
+            });
+            conn.query_row(
+                "INSERT INTO collection_folders
+                    (parent_id, name, kind, deck_id, sort_order, locked, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, 0, ?5, unixepoch(), unixepoch())
+                 RETURNING id",
+                params![parent, name, kind, deck_id, locked],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        let binder = folder("Binder", "user", None, false);
+        let deck = folder("Burn", "deck", None, false);
+        let case = folder("Display case", "user", None, true);
+        let shelf = folder("Top shelf", "user", Some(case), false);
+        let removed: i64 = conn
+            .query_row(
+                "SELECT id FROM collection_folders WHERE kind = 'removed'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let own = |card: &str, set: &str, cn: &str, qty: i64, at: Option<i64>| {
+            conn.execute(
+                "INSERT INTO collection_entries (card_id, set_code, collector_number, lang,
+                     finish, condition, quantity, folder_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, 'en', 'nonfoil', 'NM', ?4, ?5, 0, 0)",
+                params![card, set, cn, qty, at],
+            )
+            .unwrap();
+        };
+        own("bolt-lea", "lea", "161", 1, None);
+        own("bolt-lea", "lea", "161", 2, Some(binder));
+        own("bolt-lea", "lea", "161", 3, Some(deck));
+        own("bolt-lea", "lea", "161", 4, Some(case));
+        own("bolt-2ed", "2ed", "162", 5, Some(shelf));
+        own("bolt-2ed", "2ed", "162", 6, Some(removed));
+        let lea = add_wish(
+            &conn,
+            &WishInput {
+                card_id: Some("bolt-lea".into()),
+                quantity: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .id;
+        let page = list_wishes(&conn, &WishlistQuery::default()).unwrap();
+        let row = page.items.iter().find(|r| r.id == lea).unwrap();
+        let held = |folder_id: Option<i64>| {
+            row.owned_places
+                .iter()
+                .find(|p| p.folder_id == folder_id)
+                .unwrap()
+                .held
+        };
+        assert!(!held(None), "the root is free");
+        assert!(!held(Some(binder)), "a folder the reader made is free");
+        assert!(!held(Some(removed)), "Recently removed is free");
+        assert!(held(Some(deck)), "a deck's group holds its copies");
+        assert!(held(Some(case)), "a locked folder holds its copies");
+        assert!(
+            held(Some(shelf)),
+            "and so does a folder inside a locked one"
+        );
     }
 
     /// "Use this printing", from an any-printing wish. The three denormalised columns are the

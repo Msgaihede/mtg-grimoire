@@ -222,6 +222,12 @@ export interface WishOwnedPlace {
   exact: number;
   /** Copies here of another printing of the same card — {@link WishRow.ownedOther}'s reading. */
   other: number;
+  /**
+   * Whether the copies here are **not free to use** (issue #1054): the folder is a deck's group,
+   * or is locked by its own flag or an ancestor's. The wall draws the free places as the `Own` /
+   * `Other` chips and the held ones as a lighter `In use` chip. `false` for `Not sorted`.
+   */
+  held: boolean;
 }
 
 export interface WishlistPage {

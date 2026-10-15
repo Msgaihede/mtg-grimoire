@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CollectionFolder, WishRow } from "@/lib/ipc";
 import { searchTerms } from "@/features/search/useCardSearch";
-import { collectionQueryOf, ownedPlacesOf, preferredFinishOf, wallPrinting } from "./wish";
+import { collectionQueryOf, heldOf, ownedPlacesOf, preferredFinishOf, wallPrinting } from "./wish";
 
 const wish = (over: Partial<WishRow> = {}): WishRow =>
   ({
@@ -50,6 +50,10 @@ describe("collectionQueryOf", () => {
     expect(collectionQueryOf(pinned, "other")).toBe('!"Lightning Bolt" -(e:lea cn:161 lang:en)');
   });
 
+  it("names the card in every printing for the whole card", () => {
+    expect(collectionQueryOf(pinned, "card")).toBe('!"Lightning Bolt"');
+  });
+
   it("names the card alone for a wish for any printing", () => {
     const any = wish({ cardId: null, setCode: null, collectorNumber: null, lang: null });
     expect(collectionQueryOf(any, "exact")).toBe('!"Lightning Bolt"');
@@ -92,10 +96,10 @@ describe("ownedPlacesOf", () => {
   ];
   const owned = wish({
     ownedPlaces: [
-      { folderId: null, exact: 1, other: 0 },
-      { folderId: 2, exact: 3, other: 1 },
-      { folderId: 3, exact: 0, other: 2 },
-      { folderId: 4, exact: 1, other: 0 },
+      { folderId: null, exact: 1, other: 0, held: false },
+      { folderId: 2, exact: 3, other: 1, held: false },
+      { folderId: 3, exact: 0, other: 2, held: true },
+      { folderId: 4, exact: 1, other: 0, held: false },
     ],
   });
 
@@ -109,6 +113,21 @@ describe("ownedPlacesOf", () => {
       { folderId: 3, kind: "deck", path: ["Burn"], count: 2 },
       { folderId: 2, kind: "folder", path: ["Binder", "Staples"], count: 1 },
     ]);
+  });
+
+  /** Issue #1054: the free chips and the in-use chip each list only their own places. */
+  it("narrows to the held places, or the free ones, when asked", () => {
+    expect(ownedPlacesOf(owned, "other", FOLDERS, false)).toEqual([
+      { folderId: 2, kind: "folder", path: ["Binder", "Staples"], count: 1 },
+    ]);
+    expect(ownedPlacesOf(owned, "card", FOLDERS, true)).toEqual([
+      { folderId: 3, kind: "deck", path: ["Burn"], count: 2 },
+    ]);
+  });
+
+  it("sums the held copies per side", () => {
+    expect(heldOf(owned)).toEqual({ exact: 0, other: 2 });
+    expect(heldOf(wish({ ownedPlaces: [] }))).toEqual({ exact: 0, other: 0 });
   });
 
   it("leaves out a folder the list does not know rather than guess its name", () => {

@@ -26,6 +26,7 @@ import { cn } from "@/lib/utils";
 import { EditWishButton } from "./EditWish";
 import {
   collectionQueryOf,
+  heldOf,
   ownedPlacesOf,
   preferredFinishOf,
   wallPrinting,
@@ -285,6 +286,15 @@ function WishWanted({ wish }: { wish: WishRow }) {
  * glyph and its whole path (`shelfPlaceName`), then how many of the copies are there. So a reader
  * deciding whether a wish still stands learns which drawer to open before pressing anything. The
  * same places ride the `sr-only` sentence, so a screen reader hears them too.
+ *
+ * **`Own` and `Other` count only the copies that are free to use** (issue #1054). A copy filed in
+ * a deck's group or a locked folder is owned, but "you have one" over a card sleeved into another
+ * deck answers the question a wish asks — *is there a copy I can just take?* — wrongly, and owning
+ * duplicates a deck already needs is the ordinary case. Those copies are not dropped, because once
+ * in a while the copy in another deck is the one to move: they are summed into one lighter
+ * `In use` chip — dimmer text on a dashed outline — whose sentence still says which printing they
+ * are and whose tooltip lists the decks and drawers holding them. `WishOwnedPlace.held` is the
+ * rule, which is the deck builder's "free" rule negated.
  */
 function WishOwned({
   wish,
@@ -296,16 +306,25 @@ function WishOwned({
 }) {
   const tip = useTooltip();
   const showInCollection = useAppStore((s) => s.showInCollection);
-  const chip = (side: OwnedSide, count: number) => {
+  const copies = (count: number) => `${count} ${count === 1 ? "copy" : "copies"}`;
+  // What one side's copies are called — the printing the wish is for, or another one.
+  const named = (side: "exact" | "other", count: number) =>
+    side === "other"
+      ? `${copies(count)} of another printing`
+      : wish.cardId === null
+        ? copies(count)
+        : `${copies(count)} of this printing`;
+  const chip = (
+    key: string,
+    label: string,
+    count: number,
+    sentence: string,
+    side: OwnedSide,
+    held: boolean,
+    look: string,
+  ) => {
     if (count <= 0) return null;
-    const copies = `${count} ${count === 1 ? "copy" : "copies"}`;
-    const sentence =
-      side === "other"
-        ? `${copies} of another printing in your collection`
-        : wish.cardId === null
-          ? `${copies} in your collection`
-          : `${copies} of this printing in your collection`;
-    const places = ownedPlacesOf(wish, side, folders);
+    const places = ownedPlacesOf(wish, side, folders, held);
     const spoken = places.map((place) => `${shelfPlaceName(place)} (${place.count})`).join(", ");
     const hint =
       places.length === 0 ? (
@@ -324,6 +343,7 @@ function WishOwned({
       );
     return (
       <button
+        key={key}
         type="button"
         data-no-drag=""
         {...tip(hint, { describes: false })}
@@ -335,12 +355,12 @@ function WishOwned({
           CORNER_PILL,
           "inline-flex shrink-0 cursor-pointer items-center font-mono tabular-nums",
           "text-[calc(0.75rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
-          side === "exact" ? "text-text" : "text-dim",
+          look,
           "hover:bg-bg",
         )}
       >
         <span aria-hidden="true">
-          {side === "exact" ? "Own" : "Other"} ×{count}
+          {label} ×{count}
         </span>
         <span className="sr-only">
           {places.length === 0
@@ -350,15 +370,48 @@ function WishOwned({
       </button>
     );
   };
-  const exact = chip("exact", wish.ownedExact);
-  const other = chip("other", wish.ownedOther);
-  if (exact === null && other === null) return null;
-  return (
-    <span className="flex flex-wrap gap-[calc(0.25rem*var(--mark-scale,1))]">
-      {exact}
-      {other}
-    </span>
-  );
+  const held = heldOf(wish);
+  const freeExact = Math.max(0, wish.ownedExact - held.exact);
+  const freeOther = Math.max(0, wish.ownedOther - held.other);
+  const heldNames = [
+    held.exact > 0 ? named("exact", held.exact) : null,
+    held.other > 0 ? named("other", held.other) : null,
+  ].filter((part) => part !== null);
+  const heldSide: OwnedSide =
+    held.exact > 0 && held.other > 0 ? "card" : held.exact > 0 ? "exact" : "other";
+  const chips = [
+    chip(
+      "exact",
+      "Own",
+      freeExact,
+      `${named("exact", freeExact)} free in your collection`,
+      "exact",
+      false,
+      "text-text",
+    ),
+    chip(
+      "other",
+      "Other",
+      freeOther,
+      `${named("other", freeOther)} free in your collection`,
+      "other",
+      false,
+      "text-dim",
+    ),
+    chip(
+      "held",
+      "In use",
+      held.exact + held.other,
+      `${heldNames.join(" and ")} in decks or locked folders`,
+      heldSide,
+      true,
+      // The lighter indicator: the dimmed face and a dashed outline, so a copy the reader cannot
+      // simply take never reads as the solid `Own` chip it sits beside.
+      "border border-dashed border-current text-dim",
+    ),
+  ].filter((c) => c !== null);
+  if (chips.length === 0) return null;
+  return <span className="flex flex-wrap gap-[calc(0.25rem*var(--mark-scale,1))]">{chips}</span>;
 }
 
 /**

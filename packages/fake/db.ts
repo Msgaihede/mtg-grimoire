@@ -7804,7 +7804,7 @@ function ownedForWish(
   const at = (folderId: number | null): WishOwnedPlace => {
     let place = byFolder.get(folderId);
     if (place === undefined) {
-      place = { folderId, exact: 0, other: 0 };
+      place = { folderId, exact: 0, other: 0, held: heldFolder(db, folderId) };
       byFolder.set(folderId, place);
     }
     return place;
@@ -7830,6 +7830,17 @@ function ownedForWish(
     (a, b) => (a.folderId ?? -Infinity) - (b.folderId ?? -Infinity),
   );
   return { exact, other, places };
+}
+
+/**
+ * `wishlist.rs`' `HELD_FOLDER` (issue #1054): copies filed in any deck's group or in a locked
+ * folder are owned but not free to use. {@link ownedSpare}'s rule negated — the root, a folder
+ * the reader made and `Recently removed` are free.
+ */
+function heldFolder(db: FakeDb, folderId: number | null): boolean {
+  if (folderId === null) return false;
+  if (collectionFolderById(db, folderId)?.kind === COLLECTION_DECK_KIND) return true;
+  return collectionFolderLocked(db, folderId);
 }
 
 function toWishRow(db: FakeDb, w: FakeWish, mp: MarketplaceId): WishRow {

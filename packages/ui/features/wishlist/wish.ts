@@ -16,7 +16,7 @@
 import { shelfFolderOf } from "@/features/collection/collectionShelfModel";
 import { finishLabel, isFinish, type Finish } from "@/lib/finish";
 import { trailOf } from "@/lib/folderTree";
-import type { CollectionFolder, WishRow } from "@/lib/ipc";
+import type { CollectionFolder, WishOwnedPlace, WishRow } from "@/lib/ipc";
 import { UNFILED_NAME, type ShelfKind } from "@/lib/shelves";
 
 /**
@@ -101,9 +101,10 @@ export function wallPrinting(wish: WishRow): string {
 /**
  * Which of a wish's owned copies a chip is about (issue #988): the printing the wish is for, or
  * the same card in another printing. An any-printing wish is answered by every printing, so all
- * its copies are `"exact"`.
+ * its copies are `"exact"`. `"card"` is both together — the in-use chip's reading when its copies
+ * span printings (issue #1054).
  */
-export type OwnedSide = "exact" | "other";
+export type OwnedSide = "exact" | "other" | "card";
 
 /** A value the query box reads as one token — quoted when it holds a space, with whichever quote
  *  it does not contain (`unquote` in `queryLanguage.ts` takes either). */
@@ -118,11 +119,12 @@ function token(value: string): string {
  *
  * `!name` is the card (both faces of a double-faced one, `exact_name_clause`), and a pinned
  * wish's printing is its set, number and language. `"other"` is the card minus that printing, as
- * one negated group. A pinned wish missing its set or number names the card alone rather than
- * guess a printing.
+ * one negated group, and `"card"` is the card in every printing. A pinned wish missing its set or
+ * number names the card alone rather than guess a printing.
  */
 export function collectionQueryOf(wish: WishRow, side: OwnedSide): string {
   const card = `!${token(wish.name)}`;
+  if (side === "card") return card;
   if (wish.cardId === null || wish.setCode === null || wish.collectorNumber === null) return card;
   const printing = [
     `e:${token(wish.setCode)}`,
@@ -154,6 +156,9 @@ const NO_LOCKS: ReadonlySet<number> = new Set();
  * The glyph is `shelfFolderOf`'s mapping (`user` a folder, `deck` a deck's group, any other kind
  * app-owned), so a chip's tooltip draws a drawer with the mark its shelf heading has.
  *
+ * `held` narrows to the places that are (or are not) free to use (issue #1054) —
+ * {@link WishOwnedPlace.held}; absent reads every place.
+ *
  * **A folder the list does not know is left out rather than guessed at** — the list not having
  * answered yet, or a folder deleted between the two reads. Its copies are still in the chip's
  * count; the tooltip only declines to name a drawer it cannot.
@@ -162,10 +167,12 @@ export function ownedPlacesOf(
   wish: Pick<WishRow, "ownedPlaces">,
   side: OwnedSide,
   folders: readonly CollectionFolder[],
+  held?: boolean,
 ): OwnedPlace[] {
   const places: OwnedPlace[] = [];
   for (const place of wish.ownedPlaces) {
-    const count = side === "exact" ? place.exact : place.other;
+    if (held !== undefined && place.held !== held) continue;
+    const count = placeCount(place, side);
     if (count <= 0) continue;
     if (place.folderId === null) {
       places.push({ folderId: null, kind: "unfiled", path: [UNFILED_NAME], count });
@@ -180,4 +187,29 @@ export function ownedPlacesOf(
   return places.sort(
     (a, b) => b.count - a.count || a.path.join("\u0000").localeCompare(b.path.join("\u0000")),
   );
+}
+
+/** One place's copies on one side — `"card"` is both printings' together. */
+function placeCount(place: WishOwnedPlace, side: OwnedSide): number {
+  return side === "exact"
+    ? place.exact
+    : side === "other"
+      ? place.other
+      : place.exact + place.other;
+}
+
+/**
+ * How many of a wish's owned copies are **held** — filed in a deck's group or a locked folder, so
+ * owned but not free to use (issue #1054) — per side. {@link WishRow.ownedExact} less `exact` is
+ * what the `Own` chip counts; the two summed are the lighter `In use` chip.
+ */
+export function heldOf(wish: Pick<WishRow, "ownedPlaces">): { exact: number; other: number } {
+  let exact = 0;
+  let other = 0;
+  for (const place of wish.ownedPlaces) {
+    if (!place.held) continue;
+    exact += place.exact;
+    other += place.other;
+  }
+  return { exact, other };
 }
