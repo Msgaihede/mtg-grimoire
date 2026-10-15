@@ -636,6 +636,7 @@ fn survey_file((label, path): &Ready, r: &Reference, ingredients: &Ingredients) 
     let Ok(frames) = cut(label, &run) else { return Vec::new() };
     let truth = ingredients.oracle_of(&label.card.id);
     let mask = card_scanner::index::Mask::all();
+    let insets = std::env::var_os("SCANNER_SURVEY_INSETS").is_some();
     let mut lines = Vec::new();
     for (i, jpeg) in frames.iter().enumerate() {
         let Ok(source) = image::load_from_memory(jpeg) else { continue };
@@ -646,31 +647,97 @@ fn survey_file((label, path): &Ready, r: &Reference, ingredients: &Ingredients) 
             .max_by(|a, b| a.rank().total_cmp(&b.rank()));
         let Some(found) = found else { continue };
         let mut readings = vec![("card".to_string(), found.quad)];
-        readings.extend(card_scanner::reframe::hypotheses(&found.quad).into_iter().map(|h| {
-            (format!("{}{}", h.region, if h.flipped { "^" } else { "" }), h.card)
-        }));
+        if insets {
+            // The match the session makes of this quad — every framing, trimmed — as the line
+            // the inset grid has to beat.
+            let session = DetectOptions::default();
+            if let Some(v) = card_scanner::detect::rectify_views(&rgb, &found.quad, &session) {
+                let mut views = vec![(&v.rectified, &v.rectified_180)];
+                views.extend(v.alternates.iter().map(|(a, b)| (a, b)));
+                let report = r.match_views(&views, 10, &mask);
+                lines.extend(survey_line(label, i, "views", true, &report, ingredients, &truth));
+            }
+            readings.extend(inset_grid(&found.quad));
+        } else {
+            readings.extend(card_scanner::reframe::hypotheses(&found.quad).into_iter().map(|h| {
+                (format!("{}{}", h.region, if h.flipped { "^" } else { "" }), h.card)
+            }));
+        }
         for (name, quad) in readings {
             let in_frame = card_scanner::reframe::mostly_in_frame(&quad, rgb.width(), rgb.height());
             let (Some(a), Some(b)) = (rectify(&rgb, &quad), rectify(&rgb, &quad.flipped())) else {
                 continue;
             };
             let report = r.match_views(&[(&a, &b)], 10, &mask);
-            let Some(top) = report.candidates.first() else { continue };
-            let top_oracle = ingredients.oracle_of(&top.id);
-            // The nearest candidate that is another card — a reprint of the top one is not doubt.
-            let rival = report.candidates.iter().skip(1)
-                .find(|c| ingredients.oracle_of(&c.id) != top_oracle)
-                .map(|c| c.normalized);
-            let truth_at = report.candidates.iter()
-                .position(|c| truth.is_some() && ingredients.oracle_of(&c.id) == truth);
-            lines.push(serde_json::json!({
-                "run": label.id, "frame": i + 1, "reading": name, "in_frame": in_frame,
-                "d": top.normalized, "rival": rival, "card_ok": truth.is_some() && top_oracle == truth,
-                "printing_ok": top.id == label.card.id, "truth_at": truth_at,
-            }).to_string());
+            lines.extend(survey_line(label, i, &name, in_frame, &report, ingredients, &truth));
         }
     }
     lines
+}
+
+/// One survey line: how a reading matched, and whether that is the reader's card.
+fn survey_line(
+    label: &ScanLabel,
+    i: usize,
+    name: &str,
+    in_frame: bool,
+    report: &card_scanner::reference::MatchReport,
+    ingredients: &Ingredients,
+    truth: &Option<String>,
+) -> Option<String> {
+    let top = report.candidates.first()?;
+    let top_oracle = ingredients.oracle_of(&top.id);
+    let truth = truth.clone();
+    // The nearest candidate that is another card — a reprint of the top one is not doubt.
+    let rival = report.candidates.iter().skip(1)
+        .find(|c| ingredients.oracle_of(&c.id) != top_oracle)
+        .map(|c| c.normalized);
+    let truth_at = report.candidates.iter()
+        .position(|c| truth.is_some() && ingredients.oracle_of(&c.id) == truth);
+    Some(serde_json::json!({
+        "run": label.id, "frame": i + 1, "reading": name, "in_frame": in_frame,
+        "d": top.normalized, "rival": rival, "card_ok": truth.is_some() && top_oracle == truth,
+        "printing_ok": top.id == label.card.id, "truth_at": truth_at,
+        "oracles": report.candidates.iter().map(|c| ingredients.oracle_of(&c.id))
+            .collect::<Vec<_>>(),
+    }).to_string())
+}
+
+/// The sleeve-pocket survey's readings (`SCANNER_SURVEY_INSETS=1`): the card taken to lie
+/// inside the detected quad, smaller and off its centre, on a grid laid out in the quad's own
+/// perspective — a pocket's margin is not even on all four sides.
+fn inset_grid(quad: &card_scanner::detect::Quad) -> Vec<(String, card_scanner::detect::Quad)> {
+    use imageproc::geometric_transformations::Projection;
+    let unit = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+    let Some(to_frame) = Projection::from_control_points(unit, quad.corners) else {
+        return Vec::new();
+    };
+    let scales = grid_values("SCANNER_SURVEY_SCALES", &[0.80, 0.85, 0.90]);
+    let offsets = grid_values("SCANNER_SURVEY_OFFSETS", &[-0.04, 0.0, 0.04]);
+    let mut out = Vec::new();
+    for &s in &scales {
+        for &dx in &offsets {
+            for &dy in &offsets {
+                let (x0, y0) = (0.5 + dx - s / 2.0, 0.5 + dy - s / 2.0);
+                let (x1, y1) = (x0 + s, y0 + s);
+                if x0 < 0.0 || y0 < 0.0 || x1 > 1.0 || y1 > 1.0 {
+                    continue;
+                }
+                let corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|p| to_frame * p);
+                let cell = card_scanner::detect::Quad { corners };
+                out.push((format!("g{s:.2},{dx:+.3},{dy:+.3}"), cell));
+            }
+        }
+    }
+    out
+}
+
+fn grid_values(var: &str, default: &[f32]) -> Vec<f32> {
+    std::env::var(var)
+        .ok()
+        .map(|v| v.split(',').filter_map(|x| x.trim().parse().ok()).collect::<Vec<f32>>())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| default.to_vec())
 }
 
 /// The runs whose id or card name contains any of `only`, ignoring case; all when it is empty.

@@ -170,6 +170,18 @@ pub struct DetectOptions {
     /// (81.2 → 81.9% plain, 76.9 → 78.1% sleeved) and Exact did not move. One Fast scan went from
     /// undecided to wrong, and a match took 4.13 hashes where it took 3.15.
     ///
+    /// **0.85 joined them the same day, for a card deeper in its pocket.** Surveyed over every
+    /// detected frame of the 86 (1,452), the card read smaller than the quad and centred named
+    /// the right card where these framings did not on 57 frames of 18 scans, and lost it on 2. On
+    /// the replay Fast went 3 scans better and none worse (card ✓ 40.7 → 41.9%, wrong card 9 → 6),
+    /// Exact 2 better and 1 worse — the right card in a sibling printing — with card ✓ 44.2 →
+    /// 45.3%; the synthetic evaluation changed no card in either scene, at about one more hash a
+    /// match (4.10 → 5.08 plain). Adding 0.80 as well gained one more scan in each pass and lost a
+    /// card in Exact, and a printing in Fast on the evaluation. Reading the card **off** the
+    /// quad's centre — a pocket's margin is rarely even — gained more frames still in the survey,
+    /// but applied as a reframe it moved the quad the lock follows and lost scans: see
+    /// `docs/reference/card-scanner.md` §10, *The replay*.
+    ///
     /// Empty means one framing, at `inset` exactly.
     pub query_insets: Vec<f32>,
     /// Cut any background margin off the rectification. See [`crate::trim`].
@@ -234,7 +246,7 @@ impl Default for DetectOptions {
             aspect_tolerance: 0.18,
             max_angle_error_deg: 22.0,
             max_candidates: 8,
-            query_insets: vec![0.92, 0.96, 1.04],
+            query_insets: vec![0.85, 0.92, 0.96, 1.04],
             trim_margin: true,
             cardness_candidates: 4,
             min_cardness: crate::cardness::MIN_SCORE,
