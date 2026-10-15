@@ -474,6 +474,9 @@ pub struct Tracker {
     /// Under a freeze, the other card the last frames have been naming instead of the decided
     /// one — a swap in progress, if it keeps naming the same one.
     other: Option<[u8; ID_LEN]>,
+    /// The card the hash was leading with when [`Tracker::commit_to`] decided another — not a
+    /// card swapped in when it shows up under the freeze. See `commit_to`.
+    overridden: Option<[u8; ID_LEN]>,
     /// The card the last frames were clear about, and how many in a row. See
     /// [`TrackerOptions::early_frames`].
     clear: Option<([u8; ID_LEN], u32)>,
@@ -528,6 +531,7 @@ impl Tracker {
             misses: 0,
             frozen: false,
             other: None,
+            overridden: None,
             clear: None,
             early_refused: false,
         }
@@ -574,6 +578,7 @@ impl Tracker {
         self.misses = 0;
         self.frozen = false;
         self.other = None;
+        self.overridden = None;
         self.clear = None;
         self.early_refused = false;
     }
@@ -618,8 +623,18 @@ impl Tracker {
     /// so a bar dragged a little higher does not undo the decision at once, and the member at a
     /// weight no frame's evidence can approach — a frozen tally takes no evidence anyway, and
     /// this keeps the resolved printing reported if the freeze is ever lifted by a rule change.
+    ///
+    /// **The card the hash was leading with is remembered, and under the freeze it is the decided
+    /// card, not another.** A resolve that overrides the hash — a title read naming the card the
+    /// hash never matched — leaves the hash naming its own choice on every frame after, steadily,
+    /// which is exactly what a card swapped in looks like to the miss count. On the replay,
+    /// Abandoned Air Temple was decided on its title at frame 9 and lost it at frame 18 with the
+    /// card still locked: ten frames of the same other card. A card that really is swapped in is
+    /// another card than that one, and the session's watch (`watch.rs`) sees it laid down.
     pub fn commit_to(&mut self, key: [u8; ID_LEN], member: [u8; ID_LEN]) {
+        let overridden = self.leader.filter(|l| *l != key);
         self.reset();
+        self.overridden = overridden;
         self.opts.rule = CommitRule::Votes;
         self.scores.insert(key, self.opts.decide_at * 2.0);
         self.seen.insert(key, 1);
@@ -671,7 +686,7 @@ impl Tracker {
         if self.frozen {
             let present = !candidates.is_empty();
             match usable.first().map(|o| o.key) {
-                Some(k) if Some(k) == self.leader => {
+                Some(k) if Some(k) == self.leader || Some(k) == self.overridden => {
                     self.misses = 0;
                     self.other = None;
                 }
@@ -2080,6 +2095,26 @@ mod tests {
             assert!(t.observe(&[]).committed);
         }
         assert!(!t.observe(&[]).committed);
+    }
+
+    #[test]
+    fn the_card_a_resolve_overrode_is_not_a_card_swapped_in() {
+        // The hash named card 2 all along; a resolve read the title and decided card 7. The
+        // hash goes on naming 2 — that is this card as the hash sees it, not another one laid
+        // in its place, so it never ends the decision.
+        let mut t = Tracker::default();
+        for _ in 0..4 {
+            t.observe_ids(&good(2));
+        }
+        t.commit_to(id(7), id(70));
+        for frame in 0..20 {
+            assert!(t.observe_ids(&good(2)).committed, "frame {frame} after the commit");
+        }
+        // A card the hash never named before, held steady, still ends it.
+        for _ in 0..9 {
+            assert!(t.observe_ids(&good(3)).committed);
+        }
+        assert!(!t.observe_ids(&good(3)).committed);
     }
 
     #[test]

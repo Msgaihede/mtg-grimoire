@@ -1734,6 +1734,16 @@ showing the **same other card** each time — and a frame with candidates but no
 gate is not one. Requiring the *same* other card matters: a churn of different neighbours is
 every foil after its read stands down, and that is not a card being swapped in.
 
+**The card a resolve overrode is not a card swapped in (2026-10-15).** Exact decides through
+`Tracker::commit_to`, often on a title read naming a card the hash never matched — that is what the
+title tier is for. The hash then goes on naming its own choice on every frame, steadily: the same
+other card, ten times, which is exactly what a swap looks like to the count. On the replay
+Abandoned Air Temple was decided on its title at frame 9 and lost at frame 18 with the card still
+locked, and the session test that covered this case asserted that the freeze lifted. So
+`commit_to` keeps the card the tally was leading with, and under the freeze that card counts as
+the decided one's. A card that really is swapped in is some other card — and the session's watch
+sees it laid down (§10 *A card laid on the last*). The replay gained Abandoned Air Temple (undecided
+→ its card) and changed nothing else; the synthetic evaluation changed no card in either scene.
 ### The measured failures each rule element came from
 
 | Element | The failure that produced it |
