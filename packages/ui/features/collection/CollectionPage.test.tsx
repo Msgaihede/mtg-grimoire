@@ -728,6 +728,18 @@ async function holdCopy(source: HTMLElement, { pressOn }: { pressOn: Element }) 
 type Clicker = { click: (element: Element) => Promise<unknown> };
 
 /**
+ * **A made folder asks for its next sibling** (issue #1058): the field stays on screen, emptied,
+ * with the caret in it — and Escape is how the reader ends the run.
+ */
+const endRun = async () => {
+  const field = screen.getByRole("textbox", { name: "Folder name" });
+  await waitFor(() => expect(field).toHaveValue(""));
+  expect(field).toHaveFocus();
+  await userEvent.keyboard("{Escape}");
+  await waitFor(() => expect(screen.queryByRole("textbox", { name: "Folder name" })).toBeNull());
+};
+
+/**
  * What `collection_shelf_counts` would answer over these rows: one entry per non-empty shelf the
  * query names, `tiles` counted per (card, finish) as the backend counts them, `unpriced` per row.
  * The default mock below derives it from whatever `collectionList` answers, so a case that sets
@@ -797,7 +809,9 @@ const findHeading = (name: string) => waitFor(() => heading(name));
 
 /** A heading's own controls, by the names `ShelfHeading` gives them. `null` where it has none. */
 const addIn = (name: string) =>
-  within(heading(name)).queryByRole("button", { name: `Add folder in ${name}` });
+  within(heading(name)).queryByRole("button", {
+    name: name === "Not sorted" ? "Add top-level folder" : `Add folder in ${name}`,
+  });
 const renameOf = (name: string) =>
   within(heading(name)).queryByRole("button", { name: `Rename ${name}` });
 const manageOf = (name: string) =>
@@ -4666,6 +4680,7 @@ describe("Add folder", () => {
 
     await waitFor(() => expect(collectionFolderCreate).toHaveBeenCalledWith(null, "Sealed"));
     expect(collectionFolderCreate).toHaveBeenCalledTimes(1);
+    await endRun();
     await waitFor(() => expect(addIn("Not sorted")).toHaveFocus());
     expect(standingIn()).toBeNull();
   });
@@ -4780,7 +4795,29 @@ describe("Add folder", () => {
     await user.click(screen.getByRole("button", { name: "Create folder" }));
 
     await waitFor(() => expect(collectionFolderCreate).toHaveBeenCalledWith(null, "Sealed"));
+    await endRun();
     await waitFor(() => expect(pathRowAddFolder()).toHaveFocus());
+  });
+
+  /** Issue #1058: filling a folder with subfolders is one Add folder and a name per folder. */
+  it("asks for the next folder in the same parent after each create, until Escape", async () => {
+    collectionFolderList.mockResolvedValue([BINDER]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await findHeading("Trade binder");
+
+    await user.click(addIn("Trade binder")!);
+    const field = await screen.findByRole("textbox", { name: "Folder name" });
+    await user.type(field, "White{Enter}");
+    await waitFor(() => expect(collectionFolderCreate).toHaveBeenCalledWith(3, "White"));
+    await waitFor(() => expect(field).toHaveValue(""));
+    await user.type(field, "Blue{Enter}");
+    await waitFor(() => expect(collectionFolderCreate).toHaveBeenCalledWith(3, "Blue"));
+
+    expect(collectionFolderCreate).toHaveBeenCalledTimes(2);
+    await endRun();
+    await waitFor(() => expect(addIn("Trade binder")).toHaveFocus());
+    expect(collectionFolderCreate).toHaveBeenCalledTimes(2);
   });
 
   /**
@@ -5505,6 +5542,7 @@ describe("the caret after Add folder in a heading and after a move", () => {
       await user.type(field, "Sleeves{Enter}");
 
       await waitFor(() => expect(collectionFolderCreate).toHaveBeenCalledWith(3, "Sleeves"));
+      await endRun();
       await waitFor(() => expect(addIn("Trade binder")).toHaveFocus());
     } finally {
       undo();
@@ -5534,6 +5572,7 @@ describe("the caret after Add folder in a heading and after a move", () => {
       await user.type(field, "Sleeves{Enter}");
 
       await waitFor(() => expect(collectionFolderCreate).toHaveBeenCalledWith(3, "Sleeves"));
+      await endRun();
       await waitFor(() => expect(addIn("Trade binder")).toHaveFocus());
     } finally {
       undo();
@@ -6070,6 +6109,7 @@ describe("the caret after the path row's Add folder, Move to folder… and Delet
       await user.type(field, "Sleeves{Enter}");
 
       await waitFor(() => expect(collectionFolderCreate).toHaveBeenCalledWith(null, "Sleeves"));
+      await endRun();
       await waitFor(() => expect(add).toHaveFocus());
       expect(focus.on(add)).toEqual([{ preventScroll: true }]);
     } finally {

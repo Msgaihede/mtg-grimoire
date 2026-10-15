@@ -177,7 +177,7 @@ const NO_RULES: readonly FolderRule[] = [];
 const NO_INHERITED: readonly InheritedRules[] = [];
 
 type Panel =
-  | { kind: "newFolder"; parentId: number | null; originShelfId?: number }
+  | { kind: "newFolder"; parentId: number | null; originShelfId?: number; round?: number }
   | { kind: "renameFolder"; folderId: number }
   | { kind: "moveFolder"; folderId: number }
   | { kind: "deleteFolder"; folderId: number }
@@ -1420,11 +1420,15 @@ export function CollectionPage() {
   // the field is revealed at the end of the parent's subtree, so on a long wall the parent's heading
   // — and with it the opener — has been virtualised away by the time the field closes, and the focus
   // above is a no-op on a detached node. The heading takes the caret back as it is drawn.
+  //
+  // **The path row's Add folder takes it back without scrolling** (ledger 217): Escape is how a run
+  // of creates ends (issue #1058), and the folders just made are drawn last among their siblings,
+  // often well below the path row — a scrolling focus would take the reader off them.
   const dismiss = useCallback(() => {
-    openerRef.current?.focus();
+    openerRef.current?.focus({ preventScroll: panel?.kind === "newFolder" });
     if (headingAddedIn !== null) recordCaret(askCaret(headingAddedIn, "add"));
     setPanel(null);
-  }, [headingAddedIn, recordCaret, askCaret]);
+  }, [panel, headingAddedIn, recordCaret, askCaret]);
   const close = useCallback(() => setPanel(null), []);
 
   /**
@@ -1606,15 +1610,17 @@ export function CollectionPage() {
    * can take a deleted folder's id — and with it whatever fold was stored under that id. The create
    * clears it, and only where something is stored, so an ordinary create writes nothing.
    *
-   * **The path row's caret comes back without scrolling** (ledger 217): the new heading is drawn
-   * last among its siblings, often well below the path row, and the return is the button the reader
-   * pressed — spec §3.8's — so an ordinary `focus()` took the page to the top and off the folder
-   * just made. A heading's Add folder is {@link dismiss}'s request, which reveals the heading.
+   * **A made folder asks for its next sibling** (issue #1058): filling a folder with five
+   * subfolders was five trips to its Add folder. So the field stays where it is — the draft is
+   * drawn last among the siblings, which is now just under the folder made — empties, and keeps the
+   * caret, until the reader ends the run with Escape, ✕ or a click away. Those are the field's own
+   * ways out and hand the caret back exactly as before: the path row's without scrolling, a
+   * heading's by request. Written through the updater, so a run the reader has already ended while
+   * the write was in flight stays ended.
    */
   const nameFolder = useCallback(
     (name: string) => {
       if (panel?.kind === "newFolder") {
-        const pathRow = headingAddedIn === null;
         createMutate(
           { parentId: panel.parentId, name },
           {
@@ -1624,12 +1630,11 @@ export function CollectionPage() {
               // the banner's sentence, so it adds no toast of its own.
               notify.success(`Folder “${name}” created`);
               if (storedFolds[String(made.id)] !== undefined) setFold(made.id, null);
-              if (!pathRow) {
-                dismiss();
-                return;
-              }
-              openerRef.current?.focus({ preventScroll: true });
-              setPanel(null);
+              setPanel((current) =>
+                current?.kind === "newFolder"
+                  ? { ...current, round: (current.round ?? 0) + 1 }
+                  : current,
+              );
             },
           },
         );
@@ -1650,7 +1655,6 @@ export function CollectionPage() {
     },
     [
       panel,
-      headingAddedIn,
       createMutate,
       renameMutate,
       storedFolds,
@@ -2530,6 +2534,7 @@ export function CollectionPage() {
               initial: "",
               mode: "create" as const,
               pending: folders.create.isPending,
+              round: openPanel?.kind === "newFolder" ? openPanel.round : undefined,
               onCommit: nameFolder,
               onCancel: cancelNewFolder,
             }
@@ -3091,6 +3096,7 @@ export function CollectionPage() {
               {!viewAll && (
                 <ShelfToolbar
                   onAddFolder={canMakeFolder ? () => openNewFolder(folderId) : undefined}
+                  addFolderIn={trail.length === 0 ? "Collection" : trail[trail.length - 1].name}
                   // Held while filtering, the chevron's rule: every shelf is drawn open then, so a
                   // press would store folds the reader cannot see. `foldPaused` says so on both
                   // buttons; the guards below are the page's own half, kept behind it.

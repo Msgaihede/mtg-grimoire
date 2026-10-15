@@ -167,6 +167,30 @@ pub trait Readers: Sync {
     fn collector_text(&self, view: &BurstView<'_>) -> (String, Vec<(String, String)>) {
         (String::new(), self.collector(view))
     }
+    /// The title found anywhere near the card's top rather than cut from its band, when it
+    /// names a card the title rules let decide ([`title_binds`]) — asked only after a resolve
+    /// fails to name one card. Defaults to none, for readers that cannot.
+    fn title_wide(&self, _view: &BurstView<'_>) -> Option<String> {
+        None
+    }
+}
+
+/// `inner`, with the title read replaced — how a resolve is run again on a wide read.
+struct WithTitle<'a> {
+    inner: &'a dyn Readers,
+    title: &'a str,
+}
+
+impl Readers for WithTitle<'_> {
+    fn title(&self, _: &BurstView<'_>) -> Option<String> {
+        Some(self.title.to_string())
+    }
+    fn collector(&self, view: &BurstView<'_>) -> Vec<(String, String)> {
+        self.inner.collector(view)
+    }
+    fn collector_text(&self, view: &BurstView<'_>) -> (String, Vec<(String, String)>) {
+        self.inner.collector_text(view)
+    }
 }
 
 /// No readers at all — no models loaded, or the `ocr` feature is off. Both reader tiers then
@@ -203,7 +227,60 @@ pub fn resolve(
 /// their distances overlapped across most of the range. A wrong crop — a sleeve pocket, an art
 /// window turned sideways — lands among a crowd of strangers at nearly the same distance; a
 /// real card, even badly framed, stands out from it.
+///
+/// **A resolve that names no one card is run again on a wide title read**
+/// ([`Readers::title_wide`]), when there is one. The title band is cut at fixed fractions of the
+/// rectified card, and a card that sits smaller in its quad — inside a binder pocket — puts its
+/// name outside it; reading the card's whole top quarter finds it, at about fifteen times the
+/// band's cost, so it is paid only where the answer would otherwise be "not found" or a list.
 pub fn resolve_gated(
+    r: &Reference,
+    mask: &Mask,
+    burst: &[BurstView<'_>],
+    readers: &dyn Readers,
+    max_normalized: f32,
+    min_gap: Option<f32>,
+) -> ResolutionView {
+    let first = resolve_once(r, mask, burst, readers, max_normalized, min_gap);
+    if !names_no_one_card(&first) {
+        return first;
+    }
+    let started = crate::host::Stopwatch::start();
+    let wide = reading_order(burst).into_iter().take(2).find_map(|v| readers.title_wide(v));
+    let Some(wide) = wide else { return first };
+    let again = WithTitle { inner: readers, title: &wide };
+    let mut again = resolve_once(r, mask, burst, &again, max_normalized, min_gap);
+    again.elapsed_ms += first.elapsed_ms + started.ms();
+    if let Some(t) = again.tiers.iter_mut().find(|t| t.tier == "title") {
+        t.detail = format!("wide, {}", t.detail);
+    }
+    again
+}
+
+/// Did the resolve fail to say which card — nothing found, or a list of more than one? A list of
+/// one card's printings is a question a title cannot answer, and on the synthetic evaluation it
+/// is a quarter of every Exact decision, so the wide read is not paid for it.
+fn names_no_one_card(v: &ResolutionView) -> bool {
+    match v.outcome {
+        Outcome::Resolved => false,
+        Outcome::NotFound => true,
+        Outcome::Ambiguous => {
+            let card = |c: &ChoiceView| c.oracle_id.clone().unwrap_or_else(|| c.id.clone());
+            v.choices.iter().map(card).collect::<HashSet<_>>().len() > 1
+        }
+    }
+}
+
+/// The burst's views in the order the readers take them: the sharpest pixels first, then the
+/// most card-like.
+fn reading_order<'b, 'a>(burst: &'b [BurstView<'a>]) -> Vec<&'b BurstView<'a>> {
+    let source = |v: &BurstView<'_>| v.pixels.map_or(0, |p| p.image().width());
+    let mut order: Vec<&BurstView<'_>> = burst.iter().collect();
+    order.sort_by(|a, b| source(b).cmp(&source(a)).then(b.cardness.total_cmp(&a.cardness)));
+    order
+}
+
+fn resolve_once(
     r: &Reference,
     mask: &Mask,
     burst: &[BurstView<'_>],
@@ -231,9 +308,7 @@ pub fn resolve_gated(
     // nothing but its 488×680 rectification — and a burst can hold all three: a card laid on a
     // decided one keeps the frames it lay at rest in, which kept no pixels. Chosen by
     // card-likeness alone, the readers read those.
-    let source = |v: &BurstView<'_>| v.pixels.map_or(0, |p| p.image().width());
-    let mut order: Vec<&BurstView<'_>> = burst.iter().collect();
-    order.sort_by(|a, b| source(b).cmp(&source(a)).then(b.cardness.total_cmp(&a.cardness)));
+    let order = reading_order(burst);
 
     // **The whole-card search and the two reads run at once.** None of the three needs another's
     // answer: the title and the collector line are different bands of the same views, and the
@@ -1259,6 +1334,51 @@ mod tests {
         let v = gated(&clear, &NoReaders);
         assert_eq!(v.outcome, Outcome::Resolved, "{:?}", v.tiers);
         assert_eq!(ids(&v), [format_uuid(&id(1))]);
+    }
+
+    #[test]
+    fn a_resolve_that_names_no_card_is_run_again_on_the_wide_title() {
+        // The band read nothing; the wide read finds the name of the card the hash ranks second.
+        struct Wide {
+            read: Option<&'static str>,
+            asked: std::sync::atomic::AtomicUsize,
+        }
+        impl Readers for Wide {
+            fn title(&self, _: &BurstView<'_>) -> Option<String> {
+                None
+            }
+            fn collector(&self, _: &BurstView<'_>) -> Vec<(String, String)> {
+                Vec::new()
+            }
+            fn title_wide(&self, _: &BurstView<'_>) -> Option<String> {
+                self.asked.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.read.map(String::from)
+            }
+        }
+        let wide = |read| Wide { read, asked: Default::default() };
+        let asked = |w: &Wide| w.asked.load(std::sync::atomic::Ordering::Relaxed);
+        let (up, down) = (img(5), img(99));
+        let gated = |r: &Reference, readers: &dyn Readers| {
+            resolve_gated(r, &Mask::all(), &burst(&up, &down), readers, GATE, Some(0.02))
+        };
+
+        let crowded = bits_away(&[40, 44]);
+        let w = wide(Some("card 1"));
+        let v = gated(&crowded, &w);
+        assert_eq!(v.outcome, Outcome::Resolved, "{:?}", v.tiers);
+        assert_eq!(ids(&v), [format_uuid(&id(2))]);
+        assert!(v.tiers[2].detail.starts_with("wide, "), "says which read: {:?}", v.tiers[2]);
+
+        // No wide read either: the first answer stands.
+        let v = gated(&crowded, &wide(None));
+        assert_eq!(v.outcome, Outcome::NotFound, "{:?}", v.tiers);
+
+        // A resolve that already named one card does not pay for the wide read.
+        let w = wide(Some("card 1"));
+        let v = gated(&bits_away(&[40, 60]), &w);
+        assert_eq!(v.outcome, Outcome::Resolved);
+        assert_eq!(ids(&v), [format_uuid(&id(1))]);
+        assert_eq!(asked(&w), 0);
     }
 
     #[test]

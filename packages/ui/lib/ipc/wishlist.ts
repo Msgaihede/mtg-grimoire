@@ -191,6 +191,13 @@ export interface WishRow {
   /** Copies the collection holds of **other printings of the same card** — `0` for an
    *  any-printing wish and for an orphan with no oracle id. */
   ownedOther: number;
+  /**
+   * **Where those copies are filed** (issue #1055) — {@link WishRow.ownedExact} and
+   * {@link WishRow.ownedOther} by collection folder, one entry per folder holding any. Summed,
+   * the two counts are the two above; empty when the collection holds none. Ids rather than
+   * names: the path is built from the collection's folder list, as every other folder mark is.
+   */
+  ownedPlaces: WishOwnedPlace[];
   notes: string | null;
   needsReview: string | null;
   /** Unix seconds. */
@@ -205,6 +212,22 @@ export interface WishRow {
    * wish's oracle card. `null` is a genuine orphan — no pinned printing, no oracle match.
    */
   legalities: string | null;
+}
+
+/** One collection folder's share of a wish's owned copies — {@link WishRow.ownedPlaces}. */
+export interface WishOwnedPlace {
+  /** The collection folder, or `null` for copies filed in no folder (`Not sorted`). */
+  folderId: number | null;
+  /** Copies here that answer the wish's printing — {@link WishRow.ownedExact}'s reading. */
+  exact: number;
+  /** Copies here of another printing of the same card — {@link WishRow.ownedOther}'s reading. */
+  other: number;
+  /**
+   * Whether the copies here are **not free to use** (issue #1054): the folder is a deck's group,
+   * or is locked by its own flag or an ancestor's. The wall draws the free places as the `Own` /
+   * `Other` chips and the held ones as a lighter `In use` chip. `false` for `Not sorted`.
+   */
+  held: boolean;
 }
 
 export interface WishlistPage {

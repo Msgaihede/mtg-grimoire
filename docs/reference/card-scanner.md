@@ -1134,6 +1134,54 @@ of a card shares its name, so the printing a name resolves to is whichever one t
 happened to store — an arbitrary choice being cast as a vote at weight 6.0, strong enough to
 fight the collector line, which actually knows.
 
+### The wide title — the name found, not cut (2026-10-15)
+
+**The band is cut at fixed fractions of the rectified card, and a card that sits smaller in its
+quad does not put its name there.** Inside a binder pocket the detector finds the pocket, the card
+lies a fifth smaller within it, and its title bar is below the band and short of its left edge: the
+recogniser reads the pocket's rim or half a word. So when a resolve names no one card — nothing
+found, or a list of more than one — it asks `Readers::title_wide`: text detection (`ocrs`'s
+model, which the band read stopped using in #707) over the card's whole top quarter, edge to edge,
+each way up, and the first line of **eight or more** characters that binds (`title_binds`) runs
+the resolve again in place of the band's read. The title tier's detail then begins `wide,`.
+
+It was surveyed before it was built, in two steps (`SCANNER_TITLE_SURVEY`, § *The replay*):
+
+| every line read, every fourth frame, of the 86 replay scans | frames binding the reader's card | frames binding another |
+| --- | ---: | ---: |
+| the whole frame, four ways up | 202 | 119 |
+| inside the detected quad | 125 | 24 |
+| inside the quad, within 15% of either end, eight characters or more | 97 lines | 0 |
+
+The whole frame is a binder page: a neighbour's name binds as readily as the card's, and a rules
+text word — "when", "sacrifice", "turn" — is some card's whole name exactly. Inside the quad and
+near its ends is where a title is, and eight characters keep the words out. Read off the
+rectified card itself (every second frame, 729), the band's read bound the reader's card on 158
+frames, the wide one on 205 at the top sixth and **252 at the top quarter**, and neither ever bound
+another. The sixth was too short on the replay: a burst's quad is the lock's, a little larger than
+a fresh detection's, and traced on Hideous Taskmaster its title sat at 16–18% of the view.
+
+| | band only | + the wide title |
+| --- | ---: | ---: |
+| replay, As scanned: printing ✓ / card ✓ | 36.0 / 45.3% | **39.5 / 50.0%** |
+| replay, As scanned: wrong card / undecided | 7 / 46.5% | 7 / 41.9% |
+| synthetic, sleeved, Exact card ✓ | 97.5% | 98.1% |
+| synthetic, plain | — | no card changed |
+| mean ms a frame, synthetic plain / sleeved (under load) | 362 / 406 | 362 / 407 |
+
+The Darkness Crystal went from undecided to its card, Emptiness, The Reaper, King No More and
+Hideous Taskmaster to their printings; on the evaluation Bruna, the Fading Light from not found to
+its card and Living Wish from a list to its printing. Nothing got worse, and Fast is untouched — the
+wide read lives in Exact's resolve. **Asked only where the answer is in doubt, and that is what
+makes it free.** Asked whenever the band's read bound nothing, it changed the same cards and cost
+537 and 561 ms a frame; asked on every list too, 451 and 491, because a quarter of Exact's
+decisions on the evaluation are lists of one card's printings, which a title cannot settle.
+
+**What it does not reach**: eight of the scans the survey found a clean title in never resolve at
+all — Exact needs seven steady locked frames and they never had them — and four more resolved
+while the burst's two views held no legible title. Abandoned Air Temple read its name exactly and
+was decided on frames 9 to 17, then lost it at 18; the replay scores the last frame.
+
 ### The collector tier — the only one that names a printing
 
 `LTR 232` is an identity. The descriptor says what a card looks like and reads a reprint as
@@ -4330,8 +4378,16 @@ reading's match looks like when it is right and when it is not. 1,452 detected f
 (`src/bin/support/ab.rs`), so a change is measured against the scanner without it on one binary and
 through `pnpm scanner:replay`, which passes the environment on and no unknown argument:
 `SCANNER_REFRAME=off | <margin>[,<only above>[,<min gap>]]`, `SCANNER_REFRAME_LOG=1` (a stderr line per
-reframed frame), `SCANNER_GAP=off | [<exact>],[<fast>]` and `SCANNER_FRAMINGS=<f>,<f>,…` (the framings
-a quad is matched at besides its own — §3 *Rectify*). Unset is what ships.
+reframed frame), `SCANNER_GAP=off | [<exact>],[<fast>]`, `SCANNER_FRAMINGS=<f>,<f>,…` (the framings
+a quad is matched at besides its own — §3 *Rectify*) and `SCANNER_WIDE_TITLE=off` (§4 *The wide
+title*). Unset is what ships.
+
+**The title survey** is the same replay binary with `SCANNER_TITLE_SURVEY=<file>`: every fourth frame
+(`SCANNER_TITLE_EVERY`), every line of text the detection model finds anywhere in it, four ways up,
+looked up as a card name — one JSON line per line that names a card, with where it sat in the
+detected quad's own coordinates and how tall it was. `SCANNER_TITLE_BANDS=1` reads the rectified
+card instead: the session's band read against the wide one (`SCANNER_TITLE_TOP`, the top quarter by
+default), with both reads' times. 86 scans, 3 to 4 minutes; §4 *The wide title* has what it found.
 
 **The sleeve pocket, the same evening.** `SCANNER_SURVEY_INSETS=1` beside `SCANNER_REFRAME_SURVEY`
 reads each detected quad as a pocket instead: the session's own match of it (every framing, trimmed)

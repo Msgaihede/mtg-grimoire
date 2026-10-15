@@ -45,7 +45,15 @@ export const INDEX_PAGE = 500;
 
 /** The two maps a row is looked up in, plus the name-keyed one a printing-less wish lands in. */
 export interface OwnedIndex {
-  /** Copies of one printing, summed over every row of the collection that holds it. */
+  /**
+   * Copies of one printing **in one finish**, keyed by {@link ownedGrainKey} and summed over every
+   * row of the collection that holds it.
+   *
+   * The finish is part of the key because it is part of what a shared row *is*: a `ShareCard`
+   * carries its `f`, and "you own 2" beside a foil copy reads as two foils. Pooled per printing,
+   * two nonfoils answered a foil row as owned (issue #1056) — a figure that sends a reader into a
+   * trade believing they already hold the card they came for.
+   */
   owned: ReadonlyMap<string, number>;
   /** Copies wished for **that printing**. */
   wanted: ReadonlyMap<string, number>;
@@ -101,6 +109,18 @@ export function wishGrainKey(
   return `${cardId}|${finish ?? ""}|${folderId ?? ""}`;
 }
 
+/**
+ * The owned map's key — one printing in one finish, the `(card_id, finish)` grain the exact-grain
+ * ownership spec matches a deck's copies on.
+ *
+ * Written once and read from both ends, {@link wishGrainKey}'s reason: the sweep files a
+ * collection row under it and {@link crossReference} looks a shared row up in it, and a key
+ * spelled twice is a lookup that misses for a reason nothing can see.
+ */
+export function ownedGrainKey(cardId: string, finish: string): string {
+  return `${cardId}|${finish}`;
+}
+
 /** What every card answers before the sweep has finished, and what a refused sweep leaves. */
 export const EMPTY_INDEX: OwnedIndex = {
   owned: new Map(),
@@ -118,15 +138,16 @@ export interface CrossReference {
 /**
  * The two figures for one shared row.
  *
- * **Owning is per printing and wanting is per printing *or* per card**, which is a difference in
- * the data rather than an inconsistency: a collection row is always a printing, and a wish is a
+ * **Owning is per printing and finish, and wanting is per printing *or* per card**, which is a
+ * difference in the data rather than an inconsistency: a collection row is always a printing in
+ * a finish — so a foil row is answered by foil copies alone (issue #1056) — and a wish is a
  * printing only when the reader pinned one. So a pinned wish is counted against its own printing
  * and a loose one against every printing of the card — which is what the reader meant when they
  * wrote the name down without a set.
  */
 export function crossReference(card: ShareCard, index: OwnedIndex): CrossReference {
   return {
-    own: index.owned.get(card.id) ?? 0,
+    own: index.owned.get(ownedGrainKey(card.id, card.f)) ?? 0,
     want: (index.wanted.get(card.id) ?? 0) + (index.wantedByName.get(card.n.toLowerCase()) ?? 0),
   };
 }
@@ -150,14 +171,20 @@ async function fold<T>(
   }
 }
 
-/** Every copy the reader holds, whatever folder it is filed in and whatever deck claims it. */
+/**
+ * Every copy the reader holds, whatever folder it is filed in and whatever deck claims it — per
+ * printing and finish, never pooled across finishes.
+ */
 async function readOwned(): Promise<ReadonlyMap<string, number>> {
   const owned = new Map<string, number>();
   // No folder filter and no lock filter: the question is what the reader *has*, and a copy set
   // aside in a locked drawer is still a copy they will not be trading for.
   await fold(
     (limit, offset) => ipc.collectionList({ limit, offset }),
-    (row) => owned.set(row.cardId, (owned.get(row.cardId) ?? 0) + row.quantity),
+    (row) => {
+      const key = ownedGrainKey(row.cardId, row.finish);
+      owned.set(key, (owned.get(key) ?? 0) + row.quantity);
+    },
   );
   return owned;
 }

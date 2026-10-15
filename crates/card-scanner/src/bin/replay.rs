@@ -675,6 +675,166 @@ fn survey_file((label, path): &Ready, r: &Reference, ingredients: &Ingredients) 
     lines
 }
 
+/// The whole-frame title survey (`SCANNER_TITLE_SURVEY=<file>`): every few frames, every line
+/// of text found anywhere in the frame — each of four ways up — looked up as a card name. One
+/// JSON line per line that names a card, and one per frame read, so the question "does the
+/// name bind, and does it bind the reader's card or a neighbour's" can be counted.
+fn title_survey_file(
+    (label, path): &Ready,
+    r: &Reference,
+    ingredients: &Ingredients,
+) -> Vec<String> {
+    use card_scanner::detect::{locate, rgb_of, DetectOptions, EdgeMethod};
+    let (Some(d), Some(m)) = (&ingredients.detection, &ingredients.recognition) else {
+        return Vec::new();
+    };
+    let Ok(reader) = TitleReader::from_bytes(d, m) else { return Vec::new() };
+    let Ok(run) = std::fs::read(path) else { return Vec::new() };
+    let Ok(frames) = cut(label, &run) else { return Vec::new() };
+    let truth = ingredients.oracle_of(&label.card.id);
+    let mask = card_scanner::index::Mask::all();
+    let every = env_number("SCANNER_TITLE_EVERY").unwrap_or(4.0) as usize;
+    let mut lines = Vec::new();
+    for (i, jpeg) in frames.iter().enumerate().filter(|(i, _)| i % every == 0) {
+        let Ok(source) = image::load_from_memory(jpeg) else { continue };
+        let rgb = rgb_of(&source);
+        let (w, h) = (rgb.width() as f32, rgb.height() as f32);
+        let quad = [EdgeMethod::Canny, EdgeMethod::Otsu]
+            .into_iter()
+            .filter_map(|method| {
+                locate(&source, &rgb, &DetectOptions { method, ..Default::default() }).0.ok()
+            })
+            .max_by(|a, b| a.rank().total_cmp(&b.rank()))
+            .map(|f| f.quad);
+        if std::env::var_os("SCANNER_TITLE_BANDS").is_some() {
+            lines.extend(title_bands(label, i, &rgb, quad.as_ref(), &reader, r, &truth));
+            continue;
+        }
+        let started = std::time::Instant::now();
+        let mut found = 0;
+        for rot in [0u32, 90, 180, 270] {
+            let img = match rot {
+                90 => image::imageops::rotate90(&*rgb),
+                180 => image::imageops::rotate180(&*rgb),
+                270 => image::imageops::rotate270(&*rgb),
+                _ => (*rgb).clone(),
+            };
+            for (text, [l, t, rr, b]) in reader.read_lines(&img) {
+                let read = card_scanner::ocr::normalize(&text);
+                let Some(hits) = r.lookup_cards_masked(&read, &mask) else { continue };
+                found += 1;
+                // The line's centre, back in the frame's own coordinates.
+                let (u, v) = ((l + rr) / 2.0, (t + b) / 2.0);
+                let (x, y) = match rot {
+                    90 => (v, h - 1.0 - u),
+                    180 => (w - 1.0 - u, h - 1.0 - v),
+                    270 => (w - 1.0 - v, u),
+                    _ => (u, v),
+                };
+                let in_quad = quad.as_ref().map(|q| inside(&q.corners, (x, y)));
+                // The centre in the quad's own unit square, and the line's height in the quad's
+                // short side — where on the card (or around the inner box) the text sits.
+                let to_unit = quad.as_ref().and_then(|q| {
+                    use imageproc::geometric_transformations::Projection;
+                    let unit = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+                    Projection::from_control_points(q.corners, unit)
+                });
+                let (qx, qy) = to_unit.map_or((f32::NAN, f32::NAN), |p| p * (x, y));
+                let short = quad.as_ref().map_or(f32::NAN, |q| {
+                    let c = q.corners;
+                    let side = |a: (f32, f32), b: (f32, f32)| (b.0 - a.0).hypot(b.1 - a.1);
+                    (side(c[0], c[1]) + side(c[2], c[3])) / 2.0
+                });
+                let card_ok = names(&hits.cards, &truth);
+                lines.push(serde_json::json!({
+                    "run": label.id, "frame": i + 1, "rot": rot, "read": read, "edits": hits.edits,
+                    "prefix": hits.prefix, "cards": hits.cards.len(),
+                    "binds": binding(&read, &hits),
+                    "card_ok": card_ok, "x": x / w, "y": y / h, "in_quad": in_quad,
+                    "height": (b - t) / if rot % 180 == 0 { h } else { w },
+                    "qx": qx, "qy": qy, "qh": (b - t) / short, "len": read.chars().count(),
+                }).to_string());
+            }
+        }
+        lines.push(serde_json::json!({
+            "run": label.id, "frame": i + 1, "frame_row": true, "named": found,
+            "quad": quad.is_some(), "ms": started.elapsed().as_millis() as u64,
+        }).to_string());
+    }
+    lines
+}
+
+/// The title survey's band mode (`SCANNER_TITLE_BANDS=1`): the session's title read of the
+/// rectified card, against every line text detection finds in its top
+/// (`SCANNER_TITLE_TOP`, [`card_scanner::ocr::WIDE_TITLE_BAND`]'s by default) — full width —
+/// each way up. One line per read that names a card, and one per frame with both reads' times.
+fn title_bands(
+    label: &ScanLabel,
+    i: usize,
+    rgb: &image::RgbImage,
+    quad: Option<&card_scanner::detect::Quad>,
+    reader: &TitleReader,
+    r: &Reference,
+    truth: &Option<String>,
+) -> Vec<String> {
+    use card_scanner::ocr::{normalize, BandSource};
+    let top = env_number("SCANNER_TITLE_TOP").unwrap_or(card_scanner::ocr::WIDE_TITLE_BAND.3);
+    let mask = card_scanner::index::Mask::all();
+    let Some(q) = quad else { return Vec::new() };
+    let opts = card_scanner::detect::DetectOptions::default();
+    let Some(v) = card_scanner::detect::rectify_views(rgb, q, &opts) else { return Vec::new() };
+    let src = BandSource::Rectified { upright: &v.rectified, flipped: &v.rectified_180 };
+    let mut out = Vec::new();
+    let mut line = |kind: &str, rot: bool, read: String, ms: f32| {
+        let Some(hits) = r.lookup_cards_masked(&read, &mask) else { return };
+        let card_ok = names(&hits.cards, truth);
+        out.push(serde_json::json!({
+            "run": label.id, "frame": i + 1, "kind": kind, "rot": rot, "read": read,
+            "edits": hits.edits, "prefix": hits.prefix, "cards": hits.cards.len(),
+            "binds": binding(&read, &hits),
+            "card_ok": card_ok, "len": read.chars().count(), "ms": ms,
+        }).to_string());
+    };
+    let started = std::time::Instant::now();
+    let band = reader.read_title(&src);
+    let band_ms = started.elapsed().as_secs_f32() * 1000.0;
+    line("band", band.rotated, band.normalized.clone(), band_ms);
+    let started = std::time::Instant::now();
+    for rot in [false, true] {
+        let img = src.band((0.0, 0.0, 1.0, top), 2, rot);
+        for (text, _) in reader.read_lines(&img) {
+            line("wide", rot, normalize(&text), f32::NAN);
+        }
+    }
+    let wide_ms = started.elapsed().as_secs_f32() * 1000.0;
+    out.push(serde_json::json!({
+        "run": label.id, "frame": i + 1, "frame_row": true, "band_ms": band_ms, "wide_ms": wide_ms,
+    }).to_string());
+    out
+}
+
+/// Does a name lookup's set of cards hold the reader's?
+fn names(cards: &[[u8; 16]], truth: &Option<String>) -> bool {
+    truth.as_ref().is_some_and(|t| cards.iter().any(|c| &format_uuid(c) == t))
+}
+
+/// Would this read decide the card — one card, not a prefix, within the title rules?
+fn binding(read: &str, hits: &card_scanner::reference::NameHits) -> bool {
+    !hits.prefix && hits.cards.len() == 1 && card_scanner::resolve::title_binds(read, hits.edits)
+}
+
+fn env_number(var: &str) -> Option<f32> {
+    std::env::var(var).ok().and_then(|v| v.parse().ok())
+}
+
+/// Is `p` inside the convex quad `c`?
+fn inside(c: &[(f32, f32); 4], p: (f32, f32)) -> bool {
+    let cross =
+        |a: (f32, f32), b: (f32, f32)| (b.0 - a.0) * (p.1 - a.1) - (b.1 - a.1) * (p.0 - a.0);
+    let s: Vec<f32> = (0..4).map(|k| cross(c[k], c[(k + 1) % 4])).collect();
+    s.iter().all(|&v| v >= 0.0) || s.iter().all(|&v| v <= 0.0)
+}
+
 /// One survey line: how a reading matched, and whether that is the reader's card.
 fn survey_line(
     label: &ScanLabel,
@@ -807,6 +967,17 @@ fn run(args: Args) -> Result<(), String> {
         .jobs
         .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get() / 2));
     let done = AtomicUsize::new(0);
+    if let Some(file) = std::env::var_os("SCANNER_TITLE_SURVEY") {
+        let r = ingredients.reference()?;
+        let lines = parallel(ready.len(), jobs, |i| {
+            let lines = title_survey_file(&ready[i], &r, &ingredients);
+            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+            eprintln!("[{n}/{}] {} — titles surveyed", ready.len(), ready[i].0.card.name);
+            lines
+        });
+        let text: String = lines.into_iter().flatten().map(|l| l + "\n").collect();
+        return std::fs::write(&file, text).map_err(|e| format!("title survey: {e}"));
+    }
     if let Some(file) = std::env::var_os("SCANNER_REFRAME_SURVEY") {
         let r = ingredients.reference()?;
         let lines = parallel(ready.len(), jobs, |i| {

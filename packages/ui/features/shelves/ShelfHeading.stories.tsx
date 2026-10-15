@@ -242,7 +242,7 @@ export const NotSorted: Story = {
     const canvas = within(canvasElement);
     await userEvent.click(canvas.getByRole("button", { name: "Not sorted" }));
     await expect(args.onToggle).toHaveBeenCalledTimes(1);
-    await userEvent.click(canvas.getByRole("button", { name: "Add folder in Not sorted" }));
+    await userEvent.click(canvas.getByRole("button", { name: "Add top-level folder" }));
     await expect(args.onAddFolder).toHaveBeenCalledTimes(1);
     await expect(canvas.queryByRole("button", { name: "Manage Not sorted" })).toBeNull();
     await expect(canvas.queryByRole("button", { name: "Rename Not sorted" })).toBeNull();
