@@ -74,7 +74,8 @@ perfectly as the other. Say which.
   `collection_folders.rules` / `wishlist_folders.rules`, a JSON array). It is advisory: it never
   refuses a card, it outlines the cards that do not match in red and counts them. A subfolder
   inherits its ancestors' folder rules. Say **folder rule**, and its mismatch a **rule
-  conflict** — never "invalid card".
+  conflict** — never "invalid card". Folder rules combine with AND/OR through a **rule group**
+  (`kind: "group"`, issue #1053) — never a deck view's group-by heading or a sync group.
 - A **deck validation rule** is a format's constraint checked by
   `packages/ui/features/decks/validation/` (singleton, deck size, banned cards) — a *rule break*
   in the deck editor. It wears the same red outline, which is the only thing the two share.

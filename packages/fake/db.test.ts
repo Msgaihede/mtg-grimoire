@@ -24966,6 +24966,202 @@ describe("folder rules", () => {
     });
   });
 
+  /**
+   * **Groups** (issue #1053), tidied as `folder_rules::tidy` tidies them: members tidied a level
+   * deeper, shape and order kept, an empty group and one past three deep refused, and the limit
+   * of twenty counting the rules that test a card wherever they sit — never a group.
+   */
+  it("tidies a group's members and refuses an empty, too deep or overfull one", () => {
+    const db = makeDb({ collectionFolders: [userFolder(1, null)] });
+    const w = writeHandlers(db);
+    const set = (rules: FolderRule[]) => () => w.collection_folder_set_rules({ id: 1, rules });
+    const lea: FolderRule = { kind: "sets", values: ["lea"] };
+
+    expect(
+      w.collection_folder_set_rules({
+        id: 1,
+        rules: [
+          {
+            kind: "group",
+            op: "or",
+            rules: [
+              { kind: "sets", values: [" LEA "] },
+              // A group of one is the reader's, never folded away.
+              { kind: "group", op: "and", rules: [{ kind: "colors", values: ["W", "U", "U"] }] },
+            ],
+          },
+        ],
+      }).rules,
+    ).toEqual([
+      {
+        kind: "group",
+        op: "or",
+        rules: [lea, { kind: "group", op: "and", rules: [{ kind: "colors", values: ["U", "W"] }] }],
+      },
+    ]);
+
+    expect(set([{ kind: "group", op: "or", rules: [] }])).toThrow(
+      "Put at least one rule in each group.",
+    );
+    expect(
+      set([{ kind: "group", op: "and", rules: [{ kind: "group", op: "or", rules: [] }] }]),
+    ).toThrow("Put at least one rule in each group.");
+    expect(set([{ kind: "group", op: "or", rules: [{ kind: "sets", values: [" "] }] }])).toThrow(
+      "Pick at least one value for each rule.",
+    );
+
+    // Three deep is "A or (B and (C or D))"; a fourth is refused before its members are read.
+    const deepest: FolderRule = {
+      kind: "group",
+      op: "or",
+      rules: [{ kind: "group", op: "and", rules: [{ kind: "group", op: "or", rules: [lea] }] }],
+    };
+    expect(set([deepest])).not.toThrow();
+    expect(set([{ kind: "group", op: "and", rules: [deepest] }])).toThrow(
+      "Groups can nest at most 3 deep.",
+    );
+
+    const twenty = Array.from({ length: 20 }, () => lea);
+    expect(set([{ kind: "group", op: "or", rules: twenty }])).not.toThrow();
+    expect(set([{ kind: "group", op: "or", rules: twenty }, lea])).toThrow(
+      "A folder can hold at most 20 rules.",
+    );
+    // The refusals left the last stored list alone.
+    expect(db.collectionFolders[0].rules).toEqual([{ kind: "group", op: "or", rules: twenty }]);
+  });
+
+  /**
+   * The issue's own example, "rare **or** (full art **and** land)", as one `or` group holding an
+   * `and` — and, beside it in the parent, an inherited cap that every row must still meet, the
+   * effective list staying an implicit `and` around the group.
+   */
+  it("marks the owned rows that break a rare-or-full-art-land group", () => {
+    const find = (name: string, set: string) =>
+      CARDS.find((c) => c.name === name && c.setCode === set)!;
+    const FOREST = find("Forest", "unf"); // common, full art, a land
+    const ISLAND = find("Island", "lea"); // common, a land, not full art
+    const SAGA = find("Urza's Saga", "mh2"); // rare, a land, not full art
+    const BOLT_SLD = find("Lightning Bolt", "sld"); // rare, full art, no land
+    const db = makeDb({
+      collectionFolders: [
+        userFolder(1, null, [{ kind: "conditions", values: ["NM"] }]),
+        userFolder(2, 1, [
+          {
+            kind: "group",
+            op: "or",
+            rules: [
+              { kind: "rarities", values: ["rare"] },
+              {
+                kind: "group",
+                op: "and",
+                rules: [
+                  { kind: "borders", values: ["fullart"] },
+                  { kind: "types", values: ["Land"] },
+                ],
+              },
+            ],
+          },
+        ]),
+      ],
+      collectionEntries: [
+        entry({ id: 1, cardId: FOREST.id, folderId: 2, condition: "NM" }),
+        entry({ id: 2, cardId: ISLAND.id, folderId: 2, condition: "NM" }),
+        entry({ id: 3, cardId: SAGA.id, folderId: 2, condition: "NM" }),
+        entry({ id: 4, cardId: BOLT_SLD.id, folderId: 2, condition: "NM" }),
+        entry({ id: 5, cardId: BOLT.id, folderId: 2, condition: "NM", quantity: 2 }),
+        // Passes the group as a full-art land, and breaks the parent's grade all the same.
+        entry({ id: 6, cardId: FOREST.id, folderId: 2, condition: "HP" }),
+      ],
+    });
+
+    expect(readHandlers(db).collection_rule_conflicts({ marketplace: "tcgplayer" })).toEqual({
+      folders: [{ folderId: 2, entries: 3, copies: 4 }],
+      ids: [2, 5, 6],
+    });
+  });
+
+  /**
+   * An any-printing wish against an `or` mixing a row-level rule (its finish) and a card-level
+   * one (a set): one printing of its card must pass **every** rule at once, the finish read on
+   * the wish and the set on that printing — never the set's answer from one printing and a
+   * rarity's from another. A rule that tests nothing on the wishlist makes its `or` a pass.
+   */
+  it("judges an any-printing wish against a group mixing its finish and its printing's set", () => {
+    const foilOr2x2: FolderRule = {
+      kind: "group",
+      op: "or",
+      rules: [
+        { kind: "finishes", values: ["foil"] },
+        { kind: "sets", values: [BOLT_2X2.setCode] },
+      ],
+    };
+    const db = makeDb({
+      wishlistFolders: [
+        { id: 1, parentId: null, name: "Foil or 2X2", sortOrder: 0, rules: [foilOr2x2] },
+        {
+          id: 2,
+          parentId: null,
+          name: "Rare too",
+          sortOrder: 1,
+          rules: [foilOr2x2, { kind: "rarities", values: ["rare"] }],
+        },
+        {
+          id: 3,
+          parentId: null,
+          name: "Graded",
+          sortOrder: 2,
+          rules: [
+            {
+              kind: "group",
+              op: "or",
+              rules: [
+                { kind: "conditions", values: ["NM"] },
+                { kind: "sets", values: ["zzz"] },
+              ],
+            },
+          ],
+        },
+      ],
+      wishlistEntries: [
+        // Nonfoil, but a 2X2 Bolt exists: passes.
+        wish({ id: 1, folderId: 1, preferredFinish: "nonfoil" }),
+        // Sol Ring has no 2X2 printing; nonfoil breaks, foil passes.
+        wish({
+          id: 2,
+          oracleId: SOL_RING.oracleId,
+          name: "Sol Ring",
+          folderId: 1,
+          preferredFinish: "nonfoil",
+          quantity: 3,
+        }),
+        wish({
+          id: 3,
+          oracleId: SOL_RING.oracleId,
+          name: "Sol Ring",
+          folderId: 1,
+          preferredFinish: "foil",
+        }),
+        // Pinned to Alpha, nonfoil: neither half holds.
+        wish({ id: 4, cardId: BOLT.id, folderId: 1, preferredFinish: "nonfoil" }),
+        wish({ id: 5, cardId: BOLT_2X2.id, folderId: 1, preferredFinish: "nonfoil" }),
+        // The 2X2 Bolt is uncommon and the rare ones are not from 2X2: no one printing passes
+        // both rules, so a nonfoil wish breaks — and a foil one, rare in `sld`, does not.
+        wish({ id: 6, folderId: 2, preferredFinish: "nonfoil", quantity: 2 }),
+        wish({ id: 7, folderId: 2, preferredFinish: "foil" }),
+        // `conditions` tests nothing here, so the `or` holding it always passes.
+        wish({ id: 8, folderId: 3, preferredFinish: "nonfoil" }),
+      ],
+    });
+
+    expect(readHandlers(db).wishlist_rule_conflicts({ marketplace: "tcgplayer" })).toEqual({
+      folders: [
+        { folderId: 1, entries: 2, copies: 4 },
+        { folderId: 2, entries: 1, copies: 2 },
+      ],
+      ids: [2, 4, 6],
+    });
+  });
+
   it("seeds one ruled folder in each cabinet of the starter world, each with a red card", () => {
     const db = seed("starter");
     const reads = readHandlers(db);

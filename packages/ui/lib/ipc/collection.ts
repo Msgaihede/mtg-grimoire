@@ -743,7 +743,7 @@ export interface CollectionFolder {
  * validation rule, a Scryfall tag, a deck label or the folder lock (`DOMAIN_VOCABULARY.md`).
  *
  * A card must satisfy every rule that applies to its folder; a rule with several `values` is
- * satisfied by any one of them. A range or date pair may leave either end `null`, never both.
+ * satisfied by any one of them, and a `group` joins its rules with `and` or `or` (issue #1053). A range or date pair may leave either end `null`, never both.
  * `released` takes `YYYY`, `YYYY-MM` or `YYYY-MM-DD`, compared on its own length, so
  * `to: "2000"` is through the end of 2000. `conditions` is ignored on a wishlist folder.
  *
@@ -751,6 +751,7 @@ export interface CollectionFolder {
  * structs, and this is an enum.
  */
 export type FolderRule =
+  | FolderRuleGroup
   | { kind: "price"; min: number | null; max: number | null }
   | { kind: "manaValue"; min: number | null; max: number | null }
   | { kind: "colors"; values: string[] }
@@ -762,8 +763,22 @@ export type FolderRule =
   | { kind: "borders"; values: string[] }
   | { kind: "released"; from: string | null; to: string | null };
 
-/** The discriminant of {@link FolderRule} — what `Add rule` picks. */
-export type FolderRuleKind = FolderRule["kind"];
+/**
+ * How a {@link FolderRuleGroup} joins its rules: `and` — the card must satisfy every one; `or` —
+ * any one is enough (issue #1053).
+ */
+export type FolderRuleOp = "and" | "or";
+
+/**
+ * Rules joined by one {@link FolderRuleOp} — "Rare **or** (full art **and** land)". A group is a
+ * rule, so groups nest; the folder's own list is itself an `and` of its rules (and of what it
+ * inherits). `folder_rules::FolderRule::Group`, at most `MAX_GROUP_DEPTH` deep and never empty.
+ */
+export type FolderRuleGroup = { kind: "group"; op: FolderRuleOp; rules: FolderRule[] };
+
+/** The discriminant of a {@link FolderRule} that tests a card — what `Add rule` picks. A group is
+ *  not one of them: it tests nothing itself, it joins rules that do. */
+export type FolderRuleKind = Exclude<FolderRule["kind"], "group">;
 
 /**
  * One folder holding cards that break its effective rules — counted in **that folder alone**,
