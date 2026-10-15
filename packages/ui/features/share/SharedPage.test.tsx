@@ -57,8 +57,8 @@ const snapshot = (over: Partial<ShareSnapshot> = {}): ShareSnapshot => ({
   ...over,
 });
 
-const owned = (cardId: string, quantity: number): CollectionRow =>
-  ({ cardId, quantity }) as unknown as CollectionRow;
+const owned = (cardId: string, quantity: number, finish = "nonfoil"): CollectionRow =>
+  ({ cardId, quantity, finish }) as unknown as CollectionRow;
 const wished = (cardId: string | null, name: string, quantity: number): WishRow =>
   ({ cardId, name, quantity }) as unknown as WishRow;
 
