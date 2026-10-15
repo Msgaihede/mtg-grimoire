@@ -261,6 +261,8 @@ function wishRow(card: ReturnType<typeof printing>, over: Partial<WishRow> = {})
     elsewhere: 0,
     ownedExact: 0,
     ownedOther: 0,
+    heldExact: 0,
+    heldOther: 0,
     notes: null,
     needsReview: null,
     updatedAt: 1_786_266_000,

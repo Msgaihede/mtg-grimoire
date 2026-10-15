@@ -92,6 +92,8 @@ const BOLT: WishRow = {
   elsewhere: 0,
   ownedExact: 0,
   ownedOther: 0,
+  heldExact: 0,
+  heldOther: 0,
   name: "Lightning Bolt",
   setCode: "lea",
   collectorNumber: "161",

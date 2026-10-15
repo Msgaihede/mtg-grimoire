@@ -50,6 +50,10 @@ describe("collectionQueryOf", () => {
     expect(collectionQueryOf(pinned, "other")).toBe('!"Lightning Bolt" -(e:lea cn:161 lang:en)');
   });
 
+  it("names the card in every printing for the whole card", () => {
+    expect(collectionQueryOf(pinned, "card")).toBe('!"Lightning Bolt"');
+  });
+
   it("names the card alone for a wish for any printing", () => {
     const any = wish({ cardId: null, setCode: null, collectorNumber: null, lang: null });
     expect(collectionQueryOf(any, "exact")).toBe('!"Lightning Bolt"');

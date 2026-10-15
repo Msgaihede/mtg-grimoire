@@ -191,6 +191,14 @@ export interface WishRow {
   /** Copies the collection holds of **other printings of the same card** — `0` for an
    *  any-printing wish and for an orphan with no oracle id. */
   ownedOther: number;
+  /**
+   * How many of {@link WishRow.ownedExact} are **not free to use** — filed in a deck's group or
+   * in a locked folder (issue #1054). Always `<= ownedExact`; the free copies are the difference.
+   * The wall draws the free copies as the owned chip and these as a lighter one beside it.
+   */
+  heldExact: number;
+  /** {@link WishRow.heldExact} for {@link WishRow.ownedOther}. Always `<= ownedOther`. */
+  heldOther: number;
   notes: string | null;
   needsReview: string | null;
   /** Unix seconds. */

@@ -273,6 +273,14 @@ function WishWanted({ wish }: { wish: WishRow }) {
  * same card in another printing. Each carries its whole sentence as `sr-only` text and tooltip,
  * {@link WishWanted}'s arrangement.
  *
+ * **`Own` and `Other` count only the copies that are free to use** (issue #1054). A copy filed in
+ * a deck's group or a locked folder is owned, but "you have one" over a card sleeved into another
+ * deck answers the question a wish asks — *is there a copy I can just take?* — wrongly, and owning
+ * duplicates a deck already needs is the ordinary case. Those copies are not dropped, because once
+ * in a while the copy in another deck is the one to move: they are summed into one lighter
+ * `In use` chip — dimmer text on a dashed outline — whose sentence still says which printing they
+ * are. `WishRow.heldExact` carries the rule, which is the deck builder's "free" rule.
+ *
  * **Each is a button that opens the collection on exactly those copies** —
  * {@link collectionQueryOf} written into its search box, through `showInCollection`. The corner
  * it sits in opens the card on a click, so the press stops there; `data-no-drag` keeps a press
@@ -281,17 +289,26 @@ function WishWanted({ wish }: { wish: WishRow }) {
 function WishOwned({ wish }: { wish: WishRow }) {
   const tip = useTooltip();
   const showInCollection = useAppStore((s) => s.showInCollection);
-  const chip = (side: OwnedSide, count: number) => {
+  const copies = (count: number) => `${count} ${count === 1 ? "copy" : "copies"}`;
+  // What one side's copies are called — the printing the wish is for, or another one.
+  const named = (side: "exact" | "other", count: number) =>
+    side === "other"
+      ? `${copies(count)} of another printing`
+      : wish.cardId === null
+        ? copies(count)
+        : `${copies(count)} of this printing`;
+  const chip = (
+    key: string,
+    label: string,
+    count: number,
+    sentence: string,
+    side: OwnedSide,
+    look: string,
+  ) => {
     if (count <= 0) return null;
-    const copies = `${count} ${count === 1 ? "copy" : "copies"}`;
-    const sentence =
-      side === "other"
-        ? `${copies} of another printing in your collection`
-        : wish.cardId === null
-          ? `${copies} in your collection`
-          : `${copies} of this printing in your collection`;
     return (
       <button
+        key={key}
         type="button"
         data-no-drag=""
         {...tip(`${sentence} — show in collection`, { describes: false })}
@@ -303,26 +320,56 @@ function WishOwned({ wish }: { wish: WishRow }) {
           CORNER_PILL,
           "inline-flex shrink-0 cursor-pointer items-center font-mono tabular-nums",
           "text-[calc(0.75rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
-          side === "exact" ? "text-text" : "text-dim",
+          look,
           "hover:bg-bg",
         )}
       >
         <span aria-hidden="true">
-          {side === "exact" ? "Own" : "Other"} ×{count}
+          {label} ×{count}
         </span>
         <span className="sr-only">{`${sentence}. Show in collection`}</span>
       </button>
     );
   };
-  const exact = chip("exact", wish.ownedExact);
-  const other = chip("other", wish.ownedOther);
-  if (exact === null && other === null) return null;
-  return (
-    <span className="flex flex-wrap gap-[calc(0.25rem*var(--mark-scale,1))]">
-      {exact}
-      {other}
-    </span>
-  );
+  const freeExact = Math.max(0, wish.ownedExact - wish.heldExact);
+  const freeOther = Math.max(0, wish.ownedOther - wish.heldOther);
+  const held = wish.heldExact + wish.heldOther;
+  const heldNames = [
+    wish.heldExact > 0 ? named("exact", wish.heldExact) : null,
+    wish.heldOther > 0 ? named("other", wish.heldOther) : null,
+  ].filter((part) => part !== null);
+  const heldSide: OwnedSide =
+    wish.heldExact > 0 && wish.heldOther > 0 ? "card" : wish.heldExact > 0 ? "exact" : "other";
+  const chips = [
+    chip(
+      "exact",
+      "Own",
+      freeExact,
+      `${named("exact", freeExact)} free in your collection`,
+      "exact",
+      "text-text",
+    ),
+    chip(
+      "other",
+      "Other",
+      freeOther,
+      `${named("other", freeOther)} free in your collection`,
+      "other",
+      "text-dim",
+    ),
+    chip(
+      "held",
+      "In use",
+      held,
+      `${heldNames.join(" and ")} in decks or locked folders`,
+      heldSide,
+      // The lighter indicator: the dimmed face and a dashed outline, so a copy the reader cannot
+      // simply take never reads as the solid `Own` chip it sits beside.
+      "border border-dashed border-current text-dim",
+    ),
+  ].filter((c) => c !== null);
+  if (chips.length === 0) return null;
+  return <span className="flex flex-wrap gap-[calc(0.25rem*var(--mark-scale,1))]">{chips}</span>;
 }
 
 /**

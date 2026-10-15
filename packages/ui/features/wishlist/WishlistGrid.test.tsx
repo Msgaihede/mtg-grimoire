@@ -58,6 +58,8 @@ const BOLT: WishRow = {
   elsewhere: 0,
   ownedExact: 0,
   ownedOther: 0,
+  heldExact: 0,
+  heldOther: 0,
   notes: null,
   needsReview: null,
   updatedAt: 1_800_000_000,
@@ -83,7 +85,17 @@ const ANY: WishRow = {
   unitPrice: 12,
 };
 
-const EXPENSIVE: WishlistFolder = { rules: [], id: 3, name: "Expensive", parentId: null, sortOrder: 0, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };
+const EXPENSIVE: WishlistFolder = {
+  rules: [],
+  id: 3,
+  name: "Expensive",
+  parentId: null,
+  sortOrder: 0,
+  managedDeckId: null,
+  managedTokens: false,
+  syncUid: null,
+  managedDeckUid: null,
+};
 
 const NODES: FolderNode<WishlistFolder>[] = [
   { folder: EXPENSIVE, depth: 0, count: 0, children: [] },
@@ -393,14 +405,14 @@ describe("the owned chips", () => {
   it("draws only the count that applies", () => {
     const { unmount } = wall([{ ...BOLT, ownedExact: 2 }]);
     expect(
-      screen.getByRole("button", { name: /2 copies of this printing in your collection/ }),
+      screen.getByRole("button", { name: /2 copies of this printing free in your collection/ }),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /another printing/ })).toBeNull();
     unmount();
 
     wall([{ ...BOLT, ownedOther: 1 }]);
     expect(
-      screen.getByRole("button", { name: /1 copy of another printing in your collection/ }),
+      screen.getByRole("button", { name: /1 copy of another printing free in your collection/ }),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /this printing/ })).toBeNull();
   });
@@ -414,8 +426,38 @@ describe("the owned chips", () => {
   it("names an any-printing wish's copies without a printing", () => {
     wall([{ ...ANY, ownedExact: 5 }]);
     expect(
-      screen.getByRole("button", { name: /^5 copies in your collection/ }),
+      screen.getByRole("button", { name: /^5 copies free in your collection/ }),
     ).toBeInTheDocument();
+  });
+
+  /** Issue #1054: copies in a deck's group or a locked folder are owned but not free, so they
+   *  leave the solid chips and are drawn as one lighter `In use` chip that still says which
+   *  printing they are. */
+  it("draws the copies a deck or a locked folder holds as a lighter chip of their own", () => {
+    wall([{ ...BOLT, ownedExact: 3, heldExact: 2, ownedOther: 4, heldOther: 1 }]);
+    expect(screen.getByText("Own ×1")).toBeInTheDocument();
+    expect(screen.getByText("Other ×3")).toBeInTheDocument();
+    expect(screen.getByText("In use ×3")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: /^2 copies of this printing and 1 copy of another printing in decks or locked folders/,
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("draws only the lighter chip when every copy is in use", () => {
+    wall([{ ...BOLT, ownedExact: 2, heldExact: 2 }]);
+    expect(screen.queryByText(/^Own/)).toBeNull();
+    expect(screen.getByText("In use ×2")).toBeInTheDocument();
+  });
+
+  it("opens the collection on the card when the copies in use span printings", async () => {
+    const user = userEvent.setup();
+    wall([{ ...BOLT, ownedExact: 1, heldExact: 1, ownedOther: 1, heldOther: 1 }]);
+
+    await user.click(screen.getByRole("button", { name: /in decks or locked folders/ }));
+
+    expect(useAppStore.getState().pendingCollectionQuery).toBe('!"Lightning Bolt"');
   });
 
   it("opens the collection on exactly those copies, without opening the card", async () => {

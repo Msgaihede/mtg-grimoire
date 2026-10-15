@@ -100,7 +100,9 @@ export function wallPrinting(wish: WishRow): string {
  * the same card in another printing. An any-printing wish is answered by every printing, so all
  * its copies are `"exact"`.
  */
-export type OwnedSide = "exact" | "other";
+/** Which copies an owned chip names: the wish's printing, the card's other printings, or — for
+ *  the in-use chip when it counts both (issue #1054) — the whole card. */
+export type OwnedSide = "exact" | "other" | "card";
 
 /** A value the query box reads as one token — quoted when it holds a space, with whichever quote
  *  it does not contain (`unquote` in `queryLanguage.ts` takes either). */
@@ -115,11 +117,12 @@ function token(value: string): string {
  *
  * `!name` is the card (both faces of a double-faced one, `exact_name_clause`), and a pinned
  * wish's printing is its set, number and language. `"other"` is the card minus that printing, as
- * one negated group. A pinned wish missing its set or number names the card alone rather than
- * guess a printing.
+ * one negated group, and `"card"` is the card in every printing. A pinned wish missing its set or
+ * number names the card alone rather than guess a printing.
  */
 export function collectionQueryOf(wish: WishRow, side: OwnedSide): string {
   const card = `!${token(wish.name)}`;
+  if (side === "card") return card;
   if (wish.cardId === null || wish.setCode === null || wish.collectorNumber === null) return card;
   const printing = [
     `e:${token(wish.setCode)}`,
