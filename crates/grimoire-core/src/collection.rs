@@ -2317,6 +2317,12 @@ pub struct CollectionQuery {
     pub conditions: Option<Vec<String>>,
     /// `Some(true)` narrows to the rows a Scryfall migration or a vanished printing flagged.
     pub needs_review: Option<bool>,
+    /// `true` narrows to the entries that break a rule of the folder they are filed in — the
+    /// red-outlined tiles, [`crate::folder_rules::conflicts`]' `ids` (issue #1057). The folder
+    /// badge's press is what asks; the rules are judged at [`Self::marketplace`], so a price rule
+    /// narrows by the price the wall shows. **Default `false`**: an unasked question keeps
+    /// today's answer, `root_only`'s argument.
+    pub rule_breaks: bool,
     /// Where the list is being read — **three states**, this field and [`Self::root_only`]
     /// together:
     ///
@@ -2685,7 +2691,24 @@ pub(crate) fn shelf_position(column: &str) -> String {
 
 /// The `WHERE` shared by the page, the count and the summary — because a summary taken
 /// over different rows than the list is a header that describes a different screen.
-fn scope(q: &CollectionQuery) -> crate::filters::Predicates {
+/// The entries [`CollectionQuery::rule_breaks`] narrows to, as the JSON array [`scope`] binds —
+/// `None` when the query does not ask. Read here, before the statements are built, because the
+/// answer is [`crate::folder_rules::conflicts`]' walk of the folder tree rather than one SQL term.
+fn rule_break_ids(conn: &Connection, q: &CollectionQuery) -> Result<Option<String>, String> {
+    if !q.rule_breaks {
+        return Ok(None);
+    }
+    let found = crate::folder_rules::conflicts(
+        conn,
+        crate::folder_rules::Scope::Collection,
+        q.marketplace,
+    )?;
+    Ok(Some(
+        serde_json::to_string(&found.ids).map_err(|e| e.to_string())?,
+    ))
+}
+
+fn scope(q: &CollectionQuery, rule_breaks: Option<&str>) -> crate::filters::Predicates {
     let mut p = crate::filters::Predicates::default();
 
     // The free text **and** every `t:`/`o:` term the box was parsed into, in the one MATCH
@@ -2745,6 +2768,14 @@ fn scope(q: &CollectionQuery) -> crate::filters::Predicates {
         Some(true) => p.wheres.push("e.needs_review IS NOT NULL".to_owned()),
         Some(false) => p.wheres.push("e.needs_review IS NULL".to_owned()),
         None => {}
+    }
+    // One bound JSON array rather than a `?` per id: a cabinet out of order can be thousands of
+    // entries, past what a statement may bind.
+    if let Some(ids) = rule_breaks {
+        p.push(
+            "e.id IN (SELECT value FROM json_each(?))".to_owned(),
+            Box::new(ids.to_owned()),
+        );
     }
     // Where the reader is standing, in the three states [`CollectionQuery::folder_id`] and
     // [`CollectionQuery::root_only`] spell between them. The named folder wins, an unasked
@@ -3009,13 +3040,13 @@ impl ListStatements {
 }
 
 /// The count and the page [`list_entries`] steps, built once and stepped there.
-fn list_statements(q: &CollectionQuery) -> ListStatements {
+fn list_statements(q: &CollectionQuery, rule_breaks: Option<&str>) -> ListStatements {
     let limit = if q.limit == 0 {
         DEFAULT_LIMIT
     } else {
         q.limit.min(MAX_LIMIT)
     };
-    let p = scope(q);
+    let p = scope(q, rule_breaks);
     let where_sql = p.where_sql();
     let mut params = p.params;
     let scope_params = params.len();
@@ -3069,7 +3100,8 @@ fn list_statements(q: &CollectionQuery) -> ListStatements {
 }
 
 pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<CollectionPage, String> {
-    let s = list_statements(q);
+    let breaks = rule_break_ids(conn, q)?;
+    let s = list_statements(q, breaks.as_deref());
     let total: i64 = conn
         .query_row(
             &s.count,
@@ -3144,7 +3176,8 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
 
 /// The aggregate header, over the *same* rows the list is showing.
 pub fn summarise(conn: &Connection, q: &CollectionQuery) -> Result<CollectionSummary, String> {
-    let p = scope(q);
+    let breaks = rule_break_ids(conn, q)?;
+    let p = scope(q, breaks.as_deref());
     let where_sql = p.where_sql();
     let sql = format!(
         "SELECT coalesce(sum(e.quantity), 0),
@@ -3293,7 +3326,8 @@ fn collection_peek_sql(shelves: &[i64]) -> String {
 /// **`unpriced` sums the unpriced entries' copies**, `summarise`'s own `CASE … THEN e.quantity`
 /// — a heading's "n unpriced" sits beside its "n cards", and the two must be one unit.
 pub fn shelf_counts(conn: &Connection, q: &CollectionQuery) -> Result<Vec<ShelfCount>, String> {
-    let p = scope(q);
+    let breaks = rule_break_ids(conn, q)?;
+    let p = scope(q, breaks.as_deref());
     let where_sql = p.where_sql();
     let sql = format!(
         "SELECT shelf,
@@ -4375,6 +4409,74 @@ mod tests {
     ///
     /// So the assertion is today's behaviour verbatim, from three directions: the struct's own
     /// default, the wire's, and the rows an unasked query still answers.
+    /// Issue #1057: the folder badge's press narrows the wall to the red-outlined entries — the
+    /// list, its count, the header and the shelf counts alike — and a subfolder's entries are
+    /// judged by the rules it inherits.
+    #[test]
+    fn rule_breaks_narrows_every_read_to_the_entries_that_break_their_folders_rules() {
+        let conn = seeded();
+        let binder = folder(&conn, "user", "Played binder");
+        let inside = nested(&conn, binder, "Inside");
+        let free = folder(&conn, "user", "Anything goes");
+        crate::collection_folders::set_folder_rules(
+            &conn,
+            binder,
+            vec![crate::folder_rules::FolderRule::Conditions {
+                values: vec!["LP".to_owned()],
+            }],
+        )
+        .unwrap();
+        // `filed_in` files every copy NM, so both ruled folders' copies break the rule.
+        let at_root = filed_in(&conn, "bolt-lea", None, 1);
+        let broken = filed_in(&conn, "bolt-lea", Some(binder), 2);
+        let inherited = filed_in(&conn, "bolt-lea", Some(inside), 3);
+        let fine = filed_in(&conn, "bolt-lea", Some(free), 4);
+
+        let asked = CollectionQuery {
+            rule_breaks: true,
+            limit: 50,
+            ..Default::default()
+        };
+        let page = list_entries(&conn, &asked).unwrap();
+        assert_eq!(
+            page.items.iter().map(|r| r.id).collect::<Vec<_>>(),
+            vec![broken, inherited]
+        );
+        assert_eq!(page.total, 2);
+        let header = summarise(&conn, &asked).unwrap();
+        assert_eq!((header.entries, header.total_cards), (2, 5));
+        let shelves = shelf_counts(
+            &conn,
+            &CollectionQuery {
+                shelves: Some(vec![0, binder, inside, free]),
+                ..asked
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            shelves.iter().map(|s| s.folder_id).collect::<Vec<_>>(),
+            vec![binder, inside]
+        );
+
+        let unasked = list_entries(
+            &conn,
+            &CollectionQuery {
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            unasked.items.iter().map(|r| r.id).collect::<Vec<_>>(),
+            vec![at_root, broken, inherited, fine],
+            "an unasked question keeps every copy"
+        );
+        let bare: CollectionQuery = serde_json::from_str("{}").unwrap();
+        assert!(!bare.rule_breaks);
+        let wire: CollectionQuery = serde_json::from_str(r#"{"ruleBreaks":true}"#).unwrap();
+        assert!(wire.rule_breaks, "camelCase on the way in");
+    }
+
     #[test]
     fn a_query_that_never_asks_still_sees_a_locked_folders_copies() {
         let conn = seeded();
@@ -4738,7 +4840,7 @@ mod tests {
     fn a_list_without_the_unfiled_shelf_is_searched_through_the_folder_index() {
         let s = shelved_collection();
 
-        let filed = list_statements(&on_shelves(vec![s.binder, s.sleeve]));
+        let filed = list_statements(&on_shelves(vec![s.binder, s.sleeve]), None);
         for (what, plan) in [
             (
                 "count",
@@ -4753,7 +4855,7 @@ mod tests {
             );
         }
 
-        let unfiled = list_statements(&on_shelves(vec![0, s.binder]));
+        let unfiled = list_statements(&on_shelves(vec![0, s.binder]), None);
         for (what, plan) in [
             (
                 "count",

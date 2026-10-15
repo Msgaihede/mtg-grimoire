@@ -7592,11 +7592,30 @@ function inList(value: string, picked: string[] | undefined, allowed: string[]):
   return values.length === 0 || values.includes(value);
 }
 
+/** {@link readHandlers.collection_rule_conflicts}' answer, here so that
+ *  {@link collectionScope}'s `ruleBreaks` reads the very same one. */
+function collectionRuleConflicts(db: FakeDb, marketplace?: MarketplaceId): RuleConflicts {
+  const mp = marketplaceOf(marketplace);
+  return folderRuleConflicts(db.collectionEntries, db.collectionFolders, (e, rules) => {
+    const card = cardById(db, e.cardId);
+    if (card === null) return false;
+    const facts: RuleRowFacts = {
+      price: finishPriceAt(db, card, e.finish, mp),
+      finish: e.finish,
+      condition: e.condition,
+    };
+    return rules.some((r) => cardBreaksRule(card, r) || rowBreaksRule(facts, r));
+  });
+}
+
 /** `collection::scope` — the `WHERE` the page, the count and the summary all share, because
  *  a header taken over different rows than the list is a header describing another screen. */
 function collectionScope(db: FakeDb, q: CollectionQuery): FakeEntry[] {
   const text = nonblank(q.text);
+  // `collection::rule_break_ids` — the conflicts at the query's marketplace, read once.
+  const breaks = q.ruleBreaks ? new Set(collectionRuleConflicts(db, q.marketplace).ids) : null;
   return db.collectionEntries.filter((e) => {
+    if (breaks !== null && !breaks.has(e.id)) return false;
     const card = cardById(db, e.cardId);
     // A text filter is a statement about a card, so it narrows to rows that still have one.
     if (text !== null && !cardMatchesText(card, text)) return false;
@@ -10794,19 +10813,8 @@ export function readHandlers(db: FakeDb) {
      * folder summary's own figure. An orphan breaks nothing, and an unpriced row passes a price
      * rule: a rule only breaks on a fact the app knows.
      */
-    collection_rule_conflicts: (args: { marketplace?: MarketplaceId }): RuleConflicts => {
-      const mp = marketplaceOf(args.marketplace);
-      return folderRuleConflicts(db.collectionEntries, db.collectionFolders, (e, rules) => {
-        const card = cardById(db, e.cardId);
-        if (card === null) return false;
-        const facts: RuleRowFacts = {
-          price: finishPriceAt(db, card, e.finish, mp),
-          finish: e.finish,
-          condition: e.condition,
-        };
-        return rules.some((r) => cardBreaksRule(card, r) || rowBreaksRule(facts, r));
-      });
-    },
+    collection_rule_conflicts: (args: { marketplace?: MarketplaceId }): RuleConflicts =>
+      collectionRuleConflicts(db, args.marketplace),
 
     /**
      * `folder_rules::wishlist_conflicts` (issue #980) — {@link collection_rule_conflicts} over

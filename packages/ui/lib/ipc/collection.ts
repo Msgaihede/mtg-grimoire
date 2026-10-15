@@ -294,6 +294,10 @@ export interface CollectionQuery extends CardFilters {
    *  are dealt with, so it is a real filter and reaches the wire as `false` rather than being
    *  dropped the way a blank string is. Absent asks nothing. */
   needsReview?: boolean;
+  /** `true` narrows to the entries that break a rule of the folder they are filed in — the
+   *  red-outlined tiles, {@link RuleConflicts.ids} at this query's marketplace (issue #1057).
+   *  Absent asks nothing. */
+  ruleBreaks?: boolean;
   /**
    * Which folder the list is being read at. Absent — and `null`, which deserializes to the same
    * `Option::None` — asks nothing about filing; {@link rootOnly} is what narrows to the root.

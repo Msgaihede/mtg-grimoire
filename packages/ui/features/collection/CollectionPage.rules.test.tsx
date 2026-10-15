@@ -263,12 +263,56 @@ describe("CollectionPage — folder rules", () => {
   it("badges a folder with rules on its heading, counting its conflicting copies", async () => {
     wrap(<CollectionPage />);
     const binder = await findHeading("Trade binder");
+    // A button once the conflicts are in: there is something to show.
     const badge = await waitFor(() =>
-      within(binder).getByRole("img", { name: /This folder's rules: Price up to \$1\.00\./ }),
+      within(binder).getByRole("button", { name: /This folder's rules: Price up to \$1\.00\./ }),
     );
+    expect(badge).toHaveAccessibleName(expect.stringContaining("2 cards don't match"));
+    expect(badge).toHaveAccessibleName(expect.stringContaining("Press to show them."));
+  });
+
+  it("shows the breakers when the badge is pressed: the folder opened, the wall narrowed", async () => {
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    const binder = await findHeading("Trade binder");
+    const badge = await waitFor(() =>
+      within(binder).getByRole("button", { name: /This folder's rules/ }),
+    );
+    cmd.collectionList.mockClear();
+
+    await user.click(badge);
+
     await waitFor(() =>
-      expect(badge).toHaveAccessibleName(expect.stringContaining("2 cards don't match")),
+      expect(cmd.collectionList).toHaveBeenCalledWith(
+        expect.objectContaining({ ruleBreaks: true, shelves: expect.arrayContaining([3]) }),
+      ),
     );
+    expect(
+      cmd.collectionList.mock.calls.some((call) =>
+        (call[0] as CollectionQuery).shelves?.includes(0),
+      ),
+    ).toBe(false);
+    // Said on the stated-filter row, whose × takes it off again.
+    const remove = await screen.findByRole("button", { name: /Remove.*Breaks folder rules/ });
+    cmd.collectionList.mockClear();
+    await user.click(remove);
+    await waitFor(() =>
+      expect(cmd.collectionList).toHaveBeenCalledWith(
+        expect.not.objectContaining({ ruleBreaks: true }),
+      ),
+    );
+  });
+
+  it("keeps the badge an image when nothing breaks the rules", async () => {
+    cmd.collectionRuleConflicts.mockResolvedValue({ ids: [], folders: [] });
+    wrap(<CollectionPage />);
+    const binder = await findHeading("Trade binder");
+    await waitFor(() =>
+      expect(
+        within(binder).getByRole("img", { name: /This folder's rules: Price up to/ }),
+      ).toBeInTheDocument(),
+    );
+    expect(within(binder).queryByRole("button", { name: /This folder's rules/ })).toBeNull();
   });
 
   it("outlines a tile whose copy breaks its folder's rules, and only that tile", async () => {
@@ -345,7 +389,7 @@ describe("CollectionPage — folder rules", () => {
     useAppStore.setState({ pendingFolder: { scope: "collection", id: 3 } });
     wrap(<CollectionPage />);
     const crumbs = await screen.findByRole("navigation", { name: "Collection folders" });
-    const badge = await screen.findByRole("img", { name: /This folder's rules: Price up to/ });
+    const badge = await screen.findByRole("button", { name: /This folder's rules: Price up to/ });
     // On the path row, not inside a heading — the level's own heading is not drawn on its wall.
     expect(badge.closest(`[${SHELF_HEADING_ATTR}]`)).toBeNull();
     expect(crumbs.parentElement?.parentElement).toContainElement(badge);

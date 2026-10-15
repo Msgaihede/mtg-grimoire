@@ -7,6 +7,11 @@
  * that judged its cards by rules it did not show would be the inheritance made invisible exactly
  * where it applies — `lockedFolderIds`' argument for the lock, made again for rules.
  *
+ * **A press shows the breakers** (issue #1057): given {@link FolderRulesBadgeProps.onShow} and a
+ * count above zero, the mark is a button, and the page answers it by opening the folder with the
+ * wall narrowed to the cards that break its rules. With nothing out of place it stays an image —
+ * a press that could only show an empty wall is not offered.
+ *
  * The glyph's size and tone are the folder card's own `size-3.5 text-dim` (`ParentFolderCard`), so
  * it sits beside a folder name as the `Lock` does. The tooltip says the rules in words, and the
  * accessible name says the same in one sentence, since a tooltip is not a name.
@@ -21,6 +26,9 @@ import { formatPrice } from "@/lib/prices";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 
+/** What a press of a badge with breakers does, said in its name and at the foot of its tooltip. */
+export const SHOW_SENTENCE = "Press to show them.";
+
 export interface FolderRulesBadgeProps {
   effective: EffectiveRules;
   /** Conflicting cards in the folder's sub-tree (`subtreeConflicts`), `0` for none. */
@@ -33,6 +41,12 @@ export interface FolderRulesBadgeProps {
    * sentence instead. Default `true`, for a heading.
    */
   focusable?: boolean;
+  /**
+   * Show the cards that break the rules — the folder opened, the wall narrowed to them. Read only
+   * while {@link conflicts} is above zero and the badge is {@link focusable}: inside a control the
+   * mark cannot be a second one.
+   */
+  onShow?: () => void;
 }
 
 export function FolderRulesBadge({
@@ -40,6 +54,7 @@ export function FolderRulesBadge({
   conflicts,
   className,
   focusable = true,
+  onShow,
 }: FolderRulesBadgeProps): ReactElement | null {
   const tip = useTooltip();
   const { marketplace } = useMarketplace();
@@ -87,23 +102,55 @@ export function FolderRulesBadge({
     </div>
   );
 
-  return (
-    // An `img` rather than a button: it does nothing when pressed. Focusable (by default) because
-    // a keyboard reader needs a stop to bring the tooltip up on.
-    <span
-      role="img"
-      tabIndex={focusable ? 0 : undefined}
-      aria-label={spoken}
-      // `describes: false`: the `aria-label` already says every word the panel does.
-      {...tip(tooltip, { describes: false })}
-      className={cn("inline-flex shrink-0 items-center gap-1 rounded-sm", FOCUS, className)}
-    >
+  const glyph = (
+    <>
       <ListChecks className="size-3.5 text-dim" aria-hidden="true" />
       {conflicts > 0 && (
         <span className="text-xs tabular-nums text-destructive" aria-hidden="true">
           {count(conflicts)}
         </span>
       )}
+    </>
+  );
+  const shape = cn("inline-flex shrink-0 items-center gap-1 rounded-sm", FOCUS, className);
+
+  if (onShow !== undefined && focusable && conflicts > 0) {
+    return (
+      <button
+        type="button"
+        aria-label={`${spoken} ${SHOW_SENTENCE}`}
+        {...tip(
+          <div className="flex flex-col gap-1.5">
+            {tooltip}
+            <p className="text-dim">{SHOW_SENTENCE}</p>
+          </div>,
+          { describes: false },
+        )}
+        onClick={(event) => {
+          // A heading's own press opens or folds its shelf; this one is the badge's alone.
+          event.stopPropagation();
+          onShow();
+        }}
+        className={cn(shape, "cursor-pointer hover:bg-accent/10")}
+      >
+        {glyph}
+      </button>
+    );
+  }
+
+  return (
+    // An `img` rather than a button: with nothing out of place, or no `onShow`, it does nothing
+    // when pressed. Focusable (by default) because a keyboard reader needs a stop to bring the
+    // tooltip up on.
+    <span
+      role="img"
+      tabIndex={focusable ? 0 : undefined}
+      aria-label={spoken}
+      // `describes: false`: the `aria-label` already says every word the panel does.
+      {...tip(tooltip, { describes: false })}
+      className={shape}
+    >
+      {glyph}
     </span>
   );
 }

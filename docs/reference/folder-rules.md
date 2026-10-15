@@ -14,6 +14,20 @@ the wall (and marked in the table), and the folder's heading wears a `ListChecks
 tooltip lists the rules in words and, in red, how many cards in the folder (its sub-tree
 included) do not match. That is the issue's own motivation — a rule shows, it does not prevent.
 
+## Showing the breakers (issue #1057)
+
+On the collection page **a badge with a red count is a button**: pressing it opens that folder —
+its sub-tree is what the count counted — with the wall narrowed to the entries that break their
+folder's rules. The narrowing is an ordinary filter, `CollectionQuery.ruleBreaks`: the list, its
+count, the header and the shelf counts all read it, the stated-filter row says
+`Breaks folder rules` with a × to take it off, the tray carries the same chip (`ruleBreaks` cell,
+`Folder rules`), and Reset all clears it. Server-side, `collection::rule_break_ids` runs
+`folder_rules::conflicts` at the query's marketplace and `scope` binds the ids as one JSON array
+(`e.id IN (SELECT value FROM json_each(?))`), so unloaded pages are narrowed too. A fixed card
+leaves the narrowed wall on the next refresh, since the conflicts sit under `["collection"]`.
+A badge with no count stays an image (nothing to show), and so does one inside a control
+(`focusable={false}`). The wishlist has no such filter yet.
+
 ## What a rule is
 
 Ten kinds, the table in the design's §1: `price`, `manaValue`, `colors`, `types`, `sets`,
@@ -58,6 +72,7 @@ reversed, and a malformed date, each in one sentence.
 | `collection_folder_set_rules { id, rules }` | write | the re-read `CollectionFolder`; user folders only (`FOLDER_NOT_YOURS`) |
 | `wishlist_folder_set_rules { id, rules }` | write | the re-read `WishlistFolder` |
 | `collection_rule_conflicts { marketplace }` | read | `RuleConflicts` — per-folder counts (that folder alone) and every conflicting entry id |
+| `collection_list` / `collection_summary` / `collection_shelf_counts` with `ruleBreaks: true` | read | the same reads narrowed to those ids (issue #1057) |
 | `wishlist_rule_conflicts { marketplace }` | read | the same over wishes |
 
 The marketplace is the page's, because a price rule judges the price the wall shows. The page
@@ -75,7 +90,7 @@ write that already invalidates those roots refreshes them.
 | `crates/grimoire-core/src/sync_engine/capture.rs` | `"rules"` on both folder specs |
 | `packages/ui/lib/folderRules.ts` | kinds, labels, `describeRule`, `validateRule`, `effectiveRules`, `subtreeConflicts` |
 | `packages/ui/features/folders/FolderRulesDialog.tsx` | the editor the folder menu's `Rules…` opens |
-| `packages/ui/features/folders/FolderRulesBadge.tsx` | the heading's icon, tooltip and red count |
+| `packages/ui/features/folders/FolderRulesBadge.tsx` | the heading's icon, tooltip and red count — a button (`onShow`) while the count is above zero |
 | `packages/ui/features/collection/useCollectionFolders.ts`, `packages/ui/features/wishlist/useWishlistFolders.ts` | `setRules`, `useCollectionRuleConflicts`, `useWishlistRuleConflicts` |
 | `packages/ui/features/search/CardGrid.tsx` | the `ruleBreak` slot — the red outline on a tile |
 | `packages/fake/db.ts` | the fake's rules and its own evaluation of them, for Storybook and the page tests |

@@ -55,6 +55,7 @@ const NONE = {
   finishes: [],
   conditions: [],
   needsReview: undefined,
+  ruleBreaks: false,
 };
 
 describe("activeFilterCount", () => {
@@ -74,6 +75,7 @@ describe("activeFilterCount", () => {
     // once the flagged ones are dealt with. Compared against `undefined`, never tested for
     // truthiness, which is the whole difference between a tri-state and a checkbox.
     expect(activeFilterCount({ ...NONE, needsReview: false })).toBe(1);
+    expect(activeFilterCount({ ...NONE, ruleBreaks: true })).toBe(1);
     expect(activeFilterCount({ ...NONE, rarities: ["rare", "mythic"] })).toBe(1);
     // The type chips are the same rule over a row of eight: a reader narrowed to creatures and
     // lands has narrowed once.
@@ -105,16 +107,16 @@ describe("activeFilterCount", () => {
 
   /**
    * The collection's row is longer than the search's by three: what the copy is (finish),
-   * what state it is in (condition), and whether it is one of the rows a sync flagged. Twelve
-   * kinds over fourteen fields — the price band is one kind with two ends, and the X chip rides
+   * what state it is in (condition), whether it is one of the rows a sync flagged, and whether it
+   * breaks its folder's rules (issue #1057). Thirteen kinds over fifteen fields — the price band is one kind with two ends, and the X chip rides
    * with the mana values. Reset all has to reach every one of them, so the count has to see
    * every one of them.
    *
-   * **`colorsStrict` is not one of the fourteen and never will be**: it is not a field of
+   * **`colorsStrict` is not one of the fifteen and never will be**: it is not a field of
    * `CollectionFilterState` at all, because it modifies what a picked colour means rather than
    * narrowing anything of its own.
    */
-  it("sees all twelve kinds the collection offers", () => {
+  it("sees all thirteen kinds the collection offers", () => {
     expect(
       activeFilterCount({
         text: "bolt",
@@ -131,8 +133,9 @@ describe("activeFilterCount", () => {
         finishes: ["foil"],
         conditions: ["NM"],
         needsReview: true,
+        ruleBreaks: true,
       }),
-    ).toBe(12);
+    ).toBe(13);
   });
 
   /** X is the last chip of the mana-value group and is OR'd with the numerals, so it is that
