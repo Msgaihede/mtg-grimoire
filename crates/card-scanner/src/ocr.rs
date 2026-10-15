@@ -41,6 +41,14 @@ use image::RgbImage;
 /// leaves the mana cost out.
 const TITLE_BAND: (f32, f32, f32, f32) = (0.045, 0.025, 0.780, 0.130);
 
+/// Where [`TitleReader::read_title_wide`] looks: the card's top quarter, edge to edge.
+pub const WIDE_TITLE_BAND: (f32, f32, f32, f32) = (0.0, 0.0, 1.0, 0.25);
+
+/// The shortest read the wide title accepts. Over a band this tall the recogniser also reads
+/// the art's edge and a stray word, and a short one can be a card's whole name exactly — "when",
+/// "sacrifice" and "turn" did, in the whole-frame survey that set it.
+pub const WIDE_TITLE_MIN_READ: usize = 8;
+
 /// The collector line, bottom left: `U 0232` over `LTR * EN <brush> Jarel Threat`.
 ///
 /// **A set code and a collector number are the printing itself**, which is the one thing
@@ -1049,6 +1057,8 @@ mod engine {
         collector: OcrEngine,
         /// Find the text with `ocrs`'s detection model, as every read did before #707.
         detect: bool,
+        /// See [`TitleReader::set_wide_title`].
+        wide: bool,
     }
 
     /// Which band a read is of — they are read by different engines and kept differently.
@@ -1112,6 +1122,7 @@ mod engine {
                 title,
                 collector,
                 detect: false,
+                wide: true,
             })
         }
 
@@ -1123,6 +1134,73 @@ mod engine {
         /// it on. Nothing else should.
         pub fn set_text_detection(&mut self, on: bool) {
             self.detect = on;
+        }
+
+        /// Read the title again, wider, when a resolve names no one card — see
+        /// [`TitleReader::read_title_wide`]. On by default; the replay turns it off to measure it.
+        pub fn set_wide_title(&mut self, on: bool) {
+            self.wide = on;
+        }
+
+        pub fn wide_title(&self) -> bool {
+            self.wide
+        }
+
+        /// The title found rather than cut: every line text detection finds in the card's top
+        /// [`WIDE_TITLE_BAND`], full width, the way up the hash chose first and then the other,
+        /// and the first one `binds` accepts, normalized.
+        ///
+        /// **For the card the title band misses.** The band is cut at fixed fractions of the
+        /// rectified card, so a card sitting smaller in its quad — inside a binder pocket —
+        /// puts its name below the band or past its right end, and the recogniser reads half a
+        /// line or the art. Surveyed over every second frame of the 86 replay scans (729
+        /// frames), the band's read bound the reader's card on 158 frames and this one on 252,
+        /// and neither bound another card. It costs fifteen times the band's read, so a resolve
+        /// asks for it only when it would otherwise name no one card
+        /// ([`crate::resolve::resolve_gated`]).
+        pub fn read_title_wide(
+            &self,
+            src: &BandSource<'_>,
+            flipped_first: bool,
+            binds: &dyn Fn(&str) -> bool,
+        ) -> Option<String> {
+            [flipped_first, !flipped_first].into_iter().find_map(|rotated| {
+                let band = src.band(WIDE_TITLE_BAND, 2, rotated);
+                self.read_lines(&band)
+                    .into_iter()
+                    .map(|(text, _)| normalize(&text))
+                    .find(|read| read.chars().count() >= WIDE_TITLE_MIN_READ && binds(read))
+            })
+        }
+
+        /// Every line of text `ocrs`'s detection model finds anywhere in `img`, read with the
+        /// full alphabet, with its bounding box (left, top, right, bottom) in `img`'s pixels.
+        ///
+        /// For a read that does not trust the quad: a title band cut from the wrong rectangle
+        /// reads the wrong text, and the name is usually legible somewhere in the frame.
+        pub fn read_lines(&self, img: &RgbImage) -> Vec<(String, [f32; 4])> {
+            let Ok(src) = ImageSource::from_bytes(img.as_raw(), (img.width(), img.height()))
+            else {
+                return Vec::new();
+            };
+            let Ok(input) = self.title.prepare_input(src) else { return Vec::new() };
+            let Ok(words) = self.title.detect_words(&input) else { return Vec::new() };
+            let lines = self.title.find_text_lines(&input, &words);
+            let Ok(read) = self.title.recognize_text(&input, &lines) else { return Vec::new() };
+            lines
+                .iter()
+                .zip(read)
+                .filter_map(|(rects, text)| {
+                    let text = text?.to_string();
+                    let corners = rects.iter().flat_map(|r| r.corners());
+                    let (mut l, mut t, mut r, mut b) =
+                        (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+                    for p in corners {
+                        (l, t, r, b) = (l.min(p.x), t.min(p.y), r.max(p.x), b.max(p.y));
+                    }
+                    (l <= r).then_some((text, [l, t, r, b]))
+                })
+                .collect()
         }
 
         fn read_band(&self, band: &RgbImage, what: Band) -> Option<String> {

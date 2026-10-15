@@ -1003,6 +1003,15 @@ impl Session {
         self.reframe_held = None;
     }
 
+    /// Read the title again, wider, when the band's read names no card — see
+    /// [`crate::ocr::TitleReader::read_title_wide`]. Only before the reader is shared.
+    #[cfg(feature = "ocr")]
+    pub fn set_wide_title(&mut self, on: bool) {
+        if let Some(reader) = self.reader.as_mut().and_then(Arc::get_mut) {
+            reader.set_wide_title(on);
+        }
+    }
+
     /// Match each frame's quad at these framings as well as its own — fractions of its size, about
     /// its centre. See [`DetectOptions::query_insets`]; the replay measures other lists with it.
     pub fn set_query_insets(&mut self, insets: Vec<f32>) {
@@ -2299,6 +2308,18 @@ impl crate::resolve::Readers for SessionReaders<'_> {
         *self.ocr.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
             Some(title_view(&read, self.r, self.mask).0);
         read.is_usable().then_some(read.normalized)
+    }
+
+    fn title_wide(&self, view: &BurstView<'_>) -> Option<String> {
+        if !self.reader.wide_title() {
+            return None;
+        }
+        let binds = |text: &str| {
+            self.r.lookup_cards_masked(text, self.mask).is_some_and(|h| {
+                !h.prefix && h.cards.len() == 1 && crate::resolve::title_binds(text, h.edits)
+            })
+        };
+        self.reader.read_title_wide(&bands_of(view), view.rotated, &binds)
     }
 
     fn collector(&self, view: &BurstView<'_>) -> Vec<(String, String)> {
