@@ -13,8 +13,11 @@
  * is now simply copies wanted. {@link collectionQueryOf} is the one reader of the collection here,
  * and it subtracts nothing: it names the copies the owned chips report, so a press can show them.
  */
+import { shelfFolderOf } from "@/features/collection/collectionShelfModel";
 import { finishLabel, isFinish, type Finish } from "@/lib/finish";
-import type { WishRow } from "@/lib/ipc";
+import { trailOf } from "@/lib/folderTree";
+import type { CollectionFolder, WishRow } from "@/lib/ipc";
+import { UNFILED_NAME, type ShelfKind } from "@/lib/shelves";
 
 /**
  * Which printing a wish is for, in the words spec §6 draws the distinction in.
@@ -127,4 +130,54 @@ export function collectionQueryOf(wish: WishRow, side: OwnedSide): string {
     ...(wish.lang ? [`lang:${token(wish.lang)}`] : []),
   ].join(" ");
   return side === "exact" ? `${card} ${printing}` : `${card} -(${printing})`;
+}
+
+/** One collection folder holding some of the copies an owned chip counts (issue #1055). */
+export interface OwnedPlace {
+  /** The collection folder's id, or `null` for `Not sorted`. */
+  folderId: number | null;
+  /** The shelf glyph the collection's own walls draw this folder with. */
+  kind: ShelfKind;
+  /** Its names from the root of the collection — `["Binder", "Staples"]`, or `["Not sorted"]`. */
+  path: string[];
+  count: number;
+}
+
+/** `shelfFolderOf` asks for the effective locks; a glyph does not depend on them. */
+const NO_LOCKS: ReadonlySet<number> = new Set();
+
+/**
+ * Where the copies one of a wish's owned chips counts are filed, in the collection's own words
+ * (issue #1055) — {@link WishRow.ownedPlaces} for one side, with each folder's path named from
+ * the collection's folder list, the most copies first and then by path.
+ *
+ * The glyph is `shelfFolderOf`'s mapping (`user` a folder, `deck` a deck's group, any other kind
+ * app-owned), so a chip's tooltip draws a drawer with the mark its shelf heading has.
+ *
+ * **A folder the list does not know is left out rather than guessed at** — the list not having
+ * answered yet, or a folder deleted between the two reads. Its copies are still in the chip's
+ * count; the tooltip only declines to name a drawer it cannot.
+ */
+export function ownedPlacesOf(
+  wish: Pick<WishRow, "ownedPlaces">,
+  side: OwnedSide,
+  folders: readonly CollectionFolder[],
+): OwnedPlace[] {
+  const places: OwnedPlace[] = [];
+  for (const place of wish.ownedPlaces) {
+    const count = side === "exact" ? place.exact : place.other;
+    if (count <= 0) continue;
+    if (place.folderId === null) {
+      places.push({ folderId: null, kind: "unfiled", path: [UNFILED_NAME], count });
+      continue;
+    }
+    const trail = trailOf(folders, place.folderId);
+    const folder = trail[trail.length - 1];
+    if (folder === undefined) continue;
+    const { kind } = shelfFolderOf(folder, NO_LOCKS);
+    places.push({ folderId: place.folderId, kind, path: trail.map((f) => f.name), count });
+  }
+  return places.sort(
+    (a, b) => b.count - a.count || a.path.join("\u0000").localeCompare(b.path.join("\u0000")),
+  );
 }

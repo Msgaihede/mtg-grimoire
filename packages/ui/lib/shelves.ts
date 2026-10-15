@@ -37,7 +37,7 @@ export const UNFILED_SHELF = 0;
 export const MAX_SHELF_INDENT = 3;
 
 /** What the unfiled shelf's heading reads. Plain text, never a button: it is not a folder. */
-const UNFILED_NAME = "Not sorted";
+export const UNFILED_NAME = "Not sorted";
 
 export type ShelfKind = "unfiled" | "folder" | "deck" | "removed" | "managed";
 export type ShelfGroup = "own" | "decks" | "managed";

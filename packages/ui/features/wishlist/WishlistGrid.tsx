@@ -8,14 +8,15 @@ import {
 } from "react";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { useTooltip } from "@/components/tooltip/useTooltip";
-import { ShelfPlace } from "@/features/shelves/ShelfPlace";
+import { ShelfGlyph } from "@/features/shelves/ShelfHeading";
+import { ShelfPlace, shelfPlaceName } from "@/features/shelves/ShelfPlace";
 import { hasBackFace } from "@/features/card/printings";
 import { dragData } from "@/features/decks/dnd";
 import { CardGrid, type GridCard, type GridSections } from "@/features/search/CardGrid";
 import type { Finish } from "@/lib/finish";
 import { RULE_BREAK } from "@/lib/folderRules";
 import type { FolderNode } from "@/lib/folderTree";
-import type { WishlistFolder, WishRow } from "@/lib/ipc";
+import type { CollectionFolder, WishlistFolder, WishRow } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import type { ShelfSection } from "@/lib/shelfLayout";
@@ -25,6 +26,7 @@ import { cn } from "@/lib/utils";
 import { EditWishButton } from "./EditWish";
 import {
   collectionQueryOf,
+  ownedPlacesOf,
   preferredFinishOf,
   wallPrinting,
   wishLabel,
@@ -277,8 +279,21 @@ function WishWanted({ wish }: { wish: WishRow }) {
  * {@link collectionQueryOf} written into its search box, through `showInCollection`. The corner
  * it sits in opens the card on a click, so the press stops there; `data-no-drag` keeps a press
  * from becoming a drag of the whole wish (the `column` slot's reason).
+ *
+ * **Its tooltip says where those copies are filed** (issue #1055) — one line per collection
+ * folder, {@link ownedPlacesOf}, drawn as the collection's own walls draw a folder: its shelf
+ * glyph and its whole path (`shelfPlaceName`), then how many of the copies are there. So a reader
+ * deciding whether a wish still stands learns which drawer to open before pressing anything. The
+ * same places ride the `sr-only` sentence, so a screen reader hears them too.
  */
-function WishOwned({ wish }: { wish: WishRow }) {
+function WishOwned({
+  wish,
+  folders,
+}: {
+  wish: WishRow;
+  /** The collection's folders, to name the places by. Empty names none — the counts still draw. */
+  folders: readonly CollectionFolder[];
+}) {
   const tip = useTooltip();
   const showInCollection = useAppStore((s) => s.showInCollection);
   const chip = (side: OwnedSide, count: number) => {
@@ -290,11 +305,28 @@ function WishOwned({ wish }: { wish: WishRow }) {
         : wish.cardId === null
           ? `${copies} in your collection`
           : `${copies} of this printing in your collection`;
+    const places = ownedPlacesOf(wish, side, folders);
+    const spoken = places.map((place) => `${shelfPlaceName(place)} (${place.count})`).join(", ");
+    const hint =
+      places.length === 0 ? (
+        `${sentence} — show in collection`
+      ) : (
+        <span className="flex flex-col gap-1">
+          <span>{`${sentence} — show in collection`}</span>
+          {places.map((place) => (
+            <span key={place.folderId ?? 0} className="flex items-center gap-1">
+              <ShelfGlyph kind={place.kind} open={false} className="size-3" />
+              <span className="min-w-0 break-words">{shelfPlaceName(place)}</span>
+              <span className="flex-none font-mono tabular-nums text-dim">×{place.count}</span>
+            </span>
+          ))}
+        </span>
+      );
     return (
       <button
         type="button"
         data-no-drag=""
-        {...tip(`${sentence} — show in collection`, { describes: false })}
+        {...tip(hint, { describes: false })}
         onClick={(event) => {
           event.stopPropagation();
           showInCollection(collectionQueryOf(wish, side));
@@ -310,7 +342,11 @@ function WishOwned({ wish }: { wish: WishRow }) {
         <span aria-hidden="true">
           {side === "exact" ? "Own" : "Other"} ×{count}
         </span>
-        <span className="sr-only">{`${sentence}. Show in collection`}</span>
+        <span className="sr-only">
+          {places.length === 0
+            ? `${sentence}. Show in collection`
+            : `${sentence}, in ${spoken}. Show in collection`}
+        </span>
       </button>
     );
   };
@@ -327,14 +363,22 @@ function WishOwned({ wish }: { wish: WishRow }) {
 
 /**
  * The bottom-left corner: what the collection holds of the card, over how many copies are wanted.
- * Module scope so `CardGrid` is handed one function for the life of the wall.
+ * A closure over the collection's folders, which name where the owned copies are (issue #1055) —
+ * held still by the wall with `useMemo` on that list, so `CardGrid` is handed one function for as
+ * long as the folders do not change.
  */
-const wishBadge = (tile: WishTile) => (
-  <span className="flex flex-col items-start gap-[calc(0.25rem*var(--mark-scale,1))]">
-    <WishOwned wish={tile.wish} />
-    <WishWanted wish={tile.wish} />
-  </span>
-);
+const wishBadgeOf = (folders: readonly CollectionFolder[]) =>
+  function wishBadge(tile: WishTile) {
+    return (
+      <span className="flex flex-col items-start gap-[calc(0.25rem*var(--mark-scale,1))]">
+        <WishOwned wish={tile.wish} folders={folders} />
+        <WishWanted wish={tile.wish} />
+      </span>
+    );
+  };
+
+/** Stable identity for "no collection folders to name places by". */
+const NO_COLLECTION_FOLDERS: readonly CollectionFolder[] = [];
 
 /**
  * The wishlist as a wall of art: one tile per wish, with what it will cost still to finish.
@@ -374,6 +418,7 @@ export const WishlistGrid = memo(function WishlistGrid({
   marketplace,
   stickyTop,
   ruleBreaks,
+  collectionFolders = NO_COLLECTION_FOLDERS,
 }: {
   rows: WishRow[];
   /** Identity of the current list, so a new one starts at the top. */
@@ -444,6 +489,12 @@ export const WishlistGrid = memo(function WishlistGrid({
    * moves only with its answer. Absent outlines nothing.
    */
   ruleBreaks?: ReadonlySet<number>;
+  /**
+   * The collection's folders (`useCollectionFolderList`), which the owned chips' tooltips name
+   * the places of the reader's copies by (issue #1055). Held still by the caller — the query's
+   * answer. Absent names no places; the counts still draw.
+   */
+  collectionFolders?: readonly CollectionFolder[];
 }) {
   // Opening a card is a store write and nothing else — `App` owns the pane, so the wall never
   // has to know whether one is open, only which card is in it.
@@ -505,6 +556,7 @@ export const WishlistGrid = memo(function WishlistGrid({
           renderSticky: shelves.renderSticky,
           revealShelfId: shelves.revealShelfId ?? null,
         };
+  const badge = useMemo(() => wishBadgeOf(collectionFolders), [collectionFolders]);
   const tileCaption = useMemo(
     () => (folderOf === undefined ? caption : placedCaption(folderOf)),
     [folderOf],
@@ -592,7 +644,7 @@ export const WishlistGrid = memo(function WishlistGrid({
       // Since issue #988 the owned chips sit above it, each its own pill and its own press —
       // `"bare"`'s case of a corner holding more than one mark. See {@link WishOwned}.
       badgeChrome="bare"
-      badge={wishBadge}
+      badge={badge}
       // The bottom-right corner carries two facts in one chip: what the reconciler found, and
       // what this wish costs.
       //
