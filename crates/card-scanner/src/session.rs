@@ -3593,21 +3593,40 @@ mod tests {
     }
 
     #[test]
-    fn a_freeze_lifting_inside_one_stretch_does_not_decide_the_card_again() {
-        // **The case Exact exists for.** The reads resolved card three, and the hash prefers
-        // another card on every frame — so under the freeze each frame is a miss, and ten of
-        // them lift it while the lock never lets go. One stretch is one card: no second resolve
-        // and no second decision, however often the tracker lifts and re-forms.
+    fn the_card_the_hash_preferred_does_not_lift_a_resolved_decision() {
+        // **The case Exact exists for.** The hash leads with the other card — its two printings
+        // pool their votes — and the resolve decides card three. On every frame after, the hash
+        // goes on naming the other card: that is this card as the hash sees it, so the decision
+        // holds. It used to count ten of them as a card swapped in and lift the decision with the
+        // card still in the lens — Abandoned Air Temple on the replay, decided at frame 9 and
+        // lost at 18.
         let mut s = resolved_on_card_three();
-        let other = card_image(1);
-        let mut lifted = false;
         for f in 0..40 {
-            let v = locked_frame(&mut s, &other);
-            lifted |= !v.tracked.as_ref().is_some_and(|t| t.committed);
+            let v = locked_frame(&mut s, &card_image(1));
+            assert!(v.decision.is_some(), "lost the decision on frame {f}");
             assert!(v.resolution.is_none(), "re-resolved inside the stretch on frame {f}");
+            assert_eq!(v.decision_seq, 1);
+        }
+    }
+
+    #[test]
+    fn a_freeze_lifting_inside_one_stretch_does_not_decide_the_card_again() {
+        // The lock holds and nothing matches for ten frames — a glare across the card — so the
+        // freeze lifts while the stretch goes on. One stretch is one card: no second resolve and
+        // no second decision when the card is matched again.
+        let mut s = resolved_on_card_three();
+        let mut lifted = false;
+        for f in 0..12 {
+            let v = held_frame(&mut s);
+            lifted |= !v.tracked.as_ref().is_some_and(|t| t.committed);
             assert_eq!(v.decision_seq, 1, "decided again inside the stretch on frame {f}");
         }
         assert!(lifted, "the premise: the freeze lifted at some point");
+        for f in 0..30 {
+            let v = locked_frame(&mut s, &card_image(1));
+            assert!(v.resolution.is_none(), "re-resolved inside the stretch on frame {f}");
+            assert_eq!(v.decision_seq, 1, "decided again inside the stretch on frame {f}");
+        }
     }
 
     #[test]
