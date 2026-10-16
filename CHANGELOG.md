@@ -30,6 +30,34 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.53.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.52.0...v0.53.0) (2026-10-15)
+
+
+### Features
+
+* **folders:** combine folder rules with AND/OR groups ([6bdeba3](https://github.com/Msgaihede/mtg-grimoire/commit/6bdeba3a115fc78fe138498dbf6f46e7c5a44ea7))
+* **folders:** combine folder rules with AND/OR groups ([abf7390](https://github.com/Msgaihede/mtg-grimoire/commit/abf73909b8fcfeebed4f8d98ca3495000c8bfe24)), closes [#1053](https://github.com/Msgaihede/mtg-grimoire/issues/1053)
+* **scanner:** find the title in the card's top quarter when a resolve names no card ([d4b5a9f](https://github.com/Msgaihede/mtg-grimoire/commit/d4b5a9ff348fd29538f5960b95e3a0104205300e))
+* **scanner:** find the title in the card's top quarter when a resolve names no card ([bf42c33](https://github.com/Msgaihede/mtg-grimoire/commit/bf42c33af9b219343f907e3ac7b6bacdd66cca95))
+* **scanner:** list a set's promo after the printing it stamps when the hash ties them ([e5adde2](https://github.com/Msgaihede/mtg-grimoire/commit/e5adde293ed0d66b0e3be7b5204a47304b12f548))
+* **scanner:** list a set's promo after the printing it stamps when the hash ties them ([72f5034](https://github.com/Msgaihede/mtg-grimoire/commit/72f5034cd1ccb2f73785e5836560512c1150f3de))
+* **shelves:** make Add folder's parent clear and let a run of folders be added in one go ([e632e85](https://github.com/Msgaihede/mtg-grimoire/commit/e632e85818cb8d54b6f0876427172e41351f20cd))
+* **shelves:** make Add folder's parent clear and let a run of folders be added in one go ([75d4d98](https://github.com/Msgaihede/mtg-grimoire/commit/75d4d984a1f8eff32859d3f18d8d08935ea6d7b8))
+* show a folder's rule breakers by pressing its rules badge ([df72356](https://github.com/Msgaihede/mtg-grimoire/commit/df7235624869f1b763c459c9475924c4acf76323))
+* show a folder's rule breakers by pressing its rules badge ([feb537c](https://github.com/Msgaihede/mtg-grimoire/commit/feb537cd68042f7d3abfce998fcf888fce52c979)), closes [#1057](https://github.com/Msgaihede/mtg-grimoire/issues/1057)
+* show wishlist copies held by decks or locked folders as a lighter chip ([ae03f14](https://github.com/Msgaihede/mtg-grimoire/commit/ae03f1450958c1923f4b65abd0bb8af9a58dd1e0))
+* show wishlist copies held by decks or locked folders as a lighter chip ([bb74b4e](https://github.com/Msgaihede/mtg-grimoire/commit/bb74b4e36f5ecde1977f6a88a03a36b3426cadf7)), closes [#1054](https://github.com/Msgaihede/mtg-grimoire/issues/1054)
+* **wishlist:** say where owned copies are filed on the owned chips' hover ([bc1de24](https://github.com/Msgaihede/mtg-grimoire/commit/bc1de244b7b78ee74316424c575024c695ca679b))
+* **wishlist:** say where owned copies are filed on the owned chips' hover ([ebd3a29](https://github.com/Msgaihede/mtg-grimoire/commit/ebd3a294d9d3533162cec554a4ebd7e9cdd38c61)), closes [#1055](https://github.com/Msgaihede/mtg-grimoire/issues/1055)
+
+
+### Bug Fixes
+
+* count only same-finish copies as owned in the shared view ([52ec1d3](https://github.com/Msgaihede/mtg-grimoire/commit/52ec1d34c3a53c813d9f671de375ffb3c199d328))
+* count only same-finish copies as owned in the shared view ([04125a7](https://github.com/Msgaihede/mtg-grimoire/commit/04125a71421ae1d014e77207ba9c2a4d348c8230)), closes [#1056](https://github.com/Msgaihede/mtg-grimoire/issues/1056)
+* **scanner:** keep an Exact decision while the hash goes on naming the card it preferred ([8d4cff7](https://github.com/Msgaihede/mtg-grimoire/commit/8d4cff749b487558fe8ad295df7833d7fca4f669))
+* **scanner:** keep an Exact decision while the hash goes on naming the card it preferred ([42999ce](https://github.com/Msgaihede/mtg-grimoire/commit/42999ce9245f3fe3405b3b635077bc6b8b0e6704))
+
 ## [0.52.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.51.0...v0.52.0) (2026-10-15)
 
 
