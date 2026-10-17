@@ -370,6 +370,19 @@ and its card size is solved so every pile fits (`layout.ts`). Cards of one name 
 each edged 5 px up and to the right of the one above it, five drawn at most, and a ×N chip on the
 pile's bottom edge for the count (issue #1001).
 
+**An attachment is tucked under the card it is attached to** (issue #1073), the way MTG Arena and
+a real table show it. `GameCard.attached_to` is the host's object id, read from phase's
+`attached_to` (a permanent only: an Aura on a player, a Curse, names nothing and stays in its
+lane). `layout.ts`' `attachmentsOf` takes every Aura, Equipment and Fortification out of its lane
+and hangs it under its host's pile, each one showing its name bar (`ATTACHED`, 0.16 card-widths)
+above the card; a card with attachments is a pile of its own, and `fitWidth` sizes the lane so the
+tallest such pile still fits. An attachment on an attachment rides under the card at the bottom of
+the chain. One that crosses tables — the reader's Pacifism on the opponent's creature — is drawn on
+the host's table (`acrossTables`, the board's `across`), where its edge can be pointed at and its
+menu opened but it is not carried off or tapped by a click. The edge is the attachment's own
+button: it points, opens its own menu (an Equipment's equip ability is activated there) and is
+picked when the rules ask for it on its own table.
+
 **Drags are dnd-kit, as everywhere in the app** (`tableDrag.ts`, `TableDrag`, `useTableDropTarget`,
 with a mark of its own, `mtg-grimoire/table-card`). A drop is a zone, never a coordinate, and only
 the reader's cards are dragged — an opponent's never:

@@ -162,6 +162,25 @@ export function turnFive(): TurnFive {
   return { view, goyf, elves, delver, ragavan, reckoner, jace };
 }
 
+/**
+ * Turn 5 with attachments (issue #1073): an Equipment on the reader's Tarmogoyf, and the
+ * reader's Aura on the opponent's Ragavan, which the board draws under Ragavan on their table.
+ * Neither printing is in the fake's corpus, so both draw as tiles by name.
+ */
+export function withAttachments(): TurnFive {
+  const t = turnFive();
+  const gear = (name: string, typeLine: string, on: GameCard) =>
+    gameCard(name, { typeLine, lane: "other", isToken: false, attachedTo: on.id });
+  const [opponent] = t.view.opponents;
+  t.view.you.battlefield = [
+    ...t.view.you.battlefield,
+    gear("Bonesplitter", "Artifact — Equipment", t.goyf),
+    gear("Pacifism", "Enchantment — Aura", t.ragavan),
+  ];
+  t.view.opponents = [opponent];
+  return t;
+}
+
 /** The reader's declare-attackers step on turn 5: three creatures that may attack. */
 export function attackStep(): TurnFive {
   const t = turnFive();
