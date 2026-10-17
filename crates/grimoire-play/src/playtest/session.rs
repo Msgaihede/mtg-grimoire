@@ -26,9 +26,9 @@
 //! **The sandbox is a setting** (`setSandbox`): a hand on the table, phase's debug actions — move a
 //! card anywhere, tap, counters, tokens, draws, life totals — on the reader's own cards and on
 //! every card the table shows (never an opponent's hand or library), and a play the rules refuse
-//! put down unpaid instead (`play`). Taken in the reader's main phase only, where nothing is
-//! half-done. Off from the start against the AI, on against the goldfish; the reader turns it on
-//! or off whenever they like.
+//! made unpaid instead: cast without paying, or put down when even that is not legal (`unpaid`).
+//! Taken in the reader's main phase only, where nothing is half-done. Off from the start against
+//! the AI, on against the goldfish; the reader turns it on or off whenever they like.
 //!
 //! **The goldfish never loses, and neither does the reader**: in a goldfish game a command-zone
 //! emblem with "you can't lose the game" (CR 104.3b, no `affected` — every player) is granted at
@@ -62,7 +62,7 @@ use engine::types::format::FormatConfig;
 use engine::types::game_state::{MulliganDecisionPhase, StackEntryKind, WaitingFor};
 use engine::types::identifiers::ObjectId;
 use engine::types::phase::Phase;
-use engine::types::statics::StaticMode;
+use engine::types::statics::{CastFreeOrigin, CastFrequency, StaticMode};
 use engine::types::zones::Zone;
 use engine::types::{
     parse_counter_type, ControllerRef, GameState, PlayerId, StaticDefinition, TargetFilter,
@@ -138,6 +138,8 @@ struct Checkpoint {
     out_told: HashSet<PlayerId>,
     /// The goldfish's `dead_on` (`PlaytestSeat::dead_on`).
     dead_on: Option<u32>,
+    /// The sandbox's free cast's emblem (`Playtest::free`).
+    free: Option<ObjectId>,
 }
 
 /// The printing an object is drawn by, with whose and what it was — so a printing can follow
@@ -185,6 +187,9 @@ pub struct Playtest {
     fish: Option<PlayerId>,
     /// The emblems that keep a goldfish game going; never shown, never counted as anyone's card.
     rules: Vec<ObjectId>,
+    /// The emblem a sandbox cast is made without paying under (`cast_free`), while it is being
+    /// made: gone when nothing is pending and the board asks nothing (`end_free`).
+    free: Option<ObjectId>,
     /// The reader's hand may change the game (`setSandbox`).
     sandbox: bool,
     ai_seats: HashSet<PlayerId>,
@@ -441,6 +446,7 @@ impl Playtest {
             rng: ChaCha8Rng::seed_from_u64(seed ^ 0x5eed_a1a1_5eed_a1a1),
             pending: None,
             choice: None,
+            free: None,
             over_told: false,
             out_told: HashSet::new(),
             dead_on: None,
@@ -1243,7 +1249,10 @@ impl Playtest {
         let mut happened = Vec::new();
         let choice = self.choice.take();
         self.frames.clear();
-        match self.run(action, choice, &mut happened) {
+        match self
+            .run(action, choice, &mut happened)
+            .and_then(|()| self.end_free())
+        {
             Ok(()) => {
                 if let Some(before) = before {
                     self.history.record(before);
@@ -1554,15 +1563,7 @@ impl Playtest {
             }
             return self.activate(id, out);
         }
-        let ways: Vec<GameAction> = self
-            .answers()
-            .into_iter()
-            .filter(|a| match a {
-                GameAction::PlayLand { object_id, .. }
-                | GameAction::CastSpell { object_id, .. } => *object_id == id,
-                _ => false,
-            })
-            .collect();
+        let ways = self.plays_of(id);
         if ways.is_empty() && by_hand {
             return self.unpaid(id, out);
         }
@@ -1580,10 +1581,29 @@ impl Playtest {
         })
     }
 
-    /// A card the rules will not play, put where it would have gone, unpaid — the goldfish's
-    /// escape hatch, the sandbox's now: a permanent onto the battlefield, an instant or sorcery
-    /// into the graveyard (it was "cast" and is done). The log says "not paid for" (`Put`).
+    /// Every legal land drop or cast of `id`.
+    fn plays_of(&self, id: ObjectId) -> Vec<GameAction> {
+        self.answers()
+            .into_iter()
+            .filter(|a| match a {
+                GameAction::PlayLand { object_id, .. }
+                | GameAction::CastSpell { object_id, .. } => *object_id == id,
+                _ => false,
+            })
+            .collect()
+    }
+
+    /// A card the rules will not play, played unpaid — the goldfish's escape hatch, the
+    /// sandbox's now. Cast without paying its mana cost first (`cast_free`), so it is a spell
+    /// cast from where it was and what it does when cast or as it enters happens: "if you cast it
+    /// from your hand" (Wakening Sun's Avatar, issue #1075) as much as any other. Only when even
+    /// that is not legal (a land past the land drop, nothing to target) is it put where it would
+    /// have gone: a permanent onto the battlefield, an instant or sorcery into the graveyard (it
+    /// was "cast" and is done). The log says "not paid for" (`Put`).
     fn unpaid(&mut self, id: ObjectId, out: &mut Vec<PlaytestHappened>) -> Result<(), String> {
+        if self.cast_free(id, out)? {
+            return Ok(());
+        }
         let obj = self.own(id)?;
         let from = place_of(obj.zone).ok_or(NOT_IN_GAME)?;
         let to = if is_permanent(obj) {
@@ -1596,6 +1616,48 @@ impl Playtest {
             engine::game::commander::record_commander_cast(&mut self.state, id);
         }
         self.put(id, to, out)
+    }
+
+    /// CR 118.9: cast `id` without paying its mana cost, under an emblem of the reader's that lets
+    /// them (phase's `CastFromHandFree`, Omniscience's). It touches nothing else: its permission is
+    /// the reader's alone (phase reads it for its controller), its `affected` is this one object,
+    /// and it is kept only while the cast is made (`free`, `end_free`). One way is cast, several
+    /// are asked about, as a paid cast is. False, and the game as it was, when even a free cast
+    /// offers no way.
+    fn cast_free(&mut self, id: ObjectId, out: &mut Vec<PlaytestHappened>) -> Result<bool, String> {
+        let before = self.checkpoint();
+        self.free = Some(grant_emblem(
+            &mut self.state,
+            YOU,
+            vec![StaticDefinition::new(StaticMode::CastFromHandFree {
+                frequency: CastFrequency::Unlimited,
+                origin: CastFreeOrigin::DefaultCastPermission,
+            })
+            .affected(TargetFilter::SpecificObject { id })],
+            Vec::new(),
+            Vec::new(),
+        ));
+        let ways = self.plays_of(id);
+        if ways.is_empty() {
+            self.restore(before);
+            return Ok(false);
+        }
+        let name = self.own(id)?.name.clone();
+        self.take_one(ways, "CastChoice", name, out, String::new)?;
+        Ok(true)
+    }
+
+    /// The free cast's emblem goes once its cast is made or taken back: nothing is pending and
+    /// the board asks nothing. Checked the moment the spell is on the stack (`advance`) and after
+    /// every action, so nothing the spell or its triggers do is cast under it.
+    fn end_free(&mut self) -> Result<(), String> {
+        if self.pending.is_some() || self.choice.is_some() {
+            return Ok(());
+        }
+        match self.free.take() {
+            Some(emblem) => self.debug(DebugAction::RemoveObject { object_id: emblem }),
+            None => Ok(()),
+        }
     }
 
     /// The rules only: a permanent's one activated ability, a question about which, or a
@@ -1958,6 +2020,7 @@ impl Playtest {
                     // A cast is made once its spell is on the stack and the reader has priority
                     // again: whether they stop here or pass, it can no longer be taken back.
                     self.pending = None;
+                    self.end_free()?;
                     if !ending && self.stops_here() {
                         return Ok(());
                     }
@@ -2227,6 +2290,13 @@ impl Playtest {
             .map_err(|e| e.to_string())
     }
 
+    /// Tests only: the emblems in the game, the goldfish's own among them — so a test can see a
+    /// free cast's is gone.
+    #[cfg(test)]
+    pub(super) fn emblems_for_test(&self) -> usize {
+        self.state.objects.values().filter(|o| o.is_emblem).count()
+    }
+
     /// Tests only: put a card of `seat`'s from its library onto the battlefield, as if it had
     /// been played — the AI cannot be told what to cast.
     #[cfg(test)]
@@ -2292,6 +2362,7 @@ impl Playtest {
             rng: self.rng.clone(),
             out_told: self.out_told.clone(),
             dead_on: self.dead_on,
+            free: self.free,
         }
     }
 
@@ -2302,6 +2373,7 @@ impl Playtest {
         self.rng = checkpoint.rng;
         self.out_told = checkpoint.out_told;
         self.dead_on = checkpoint.dead_on;
+        self.free = checkpoint.free;
     }
 }
 

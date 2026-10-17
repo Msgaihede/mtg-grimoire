@@ -256,7 +256,7 @@ fn a_land_is_played_by_the_land_drop_and_a_second_is_put_by_hand() {
 }
 
 #[test]
-fn a_spell_is_cast_from_untapped_mana_and_put_by_hand_without_it() {
+fn a_spell_is_cast_from_untapped_mana_and_cast_unpaid_without_it() {
     let (cast, unpaid) = engine(|| {
         let mut game = kept();
         let forest = in_hand(&mut game, "Forest");
@@ -286,10 +286,15 @@ fn a_spell_is_cast_from_untapped_mana_and_put_by_hand_without_it() {
         cast.view.you.mana_open, 0,
         "a summoning-sick elf makes no mana"
     );
-    assert!(unpaid
-        .happened
-        .iter()
-        .any(|h| matches!(h, H::Put { name, .. } if name == "Grizzly Bears")));
+    assert!(
+        unpaid.happened.contains(&H::Cast {
+            seat: YOU,
+            name: "Grizzly Bears".into(),
+        }),
+        "cast without paying (CR 118.9): {:?}",
+        unpaid.happened
+    );
+    assert!(find(&unpaid.view.you.battlefield, "Grizzly Bears").is_some());
 }
 
 /// "Next turn" is the playtest's `endTurn` now: the goldfish's turn passes doing nothing — it
@@ -964,4 +969,103 @@ fn a_refused_action_is_not_remembered() {
             "a refusal leaves the redo trail as it was"
         );
     });
+}
+
+/// Issue #1075: a card the reader cannot pay for is cast without paying (CR 118.9), not put down,
+/// so a trigger that asks whether it was cast — Wakening Sun's Avatar's "if you cast it from your
+/// hand" — happens. The free cast's emblem is gone after it: the next spell is paid for.
+#[test]
+fn a_card_played_unpaid_is_cast_and_its_cast_from_hand_trigger_happens() {
+    let (free, paid) = engine(|| {
+        let mut cards =
+            vec![
+            card("Plains", None, "Basic Land — Plains", "({T}: Add {W}.)", None, 40),
+            card("Grizzly Bears", Some("{1}{G}"), "Creature — Bear", "", Some(("2", "2")), 20),
+            card(
+                "Savannah Lions",
+                Some("{W}"),
+                "Creature — Cat",
+                "",
+                Some(("2", "1")),
+                20,
+            ),
+            card(
+                "Wakening Sun's Avatar",
+                Some("{5}{W}{W}{W}"),
+                "Creature — Dinosaur Avatar",
+                "When Wakening Sun's Avatar enters, if you cast it from your hand, destroy all \
+                 non-Dinosaur creatures.",
+                Some(("7", "7")),
+                20,
+            ),
+        ];
+        for c in &mut cards[2..] {
+            c.colors = vec!["W".into()];
+        }
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).unwrap();
+        put_down(&mut game, "Grizzly Bears");
+        let emblems = game.emblems_for_test();
+        let avatar = in_hand(&mut game, "Wakening Sun's Avatar");
+        let free = game.act(A::Play { id: avatar }).unwrap();
+        assert_eq!(
+            game.emblems_for_test(),
+            emblems,
+            "the free cast's emblem is gone"
+        );
+        put_down(&mut game, "Plains");
+        let lions = in_hand(&mut game, "Savannah Lions");
+        (free, game.act(A::Play { id: lions }).unwrap())
+    });
+    assert!(
+        free.happened.contains(&H::Cast {
+            seat: YOU,
+            name: "Wakening Sun's Avatar".into(),
+        }),
+        "{:?}",
+        free.happened
+    );
+    assert!(find(&free.view.you.battlefield, "Wakening Sun's Avatar").is_some());
+    assert!(
+        find(&free.view.you.battlefield, "Grizzly Bears").is_none(),
+        "the Avatar's trigger destroyed the Bears: {:?}",
+        free.happened
+    );
+    assert!(find(&free.view.you.graveyard, "Grizzly Bears").is_some());
+    assert!(paid.happened.contains(&H::Cast {
+        seat: YOU,
+        name: "Savannah Lions".into(),
+    }));
+    assert!(
+        find(&paid.view.you.battlefield, "Plains").unwrap().tapped,
+        "the next spell was paid for"
+    );
+}
+
+/// A free cast that asks a question keeps its emblem while it asks, and Cancel takes the emblem
+/// back with the cast: nothing is left that would let the next card be cast free.
+#[test]
+fn a_free_cast_that_asks_is_cancelled_with_its_emblem() {
+    let (emblems, asking, cancelled, step) = engine(|| {
+        let mut game = kept();
+        for _ in 0..2 {
+            put_down(&mut game, "Grizzly Bears");
+        }
+        let emblems = game.emblems_for_test();
+        let growth = in_hand(&mut game, "Giant Growth");
+        let step = game.act(A::Play { id: growth }).unwrap();
+        let asking = game.emblems_for_test();
+        let cancelled = game.act(A::Cancel).unwrap();
+        (emblems, asking, game.emblems_for_test(), (step, cancelled))
+    });
+    let (asked, back) = step;
+    assert_eq!(asked.view.stage, Stage::Prompt, "{:?}", asked.happened);
+    assert_eq!(
+        asking,
+        emblems + 1,
+        "the emblem is there while the cast asks"
+    );
+    assert_eq!(cancelled, emblems, "and gone with the cast");
+    assert_eq!(back.view.stage, Stage::Main);
+    assert!(find(&back.view.you.hand, "Giant Growth").is_some());
 }

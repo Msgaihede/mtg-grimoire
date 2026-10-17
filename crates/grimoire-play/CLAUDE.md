@@ -70,9 +70,11 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
   The goldfish's steps are never frames of their own.
 - **A refused action changes nothing.** `act` restores a checkpoint on any `Err`. A play with
   several ways is asked about, and the cast's checkpoint (`Pending`) is what `cancel` goes back to
-  until the spell is on the stack. A play is put down unpaid (`unpaid`) only with the sandbox on and
-  only when the rules offer no way at all; without the sandbox it is a refusal. Keep all of it: the
-  board relies on a refusal leaving the game as it was.
+  until the spell is on the stack. A play is made unpaid (`unpaid`) only with the sandbox on and
+  only when the rules offer no way at all; without the sandbox it is a refusal. Unpaid is a real
+  cast without paying (`cast_free`, issue #1075) before it is ever a put: a put fires no cast or
+  enter trigger. The free cast's emblem lives only while that cast is made (`end_free`). Keep all
+  of it: the board relies on a refusal leaving the game as it was.
 - **Undo and redo restore whole moments, never inverses** (`history.rs`, issue #1022). The session
   keeps the game before each successful action (`Moment`) and `Undo` / `Redo` restore one exactly;
   redo never replays, so the AI's dice cannot change a redone turn. Anything an action changes is

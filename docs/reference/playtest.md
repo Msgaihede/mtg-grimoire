@@ -232,9 +232,12 @@ land drop left, too little mana, nothing to target), what happens is the sandbox
 - **Sandbox off: it is refused with a sentence** that ends "Turn the sandbox on to put it down by
   hand." Putting a card down unpaid against an opponent would be cheating it, so it is never done
   unasked.
-- **Sandbox on, in the reader's main phase: it is put down unpaid** (`unpaid`), where it would have
-  gone — a permanent onto the battlefield, an instant or sorcery into the graveyard — told as
-  `put` and logged "Cast Ponder · not paid for". A commander from the command zone still raises its
+- **Sandbox on, in the reader's main phase: it is played unpaid** (`unpaid`): cast without paying
+  its mana cost (CR 118.9, under a `CastFromHandFree` emblem held only while the cast is made —
+  [goldfish.md](goldfish.md)), so its cast and enter triggers happen (issue #1075), told as `cast`.
+  Only when even that is not legal is it put where it would have gone — a permanent onto the
+  battlefield, an instant or sorcery into the graveyard — told as `put` and logged "Cast Ponder ·
+  not paid for". A commander from the command zone still raises its
   tax (CR 903.8). Only when the rules offer no way: a card with one way is played, and one with
   several is asked about, sandbox or not.
 
