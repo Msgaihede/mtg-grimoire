@@ -464,9 +464,16 @@ export function CollectionPage() {
   // what makes the adjustment terminate until the effect below spends the hand-off.
   const pendingQuery = useAppStore((s) => s.pendingCollectionQuery);
   const clearPendingQuery = useAppStore((s) => s.clearPendingCollectionQuery);
+  // The header's quick search reveal (issue #1098) — `store.ts`' `pendingReveal`, when it names
+  // this page. Its query seeds the box like the hand-off above; its folder is opened below, beside
+  // `pendingFolder`, once the census has answered.
+  const pendingReveal = useAppStore((s) =>
+    s.pendingReveal?.scope === "collection" ? s.pendingReveal : null,
+  );
+  const clearPendingReveal = useAppStore((s) => s.clearPendingReveal);
   const collection = useCollection({
     initialNeedsReview: review.initialNeedsReview,
-    initialText: pendingQuery ?? undefined,
+    initialText: pendingQuery ?? pendingReveal?.query ?? undefined,
   });
   review.settle(collection.needsReview, collection.setNeedsReview);
   const [appliedQuery, setAppliedQuery] = useState(pendingQuery);
@@ -611,6 +618,32 @@ export function CollectionPage() {
   useEffect(() => {
     if (pendingHere !== null) clearPendingFolder();
   }, [pendingHere, clearPendingFolder]);
+  /**
+   * **The quick search's reveal** — `pendingFolder` and the query hand-off together, for a card
+   * rather than a drawer. The box half is applied at once (a seed on a mount, `resetAll` and the
+   * query on a page already here, so no chip left standing hides the card); the folder half waits
+   * for the census exactly as `pendingHere` does, and may name the root, which is where a card
+   * filed nowhere is drawn. `appliedReveal` compares by identity — every press writes a fresh
+   * object — so the same card asked for twice still lands the second time.
+   */
+  const [appliedReveal, setAppliedReveal] = useState(pendingReveal);
+  if (pendingReveal !== null && pendingReveal !== appliedReveal) {
+    setAppliedReveal(pendingReveal);
+    collection.resetAll();
+    collection.setText(pendingReveal.query);
+  } else if (pendingReveal === null && appliedReveal !== null) {
+    setAppliedReveal(null);
+  }
+  const revealHere =
+    pendingReveal !== null && !folders.query.isPending ? pendingReveal.folderId : undefined;
+  if (revealHere !== undefined && (requestedFolderId !== revealHere || requestedViewAll)) {
+    if (revealHere === null || folders.folders.some((folder) => folder.id === revealHere)) {
+      collection.openFolder(revealHere);
+    }
+  }
+  useEffect(() => {
+    if (revealHere !== undefined) clearPendingReveal();
+  }, [revealHere, clearPendingReveal]);
   /**
    * **A review hand-off opens the root**, which is the whole cabinet on shelves — To review counted
    * the flagged copies in every drawer, and a folder's wall holds only its own subtree. A page

@@ -334,6 +334,52 @@ describe("the search the Collection was asked to open on", () => {
   });
 });
 
+/** The header's quick search (issue #1098): three more of the same one-shot shape. */
+describe("the quick search's hand-offs", () => {
+  it("opens a deck folder on the gallery, not on a deck the trip to Decks brought back", () => {
+    useAppStore.getState().setActiveView("decks");
+    useAppStore.getState().setOpenDeckId(4);
+    useAppStore.getState().setActiveView("collection");
+
+    useAppStore.getState().showDeckFolder(7);
+
+    const s = useAppStore.getState();
+    expect(s.activeView).toBe("decks");
+    expect(s.openDeckId).toBeNull();
+    expect(s.pendingDeckFolder).toBe(7);
+    s.clearPendingDeckFolder();
+    expect(useAppStore.getState().pendingDeckFolder).toBeNull();
+  });
+
+  it("goes to Search with the text, and to a list with the card to reveal", () => {
+    useAppStore.getState().showTextInSearch('!"Lightning Bolt"');
+    expect(useAppStore.getState().activeView).toBe("search");
+    expect(useAppStore.getState().pendingSearchText).toBe('!"Lightning Bolt"');
+
+    const reveal = { scope: "wishlist", folderId: null, query: "!Shock" } as const;
+    useAppStore.getState().revealCard(reveal);
+    const s = useAppStore.getState();
+    expect(s.activeView).toBe("wishlist");
+    expect(s.pendingReveal).toEqual(reveal);
+    // The view change carrying the reveal spent the search hand-off nobody read.
+    expect(s.pendingSearchText).toBeNull();
+  });
+
+  it("is spent by a later view change, read or not", () => {
+    useAppStore.getState().showDeckFolder(7);
+    useAppStore.getState().setActiveView("home");
+    useAppStore.getState().showTextInSearch("bolt");
+    useAppStore.getState().setActiveView("home");
+    useAppStore.getState().revealCard({ scope: "collection", folderId: 4, query: "!Shock" });
+    useAppStore.getState().setActiveView("home");
+
+    const s = useAppStore.getState();
+    expect(s.pendingDeckFolder).toBeNull();
+    expect(s.pendingSearchText).toBeNull();
+    expect(s.pendingReveal).toBeNull();
+  });
+});
+
 /**
  * **The home page's three other one-shot hand-offs** (2026-09-26) — To review's needs-review filter
  * and its Settings group, and Wishlist savings' whole-list price sweep.

@@ -284,7 +284,16 @@ const WISHLIST_LABELS: FilterLabels = { idStem: "wishlist", search: "Search your
 export function WishlistPage() {
   // The To review widget's needs-review hand-off — `useReviewHandoff` has the whole rule.
   const review = useReviewHandoff("wishlist");
-  const wishlist = useWishlist({ initialNeedsReview: review.initialNeedsReview });
+  // The header's quick search reveal (issue #1098) — `store.ts`' `pendingReveal`, when it names
+  // this page: its query seeds the box, and its folder is opened below beside `pendingFolder`.
+  const pendingReveal = useAppStore((s) =>
+    s.pendingReveal?.scope === "wishlist" ? s.pendingReveal : null,
+  );
+  const clearPendingReveal = useAppStore((s) => s.clearPendingReveal);
+  const wishlist = useWishlist({
+    initialNeedsReview: review.initialNeedsReview,
+    initialText: pendingReveal?.query,
+  });
   review.settle(wishlist.needsReview, wishlist.setNeedsReview);
   const {
     query,
@@ -388,6 +397,27 @@ export function WishlistPage() {
   useEffect(() => {
     if (pendingHere !== null) clearPendingFolder();
   }, [pendingHere, clearPendingFolder]);
+  // The quick search's reveal — `CollectionPage`'s arrangement, which argues it: the box at once
+  // (every chip cleared on a page already here), the folder once the census has answered, and the
+  // root allowed, which is where a wish filed nowhere is drawn.
+  const [appliedReveal, setAppliedReveal] = useState(pendingReveal);
+  if (pendingReveal !== null && pendingReveal !== appliedReveal) {
+    setAppliedReveal(pendingReveal);
+    wishlist.resetAll();
+    wishlist.setText(pendingReveal.query);
+  } else if (pendingReveal === null && appliedReveal !== null) {
+    setAppliedReveal(null);
+  }
+  const revealHere =
+    pendingReveal !== null && !folders.query.isPending ? pendingReveal.folderId : undefined;
+  if (revealHere !== undefined && (requestedFolderId !== revealHere || requestedViewAll)) {
+    if (revealHere === null || folders.folders.some((folder) => folder.id === revealHere)) {
+      wishlist.openFolder(revealHere);
+    }
+  }
+  useEffect(() => {
+    if (revealHere !== undefined) clearPendingReveal();
+  }, [revealHere, clearPendingReveal]);
 
   /**
    * **A review hand-off opens the root**, which is the whole wishlist on shelves — To review

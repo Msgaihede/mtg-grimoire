@@ -35,6 +35,7 @@ import { DURATION, statusLine as statusLineMotion } from "@/lib/motion";
 import { notify, useUnreadCount } from "@/lib/notifications";
 import { matchesChord, matchesShortcut, shortcut } from "@/lib/shortcuts";
 import { useAppStore, type ViewId } from "@/lib/store";
+import { QuickSearch } from "@/features/quickSearch/QuickSearch";
 import { usePrefetchSearchOpen } from "@/features/search/useSearchOpen";
 import { useShareAutoUpdate } from "@/features/collection/useShareAutoUpdate";
 import { usePrefetchPanelWidth } from "@/features/search/usePanelWidth";
@@ -484,7 +485,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
           AppData when the folder beside the exe is not writable, and spec §3 asks for an
           indicator of which one is live. The status line hangs it as a tooltip on the sentence
           that already summarises the database. */}
-      <TitleBar windowControls={edition.caption}>
+      <TitleBar windowControls={edition.caption} center={<QuickSearch />}>
         <ChromeStatus
           statusLine={statusLine(status)}
           dataDir={status?.dataDir}

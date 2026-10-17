@@ -1785,6 +1785,40 @@ describe("needsNextPage", () => {
  * one-shot `pendingSearchSet`. The modal's half is `CardModalArt.test.tsx`'s; this is the half
  * that turns the hand-off into a request.
  */
+/**
+ * Issue #1098: the header's quick search opens this page on one box of text — `pendingSearchText`,
+ * answered the way the set above is.
+ */
+describe("SearchPage — text handed over by the quick search", () => {
+  afterEach(() => {
+    useAppStore.setState({ pendingSearchText: null });
+  });
+
+  it("opens on that text alone, at Any card, and spends the hand-off", async () => {
+    useAppStore.setState({ pendingSearchText: "bolt" });
+    wrap(<SearchPage />);
+
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    for (const [req] of searchCards.mock.calls) expect(req).toMatchObject({ text: "bolt" });
+    expect(lastRequest().format).toBeUndefined();
+    expect(screen.getByPlaceholderText(/search cards/i)).toHaveValue("bolt");
+    await waitFor(() => expect(useAppStore.getState().pendingSearchText).toBeNull());
+  });
+
+  it("replaces the search already on screen", async () => {
+    wrap(<SearchPage />);
+    const box = screen.getByPlaceholderText(/search cards/i);
+    await userEvent.type(box, "goblin");
+    await waitFor(() => expect(lastRequest().text).toBe("goblin"));
+
+    act(() => useAppStore.getState().showTextInSearch("bolt"));
+
+    await waitFor(() => expect(lastRequest()).toMatchObject({ text: "bolt" }));
+    expect(box).toHaveValue("bolt");
+    await waitFor(() => expect(useAppStore.getState().pendingSearchText).toBeNull());
+  });
+});
+
 describe("SearchPage — a set handed over by the card modal", () => {
   afterEach(() => {
     useAppStore.setState({ pendingSearchSet: null });

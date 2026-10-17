@@ -65,6 +65,14 @@ export const BELOW_CAPTION = "top-[34px]";
  * against the keyboard map. The 56px ribbon and its page heading that used to carry them are
  * gone; the mana line sits directly under this row now, and the page directly under that.
  *
+ * **The quick search sits in the middle, since issue #1098** — `center`, which `AppShell` fills
+ * with `QuickSearch`. The row is a three-column grid (`1fr auto 1fr`) rather than the flex row it
+ * was, because "centred in the window" is a fact about the *window*: in a flex row the field would
+ * sit midway between the lockup and the status run, and drift every time the status line changed
+ * length. Equal side tracks keep it on the window's axis, and because a `1fr` track still never
+ * shrinks below its content's minimum, a cramped window pushes the field off-centre before it
+ * would ever clip a window verb.
+ *
  * **`windowControls` is false wherever a browser or an OS owns the frame** — the light
  * edition's desktop face, in a browser tab or on a tablet. There this row is a header band of
  * the same height carrying the same lockup, status and keyboard map, minus the three window
@@ -73,10 +81,13 @@ export const BELOW_CAPTION = "top-[34px]";
  */
 export function TitleBar({
   children,
+  center,
   windowControls = true,
 }: {
   /** The app's status run, drawn right-aligned before the keyboard map. */
   children?: ReactNode;
+  /** What sits centred in the row — the quick search. Its cell is a drag region around it. */
+  center?: ReactNode;
   windowControls?: boolean;
 }) {
   // Shared with `AppShell`, which binds `F1`, because the key and the panel are in two
@@ -98,7 +109,7 @@ export function TitleBar({
     <div
       {...dragRegion}
       className={cn(
-        "flex shrink-0 items-center justify-between gap-4 bg-surface pl-3",
+        "grid shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-4 bg-surface pl-3",
         BAR_H,
         LAYER.caption,
       )}
@@ -174,7 +185,14 @@ export function TitleBar({
         </span>
       </div>
 
-      <div {...dragRegion} className="flex h-full min-w-0 items-center">
+      <div {...dragRegion} className="flex h-full items-center justify-center">
+        {center}
+      </div>
+
+      {/* No `min-w-0`: a grid item's automatic minimum is what keeps its `1fr` track from going
+          below the run's unshrinkable part (the window verbs), and the status line inside still
+          truncates, because it is `min-w-0` itself. */}
+      <div {...dragRegion} className="flex h-full items-center justify-end">
         {children}
         {/* The panel is rendered inside `KeyMap`'s own box, immediately after the button it
             belongs to — which is what makes the pair a disclosure rather than a dialog, and

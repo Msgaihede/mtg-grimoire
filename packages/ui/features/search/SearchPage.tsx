@@ -356,9 +356,16 @@ export function SearchPage() {
    */
   const pendingSet = useAppStore((s) => s.pendingSearchSet);
   const clearPendingSet = useAppStore((s) => s.clearPendingSearchSet);
+  // The header's quick search hand-off (issue #1098) — `pendingSearchText`, answered exactly as
+  // the set is above: a seed on a mount, a render-phase adjustment on a page already mounted, and
+  // `appliedText` as the guard until the effect spends it. The picked tags are put down too: a
+  // card asked for by name must not be hidden by a tag chip left standing from the last search.
+  const pendingText = useAppStore((s) => s.pendingSearchText);
+  const clearPendingText = useAppStore((s) => s.clearPendingSearchText);
   const tags = useTagSelection();
   const search = useCardSearch({
     initialSet: pendingSet,
+    initialText: pendingText,
     rememberAs: "search",
     tagTerms: tags.tagTerms,
   });
@@ -374,6 +381,18 @@ export function SearchPage() {
   useEffect(() => {
     if (pendingSet !== null) clearPendingSet();
   }, [pendingSet, clearPendingSet]);
+  const [appliedText, setAppliedText] = useState<string | null>(null);
+  if (pendingText !== null && pendingText !== appliedText) {
+    setAppliedText(pendingText);
+    if (tags.selection.chips.length > 0) tags.clearTags();
+    // A mount has seeded these already, so there it rewrites what is there with the same values.
+    search.showOnlyText(pendingText);
+  } else if (pendingText === null && appliedText !== null) {
+    setAppliedText(null);
+  }
+  useEffect(() => {
+    if (pendingText !== null) clearPendingText();
+  }, [pendingText, clearPendingText]);
 
   // **The filter quick bar** (spec 2026-09-29): a one-row copy of the page's filters that docks at
   // the top of `main` once the whole `FilterBar` block — row, open tray, stated filters — has
