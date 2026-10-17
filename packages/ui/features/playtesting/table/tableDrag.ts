@@ -79,13 +79,16 @@ export function dropAction(
 
 export function tableDraggable({
   element,
+  handle,
   payload,
 }: {
   element: HTMLElement;
+  /** The only place a press may start the drag, when the whole element is not it. */
+  handle?: Element;
   /** Read at the press, so a pile that grew since it mounted carries what it is now. */
   payload: () => TableDrag;
 }): () => void {
-  return dndDraggable({ element, data: () => tableDragData(payload()) });
+  return dndDraggable({ element, handle, data: () => tableDragData(payload()) });
 }
 
 /** The card in the air, or `null` — what lights the zones that could take it. */

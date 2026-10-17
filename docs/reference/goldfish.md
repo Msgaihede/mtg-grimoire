@@ -163,7 +163,7 @@ radio row in the game menu): **off by default against the AI, on against the gol
 | By the rules                                                       | By hand (phase's sandbox, while it is on)                    |
 | ------------------------------------------------------------------ | ------------------------------------------------------------ |
 | The London mulligan and Commander's free first one                 | A drag to any zone                                           |
-| Playing a land as the turn's land drop                             | A card the rules will not play, put down unpaid              |
+| Playing a land as the turn's land drop                             | A card the rules will not play, cast or put down unpaid      |
 | Casting a spell, paid from untapped mana (`CastPaymentMode::Auto`) | Tapping and untapping                                        |
 | Commander tax                                                      | Counters, token copies, preset tokens                        |
 | Foretelling (CR 702.143a) and casting a foretold card from exile   |                                                              |
@@ -184,14 +184,23 @@ the table. It looks for the legal `PlayLand` or `CastSpell` for that card:
 - **Exactly one:** it is played. phase lists a cast once per way to make it (a target, a mode), so
   one row means nothing is left to decide.
 - **Two or more:** the board asks which, as a prompt with Cancel ([playtest.md](playtest.md#prompts)).
-- **None:** with the sandbox on, in the main phase, the card is put where it would have gone,
-  unpaid (`unpaid`) — a permanent onto the battlefield, an instant or sorcery into the graveyard.
-  `PlaytestHappened::Put` says so, and the log reads "Cast Swords to Plowshares · not paid for".
-  With the sandbox off it is refused, in a sentence that ends "Turn the sandbox on to put it down
-  by hand."
+- **None:** with the sandbox on, in the main phase, the card is played unpaid (`unpaid`). It is
+  **cast without paying its mana cost** first (CR 118.9, `cast_free`): an emblem of the reader's
+  with phase's `CastFromHandFree` (Omniscience's static) is granted, the cast is made as any other
+  — one way taken, several asked about — and the emblem is removed once nothing is pending and the
+  board asks nothing (`end_free`: the moment the spell is on the stack, and after every action), so
+  the next play is paid. It touches no other card: its permission is the reader's alone, and its
+  `affected` is `SpecificObject`, the one card being played. Being a real
+  cast, what the card does when cast or as it enters happens: Wakening Sun's Avatar's "if you cast
+  it from your hand, destroy all non-Dinosaur creatures" (issue #1075) was lost when the card was
+  only put down. Only when even a free cast is not legal (a land past the land drop, nothing to
+  target) is the card put where it would have gone — a permanent onto the battlefield, an instant
+  or sorcery into the graveyard. `PlaytestHappened::Put` says so, and the log reads "Cast Swords to
+  Plowshares · not paid for". With the sandbox off it is refused, in a sentence that ends "Turn
+  the sandbox on to put it down by hand."
 
-**A commander put down unpaid still raises its tax.** The reader cast it; they only skipped
-paying. `record_commander_cast` is called on that path too. **A card elsewhere than the hand or the
+**A commander played unpaid still raises its tax.** Cast free, the engine raises it as for any
+cast; put down, `record_commander_cast` is called on that path too. **A card elsewhere than the hand or the
 command zone is cast when the rules let it be cast from there** (a foretold card in exile, a
 flashback card in the graveyard); else it is activated, and in the sandbox one with nothing to
 activate is put onto the battlefield (a double-click on a graveyard's creature).
@@ -369,6 +378,19 @@ and its card size is solved so every pile fits (`layout.ts`). Cards of one name 
 — same printing, same tapped state, same counters — are one pile: the cards themselves stacked,
 each edged 5 px up and to the right of the one above it, five drawn at most, and a ×N chip on the
 pile's bottom edge for the count (issue #1001).
+
+**An attachment is tucked under the card it is attached to** (issue #1073), the way MTG Arena and
+a real table show it. `GameCard.attached_to` is the host's object id, read from phase's
+`attached_to` (a permanent only: an Aura on a player, a Curse, names nothing and stays in its
+lane). `layout.ts`' `attachmentsOf` takes every Aura, Equipment and Fortification out of its lane
+and hangs it under its host's pile, each one showing its name bar (`ATTACHED`, 0.16 card-widths)
+above the card; a card with attachments is a pile of its own, and `fitWidth` sizes the lane so the
+tallest such pile still fits. An attachment on an attachment rides under the card at the bottom of
+the chain. One that crosses tables — the reader's Pacifism on the opponent's creature — is drawn on
+the host's table (`acrossTables`, the board's `across`), where its edge can be pointed at and its
+menu opened but it is not carried off or tapped by a click. The edge is the attachment's own
+button: it points, opens its own menu (an Equipment's equip ability is activated there) and is
+picked when the rules ask for it on its own table.
 
 **Drags are dnd-kit, as everywhere in the app** (`tableDrag.ts`, `TableDrag`, `useTableDropTarget`,
 with a mark of its own, `mtg-grimoire/table-card`). A drop is a zone, never a coordinate, and only

@@ -256,7 +256,7 @@ fn a_land_is_played_by_the_land_drop_and_a_second_is_put_by_hand() {
 }
 
 #[test]
-fn a_spell_is_cast_from_untapped_mana_and_put_by_hand_without_it() {
+fn a_spell_is_cast_from_untapped_mana_and_cast_unpaid_without_it() {
     let (cast, unpaid) = engine(|| {
         let mut game = kept();
         let forest = in_hand(&mut game, "Forest");
@@ -286,10 +286,15 @@ fn a_spell_is_cast_from_untapped_mana_and_put_by_hand_without_it() {
         cast.view.you.mana_open, 0,
         "a summoning-sick elf makes no mana"
     );
-    assert!(unpaid
-        .happened
-        .iter()
-        .any(|h| matches!(h, H::Put { name, .. } if name == "Grizzly Bears")));
+    assert!(
+        unpaid.happened.contains(&H::Cast {
+            seat: YOU,
+            name: "Grizzly Bears".into(),
+        }),
+        "cast without paying (CR 118.9): {:?}",
+        unpaid.happened
+    );
+    assert!(find(&unpaid.view.you.battlefield, "Grizzly Bears").is_some());
 }
 
 /// "Next turn" is the playtest's `endTurn` now: the goldfish's turn passes doing nothing — it
@@ -468,6 +473,89 @@ fn a_turn_passed_over_the_hand_size_asks_the_reader_which_cards_to_discard() {
     assert!(done.happened.contains(&H::TurnBegan { turn: 3, seat: YOU }));
 }
 
+/// "Choose creatures with total power 4 or less, sacrifice the rest" is the reader's to choose,
+/// as a pick of their creatures under the cap (issue #1079): a set over the cap is refused, and
+/// the creatures left out are sacrificed. The engine's own canned answers name what they keep.
+#[test]
+fn a_keep_within_total_power_asks_which_creatures_to_keep() {
+    let (asked, over, done, kept_ids) = engine(|| {
+        let mut cards = deck();
+        cards.push(card(
+            "Destined Confrontation",
+            Some("{G}"),
+            "Sorcery",
+            "Each player chooses any number of creatures they control with total power 4 or less, then sacrifices all other creatures they control.",
+            None,
+            10,
+        ));
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).unwrap();
+        let forest = in_hand(&mut game, "Forest");
+        game.act(A::Play { id: forest }).unwrap();
+        let bears: Vec<u64> = (0..3)
+            .map(|_| put_down(&mut game, "Grizzly Bears"))
+            .collect();
+        let elf = put_down(&mut game, "Llanowar Elves");
+        let spell = in_hand(&mut game, "Destined Confrontation");
+        let asked = game.act(A::Play { id: spell }).unwrap();
+        let over = game.act(A::PickCards { ids: bears.clone() }).unwrap_err();
+        assert_eq!(game.view(), asked.view, "a refusal changed nothing");
+        let kept_ids = vec![bears[0], elf];
+        let done = game
+            .act(A::PickCards {
+                ids: kept_ids.clone(),
+            })
+            .unwrap();
+        (asked, over, done, kept_ids)
+    });
+    assert_eq!(asked.view.stage, Stage::Prompt, "{:?}", asked.happened);
+    let prompt = asked.view.prompt.as_ref().unwrap();
+    assert_eq!(prompt.kind, "KeepWithinTotalPowerChoice");
+    let pick = prompt.pick.as_ref().expect("asked as a pick");
+    assert_eq!(pick.purpose, PlaytestPickPurpose::Keep);
+    assert_eq!(pick.power_cap, Some(4));
+    assert_eq!((pick.min, pick.max), (0, 4));
+    assert_eq!(pick.eligible.len(), 4, "every creature the reader controls");
+    assert!(
+        prompt
+            .options
+            .iter()
+            .filter(|o| o.kind == "ChooseKeptCreatures")
+            .any(|o| !o.cards.is_empty()),
+        "the engine's answers name the creatures they keep: {:?}",
+        prompt.options
+    );
+    assert_eq!(
+        over,
+        "The kept creatures' total power is 6; it may be at most 4."
+    );
+
+    assert_eq!(done.view.stage, Stage::Main, "{:?}", done.happened);
+    let mut left: Vec<u64> = done
+        .view
+        .you
+        .battlefield
+        .iter()
+        .filter(|c| c.power.is_some())
+        .map(|c| c.id)
+        .collect();
+    left.sort_unstable();
+    let mut kept_ids = kept_ids;
+    kept_ids.sort_unstable();
+    assert_eq!(
+        left, kept_ids,
+        "the creatures the reader kept, and no others"
+    );
+    let buried = done
+        .view
+        .you
+        .graveyard
+        .iter()
+        .filter(|c| c.name == "Grizzly Bears")
+        .count();
+    assert_eq!(buried, 2, "the bears left out were sacrificed");
+}
+
 /// Neither seat loses: the goldfish at 0 life is "dead on your turn 1", and the game goes on.
 #[test]
 fn a_life_total_at_zero_does_not_end_the_game() {
@@ -560,6 +648,40 @@ fn counters_change_power_and_toughness() {
 
 /// Issue #991: a token the deck keeps is offered and drawn in the printing the reader set for it,
 /// not phase's.
+#[test]
+fn a_card_the_engine_plays_only_in_part_carries_its_gaps_in_hand_and_on_the_battlefield() {
+    let mut cards = deck();
+    // Rules text no parser has a word for, as `support.rs`' tests use.
+    cards.push(card(
+        "Moonlit Bard",
+        Some("{1}{G}"),
+        "Creature — Elf Bard",
+        "Whenever the moon is full, sing a song of the old forest to every listener.",
+        Some(("2", "2")),
+        8,
+    ));
+    let (hand, battlefield, bears) = engine(move || {
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).unwrap();
+        let id = in_hand(&mut game, "Moonlit Bard");
+        let hand = game
+            .view()
+            .you
+            .hand
+            .into_iter()
+            .find(|c| c.id == id)
+            .unwrap();
+        put_down(&mut game, "Moonlit Bard");
+        put_down(&mut game, "Grizzly Bears");
+        let view = game.view();
+        let on = |name: &str| find(&view.you.battlefield, name).unwrap().clone();
+        (hand, on("Moonlit Bard"), on("Grizzly Bears"))
+    });
+    assert!(!hand.gaps.is_empty(), "in hand: {hand:?}");
+    assert_eq!(battlefield.gaps, hand.gaps, "the same face, the same gaps");
+    assert!(bears.gaps.is_empty(), "a card played in full has none");
+}
+
 #[test]
 fn a_token_is_offered_and_drawn_in_the_printing_the_deck_sets() {
     let (preset, oracle, source) = crate::tokens::a_treasure();
@@ -1021,6 +1143,105 @@ fn a_refused_action_is_not_remembered() {
             "a refusal leaves the redo trail as it was"
         );
     });
+}
+
+/// Issue #1075: a card the reader cannot pay for is cast without paying (CR 118.9), not put down,
+/// so a trigger that asks whether it was cast — Wakening Sun's Avatar's "if you cast it from your
+/// hand" — happens. The free cast's emblem is gone after it: the next spell is paid for.
+#[test]
+fn a_card_played_unpaid_is_cast_and_its_cast_from_hand_trigger_happens() {
+    let (free, paid) = engine(|| {
+        let mut cards =
+            vec![
+            card("Plains", None, "Basic Land — Plains", "({T}: Add {W}.)", None, 40),
+            card("Grizzly Bears", Some("{1}{G}"), "Creature — Bear", "", Some(("2", "2")), 20),
+            card(
+                "Savannah Lions",
+                Some("{W}"),
+                "Creature — Cat",
+                "",
+                Some(("2", "1")),
+                20,
+            ),
+            card(
+                "Wakening Sun's Avatar",
+                Some("{5}{W}{W}{W}"),
+                "Creature — Dinosaur Avatar",
+                "When Wakening Sun's Avatar enters, if you cast it from your hand, destroy all \
+                 non-Dinosaur creatures.",
+                Some(("7", "7")),
+                20,
+            ),
+        ];
+        for c in &mut cards[2..] {
+            c.colors = vec!["W".into()];
+        }
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).unwrap();
+        put_down(&mut game, "Grizzly Bears");
+        let emblems = game.emblems_for_test();
+        let avatar = in_hand(&mut game, "Wakening Sun's Avatar");
+        let free = game.act(A::Play { id: avatar }).unwrap();
+        assert_eq!(
+            game.emblems_for_test(),
+            emblems,
+            "the free cast's emblem is gone"
+        );
+        put_down(&mut game, "Plains");
+        let lions = in_hand(&mut game, "Savannah Lions");
+        (free, game.act(A::Play { id: lions }).unwrap())
+    });
+    assert!(
+        free.happened.contains(&H::Cast {
+            seat: YOU,
+            name: "Wakening Sun's Avatar".into(),
+        }),
+        "{:?}",
+        free.happened
+    );
+    assert!(find(&free.view.you.battlefield, "Wakening Sun's Avatar").is_some());
+    assert!(
+        find(&free.view.you.battlefield, "Grizzly Bears").is_none(),
+        "the Avatar's trigger destroyed the Bears: {:?}",
+        free.happened
+    );
+    assert!(find(&free.view.you.graveyard, "Grizzly Bears").is_some());
+    assert!(paid.happened.contains(&H::Cast {
+        seat: YOU,
+        name: "Savannah Lions".into(),
+    }));
+    assert!(
+        find(&paid.view.you.battlefield, "Plains").unwrap().tapped,
+        "the next spell was paid for"
+    );
+}
+
+/// A free cast that asks a question keeps its emblem while it asks, and Cancel takes the emblem
+/// back with the cast: nothing is left that would let the next card be cast free.
+#[test]
+fn a_free_cast_that_asks_is_cancelled_with_its_emblem() {
+    let (emblems, asking, cancelled, step) = engine(|| {
+        let mut game = kept();
+        for _ in 0..2 {
+            put_down(&mut game, "Grizzly Bears");
+        }
+        let emblems = game.emblems_for_test();
+        let growth = in_hand(&mut game, "Giant Growth");
+        let step = game.act(A::Play { id: growth }).unwrap();
+        let asking = game.emblems_for_test();
+        let cancelled = game.act(A::Cancel).unwrap();
+        (emblems, asking, game.emblems_for_test(), (step, cancelled))
+    });
+    let (asked, back) = step;
+    assert_eq!(asked.view.stage, Stage::Prompt, "{:?}", asked.happened);
+    assert_eq!(
+        asking,
+        emblems + 1,
+        "the emblem is there while the cast asks"
+    );
+    assert_eq!(cancelled, emblems, "and gone with the cast");
+    assert_eq!(back.view.stage, Stage::Main);
+    assert!(find(&back.view.you.hand, "Giant Growth").is_some());
 }
 
 /// A foretell deck (issue #1077): Islands and Behold the Multiverse, the card the issue names.

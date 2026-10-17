@@ -4,6 +4,7 @@ import type { GameCard, PlaytestView } from "@/lib/ipc";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { gameCard } from "../table/fixtures";
 import { tableDraggable } from "../table/tableDrag";
+import { tableCardWidth } from "../table/Battlefield";
 import { INSPECT_DELAY } from "../table/Inspect";
 import type { Playmat } from "../table/types";
 import {
@@ -23,7 +24,7 @@ import {
   targetPrompt,
   turnFive,
 } from "./fixtures";
-import { PlaytestBoard } from "./PlaytestBoard";
+import { PlaytestBoard, zoneSize } from "./PlaytestBoard";
 
 // Spied, not replaced: the board's cards still register as they would, and the test can ask
 // which ones did.
@@ -646,5 +647,34 @@ describe("PlaytestBoard's inspect preview", () => {
     rest(INSPECT_DELAY);
     fireEvent.pointerMove(ring);
     expect(preview()).toBeInTheDocument();
+  });
+});
+
+describe("PlaytestBoard's zone columns", () => {
+  it("keep their 72 × 101 cards in a short window", () => {
+    // 1280 × 800 less the caption: the tables' cards are smaller than that.
+    expect(zoneSize(766)).toEqual({ width: 72, height: 101, compact: true });
+  });
+
+  it("draw their cards at the size of an unshrunk card on the tables in a tall window", () => {
+    // A 1400 px board's tables are 606 px tall each.
+    const size = zoneSize(1400);
+    expect(size.width).toBe(tableCardWidth(606, true));
+    expect(size.width).toBeGreaterThan(2 * 72);
+    expect(size.height).toBe(Math.round(size.width * 1.4));
+    // Two of them and the column's 8 px gap still stand inside the table.
+    expect(2 * size.height + 8).toBeLessThanOrEqual(606);
+  });
+
+  it("move the tables in by their width", () => {
+    const height = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(1400);
+    try {
+      setup(turnFive().view);
+      expect(
+        screen.getByTestId("playtest-board").style.getPropertyValue("--table-x"),
+      ).toBe(`${zoneSize(1400).width + 24}px`);
+    } finally {
+      height.mockRestore();
+    }
   });
 });

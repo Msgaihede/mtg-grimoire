@@ -53,19 +53,44 @@ describe("PromptPanel", () => {
     const { onAct } = setup(prompt);
     expect(screen.getByRole("heading", { name: "Put your triggers in order" })).toBeInTheDocument();
     expect(screen.getByText("Pick which one resolves first")).toBeInTheDocument();
+    // Two Delvers' upkeep triggers read alike either way round: one answer, not two the same
+    // (issue #1076).
     const answers = screen.getAllByRole("button", { name: /resolves first/ });
-    expect(answers).toHaveLength(2);
+    expect(answers).toHaveLength(1);
     expect(answers[0]).toHaveTextContent("then Delver of Secrets");
     expect(answers[0].getAttribute("title")).toMatch(/^1\. Delver of Secrets.*: At the beginning/);
     // A picture per trigger, numbered in the order they resolve.
     expect(within(answers[0]).getByText("1")).toBeInTheDocument();
     expect(within(answers[0]).getByText("2")).toBeInTheDocument();
-    fireEvent.click(answers[1]);
-    expect(onAct).toHaveBeenCalledWith({ type: "choose", index: 1 });
+    fireEvent.click(answers[0]);
+    expect(onAct).toHaveBeenCalledWith({ type: "choose", index: 0 });
+  });
+
+  it("says which trigger a target is for: what set it off, and its words in the tooltip", () => {
+    const text = "Whenever another creature enters, it deals 1 damage to any target.";
+    setup({
+      ...targetPrompt().view.prompt!,
+      kind: "TriggerTargetSelection",
+      source: "Impact Tremors",
+      sourceText: text,
+      cause: { event: "ZoneChanged", id: 70, name: "Grizzly Bears", player: "you" },
+      cancellable: false,
+    });
+    const line = screen.getByText("Impact Tremors for Grizzly Bears");
+    expect(line.getAttribute("title")).toBe(`Impact Tremors: ${text} (for Grizzly Bears)`);
   });
 
   it("offers only the engine's choice for a question it cannot draw", () => {
-    setup({ kind: "ChooseRingBearer", source: null, options: [], cancellable: false, pick: null, keyword: null });
+    setup({
+      kind: "ChooseRingBearer",
+      source: null,
+      sourceText: null,
+      cause: null,
+      options: [],
+      cancellable: false,
+      pick: null,
+      keyword: null,
+    });
     expect(screen.getByRole("heading", { name: "Choose ring bearer" })).toBeInTheDocument();
     expect(screen.getByText(/can’t show this choice/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();

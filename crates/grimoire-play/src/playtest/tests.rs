@@ -950,11 +950,11 @@ fn the_sandbox_reaches_the_table_but_not_an_opponents_hidden_cards() {
     });
 }
 
-/// With the sandbox on, a card the rules cannot play against the AI is put down unpaid, as on the
-/// goldfish; with it off, the refusal says how to.
+/// With the sandbox on, a card the rules cannot play against the AI is cast unpaid (CR 118.9), as
+/// on the goldfish; with it off, the refusal says how to.
 #[test]
-fn a_card_the_rules_refuse_is_put_down_unpaid_only_in_the_sandbox() {
-    let (refused, put) = engine(|| {
+fn a_card_the_rules_refuse_is_cast_unpaid_only_in_the_sandbox() {
+    let (refused, cast) = engine(|| {
         let (mut game, _) = kept(2);
         let bear = in_hand(&mut game, "Grizzly Bears");
         let refused = game.act(A::Play { id: bear });
@@ -962,12 +962,10 @@ fn a_card_the_rules_refuse_is_put_down_unpaid_only_in_the_sandbox() {
         (refused, game.act(A::Play { id: bear }).unwrap())
     });
     assert!(refused.unwrap_err().contains("Turn the sandbox on"));
-    assert!(find(&put.view.you.battlefield, "Grizzly Bears").is_some());
-    assert!(put.happened.contains(&H::Put {
+    assert!(find(&cast.view.you.battlefield, "Grizzly Bears").is_some());
+    assert!(cast.happened.contains(&H::Cast {
         seat: PlaytestPlayer::You,
         name: "Grizzly Bears".into(),
-        from: Place::Hand,
-        to: Place::Battlefield,
     }));
 }
 
@@ -1625,4 +1623,142 @@ fn undo_walks_back_through_the_phases_one_decision_at_a_time() {
         );
         assert_eq!(again.you, end.you);
     });
+}
+
+/// Issue #1076: one ability's two triggers at once — a Herald seeing two creatures attack — are
+/// told apart by what set each off: each target question names its trigger's words and its
+/// attacker, and the trigger on the stack carries both too.
+#[test]
+fn one_abilitys_two_triggers_carry_what_set_each_off() {
+    let (first, second) = engine(|| {
+        let mut deck = green();
+        deck.push(card(
+            "Herald of Dawn",
+            Some("{G}"),
+            "Creature — Elf",
+            "Whenever a creature you control attacks, it deals 1 damage to any target.",
+            Some(("0", "1")),
+            "G",
+            4,
+        ));
+        for name in ["Dawn Bear", "Dusk Bear"] {
+            deck.push(card(
+                name,
+                Some("{G}"),
+                "Creature — Bear",
+                "",
+                Some(("2", "2")),
+                "G",
+                4,
+            ));
+        }
+        let (mut game, _) = deal(deck, 2);
+        game.act(A::Keep { bottom: vec![] }).unwrap();
+        put_down(&mut game, "Herald of Dawn");
+        put_down(&mut game, "Dawn Bear");
+        put_down(&mut game, "Dusk Bear");
+        to_main(&mut game);
+        let offered = game.act(A::Pass).unwrap();
+        let attacks = offered
+            .view
+            .you
+            .battlefield
+            .iter()
+            .filter(|c| c.name.ends_with("Bear"))
+            .map(|c| PlaytestAttackPair {
+                attacker: c.id,
+                target: None,
+                player: None,
+            })
+            .collect();
+        let first = game.act(A::Attack { attacks }).unwrap();
+        // Each trigger asks for its target in turn; the opponent is one answer to either.
+        let at_them = |step: &PlaytestStep| {
+            let prompt = step.view.prompt.as_ref().expect("a target is asked for");
+            prompt
+                .options
+                .iter()
+                .find(|o| o.players == [AI_SEAT])
+                .map(|o| o.index)
+                .expect("the opponent is a target")
+        };
+        let index = at_them(&first);
+        let second = game.act(A::Choose { index }).unwrap();
+        (first, second)
+    });
+    let cause_of = |step: &PlaytestStep| {
+        let prompt = step.view.prompt.as_ref().expect("a target is asked for");
+        assert_eq!(prompt.kind, "TriggerTargetSelection", "{prompt:?}");
+        assert_eq!(prompt.source.as_deref(), Some("Herald of Dawn"));
+        assert!(
+            prompt
+                .source_text
+                .as_deref()
+                .is_some_and(|t| t.contains("damage")),
+            "the question names its trigger's words: {prompt:?}"
+        );
+        let cause = prompt.cause.as_ref().expect("the question names its cause");
+        assert_eq!(cause.player, Some(PlaytestPlayer::You));
+        cause.name.clone().expect("the attacker is on the table")
+    };
+    let mut causes = [cause_of(&first), cause_of(&second)];
+    causes.sort_unstable();
+    assert_eq!(
+        causes,
+        ["Dawn Bear", "Dusk Bear"],
+        "one trigger for each attacker"
+    );
+    let herald = second
+        .view
+        .stack
+        .iter()
+        .find(|item| item.name == "Herald of Dawn")
+        .expect("the first trigger waits on the stack");
+    assert!(herald.ability && herald.text.as_deref().is_some_and(|t| t.contains("damage")));
+    assert!(
+        herald.cause.as_ref().is_some_and(|c| c.name.is_some()),
+        "the trigger on the stack names its attacker: {herald:?}"
+    );
+}
+
+/// Issue #1073: an Equipment equipped to a creature names it, so the board draws it under the
+/// creature; an unattached one names nothing.
+#[test]
+fn an_equipment_names_the_creature_it_is_attached_to() {
+    let mut you = green();
+    you.push(card(
+        "Bonesplitter",
+        Some("{1}"),
+        "Artifact — Equipment",
+        "Equipped creature gets +2/+0.\nEquip {1}",
+        None,
+        "C",
+        4,
+    ));
+    let (loose, equipped) = engine(move || {
+        let (mut game, _) = deal(you, 2);
+        game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+        put_down(&mut game, "Forest");
+        put_down(&mut game, "Grizzly Bears");
+        put_down(&mut game, "Bonesplitter");
+        let loose = game.view();
+        let sword = find(&loose.you.battlefield, "Bonesplitter").unwrap().id;
+        (loose, game.act(A::Activate { id: sword }).expect("equip"))
+    });
+    assert_eq!(
+        find(&loose.you.battlefield, "Bonesplitter")
+            .unwrap()
+            .attached_to,
+        None
+    );
+    let bear = find(&equipped.view.you.battlefield, "Grizzly Bears").unwrap();
+    let sword = find(&equipped.view.you.battlefield, "Bonesplitter").unwrap();
+    assert_eq!(
+        sword.attached_to,
+        Some(bear.id),
+        "{:?}",
+        equipped.view.prompt
+    );
+    assert_eq!(bear.attached_to, None);
+    assert_eq!(bear.power, Some(4));
 }

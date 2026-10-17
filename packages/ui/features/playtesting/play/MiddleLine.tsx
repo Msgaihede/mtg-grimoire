@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import { CardFace } from "../table/Inspect";
 import { combatLine, type Picks } from "./combat";
 import { opponentNumber, playerPossessive, tableCards } from "./players";
-import { cardOfRef } from "./prompt";
+import { abilityLine, cardOfRef } from "./prompt";
 import { STOP_STEPS, fixedStop, hasStop, toggleStop } from "./stops";
 import { trackerOf } from "./tracker";
 
@@ -164,10 +164,16 @@ export function StackColumn({
           const card = cardOfRef(item, table);
           const whose =
             item.seat === "you" ? "Yours" : playerPossessive(item.seat, view.opponents.length);
+          // An ability says its words and what set it off: two of one card's on the stack are
+          // otherwise the same picture (issue #1076).
+          const detail = item.ability
+            ? abilityLine(item.name, item.text, item.cause, view.opponents.length)
+            : item.name;
           return (
             <li
               key={item.id}
-              aria-label={`${i === 0 ? "Top" : `${i + 1} from the top`}: ${whose} ${item.name}${item.ability ? ", ability" : ""}`}
+              aria-label={`${i === 0 ? "Top" : `${i + 1} from the top`}: ${whose} ${detail}${item.ability ? ", ability" : ""}`}
+              title={item.ability && detail !== item.name ? detail : undefined}
               onMouseEnter={(e) => onPoint(card, item, e)}
               onMouseLeave={onUnpoint}
               data-point={item.id}

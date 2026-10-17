@@ -181,6 +181,28 @@ generically, never matched variant by variant.
   cards of one name are told apart by their words. An answer standing for abilities carries
   their words in its tooltip.
 
+- **No two triggers read alike unless they are alike** (issue #1076). Each trigger also carries
+  its **cause** (`PlaytestCause`): what set it off, read from the trigger's first event —
+  `pending_trigger_order`'s `trigger_events`, a stack entry's `stack_trigger_event_batches` or
+  `trigger_event` — by the field names its events name their subject with (`object_id`,
+  `target`, `attacker`, `attacker_ids`…), never matched event by event. The cause is the
+  event's kind, its card's id and name (left out when the reader may not see the card) and its
+  player (the card's controller, or the event's player when it names no card). The page:
+  - names a trigger whose row holds another of one card name and one text by its cause:
+    "Soul Warden for Llanowar Elves resolves first, then Soul Warden for Grizzly Bears";
+  - offers an order of triggers that reads the same as one before it once (`distinctOptions`):
+    two Soul Wardens seeing one creature enter, or two Delvers' upkeep triggers, can go either
+    way round, and the engine lists both orders. Every other question keeps every answer,
+    since its facts are a reading of the engine's answer, not all of it;
+  - says a question about one trigger by its cause too — `PlaytestPrompt.sourceText` and
+    `cause`, read from the question's own `source_id`, `description` and `trigger_events`: the
+    header reads "Choose a target · Impact Tremors for Grizzly Bears", the trigger's words in
+    its tooltip. phase orders one ability's triggers itself when the order cannot matter, and
+    then asks each one's targets in turn; before this, the questions were word for word alike
+    and their source was the top of the stack, which is not always the trigger being asked about;
+  - gives each ability on the stack its words and cause (`PlaytestStackItem.text`, `cause`), in
+    its card's tooltip and its spoken label.
+
 - **`auto`** answers any prompt with `phase_ai::choose_action` for the reader, at Medium.
   `Happened::Chose` says so. It is also the answer to a prompt with no options the board can draw.
 - **A question with one answer is never asked** (issue #999, `sole_answer`). phase already fills
@@ -203,8 +225,9 @@ generically, never matched variant by variant.
 answers (none, all, each card alone), and there are sixteen. So for the questions whose answer is
 a set of cards, the prompt carries a `pick` beside its options (`Playtest::pick`): the cards, which
 of them may be picked, a minimum and a maximum, and whether order counts. `pickCards` answers it.
-The answer is `SelectCards`, or `SelectTargets` for `ChooseObjectsSelection`. The meaning of the
-picked cards is phase's:
+The answer is `SelectCards`, `SelectTargets` for `ChooseObjectsSelection`, or the kept set
+(`ChooseKeptCreatures`, `ChooseKeptPermanents`) for a keep. The meaning of the picked cards is
+phase's:
 
 | Question                                         | `purpose` | The picked cards                                            | Count                                               |
 | ------------------------------------------------ | --------- | ----------------------------------------------------------- | --------------------------------------------------- |
@@ -216,8 +239,18 @@ picked cards is phase's:
 | `ChooseFromZoneChoice`, `ChooseObjectsSelection` | `choose`  | Are chosen                                                  | as the question says                                |
 | `RevealChoice`                                   | `reveal`  | Is revealed                                                 | one, or none when optional                          |
 | `MultiTargetSelection`                           | `targets` | Are the targets                                             | `min_targets` to `max_targets`                      |
+| `KeepWithinTotalPowerChoice`                     | `keep`    | Are kept; the rest are sacrificed                           | any, their total power at most `powerCap`           |
+| `KeepExactPermanentsChoice`                      | `keep`    | Are kept; the rest are sacrificed                           | `required_count`                                    |
 
-The session checks the count, that each card is eligible and that none is picked twice. The engine
+A keep within a total power (Slaughter the Strong, Destined Confrontation — issue #1079) is bounded
+by power as well as count: `powerCap` is the cap, each creature counts its current power
+(`GameCard.power`), and the board will not pick a creature that would pass it. phase's own
+`legal_actions` for it are two canned sets (keep none, and its greedy keep), which before the pick
+showed as two identical "Choose kept creatures" chips; they stay under "Other answers", each naming
+the creatures it keeps (`option_of` reads `kept`).
+
+The session checks the count, the power cap, that each card is eligible and that none is picked
+twice. The engine
 checks the rest (a search's "different names", say), and its refusal is the sentence shown. This
 is the one place the session reads question kinds by name, because their fields say how many
 cards are wanted and the generic options cannot. Any other question is still its options, and
@@ -238,9 +271,12 @@ land drop left, too little mana, nothing to target), what happens is the sandbox
 - **Sandbox off: it is refused with a sentence** that ends "Turn the sandbox on to put it down by
   hand." Putting a card down unpaid against an opponent would be cheating it, so it is never done
   unasked.
-- **Sandbox on, in the reader's main phase: it is put down unpaid** (`unpaid`), where it would have
-  gone — a permanent onto the battlefield, an instant or sorcery into the graveyard — told as
-  `put` and logged "Cast Ponder · not paid for". A commander from the command zone still raises its
+- **Sandbox on, in the reader's main phase: it is played unpaid** (`unpaid`): cast without paying
+  its mana cost (CR 118.9, under a `CastFromHandFree` emblem held only while the cast is made —
+  [goldfish.md](goldfish.md)), so its cast and enter triggers happen (issue #1075), told as `cast`.
+  Only when even that is not legal is it put where it would have gone — a permanent onto the
+  battlefield, an instant or sorcery into the graveyard — told as `put` and logged "Cast Ponder ·
+  not paid for". A commander from the command zone still raises its
   tax (CR 903.8). Only when the rules offer no way: a card with one way is played, and one with
   several is asked about, sandbox or not.
 
@@ -457,6 +493,16 @@ first visit's sweep of every deck never queues ahead of the deck the reader just
 answers are under the `["decks"]` query root, so a deck edit marks them stale; a refetch is a
 database read and cache lookups.
 
+**In a game, each card carries its own gaps** (issue #1093). `Playtest::new` asks
+`card_face_gaps` of every face in the game's card database once, and keeps the faces with a gap by
+name; every `GameCard` the session builds carries its face's (`gaps`, empty for a face played in
+full and for a token). The board's `CardFace` draws a card with any in a **gold border inside the
+card** — the setup's caution colour, clear of the outline marks for attack, block and pick, which
+sit outside it — wherever it is drawn: the hand, the battlefield, a pile, the preview. The card's
+label says "played only in part", and the preview names each gap with `gapWords`. A transformed
+card is its shown face's name, so its marks follow the face; it is fixed for the game, so not in a
+`Moment`.
+
 ## The board
 
 `packages/ui/features/playtesting/play/`. **One board for every game on a deck**: whatever it draws
@@ -512,13 +558,18 @@ Before the overhaul, a table at 1280 was 275 px and its cards about 61 px wide.
   chrome. The duel's compact plate sits right of the hand in a box that ends 116 px from the right
   edge, so it never runs under the help and log buttons: a plate wider than that (a long deck name,
   the sandbox's stepper) shortens its title, and the full title is its tooltip.
-- **The tables** are inset 96 px from either side. On the opponent's table the creature lane is
-  nearest the middle line and the back row is at the top.
-- **The zone columns** sit 12 px in, with 72 × 101 cards (the artboard's are 180 × 252; 60 × 84 until issue #992 grew them a fifth), each zone's count on its card. On the
+- **The tables** are inset from either side by a zone column and 12 px either side of it — 96 px
+  at the narrowest. On the opponent's table the creature lane is nearest the middle line and the
+  back row is at the top.
+- **The zone columns** sit 12 px in, their cards as big as a card on the tables is drawn before a
+  full row shrinks it — the lane's height bound, `tableCardWidth` — and never under 72 × 101 (the
+  artboard's are 180 × 252; 60 × 84 until issue #992 grew them a fifth), each zone's count on its
+  card. A short window keeps 72 × 101; a 1400 px board draws them 173 × 242. On the
   opponent's side, library over graveyard is on the left and exile over command on the right. On
   the reader's side, command over exile is on the left and graveyard over library on the right.
 - **The stack** is real cards (52 × 73, up to three, then "+N") in the right gutter between the
-  zone columns, top first, with whose each is. It covers no table.
+  zone columns, top first, with whose each is; an ability says its words and its cause in its
+  tooltip. It covers no table.
 - **The prompt** docks at the bottom over the hand, at most 640 × 104, and the reader's plate moves
   to the edge while it is up. **The picker** sits centred over the middle, up to 820 px wide.
 

@@ -7,10 +7,12 @@ import { cn } from "@/lib/utils";
 import { CardFace } from "../table/Inspect";
 import {
   cardOfRef,
+  distinctOptions,
   optionCards,
   optionDetail,
   optionLabel,
   promptHelp,
+  promptSource,
   promptTitle,
 } from "./prompt";
 
@@ -31,6 +33,11 @@ import {
  * order of triggers is shown first-to-resolve first, each picture numbered, and a row standing
  * for abilities (triggers, replacement effects) carries their words in its tooltip. A question
  * whose title alone does not say what an answer decides has a line under it (`promptHelp`).
+ *
+ * **No two rows alike** (issue #1076): a trigger is named by what tells it from the others in its
+ * row — its words, or what set it off — and an order of triggers that reads the same as another
+ * is offered once (`distinctOptions`). A question about one trigger (its targets) says the
+ * trigger's cause beside its card, and its words in the tooltip (`promptSource`).
  *
  * **"Let the engine choose" is always there** (`auto`): phase's engine has well over a hundred
  * kinds of question, and a kind whose answers the board cannot draw — none sent, or none it can
@@ -61,6 +68,8 @@ export function PromptPanel({
 }): JSX.Element {
   const title = promptTitle(prompt.kind);
   const help = promptHelp(prompt.kind);
+  const source = promptSource(prompt, opponents);
+  const line = help ?? source?.text ?? null;
   return (
     <section
       aria-label={title}
@@ -72,8 +81,13 @@ export function PromptPanel({
     >
       <header className="flex flex-none items-center gap-2 border-b border-border py-1.5 pr-1.5 pl-3">
         <h2 className="m-0 flex-none text-[14px] font-semibold">{title}</h2>
-        {(help ?? prompt.source) !== null && (
-          <span className="min-w-0 truncate text-xs text-dim">{help ?? prompt.source}</span>
+        {line !== null && (
+          <span
+            title={help === null ? (source?.detail ?? undefined) : undefined}
+            className="min-w-0 truncate text-xs text-dim"
+          >
+            {line}
+          </span>
         )}
         <span className="ml-auto flex flex-none gap-1.5">
           {prompt.cancellable && (
@@ -141,7 +155,7 @@ export function OptionChips({
 }): JSX.Element {
   return (
     <ul className="m-0 flex min-h-0 list-none flex-wrap gap-1.5 overflow-y-auto p-1.5">
-      {prompt.options.map((option) => {
+      {distinctOptions(prompt).map((option) => {
         const { text, hint } = optionLabel(option, prompt, opponents);
         const cards = optionCards(option, prompt).map((ref) => cardOfRef(ref, table));
         const numbered = prompt.kind === "OrderTriggers" && cards.length > 1;
@@ -158,7 +172,7 @@ export function OptionChips({
               onMouseEnter={first === undefined ? undefined : (e) => onPoint(first, e)}
               onMouseLeave={first === undefined ? undefined : onUnpoint}
               data-point={first?.id}
-              title={optionDetail(option, prompt) ?? undefined}
+              title={optionDetail(option, prompt, opponents) ?? undefined}
               className={cn(
                 "flex h-11 max-w-[260px] items-center gap-2 rounded-lg border border-border px-1.5 text-left text-[13px]",
                 "transition-colors motion-reduce:transition-none hover:border-accent disabled:opacity-45",
