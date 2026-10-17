@@ -746,6 +746,8 @@ beforeEach(() => {
     // either written would open the next case on the flagged wishes or inside the price sweep.
     pendingReviewFilter: null,
     pendingOptimize: null,
+    // And the quick search's reveal (issue #1098).
+    pendingReveal: null,
   });
 });
 
@@ -6049,5 +6051,21 @@ describe("the caret after the path row's Add folder, Move to folder… and Delet
 
     await waitFor(() => expect(wishlistFolderDeleteWithWishes).toHaveBeenCalledWith(ORDERED.id));
     await waitFor(() => expect(pathAddFolder()).toHaveFocus());
+  });
+});
+
+/** Issue #1098: the header's quick search reveals a wish in the folder it is filed in. */
+describe("a wish the quick search asked this page to reveal", () => {
+  it("stands in its folder with the box holding the card, and spends the hand-off", async () => {
+    wishlistFolderList.mockResolvedValue(FOLDERS);
+    useAppStore.setState({
+      pendingReveal: { scope: "wishlist", folderId: ORDERED.id, query: '!"Lightning Bolt"' },
+    });
+    wrap(<WishlistPage />);
+
+    await waitFor(() => expect(levelAsked()).toBe(ORDERED.id));
+    expect(screen.getByDisplayValue('!"Lightning Bolt"')).toBeInTheDocument();
+    expect(lastQuery().predicates?.some((p) => p.field === "name")).toBe(true);
+    await waitFor(() => expect(useAppStore.getState().pendingReveal).toBeNull());
   });
 });

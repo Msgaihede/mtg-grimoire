@@ -156,6 +156,16 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
     },
     { id: "keyMap", label: "Show this list", chords: [{ key: "F1" }] },
     {
+      id: "quickSearch",
+      label: "Search decks, cards and settings",
+      /**
+       * The header's quick search (issue #1098), bound by `QuickSearch` itself. VS Code's and every
+       * command palette's chord since; `Ctrl+P` would be the other candidate, and in the light
+       * edition's browser tab it is Print.
+       */
+      chords: [{ key: "k", ctrl: true }],
+    },
+    {
       id: "newWindow",
       label: "Open a new window",
       /**

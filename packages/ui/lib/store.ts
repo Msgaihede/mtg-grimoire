@@ -823,6 +823,50 @@ interface AppState {
   /** Spend it — `WishlistPage`, on the commit it opened the dialog. */
   clearPendingOptimize: () => void;
   /**
+   * **The deck folder the header's quick search asked the Decks page to open** (issue #1098) —
+   * {@link pendingFolder}'s one-shot shape aimed at the deck cabinet, whose open drawer is
+   * `DecksPage`'s own `useState` for that field's reason. A `deck_folders.id`, never `null` (the
+   * gallery opens at its top level already).
+   *
+   * Cleared by {@link setActiveView}, and written after it by {@link showDeckFolder}, which also
+   * closes any deck that view change brought back from the park: a folder asked for is the
+   * gallery, not the editor.
+   */
+  pendingDeckFolder: number | null;
+  /** Go to the Decks gallery standing in one folder — the view change, the closed editor and the
+   *  hand-off in one action, so no caller can write them in the order that wipes the last. */
+  showDeckFolder: (id: number) => void;
+  /** Spend it — `DecksPage`, on the commit it read it. */
+  clearPendingDeckFolder: () => void;
+  /**
+   * **The search the header's quick search asked the Search page to show** (issue #1098) —
+   * {@link pendingSearchSet}'s one-shot shape carrying the box's text instead of a set. The page
+   * answers it with a clean slate holding this text alone, so the card asked for is on the wall
+   * whatever the reader had narrowed it to before. Cleared by {@link setActiveView}; written after
+   * it by {@link showTextInSearch}.
+   */
+  pendingSearchText: string | null;
+  /** Go to the Search view filtered by `text` — {@link showSetInSearch}'s shape. */
+  showTextInSearch: (text: string) => void;
+  /** Spend it — `SearchPage`, on the commit it applied it. */
+  clearPendingSearchText: () => void;
+  /**
+   * **A card the header's quick search asked a list to reveal** (issue #1098): the folder it is
+   * filed in and a query naming its printing, which the page answers by standing in that folder
+   * with every other filter cleared and the box holding the query. {@link pendingFolder} and
+   * {@link pendingCollectionQuery} together, and one field rather than those two because this one
+   * can name the root (`folderId: null`, the cards filed nowhere) — which `pendingFolder` cannot,
+   * and which a reader standing in a drawer would otherwise never be walked out of.
+   *
+   * Cleared by {@link setActiveView}; written after it by {@link revealCard}.
+   */
+  pendingReveal: PendingReveal | null;
+  /** Go to the list `reveal.scope` names and reveal one card there — the view change and the
+   *  hand-off in one action, {@link showSetInSearch}'s shape. */
+  revealCard: (reveal: PendingReveal) => void;
+  /** Spend it — the page its `scope` names, once it has opened the folder. */
+  clearPendingReveal: () => void;
+  /**
    * The card a reader asked to see every printing of, and the deck slot they asked from.
    *
    * **One field, written by one action that touches nothing else.** What this replaced —
@@ -1107,6 +1151,18 @@ export interface PendingFolder {
  */
 export interface PendingReviewFilter {
   scope: "collection" | "wishlist";
+}
+
+/**
+ * A card for a list to reveal — see {@link AppState.pendingReveal}, the only field of this shape.
+ * The scopes are spelled out for {@link PendingFolder}'s reason.
+ */
+export interface PendingReveal {
+  scope: "collection" | "wishlist";
+  /** The folder the card is filed in, or `null` for the root — the cards filed nowhere. */
+  folderId: number | null;
+  /** The box's own syntax (`!"Lightning Bolt" e:lea cn:161`), so the reader sees what narrowed it. */
+  query: string;
 }
 
 /**
@@ -1396,6 +1452,11 @@ export const useAppStore = create<AppState>((set) => ({
         pendingReviewFilter: null,
         pendingSettingsPanel: null,
         pendingOptimize: null,
+        // The quick search's three hand-offs (issue #1098), for the same reason: each `show…`
+        // action writes its field after calling this.
+        pendingDeckFolder: null,
+        pendingSearchText: null,
+        pendingReveal: null,
       };
     }),
   // Nothing until a reader pastes a link, which is what keeps the rail row off the screen of
@@ -1691,6 +1752,26 @@ export const useAppStore = create<AppState>((set) => ({
   pendingOptimize: null,
   setPendingOptimize: (scope) => set({ pendingOptimize: scope }),
   clearPendingOptimize: () => set({ pendingOptimize: null }),
+  pendingDeckFolder: null,
+  // `showSetInSearch`'s two `set`s, for its reason — plus the deck a return to Decks brings back
+  // from the park, which a folder asked for must not open over the gallery.
+  showDeckFolder: (id) => {
+    useAppStore.getState().setActiveView("decks");
+    set({ openDeckId: null, pendingDeckFolder: id });
+  },
+  clearPendingDeckFolder: () => set({ pendingDeckFolder: null }),
+  pendingSearchText: null,
+  showTextInSearch: (text) => {
+    useAppStore.getState().setActiveView("search");
+    set({ pendingSearchText: text });
+  },
+  clearPendingSearchText: () => set({ pendingSearchText: null }),
+  pendingReveal: null,
+  revealCard: (reveal) => {
+    useAppStore.getState().setActiveView(reveal.scope);
+    set({ pendingReveal: reveal });
+  },
+  clearPendingReveal: () => set({ pendingReveal: null }),
   printingsRequest: null,
   // One field, and that is the whole point — see the interface. Its predecessor wrote six in
   // this `set` because it was a navigation; a modal drawn over the app is not one, so nothing

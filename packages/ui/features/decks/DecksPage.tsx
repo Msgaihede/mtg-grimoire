@@ -347,7 +347,9 @@ export function DecksPage() {
   const [filter, setFilter] = useState<DeckFilter>(NO_DECK_FILTER);
   /** Which drawer is open. `null` is the top level, which is also where every deck is drawn
    *  when the folder list could not be read. */
-  const [selectedFolderId, setSelectedFolderId] = useState<number | null>(null);
+  const [selectedFolderId, setSelectedFolderId] = useState<number | null>(
+    () => useAppStore.getState().pendingDeckFolder,
+  );
   /**
    * Whether the wall is the **flat** one — every deck, no folders — that the heading row's
    * `View all` toggle draws (issue #750).
@@ -372,6 +374,32 @@ export function DecksPage() {
     },
     [setFlat],
   );
+  /**
+   * **The folder the header's quick search asked for** — `store.ts`' `pendingDeckFolder` (issue
+   * #1098), answered as `SearchPage` answers `pendingSearchSet`: a seed on a mount (the
+   * `selectedFolderId` initialiser above), a render-phase adjustment on a page already mounted,
+   * and `appliedFolder` as the guard that makes the adjustment terminate until the effect spends
+   * the hand-off. A folder another surface deleted meanwhile needs no guard of its own:
+   * `openNode` below already answers a `selectedFolderId` naming nothing with the top level.
+   *
+   * The flat view is left in the effect rather than through `openFolder`, because it is the
+   * store's (`deckWallFlat`) and a store write during render would update every other reader of
+   * it mid-render.
+   */
+  const pendingFolder = useAppStore((s) => s.pendingDeckFolder);
+  const clearPendingFolder = useAppStore((s) => s.clearPendingDeckFolder);
+  const [appliedFolder, setAppliedFolder] = useState(pendingFolder);
+  if (pendingFolder !== null && pendingFolder !== appliedFolder) {
+    setAppliedFolder(pendingFolder);
+    setSelectedFolderId(pendingFolder);
+  } else if (pendingFolder === null && appliedFolder !== null) {
+    setAppliedFolder(null);
+  }
+  useEffect(() => {
+    if (pendingFolder === null) return;
+    setFlat(false);
+    clearPendingFolder();
+  }, [pendingFolder, setFlat, clearPendingFolder]);
   const newDeckRef = useRef<HTMLButtonElement>(null);
   /** The `View all` toggle — where Escape hands the caret when it leaves the flat view, since a
    *  keypress has no element of its own and this is the control that turned the view on. */

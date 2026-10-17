@@ -108,7 +108,7 @@ export type OwnedSide = "exact" | "other" | "card";
 
 /** A value the query box reads as one token — quoted when it holds a space, with whichever quote
  *  it does not contain (`unquote` in `queryLanguage.ts` takes either). */
-function token(value: string): string {
+export function queryToken(value: string): string {
   if (!/[\s"'()]/.test(value)) return value;
   return value.includes('"') ? `'${value}'` : `"${value}"`;
 }
@@ -123,13 +123,13 @@ function token(value: string): string {
  * number names the card alone rather than guess a printing.
  */
 export function collectionQueryOf(wish: WishRow, side: OwnedSide): string {
-  const card = `!${token(wish.name)}`;
+  const card = `!${queryToken(wish.name)}`;
   if (side === "card") return card;
   if (wish.cardId === null || wish.setCode === null || wish.collectorNumber === null) return card;
   const printing = [
-    `e:${token(wish.setCode)}`,
-    `cn:${token(wish.collectorNumber)}`,
-    ...(wish.lang ? [`lang:${token(wish.lang)}`] : []),
+    `e:${queryToken(wish.setCode)}`,
+    `cn:${queryToken(wish.collectorNumber)}`,
+    ...(wish.lang ? [`lang:${queryToken(wish.lang)}`] : []),
   ].join(" ");
   return side === "exact" ? `${card} ${printing}` : `${card} -(${printing})`;
 }

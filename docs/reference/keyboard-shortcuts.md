@@ -25,7 +25,7 @@ it. Of the entries in `SHORTCUTS`:
 
 | Rows | Fenced how |
 | --- | --- |
-| `switchView`, `keyMap`, `newWindow` (`AppShell`); `selectAll` (`selectAllSurface.ts`); `undo`, `redo`, `remove` (`DeckEditor`); `undo`, `redo` on the game boards (`features/playtesting/undo.ts`) | **Fenced.** The handler calls `matchesShortcut` against the entry. Rename the id and `shortcut()` throws at import; change a chord and the binding changes with it. |
+| `switchView`, `keyMap`, `newWindow` (`AppShell`); `quickSearch` (`features/quickSearch/QuickSearch.tsx`, `Ctrl+K`, issue #1098); `selectAll` (`selectAllSurface.ts`); `undo`, `redo`, `remove` (`DeckEditor`); `undo`, `redo` on the game boards (`features/playtesting/undo.ts`) | **Fenced.** The handler calls `matchesShortcut` against the entry. Rename the id and `shortcut()` throws at import; change a chord and the binding changes with it. |
 | `dismiss` (`Escape`), `contextMenu` (`Shift+F10`, `Menu`) | **Prose.** The bindings live in `useDismissOnEscape` and `menu/useContextMenu`, and neither reads the catalogue. |
 | `zoom` (`Ctrl+wheel`), `select` (`Ctrl`/`Shift`-click) | **Unmatchable by construction.** A pointer chord carries no `key`, so `matchesChord` answers `false` from its shape rather than from a guard a caller could forget. `useCardZoomGesture` and `multiSelect.ts` keep their own logic; the fence there is only that the label sits next to the code it describes. |
 

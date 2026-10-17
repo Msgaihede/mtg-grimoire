@@ -666,6 +666,13 @@ export interface CardSearchOptions {
    */
   initialSet?: string | null;
   /**
+   * A search box to **open** on, alone and at `Any card` — `SearchPage` passing the header's quick
+   * search hand-off when that press is what mounted it (issue #1098). {@link initialSet}'s seed
+   * for the box instead of the Set chips, read once and ignored after; {@link showOnlyText} is
+   * the same answer for a page already mounted.
+   */
+  initialText?: string | null;
+  /**
    * Remember this search's filters under this name, so the view opens on them again when the
    * reader comes back to it (issue #908) — `SearchPage` and the light app's phone search pass
    * `"search"`. Absent remembers nothing, which is the deck builder's docked panels: they open on
@@ -715,7 +722,10 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   const [recalled] = useState(() =>
     rememberAs === undefined ? undefined : viewMemory<RememberedSearch>(rememberAs).recall(),
   );
-  const seed = options.initialSet ? undefined : recalled;
+  const seed = options.initialSet || options.initialText ? undefined : recalled;
+  // A hand-off's box text, when one mounted the page — the seed for both `text` and the debounced
+  // copy the request reads, so the first request is already the hand-off's.
+  const seededText = options.initialText || (seed?.text ?? "");
   // Read once, and as a string rather than as the object: every caller builds that object
   // inline, so it is a new identity on every render and nothing may depend on it.
   const defaultFormatValue = options.defaultFormat?.value ?? "";
@@ -743,7 +753,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   // a formatting choice: the backend prices the page with it, so it is in the key below and a
   // switch re-asks.
   const { marketplace } = useMarketplace();
-  const [text, setText] = useState(seed?.text ?? "");
+  const [text, setText] = useState(seededText);
   // The format select's whole value, which is three kinds of thing in one string: `""` is
   // `Any format` and the default, {@link ANY_CARD} is `Any card`, anything else is a
   // `legalities` key. {@link formatParams} is the only place that branch is written.
@@ -755,7 +765,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   // `Any card` when opening on a set, for {@link showOnlySet}'s reason.
   // A remembered format wins over the caller's default: it is the reader's own last answer.
   const [format, setFormat] = useState(
-    options.initialSet ? ANY_CARD : (seed?.format ?? defaultFormatValue),
+    options.initialSet || options.initialText ? ANY_CARD : (seed?.format ?? defaultFormatValue),
   );
   /**
    * The default this filter is currently *sitting on*, so a changed default can be told from a
@@ -850,7 +860,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   // card is a search answering the wrong question.
   // Seeded with the remembered text rather than `""`, so a returning reader's first request is
   // their query and not the unfiltered wall followed 300 ms later by the one they left.
-  const [debouncedText, setDebouncedText] = useState(seed?.text ?? "");
+  const [debouncedText, setDebouncedText] = useState(seededText);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedText(text), DEBOUNCE_MS);
@@ -1839,6 +1849,28 @@ export function useCardSearch(options: CardSearchOptions = {}) {
      * The layout, the sort and `allPrintings` are views rather than filters and stay where the
      * reader left them — `resetAll`'s own rule.
      */
+    /**
+     * Show what one box of text finds and nothing else — the header's quick search (issue #1098),
+     * arriving through `store.ts`'s `pendingSearchText`. {@link showOnlySet}'s clean slate with
+     * the box holding `next` in place of the Set chip, flushed past the debounce like a chip's
+     * press: the reader picked this search already, so it is the final answer.
+     */
+    showOnlyText: (next: string) => {
+      rewrite(next);
+      setFormat(ANY_CARD);
+      setColorFilter(NO_COLORS);
+      setSets([]);
+      setTypes([]);
+      setBorders([]);
+      setFinishes([]);
+      setUniverse(undefined);
+      setManaValues([]);
+      setManaX(false);
+      setOwned(undefined);
+      setRarities([]);
+      setPriceMin(undefined);
+      setPriceMax(undefined);
+    },
     showOnlySet: (code: string) => {
       setText("");
       setFormat(ANY_CARD);

@@ -449,6 +449,7 @@ describe("the catalogue's shape", () => {
     expect(SHORTCUTS.global.map((s) => s.id)).toEqual([
       "switchView",
       "keyMap",
+      "quickSearch",
       "newWindow",
       "dismiss",
       "contextMenu",
@@ -483,6 +484,7 @@ describe("the catalogue's shape", () => {
     expect(Object.fromEntries(SHORTCUTS.global.map((s) => [s.id, s.label] as const))).toEqual({
       switchView: "Jump to a section",
       keyMap: "Show this list",
+      quickSearch: "Search decks, cards and settings",
       newWindow: "Open a new window",
       dismiss: "Close dialog or panel",
       contextMenu: "Open context menu",

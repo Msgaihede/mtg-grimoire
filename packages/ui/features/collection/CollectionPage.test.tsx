@@ -1049,6 +1049,8 @@ beforeEach(() => {
     pendingReviewFilter: null,
     // The wishlist's owned-chip hand-off, for the same reason.
     pendingCollectionQuery: null,
+    // And the quick search's reveal (issue #1098), which names a folder and a query both.
+    pendingReveal: null,
   });
 });
 
@@ -4270,6 +4272,34 @@ describe("the collection's shelves", () => {
 
       expect(await findHeading("Trade binder")).toBeInTheDocument();
       await waitFor(() => expect(standingIn()).toBeNull());
+    });
+
+    /** The header's quick search (issue #1098): a card revealed in the folder it is filed in. */
+    it("reveals a card: stands in its folder with the box holding its printing", async () => {
+      collectionFolderList.mockResolvedValue([BINDER]);
+      useAppStore.setState({
+        pendingReveal: { scope: "collection", folderId: 3, query: '!"Lightning Bolt" e:lea' },
+      });
+      wrap(<CollectionPage />);
+
+      await waitFor(() => expect(standingIn()).toBe(3));
+      expect(screen.getByDisplayValue('!"Lightning Bolt" e:lea')).toBeInTheDocument();
+      await waitFor(() => expect(useAppStore.getState().pendingReveal).toBeNull());
+    });
+
+    it("walks a reader standing in a drawer back to the root for a card filed nowhere", async () => {
+      collectionFolderList.mockResolvedValue([BINDER]);
+      useAppStore.setState({ pendingFolder: { scope: "collection", id: 3 } });
+      wrap(<CollectionPage />);
+      await waitFor(() => expect(standingIn()).toBe(3));
+
+      act(() =>
+        useAppStore.getState().revealCard({ scope: "collection", folderId: null, query: "!Shock" }),
+      );
+
+      await waitFor(() => expect(standingIn()).toBeNull());
+      expect(screen.getByDisplayValue("!Shock")).toBeInTheDocument();
+      await waitFor(() => expect(useAppStore.getState().pendingReveal).toBeNull());
     });
 
     it("leaves the wishlist's hand-off untouched", async () => {

@@ -242,15 +242,19 @@ export const WISHLIST_TRAY: readonly TrayCell[] = [
  */
 export function useWishlist({
   initialNeedsReview,
+  initialText,
   folds: foldsOverride,
 }: {
   initialNeedsReview?: boolean;
+  /** The search box this list **mounts** with — `useCollection`'s option of the same name, here
+   *  for the header's quick search reveal (issue #1098). Read once. */
+  initialText?: string;
   folds?: Readonly<Record<string, boolean>>;
 } = {}) {
   // Which marketplace this list quotes — an input to the query and part of its key, because
   // it decides what a Cost cell contains and not merely how it is written.
   const { marketplace } = useMarketplace();
-  const [text, setText] = useState("");
+  const [text, setText] = useState(initialText ?? "");
   // The card filters, drawn since 2026-08-26 and **on the wire the whole time before that**:
   // `WishlistQuery` has extended `CardFilters` since it was written, so every one of these was a
   // field the backend already read and this hook simply never sent. See {@link activeFilterCount}
@@ -301,7 +305,7 @@ export function useWishlist({
    */
   const [viewAll, setViewAllState] = useState(false);
   const level = viewAll ? null : folderId;
-  const [debouncedText, setDebouncedText] = useState("");
+  const [debouncedText, setDebouncedText] = useState(initialText ?? "");
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedText(text), DEBOUNCE_MS);

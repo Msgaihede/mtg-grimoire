@@ -427,6 +427,8 @@ beforeEach(() => {
     // The `View all` wall is session state in the store, so a case that pressed it would leave
     // every later case in the file looking at every deck at once.
     deckWallFlat: false,
+    // The quick search's folder hand-off (issue #1098), which this page consumes.
+    pendingDeckFolder: null,
   });
 });
 
@@ -3838,6 +3840,23 @@ describe("the View all wall", () => {
     expect(await tileFor("Sunday draft")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Burn/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Folder actions" })).toBeInTheDocument();
+  });
+
+  /** Issue #1098: the header's quick search opens a deck folder — over the flat wall, too. */
+  it("opens the folder the quick search asked for, leaving the flat wall", async () => {
+    withFolders();
+    useAppStore.setState({ deckWallFlat: true, pendingDeckFolder: EDH.id });
+
+    wrap(<DecksPage />);
+
+    expect(await screen.findByRole("heading", { name: "Commander" })).toBeInTheDocument();
+    expect(await tileFor("Sunday draft")).toBeInTheDocument();
+    expect(useAppStore.getState().deckWallFlat).toBe(false);
+    await waitFor(() => expect(useAppStore.getState().pendingDeckFolder).toBeNull());
+
+    act(() => useAppStore.getState().showDeckFolder(LEGENDS.id));
+    expect(await screen.findByRole("heading", { name: "Legends" })).toBeInTheDocument();
+    await waitFor(() => expect(useAppStore.getState().pendingDeckFolder).toBeNull());
   });
 
   it("leaves the flat wall for whichever row is picked in the tree", async () => {
