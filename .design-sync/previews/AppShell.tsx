@@ -26,7 +26,7 @@
  */
 import * as React from "react";
 import { GrimoireWorld } from "mtg-grimoire";
-import * as S from "@ds-stories/src/components/AppShell.stories";
+import * as S from "@ds-stories/packages/ui/components/AppShell.stories";
 
 function compose(S: any, key: string) {
   const meta: any = S.default ?? {};
