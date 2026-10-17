@@ -4,7 +4,13 @@ import { canConfirm, confirmLabel, pickCounter, pickTitle, pickZones, togglePick
 import { fixedStop, hasStop, toggleStop } from "./stops";
 
 function pick(over: Partial<PlaytestPick>): PlaytestPick {
-  const cards = [1, 2, 3].map((id) => ({ id, name: `Card ${id}`, cardId: null, text: null }));
+  const cards = [1, 2, 3].map((id) => ({
+    id,
+    name: `Card ${id}`,
+    cardId: null,
+    text: null,
+    cause: null,
+  }));
   return {
     purpose: "choose",
     cards,

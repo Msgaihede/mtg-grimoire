@@ -1535,3 +1535,99 @@ fn undo_walks_back_through_the_phases_one_decision_at_a_time() {
         assert_eq!(again.you, end.you);
     });
 }
+
+/// Issue #1076: one ability's two triggers at once — a Herald seeing two creatures attack — are
+/// told apart by what set each off: each target question names its trigger's words and its
+/// attacker, and the trigger on the stack carries both too.
+#[test]
+fn one_abilitys_two_triggers_carry_what_set_each_off() {
+    let (first, second) = engine(|| {
+        let mut deck = green();
+        deck.push(card(
+            "Herald of Dawn",
+            Some("{G}"),
+            "Creature — Elf",
+            "Whenever a creature you control attacks, it deals 1 damage to any target.",
+            Some(("0", "1")),
+            "G",
+            4,
+        ));
+        for name in ["Dawn Bear", "Dusk Bear"] {
+            deck.push(card(
+                name,
+                Some("{G}"),
+                "Creature — Bear",
+                "",
+                Some(("2", "2")),
+                "G",
+                4,
+            ));
+        }
+        let (mut game, _) = deal(deck, 2);
+        game.act(A::Keep { bottom: vec![] }).unwrap();
+        put_down(&mut game, "Herald of Dawn");
+        put_down(&mut game, "Dawn Bear");
+        put_down(&mut game, "Dusk Bear");
+        to_main(&mut game);
+        let offered = game.act(A::Pass).unwrap();
+        let attacks = offered
+            .view
+            .you
+            .battlefield
+            .iter()
+            .filter(|c| c.name.ends_with("Bear"))
+            .map(|c| PlaytestAttackPair {
+                attacker: c.id,
+                target: None,
+                player: None,
+            })
+            .collect();
+        let first = game.act(A::Attack { attacks }).unwrap();
+        // Each trigger asks for its target in turn; the opponent is one answer to either.
+        let at_them = |step: &PlaytestStep| {
+            let prompt = step.view.prompt.as_ref().expect("a target is asked for");
+            prompt
+                .options
+                .iter()
+                .find(|o| o.players == [AI_SEAT])
+                .map(|o| o.index)
+                .expect("the opponent is a target")
+        };
+        let index = at_them(&first);
+        let second = game.act(A::Choose { index }).unwrap();
+        (first, second)
+    });
+    let cause_of = |step: &PlaytestStep| {
+        let prompt = step.view.prompt.as_ref().expect("a target is asked for");
+        assert_eq!(prompt.kind, "TriggerTargetSelection", "{prompt:?}");
+        assert_eq!(prompt.source.as_deref(), Some("Herald of Dawn"));
+        assert!(
+            prompt
+                .source_text
+                .as_deref()
+                .is_some_and(|t| t.contains("damage")),
+            "the question names its trigger's words: {prompt:?}"
+        );
+        let cause = prompt.cause.as_ref().expect("the question names its cause");
+        assert_eq!(cause.player, Some(PlaytestPlayer::You));
+        cause.name.clone().expect("the attacker is on the table")
+    };
+    let mut causes = [cause_of(&first), cause_of(&second)];
+    causes.sort_unstable();
+    assert_eq!(
+        causes,
+        ["Dawn Bear", "Dusk Bear"],
+        "one trigger for each attacker"
+    );
+    let herald = second
+        .view
+        .stack
+        .iter()
+        .find(|item| item.name == "Herald of Dawn")
+        .expect("the first trigger waits on the stack");
+    assert!(herald.ability && herald.text.as_deref().is_some_and(|t| t.contains("damage")));
+    assert!(
+        herald.cause.as_ref().is_some_and(|c| c.name.is_some()),
+        "the trigger on the stack names its attacker: {herald:?}"
+    );
+}

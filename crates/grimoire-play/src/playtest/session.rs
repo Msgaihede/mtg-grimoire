@@ -82,8 +82,8 @@ use crate::view::{GameCard, MulliganView, Place, Seat, TokenOffer};
 
 use super::view::{
     Difficulty, PlaytestAction, PlaytestAttack, PlaytestAttackPair, PlaytestAttacker,
-    PlaytestBlock, PlaytestBlockPair, PlaytestBlocker, PlaytestCardRef, PlaytestCombat,
-    PlaytestFrame, PlaytestHappened, PlaytestOption, PlaytestPhase, PlaytestPick,
+    PlaytestBlock, PlaytestBlockPair, PlaytestBlocker, PlaytestCardRef, PlaytestCause,
+    PlaytestCombat, PlaytestFrame, PlaytestHappened, PlaytestOption, PlaytestPhase, PlaytestPick,
     PlaytestPickPurpose, PlaytestPlayer, PlaytestPrompt, PlaytestSeat, PlaytestStackItem,
     PlaytestStage, PlaytestStep, PlaytestStop, PlaytestStopStep, PlaytestView,
 };
@@ -700,12 +700,36 @@ impl Playtest {
                     } else {
                         entry.source_id
                     };
+                    let (text, event) = match &entry.kind {
+                        StackEntryKind::Spell { .. } => (None, None),
+                        StackEntryKind::ActivatedAbility { ability, .. } => {
+                            (ability.description.clone(), None)
+                        }
+                        StackEntryKind::TriggeredAbility {
+                            ability,
+                            description,
+                            trigger_event,
+                            ..
+                        } => (
+                            description.clone().or_else(|| ability.description.clone()),
+                            trigger_event.as_ref(),
+                        ),
+                        _ => (None, None),
+                    };
+                    // A batch's first event is its cause, as phase's own stack tooltip reads it.
+                    let event = s
+                        .stack_trigger_event_batches
+                        .get(&entry.id)
+                        .and_then(|batch| batch.first())
+                        .or(event);
                     Some(PlaytestStackItem {
                         id: entry.id.0,
                         name: source.name.clone(),
                         card_id: self.printing_of(shown),
                         seat: seat_of(entry.controller),
                         ability: !matches!(entry.kind, StackEntryKind::Spell { .. }),
+                        text: text.filter(|t| !t.is_empty()),
+                        cause: event.and_then(|e| self.cause(&serde_json::to_value(e).ok()?)),
                     })
                 })
                 .collect(),
@@ -802,7 +826,118 @@ impl Playtest {
             name: o.name.clone(),
             card_id: self.printing_of(id),
             text: None,
+            cause: None,
         })
+    }
+
+    /// Whether the reader may see a card: their own anywhere, anyone's in a public zone.
+    fn visible(&self, id: ObjectId) -> bool {
+        self.state.objects.get(&id).is_some_and(|o| {
+            o.owner == YOU || o.controller == YOU || !matches!(o.zone, Zone::Hand | Zone::Library)
+        })
+    }
+
+    /// What set a trigger off, read from the event that did — phase's `{ "type": …, "data": { …
+    /// } }` on the wire — by the handful of field names its events name their subject with,
+    /// rather than matched event by event (`option_of` reads an answer the same way). The card is
+    /// the event's subject: the one that entered, was cast, was dealt damage, attacked. A card
+    /// the reader may not see is left out, and one gone from the game is named as it was. The
+    /// player is the card's controller, or the player the event names when it names no card.
+    fn cause(&self, event: &Value) -> Option<PlaytestCause> {
+        let kind = event.get("type")?.as_str()?.to_string();
+        let data = event.get("data");
+        let field = |key: &str| data.and_then(|d| d.get(key));
+        let mut ids: Vec<ObjectId> = Vec::new();
+        let mut players: Vec<PlaytestPlayer> = Vec::new();
+        for key in [
+            "object_id",
+            "target",
+            "attacker",
+            "attacker_ids",
+            "merged_id",
+            "vehicle_id",
+            "card_ids",
+            "source_id",
+        ] {
+            if let Some(value) = field(key) {
+                collect_refs(value, &mut ids, &mut players);
+            }
+            if !ids.is_empty() {
+                break;
+            }
+        }
+        // The card's controller when the event names a card; else the player the event names.
+        let controller = ids
+            .first()
+            .and_then(|id| self.state.objects.get(id))
+            .map(|o| seat_of(o.controller));
+        let player = controller.or(players.first().copied()).or_else(|| {
+            ["player_id", "controller", "player", "defending_player"]
+                .iter()
+                .find_map(|key| field(key)?.as_u64())
+                .map(|p| seat_of(PlayerId(p as u8)))
+        });
+        let (id, name) = match ids.first() {
+            Some(&id) if self.state.objects.contains_key(&id) => {
+                if self.visible(id) {
+                    (
+                        Some(id.0),
+                        self.state.objects.get(&id).map(|o| o.name.clone()),
+                    )
+                } else {
+                    (None, None)
+                }
+            }
+            // Gone from the game (a token that died): the event's own record of it.
+            Some(&id) => {
+                let name = field("record")
+                    .and_then(|r| r.get("name"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                (name.is_some().then_some(id.0), name)
+            }
+            None => (None, None),
+        };
+        (id.is_some() || player.is_some()).then_some(PlaytestCause {
+            event: kind,
+            id,
+            name,
+            player,
+        })
+    }
+
+    /// The causes of the triggers being put in order, in the question's order: each one's first
+    /// event, from phase's own record of the group it asks about. Empty when the record and the
+    /// question do not match one for one.
+    fn trigger_causes(&self, abilities: &[PlaytestCardRef]) -> Vec<Option<PlaytestCause>> {
+        let Some(group) = self
+            .state
+            .pending_trigger_order
+            .as_ref()
+            .and_then(|order| order.groups.iter().find(|g| !g.ordered))
+        else {
+            return Vec::new();
+        };
+        let matches = group.triggers.len() == abilities.len()
+            && group
+                .triggers
+                .iter()
+                .zip(abilities)
+                .all(|(t, a)| t.pending.source_id.0 == a.id);
+        if !matches {
+            return Vec::new();
+        }
+        group
+            .triggers
+            .iter()
+            .map(|t| {
+                let event = t
+                    .trigger_events
+                    .first()
+                    .or(t.pending.trigger_event.as_ref())?;
+                self.cause(&serde_json::to_value(event).ok()?)
+            })
+            .collect()
     }
 
     /// The abilities the question is about, when it lists them: the triggers to put in order,
@@ -825,18 +960,26 @@ impl Playtest {
                 name,
                 card_id: None,
                 text: None,
+                cause: None,
             });
             Some(PlaytestCardRef {
                 text: Some(text),
                 ..card
             })
         };
-        fields
+        let mut refs: Vec<PlaytestCardRef> = fields
             .values()
             .filter_map(Value::as_array)
             .find(|items| !items.is_empty() && items.iter().all(|v| ability(v).is_some()))
             .map(|items| items.iter().filter_map(ability).collect())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        // Triggers to put in order carry what set each off: one ability's two triggers differ
+        // by that alone.
+        let causes = self.trigger_causes(&refs);
+        for (r, cause) in refs.iter_mut().zip(causes) {
+            r.cause = cause;
+        }
+        refs
     }
 
     fn stage(&self) -> PlaytestStage {
@@ -898,6 +1041,8 @@ impl Playtest {
             return PlaytestPrompt {
                 kind: choice.kind.into(),
                 source: Some(choice.source.clone()),
+                source_text: None,
+                cause: None,
                 options: choice
                     .actions
                     .iter()
@@ -908,19 +1053,48 @@ impl Playtest {
                 pick: None,
             };
         }
-        let source = self.pending.as_ref().map(|p| p.source.clone()).or_else(|| {
-            let top = self.state.stack.last()?;
-            let o = self
-                .state
-                .objects
-                .get(&top.id)
-                .or_else(|| self.state.objects.get(&top.source_id))?;
-            Some(o.name.clone())
-        });
+        // The question's own data names its ability when it is about one — a trigger's targets —
+        // by `source_id`, `description` and the trigger's events: read by those fields, as
+        // `abilities` reads a list, rather than matched kind by kind. The top of the stack is the
+        // fallback, and it is not always the trigger being asked about.
+        let json = serde_json::to_value(&self.state.waiting_for).unwrap_or(Value::Null);
+        let data = json.get("data");
+        let field = |key: &str| data.and_then(|d| d.get(key));
+        let named = field("source_id")
+            .and_then(Value::as_u64)
+            .map(ObjectId)
+            .filter(|id| self.visible(*id))
+            .and_then(|id| self.state.objects.get(&id))
+            .map(|o| o.name.clone());
+        let source_text = field("description")
+            .and_then(Value::as_str)
+            .filter(|t| !t.is_empty())
+            .map(str::to_string);
+        let cause = field("trigger_events")
+            .and_then(Value::as_array)
+            .and_then(|events| events.first())
+            .or_else(|| field("trigger_event").filter(|e| !e.is_null()))
+            .and_then(|e| self.cause(e));
+        let source = self
+            .pending
+            .as_ref()
+            .map(|p| p.source.clone())
+            .or(named)
+            .or_else(|| {
+                let top = self.state.stack.last()?;
+                let o = self
+                    .state
+                    .objects
+                    .get(&top.id)
+                    .or_else(|| self.state.objects.get(&top.source_id))?;
+                Some(o.name.clone())
+            });
         let abilities = self.abilities();
         PlaytestPrompt {
             kind: self.state.waiting_for.variant_name().into(),
             source,
+            source_text,
+            cause,
             options: self
                 .answers()
                 .iter()
