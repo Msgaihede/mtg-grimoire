@@ -238,8 +238,17 @@ land drop left, too little mana, nothing to target), what happens is the sandbox
   tax (CR 903.8). Only when the rules offer no way: a card with one way is played, and one with
   several is asked about, sandbox or not.
 
-A card elsewhere than the hand or the command zone is activated rather than played; in the sandbox,
-one with nothing to activate is put onto the battlefield (a double-click on a graveyard's creature).
+A card elsewhere than the hand or the command zone is cast when the rules offer a cast of it there
+(a foretold card in exile, flashback in the graveyard); else it is activated rather than played,
+and in the sandbox one with nothing to activate is put onto the battlefield (a double-click on a
+graveyard's creature).
+
+**`foretell`** takes phase's `Foretell` special action for a hand card (CR 702.143a): {2} paid
+from untapped mana, the card exiled face down and foretold. It is refused, saying why, off the
+reader's turn or with {2} out of reach. **What the rules offer is on the card**: `canForetell` on a
+hand card the engine would foretell now, `castable` on a graveyard or exile card it would cast now,
+`foretold` on a foretold card in exile — each read off the legal actions once per view, and never
+set in a replay frame. An opponent's face-down exiled cards are not in their seat's `exile` at all.
 
 **`activate`** takes every legal action of a permanent's: an ability, equip, crew, station,
 saddle, transform, turn face up. These are found by the source field in the action's data
@@ -365,6 +374,7 @@ each of the AI's actions. They become the log's facts:
 | `LandPlayed`                             | `played`                                                                                             |
 | `SpellCast`                              | `cast`                                                                                               |
 | `AbilityActivated` (not mana)            | `activated`                                                                                          |
+| `Foretold`                               | `foretold`, naming the reader's own card only; its move from the hand to exile is not told again     |
 | `ZoneChanged`                            | `moved`, or `drew` (library to hand). A move to or from the stack is the cast, and is not told again |
 | `AttackersDeclared` / `BlockersDeclared` | `attacked` / `blocked`                                                                               |
 | `DamageDealt` to a permanent             | `dealt`, naming the permanent by id and seat (damage to a player is its `LifeChanged`)               |
@@ -544,8 +554,8 @@ facts are found as a run of `step.happened`, and the end takes the rest.
 
 - **The sandbox decides most of what is offered.** The board works it out once (`edits`: the
   sandbox on, the reader's main phase, nothing with the engine) and hands it to every piece.
-  - **Off:** no hand edits are drawn. A card's menu keeps only the rules' rows (Play, Cast, Activate
-    ability); a click does not tap; T, G, E and H do nothing; the only drag is a play onto the
+  - **Off:** no hand edits are drawn. A card's menu keeps only the rules' rows (Play, Foretell, Cast,
+    Activate ability), and a castable card in the graveyard or exile dialog its Cast; a click does not tap; T, G, E and H do nothing; the only drag is a play onto the
     table; the library pile is disabled; a graveyard or exile opens read-only; and every life plate
     is read-only text (`LifePlate`'s `readOnly`). What is left is the rules'.
   - **On:** the reader's cards have the whole hand — moves, taps, counters, token copies, draws,

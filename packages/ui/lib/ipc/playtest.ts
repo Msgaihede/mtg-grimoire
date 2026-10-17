@@ -259,6 +259,9 @@ export type PlaytestAction =
   | { type: "keep"; bottom: number[] }
   | { type: "play"; id: number }
   | { type: "activate"; id: number }
+  /** Foretell a hand card (CR 702.143a): pay {2}, exile it face down, cast it on a later turn
+   *  (a `play` of it in exile). Offered when its {@link GameCard.canForetell} says so. */
+  | { type: "foretell"; id: number }
   | { type: "pass" }
   | { type: "endTurn" }
   | { type: "setStops"; stops: PlaytestStop[] }
@@ -298,6 +301,8 @@ export type PlaytestHappened =
   | { type: "played"; seat: PlaytestPlayer; name: string }
   | { type: "cast"; seat: PlaytestPlayer; name: string }
   | { type: "activated"; seat: PlaytestPlayer; name: string }
+  /** A card exiled face down from its owner's hand; `name` is `null` for an opponent's. */
+  | { type: "foretold"; seat: PlaytestPlayer; name: string | null }
   | { type: "moved"; seat: PlaytestPlayer; name: string; from: GamePlace; to: GamePlace }
   | { type: "drew"; seat: PlaytestPlayer; name: string | null }
   | { type: "attacked"; seat: PlaytestPlayer; names: string[] }

@@ -419,6 +419,12 @@ pub enum PlaytestAction {
     Activate {
         id: u64,
     },
+    /// Foretell a hand card by the rules (CR 702.143a): the special action that pays {2} and
+    /// exiles it face down, to be cast on a later turn for its foretell cost (a `Play` of it in
+    /// exile). Only on the reader's turn; refused, saying why, when the rules do not offer it.
+    Foretell {
+        id: u64,
+    },
     /// Pass priority on to the next place the reader decides something: from the first main
     /// phase to combat, from the second to the opponent's turn.
     Pass,
@@ -528,6 +534,12 @@ pub enum PlaytestHappened {
     Activated {
         seat: PlaytestPlayer,
         name: String,
+    },
+    /// A card foretold: exiled face down from its owner's hand (CR 702.143a). `name` is the card
+    /// for the reader's own, `None` for an opponent's, which only they may look at.
+    Foretold {
+        seat: PlaytestPlayer,
+        name: Option<String>,
     },
     /// A card the rules moved: a resolving spell, a dying creature, a discard, a mill.
     Moved {

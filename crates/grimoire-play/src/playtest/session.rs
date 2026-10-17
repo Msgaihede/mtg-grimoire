@@ -149,6 +149,14 @@ struct Printing {
     card_id: String,
 }
 
+/// The reader's cards the rules offer more than a hand card's play for (`offers`): the hand
+/// cards they can foretell, and the graveyard and exile cards they can cast or play.
+#[derive(Default)]
+struct Offers {
+    foretell: HashSet<ObjectId>,
+    cast: HashSet<ObjectId>,
+}
+
 /// A cast or an activation the engine is still asking the reader about, which `cancel` takes
 /// back to `checkpoint`.
 #[derive(Clone)]
@@ -680,8 +688,12 @@ impl Playtest {
             phase: phase_of(s.phase),
             step: stop_step(s.phase),
             mulligan: self.mulligan(),
-            you: self.seat(YOU),
-            opponents: self.opponents.iter().map(|&p| self.seat(p)).collect(),
+            you: self.seat(YOU, &self.offers(watching)),
+            opponents: self
+                .opponents
+                .iter()
+                .map(|&p| self.seat(p, &Offers::default()))
+                .collect(),
             combat,
             attack,
             block,
@@ -721,14 +733,54 @@ impl Playtest {
         }
     }
 
-    fn seat(&self, seat: PlayerId) -> PlaytestSeat {
+    /// What the rules offer the reader beyond a hand card's play: foretelling a hand card, and
+    /// casting a card from the graveyard or exile. Nothing in a replay frame, or while the reader
+    /// does not have priority.
+    fn offers(&self, watching: bool) -> Offers {
+        let mut offers = Offers::default();
+        if watching || !matches!(self.stage(), PlaytestStage::Main | PlaytestStage::Respond) {
+            return offers;
+        }
+        for action in self.answers() {
+            match action {
+                GameAction::Foretell { object_id, .. } => {
+                    offers.foretell.insert(object_id);
+                }
+                GameAction::CastSpell { object_id, .. }
+                | GameAction::PlayLand { object_id, .. } => {
+                    offers.cast.insert(object_id);
+                }
+                _ => {}
+            }
+        }
+        offers
+    }
+
+    fn seat(&self, seat: PlayerId, offers: &Offers) -> PlaytestSeat {
         let s = &self.state;
         let player = &s.players[seat.0 as usize];
-        let mine = |id: &&ObjectId| s.objects.get(id).is_some_and(|o| o.owner == seat);
-        let cards = |ids: &mut dyn Iterator<Item = &ObjectId>| -> Vec<GameCard> {
-            ids.filter_map(|id| self.card(*id)).collect()
-        };
         let reader = seat == YOU;
+        // An opponent's face-down exiled cards (a foretold card) are theirs alone to look at.
+        let mine = |id: &&ObjectId| {
+            s.objects
+                .get(id)
+                .is_some_and(|o| o.owner == seat && (reader || !o.face_down))
+        };
+        let cards = |ids: &mut dyn Iterator<Item = &ObjectId>| -> Vec<GameCard> {
+            ids.filter_map(|id| self.card(*id))
+                .map(|mut c| {
+                    let id = ObjectId(c.id);
+                    match s.objects.get(&id).map(|o| o.zone) {
+                        Some(Zone::Hand) => c.can_foretell = offers.foretell.contains(&id),
+                        Some(Zone::Graveyard | Zone::Exile) => {
+                            c.castable = offers.cast.contains(&id);
+                        }
+                        _ => {}
+                    }
+                    c
+                })
+                .collect()
+        };
         PlaytestSeat {
             player: seat_of(seat),
             out: player.is_eliminated,
@@ -1521,6 +1573,7 @@ impl Playtest {
             // With priority: the main phase's, or a response's.
             PlaytestAction::Play { id } => self.play(ObjectId(id), out),
             PlaytestAction::Activate { id } => self.activate(ObjectId(id), out),
+            PlaytestAction::Foretell { id } => self.foretell(ObjectId(id), out),
             PlaytestAction::Pass => {
                 self.apply(YOU, GameAction::PassPriority, out)?;
                 self.advance(out)
@@ -1540,29 +1593,26 @@ impl Playtest {
 
     /// The rules first: the one way to play it, or a question about which way. When the rules
     /// offer none, the sandbox puts it down unpaid (`unpaid`), and without the sandbox it is a
-    /// refusal that says why. A card elsewhere than the hand or the command zone is activated
-    /// rather than played — or, in the sandbox, put onto the battlefield when it has nothing to
-    /// activate and is not there already (a double-click on a graveyard's creature).
+    /// refusal that says why. A card elsewhere than the hand or the command zone is cast when the
+    /// rules let it be cast from there (a foretold card in exile, a flashback card in the
+    /// graveyard); else it is activated rather than played — or, in the sandbox, put onto the
+    /// battlefield when it has nothing to activate and is not there already (a double-click on a
+    /// graveyard's creature).
     fn play(&mut self, id: ObjectId, out: &mut Vec<PlaytestHappened>) -> Result<(), String> {
         let obj = self.own(id)?;
         let name = obj.name.clone();
         let zone = obj.zone;
         let by_hand = self.sandbox && self.stage() == PlaytestStage::Main;
+        let ways = self.plays_of(id);
         if !matches!(zone, Zone::Hand | Zone::Command) {
+            if !ways.is_empty() {
+                return self.take_one(ways, "CastChoice", name, out, String::new);
+            }
             if by_hand && zone != Zone::Battlefield && self.abilities_of(id).is_empty() {
                 return self.put(id, Place::Battlefield, out);
             }
             return self.activate(id, out);
         }
-        let ways: Vec<GameAction> = self
-            .answers()
-            .into_iter()
-            .filter(|a| match a {
-                GameAction::PlayLand { object_id, .. }
-                | GameAction::CastSpell { object_id, .. } => *object_id == id,
-                _ => false,
-            })
-            .collect();
         if ways.is_empty() && by_hand {
             return self.unpaid(id, out);
         }
@@ -1598,6 +1648,41 @@ impl Playtest {
         self.put(id, to, out)
     }
 
+    /// Every legal play or cast of `id`, from wherever it is.
+    fn plays_of(&self, id: ObjectId) -> Vec<GameAction> {
+        self.answers()
+            .into_iter()
+            .filter(|a| match a {
+                GameAction::PlayLand { object_id, .. }
+                | GameAction::CastSpell { object_id, .. } => *object_id == id,
+                _ => false,
+            })
+            .collect()
+    }
+
+    /// The rules only: foretell a hand card (CR 702.143a), paying {2} as phase pays a special
+    /// action's cost, or a refusal that says why.
+    fn foretell(&mut self, id: ObjectId, out: &mut Vec<PlaytestHappened>) -> Result<(), String> {
+        let obj = self.own(id)?;
+        let name = obj.name.clone();
+        let zone = obj.zone;
+        let ways: Vec<GameAction> = self
+            .answers()
+            .into_iter()
+            .filter(|a| matches!(a, GameAction::Foretell { object_id, .. } if *object_id == id))
+            .collect();
+        let yours = self.state.active_player == YOU;
+        self.take_one(ways, "CastChoice", name.clone(), out, || {
+            if zone != Zone::Hand {
+                format!("Only a card in your hand can be foretold, and {name} is not.")
+            } else if !yours {
+                format!("{name} can be foretold only during your own turn.")
+            } else {
+                format!("{name} can't be foretold right now: it has no foretell, or {{2}} can't be paid.")
+            }
+        })
+    }
+
     /// The rules only: a permanent's one activated ability, a question about which, or a
     /// refusal.
     fn activate(&mut self, id: ObjectId, out: &mut Vec<PlaytestHappened>) -> Result<(), String> {
@@ -1619,6 +1704,7 @@ impl Playtest {
                     GameAction::PassPriority
                         | GameAction::PlayLand { .. }
                         | GameAction::CastSpell { .. }
+                        | GameAction::Foretell { .. }
                 ) && names_source(a, id)
             })
             .collect()
@@ -2438,6 +2524,14 @@ fn tell(state: &GameState, events: &[GameEvent], out: &mut Vec<PlaytestHappened>
             _ => None,
         })
         .collect();
+    // A foretold card's move to exile is told as its foretelling, which hides an opponent's card.
+    let foretold: BTreeSet<ObjectId> = events
+        .iter()
+        .filter_map(|e| match e {
+            GameEvent::Foretold { object_id, .. } => Some(*object_id),
+            _ => None,
+        })
+        .collect();
     for event in events {
         match event {
             GameEvent::TurnStarted {
@@ -2501,7 +2595,10 @@ fn tell(state: &GameState, events: &[GameEvent], out: &mut Vec<PlaytestHappened>
                     // The stack: a cast and its resolving are told as the cast.
                     continue;
                 };
-                if from_place == to_place || (*from == Zone::Hand && lands.contains(object_id)) {
+                if from_place == to_place
+                    || (*from == Zone::Hand
+                        && (lands.contains(object_id) || foretold.contains(object_id)))
+                {
                     continue;
                 }
                 let owner = state
@@ -2525,6 +2622,20 @@ fn tell(state: &GameState, events: &[GameEvent], out: &mut Vec<PlaytestHappened>
                         to: to_place,
                     }),
                 }
+            }
+            GameEvent::Foretold {
+                player_id,
+                object_id,
+            } => {
+                let whose = seat_of(*player_id);
+                out.push(PlaytestHappened::Foretold {
+                    seat: whose,
+                    name: if whose == PlaytestPlayer::You {
+                        name(object_id)
+                    } else {
+                        None
+                    },
+                });
             }
             GameEvent::AttackersDeclared { attacker_ids, .. } => {
                 let names: Vec<String> = attacker_ids.iter().filter_map(name).collect();

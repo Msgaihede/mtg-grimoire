@@ -31,6 +31,11 @@ import type { ZoneLook } from "./types";
  * **`opponent` is a look at another player's zone** — an opponent's graveyard or exile, named as
  * theirs (`owner`), and read-only like `readOnly`: their cards are moved through their own
  * battlefield's menu with the sandbox on, never from here.
+ *
+ * **A card the rules let the reader cast from here carries a Cast** ({@link GameCard.castable}: a
+ * foretold card in exile, a flashback card in the graveyard), whatever `readOnly` says — it is the
+ * rules' play, not a hand move. It closes the dialog, since the cast may ask a question of its own.
+ * A foretold card says so under it.
  */
 export function LibraryDialog({
   look,
@@ -130,13 +135,31 @@ export function LibraryDialog({
                     {card.name}
                   </span>
                 )}
+                {card.foretold && <span className="font-mono text-[11px] text-dim">Foretold</span>}
                 {look.zone === "library" && !searching && (
                   <span className="font-mono text-[11px] text-dim">
                     {i === 0 ? "On top" : `${i + 1} from the top`}
                   </span>
                 )}
-                {places.length > 0 && (
+                {((card.castable && !opponent) || places.length > 0) && (
                   <div className="flex flex-wrap gap-1">
+                    {card.castable && !opponent && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onAct({ type: "play", id: card.id });
+                          onClose();
+                        }}
+                        className={cn(
+                          "h-6 rounded border border-accent px-1.5 text-[11px] text-accent",
+                          "transition-colors motion-reduce:transition-none hover:bg-accent hover:text-accent-fg",
+                          PRESS,
+                          FOCUS,
+                        )}
+                      >
+                        Cast
+                      </button>
+                    )}
                     {places.map(([to, label]) => (
                       <button
                         key={to}

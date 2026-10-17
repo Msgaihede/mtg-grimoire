@@ -195,6 +195,9 @@ export function cardOfRef(
       power: null,
       toughness: null,
       tax: 0,
+      foretold: false,
+      canForetell: false,
+      castable: false,
     }
   );
 }
