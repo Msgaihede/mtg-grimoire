@@ -30,6 +30,14 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.55.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.54.0...v0.55.0) (2026-10-17)
+
+
+### Features
+
+* **ui:** add a centred header quick search across decks, cards and settings ([#1098](https://github.com/Msgaihede/mtg-grimoire/issues/1098)) ([601f630](https://github.com/Msgaihede/mtg-grimoire/commit/601f630fb956e8531c75db94be0c74153be448de))
+* **ui:** centred header quick search across decks, cards and settings ([edd56d3](https://github.com/Msgaihede/mtg-grimoire/commit/edd56d36e600bd0aca320f22f87acfebcc20b8e1))
+
 ## [0.54.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.53.0...v0.54.0) (2026-10-17)
 
 
