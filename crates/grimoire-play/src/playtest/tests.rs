@@ -950,11 +950,11 @@ fn the_sandbox_reaches_the_table_but_not_an_opponents_hidden_cards() {
     });
 }
 
-/// With the sandbox on, a card the rules cannot play against the AI is put down unpaid, as on the
-/// goldfish; with it off, the refusal says how to.
+/// With the sandbox on, a card the rules cannot play against the AI is cast unpaid (CR 118.9), as
+/// on the goldfish; with it off, the refusal says how to.
 #[test]
-fn a_card_the_rules_refuse_is_put_down_unpaid_only_in_the_sandbox() {
-    let (refused, put) = engine(|| {
+fn a_card_the_rules_refuse_is_cast_unpaid_only_in_the_sandbox() {
+    let (refused, cast) = engine(|| {
         let (mut game, _) = kept(2);
         let bear = in_hand(&mut game, "Grizzly Bears");
         let refused = game.act(A::Play { id: bear });
@@ -962,12 +962,10 @@ fn a_card_the_rules_refuse_is_put_down_unpaid_only_in_the_sandbox() {
         (refused, game.act(A::Play { id: bear }).unwrap())
     });
     assert!(refused.unwrap_err().contains("Turn the sandbox on"));
-    assert!(find(&put.view.you.battlefield, "Grizzly Bears").is_some());
-    assert!(put.happened.contains(&H::Put {
+    assert!(find(&cast.view.you.battlefield, "Grizzly Bears").is_some());
+    assert!(cast.happened.contains(&H::Cast {
         seat: PlaytestPlayer::You,
         name: "Grizzly Bears".into(),
-        from: Place::Hand,
-        to: Place::Battlefield,
     }));
 }
 

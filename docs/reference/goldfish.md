@@ -163,7 +163,7 @@ radio row in the game menu): **off by default against the AI, on against the gol
 | By the rules                                                       | By hand (phase's sandbox, while it is on)                    |
 | ------------------------------------------------------------------ | ------------------------------------------------------------ |
 | The London mulligan and Commander's free first one                 | A drag to any zone                                           |
-| Playing a land as the turn's land drop                             | A card the rules will not play, put down unpaid              |
+| Playing a land as the turn's land drop                             | A card the rules will not play, cast or put down unpaid      |
 | Casting a spell, paid from untapped mana (`CastPaymentMode::Auto`) | Tapping and untapping                                        |
 | Commander tax                                                      | Counters, token copies, preset tokens                        |
 | Foretelling (CR 702.143a) and casting a foretold card from exile   |                                                              |
@@ -184,14 +184,23 @@ the table. It looks for the legal `PlayLand` or `CastSpell` for that card:
 - **Exactly one:** it is played. phase lists a cast once per way to make it (a target, a mode), so
   one row means nothing is left to decide.
 - **Two or more:** the board asks which, as a prompt with Cancel ([playtest.md](playtest.md#prompts)).
-- **None:** with the sandbox on, in the main phase, the card is put where it would have gone,
-  unpaid (`unpaid`) — a permanent onto the battlefield, an instant or sorcery into the graveyard.
-  `PlaytestHappened::Put` says so, and the log reads "Cast Swords to Plowshares · not paid for".
-  With the sandbox off it is refused, in a sentence that ends "Turn the sandbox on to put it down
-  by hand."
+- **None:** with the sandbox on, in the main phase, the card is played unpaid (`unpaid`). It is
+  **cast without paying its mana cost** first (CR 118.9, `cast_free`): an emblem of the reader's
+  with phase's `CastFromHandFree` (Omniscience's static) is granted, the cast is made as any other
+  — one way taken, several asked about — and the emblem is removed once nothing is pending and the
+  board asks nothing (`end_free`: the moment the spell is on the stack, and after every action), so
+  the next play is paid. It touches no other card: its permission is the reader's alone, and its
+  `affected` is `SpecificObject`, the one card being played. Being a real
+  cast, what the card does when cast or as it enters happens: Wakening Sun's Avatar's "if you cast
+  it from your hand, destroy all non-Dinosaur creatures" (issue #1075) was lost when the card was
+  only put down. Only when even a free cast is not legal (a land past the land drop, nothing to
+  target) is the card put where it would have gone — a permanent onto the battlefield, an instant
+  or sorcery into the graveyard. `PlaytestHappened::Put` says so, and the log reads "Cast Swords to
+  Plowshares · not paid for". With the sandbox off it is refused, in a sentence that ends "Turn
+  the sandbox on to put it down by hand."
 
-**A commander put down unpaid still raises its tax.** The reader cast it; they only skipped
-paying. `record_commander_cast` is called on that path too. **A card elsewhere than the hand or the
+**A commander played unpaid still raises its tax.** Cast free, the engine raises it as for any
+cast; put down, `record_commander_cast` is called on that path too. **A card elsewhere than the hand or the
 command zone is cast when the rules let it be cast from there** (a foretold card in exile, a
 flashback card in the graveyard); else it is activated, and in the sandbox one with nothing to
 activate is put onto the battlefield (a double-click on a graveyard's creature).
