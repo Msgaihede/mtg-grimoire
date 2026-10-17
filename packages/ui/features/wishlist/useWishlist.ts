@@ -23,6 +23,7 @@ import {
 import type { TrayCell } from "@/features/search/filterOptions";
 import { useShelfFolds } from "@/features/shelves/useShelfFolds";
 import type { Border } from "@/lib/border";
+import type { Universe } from "@/lib/universe";
 import {
   ipc,
   type ShelfCount,
@@ -134,6 +135,8 @@ export interface WishlistFilterState {
    *  `preferred_finish` is what the reader means to buy, not a fact about the card, and the tray
    *  draws no Finish cell here. */
   borders: readonly Border[];
+  /** Universes Beyond or Within, over the wish's printing — or neither. One kind. */
+  universe?: Universe | undefined;
   /** `true` is the wishes a sync flagged, `false` everything it did not touch. Three-way
    *  because the complement is a real question, and compared against `undefined` rather than
    *  tested for truthiness because `false` is a filter too. */
@@ -176,6 +179,7 @@ export function activeFilterCount(f: WishlistFilterState): number {
     f.types.length > 0,
     // One kind for the same reason: `Borderless` and `Full art` are one narrowing of *which frame*.
     f.borders.length > 0,
+    f.universe !== undefined,
     f.needsReview !== undefined,
   ].filter(Boolean).length;
 }
@@ -209,6 +213,7 @@ export const WISHLIST_TRAY: readonly TrayCell[] = [
   "rarity",
   "type",
   "border",
+  "universe",
   "needsReview",
 ];
 
@@ -264,6 +269,8 @@ export function useWishlist({
   // The border chips (issue #573) — the type chips' shape, on the wire for the same reason:
   // `CardFilters.borders`, which `push_card_filters` emits for all three lists.
   const [borders, setBorders] = useState<readonly Border[]>([]);
+  // Universes Beyond or Within — the border's shape, on the wire as `CardFilters.universe`.
+  const [universe, setUniverse] = useState<Universe | undefined>(undefined);
   const [sets, setSets] = useState<readonly string[]>([]);
   const [manaValues, setManaValues] = useState<readonly number[]>([]);
   // Additive rather than exclusive, exactly as both siblings are: `cmc` counts `{X}` as zero, so
@@ -361,6 +368,7 @@ export function useWishlist({
       rarities,
       types,
       borders,
+      universe,
       needsReview,
     }) > 0;
   const shelves = useMemo(
@@ -394,6 +402,7 @@ export function useWishlist({
     sets: setsParam,
     types: typesParamValue,
     borders: bordersParamValue,
+    universe,
     manaValues: manaParam,
     // Absent rather than `false`, which is what the backend defaults to. `true` widens — it adds
     // the `{X}` rows to whatever the numerals matched.
@@ -429,6 +438,7 @@ export function useWishlist({
     setsParam?.join(",") ?? "",
     typesParamValue?.join(",") ?? "",
     bordersParamValue?.join(",") ?? "",
+    universe ?? "",
     manaParam?.join(",") ?? "",
     // X is a second axis over the same chips, so "3, and also X" must not be served from plain "3".
     manaX ? "x" : "",
@@ -636,6 +646,11 @@ export function useWishlist({
      *  printing, so a borderless full-art wish answers two chips. */
     borders,
     toggleBorder: (border: Border) => setBorders((picked) => toggleIn(picked, border)),
+    /** Universes Beyond or Within over the printing; passing the value already set clears it,
+     *  the search's rule. */
+    universe,
+    setUniverse: (next: Universe | undefined) =>
+      setUniverse((current) => (current === next ? undefined : next)),
     manaValues,
     toggleManaValue: (value: number) => setManaValues((picked) => toggleIn(picked, value)),
     /** Also match the wishes whose printed cost contains `{X}` — **additive, never exclusive**,
@@ -726,6 +741,7 @@ export function useWishlist({
       rarities,
       types,
       borders,
+      universe,
       needsReview,
     }),
     /** Clear every filter at once. The sort is not a filter and stays: it is how the reader
@@ -743,6 +759,7 @@ export function useWishlist({
       setSets([]);
       setTypes([]);
       setBorders([]);
+      setUniverse(undefined);
       setManaValues([]);
       setManaX(false);
       setRarities([]);

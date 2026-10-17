@@ -1030,6 +1030,23 @@ describe("the border and printed-finish chips", () => {
     );
   });
 
+  it("splits the printings into Universes Beyond and everything else", () => {
+    const db = makeDb();
+    const isBeyond = (c: (typeof paper)[number]) =>
+      (c.promoTypes ?? "").includes('"universesbeyond"');
+    const beyond = paper.filter(isBeyond);
+    // Without a row on each side, the partition below would be vacuous.
+    expect(beyond.length).toBeGreaterThan(0);
+    expect(beyond.length).toBeLessThan(paper.length);
+
+    expect(new Set(ids(db, { universe: "beyond" }))).toEqual(new Set(beyond.map((c) => c.id)));
+    expect(new Set(ids(db, { universe: "within" }))).toEqual(
+      new Set(paper.filter((c) => !isBeyond(c)).map((c) => c.id)),
+    );
+    // Validated like Rust's `picked_universe`: a word outside the two is no filter.
+    expect(ids(db, { universe: "elsewhere" as never })).toHaveLength(paper.length);
+  });
+
   it("narrows the binder by the printing, beside the copy's own finish", () => {
     // A foil copy of a printing sold only in foil, and a nonfoil copy of a nonfoil-only one:
     // `finishes` asks the copy and `printedFinishes` the printing, and the two differ here.

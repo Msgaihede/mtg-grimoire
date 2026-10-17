@@ -215,6 +215,9 @@ export function playtestSentence(
       return h.seat === "you"
         ? `Activated ${h.name}`
         : `${playerName(h.seat, opponents)} activated ${h.name}`;
+    case "foretold":
+      if (h.seat !== "you") return `${playerName(h.seat, opponents)} foretold a card`;
+      return h.name === null ? "Foretold a card" : `Foretold ${h.name}`;
     case "moved":
       return movedSentence(h.seat, h.name, h.from, h.to, opponents);
     case "drew":
@@ -288,6 +291,7 @@ export function playtestKind(h: PlaytestHappened): LogKind {
       return "land";
     case "cast":
     case "activated":
+    case "foretold":
       return "cast";
     case "moved":
       return h.from === "libraryTop" && h.to === "hand" ? "draw" : "move";

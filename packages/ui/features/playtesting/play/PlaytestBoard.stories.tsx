@@ -224,7 +224,8 @@ export const YourMainPhase: Story = {
   },
 };
 
-/** A spell of each seat's on the stack, top first. */
+/** A spell of each seat's on the stack, top first, each with a dotted arrow at its target: the
+ *  reader's Counterspell at the Bolt, the Bolt at the reader's plate (issue #1071). */
 export const StackInUse: Story = {
   args: { view: withStack().view },
 };

@@ -55,11 +55,11 @@ use engine::game::{
     install_card_db, load_and_hydrate_decks, resolve_deck_list, start_game_with_starting_player,
     DeckList, PlayerDeckList,
 };
-use engine::types::ability::{LibraryPosition, TargetRef};
+use engine::types::ability::{KeywordAction, LibraryPosition, TargetRef};
 use engine::types::actions::{DebugAction, DebugTokenRequest, GameAction, MulliganChoice};
 use engine::types::events::{ActivatedAbilityKind, GameEvent};
 use engine::types::format::FormatConfig;
-use engine::types::game_state::{MulliganDecisionPhase, StackEntryKind, WaitingFor};
+use engine::types::game_state::{MulliganDecisionPhase, StackEntry, StackEntryKind, WaitingFor};
 use engine::types::identifiers::ObjectId;
 use engine::types::phase::Phase;
 use engine::types::statics::StaticMode;
@@ -147,6 +147,14 @@ struct Printing {
     owner: PlayerId,
     name: String,
     card_id: String,
+}
+
+/// The reader's cards the rules offer more than a hand card's play for (`offers`): the hand
+/// cards they can foretell, and the graveyard and exile cards they can cast or play.
+#[derive(Default)]
+struct Offers {
+    foretell: HashSet<ObjectId>,
+    cast: HashSet<ObjectId>,
 }
 
 /// A cast or an activation the engine is still asking the reader about, which `cancel` takes
@@ -680,8 +688,12 @@ impl Playtest {
             phase: phase_of(s.phase),
             step: stop_step(s.phase),
             mulligan: self.mulligan(),
-            you: self.seat(YOU),
-            opponents: self.opponents.iter().map(|&p| self.seat(p)).collect(),
+            you: self.seat(YOU, &self.offers(watching)),
+            opponents: self
+                .opponents
+                .iter()
+                .map(|&p| self.seat(p, &Offers::default()))
+                .collect(),
             combat,
             attack,
             block,
@@ -722,6 +734,7 @@ impl Playtest {
                         .get(&entry.id)
                         .and_then(|batch| batch.first())
                         .or(event);
+                    let (targets, target_players) = stack_targets(s, entry);
                     Some(PlaytestStackItem {
                         id: entry.id.0,
                         name: source.name.clone(),
@@ -730,6 +743,8 @@ impl Playtest {
                         ability: !matches!(entry.kind, StackEntryKind::Spell { .. }),
                         text: text.filter(|t| !t.is_empty()),
                         cause: event.and_then(|e| self.cause(&serde_json::to_value(e).ok()?)),
+                        targets,
+                        target_players,
                     })
                 })
                 .collect(),
@@ -745,14 +760,54 @@ impl Playtest {
         }
     }
 
-    fn seat(&self, seat: PlayerId) -> PlaytestSeat {
+    /// What the rules offer the reader beyond a hand card's play: foretelling a hand card, and
+    /// casting a card from the graveyard or exile. Nothing in a replay frame, or while the reader
+    /// does not have priority.
+    fn offers(&self, watching: bool) -> Offers {
+        let mut offers = Offers::default();
+        if watching || !matches!(self.stage(), PlaytestStage::Main | PlaytestStage::Respond) {
+            return offers;
+        }
+        for action in self.answers() {
+            match action {
+                GameAction::Foretell { object_id, .. } => {
+                    offers.foretell.insert(object_id);
+                }
+                GameAction::CastSpell { object_id, .. }
+                | GameAction::PlayLand { object_id, .. } => {
+                    offers.cast.insert(object_id);
+                }
+                _ => {}
+            }
+        }
+        offers
+    }
+
+    fn seat(&self, seat: PlayerId, offers: &Offers) -> PlaytestSeat {
         let s = &self.state;
         let player = &s.players[seat.0 as usize];
-        let mine = |id: &&ObjectId| s.objects.get(id).is_some_and(|o| o.owner == seat);
-        let cards = |ids: &mut dyn Iterator<Item = &ObjectId>| -> Vec<GameCard> {
-            ids.filter_map(|id| self.card(*id)).collect()
-        };
         let reader = seat == YOU;
+        // An opponent's face-down exiled cards (a foretold card) are theirs alone to look at.
+        let mine = |id: &&ObjectId| {
+            s.objects
+                .get(id)
+                .is_some_and(|o| o.owner == seat && (reader || !o.face_down))
+        };
+        let cards = |ids: &mut dyn Iterator<Item = &ObjectId>| -> Vec<GameCard> {
+            ids.filter_map(|id| self.card(*id))
+                .map(|mut c| {
+                    let id = ObjectId(c.id);
+                    match s.objects.get(&id).map(|o| o.zone) {
+                        Some(Zone::Hand) => c.can_foretell = offers.foretell.contains(&id),
+                        Some(Zone::Graveyard | Zone::Exile) => {
+                            c.castable = offers.cast.contains(&id);
+                        }
+                        _ => {}
+                    }
+                    c
+                })
+                .collect()
+        };
         PlaytestSeat {
             player: seat_of(seat),
             out: player.is_eliminated,
@@ -1051,6 +1106,7 @@ impl Playtest {
                     .collect(),
                 cancellable: true,
                 pick: None,
+                keyword: None,
             };
         }
         // The question's own data names its ability when it is about one — a trigger's targets —
@@ -1103,7 +1159,16 @@ impl Playtest {
                 .collect(),
             cancellable: self.pending.is_some(),
             pick: self.pick().map(|(pick, _)| pick),
+            keyword: self.keyword(),
         }
+    }
+
+    /// The keyword the question is about, when its data names one — the alternative cost a
+    /// cast is offered (`Overload`, `Evoke`, `Bestow`…; issue #1072). Read from the question's
+    /// own fields, as `option_of` reads an answer's.
+    fn keyword(&self) -> Option<String> {
+        let json = serde_json::to_value(&self.state.waiting_for).ok()?;
+        json.get("data")?.get("keyword").and_then(tag_of)
     }
 
     /// The question's answer as a set of cards, for the few kinds of question whose answers
@@ -1369,7 +1434,8 @@ impl Playtest {
                             .and_then(Value::as_i64)
                     }
                     "accept" | "pay" | "top" => yes = value.as_bool(),
-                    "choice" => label = value.as_str().map(str::to_string),
+                    // A word, or one of phase's tagged choices: `{ "type": "Alternative" }`.
+                    "choice" => label = tag_of(value),
                     _ => {}
                 }
             }
@@ -1695,6 +1761,7 @@ impl Playtest {
             // With priority: the main phase's, or a response's.
             PlaytestAction::Play { id } => self.play(ObjectId(id), out),
             PlaytestAction::Activate { id } => self.activate(ObjectId(id), out),
+            PlaytestAction::Foretell { id } => self.foretell(ObjectId(id), out),
             PlaytestAction::Pass => {
                 self.apply(YOU, GameAction::PassPriority, out)?;
                 self.advance(out)
@@ -1714,29 +1781,26 @@ impl Playtest {
 
     /// The rules first: the one way to play it, or a question about which way. When the rules
     /// offer none, the sandbox puts it down unpaid (`unpaid`), and without the sandbox it is a
-    /// refusal that says why. A card elsewhere than the hand or the command zone is activated
-    /// rather than played — or, in the sandbox, put onto the battlefield when it has nothing to
-    /// activate and is not there already (a double-click on a graveyard's creature).
+    /// refusal that says why. A card elsewhere than the hand or the command zone is cast when the
+    /// rules let it be cast from there (a foretold card in exile, a flashback card in the
+    /// graveyard); else it is activated rather than played — or, in the sandbox, put onto the
+    /// battlefield when it has nothing to activate and is not there already (a double-click on a
+    /// graveyard's creature).
     fn play(&mut self, id: ObjectId, out: &mut Vec<PlaytestHappened>) -> Result<(), String> {
         let obj = self.own(id)?;
         let name = obj.name.clone();
         let zone = obj.zone;
         let by_hand = self.sandbox && self.stage() == PlaytestStage::Main;
+        let ways = self.plays_of(id);
         if !matches!(zone, Zone::Hand | Zone::Command) {
+            if !ways.is_empty() {
+                return self.take_one(ways, "CastChoice", name, out, String::new);
+            }
             if by_hand && zone != Zone::Battlefield && self.abilities_of(id).is_empty() {
                 return self.put(id, Place::Battlefield, out);
             }
             return self.activate(id, out);
         }
-        let ways: Vec<GameAction> = self
-            .answers()
-            .into_iter()
-            .filter(|a| match a {
-                GameAction::PlayLand { object_id, .. }
-                | GameAction::CastSpell { object_id, .. } => *object_id == id,
-                _ => false,
-            })
-            .collect();
         if ways.is_empty() && by_hand {
             return self.unpaid(id, out);
         }
@@ -1772,6 +1836,41 @@ impl Playtest {
         self.put(id, to, out)
     }
 
+    /// Every legal play or cast of `id`, from wherever it is.
+    fn plays_of(&self, id: ObjectId) -> Vec<GameAction> {
+        self.answers()
+            .into_iter()
+            .filter(|a| match a {
+                GameAction::PlayLand { object_id, .. }
+                | GameAction::CastSpell { object_id, .. } => *object_id == id,
+                _ => false,
+            })
+            .collect()
+    }
+
+    /// The rules only: foretell a hand card (CR 702.143a), paying {2} as phase pays a special
+    /// action's cost, or a refusal that says why.
+    fn foretell(&mut self, id: ObjectId, out: &mut Vec<PlaytestHappened>) -> Result<(), String> {
+        let obj = self.own(id)?;
+        let name = obj.name.clone();
+        let zone = obj.zone;
+        let ways: Vec<GameAction> = self
+            .answers()
+            .into_iter()
+            .filter(|a| matches!(a, GameAction::Foretell { object_id, .. } if *object_id == id))
+            .collect();
+        let yours = self.state.active_player == YOU;
+        self.take_one(ways, "CastChoice", name.clone(), out, || {
+            if zone != Zone::Hand {
+                format!("Only a card in your hand can be foretold, and {name} is not.")
+            } else if !yours {
+                format!("{name} can be foretold only during your own turn.")
+            } else {
+                format!("{name} can't be foretold right now: it has no foretell, or {{2}} can't be paid.")
+            }
+        })
+    }
+
     /// The rules only: a permanent's one activated ability, a question about which, or a
     /// refusal.
     fn activate(&mut self, id: ObjectId, out: &mut Vec<PlaytestHappened>) -> Result<(), String> {
@@ -1793,6 +1892,7 @@ impl Playtest {
                     GameAction::PassPriority
                         | GameAction::PlayLand { .. }
                         | GameAction::CastSpell { .. }
+                        | GameAction::Foretell { .. }
                 ) && names_source(a, id)
             })
             .collect()
@@ -2506,6 +2606,55 @@ fn seat_of(player: PlayerId) -> PlaytestPlayer {
         .unwrap_or(PlaytestPlayer::Opponent3)
 }
 
+/// What a stack entry targets, for the board's arrows: the cards the table shows and the players,
+/// each once, in the order chosen — the spell's or ability's own targets and its follow-on
+/// abilities' ("… and another target creature"), and an equip's creature. A card in a hand or a
+/// library is not shown, so it is not told.
+pub(super) fn stack_targets(
+    state: &GameState,
+    entry: &StackEntry,
+) -> (Vec<u64>, Vec<PlaytestPlayer>) {
+    let mut refs: Vec<TargetRef> = Vec::new();
+    let mut next = entry.ability();
+    while let Some(ability) = next {
+        refs.extend_from_slice(&ability.targets);
+        if let Some(branch) = ability.else_ability.as_deref() {
+            refs.extend_from_slice(&branch.targets);
+        }
+        next = ability.sub_ability.as_deref();
+    }
+    if let StackEntryKind::KeywordAction {
+        action: KeywordAction::Equip {
+            target_creature_id, ..
+        },
+    } = &entry.kind
+    {
+        refs.push(TargetRef::Object(*target_creature_id));
+    }
+    let mut cards = Vec::new();
+    let mut players = Vec::new();
+    for r in refs {
+        match r {
+            TargetRef::Object(id) => {
+                let shown = state
+                    .objects
+                    .get(&id)
+                    .is_some_and(|o| !matches!(o.zone, Zone::Hand | Zone::Library));
+                if shown && id != entry.id && !cards.contains(&id.0) {
+                    cards.push(id.0);
+                }
+            }
+            TargetRef::Player(p) => {
+                let p = seat_of(p);
+                if !players.contains(&p) {
+                    players.push(p);
+                }
+            }
+        }
+    }
+    (cards, players)
+}
+
 /// A pick's answer: the cards, as `SelectTargets` when the question takes targets (`pick`'s
 /// second value), else `SelectCards`.
 fn pick_answer(ids: Vec<u64>, targets: bool) -> GameAction {
@@ -2579,6 +2728,14 @@ fn collect_refs(value: &Value, ids: &mut Vec<ObjectId>, players: &mut Vec<Playte
     }
 }
 
+/// A word on the wire: a string, or the tag of one of phase's `#[serde(tag = "type")]` enums.
+fn tag_of(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .or_else(|| value.get("type")?.as_str())
+        .map(str::to_string)
+}
+
 /// Whether an action is something `id` does: its data names `id` as the source, the equipment,
 /// the vehicle or the object acted on.
 fn names_source(action: &GameAction, id: ObjectId) -> bool {
@@ -2609,6 +2766,14 @@ fn tell(state: &GameState, events: &[GameEvent], out: &mut Vec<PlaytestHappened>
         .iter()
         .filter_map(|e| match e {
             GameEvent::LandPlayed { object_id, .. } => Some(*object_id),
+            _ => None,
+        })
+        .collect();
+    // A foretold card's move to exile is told as its foretelling, which hides an opponent's card.
+    let foretold: BTreeSet<ObjectId> = events
+        .iter()
+        .filter_map(|e| match e {
+            GameEvent::Foretold { object_id, .. } => Some(*object_id),
             _ => None,
         })
         .collect();
@@ -2675,7 +2840,10 @@ fn tell(state: &GameState, events: &[GameEvent], out: &mut Vec<PlaytestHappened>
                     // The stack: a cast and its resolving are told as the cast.
                     continue;
                 };
-                if from_place == to_place || (*from == Zone::Hand && lands.contains(object_id)) {
+                if from_place == to_place
+                    || (*from == Zone::Hand
+                        && (lands.contains(object_id) || foretold.contains(object_id)))
+                {
                     continue;
                 }
                 let owner = state
@@ -2699,6 +2867,20 @@ fn tell(state: &GameState, events: &[GameEvent], out: &mut Vec<PlaytestHappened>
                         to: to_place,
                     }),
                 }
+            }
+            GameEvent::Foretold {
+                player_id,
+                object_id,
+            } => {
+                let whose = seat_of(*player_id);
+                out.push(PlaytestHappened::Foretold {
+                    seat: whose,
+                    name: if whose == PlaytestPlayer::You {
+                        name(object_id)
+                    } else {
+                        None
+                    },
+                });
             }
             GameEvent::AttackersDeclared { attacker_ids, .. } => {
                 let names: Vec<String> = attacker_ids.iter().filter_map(name).collect();

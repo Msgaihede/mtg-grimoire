@@ -207,6 +207,33 @@ describe("cardMenu", () => {
     expect(cardMenu({ ...off, card: ring, ids: [ring.id], place: "graveyard" })).toEqual([]);
   });
 
+  it("offers Foretell on a hand card the rules let the reader foretell, sandbox or not", () => {
+    const onAct = vi.fn();
+    const behold = gameCard("Behold the Multiverse", { canForetell: true });
+    const off = cardMenu({ card: behold, ids: [behold.id], place: "hand", sandbox: false, onAct });
+    expect(labels(off)).toEqual(["Play", "Foretell"]);
+    act(off, "Foretell").onSelect();
+    expect(onAct).toHaveBeenCalledWith({ type: "foretell", id: behold.id });
+    const on = cardMenu({ card: behold, ids: [behold.id], place: "hand", sandbox: true, onAct });
+    expect(labels(on)).toEqual(["Play", "Foretell", "Move to"]);
+    // Not offered when the rules would refuse it.
+    const plain = gameCard("Behold the Multiverse");
+    expect(
+      labels(cardMenu({ card: plain, ids: [plain.id], place: "hand", sandbox: false, onAct })),
+    ).toEqual(["Play"]);
+  });
+
+  it("casts a foretold card from exile, sandbox or not", () => {
+    const onAct = vi.fn();
+    const behold = gameCard("Behold the Multiverse", { foretold: true, castable: true });
+    const off = cardMenu({ card: behold, ids: [behold.id], place: "exile", sandbox: false, onAct });
+    expect(labels(off)).toEqual(["Cast"]);
+    act(off, "Cast").onSelect();
+    expect(onAct).toHaveBeenCalledWith({ type: "play", id: behold.id });
+    const on = cardMenu({ card: behold, ids: [behold.id], place: "exile", sandbox: true, onAct });
+    expect(labels(on)).toEqual(["Cast", "Move to"]);
+  });
+
   it("heads a permanent's sandbox rows with Activate ability when the reader may activate it", () => {
     const ring = gameCard("Sol Ring");
     const items = cardMenu({

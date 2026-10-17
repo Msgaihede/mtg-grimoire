@@ -89,6 +89,7 @@ describe("PromptPanel", () => {
       options: [],
       cancellable: false,
       pick: null,
+      keyword: null,
     });
     expect(screen.getByRole("heading", { name: "Choose ring bearer" })).toBeInTheDocument();
     expect(screen.getByText(/can’t show this choice/)).toBeInTheDocument();
