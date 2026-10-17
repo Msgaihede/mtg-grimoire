@@ -192,13 +192,20 @@ generically, never matched variant by variant.
   and their order cannot matter. Should the engine refuse that answer, the question is asked
   after all.
 - A card named alone by an option lights up on the table, and clicking it answers.
+- **An alternative cost is asked as which cost** (issue #1072). A spell with Overload, Evoke,
+  Bestow, Dash and the like whose printed and alternative costs are both payable is phase's
+  `AlternativeCastChoice`, answered `ChooseAlternativeCast` with `Normal` or `Alternative` — a
+  tagged choice, which `option_of` reads as the option's `label` (`tag_of`). The question's own
+  `keyword` field rides on the prompt as `keyword`, so the board says "Overload" and "Mana cost"
+  rather than two rows of the same words. With only one cost payable, phase takes it unasked.
 
 **A pick: the answer that is a set of cards.** For a scry of three, `legal_actions` offers four
 answers (none, all, each card alone), and there are sixteen. So for the questions whose answer is
 a set of cards, the prompt carries a `pick` beside its options (`Playtest::pick`): the cards, which
 of them may be picked, a minimum and a maximum, and whether order counts. `pickCards` answers it.
-The answer is `SelectCards`, or `SelectTargets` for `ChooseObjectsSelection`. The meaning of the
-picked cards is phase's:
+The answer is `SelectCards`, `SelectTargets` for `ChooseObjectsSelection`, or the kept set
+(`ChooseKeptCreatures`, `ChooseKeptPermanents`) for a keep. The meaning of the picked cards is
+phase's:
 
 | Question                                         | `purpose` | The picked cards                                            | Count                                               |
 | ------------------------------------------------ | --------- | ----------------------------------------------------------- | --------------------------------------------------- |
@@ -210,8 +217,18 @@ picked cards is phase's:
 | `ChooseFromZoneChoice`, `ChooseObjectsSelection` | `choose`  | Are chosen                                                  | as the question says                                |
 | `RevealChoice`                                   | `reveal`  | Is revealed                                                 | one, or none when optional                          |
 | `MultiTargetSelection`                           | `targets` | Are the targets                                             | `min_targets` to `max_targets`                      |
+| `KeepWithinTotalPowerChoice`                     | `keep`    | Are kept; the rest are sacrificed                           | any, their total power at most `powerCap`           |
+| `KeepExactPermanentsChoice`                      | `keep`    | Are kept; the rest are sacrificed                           | `required_count`                                    |
 
-The session checks the count, that each card is eligible and that none is picked twice. The engine
+A keep within a total power (Slaughter the Strong, Destined Confrontation — issue #1079) is bounded
+by power as well as count: `powerCap` is the cap, each creature counts its current power
+(`GameCard.power`), and the board will not pick a creature that would pass it. phase's own
+`legal_actions` for it are two canned sets (keep none, and its greedy keep), which before the pick
+showed as two identical "Choose kept creatures" chips; they stay under "Other answers", each naming
+the creatures it keeps (`option_of` reads `kept`).
+
+The session checks the count, the power cap, that each card is eligible and that none is picked
+twice. The engine
 checks the rest (a search's "different names", say), and its refusal is the sentence shown. This
 is the one place the session reads question kinds by name, because their fields say how many
 cards are wanted and the generic options cannot. Any other question is still its options, and
@@ -241,8 +258,17 @@ land drop left, too little mana, nothing to target), what happens is the sandbox
   tax (CR 903.8). Only when the rules offer no way: a card with one way is played, and one with
   several is asked about, sandbox or not.
 
-A card elsewhere than the hand or the command zone is activated rather than played; in the sandbox,
-one with nothing to activate is put onto the battlefield (a double-click on a graveyard's creature).
+A card elsewhere than the hand or the command zone is cast when the rules offer a cast of it there
+(a foretold card in exile, flashback in the graveyard); else it is activated rather than played,
+and in the sandbox one with nothing to activate is put onto the battlefield (a double-click on a
+graveyard's creature).
+
+**`foretell`** takes phase's `Foretell` special action for a hand card (CR 702.143a): {2} paid
+from untapped mana, the card exiled face down and foretold. It is refused, saying why, off the
+reader's turn or with {2} out of reach. **What the rules offer is on the card**: `canForetell` on a
+hand card the engine would foretell now, `castable` on a graveyard or exile card it would cast now,
+`foretold` on a foretold card in exile — each read off the legal actions once per view, and never
+set in a replay frame. An opponent's face-down exiled cards are not in their seat's `exile` at all.
 
 **`activate`** takes every legal action of a permanent's: an ability, equip, crew, station,
 saddle, transform, turn face up. These are found by the source field in the action's data
@@ -368,6 +394,7 @@ each of the AI's actions. They become the log's facts:
 | `LandPlayed`                             | `played`                                                                                             |
 | `SpellCast`                              | `cast`                                                                                               |
 | `AbilityActivated` (not mana)            | `activated`                                                                                          |
+| `Foretold`                               | `foretold`, naming the reader's own card only; its move from the hand to exile is not told again     |
 | `ZoneChanged`                            | `moved`, or `drew` (library to hand). A move to or from the stack is the cast, and is not told again |
 | `AttackersDeclared` / `BlockersDeclared` | `attacked` / `blocked`                                                                               |
 | `DamageDealt` to a permanent             | `dealt`, naming the permanent by id and seat (damage to a player is its `LifeChanged`)               |
@@ -389,6 +416,12 @@ planeswalker's or a battle's id, or `null` for the opponent. In the attack stage
 `targets` come from phase's per-attacker map (`valid_attack_targets_by_attacker`), falling back to
 the step's aggregate list. The combat view's `attacks` give every attacker's target, both seats',
 so the board can draw arrows.
+
+**A stack item names its targets** (issue #1071). Each `PlaytestStackItem` carries `targets`, the
+ids of the cards it targets that the table shows (a permanent, a card in a graveyard, in exile or in
+the command zone, another spell on the stack), and `targetPlayers`. They are read from the entry's
+`ResolvedAbility` and its `sub_ability` / `else_ability` chain, and from an equip's creature
+(`stack_targets`); a target in a hand or a library is left out, as the reader may not see it.
 
 **A printing follows its card.** phase keeps an object's id across zones and bumps its
 `incarnation`. The session still re-homes a printing whose object is gone, by seat and name
@@ -437,6 +470,16 @@ about the seats' decks at once and about the rest **one at a time** (`usePlaytes
 first visit's sweep of every deck never queues ahead of the deck the reader just picked. The
 answers are under the `["decks"]` query root, so a deck edit marks them stale; a refetch is a
 database read and cache lookups.
+
+**In a game, each card carries its own gaps** (issue #1093). `Playtest::new` asks
+`card_face_gaps` of every face in the game's card database once, and keeps the faces with a gap by
+name; every `GameCard` the session builds carries its face's (`gaps`, empty for a face played in
+full and for a token). The board's `CardFace` draws a card with any in a **gold border inside the
+card** — the setup's caution colour, clear of the outline marks for attack, block and pick, which
+sit outside it — wherever it is drawn: the hand, the battlefield, a pile, the preview. The card's
+label says "played only in part", and the preview names each gap with `gapWords`. A transformed
+card is its shown face's name, so its marks follow the face; it is fixed for the game, so not in a
+`Moment`.
 
 ## The board
 
@@ -520,6 +563,13 @@ gold, the opponent's red, and blocks a dashed blue. They are measured from the D
 (`[data-table] [data-point]`, `[data-plate]`) on every view, 220 ms later, and on a resize. An
 attacker is ringed, slid 14 px toward the middle, lifted and shadowed.
 
+**Targets are drawn.** A dotted, thinner arrow runs from each spell or ability on the stack
+(`[data-stack]`) to what it targets: a card on a table, another spell on the stack, or a player's
+plate, in the controller's colour (gold for the reader's, red for an opponent's). The same
+`BoardArrows` overlay draws them with combat's, so they show against the goldfish, against the AI
+and in a replay frame alike. A target the board does not draw (a card under a pile's top, a stack
+item past the first three) has no arrow.
+
 **Damage and life pop.** A `dealt` pops "−N" over the permanent it names (`targetId` on `seat`'s
 battlefield), and a `life` pops "−N" in red or "+N" in green by that seat's plate. The pops use the
 Web Animations API and are off under reduced motion. A creature the damage killed is already gone
@@ -547,8 +597,8 @@ facts are found as a run of `step.happened`, and the end takes the rest.
 
 - **The sandbox decides most of what is offered.** The board works it out once (`edits`: the
   sandbox on, the reader's main phase, nothing with the engine) and hands it to every piece.
-  - **Off:** no hand edits are drawn. A card's menu keeps only the rules' rows (Play, Cast, Activate
-    ability); a click does not tap; T, G, E and H do nothing; the only drag is a play onto the
+  - **Off:** no hand edits are drawn. A card's menu keeps only the rules' rows (Play, Foretell, Cast,
+    Activate ability), and a castable card in the graveyard or exile dialog its Cast; a click does not tap; T, G, E and H do nothing; the only drag is a play onto the
     table; the library pile is disabled; a graveyard or exile opens read-only; and every life plate
     is read-only text (`LifePlate`'s `readOnly`). What is left is the rules'.
   - **On:** the reader's cards have the whole hand — moves, taps, counters, token copies, draws,

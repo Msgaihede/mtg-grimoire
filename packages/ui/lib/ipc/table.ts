@@ -69,6 +69,24 @@ export interface GameCard {
   toughness: number | null;
   /** Commander tax in generic mana; 0 for anything else. */
   tax: number;
+  /**
+   * The permanent this Aura, Equipment or Fortification is attached to, by its `id` — whoever
+   * controls it. `null` for anything unattached, off the battlefield, or attached to a player.
+   */
+  attachedTo: number | null;
+  /** In exile and foretold (CR 702.143): cast later, for its foretell cost, by a `play`. */
+  foretold: boolean;
+  /** The rules let the reader foretell this hand card now (their turn, {2} to pay). */
+  canForetell: boolean;
+  /** The rules let the reader cast or play this graveyard or exile card now (foretold,
+   *  flashback). */
+  castable: boolean;
+  /**
+   * What the rules engine does not play of the face shown: phase's coverage labels, as
+   * `DeckSupport`'s cards carry them (`gapWords` puts them in words). Empty for a face played in
+   * full and for a token. The board marks a card with any (issue #1093).
+   */
+  gaps: string[];
 }
 
 export interface CardCounter {

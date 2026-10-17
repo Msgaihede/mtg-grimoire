@@ -162,6 +162,25 @@ export function turnFive(): TurnFive {
   return { view, goyf, elves, delver, ragavan, reckoner, jace };
 }
 
+/**
+ * Turn 5 with attachments (issue #1073): an Equipment on the reader's Tarmogoyf, and the
+ * reader's Aura on the opponent's Ragavan, which the board draws under Ragavan on their table.
+ * Neither printing is in the fake's corpus, so both draw as tiles by name.
+ */
+export function withAttachments(): TurnFive {
+  const t = turnFive();
+  const gear = (name: string, typeLine: string, on: GameCard) =>
+    gameCard(name, { typeLine, lane: "other", isToken: false, attachedTo: on.id });
+  const [opponent] = t.view.opponents;
+  t.view.you.battlefield = [
+    ...t.view.you.battlefield,
+    gear("Bonesplitter", "Artifact — Equipment", t.goyf),
+    gear("Pacifism", "Enchantment — Aura", t.ragavan),
+  ];
+  t.view.opponents = [opponent];
+  return t;
+}
+
 /** The reader's declare-attackers step on turn 5: three creatures that may attack. */
 export function attackStep(): TurnFive {
   const t = turnFive();
@@ -244,6 +263,7 @@ export function targetPrompt(): TurnFive {
         options: [option(0, t.ragavan), option(1, t.reckoner), option(2, t.goyf)],
         cancellable: true,
         pick: null,
+        keyword: null,
       },
       stack: [],
     },
@@ -283,6 +303,7 @@ export function orderTriggersPrompt(): TurnFive {
         options: [order(0, [t.delver, second]), order(1, [second, t.delver])],
         cancellable: false,
         pick: null,
+        keyword: null,
       },
       stack: [],
     },
@@ -325,12 +346,14 @@ export function castChoicePrompt(): TurnFive {
         ],
         cancellable: true,
         pick: null,
+        keyword: null,
       },
     },
   };
 }
 
-/** The opponent's Lightning Bolt on the stack over the reader's own Counterspell's target. */
+/** The opponent's Lightning Bolt at the reader's face, under the reader's own Counterspell at the
+ *  Bolt: an arrow from each to its target. */
 export function withStack(): TurnFive {
   const t = turnFive();
   const bolt = gameCard("Lightning Bolt");
@@ -340,8 +363,24 @@ export function withStack(): TurnFive {
     view: {
       ...t.view,
       stack: [
-        { id: counter.id, name: counter.name, cardId: counter.cardId, seat: "you", ability: false },
-        { id: bolt.id, name: bolt.name, cardId: bolt.cardId, seat: "opponent", ability: false },
+        {
+          id: counter.id,
+          name: counter.name,
+          cardId: counter.cardId,
+          seat: "you",
+          ability: false,
+          targets: [bolt.id],
+          targetPlayers: [],
+        },
+        {
+          id: bolt.id,
+          name: bolt.name,
+          cardId: bolt.cardId,
+          seat: "opponent",
+          ability: false,
+          targets: [],
+          targetPlayers: ["you"],
+        },
       ],
     },
   };
@@ -482,7 +521,7 @@ function pickPrompt(t: TurnFive, kind: string, source: string, pick: PlaytestPic
     view: {
       ...t.view,
       stage: "prompt",
-      prompt: { kind, source, options: [], cancellable: false, pick },
+      prompt: { kind, source, options: [], cancellable: false, pick, keyword: null },
     },
   };
 }
@@ -500,6 +539,7 @@ export function scryPick(): TurnFive {
     min: 0,
     max: 3,
     ordered: true,
+    powerCap: null,
   });
 }
 
@@ -519,6 +559,26 @@ export function discardPick(): TurnFive {
     min: 2,
     max: 2,
     ordered: false,
+    powerCap: null,
+  });
+}
+
+/**
+ * Keep creatures with total power 4 or less, sacrifice the rest (Destined Confrontation, issue
+ * #1079): the reader's creatures, any of them under the cap.
+ */
+export function keepPick(): TurnFive {
+  const t = turnFive();
+  const creatures = t.view.you.battlefield.filter((c) => c.power !== null);
+  const cards = creatures.map((c) => ({ id: c.id, name: c.name, cardId: c.cardId, text: null }));
+  return pickPrompt(t, "KeepWithinTotalPowerChoice", "Destined Confrontation", {
+    purpose: "keep",
+    cards,
+    eligible: cards.map((c) => c.id),
+    min: 0,
+    max: cards.length,
+    ordered: false,
+    powerCap: 4,
   });
 }
 
@@ -549,7 +609,15 @@ export function replayStep(): { step: PlaytestStep; start: PlaytestView } {
   };
   const f2 = {
     ...theirs(start, f1Bf, { phase: "main1" }),
-    stack: [{ ...bolt, seat: "opponent" as const, ability: false }],
+    stack: [
+      {
+        ...bolt,
+        seat: "opponent" as const,
+        ability: false,
+        targets: [],
+        targetPlayers: ["you" as const],
+      },
+    ],
   };
   const ragavan = { ...t.ragavan, tapped: true };
   const f3Bf = f1Bf.map((c) => (c.id === ragavan.id ? ragavan : c));

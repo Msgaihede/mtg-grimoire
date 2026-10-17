@@ -166,6 +166,7 @@ radio row in the game menu): **off by default against the AI, on against the gol
 | Playing a land as the turn's land drop                             | A card the rules will not play, cast or put down unpaid      |
 | Casting a spell, paid from untapped mana (`CastPaymentMode::Auto`) | Tapping and untapping                                        |
 | Commander tax                                                      | Counters, token copies, preset tokens                        |
+| Foretelling (CR 702.143a) and casting a foretold card from exile   |                                                              |
 | The turn and each of its steps, every seat's; attacks and blocks   | Life totals, draws, mills and shuffles outside the draw step |
 | P/T with counters and statics; the mana open                       |                                                              |
 
@@ -200,8 +201,20 @@ the table. It looks for the legal `PlayLand` or `CastSpell` for that card:
 
 **A commander played unpaid still raises its tax.** Cast free, the engine raises it as for any
 cast; put down, `record_commander_cast` is called on that path too. **A card elsewhere than the hand or the
-command zone is activated**, and in the sandbox one with nothing to activate is put onto the
-battlefield (a double-click on a graveyard's creature).
+command zone is cast when the rules let it be cast from there** (a foretold card in exile, a
+flashback card in the graveyard); else it is activated, and in the sandbox one with nothing to
+activate is put onto the battlefield (a double-click on a graveyard's creature).
+
+**Foretelling is the rules' alone** (issue #1077). phase offers it as a special action,
+`GameAction::Foretell`: on the reader's own turn, {2} paid from untapped mana, the card exiled face
+down and foretold, castable on a later turn for its foretell cost through the same `CastSpell` a
+`play` takes. The session sends it as `foretell` (a hand card's menu row, offered only when the
+card's `canForetell` says so) and a foretold card's cast as a `play` (the exile dialog's Cast, on
+a card whose `castable` says so). The engine moves the card as the rules do, so a trigger on a
+card leaving the hand for exile would see it — but phase does not yet parse Ranar the
+Ever-Watchful's (neither its free first foretell nor its Spirit), and the deck's support panel says
+so (`support.rs`). A foretold card put into exile by the sandbox's `move` is not foretold —
+that is a hand, not the rules.
 
 **The checkpoint is what keeps a cast honest.** `GameState` is persistent (`im`), so a clone is
 cheap. A refused action restores the clone, so the game never holds half of anything. A cast keeps
@@ -365,6 +378,19 @@ and its card size is solved so every pile fits (`layout.ts`). Cards of one name 
 — same printing, same tapped state, same counters — are one pile: the cards themselves stacked,
 each edged 5 px up and to the right of the one above it, five drawn at most, and a ×N chip on the
 pile's bottom edge for the count (issue #1001).
+
+**An attachment is tucked under the card it is attached to** (issue #1073), the way MTG Arena and
+a real table show it. `GameCard.attached_to` is the host's object id, read from phase's
+`attached_to` (a permanent only: an Aura on a player, a Curse, names nothing and stays in its
+lane). `layout.ts`' `attachmentsOf` takes every Aura, Equipment and Fortification out of its lane
+and hangs it under its host's pile, each one showing its name bar (`ATTACHED`, 0.16 card-widths)
+above the card; a card with attachments is a pile of its own, and `fitWidth` sizes the lane so the
+tallest such pile still fits. An attachment on an attachment rides under the card at the bottom of
+the chain. One that crosses tables — the reader's Pacifism on the opponent's creature — is drawn on
+the host's table (`acrossTables`, the board's `across`), where its edge can be pointed at and its
+menu opened but it is not carried off or tapped by a click. The edge is the attachment's own
+button: it points, opens its own menu (an Equipment's equip ability is activated there) and is
+picked when the rules ask for it on its own table.
 
 **Drags are dnd-kit, as everywhere in the app** (`tableDrag.ts`, `TableDrag`, `useTableDropTarget`,
 with a mark of its own, `mtg-grimoire/table-card`). A drop is a zone, never a coordinate, and only

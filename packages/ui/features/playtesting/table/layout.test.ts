@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { GameCard } from "@/lib/ipc";
 import {
+  ATTACHED,
+  ASPECT,
   BACK_MAX,
   CREATURE_MAX,
   FLOOR,
@@ -12,7 +14,9 @@ import {
   HAND_LIFT,
   HAND_MIN_STEP,
   HAND_ROW_MAX,
+  acrossTables,
   arrangeHand,
+  attachmentsOf,
   fitWidth,
   handRow,
   landsFirst,
@@ -40,6 +44,11 @@ function card(name: string, over: Partial<GameCard> = {}): GameCard {
     power: null,
     toughness: null,
     tax: 0,
+    attachedTo: null,
+    foretold: false,
+    canForetell: false,
+    castable: false,
+    gaps: [],
     ...over,
   };
 }
@@ -133,6 +142,60 @@ describe("layoutTable", () => {
     expect(t.others).toHaveLength(1);
     expect(t.creatureWidth).toBe(CREATURE_MAX);
     expect(t.backWidth).toBe(BACK_MAX);
+  });
+});
+
+describe("attachments (issue #1073)", () => {
+  const creature = (name: string, over: Partial<GameCard> = {}) =>
+    card(name, { lane: "creature", isLand: false, ...over });
+  const gear = (name: string, on: GameCard) =>
+    card(name, { lane: "other", isLand: false, attachedTo: on.id });
+
+  it("takes an attachment out of its lane and puts it under its card, a pile of its own", () => {
+    const bear = creature("Bear");
+    const twin = creature("Bear");
+    const sword = gear("Bonesplitter", bear);
+    const t = layoutTable([bear, twin, sword, card("Forest")], { width: 1100, height: 1000 });
+    expect(t.others).toEqual([]);
+    expect(t.creatures.map((p) => [p.ids, p.attached.map((a) => a.name)])).toEqual([
+      [[bear.id], ["Bonesplitter"]],
+      [[twin.id], []],
+    ]);
+  });
+
+  it("tucks an Aura on an Equipment under the creature at the bottom of the chain", () => {
+    const bear = creature("Bear");
+    const sword = gear("Bonesplitter", bear);
+    const aura = gear("Spirit Link", sword);
+    const { lanes, attached } = attachmentsOf([bear, sword, aura]);
+    expect(lanes).toEqual([bear]);
+    expect(attached.get(bear.id)).toEqual([sword, aura]);
+  });
+
+  it("leaves an attachment whose card is on no table in its own lane", () => {
+    const aura = card("Pacifism", { lane: "other", isLand: false, attachedTo: 9999 });
+    expect(attachmentsOf([aura]).lanes).toEqual([aura]);
+  });
+
+  it("draws an Aura on another player's creature on that player's table", () => {
+    const goblin = creature("Goblin");
+    const aura = gear("Pacifism", goblin);
+    const [mine, theirs] = acrossTables([[aura], [goblin]]);
+    expect(mine.guests).toEqual([]);
+    expect(theirs.guests).toEqual([aura]);
+    expect(attachmentsOf([aura], mine).lanes).toEqual([]);
+    expect(attachmentsOf([goblin], theirs).attached.get(goblin.id)).toEqual([aura]);
+  });
+
+  it("makes room above a card for each attachment's edge, and still fits the lane", () => {
+    const bear = creature("Bear");
+    const piles = layoutTable([bear, gear("A", bear), gear("B", bear)], {
+      width: 1100,
+      height: 600,
+    }).creatures;
+    const w = fitWidth(piles, { row: 1100, laneHeight: 300, max: CREATURE_MAX });
+    expect(pileHeight(piles[0], w)).toBeLessThanOrEqual(300);
+    expect(pileHeight(piles[0], 100)).toBe(100 * ASPECT + 2 * 100 * ATTACHED + 14);
   });
 });
 

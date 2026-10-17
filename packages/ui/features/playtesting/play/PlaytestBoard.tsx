@@ -37,7 +37,7 @@ import { CommandZone, ExileZone, GraveyardZone, LibraryZone } from "../table/Zon
 import { dropAction, type TableDrag } from "../table/tableDrag";
 import { useLandingOf } from "../table/landing";
 import { useUndoKeys } from "../undo";
-import { handRow, type ZoneSize } from "../table/layout";
+import { acrossTables, handRow, type ZoneSize } from "../table/layout";
 import type { LogLine } from "../table/log";
 import { feltBackground } from "../table/playmats";
 import type { Playmat, Pointed, ZoneLook } from "../table/types";
@@ -53,8 +53,8 @@ import {
   toggleAttacker,
   type Picks,
 } from "./combat";
-import { combatArrows } from "./arrows";
-import { CombatArrows } from "./CombatArrows";
+import { combatArrows, targetArrows } from "./arrows";
+import { BoardArrows } from "./BoardArrows";
 import { DamagePops } from "./DamagePops";
 import { MiddleLine, StackColumn } from "./MiddleLine";
 import { OpponentArea } from "./OpponentArea";
@@ -427,8 +427,19 @@ export function PlaytestBoard({
     return out;
   }, [view, pickable, locked, stage, answers, act, setPicks]);
   const theirPick = theirPicks.opponent;
+  /** Each table's attachments that cross to another's — yours first, then each opponent's. */
+  const across = useMemo(
+    () =>
+      view === null
+        ? []
+        : acrossTables([view.you.battlefield, ...view.opponents.map((o) => o.battlefield)]),
+    [view],
+  );
   const onActivate = useCallback((id: number) => act({ type: "activate", id }), [act]);
-  const arrows = useMemo(() => (view === null ? [] : combatArrows(view, picks)), [view, picks]);
+  const arrows = useMemo(
+    () => (view === null ? [] : [...combatArrows(view, picks), ...targetArrows(view)]),
+    [view, picks],
+  );
 
   const you = view?.you ?? null;
   const opponent = view?.opponents[0] ?? null;
@@ -540,6 +551,7 @@ export function PlaytestBoard({
                   steppers={sandboxOn}
                   marks={marks?.[seat.player]}
                   pick={theirPicks[seat.player]}
+                  across={across[i + 1]}
                   aimable={aimable.includes(seat.player)}
                   onAim={() => setPicks((p) => aimAttacker(p, view, seat.player))}
                   onLife={(life) => act({ type: "setLife", seat: seat.player, life })}
@@ -566,6 +578,7 @@ export function PlaytestBoard({
                 dense
                 marks={marks?.opponent}
                 pick={theirPick}
+                across={across[1]}
                 className="h-full w-full"
               />
             </div>
@@ -593,6 +606,7 @@ export function PlaytestBoard({
               marks={marks?.you}
               pick={yourPick}
               onActivate={onActivate}
+              across={across[0]}
               className="h-full w-full"
             />
           </div>
@@ -959,7 +973,7 @@ export function PlaytestBoard({
         />
       )}
 
-      <CombatArrows root={root} arrows={arrows} />
+      <BoardArrows root={root} arrows={arrows} />
       <DamagePops root={root} view={view} happened={happened} />
 
       {/* **Read-only while the opponent's turn is played back**: one sheet over the whole board

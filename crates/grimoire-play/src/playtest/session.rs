@@ -47,6 +47,7 @@ use std::sync::Arc;
 
 use engine::ai_support::{has_meaningful_priority_action, legal_actions};
 use engine::game::combat::AttackTarget;
+use engine::game::coverage::card_face_gaps;
 use engine::game::effects::create_emblem::grant_emblem;
 use engine::game::engine::apply;
 use engine::game::mana_sources::max_mana_yield;
@@ -55,11 +56,11 @@ use engine::game::{
     install_card_db, load_and_hydrate_decks, resolve_deck_list, start_game_with_starting_player,
     DeckList, PlayerDeckList,
 };
-use engine::types::ability::{LibraryPosition, TargetRef};
+use engine::types::ability::{KeywordAction, LibraryPosition, TargetRef};
 use engine::types::actions::{DebugAction, DebugTokenRequest, GameAction, MulliganChoice};
 use engine::types::events::{ActivatedAbilityKind, GameEvent};
 use engine::types::format::FormatConfig;
-use engine::types::game_state::{MulliganDecisionPhase, StackEntryKind, WaitingFor};
+use engine::types::game_state::{MulliganDecisionPhase, StackEntry, StackEntryKind, WaitingFor};
 use engine::types::identifiers::ObjectId;
 use engine::types::phase::Phase;
 use engine::types::statics::{CastFreeOrigin, CastFrequency, StaticMode};
@@ -151,6 +152,14 @@ struct Printing {
     card_id: String,
 }
 
+/// The reader's cards the rules offer more than a hand card's play for (`offers`): the hand
+/// cards they can foretell, and the graveyard and exile cards they can cast or play.
+#[derive(Default)]
+struct Offers {
+    foretell: HashSet<ObjectId>,
+    cast: HashSet<ObjectId>,
+}
+
 /// A cast or an activation the engine is still asking the reader about, which `cancel` takes
 /// back to `checkpoint`.
 #[derive(Clone)]
@@ -175,6 +184,10 @@ pub struct Playtest {
     /// engine made): the deck's first printing of that name, per seat.
     by_name: HashMap<(PlayerId, String), String>,
     commanders: HashSet<(PlayerId, String)>,
+    /// What the engine does not play of each face in the game, by the face's name — phase's own
+    /// `card_face_gaps`, as `support.rs` asks it before a game (issue #1093). Only the faces with
+    /// a gap; fixed for the game, so not in a `Moment`.
+    gaps: HashMap<String, Vec<String>>,
     mulligans: u8,
     tokens: Vec<TokenOffer>,
     /// Each seat's deck's tokens in the printings the reader set, which a token is drawn by.
@@ -269,6 +282,13 @@ impl Playtest {
             .collect();
         let fish_card = goldfish.then(|| cards::synthetic(FISH_CARD, "Land", ""));
         let db = Arc::new(cards::database(&all, fish_card.as_slice())?);
+        let gaps: HashMap<String, Vec<String>> = db
+            .face_iter()
+            .filter_map(|(_, face)| {
+                let gaps = card_face_gaps(face);
+                (!gaps.is_empty()).then(|| (face.name.clone(), gaps))
+            })
+            .collect();
 
         let mut by_name = HashMap::new();
         let mut commanders = HashSet::new();
@@ -415,6 +435,7 @@ impl Playtest {
             printings: HashMap::new(),
             by_name,
             commanders,
+            gaps,
             mulligans: 0,
             tokens,
             deck_tokens,
@@ -686,8 +707,12 @@ impl Playtest {
             phase: phase_of(s.phase),
             step: stop_step(s.phase),
             mulligan: self.mulligan(),
-            you: self.seat(YOU),
-            opponents: self.opponents.iter().map(|&p| self.seat(p)).collect(),
+            you: self.seat(YOU, &self.offers(watching)),
+            opponents: self
+                .opponents
+                .iter()
+                .map(|&p| self.seat(p, &Offers::default()))
+                .collect(),
             combat,
             attack,
             block,
@@ -706,12 +731,15 @@ impl Playtest {
                     } else {
                         entry.source_id
                     };
+                    let (targets, target_players) = stack_targets(s, entry);
                     Some(PlaytestStackItem {
                         id: entry.id.0,
                         name: source.name.clone(),
                         card_id: self.printing_of(shown),
                         seat: seat_of(entry.controller),
                         ability: !matches!(entry.kind, StackEntryKind::Spell { .. }),
+                        targets,
+                        target_players,
                     })
                 })
                 .collect(),
@@ -727,14 +755,54 @@ impl Playtest {
         }
     }
 
-    fn seat(&self, seat: PlayerId) -> PlaytestSeat {
+    /// What the rules offer the reader beyond a hand card's play: foretelling a hand card, and
+    /// casting a card from the graveyard or exile. Nothing in a replay frame, or while the reader
+    /// does not have priority.
+    fn offers(&self, watching: bool) -> Offers {
+        let mut offers = Offers::default();
+        if watching || !matches!(self.stage(), PlaytestStage::Main | PlaytestStage::Respond) {
+            return offers;
+        }
+        for action in self.answers() {
+            match action {
+                GameAction::Foretell { object_id, .. } => {
+                    offers.foretell.insert(object_id);
+                }
+                GameAction::CastSpell { object_id, .. }
+                | GameAction::PlayLand { object_id, .. } => {
+                    offers.cast.insert(object_id);
+                }
+                _ => {}
+            }
+        }
+        offers
+    }
+
+    fn seat(&self, seat: PlayerId, offers: &Offers) -> PlaytestSeat {
         let s = &self.state;
         let player = &s.players[seat.0 as usize];
-        let mine = |id: &&ObjectId| s.objects.get(id).is_some_and(|o| o.owner == seat);
-        let cards = |ids: &mut dyn Iterator<Item = &ObjectId>| -> Vec<GameCard> {
-            ids.filter_map(|id| self.card(*id)).collect()
-        };
         let reader = seat == YOU;
+        // An opponent's face-down exiled cards (a foretold card) are theirs alone to look at.
+        let mine = |id: &&ObjectId| {
+            s.objects
+                .get(id)
+                .is_some_and(|o| o.owner == seat && (reader || !o.face_down))
+        };
+        let cards = |ids: &mut dyn Iterator<Item = &ObjectId>| -> Vec<GameCard> {
+            ids.filter_map(|id| self.card(*id))
+                .map(|mut c| {
+                    let id = ObjectId(c.id);
+                    match s.objects.get(&id).map(|o| o.zone) {
+                        Some(Zone::Hand) => c.can_foretell = offers.foretell.contains(&id),
+                        Some(Zone::Graveyard | Zone::Exile) => {
+                            c.castable = offers.cast.contains(&id);
+                        }
+                        _ => {}
+                    }
+                    c
+                })
+                .collect()
+        };
         PlaytestSeat {
             player: seat_of(seat),
             out: player.is_eliminated,
@@ -783,7 +851,13 @@ impl Playtest {
     fn card(&self, id: ObjectId) -> Option<GameCard> {
         let o = self.state.objects.get(&id)?;
         let is_commander = !o.is_token && self.commanders.contains(&(o.owner, o.name.clone()));
-        game_card(&self.state, id, self.printing_of(id), is_commander)
+        // A token is phase's preset, never a face of the deck's: its maker's gaps are the maker's.
+        let gaps = if o.is_token {
+            Vec::new()
+        } else {
+            self.gaps.get(&o.name).cloned().unwrap_or_default()
+        };
+        game_card(&self.state, id, self.printing_of(id), is_commander, gaps)
     }
 
     fn printing_of(&self, id: ObjectId) -> Option<String> {
@@ -912,6 +986,7 @@ impl Playtest {
                     .collect(),
                 cancellable: true,
                 pick: None,
+                keyword: None,
             };
         }
         let source = self.pending.as_ref().map(|p| p.source.clone()).or_else(|| {
@@ -935,17 +1010,26 @@ impl Playtest {
                 .collect(),
             cancellable: self.pending.is_some(),
             pick: self.pick().map(|(pick, _)| pick),
+            keyword: self.keyword(),
         }
+    }
+
+    /// The keyword the question is about, when its data names one — the alternative cost a
+    /// cast is offered (`Overload`, `Evoke`, `Bestow`…; issue #1072). Read from the question's
+    /// own fields, as `option_of` reads an answer's.
+    fn keyword(&self) -> Option<String> {
+        let json = serde_json::to_value(&self.state.waiting_for).ok()?;
+        json.get("data")?.get("keyword").and_then(tag_of)
     }
 
     /// The question's answer as a set of cards, for the few kinds of question whose answers
     /// `legal_actions` cannot list (it offers none, all and each one alone — a scry of three has
     /// sixteen answers). Each kind's fields say which cards, how many and whether order counts;
-    /// the answer is `SelectCards`, or `SelectTargets` for `ChooseObjectsSelection`. The second
-    /// value says which.
-    fn pick(&self) -> Option<(PlaytestPick, bool)> {
+    /// the answer is `SelectCards`, `SelectTargets` for `ChooseObjectsSelection`, or the kept
+    /// set for a keep-and-sacrifice-the-rest (issue #1079). The second value says which.
+    fn pick(&self) -> Option<(PlaytestPick, PickAnswer)> {
         let all = |ids: &[ObjectId]| ids.iter().map(|id| id.0).collect::<Vec<u64>>();
-        let (purpose, shown, eligible, min, max, ordered, targets) = match &self.state.waiting_for {
+        let (purpose, shown, eligible, min, max, ordered, answer) = match &self.state.waiting_for {
             WaitingFor::ScryChoice { player, cards } if *player == YOU => (
                 PlaytestPickPurpose::Scry,
                 all(cards),
@@ -953,7 +1037,7 @@ impl Playtest {
                 0,
                 cards.len(),
                 true,
-                false,
+                PickAnswer::Cards,
             ),
             WaitingFor::SurveilChoice { player, cards } if *player == YOU => (
                 PlaytestPickPurpose::Surveil,
@@ -962,7 +1046,7 @@ impl Playtest {
                 0,
                 cards.len(),
                 true,
-                false,
+                PickAnswer::Cards,
             ),
             WaitingFor::DiscardChoice {
                 player,
@@ -977,7 +1061,7 @@ impl Playtest {
                 if *up_to { 0 } else { *count },
                 *count,
                 false,
-                false,
+                PickAnswer::Cards,
             ),
             WaitingFor::DiscardToHandSize {
                 player,
@@ -990,7 +1074,7 @@ impl Playtest {
                 *count,
                 *count,
                 false,
-                false,
+                PickAnswer::Cards,
             ),
             WaitingFor::SearchChoice {
                 player,
@@ -1010,7 +1094,7 @@ impl Playtest {
                 },
                 *count,
                 false,
-                false,
+                PickAnswer::Cards,
             ),
             WaitingFor::DigChoice {
                 player,
@@ -1033,7 +1117,7 @@ impl Playtest {
                     if *up_to { 0 } else { most },
                     most,
                     false,
-                    false,
+                    PickAnswer::Cards,
                 )
             }
             WaitingFor::ChooseFromZoneChoice {
@@ -1049,7 +1133,7 @@ impl Playtest {
                 if *up_to { 0 } else { (*count).min(cards.len()) },
                 *count,
                 false,
-                false,
+                PickAnswer::Cards,
             ),
             WaitingFor::RevealChoice {
                 player,
@@ -1063,7 +1147,7 @@ impl Playtest {
                 usize::from(!*optional),
                 1,
                 false,
-                false,
+                PickAnswer::Cards,
             ),
             WaitingFor::MultiTargetSelection {
                 player,
@@ -1078,7 +1162,7 @@ impl Playtest {
                 *min_targets,
                 *max_targets,
                 false,
-                false,
+                PickAnswer::Cards,
             ),
             // Only while every eligible choice is a card: a player among them is a question the
             // generic options answer.
@@ -1104,10 +1188,44 @@ impl Playtest {
                     *min as usize,
                     most,
                     false,
-                    true,
+                    PickAnswer::Targets,
                 )
             }
+            // Keep some creatures within a total power, sacrifice the rest (Slaughter the
+            // Strong, Destined Confrontation — issue #1079). Any number may be kept; the cap is
+            // `power_cap`, and the engine is asked only once keeping them all would pass it.
+            WaitingFor::KeepWithinTotalPowerChoice {
+                player, eligible, ..
+            } if *player == YOU => (
+                PlaytestPickPurpose::Keep,
+                all(eligible),
+                all(eligible),
+                0,
+                eligible.len(),
+                false,
+                PickAnswer::KeptCreatures,
+            ),
+            // Keep exactly so many permanents, sacrifice the rest. `required_count` is already
+            // capped to what is eligible.
+            WaitingFor::KeepExactPermanentsChoice {
+                player,
+                eligible,
+                required_count,
+                ..
+            } if *player == YOU => (
+                PlaytestPickPurpose::Keep,
+                all(eligible),
+                all(eligible),
+                *required_count,
+                *required_count,
+                false,
+                PickAnswer::KeptPermanents,
+            ),
             _ => return None,
+        };
+        let power_cap = match &self.state.waiting_for {
+            WaitingFor::KeepWithinTotalPowerChoice { cap, .. } => Some(*cap),
+            _ => None,
         };
         Some((
             PlaytestPick {
@@ -1120,9 +1238,19 @@ impl Playtest {
                 min: min as u32,
                 max: max as u32,
                 ordered,
+                power_cap,
             },
-            targets,
+            answer,
         ))
+    }
+
+    /// The picked cards' power added up, each its current power (CR 208.3) as the engine counts
+    /// a total-power keep.
+    fn total_power(&self, ids: &[u64]) -> i32 {
+        ids.iter()
+            .filter_map(|id| self.state.objects.get(&ObjectId(*id)))
+            .map(|o| o.power.unwrap_or(0))
+            .sum()
     }
 
     /// The answers the engine accepts to the question it is asking the reader.
@@ -1137,10 +1265,10 @@ impl Playtest {
     /// for that. A pick has one answer when every eligible card must be picked, in no order that
     /// matters.
     fn sole_answer(&self) -> Option<GameAction> {
-        if let Some((pick, targets)) = self.pick() {
+        if let Some((pick, answer)) = self.pick() {
             let all = pick.min == pick.max && pick.eligible.len() == pick.min as usize;
             return (all && (!pick.ordered || pick.min <= 1))
-                .then(|| pick_answer(pick.eligible, targets));
+                .then(|| pick_answer(pick.eligible, answer));
         }
         let mut answers = self
             .answers()
@@ -1183,7 +1311,7 @@ impl Playtest {
                 match key.as_str() {
                     // Cards, by id or list of ids.
                     "object_id" | "source_id" | "keep" | "target_id" | "equipment_id"
-                    | "vehicle_id" | "cards" | "creature_ids" | "targets" | "target" => {
+                    | "vehicle_id" | "cards" | "creature_ids" | "targets" | "target" | "kept" => {
                         collect_refs(value, &mut ids, &mut players);
                     }
                     "order" if !abilities.is_empty() => {
@@ -1201,7 +1329,8 @@ impl Playtest {
                             .and_then(Value::as_i64)
                     }
                     "accept" | "pay" | "top" => yes = value.as_bool(),
-                    "choice" => label = value.as_str().map(str::to_string),
+                    // A word, or one of phase's tagged choices: `{ "type": "Alternative" }`.
+                    "choice" => label = tag_of(value),
                     _ => {}
                 }
             }
@@ -1415,7 +1544,7 @@ impl Playtest {
                 if stage != PlaytestStage::Prompt || choice.is_some() {
                     return Err(NO_PROMPT.into());
                 }
-                let (pick, targets) = self
+                let (pick, answer) = self
                     .pick()
                     .ok_or("This question is not answered with a set of cards.")?;
                 let count = ids.len() as u32;
@@ -1437,7 +1566,15 @@ impl Playtest {
                 {
                     return Err(NOT_IN_GAME.into());
                 }
-                self.apply(YOU, pick_answer(ids, targets), out)?;
+                if let Some(cap) = pick.power_cap {
+                    let total = self.total_power(&ids);
+                    if total > cap {
+                        return Err(format!(
+                            "The kept creatures' total power is {total}; it may be at most {cap}."
+                        ));
+                    }
+                }
+                self.apply(YOU, pick_answer(ids, answer), out)?;
                 self.advance(out)
             }
             PlaytestAction::Cancel => {
@@ -1530,6 +1667,7 @@ impl Playtest {
             // With priority: the main phase's, or a response's.
             PlaytestAction::Play { id } => self.play(ObjectId(id), out),
             PlaytestAction::Activate { id } => self.activate(ObjectId(id), out),
+            PlaytestAction::Foretell { id } => self.foretell(ObjectId(id), out),
             PlaytestAction::Pass => {
                 self.apply(YOU, GameAction::PassPriority, out)?;
                 self.advance(out)
@@ -1549,21 +1687,26 @@ impl Playtest {
 
     /// The rules first: the one way to play it, or a question about which way. When the rules
     /// offer none, the sandbox puts it down unpaid (`unpaid`), and without the sandbox it is a
-    /// refusal that says why. A card elsewhere than the hand or the command zone is activated
-    /// rather than played — or, in the sandbox, put onto the battlefield when it has nothing to
-    /// activate and is not there already (a double-click on a graveyard's creature).
+    /// refusal that says why. A card elsewhere than the hand or the command zone is cast when the
+    /// rules let it be cast from there (a foretold card in exile, a flashback card in the
+    /// graveyard); else it is activated rather than played — or, in the sandbox, put onto the
+    /// battlefield when it has nothing to activate and is not there already (a double-click on a
+    /// graveyard's creature).
     fn play(&mut self, id: ObjectId, out: &mut Vec<PlaytestHappened>) -> Result<(), String> {
         let obj = self.own(id)?;
         let name = obj.name.clone();
         let zone = obj.zone;
         let by_hand = self.sandbox && self.stage() == PlaytestStage::Main;
+        let ways = self.plays_of(id);
         if !matches!(zone, Zone::Hand | Zone::Command) {
+            if !ways.is_empty() {
+                return self.take_one(ways, "CastChoice", name, out, String::new);
+            }
             if by_hand && zone != Zone::Battlefield && self.abilities_of(id).is_empty() {
                 return self.put(id, Place::Battlefield, out);
             }
             return self.activate(id, out);
         }
-        let ways = self.plays_of(id);
         if ways.is_empty() && by_hand {
             return self.unpaid(id, out);
         }
@@ -1579,18 +1722,6 @@ impl Playtest {
                 format!("{why} Turn the sandbox on to put it down by hand.")
             }
         })
-    }
-
-    /// Every legal land drop or cast of `id`.
-    fn plays_of(&self, id: ObjectId) -> Vec<GameAction> {
-        self.answers()
-            .into_iter()
-            .filter(|a| match a {
-                GameAction::PlayLand { object_id, .. }
-                | GameAction::CastSpell { object_id, .. } => *object_id == id,
-                _ => false,
-            })
-            .collect()
     }
 
     /// A card the rules will not play, played unpaid — the goldfish's escape hatch, the
@@ -1660,6 +1791,41 @@ impl Playtest {
         }
     }
 
+    /// Every legal play or cast of `id`, from wherever it is.
+    fn plays_of(&self, id: ObjectId) -> Vec<GameAction> {
+        self.answers()
+            .into_iter()
+            .filter(|a| match a {
+                GameAction::PlayLand { object_id, .. }
+                | GameAction::CastSpell { object_id, .. } => *object_id == id,
+                _ => false,
+            })
+            .collect()
+    }
+
+    /// The rules only: foretell a hand card (CR 702.143a), paying {2} as phase pays a special
+    /// action's cost, or a refusal that says why.
+    fn foretell(&mut self, id: ObjectId, out: &mut Vec<PlaytestHappened>) -> Result<(), String> {
+        let obj = self.own(id)?;
+        let name = obj.name.clone();
+        let zone = obj.zone;
+        let ways: Vec<GameAction> = self
+            .answers()
+            .into_iter()
+            .filter(|a| matches!(a, GameAction::Foretell { object_id, .. } if *object_id == id))
+            .collect();
+        let yours = self.state.active_player == YOU;
+        self.take_one(ways, "CastChoice", name.clone(), out, || {
+            if zone != Zone::Hand {
+                format!("Only a card in your hand can be foretold, and {name} is not.")
+            } else if !yours {
+                format!("{name} can be foretold only during your own turn.")
+            } else {
+                format!("{name} can't be foretold right now: it has no foretell, or {{2}} can't be paid.")
+            }
+        })
+    }
+
     /// The rules only: a permanent's one activated ability, a question about which, or a
     /// refusal.
     fn activate(&mut self, id: ObjectId, out: &mut Vec<PlaytestHappened>) -> Result<(), String> {
@@ -1681,6 +1847,7 @@ impl Playtest {
                     GameAction::PassPriority
                         | GameAction::PlayLand { .. }
                         | GameAction::CastSpell { .. }
+                        | GameAction::Foretell { .. }
                 ) && names_source(a, id)
             })
             .collect()
@@ -2404,20 +2571,81 @@ fn seat_of(player: PlayerId) -> PlaytestPlayer {
         .unwrap_or(PlaytestPlayer::Opponent3)
 }
 
-/// A pick's answer: the cards, as `SelectTargets` when the question takes targets (`pick`'s
-/// second value), else `SelectCards`.
-fn pick_answer(ids: Vec<u64>, targets: bool) -> GameAction {
-    if targets {
-        GameAction::SelectTargets {
+/// What a stack entry targets, for the board's arrows: the cards the table shows and the players,
+/// each once, in the order chosen — the spell's or ability's own targets and its follow-on
+/// abilities' ("… and another target creature"), and an equip's creature. A card in a hand or a
+/// library is not shown, so it is not told.
+pub(super) fn stack_targets(
+    state: &GameState,
+    entry: &StackEntry,
+) -> (Vec<u64>, Vec<PlaytestPlayer>) {
+    let mut refs: Vec<TargetRef> = Vec::new();
+    let mut next = entry.ability();
+    while let Some(ability) = next {
+        refs.extend_from_slice(&ability.targets);
+        if let Some(branch) = ability.else_ability.as_deref() {
+            refs.extend_from_slice(&branch.targets);
+        }
+        next = ability.sub_ability.as_deref();
+    }
+    if let StackEntryKind::KeywordAction {
+        action: KeywordAction::Equip {
+            target_creature_id, ..
+        },
+    } = &entry.kind
+    {
+        refs.push(TargetRef::Object(*target_creature_id));
+    }
+    let mut cards = Vec::new();
+    let mut players = Vec::new();
+    for r in refs {
+        match r {
+            TargetRef::Object(id) => {
+                let shown = state
+                    .objects
+                    .get(&id)
+                    .is_some_and(|o| !matches!(o.zone, Zone::Hand | Zone::Library));
+                if shown && id != entry.id && !cards.contains(&id.0) {
+                    cards.push(id.0);
+                }
+            }
+            TargetRef::Player(p) => {
+                let p = seat_of(p);
+                if !players.contains(&p) {
+                    players.push(p);
+                }
+            }
+        }
+    }
+    (cards, players)
+}
+
+/// Which of the engine's answers a pick's cards are sent as (`pick`'s second value).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PickAnswer {
+    /// `SelectCards`.
+    Cards,
+    /// `SelectTargets`, for a question that takes targets.
+    Targets,
+    /// `ChooseKeptCreatures`: the creatures kept within a total power, the rest sacrificed.
+    KeptCreatures,
+    /// `ChooseKeptPermanents`: the permanents kept, the rest sacrificed.
+    KeptPermanents,
+}
+
+/// A pick's answer: the cards, as the question takes them.
+fn pick_answer(ids: Vec<u64>, answer: PickAnswer) -> GameAction {
+    let objects = || ids.iter().copied().map(ObjectId).collect();
+    match answer {
+        PickAnswer::Cards => GameAction::SelectCards { cards: objects() },
+        PickAnswer::Targets => GameAction::SelectTargets {
             targets: ids
-                .into_iter()
-                .map(|id| TargetRef::Object(ObjectId(id)))
+                .iter()
+                .map(|id| TargetRef::Object(ObjectId(*id)))
                 .collect(),
-        }
-    } else {
-        GameAction::SelectCards {
-            cards: ids.into_iter().map(ObjectId).collect(),
-        }
+        },
+        PickAnswer::KeptCreatures => GameAction::ChooseKeptCreatures { kept: objects() },
+        PickAnswer::KeptPermanents => GameAction::ChooseKeptPermanents { kept: objects() },
     }
 }
 
@@ -2477,6 +2705,14 @@ fn collect_refs(value: &Value, ids: &mut Vec<ObjectId>, players: &mut Vec<Playte
     }
 }
 
+/// A word on the wire: a string, or the tag of one of phase's `#[serde(tag = "type")]` enums.
+fn tag_of(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .or_else(|| value.get("type")?.as_str())
+        .map(str::to_string)
+}
+
 /// Whether an action is something `id` does: its data names `id` as the source, the equipment,
 /// the vehicle or the object acted on.
 fn names_source(action: &GameAction, id: ObjectId) -> bool {
@@ -2507,6 +2743,14 @@ fn tell(state: &GameState, events: &[GameEvent], out: &mut Vec<PlaytestHappened>
         .iter()
         .filter_map(|e| match e {
             GameEvent::LandPlayed { object_id, .. } => Some(*object_id),
+            _ => None,
+        })
+        .collect();
+    // A foretold card's move to exile is told as its foretelling, which hides an opponent's card.
+    let foretold: BTreeSet<ObjectId> = events
+        .iter()
+        .filter_map(|e| match e {
+            GameEvent::Foretold { object_id, .. } => Some(*object_id),
             _ => None,
         })
         .collect();
@@ -2573,7 +2817,10 @@ fn tell(state: &GameState, events: &[GameEvent], out: &mut Vec<PlaytestHappened>
                     // The stack: a cast and its resolving are told as the cast.
                     continue;
                 };
-                if from_place == to_place || (*from == Zone::Hand && lands.contains(object_id)) {
+                if from_place == to_place
+                    || (*from == Zone::Hand
+                        && (lands.contains(object_id) || foretold.contains(object_id)))
+                {
                     continue;
                 }
                 let owner = state
@@ -2597,6 +2844,20 @@ fn tell(state: &GameState, events: &[GameEvent], out: &mut Vec<PlaytestHappened>
                         to: to_place,
                     }),
                 }
+            }
+            GameEvent::Foretold {
+                player_id,
+                object_id,
+            } => {
+                let whose = seat_of(*player_id);
+                out.push(PlaytestHappened::Foretold {
+                    seat: whose,
+                    name: if whose == PlaytestPlayer::You {
+                        name(object_id)
+                    } else {
+                        None
+                    },
+                });
             }
             GameEvent::AttackersDeclared { attacker_ids, .. } => {
                 let names: Vec<String> = attacker_ids.iter().filter_map(name).collect();

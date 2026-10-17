@@ -13,12 +13,13 @@ use engine::types::{GameState, PlayerId};
 use crate::view::{CardCounter, GameCard, Lane, ManaByType, ManaTable, Place};
 
 /// One object as a board draws it. `card_id` is the printing to draw it by, which only the
-/// session knows (it follows a card across zones by name); `is_commander` likewise.
+/// session knows (it follows a card across zones by name); `is_commander` and `gaps` likewise.
 pub(crate) fn game_card(
     state: &GameState,
     id: ObjectId,
     card_id: Option<String>,
     is_commander: bool,
+    gaps: Vec<String>,
 ) -> Option<GameCard> {
     let o = state.objects.get(&id)?;
     let core = &o.card_types.core_types;
@@ -60,6 +61,16 @@ pub(crate) fn game_card(
         } else {
             0
         },
+        attached_to: o
+            .attached_to
+            .and_then(|host| host.as_object())
+            .filter(|host| o.zone == Zone::Battlefield && state.battlefield.contains(host))
+            .map(|host| host.0),
+        foretold: o.zone == Zone::Exile && o.foretold,
+        // What the rules offer is the session's to say: it knows whose view this is.
+        can_foretell: false,
+        castable: false,
+        gaps,
     })
 }
 

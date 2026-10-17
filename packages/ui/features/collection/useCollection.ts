@@ -22,6 +22,7 @@ import {
 import type { TrayCell } from "@/features/search/filterOptions";
 import { useShelfFolds } from "@/features/shelves/useShelfFolds";
 import type { Border } from "@/lib/border";
+import type { Universe } from "@/lib/universe";
 import { CONDITIONS, type Condition } from "@/lib/conditions";
 import { FINISHES, type Finish } from "@/lib/finish";
 import { lockedFolderIds } from "@/lib/folderTree";
@@ -66,6 +67,7 @@ export const COLLECTION_TRAY: readonly TrayCell[] = [
   "rarity",
   "type",
   "border",
+  "universe",
   "price",
   "finish",
   "condition",
@@ -147,6 +149,8 @@ export interface CollectionFilterState {
   /** The border chips — `regular`/`borderless`/`fullart`, over the copy's printing. One kind
    *  however many are pressed, for `types`' reason. */
   borders: readonly Border[];
+  /** Universes Beyond or Within, over the copy's printing — or neither. One kind. */
+  universe?: Universe | undefined;
   /** The band the Price cell sets, at the marketplace the list is quoting. Either end alone is a
    *  filter; both `undefined` is none. */
   priceMin: number | undefined;
@@ -185,6 +189,7 @@ export function activeFilterCount(f: CollectionFilterState): number {
     f.types.length > 0,
     // One kind however many are pressed, for the type row's reason.
     f.borders.length > 0,
+    f.universe !== undefined,
     // One kind for both ends, as the search counts it: `$5 – $20` is one band and one thing to
     // clear, so a reader who set both ends and saw `Reset all 2` would have been told the wrong
     // number about one control.
@@ -321,6 +326,9 @@ export function useCollection({
   // unlike `finishes` below they ask what the search's chips ask. On the wire for the type chips'
   // reason: `CardFilters.borders`, which `push_card_filters` emits for all three lists.
   const [borders, setBorders] = useState<readonly Border[]>([]);
+  // Universes Beyond or Within — the border's shape: a fact about the copy's printing, on the wire
+  // as `CardFilters.universe`.
+  const [universe, setUniverse] = useState<Universe | undefined>(undefined);
   const [sets, setSets] = useState<readonly string[]>([]);
   const [manaValues, setManaValues] = useState<readonly number[]>([]);
   // Additive rather than exclusive, exactly as the search's is: `cmc` counts `{X}` as zero, so
@@ -460,6 +468,7 @@ export function useCollection({
       rarities,
       types,
       borders,
+      universe,
       priceMin,
       priceMax,
       finishes,
@@ -501,6 +510,7 @@ export function useCollection({
     sets: setsParam,
     types: typesParamValue,
     borders: bordersParamValue,
+    universe,
     manaValues: manaParam,
     // Absent rather than `false`, which is what the backend defaults to: an off chip is not a
     // filter, and a payload that said so would be lying about intent the way a blank `text`
@@ -567,6 +577,7 @@ export function useCollection({
     setsParam?.join(",") ?? "",
     typesParamValue?.join(",") ?? "",
     bordersParamValue?.join(",") ?? "",
+    universe ?? "",
     manaParam?.join(",") ?? "",
     // Its own segment, and load-bearing: X is a second axis over the same chips, so a key
     // built from the numerals alone would serve "3, and also X" out of the pages cached for
@@ -816,6 +827,11 @@ export function useCollection({
      *  the chip its printing's frame answers, so a borderless full-art copy answers two. */
     borders,
     toggleBorder: (border: Border) => setBorders((picked) => toggleIn(picked, border)),
+    /** Universes Beyond or Within over the copy's printing; passing the value already set clears
+     *  it, the search's rule. */
+    universe,
+    setUniverse: (next: Universe | undefined) =>
+      setUniverse((current) => (current === next ? undefined : next)),
     rarities,
     toggleRarity: (rarity: string) => setRarities((picked) => toggleIn(picked, rarity)),
     priceMin,
@@ -1022,6 +1038,7 @@ export function useCollection({
       rarities,
       types,
       borders,
+      universe,
       priceMin,
       priceMax,
       finishes,
@@ -1044,6 +1061,7 @@ export function useCollection({
       setSets([]);
       setTypes([]);
       setBorders([]);
+      setUniverse(undefined);
       setManaValues([]);
       setManaX(false);
       setRarities([]);

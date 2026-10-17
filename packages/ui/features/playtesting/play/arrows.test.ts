@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { NO_PICKS, aimAttacker, toggleAttacker } from "./combat";
-import { arrowPath, combatArrows, edgePoint } from "./arrows";
-import { attackStep, combatArrowsView, fourPlayerAttack, fourPlayerCombat } from "./fixtures";
+import { anchorSelector, arrowPath, combatArrows, edgePoint, targetArrows } from "./arrows";
+import {
+  attackStep,
+  combatArrowsView,
+  fourPlayerAttack,
+  fourPlayerCombat,
+  turnFive,
+  withStack,
+} from "./fixtures";
 
 const box = (left: number, top: number, width = 100, height = 140) => ({
   left,
@@ -88,5 +95,71 @@ describe("combatArrows", () => {
       "opponent2",
     );
     expect(combatArrows(attack.view, picks)[0].to).toEqual({ plate: "opponent2" });
+  });
+});
+
+describe("targetArrows", () => {
+  it("draws each stack item at its targets: a spell on the stack, a player's plate", () => {
+    const { view } = withStack();
+    const [counter, bolt] = view.stack;
+    expect(targetArrows(view)).toEqual([
+      {
+        key: `target-${counter.id}-${bolt.id}`,
+        from: { stack: counter.id },
+        to: { stack: bolt.id },
+        tone: "targetYou",
+      },
+      {
+        key: `target-${bolt.id}-you`,
+        from: { stack: bolt.id },
+        to: { plate: "you" },
+        tone: "targetOpponent",
+      },
+    ]);
+  });
+
+  it("points at a card on a table, and draws nothing for a stack with no targets", () => {
+    const t = turnFive();
+    const goyf = t.view.you.battlefield[0];
+    const view = {
+      ...t.view,
+      stack: [
+        {
+          id: 7001,
+          name: "Lightning Bolt",
+          cardId: null,
+          seat: "opponent" as const,
+          ability: false,
+          targets: [goyf.id],
+          targetPlayers: [],
+        },
+        {
+          id: 7002,
+          name: "Grizzly Bears",
+          cardId: null,
+          seat: "you" as const,
+          ability: false,
+          targets: [],
+          targetPlayers: [],
+        },
+      ],
+    };
+    expect(targetArrows(view)).toEqual([
+      {
+        key: `target-7001-${goyf.id}`,
+        from: { stack: 7001 },
+        to: { card: goyf.id },
+        tone: "targetOpponent",
+      },
+    ]);
+    expect(targetArrows(t.view)).toEqual([]);
+  });
+});
+
+describe("anchorSelector", () => {
+  it("finds a card on the tables, a stack item by its own mark, and a plate", () => {
+    expect(anchorSelector({ card: 4 })).toBe('[data-table] [data-point="4"]');
+    expect(anchorSelector({ stack: 4 })).toBe('[data-stack="4"]');
+    expect(anchorSelector({ plate: "opponent2" })).toBe('[data-plate="opponent2"]');
   });
 });

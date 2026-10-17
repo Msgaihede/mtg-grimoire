@@ -4,11 +4,18 @@
 //! against the AI starts with the sandbox off, so a test that arranges the table by hand turns it
 //! on for that (`by_hand`) and back off; `goldfish_tests.rs` has the game against the goldfish.
 
+use engine::game::create_object;
+use engine::types::ability::{Effect, KeywordAction, ResolvedAbility, TargetRef};
+use engine::types::game_state::{StackEntry, StackEntryKind};
+use engine::types::identifiers::{CardId, ObjectId};
+use engine::types::zones::Zone;
+use engine::types::{GameState, PlayerId};
+
 use crate::cards::CardFacts;
 use crate::on_engine_stack;
 use crate::view::{GameCard, Lane, Place, Seat};
 
-use super::session::{OpponentDeck, Playtest};
+use super::session::{stack_targets, OpponentDeck, Playtest};
 use super::view::{
     Difficulty, PlaytestAction as A, PlaytestAttackPair, PlaytestBlockPair, PlaytestHappened as H,
     PlaytestPhase, PlaytestPickPurpose, PlaytestPlayer, PlaytestStage as Stage, PlaytestStep,
@@ -445,6 +452,90 @@ fn a_spell_with_a_choice_of_targets_asks_and_is_cast_at_the_answer() {
         total: 17,
     }));
     assert!(find(&cast.view.you.graveyard, "Lightning Bolt").is_some());
+}
+
+/// Issue #1071: a stack item names what it targets, for the board's arrows — its follow-on
+/// abilities' targets too, each once, and never a card the reader may not see.
+#[test]
+fn a_stack_item_names_the_targets_the_table_shows() {
+    let (spell, equip) = engine(|| {
+        let mut state = GameState::new_two_player(7);
+        let goblin = create_object(
+            &mut state,
+            CardId(1),
+            PlayerId(1),
+            "Raging Goblin".into(),
+            Zone::Battlefield,
+        );
+        let hidden = create_object(
+            &mut state,
+            CardId(2),
+            PlayerId(1),
+            "Llanowar Elves".into(),
+            Zone::Hand,
+        );
+        let bolt = create_object(
+            &mut state,
+            CardId(3),
+            PlayerId(0),
+            "Lightning Bolt".into(),
+            Zone::Stack,
+        );
+        let effect = || Effect::Unimplemented {
+            name: "test".into(),
+            description: None,
+        };
+        let ability = ResolvedAbility::new(
+            effect(),
+            vec![
+                TargetRef::Object(goblin),
+                TargetRef::Object(hidden),
+                TargetRef::Player(PlayerId(1)),
+            ],
+            bolt,
+            PlayerId(0),
+        )
+        .sub_ability(ResolvedAbility::new(
+            effect(),
+            vec![TargetRef::Object(goblin), TargetRef::Player(PlayerId(0))],
+            bolt,
+            PlayerId(0),
+        ));
+        let spell = StackEntry {
+            id: bolt,
+            source_id: bolt,
+            controller: PlayerId(0),
+            kind: StackEntryKind::Spell {
+                card_id: CardId(3),
+                ability: Some(Box::new(ability)),
+                casting_variant: Default::default(),
+                actual_mana_spent: 1,
+            },
+        };
+        let equip = StackEntry {
+            id: ObjectId(900),
+            source_id: ObjectId(901),
+            controller: PlayerId(0),
+            kind: StackEntryKind::KeywordAction {
+                action: KeywordAction::Equip {
+                    equipment_id: ObjectId(901),
+                    target_creature_id: goblin,
+                },
+            },
+        };
+        (
+            (goblin.0, stack_targets(&state, &spell)),
+            stack_targets(&state, &equip),
+        )
+    });
+    let (goblin, (cards, players)) = spell;
+    assert_eq!(cards, vec![goblin], "the hand's card is never told");
+    assert_eq!(
+        players,
+        vec![PlaytestPlayer::Opponent, PlaytestPlayer::You],
+        "the sub-ability's player follows the spell's own"
+    );
+    assert_eq!(equip, (vec![goblin], vec![]));
 }
 
 /// Issue #999: a spell with one legal target is cast at it, with no question.
@@ -1532,4 +1623,46 @@ fn undo_walks_back_through_the_phases_one_decision_at_a_time() {
         );
         assert_eq!(again.you, end.you);
     });
+}
+
+/// Issue #1073: an Equipment equipped to a creature names it, so the board draws it under the
+/// creature; an unattached one names nothing.
+#[test]
+fn an_equipment_names_the_creature_it_is_attached_to() {
+    let mut you = green();
+    you.push(card(
+        "Bonesplitter",
+        Some("{1}"),
+        "Artifact — Equipment",
+        "Equipped creature gets +2/+0.\nEquip {1}",
+        None,
+        "C",
+        4,
+    ));
+    let (loose, equipped) = engine(move || {
+        let (mut game, _) = deal(you, 2);
+        game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+        put_down(&mut game, "Forest");
+        put_down(&mut game, "Grizzly Bears");
+        put_down(&mut game, "Bonesplitter");
+        let loose = game.view();
+        let sword = find(&loose.you.battlefield, "Bonesplitter").unwrap().id;
+        (loose, game.act(A::Activate { id: sword }).expect("equip"))
+    });
+    assert_eq!(
+        find(&loose.you.battlefield, "Bonesplitter")
+            .unwrap()
+            .attached_to,
+        None
+    );
+    let bear = find(&equipped.view.you.battlefield, "Grizzly Bears").unwrap();
+    let sword = find(&equipped.view.you.battlefield, "Bonesplitter").unwrap();
+    assert_eq!(
+        sword.attached_to,
+        Some(bear.id),
+        "{:?}",
+        equipped.view.prompt
+    );
+    assert_eq!(bear.attached_to, None);
+    assert_eq!(bear.power, Some(4));
 }

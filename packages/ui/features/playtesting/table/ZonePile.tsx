@@ -204,7 +204,7 @@ function CommanderCard({
     <button
       ref={ref}
       type="button"
-      aria-label={`${card.name} in the command zone. Double-click or drag to cast`}
+      aria-label={`${card.name} in the command zone${card.gaps.length > 0 ? ", played only in part" : ""}. Double-click or drag to cast`}
       onDoubleClick={cast}
       // Enter or Space on the focused card casts it too — the keyboard has no double-click.
       onClick={(e) => {

@@ -847,7 +847,7 @@ beside it.
 | prices | `usd`, `eur`, `tix` |
 | legality | `banned`, `restricted` |
 | reprints | `prints`, `paperprints`, `sets`, `papersets` |
-| flags | `is` / `not` (114 values — layouts, card kinds, printing flags, frame effects, promo types and land nicknames; `filters::IS_VALUES` is the list) and `has` (`watermark` `indicator` `flavor` `stamp`) |
+| flags | `is` / `not` (116 values — layouts, card kinds, printing flags, frame effects, promo types (`universesbeyond` and its short form `ub` among them) and land nicknames; `filters::IS_VALUES` is the list) and `has` (`watermark` `indicator` `flavor` `stamp`) |
 
 **An unknown value is free text, the rule this file has always had** — `is:banana` searches for
 the words, exactly as `cmc>=banana` does. The TS parser and Rust's `IS_VALUES` hold the same

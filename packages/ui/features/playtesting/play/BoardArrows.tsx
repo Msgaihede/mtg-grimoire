@@ -4,8 +4,9 @@ import { cn } from "@/lib/utils";
 import { arrowPath, measureAnchor, type ArrowPath, type ArrowSpec } from "./arrows";
 
 /**
- * The combat's arrows, over both tables: each attacker to the plate of the player it attacks,
- * each blocker to the attacker it blocks.
+ * The board's arrows, over both tables: each attacker to the plate of the player it attacks,
+ * each blocker to the attacker it blocks, and each spell or ability on the stack to what it
+ * targets (issue #1071) — dotted, so a target is never read as an attack.
  *
  * **Measured from the DOM, after the cards are drawn** (`measureAnchor`): the tables lay their
  * cards out by the rules and size them to the box, so where a card is is only known once it is
@@ -15,7 +16,7 @@ import { arrowPath, measureAnchor, type ArrowPath, type ArrowSpec } from "./arro
  * `LAYER.raised` and pointer-free: above the tables' cards, below every menu and dialog, and never
  * between the pointer and a card.
  */
-export function CombatArrows({
+export function BoardArrows({
   root,
   arrows,
 }: {
@@ -58,11 +59,11 @@ export function CombatArrows({
   return (
     <svg
       aria-hidden="true"
-      data-testid="combat-arrows"
+      data-testid="board-arrows"
       className={cn("pointer-events-none absolute inset-0 h-full w-full", LAYER.raised)}
     >
       <defs>
-        {(["you", "opponent", "block"] as const).map((tone) => (
+        {TONES.map((tone) => (
           <marker
             key={tone}
             id={marker(tone)}
@@ -83,9 +84,9 @@ export function CombatArrows({
           d={path.d}
           data-arrow={spec.key}
           fill="none"
-          strokeWidth={spec.tone === "block" ? 3 : 3.5}
+          strokeWidth={TONE_WIDTH[spec.tone]}
           strokeLinecap="round"
-          strokeDasharray={spec.tone === "block" ? "7 5" : undefined}
+          strokeDasharray={TONE_DASH[spec.tone]}
           markerEnd={`url(#${marker(spec.tone)})`}
           className={cn(TONE_STROKE[spec.tone], "opacity-90")}
         />
@@ -94,14 +95,36 @@ export function CombatArrows({
   );
 }
 
-/** The reader's attacks in their gold, the opponent's in red, a block in the blockers' blue. */
+const TONES = ["you", "opponent", "block", "targetYou", "targetOpponent"] as const;
+
+/** The reader's attacks in their gold, the opponent's in red, a block in the blockers' blue; a
+ *  target in its spell's controller's colour, as the stack card's edge. */
 const TONE_STROKE: Record<ArrowSpec["tone"], string> = {
   you: "stroke-accent",
   opponent: "stroke-mana-r",
   block: "stroke-mana-u",
+  targetYou: "stroke-accent",
+  targetOpponent: "stroke-mana-r",
 };
 const TONE_FILL: Record<ArrowSpec["tone"], string> = {
   you: "fill-accent",
   opponent: "fill-mana-r",
   block: "fill-mana-u",
+  targetYou: "fill-accent",
+  targetOpponent: "fill-mana-r",
+};
+/** An attack solid, a block dashed, a target dotted and thinner. */
+const TONE_WIDTH: Record<ArrowSpec["tone"], number> = {
+  you: 3.5,
+  opponent: 3.5,
+  block: 3,
+  targetYou: 2.5,
+  targetOpponent: 2.5,
+};
+const TONE_DASH: Record<ArrowSpec["tone"], string | undefined> = {
+  you: undefined,
+  opponent: undefined,
+  block: "7 5",
+  targetYou: "1 6",
+  targetOpponent: "1 6",
 };

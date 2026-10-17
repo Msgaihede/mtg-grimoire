@@ -21,6 +21,11 @@ function card(name: string, over: Partial<GameCard> = {}): GameCard {
     power: null,
     toughness: null,
     tax: 0,
+    attachedTo: null,
+    foretold: false,
+    canForetell: false,
+    castable: false,
+    gaps: [],
     ...over,
   };
 }
@@ -127,6 +132,18 @@ describe("Battlefield", () => {
     expect(screen.getByRole("button", { name: "2 Treasures, token" })).toBeInTheDocument();
   });
 
+  it("borders a card the rules engine plays only in part, and says so (issue #1093)", () => {
+    setup([
+      creature("Moonlit Bard", { gaps: ["Trigger:Whenever the moon is full"] }),
+      creature("Grizzly Bears"),
+    ]);
+    const partly = screen.getByRole("button", { name: "Moonlit Bard, played only in part" });
+    expect(partly.querySelector("[data-partly]")).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Grizzly Bears" }).querySelector("[data-partly]"),
+    ).toBeNull();
+  });
+
   it("lays creatures in front and lands and the rest behind", () => {
     setup([
       creature("Old Gnawbone"),
@@ -155,6 +172,38 @@ describe("Battlefield", () => {
     );
     fireEvent.mouseLeave(pile);
     expect(onUnpoint).toHaveBeenCalled();
+  });
+
+  it("tucks an Equipment under the creature it is attached to (issue #1073)", () => {
+    const bear = creature("Grizzly Bears");
+    const sword = card("Bonesplitter", { lane: "other", isLand: false, attachedTo: bear.id });
+    const { onPoint } = setup([bear, sword]);
+    const front = screen.getByRole("region", { name: "Creatures" });
+    expect(
+      within(front).getByRole("button", { name: "Grizzly Bears, with Bonesplitter" }),
+    ).toBeInTheDocument();
+    const under = within(front).getByRole("button", {
+      name: "Bonesplitter, attached to Grizzly Bears",
+    });
+    const back = screen.getByRole("region", { name: "Lands and other permanents" });
+    expect(within(back).queryByRole("button")).not.toBeInTheDocument();
+    fireEvent.mouseEnter(under);
+    expect(onPoint).toHaveBeenCalledWith(
+      expect.objectContaining({ ids: [sword.id], line: "Bonesplitter, attached to Grizzly Bears" }),
+    );
+  });
+
+  it("activates an Equipment's ability from its edge under the creature", async () => {
+    const bear = creature("Grizzly Bears");
+    const sword = card("Bonesplitter", { lane: "other", isLand: false, attachedTo: bear.id });
+    const onActivate = vi.fn();
+    setup([bear, sword], { sandbox: false, onActivate });
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Bonesplitter, attached to Grizzly Bears" }),
+    );
+    await screen.findByRole("menu");
+    fireEvent.click(screen.getByRole("menuitem", { name: "Activate ability" }));
+    expect(onActivate).toHaveBeenCalledWith(sword.id);
   });
 
   it("offers an empty table as somewhere to play a card", () => {

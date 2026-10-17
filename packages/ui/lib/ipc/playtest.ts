@@ -34,7 +34,7 @@ export type PlaytestPhase = "beginning" | "main1" | "combat" | "main2" | "ending
 
 /** What picking a card does: kept on top (scry, surveil), discarded, found, kept, revealed… */
 export type PlaytestPickPurpose =
-  "scry" | "surveil" | "discard" | "search" | "dig" | "reveal" | "targets" | "choose";
+  "scry" | "surveil" | "discard" | "search" | "dig" | "reveal" | "targets" | "choose" | "keep";
 
 /** A step the reader can ask the game to stop at. */
 export type PlaytestStopStep =
@@ -209,6 +209,12 @@ export interface PlaytestPrompt {
   cancellable: boolean;
   /** The answer is a set of cards (scry, surveil, a discard, a search): `pickCards` answers. */
   pick: PlaytestPick | null;
+  /**
+   * The keyword the question is about, when the engine names one: the alternative cost a cast may
+   * be paid with (`Overload`, `Evoke`, `Bestow`…), whose answers are labelled `Normal` and
+   * `Alternative`.
+   */
+  keyword: string | null;
 }
 
 export interface PlaytestPick {
@@ -221,6 +227,11 @@ export interface PlaytestPick {
   max: number;
   /** Order counts: for scry and surveil the picked cards stay on top, first picked on top. */
   ordered: boolean;
+  /**
+   * The most the picked cards' power may add up to, each a creature's `GameCard.power` ("total
+   * power 4 or less", issue #1079); `null` for a pick bounded by its count alone.
+   */
+  powerCap: number | null;
 }
 
 export interface PlaytestOption {
@@ -251,6 +262,14 @@ export interface PlaytestStackItem {
   cardId: string | null;
   seat: PlaytestPlayer;
   ability: boolean;
+  /**
+   * The cards it targets that the table shows — a permanent, a card in a graveyard, in exile or in
+   * the command zone, another spell on the stack — in the order chosen: the board's targeting
+   * arrows. A target in a hand or a library is never sent.
+   */
+  targets: number[];
+  /** The players it targets. */
+  targetPlayers: PlaytestPlayer[];
 }
 
 /** Everything the board can ask of a game. `id` is a {@link GameCard.id} from the current view. */
@@ -259,6 +278,9 @@ export type PlaytestAction =
   | { type: "keep"; bottom: number[] }
   | { type: "play"; id: number }
   | { type: "activate"; id: number }
+  /** Foretell a hand card (CR 702.143a): pay {2}, exile it face down, cast it on a later turn
+   *  (a `play` of it in exile). Offered when its {@link GameCard.canForetell} says so. */
+  | { type: "foretell"; id: number }
   | { type: "pass" }
   | { type: "endTurn" }
   | { type: "setStops"; stops: PlaytestStop[] }
@@ -298,6 +320,8 @@ export type PlaytestHappened =
   | { type: "played"; seat: PlaytestPlayer; name: string }
   | { type: "cast"; seat: PlaytestPlayer; name: string }
   | { type: "activated"; seat: PlaytestPlayer; name: string }
+  /** A card exiled face down from its owner's hand; `name` is `null` for an opponent's. */
+  | { type: "foretold"; seat: PlaytestPlayer; name: string | null }
   | { type: "moved"; seat: PlaytestPlayer; name: string; from: GamePlace; to: GamePlace }
   | { type: "drew"; seat: PlaytestPlayer; name: string | null }
   | { type: "attacked"; seat: PlaytestPlayer; names: string[] }

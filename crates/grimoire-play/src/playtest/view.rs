@@ -270,6 +270,10 @@ pub struct PlaytestPrompt {
     /// Present when the answer is a set of cards — scry, surveil, a discard, a search — which
     /// `options` cannot list (the engine offers only a few of the sets). `pickCards` answers it.
     pub pick: Option<PlaytestPick>,
+    /// The keyword the question is about, when the engine names one: the alternative cost a cast
+    /// may be paid with (`Overload`, `Evoke`, `Bestow`…), whose answers are `Normal` and
+    /// `Alternative`.
+    pub keyword: Option<String>,
 }
 
 /// A question whose answer is some of a set of cards.
@@ -286,6 +290,10 @@ pub struct PlaytestPick {
     /// The order of the picked cards counts: a scry's or a surveil's picked cards are the ones
     /// kept on top, first picked on top.
     pub ordered: bool,
+    /// The most the picked cards' power may add up to — each a creature's current power, its
+    /// `GameCard.power` (Slaughter the Strong's "total power 4 or less", issue #1079). `None` for
+    /// a pick bounded by its count alone.
+    pub power_cap: Option<i32>,
 }
 
 /// What picking a card does, so the page can say it.
@@ -308,6 +316,8 @@ pub enum PlaytestPickPurpose {
     Targets,
     /// The picked cards are the ones chosen.
     Choose,
+    /// The picked permanents are kept; the rest are sacrificed.
+    Keep,
 }
 
 /// A step the reader asked the game to stop at, on whose turn: the reader's own, or an
@@ -378,6 +388,13 @@ pub struct PlaytestStackItem {
     pub seat: PlaytestPlayer,
     /// An ability rather than a spell.
     pub ability: bool,
+    /// The cards it targets that the table shows — a permanent, a card in a graveyard, in exile
+    /// or in the command zone, another spell on the stack — in the order it chose them, for the
+    /// board's targeting arrows (issue #1071). A target the reader may not see (in a hand or a
+    /// library) is left out.
+    pub targets: Vec<u64>,
+    /// The players it targets.
+    pub target_players: Vec<PlaytestPlayer>,
 }
 
 /// What the AI opponent plays like: phase's difficulty presets, from random to competitive.
@@ -417,6 +434,12 @@ pub enum PlaytestAction {
     /// A permanent's activated ability, by the rules. One is activated; several are an
     /// `AbilityChoice` prompt.
     Activate {
+        id: u64,
+    },
+    /// Foretell a hand card by the rules (CR 702.143a): the special action that pays {2} and
+    /// exiles it face down, to be cast on a later turn for its foretell cost (a `Play` of it in
+    /// exile). Only on the reader's turn; refused, saying why, when the rules do not offer it.
+    Foretell {
         id: u64,
     },
     /// Pass priority on to the next place the reader decides something: from the first main
@@ -528,6 +551,12 @@ pub enum PlaytestHappened {
     Activated {
         seat: PlaytestPlayer,
         name: String,
+    },
+    /// A card foretold: exiled face down from its owner's hand (CR 702.143a). `name` is the card
+    /// for the reader's own, `None` for an opponent's, which only they may look at.
+    Foretold {
+        seat: PlaytestPlayer,
+        name: Option<String>,
     },
     /// A card the rules moved: a resolving spell, a dying creature, a discard, a mill.
     Moved {

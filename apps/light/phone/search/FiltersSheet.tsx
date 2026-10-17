@@ -36,6 +36,7 @@ import { FINISHES, FINISH_LABEL } from "@grimoire/ui/lib/finish";
 import { CONDITIONS, CONDITION_NOT_SET } from "@grimoire/ui/lib/conditions";
 import { MANA_KEYS, MANA_LABEL } from "@grimoire/ui/lib/mana";
 import { TRANSITION } from "@grimoire/ui/lib/motion";
+import { UNIVERSES, UNIVERSE_LABEL } from "@grimoire/ui/lib/universe";
 import { cn } from "@grimoire/ui/lib/utils";
 
 /**
@@ -502,6 +503,21 @@ function SheetBody<SortKey extends string>({
                     />
                   );
                 })}
+              </div>
+            </Section>
+          )}
+
+          {offers("universe") && search.setUniverse && (
+            <Section caption="Universe">
+              <div role="group" aria-label="Universe" className="grid grid-cols-2 gap-1.5">
+                {UNIVERSES.map((u) => (
+                  <ToggleChip
+                    key={u}
+                    label={UNIVERSE_LABEL[u]}
+                    pressed={search.universe === u}
+                    onClick={() => search.setUniverse?.(u)}
+                  />
+                ))}
               </div>
             </Section>
           )}
