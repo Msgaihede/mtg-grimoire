@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type JSX } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
-import type { PlaytestAction, PlaytestHappened, PlaytestView } from "@/lib/ipc";
+import type { GameCard, PlaytestAction, PlaytestHappened, PlaytestView } from "@/lib/ipc";
 import { appendLog, type LogLine } from "../table/log";
 import type { Playmat } from "../table/types";
 import {
@@ -221,6 +221,36 @@ export const YourMainPhase: Story = {
     await expect(canvas.getByRole("group", { name: "Turn 5 · Your main phase" })).toBeVisible();
     await userEvent.click(canvas.getByRole("button", { name: /To combat/ }));
     await expect(args.onAct).toHaveBeenLastCalledWith({ type: "pass" });
+  },
+};
+
+/** Cards the rules engine plays only in part wear a gold border, in the hand and on the table
+ *  (issue #1093): here the Sphinx in hand and the Sol Ring on the battlefield. */
+export const PartlyPlayed: Story = {
+  args: (() => {
+    const { view } = turnFive();
+    const GAPS = ["Trigger:Whenever an opponent draws a card"];
+    const mark = (names: string[]) => (c: GameCard) =>
+      names.includes(c.name) ? { ...c, gaps: GAPS } : c;
+    return {
+      view: {
+        ...view,
+        you: {
+          ...view.you,
+          hand: view.you.hand.map(mark(["Consecrated Sphinx"])),
+          battlefield: view.you.battlefield.map(mark(["Sol Ring"])),
+        },
+      },
+    };
+  })(),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(
+      canvas.getByRole("button", { name: /^Consecrated Sphinx, played only in part\./ }),
+    ).toBeVisible();
+    await expect(
+      canvas.getByRole("button", { name: "Sol Ring, played only in part" }),
+    ).toBeVisible();
   },
 };
 

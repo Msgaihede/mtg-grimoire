@@ -214,6 +214,7 @@ export function cardOfRef(
       foretold: false,
       canForetell: false,
       castable: false,
+      gaps: [],
     }
   );
 }

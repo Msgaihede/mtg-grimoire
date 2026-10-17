@@ -65,6 +65,7 @@ export function gameCard(name: string, over: Partial<GameCard> = {}): GameCard {
     foretold: false,
     canForetell: false,
     castable: false,
+    gaps: [],
     ...over,
   };
 }

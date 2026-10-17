@@ -24,6 +24,7 @@ function card(name: string, over: Partial<GameCard> = {}): GameCard {
     foretold: false,
     canForetell: false,
     castable: false,
+    gaps: [],
     ...over,
   };
 }
@@ -128,6 +129,18 @@ describe("Battlefield", () => {
       card("Treasure", { lane: "other", isLand: false, isToken: true, cardId: null }),
     ]);
     expect(screen.getByRole("button", { name: "2 Treasures, token" })).toBeInTheDocument();
+  });
+
+  it("borders a card the rules engine plays only in part, and says so (issue #1093)", () => {
+    setup([
+      creature("Moonlit Bard", { gaps: ["Trigger:Whenever the moon is full"] }),
+      creature("Grizzly Bears"),
+    ]);
+    const partly = screen.getByRole("button", { name: "Moonlit Bard, played only in part" });
+    expect(partly.querySelector("[data-partly]")).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Grizzly Bears" }).querySelector("[data-partly]"),
+    ).toBeNull();
   });
 
   it("lays creatures in front and lands and the rest behind", () => {

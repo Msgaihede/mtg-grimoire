@@ -79,6 +79,11 @@ pub struct GameCard {
     /// exile, a flashback card from the graveyard. Only ever set on a graveyard or exile card,
     /// and only in a view the reader can act in.
     pub castable: bool,
+    /// What the engine does not play of the face it shows: phase's coverage labels
+    /// (`card_face_gaps`, as `support.rs` sends them), empty for a face played in full and for a
+    /// token. A card with any is still played, but the parts named do nothing, so the board marks
+    /// it (issue #1093).
+    pub gaps: Vec<String>,
 }
 
 /// Where a permanent sits: creatures toward the opponent; behind them lands on the left and

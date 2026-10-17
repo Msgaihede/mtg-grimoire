@@ -457,6 +457,16 @@ first visit's sweep of every deck never queues ahead of the deck the reader just
 answers are under the `["decks"]` query root, so a deck edit marks them stale; a refetch is a
 database read and cache lookups.
 
+**In a game, each card carries its own gaps** (issue #1093). `Playtest::new` asks
+`card_face_gaps` of every face in the game's card database once, and keeps the faces with a gap by
+name; every `GameCard` the session builds carries its face's (`gaps`, empty for a face played in
+full and for a token). The board's `CardFace` draws a card with any in a **gold border inside the
+card** — the setup's caution colour, clear of the outline marks for attack, block and pick, which
+sit outside it — wherever it is drawn: the hand, the battlefield, a pile, the preview. The card's
+label says "played only in part", and the preview names each gap with `gapWords`. A transformed
+card is its shown face's name, so its marks follow the face; it is fixed for the game, so not in a
+`Moment`.
+
 ## The board
 
 `packages/ui/features/playtesting/play/`. **One board for every game on a deck**: whatever it draws
