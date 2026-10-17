@@ -31,6 +31,7 @@ import type { SortDir } from "@/lib/sort";
 import { useAppStore, type ListSection } from "@/lib/store";
 import { clearFieldOnEscape } from "@/lib/useDismissOnEscape";
 import { useElementWidth } from "@/lib/useElementWidth";
+import { UNIVERSES, UNIVERSE_CHIP_LABEL, UNIVERSE_LABEL, type Universe } from "@/lib/universe";
 import { cn } from "@/lib/utils";
 import { colorDisabled, countDisabled, facetTitle, optionDisabled } from "./facets";
 import {
@@ -265,6 +266,15 @@ export interface FilterSurface<SortKey extends string = string> extends TagQuery
    */
   borders?: readonly Border[];
   toggleBorder?: (border: Border) => void;
+  /**
+   * Universes Beyond or Universes Within (`@/lib/universe`), or neither question. One value
+   * rather than two chips, because the two partition the printings and both at once is no
+   * filter. A **setter** for {@link FilterSurface.owned}'s reason: passing the value already set
+   * clears it, which is the tray's second press, and the stated-filter chip's × passes
+   * `undefined`. A printing fact on every surface, like the border.
+   */
+  universe?: Universe | undefined;
+  setUniverse?: (next: Universe | undefined) => void;
   /**
    * The finish chips, and **the one pair here whose meaning is the surface's** — the price band's
    * shape. Over *printings* (the card search) it is whether the printing was **published** in
@@ -1207,6 +1217,28 @@ export function FilterTray<SortKey extends string>({
               />
             );
           })}
+        </div>
+      </TrayField>
+    ) : null,
+
+    /* Owned's two-button shape over one printing fact: Beyond is Scryfall's `universesbeyond`
+       promo type and Within is every printing without it, so the pair is a partition and
+       pressing the one that is on turns the filter off. Never greyed — there is no facet count
+       for it, and `facets.ts`' fail-open rule is that a missing count leaves a control live. */
+    universe: search.setUniverse ? (
+      <TrayField key="universe" label="Universe">
+        <div role="group" aria-label="Universe" className="flex flex-wrap gap-1.5">
+          {UNIVERSES.map((u) => (
+            <ToggleChip
+              key={u}
+              label={UNIVERSE_LABEL[u]}
+              pressed={search.universe === u}
+              // The full name as the tooltip, joined to a name that begins with the word drawn.
+              hint={UNIVERSE_CHIP_LABEL[u]}
+              onClick={() => search.setUniverse?.(u)}
+              className="flex-1"
+            />
+          ))}
         </div>
       </TrayField>
     ) : null,

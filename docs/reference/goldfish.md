@@ -166,6 +166,7 @@ radio row in the game menu): **off by default against the AI, on against the gol
 | Playing a land as the turn's land drop                             | A card the rules will not play, put down unpaid              |
 | Casting a spell, paid from untapped mana (`CastPaymentMode::Auto`) | Tapping and untapping                                        |
 | Commander tax                                                      | Counters, token copies, preset tokens                        |
+| Foretelling (CR 702.143a) and casting a foretold card from exile   |                                                              |
 | The turn and each of its steps, every seat's; attacks and blocks   | Life totals, draws, mills and shuffles outside the draw step |
 | P/T with counters and statics; the mana open                       |                                                              |
 
@@ -191,8 +192,20 @@ the table. It looks for the legal `PlayLand` or `CastSpell` for that card:
 
 **A commander put down unpaid still raises its tax.** The reader cast it; they only skipped
 paying. `record_commander_cast` is called on that path too. **A card elsewhere than the hand or the
-command zone is activated**, and in the sandbox one with nothing to activate is put onto the
-battlefield (a double-click on a graveyard's creature).
+command zone is cast when the rules let it be cast from there** (a foretold card in exile, a
+flashback card in the graveyard); else it is activated, and in the sandbox one with nothing to
+activate is put onto the battlefield (a double-click on a graveyard's creature).
+
+**Foretelling is the rules' alone** (issue #1077). phase offers it as a special action,
+`GameAction::Foretell`: on the reader's own turn, {2} paid from untapped mana, the card exiled face
+down and foretold, castable on a later turn for its foretell cost through the same `CastSpell` a
+`play` takes. The session sends it as `foretell` (a hand card's menu row, offered only when the
+card's `canForetell` says so) and a foretold card's cast as a `play` (the exile dialog's Cast, on
+a card whose `castable` says so). The engine moves the card as the rules do, so a trigger on a
+card leaving the hand for exile would see it — but phase does not yet parse Ranar the
+Ever-Watchful's (neither its free first foretell nor its Spirit), and the deck's support panel says
+so (`support.rs`). A foretold card put into exile by the sandbox's `move` is not foretold —
+that is a hand, not the rules.
 
 **The checkpoint is what keeps a cast honest.** `GameState` is persistent (`im`), so a clone is
 cheap. A refused action restores the clone, so the game never holds half of anything. A cast keeps

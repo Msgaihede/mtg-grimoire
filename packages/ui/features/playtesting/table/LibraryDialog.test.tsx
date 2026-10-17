@@ -154,4 +154,17 @@ describe("LibraryDialog", () => {
     expect(elves.queryAllByRole("button")).toEqual([]);
     expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument();
   });
+
+  it("casts a foretold card from exile by the rules, even as a look", async () => {
+    const behold = gameCard("Behold the Multiverse", { foretold: true, castable: true });
+    const view = { ...tableView(), exile: [behold, gameCard("Swords to Plowshares")] };
+    const { onAct } = open({ zone: "exile", mode: "browse", count: "all" }, view, true);
+    const card = within(screen.getByRole("group", { name: "Behold the Multiverse" }));
+    expect(card.getByText("Foretold")).toBeInTheDocument();
+    await userEvent.click(card.getByRole("button", { name: "Cast" }));
+    expect(onAct).toHaveBeenCalledWith({ type: "play", id: behold.id });
+    // A card the rules do not let the reader cast from exile has nothing to press.
+    const swords = within(screen.getByRole("group", { name: "Swords to Plowshares" }));
+    expect(swords.queryAllByRole("button")).toEqual([]);
+  });
 });

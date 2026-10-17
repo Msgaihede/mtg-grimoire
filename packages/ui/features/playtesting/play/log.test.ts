@@ -24,6 +24,12 @@ const CASES: [PlaytestHappened, string | null, string][] = [
     "cast",
   ],
   [
+    { type: "foretold", seat: "you", name: "Behold the Multiverse" },
+    "Foretold Behold the Multiverse",
+    "cast",
+  ],
+  [{ type: "foretold", seat: "opponent", name: null }, "The opponent foretold a card", "cast"],
+  [
     { type: "moved", seat: "you", name: "Tarmogoyf", from: "battlefield", to: "graveyard" },
     "Tarmogoyf went to your graveyard",
     "move",

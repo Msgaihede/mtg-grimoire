@@ -74,6 +74,13 @@ export interface GameCard {
    * controls it. `null` for anything unattached, off the battlefield, or attached to a player.
    */
   attachedTo: number | null;
+  /** In exile and foretold (CR 702.143): cast later, for its foretell cost, by a `play`. */
+  foretold: boolean;
+  /** The rules let the reader foretell this hand card now (their turn, {2} to pay). */
+  canForetell: boolean;
+  /** The rules let the reader cast or play this graveyard or exile card now (foretold,
+   *  flashback). */
+  castable: boolean;
 }
 
 export interface CardCounter {

@@ -140,6 +140,7 @@ describe("pickableCards", () => {
       source: null,
       cancellable: false,
       pick: null,
+      keyword: null,
       options: [
         option({ index: 0, cards: [a] }),
         option({ index: 1, cards: [a, b] }),
@@ -160,8 +161,25 @@ describe("pickableCards", () => {
       source: null,
       cancellable: false,
       pick: null,
+      keyword: null,
       options: [option({ index: 0, kind: "ChooseReplacement", cards: [effect] })],
     });
     expect(picks.size).toBe(0);
+  });
+});
+
+describe("an alternative cost", () => {
+  const cast = (label: string) => option({ kind: "ChooseAlternativeCast", label });
+
+  it("is asked as which cost, its answers the keyword's cost and the printed one", () => {
+    expect(promptTitle("AlternativeCastChoice")).toBe("Which cost do you pay?");
+    const question = { kind: "AlternativeCastChoice", keyword: "Overload" };
+    expect(optionLabel(cast("Alternative"), question)).toEqual({ text: "Overload", hint: null });
+    expect(optionLabel(cast("Normal"), question)).toEqual({ text: "Mana cost", hint: null });
+  });
+
+  it("says alternative cost when the engine names no keyword", () => {
+    const question = { kind: "AlternativeCastChoice", keyword: null };
+    expect(optionLabel(cast("Alternative"), question).text).toBe("Alternative cost");
   });
 });

@@ -171,6 +171,7 @@ export function StackColumn({
               onMouseEnter={(e) => onPoint(card, item, e)}
               onMouseLeave={onUnpoint}
               data-point={item.id}
+              data-stack={item.id}
               className={cn(
                 "absolute left-0 rounded-md border-2 bg-surface shadow-md",
                 item.seat === "you" ? "border-accent" : "border-mana-r",

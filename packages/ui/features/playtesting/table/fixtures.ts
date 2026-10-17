@@ -63,6 +63,9 @@ export function gameCard(name: string, over: Partial<GameCard> = {}): GameCard {
     toughness: isCreature ? num(row?.toughness) : null,
     tax: 0,
     attachedTo: null,
+    foretold: false,
+    canForetell: false,
+    castable: false,
     ...over,
   };
 }

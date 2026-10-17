@@ -705,6 +705,63 @@ fn a_spell_that_asks_for_a_choice_asks_and_cancel_puts_the_game_back() {
     );
 }
 
+/// A spell with overload asks which cost to pay when both are payable, the question naming the
+/// keyword, and its overload cost changes "target" to "each" (issue #1072).
+#[test]
+fn a_spell_with_overload_asks_which_cost_and_its_overload_hits_each() {
+    let (asked, cast) = engine(|| {
+        let mut cards = deck();
+        let mut swell = card(
+            "Wild Swell",
+            Some("{G}"),
+            "Instant",
+            "Target creature you control gets +2/+2 until end of turn.\nOverload {2}{G}{G} (You may \
+             cast this spell for its overload cost. If you do, change its text by replacing all \
+             instances of \"target\" with \"each.\")",
+            None,
+            1,
+        );
+        swell.keywords = vec!["Overload".into()];
+        cards.push(swell);
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+        for _ in 0..4 {
+            put_down(&mut game, "Forest");
+        }
+        for _ in 0..2 {
+            put_down(&mut game, "Grizzly Bears");
+        }
+        let swell = in_hand(&mut game, "Wild Swell");
+        let asked = game.act(A::Play { id: swell }).unwrap();
+        let prompt = asked.view.prompt.clone().expect("a question");
+        let overload = prompt
+            .options
+            .iter()
+            .find(|o| o.label.as_deref() == Some("Alternative"))
+            .expect("an alternative-cost answer")
+            .index;
+        (asked, game.act(A::Choose { index: overload }).unwrap())
+    });
+    assert_eq!(asked.view.stage, Stage::Prompt, "{:?}", asked.happened);
+    let prompt = asked.view.prompt.as_ref().unwrap();
+    assert_eq!(prompt.kind, "AlternativeCastChoice");
+    assert_eq!(prompt.keyword.as_deref(), Some("Overload"));
+    assert_eq!(prompt.source.as_deref(), Some("Wild Swell"));
+    let mut labels: Vec<_> = prompt.options.iter().map(|o| o.label.as_deref()).collect();
+    labels.sort();
+    assert_eq!(labels, [Some("Alternative"), Some("Normal")]);
+    let bears: Vec<_> = cast
+        .view
+        .you
+        .battlefield
+        .iter()
+        .filter(|c| c.name == "Grizzly Bears")
+        .map(|c| (c.power, c.toughness))
+        .collect();
+    assert_eq!(bears, [(Some(4), Some(4)); 2], "{:?}", cast.happened);
+    assert!(find(&cast.view.you.graveyard, "Wild Swell").is_some());
+}
+
 #[test]
 fn a_modal_double_faced_card_is_played_by_its_front_face() {
     let view = engine(|| {
@@ -964,4 +1021,145 @@ fn a_refused_action_is_not_remembered() {
             "a refusal leaves the redo trail as it was"
         );
     });
+}
+
+/// A foretell deck (issue #1077): Islands and Behold the Multiverse, the card the issue names.
+/// Not Ranar the Ever-Watchful, the issue's other card: phase does not yet parse its free foretell
+/// or its exile trigger (`support.rs` reports both as gaps).
+fn foretell_deck() -> Vec<CardFacts> {
+    let mut commander = card(
+        "Vendilion Clique",
+        Some("{1}{U}{U}"),
+        "Legendary Creature — Faerie Wizard",
+        "Flash\nFlying",
+        Some(("3", "1")),
+        1,
+    );
+    commander.commander = true;
+    commander.keywords = vec!["Flash".into(), "Flying".into()];
+    let mut behold = card(
+        "Behold the Multiverse",
+        Some("{3}{U}"),
+        "Instant",
+        "Scry 2, then draw two cards.\nForetell {1}{U} (During your turn, you may pay {2} and exile this card from your hand face down. Cast it on a later turn for its foretell cost.)",
+        None,
+        39,
+    );
+    behold.keywords = vec!["Foretell".into()];
+    vec![
+        commander,
+        card(
+            "Island",
+            None,
+            "Basic Land — Island",
+            "({T}: Add {U}.)",
+            None,
+            60,
+        ),
+        behold,
+    ]
+}
+
+/// The foretell deck's game past its opening hand, at the reader's first main phase.
+fn foretelling() -> Playtest {
+    let (mut game, _) = fish(&foretell_deck(), 7);
+    game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+    game
+}
+
+/// Answer whatever the rules ask (a scry, a payment) with the engine's own answers, until the
+/// reader is back in a main phase.
+fn settle(game: &mut Playtest) -> PlaytestView {
+    for _ in 0..10 {
+        let view = game.view();
+        if view.stage != Stage::Prompt {
+            return view;
+        }
+        game.act(A::Auto).expect("the engine answers");
+    }
+    panic!("the rules kept asking");
+}
+
+#[test]
+fn a_foretold_card_is_exiled_for_two_and_cast_from_exile_on_a_later_turn() {
+    let (offered, foretold, next_turn, cast) = engine(|| {
+        let mut game = foretelling();
+        put_down(&mut game, "Island");
+        put_down(&mut game, "Island");
+        let behold = in_hand(&mut game, "Behold the Multiverse");
+        let offered = find(&game.view().you.hand, "Behold the Multiverse")
+            .is_some_and(|c| c.id == behold && c.can_foretell);
+        let foretold = game.act(A::Foretell { id: behold }).expect("foretold");
+        let foretold = (foretold.happened, settle(&mut game));
+        let next_turn = game.act(A::EndTurn).expect("the next turn").view;
+        let in_exile = find(&next_turn.you.exile, "Behold the Multiverse")
+            .expect("still in exile")
+            .id;
+        let cast = game.act(A::Play { id: in_exile }).expect("cast from exile");
+        settle(&mut game);
+        (offered, foretold, next_turn, (cast.happened, game.view()))
+    });
+    assert!(offered, "the hand card says it can be foretold");
+
+    let (happened, view) = foretold;
+    assert!(happened.contains(&H::Foretold {
+        seat: YOU,
+        name: Some("Behold the Multiverse".into()),
+    }));
+    assert!(
+        !happened.iter().any(|h| matches!(
+            h,
+            H::Moved {
+                to: Place::Exile,
+                ..
+            }
+        )),
+        "the foretelling is the move's line"
+    );
+    let exiled = find(&view.you.exile, "Behold the Multiverse").expect("foretold in exile");
+    assert!(exiled.foretold);
+    assert!(
+        !exiled.castable,
+        "a foretold card is cast on a later turn only"
+    );
+    assert!(
+        view.you
+            .battlefield
+            .iter()
+            .filter(|c| c.name == "Island")
+            .all(|c| c.tapped),
+        "the {{2}} was paid"
+    );
+
+    let exiled = find(&next_turn.you.exile, "Behold the Multiverse").unwrap();
+    assert!(
+        exiled.castable,
+        "on the next turn its foretell cost is open"
+    );
+
+    let (happened, view) = cast;
+    assert!(happened.contains(&H::Cast {
+        seat: YOU,
+        name: "Behold the Multiverse".into(),
+    }));
+    assert!(find(&view.you.exile, "Behold the Multiverse").is_none());
+    assert!(find(&view.you.graveyard, "Behold the Multiverse").is_some());
+}
+
+#[test]
+fn foretelling_is_refused_saying_why_when_it_cannot_be_paid() {
+    let refused = engine(|| {
+        let mut game = foretelling();
+        let behold = in_hand(&mut game, "Behold the Multiverse");
+        assert!(
+            !find(&game.view().you.hand, "Behold the Multiverse")
+                .unwrap()
+                .can_foretell,
+            "not offered without {{2}}"
+        );
+        let refused = game.act(A::Foretell { id: behold }).unwrap_err();
+        assert!(find(&game.view().you.hand, "Behold the Multiverse").is_some());
+        refused
+    });
+    assert!(refused.contains("can't be foretold"), "{refused}");
 }

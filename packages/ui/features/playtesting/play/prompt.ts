@@ -37,6 +37,7 @@ const TITLES: Record<string, string> = {
   ChooseXValue: "Choose X",
   NamedChoice: "Choose",
   OptionalCostChoice: "Pay the optional cost?",
+  AlternativeCastChoice: "Which cost do you pay?",
   UnlessPayment: "Pay?",
   ReplacementChoice: "Choose a replacement effect",
   OrderTriggers: "Put your triggers in order",
@@ -94,15 +95,19 @@ const BY_KIND = new Set(["CastChoice", "AbilityChoice"]);
  * number, the cards it points at, the players. A target answer that points at nothing is the one
  * that stops choosing ("No more targets"). The board's own two questions — how to cast, which
  * ability — say the answer's kind beside it, since every answer names the same card.
+ * An alternative cost's answers are the keyword's cost by its name ("Overload") and the printed
+ * "Mana cost" (issue #1072).
  *
  * A player is "You" or "Opponent", and at a four-player table (`opponents` of 3) the opponent's
  * number too: "Opponent 2".
  */
 export function optionLabel(
   option: PlaytestOption,
-  prompt: Pick<PlaytestPrompt, "kind">,
+  prompt: Pick<PlaytestPrompt, "kind"> & Partial<Pick<PlaytestPrompt, "keyword">>,
   opponents = 1,
 ): OptionLabel {
+  if (option.kind === "ChooseAlternativeCast")
+    return { text: costText(option, prompt), hint: null };
   if (prompt.kind === "OrderTriggers" && option.cards.length > 0) {
     const refs = optionCards(option, prompt);
     const [first, ...rest] = refs.map((ref) => abilityName(ref, refs));
@@ -126,6 +131,17 @@ export function optionLabel(
     (option.kind === "ChooseTarget" ? "No more targets" : (hint ?? words(option.kind)));
   // The hint repeats nothing: when the line is already the kind's words, it goes.
   return { text, hint: hint === text ? null : hint };
+}
+
+/** An alternative cost's two answers: the keyword's cost ("Overload") or the printed one. */
+function costText(
+  option: Pick<PlaytestOption, "label">,
+  prompt: Partial<Pick<PlaytestPrompt, "keyword">>,
+): string {
+  if (option.label === "Normal") return "Mana cost";
+  if (option.label === "Alternative")
+    return prompt.keyword ? words(prompt.keyword) : "Alternative cost";
+  return option.label ?? words("ChooseAlternativeCast");
 }
 
 /** A number as the question means it: X's value, a mode, an ability. Modes and abilities are
@@ -196,6 +212,9 @@ export function cardOfRef(
       toughness: null,
       tax: 0,
       attachedTo: null,
+      foretold: false,
+      canForetell: false,
+      castable: false,
     }
   );
 }

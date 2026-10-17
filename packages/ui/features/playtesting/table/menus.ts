@@ -12,8 +12,9 @@
  * mill, a shuffle — are the reader's hand changing the game outside the rules, and the engine
  * takes them only while the sandbox is on and only in the reader's main phase. So each builder
  * takes `sandbox` as the board works it out (on, the main phase, nothing with the engine) and,
- * off, offers only what the rules do: a hand card's Play, a commander's Cast, a permanent's
- * Activate ability. A row the engine would only refuse is not offered.
+ * off, offers only what the rules do: a hand card's Play (and its Foretell), a commander's Cast, a
+ * foretold or flashback card's Cast, a permanent's Activate ability. A row the engine would only
+ * refuse is not offered.
  */
 import type { MenuAction, MenuItem } from "@/components/menu/types";
 import type { GameCard, GamePlace, PlaytestAction, PlaytestSeat, PlaytestView } from "@/lib/ipc";
@@ -140,10 +141,14 @@ export function cardMenu({
       return items;
     }
     case "hand": {
-      const play = action("play", "Play", () => onAct({ type: "play", id }));
-      if (!sandbox) return [play];
+      // Foretell is the rules' own row, offered only when the engine would take it.
+      const rules = [action("play", "Play", () => onAct({ type: "play", id }))];
+      if (card.canForetell) {
+        rules.push(action("foretell", "Foretell", () => onAct({ type: "foretell", id })));
+      }
+      if (!sandbox) return rules;
       return [
-        play,
+        ...rules,
         { kind: "separator", id: "sep" },
         submenu("move", "Move to", [
           // "Unpaid" because that is the difference from Play: no land drop spent, no mana paid,
@@ -172,7 +177,10 @@ export function cardMenu({
       ];
     }
     default: {
-      if (!sandbox) return [];
+      // A card the rules let the reader cast from here (foretold in exile, flashback in the
+      // graveyard) heads the menu with its Cast, sandbox or not.
+      const cast = action("cast", "Cast", () => onAct({ type: "play", id }));
+      if (!sandbox) return card.castable ? [cast] : [];
       // The graveyard and exile (and a library card, should one ever be pointed at): every other
       // place, the one it is in left out.
       const rows: MenuItem[] = [
@@ -186,7 +194,8 @@ export function cardMenu({
         action("bottom", "Bottom of library", move("libraryBottom")),
         ...commandRow,
       );
-      return [submenu("move", "Move to", rows)];
+      const head: MenuItem[] = card.castable ? [cast, { kind: "separator", id: "sepCast" }] : [];
+      return [...head, submenu("move", "Move to", rows)];
     }
   }
 }

@@ -73,6 +73,16 @@ pub struct GameCard {
     /// its object id — whoever controls it, so an Aura on an opponent's creature names that
     /// creature. `None` for anything unattached, off the battlefield, or attached to a player.
     pub attached_to: Option<u64>,
+    /// A card in exile that is foretold (CR 702.143): face down, cast later for its foretell cost.
+    /// Only the reader's are in a view; an opponent's are face down, so not shown at all.
+    pub foretold: bool,
+    /// The rules let the reader foretell it now (CR 702.143a): a hand card with foretell, on their
+    /// own turn, with {2} to pay. Set only in a view the reader can act in.
+    pub can_foretell: bool,
+    /// The rules let the reader cast or play it from where it is now — a foretold card from
+    /// exile, a flashback card from the graveyard. Only ever set on a graveyard or exile card,
+    /// and only in a view the reader can act in.
+    pub castable: bool,
 }
 
 /// Where a permanent sits: creatures toward the opponent; behind them lands on the left and
