@@ -30,6 +30,40 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.54.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.53.0...v0.54.0) (2026-10-17)
+
+
+### Features
+
+* draw targeting arrows from stack items to their targets ([e10d646](https://github.com/Msgaihede/mtg-grimoire/commit/e10d64668919dadc0e6bc6d99d622577661cb274))
+* draw targeting arrows from stack items to their targets ([7dd6f86](https://github.com/Msgaihede/mtg-grimoire/commit/7dd6f865b7ec2e7ca13e831615858e388440089a)), closes [#1071](https://github.com/Msgaihede/mtg-grimoire/issues/1071)
+* foretell cards and cast them from exile in a game ([2626636](https://github.com/Msgaihede/mtg-grimoire/commit/26266363df205227ef4d3450b3ff470b23ccfede))
+* foretell cards and cast them from exile in a game ([1fad680](https://github.com/Msgaihede/mtg-grimoire/commit/1fad6800e9ce3a068125736751e858e9c6884758)), closes [#1077](https://github.com/Msgaihede/mtg-grimoire/issues/1077)
+* **playtesting:** border the cards the rules engine plays only in part ([710c48c](https://github.com/Msgaihede/mtg-grimoire/commit/710c48ca50b159c5d978d05bf7c68970337c6ccf))
+* **playtesting:** border the cards the rules engine plays only in part ([f7785ff](https://github.com/Msgaihede/mtg-grimoire/commit/f7785ff1e16d8d01409ee4dc25bf60c12f4b099c)), closes [#1093](https://github.com/Msgaihede/mtg-grimoire/issues/1093)
+* **playtesting:** mark decks and cards the rules engine plays only in part ([#1084](https://github.com/Msgaihede/mtg-grimoire/issues/1084)) ([ae63c0b](https://github.com/Msgaihede/mtg-grimoire/commit/ae63c0b6d4a32bb7c3fa4144d2d0c599989ab7c0)), closes [#1078](https://github.com/Msgaihede/mtg-grimoire/issues/1078)
+* **playtesting:** tuck Auras and Equipment under the card they're attached to ([79ae9ee](https://github.com/Msgaihede/mtg-grimoire/commit/79ae9eee52543f112a141afe5a3a9c50203ca37c))
+* **playtesting:** tuck Auras and Equipment under the card they're attached to ([ca502ff](https://github.com/Msgaihede/mtg-grimoire/commit/ca502ff7f023e7f72f834f5fc9b467f6c38b6814)), closes [#1073](https://github.com/Msgaihede/mtg-grimoire/issues/1073)
+* **search:** filter cards by Universes Beyond or Universes Within ([aabbd97](https://github.com/Msgaihede/mtg-grimoire/commit/aabbd97a4d2ac6772dcdb724c98c614b9f8775d4))
+* **search:** filter cards by Universes Beyond or Universes Within ([5b4bd68](https://github.com/Msgaihede/mtg-grimoire/commit/5b4bd684437b6ecb063b2901339d1dbafc85c4eb))
+* unify goldfishing and playtesting into one game with a sandbox mode ([61fbfe6](https://github.com/Msgaihede/mtg-grimoire/commit/61fbfe68341513d1e66d6815129f2779b58348e3))
+* unify goldfishing and playtesting into one game with a sandbox mode ([a69713e](https://github.com/Msgaihede/mtg-grimoire/commit/a69713e36e8608bae6a74a17d754ba87b2276331))
+
+
+### Bug Fixes
+
+* cast a card played unpaid in the sandbox, so its cast and enter triggers happen ([460dcf1](https://github.com/Msgaihede/mtg-grimoire/commit/460dcf116736852e3990c02c170a2a361541cc85))
+* cast a card played unpaid in the sandbox, so its cast and enter triggers happen ([c40960a](https://github.com/Msgaihede/mtg-grimoire/commit/c40960ab83664ff5ecb614ea5dd4bf123eca997f)), closes [#1075](https://github.com/Msgaihede/mtg-grimoire/issues/1075)
+* **playtest:** ask a keep-within-total-power sacrifice as a pick of creatures ([e590e61](https://github.com/Msgaihede/mtg-grimoire/commit/e590e610fe08239231a8d3fbe2a0010c01f0c0b4))
+* **playtest:** ask a keep-within-total-power sacrifice as a pick of creatures ([2d981a6](https://github.com/Msgaihede/mtg-grimoire/commit/2d981a66bc9e827ea9b5522498fa9c2d2c60918e)), closes [#1079](https://github.com/Msgaihede/mtg-grimoire/issues/1079)
+* **playtesting:** draw the zone columns' cards at the table's card size ([#1095](https://github.com/Msgaihede/mtg-grimoire/issues/1095)) ([58f9df7](https://github.com/Msgaihede/mtg-grimoire/commit/58f9df78917eb059c565e5c4ee53031dad6093f0))
+* **playtesting:** offer the overload cost as its own answer when casting ([aee9e38](https://github.com/Msgaihede/mtg-grimoire/commit/aee9e38587ad43bb110a45704a11b942b50dc047))
+* **playtesting:** offer the overload cost as its own answer when casting ([f980ae5](https://github.com/Msgaihede/mtg-grimoire/commit/f980ae5fd70b013dfa7162f2b32fb86afd7b8559)), closes [#1072](https://github.com/Msgaihede/mtg-grimoire/issues/1072)
+* record a watched card's price as soon as it is chosen ([ce1b9b0](https://github.com/Msgaihede/mtg-grimoire/commit/ce1b9b018a782e29406871b7807cd5f6516fd8d2))
+* record a watched card's price as soon as it is chosen ([90df4ca](https://github.com/Msgaihede/mtg-grimoire/commit/90df4cad74d088e8afa61d94f71eb6a8ffca1547)), closes [#1080](https://github.com/Msgaihede/mtg-grimoire/issues/1080)
+* tell stacked triggers apart by what set each off ([f9e353e](https://github.com/Msgaihede/mtg-grimoire/commit/f9e353e3f4027bf278a2f192c687709ad55e077b))
+* tell stacked triggers apart by what set each off ([799706b](https://github.com/Msgaihede/mtg-grimoire/commit/799706bd31bf87d2ece8700ccf3e136e1ff1de6d)), closes [#1076](https://github.com/Msgaihede/mtg-grimoire/issues/1076)
+
 ## [0.53.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.52.0...v0.53.0) (2026-10-15)
 
 
