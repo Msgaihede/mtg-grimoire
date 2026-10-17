@@ -289,9 +289,28 @@ export const CastChoice: Story = {
   args: { view: castChoicePrompt().view },
 };
 
-/** Two triggers at once: each answer is an order, said first-to-resolve first, with pictures. */
+/** Two triggers at once: each answer is an order, said first-to-resolve first, with pictures. Two
+ *  Delvers' triggers read alike either way round, so the two orders are one answer. */
 export const OrderTriggers: Story = {
   args: { view: orderTriggersPrompt().view },
+};
+
+/** One ability's second trigger asking for its target: the header says which creature set it off,
+ *  and the tooltip the trigger's words (issue #1076). */
+export const TriggerTargetWithCause: Story = {
+  args: {
+    view: {
+      ...targetPrompt().view,
+      prompt: {
+        ...targetPrompt().view.prompt!,
+        kind: "TriggerTargetSelection",
+        source: "Impact Tremors",
+        sourceText: "Whenever a creature you control enters, it deals 1 damage to any target.",
+        cause: { event: "ZoneChanged", id: 70, name: "Grizzly Bears", player: "you" },
+        cancellable: false,
+      },
+    },
+  },
 };
 
 /** The opponent's turn being played out. */

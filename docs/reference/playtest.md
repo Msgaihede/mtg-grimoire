@@ -181,6 +181,28 @@ generically, never matched variant by variant.
   cards of one name are told apart by their words. An answer standing for abilities carries
   their words in its tooltip.
 
+- **No two triggers read alike unless they are alike** (issue #1076). Each trigger also carries
+  its **cause** (`PlaytestCause`): what set it off, read from the trigger's first event —
+  `pending_trigger_order`'s `trigger_events`, a stack entry's `stack_trigger_event_batches` or
+  `trigger_event` — by the field names its events name their subject with (`object_id`,
+  `target`, `attacker`, `attacker_ids`…), never matched event by event. The cause is the
+  event's kind, its card's id and name (left out when the reader may not see the card) and its
+  player (the card's controller, or the event's player when it names no card). The page:
+  - names a trigger whose row holds another of one card name and one text by its cause:
+    "Soul Warden for Llanowar Elves resolves first, then Soul Warden for Grizzly Bears";
+  - offers an order of triggers that reads the same as one before it once (`distinctOptions`):
+    two Soul Wardens seeing one creature enter, or two Delvers' upkeep triggers, can go either
+    way round, and the engine lists both orders. Every other question keeps every answer,
+    since its facts are a reading of the engine's answer, not all of it;
+  - says a question about one trigger by its cause too — `PlaytestPrompt.sourceText` and
+    `cause`, read from the question's own `source_id`, `description` and `trigger_events`: the
+    header reads "Choose a target · Impact Tremors for Grizzly Bears", the trigger's words in
+    its tooltip. phase orders one ability's triggers itself when the order cannot matter, and
+    then asks each one's targets in turn; before this, the questions were word for word alike
+    and their source was the top of the stack, which is not always the trigger being asked about;
+  - gives each ability on the stack its words and cause (`PlaytestStackItem.text`, `cause`), in
+    its card's tooltip and its spoken label.
+
 - **`auto`** answers any prompt with `phase_ai::choose_action` for the reader, at Medium.
   `Happened::Chose` says so. It is also the answer to a prompt with no options the board can draw.
 - **A question with one answer is never asked** (issue #999, `sole_answer`). phase already fills
@@ -546,7 +568,8 @@ Before the overhaul, a table at 1280 was 275 px and its cards about 61 px wide.
   opponent's side, library over graveyard is on the left and exile over command on the right. On
   the reader's side, command over exile is on the left and graveyard over library on the right.
 - **The stack** is real cards (52 × 73, up to three, then "+N") in the right gutter between the
-  zone columns, top first, with whose each is. It covers no table.
+  zone columns, top first, with whose each is; an ability says its words and its cause in its
+  tooltip. It covers no table.
 - **The prompt** docks at the bottom over the hand, at most 640 × 104, and the reader's plate moves
   to the edge while it is up. **The picker** sits centred over the middle, up to 820 px wide.
 

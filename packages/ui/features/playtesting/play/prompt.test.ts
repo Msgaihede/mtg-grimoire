@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { PlaytestOption } from "@/lib/ipc";
+import type { PlaytestCause, PlaytestOption } from "@/lib/ipc";
 import {
+  distinctOptions,
   optionCards,
   optionDetail,
   optionLabel,
   pickableCards,
+  promptSource,
   promptTitle,
   words,
 } from "./prompt";
@@ -40,7 +42,7 @@ describe("optionLabel", () => {
   const target = { kind: "TargetSelection" };
 
   it("names a target by its card or its player", () => {
-    const card = { id: 1, name: "Ragavan", cardId: null, text: null };
+    const card = { id: 1, name: "Ragavan", cardId: null, text: null, cause: null };
     expect(optionLabel(option({ cards: [card] }), target).text).toBe("Ragavan");
     expect(optionLabel(option({ players: ["opponent"] }), target).text).toBe("Opponent");
     expect(optionLabel(option({ players: ["you"] }), target).text).toBe("You");
@@ -76,7 +78,7 @@ describe("optionLabel", () => {
       option({
         kind: "CastAdventure",
         label: "Stomp",
-        cards: [{ id: 1, name: "B", cardId: null, text: null }],
+        cards: [{ id: 1, name: "B", cardId: null, text: null, cause: null }],
       }),
       { kind: "CastChoice" },
     );
@@ -86,7 +88,13 @@ describe("optionLabel", () => {
 
 describe("an order of triggers", () => {
   const order = { kind: "OrderTriggers" };
-  const ability = (id: number, name: string, text: string) => ({ id, name, cardId: null, text });
+  const ability = (id: number, name: string, text: string) => ({
+    id,
+    name,
+    cardId: null,
+    text,
+    cause: null,
+  });
   const carmen = ability(1, "Carmen", "Whenever Carmen attacks, gain 1 life.");
   const clavileno = ability(2, "Clavileño", "Whenever Clavileño attacks, make a Vampire.");
 
@@ -120,9 +128,105 @@ describe("an order of triggers", () => {
   });
 });
 
+/** Issue #1076: two triggers that read alike are told apart, or offered once. */
+describe("triggers of one ability", () => {
+  const order = { kind: "OrderTriggers" };
+  const entered = (id: number, name: string): PlaytestCause => ({
+    event: "ZoneChanged",
+    id,
+    name,
+    player: "you",
+  });
+  const soulWarden = "Whenever another creature enters, you gain 1 life.";
+  const warden = (id: number, cause: PlaytestCause | null) => ({
+    id,
+    name: "Soul Warden",
+    cardId: null,
+    text: soulWarden,
+    cause,
+  });
+
+  it("are named by what set each off", () => {
+    const bears = warden(1, entered(7, "Grizzly Bears"));
+    const elf = warden(1, entered(8, "Llanowar Elves"));
+    const answer = option({ kind: "OrderTriggers", cards: [bears, elf] });
+    expect(optionLabel(answer, order)).toEqual({
+      text: "Soul Warden for Llanowar Elves resolves first",
+      hint: "then Soul Warden for Grizzly Bears",
+    });
+    expect(optionDetail(answer, order)).toBe(
+      `1. Soul Warden: ${soulWarden} (for Llanowar Elves)\n` +
+        `2. Soul Warden: ${soulWarden} (for Grizzly Bears)`,
+    );
+  });
+
+  it("name a player when the event names no card the reader can see", () => {
+    const hidden: PlaytestCause = { event: "CardDrawn", id: null, name: null, player: "opponent2" };
+    const mine = warden(1, entered(7, "Grizzly Bears"));
+    const label = optionLabel(
+      option({ kind: "OrderTriggers", cards: [warden(1, hidden), mine] }),
+      order,
+      3,
+    );
+    expect(label.text).toBe("Soul Warden for Grizzly Bears resolves first");
+    expect(label.hint).toBe("then Soul Warden for Opponent 2");
+  });
+
+  it("alike in name, words and cause are one order, offered once", () => {
+    // Two Soul Wardens seeing one creature enter: either order is the same action.
+    const a = warden(1, entered(7, "Grizzly Bears"));
+    const b = warden(2, entered(7, "Grizzly Bears"));
+    const options = [
+      option({ index: 0, kind: "OrderTriggers", cards: [a, b] }),
+      option({ index: 1, kind: "OrderTriggers", cards: [b, a] }),
+    ];
+    const kept = distinctOptions({ kind: "OrderTriggers", options });
+    expect(kept.map((o) => o.index)).toEqual([0]);
+    expect(optionLabel(kept[0], order)).toEqual({
+      text: "Soul Warden resolves first",
+      hint: "then Soul Warden",
+    });
+  });
+
+  it("that differ keep every order, and other questions keep every answer", () => {
+    const a = warden(1, entered(7, "Grizzly Bears"));
+    const b = warden(2, entered(8, "Llanowar Elves"));
+    const orders = [
+      option({ index: 0, kind: "OrderTriggers", cards: [a, b] }),
+      option({ index: 1, kind: "OrderTriggers", cards: [b, a] }),
+    ];
+    expect(distinctOptions({ kind: "OrderTriggers", options: orders })).toHaveLength(2);
+    const alike = [option({ index: 0 }), option({ index: 1 })];
+    expect(distinctOptions({ kind: "TargetSelection", options: alike })).toHaveLength(2);
+  });
+
+  it("asking for targets one after the other say whose target", () => {
+    const prompt = {
+      source: "Soul Warden",
+      sourceText: soulWarden,
+      cause: entered(7, "Grizzly Bears"),
+    };
+    expect(promptSource(prompt)).toEqual({
+      text: "Soul Warden for Grizzly Bears",
+      detail: `Soul Warden: ${soulWarden} (for Grizzly Bears)`,
+    });
+    expect(promptSource({ source: "Opt", sourceText: null, cause: null })).toEqual({
+      text: "Opt",
+      detail: null,
+    });
+    expect(promptSource({ source: null, sourceText: null, cause: null })).toBeNull();
+  });
+});
+
 describe("a replacement effect", () => {
   it("is named by its card, with its words beside", () => {
-    const effect = { id: 4, name: "Doubling Season", cardId: null, text: "Twice that many." };
+    const effect = {
+      id: 4,
+      name: "Doubling Season",
+      cardId: null,
+      text: "Twice that many.",
+      cause: null,
+    };
     expect(
       optionLabel(option({ kind: "ChooseReplacement", cards: [effect] }), {
         kind: "ReplacementChoice",
@@ -133,11 +237,13 @@ describe("a replacement effect", () => {
 
 describe("pickableCards", () => {
   it("makes each one-card answer its card, the first answer keeping a card twice named", () => {
-    const a = { id: 1, name: "A", cardId: null, text: null };
-    const b = { id: 2, name: "B", cardId: null, text: null };
+    const a = { id: 1, name: "A", cardId: null, text: null, cause: null };
+    const b = { id: 2, name: "B", cardId: null, text: null, cause: null };
     const picks = pickableCards({
       kind: "TargetSelection",
       source: null,
+      sourceText: null,
+      cause: null,
       cancellable: false,
       pick: null,
       keyword: null,
@@ -155,10 +261,12 @@ describe("pickableCards", () => {
   });
 
   it("leaves a card standing for one of its abilities to the panel", () => {
-    const effect = { id: 1, name: "A", cardId: null, text: "Twice that many." };
+    const effect = { id: 1, name: "A", cardId: null, text: "Twice that many.", cause: null };
     const picks = pickableCards({
       kind: "ReplacementChoice",
       source: null,
+      sourceText: null,
+      cause: null,
       cancellable: false,
       pick: null,
       keyword: null,

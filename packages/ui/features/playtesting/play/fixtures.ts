@@ -196,7 +196,9 @@ export function attackStep(): TurnFive {
           { id: t.elves.id, players: ["opponent"], targets: [] },
           { id: t.delver.id, players: ["opponent"], targets: [] },
         ],
-        targets: [{ id: t.jace.id, name: t.jace.name, cardId: t.jace.cardId, text: null }],
+        targets: [
+          { id: t.jace.id, name: t.jace.name, cardId: t.jace.cardId, text: null, cause: null },
+        ],
       },
     },
   };
@@ -242,7 +244,13 @@ export function blockStep(): TurnFive {
  */
 export function targetPrompt(): TurnFive {
   const t = turnFive();
-  const ref = (c: GameCard) => ({ id: c.id, name: c.name, cardId: c.cardId, text: null });
+  const ref = (c: GameCard) => ({
+    id: c.id,
+    name: c.name,
+    cardId: c.cardId,
+    text: null,
+    cause: null,
+  });
   const option = (index: number, c: GameCard) => ({
     index,
     kind: "ChooseTarget",
@@ -260,6 +268,8 @@ export function targetPrompt(): TurnFive {
       prompt: {
         kind: "TargetSelection",
         source: "Swords to Plowshares",
+        sourceText: null,
+        cause: null,
         options: [option(0, t.ragavan), option(1, t.reckoner), option(2, t.goyf)],
         cancellable: true,
         pick: null,
@@ -279,7 +289,7 @@ export function orderTriggersPrompt(): TurnFive {
   const second = gameCard("Delver of Secrets // Insectile Aberration", { power: 1, toughness: 1 });
   const text =
     "At the beginning of your upkeep, look at the top card of your library. You may reveal that card. If an instant or sorcery card is revealed this way, transform Delver of Secrets.";
-  const ref = (c: GameCard) => ({ id: c.id, name: c.name, cardId: c.cardId, text });
+  const ref = (c: GameCard) => ({ id: c.id, name: c.name, cardId: c.cardId, text, cause: null });
   const order = (index: number, cards: GameCard[]) => ({
     index,
     kind: "OrderTriggers",
@@ -300,6 +310,8 @@ export function orderTriggersPrompt(): TurnFive {
       prompt: {
         kind: "OrderTriggers",
         source: null,
+        sourceText: null,
+        cause: null,
         options: [order(0, [t.delver, second]), order(1, [second, t.delver])],
         cancellable: false,
         pick: null,
@@ -314,7 +326,7 @@ export function orderTriggersPrompt(): TurnFive {
 export function castChoicePrompt(): TurnFive {
   const t = turnFive();
   const giant = gameCard("Bonecrusher Giant // Stomp");
-  const ref = { id: giant.id, name: giant.name, cardId: giant.cardId, text: null };
+  const ref = { id: giant.id, name: giant.name, cardId: giant.cardId, text: null, cause: null };
   return {
     ...t,
     view: {
@@ -324,6 +336,8 @@ export function castChoicePrompt(): TurnFive {
       prompt: {
         kind: "CastChoice",
         source: giant.name,
+        sourceText: null,
+        cause: null,
         options: [
           {
             index: 0,
@@ -369,6 +383,8 @@ export function withStack(): TurnFive {
           cardId: counter.cardId,
           seat: "you",
           ability: false,
+          text: null,
+          cause: null,
           targets: [bolt.id],
           targetPlayers: [],
         },
@@ -378,6 +394,8 @@ export function withStack(): TurnFive {
           cardId: bolt.cardId,
           seat: "opponent",
           ability: false,
+          text: null,
+          cause: null,
           targets: [],
           targetPlayers: ["you"],
         },
@@ -521,7 +539,16 @@ function pickPrompt(t: TurnFive, kind: string, source: string, pick: PlaytestPic
     view: {
       ...t.view,
       stage: "prompt",
-      prompt: { kind, source, options: [], cancellable: false, pick, keyword: null },
+      prompt: {
+        kind,
+        source,
+        sourceText: null,
+        cause: null,
+        options: [],
+        cancellable: false,
+        pick,
+        keyword: null,
+      },
     },
   };
 }
@@ -531,7 +558,7 @@ export function scryPick(): TurnFive {
   const t = turnFive();
   const cards = t.view.you.libraryCards
     .slice(0, 3)
-    .map((c) => ({ id: c.id, name: c.name, cardId: c.cardId, text: null }));
+    .map((c) => ({ id: c.id, name: c.name, cardId: c.cardId, text: null, cause: null }));
   return pickPrompt(t, "ScryChoice", "Opt", {
     purpose: "scry",
     cards,
@@ -551,6 +578,7 @@ export function discardPick(): TurnFive {
     name: c.name,
     cardId: c.cardId,
     text: null,
+    cause: null,
   }));
   return pickPrompt(t, "DiscardChoice", "Thoughtseize", {
     purpose: "discard",
@@ -570,7 +598,13 @@ export function discardPick(): TurnFive {
 export function keepPick(): TurnFive {
   const t = turnFive();
   const creatures = t.view.you.battlefield.filter((c) => c.power !== null);
-  const cards = creatures.map((c) => ({ id: c.id, name: c.name, cardId: c.cardId, text: null }));
+  const cards = creatures.map((c) => ({
+    id: c.id,
+    name: c.name,
+    cardId: c.cardId,
+    text: null,
+    cause: null,
+  }));
   return pickPrompt(t, "KeepWithinTotalPowerChoice", "Destined Confrontation", {
     purpose: "keep",
     cards,
@@ -606,6 +640,7 @@ export function replayStep(): { step: PlaytestStep; start: PlaytestView } {
     name: "Lightning Bolt",
     cardId: gameCard("Lightning Bolt").cardId,
     text: null,
+    cause: null,
   };
   const f2 = {
     ...theirs(start, f1Bf, { phase: "main1" }),
@@ -614,6 +649,8 @@ export function replayStep(): { step: PlaytestStep; start: PlaytestView } {
         ...bolt,
         seat: "opponent" as const,
         ability: false,
+        text: null,
+        cause: null,
         targets: [],
         targetPlayers: ["you" as const],
       },
@@ -770,7 +807,9 @@ export function fourPlayerAttack(): FourPlayer {
           { id: f.goyf.id, players: both, targets: [f.jace.id] },
           { id: f.elves.id, players: both, targets: [] },
         ],
-        targets: [{ id: f.jace.id, name: f.jace.name, cardId: f.jace.cardId, text: null }],
+        targets: [
+          { id: f.jace.id, name: f.jace.name, cardId: f.jace.cardId, text: null, cause: null },
+        ],
       },
     },
   };

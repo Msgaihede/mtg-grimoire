@@ -204,6 +204,10 @@ export interface PlaytestPrompt {
   kind: string;
   /** The card the question is about, when there is one. */
   source: string | null;
+  /** The words of the ability the question is about — a trigger whose targets are chosen. */
+  sourceText: string | null;
+  /** What set off the trigger the question is about, when it is one. */
+  cause: PlaytestCause | null;
   options: PlaytestOption[];
   /** It came out of the reader's own cast or activation, which `cancel` takes back. */
   cancellable: boolean;
@@ -254,6 +258,18 @@ export interface PlaytestCardRef {
   /** The ref stands for one of the card's abilities — a trigger to order, a replacement effect
    *  to choose: the ability's words, as the engine gives them. */
   text: string | null;
+  /** For a trigger: what set it off. One ability's two triggers differ by this alone. */
+  cause: PlaytestCause | null;
+}
+
+/** What set a trigger off: the card the event is about and its player. A card the reader may
+ *  not see (an opponent's hand or library) has neither id nor name. */
+export interface PlaytestCause {
+  /** phase's name for the event: `ZoneChanged`, `SpellCast`, `DamageDealt`… */
+  event: string;
+  id: number | null;
+  name: string | null;
+  player: PlaytestPlayer | null;
 }
 
 export interface PlaytestStackItem {
@@ -262,6 +278,10 @@ export interface PlaytestStackItem {
   cardId: string | null;
   seat: PlaytestPlayer;
   ability: boolean;
+  /** An ability's words, as the engine gives them. */
+  text: string | null;
+  /** A trigger's cause: what set it off. */
+  cause: PlaytestCause | null;
   /**
    * The cards it targets that the table shows — a permanent, a card in a graveyard, in exile or in
    * the command zone, another spell on the stack — in the order chosen: the board's targeting

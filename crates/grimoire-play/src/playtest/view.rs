@@ -264,6 +264,11 @@ pub struct PlaytestPrompt {
     /// The card the question is about — the spell being cast, the ability's source — when
     /// there is one.
     pub source: Option<String>,
+    /// The words of the ability the question is about, when the question names one: a trigger
+    /// whose targets are being chosen. Two of one card's triggers are told apart by these.
+    pub source_text: Option<String>,
+    /// What set off the trigger the question is about, when it is one.
+    pub cause: Option<PlaytestCause>,
     pub options: Vec<PlaytestOption>,
     /// The question came out of the reader's own cast or activation, which `cancel` takes back.
     pub cancellable: bool,
@@ -375,6 +380,21 @@ pub struct PlaytestCardRef {
     /// trigger to put in order, a replacement effect to choose — the ability's words, as the
     /// engine gives them.
     pub text: Option<String>,
+    /// For a trigger: what set it off. Two triggers of one ability are told apart by it — one
+    /// Soul Warden's two triggers, for two creatures entering.
+    pub cause: Option<PlaytestCause>,
+}
+
+/// What set a trigger off, as the event that did names it: the card it is about and the player.
+/// A card the reader may not see (in an opponent's hand or library) has neither id nor name.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaytestCause {
+    /// phase's name for the event: `ZoneChanged`, `SpellCast`, `DamageDealt`, `CardDrawn`…
+    pub event: String,
+    pub id: Option<u64>,
+    pub name: Option<String>,
+    pub player: Option<PlaytestPlayer>,
 }
 
 /// One spell or ability on the stack.
@@ -388,6 +408,11 @@ pub struct PlaytestStackItem {
     pub seat: PlaytestPlayer,
     /// An ability rather than a spell.
     pub ability: bool,
+    /// An ability's words, as the engine gives them — two abilities of one card's name on the
+    /// stack are told apart by these.
+    pub text: Option<String>,
+    /// A trigger's cause: what set it off.
+    pub cause: Option<PlaytestCause>,
     /// The cards it targets that the table shows — a permanent, a card in a graveyard, in exile
     /// or in the command zone, another spell on the stack — in the order it chose them, for the
     /// board's targeting arrows (issue #1071). A target the reader may not see (in a hand or a
