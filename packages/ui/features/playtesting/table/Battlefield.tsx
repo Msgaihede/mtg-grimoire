@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type JSX,
+} from "react";
 import type { GameCard, GamePlace, PlaytestAction } from "@/lib/ipc";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { FOCUS } from "@/lib/focus";
@@ -9,10 +17,12 @@ import {
   ASPECT,
   GAP,
   PILE,
+  attachedPeek,
   layoutTable,
   pileHeight,
   pileWidth,
   underOf,
+  type Across,
   type Pile,
   type PileApart,
 } from "./layout";
@@ -95,6 +105,12 @@ export interface BattlefieldProps {
    * whose two tables share the window's height.
    */
   dense?: boolean;
+  /**
+   * The attachments that cross tables (`acrossTables`): another player's Aura on one of this
+   * table's creatures is drawn under it here, and this table's Aura on another's creature leaves
+   * these lanes. Without it, each table draws only its own cards' attachments.
+   */
+  across?: Across;
 }
 
 /**
@@ -125,6 +141,7 @@ export function Battlefield({
   pick,
   onActivate,
   dense = false,
+  across,
 }: BattlefieldProps): JSX.Element {
   const dropRef = useRef<HTMLElement | null>(null);
   const over = useTableDropTarget({
@@ -177,11 +194,13 @@ export function Battlefield({
           height: Math.max(0, box.height - LANE_CHROME),
         },
         apart,
+        across,
       ),
-    [cards, box, apart],
+    [cards, box, apart, across],
   );
   const { creatures, lands, others, creatureWidth, backWidth } = layout;
   const both = lands.length > 0 && others.length > 0;
+  const own = useMemo(() => new Set(cards.map((c) => c.id)), [cards]);
   const row = cn(ROW, flipped && "items-start");
   const pile = (p: Pile, w: number) => (
     <PileView
@@ -197,6 +216,9 @@ export function Battlefield({
       mark={marks?.get(p.ids[0])}
       onPick={pick?.ids.has(p.ids[0]) ? pick.onPick : undefined}
       onActivate={onActivate}
+      own={own}
+      marks={marks}
+      pick={pick}
     />
   );
   const creatureLane = (
@@ -303,6 +325,9 @@ function PileView({
   mark,
   onPick,
   onActivate,
+  own,
+  marks,
+  pick,
 }: {
   pile: Pile;
   w: number;
@@ -316,13 +341,22 @@ function PileView({
   /** Present when a click picks this card rather than tapping it. */
   onPick: ((id: number) => void) | undefined;
   onActivate: ((id: number) => void) | undefined;
+  /** This table's own cards: an attachment that is not one is another table's guest. */
+  own: ReadonlySet<number>;
+  marks: ReadonlyMap<number, CardMark> | undefined;
+  pick: TablePick | undefined;
 }): JSX.Element {
   const ref = useRef<HTMLDivElement>(null);
+  const top = useRef<HTMLButtonElement>(null);
   const { menu, menuKey } = useContextMenu();
   const { card, ids, tapped } = pile;
+  const hosts = pile.attached.length > 0;
   const count = ids.length;
   const under = underOf(pile);
   const h = Math.round(w * ASPECT);
+  const peek = attachedPeek(w);
+  /** How far the pile is pushed down to make room for its attachments' edges above it. */
+  const lift = pile.attached.length * peek;
   // A card turned on its centre spills 0.2 of its width past its left edge; this puts it back
   // inside the pile's box, which `pileWidth` sized for the card as it lies.
   const turn = Math.round(w * 0.2);
@@ -334,11 +368,14 @@ function PileView({
   useEffect(() => {
     const element = ref.current;
     if (!element || !handled) return;
+    // With attachments the card itself is the handle, so a press on an attachment's edge carries
+    // the attachment (its own draggable) rather than the card it is attached to.
     return tableDraggable({
       element,
+      handle: hosts ? (top.current ?? undefined) : undefined,
       payload: () => ({ ids, from: "battlefield", name: card.name }),
     });
-  }, [ids, card.name, handled]);
+  }, [ids, card.name, handled, hosts]);
 
   /** Where one card of the pile is drawn: `x` right and `y` down of the box's corner. */
   const at = (x: number, y: number) => ({
@@ -351,7 +388,7 @@ function PileView({
   // The ×N marker straddles the bottom edge of the card as it lies, centred under it — large
   // enough to read across the table (issue #1001).
   const markX = Math.round(w * (tapped ? 0.7 : 0.5));
-  const markY = under * PILE + (tapped ? turn + w : h);
+  const markY = lift + under * PILE + (tapped ? turn + w : h);
 
   // Activate ability is the reader's own permanents' (never during a replay); the sandbox's rows
   // are any card's the table shows.
@@ -378,24 +415,47 @@ function PileView({
         ...(mark?.tone === "attack" ? { translate: `0 ${flipped ? FORWARD : -FORWARD}px` } : {}),
       }}
     >
+      {/* The attachments, farthest first, each a name bar higher — tucked under the card the way
+          an Aura or Equipment sits at a real table (issue #1073). */}
+      {pile.attached
+        .map((a, i) => ({ a, i }))
+        .reverse()
+        .map(({ a, i }) => (
+          <AttachedView
+            key={a.id}
+            card={a}
+            host={card}
+            style={at(0, lift - (i + 1) * peek)}
+            handled={handled && own.has(a.id)}
+            sandbox={sandbox}
+            onAct={onAct}
+            onPoint={onPoint}
+            onUnpoint={onUnpoint}
+            mark={marks?.get(a.id)}
+            onPick={pick?.ids.has(a.id) ? pick.onPick : undefined}
+            onActivate={readOnly || !own.has(a.id) ? undefined : onActivate}
+          />
+        ))}
       {/* The cards underneath, a few pixels up and to the right, the way cardboard sits. */}
       {Array.from({ length: under }, (_, i) => under - i).map((k) => (
         <div
           key={k}
           aria-hidden="true"
           className="pointer-events-none absolute"
-          style={at(k * PILE, (under - k) * PILE)}
+          style={at(k * PILE, lift + (under - k) * PILE)}
         >
           <CardFace card={card} />
         </div>
       ))}
       <button
+        ref={top}
         type="button"
         aria-label={[
           word,
           tapped ? "tapped" : null,
           card.isToken ? "token" : null,
           counters === "" ? null : counters,
+          pile.attached.length > 0 ? `with ${pile.attached.map((a) => a.name).join(", ")}` : null,
           mark?.word ?? null,
         ]
           .filter((part) => part !== null)
@@ -436,7 +496,7 @@ function PileView({
           !handled && !picks && "cursor-default",
           mark !== undefined ? MARK_RING[mark.tone] : picks && PICKABLE_RING,
         )}
-        style={at(0, under * PILE)}
+        style={at(0, lift + under * PILE)}
       >
         <CardFace card={card} />
         {mark?.badge !== undefined && (
@@ -463,5 +523,106 @@ function PileView({
         </span>
       )}
     </div>
+  );
+}
+
+/**
+ * One Aura or Equipment tucked under the card it is attached to: only its top edge shows, and
+ * that edge is the card's own to point at, open the menu of, pick, tap and carry off — an
+ * Equipment's equip ability is activated from here.
+ */
+function AttachedView({
+  card,
+  host,
+  style,
+  handled,
+  sandbox,
+  onAct,
+  onPoint,
+  onUnpoint,
+  mark,
+  onPick,
+  onActivate,
+}: {
+  card: GameCard;
+  host: GameCard;
+  style: CSSProperties;
+  /** Carried off and tapped by a click: the table's own card, with the sandbox's moves working. */
+  handled: boolean;
+  sandbox: boolean;
+  onAct: (action: PlaytestAction) => void;
+  onPoint: (pointed: Pointed) => void;
+  onUnpoint: () => void;
+  mark: CardMark | undefined;
+  onPick: ((id: number) => void) | undefined;
+  onActivate: ((id: number) => void) | undefined;
+}): JSX.Element {
+  const ref = useRef<HTMLButtonElement>(null);
+  const { menu, menuKey } = useContextMenu();
+  const ids = useMemo(() => [card.id], [card.id]);
+  const counters = card.counters.map(counterLabel).join(" · ");
+  const picks = onPick !== undefined;
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element || !handled) return;
+    return tableDraggable({
+      element,
+      payload: () => ({ ids, from: "battlefield", name: card.name }),
+    });
+  }, [ids, card.name, handled]);
+
+  const build = () => cardMenu({ card, ids, place: "battlefield", sandbox, onAct, onActivate });
+  const openMenu = menu(build);
+
+  return (
+    <button
+      ref={ref}
+      type="button"
+      aria-label={[
+        card.name,
+        `attached to ${host.name}`,
+        card.tapped ? "tapped" : null,
+        card.isToken ? "token" : null,
+        counters === "" ? null : counters,
+        mark?.word ?? null,
+      ]
+        .filter((part) => part !== null)
+        .join(", ")}
+      aria-pressed={picks ? mark !== undefined : undefined}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (onPick !== undefined) onPick(card.id);
+        else if (handled) onAct({ type: "tap", ids, tapped: !card.tapped });
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        if (build().length === 0) return;
+        onUnpoint();
+        openMenu(e);
+      }}
+      onKeyDown={menuKey(build)}
+      onMouseEnter={(e) =>
+        onPoint({
+          card,
+          ids,
+          place: "battlefield",
+          line: `${card.name}, attached to ${host.name}`,
+          at: pointerAt(e),
+        })
+      }
+      onMouseLeave={onUnpoint}
+      data-point={card.id}
+      className={cn(
+        "absolute rounded-md p-0",
+        "transition-[left,top,transform] duration-150 ease-out motion-reduce:transition-none",
+        FOCUS,
+        handled ? "cursor-grab" : picks ? "cursor-pointer" : "cursor-default",
+        mark !== undefined ? MARK_RING[mark.tone] : picks && PICKABLE_RING,
+      )}
+      style={style}
+    >
+      <CardFace card={card} />
+    </button>
   );
 }

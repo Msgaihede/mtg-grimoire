@@ -29,6 +29,7 @@ import {
   scryPick,
   targetPrompt,
   turnFive,
+  withAttachments,
   withStack,
 } from "./fixtures";
 import { playtestLines } from "./log";
@@ -334,6 +335,25 @@ export const AimAttack: Story = {
   play: async ({ canvasElement }) => {
     const yours = within(canvasElement).getByRole("region", { name: "Your battlefield" });
     await userEvent.click(within(yours).getByRole("button", { name: /^Tarmogoyf/ }));
+  },
+};
+
+/** Issue #1073: an Equipment and an Aura tucked under the creatures they are attached to, the
+ *  reader's Aura on the opponent's creature drawn on the opponent's table. */
+export const Attachments: Story = {
+  args: { view: withAttachments().view },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const yours = canvas.getByRole("region", { name: "Your battlefield" });
+    const theirs = canvas.getByRole("region", { name: "The opponent's battlefield" });
+    await expect(
+      within(yours).getByRole("button", { name: "Bonesplitter, attached to Tarmogoyf" }),
+    ).toBeVisible();
+    await expect(
+      within(theirs).getByRole("button", {
+        name: "Pacifism, attached to Ragavan, Nimble Pilferer",
+      }),
+    ).toBeVisible();
   },
 };
 

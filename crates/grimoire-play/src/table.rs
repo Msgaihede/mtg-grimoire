@@ -60,6 +60,11 @@ pub(crate) fn game_card(
         } else {
             0
         },
+        attached_to: o
+            .attached_to
+            .and_then(|host| host.as_object())
+            .filter(|host| o.zone == Zone::Battlefield && state.battlefield.contains(host))
+            .map(|host| host.0),
         foretold: o.zone == Zone::Exile && o.foretold,
         // What the rules offer is the session's to say: it knows whose view this is.
         can_foretell: false,
