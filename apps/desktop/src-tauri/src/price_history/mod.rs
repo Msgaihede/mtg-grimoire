@@ -42,7 +42,8 @@ pub async fn price_movers(
 }
 
 /// Replace the device's price watch list — the cards the Price movers widgets are narrowed to,
-/// which the next snapshot remembers a price for whether or not they are owned. Through
+/// whose price is remembered whether or not they are owned, from today: a changed list is
+/// snapshotted at once ([`watch`], issue #1080). Through
 /// `with_write`, so a sync holding the connection answers `BUSY`; the page sends the list again
 /// with its next layout change.
 #[tauri::command]
@@ -52,7 +53,7 @@ pub async fn set_price_watch(
 ) -> Result<(), String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        crate::sync::with_write(&state, |conn| set_watched(conn, &card_ids))
+        crate::sync::with_write(&state, |conn| watch(conn, &card_ids))
     })
     .await
     .map_err(|e| format!("the cards to follow could not be remembered: {e}"))?
