@@ -224,8 +224,14 @@ const GROUP = "g1";
 
 interface Relay extends FakeState {
   object: Group;
-  /** Store one row as `device`, stamped `hlcMs`; answers its `seq`. */
-  push: (device: string, sealed: string, hlcMs: number, hlcCtr?: number) => Promise<number>;
+  /** Store one row as `device`, stamped `hlcMs`, signed when `sig` is given; answers its `seq`. */
+  push: (
+    device: string,
+    sealed: string,
+    hlcMs: number,
+    hlcCtr?: number,
+    sig?: string,
+  ) => Promise<number>;
   /** A pull, as its query string; answers the status, the parsed body and the body's text. */
   pull: (query: string) => Promise<{ status: number; text: string; body: Answer }>;
   ack: (device: string, cursor: number) => Promise<number>;
@@ -240,15 +246,19 @@ interface Answer {
   error?: string;
 }
 
-function relay(): Relay {
-  const fake = fakeState("sqlite");
+/**
+ * A relay over `fake`, or over a fresh database. `fake` is for a test that has put something in
+ * the database before the object's first wake — the shape of a log an older relay made.
+ */
+function relay(fake: FakeState = fakeState("sqlite")): Relay {
   const object = new Group(fake.state);
   const at = (path: string) => `https://relay.example/g/${GROUP}/${path}`;
   return {
     ...fake,
     object,
-    async push(device, sealed, hlcMs, hlcCtr = 0) {
+    async push(device, sealed, hlcMs, hlcCtr = 0, sig) {
       const envelope: Envelope = { group: GROUP, device, epoch: 1, hlcMs, hlcCtr, sealed };
+      if (sig !== undefined) envelope.sig = sig;
       const response = await object.fetch(
         new Request(at("push"), { method: "POST", body: JSON.stringify(envelope) }),
       );
@@ -673,3 +683,191 @@ describe("a pull is the relay hearing from a device, paged or not", () => {
     }
   });
 });
+
+/**
+ * **A signed envelope's `sig`, stored and served** (issue #1096, spec §4 and §8): the relay keeps
+ * it beside the row and hands it back on both answers, verifying nothing — and an unsigned row's
+ * answer is the one it has always been, which the byte-for-byte tests above already hold over a
+ * log of nothing but unsigned rows.
+ */
+const SIG = "S".repeat(43) + "-_".repeat(21) + "z";
+const SIG2 = "T".repeat(86);
+
+describe("a signed push", () => {
+  it("is stored with its sig, and an unsigned one with none", async () => {
+    expect(SIG).toHaveLength(86);
+    const r = relay();
+    await r.push("b", "signed", 1, 0, SIG);
+    await r.push("b", "unsigned", 2);
+
+    expect(r.sql(`SELECT sealed, sig FROM log ORDER BY seq`)).toEqual([
+      { sealed: "signed", sig: SIG },
+      { sealed: "unsigned", sig: null },
+    ]);
+  });
+
+  it("is answered with its sig last on a page, and an unsigned row beside it without one", async () => {
+    const r = relay();
+    await r.push("b", "sealed-text", 7, 3, SIG);
+    await r.push("c", "plain", 8);
+
+    const { text } = await r.pull("since=0&device=a&limit=5");
+
+    expect(text).toBe(
+      `{"envelopes":[` +
+        `{"group":"g1","device":"b","epoch":1,"hlcMs":7,"hlcCtr":3,"sealed":"sealed-text","sig":"${SIG}"},` +
+        `{"group":"g1","device":"c","epoch":1,"hlcMs":8,"hlcCtr":0,"sealed":"plain"}` +
+        `],"cursor":2,"more":false}`,
+    );
+  });
+
+  it("is answered with its sig on the streamed pull, and only the signed rows carry one", async () => {
+    const r = relay();
+    await r.push("b", "first", 5, 0, SIG);
+    await r.push("c", "second", 3);
+    await r.push("a", "mine", 4, 0, SIG2);
+    await r.push("c", "third", 9, 1, SIG2);
+
+    const { text } = await r.pull("since=0&device=a");
+
+    expect(text).toBe(
+      `{"envelopes":[` +
+        `{"group":"g1","device":"c","epoch":1,"hlcMs":3,"hlcCtr":0,"sealed":"second"},` +
+        `{"group":"g1","device":"b","epoch":1,"hlcMs":5,"hlcCtr":0,"sealed":"first","sig":"${SIG}"},` +
+        `{"group":"g1","device":"c","epoch":1,"hlcMs":9,"hlcCtr":1,"sealed":"third","sig":"${SIG2}"}` +
+        `],"cursor":4}`,
+    );
+    // And the unpaged answer of a log with no signed row in it is still the old one, to the byte.
+    const plain = relay();
+    await plain.push("b", "x", 1);
+    expect((await plain.pull("since=0&device=a")).text).toBe(asItWasAnswered(plain, 0, "a"));
+    expect((await plain.pull("since=0&device=a")).text).not.toContain("sig");
+  });
+
+  it("refuses a malformed sig at the object as well, and stores nothing", async () => {
+    const r = relay();
+    for (const sig of [null, 7, SIG + "==", SIG.slice(2)]) {
+      const response = await r.object.fetch(
+        new Request(`https://relay.example/g/${GROUP}/push`, {
+          method: "POST",
+          body: JSON.stringify({
+            group: GROUP,
+            device: "b",
+            epoch: 1,
+            hlcMs: 1,
+            hlcCtr: 0,
+            sealed: "x",
+            sig,
+          }),
+        }),
+      );
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: "malformed envelope" });
+    }
+    expect(r.sql(`SELECT count(*) AS n FROM log`)[0].n).toBe(0);
+  });
+
+  it("counts the sealed text and not the sig against the log's size", async () => {
+    const r = relay();
+    await r.push("b", "12345", 1, 0, SIG);
+
+    expect(r.sql(`SELECT chars FROM log_size`)[0].chars).toBe(5);
+  });
+});
+
+describe("a log an older relay made, with no sig column", () => {
+  /** The `log` table as every object made it before `sig` existed, with two rows already in it. */
+  function older(): FakeState {
+    const fake = fakeState("sqlite");
+    fake.sql(
+      `CREATE TABLE log (
+         seq       INTEGER PRIMARY KEY AUTOINCREMENT,
+         device    TEXT    NOT NULL,
+         epoch     INTEGER NOT NULL,
+         hlc_ms    INTEGER NOT NULL,
+         hlc_ctr   INTEGER NOT NULL,
+         sealed    TEXT    NOT NULL,
+         stored_at INTEGER NOT NULL
+       )`,
+    );
+    for (const [device, sealed, hlcMs] of [
+      ["b", "before-one", 1],
+      ["c", "before-two", 2],
+    ] as const) {
+      fake.sql(
+        `INSERT INTO log (device, epoch, hlc_ms, hlc_ctr, sealed, stored_at) VALUES (?, 1, ?, 0, ?, 0)`,
+        device,
+        hlcMs,
+        sealed,
+      );
+    }
+    return fake;
+  }
+
+  const columns = (fake: FakeState) =>
+    fake.sql(`PRAGMA table_info(log)`).map((column) => column.name);
+
+  it("gains the column on its first wake, last and nullable, its rows kept and left unsigned", async () => {
+    const fake = older();
+    expect(columns(fake)).not.toContain("sig");
+
+    const r = relay(fake);
+
+    expect(columns(fake)).toEqual([
+      "seq",
+      "device",
+      "epoch",
+      "hlc_ms",
+      "hlc_ctr",
+      "sealed",
+      "stored_at",
+      "sig",
+    ]);
+    // The shape a fresh object makes, so every object has one.
+    expect(columns(freshLog())).toEqual(columns(fake));
+    expect(fake.sql(`SELECT sealed, sig FROM log ORDER BY seq`)).toEqual([
+      { sealed: "before-one", sig: null },
+      { sealed: "before-two", sig: null },
+    ]);
+    // Its rows answered as they were, and a signed push after the wake carries its sig.
+    await r.push("b", "after", 3, 0, SIG);
+    expect((await r.pull("since=0&device=a")).text).toBe(
+      `{"envelopes":[` +
+        `{"group":"g1","device":"b","epoch":1,"hlcMs":1,"hlcCtr":0,"sealed":"before-one"},` +
+        `{"group":"g1","device":"c","epoch":1,"hlcMs":2,"hlcCtr":0,"sealed":"before-two"},` +
+        `{"group":"g1","device":"b","epoch":1,"hlcMs":3,"hlcCtr":0,"sealed":"after","sig":"${SIG}"}` +
+        `],"cursor":3}`,
+    );
+    // And the seq carried on from the rows already there: the table was altered, not remade.
+    expect(r.sql(`SELECT max(seq) AS seq FROM log`)[0].seq).toBe(3);
+  });
+
+  it("is altered once: a later wake finds the column and adds nothing", () => {
+    const fake = older();
+    new Group(fake.state);
+    const mark = fake.asked.length;
+
+    new Group(fake.state);
+
+    expect(fake.asked.slice(mark).some((one) => one.query.startsWith("ALTER TABLE log"))).toBe(
+      false,
+    );
+    expect(
+      fake.asked.slice(0, mark).filter((one) => one.query.startsWith("ALTER TABLE log")),
+    ).toHaveLength(1);
+  });
+
+  it("is never altered when the object was made with the column", () => {
+    const fake = fakeState("sqlite");
+    new Group(fake.state);
+
+    expect(fake.asked.some((one) => one.query.startsWith("ALTER TABLE log"))).toBe(false);
+  });
+});
+
+/** A fresh object's `log` table, for its shape. */
+function freshLog(): FakeState {
+  const fake = fakeState("sqlite");
+  new Group(fake.state);
+  return fake;
+}

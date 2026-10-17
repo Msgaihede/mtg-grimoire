@@ -350,8 +350,24 @@ database stays the device it was rather than silently forking. Two devices claim
 is worse than a device that has to be re-paired, and that one line is what decides which of those
 a restore produces.
 
+**The signing key lives beside it, by the same rules (user schema v66).** `sync_identity` holds a
+second pair, `sign_secret` and `sign_public` — Ed25519, the key every envelope this device pushes
+is signed with (*The envelope, measured*) — next to the X25519 pair it agrees keys with. It is
+minted **on absence**, exactly like the identity: beside the X25519 pair on a fresh install, and on
+an install from before the rung the first time `identity::ensure` runs or the push asks
+`identity::signing_key` — the push path mints the one missing thing and nothing else, because a
+device paired before v66 may push for weeks before it next pairs. A row that already holds a key
+keeps it, so a restored `user.db` signs as the device it was. An archive restore
+(`archive::replace`) treats it as it treats the X25519 secret: archives carry no `sync_` table,
+the restore empties `sync_devices` and leaves `sync_identity` alone, and so does leaving a group.
+A peer's key sits on its roster row, `sync_devices.sign_public`, beside its `capability` (`NULL`
+is a full member) and the `proto` level it advertised (`identity::SIG_PROTO` is this build's);
+nothing a shipped build does writes those three yet — the pairing slots that carry them are the
+Discord spec's PR 2 ([design](../superpowers/specs/2026-10-17-discord-integration-design.md) §3).
+
 **No key crosses the IPC boundary.** `identity::Device.public_key` is `#[serde(skip)]` — the
-webview draws a list of devices, and a key on that list is a key in a screenshot — and
+webview draws a list of devices, and a key on that list is a key in a screenshot — and so are the
+v66 `sign_public`, `capability` and `proto`; and
 `pairing::Pending`'s fields are all private and none of them is `Serialize`. What crosses is the
 six digits (a string, because they are what a *person* compares) and two sealed blobs.
 
@@ -720,9 +736,14 @@ Three tables, all `Side::User` in `schema::TABLES` and all `None` in
 
 | Table | Holds |
 | --- | --- |
-| `sync_identity` | one row: this device's id, its X25519 keypair, its name |
+| `sync_identity` | one row: this device's id, its X25519 keypair, its name — and since v66 its Ed25519 signing pair, `sign_secret`/`sign_public`, nullable until minted on absence |
 | `sync_group` | one row: the group id, the epoch, the 32-byte group key |
-| `sync_devices` | the roster, `WITHOUT ROWID`. **A removed row is deleted since 2026-08-30**; `revoked_at` stays on the table for the migration's sake and is read but no longer written |
+| `sync_devices` | the roster, `WITHOUT ROWID`. **A removed row is deleted since 2026-08-30**; `revoked_at` stays on the table for the migration's sake and is read but no longer written. Since v66 a peer's `sign_public`, `capability` (no `CHECK`, so a newer word is kept) and `proto`, all nullable |
+
+**v66 (2026-10-17, issue #1096) is five nullable `ADD COLUMN`s on these two tables and writes no
+row.** Neither table syncs, so no capture spec moves; the rung owes `schema::fixtures::UNDO_V66`
+for `ADD COLUMN`'s loud reason, and `v66_adds_the_signing_columns_empty` holds the rewind to v65's
+text and the climb to head's.
 
 **Three tables rather than three `app_meta` rows**, and the difference is what a bad value costs.
 Every key in `app_meta` is a *preference* — `get_app_meta` swallows a read error and every caller
@@ -858,6 +879,7 @@ recipients, through a different route, and it is still the one this paragraph or
 
 | Crate | Pin | Why |
 | --- | --- | --- |
+| `ed25519-dalek` | `2.2`, `default-features = false` + `zeroize` — **not 3.0** | The envelope signature (user schema v66). 3.0 shares `curve25519-dalek 5` with `x25519-dalek` but needs `sha2 0.11`, the `hybrid-array` stack `chacha20poly1305`'s row refuses; 2.x hashes with the `sha2 0.10` already here and costs a second `curve25519-dalek` (4.x) — the one new duplicate `cargo tree -d` showed on 2026-10-17. No `std`, no `fast` tables, no `rand_core`: the key is `crypto::random_bytes`. |
 | `x25519-dalek` | `3`, features `static_secrets` + `getrandom` | `static_secrets` because a device's key is reused for every pairing it ever does — an `EphemeralSecret` is consumed by its one `diffie_hellman`. `getrandom` is what supplies `StaticSecret::random()`, so this crate never holds an RNG of its own. |
 | `chacha20poly1305` | `0.10`, **not 0.11** | 0.11 moves RustCrypto's array types to `hybrid-array`, which would stand a **second** array stack beside the `sha2 0.10 → digest 0.10 → crypto-common 0.1 → generic-array 0.14` this tree already carries. |
 | `hkdf` | `0.12` | Sits on that same stack. |
@@ -3664,11 +3686,68 @@ does not overwrite a sentence the reconciler already wrote about a printing that
 
 ## The envelope, measured
 
-`sync_engine::wire`. Six fields cross the network and **the relay sees nothing else**: `group`
-routes it, `device` and the two clock fields let the Durable Object order and compact without
-decrypting anything, and `sealed` is opaque. The op count is deliberately absent — "this device
-wrote 431 things today" is not needed in order to relay — and a test asserts the JSON has exactly
-those six keys.
+`sync_engine::wire`. Six fields cross the network, a seventh when the sender signed, and **the
+relay sees nothing else**: `group` routes it, `device` and the two clock fields let the Durable
+Object order and compact without decrypting anything, `sealed` is opaque, and `sig` is the
+sender's signature over the rest. The op count is deliberately absent — "this device wrote 431
+things today" is not needed in order to relay — and a test asserts the JSON has exactly those
+keys, with `sig` and without.
+
+### The seventh field: `sig` (user schema v66)
+
+**Encrypt-then-sign.** `wire::seal_batch` seals, then signs with the device's Ed25519 key
+(`identity::signing_key`, threaded through `client::post_ops` — the push and the baselines, the
+two callers, so nothing this device sends goes out unsigned). The signature covers exactly
+`wire::envelope_signing_bytes`:
+
+```
+b"mtg-grimoire/envelope/v1" 0x00 group 0x00 device 0x00 epoch 0x00 hlc_ms 0x00 hlc_ctr 0x00 sealed
+```
+
+— the three numbers as decimal text, `sealed` as its base64url characters — and travels as
+`sig`, base64url **without padding** (86 characters), `sealed`'s engine. The bytes are a wire to
+the relay and to every later build, pinned by `the_signing_bytes_are_pinned`. The clock fields are
+in it because the AEAD never covered them: until v66 a relay could restamp an envelope unseen.
+
+**Old and new builds read each other.** `Envelope` has no `deny_unknown_fields`, so an older build
+drops the key; `sig` is `#[serde(default, skip_serializing_if = "Option::is_none")]`, so an envelope
+without one parses as `None` and an unsigned envelope serialises to the bytes it always did.
+
+**Verified when present and known — open mode.** `client::open_checked`, ahead of `open_batch` on
+every pulled envelope, looks up the sender's `sync_devices.sign_public`: no key on file or no `sig`
+is accepted as before (`wire::Signed::Unchecked`); a signature the key refuses
+(`wire::Signed::Forged`) is `WireError::Forged`, refused before a byte is decrypted and stepped over
+exactly like an unreadable envelope — one `error_log` row, the cursor moves past it, a gap is
+opened — because a forgery never becomes the sender's and must not pin the log. No shipped build
+files a peer's key yet, so in practice every envelope is unchecked until the Discord spec's PR 2
+carries keys across the pairing and makes a signed group refuse the unchecked arm.
+
+**Every op inside must be the envelope's sender's — recorded, not yet refused.** `apply` attributes
+an op by its own `at.device`, so a signature over the envelope says nothing about an op stamped as
+somebody else (the spec's F3). `wire::foreign_ops` counts them after opening, and
+`client::OP_BINDING` decides: `Record` in this build — one `error_log` row per envelope a trip
+reads, and the ops applied — and the spec's PR 2 flips that one constant to `Refuse`. **No honest
+flow puts another device's op in an envelope**, which is what makes the flip safe: the outbox is
+filled only by the capture triggers, which stamp `sync_identity.device_id`; `apply` writes under
+`capture::suppressed` and adds nothing to it; a baseline's claims are built by `baseline::build`
+under the emitter's own id (the horizon carries other devices' stamps, but in its own field, never
+as an op's `at`); `rebase` restamps with the same id; and a push refused as `stale_epoch` re-seals
+the same ops under the new key. Orphans, `sync_heard` and the rendezvous publish no ops at all.
+Recording first is the cheap way to learn the census missed a case.
+
+**The relay's side.** The relay checks `sig`'s shape and nothing more — exactly 86 characters of
+`[A-Za-z0-9_-]` — because it holds no device's signing key and verifies no signature. An envelope
+with no `sig` key is read exactly as before; one whose `sig` is present and not of that shape —
+`null` included, which is why an unsigned batch omits the key — is `400 malformed envelope`, at the
+Worker and again in the group's Durable Object. The object stores it in `log.sig`, a nullable
+column a live log gains on its first wake after the deploy (`PRAGMA table_info(log)`, then
+`ALTER TABLE log ADD COLUMN sig TEXT`, no backfill — every older row is unsigned), and both pull
+answers, streamed and paged, return it as the envelope's last field only when the row has one, so
+an unsigned row's bytes are unchanged. `sig` is not counted against the quota, and the push-body
+cap did not move. **The same release binds the token's `dev` claim** to the device a push's
+envelope or an ack's body names, in the Worker ahead of the object — **warn-only**: a mismatch is
+logged as the fixed line `device_mismatch on push|ack` and passed on (`admit::DEVICE_BINDING`),
+and the spec's PR 2 flips it to `403 device_mismatch`. A token with no `dev` is never a mismatch.
 
 The AAD is `group\0device\0epoch`, and **binding the epoch is what makes revocation mean
 something on the wire**: rotating the group key already stops a removed device reading anything

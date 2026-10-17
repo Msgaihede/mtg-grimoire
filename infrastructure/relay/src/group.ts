@@ -36,6 +36,13 @@ import { KEEPALIVE, selectedProtocol } from "./ticket";
  * The envelope as `sync_engine::wire` seals it, with only the fields the relay reads named.
  * `sealed` is the ciphertext and is passed through untouched; the clock fields are copied out
  * so the relay can sort a log it cannot read.
+ *
+ * **`sig` is the sender's Ed25519 signature over the sealed batch** (issue #1096, spec §4) —
+ * base64url, unpadded, 86 characters (`admit.ts`'s `SIG_CHARS`) — and, like `sealed`, it is
+ * stored and handed back and never looked inside: the relay holds no device's signing key, so it
+ * verifies nothing. **Optional, and absent from an answer whenever it is absent from the row**,
+ * which is every row a build without signing pushed: their answers keep the six fields they have
+ * always had, byte for byte.
  */
 export interface Envelope {
   group: string;
@@ -44,6 +51,7 @@ export interface Envelope {
   hlcMs: number;
   hlcCtr: number;
   sealed: string;
+  sig?: string;
 }
 
 /**
@@ -57,15 +65,26 @@ type LogRow = {
   hlc_ms: number;
   hlc_ctr: number;
   sealed: string;
+  /** `NULL` for an unsigned push — every row stored before the column existed is one. */
+  sig: string | null;
 };
+
+/**
+ * The columns a pull reads of a row it answers: the one list both answers select, so a column
+ * added to the envelope is added to every pull at once and neither can be left serving the old
+ * shape.
+ */
+const ANSWERED = `device, epoch, hlc_ms, hlc_ctr, sealed, sig`;
 
 /**
  * A stored row as the envelope a pull answers it as — **the six fields in the order every
  * answer has spelled them**, which is what `JSON.stringify` writes and what the unpaged
- * answer's bytes are held to.
+ * answer's bytes are held to — **and a seventh, `sig`, last and only when the row has one.**
+ * Left off rather than written `null`, so an unsigned row's envelope is the one it was before
+ * signatures existed, to the byte; a released build's serde ignores the field when it is there.
  */
 function envelopeOf(group: string, row: LogRow): Envelope {
-  return {
+  const envelope: Envelope = {
     group,
     device: row.device,
     epoch: row.epoch,
@@ -73,6 +92,8 @@ function envelopeOf(group: string, row: LogRow): Envelope {
     hlcCtr: row.hlc_ctr,
     sealed: row.sealed,
   };
+  if (row.sig !== null) envelope.sig = row.sig;
+  return envelope;
 }
 
 /**
@@ -150,6 +171,10 @@ export class Group implements DurableObject {
     // the log would restart `seq` at 1 and every device holding a cursor of 5 would silently
     // skip the next five rows. `AUTOINCREMENT` is the documented way to make a rowid
     // monotonic for the life of the table.
+    //
+    // `sig` is last, and nullable, for the reason `acks.heard_at` is below: an object that held a
+    // log before the column existed gets it from an `ALTER`, which appends it and cannot add a
+    // `NOT NULL` — so a fresh table is made the same shape, and every object has one.
     this.sql.exec(
       `CREATE TABLE IF NOT EXISTS log (
          seq       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -158,9 +183,22 @@ export class Group implements DurableObject {
          hlc_ms    INTEGER NOT NULL,
          hlc_ctr   INTEGER NOT NULL,
          sealed    TEXT    NOT NULL,
-         stored_at INTEGER NOT NULL
+         stored_at INTEGER NOT NULL,
+         sig       TEXT
        );`,
     );
+    // **A live log gets `sig` on its first wake after the deploy**, by the same check as
+    // `heard_at`'s below: `CREATE TABLE IF NOT EXISTS` leaves an existing table as it was, so the
+    // column is added when `PRAGMA table_info` does not list it, and not otherwise.
+    //
+    // **No backfill, and `NULL` is the truth rather than a placeholder**: every row already stored
+    // was pushed unsigned, and an unsigned row is answered without a `sig` exactly as it was before
+    // the column existed. Adding a nullable column with no default rewrites no row — SQLite records
+    // it in the schema alone — so the migration costs a live log nothing in proportion to its size.
+    const logColumns = this.sql.exec<{ name: string }>(`PRAGMA table_info(log)`).toArray();
+    if (!logColumns.some((column) => column.name === "sig")) {
+      this.sql.exec(`ALTER TABLE log ADD COLUMN sig TEXT`);
+    }
     // `heard_at` is when the relay last heard from the device — every ack sets it, a pull
     // refreshes it daily — and it is how a device that is never coming back stops holding the
     // compaction floor (`log.compact`, `ACK_TTL_MS`). **Nullable in a fresh table too**, so
@@ -310,10 +348,12 @@ export class Group implements DurableObject {
     }
     if (full) return json({ error: full.error, code: full.code }, full.status);
 
+    // `sig` as it came or `NULL`: `isEnvelope` has already refused one of any other shape, and
+    // the relay verifies none — it holds no key to verify with (`Envelope`'s doc).
     const stored = this.sql
       .exec<{ seq: number }>(
-        `INSERT INTO log (device, epoch, hlc_ms, hlc_ctr, sealed, stored_at)
-              VALUES (?, ?, ?, ?, ?, ?)
+        `INSERT INTO log (device, epoch, hlc_ms, hlc_ctr, sealed, stored_at, sig)
+              VALUES (?, ?, ?, ?, ?, ?, ?)
            RETURNING seq`,
         envelope.device,
         envelope.epoch,
@@ -321,6 +361,7 @@ export class Group implements DurableObject {
         envelope.hlcCtr,
         envelope.sealed,
         Date.now(),
+        envelope.sig ?? null,
       )
       .one();
     this.sql.exec(`UPDATE log_size SET chars = chars + ? WHERE id = 1`, envelope.sealed.length);
@@ -446,10 +487,7 @@ export class Group implements DurableObject {
         const parts: string[] = [];
         for (let chars = 0; next < order.length && chars < STREAM_CHUNK_CHARS; next += 1) {
           const row = this.sql
-            .exec<LogRow>(
-              `SELECT device, epoch, hlc_ms, hlc_ctr, sealed FROM log WHERE seq = ?`,
-              order[next].seq,
-            )
+            .exec<LogRow>(`SELECT ${ANSWERED} FROM log WHERE seq = ?`, order[next].seq)
             .toArray()[0];
           if (row === undefined) continue;
           parts.push((written ? "," : "") + JSON.stringify(envelopeOf(group, row)));
@@ -516,7 +554,7 @@ export class Group implements DurableObject {
     const last = seqs[taken - 1];
     const rows = this.sql
       .exec<LogRow>(
-        `SELECT device, epoch, hlc_ms, hlc_ctr, sealed FROM log
+        `SELECT ${ANSWERED} FROM log
           WHERE seq > ? AND seq <= ? AND device <> ?
           ORDER BY seq`,
         cursor,

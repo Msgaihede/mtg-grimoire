@@ -170,7 +170,7 @@ async fn a_push_and_a_pull_carry_a_row_between_two_databases() {
             .collect()
     };
     let group = identity::group(&a).unwrap().unwrap();
-    let envelope = wire::seal_batch(&group, "dev-a", &ops).unwrap();
+    let envelope = wire::seal_unsigned(&group, "dev-a", &ops).unwrap();
 
     let server = MockServer::start_async().await;
     server.mock(|when, then| {
@@ -230,7 +230,7 @@ async fn an_envelope_from_a_newer_epoch_holds_the_cursor() {
             .collect()
     };
     let newer = identity::group(&a).unwrap().unwrap();
-    let envelope = wire::seal_batch(&newer, "dev-a", &ops).unwrap();
+    let envelope = wire::seal_unsigned(&newer, "dev-a", &ops).unwrap();
 
     let server = MockServer::start_async().await;
     let twice = serde_json::to_value(&envelope).unwrap();
@@ -524,7 +524,7 @@ async fn a_baseline_is_emitted_after_the_pull_and_not_before() {
     let b = paired("dev-b", 0);
     add_copy(&b, "from-b", 2);
     let group = identity::group(&b).unwrap().unwrap();
-    let envelope = wire::seal_batch(&group, "dev-b", &outbox(&b)).unwrap();
+    let envelope = wire::seal_unsigned(&group, "dev-b", &outbox(&b)).unwrap();
 
     let server = MockServer::start_async().await;
     keys_mock(&server, 0);
@@ -1398,7 +1398,7 @@ fn desk_at(group: &Group) -> Connection {
 
 /// What the desk writes from here on, sealed under `group` — the ops after the first `skip`.
 fn sealed_since(desk: &Connection, skip: usize, group: &Group) -> Envelope {
-    wire::seal_batch(group, "dev-remover", &outbox(desk)[skip..]).unwrap()
+    wire::seal_unsigned(group, "dev-remover", &outbox(desk)[skip..]).unwrap()
 }
 
 /// `/keys` answering `epoch` with a blob the desk sealed to `me`, naming `devices`.
@@ -2492,7 +2492,7 @@ async fn a_device_that_changes_group_pulls_the_new_log_from_the_start() {
             .map(|r| r.unwrap().1)
             .collect()
     };
-    let envelope = wire::seal_batch(
+    let envelope = wire::seal_unsigned(
         &identity::group(&a).unwrap().unwrap(),
         &a_me.device_id,
         &ops,
@@ -2604,7 +2604,7 @@ async fn a_pull_that_lands_converts_the_legacy_picks_and_one_held_at_an_epoch_do
     let a = paired("dev-a", 1);
     add_copy(&a, "c1", 1);
     let newer = identity::group(&a).unwrap().unwrap();
-    let envelope = wire::seal_batch(&newer, "dev-a", &outbox(&a)).unwrap();
+    let envelope = wire::seal_unsigned(&newer, "dev-a", &outbox(&a)).unwrap();
     let held = MockServer::start_async().await;
     held.mock(|when, then| {
         when.method(GET).path(format!("/g/{GROUP}/pull"));
@@ -2739,7 +2739,7 @@ fn a_newer_devices_page(card: &str) -> Envelope {
 fn an_ordinary_page(card: &str) -> Envelope {
     let c = paired("dev-c", 0);
     add_copy(&c, card, 1);
-    wire::seal_batch(&identity::group(&c).unwrap().unwrap(), "dev-c", &outbox(&c)).unwrap()
+    wire::seal_unsigned(&identity::group(&c).unwrap().unwrap(), "dev-c", &outbox(&c)).unwrap()
 }
 
 /// `dev-a` files a deck in a folder and adds a copy behind it. Answers `(child, parent)`: the deck
@@ -2770,8 +2770,8 @@ fn a_child_and_its_parent_from(device: &str, card: &str) -> (Envelope, Envelope)
     assert_eq!(ops.len(), 3, "a folder, a deck and a +1: {ops:?}");
     let group = identity::group(&a).unwrap().unwrap();
     (
-        wire::seal_batch(&group, device, &ops[1..]).unwrap(),
-        wire::seal_batch(&group, device, &ops[..1]).unwrap(),
+        wire::seal_unsigned(&group, device, &ops[1..]).unwrap(),
+        wire::seal_unsigned(&group, device, &ops[..1]).unwrap(),
     )
 }
 
@@ -2962,7 +2962,7 @@ async fn an_authentic_batch_this_build_cannot_parse_holds_as_newer() {
     assert_eq!(rows[0].0, "pull", "still noted: {rows:?}");
 
     // The contrast: the same epoch, a seal that fails.
-    let mut altered = wire::seal_batch(&group, "dev-a", &outbox(&a)).unwrap();
+    let mut altered = wire::seal_unsigned(&group, "dev-a", &outbox(&a)).unwrap();
     let middle = altered.sealed.len() / 2;
     let flipped = if &altered.sealed[middle..=middle] == "A" {
         "B"
@@ -3011,9 +3011,9 @@ async fn a_malformed_batch_holds_its_senders_later_batches_too() {
     let ops = outbox(&a);
     assert_eq!(ops.len(), 3, "{ops:?}");
     let group = identity::group(&a).unwrap().unwrap();
-    let earlier = wire::seal_batch(&group, "dev-a", &ops[0..1]).unwrap();
+    let earlier = wire::seal_unsigned(&group, "dev-a", &ops[0..1]).unwrap();
     let malformed = unparseable(&group, "dev-a", &ops[1]);
-    let later = wire::seal_batch(&group, "dev-a", &ops[2..3]).unwrap();
+    let later = wire::seal_unsigned(&group, "dev-a", &ops[2..3]).unwrap();
     let other = an_ordinary_page("c1");
 
     let server = MockServer::start_async().await;
@@ -3062,7 +3062,7 @@ async fn a_malformed_batch_holds_its_senders_later_batches_too() {
 
     // This device updates, and the same batch now parses.
     first.delete_async().await;
-    let parsed = wire::seal_batch(&group, "dev-a", &ops[1..2]).unwrap();
+    let parsed = wire::seal_unsigned(&group, "dev-a", &ops[1..2]).unwrap();
     serving(&server, &[&later, &other, &parsed, &earlier], 9);
     let Pulled { report: landed, .. } = pull(&b, &server.base_url(), "access-1", None)
         .await
@@ -3093,7 +3093,7 @@ async fn a_same_version_batch_that_does_not_parse_is_stepped_over_and_recorded_o
         let ops = outbox(&a);
         let group = identity::group(&a).unwrap().unwrap();
         let broken = unparseable_as(&group, "dev-a", &ops[0], schema);
-        let later = wire::seal_batch(&group, "dev-a", &ops[1..2]).unwrap();
+        let later = wire::seal_unsigned(&group, "dev-a", &ops[1..2]).unwrap();
 
         let server = MockServer::start_async().await;
         serving(&server, &[&broken, &later], 9);
@@ -3360,7 +3360,7 @@ async fn a_release_that_uncovers_a_newer_op_holds_it_as_newer() {
     assert_eq!(ops.len(), 3, "{ops:?}");
     let group = identity::group(&a).unwrap().unwrap();
     // The deck, from this build; the folder never sent.
-    let child = wire::seal_batch(&group, "dev-a", &ops[1..2]).unwrap();
+    let child = wire::seal_unsigned(&group, "dev-a", &ops[1..2]).unwrap();
     // Then dev-a updates, and its next op is on a table this build does not have.
     let mut future = ops[2].clone();
     future.table = "future_table".to_owned();
@@ -3638,7 +3638,7 @@ fn claiming_epoch(epoch: i64, card: &str) -> Envelope {
     let x = paired("dev-x", 0);
     add_copy(&x, card, 1);
     let group = identity::group(&x).unwrap().unwrap();
-    let mut envelope = wire::seal_batch(&group, "dev-x", &outbox(&x)).unwrap();
+    let mut envelope = wire::seal_unsigned(&group, "dev-x", &outbox(&x)).unwrap();
     envelope.epoch = epoch;
     envelope
 }
@@ -4760,10 +4760,10 @@ async fn a_batch_stamped_days_ahead_holds_its_sender_until_the_clock_catches_up(
         )
         .unwrap();
     let two_days = 2 * 24 * 60 * 60 * 1000;
-    let early = wire::seal_batch(&group, "dev-a", &ops[0..1]).unwrap();
+    let early = wire::seal_unsigned(&group, "dev-a", &ops[0..1]).unwrap();
     let mut ahead = ops[1].clone();
     ahead.at.ms = now + two_days;
-    let fast = wire::seal_batch(&group, "dev-a", &[ahead]).unwrap();
+    let fast = wire::seal_unsigned(&group, "dev-a", &[ahead]).unwrap();
 
     let server = MockServer::start_async().await;
     serving(&server, &[&fast, &an_ordinary_page("c1"), &early], 9);
@@ -4850,7 +4850,7 @@ async fn a_far_ahead_batch_already_applied_holds_nothing_when_it_comes_back() {
     let group = identity::group(&a).unwrap().unwrap();
     let mut ahead = outbox(&a)[0].clone();
     ahead.at.ms = now_ms(&a) + 2 * DAY_MS;
-    let fast = wire::seal_batch(&group, "dev-a", std::slice::from_ref(&ahead)).unwrap();
+    let fast = wire::seal_unsigned(&group, "dev-a", std::slice::from_ref(&ahead)).unwrap();
 
     let server = MockServer::start_async().await;
     serving(&server, &[&fast], 9);
@@ -4898,8 +4898,8 @@ async fn a_sender_held_for_its_clock_waits_whole_so_its_watermark_cannot_pass_wh
     ops[2].at.ms = now + 2 * DAY_MS;
     // `low` and `high` in one chunk, whose envelope sorts at `high`; `mid` alone in a sibling whose
     // envelope sorts before it and whose op sorts after `low`.
-    let held = wire::seal_batch(&group, "dev-a", &[ops[0].clone(), ops[2].clone()]).unwrap();
-    let sibling = wire::seal_batch(&group, "dev-a", &ops[1..2]).unwrap();
+    let held = wire::seal_unsigned(&group, "dev-a", &[ops[0].clone(), ops[2].clone()]).unwrap();
+    let sibling = wire::seal_unsigned(&group, "dev-a", &ops[1..2]).unwrap();
 
     let server = MockServer::start_async().await;
     serving(&server, &[&held, &sibling], 9);
@@ -5853,7 +5853,7 @@ async fn a_write_anywhere_beside_a_pull_is_counted_once_on_both_devices() {
         apply::apply(&b, &earlier).unwrap();
         one_more_bolt(&b);
         let group = identity::group(&a).unwrap().unwrap();
-        let envelope = wire::seal_batch(&group, "dev-b", &outbox(&b)).unwrap();
+        let envelope = wire::seal_unsigned(&group, "dev-b", &outbox(&b)).unwrap();
 
         let server = MockServer::start_async().await;
         keys_mock(&server, 0);
@@ -6045,8 +6045,8 @@ async fn a_clock_held_senders_put_holds_the_claim_for_its_row() {
     let b = paired("dev-b", 0);
     let group = identity::group(&b).unwrap().unwrap();
     let envelopes = [
-        wire::seal_batch(&group, "dev-c", &from_c).unwrap(),
-        wire::seal_batch(&group, "dev-e", &from_e).unwrap(),
+        wire::seal_unsigned(&group, "dev-c", &from_c).unwrap(),
+        wire::seal_unsigned(&group, "dev-e", &from_e).unwrap(),
     ];
     let server = MockServer::start_async().await;
     keys_mock(&server, 0);
@@ -6090,7 +6090,7 @@ async fn an_envelope_stepped_over_as_unreadable_opens_the_gap() {
     let b = paired("dev-b", 0);
     let mut group = identity::group(&b).unwrap().unwrap();
     group.group_key = [9u8; 32];
-    let altered = wire::seal_batch(&group, "dev-x", &outbox(&other)).unwrap();
+    let altered = wire::seal_unsigned(&group, "dev-x", &outbox(&other)).unwrap();
     let server = MockServer::start_async().await;
     keys_mock(&server, 0);
     server.mock(|when, then| {
@@ -6127,7 +6127,7 @@ async fn an_envelope_held_behind_a_rotation_opens_no_gap() {
     let a = paired("dev-a", 1);
     add_copy(&a, "c1", 1);
     let newer = identity::group(&a).unwrap().unwrap();
-    let envelope = wire::seal_batch(&newer, "dev-a", &outbox(&a)).unwrap();
+    let envelope = wire::seal_unsigned(&newer, "dev-a", &outbox(&a)).unwrap();
     let server = MockServer::start_async().await;
     serving(&server, &[&envelope], 9);
     let b = paired("dev-b", 0);
@@ -6243,3 +6243,11 @@ async fn a_baseline_the_relay_defers_leaves_its_marker_unset_and_the_trip_still_
 
 #[cfg(test)]
 mod paged;
+
+// ---------------------------------------------------------------------------------------
+// Signed envelopes — user schema v66. A file of its own: `tests/signed.rs`, gated again for
+// `paged`'s reason above.
+// ---------------------------------------------------------------------------------------
+
+#[cfg(test)]
+mod signed;

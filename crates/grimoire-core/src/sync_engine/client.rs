@@ -623,6 +623,17 @@ fn me(conn: &Connection) -> Result<Option<(String, Group)>, String> {
     })
 }
 
+/// This device's Ed25519 signing secret, **minted on absence** (`identity::signing_key`) — what
+/// [`post_ops`] signs every envelope with. Read beside [`me`] by the two functions that push, so
+/// a device paired before user schema v66 signs from its first push after the upgrade rather than
+/// from its next pairing.
+fn signing_secret(conn: &Connection) -> Result<[u8; 32], String> {
+    identity::signing_key(conn)
+        .map_err(|e| e.to_string())?
+        .map(|key| key.secret)
+        .ok_or_else(|| identity::NOT_IN_A_GROUP.to_owned())
+}
+
 // ---------------------------------------------------------------------------------------
 // The network
 // ---------------------------------------------------------------------------------------
@@ -1563,16 +1574,20 @@ enum Refusal {
 /// [`Refusal::Stale`] and [`Refusal::ClockAhead`], which are the caller's to mend or record. **A
 /// refusal an updated relay explains is recorded in its own sentence** ([`refused_push`]),
 /// matched on its `code`.
+///
+/// **Every envelope it sends is signed with `sign_secret`**, this device's Ed25519 key, inside
+/// [`wire::seal_batch`] — the one sealing function, so neither caller can send one unsigned.
 async fn post_ops(
     db: &impl Store,
     base: &str,
     token: &str,
     group: &Group,
     device: &str,
+    sign_secret: &[u8; 32],
     ops: &[Op],
 ) -> Result<(), Refusal> {
     let url = format!("{base}/g/{}/push", group.group_id);
-    let envelope = match wire::seal_batch(group, device, ops) {
+    let envelope = match wire::seal_batch(group, device, sign_secret, ops) {
         Ok(e) => e,
         Err(e) => {
             say(db, "push", Kind::Other, &e.to_string(), None);
@@ -1893,6 +1908,7 @@ pub async fn push(db: &impl Store, base: &str, token: &str) -> Result<Pushed, St
     let Some((device, mut group)) = db.with(me)? else {
         return Ok(Pushed::default());
     };
+    let sign_secret = db.with(signing_secret)?;
     let url = format!("{base}/g/{}/push", group.group_id);
     let mut sent = 0usize;
     let mut caught_up = false;
@@ -1925,7 +1941,7 @@ pub async fn push(db: &impl Store, base: &str, token: &str) -> Result<Pushed, St
                 })?;
                 continue;
             }
-            let mut landed = post_ops(db, base, token, &group, &device, chunk).await;
+            let mut landed = post_ops(db, base, token, &group, &device, &sign_secret, chunk).await;
             if matches!(landed, Err(Refusal::Stale)) {
                 if caught_up {
                     return Err(stale_twice(db, &url));
@@ -1942,7 +1958,7 @@ pub async fn push(db: &impl Store, base: &str, token: &str) -> Result<Pushed, St
                     return Ok(gone);
                 };
                 group = adopted;
-                landed = post_ops(db, base, token, &group, &device, chunk).await;
+                landed = post_ops(db, base, token, &group, &device, &sign_secret, chunk).await;
             }
             match landed {
                 Ok(()) => {}
@@ -2288,6 +2304,7 @@ pub async fn pull(
         relay: relay_epoch,
         asked: None,
         noted: recorded,
+        bound: Vec::new(),
     };
     // The relay's epoch as this trip knows it, and whether this trip has asked `/keys` itself —
     // `Some(true)` for an answer, `Some(false)` for an ask that failed. **Once per trip, and
@@ -2426,7 +2443,7 @@ fn an_older_baseline_is_in(
         } else {
             None
         };
-        if let Ok(batch) = wire::open_batch(held.as_ref().unwrap_or(group), envelope) {
+        if let Ok((batch, _)) = open_checked(conn, held.as_ref().unwrap_or(group), envelope)? {
             if batch
                 .iter()
                 .any(|op| op.horizon.is_some() && op.emission.is_none())
@@ -2446,6 +2463,66 @@ struct Trip {
     relay: Option<i64>,
     asked: Option<bool>,
     noted: Vec<(String, i64, i64)>,
+    /// The envelopes whose ops this trip has recorded as stamped by another device
+    /// ([`OP_BINDING`]), so a carried page read twice writes the row once. Apart from `noted`
+    /// because an envelope recorded here is still read — `noted`'s key for it can be another
+    /// record's (a clock hold's, at the same stamp).
+    bound: Vec<(String, i64, i64)>,
+}
+
+/// What a pull does with an opened envelope that carries ops stamped by a device other than the
+/// one that sent it — the Discord spec's F3 ([`wire::foreign_ops`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Binding {
+    /// Apply as before and write one `error_log` row per envelope: the evidence a forger leaves,
+    /// and a tell for a build that seals loosely, without refusing anything a group sent.
+    Record,
+    /// Refuse the whole envelope as [`WireError::Foreign`], stepped over like an unreadable one.
+    #[allow(dead_code)]
+    Refuse,
+}
+
+/// **The one switch the spec's PR 2 flips**, from [`Binding::Record`] to [`Binding::Refuse`].
+///
+/// Recorded and not refused in this build, though no honest build seals a foreign op —
+/// `docs/reference/sync.md`'s *The envelope* has the census: the capture triggers stamp
+/// `sync_identity.device_id`, `baseline::build` stamps the emitter, `rebase` and the re-seal
+/// after a rotation keep the stamp, and nothing else puts an op in an outbox. The rule is new on
+/// the wire, though, and a refusal is a gap ([`emission::open_gap`]) on every device that meets
+/// one; a release of evidence first is the cheaper way to learn the census missed something.
+const OP_BINDING: Binding = Binding::Record;
+
+/// Open one pulled envelope as every reader of a page does: **its signature first**, then the
+/// AEAD, then the op/envelope binding. `Err` on the outside is the database; `Err` inside is the
+/// envelope's, which the caller steps over or holds exactly as it does any other refusal.
+///
+/// **The signature is checked only when this device holds the sender's key** (`sync_devices.
+/// sign_public`), which no shipped pairing writes yet — so today only a test files a key and
+/// meets a forgery, and after the Discord spec's PR 2 any peer's envelope can. Unsigned and unknown
+/// are [`wire::Signed::Unchecked`] and open as they always did. A [`wire::Signed::Forged`] is
+/// [`WireError::Forged`] before a byte is decrypted, stepped over like an unreadable batch: it
+/// pins nothing, because a forgery is never going to become the sender's.
+///
+/// The `usize` beside the ops is [`wire::foreign_ops`]: non-zero only under [`Binding::Record`],
+/// for the caller to write down.
+fn open_checked(
+    conn: &Connection,
+    group: &Group,
+    envelope: &Envelope,
+) -> Result<Result<(Vec<Op>, usize), WireError>, String> {
+    let key = identity::sign_public_of(conn, &envelope.device).map_err(|e| e.to_string())?;
+    if wire::signature(envelope, key.as_ref()) == wire::Signed::Forged {
+        return Ok(Err(WireError::Forged));
+    }
+    let batch = match wire::open_batch(group, envelope) {
+        Ok(batch) => batch,
+        Err(e) => return Ok(Err(e)),
+    };
+    let foreign = wire::foreign_ops(envelope, &batch);
+    if foreign > 0 && OP_BINDING == Binding::Refuse {
+        return Ok(Err(WireError::Foreign(foreign)));
+    }
+    Ok(Ok((batch, foreign)))
 }
 
 /// What one evaluation of a page — or of a carry and the page behind it — did.
@@ -2585,8 +2662,20 @@ fn evaluate(
             } else {
                 None
             };
-            match wire::open_batch(held.as_ref().unwrap_or(group), envelope) {
-                Ok(batch) => {
+            match open_checked(conn, held.as_ref().unwrap_or(group), envelope)? {
+                Ok((batch, foreign)) => {
+                    // Recorded once per envelope a trip reads ([`OP_BINDING`]), and applied.
+                    let this = (envelope.device.clone(), envelope.hlc_ms, envelope.hlc_ctr);
+                    if foreign > 0 && !trip.bound.contains(&this) {
+                        note(
+                            conn,
+                            "pull",
+                            Kind::Other,
+                            &WireError::Foreign(foreign).to_string(),
+                            Some(&envelope.device),
+                        );
+                        trip.bound.push(this);
+                    }
                     opened.push((envelope, batch));
                     continue;
                 }
@@ -3034,6 +3123,7 @@ async fn emit_baselines(
     let Some((device, group)) = db.with(me)? else {
         return Ok((0, 0));
     };
+    let sign_secret = db.with(signing_secret)?;
     let url = format!("{base}/g/{}/push", group.group_id);
     let mut emitted = 0usize;
     let mut history = 0usize;
@@ -3156,7 +3246,7 @@ async fn emit_baselines(
             // next trip's `check_keys` adopts before it gets here, and the baseline is built and
             // sealed again under the new key — a baseline is never filed, so there is nothing
             // to re-seal in place.
-            match post_ops(db, base, token, &group, &device, chunk).await {
+            match post_ops(db, base, token, &group, &device, &sign_secret, chunk).await {
                 Ok(()) => {}
                 Err(Refusal::Stale) => {
                     let message = "the relay refused a device's first sync as sealed under a \
