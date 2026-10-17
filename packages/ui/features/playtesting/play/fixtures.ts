@@ -244,6 +244,7 @@ export function targetPrompt(): TurnFive {
         options: [option(0, t.ragavan), option(1, t.reckoner), option(2, t.goyf)],
         cancellable: true,
         pick: null,
+        keyword: null,
       },
       stack: [],
     },
@@ -283,6 +284,7 @@ export function orderTriggersPrompt(): TurnFive {
         options: [order(0, [t.delver, second]), order(1, [second, t.delver])],
         cancellable: false,
         pick: null,
+        keyword: null,
       },
       stack: [],
     },
@@ -325,6 +327,7 @@ export function castChoicePrompt(): TurnFive {
         ],
         cancellable: true,
         pick: null,
+        keyword: null,
       },
     },
   };
@@ -499,7 +502,7 @@ function pickPrompt(t: TurnFive, kind: string, source: string, pick: PlaytestPic
     view: {
       ...t.view,
       stage: "prompt",
-      prompt: { kind, source, options: [], cancellable: false, pick },
+      prompt: { kind, source, options: [], cancellable: false, pick, keyword: null },
     },
   };
 }

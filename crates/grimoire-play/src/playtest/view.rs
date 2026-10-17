@@ -270,6 +270,10 @@ pub struct PlaytestPrompt {
     /// Present when the answer is a set of cards — scry, surveil, a discard, a search — which
     /// `options` cannot list (the engine offers only a few of the sets). `pickCards` answers it.
     pub pick: Option<PlaytestPick>,
+    /// The keyword the question is about, when the engine names one: the alternative cost a cast
+    /// may be paid with (`Overload`, `Evoke`, `Bestow`…), whose answers are `Normal` and
+    /// `Alternative`.
+    pub keyword: Option<String>,
 }
 
 /// A question whose answer is some of a set of cards.

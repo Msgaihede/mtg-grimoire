@@ -705,6 +705,63 @@ fn a_spell_that_asks_for_a_choice_asks_and_cancel_puts_the_game_back() {
     );
 }
 
+/// A spell with overload asks which cost to pay when both are payable, the question naming the
+/// keyword, and its overload cost changes "target" to "each" (issue #1072).
+#[test]
+fn a_spell_with_overload_asks_which_cost_and_its_overload_hits_each() {
+    let (asked, cast) = engine(|| {
+        let mut cards = deck();
+        let mut swell = card(
+            "Wild Swell",
+            Some("{G}"),
+            "Instant",
+            "Target creature you control gets +2/+2 until end of turn.\nOverload {2}{G}{G} (You may \
+             cast this spell for its overload cost. If you do, change its text by replacing all \
+             instances of \"target\" with \"each.\")",
+            None,
+            1,
+        );
+        swell.keywords = vec!["Overload".into()];
+        cards.push(swell);
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+        for _ in 0..4 {
+            put_down(&mut game, "Forest");
+        }
+        for _ in 0..2 {
+            put_down(&mut game, "Grizzly Bears");
+        }
+        let swell = in_hand(&mut game, "Wild Swell");
+        let asked = game.act(A::Play { id: swell }).unwrap();
+        let prompt = asked.view.prompt.clone().expect("a question");
+        let overload = prompt
+            .options
+            .iter()
+            .find(|o| o.label.as_deref() == Some("Alternative"))
+            .expect("an alternative-cost answer")
+            .index;
+        (asked, game.act(A::Choose { index: overload }).unwrap())
+    });
+    assert_eq!(asked.view.stage, Stage::Prompt, "{:?}", asked.happened);
+    let prompt = asked.view.prompt.as_ref().unwrap();
+    assert_eq!(prompt.kind, "AlternativeCastChoice");
+    assert_eq!(prompt.keyword.as_deref(), Some("Overload"));
+    assert_eq!(prompt.source.as_deref(), Some("Wild Swell"));
+    let mut labels: Vec<_> = prompt.options.iter().map(|o| o.label.as_deref()).collect();
+    labels.sort();
+    assert_eq!(labels, [Some("Alternative"), Some("Normal")]);
+    let bears: Vec<_> = cast
+        .view
+        .you
+        .battlefield
+        .iter()
+        .filter(|c| c.name == "Grizzly Bears")
+        .map(|c| (c.power, c.toughness))
+        .collect();
+    assert_eq!(bears, [(Some(4), Some(4)); 2], "{:?}", cast.happened);
+    assert!(find(&cast.view.you.graveyard, "Wild Swell").is_some());
+}
+
 #[test]
 fn a_modal_double_faced_card_is_played_by_its_front_face() {
     let view = engine(|| {

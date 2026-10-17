@@ -209,6 +209,12 @@ export interface PlaytestPrompt {
   cancellable: boolean;
   /** The answer is a set of cards (scry, surveil, a discard, a search): `pickCards` answers. */
   pick: PlaytestPick | null;
+  /**
+   * The keyword the question is about, when the engine names one: the alternative cost a cast may
+   * be paid with (`Overload`, `Evoke`, `Bestow`…), whose answers are labelled `Normal` and
+   * `Alternative`.
+   */
+  keyword: string | null;
 }
 
 export interface PlaytestPick {
