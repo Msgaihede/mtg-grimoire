@@ -31,7 +31,7 @@ import { makeFit, type WidgetFit } from "../fit";
 import { priceMoversKey } from "../keys";
 import {
   CHOSEN_GONE,
-  CHOSEN_NO_HISTORY,
+  chosenNoHistory,
   emptySentence,
   MAX_CHOSEN_CARDS,
   NO_HISTORY,
@@ -183,7 +183,7 @@ describe("emptySentence", () => {
    */
   it("speaks of what the reader chose under a scope", () => {
     expect(emptySentence(answer({ movers: [], since: null, days: 90 }), "7d", "both", true)).toBe(
-      CHOSEN_NO_HISTORY,
+      chosenNoHistory("7d"),
     );
     expect(emptySentence(answer({ movers: [] }), "7d", "up", true)).toBe(
       "Nothing you chose went up over the last seven days.",
@@ -399,7 +399,17 @@ describe("a widget narrowed to what the reader chose (issue #906)", () => {
   it("says the chosen cards have no history yet in their own words", async () => {
     priceMovers.mockResolvedValue(answer({ movers: [], since: null, days: 60 }));
     draw({ scope: "chosen", cards: [bolt] });
-    expect(await screen.findByText(CHOSEN_NO_HISTORY)).toBeInTheDocument();
+    expect(await screen.findByText(chosenNoHistory("7d"))).toBeInTheDocument();
+  });
+
+  /** Issue #1080: a card chosen today must not read as a widget that ignored it. */
+  it("says when each window will have something to measure for a chosen card", () => {
+    expect(chosenNoHistory("7d")).toContain("a week after");
+    expect(chosenNoHistory("30d")).toContain("thirty days after");
+    expect(chosenNoHistory("all")).toContain("from the next day on");
+    for (const range of ["7d", "30d", "all"] as const) {
+      expect(chosenNoHistory(range)).toContain("remembered from the day you choose them");
+    }
   });
 });
 

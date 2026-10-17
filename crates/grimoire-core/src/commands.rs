@@ -888,7 +888,7 @@ commands! {
     read price_movers in price_history(window: String, direction: String, marketplace: Option<Marketplace>, limit: i64, scope: Option<PriceMoverScope>) = |conn| {
         movers_in(conn, &window, &direction, marketplace.unwrap_or_default(), limit, scope.as_ref())
     };
-    write set_price_watch in price_history(card_ids: Vec<String>) = |conn| set_watched(conn, &card_ids);
+    write set_price_watch in price_history(card_ids: Vec<String>) = |conn| watch(conn, &card_ids);
 
     // recent_cards
     read recent_cards in recent_cards(limit: u32) = |conn| Ok(recent(conn, limit));
