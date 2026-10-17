@@ -7,11 +7,13 @@ import { CardFace, counterLabel, pointerAt } from "./Inspect";
 import { tableDraggable, useTableDropTarget, type TableDrag } from "./tableDrag";
 import {
   ASPECT,
+  BACK_MAX,
   GAP,
   PILE,
   layoutTable,
   pileHeight,
   pileWidth,
+  tallestWidth,
   underOf,
   type Pile,
   type PileApart,
@@ -32,6 +34,17 @@ const DENSE_Y = 8;
  * tighter.
  */
 const LANE_CHROME = GAP + 2 * (12 + 1);
+
+/**
+ * The width a card on a table `height` px tall is drawn at while its row has room — the lane's
+ * height is what bounds it, as `layoutTable` measures it from this section's box — no wider than
+ * a land is ever drawn ({@link BACK_MAX}). The board sizes its zone columns' cards by it, so a
+ * graveyard reads at the size of the cards beside it.
+ */
+export function tableCardWidth(height: number, dense = false): number {
+  const box = height - 2 * (dense ? DENSE_Y : PAD_Y) - LANE_CHROME;
+  return Math.min(BACK_MAX, tallestWidth(Math.max(0, box) / 2));
+}
 
 /** The artboard's drop glow, for the table and the hand: a 1 px inner ring of the accent. */
 export const DROP_GLOW =

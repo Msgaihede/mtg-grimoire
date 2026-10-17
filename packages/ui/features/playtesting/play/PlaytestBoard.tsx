@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type JSX,
   type MouseEvent,
 } from "react";
@@ -23,7 +24,7 @@ import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
-import { Battlefield, type TablePick } from "../table/Battlefield";
+import { Battlefield, tableCardWidth, type TablePick } from "../table/Battlefield";
 import { CommanderMat } from "../table/CommanderMat";
 import { HandFan } from "../table/HandFan";
 import { INSPECT_WIDTH, Inspect, pointerAt } from "../table/Inspect";
@@ -37,7 +38,7 @@ import { CommandZone, ExileZone, GraveyardZone, LibraryZone } from "../table/Zon
 import { dropAction, type TableDrag } from "../table/tableDrag";
 import { useLandingOf } from "../table/landing";
 import { useUndoKeys } from "../undo";
-import { handRow, type ZoneSize } from "../table/layout";
+import { ASPECT, handRow, type ZoneSize } from "../table/layout";
 import type { LogLine } from "../table/log";
 import { feltBackground } from "../table/playmats";
 import type { Playmat, Pointed, ZoneLook } from "../table/types";
@@ -98,8 +99,9 @@ import { PromptPanel } from "./PromptPanel";
  * drawn exactly as it always was; nothing of the four-player layout reaches it.
  *
  * **The frame, measured from this element's box** so it fits a 1280 × 800 window with no scroll:
- * see {@link OPPONENT_TABLE} below. The zone columns' cards are {@link ZONE} rather than the
- * artboard's 180 × 252: two of them and their labels stand beside each table's height.
+ * see {@link OPPONENT_TABLE} below. The zone columns' cards are {@link zoneSize} — the size of
+ * an unshrunk card on the tables beside them — rather than the artboard's 180 × 252: two of them
+ * stand beside each table's height.
  *
  * **The rules' handling is always there**: a double-click or a drag onto the table plays a card
  * from the hand or the command zone, a permanent's menu activates its abilities, and a click is a
@@ -156,9 +158,22 @@ export interface PlaytestBoardProps {
   returnTo?: "setup" | "deck";
 }
 
-/** The zone columns' cards: 72 × 101, two fifths of the artboard's 180 × 252 (issue #992 grew
- *  them a fifth from 60 × 84), their counts drawn on them. */
-const ZONE: ZoneSize = { width: 72, height: 101, compact: true };
+/** The narrowest the zone columns' cards are drawn: 72 × 101, two fifths of the artboard's
+ *  180 × 252 (issue #992 grew them a fifth from 60 × 84). */
+const ZONE_MIN = 72;
+
+/**
+ * The zone columns' cards at a board `boardHeight` px tall, their counts drawn on them: as big as
+ * a card on the tables beside them is drawn before a full row shrinks it (`tableCardWidth`, of
+ * the {@link FRAME_Y} frame's table height), and never under {@link ZONE_MIN} — so a commander or
+ * a graveyard reads at the size of the permanents next to it, not as a thumbnail at the edge of a
+ * tall window. Two of them and their gap still stand inside the table's height: a card that fits
+ * a lane is under half the table.
+ */
+export function zoneSize(boardHeight: number): ZoneSize {
+  const width = Math.max(ZONE_MIN, tableCardWidth(boardHeight / 2 - FRAME_Y, true));
+  return { width, height: Math.round(width * ASPECT), compact: true };
+}
 
 const NONE: readonly PlaytestHappened[] = [];
 
@@ -199,6 +214,22 @@ export function PlaytestBoard({
   const [previewWidth, setPreviewWidth] = useState(INSPECT_WIDTH);
   const { menuClick } = useContextMenu();
   const root = useRef<HTMLDivElement>(null);
+  const [boardHeight, setBoardHeight] = useState(0);
+  // A callback ref, so the first measurement lands in the commit rather than one paint later
+  // (`Battlefield`'s, for its reasons). React 19 runs the returned cleanup.
+  const measure = useCallback((el: HTMLDivElement | null) => {
+    root.current = el;
+    if (el === null) return undefined;
+    const read = () => setBoardHeight(el.clientHeight);
+    read();
+    const observer = new ResizeObserver(read);
+    observer.observe(el);
+    return () => {
+      observer.disconnect();
+      root.current = null;
+    };
+  }, []);
+  const zone = zoneSize(boardHeight);
 
   // **The reader's combat picks belong to the view they were made on.** Every answer is a new
   // view — the step moved on, or the engine refused and the old one came back — and either way
@@ -459,9 +490,10 @@ export function PlaytestBoard({
 
   return (
     <div
-      ref={root}
+      ref={measure}
       aria-busy={busy}
       className="relative h-full w-full overflow-hidden bg-bg text-sm text-text"
+      style={{ "--table-x": `${zone.width + 2 * COLUMN_GAP}px` } as CSSProperties}
       data-testid="playtest-board"
     >
       {felt !== null && (
@@ -496,7 +528,7 @@ export function PlaytestBoard({
       />
 
       {view === null ? (
-        <div className="absolute inset-x-[96px] top-[48px] bottom-[112px] flex items-center justify-center text-dim">
+        <div className="absolute inset-x-[var(--table-x)] top-[48px] bottom-[112px] flex items-center justify-center text-dim">
           {error ?? (four ? "Shuffling every deck…" : "Shuffling both decks…")}
         </div>
       ) : view.stage === "mulligan" ? (
@@ -580,7 +612,7 @@ export function PlaytestBoard({
             failed={error !== null}
             onStops={locked ? undefined : (stops) => act({ type: "setStops", stops })}
             onSandbox={(on) => act({ type: "setSandbox", on })}
-            className="absolute inset-x-[96px] top-[calc(50%-46px)] h-7"
+            className="absolute inset-x-[var(--table-x)] top-[calc(50%-46px)] h-7"
           />
           <div data-table="you" className={YOUR_TABLE}>
             <Battlefield
@@ -752,11 +784,11 @@ export function PlaytestBoard({
       {!four && (
         <>
           <div className={cn(OPPONENT_COLUMN, "left-3")}>
-            <OpponentLibrary seat={opponent} size={ZONE} />
+            <OpponentLibrary seat={opponent} size={zone} />
             <OpponentPile
               seat={opponent}
               zone="graveyard"
-              size={ZONE}
+              size={zone}
               onPoint={pointOpponent}
               onUnpoint={unpoint}
               onLook={lookOpponent}
@@ -766,7 +798,7 @@ export function PlaytestBoard({
             <OpponentPile
               seat={opponent}
               zone="exile"
-              size={ZONE}
+              size={zone}
               onPoint={pointOpponent}
               onUnpoint={unpoint}
               onLook={lookOpponent}
@@ -774,7 +806,7 @@ export function PlaytestBoard({
             />
             <OpponentCommand
               seat={opponent}
-              size={ZONE}
+              size={zone}
               onPoint={pointOpponent}
               onUnpoint={unpoint}
               className="items-end"
@@ -793,7 +825,7 @@ export function PlaytestBoard({
           onDrop={drop}
           onPoint={pointYou}
           onUnpoint={unpoint}
-          size={ZONE}
+          size={zone}
         />
         <ExileZone
           view={you}
@@ -802,7 +834,7 @@ export function PlaytestBoard({
           onPoint={pointYou}
           onUnpoint={unpoint}
           onLook={lookYou}
-          size={ZONE}
+          size={zone}
         />
       </div>
       <div className={cn(YOUR_COLUMN, "right-3 items-end")}>
@@ -813,7 +845,7 @@ export function PlaytestBoard({
           onPoint={pointYou}
           onUnpoint={unpoint}
           onLook={lookYou}
-          size={ZONE}
+          size={zone}
         />
         <LibraryZone
           view={you}
@@ -821,7 +853,7 @@ export function PlaytestBoard({
           onAct={onAct}
           onDrop={drop}
           onLook={lookYou}
-          size={ZONE}
+          size={zone}
         />
       </div>
 
@@ -1025,11 +1057,14 @@ export function PlaytestBoard({
  * **The frame**, measured from the board's box: the opponent's band is the top 48 px, the reader's
  * foot the bottom 112, the middle line 28 px tall just above the centre, and the two tables share
  * the rest equally — `calc(50% - 94px)` each, 289 px in a 766 px board (1280 × 800 less the
- * caption), 339 in an 866 px one. The tables are 96 px in from either side: a 72 px zone column
- * 12 px from the edge, and 12 px between it and the table.
+ * caption), 339 in an 866 px one. The tables are `--table-x` in from either side: a zone column
+ * ({@link zoneSize}, 72 px in a short window) {@link COLUMN_GAP} from the edge, and as much again
+ * between it and the table — 96 px at the narrowest.
  */
-const OPPONENT_TABLE = "absolute inset-x-[96px] top-[48px] bottom-[calc(50%+46px)]";
-const YOUR_TABLE = "absolute inset-x-[96px] top-[calc(50%-18px)] bottom-[112px]";
+const FRAME_Y = 94;
+const COLUMN_GAP = 12;
+const OPPONENT_TABLE = "absolute inset-x-[var(--table-x)] top-[48px] bottom-[calc(50%+46px)]";
+const YOUR_TABLE = "absolute inset-x-[var(--table-x)] top-[calc(50%-18px)] bottom-[112px]";
 /**
  * A four-player table's three opponent areas: the duel's opponent table, top to bottom and side
  * to side — over the reader's table, the gutters left to the chrome and the stack — cut into
@@ -1037,7 +1072,7 @@ const YOUR_TABLE = "absolute inset-x-[96px] top-[calc(50%-18px)] bottom-[112px]"
  * row, and below it the zones' 2 × 3 grid of 40 × 56 tiles (84 × 176) beside the battlefield
  * (about 265 × 245).
  */
-const OPPONENT_AREAS = "absolute inset-x-[96px] top-[48px] bottom-[calc(50%+46px)]";
+const OPPONENT_AREAS = "absolute inset-x-[var(--table-x)] top-[48px] bottom-[calc(50%+46px)]";
 /** A zone column, centred on its table's height. */
 const OPPONENT_COLUMN =
   "absolute top-[48px] bottom-[calc(50%+46px)] flex flex-col justify-center gap-2";

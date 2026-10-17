@@ -148,10 +148,16 @@ export function fitWidth(
   const widths = piles.reduce((n, p) => n + (p.tapped ? TAPPED : 1), 0);
   const edges = piles.reduce((n, p) => n + underOf(p) * PILE, 0);
   const room = row - fixed - edges - GAP * (piles.length - 1);
-  // A tapped card is as tall as an untapped one is wide, so the lane's height bounds the
-  // untapped card: its height plus the pile's edges and the marker must fit.
-  const tallest = Math.floor((laneHeight - UNDER * PILE - MARK) / ASPECT);
-  return Math.max(FLOOR, Math.min(max, tallest, Math.floor(room / widths) - 1));
+  return Math.max(FLOOR, Math.min(max, tallestWidth(laneHeight), Math.floor(room / widths) - 1));
+}
+
+/**
+ * The widest an untapped card stands in a lane `laneHeight` px tall: a tapped card is as tall as
+ * an untapped one is wide, so the lane's height bounds the untapped card — its height plus a
+ * pile's edges and the marker must fit. What a sparse row is drawn at, before its width shrinks it.
+ */
+export function tallestWidth(laneHeight: number): number {
+  return Math.floor((laneHeight - UNDER * PILE - MARK) / ASPECT);
 }
 
 /** Both lanes' piles and the card width each is drawn at. */

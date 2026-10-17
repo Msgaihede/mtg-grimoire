@@ -512,9 +512,13 @@ Before the overhaul, a table at 1280 was 275 px and its cards about 61 px wide.
   chrome. The duel's compact plate sits right of the hand in a box that ends 116 px from the right
   edge, so it never runs under the help and log buttons: a plate wider than that (a long deck name,
   the sandbox's stepper) shortens its title, and the full title is its tooltip.
-- **The tables** are inset 96 px from either side. On the opponent's table the creature lane is
-  nearest the middle line and the back row is at the top.
-- **The zone columns** sit 12 px in, with 72 × 101 cards (the artboard's are 180 × 252; 60 × 84 until issue #992 grew them a fifth), each zone's count on its card. On the
+- **The tables** are inset from either side by a zone column and 12 px either side of it — 96 px
+  at the narrowest. On the opponent's table the creature lane is nearest the middle line and the
+  back row is at the top.
+- **The zone columns** sit 12 px in, their cards as big as a card on the tables is drawn before a
+  full row shrinks it — the lane's height bound, `tableCardWidth` — and never under 72 × 101 (the
+  artboard's are 180 × 252; 60 × 84 until issue #992 grew them a fifth), each zone's count on its
+  card. A short window keeps 72 × 101; a 1400 px board draws them 173 × 242. On the
   opponent's side, library over graveyard is on the left and exile over command on the right. On
   the reader's side, command over exile is on the left and graveyard over library on the right.
 - **The stack** is real cards (52 × 73, up to three, then "+N") in the right gutter between the
