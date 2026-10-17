@@ -65,7 +65,14 @@ describe("PromptPanel", () => {
   });
 
   it("offers only the engine's choice for a question it cannot draw", () => {
-    setup({ kind: "ChooseRingBearer", source: null, options: [], cancellable: false, pick: null, keyword: null });
+    setup({
+      kind: "ChooseRingBearer",
+      source: null,
+      options: [],
+      cancellable: false,
+      pick: null,
+      keyword: null,
+    });
     expect(screen.getByRole("heading", { name: "Choose ring bearer" })).toBeInTheDocument();
     expect(screen.getByText(/can’t show this choice/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();

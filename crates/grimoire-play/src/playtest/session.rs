@@ -47,6 +47,7 @@ use std::sync::Arc;
 
 use engine::ai_support::{has_meaningful_priority_action, legal_actions};
 use engine::game::combat::AttackTarget;
+use engine::game::coverage::card_face_gaps;
 use engine::game::effects::create_emblem::grant_emblem;
 use engine::game::engine::apply;
 use engine::game::mana_sources::max_mana_yield;
@@ -181,6 +182,10 @@ pub struct Playtest {
     /// engine made): the deck's first printing of that name, per seat.
     by_name: HashMap<(PlayerId, String), String>,
     commanders: HashSet<(PlayerId, String)>,
+    /// What the engine does not play of each face in the game, by the face's name — phase's own
+    /// `card_face_gaps`, as `support.rs` asks it before a game (issue #1093). Only the faces with
+    /// a gap; fixed for the game, so not in a `Moment`.
+    gaps: HashMap<String, Vec<String>>,
     mulligans: u8,
     tokens: Vec<TokenOffer>,
     /// Each seat's deck's tokens in the printings the reader set, which a token is drawn by.
@@ -272,6 +277,13 @@ impl Playtest {
             .collect();
         let fish_card = goldfish.then(|| cards::synthetic(FISH_CARD, "Land", ""));
         let db = Arc::new(cards::database(&all, fish_card.as_slice())?);
+        let gaps: HashMap<String, Vec<String>> = db
+            .face_iter()
+            .filter_map(|(_, face)| {
+                let gaps = card_face_gaps(face);
+                (!gaps.is_empty()).then(|| (face.name.clone(), gaps))
+            })
+            .collect();
 
         let mut by_name = HashMap::new();
         let mut commanders = HashSet::new();
@@ -418,6 +430,7 @@ impl Playtest {
             printings: HashMap::new(),
             by_name,
             commanders,
+            gaps,
             mulligans: 0,
             tokens,
             deck_tokens,
@@ -832,7 +845,13 @@ impl Playtest {
     fn card(&self, id: ObjectId) -> Option<GameCard> {
         let o = self.state.objects.get(&id)?;
         let is_commander = !o.is_token && self.commanders.contains(&(o.owner, o.name.clone()));
-        game_card(&self.state, id, self.printing_of(id), is_commander)
+        // A token is phase's preset, never a face of the deck's: its maker's gaps are the maker's.
+        let gaps = if o.is_token {
+            Vec::new()
+        } else {
+            self.gaps.get(&o.name).cloned().unwrap_or_default()
+        };
+        game_card(&self.state, id, self.printing_of(id), is_commander, gaps)
     }
 
     fn printing_of(&self, id: ObjectId) -> Option<String> {

@@ -81,6 +81,12 @@ export interface GameCard {
   /** The rules let the reader cast or play this graveyard or exile card now (foretold,
    *  flashback). */
   castable: boolean;
+  /**
+   * What the rules engine does not play of the face shown: phase's coverage labels, as
+   * `DeckSupport`'s cards carry them (`gapWords` puts them in words). Empty for a face played in
+   * full and for a token. The board marks a card with any (issue #1093).
+   */
+  gaps: string[];
 }
 
 export interface CardCounter {

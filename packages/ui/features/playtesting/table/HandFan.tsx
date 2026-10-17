@@ -136,7 +136,7 @@ function HandCard({
     <button
       ref={ref}
       type="button"
-      aria-label={`${name}. Drag to play, or double-click`}
+      aria-label={`${name}${card.gaps.length > 0 ? ", played only in part" : ""}. Drag to play, or double-click`}
       data-land={id}
       onDoubleClick={play}
       // A double-click is a mouse's gesture; Enter on the focused card is the keyboard's way to

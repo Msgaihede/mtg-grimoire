@@ -454,6 +454,7 @@ function PileView({
           word,
           tapped ? "tapped" : null,
           card.isToken ? "token" : null,
+          card.gaps.length > 0 ? "played only in part" : null,
           counters === "" ? null : counters,
           pile.attached.length > 0 ? `with ${pile.attached.map((a) => a.name).join(", ")}` : null,
           mark?.word ?? null,

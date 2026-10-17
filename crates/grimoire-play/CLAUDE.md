@@ -81,7 +81,8 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
 - **What the engine plays of a deck is phase's verdict, never ours** (`support.rs`, issue #1078):
   each face parsed as a game parses it, asked phase's `card_face_gaps`. Never add a list of cards
   or effects this crate judges by itself; a rev move changes the verdict, and that is the point.
-  Like a game, it runs on `on_engine_stack`.
+  Like a game, it runs on `on_engine_stack`. A game asks the same of its own faces once, in
+  `Playtest::new`, and every `GameCard` carries its face's `gaps` (issue #1093).
 - **Only the deck's cards are parsed**, with phase's own `build_oracle_face`. Never fetch phase's
   `card-data.json`: it is a 93 MB external host this app does not use.
 
