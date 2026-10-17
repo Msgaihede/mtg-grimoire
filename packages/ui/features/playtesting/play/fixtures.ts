@@ -162,6 +162,25 @@ export function turnFive(): TurnFive {
   return { view, goyf, elves, delver, ragavan, reckoner, jace };
 }
 
+/**
+ * Turn 5 with attachments (issue #1073): an Equipment on the reader's Tarmogoyf, and the
+ * reader's Aura on the opponent's Ragavan, which the board draws under Ragavan on their table.
+ * Neither printing is in the fake's corpus, so both draw as tiles by name.
+ */
+export function withAttachments(): TurnFive {
+  const t = turnFive();
+  const gear = (name: string, typeLine: string, on: GameCard) =>
+    gameCard(name, { typeLine, lane: "other", isToken: false, attachedTo: on.id });
+  const [opponent] = t.view.opponents;
+  t.view.you.battlefield = [
+    ...t.view.you.battlefield,
+    gear("Bonesplitter", "Artifact — Equipment", t.goyf),
+    gear("Pacifism", "Enchantment — Aura", t.ragavan),
+  ];
+  t.view.opponents = [opponent];
+  return t;
+}
+
 /** The reader's declare-attackers step on turn 5: three creatures that may attack. */
 export function attackStep(): TurnFive {
   const t = turnFive();
@@ -547,6 +566,7 @@ export function scryPick(): TurnFive {
     min: 0,
     max: 3,
     ordered: true,
+    powerCap: null,
   });
 }
 
@@ -567,6 +587,32 @@ export function discardPick(): TurnFive {
     min: 2,
     max: 2,
     ordered: false,
+    powerCap: null,
+  });
+}
+
+/**
+ * Keep creatures with total power 4 or less, sacrifice the rest (Destined Confrontation, issue
+ * #1079): the reader's creatures, any of them under the cap.
+ */
+export function keepPick(): TurnFive {
+  const t = turnFive();
+  const creatures = t.view.you.battlefield.filter((c) => c.power !== null);
+  const cards = creatures.map((c) => ({
+    id: c.id,
+    name: c.name,
+    cardId: c.cardId,
+    text: null,
+    cause: null,
+  }));
+  return pickPrompt(t, "KeepWithinTotalPowerChoice", "Destined Confrontation", {
+    purpose: "keep",
+    cards,
+    eligible: cards.map((c) => c.id),
+    min: 0,
+    max: cards.length,
+    ordered: false,
+    powerCap: 4,
   });
 }
 

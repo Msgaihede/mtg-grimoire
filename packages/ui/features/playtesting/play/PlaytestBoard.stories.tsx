@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type JSX } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
-import type { PlaytestAction, PlaytestHappened, PlaytestView } from "@/lib/ipc";
+import type { GameCard, PlaytestAction, PlaytestHappened, PlaytestView } from "@/lib/ipc";
 import { appendLog, type LogLine } from "../table/log";
 import type { Playmat } from "../table/types";
 import {
@@ -21,6 +21,7 @@ import {
   goldfishDead,
   goldfishOpeningHand,
   goldfishTurn,
+  keepPick,
   openingHand,
   playLocally,
   replayStep,
@@ -28,6 +29,7 @@ import {
   scryPick,
   targetPrompt,
   turnFive,
+  withAttachments,
   withStack,
 } from "./fixtures";
 import { playtestLines } from "./log";
@@ -224,6 +226,36 @@ export const YourMainPhase: Story = {
   },
 };
 
+/** Cards the rules engine plays only in part wear a gold border, in the hand and on the table
+ *  (issue #1093): here the Sphinx in hand and the Sol Ring on the battlefield. */
+export const PartlyPlayed: Story = {
+  args: (() => {
+    const { view } = turnFive();
+    const GAPS = ["Trigger:Whenever an opponent draws a card"];
+    const mark = (names: string[]) => (c: GameCard) =>
+      names.includes(c.name) ? { ...c, gaps: GAPS } : c;
+    return {
+      view: {
+        ...view,
+        you: {
+          ...view.you,
+          hand: view.you.hand.map(mark(["Consecrated Sphinx"])),
+          battlefield: view.you.battlefield.map(mark(["Sol Ring"])),
+        },
+      },
+    };
+  })(),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(
+      canvas.getByRole("button", { name: /^Consecrated Sphinx, played only in part\./ }),
+    ).toBeVisible();
+    await expect(
+      canvas.getByRole("button", { name: "Sol Ring, played only in part" }),
+    ).toBeVisible();
+  },
+};
+
 /** A spell of each seat's on the stack, top first, each with a dotted arrow at its target: the
  *  reader's Counterspell at the Bolt, the Bolt at the reader's plate (issue #1071). */
 export const StackInUse: Story = {
@@ -355,6 +387,25 @@ export const AimAttack: Story = {
   },
 };
 
+/** Issue #1073: an Equipment and an Aura tucked under the creatures they are attached to, the
+ *  reader's Aura on the opponent's creature drawn on the opponent's table. */
+export const Attachments: Story = {
+  args: { view: withAttachments().view },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const yours = canvas.getByRole("region", { name: "Your battlefield" });
+    const theirs = canvas.getByRole("region", { name: "The opponent's battlefield" });
+    await expect(
+      within(yours).getByRole("button", { name: "Bonesplitter, attached to Tarmogoyf" }),
+    ).toBeVisible();
+    await expect(
+      within(theirs).getByRole("button", {
+        name: "Pacifism, attached to Ragavan, Nimble Pilferer",
+      }),
+    ).toBeVisible();
+  },
+};
+
 /** Scry 3: Keep on top, in order, and Bottom. */
 export const ScryPick: Story = {
   args: { view: scryPick().view },
@@ -363,6 +414,11 @@ export const ScryPick: Story = {
 /** Discard exactly two; the land cannot be picked. */
 export const DiscardPick: Story = {
   args: { view: discardPick().view },
+};
+
+/** Keep creatures with total power 4 or less; one that would pass the cap is drawn dim. */
+export const KeepPick: Story = {
+  args: { view: keepPick().view },
 };
 
 /** One deck in each of three opponents' seats. */

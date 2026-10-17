@@ -225,8 +225,9 @@ generically, never matched variant by variant.
 answers (none, all, each card alone), and there are sixteen. So for the questions whose answer is
 a set of cards, the prompt carries a `pick` beside its options (`Playtest::pick`): the cards, which
 of them may be picked, a minimum and a maximum, and whether order counts. `pickCards` answers it.
-The answer is `SelectCards`, or `SelectTargets` for `ChooseObjectsSelection`. The meaning of the
-picked cards is phase's:
+The answer is `SelectCards`, `SelectTargets` for `ChooseObjectsSelection`, or the kept set
+(`ChooseKeptCreatures`, `ChooseKeptPermanents`) for a keep. The meaning of the picked cards is
+phase's:
 
 | Question                                         | `purpose` | The picked cards                                            | Count                                               |
 | ------------------------------------------------ | --------- | ----------------------------------------------------------- | --------------------------------------------------- |
@@ -238,8 +239,18 @@ picked cards is phase's:
 | `ChooseFromZoneChoice`, `ChooseObjectsSelection` | `choose`  | Are chosen                                                  | as the question says                                |
 | `RevealChoice`                                   | `reveal`  | Is revealed                                                 | one, or none when optional                          |
 | `MultiTargetSelection`                           | `targets` | Are the targets                                             | `min_targets` to `max_targets`                      |
+| `KeepWithinTotalPowerChoice`                     | `keep`    | Are kept; the rest are sacrificed                           | any, their total power at most `powerCap`           |
+| `KeepExactPermanentsChoice`                      | `keep`    | Are kept; the rest are sacrificed                           | `required_count`                                    |
 
-The session checks the count, that each card is eligible and that none is picked twice. The engine
+A keep within a total power (Slaughter the Strong, Destined Confrontation — issue #1079) is bounded
+by power as well as count: `powerCap` is the cap, each creature counts its current power
+(`GameCard.power`), and the board will not pick a creature that would pass it. phase's own
+`legal_actions` for it are two canned sets (keep none, and its greedy keep), which before the pick
+showed as two identical "Choose kept creatures" chips; they stay under "Other answers", each naming
+the creatures it keeps (`option_of` reads `kept`).
+
+The session checks the count, the power cap, that each card is eligible and that none is picked
+twice. The engine
 checks the rest (a search's "different names", say), and its refusal is the sentence shown. This
 is the one place the session reads question kinds by name, because their fields say how many
 cards are wanted and the generic options cannot. Any other question is still its options, and
@@ -478,6 +489,16 @@ about the seats' decks at once and about the rest **one at a time** (`usePlaytes
 first visit's sweep of every deck never queues ahead of the deck the reader just picked. The
 answers are under the `["decks"]` query root, so a deck edit marks them stale; a refetch is a
 database read and cache lookups.
+
+**In a game, each card carries its own gaps** (issue #1093). `Playtest::new` asks
+`card_face_gaps` of every face in the game's card database once, and keeps the faces with a gap by
+name; every `GameCard` the session builds carries its face's (`gaps`, empty for a face played in
+full and for a token). The board's `CardFace` draws a card with any in a **gold border inside the
+card** — the setup's caution colour, clear of the outline marks for attack, block and pick, which
+sit outside it — wherever it is drawn: the hand, the battlefield, a pile, the preview. The card's
+label says "played only in part", and the preview names each gap with `gapWords`. A transformed
+card is its shown face's name, so its marks follow the face; it is fixed for the game, so not in a
+`Moment`.
 
 ## The board
 

@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { PlaytestPick } from "@/lib/ipc";
-import { canConfirm, confirmLabel, pickCounter, pickTitle, pickZones, togglePick } from "./pick";
+import {
+  canConfirm,
+  confirmLabel,
+  pickCounter,
+  pickedPower,
+  pickTitle,
+  pickZones,
+  togglePick,
+} from "./pick";
 import { fixedStop, hasStop, toggleStop } from "./stops";
 
 function pick(over: Partial<PlaytestPick>): PlaytestPick {
@@ -18,6 +26,7 @@ function pick(over: Partial<PlaytestPick>): PlaytestPick {
     min: 0,
     max: 3,
     ordered: false,
+    powerCap: null,
     ...over,
   };
 }
@@ -56,6 +65,30 @@ describe("the picker's rules", () => {
     expect(togglePick([2], 1, p)).toEqual([2]);
     expect(togglePick([2], 2, p)).toEqual([]);
     expect(togglePick(togglePick([], 3, pick({})), 1, pick({}))).toEqual([3, 1]);
+  });
+});
+
+describe("a keep within a total power (issue #1079)", () => {
+  // Card n has power n: 1, 2 and 3.
+  const powerOf = (id: number) => id;
+  const keep = pick({ purpose: "keep", powerCap: 4 });
+
+  it("says the cap, the power picked, and what confirming keeps", () => {
+    expect(pickTitle(keep)).toBe("Keep total power 4 or less");
+    expect(pickTitle(pick({ purpose: "keep", min: 2, max: 2 }))).toBe("Keep 2");
+    expect(pickCounter(keep, 2, 4)).toBe("2 kept, power 4 of 4");
+    expect(confirmLabel(keep, 0)).toBe("Sacrifice all");
+    expect(confirmLabel(keep, 2)).toBe("Keep 2");
+  });
+
+  it("refuses a creature that would pass the cap, and confirms only under it", () => {
+    expect(togglePick([1], 3, keep, powerOf)).toEqual([1, 3]);
+    expect(togglePick([1, 3], 2, keep, powerOf)).toEqual([1, 3]);
+    expect(togglePick([3], 2, keep, powerOf)).toEqual([3]);
+    expect(pickedPower([1, 3], powerOf)).toBe(4);
+    expect(canConfirm(keep, 0, 0)).toBe(true);
+    expect(canConfirm(keep, 2, 4)).toBe(true);
+    expect(canConfirm(keep, 2, 5)).toBe(false);
   });
 });
 

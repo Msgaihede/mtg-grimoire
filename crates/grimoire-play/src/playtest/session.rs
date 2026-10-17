@@ -47,6 +47,7 @@ use std::sync::Arc;
 
 use engine::ai_support::{has_meaningful_priority_action, legal_actions};
 use engine::game::combat::AttackTarget;
+use engine::game::coverage::card_face_gaps;
 use engine::game::effects::create_emblem::grant_emblem;
 use engine::game::engine::apply;
 use engine::game::mana_sources::max_mana_yield;
@@ -181,6 +182,10 @@ pub struct Playtest {
     /// engine made): the deck's first printing of that name, per seat.
     by_name: HashMap<(PlayerId, String), String>,
     commanders: HashSet<(PlayerId, String)>,
+    /// What the engine does not play of each face in the game, by the face's name — phase's own
+    /// `card_face_gaps`, as `support.rs` asks it before a game (issue #1093). Only the faces with
+    /// a gap; fixed for the game, so not in a `Moment`.
+    gaps: HashMap<String, Vec<String>>,
     mulligans: u8,
     tokens: Vec<TokenOffer>,
     /// Each seat's deck's tokens in the printings the reader set, which a token is drawn by.
@@ -272,6 +277,13 @@ impl Playtest {
             .collect();
         let fish_card = goldfish.then(|| cards::synthetic(FISH_CARD, "Land", ""));
         let db = Arc::new(cards::database(&all, fish_card.as_slice())?);
+        let gaps: HashMap<String, Vec<String>> = db
+            .face_iter()
+            .filter_map(|(_, face)| {
+                let gaps = card_face_gaps(face);
+                (!gaps.is_empty()).then(|| (face.name.clone(), gaps))
+            })
+            .collect();
 
         let mut by_name = HashMap::new();
         let mut commanders = HashSet::new();
@@ -418,6 +430,7 @@ impl Playtest {
             printings: HashMap::new(),
             by_name,
             commanders,
+            gaps,
             mulligans: 0,
             tokens,
             deck_tokens,
@@ -856,7 +869,13 @@ impl Playtest {
     fn card(&self, id: ObjectId) -> Option<GameCard> {
         let o = self.state.objects.get(&id)?;
         let is_commander = !o.is_token && self.commanders.contains(&(o.owner, o.name.clone()));
-        game_card(&self.state, id, self.printing_of(id), is_commander)
+        // A token is phase's preset, never a face of the deck's: its maker's gaps are the maker's.
+        let gaps = if o.is_token {
+            Vec::new()
+        } else {
+            self.gaps.get(&o.name).cloned().unwrap_or_default()
+        };
+        game_card(&self.state, id, self.printing_of(id), is_commander, gaps)
     }
 
     fn printing_of(&self, id: ObjectId) -> Option<String> {
@@ -1174,11 +1193,11 @@ impl Playtest {
     /// The question's answer as a set of cards, for the few kinds of question whose answers
     /// `legal_actions` cannot list (it offers none, all and each one alone — a scry of three has
     /// sixteen answers). Each kind's fields say which cards, how many and whether order counts;
-    /// the answer is `SelectCards`, or `SelectTargets` for `ChooseObjectsSelection`. The second
-    /// value says which.
-    fn pick(&self) -> Option<(PlaytestPick, bool)> {
+    /// the answer is `SelectCards`, `SelectTargets` for `ChooseObjectsSelection`, or the kept
+    /// set for a keep-and-sacrifice-the-rest (issue #1079). The second value says which.
+    fn pick(&self) -> Option<(PlaytestPick, PickAnswer)> {
         let all = |ids: &[ObjectId]| ids.iter().map(|id| id.0).collect::<Vec<u64>>();
-        let (purpose, shown, eligible, min, max, ordered, targets) = match &self.state.waiting_for {
+        let (purpose, shown, eligible, min, max, ordered, answer) = match &self.state.waiting_for {
             WaitingFor::ScryChoice { player, cards } if *player == YOU => (
                 PlaytestPickPurpose::Scry,
                 all(cards),
@@ -1186,7 +1205,7 @@ impl Playtest {
                 0,
                 cards.len(),
                 true,
-                false,
+                PickAnswer::Cards,
             ),
             WaitingFor::SurveilChoice { player, cards } if *player == YOU => (
                 PlaytestPickPurpose::Surveil,
@@ -1195,7 +1214,7 @@ impl Playtest {
                 0,
                 cards.len(),
                 true,
-                false,
+                PickAnswer::Cards,
             ),
             WaitingFor::DiscardChoice {
                 player,
@@ -1210,7 +1229,7 @@ impl Playtest {
                 if *up_to { 0 } else { *count },
                 *count,
                 false,
-                false,
+                PickAnswer::Cards,
             ),
             WaitingFor::DiscardToHandSize {
                 player,
@@ -1223,7 +1242,7 @@ impl Playtest {
                 *count,
                 *count,
                 false,
-                false,
+                PickAnswer::Cards,
             ),
             WaitingFor::SearchChoice {
                 player,
@@ -1243,7 +1262,7 @@ impl Playtest {
                 },
                 *count,
                 false,
-                false,
+                PickAnswer::Cards,
             ),
             WaitingFor::DigChoice {
                 player,
@@ -1266,7 +1285,7 @@ impl Playtest {
                     if *up_to { 0 } else { most },
                     most,
                     false,
-                    false,
+                    PickAnswer::Cards,
                 )
             }
             WaitingFor::ChooseFromZoneChoice {
@@ -1282,7 +1301,7 @@ impl Playtest {
                 if *up_to { 0 } else { (*count).min(cards.len()) },
                 *count,
                 false,
-                false,
+                PickAnswer::Cards,
             ),
             WaitingFor::RevealChoice {
                 player,
@@ -1296,7 +1315,7 @@ impl Playtest {
                 usize::from(!*optional),
                 1,
                 false,
-                false,
+                PickAnswer::Cards,
             ),
             WaitingFor::MultiTargetSelection {
                 player,
@@ -1311,7 +1330,7 @@ impl Playtest {
                 *min_targets,
                 *max_targets,
                 false,
-                false,
+                PickAnswer::Cards,
             ),
             // Only while every eligible choice is a card: a player among them is a question the
             // generic options answer.
@@ -1337,10 +1356,44 @@ impl Playtest {
                     *min as usize,
                     most,
                     false,
-                    true,
+                    PickAnswer::Targets,
                 )
             }
+            // Keep some creatures within a total power, sacrifice the rest (Slaughter the
+            // Strong, Destined Confrontation — issue #1079). Any number may be kept; the cap is
+            // `power_cap`, and the engine is asked only once keeping them all would pass it.
+            WaitingFor::KeepWithinTotalPowerChoice {
+                player, eligible, ..
+            } if *player == YOU => (
+                PlaytestPickPurpose::Keep,
+                all(eligible),
+                all(eligible),
+                0,
+                eligible.len(),
+                false,
+                PickAnswer::KeptCreatures,
+            ),
+            // Keep exactly so many permanents, sacrifice the rest. `required_count` is already
+            // capped to what is eligible.
+            WaitingFor::KeepExactPermanentsChoice {
+                player,
+                eligible,
+                required_count,
+                ..
+            } if *player == YOU => (
+                PlaytestPickPurpose::Keep,
+                all(eligible),
+                all(eligible),
+                *required_count,
+                *required_count,
+                false,
+                PickAnswer::KeptPermanents,
+            ),
             _ => return None,
+        };
+        let power_cap = match &self.state.waiting_for {
+            WaitingFor::KeepWithinTotalPowerChoice { cap, .. } => Some(*cap),
+            _ => None,
         };
         Some((
             PlaytestPick {
@@ -1353,9 +1406,19 @@ impl Playtest {
                 min: min as u32,
                 max: max as u32,
                 ordered,
+                power_cap,
             },
-            targets,
+            answer,
         ))
+    }
+
+    /// The picked cards' power added up, each its current power (CR 208.3) as the engine counts
+    /// a total-power keep.
+    fn total_power(&self, ids: &[u64]) -> i32 {
+        ids.iter()
+            .filter_map(|id| self.state.objects.get(&ObjectId(*id)))
+            .map(|o| o.power.unwrap_or(0))
+            .sum()
     }
 
     /// The answers the engine accepts to the question it is asking the reader.
@@ -1370,10 +1433,10 @@ impl Playtest {
     /// for that. A pick has one answer when every eligible card must be picked, in no order that
     /// matters.
     fn sole_answer(&self) -> Option<GameAction> {
-        if let Some((pick, targets)) = self.pick() {
+        if let Some((pick, answer)) = self.pick() {
             let all = pick.min == pick.max && pick.eligible.len() == pick.min as usize;
             return (all && (!pick.ordered || pick.min <= 1))
-                .then(|| pick_answer(pick.eligible, targets));
+                .then(|| pick_answer(pick.eligible, answer));
         }
         let mut answers = self
             .answers()
@@ -1416,7 +1479,7 @@ impl Playtest {
                 match key.as_str() {
                     // Cards, by id or list of ids.
                     "object_id" | "source_id" | "keep" | "target_id" | "equipment_id"
-                    | "vehicle_id" | "cards" | "creature_ids" | "targets" | "target" => {
+                    | "vehicle_id" | "cards" | "creature_ids" | "targets" | "target" | "kept" => {
                         collect_refs(value, &mut ids, &mut players);
                     }
                     "order" if !abilities.is_empty() => {
@@ -1646,7 +1709,7 @@ impl Playtest {
                 if stage != PlaytestStage::Prompt || choice.is_some() {
                     return Err(NO_PROMPT.into());
                 }
-                let (pick, targets) = self
+                let (pick, answer) = self
                     .pick()
                     .ok_or("This question is not answered with a set of cards.")?;
                 let count = ids.len() as u32;
@@ -1668,7 +1731,15 @@ impl Playtest {
                 {
                     return Err(NOT_IN_GAME.into());
                 }
-                self.apply(YOU, pick_answer(ids, targets), out)?;
+                if let Some(cap) = pick.power_cap {
+                    let total = self.total_power(&ids);
+                    if total > cap {
+                        return Err(format!(
+                            "The kept creatures' total power is {total}; it may be at most {cap}."
+                        ));
+                    }
+                }
+                self.apply(YOU, pick_answer(ids, answer), out)?;
                 self.advance(out)
             }
             PlaytestAction::Cancel => {
@@ -2655,20 +2726,32 @@ pub(super) fn stack_targets(
     (cards, players)
 }
 
-/// A pick's answer: the cards, as `SelectTargets` when the question takes targets (`pick`'s
-/// second value), else `SelectCards`.
-fn pick_answer(ids: Vec<u64>, targets: bool) -> GameAction {
-    if targets {
-        GameAction::SelectTargets {
+/// Which of the engine's answers a pick's cards are sent as (`pick`'s second value).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PickAnswer {
+    /// `SelectCards`.
+    Cards,
+    /// `SelectTargets`, for a question that takes targets.
+    Targets,
+    /// `ChooseKeptCreatures`: the creatures kept within a total power, the rest sacrificed.
+    KeptCreatures,
+    /// `ChooseKeptPermanents`: the permanents kept, the rest sacrificed.
+    KeptPermanents,
+}
+
+/// A pick's answer: the cards, as the question takes them.
+fn pick_answer(ids: Vec<u64>, answer: PickAnswer) -> GameAction {
+    let objects = || ids.iter().copied().map(ObjectId).collect();
+    match answer {
+        PickAnswer::Cards => GameAction::SelectCards { cards: objects() },
+        PickAnswer::Targets => GameAction::SelectTargets {
             targets: ids
-                .into_iter()
-                .map(|id| TargetRef::Object(ObjectId(id)))
+                .iter()
+                .map(|id| TargetRef::Object(ObjectId(*id)))
                 .collect(),
-        }
-    } else {
-        GameAction::SelectCards {
-            cards: ids.into_iter().map(ObjectId).collect(),
-        }
+        },
+        PickAnswer::KeptCreatures => GameAction::ChooseKeptCreatures { kept: objects() },
+        PickAnswer::KeptPermanents => GameAction::ChooseKeptPermanents { kept: objects() },
     }
 }
 

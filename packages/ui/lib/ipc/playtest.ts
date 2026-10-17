@@ -34,7 +34,7 @@ export type PlaytestPhase = "beginning" | "main1" | "combat" | "main2" | "ending
 
 /** What picking a card does: kept on top (scry, surveil), discarded, found, kept, revealed… */
 export type PlaytestPickPurpose =
-  "scry" | "surveil" | "discard" | "search" | "dig" | "reveal" | "targets" | "choose";
+  "scry" | "surveil" | "discard" | "search" | "dig" | "reveal" | "targets" | "choose" | "keep";
 
 /** A step the reader can ask the game to stop at. */
 export type PlaytestStopStep =
@@ -231,6 +231,11 @@ export interface PlaytestPick {
   max: number;
   /** Order counts: for scry and surveil the picked cards stay on top, first picked on top. */
   ordered: boolean;
+  /**
+   * The most the picked cards' power may add up to, each a creature's `GameCard.power` ("total
+   * power 4 or less", issue #1079); `null` for a pick bounded by its count alone.
+   */
+  powerCap: number | null;
 }
 
 export interface PlaytestOption {
