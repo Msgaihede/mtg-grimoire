@@ -192,6 +192,12 @@ generically, never matched variant by variant.
   and their order cannot matter. Should the engine refuse that answer, the question is asked
   after all.
 - A card named alone by an option lights up on the table, and clicking it answers.
+- **An alternative cost is asked as which cost** (issue #1072). A spell with Overload, Evoke,
+  Bestow, Dash and the like whose printed and alternative costs are both payable is phase's
+  `AlternativeCastChoice`, answered `ChooseAlternativeCast` with `Normal` or `Alternative` — a
+  tagged choice, which `option_of` reads as the option's `label` (`tag_of`). The question's own
+  `keyword` field rides on the prompt as `keyword`, so the board says "Overload" and "Mana cost"
+  rather than two rows of the same words. With only one cost payable, phase takes it unasked.
 
 **A pick: the answer that is a set of cards.** For a scry of three, `legal_actions` offers four
 answers (none, all, each card alone), and there are sixteen. So for the questions whose answer is

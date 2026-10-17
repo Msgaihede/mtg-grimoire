@@ -906,6 +906,7 @@ impl Playtest {
                     .collect(),
                 cancellable: true,
                 pick: None,
+                keyword: None,
             };
         }
         let source = self.pending.as_ref().map(|p| p.source.clone()).or_else(|| {
@@ -929,7 +930,16 @@ impl Playtest {
                 .collect(),
             cancellable: self.pending.is_some(),
             pick: self.pick().map(|(pick, _)| pick),
+            keyword: self.keyword(),
         }
+    }
+
+    /// The keyword the question is about, when its data names one — the alternative cost a
+    /// cast is offered (`Overload`, `Evoke`, `Bestow`…; issue #1072). Read from the question's
+    /// own fields, as `option_of` reads an answer's.
+    fn keyword(&self) -> Option<String> {
+        let json = serde_json::to_value(&self.state.waiting_for).ok()?;
+        json.get("data")?.get("keyword").and_then(tag_of)
     }
 
     /// The question's answer as a set of cards, for the few kinds of question whose answers
@@ -1195,7 +1205,8 @@ impl Playtest {
                             .and_then(Value::as_i64)
                     }
                     "accept" | "pay" | "top" => yes = value.as_bool(),
-                    "choice" => label = value.as_str().map(str::to_string),
+                    // A word, or one of phase's tagged choices: `{ "type": "Alternative" }`.
+                    "choice" => label = tag_of(value),
                     _ => {}
                 }
             }
@@ -2403,6 +2414,14 @@ fn collect_refs(value: &Value, ids: &mut Vec<ObjectId>, players: &mut Vec<Playte
         }
         _ => {}
     }
+}
+
+/// A word on the wire: a string, or the tag of one of phase's `#[serde(tag = "type")]` enums.
+fn tag_of(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .or_else(|| value.get("type")?.as_str())
+        .map(str::to_string)
 }
 
 /// Whether an action is something `id` does: its data names `id` as the source, the equipment,
