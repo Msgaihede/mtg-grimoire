@@ -55,11 +55,11 @@ use engine::game::{
     install_card_db, load_and_hydrate_decks, resolve_deck_list, start_game_with_starting_player,
     DeckList, PlayerDeckList,
 };
-use engine::types::ability::{LibraryPosition, TargetRef};
+use engine::types::ability::{KeywordAction, LibraryPosition, TargetRef};
 use engine::types::actions::{DebugAction, DebugTokenRequest, GameAction, MulliganChoice};
 use engine::types::events::{ActivatedAbilityKind, GameEvent};
 use engine::types::format::FormatConfig;
-use engine::types::game_state::{MulliganDecisionPhase, StackEntryKind, WaitingFor};
+use engine::types::game_state::{MulliganDecisionPhase, StackEntry, StackEntryKind, WaitingFor};
 use engine::types::identifiers::ObjectId;
 use engine::types::phase::Phase;
 use engine::types::statics::StaticMode;
@@ -700,12 +700,15 @@ impl Playtest {
                     } else {
                         entry.source_id
                     };
+                    let (targets, target_players) = stack_targets(s, entry);
                     Some(PlaytestStackItem {
                         id: entry.id.0,
                         name: source.name.clone(),
                         card_id: self.printing_of(shown),
                         seat: seat_of(entry.controller),
                         ability: !matches!(entry.kind, StackEntryKind::Spell { .. }),
+                        targets,
+                        target_players,
                     })
                 })
                 .collect(),
@@ -2330,6 +2333,55 @@ fn seat_of(player: PlayerId) -> PlaytestPlayer {
         .get(player.0 as usize)
         .copied()
         .unwrap_or(PlaytestPlayer::Opponent3)
+}
+
+/// What a stack entry targets, for the board's arrows: the cards the table shows and the players,
+/// each once, in the order chosen — the spell's or ability's own targets and its follow-on
+/// abilities' ("… and another target creature"), and an equip's creature. A card in a hand or a
+/// library is not shown, so it is not told.
+pub(super) fn stack_targets(
+    state: &GameState,
+    entry: &StackEntry,
+) -> (Vec<u64>, Vec<PlaytestPlayer>) {
+    let mut refs: Vec<TargetRef> = Vec::new();
+    let mut next = entry.ability();
+    while let Some(ability) = next {
+        refs.extend_from_slice(&ability.targets);
+        if let Some(branch) = ability.else_ability.as_deref() {
+            refs.extend_from_slice(&branch.targets);
+        }
+        next = ability.sub_ability.as_deref();
+    }
+    if let StackEntryKind::KeywordAction {
+        action: KeywordAction::Equip {
+            target_creature_id, ..
+        },
+    } = &entry.kind
+    {
+        refs.push(TargetRef::Object(*target_creature_id));
+    }
+    let mut cards = Vec::new();
+    let mut players = Vec::new();
+    for r in refs {
+        match r {
+            TargetRef::Object(id) => {
+                let shown = state
+                    .objects
+                    .get(&id)
+                    .is_some_and(|o| !matches!(o.zone, Zone::Hand | Zone::Library));
+                if shown && id != entry.id && !cards.contains(&id.0) {
+                    cards.push(id.0);
+                }
+            }
+            TargetRef::Player(p) => {
+                let p = seat_of(p);
+                if !players.contains(&p) {
+                    players.push(p);
+                }
+            }
+        }
+    }
+    (cards, players)
 }
 
 /// A pick's answer: the cards, as `SelectTargets` when the question takes targets (`pick`'s
