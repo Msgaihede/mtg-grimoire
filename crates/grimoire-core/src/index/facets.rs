@@ -170,6 +170,10 @@ struct Prepared {
 ///   either (the context menu that grows this filter calls `search_cards` directly), so this is
 ///   the same trade as `rarity`, made for the same reason, and would take the same sixth-
 ///   dimension change to close.
+/// * `universe` (Universes Beyond or Within) has no bitset either, so a request narrowed to
+///   one universe is faceted over both and every count reads high — the fail-open direction
+///   the entries above take. It is one `promo_types` word and would be a one-bit dimension
+///   if the over-read ever costs a reader a press.
 /// * `collapse` is not a filter at all. The search folds printings into cards for display
 ///   and these counts are printings either way — spec §2 says so, and the tooltip says
 ///   "printings" for exactly this reason.

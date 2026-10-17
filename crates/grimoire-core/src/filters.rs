@@ -75,6 +75,25 @@ pub const BORDER_KEYS: [&str; 3] = ["regular", "borderless", "fullart"];
 /// border chips do, and a nonfoil-and-foil printing answers both.
 pub const FINISH_KEYS: [&str; 3] = crate::schema::FINISHES;
 
+/// The universe filter's two values, in the order the filter row draws them.
+///
+/// **One column and one word.** `beyond` is a printing whose `cards.promo_types` holds
+/// [`UNIVERSES_BEYOND`] — Scryfall's own mark, what its `is:universesbeyond` reads — and
+/// `within` is every printing that does not (the owner's definition, 2026-10-17). Scryfall
+/// has no "Universes Within" word of its own, so the second half is the complement and not a
+/// list anybody keeps.
+///
+/// **A printing's fact, not a card's.** A Sol Ring printed in a Lord of the Rings Commander
+/// deck is `beyond` and its Commander Legends printing is `within`, so a collapsed search
+/// answers both values with Sol Ring — represented by a printing that matches — exactly as
+/// Scryfall's `unique=cards` does. A copy in a binder is one printing, which is the question a
+/// collection asks.
+pub const UNIVERSE_KEYS: [&str; 2] = ["beyond", "within"];
+
+/// The `promo_types` member Scryfall marks a Universes Beyond printing with. **Bound, never
+/// interpolated**, like [`BORDERLESS`].
+pub const UNIVERSES_BEYOND: &str = "universesbeyond";
+
 /// The value `cards.border_color` holds for a printing with no border — the one word of its
 /// six that is a chip. **Bound, never interpolated**, so the module note's list of what reaches
 /// the SQL text stays four items long.
@@ -361,6 +380,14 @@ pub struct CardFilters {
     /// they are different questions — a nonfoil copy of a printing that also exists in foil
     /// answers `printedFinishes: ["foil"]` and fails `finishes: ["foil"]`.
     pub printed_finishes: Option<Vec<String>>,
+    /// Universes Beyond or Universes Within — one of [`UNIVERSE_KEYS`], or absent for both.
+    ///
+    /// **Single-valued, because the two values partition the corpus**: both at once is no
+    /// filter, so the wire carries the one the reader narrowed to and nothing when they did
+    /// not. A word outside the list is no filter either — it fails open, like
+    /// [`Self::art_weight_floor`], rather than emptying the result over a typo in a hand-built
+    /// payload. See [`UNIVERSE_KEYS`] for why it is a printing's fact.
+    pub universe: Option<String>,
     /// Omitted means true in the search and false in the collection: a search offers cards
     /// to own, a collection lists cards that are owned.
     pub paper_only: Option<bool>,
@@ -926,6 +953,21 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
                 p.params.push(Box::new(format!("\"{finish}\"")));
             }
         }
+    }
+
+    // Universes Beyond is Scryfall's word in `promo_types` (quoted, like the finishes' needle,
+    // so no other member can contain it), and Within is its complement. `promo_types` is NULL
+    // on most printings, so Within reads it through `coalesce` — and then needs `{alias}.id`
+    // to keep an orphaned collection entry failing it, as it fails Beyond (`instr(NULL, ?)` is
+    // NULL): the universe is a claim only a card row can make.
+    if let Some(universe) = picked_universe(&f.universe) {
+        let sql = match universe {
+            "beyond" => format!("instr({alias}.promo_types, ?) > 0"),
+            _ => format!(
+                "({alias}.id IS NOT NULL AND coalesce(instr({alias}.promo_types, ?), 0) = 0)"
+            ),
+        };
+        p.push(sql, Box::new(format!("\"{UNIVERSES_BEYOND}\"")));
     }
 
     if f.paper_only.unwrap_or(true) {
@@ -2295,6 +2337,8 @@ pub const IS_VALUES: &[&str] = &[
     "ripplefoil",
     "raisedfoil",
     "poster",
+    "universesbeyond",
+    "ub",
     // Land nicknames
     "dual",
     "fetchland",
@@ -2582,6 +2626,8 @@ fn is_clause(alias: &str, set_code: &str, value: &str) -> Clause {
         | "embossed" | "gilded" | "ripplefoil" | "raisedfoil" | "poster" => {
             json_word(a, "promo_types", word)
         }
+        // Scryfall's own short form answers the same word — the universe chip's Beyond.
+        "universesbeyond" | "ub" => json_word(a, "promo_types", UNIVERSES_BEYOND),
 
         // ---- Land nicknames: rules-text templates, each on a land.
         // The ten originals: two basic types and nothing but the reminder of what they tap for.
@@ -3056,6 +3102,13 @@ pub fn picked_borders(borders: &[String]) -> Vec<String> {
 /// [`FINISH_KEYS`], shared with [`crate::index::facets`] for the same reason.
 pub fn picked_finishes(finishes: &[String]) -> Vec<String> {
     picked_from(finishes, &FINISH_KEYS)
+}
+
+/// The universe a request really filters on: trimmed and lower-cased, and `None` for anything
+/// outside [`UNIVERSE_KEYS`] — which is no filter, never "match nothing".
+pub fn picked_universe(universe: &Option<String>) -> Option<&'static str> {
+    let v = nonblank(universe)?.to_ascii_lowercase();
+    UNIVERSE_KEYS.iter().copied().find(|k| *k == v)
 }
 
 /// Trim, lower-case, keep what `vocabulary` names, sort, deduplicate — the one body both
@@ -5413,10 +5466,91 @@ mod tests {
             of_borders(&["fullart"]),
             of_finishes(&["nonfoil"]),
             of_finishes(&["foil", "etched"]),
+            of_universe("beyond"),
+            of_universe("within"),
         ] {
-            let asked = format!("{:?} {:?}", f.borders, f.printed_finishes);
+            let asked = format!("{:?} {:?} {:?}", f.borders, f.printed_finishes, f.universe);
             assert_eq!(orphans(f), 0, "{asked}");
         }
+    }
+
+    fn of_universe(universe: &str) -> CardFilters {
+        CardFilters {
+            universe: Some(universe.to_owned()),
+            ..Default::default()
+        }
+    }
+
+    /// One printing per shape the universe filter has to tell apart: Scryfall's word alone,
+    /// beside other members, absent from a non-empty list, and the NULL most printings carry.
+    fn corpus_with_universes() -> rusqlite::Connection {
+        let conn = crate::schema::memory_pair();
+        let rows: [(&str, Option<&str>); 4] = [
+            ("ltr", Some(r#"["universesbeyond"]"#)),
+            (
+                "fin",
+                Some(r#"["ffiv","sourcematerial","universesbeyond","boosterfun"]"#),
+            ),
+            ("promo", Some(r#"["boosterfun","surgefoil"]"#)),
+            ("plain", None),
+        ];
+        for (id, promo_types) in rows {
+            conn.execute(
+                "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,raw,
+                                    promo_types)
+                 VALUES (?1,?1,'tst',?1,'en','normal',1,'{}',?2)",
+                rusqlite::params![id, promo_types],
+            )
+            .unwrap();
+        }
+        conn
+    }
+
+    /// **Beyond is Scryfall's `promo_types` word and Within is everything else** — the NULL
+    /// four fifths of the corpus carry included — so the two partition the printings. Blank or
+    /// unknown is no filter; case and padding are read as the reader meant them.
+    #[test]
+    fn the_universe_filter_partitions_printings_by_scryfalls_word() {
+        let conn = corpus_with_universes();
+        let all = search_ids(&conn, no_filters());
+        assert_eq!(all, vec!["fin", "ltr", "plain", "promo"]);
+
+        assert_eq!(search_ids(&conn, of_universe("beyond")), vec!["fin", "ltr"]);
+        assert_eq!(
+            search_ids(&conn, of_universe(" Within ")),
+            vec!["plain", "promo"]
+        );
+        for unknown in ["", "  ", "both", "universesbeyond"] {
+            assert_eq!(search_ids(&conn, of_universe(unknown)), all, "{unknown:?}");
+        }
+
+        // The `is:` word answers what the chip's Beyond does, under both spellings.
+        for word in ["universesbeyond", "ub"] {
+            let (sql, params) = is_clause("c", "c.set_code", word);
+            let ids: Vec<String> = conn
+                .prepare(&format!(
+                    "SELECT c.id FROM cards c WHERE {sql} ORDER BY c.id"
+                ))
+                .unwrap()
+                .query_map(
+                    rusqlite::params_from_iter(params.iter().map(|b| b.as_ref())),
+                    |r| r.get(0),
+                )
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            assert_eq!(ids, vec!["fin", "ltr"], "is:{word}");
+        }
+    }
+
+    /// The wire name is `universe`, one word, and its two values are the filter row's.
+    #[test]
+    fn the_universe_wire_name_and_values() {
+        let f: CardFilters = serde_json::from_str(r#"{"universe":"beyond"}"#).unwrap();
+        assert_eq!(picked_universe(&f.universe), Some("beyond"));
+        assert_eq!(picked_universe(&Some("WITHIN".into())), Some("within"));
+        assert_eq!(picked_universe(&None), None);
+        assert_eq!(UNIVERSE_KEYS, ["beyond", "within"]);
     }
 
     /// Both normalisers trim, lower-case, validate, sort and deduplicate — and they are what
@@ -6088,7 +6222,7 @@ mod tests {
     #[test]
     fn every_is_value_has_its_own_sql() {
         let conn = corpus_for_the_full_syntax();
-        assert_eq!(IS_VALUES.len(), 114);
+        assert_eq!(IS_VALUES.len(), 116);
         let mut seen: Vec<&str> = Vec::new();
         for value in IS_VALUES {
             assert!(!seen.contains(value), "{value} is listed twice");

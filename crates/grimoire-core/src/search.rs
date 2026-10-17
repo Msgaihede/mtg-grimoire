@@ -81,6 +81,10 @@ pub struct SearchRequest {
     /// because the collection's query has a `finishes` of its own for the copy's finish. See
     /// [`crate::filters::CardFilters::printed_finishes`].
     pub printed_finishes: Option<Vec<String>>,
+    /// Universes Beyond (`beyond`) or Within (`within`) — one of
+    /// [`crate::filters::UNIVERSE_KEYS`], or absent for both. See
+    /// [`crate::filters::CardFilters::universe`].
+    pub universe: Option<String>,
     /// The cheapest and dearest a printing may cost at [`Self::marketplace`] and still match.
     ///
     /// Inclusive on both ends, either half usable alone, and **an unpriced printing matches
@@ -229,6 +233,7 @@ impl SearchRequest {
             types: self.types.clone(),
             borders: self.borders.clone(),
             printed_finishes: self.printed_finishes.clone(),
+            universe: self.universe.clone(),
             paper_only: self.paper_only,
             playable_only: self.playable_only,
             art_tags: self.art_tags.clone(),

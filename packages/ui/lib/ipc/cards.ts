@@ -14,6 +14,7 @@ import type { Finish } from "../finish";
 import type { ImageVariant } from "../images";
 import type { MarketplaceId } from "../marketplace";
 import type { SortSpec } from "../sort";
+import type { Universe } from "../universe";
 import { invoke } from "./invoke";
 import type { ArtWeightFloor, TagTerms } from "./tags";
 
@@ -147,6 +148,13 @@ export interface SearchRequest {
    * `printed_finishes: Option<Vec<String>>`.
    */
   printedFinishes?: Finish[];
+  /**
+   * Universes Beyond (`beyond`) or Universes Within (`within`), absent for both — one value,
+   * because the two partition the printings (`@/lib/universe`). Beyond is Scryfall's
+   * `universesbeyond` promo type and Within every printing without it. Rust:
+   * `universe: Option<String>`.
+   */
+  universe?: Universe;
   /**
    * The price band, at {@link marketplace}. Inclusive at both ends, either half usable alone.
    *
@@ -897,6 +905,10 @@ export interface CardFilters {
    *  finish, which is a different question; nothing in the app sends this one there. Rust:
    *  `printed_finishes: Option<Vec<String>>`. */
   printedFinishes?: Finish[];
+  /** Universes Beyond or Within — see {@link SearchRequest.universe}, the same field on the same
+   *  control. Declared here as well because `filters::push_card_filters` emits it for all three
+   *  lists. Rust: `universe: Option<String>`. */
+  universe?: Universe;
   /** Omitted means true in the search and false in the collection: a search offers cards to
    *  own, a collection lists cards that are owned. */
   paperOnly?: boolean;
