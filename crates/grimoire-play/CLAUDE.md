@@ -4,8 +4,8 @@ The one place the app touches a rules engine: [phase.rs](https://github.com/phas
 `phase-engine` (library `engine`) and its AI, `phase-ai`, taken from git at one pinned `rev`. It
 holds two games: the goldfish board's (`session.rs`, `view.rs`: one player against a target that
 does nothing) and a playtest (`playtest/`: the reader's deck against one other or three, each
-opponent played by phase's AI). Facts go in (`CardFacts`, Scryfall's fields for a deck row), and
-a view and what happened come out. It knows nothing of SQLite, Tauri or a window.
+opponent played by phase's AI), and what the engine plays of a deck before either (`support.rs`).
+Facts go in (`CardFacts`, Scryfall's fields for a deck row), and a view and what happened come out. It knows nothing of SQLite, Tauri or a window.
 
 Design, measurements and licences: [goldfish.md](../../docs/reference/goldfish.md) (the engine,
 the pin, the goldfish) and [playtest.md](../../docs/reference/playtest.md) (the AI game).
@@ -61,6 +61,10 @@ the pin, the goldfish) and [playtest.md](../../docs/reference/playtest.md) (the 
   redo never replays, so the AI's dice cannot change a redone turn. Anything an action changes is
   in its `Moment`: a new field of game state on either session is a field there too. `UNDO_LIMIT`
   is mirrored by `packages/ui/features/playtesting/undo.ts`.
+- **What the engine plays of a deck is phase's verdict, never ours** (`support.rs`, issue #1078):
+  each face parsed as a game parses it, asked phase's `card_face_gaps`. Never add a list of cards
+  or effects this crate judges by itself; a rev move changes the verdict, and that is the point.
+  Like a game, it runs on `on_engine_stack`.
 - **Only the deck's cards are parsed**, with phase's own `build_oracle_face`. Never fetch phase's
   `card-data.json`: it is a 93 MB external host this app does not use.
 

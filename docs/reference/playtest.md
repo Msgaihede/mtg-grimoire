@@ -278,10 +278,11 @@ board's.
 | `playtest_start(deck_id, variant, opponents, difficulty, seed)` | Reads every deck (`play::deck_cards`), deals, and answers with a `PlaytestStep` at the reader's opening hand. `opponents` is one to three `PlaytestOpponent { deckId, variant }`. A fresh game replaces any other. |
 | `playtest_act(action)`                                          | One `PlaytestAction`, and everything the AI does after it until the reader next decides. A refusal is one sentence.                                                                                                |
 | `playtest_end()`                                                | Drops the game.                                                                                                                                                                                                    |
+| `playtest_support(deck_id, variant)`                            | What the engine plays of a deck, before a game: a `DeckSupport` (its different cards, and the `UnsupportedCard`s phase reads only in part). See [the setup page](#the-setup-page).                                 |
 
 **The goldfish's slot arrangement, in a slot of its own** (`PlaytestSlot`: `Empty | Busy | Game`).
 A goldfish game and a playtest can be held at once. A call while the AI is thinking is told "The
-opponent is still thinking." All three commands are on `command_table::DESKTOP_ONLY`.
+opponent is still thinking." All four commands are on `command_table::DESKTOP_ONLY`.
 
 **The wire** is `playtest/view.rs` ↔ `packages/ui/lib/ipc/playtest.ts`. It reuses the goldfish's
 `GameCard`, `MulliganView`, `TokenOffer` and `Place`, so the goldfish's table pieces draw both
@@ -336,6 +337,34 @@ kept for the window's life in `viewMemory("playtesting.setup")`, never in storag
 **The table** is a two-button group, "1 opponent" (the default) or "3 opponents". Three opponents
 show three dropdowns, "Opponent 1's deck" to "Opponent 3's", and Start waits for all four decks.
 Any deck may sit in any seat, twice over. The seats a duel hides keep their picks.
+
+### What the engine plays of a deck (issue #1078)
+
+phase's parser reads most cards whole. A card it reads only in part is still dealt and played, as
+a body with a cost and a type, but the parts it could not read do nothing. So the setup page marks
+each deck before it is picked:
+
+- **In the deck lists**, each row has a glyph for the list the deck is first dealt from: a green
+  `CircleCheck` when every card is played whole, a gold `TriangleAlert` when some are played only
+  in part (a caution, not the red of a broken rule: the deck still plays). The row's tooltip is
+  the sentence, and the glyph rides on the closed trigger with the picked deck.
+- **Under each seat**, the picked deck's verdict in the list picked there ("The rules engine plays
+  23 of 24 cards in full; 1 card is played only in part."), and a fold that lists those cards,
+  each with its copies and what phase leaves out of it.
+
+**The verdict is phase's own.** `grimoire-play`'s `support.rs` parses each face exactly as a game
+does (`cards::parsed_faces`, `build_oracle_face`) and asks `engine::game::coverage::card_face_gaps`,
+the check behind phase's coverage report and its deck builder's "N of M supported". A gap is
+phase's label (`Effect:…`, `Trigger:…`, `Keyword:…`, `Static:…`, `SilentDrop:2_of_3`), and
+`features/playtesting/support.ts`' `gapWords` puts it in words. Two printings of one card are one
+card, their copies summed.
+
+**Each card is parsed once per window.** The host holds a `SupportCache` (`PlaytestSupport`) keyed
+by oracle id, behind one lock, so a burst of questions parses each shared card once. The page asks
+about the seats' decks at once and about the rest **one at a time** (`usePlaytestSupport`), so a
+first visit's sweep of every deck never queues ahead of the deck the reader just picked. The
+answers are under the `["decks"]` query root, so a deck edit marks them stale; a refetch is a
+database read and cache lookups.
 
 ## The board
 

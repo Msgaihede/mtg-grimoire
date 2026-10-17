@@ -970,7 +970,7 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
-   * The playtest board's three commands — the goldfish's arrangement: `playtest_act` carries one
+   * The playtest board's four commands — the goldfish's arrangement: `playtest_act` carries one
    * `PlaytestAction`, and each variant and field this side can send, and each fact it reads back,
    * is read out of `playtest/view.rs` rather than trusted.
    */
@@ -999,6 +999,9 @@ describe("ipc argument names match the Rust command signatures", () => {
     invoke.mockResolvedValue(undefined);
     await ipc.playtestEnd();
     expect(invoke).toHaveBeenLastCalledWith("playtest_end");
+    invoke.mockResolvedValue({ cards: 0, unsupported: [] });
+    await ipc.playtestSupport(9, "theory");
+    expect(invoke).toHaveBeenLastCalledWith("playtest_support", { deckId: 9, variant: "theory" });
 
     const declares = (command: string, param: string) =>
       expect(playtestRs, `\`${command}\` declares no \`${param}\``).toMatch(
@@ -1008,10 +1011,13 @@ describe("ipc argument names match the Rust command signatures", () => {
       declares("playtest_start", param);
     }
     declares("playtest_act", "action");
+    declares("playtest_support", "deck_id");
+    declares("playtest_support", "variant");
     for (const registered of [
       "playtest::playtest_start,",
       "playtest::playtest_act,",
       "playtest::playtest_end,",
+      "playtest::playtest_support,",
     ]) {
       expect(desktopRs).toContain(registered);
     }
