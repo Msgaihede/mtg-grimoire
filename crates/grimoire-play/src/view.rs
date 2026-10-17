@@ -69,6 +69,10 @@ pub struct GameCard {
     /// What casting it from the command zone costs on top of its mana cost, in generic mana
     /// (CR 903.8). 0 for anything but a commander.
     pub tax: u32,
+    /// The permanent this Aura, Equipment or Fortification is attached to (CR 301.5, 303.4), by
+    /// its object id — whoever controls it, so an Aura on an opponent's creature names that
+    /// creature. `None` for anything unattached, off the battlefield, or attached to a player.
+    pub attached_to: Option<u64>,
 }
 
 /// Where a permanent sits: creatures toward the opponent; behind them lands on the left and

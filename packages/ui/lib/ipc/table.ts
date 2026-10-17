@@ -69,6 +69,11 @@ export interface GameCard {
   toughness: number | null;
   /** Commander tax in generic mana; 0 for anything else. */
   tax: number;
+  /**
+   * The permanent this Aura, Equipment or Fortification is attached to, by its `id` — whoever
+   * controls it. `null` for anything unattached, off the battlefield, or attached to a player.
+   */
+  attachedTo: number | null;
 }
 
 export interface CardCounter {

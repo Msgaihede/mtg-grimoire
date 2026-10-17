@@ -1535,3 +1535,45 @@ fn undo_walks_back_through_the_phases_one_decision_at_a_time() {
         assert_eq!(again.you, end.you);
     });
 }
+
+/// Issue #1073: an Equipment equipped to a creature names it, so the board draws it under the
+/// creature; an unattached one names nothing.
+#[test]
+fn an_equipment_names_the_creature_it_is_attached_to() {
+    let mut you = green();
+    you.push(card(
+        "Bonesplitter",
+        Some("{1}"),
+        "Artifact — Equipment",
+        "Equipped creature gets +2/+0.\nEquip {1}",
+        None,
+        "C",
+        4,
+    ));
+    let (loose, equipped) = engine(move || {
+        let (mut game, _) = deal(you, 2);
+        game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+        put_down(&mut game, "Forest");
+        put_down(&mut game, "Grizzly Bears");
+        put_down(&mut game, "Bonesplitter");
+        let loose = game.view();
+        let sword = find(&loose.you.battlefield, "Bonesplitter").unwrap().id;
+        (loose, game.act(A::Activate { id: sword }).expect("equip"))
+    });
+    assert_eq!(
+        find(&loose.you.battlefield, "Bonesplitter")
+            .unwrap()
+            .attached_to,
+        None
+    );
+    let bear = find(&equipped.view.you.battlefield, "Grizzly Bears").unwrap();
+    let sword = find(&equipped.view.you.battlefield, "Bonesplitter").unwrap();
+    assert_eq!(
+        sword.attached_to,
+        Some(bear.id),
+        "{:?}",
+        equipped.view.prompt
+    );
+    assert_eq!(bear.attached_to, None);
+    assert_eq!(bear.power, Some(4));
+}
