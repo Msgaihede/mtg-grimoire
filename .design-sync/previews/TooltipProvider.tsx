@@ -29,7 +29,7 @@
  * it on the next sync and this file has to follow.
  */
 import * as React from 'react';
-import * as S from "@ds-stories/src/components/tooltip/Tooltip.stories";
+import * as S from "@ds-stories/packages/ui/components/tooltip/Tooltip.stories";
 
 function compose(S: any, key: string) {
   const meta: any = S.default ?? {};

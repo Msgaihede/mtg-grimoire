@@ -9,4 +9,7 @@
 // underneath this is the workbench's, which is the whole point — the compare loop screenshots
 // both sides and they have to be the same picture. Any other `@/`-aliased
 // directory-with-`index.ts` will land in the same hole; today this is the only one in `packages/ui/`.
-export { core } from "../packages/ui/lib/core/index";
+//
+// **`export *`, never a list.** It named `core` alone until the module grew `host` (the clipboard
+// and the way out to a browser), and the build then failed on every importer of the new name.
+export * from "../packages/ui/lib/core/index";

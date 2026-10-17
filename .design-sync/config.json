@@ -47,9 +47,6 @@
         "primitives-ownedbadge--nothing"
       ]
     },
-    "Ribbon": {
-      "cardMode": "column"
-    },
     "SortableHeader": {
       "cardMode": "column",
       "skip": [

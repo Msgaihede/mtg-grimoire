@@ -1,5 +1,7 @@
-// Writes the Design System page cards (components/<Name>/preview.html) for the deck parts and
-// the two card-image components. The frame is the one every existing card in the system uses.
+// Writes the Design System page cards (components/<Name>/preview.html) for the deck parts, the
+// two card-image components, and Dropdown, TooltipProvider and WorkInProgress. The frame is the
+// one every existing card in the system uses. The other cards were written by the 2026-09-20
+// migration and live only in the artifact.
 // Usage: node .design-sync/artifact/page-cards.mjs <pubDir>
 import fs from "node:fs";
 import path from "node:path";
@@ -175,6 +177,99 @@ const cards = {
     h('div', { style: { marginTop: '12px' } },
       note('In the app the address is the mtgimg:// protocol\\u2019s; here cardImageUrl answers the fixture\\u2019s real printing from card-art/ beside the bundle.'))
   ));
+`,
+  ],
+  // The migration's card, brought here on 2026-10-17 because `update` stopped taking `null`: the
+  // shell reads `update.progress` for the header's update activity, and the old card's
+  // `update: null` threw on mount and drew nothing. An idle update — nothing available, nothing
+  // running — is what a window that has checked and found nothing holds.
+  AppShell: [
+    "chrome",
+    `820 width=1280`,
+    `
+  if (!need('AppShell')) return;
+  var C = NS.AppShell;
+  var idle = { status: null, progress: null, busy: false, action: 'none', error: null,
+    check: noop, download: noop, install: noop, openReleasePage: noop };
+  render(h('div', { className: 'bg-bg border border-border rounded-lg overflow-hidden',
+                    style: { height: '780px' } },
+    h(C, { update: idle },
+      h('div', { className: 'p-6 font-sans text-text' },
+        h('h2', { className: 'font-heading text-lg' }, 'Home'),
+        h('p', { className: 'text-dim text-sm' },
+          'The shell draws the sidebar, the window header and the window chrome; this is the view slot the app fills.')))
+  ));
+`,
+  ],
+  // The three below joined the bundle on 2026-09-27 and had no page card until 2026-10-17.
+  // Every one is drawn at rest: an open listbox or a shown tooltip is a fixed panel opened by
+  // input, and the frame runs React 18, where `PopupListbox` gets no ref (NOTES).
+  Dropdown: [
+    "primitives",
+    200,
+    `
+  if (!need('Dropdown') || !need('MultiDropdown')) return;
+  var formats = [
+    { value: 'standard', label: 'Standard' },
+    { value: 'pioneer', label: 'Pioneer' },
+    { value: 'modern', label: 'Modern' },
+    { value: 'legacy', label: 'Legacy', disabled: true, title: 'No cards in this deck are legal here' },
+    { value: 'commander', label: 'Commander' }
+  ];
+  function One(p) {
+    var s = React.useState(p.value);
+    return h(NS.Dropdown, { label: 'Format', options: formats, value: s[0], onChange: s[1], size: p.size, fill: p.fill });
+  }
+  function Many() {
+    var s = React.useState(['modern', 'commander']);
+    var picked = s[0];
+    return h(NS.MultiDropdown, { label: 'Formats', options: formats, selected: picked,
+      triggerLabel: picked.length === 0 ? 'Any format' : picked.length + ' formats',
+      onToggle: function (v) {
+        s[1](picked.indexOf(v) >= 0 ? picked.filter(function (x) { return x !== v; }) : picked.concat([v]));
+      } });
+  }
+  render(h('div', null,
+    h('div', { className: 'ds-wrap' },
+      cell('Dropdown', h(One, { value: 'modern' })),
+      cell('size="sm"', h(One, { value: 'commander', size: 'sm' })),
+      cell('MultiDropdown', h(Many)),
+      cell('fill, in a 240px cell', h('div', { style: { width: '240px' } }, h(One, { value: 'pioneer', fill: true })))),
+    h('div', { style: { marginTop: '12px' } },
+      note('Press a trigger to open its listbox. Rows are { value, label, icon?, hint?, disabled?, title? }; a disabled row\\u2019s title is the reason it gives.'))
+  ));
+`,
+  ],
+  TooltipProvider: [
+    "primitives",
+    200,
+    `
+  if (!need('useTooltip')) return;
+  // The provider is GrimoirePreviewProvider's own: it mounts the one panel every hint opens in.
+  function Hints() {
+    var tip = NS.useTooltip();
+    var btn = 'rounded-md border border-border bg-surface px-3 py-1.5 font-sans text-sm text-text';
+    return h('div', { className: 'ds-wrap' },
+      cell('A hint', h('button', Object.assign({ className: btn }, tip('Sorted by release date')), 'Release date')),
+      cell('Interactive', h('button', Object.assign({ className: btn },
+        tip('Needs review \\u2014 three cards have no printing picked', { interactive: true })), 'Needs review')),
+      cell('Only when clipped', h('span', Object.assign({ className: 'block w-32 truncate font-sans text-sm text-text' },
+        tip('Kamigawa: Neon Dynasty Commander', { whenClipped: true })), 'Kamigawa: Neon Dynasty Commander')));
+  }
+  render(h('div', null,
+    h(Hints),
+    h('div', { style: { marginTop: '12px' } },
+      note('Hover or focus a control to open its hint. useTooltip() returns props to spread on the element itself \\u2014 no wrapper, never a title attribute.'))
+  ));
+`,
+  ],
+  WorkInProgress: [
+    "primitives",
+    260,
+    `
+  if (!need('WorkInProgress')) return;
+  render(h('div', { className: 'bg-bg border border-border rounded-lg', style: { height: '220px' } },
+    h(NS.WorkInProgress, { view: 'Playtesting' })));
 `,
   ],
 };

@@ -16,11 +16,13 @@
  * `compose` below is copied verbatim from the generated wrapper
  * (`.design-sync/.cache/previews/ContextMenu.tsx`) — keep it that way, so a converter change to
  * story composition can be diffed straight across. If `Card`'s play changes, `[STORY_CHANGED]`
- * names it on the next sync and this file has to follow. The other fifteen exports are the
- * generated ones, unchanged.
+ * names it on the next sync and this file has to follow. The other sixteen exports are the
+ * generated ones, unchanged — one per story, in the story file's order. A story added to that
+ * file needs its line here too (`TagDeck`, from #914, was missing until 2026-10-17): an owned
+ * preview is not regenerated, so a missing export just drops that story from the card.
  */
 import * as React from 'react';
-import * as S from "@ds-stories/src/components/menu/ContextMenu.stories";
+import * as S from "@ds-stories/packages/ui/components/menu/ContextMenu.stories";
 
 function compose(S: any, key: string) {
   const meta: any = S.default ?? {};
@@ -109,6 +111,7 @@ export const MoveToPile = /* Move To Pile */ compose(S, "MoveToPile");
 export const LabelRadios = /* Label Radios */ compose(S, "LabelRadios");
 export const Deck = /* Deck */ compose(S, "Deck");
 export const MoveDeckToFolder = /* Move Deck To Folder */ compose(S, "MoveDeckToFolder");
+export const TagDeck = /* Tag Deck */ compose(S, "TagDeck");
 export const Folder = /* Folder */ compose(S, "Folder");
 export const Category = /* Category */ compose(S, "Category");
 export const PredefinedZone = /* Predefined Zone */ compose(S, "PredefinedZone");

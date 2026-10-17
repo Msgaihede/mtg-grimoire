@@ -12,17 +12,6 @@ const put = (to, from) => {
   fs.copyFileSync(from, to);
 };
 
-/** Components the artifact has never held: everything of theirs goes up. */
-const NEW = new Set([
-  "StackView",
-  "CardStack",
-  "CardChin",
-  "QuantityTag",
-  "Dropdown",
-  "TooltipProvider",
-  "WorkInProgress",
-]);
-
 const core = []; // call 1
 const add = (list, rel, contentType) =>
   list.push(contentType ? { path: `project/${rel}`, contentType } : { path: `project/${rel}` });
@@ -52,8 +41,10 @@ for (const f of fs.readdirSync(B("fonts"))) {
   console.log("new font file:", f);
 }
 
-// Per-component docs: prompt.md and .d.ts for every component (props move); the converter's own
-// card html, its jsx stub and its compiled preview only for the components new to the artifact.
+// Per-component docs, for every component: prompt.md and .d.ts (props move), the converter's own
+// card html, its jsx stub and its compiled preview. Until 2026-10-17 the last three went up only
+// for components new to the artifact; the previews are compiled against the bundle beside them,
+// so a rebuilt bundle with old previews is a pair that was never verified together.
 const names = [];
 for (const group of fs.readdirSync(B("components"))) {
   for (const name of fs.readdirSync(B("components", group))) {
@@ -63,7 +54,6 @@ for (const group of fs.readdirSync(B("components"))) {
     add(core, `components/${group}/${name}/${name}.prompt.md`);
     put(P("components", group, name, `${name}.d.ts`), src("d.ts"));
     add(core, `components/${group}/${name}/${name}.d.ts`, "text/plain");
-    if (!NEW.has(name)) continue;
     put(P("components", group, name, `${name}.html`), src("html"));
     add(core, `components/${group}/${name}/${name}.html`, "text/plain");
     put(P("docs", "components", group, name, `${name}.jsx`), src("jsx"));
@@ -79,6 +69,43 @@ for (const name of fs.readdirSync(P("components"))) {
     add(core, `components/${name}/preview.html`);
 }
 
+// Components the artifact holds and the build no longer makes (Ribbon, 2026-10-11): every file of
+// theirs comes out, as `null` entries — a publish's map form, so they go in a call of their own.
+// What the artifact holds is read from the two places that name its components with their group:
+// the migration's card manifest and the page cards' `@dsCard` lines. The page's generated
+// `api/components/<Name>.md` is never written, so it is not listed here either.
+const built = new Set(names.map((n) => n.split("/")[1]));
+const held = new Map(); // name -> group
+const legacy = JSON.parse(
+  fs.readFileSync(path.join(artifactDir, "project", "docs", "_ds_manifest.json"), "utf8"),
+);
+for (const c of legacy.components ?? []) {
+  const group = /^components\/([^/]+)\//.exec(c.sourcePath ?? "")?.[1];
+  if (group) held.set(c.name, group);
+}
+const cardsDir = path.join(artifactDir, "project", "components");
+for (const name of fs.existsSync(cardsDir) ? fs.readdirSync(cardsDir) : []) {
+  const card = path.join(cardsDir, name, "preview.html");
+  if (!fs.existsSync(card)) continue;
+  const group = /@dsCard group="([^"]+)"/.exec(fs.readFileSync(card, "utf8"))?.[1];
+  if (group && !held.has(name)) held.set(name, group);
+}
+const removed = {};
+for (const [name, group] of held) {
+  if (built.has(name)) continue;
+  for (const rel of [
+    `components/${name}/preview.html`,
+    `components/${group}/${name}/${name}.prompt.md`,
+    `components/${group}/${name}/${name}.d.ts`,
+    `components/${group}/${name}/${name}.html`,
+    `docs/components/${group}/${name}/${name}.jsx`,
+    `assets/_preview/${name}.js`,
+  ])
+    removed[`project/${rel}`] = null;
+  console.log("gone from the build:", `${group}/${name}`);
+}
+fs.writeFileSync(path.join(pubDir, "files-remove.json"), JSON.stringify(removed, null, 1));
+
 // README: the converter's (conventions header + generated), then the migration section the
 // artifact's README already carried, verbatim.
 const oldReadme = fs.readFileSync(path.join(artifactDir, "project", "README.md"), "utf8");
@@ -86,6 +113,7 @@ const cut = oldReadme.indexOf("## Migrated from a legacy design system");
 if (cut < 0) throw new Error("the artifact README has no migration section to keep");
 const newReadme = fs.readFileSync(B("README.md"), "utf8").trimEnd();
 fs.writeFileSync(P("README.md"), `${newReadme}\n\n${oldReadme.slice(cut)}`);
+add(core, "README.md");
 
 // The art.
 const art = [];

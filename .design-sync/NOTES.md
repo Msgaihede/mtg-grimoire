@@ -110,6 +110,33 @@ Three repo files carry sync state. All three look incidental and none is:
   `@/`-aliased directory-with-`index.ts` lands in the same hole; today this is the only one in
   `packages/ui/`. (Until 2026-09-27 the shim also covered `__CORE__`, a Vite `define` esbuild was never
   handed, and a second shim covered `@/pwa/target`; the define left with the web build.)
+  **The shim is `export *` since 2026-10-17**: it named `core` alone, `lib/core` grew `host`, and
+  the bundle build failed on every importer of the new name.
+- **[GENERAL] A name that is both `x.ts` and a folder `x/` lands in the same hole** (2026-10-17).
+  Vite resolves it to the file; the converter's resolver hands esbuild the folder. `@/lib/ipc`
+  (`ipc.ts` beside `ipc/`, the per-domain mirror) and `@/features/home/widgets` are aliased to their
+  `.ts` outright, under both `@/` and `@grimoire/ui/`. Find the next one before it bites:
+  `for d in $(find packages/ui packages/fake -type d -not -path '*/node_modules*'); do [ -e "$d.ts" ] || [ -e "$d/index.ts" ] && echo $d; done`
+  — every hit imported by its bare name through an alias needs a rule above the wildcard.
+- **[GENERAL] The converter's bundle build has a fixed loader table and no config knob for it**
+  (2026-10-17). `packages/fake/world.ts` imports the light host's `membership.rs?raw`; esbuild
+  answered "No loader is configured for ".rs" files". `.design-sync/tsconfig.json` carries one
+  *relative* key, the exact specifier, pointing at `membership-raw.ts`, which re-imports the file
+  `with { type: "text" }` — an import attribute picks the loader per import (esbuild ≥ 0.25). The
+  text is the real file, read at every build. A new `?raw` import in the fake needs the same.
+- **[GENERAL] A Vite `define` the converter is never handed throws at module init** (2026-10-17).
+  The converter defines `import.meta.env` as a fixed `{MODE, DEV, PROD, SSR, BASE_URL}` object, so
+  `JSON.parse(import.meta.env.VITE_RELEASE_DATES)` in `lib/appVersion.ts` threw and AppShell's card
+  rendered nothing (`[RENDER] root empty`, `SyntaxError: "undefined" is not valid JSON`). Reached
+  through the story's `SettingsPage` → `VersionPanel`, never through the bundle. `appVersion-shim.ts`
+  answers the version from `package.json` and no release days: `VersionPanel` is the light
+  edition's and the desktop Settings every story draws shows `UpdatePanel` instead. Any new
+  `import.meta.env.VITE_*` read on a story's graph needs the same treatment (`vite.base.ts`'s
+  `define` lists them).
+- **Owned previews import their story by repo path, and the 2026-10-08 restructure moved every
+  story.** `@ds-stories/src/components/…` became `@ds-stories/packages/ui/components/…` in all five
+  owned files; the build said `! preview build failed: … @ds-stories path not found` and the
+  component fell to the floor card. A future move breaks them the same way.
 
 ## Real card art — the `bundled` mode (2026-10-01)
 
@@ -153,7 +180,11 @@ shows them, so the fake grew a third mode (`packages/fake/images.ts`):
    `node .design-sync/card-art.mjs --copy ds-bundle`. The converter wipes `--out` on every
    rebuild, so a copy made before the build is gone after it — and a preview then draws the app's
    own no-image frame where the reference draws the card, which fails compare loudly (good) and
-   for a reason the sheet does not name (bad).
+   for a reason the sheet does not name (bad). **The driver (`resync.mjs`) captures inside the
+   same run that wiped the art**, so its sheets always draw every card as a `Retrying…` frame:
+   after a driver run, copy the art and run `compare.mjs` again before grading (2026-10-17 — the
+   whole first capture of every card-bearing component was wasted this way). Its closing receipt
+   carries graded components forward without capturing, so only the publish needs the copy then.
 2. **Add `card-art/**` to the upload's `writes`.** The skill's fixed list
    (`components/**`, `fonts/**`, `_vendor/**`, …) does not name it, and a bundle uploaded without
    its art draws no-image frames on every card in every design. Chunk the writes: 11 MB of
@@ -174,7 +205,11 @@ over the script's own address. The artifact's page cards pass `../../card-art/`;
 project on **2026-09-20**. Read on 2026-10-01 it listed 21 components and none of the three the
 2026-09-27 sync added, so that sync's upload went to `config.json`'s `projectId` and stopped
 there. Until the two are tied together again, a change meant for canvases is published into the
-artifact with the Artifact tool, which needs no `/design-login`. What was done, in order:
+artifact with the Artifact tool, which needs no `/design-login`. **On 2026-10-17 Markus chose the
+artifact alone as `/design-sync`'s target** (offered: artifact, both, the legacy project, local
+only), so the legacy project's `_ds_sync.json` anchor is from 2026-09-27 and every sync since runs
+the driver with no `--remote` — the full-scope path, carried forward by the local grade cache
+when this checkout has one. What was done, in order:
 
 1. **Build and grade locally**: `buildCmd`, then `package-build.mjs`, then
    `node .design-sync/card-art.mjs --copy ds-bundle`, `package-validate.mjs` and a scoped
@@ -210,9 +245,29 @@ components take `ref` as a plain prop, which only React 19 passes — `PopupList
 listbox) and a row in `metaRows.tsx` — so their refs are `null` in the artifact and on every
 canvas. The deck parts are unaffected: they hand ref *objects* to hooks. Not fixed here.
 
-**Three components are in the bundle with no page card yet**: `Dropdown`, `TooltipProvider` and
-`WorkInProgress`. Their `.prompt.md` and `.d.ts` are published; a `components/<Name>/preview.html`
-for each is the missing piece.
+**The 2026-10-17 run (bundle 0.53.0, artifact versions 16–17)** changed the procedure in four ways:
+
+- **`assemble.mjs` now sends every component's converter card, `.jsx` and compiled preview**, not
+  only new components', and writes `files-remove.json` — `null` entries for a component the
+  artifact holds and the build no longer makes (Ribbon, deleted from the app 2026-10-11). It also
+  lists `README.md`, which it wrote but never listed until then. The publish is one call in the
+  `files` map form (paths plus `null`s; ~156 entries, 7.2 MB), then the index alone.
+- **Card art is re-sent only when it changed.** The 116 files' names and sizes matched the
+  artifact's listing, so the 11 MB call was skipped.
+- **Every page card is rendered, not only the ones `page-cards.mjs` writes.** The other cards were
+  written by the migration and live only in the artifact; copy them from an artifact read into a
+  check tree beside the publish tree and point `render-check.mjs` at that. It found AppShell's
+  card throwing (`Cannot read properties of null (reading 'progress')`): `update` stopped taking
+  `null`. The card now lives in `page-cards.mjs` with an idle `Update`, so it is the repo's.
+- **`Dropdown`, `TooltipProvider` and `WorkInProgress` have page cards** (drawn at rest — an open
+  listbox or tooltip is input-driven, and `PopupListbox` has no ref on React 18). All 27 cards
+  mounted on React 18.3.1 with no script error and every card image loaded.
+
+The remaining 404s in a render check are the migration's own: `components/bundle.css` inlines
+`styles.css`'s two `@import`s and `fonts.css`'s relative `url()`s, which resolve under
+`components/` to nothing. The faces load through the page's `tokens.css`. Not new; not fixed.
+The page-generated `api/components/Ribbon.md` outlived Ribbon's files — the page owns `api/`, so
+it was not removed by hand.
 
 ## Config decisions worth knowing
 
@@ -259,8 +314,12 @@ for each is the missing piece.
   build**: `grep -c "new DragDropManager" ds-bundle/_preview/{StackView,CardStack}.js` should be
   0, and the shim reaches any older preview whose graph touches `dndManager` too (ContextMenu's
   feature menus may) — compare its `createContext` count with the table below.
-- **Four owned previews exist only to re-enact a `play`**: `TooltipProvider`, `CardZoomIndicator`,
-  `ContextMenu`, and the `Flanked` half of `Dialog`. The rule they follow is under "Stories with a
+- **Five owned previews exist only to re-enact a `play`**: `TooltipProvider`, `CardZoomIndicator`,
+  `ContextMenu`, the `Flanked` half of `Dialog`, and (since 2026-10-17) `VirtualTable`'s `Shelved`,
+  whose play scrolls the table 800px so the sticky shelf bar names `Trade binder`. `Shelved` is
+  VirtualTable's 7th story — past compare's 6-story cap, so it was never captured until a
+  `--max-stories 7` run on 2026-10-17 found it mismatching. It is the only story that draws
+  `band`/`stickyBand`; capture VirtualTable with `--max-stories 7` whenever it re-grades. The rule they follow is under "Stories with a
   `play`" below. `TooltipProvider` is `cardMode: "single"`, `primaryStory: "Interactive"`, because
   an open panel is `fixed` and validate flags it `[GRID_OVERFLOW] escape` in a grid.
 - **`AppShell` renders at `viewport: "1280x800"`** — the app's narrow rung, near enough. The
@@ -288,13 +347,16 @@ for each is the missing piece.
 `grep -c createContext ds-bundle/_preview/*.js` is non-zero for four previews, and none of
 them is the `useTooltip` bug:
 
-- **ContextMenu (8)** — its story imports `ContextMenuProvider`, `useContextMenu`, `cardMenu` and
+Re-counted 2026-10-17: AppShell 8, ContextMenu 7, Dialog 1, every other preview 0 (Ribbon was
+deleted 2026-10-11).
+
+- **ContextMenu (8, 7 since 2026-10-17)** — its story imports `ContextMenuProvider`, `useContextMenu`, `cardMenu` and
   the four feature menus from source. The whole menu stack compiles consistently *inside* the
   preview, so the provider and every reader share the preview's copy and it renders correctly. The
   cost: this card proves the source menu stack, not the bundle's copy. Shimming it would mean
   exporting `ContextMenuProvider`, `useContextMenu` and the feature menus from the barrel —
   not done.
-- **AppShell (8), Ribbon (1), Dialog (1)** — `motion`'s and `lucide-react`'s contexts come from
+- **AppShell (8), Dialog (1)** (Ribbon (1) until it was deleted) — `motion`'s and `lucide-react`'s contexts come from
   `node_modules`, which rule 2 never redirects by design. `FeedDownloadContext` rides in through
   `packages/ui/lib/query.ts`. The 2026-09-08 grades already covered all three in this state.
 
@@ -333,7 +395,17 @@ Graded `close` on purpose, each with its reason in its `grade.json`:
 - **Dropdown `Multi` and `Picked Icon`**: the reference is the play's end state ("3 formats"; "No
   label" with the swatch gone), and the preview renders the story's args ("1 format"; "Removal"
   with its `triggerIcon` swatch). They are kept rather than skipped because they are the only cells
-  that show `MultiDropdown` and `triggerIcon`.
+  that show `MultiDropdown` and `triggerIcon`. (`Picked Icon` is 8th of 9, so only a
+  `--max-stories 9` run captures it; at the default cap only `Multi` carries this grade.)
+- **CardStack `Labelled And Short Of Copies`** (2026-10-17): its play hovers the `3` tag, which
+  opens card 0 and a fixed tooltip, and compare shoots mid-play (card open ~380–900 ms after
+  navigation, tooltip from ~716 ms, at rest by ~1155 ms). The preview draws the stack at rest, where
+  the play ends. Not re-enacted: the hover opens a fixed tooltip on a grid card (rule 3). A real
+  hover on the bundle's preview reproduced the reference frame and the same `Wincon · 3 in this
+  category` text. Timing-dependent: a capture after ~900 ms would grade match.
+- **Dialog `Default`** (2026-10-17): panel 863px against 879px and 24px lower — the `?story=` page's
+  padded `.ds-single` is the fixed panel's containing block. `Long Body`, bound by its max-width,
+  measures identical. The product card (single, padding zeroed) does not have it.
 - **TooltipProvider `Interactive` and `On Focus`**: the +24px capture-page offset described above.
   Product-card placement was measured correct.
 - **CardArt `Game Changer` and `Game Changer Foil`, Figure `With As Of Title`**: the reference
@@ -350,6 +422,25 @@ Grading tips from the same pass:
   preview raw to its content, upscale both 5–6x nearest-neighbour into one image, and Read that.
 - **Fan-out subagents share one scratchpad**, and two batches writing `compare1.log` interleaved.
   Tell each batch to log under its own subdirectory.
+- **[GENERAL] Align at the 24px gutter, then re-align right-anchored content by 16px** (2026-10-17).
+  The `?story=` page's content box is 1232px at a 1280 viewport (two 24px gutters) and storybook's
+  padded root is 1248px. Left-anchored content diffs clean at the plain (24,24) offset; content
+  pinned right (StackView's rail) sits 16px further left in the preview, and anything stretched to
+  the root (CountTag's banner, ManaLine's strip, DropIndicator's `Alone` hairline) is that much
+  shorter. All framing.
+- **[GENERAL] One Playwright probe verifies every fixed popup the reference cannot show**
+  (2026-10-17: Dropdown's listboxes; CountTag, OwnedBadge, ToggleChip and Figure tooltips). Serve
+  `sb-reference/` and `ds-bundle/` with `.ds-sync/storybook/http-serve.mjs`'s `serveDir`; on
+  storybook let the play finish (~2.5 s) then hover for real; on the preview load `?story=<Export>`
+  after injecting `.ds-single{transform:none!important}` so a viewport-fixed panel lands as on a
+  plain page, and use real input. Compare text, role, `aria-describedby`, size and offset from the
+  anchor. An 8px horizontal delta is the panel clamping to the viewport edge from a root at x=16
+  against x=24 — framing. About a minute for all of them.
+- **CardImage's converter card draws synthetic placeholders, on both sides** (2026-10-17). Its story
+  calls `cardImageUrl()` in `args` at module scope, before storybook's toolbar or the provider
+  switches the fake to `bundled`, so both sides draw the `Lightning Bolt · LEA 161` SVG and the
+  grade compares like with like. Only the story can fix it (compute `src` at render). The
+  artifact's own page card builds the URL inside the provider and draws the real JPG.
 
 ## Known render warns (triaged — not new)
 
@@ -438,7 +529,9 @@ Export it before every driver or compare run:
     export DS_CHROMIUM_PATH="C:/Users/Markus/AppData/Local/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-win64/chrome-headless-shell.exe"
 
 Build 1234 against playwright 1.63 was launch-tested both headless-shell and full-chromium on
-2026-09-08 — both fine, so the nine-build gap costs nothing. **`npx playwright install` reports
+2026-09-08 — both fine, so the nine-build gap costs nothing. The 2026-10-17 sync staged
+playwright **1.64.1** and ran every validate, compare and render check on the same 1234 headless
+shell without a launch failure. **`npx playwright install` reports
 success through a pipe**: it exits non-zero but `| tail` returns tail's 0, so check the log text,
 not `$?`.
 
@@ -472,10 +565,29 @@ not `$?`.
   context-reading hook from a module that is not a component (`useCardToDeckRefusal`, a
   `use…Context`) compiles a dead second copy, and the static render usually looks fine. Grep the
   compiled preview for `createContext`.
-- **Four owned previews re-enact plays by hand** (see "Stories with a `play`"). If
-  `CardZoomIndicator` `WhileZooming`, Dialog `Flanked` or ContextMenu `Card` changes its play,
-  `[STORY_CHANGED]` names it and the owned file has to follow. `CardZoomIndicator`'s match is
-  timing-dependent **on both sides**: each shot has to land within 1,200 ms of the click.
+- **Five owned previews re-enact plays by hand** (see "Stories with a `play`"). If
+  `CardZoomIndicator` `WhileZooming`, Dialog `Flanked`, ContextMenu `Card` or VirtualTable
+  `Shelved` changes its play, `[STORY_CHANGED]` names it and the owned file has to follow.
+  `CardZoomIndicator`'s match is timing-dependent **on both sides**: each shot has to land within
+  1,200 ms of the click.
+- **[GENERAL] An owned preview never gains a story added to its file** (2026-10-17). ContextMenu's
+  owned file had no `TagDeck` export for the story #914 added, so the story silently dropped off the
+  card — and compare could not say so, because it sat past the 6-story cap and `unpaired` is only
+  reported for captured stories. After any story-file change, diff each owned file's `export const`
+  names against `ds-bundle/.stories-map.json`'s `exportKey`s for that component, minus
+  `cfg.overrides.<Name>.skip`. Run 2026-10-17 after the fix: all six owned files missing none,
+  extra none.
+- **The 6-story cap leaves tail stories unverified, and most of them have plays** (listed
+  2026-10-17). Tail stories whose `play` *acts* (clicks, hovers, scrolls, keys) are where an
+  end-state mismatch can hide — `Shelved` was one. Not captured this sync: AppShell `First Run
+  Failed Mid Run`, `Drop Targets Live`; CardStack `Long Stack`; ContextMenu `Greyed Commander`,
+  `Move To Pile`, `Label Radios`, `Deck`, `Move Deck To Folder`, `Tag Deck`, `Folder`, `Category`,
+  `Empty Pile Cannot Be Cleared`, `Clearing A Pile Asks First`; Dropdown `Rich Rows`, `Picked
+  Icon`; StackView `Hidden Stack`, `Reorderable`, `Keyboard Walk`; SyncProgress `Retrying`;
+  TitleBar `Keyboard Shortcuts`, `Each Button Acts On The Window`; ToggleChip `Colours Exact`,
+  `Disclosures`. Deliberate: the artifact renders its own page cards, never the converter's grids,
+  and the bundle these stories exercise is proven by the ~150 stories that were graded. Raise
+  `--max-stories` per component if the converter cards ever become what a reader sees.
 - `AppShell` is the only story whose `parameters.fake` changes what renders. ContextMenu
   `No Stored Image` also sets one (`fault: "imageUrisMissing"`, since 2026-08-14), but the fault
   only changes what *Copy card image* copies, and no static render presses it. A story whose

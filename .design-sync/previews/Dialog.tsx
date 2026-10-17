@@ -22,7 +22,7 @@
  * composition can be diffed straight across.
  */
 import * as React from "react";
-import * as S from "@ds-stories/src/components/Dialog.stories";
+import * as S from "@ds-stories/packages/ui/components/Dialog.stories";
 
 /** The card's declared viewport — `cfg.overrides.Dialog.viewport`, in sync by hand. */
 const STAGE = { width: 960, height: 700 };

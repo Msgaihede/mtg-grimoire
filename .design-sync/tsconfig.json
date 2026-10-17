@@ -13,10 +13,18 @@
   // every exact-match rule must precede the `@/*` wildcard. Move `@/*` up and `@/lib/images`
   // silently resolves to the real module again.
   //
-  // **The last rule before the wildcard has no twin in `main.ts`, and that is not an
-  // oversight.** Storybook needs none: Vite resolves a directory to its `index.ts`. The
-  // converter's resolver hands esbuild the directory itself, and `core-shim.ts` re-exports the
-  // real module by its file; its header has the account.
+  // **The rules after `@/lib/images` have no twin in `main.ts`, and that is not an
+  // oversight.** Storybook needs none: Vite resolves a directory to its `index.ts`, and a name
+  // that is both `x.ts` and a folder `x/` to the file. The converter's resolver tries the bare
+  // stem first and `existsSync` says yes to a folder, so esbuild is handed the directory and fails
+  // with a Windows `Incorrect function`. `@/lib/core` is a folder with an `index.ts`
+  // (`core-shim.ts` has the account); `@/lib/ipc` and `@/features/home/widgets` are a file with a
+  // folder of the same name beside it, so they are pointed at the file outright.
+  // `@/lib/appVersion` reads two Vite `define`s the converter never sets; `appVersion-shim.ts`
+  // has the account.
+  //
+  // **The one relative key is `world.ts`'s `?raw` import of a Rust file** — an exact match on
+  // the specifier, which the resolver compares before any wildcard. `membership-raw.ts` has why.
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {
@@ -25,13 +33,20 @@
       "@tauri-apps/api/window": ["../packages/fake/window.ts"],
       "@/lib/images": ["../packages/fake/images.ts"],
       "@/lib/core": ["./core-shim.ts"],
+      "@/lib/ipc": ["../packages/ui/lib/ipc.ts"],
+      "@/features/home/widgets": ["../packages/ui/features/home/widgets.ts"],
+      "@/lib/appVersion": ["./appVersion-shim.ts"],
       "@/*": ["../packages/ui/*"],
-      // The same two exceptions under the name every other package uses (2026-10-08): the fake's
+      // The same exceptions under the name every other package uses (2026-10-08): the fake's
       // `db.ts` imports the images module as `@grimoire/ui/lib/images`.
       "@grimoire/ui/lib/images": ["../packages/fake/images.ts"],
       "@grimoire/ui/lib/core": ["./core-shim.ts"],
+      "@grimoire/ui/lib/ipc": ["../packages/ui/lib/ipc.ts"],
+      "@grimoire/ui/features/home/widgets": ["../packages/ui/features/home/widgets.ts"],
+      "@grimoire/ui/lib/appVersion": ["./appVersion-shim.ts"],
       "@grimoire/ui/*": ["../packages/ui/*"],
-      "@grimoire/fake/*": ["../packages/fake/*"]
+      "@grimoire/fake/*": ["../packages/fake/*"],
+      "../../apps/light/src-tauri/src/membership.rs?raw": ["./membership-raw.ts"]
     }
   }
 }
