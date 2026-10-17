@@ -21,6 +21,7 @@ import {
   goldfishDead,
   goldfishOpeningHand,
   goldfishTurn,
+  keepPick,
   openingHand,
   playLocally,
   replayStep,
@@ -343,6 +344,11 @@ export const ScryPick: Story = {
 /** Discard exactly two; the land cannot be picked. */
 export const DiscardPick: Story = {
   args: { view: discardPick().view },
+};
+
+/** Keep creatures with total power 4 or less; one that would pass the cap is drawn dim. */
+export const KeepPick: Story = {
+  args: { view: keepPick().view },
 };
 
 /** One deck in each of three opponents' seats. */

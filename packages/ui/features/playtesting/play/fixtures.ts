@@ -500,6 +500,7 @@ export function scryPick(): TurnFive {
     min: 0,
     max: 3,
     ordered: true,
+    powerCap: null,
   });
 }
 
@@ -519,6 +520,26 @@ export function discardPick(): TurnFive {
     min: 2,
     max: 2,
     ordered: false,
+    powerCap: null,
+  });
+}
+
+/**
+ * Keep creatures with total power 4 or less, sacrifice the rest (Destined Confrontation, issue
+ * #1079): the reader's creatures, any of them under the cap.
+ */
+export function keepPick(): TurnFive {
+  const t = turnFive();
+  const creatures = t.view.you.battlefield.filter((c) => c.power !== null);
+  const cards = creatures.map((c) => ({ id: c.id, name: c.name, cardId: c.cardId, text: null }));
+  return pickPrompt(t, "KeepWithinTotalPowerChoice", "Destined Confrontation", {
+    purpose: "keep",
+    cards,
+    eligible: cards.map((c) => c.id),
+    min: 0,
+    max: cards.length,
+    ordered: false,
+    powerCap: 4,
   });
 }
 

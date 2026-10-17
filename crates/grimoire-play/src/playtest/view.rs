@@ -286,6 +286,10 @@ pub struct PlaytestPick {
     /// The order of the picked cards counts: a scry's or a surveil's picked cards are the ones
     /// kept on top, first picked on top.
     pub ordered: bool,
+    /// The most the picked cards' power may add up to — each a creature's current power, its
+    /// `GameCard.power` (Slaughter the Strong's "total power 4 or less", issue #1079). `None` for
+    /// a pick bounded by its count alone.
+    pub power_cap: Option<i32>,
 }
 
 /// What picking a card does, so the page can say it.
@@ -308,6 +312,8 @@ pub enum PlaytestPickPurpose {
     Targets,
     /// The picked cards are the ones chosen.
     Choose,
+    /// The picked permanents are kept; the rest are sacrificed.
+    Keep,
 }
 
 /// A step the reader asked the game to stop at, on whose turn: the reader's own, or an
