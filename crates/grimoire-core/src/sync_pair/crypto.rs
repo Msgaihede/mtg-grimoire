@@ -12,6 +12,7 @@
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
+use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use hkdf::Hkdf;
 use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
@@ -36,6 +37,23 @@ const NONCE: usize = 24;
 /// infallible for any 32 bytes.
 #[derive(Clone)]
 pub struct Keypair {
+    pub secret: [u8; 32],
+    pub public: [u8; 32],
+}
+
+/// One device's Ed25519 key material (user schema v66) — the key it **signs** with, where
+/// [`Keypair`] is the one it agrees keys with.
+///
+/// **A type of its own and not a second [`Keypair`]**, though the two are the same shape: an
+/// X25519 secret handed to [`sign`] would sign happily — any 32 bytes are an Ed25519 seed — and
+/// produce a signature that verifies under a public key nobody holds. Two names make that a type
+/// error rather than a group that cannot read its own pushes.
+///
+/// `secret` is the 32-byte seed RFC 8032 calls the private key, raw for [`Keypair`]'s reason: it
+/// is written straight into a BLOB column and read straight back, and
+/// `SigningKey::from_bytes` takes any 32 bytes.
+#[derive(Clone)]
+pub struct SigningKeypair {
     pub secret: [u8; 32],
     pub public: [u8; 32],
 }
@@ -68,6 +86,46 @@ pub fn keypair() -> Keypair {
         secret: secret.to_bytes(),
         public: public.to_bytes(),
     }
+}
+
+/// A fresh Ed25519 keypair for this device.
+///
+/// **The seed is [`random_bytes`], not `SigningKey::generate`**: the latter wants a `rand_core`
+/// RNG, which is a second source of randomness this crate would have to carry and a dependency
+/// that refuses `wasm32-unknown-unknown` — see `ed25519-dalek`'s line in `Cargo.toml`. An
+/// Ed25519 private key *is* 32 uniformly random bytes, so drawing them from the OS is the whole
+/// of generation.
+pub fn signing_keypair() -> SigningKeypair {
+    let secret = random_bytes::<32>();
+    let public = SigningKey::from_bytes(&secret).verifying_key().to_bytes();
+    SigningKeypair { secret, public }
+}
+
+/// The public half of a signing secret — what [`signing_keypair`] stored beside it, derived again.
+pub fn signing_public(secret: &[u8; 32]) -> [u8; 32] {
+    SigningKey::from_bytes(secret).verifying_key().to_bytes()
+}
+
+/// Sign `msg` with this device's Ed25519 secret: 64 bytes, deterministic (RFC 8032 draws no
+/// nonce), so the same message under the same key is the same signature on every host.
+pub fn sign(secret: &[u8; 32], msg: &[u8]) -> [u8; 64] {
+    SigningKey::from_bytes(secret).sign(msg).to_bytes()
+}
+
+/// Whether `sig` is `public`'s signature over `msg`.
+///
+/// **`verify_strict` and not `verify`.** The lenient check accepts a signature against a
+/// small-order public key, and a non-canonical `R`, both of which let one signature verify for
+/// more than one key or message — malleability nothing here wants, and a door a forger only needs
+/// once. The strict check refuses both, and no honest key or signature is one of them.
+///
+/// **A `bool` and never a reason**, [`CryptoError`]'s argument: a public key that is not a curve
+/// point and a signature that does not match are the same answer to a caller who must refuse
+/// either, and a sentence saying which would be telling a forger which half to fix. It cannot
+/// panic: every input is fixed-width and the parse of the key is fallible.
+pub fn verify(public: &[u8; 32], msg: &[u8], sig: &[u8; 64]) -> bool {
+    VerifyingKey::from_bytes(public)
+        .is_ok_and(|key| key.verify_strict(msg, &Signature::from_bytes(sig)).is_ok())
 }
 
 /// The key the two pairing devices share, from one ECDH plus one HKDF extract-and-expand.
@@ -638,6 +696,76 @@ mod tests {
         let b = random_bytes::<32>();
         assert_ne!(a, [0u8; 32]);
         assert_ne!(a, b);
+    }
+
+    /// **A signature round trips, and is the same bytes every time.** Ed25519 draws no nonce, so a
+    /// host that signed the same envelope twice — a retried push — sends one signature, not two.
+    #[test]
+    fn a_signature_verifies_under_its_own_public_key() {
+        let me = signing_keypair();
+        let sig = sign(&me.secret, b"the sealed batch");
+        assert!(verify(&me.public, b"the sealed batch", &sig));
+        assert_eq!(sig, sign(&me.secret, b"the sealed batch"), "deterministic");
+        assert_eq!(signing_public(&me.secret), me.public);
+    }
+
+    /// The three ways a verification must refuse: one flipped bit of the message, one of the
+    /// signature, and another device's key. Each is a forgery and none may pass.
+    #[test]
+    fn verify_refuses_a_tampered_message_a_bent_signature_or_another_key() {
+        let me = signing_keypair();
+        let them = signing_keypair();
+        let sig = sign(&me.secret, b"the sealed batch");
+
+        assert!(!verify(&me.public, b"the sealed batcH", &sig), "message");
+        let mut bent = sig;
+        bent[10] ^= 1;
+        assert!(!verify(&me.public, b"the sealed batch", &bent), "signature");
+        assert!(
+            !verify(&them.public, b"the sealed batch", &sig),
+            "wrong key"
+        );
+        assert_ne!(me.secret, them.secret, "two keypairs are two keypairs");
+    }
+
+    /// **`verify_strict`'s refusals, held rather than trusted.** The identity point is a public
+    /// key of small order, which the lenient `verify` would let a crafted signature through for —
+    /// so a key of all zeroes but the encoding's one, and a key that is not a point at all, both
+    /// refuse every signature, without a panic.
+    #[test]
+    fn verify_refuses_a_small_order_or_malformed_public_key_without_panicking() {
+        let mut identity = [0u8; 32];
+        identity[0] = 1;
+        let sig = sign(&signing_keypair().secret, b"m");
+        assert!(!verify(&identity, b"m", &sig), "a small-order key");
+        assert!(!verify(&[0xff; 32], b"m", &sig), "not a point");
+        assert!(!verify(&identity, b"m", &[0u8; 64]), "and nothing at all");
+    }
+
+    /// **The RFC 8032 test vector 1**, so the curve and the hash are Ed25519's and not some
+    /// other scheme's that happens to round-trip against itself — the relay and any other
+    /// implementation that checks these signatures does so to the standard, not to this crate.
+    #[test]
+    fn signing_matches_rfc_8032_test_vector_one() {
+        let hex = |s: &str| -> Vec<u8> {
+            (0..s.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+                .collect()
+        };
+        let secret: [u8; 32] =
+            hex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
+                .try_into()
+                .unwrap();
+        let public = hex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a");
+        let want = hex(
+            "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e06522490155\
+             5fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b",
+        );
+        assert_eq!(signing_public(&secret).as_slice(), public.as_slice());
+        let sig = sign(&secret, b"");
+        assert_eq!(sig.as_slice(), want.as_slice());
+        assert!(verify(&public.try_into().unwrap(), b"", &sig));
     }
 
     /// Two keypairs are two keypairs, and a public key is derived from its own secret.

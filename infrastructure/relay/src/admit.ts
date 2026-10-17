@@ -1,5 +1,6 @@
 import type { Envelope } from "./group";
 import { MAX_CLOCK_AHEAD_MS, MAX_GROUP_LOG_CHARS, MAX_SEALED_CHARS } from "./log";
+import type { Claims } from "./token";
 
 /**
  * Every refusal a push can meet, as pure functions over values already read — the Worker's
@@ -20,6 +21,10 @@ import { MAX_CLOCK_AHEAD_MS, MAX_GROUP_LOG_CHARS, MAX_SEALED_CHARS } from "./log
  * The two 400s — a body that is not JSON, an envelope missing a field — are not here. They were
  * the object's refusals before this file existed, they carry no `code` because there is nothing
  * for a client to do about one but fix itself, and `index.ts` still sends them in the same words.
+ *
+ * **One check here is an ack's as well as a push's**: whether the device a body names is the one
+ * its token was minted for ([`deviceMismatch`], [`bindDevice`]) — and it is, for now, a check that
+ * refuses nothing. See [`DEVICE_BINDING`].
  */
 
 export interface Refusal {
@@ -30,22 +35,54 @@ export interface Refusal {
 
 /**
  * The longest push body the Worker will read to the end, in characters: the sealed cap plus 4 KiB
- * for the envelope's other five fields and its punctuation.
+ * for the envelope's other fields and its punctuation.
  *
  * **Generous on purpose**, so that it is the sealed cap and not this one that an honest envelope
  * at the limit meets. The other fields are bounded well inside the allowance — the group id is at
- * most 128 characters by the route's own pattern, the app's device id is 32, and the three
- * numbers are at most twenty digits each — and `admit.test.ts` builds that worst case and holds it
- * under this line. This cap exists so that the Worker never parses a body it would refuse anyway.
+ * most 128 characters by the route's own pattern, the app's device id is 32, the three numbers are
+ * at most twenty digits each, and a `sig` is exactly [`SIG_CHARS`] — and `admit.test.ts` builds
+ * that worst case, signature included, and holds it under this line. **The signature did not move
+ * the cap**: 86 characters and `,"sig":""` fit in what the allowance had left with room to spare,
+ * so a signed push at the sealed cap still meets the sealed cap first. This cap exists so that the
+ * Worker never parses a body it would refuse anyway.
  */
 export const MAX_PUSH_BODY_CHARS = MAX_SEALED_CHARS + 4 * 1024;
 
 /**
+ * How long an envelope's `sig` is, in characters: a 64-byte Ed25519 signature as base64url
+ * **without padding** — 64 bytes is 512 bits, and 512 / 6 rounds up to 86.
+ *
+ * Exactly this and no other length, because a signature has one size: a `sig` of 85 or 88 (the
+ * padded spelling, `==` and all) is not a near miss of a signature but something no signer
+ * writes, and the relay would otherwise store, and every peer pull and try to verify, bytes that
+ * cannot be one.
+ */
+export const SIG_CHARS = 86;
+
+/**
+ * A well-formed `sig`: [`SIG_CHARS`] of base64url's alphabet and nothing else — no `=`, no `+` or
+ * `/`, no whitespace. **Shape and never truth**: the relay holds no device's key yet (spec §8; it
+ * learns them with the signed roster document, PR 2), so a `sig` that has the shape and verifies
+ * against nothing is stored like any other. What it buys now is that every row a peer is handed
+ * carries either no signature or one a verifier can at least decode.
+ */
+const SIG = new RegExp(`^[A-Za-z0-9_-]{${SIG_CHARS}}$`);
+
+/**
  * The envelope as the relay reads it: the six fields `sync_engine::wire` writes, with the three
- * numbers finite. **Shared by the Worker and the object**, so the two cannot disagree about what
+ * numbers finite — and, since the Discord integration's first PR (issue #1096, spec §4), an
+ * optional seventh. **Shared by the Worker and the object**, so the two cannot disagree about what
  * a well-formed push is — the object re-checks what the Worker already checked, because it is a
  * class that should not store a shape it does not enforce, and one predicate means the two checks
  * are the same check.
+ *
+ * **`sig` is optional, and absent is not a weaker form of present.** An envelope with no `sig` is
+ * every envelope a released build has ever pushed, and is read exactly as it was. One with a
+ * `sig` must carry a well-formed one: present and anything else — a number, `null`, a padded or
+ * truncated string — is the same `400 malformed envelope` as a missing `sealed`, because it is
+ * the same kind of wrong. ⚠️ **`null` is "present"**: a client that serialises an unsigned batch
+ * as `"sig": null` rather than leaving the key out is refused, so the Rust side skips the field
+ * when it has none.
  */
 export function isEnvelope(value: unknown): value is Envelope {
   if (typeof value !== "object" || value === null) return false;
@@ -56,8 +93,16 @@ export function isEnvelope(value: unknown): value is Envelope {
     typeof envelope.sealed === "string" &&
     Number.isFinite(envelope.epoch) &&
     Number.isFinite(envelope.hlcMs) &&
-    Number.isFinite(envelope.hlcCtr)
+    Number.isFinite(envelope.hlcCtr) &&
+    // `undefined` and not `"sig" in`: a parsed body cannot hold an `undefined`, so over the wire
+    // the two are one test, and this one also reads a caller's `{ ...e, sig: undefined }` as absent.
+    (envelope.sig === undefined || isSig(envelope.sig))
   );
+}
+
+/** Whether `value` is a `sig` of the one shape [`isEnvelope`] admits. */
+export function isSig(value: unknown): value is string {
+  return typeof value === "string" && SIG.test(value);
 }
 
 /**
@@ -148,4 +193,78 @@ export function admit(
 export function admitToLog(storedChars: number, sealedChars: number): Refusal | null {
   if (storedChars + sealedChars <= MAX_GROUP_LOG_CHARS) return null;
   return { status: 507, code: "quota", error: "this group's log is full" };
+}
+
+/**
+ * The code a push or an ack is refused with when the device its body names is not the device its
+ * token was minted for — **when that is refused, which it is not yet** ([`DEVICE_BINDING`]). Named
+ * now so the code a client will match on is decided once, beside the check, and not respelled by
+ * the change that starts sending it.
+ */
+export const DEVICE_MISMATCH = "device_mismatch";
+
+/**
+ * What the Worker does with a [`DEVICE_MISMATCH`]: `"warn"` records it and passes the request on,
+ * `"refuse"` answers it 403.
+ *
+ * **Why the relay binds the token's device at all** (spec §2, F4). Push and ack used to check the
+ * token's `grp` and nothing else, so any device of a group could push an envelope stamped as
+ * another device, or ack as one — and an ack stores whatever `device` it names, so one device
+ * could move another's compaction floor. That was harmless while every device was a full peer
+ * holding the same key. It stops being harmless when one of them is a restricted device (the
+ * Discord bot, issue #1096): a bot that could ack as the desktop could have the log compacted out
+ * from under it.
+ *
+ * **Why `"warn"` first.** The `dev` claim is issue #548's, minted since 2026-10-01 — every token
+ * alive today carries one — but no client has ever been held to it, and a client that sends a
+ * device id its token does not name for a reason nobody has found yet would stop syncing on the
+ * day this refuses. So the first release only counts them: `bindDevice` logs a fixed line per
+ * mismatch, Workers Logs (`observability`, `wrangler.jsonc`) keeps it, and the release that
+ * flips this to `"refuse"` (the integration's second PR) is the one that has read those lines and
+ * found none from an honest client. **This constant is the one place that changes**; the code,
+ * the status and the check are already here and tested in both modes.
+ *
+ * **A token with no `dev` is never a mismatch, in either mode.** It is an older relay's, lives at
+ * most `TOKEN_TTL_MS`, and names no device to hold a body to.
+ */
+export const DEVICE_BINDING: "warn" | "refuse" = "warn";
+
+/**
+ * Whether `device` — an envelope's `device` on a push, a body's `device` on an ack — is the device
+ * the token names: `null` when it is, or when the token names none, else the 403 it would be
+ * refused with. Pure; [`bindDevice`] is what acts on it.
+ */
+export function deviceMismatch(claims: Pick<Claims, "dev">, device: string): Refusal | null {
+  if (claims.dev === undefined || claims.dev === device) return null;
+  return {
+    status: 403,
+    code: DEVICE_MISMATCH,
+    error: "that body names a device this token was not minted for",
+  };
+}
+
+/**
+ * [`deviceMismatch`] under [`DEVICE_BINDING`] — **the one place a mismatch is acted on**, for a
+ * push and an ack alike: `null` to pass the request on, or the refusal to answer it with.
+ *
+ * **The line it logs is fixed text**: the code and which of the two routes, and nothing a request
+ * carried — no group, no device id, no token, no byte of the body. The invocation log beside it
+ * already records the request's URL, which is the group; what this adds is only that the binding
+ * failed, which is the count the flip waits on. A device id is not a secret, but nothing the count
+ * needs would be learnt from one, so none is written. `warn` and not `error`: in this mode it is
+ * a measurement, not a fault.
+ *
+ * `mode` is a parameter so a test can hold the `"refuse"` path to its 403 today; every caller
+ * leaves it to the constant.
+ */
+export function bindDevice(
+  route: "push" | "ack",
+  claims: Pick<Claims, "dev">,
+  device: string,
+  mode: "warn" | "refuse" = DEVICE_BINDING,
+): Refusal | null {
+  const mismatch = deviceMismatch(claims, device);
+  if (mismatch === null) return null;
+  console.warn(`${DEVICE_MISMATCH} on ${route}`);
+  return mode === "refuse" ? mismatch : null;
 }

@@ -1,4 +1,4 @@
-import { admit, admitBody, isEnvelope, type Refusal } from "./admit";
+import { admit, admitBody, bindDevice, isEnvelope, type Refusal } from "./admit";
 import { Group } from "./group";
 import {
   GROUP_SEGMENT,
@@ -16,7 +16,7 @@ import { limited, type LimitedRoute, type Limiters } from "./ratelimit";
 import { handleRendezvousGet, handleRendezvousPut, sweepRendezvous } from "./rendezvous";
 import { handleKeys, handleRotate } from "./rotate";
 import { bearerTicket } from "./ticket";
-import { verify } from "./token";
+import { verify, type Claims } from "./token";
 
 /**
  * The Worker entry: a router, an authentication gate, a push's admission, and the hourly
@@ -47,6 +47,13 @@ import { verify } from "./token";
  * invocation and one D1 point read, where inside the object it would cost the Durable Object
  * request the gate exists to protect. The object keeps only the check it alone can make — whether
  * the group's log has room. `admitPush` below is the order.
+ *
+ * **A push and an ack are held to the token's device here too, and in this release that refuses
+ * nothing.** The token's `dev` (issue #548) is compared with the device the body names — the
+ * envelope's on a push, the ack's on an ack — and a mismatch is logged and passed on
+ * (`admit.ts`'s `DEVICE_BINDING`, spec §2 F4). It stands here and not in the object for the
+ * reason the rest of a push's admission does: the release that turns it into a 403 should not
+ * have spent a Durable Object request on what it refuses.
  *
  * **The five routes a caller reaches with no token are rate limited, and the bill is why again.**
  * `/claim`, `/token`, `/rotate`, `/keys` and the rendezvous each read D1 before they can refuse
@@ -245,16 +252,23 @@ async function currentEpoch(env: Env, group: string): Promise<number | null> {
  * 1. a declared `Content-Length` past the cap → 413 `too_large`, **before a byte is read**, so an
  *    honest client that built something enormous is not parsed at all;
  * 2. the body's text past the cap → 413 `too_large`, for a body that declared no length;
- * 3. not JSON → 400, and not an envelope → 400, in the words the object has always used;
- * 4. `admit`'s four: `sealed` too large (413), the epoch behind (409) or ahead (422), the clock
+ * 3. not JSON → 400, and not an envelope → 400, in the words the object has always used — an
+ *    envelope with a `sig` that is not a well-formed one among them (`isEnvelope`);
+ * 4. the envelope's `device` against the token's `dev` (`bindDevice`) — **recorded and passed on
+ *    in this release, never refused**; see `admit.ts`'s `DEVICE_BINDING`. Ahead of the D1 read,
+ *    so that the release that does refuse it spends no read on a push it is about to turn away;
+ * 5. `admit`'s four: `sealed` too large (413), the epoch behind (409) or ahead (422), the clock
  *    ahead (422).
  *
- * **The forwarded request is built from the text rather than passed through**, because reading
- * the body consumed the original's stream, and it carries only a content type: the object reads no
- * header of a push, and copying the original's `Content-Length` onto a re-encoded body is a length
- * the runtime could find disagreeing with the bytes it is sent.
+ * **The forwarded request is built from the text rather than passed through** (`forwarded`),
+ * because reading the body consumed the original's stream.
  */
-async function admitPush(request: Request, env: Env, group: string): Promise<Request | Response> {
+async function admitPush(
+  request: Request,
+  env: Env,
+  group: string,
+  claims: Claims,
+): Promise<Request | Response> {
   const declared = admitBody(Number(request.headers.get("content-length")));
   if (declared) return refuse(declared);
 
@@ -270,9 +284,54 @@ async function admitPush(request: Request, env: Env, group: string): Promise<Req
   }
   if (!isEnvelope(envelope)) return json({ error: "malformed envelope" }, 400);
 
+  const unbound = bindDevice("push", claims, envelope.device);
+  if (unbound) return refuse(unbound);
+
   const refusal = admit(envelope, await currentEpoch(env, group), Date.now());
   if (refusal) return refuse(refusal);
 
+  return forwarded(request, text);
+}
+
+/**
+ * An ack, held to the token's device before its object: the `Request` to forward, or the
+ * `Response` that refuses it — **and in this release it is always the request** (`admit.ts`'s
+ * `DEVICE_BINDING`): a body whose `device` is not the token's `dev` is recorded and passed on.
+ *
+ * Why an ack is bound at all is the same field doing the damage: the object stores the cursor of
+ * whatever `device` the body names, and that cursor is the device's place on the compaction
+ * floor (spec §2, F4).
+ *
+ * **A token with no `dev` forwards the original request untouched**, unread — it names nothing to
+ * hold the body to, and that is the ack every token minted before issue #548 made. **A body this
+ * cannot read is forwarded too**, as text, for the object to refuse in the words it always has
+ * (`400 unreadable body`, `400 malformed ack`): the check is of one field, and an ack that has no
+ * string `device` has no device to compare. Like a push, a forwarded body is rebuilt from the text
+ * that was read, because reading it consumed the original's stream.
+ */
+async function admitAck(request: Request, claims: Claims): Promise<Request | Response> {
+  if (claims.dev === undefined) return request;
+
+  const text = await request.text();
+  let device: unknown;
+  try {
+    device = (JSON.parse(text) as { device?: unknown } | null)?.device;
+  } catch {
+    device = undefined;
+  }
+  if (typeof device === "string") {
+    const unbound = bindDevice("ack", claims, device);
+    if (unbound) return refuse(unbound);
+  }
+  return forwarded(request, text);
+}
+
+/**
+ * A POST rebuilt from the body text the Worker already read, with only a content type: the
+ * object reads no header of a push or an ack, and copying the original's `Content-Length` onto a
+ * re-encoded body is a length the runtime could find disagreeing with the bytes it is sent.
+ */
+function forwarded(request: Request, text: string): Request {
   return new Request(request.url, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -378,8 +437,11 @@ async function route(request: Request, env: Env, url: URL): Promise<Response> {
   }
 
   let forward = request;
-  if (action === "push") {
-    const admitted = await admitPush(request, env, group);
+  if (action === "push" || action === "ack") {
+    const admitted =
+      action === "push"
+        ? await admitPush(request, env, group, claims)
+        : await admitAck(request, claims);
     if (admitted instanceof Response) return admitted;
     forward = admitted;
   }

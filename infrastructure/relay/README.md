@@ -133,8 +133,10 @@ verifies it **before the Durable Object hop**. The position is the point, not th
 
 `access` is `base64url(payload) "." base64url(HMAC-SHA256(payload, RELAY_HMAC_KEY))` over
 `{sub, grp, exp, dev}`, with a **24-hour** TTL (`TOKEN_TTL_MS`). `dev` is the device the door
-admitted, added 2026-10-01 for the share Worker's removed-device check; nothing in the relay
-reads it, and a token without one (an older relay's) still verifies. The app trades its long-lived
+admitted, added 2026-10-01 for the share Worker's removed-device check, and a token without one
+(an older relay's) still verifies. **Since the Discord integration's first PR the relay reads it
+too, and refuses nothing over it yet**: a push whose envelope, or an ack whose body, names a device
+other than `dev` is logged and passed on — "Binding the token's device" below. The app trades its long-lived
 `refresh` secret for a new one when fewer than six hours remain. That split is what makes lapse
 work: deleting `refresh_secret` is instantaneous, and an already-issued `access` dies of old age
 within a day.
@@ -396,7 +398,7 @@ per group, addressed by `idFromName(group)`.
 
 | Request | Body | Answer |
 | --- | --- | --- |
-| `POST /g/{group}/push` | one `Envelope` | `200 {"cursor": <seq>}` — the stored row's seq; the refusals are below |
+| `POST /g/{group}/push` | one `Envelope`, optionally signed (`sig`) | `200 {"cursor": <seq>}` — the stored row's seq; the refusals are below |
 | `GET /g/{group}/pull?since={cursor}&device={id}` | — | `200 {"envelopes": [...], "cursor": <head>}` — everything after the cursor, streamed; and the device counts as heard, at most once a day. Every build released before paging asks this |
 | `GET /g/{group}/pull?since={cursor}&device={id}&limit={rows}` | — | `200 {"envelopes": [...], "cursor": <n>, "more": <bool>}` — one page; a `limit` that is not a whole number of at least one is `400 {"error": "bad limit"}`. "A pull, a page at a time" below |
 | `POST /g/{group}/ack` | `{"device": id, "cursor": n}` | `204` — and compaction runs; a departed device's ack is answered and not stored |
@@ -411,7 +413,8 @@ object's state to be refused. In the order a push meets them, every refusal but 
 | --- | --- | --- |
 | 1 | the declared `Content-Length` is over `MAX_PUSH_BODY_CHARS` (1 504 096 — the sealed cap plus 4 KiB) — **before a byte is read**; a missing or non-numeric header decides nothing | `413 too_large` |
 | 2 | the body's text is longer than that | `413 too_large` |
-| 3 | the body is not JSON, or not an envelope | `400 unreadable body` / `400 malformed envelope`, no code — the object's words, unchanged |
+| 3 | the body is not JSON, or not an envelope — a `sig` that is present and not 86 characters of unpadded base64url among them | `400 unreadable body` / `400 malformed envelope`, no code — the object's words, unchanged |
+| — | the envelope's `device` is not the token's `dev` | **nothing yet**: logged, and the push goes on (`DEVICE_BINDING`); the release that refuses it answers `403 device_mismatch` here, ahead of the D1 read |
 | 4 | `sealed` is over `MAX_SEALED_CHARS` (1 500 000, `log.ts`) | `413 too_large` |
 | 5 | the envelope's epoch is below the group's — its newest `group_keys` row, one read on `group_keys_by_group` | `409 stale_epoch` |
 | 6 | … or above it | `422 epoch_ahead` |
@@ -425,7 +428,7 @@ push, so no device's head moves and no ack would ever run a compaction again —
 rows aged past the thirty-day tail behind every ack would never be deleted and the group would stay
 full for good. The full scan is paid only by a push about to be refused.
 
-- **The sealed cap is the Durable Object's 2 MB row**, less headroom for the other six columns;
+- **The sealed cap is the Durable Object's 2 MB row**, less headroom for the other seven columns;
   `sealed` is base64url, one byte a character. It refuses no batch the app builds: a 512 KiB
   plaintext batch seals to 699 104 characters, about 47% of it, and the fattest batch ever measured
   sealed to 186 188. What meets it is one op that is alone larger than a batch — a note pasted in
@@ -452,6 +455,55 @@ full for good. The full scan is paid only by a push about to be refused.
   a running total in `log_size` rather than a `sum()` per push — Durable Object SQL bills rows read,
   so the check would cost most exactly when the log is nearest the cap — and not `databaseSize`,
   which is a high-water mark that compaction never lowers. Every compaction recomputes it exactly.
+
+### A signed envelope, and binding the token's device
+
+**Issue #1096's first PR (spec `docs/superpowers/specs/2026-10-17-discord-integration-design.md`,
+§4 and §8), in this tree and not deployed until a release carries it.** Two changes, neither of
+which a reader sees, both ahead of the bot that is the reason for them.
+
+**An envelope may carry a seventh field, `sig`** — the sender's Ed25519 signature over the sealed
+batch, as base64url without padding: exactly 86 characters of `[A-Za-z0-9_-]` (`SIG_CHARS`,
+`isSig`). The relay **checks its shape and never its truth**: it holds no device's signing key (it
+learns them with the signed roster document, the integration's second PR), so a well-formed `sig`
+is stored whatever it signs. Absent is every envelope a released build pushes and is read exactly
+as before; present and anything else — a number, `null`, the padded 88, a truncated 85 — is the
+`400 malformed envelope` a missing `sealed` gets, at the Worker and again at the object.
+⚠️ **`null` counts as present**, so a client sends no `sig` key at all for an unsigned batch.
+
+- **Stored** in `log.sig`, a nullable `TEXT` column, last. A fresh object makes it in its `CREATE`;
+  a live one gains it on its first wake after the deploy from an `ALTER TABLE log ADD COLUMN sig
+  TEXT` the constructor runs only when `PRAGMA table_info(log)` does not list it — the
+  `acks.heard_at` mechanism, with **no backfill**: every row already stored was pushed unsigned,
+  and `NULL` says exactly that. Adding a nullable column rewrites no row.
+- **Served on both pulls, last, and only when the row has one.** The streamed answer and a page
+  read the same column list (`group.ts`'s `ANSWERED`), and `envelopeOf` leaves the key off a row
+  whose `sig` is `NULL` rather than writing `null` — so **an unsigned row's envelope is the six
+  fields it always was, to the byte**, and `group.test.ts` still holds the unpaged answer of an
+  unsigned log to the pre-paging bytes. A released build's serde ignores the field.
+- **Not counted against the quota.** `log_size` and `MAX_GROUP_LOG_CHARS` are sums of `sealed`;
+  a `sig` is a fixed 86 characters a row, and the 4 KiB `MAX_PUSH_BODY_CHARS` allows beyond the
+  sealed cap already covered it, so neither cap moved. Compaction reads no `sig` (it reads no
+  body at all) and no path copies a row, so there is nothing else for the column to follow.
+
+**Binding the token's device (spec §2, F4), warn-only.** Push and ack checked the token's `grp`
+and nothing else, and the object stores the cursor of whatever `device` an ack names — so any
+device of a group could ack as another and move that device's place on the compaction floor, or
+push an envelope stamped as another. The Worker now compares the token's `dev` with the device the
+body names, **after the gate and before the Durable Object hop** (`index.ts`'s `admitPush` and
+`admitAck`, `admit.ts`'s `bindDevice`):
+
+- **A mismatch is logged and passed on.** One `console.warn` of fixed text —
+  `device_mismatch on push` or `device_mismatch on ack` — with nothing the request carried: no
+  group, no device id, no token, no body. Workers Logs (`observability`) keeps it beside the
+  invocation's own line. The point of the release is that count: no client has ever been held to
+  its `dev`, and the flip waits on reading those lines and finding none from an honest one.
+- **The flip is one constant**: `DEVICE_BINDING` from `"warn"` to `"refuse"`, and the answer is
+  **`403 device_mismatch`** (`DEVICE_MISMATCH`), already built and tested in both modes.
+- **A token with no `dev`** — an older relay's, at most a day old — is never a mismatch, and its
+  ack is forwarded as the very request, unread. An ack with `dev` is read in the Worker for its
+  `device`, then forwarded rebuilt from the same text; one the Worker cannot read is forwarded
+  for the object to refuse in the words it always has.
 
 **Two more `/g/…` routes stand *ahead* of the gate, and the placement is the point rather than an
 exemption.** ⚠️ **This section said "every one of them is behind the bearer gate" until
@@ -813,7 +865,9 @@ a Rust test red.
 
 `src/admit.ts` — every refusal a push can meet, as pure functions in the order they are met: the
 Worker's checks ahead of the Durable Object hop (`admitBody`, `admit`), the object's quota
-(`admitToLog`), and the one envelope predicate both sides share (`isEnvelope`).
+(`admitToLog`), and the one envelope predicate both sides share (`isEnvelope`, with `isSig` and
+`SIG_CHARS` for the optional signature) — and the token's device against a push's or an ack's
+(`deviceMismatch`, `bindDevice`, `DEVICE_BINDING`, `DEVICE_MISMATCH`).
 
 `src/token.ts` — mint and verify. Pure, and tested the same way.
 
@@ -837,7 +891,7 @@ pruning must import rather than respell.
 `src/rotate.ts` — `POST /g/{group}/rotate` and `GET /g/{group}/keys`, the two routes that stand
 ahead of the bearer gate, and `sendRoster`, the one request either makes to a Durable Object.
 
-`src/group.ts` — the Durable Object: its tables (`log`, `acks` with `heard_at`, `departed`,
+`src/group.ts` — the Durable Object: its tables (`log` with `sig`, `acks` with `heard_at`, `departed`,
 `roster_epoch`, `log_size`), the handlers — the internal `drop` and `roster` among them — and a
 call into `log.ts` for every decision about which rows and into `admit.ts` for the quota.
 
@@ -891,7 +945,9 @@ an object rather than quietly:
 - **The constructor's own migration.** A Durable Object has no migration step: an object created
   before `acks.heard_at` existed adds it on its first wake after the deploy, when `PRAGMA
   table_info(acks)` does not list it, and backfills it with that moment — every existing device
-  counts as heard at the deploy, so none drops off the floor. **Whether workerd accepts `PRAGMA
+  counts as heard at the deploy, so none drops off the floor. `log.sig` is added the same way,
+  by a `PRAGMA table_info(log)` every constructor asks, with no backfill (`group.test.ts` runs it
+  over a log made in the old shape). **Whether workerd accepts `PRAGMA
   table_info` there is untested**, and every constructor asks it, a new object's included — so if
   it does not, every request that reaches any group's object 500s. The first pull after the deploy
   is the check.

@@ -97,11 +97,17 @@ fn list_bytes(ops: &[Op]) -> usize {
 
 /// One stored row's worth of ops, as it crosses the network.
 ///
-/// **The relay sees these six fields and nothing else.** `group` routes it, `device` and the
-/// two clock fields let the Durable Object order and compact without decrypting anything, and
-/// `sealed` is opaque. The op count is deliberately absent: it is inside the ciphertext,
-/// because "this device wrote 431 things today" is information the relay does not need in order
-/// to relay.
+/// **The relay sees these six fields, and a seventh when the sender signed, and nothing else.**
+/// `group` routes it, `device` and the two clock fields let the Durable Object order and compact
+/// without decrypting anything, `sealed` is opaque, and `sig` (user schema v66) is the sender's
+/// Ed25519 signature over the other six ([`envelope_signing_bytes`]). The op count is
+/// deliberately absent: it is inside the ciphertext, because "this device wrote 431 things
+/// today" is information the relay does not need in order to relay.
+///
+/// **No `deny_unknown_fields`, and that is the whole of the compatibility story for `sig`.** A
+/// build from before it parses an envelope that carries one and drops the key; this build parses
+/// one that lacks it as `None`. A `None` is never written at all, so an unsigned envelope is the
+/// same bytes it always was ([`tests::an_unsigned_envelope_is_the_bytes_it_always_was`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Envelope {
@@ -115,6 +121,109 @@ pub struct Envelope {
     /// blob replayed into another group or under another epoch fails to open rather than
     /// applying somewhere it does not belong.
     pub sealed: String,
+    /// The sender's Ed25519 signature over [`envelope_signing_bytes`], base64url with no
+    /// padding — 86 characters, `sealed`'s engine. **Encrypt-then-sign**: it covers the sealed
+    /// text, so a receiver refuses a forgery before it spends a decryption on it, and the relay —
+    /// which holds no group key — can check it too.
+    ///
+    /// `None` from a build before v66 and from a test that seals as another device. A receiver
+    /// checks it only when it holds the sender's key (`client::evaluate`), and accepts an
+    /// envelope without one: the Discord spec's open mode, which its PR 2 ends for a signed group.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sig: Option<String>,
+}
+
+/// The domain tag every envelope signature opens with — [`crypto`]'s `INFO_*` convention, and
+/// versioned for its reason: the day these bytes change is the day two builds must fail to verify
+/// each other rather than agree on a different message.
+const ENVELOPE_SIG_DOMAIN: &[u8] = b"mtg-grimoire/envelope/v1";
+
+/// **Exactly the bytes an envelope's signature covers**, and the one place they are spelled:
+///
+/// `b"mtg-grimoire/envelope/v1" 0x00 group 0x00 device 0x00 epoch 0x00 hlc_ms 0x00 hlc_ctr 0x00
+/// sealed`
+///
+/// — the three numbers as their decimal `to_string()`, `sealed` as its base64url characters (the
+/// text on the wire, not the bytes it decodes to). ⚠️ **A wire to two other places**: the relay
+/// checks these bytes (`infrastructure/relay`), and every later build of this one must produce
+/// them byte for byte, which [`tests::the_signing_bytes_are_pinned`] holds to a literal.
+///
+/// **Every clear field is in it, `sig` aside.** `group`, `device` and `epoch` are the AAD's three,
+/// so a signature lifted onto another group's, device's or epoch's envelope fails for the same
+/// reason the AEAD does; the two clock fields are the relay's ordering key, which the AEAD never
+/// covered — a relay that restamped an envelope to reorder the log could, until this, do so
+/// unseen. `\0` between the fields for [`aad`]'s reason: no field's spelling can be read as two.
+pub fn envelope_signing_bytes(envelope: &Envelope) -> Vec<u8> {
+    let mut out = Vec::with_capacity(ENVELOPE_SIG_DOMAIN.len() + envelope.sealed.len() + 96);
+    out.extend_from_slice(ENVELOPE_SIG_DOMAIN);
+    for field in [
+        envelope.group.as_bytes(),
+        envelope.device.as_bytes(),
+        envelope.epoch.to_string().as_bytes(),
+        envelope.hlc_ms.to_string().as_bytes(),
+        envelope.hlc_ctr.to_string().as_bytes(),
+        envelope.sealed.as_bytes(),
+    ] {
+        out.push(0);
+        out.extend_from_slice(field);
+    }
+    out
+}
+
+/// Sign `envelope` with this device's Ed25519 secret, replacing any signature it carried.
+fn sign(envelope: &mut Envelope, sign_secret: &[u8; 32]) {
+    let sig = crypto::sign(sign_secret, &envelope_signing_bytes(envelope));
+    envelope.sig = Some(URL_SAFE_NO_PAD.encode(sig));
+}
+
+/// What a receiver can say of an envelope's signature, given the sender's key if it holds one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Signed {
+    /// It carries a signature and the sender's key verifies it.
+    Verified,
+    /// Nothing to check it against, or nothing to check: no `sig` (a build before v66), or no key
+    /// on file for the sender (every peer until the Discord spec's PR 2 carries keys). **Accepted
+    /// as today** — open mode — and the one arm a signed group's PR 2 refuses.
+    Unchecked,
+    /// It carries a signature and the sender's key refuses it — altered on the way, or written by
+    /// somebody holding the group key who is not that device. A signature that is not 64 bytes of
+    /// base64url is this too: it is not the sender's.
+    Forged,
+}
+
+/// Check `envelope`'s signature against `key`, the sender's Ed25519 public key if this device
+/// was ever given one. [`Signed`] says what each answer means; this does no I/O and cannot panic.
+pub fn signature(envelope: &Envelope, key: Option<&[u8; 32]>) -> Signed {
+    let (Some(sig), Some(key)) = (envelope.sig.as_deref(), key) else {
+        return Signed::Unchecked;
+    };
+    let Some(sig) = URL_SAFE_NO_PAD
+        .decode(sig)
+        .ok()
+        .and_then(|bytes| <[u8; 64]>::try_from(bytes).ok())
+    else {
+        return Signed::Forged;
+    };
+    if crypto::verify(key, &envelope_signing_bytes(envelope), &sig) {
+        Signed::Verified
+    } else {
+        Signed::Forged
+    }
+}
+
+/// How many of `ops` are stamped by a device other than the one `envelope` names — the Discord
+/// spec's F3: an op is attributed by its own `at.device` on apply, so a signature over the
+/// envelope proves nothing about an op inside it unless the two are the same device.
+///
+/// **No honest build seals one** (`docs/reference/sync.md`, *The envelope*): the outbox is
+/// filled by the capture triggers, which stamp this device's id; a baseline's claims are built
+/// with it; a rebase and a re-seal after a rotation keep it. So a non-zero answer is a forger or
+/// a test that labels its envelopes loosely — which is why `client` records it and, until the
+/// spec's PR 2, refuses nothing.
+pub fn foreign_ops(envelope: &Envelope, ops: &[Op]) -> usize {
+    ops.iter()
+        .filter(|op| op.at.device != envelope.device)
+        .count()
 }
 
 /// What a batch could not do, in words a panel can show.
@@ -132,6 +241,18 @@ pub enum WireError {
     WrongEpoch,
     #[error("that batch could not be read - it is for another group, or it was altered")]
     Unreadable,
+    /// Signed, and the signature is not the named device's ([`Signed::Forged`]). Refused before
+    /// the AEAD and stepped over exactly like [`WireError::Unreadable`] — nothing an update or a
+    /// later pull brings will make it the sender's.
+    #[error(
+        "that batch's signature is not the device's it names - it was altered, or written by \
+         another device"
+    )]
+    Forged,
+    /// Opened, and some of its ops are stamped by a device other than the one that signed the
+    /// envelope ([`foreign_ops`]). Only `client::OP_BINDING` turns this into a refusal.
+    #[error("that batch carries {0} changes stamped by a device other than the one that sent it")]
+    Foreign(usize),
     /// Not a list of ops. On the way in: opened under the group key and did not parse, and
     /// **nothing in it says a newer build sealed it**, so no update of this device will ever read
     /// it. On the way out: ops [`seal_batch`] could not serialize.
@@ -176,7 +297,35 @@ fn aad(group: &str, device: &str, epoch: i64) -> Vec<u8> {
 /// Sealing is the one function every path that sends ops goes through — the push and the
 /// baselines alike — and stamping at capture instead would leave an outbox written by an older
 /// build saying the older schema after the upgrade that is actually sending it.
-pub fn seal_batch(group: &Group, device: &str, ops: &[Op]) -> Result<Envelope, WireError> {
+///
+/// **And every envelope is signed here, with `sign_secret`, for the same reason** (user schema
+/// v66): one function every send goes through is one place a send cannot forget. The signature
+/// is made after the seal and over the sealed text — encrypt-then-sign — so it says who sent
+/// these exact bytes ([`envelope_signing_bytes`]).
+pub fn seal_batch(
+    group: &Group,
+    device: &str,
+    sign_secret: &[u8; 32],
+    ops: &[Op],
+) -> Result<Envelope, WireError> {
+    let mut envelope = seal_unsigned_batch(group, device, ops)?;
+    sign(&mut envelope, sign_secret);
+    Ok(envelope)
+}
+
+/// **Test-only: [`seal_batch`] with no signature** — what a build before v66 sends, and what a test
+/// that seals as another device (whose key it never filed) puts on a mock relay.
+#[cfg(test)]
+pub(crate) fn seal_unsigned(
+    group: &Group,
+    device: &str,
+    ops: &[Op],
+) -> Result<Envelope, WireError> {
+    seal_unsigned_batch(group, device, ops)
+}
+
+/// The batch's checks, its schema stamps and the seal, with no signature yet.
+fn seal_unsigned_batch(group: &Group, device: &str, ops: &[Op]) -> Result<Envelope, WireError> {
     if ops.is_empty() {
         return Err(WireError::Empty);
     }
@@ -215,6 +364,7 @@ fn seal_bytes(
         hlc_ms,
         hlc_ctr,
         sealed: URL_SAFE_NO_PAD.encode(sealed),
+        sig: None,
     })
 }
 
@@ -347,6 +497,19 @@ mod tests {
             epoch,
             group_key: [7u8; 32],
         }
+    }
+
+    /// The signing secret every test here seals with, and its public half.
+    const SIGNER: [u8; 32] = [5u8; 32];
+
+    fn signer_public() -> [u8; 32] {
+        crypto::signing_public(&SIGNER)
+    }
+
+    /// [`super::seal_batch`] under [`SIGNER`] — shadowing the glob import, so the tests that are
+    /// about batching and sealing read as they did before every envelope was signed.
+    fn seal_batch(group: &Group, device: &str, ops: &[Op]) -> Result<Envelope, WireError> {
+        super::seal_batch(group, device, &SIGNER, ops)
     }
 
     /// An op the size the wire actually carries: a collection entry with every field on it.
@@ -852,24 +1015,190 @@ mod tests {
         assert_eq!(batches(&batch).len(), 1);
     }
 
-    /// **The relay is told six things and no seventh.** The op count is deliberately not one of
-    /// them: "this device wrote 431 things today" is not needed in order to relay.
+    /// **The relay is told six things, a seventh when the sender signed, and no eighth.** The op
+    /// count is deliberately not one of them: "this device wrote 431 things today" is not needed
+    /// in order to relay. The seventh is `sig`, and an unsigned envelope does not carry the key at
+    /// all — not even as `null`.
     #[test]
-    fn the_envelope_tells_the_relay_six_things() {
-        let envelope = seal_batch(&group(0), "dev-a", &ops(4)).unwrap();
-        let json: serde_json::Value =
-            serde_json::from_str(&serde_json::to_string(&envelope).unwrap()).unwrap();
-        let mut keys: Vec<&str> = json
-            .as_object()
-            .unwrap()
-            .keys()
-            .map(String::as_str)
-            .collect();
-        keys.sort_unstable();
+    fn the_envelope_tells_the_relay_six_things_and_a_signature() {
+        let keys = |envelope: &Envelope| -> Vec<String> {
+            let json: serde_json::Value =
+                serde_json::from_str(&serde_json::to_string(envelope).unwrap()).unwrap();
+            let mut keys: Vec<String> = json.as_object().unwrap().keys().cloned().collect();
+            keys.sort_unstable();
+            keys
+        };
         assert_eq!(
-            keys,
+            keys(&seal_batch(&group(0), "dev-a", &ops(4)).unwrap()),
+            ["device", "epoch", "group", "hlcCtr", "hlcMs", "sealed", "sig"]
+        );
+        assert_eq!(
+            keys(&seal_unsigned(&group(0), "dev-a", &ops(4)).unwrap()),
             ["device", "epoch", "group", "hlcCtr", "hlcMs", "sealed"]
         );
+    }
+
+    /// An envelope with every clear field fixed, for the tests that pin bytes.
+    fn pinned(sig: Option<&str>) -> Envelope {
+        Envelope {
+            group: "0123456789abcdef".into(),
+            device: "dev-a".into(),
+            epoch: 3,
+            hlc_ms: 1_787_000_000_123,
+            hlc_ctr: 7,
+            sealed: "c2VhbGVk".into(),
+            sig: sig.map(str::to_owned),
+        }
+    }
+
+    /// **The bytes a signature covers, to the byte** — the definition the relay and every later
+    /// build verify against, so a change here is a change to a wire and must be red.
+    #[test]
+    fn the_signing_bytes_are_pinned() {
+        assert_eq!(
+            envelope_signing_bytes(&pinned(None)),
+            b"mtg-grimoire/envelope/v1\x000123456789abcdef\x00dev-a\x003\x001787000000123\x007\x00c2VhbGVk"
+                .to_vec()
+        );
+        // The signature is not part of what it signs: a signed envelope's bytes are the same.
+        assert_eq!(
+            envelope_signing_bytes(&pinned(Some("anything"))),
+            envelope_signing_bytes(&pinned(None))
+        );
+    }
+
+    /// **An unsigned envelope is the bytes it always was**: a `None` signature writes no key, so
+    /// a push from a test helper, or a relay row from before v66 written back out, is unchanged.
+    #[test]
+    fn an_unsigned_envelope_is_the_bytes_it_always_was() {
+        assert_eq!(
+            serde_json::to_string(&pinned(None)).unwrap(),
+            r#"{"group":"0123456789abcdef","device":"dev-a","epoch":3,"hlcMs":1787000000123,"hlcCtr":7,"sealed":"c2VhbGVk"}"#
+        );
+    }
+
+    /// **An envelope from before v66 parses, and one from after it parses on a build that does not
+    /// know the field** — the second shown by a struct with no `sig` and no `deny_unknown_fields`,
+    /// which is every build before this one.
+    #[test]
+    fn old_and_new_envelopes_parse_on_either_side() {
+        let old = r#"{"group":"g","device":"d","epoch":0,"hlcMs":1,"hlcCtr":0,"sealed":"x"}"#;
+        let parsed: Envelope = serde_json::from_str(old).unwrap();
+        assert_eq!(parsed.sig, None);
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        #[allow(dead_code)]
+        struct BeforeV66 {
+            group: String,
+            device: String,
+            epoch: i64,
+            hlc_ms: i64,
+            hlc_ctr: i64,
+            sealed: String,
+        }
+        let signed =
+            serde_json::to_string(&seal_batch(&group(0), "dev-a", &ops(1)).unwrap()).unwrap();
+        assert!(signed.contains(r#""sig":""#), "{signed}");
+        serde_json::from_str::<BeforeV66>(&signed).expect("an older build ignores the seventh key");
+    }
+
+    /// **A signed batch verifies under its sender's key, round trips, and opens as it always
+    /// did.** The signature is 86 characters of `sealed`'s own base64url, 64 bytes unpadded.
+    #[test]
+    fn a_signed_batch_verifies_and_still_opens() {
+        let g = group(0);
+        let envelope = seal_batch(&g, "dev-a", &ops(3)).unwrap();
+        let sig = envelope
+            .sig
+            .as_deref()
+            .expect("every sealed batch is signed");
+        assert_eq!(sig.len(), 86);
+        assert!(sig
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'));
+        assert_eq!(
+            signature(&envelope, Some(&signer_public())),
+            Signed::Verified
+        );
+
+        let wire = serde_json::to_string(&envelope).unwrap();
+        let back: Envelope = serde_json::from_str(&wire).unwrap();
+        assert_eq!(back, envelope);
+        assert_eq!(signature(&back, Some(&signer_public())), Signed::Verified);
+        assert_eq!(open_batch(&g, &back).unwrap().len(), 3);
+    }
+
+    /// **Every clear field is covered**: a relay that changed any one of them — or the sealed
+    /// text, or the signature itself — hands over an envelope the sender's key refuses. The two
+    /// clock fields are the ones the AEAD never covered.
+    #[test]
+    fn a_tampered_envelope_or_signature_is_forged() {
+        let envelope = seal_batch(&group(0), "dev-a", &ops(2)).unwrap();
+        let key = signer_public();
+        type Bend = Box<dyn Fn(&mut Envelope)>;
+        let bent: [(&str, Bend); 8] = [
+            ("group", Box::new(|e| e.group.push('0'))),
+            ("device", Box::new(|e| e.device = "dev-b".into())),
+            ("epoch", Box::new(|e| e.epoch += 1)),
+            ("hlcMs", Box::new(|e| e.hlc_ms += 1)),
+            ("hlcCtr", Box::new(|e| e.hlc_ctr += 1)),
+            ("sealed", Box::new(|e| e.sealed.insert(0, 'A'))),
+            (
+                "sig",
+                Box::new(|e| {
+                    let mut raw = URL_SAFE_NO_PAD.decode(e.sig.as_ref().unwrap()).unwrap();
+                    raw[0] ^= 1;
+                    e.sig = Some(URL_SAFE_NO_PAD.encode(raw));
+                }),
+            ),
+            (
+                "a sig that is not 64 bytes",
+                Box::new(|e| e.sig = Some("c2ln".into())),
+            ),
+        ];
+        for (what, bend) in bent {
+            let mut altered = envelope.clone();
+            bend(&mut altered);
+            assert_eq!(signature(&altered, Some(&key)), Signed::Forged, "{what}");
+        }
+        // Another device's key is a forgery too: the sender is not who the key says.
+        let stranger = crypto::signing_keypair().public;
+        assert_eq!(signature(&envelope, Some(&stranger)), Signed::Forged);
+    }
+
+    /// **Open mode**: no key on file, or no signature to check, is accepted as today — the arm
+    /// the Discord spec's PR 2 refuses in a signed group, and nothing earlier does.
+    #[test]
+    fn an_unknown_key_or_an_unsigned_envelope_is_unchecked() {
+        let signed = seal_batch(&group(0), "dev-a", &ops(1)).unwrap();
+        assert_eq!(
+            signature(&signed, None),
+            Signed::Unchecked,
+            "no key on file"
+        );
+        let unsigned = seal_unsigned(&group(0), "dev-a", &ops(1)).unwrap();
+        assert_eq!(unsigned.sig, None);
+        assert_eq!(
+            signature(&unsigned, Some(&signer_public())),
+            Signed::Unchecked,
+            "a build before v66"
+        );
+    }
+
+    /// **The op/envelope binding counts what a signature cannot vouch for**: an op stamped by a
+    /// device other than the one that sent the envelope.
+    #[test]
+    fn ops_stamped_by_another_device_are_counted() {
+        let mut sent = ops(3);
+        let envelope = seal_batch(&group(0), "0123456789abcdef", &sent).unwrap();
+        assert_eq!(
+            foreign_ops(&envelope, &sent),
+            0,
+            "realistic() stamps its own device"
+        );
+        sent[1].at.device = "somebody-else".into();
+        assert_eq!(foreign_ops(&envelope, &sent), 1);
     }
 
     /// The sealed blob is base64url with no padding, so it can be a path segment or a JSON
