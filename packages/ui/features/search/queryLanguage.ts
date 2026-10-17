@@ -919,6 +919,8 @@ export const IS_VALUES: readonly string[] = [
   "ripplefoil",
   "raisedfoil",
   "poster",
+  "universesbeyond",
+  "ub",
   // Land nicknames.
   "dual",
   "fetchland",

@@ -2489,6 +2489,18 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
     cell's older meaning, the finish the **copy** is, sent as `finishes`. The wishlist draws
     `Border` and no `Finish`. One cell, two questions, two wire names — the name is what keeps
     them from colliding on the collection's flattened payload.
+- **`Universe` sits after `Finish` and is one value, not a chip group** (2026-10-17). `Beyond` and
+  `Within` are Owned's two-button shape over one printing fact: Beyond is Scryfall's
+  `universesbeyond` promo type and Within is every printing without it (the owner's definition —
+  Scryfall has no "Universes Within" word), so the pair partitions the printings, neither pressed
+  is the default, and pressing the one that is on turns it off. It is in every tray — search, the
+  docked panels, the collection (both callers), the wishlist and the phone's sheet — and stated
+  as `Universes Beyond` / `Universes Within` on the stated-filter row. **Never greyed**: there is
+  no facet dimension for it (`index/facets.rs`' `base` lists it), and it rides neither the facet
+  request nor any count. `@/lib/universe` owns the words; Rust's `filters::UNIVERSE_KEYS` holds
+  the same two and reads anything else as no filter. A collapsed search answers either value
+  with a card like Sol Ring, represented by a printing that matches: the filter asks about
+  printings, as Scryfall's `is:universesbeyond` does with `unique=cards`.
 
 ## The theory mark, and the four things a photograph settled
 

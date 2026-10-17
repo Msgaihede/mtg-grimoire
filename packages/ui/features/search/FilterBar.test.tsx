@@ -83,6 +83,9 @@ const search = (over: Record<string, unknown> = {}) =>
     toggleBorder: vi.fn(),
     finishes: [] as string[],
     toggleFinish: vi.fn(),
+    // The universe cell's pair, for the border pair's reason: `SEARCH_TRAY` names it.
+    universe: undefined as string | undefined,
+    setUniverse: vi.fn(),
     setOwned: vi.fn(),
     allPrintings: false,
     toggleAllPrintings: vi.fn(),
@@ -1734,7 +1737,8 @@ describe("FilterBar, its Exact chip", () => {
     render(<FilterBar search={search()} />);
     await openTray();
 
-    expect(screen.getAllByRole("button", { name: /^(Exact|Within)\b/ })).toHaveLength(1);
+    // The em dash is the colour reading's own name, so the Universe cell's `Within` is not it.
+    expect(screen.getAllByRole("button", { name: /^(Exact|Within) —/ })).toHaveLength(1);
     expect(screen.queryByText("Colour")).toBeNull();
   });
 
@@ -2172,6 +2176,53 @@ describe("FilterBar, its border chips", () => {
     );
 
     expect(chipLabels()).toEqual([]);
+  });
+});
+
+/** The universe cell — Universes Beyond or Within, one value over Scryfall's promo type. */
+describe("FilterBar, its universe pair", () => {
+  const group = () => screen.getByRole("group", { name: "Universe" });
+
+  it("draws the universe cell only where the surface answers it", async () => {
+    render(<FilterBar search={search({ setUniverse: undefined })} />);
+    await openTray();
+
+    expect(screen.queryByRole("group", { name: "Universe" })).toBeNull();
+  });
+
+  it("draws Beyond then Within, neither on by default, and sets one by its id", async () => {
+    const setUniverse = vi.fn();
+    render(<FilterBar search={search({ setUniverse })} />);
+    await openTray();
+
+    const buttons = within(group()).getAllByRole("button");
+    expect(buttons.map((b) => b.textContent)).toEqual(["Beyond", "Within"]);
+    for (const b of buttons) expect(b).toHaveAttribute("aria-pressed", "false");
+    expect(buttons[0]).toHaveAccessibleName("Beyond, Universes Beyond");
+
+    await userEvent.click(buttons[1]);
+    expect(setUniverse).toHaveBeenCalledWith("within");
+  });
+
+  /** The setter clears on a repeat, so pressing the one that is on passes its own id again. */
+  it("shows the universe that is on, and a press on it passes it back to clear", async () => {
+    const setUniverse = vi.fn();
+    render(<FilterBar search={search({ universe: "beyond", setUniverse })} />);
+    await openTray();
+
+    const beyond = within(group()).getByRole("button", { name: /^Beyond\b/ });
+    expect(beyond).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(beyond);
+    expect(setUniverse).toHaveBeenCalledWith("beyond");
+  });
+
+  it("states the universe as a chip whose × clears it", async () => {
+    const setUniverse = vi.fn();
+    render(<FilterBar search={search({ universe: "within", setUniverse, activeCount: 1 })} />);
+
+    expect(chipLabels()).toEqual(["Universes Within"]);
+    await userEvent.click(screen.getByRole("button", { name: "Remove filter — Universes Within" }));
+    expect(setUniverse).toHaveBeenCalledWith(undefined);
   });
 });
 
