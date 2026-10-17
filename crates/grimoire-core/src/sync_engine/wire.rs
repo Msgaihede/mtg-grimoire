@@ -182,8 +182,8 @@ pub enum Signed {
     /// It carries a signature and the sender's key verifies it.
     Verified,
     /// Nothing to check it against, or nothing to check: no `sig` (a build before v66), or no key
-    /// on file for the sender (every peer until the Discord spec's PR 2 carries keys). **Accepted
-    /// as today** — open mode — and the one arm a signed group's PR 2 refuses.
+    /// on file for the sender (a peer paired by an older build, and not yet amended in). **Accepted
+    /// as before in open mode**, and refused in a signed group (`WireError::Unverified`).
     Unchecked,
     /// It carries a signature and the sender's key refuses it — altered on the way, or written by
     /// somebody holding the group key who is not that device. A signature that is not 64 bytes of
@@ -218,8 +218,8 @@ pub fn signature(envelope: &Envelope, key: Option<&[u8; 32]>) -> Signed {
 /// **No honest build seals one** (`docs/reference/sync.md`, *The envelope*): the outbox is
 /// filled by the capture triggers, which stamp this device's id; a baseline's claims are built
 /// with it; a rebase and a re-seal after a rotation keep it. So a non-zero answer is a forger or
-/// a test that labels its envelopes loosely — which is why `client` records it and, until the
-/// spec's PR 2, refuses nothing.
+/// a test that labels its envelopes loosely — which is why `client` records it in open mode and
+/// refuses it only in a signed group.
 pub fn foreign_ops(envelope: &Envelope, ops: &[Op]) -> usize {
     ops.iter()
         .filter(|op| op.at.device != envelope.device)
@@ -250,9 +250,26 @@ pub enum WireError {
     )]
     Forged,
     /// Opened, and some of its ops are stamped by a device other than the one that signed the
-    /// envelope ([`foreign_ops`]). Only `client::OP_BINDING` turns this into a refusal.
+    /// envelope ([`foreign_ops`]). A refusal in a signed group (`client::binding`); outside one,
+    /// recorded and applied.
     #[error("that batch carries {0} changes stamped by a device other than the one that sent it")]
     Foreign(usize),
+    /// **A signed group's rule** (the Discord spec's PR 2): an envelope at or after the epoch the
+    /// group began signing ([`crate::sync_pair::roster::requires_signatures`]) that carries no
+    /// signature, or whose sender's key this device was never given. Refused before the AEAD and
+    /// stepped over exactly like [`WireError::Forged`] — in a signed group it is not provably the
+    /// sender's, and a later pull cannot make it so.
+    #[error(
+        "that batch is not signed by a key this device holds for its sender, and this group \
+         accepts only signed batches"
+    )]
+    Unverified,
+    /// From a device the group restricted (`read`, or any capability but `full`): refused in
+    /// full, unopened. **Not unreadable and not a gap** — every op such a device sends is refused
+    /// by every peer, so it is consumed, recorded once per sender and passed by the cursor
+    /// (`client::evaluate`).
+    #[error("that batch is from a device that may only read this group")]
+    Restricted,
     /// Not a list of ops. On the way in: opened under the group key and did not parse, and
     /// **nothing in it says a newer build sealed it**, so no update of this device will ever read
     /// it. On the way out: ops [`seal_batch`] could not serialize.

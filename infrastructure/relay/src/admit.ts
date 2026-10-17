@@ -196,10 +196,60 @@ export function admitToLog(storedChars: number, sealedChars: number): Refusal | 
 }
 
 /**
+ * How many pushes a restricted device — one whose token carries a `cap` other than `full`
+ * (`token.ts`'s `isRestricted`) — may have stored in one UTC day: **64**. Spec §6 and §12.
+ *
+ * **Why a restricted device is capped at all, when every peer refuses what it sends.** A `read`
+ * device (the Discord bot's first release) has nothing to push that a peer will apply, and an
+ * `add` device (its second) may push adds and nothing else — so what a compromised one can still
+ * do is fill the group's log, which every device then pulls. The relay stores what it pushes
+ * (refusing it would need the relay to read ops it cannot decrypt) and bounds how much.
+ *
+ * **Why 64.** One push is one debounced batch, and a batch holds many ops, so 64 is far past what
+ * a reader confirming cards one `/collection add` at a time produces in a day — a cap that says
+ * "something is wrong" — while 64 batches at the sealed cap is 96 MB of a group's 128 MiB, so even
+ * a bot pushing at the cap all day cannot fill a log by itself before the next day's count, and
+ * a reader who notices removes it. A full device has no daily cap: the log's own quota is its
+ * fence, as it always was.
+ */
+export const RESTRICTED_PUSHES_PER_DAY = 64;
+
+/** The code a restricted device's push past [`RESTRICTED_PUSHES_PER_DAY`] is refused with. */
+export const RESTRICTED_QUOTA = "restricted_quota";
+
+/**
+ * The header the Worker puts on a restricted device's push before it forwards it to the object,
+ * naming the device the quota is counted against (the token's `dev`). **Trusted because no client
+ * can set it**: `index.ts` rebuilds every push it forwards from the body text with one header of
+ * its own (`forwarded`), so a header a client sent never reaches the object on a push — and the
+ * object reads this one on a push and nowhere else.
+ */
+export const RESTRICTED_HEADER = "x-grimoire-restricted";
+
+/** A UTC day number: what the restricted quota is counted per. */
+export function quotaDay(nowMs: number): number {
+  return Math.floor(nowMs / 86_400_000);
+}
+
+/**
+ * The object's check of a restricted device's push: `pushedToday` already stored this UTC day →
+ * **429 `restricted_quota`** at [`RESTRICTED_PUSHES_PER_DAY`]. The 64th is stored; the 65th is not.
+ * A 429 and not the log's 507, because it clears on its own at midnight UTC and says nothing about
+ * the group's log.
+ */
+export function admitRestricted(pushedToday: number): Refusal | null {
+  if (pushedToday < RESTRICTED_PUSHES_PER_DAY) return null;
+  return {
+    status: 429,
+    code: RESTRICTED_QUOTA,
+    error: "this device has pushed as much today as a restricted device may",
+  };
+}
+
+/**
  * The code a push or an ack is refused with when the device its body names is not the device its
- * token was minted for — **when that is refused, which it is not yet** ([`DEVICE_BINDING`]). Named
- * now so the code a client will match on is decided once, beside the check, and not respelled by
- * the change that starts sending it.
+ * token was minted for — refused once the group is signed, and only recorded before
+ * ([`DEVICE_BINDING`]).
  */
 export const DEVICE_MISMATCH = "device_mismatch";
 
@@ -219,10 +269,14 @@ export const DEVICE_MISMATCH = "device_mismatch";
  * alive today carries one — but no client has ever been held to it, and a client that sends a
  * device id its token does not name for a reason nobody has found yet would stop syncing on the
  * day this refuses. So the first release only counts them: `bindDevice` logs a fixed line per
- * mismatch, Workers Logs (`observability`, `wrangler.jsonc`) keeps it, and the release that
- * flips this to `"refuse"` (the integration's second PR) is the one that has read those lines and
- * found none from an honest client. **This constant is the one place that changes**; the code,
- * the status and the check are already here and tested in both modes.
+ * mismatch, and Workers Logs (`observability`, `wrangler.jsonc`) keeps it.
+ *
+ * **And `"warn"` still, for every group that is not signed** (the integration's second PR, spec
+ * §12). A group whose newest roster document is `signed` is refused instead — `index.ts`'s
+ * `bound` passes `"refuse"` for it — because a signed group is one that holds a restricted
+ * device, which is the case the binding exists for, and every member of one is a build new
+ * enough to have been gated in (spec §7). Every other group keeps this constant's answer, so the
+ * flip for them is still this one line, waiting on the count.
  *
  * **A token with no `dev` is never a mismatch, in either mode.** It is an older relay's, lives at
  * most `TOKEN_TTL_MS`, and names no device to hold a body to.

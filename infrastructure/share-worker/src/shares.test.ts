@@ -592,3 +592,63 @@ describe("a device the group has removed", () => {
     expect(res.status).toBe(200);
   });
 });
+
+describe("a restricted device's token", () => {
+  /** A live token naming `dev`, with `cap` when one is given — as the relay mints a bot's. */
+  async function capped(cap?: string): Promise<string> {
+    const claims = { sub: "sub-0", grp: "g1", exp: Date.now() + 60_000, dev: "bot" };
+    return mint(cap === undefined ? claims : { ...claims, cap }, KEY);
+  }
+
+  it("is refused 403 restricted_device on every gated route", async () => {
+    // Spec §2 F8: the bot holds the group key to read, and a share would make what it reads public.
+    const env = shareEnv();
+    const id = await idOf(await worker.fetch(post("g1", await token(), META), env));
+    const bot = await capped("read");
+
+    for (const request of [
+      post("g1", bot, META),
+      list("g1", bot),
+      revoke("g1", bot, id),
+      new Request(`https://share.example/g/g1/share/${id}`, {
+        method: "PUT",
+        headers: { authorization: `Bearer ${bot}` },
+        body: new Uint8Array([0x1f, 0x8b]),
+      }),
+    ]) {
+      const res = await worker.fetch(request, env);
+      expect(res.status, request.method).toBe(403);
+      expect(await res.json()).toEqual({
+        error: expect.any(String) as string,
+        code: "restricted_device",
+      });
+    }
+    // Nothing was withdrawn by the refused revoke.
+    const listed = (await (await worker.fetch(list("g1", await token()), env)).json()) as {
+      shares: unknown[];
+    };
+    expect(listed.shares).toHaveLength(1);
+  });
+
+  it("is refused for any cap but full — one this build has never heard of included", async () => {
+    const env = shareEnv();
+    for (const cap of ["add", "something-new"]) {
+      expect((await worker.fetch(post("g1", await capped(cap), META), env)).status, cap).toBe(403);
+    }
+  });
+
+  it("is let in with a cap of full, or none at all, which is every token minted before it", async () => {
+    const env = shareEnv();
+    expect((await worker.fetch(post("g1", await capped("full"), META), env)).status).toBe(200);
+    expect((await worker.fetch(list("g1", await capped()), env)).status).toBe(200);
+  });
+
+  it("is still a 401 for another group's token, before the cap is read", async () => {
+    const env = shareEnv();
+    const other = await mint(
+      { sub: "sub-0", grp: "g2", exp: Date.now() + 60_000, dev: "bot", cap: "read" },
+      KEY,
+    );
+    expect((await worker.fetch(list("g1", other), env)).status).toBe(401);
+  });
+});

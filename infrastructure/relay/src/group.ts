@@ -1,4 +1,4 @@
-import { admitToLog, isEnvelope } from "./admit";
+import { admitRestricted, admitToLog, isEnvelope, quotaDay, RESTRICTED_HEADER } from "./admit";
 import {
   CLOSE_DROPPED,
   CLOSE_REMOVED,
@@ -270,6 +270,21 @@ export class Group implements DurableObject {
         `INSERT INTO log_size (id, chars) SELECT 1, coalesce(sum(length(sealed)), 0) FROM log`,
       );
     }
+
+    // **A restricted device's pushes, counted per UTC day** (`admit.ts`'s
+    // `RESTRICTED_PUSHES_PER_DAY`, spec §12): one row per restricted device this object has
+    // stored a push from, holding the day it last pushed on and how many it has stored that day.
+    // **A day number and a count, not a row per push**, so the check is a point read and the
+    // count a point write whatever the device sends, and a new day resets the count by
+    // overwriting it rather than by a sweep. A full device never has a row here. Created on every
+    // wake like the tables above, so a live object gains it on its first wake after the deploy.
+    this.sql.exec(
+      `CREATE TABLE IF NOT EXISTS restricted_pushes (
+         device TEXT    PRIMARY KEY,
+         day    INTEGER NOT NULL,
+         count  INTEGER NOT NULL
+       );`,
+    );
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -330,6 +345,24 @@ export class Group implements DurableObject {
     const mismatch = this.assertGroup(group, envelope.group);
     if (mismatch) return mismatch;
 
+    // **A restricted device's daily count, ahead of the log's quota** — the Worker names the
+    // device in `RESTRICTED_HEADER` when the token's `cap` is not `full`, and on no other push
+    // (`admit.ts` says why the header can be trusted). Ahead of the log check so a device over its
+    // day is refused without the compaction a full log's refusal pays for. The count moves only
+    // once the push is stored, below: a push the log refuses spends none of the device's day.
+    const restricted = request.headers.get(RESTRICTED_HEADER);
+    const day = quotaDay(Date.now());
+    if (restricted !== null) {
+      const row = this.sql
+        .exec<{ day: number; count: number }>(
+          `SELECT day, count FROM restricted_pushes WHERE device = ?`,
+          restricted,
+        )
+        .toArray()[0];
+      const over = admitRestricted(row !== undefined && row.day === day ? row.count : 0);
+      if (over) return json({ error: over.error, code: over.code }, over.status);
+    }
+
     // The size, the epoch and the clock were refused in the Worker, before this request cost a
     // Durable Object request (`admit.ts`). The quota is the one check that needs this object's
     // own state. Nothing awaits between the read and the two writes, so no other request can
@@ -365,6 +398,19 @@ export class Group implements DurableObject {
       )
       .one();
     this.sql.exec(`UPDATE log_size SET chars = chars + ? WHERE id = 1`, envelope.sealed.length);
+    // The count, in the same synchronous run as the read above — nothing awaits between them, so
+    // two pushes cannot both be admitted against one count. SQLite reads every right-hand side of
+    // a `SET` from the row as it was, so `day = excluded.day` beside the `CASE` is safe in order.
+    if (restricted !== null) {
+      this.sql.exec(
+        `INSERT INTO restricted_pushes (device, day, count) VALUES (?, ?, 1)
+           ON CONFLICT (device) DO UPDATE
+             SET count = CASE WHEN day = excluded.day THEN count + 1 ELSE 1 END,
+                 day = excluded.day`,
+        restricted,
+        day,
+      );
+    }
 
     this.notify(stored.seq, envelope.device);
 
@@ -900,6 +946,9 @@ export class Group implements DurableObject {
     this.sql.exec(`DELETE FROM log`);
     this.sql.exec(`DELETE FROM acks`);
     this.sql.exec(`UPDATE log_size SET chars = 0 WHERE id = 1`);
+    // A day's count belongs to a membership as much as the log does; a reader who resubscribes
+    // starts the day's count again.
+    this.sql.exec(`DELETE FROM restricted_pushes`);
     // 4001 is in the private range, so the Rust client can tell "this group was dropped" from
     // any transport-level close — and from 4002, which is one device taken off a manifest
     // (`log.ts`'s `CLOSE_REMOVED`). There is no close-all API; the loop is it. `state.abort()`

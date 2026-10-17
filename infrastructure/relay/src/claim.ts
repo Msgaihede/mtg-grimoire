@@ -18,7 +18,8 @@ import {
   required,
   verifyWebhook,
 } from "./patreon";
-import { mint, TOKEN_TTL_MS } from "./token";
+import { capOf, forgetRosters } from "./roster";
+import { mint, TOKEN_TTL_MS, type Claims } from "./token";
 // **`import type` and never a value import**, because `index.ts` imports this file: a value
 // import would close a runtime cycle, and a cycle in which one side builds a route table out of
 // the other side's functions at module-evaluation time is exactly the shape that resolves to
@@ -394,6 +395,13 @@ function randomSecret(): string {
  * worse, `String(env.RELAY_HMAC_KEY)`: an unset binding spelled that way signs every token with
  * the literal text `"undefined"`, and every token then verifies — for anyone who guesses that
  * the binding is unset. Unset has to be a loud 500.
+ *
+ * **A restricted device's token carries its `cap`** (spec §12): the group's newest roster
+ * document is read (`roster.ts`'s `capOf`, one D1 read per mint) and a device it names as other
+ * than `full` is minted `cap` beside `dev`. §12 names the group door; **every door asks**, because
+ * this function is every door's, and a restriction that one door forgot is a door a restricted
+ * device would learn to use. A full device's token, and every device's in a group with no RD, is
+ * the claim set it always was — no `cap` key at all.
  */
 async function grantFor(
   env: Env,
@@ -405,12 +413,12 @@ async function grantFor(
   issuedAtMs = Date.now(),
 ): Promise<GroupGrant> {
   const exp = issuedAtMs + TOKEN_TTL_MS;
-  const access = await mint(
-    // `dev` is read by the share Worker alone — see `Claims`. Every door has already checked it
-    // with `deviceIn` and admitted it to the roll, so it is the device the grant is really for.
-    { sub: subject, grp: group, exp, dev: device },
-    required(env.RELAY_HMAC_KEY, "RELAY_HMAC_KEY"),
-  );
+  // `dev` is the device every door has already checked with `deviceIn` and admitted to the roll,
+  // so it is the device the grant is really for — see `Claims` for who reads it.
+  const claims: Claims = { sub: subject, grp: group, exp, dev: device };
+  const cap = await capOf(env, group, device);
+  if (cap !== undefined) claims.cap = cap;
+  const access = await mint(claims, required(env.RELAY_HMAC_KEY, "RELAY_HMAC_KEY"));
   return {
     access,
     expires: unixSeconds(exp),
@@ -473,7 +481,7 @@ function deviceIn(body: { device?: unknown }): string | null {
 
 /**
  * Everything the relay holds for a group a subject has just stopped being bound to: the key
- * history, the device roll, and the log itself (spec §3).
+ * history, the device roll, the roster documents, and the log itself (spec §3).
  *
  * **Called after the new binding has been written and never before it**, which is the ordering
  * the whole reversal turns on. A teardown that ran first would destroy the reader's working group
@@ -493,6 +501,10 @@ async function releaseGroup(env: Env, group: string): Promise<void> {
   try {
     await env.DB.prepare(`DELETE FROM group_keys WHERE group_id = ?`).bind(group).run();
     await forgetGroup(env, group);
+    // The roster chain goes with the key history it was published beside: a group re-claimed
+    // later starts a fresh chain from a fresh first claim, never from a document naming devices
+    // whose keys were dropped here.
+    await forgetRosters(env, group);
     // Last, because it is the only step that leaves D1 — a Durable Object that cannot be reached
     // must not cost the two deletes above, which are what free the slots and retire the key.
     await dropGroup(env, group);

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { quotaDay, RESTRICTED_HEADER, RESTRICTED_PUSHES_PER_DAY } from "./admit";
 import { fakeState, stubWorkerd, type FakeSocket, type FakeState } from "./fakeState";
 import { Group, type Envelope } from "./group";
 import {
@@ -871,3 +872,91 @@ function freshLog(): FakeState {
   new Group(fake.state);
   return fake;
 }
+
+describe("a restricted device's pushes, counted per day", () => {
+  /** A push the Worker forwarded, naming `restricted` in the header when it is a restricted one. */
+  async function pushAs(object: Group, device: string, restricted: string | null, sealed = "s") {
+    const envelope: Envelope = { group: GROUP, device, epoch: 1, hlcMs: 1, hlcCtr: 0, sealed };
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (restricted !== null) headers[RESTRICTED_HEADER] = restricted;
+    return object.fetch(
+      new Request(`https://relay.example/g/${GROUP}/push`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(envelope),
+      }),
+    );
+  }
+
+  it("stores the day's cap and refuses the next: 429 restricted_quota", async () => {
+    const fake = fakeState("sqlite");
+    const object = new Group(fake.state);
+
+    for (let i = 0; i < RESTRICTED_PUSHES_PER_DAY; i += 1) {
+      expect((await pushAs(object, "bot", "bot")).status).toBe(200);
+    }
+    const refused = await pushAs(object, "bot", "bot");
+    expect(refused.status).toBe(429);
+    expect(await refused.json()).toEqual({
+      error: expect.any(String) as string,
+      code: "restricted_quota",
+    });
+    // Nothing of the refused push is stored.
+    expect(fake.sql(`SELECT count(*) AS n FROM log`)).toEqual([{ n: RESTRICTED_PUSHES_PER_DAY }]);
+
+    // A full device's pushes — no header — are not counted and not capped.
+    expect((await pushAs(object, "desk", null)).status).toBe(200);
+    expect(fake.sql(`SELECT device FROM restricted_pushes`)).toEqual([{ device: "bot" }]);
+  });
+
+  it("starts the count again on the next UTC day", async () => {
+    const fake = fakeState("sqlite");
+    const object = new Group(fake.state);
+    fake.sql(
+      `INSERT INTO restricted_pushes (device, day, count) VALUES (?, ?, ?)`,
+      "bot",
+      quotaDay(Date.now()) - 1,
+      RESTRICTED_PUSHES_PER_DAY,
+    );
+
+    expect((await pushAs(object, "bot", "bot")).status).toBe(200);
+    expect(fake.sql(`SELECT day, count FROM restricted_pushes`)).toEqual([
+      { day: quotaDay(Date.now()), count: 1 },
+    ]);
+  });
+
+  it("counts only what it stored: a refused push spends none of the day", async () => {
+    const fake = fakeState("sqlite");
+    const object = new Group(fake.state);
+    for (let i = 0; i < RESTRICTED_PUSHES_PER_DAY; i += 1) await pushAs(object, "bot", "bot");
+
+    for (let i = 0; i < 3; i += 1) expect((await pushAs(object, "bot", "bot")).status).toBe(429);
+    // A push naming another group is refused ahead of the count, and moves nothing either.
+    const stray = await object.fetch(
+      new Request(`https://relay.example/g/${GROUP}/push`, {
+        method: "POST",
+        headers: { [RESTRICTED_HEADER]: "bot" },
+        body: JSON.stringify({
+          group: "g2",
+          device: "bot",
+          epoch: 1,
+          hlcMs: 1,
+          hlcCtr: 0,
+          sealed: "s",
+        }),
+      }),
+    );
+    expect(stray.status).toBe(409);
+    expect(fake.sql(`SELECT count FROM restricted_pushes`)).toEqual([
+      { count: RESTRICTED_PUSHES_PER_DAY },
+    ]);
+  });
+
+  it("forgets the count with the log when the group is dropped", async () => {
+    const fake = fakeState("sqlite");
+    const object = new Group(fake.state);
+    await pushAs(object, "bot", "bot");
+    await object.fetch(new Request(`https://relay.internal/g/${GROUP}/drop`, { method: "POST" }));
+    expect(fake.sql(`SELECT * FROM restricted_pushes`)).toEqual([]);
+  });
+});

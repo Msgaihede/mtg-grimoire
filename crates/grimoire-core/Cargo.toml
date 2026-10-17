@@ -138,6 +138,11 @@ ed25519-dalek = { version = "2.2", default-features = false, features = ["zeroiz
 # draws its own 24 bytes through `crypto::random_bytes`. So the line is a subtraction.
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
 hkdf = "0.12"
+# The roster document's open-mode MAC (the Discord spec §12): HMAC-SHA256 under a key HKDF derives
+# from the epoch's group key. **0.12 is the very crate `hkdf 0.12` is built on** — already in the
+# lock on the one `digest 0.10` stack — so naming it adds no crate, only the line that lets this
+# one call `Hmac` and its constant-time `verify_slice` directly.
+hmac = "0.12"
 # The sealed envelope as a JSON string. **base64url and not hex**: the relay stores ciphertext
 # as TEXT in a Durable Object, and hex would be twice the bytes over the wire and against the
 # 2 MB per-row cap where base64 is four thirds; URL-safe so the blob can be a path segment

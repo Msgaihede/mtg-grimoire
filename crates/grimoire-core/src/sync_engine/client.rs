@@ -84,6 +84,7 @@ use crate::sync_engine::merge::{Emission, Op};
 use crate::sync_engine::wire::{self, Envelope, WireError};
 use crate::sync_pair::crypto;
 use crate::sync_pair::identity::{self, Group};
+use crate::sync_pair::roster::{self, Roster};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use rusqlite::{Connection, OptionalExtension};
@@ -582,7 +583,10 @@ fn nothing_is_held_across_a_request(lane: &Lane<'_>, rotation: &identity::Rotati
     sendable(publish_join(lane));
     sendable(post_rotation(lane, rotation));
     sendable(post_rendezvous(lane, "", "", ""));
+    sendable(post_rendezvous_if_kept(lane, "", "", ""));
     sendable(get_rendezvous(lane, "", ""));
+    sendable(amend_roster(lane));
+    sendable(relay_says_signed(lane, &rotation.group, ""));
 }
 
 // ---------------------------------------------------------------------------------------
@@ -796,8 +800,15 @@ pub enum KeyOutcome {
     /// the trip carries on.
     Adopted,
     /// A higher epoch and **no blob for this device**, which is the removal notice — see
-    /// [`check_keys`]. The group is left and the grant cleared.
+    /// [`check_keys`]. The group is left and the grant cleared. **In signed mode only on a verified
+    /// roster document at that epoch that omits this device**, never on the relay's word.
     Removed,
+    /// **Signed mode only**: a higher epoch that no roster document this device can verify
+    /// vouches for, or one that names this device and carries no blob for it. Nothing is adopted
+    /// and nothing is left — an unverifiable answer is held, never obeyed (the Discord spec §5) —
+    /// and the trip goes on at the epoch this device stands on, where the relay will refuse what
+    /// it must.
+    Held,
 }
 
 /// What [`check_keys`] found, and the epoch the relay answered it at.
@@ -827,6 +838,67 @@ struct KeyPage {
     /// anything about this group, so the default is the honest reading. [`RELAY_REMOVAL_STEP`].
     #[serde(default, rename = "removalStep")]
     removal_step: Option<i64>,
+    /// The relay's newest roster document, verbatim, and the one authenticator beside it — all
+    /// three `null` (or absent, from an older relay) for a group that has none. §12.
+    #[serde(default)]
+    roster: Option<String>,
+    #[serde(default, rename = "rosterMac")]
+    roster_mac: Option<String>,
+    #[serde(default, rename = "rosterSig")]
+    roster_sig: Option<String>,
+    /// Every document from the `since` epoch this device asked from, oldest first, capped by the
+    /// relay — the catch-up walk. **Each an object of the same three fields**
+    /// (`{roster, rosterMac, rosterSig}`); read leniently, so an element of another shape is
+    /// skipped rather than failing the key check.
+    #[serde(default)]
+    rosters: Vec<serde_json::Value>,
+    /// `1` from a relay that stores and serves roster documents. **Absent is an older relay**, and
+    /// every roster field above is then ignored, whatever it says.
+    #[serde(default)]
+    sig: Option<i64>,
+}
+
+impl KeyPage {
+    /// Whether the relay that answered keeps roster documents.
+    fn keeps_rosters(&self) -> bool {
+        self.sig == Some(1)
+    }
+
+    /// Every document the answer carries — the walk, and the newest beside it — de-duplicated by
+    /// their characters and ordered by `(epoch, step)`, so a relay that answered them out of order
+    /// is read in order. One that does not parse sorts last and is refused by [`roster::judge`].
+    fn documents(&self) -> Vec<roster::Stored> {
+        if !self.keeps_rosters() {
+            return Vec::new();
+        }
+        let field = |v: &serde_json::Value, name: &str| {
+            v.get(name).and_then(|f| f.as_str()).map(str::to_owned)
+        };
+        let mut out: Vec<roster::Stored> = self
+            .rosters
+            .iter()
+            .filter_map(|v| {
+                Some(roster::Stored {
+                    text: field(v, "roster")?,
+                    mac: field(v, "rosterMac"),
+                    sig: field(v, "rosterSig"),
+                })
+            })
+            .collect();
+        if let Some(text) = &self.roster {
+            out.push(roster::Stored {
+                text: text.clone(),
+                mac: self.roster_mac.clone(),
+                sig: self.roster_sig.clone(),
+            });
+        }
+        let mut seen = std::collections::HashSet::new();
+        out.retain(|d| seen.insert(d.text.clone()));
+        out.sort_by_key(|d| {
+            roster::parse(&d.text).map_or((1, i64::MAX, i64::MAX), |rd| (0, rd.epoch, rd.step))
+        });
+        out
+    }
 }
 
 /// The step [`identity`]'s removal and departure plans advance the epoch by:
@@ -932,7 +1004,11 @@ async fn fetch_key_page_at(
     at: Option<i64>,
 ) -> Result<Option<KeyPage>, String> {
     let auth = crypto::relay_auth(&group.group_key, &group.group_id, group.epoch);
-    let url = keys_url(base, device, group, at);
+    // **`since`: where the relay's walk of roster documents starts** — the last one accepted
+    // here, inclusive. An older relay ignores the parameter, as it ignores every field it does
+    // not know.
+    let since = db.with(|conn| Ok(roster::since(conn, group.epoch)))?;
+    let url = format!("{}&since={since}", keys_url(base, device, group, at));
     let response = match http()
         .get(&url)
         .header("authorization", &format!("Bearer {auth}"))
@@ -986,9 +1062,14 @@ async fn fetch_key_page_at(
     };
     match serde_json::from_str::<KeyPage>(&text) {
         Ok(page) => {
-            // A fact about the relay, kept in a stretch of its own.
+            // A fact about the relay, kept in a stretch of its own — and, from the newest answer
+            // only, whether it keeps rosters and which is its newest: what a document this device
+            // publishes must name as `prev`.
             let _ = db.with(|conn| {
                 latch_removal_step(conn, &page);
+                if at.is_none() {
+                    let _ = roster::note_relay(conn, page.keeps_rosters(), page.roster.as_deref());
+                }
                 Ok(())
             });
             Ok(Some(page))
@@ -1060,11 +1141,23 @@ pub async fn check_keys(db: &impl Store) -> Result<KeyCheck, String> {
         relay_epoch: Some(page.epoch),
     };
 
+    // **Every roster document this device can verify now**, before the epoch is compared: a
+    // signed one needs no key, and it is what decides a key change in signed mode — including
+    // the first, which latches this device into that mode. An open one needs its epoch's key and
+    // waits for the adoption below when this device does not hold it yet.
+    let verified = db.with(|conn| walk_rosters(conn, &page))?;
+
     // **Against the group as it stood before the request**, which is the group as it stands:
     // only a sync operation moves it, and this one holds the lane.
     if page.epoch <= group.epoch {
         return Ok(answered(KeyOutcome::Current));
     }
+    if db.with(|conn| Ok(roster::mode(conn)))? == roster::Mode::Signed {
+        let outcome = signed_key_change(db, &base, &device, &group, &page, &verified).await?;
+        return Ok(answered(outcome));
+    }
+    // **Open mode is today's rule exactly**: the manifest decides, a missing blob is the removal
+    // notice, and every roster sealer is a candidate — only a restricted one is not.
     let Some(blob) = &page.blob else {
         db.with(removed)?;
         return Ok(answered(KeyOutcome::Removed));
@@ -1072,18 +1165,173 @@ pub async fn check_keys(db: &impl Store) -> Result<KeyCheck, String> {
     // **No walk once the newest answer has no blob**: the group as it stands has taken this device
     // off, and leaving deletes every key the walk could have collected.
     if page.epoch > group.epoch + 1
-        && catch_up(db, &base, &device, page.epoch).await? == CatchUp::Removed
+        && catch_up(db, &base, &device, page.epoch, None).await? == CatchUp::Removed
     {
         db.with(removed)?;
         return Ok(answered(KeyOutcome::Removed));
     }
     db.with(|conn| {
-        adopt_page(conn, &device, &page, blob, identity::adopt_epoch).inspect_err(|message| {
+        adopt_page(
+            conn,
+            &device,
+            page.epoch,
+            blob,
+            &page.devices,
+            None,
+            identity::adopt_epoch,
+        )
+        .inspect_err(|message| {
             let url = keys_url(&base, &device, &group, None);
             note(conn, "keys", Kind::Parse, message, Some(&url));
         })
     })?;
+    // **The new epoch's key opens what the first walk had to leave for later** — the open
+    // document the rotation carried, which is how this device learns the members a sibling paired.
+    db.with(|conn| walk_rosters(conn, &page))?;
     Ok(answered(KeyOutcome::Adopted))
+}
+
+/// What a held key change records, once per epoch ([`roster::note_held`]).
+const HELD_UNVERIFIED: &str = "the relay says this group's key changed, but no roster document      this device can verify says so, so nothing was changed; it is asked again on the next sync";
+const HELD_NO_BLOB: &str = "a verified roster document keeps this device in its group, but the      relay carried no key for it, so nothing was changed; it is asked again on the next sync";
+
+/// Walk every roster document `page` carries, oldest first, and take each this device can verify
+/// ([`roster::judge`], [`roster::accept`]) — answering the ones taken, in order. A refusal is
+/// recorded once per document and the walk goes on: the next may still follow the last one
+/// accepted. **Nothing at all from a relay that does not keep rosters**, whatever it sent.
+///
+/// ⚠️ **A document ahead of the manifest is not yet** — skipped, neither taken nor refused nor
+/// latched on. The relay writes a rotation's document *before* the rotation and deletes it again
+/// if the rotation is refused, so for one round trip `/keys` can answer a `roster` one epoch past
+/// its own `epoch`: a rotation that may never happen. It comes back on the walk once the manifest
+/// has reached it.
+fn walk_rosters(conn: &Connection, page: &KeyPage) -> Result<Vec<Roster>, String> {
+    let mut taken = Vec::new();
+    for stored in page.documents() {
+        if roster::parse(&stored.text).is_some_and(|rd| rd.epoch > page.epoch) {
+            continue;
+        }
+        let Some(group) = identity::group(conn).map_err(|e| e.to_string())? else {
+            break;
+        };
+        let (mode, last, restricted, anchors) =
+            roster::trust_parts(conn).map_err(|e| e.to_string())?;
+        let trust = roster::Trust {
+            group_id: &group.group_id,
+            mode,
+            last: last.as_ref(),
+            restricted_ever: &restricted,
+            anchors: &anchors,
+        };
+        let key_at = |epoch: i64| {
+            identity::group_at(conn, &group, epoch)
+                .ok()
+                .flatten()
+                .map(|g| g.group_key)
+        };
+        match roster::judge(&trust, &stored, &key_at) {
+            roster::Verdict::Accept(rd) => {
+                roster::accept(conn, &stored.text, &rd, true).map_err(|e| e.to_string())?;
+                taken.push(rd);
+            }
+            roster::Verdict::Later | roster::Verdict::Stale => {}
+            roster::Verdict::Refuse(why) => roster::note_refused(conn, &stored.text, why),
+        }
+    }
+    Ok(taken)
+}
+
+/// The newest verified document at `epoch` — the highest step of it this walk took, or the one
+/// accepted on an earlier trip.
+fn verified_at(conn: &Connection, walked: &[Roster], epoch: i64) -> Option<Roster> {
+    walked
+        .iter()
+        .rev()
+        .find(|rd| rd.epoch == epoch)
+        .cloned()
+        .or_else(|| {
+            roster::last(conn)
+                .ok()
+                .flatten()
+                .map(|(_, rd)| rd)
+                .filter(|rd| rd.epoch == epoch)
+        })
+}
+
+/// The members of `rd` that may have sealed a rotation's blob: its full members, none of them
+/// ever restricted.
+fn full_sealers(conn: &Connection, rd: &Roster) -> Vec<String> {
+    rd.members
+        .iter()
+        .filter(|m| m.is_full())
+        .filter(|m| !roster::is_restricted(conn, &m.device).unwrap_or(true))
+        .map(|m| m.device.clone())
+        .collect()
+}
+
+/// A key change **in signed mode**, where the relay's word moves nothing on its own (the
+/// Discord spec §5, F2).
+///
+/// * **No verified document at the new epoch** — held ([`KeyOutcome::Held`]), recorded once.
+///   A relay, or a restricted device holding the group's auth, can publish an epoch; only a full
+///   member can sign the document that makes it one.
+/// * **A verified document that omits this device** — the removal notice, and the only one.
+/// * **One that names it, and no blob** — held: the document says this device stays.
+/// * **One that names it, and a blob** — adopted, trying only the document's full members as
+///   sealers, and taking the document's members as the manifest rather than the relay's
+///   `devices`, which nothing authenticates.
+async fn signed_key_change(
+    db: &impl Store,
+    base: &str,
+    device: &str,
+    group: &Group,
+    page: &KeyPage,
+    walked: &[Roster],
+) -> Result<KeyOutcome, String> {
+    let Some(rd) = db.with(|conn| Ok(verified_at(conn, walked, page.epoch)))? else {
+        say_held(db, page.epoch, HELD_UNVERIFIED);
+        return Ok(KeyOutcome::Held);
+    };
+    if rd.member(device).is_none() {
+        db.with(removed)?;
+        return Ok(KeyOutcome::Removed);
+    }
+    let Some(blob) = &page.blob else {
+        say_held(db, page.epoch, HELD_NO_BLOB);
+        return Ok(KeyOutcome::Held);
+    };
+    if page.epoch > group.epoch + 1
+        && catch_up(db, base, device, page.epoch, Some(walked)).await? == CatchUp::Removed
+    {
+        db.with(removed)?;
+        return Ok(KeyOutcome::Removed);
+    }
+    let manifest: Vec<String> = rd.members.iter().map(|m| m.device.clone()).collect();
+    db.with(|conn| {
+        let sealers = full_sealers(conn, &rd);
+        adopt_page(
+            conn,
+            device,
+            page.epoch,
+            blob,
+            &manifest,
+            Some(&sealers),
+            identity::adopt_epoch,
+        )
+        .inspect_err(|message| {
+            let url = keys_url(base, device, group, None);
+            note(conn, "keys", Kind::Parse, message, Some(&url));
+        })
+    })?;
+    Ok(KeyOutcome::Adopted)
+}
+
+/// [`roster::note_held`] as a stretch of its own.
+fn say_held(db: &impl Store, epoch: i64, message: &str) {
+    let _ = db.with(|conn| {
+        roster::note_held(conn, epoch, message);
+        Ok(())
+    });
 }
 
 /// This device has been taken off the group: leave it, and clear the grant.
@@ -1146,11 +1394,17 @@ enum CatchUp {
 /// forgets the keys in between rather than stalling at an epoch it cannot get past. A failure the
 /// request itself met is still recorded by [`fetch_key_page_at`]; one of the blob's is not,
 /// because the newest may yet open and a row would then report a sync that worked.
+///
+/// **In signed mode (`verified` is `Some`) an epoch is passed through only on a verified document
+/// at it** that names this device — its full members the only sealers tried, its members the
+/// manifest. One that omits this device is the removal notice; no document, or no blob, stops
+/// the walk, and the newest is decided by [`signed_key_change`] alone.
 async fn catch_up(
     db: &impl Store,
     base: &str,
     device: &str,
     newest: i64,
+    verified: Option<&[Roster]>,
 ) -> Result<CatchUp, String> {
     let group_now = |conn: &Connection| identity::group(conn).map_err(|e| e.to_string());
     let Some(start) = db.with(group_now)? else {
@@ -1168,11 +1422,37 @@ async fn catch_up(
         if page.epoch != n || page.epoch <= group.epoch {
             return Ok(CatchUp::Newest);
         }
+        let (manifest, sealers) = match verified {
+            None => (page.devices.clone(), None),
+            Some(walked) => {
+                let Some(rd) = db.with(|conn| Ok(verified_at(conn, walked, n)))? else {
+                    return Ok(CatchUp::Newest);
+                };
+                if rd.member(device).is_none() {
+                    return Ok(CatchUp::Removed);
+                }
+                let sealers = db.with(|conn| Ok(full_sealers(conn, &rd)))?;
+                let ids = rd.members.iter().map(|m| m.device.clone()).collect();
+                (ids, Some(sealers))
+            }
+        };
         let Some(blob) = &page.blob else {
+            if verified.is_some() {
+                return Ok(CatchUp::Newest);
+            }
             return Ok(CatchUp::Removed);
         };
-        let adopted =
-            db.with(|conn| adopt_page(conn, device, &page, blob, identity::adopt_passing_epoch));
+        let adopted = db.with(|conn| {
+            adopt_page(
+                conn,
+                device,
+                page.epoch,
+                blob,
+                &manifest,
+                sealers.as_deref(),
+                identity::adopt_passing_epoch,
+            )
+        });
         if adopted.is_err() {
             return Ok(CatchUp::Newest);
         }
@@ -1204,34 +1484,50 @@ type Adopt = fn(&Connection, &str, i64, &[u8], &[String]) -> Result<(), String>;
 /// never pushed again. Hence the manifest, then the whole local roster, then this device.
 ///
 /// **Trying more candidates trusts nothing new.** A candidate is only a public key to try, and
-/// every one is read from this device's own roster — taken at pairing, behind the six digits — or
-/// is its own; the relay supplies ids and never a key. The blob still opens only for whoever holds
+/// every one is read from this device's own roster — taken at pairing, behind the six digits, or
+/// from a roster document this device verified — or is its own; the relay supplies ids, and a key
+/// only inside a document whose authenticator it cannot forge. The blob still opens only for whoever holds
 /// the matching secret, bound to this group, this device and this epoch. A device removed earlier
 /// is off the roster already — deleted, or on an older build's database stamped `revoked_at`,
 /// which is skipped here and refused by `adopt_epoch` — and anybody able to publish to `/rotate`
 /// at all could always have named itself on its own manifest.
+///
+/// ⚠️ **A restricted device is never a candidate, and neither is one that ever was** (the Discord
+/// spec §4, F2). A `read` bot holds the group key and an X25519 key of its own on every roster,
+/// so it could seal a key of its choosing to every member; trying it would let it pick the next
+/// epoch's key and, holding it, rotate the full devices out. `sealers`, in signed mode, is the
+/// verified document's full members and replaces the manifest-and-roster list outright.
 fn adopt_page(
     conn: &Connection,
     device: &str,
-    page: &KeyPage,
+    epoch: i64,
     blob: &str,
+    manifest: &[String],
+    sealers: Option<&[String]>,
     adopt: Adopt,
 ) -> Result<(), String> {
     let sealed = URL_SAFE_NO_PAD
         .decode(blob.as_bytes())
         .map_err(|e| e.to_string())?;
-    let mut candidates: Vec<String> = page.devices.clone();
-    for known in identity::roster(conn).map_err(|e| e.to_string())? {
-        if known.revoked_at.is_none() && !candidates.contains(&known.device_id) {
-            candidates.push(known.device_id);
+    let mut candidates: Vec<String> = match sealers {
+        Some(sealers) => sealers.to_vec(),
+        None => {
+            let mut candidates = manifest.to_vec();
+            for known in identity::roster(conn).map_err(|e| e.to_string())? {
+                if known.revoked_at.is_none() && !candidates.contains(&known.device_id) {
+                    candidates.push(known.device_id);
+                }
+            }
+            candidates
         }
-    }
+    };
+    candidates.retain(|c| c == device || !roster::is_restricted(conn, c).unwrap_or(true));
     if !candidates.iter().any(|c| c == device) {
         candidates.push(device.to_owned());
     }
     let mut refusal = String::new();
     for sealer in &candidates {
-        match adopt(conn, sealer, page.epoch, &sealed, &page.devices) {
+        match adopt(conn, sealer, epoch, &sealed, manifest) {
             Ok(()) => return Ok(()),
             Err(e) => refusal = e,
         }
@@ -1267,17 +1563,63 @@ fn adopt_page(
 /// off as a join, which is exactly what the latch exists to stop it doing, so a quiet fallback
 /// would be the downgrade under another name; the refusal is recorded like any other, nothing
 /// local moves, and the reader's press answers that the relay refused it.
+///
+/// # It carries the new epoch's roster document
+///
+/// **Whenever the relay keeps rosters** (its last `/keys` said `sig: 1`, [`roster::RELAY_ROSTERS`])
+/// the body also carries `roster` — step 0 at the new epoch, the manifest's devices with every
+/// key this device holds for them ([`roster::for_rotation`]) — and its authenticator: the MAC
+/// under the **new** key in open mode, this device's signature in signed mode, where the relay
+/// refuses a rotation without one. That document is how every device that adopts learns the keys
+/// of a member it never met (F1), and in signed mode it is what makes the rotation one at all.
+/// **An older relay is sent the body it always was**, and `prev` is whatever the relay's newest
+/// was on the last answer this device read. A `409 roster_conflict` — a sibling's amendment
+/// landed since — is the one refusal that is asked again: the relay is read afresh, the document
+/// rebuilt on its newest, once. On a 2xx the document is this device's last accepted one.
 pub async fn post_rotation(db: &impl Store, rotation: &identity::Rotation) -> Result<(), String> {
+    for attempt in 0..2 {
+        match post_rotation_once(db, rotation).await? {
+            Posted::Done => return Ok(()),
+            Posted::RosterConflict if attempt == 0 => refresh_rosters(db).await?,
+            Posted::RosterConflict => {
+                let message = "the relay answered 409 to a key change, so nothing was removed";
+                return Err(message.to_owned());
+            }
+        }
+    }
+    unreachable!("the second attempt always answers")
+}
+
+/// What one post of a rotation or an amendment came to, short of a failure.
+enum Posted {
+    Done,
+    /// `409` with `code: "roster_conflict"`: the document's `prev` is not the relay's newest.
+    RosterConflict,
+}
+
+/// The relay's word for a document whose `prev` is not its newest — §12.
+const ROSTER_CONFLICT: &str = "roster_conflict";
+
+async fn post_rotation_once(
+    db: &impl Store,
+    rotation: &identity::Rotation,
+) -> Result<Posted, String> {
     // Its own sentence rather than `identity`'s `NOT_IN_A_GROUP`, which is private to that
     // module: this is not the ordinary "you are in no group" refusal — `plan_rotation` has
     // already answered that one — but a group that went away between planning and publishing.
-    let (current, base) = db.with(|conn| {
+    let (current, base, document) = db.with(|conn| {
         let Some(current) = identity::group(conn).map_err(|e| e.to_string())? else {
             return Err(
                 "this device left its group before that key change could be published".to_owned(),
             );
         };
-        Ok((current, entitlement::base(conn)))
+        let document =
+            if roster::relay_keeps_rosters(conn) || roster::mode(conn) == roster::Mode::Signed {
+                roster::for_rotation(conn, rotation)?
+            } else {
+                None
+            };
+        Ok((current, entitlement::base(conn), document))
     })?;
     let auth = crypto::relay_auth(&current.group_key, &current.group_id, current.epoch);
     let url = format!("{base}/g/{}/rotate", current.group_id);
@@ -1291,17 +1633,21 @@ pub async fn post_rotation(db: &impl Store, rotation: &identity::Rotation) -> Re
             )
         })
         .collect();
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "epoch": rotation.group.epoch,
         "auth": rotation.auth,
         "keys": keys,
-    })
-    .to_string();
+    });
+    if let Some((text, proof)) = &document {
+        let (field, value) = proof.field();
+        body["roster"] = serde_json::Value::String(text.clone());
+        body[field] = serde_json::Value::String(value.to_owned());
+    }
     let response = match http()
         .post(&url)
         .header("content-type", "application/json")
         .header("authorization", &format!("Bearer {auth}"))
-        .body(body)
+        .body(body.to_string())
         .send()
         .await
     {
@@ -1313,12 +1659,99 @@ pub async fn post_rotation(db: &impl Store, rotation: &identity::Rotation) -> Re
     };
     let status = response.status();
     if !(200..300).contains(&status) {
+        let body = response.text().await.unwrap_or_default();
+        if status == 409 && refusal_code(&body).as_deref() == Some(ROSTER_CONFLICT) {
+            return Ok(Posted::RosterConflict);
+        }
         let message =
             format!("the relay answered {status} to a key change, so nothing was removed");
         say(db, "rotate", Kind::Http, &message, Some(&url));
         return Err(message);
     }
-    Ok(())
+    if let Some((text, _)) = &document {
+        // Taken: the relay's newest is this document, and it is this device's last accepted one.
+        // A failure to write is only a stale `prev` for the next publish, which the relay's 409
+        // and one refetch repair.
+        let _ = db.with(|conn| roster::accept_own(conn, text).map_err(|e| e.to_string()));
+    }
+    Ok(Posted::Done)
+}
+
+/// Read the relay's newest roster documents again and take what can be verified — what a
+/// `409 roster_conflict` asks for before the one retry.
+async fn refresh_rosters(db: &impl Store) -> Result<(), String> {
+    let Some((device, group, base)) = db.with(whereabouts)? else {
+        return Ok(());
+    };
+    let page = fetch_key_page(db, &base, &device, &group).await?;
+    db.with(|conn| walk_rosters(conn, &page)).map(|_| ())
+}
+
+/// **Amend this device's own entry on the relay's newest roster document, when it owes one** —
+/// `POST /g/{group}/roster` (§12). Best effort, once a trip: every failure is the next trip's to
+/// try again, and none of them is the trip's.
+///
+/// **What it is for: groups paired before rosters existed**, and every device whose entry a
+/// sibling published without its signing key. Each device adds itself — its X25519 and Ed25519
+/// keys and this build's [`identity::SIG_PROTO`] — so every member comes to hold every member's
+/// keys without a rotation (F1), and PR 3's gate can read a level for each of them.
+///
+/// [`roster::amendment`] decides whether anything is owed and builds it: under the MAC of this
+/// device's epoch in open mode, under its signature in signed mode — where only a full device
+/// amends at all. **An older relay is never asked**: no `sig: 1` on its last `/keys` and nothing
+/// is built; a relay that answers the route `404` is one too, and is not recorded. A `409
+/// roster_conflict` — two devices amending at once — reads the relay again and builds on its
+/// newest, once.
+async fn amend_roster(db: &impl Store) {
+    for attempt in 0..2 {
+        let owed = db.with(|conn| {
+            Ok(roster::amendment(conn)?
+                .map(|(group, text, proof)| (group, entitlement::base(conn), text, proof)))
+        });
+        let Ok(Some((group, base, text, proof))) = owed else {
+            return;
+        };
+        let auth = crypto::relay_auth(&group.group_key, &group.group_id, group.epoch);
+        let url = format!("{base}/g/{}/roster", group.group_id);
+        let (field, value) = proof.field();
+        let mut body = serde_json::json!({ "roster": text });
+        body[field] = serde_json::Value::String(value.to_owned());
+        let response = match http()
+            .post(&url)
+            .header("content-type", "application/json")
+            .header("authorization", &format!("Bearer {auth}"))
+            .body(body.to_string())
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                say(db, "roster", kind_of(&e), &e.to_string(), Some(&url));
+                return;
+            }
+        };
+        let status = response.status();
+        if (200..300).contains(&status) {
+            let _ = db.with(|conn| roster::accept_own(conn, &text).map_err(|e| e.to_string()));
+            return;
+        }
+        if status == 404 {
+            return;
+        }
+        let answer = response.text().await.unwrap_or_default();
+        if status == 409
+            && refusal_code(&answer).as_deref() == Some(ROSTER_CONFLICT)
+            && attempt == 0
+        {
+            if refresh_rosters(db).await.is_err() {
+                return;
+            }
+            continue;
+        }
+        let message = format!("the relay answered {status} to this device's roster entry");
+        say(db, "roster", Kind::Http, &message, Some(&url));
+        return;
+    }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1379,6 +1812,99 @@ pub async fn post_rendezvous(
     let message = format!("the relay answered {status} to a rendezvous post");
     say(db, "rendezvous", Kind::Http, &message, Some(&url));
     Err(message)
+}
+
+/// The joiner's sealed signing key and protocol level, written by the joiner and read by the
+/// initiator — beside `join`, and posted **before** it, so an initiator that has read `join` finds
+/// it there (§12; `pairing::accept`).
+pub const JOIN_SIG: &str = "joinsig";
+
+/// The initiator's, beside `offer` and posted before it, carrying whether the group signs its
+/// rosters (`pairing::confirm`).
+pub const OFFER_SIG: &str = "offersig";
+
+/// [`post_rendezvous`] for a slot an **older relay does not keep**: `Ok(false)` — quietly, with no
+/// `error_log` row — for the `404` an older relay's route answers and the `400` its slot check
+/// does, so pairing with a relay that predates the slot goes on exactly as it did. A `409` is still
+/// [`RENDEZVOUS_TAKEN`]: somebody else answered this code first.
+pub async fn post_rendezvous_if_kept(
+    db: &impl Store,
+    rv: &str,
+    slot: &str,
+    blob: &str,
+) -> Result<bool, String> {
+    let base = db.with(|conn| Ok(entitlement::base(conn)))?;
+    let url = format!("{base}/p/{rv}/{slot}");
+    let body = serde_json::json!({ "blob": blob }).to_string();
+    let response = match http()
+        .post(&url)
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            say(db, "rendezvous", kind_of(&e), &e.to_string(), Some(&url));
+            return Err(e.to_string());
+        }
+    };
+    match response.status() {
+        204 => Ok(true),
+        400 | 404 => Ok(false),
+        409 => Err(RENDEZVOUS_TAKEN.to_owned()),
+        status => {
+            let message = format!("the relay answered {status} to a rendezvous post");
+            say(db, "rendezvous", Kind::Http, &message, Some(&url));
+            Err(message)
+        }
+    }
+}
+
+/// Whether the relay says `group` signs its rosters — the newest document on its `/keys` answer
+/// says `signed` — asked **quietly** by a joiner whose initiator sent no `offersig`, with the key
+/// the offer carried and before anything is written (`pairing::poll`).
+///
+/// **The relay's word and nothing more**, and that is enough for the direction it is used in: a
+/// `true` refuses a pairing, which a relay could do anyway by withholding a slot; it could not
+/// make a signed group look open, because an open document is accepted only under the MAC of the
+/// group's key, which it does not hold — and a `false` from an unreachable or older relay, or a
+/// group that has no membership yet, is today's pairing, unchanged.
+pub async fn relay_says_signed(db: &impl Store, group: &Group, device: &str) -> bool {
+    let Ok(base) = db.with(|conn| Ok(entitlement::base(conn))) else {
+        return false;
+    };
+    let auth = crypto::relay_auth(&group.group_key, &group.group_id, group.epoch);
+    let url = keys_url(&base, device, group, None);
+    let Ok(response) = http()
+        .get(&url)
+        .header("authorization", &format!("Bearer {auth}"))
+        .send()
+        .await
+    else {
+        return false;
+    };
+    if !(200..300).contains(&response.status()) {
+        return false;
+    }
+    let Ok(text) = response.text().await else {
+        return false;
+    };
+    let Some(page) = serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .filter(|page| page.get("sig").and_then(|v| v.as_i64()) == Some(1))
+    else {
+        return false;
+    };
+    let manifest = page
+        .get("epoch")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(i64::MAX);
+    // A document ahead of the manifest is a rotation that may yet be refused ([`walk_rosters`]).
+    page.get("roster")
+        .and_then(|v| v.as_str())
+        .and_then(roster::parse)
+        .is_some_and(|rd| rd.mode == roster::Mode::Signed && rd.epoch <= manifest)
 }
 
 /// Poll the rendezvous for the other side's blob.
@@ -1453,11 +1979,12 @@ pub async fn get_rendezvous(
 /// which is exactly what pairing did before roster publishing existed, so the floor is the
 /// behaviour that shipped rather than a regression.
 ///
-/// **The real fix is a wire change and is deliberately not attempted here.** Carrying each
-/// device's public key in the manifest would let `adopt_epoch` *add* a row, and then every
-/// device's roster would converge on the relay's. That is a protocol change on both sides; until
-/// it exists, a device that has been told about a join only by adopting an epoch still cannot
-/// pair a fourth device into the whole group — it can only decline to break it.
+/// **The real fix was a wire change, and since the Discord spec's PR 2 it is made where the relay
+/// keeps rosters**: every rotation carries a roster document with each member's keys, and a
+/// device that adopts one inserts the members it never met ([`walk_rosters`]), so rosters
+/// converge and this check passes. Against an older relay, a device that has been told about a
+/// join only by adopting an epoch still cannot pair a fourth device into the whole group — it can
+/// only decline to break it.
 ///
 /// ⚠️ **`commit_rotation` after the relay accepts, and never before or not at all.** `plan`'s
 /// manifest names **every device on the roster, this one included** — `create_group` and
@@ -2074,6 +2601,25 @@ fn clock_sentence(conn: &Connection, device: &str, ahead_ms: i64) -> String {
     )
 }
 
+/// What a restricted device's refused envelopes record: its name, so two such devices are two
+/// rows — the error log's grain is the sentence.
+fn restricted_sentence(conn: &Connection, device: &str) -> String {
+    let name: String = conn
+        .query_row(
+            "SELECT coalesce(
+                 (SELECT name FROM device_names WHERE device_id = ?1),
+                 (SELECT name FROM sync_devices WHERE device_id = ?1),
+                 ?1)",
+            [device],
+            |r| r.get(0),
+        )
+        .unwrap_or_else(|_| device.to_owned());
+    format!(
+        "Changes from {name} were not applied: that device may only read this group, so \
+         every device refuses what it sends."
+    )
+}
+
 /// Take everything the group has said since this device's cursor, and apply it.
 ///
 /// # An unreadable envelope is three different things and only one of them holds
@@ -2305,6 +2851,7 @@ pub async fn pull(
         asked: None,
         noted: recorded,
         bound: Vec::new(),
+        refused: Vec::new(),
     };
     // The relay's epoch as this trip knows it, and whether this trip has asked `/keys` itself —
     // `Some(true)` for an answer, `Some(false)` for an ask that failed. **Once per trip, and
@@ -2468,6 +3015,9 @@ struct Trip {
     /// because an envelope recorded here is still read — `noted`'s key for it can be another
     /// record's (a clock hold's, at the same stamp).
     bound: Vec<(String, i64, i64)>,
+    /// The restricted senders this trip has recorded ([`WireError::Restricted`]) — one row per
+    /// sender, however many of its envelopes, and however often a carried page is read.
+    refused: Vec<String>,
 }
 
 /// What a pull does with an opened envelope that carries ops stamped by a device other than the
@@ -2478,48 +3028,70 @@ enum Binding {
     /// and a tell for a build that seals loosely, without refusing anything a group sent.
     Record,
     /// Refuse the whole envelope as [`WireError::Foreign`], stepped over like an unreadable one.
-    #[allow(dead_code)]
     Refuse,
 }
 
-/// **The one switch the spec's PR 2 flips**, from [`Binding::Record`] to [`Binding::Refuse`].
-///
-/// Recorded and not refused in this build, though no honest build seals a foreign op —
-/// `docs/reference/sync.md`'s *The envelope* has the census: the capture triggers stamp
-/// `sync_identity.device_id`, `baseline::build` stamps the emitter, `rebase` and the re-seal
+/// **The binding outside a signed group**: recorded and not refused, though no honest build seals
+/// a foreign op — `docs/reference/sync.md`'s *The envelope* has the census: the capture triggers
+/// stamp `sync_identity.device_id`, `baseline::build` stamps the emitter, `rebase` and the re-seal
 /// after a rotation keep the stamp, and nothing else puts an op in an outbox. The rule is new on
 /// the wire, though, and a refusal is a gap ([`emission::open_gap`]) on every device that meets
 /// one; a release of evidence first is the cheaper way to learn the census missed something.
 const OP_BINDING: Binding = Binding::Record;
+
+/// The binding for an envelope: [`Binding::Refuse`] **in a signed group** — at or after the epoch
+/// it began signing (`roster::requires_signatures`), where a restricted device holds the group
+/// key and a signed envelope stamping a full device's ops would otherwise be that device's
+/// writing — and [`OP_BINDING`] everywhere else. **Mode-dependent rather than a flipped constant**:
+/// a group with no restricted device has no reason to start refusing, and every old build in it
+/// would be the first to meet the refusal.
+fn binding(signed: bool) -> Binding {
+    if signed {
+        Binding::Refuse
+    } else {
+        OP_BINDING
+    }
+}
 
 /// Open one pulled envelope as every reader of a page does: **its signature first**, then the
 /// AEAD, then the op/envelope binding. `Err` on the outside is the database; `Err` inside is the
 /// envelope's, which the caller steps over or holds exactly as it does any other refusal.
 ///
 /// **The signature is checked only when this device holds the sender's key** (`sync_devices.
-/// sign_public`), which no shipped pairing writes yet — so today only a test files a key and
-/// meets a forgery, and after the Discord spec's PR 2 any peer's envelope can. Unsigned and unknown
-/// are [`wire::Signed::Unchecked`] and open as they always did. A [`wire::Signed::Forged`] is
+/// sign_public`), which a pairing's sealed slot or a verified roster document filed. Unsigned and
+/// unknown are [`wire::Signed::Unchecked`] and, outside signed mode, open as they always did. A [`wire::Signed::Forged`] is
 /// [`WireError::Forged`] before a byte is decrypted, stepped over like an unreadable batch: it
 /// pins nothing, because a forgery is never going to become the sender's.
 ///
 /// The `usize` beside the ops is [`wire::foreign_ops`]: non-zero only under [`Binding::Record`],
 /// for the caller to write down.
+///
+/// **A signed group asks more** (the Discord spec's PR 2): at or after the epoch it began signing,
+/// an unchecked envelope — no `sig`, or no key on file for its sender — is
+/// [`WireError::Unverified`], refused like a forgery, and a foreign op refuses its envelope
+/// ([`binding`]). **And a restricted sender is refused first, whatever the mode**, unopened:
+/// [`WireError::Restricted`], which the caller consumes rather than steps over.
 fn open_checked(
     conn: &Connection,
     group: &Group,
     envelope: &Envelope,
 ) -> Result<Result<(Vec<Op>, usize), WireError>, String> {
+    if roster::is_restricted(conn, &envelope.device).map_err(|e| e.to_string())? {
+        return Ok(Err(WireError::Restricted));
+    }
+    let signed = roster::requires_signatures(conn, envelope.epoch);
     let key = identity::sign_public_of(conn, &envelope.device).map_err(|e| e.to_string())?;
-    if wire::signature(envelope, key.as_ref()) == wire::Signed::Forged {
-        return Ok(Err(WireError::Forged));
+    match wire::signature(envelope, key.as_ref()) {
+        wire::Signed::Forged => return Ok(Err(WireError::Forged)),
+        wire::Signed::Unchecked if signed => return Ok(Err(WireError::Unverified)),
+        _ => {}
     }
     let batch = match wire::open_batch(group, envelope) {
         Ok(batch) => batch,
         Err(e) => return Ok(Err(e)),
     };
     let foreign = wire::foreign_ops(envelope, &batch);
-    if foreign > 0 && OP_BINDING == Binding::Refuse {
+    if foreign > 0 && binding(signed) == Binding::Refuse {
         return Ok(Err(WireError::Foreign(foreign)));
     }
     Ok(Ok((batch, foreign)))
@@ -2677,6 +3249,22 @@ fn evaluate(
                         trip.bound.push(this);
                     }
                     opened.push((envelope, batch));
+                    continue;
+                }
+                Err(WireError::Restricted) => {
+                    // **Consumed, not unreadable**: refused in full, one row per sender, and
+                    // neither held nor a gap — the cursor passes it, so a restricted device's
+                    // pushes can neither pin the log nor make every later emission read whole.
+                    if !trip.refused.contains(&envelope.device) {
+                        note(
+                            conn,
+                            "pull",
+                            Kind::Other,
+                            &restricted_sentence(conn, &envelope.device),
+                            Some(&envelope.device),
+                        );
+                        trip.refused.push(envelope.device.clone());
+                    }
                     continue;
                 }
                 Err(e) => {
@@ -3352,7 +3940,7 @@ async fn token_across_a_rotation(
             match keys.outcome {
                 KeyOutcome::Adopted => entitlement::access_token(db).await,
                 KeyOutcome::Removed => Ok(None),
-                KeyOutcome::Current => Err(refused),
+                KeyOutcome::Current | KeyOutcome::Held => Err(refused),
             }
         }
         answer => answer,
@@ -3398,6 +3986,12 @@ async fn round_trip(db: &impl Store, baselines: bool) -> Result<Option<RelayOutc
     // `check_keys` adopts what won.
     if db.with(|conn| Ok(identity::roster_is_dirty(conn)? && me(conn)?.is_some()))? {
         let _ = publish_join(db).await;
+    }
+    // **This device's own entry on the roster document, when it owes one** — once a trip, best
+    // effort, never against an older relay, and never on a held answer: a device that cannot
+    // verify the relay's newest has nothing to build on.
+    if keys.outcome != KeyOutcome::Held {
+        amend_roster(db).await;
     }
     let Some(token) = token_across_a_rotation(db, &mut keys).await? else {
         return Ok(None);

@@ -133,6 +133,33 @@ describe("anybody else", () => {
   });
 });
 
+describe("a restricted device", () => {
+  it("is refused 403 restricted_device, before anything about the scan is read", async () => {
+    // Spec §2 F8 and §12: a token whose `cap` is present and not `full` is the Discord bot's.
+    const request = scan({ token: await tokenFor(Date.UTC(2100, 0, 1), KEY, "read") });
+    const response = await worker.fetch(request, { ...inbox().env, SCANS: untouchable });
+    expect(response.status).toBe(403);
+    expect(await refusal(response)).toEqual({
+      error: expect.any(String) as string,
+      code: "restricted_device",
+    });
+    expect(request.bodyUsed).toBe(false);
+  });
+
+  it("is any cap but full, and a full or absent cap is let in", async () => {
+    for (const cap of ["add", "something-new"]) {
+      const response = await worker.fetch(
+        scan({ token: await tokenFor(Date.UTC(2100, 0, 1), KEY, cap) }),
+        inbox().env,
+      );
+      expect(response.status, cap).toBe(403);
+    }
+    const full = await tokenFor(Date.UTC(2100, 0, 1), KEY, "full");
+    expect((await worker.fetch(scan({ token: full }), inbox().env)).status).toBe(201);
+    expect((await worker.fetch(scan(), inbox().env)).status).toBe(201);
+  });
+});
+
 describe("a Worker that holds no key", () => {
   it("says so in a 500 that names it, to a supporter and a stranger alike", async () => {
     // A deploy made before the owner set the secret. Not a 401 — nobody's token is wrong — and

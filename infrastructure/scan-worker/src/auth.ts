@@ -1,4 +1,4 @@
-import { verify } from "@grimoire/relay/src/token";
+import { isRestricted, RESTRICTED_DEVICE, verify } from "@grimoire/relay/src/token";
 import { json, type Env } from "./env";
 
 /**
@@ -8,7 +8,7 @@ import { json, type Env } from "./env";
  * The app draws its Send for a supporter alone, and its engine refuses anybody else before it
  * reads a frame — and both of those are a suggestion to anyone who can send a request. So the
  * entitlement is enforced here, the way the share Worker enforces its own
- * (`infrastructure/share-worker/src/env.ts`, `authorised`): the request carries the token the
+ * (`infrastructure/share-worker/src/env.ts`, `refused`): the request carries the token the
  * relay's `/token` door mints, which an unentitled caller cannot get, and this Worker checks the
  * relay's signature on it with the relay's key. No service binding and no request to the relay:
  * a deploy here stays a deploy of this Worker alone.
@@ -26,9 +26,10 @@ import { json, type Env } from "./env";
  * membership that ended, the same day.
  */
 
-/** The machine-readable half of the two refusals this file makes. */
+/** The machine-readable half of the three refusals this file makes. */
 export const UNAUTHORIZED = "unauthorized";
 export const NO_KEY = "no_key";
+export const RESTRICTED = RESTRICTED_DEVICE;
 
 /**
  * The refusal for this request, or `null` when it carries a live token of the relay's.
@@ -36,6 +37,10 @@ export const NO_KEY = "no_key";
  * - **401** for every way a token can be unacceptable — none, not a bearer, another key's,
  *   edited, expired — in one sentence that does not say which: `verify` answers `null` for all
  *   of them and throws for none, so what a stranger sends can never be a 500.
+ * - **403 `restricted_device`** for a live token whose `cap` claim is present and not `full`
+ *   (`token.ts`'s `isRestricted`; spec §2 F8 and §12) — the relay mints one for a device a
+ *   group's signed roster names as restricted, the Discord bot. It is a device that may read and
+ *   not send, and a scan is a submission; the claim is read and thrown away with the rest.
  * - **500** when this Worker holds no key. That is a deploy with a step left out, not a caller's
  *   fault, and it is answered rather than thrown: this Worker keeps no log, so an exception
  *   would be an error page that says nothing, where this says what is missing. The release's
@@ -55,6 +60,9 @@ export async function refused(request: Request, env: Env, now: number): Promise<
     return json({ error: "unauthorized", code: UNAUTHORIZED }, 401, {
       "www-authenticate": "Bearer",
     });
+  }
+  if (isRestricted(claims)) {
+    return json({ error: "a restricted device may not send scans", code: RESTRICTED }, 403);
   }
   return null;
 }
