@@ -30,6 +30,14 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.56.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.55.0...v0.56.0) (2026-10-17)
+
+
+### Features
+
+* **sync:** sign every envelope with a per-device Ed25519 key ([84ec1f7](https://github.com/Msgaihede/mtg-grimoire/commit/84ec1f79ddaf054b9f40b981c3412fa964a31705))
+* **sync:** sign every envelope with a per-device Ed25519 key ([9d8bb90](https://github.com/Msgaihede/mtg-grimoire/commit/9d8bb901211aa67e541aa8239413b53222b714a2))
+
 ## [0.55.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.54.0...v0.55.0) (2026-10-17)
 
 
