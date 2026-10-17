@@ -182,12 +182,22 @@ export function fitWidth(
   const widths = piles.reduce((n, p) => n + (p.tapped ? TAPPED : 1), 0);
   const edges = piles.reduce((n, p) => n + underOf(p) * PILE, 0);
   const room = row - fixed - edges - GAP * (piles.length - 1);
-  // A tapped card is as tall as an untapped one is wide, so the lane's height bounds the
-  // untapped card: its height plus the pile's edges, its attachments' edges and the marker must
-  // fit. The pile with the most attachments is the tallest.
+  // The pile with the most attachments is the tallest.
   const most = piles.reduce((n, p) => Math.max(n, p.attached.length), 0);
-  const tallest = Math.floor((laneHeight - UNDER * PILE - MARK) / (ASPECT + most * ATTACHED));
-  return Math.max(FLOOR, Math.min(max, tallest, Math.floor(room / widths) - 1));
+  return Math.max(
+    FLOOR,
+    Math.min(max, tallestWidth(laneHeight, most), Math.floor(room / widths) - 1),
+  );
+}
+
+/**
+ * The widest an untapped card stands in a lane `laneHeight` px tall with `attached` cards tucked
+ * under it: a tapped card is as tall as an untapped one is wide, so the lane's height bounds the
+ * untapped card — its height plus a pile's edges, its attachments' edges and the marker must fit.
+ * What a sparse row is drawn at, before its width shrinks it.
+ */
+export function tallestWidth(laneHeight: number, attached = 0): number {
+  return Math.floor((laneHeight - UNDER * PILE - MARK) / (ASPECT + attached * ATTACHED));
 }
 
 /** Both lanes' piles and the card width each is drawn at. */

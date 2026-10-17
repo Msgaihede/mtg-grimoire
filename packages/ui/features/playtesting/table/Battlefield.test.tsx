@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { GameCard } from "@/lib/ipc";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
-import { Battlefield } from "./Battlefield";
+import { Battlefield, tableCardWidth } from "./Battlefield";
 
 let next = 1;
 function card(name: string, over: Partial<GameCard> = {}): GameCard {
@@ -251,5 +251,34 @@ describe("Battlefield's far side with the sandbox on", () => {
     expect(menuRows()).not.toContain("Activate ability");
     fireEvent.click(screen.getByRole("menuitem", { name: "Tap" }));
     expect(onAct).toHaveBeenCalledWith({ type: "tap", ids: [goblin.id], tapped: true });
+  });
+});
+
+describe("tableCardWidth", () => {
+  it("is the width a lone card is drawn at on a table that tall", () => {
+    // jsdom lays nothing out: the section reads a 2000 × 606 box, a tall window's table.
+    const width = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(2000);
+    const height = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(606);
+    try {
+      render(
+        <ContextMenuProvider>
+          <Battlefield
+            cards={[card("Forest")]}
+            sandbox
+            dense
+            onAct={vi.fn()}
+            onDrop={vi.fn()}
+            onPoint={vi.fn()}
+            onUnpoint={vi.fn()}
+          />
+        </ContextMenuProvider>,
+      );
+      expect(screen.getByRole("button", { name: "Forest" }).style.width).toBe(
+        `${tableCardWidth(606, true)}px`,
+      );
+    } finally {
+      width.mockRestore();
+      height.mockRestore();
+    }
   });
 });
