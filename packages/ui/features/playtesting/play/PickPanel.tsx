@@ -6,14 +6,24 @@ import { LAYER } from "@/lib/layers";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { CardFace } from "../table/Inspect";
-import { canConfirm, confirmLabel, pickCounter, pickTitle, pickZones, togglePick } from "./pick";
+import {
+  canConfirm,
+  confirmLabel,
+  hasRoom,
+  pickCounter,
+  pickedPower,
+  pickTitle,
+  pickZones,
+  togglePick,
+} from "./pick";
 import { cardOfRef } from "./prompt";
 import { OptionChips } from "./PromptPanel";
 
 /**
  * The engine's question when the answer is a set of cards — a scry, a surveil, a discard, a
- * search (`prompt.pick`): the cards large, a click to pick or put back, a count against the
- * bounds, and Confirm only within them.
+ * search, a keep-the-rest-are-sacrificed (`prompt.pick`): the cards large, a click to pick or put
+ * back, a count against the bounds, and Confirm only within them. Under a power cap the count is
+ * the picked creatures' power too, and a creature that would pass it is drawn dim.
  *
  * **A scry or a surveil sorts into two zones** — "Keep on top" and "Bottom", "Top" and
  * "Graveyard" — the picked ones in the order picked, numbered, the first on top: the order is the
@@ -50,13 +60,20 @@ export function PickPanel({
   const [others, setOthers] = useState(false);
   const title = pickTitle(pick);
   const zones = pickZones(pick);
-  const ready = canConfirm(pick, picked.length) && !disabled;
   const byId = new Map(pick.cards.map((c) => [c.id, c]));
+  const powerOf = (id: number) => {
+    const ref = byId.get(id);
+    return ref === undefined ? 0 : (cardOfRef(ref, table).power ?? 0);
+  };
+  const power = pickedPower(picked, powerOf);
+  const ready = canConfirm(pick, picked.length, power) && !disabled;
 
   const tile = (ref: PlaytestCardRef) => {
     const card = cardOfRef(ref, table);
     const at = picked.indexOf(ref.id);
     const eligible = pick.eligible.includes(ref.id);
+    const over =
+      eligible && at < 0 && pick.powerCap !== null && !hasRoom(picked, ref.id, pick, powerOf);
     return (
       <li key={ref.id} className="flex-none">
         <button
@@ -65,7 +82,7 @@ export function PickPanel({
           aria-disabled={!eligible || disabled}
           aria-label={`${ref.name}${at >= 0 && pick.ordered ? `, ${at + 1}` : ""}${eligible ? "" : ", cannot be picked"}`}
           onClick={() => {
-            if (eligible && !disabled) setPicked((p) => togglePick(p, ref.id, pick));
+            if (eligible && !disabled) setPicked((p) => togglePick(p, ref.id, pick, powerOf));
           }}
           onMouseEnter={(e) => onPoint(card, e)}
           onMouseLeave={onUnpoint}
@@ -75,6 +92,7 @@ export function PickPanel({
             "transition-[translate,opacity] duration-150 motion-reduce:transition-none",
             FOCUS,
             !eligible && "cursor-not-allowed opacity-40",
+            over && "opacity-60",
             at >= 0 &&
               !zones &&
               "-translate-y-2 outline-2 outline-offset-2 outline-accent outline-solid",
@@ -120,7 +138,7 @@ export function PickPanel({
           <span className="min-w-0 truncate text-xs text-dim">{prompt.source}</span>
         )}
         <span className="ml-auto flex-none font-mono text-xs text-dim tabular-nums">
-          {pickCounter(pick, picked.length)}
+          {pickCounter(pick, picked.length, power)}
         </span>
         <button
           type="button"
