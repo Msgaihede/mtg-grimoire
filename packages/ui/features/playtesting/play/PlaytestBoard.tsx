@@ -10,8 +10,7 @@ import {
 import { ArrowRight, ChevronLeft, LoaderCircle, Menu, SkipForward } from "lucide-react";
 import type {
   GameCard,
-  GoldfishAction,
-  GoldfishPlace,
+  GamePlace,
   PlaytestAction,
   PlaytestHappened,
   PlaytestPlayer,
@@ -24,25 +23,24 @@ import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
-import { Battlefield, type TablePick } from "../goldfish/Battlefield";
-import { CommanderMat } from "../goldfish/GoldfishBoard";
-import { HandFan } from "../goldfish/HandFan";
-import { INSPECT_WIDTH, Inspect, pointerAt } from "../goldfish/Inspect";
-import { LibraryDialog } from "../goldfish/LibraryDialog";
-import { LifePlate } from "../goldfish/LifePlate";
-import { ManaTableView } from "../goldfish/ManaTable";
-import { gameMenu } from "../goldfish/menus";
-import { OpeningHand } from "../goldfish/OpeningHand";
-import { HelpPanel, LogPanel } from "../goldfish/Panels";
-import { CommandZone, ExileZone, GraveyardZone, LibraryZone } from "../goldfish/ZonePile";
-import { dropAction, type GoldfishDrag } from "../goldfish/goldfishDrag";
-import { useLandingOf } from "../goldfish/landing";
+import { Battlefield, type TablePick } from "../table/Battlefield";
+import { CommanderMat } from "../table/CommanderMat";
+import { HandFan } from "../table/HandFan";
+import { INSPECT_WIDTH, Inspect, pointerAt } from "../table/Inspect";
+import { LibraryDialog } from "../table/LibraryDialog";
+import { LifePlate } from "../table/LifePlate";
+import { ManaTableView } from "../table/ManaTable";
+import { gameMenu } from "../table/menus";
+import { OpeningHand } from "../table/OpeningHand";
+import { HelpPanel, LogPanel } from "../table/Panels";
+import { CommandZone, ExileZone, GraveyardZone, LibraryZone } from "../table/ZonePile";
+import { dropAction, type TableDrag } from "../table/tableDrag";
+import { useLandingOf } from "../table/landing";
 import { useUndoKeys } from "../undo";
-import { handRow, type ZoneSize } from "../goldfish/layout";
-import type { LogLine } from "../goldfish/log";
-import { feltBackground } from "../goldfish/playmats";
-import type { Playmat, Pointed, ZoneLook } from "../goldfish/types";
-import { fromGoldfish } from "./actions";
+import { handRow, type ZoneSize } from "../table/layout";
+import type { LogLine } from "../table/log";
+import { feltBackground } from "../table/playmats";
+import type { Playmat, Pointed, ZoneLook } from "../table/types";
 import {
   NO_PICKS,
   aimAttacker,
@@ -74,18 +72,25 @@ import { PickPanel } from "./PickPanel";
 import { PromptPanel } from "./PromptPanel";
 
 /**
- * The playtest board — the goldfish's table with an opponent across it: the reader's deck against
- * another of their decks, the opponent played by phase.rs's AI, the rules engine deciding.
+ * The board — one table for every game on a deck: the reader's deck against **the goldfish**, an
+ * opponent that does nothing and never loses (`view.goldfish`), or against another of their decks
+ * played by phase.rs's AI, or three of them at a four-player table. The rules engine decides in
+ * every case; goldfishing is a playtest whose opponent takes no actions (the owner's decision of
+ * 2026-10-17), so a change to this board is a change to both.
  *
- * **Presentational, like `GoldfishBoard`**: a {@link PlaytestView} in, {@link PlaytestAction}s
- * out, no `ipc` — `PlaytestPage` is the one place that wires it to the engine, and the stories
- * draw it from fixtures (`fixtures.ts`).
+ * **Presentational**: a {@link PlaytestView} in, {@link PlaytestAction}s out, no `ipc` —
+ * `PlaytestPage` is the one place that wires it to the engine, and the stories draw it from
+ * fixtures (`fixtures.ts`). The table's pieces (`../table/`) speak `PlaytestAction` too, and are
+ * handed `onAct` as it is.
  *
  * **The opponent's half is the reader's turned 180°**, in arrangement and not in pixels, so their
  * cards still read the right way up: their creatures nearest the middle line and their lands
  * behind toward the top edge (`Battlefield`'s `flipped`), their library and graveyard on the left
- * and exile and command zone on the right, their hand face down along the top edge. The reader's
- * half is the goldfish's own. Between them, the middle line: the turn, the stack, the combat.
+ * and exile and command zone on the right, their hand face down along the top edge. Between the
+ * two halves, the middle line: the turn, the stack, the combat. **The goldfish is drawn exactly
+ * so**, as a single AI opponent is — its band, its face-down hand, its plate, its columns and its
+ * empty table — with nothing of its own but the plate's title, which says when it would have died
+ * ("Dead on your turn 5", the plate's edge gold).
  *
  * **Three opponents share that half** at a four-player table (issue #994): it is cut into three
  * areas side by side over the reader's table, in turn order from the left, each a whole opponent
@@ -93,26 +98,31 @@ import { PromptPanel } from "./PromptPanel";
  * drawn exactly as it always was; nothing of the four-player layout reaches it.
  *
  * **The frame, measured from this element's box** so it fits a 1280 × 800 window with no scroll:
- * the opponent's band is the top 72 px (their hand, their plate, the chrome), the reader's
- * foot the bottom 108 (the hand, the plate, the stage button), the middle line
- * 36 px tall just above the centre, and the two tables share what is left equally — 275 px
- * each in a 766 px board. The zone columns' cards are {@link ZONE} rather than the goldfish's
- * 180 × 252: two of them and their labels stand beside each table's height.
+ * see {@link OPPONENT_TABLE} below. The zone columns' cards are {@link ZONE} rather than the
+ * artboard's 180 × 252: two of them and their labels stand beside each table's height.
  *
- * **The reader's cards are handled as on the goldfish** — drag between zones, a click taps, a
- * double-click plays, a right-click opens the goldfish's menus — and those are sandbox moves the
- * engine also allows here (the escape hatch for a card the rules cannot play). **The opponent's
- * are only looked at**: pointable for the preview, never dragged, tapped or opened in a menu.
+ * **The rules' handling is always there**: a double-click or a drag onto the table plays a card
+ * from the hand or the command zone, a permanent's menu activates its abilities, and a click is a
+ * pick when the rules are asking for one (`combat.ts`): in the declare-attackers step a creature
+ * that may attack is toggled as an attacker, in declare-blockers a blocker is picked and then the
+ * attacker it blocks, and while the engine asks a question each answer that names one card on the
+ * table makes that card clickable. Picks are kept here until the stage button declares them, and
+ * dropped whenever a new view arrives.
  *
- * **A click is a pick when the rules are asking for one** (`combat.ts`): in the declare-attackers
- * step a creature that may attack is toggled as an attacker, in declare-blockers a blocker is
- * picked and then the attacker it blocks, and while the engine asks a question each answer that
- * names one card on the table makes that card clickable. Picks are kept here until the stage
- * button declares them, and dropped whenever a new view arrives.
+ * **The sandbox is the rest** (`view.sandbox`, toggled by the chip in the top band and the game
+ * menu's row — off against the AI, on against the goldfish, at the start). Its moves change the
+ * game by hand, outside the rules: a click taps, a drag puts a card in any zone, the T / G / E / H
+ * keys, the card menus' moves and counters and token copies, the library's draws and looks, a
+ * token from the game menu, the life steppers on every plate. The engine takes them only in the
+ * reader's main phase, so the board offers them only then and only while nothing is with the
+ * engine (`edits`); off, none of them is drawn, and what is left is the rules'. With it on they
+ * reach **every card the table shows**: an opponent's permanents get the sandbox's card menu and
+ * their plates a stepper — but an opponent's cards are never dragged, and their hand and library
+ * are counts the reader never touches.
  *
  * **Every action can take seconds** — the AI plays its whole turn before the engine answers — so
- * while one is with the engine (`busy`) the stage button says the opponent is thinking and nothing
- * new is offered; `PlaytestPage`'s hook queues anything sent anyway, in order.
+ * while one is with the engine (`busy`) the stage button says so and nothing new is offered;
+ * `PlaytestPage`'s hook queues anything sent anyway, in order.
  */
 export interface PlaytestBoardProps {
   /** The reader's deck. */
@@ -136,9 +146,17 @@ export interface PlaytestBoardProps {
   /** The opponent's actions are being played back: the board is read-only, Skip ends it. */
   replaying?: boolean;
   onSkip?: () => void;
+  /**
+   * Where the board was opened from, which its way back returns to: the Playtesting page's setup
+   * ("setup", the default) or the deck editor ("deck", the goldfish button). It names the back
+   * button ("‹ Setup" / "‹ <deckName>"), the game menu's and the result banner's way back ("Back
+   * to setup" / "Back to the deck"), and the shortcut catalogue's scope for undo ("playtesting" /
+   * "goldfish").
+   */
+  returnTo?: "setup" | "deck";
 }
 
-/** The zone columns' cards: 72 × 101, two fifths of the goldfish's 180 × 252 (issue #992 grew
+/** The zone columns' cards: 72 × 101, two fifths of the artboard's 180 × 252 (issue #992 grew
  *  them a fifth from 60 × 84), their counts drawn on them. */
 const ZONE: ZoneSize = { width: 72, height: 101, compact: true };
 
@@ -172,6 +190,7 @@ export function PlaytestBoard({
   happened = NONE,
   replaying = false,
   onSkip,
+  returnTo = "setup",
 }: PlaytestBoardProps): JSX.Element {
   const [pointed, setPointed] = useState<{ pointed: Pointed; side: Side } | null>(null);
   const [panel, setPanel] = useState<"help" | "log" | null>(null);
@@ -212,14 +231,17 @@ export function PlaytestBoard({
     },
     [onAct, view],
   );
-  /** The goldfish's pieces speak `GoldfishAction` (`actions.ts`). */
-  const goldfishAct = useCallback(
-    (action: GoldfishAction) => {
-      const mapped = fromGoldfish(action);
-      if (mapped !== null) onAct(mapped);
-    },
-    [onAct],
-  );
+
+  /** Nothing new is offered while the engine is busy or the opponent's turn is played back. */
+  const locked = busy || replaying;
+  /** The sandbox is on — the setting, whatever the stage: the plates have steppers. */
+  const sandboxOn = view?.sandbox ?? false;
+  /**
+   * **The sandbox's moves work now**: it is on, it is the reader's main phase (the engine refuses
+   * them anywhere else), and nothing is with the engine. What every table piece is handed as its
+   * `sandbox`, so each offers the hand moves only when they would be taken.
+   */
+  const edits = view !== null && view.sandbox && view.stage === "main" && !locked;
 
   const ids = useMemo(
     () => (view === null || view.stage === "mulligan" ? null : seen(view)),
@@ -230,12 +252,12 @@ export function PlaytestBoard({
   const current = useMemo(() => fresh(pointed, view), [pointed, view]);
 
   const drop = useCallback(
-    (drag: GoldfishDrag, to: GoldfishPlace) => {
-      const action = dropAction(drag, to);
-      if (action !== null) goldfishAct(action);
+    (drag: TableDrag, to: GamePlace) => {
+      const action = dropAction(drag, to, edits);
+      if (action !== null) onAct(action);
       setPointed(null);
     },
-    [goldfishAct],
+    [onAct, edits],
   );
 
   const pointYou = useCallback((p: Pointed) => setPointed({ pointed: p, side: "you" }), []);
@@ -251,8 +273,8 @@ export function PlaytestBoard({
     [],
   );
   const pointOpponent = pointThem.opponent;
-  // **It takes no argument, and must not grow one** — `GoldfishBoard`'s reason: every card hands
-  // it to `onMouseLeave` as it is.
+  // **It takes no argument, and must not grow one**: every card hands it to `onMouseLeave` as it
+  // is, so a parameter here is filled with the mouse event.
   const unpoint = useCallback(() => setPointed(null), []);
   const pointCard = useCallback(
     (card: GameCard, e: MouseEvent) => {
@@ -287,7 +309,11 @@ export function PlaytestBoard({
     [opponentCount],
   );
 
-  // `GoldfishBoard`'s guard against a card redrawn under a still pointer, for its reasons.
+  // **A card's `mouseleave` is not the only way the pointer stops being on it.** A card redrawn
+  // by another element — an untapped land joining a pile, a graveyard's new top card — is gone
+  // from under the pointer without one, and is still in its zone, so `fresh` does not let go of
+  // it. So while a card is pointed at, each move of the pointer is asked what it is over
+  // (`data-point`), and anything but that card lets go.
   const pointedId = pointed?.pointed.card.id ?? null;
   useEffect(() => {
     if (pointedId === null) return;
@@ -299,19 +325,22 @@ export function PlaytestBoard({
     return () => window.removeEventListener("pointermove", onMove);
   }, [pointedId]);
 
-  /** Nothing new is offered while the engine is busy or the opponent's turn is played back. */
-  const locked = busy || replaying;
   const buttons = view === null ? null : stageButtons(view, picks);
   const primary = locked ? null : (buttons?.primary ?? null);
 
   // Undo and redo (issue #1022): not while the engine is busy; during a replay, `act` shows its
-  // end first, as it does for any action.
-  useUndoKeys("playtesting", view, act, !busy);
+  // end first, as it does for any action. The catalogue's scope is where the board was opened
+  // from: the deck editor's goldfish, or the Playtesting page.
+  useUndoKeys(returnTo === "deck" ? "goldfish" : "playtesting", view, act, !busy);
 
   // **The board's keys**: Space presses the stage button (to combat, end the turn, declare), and
-  // T, G, E, H act on the reader's own card under the pointer as on the goldfish. Not while a
-  // field has the caret or a menu or dialog is open, and Space is the board's even on a focused
-  // button — `GoldfishBoard`'s reasons, both.
+  // T, G, E, H tap, bury, exile or return to hand the reader's own card under the pointer — the
+  // sandbox's, so only while its moves work (`edits`). Not while a field has the caret (the life
+  // steppers) or a menu or dialog is open over the board.
+  //
+  // **Space is the board's even on a focused button**, and the `preventDefault` is what makes it
+  // so: a card clicked keeps the focus, and Space would otherwise press it — playing the card in
+  // hand the reader only meant to pass after. Enter still presses a focused control.
   useEffect(() => {
     const blocked = (e: KeyboardEvent) =>
       (e.target instanceof HTMLElement && e.target.closest("input, textarea, [role=menu]")) ||
@@ -331,8 +360,7 @@ export function PlaytestBoard({
         act(primary.action);
         return;
       }
-      if (current === null || current.side !== "you" || locked) return;
-      if (view.stage === "mulligan" || view.stage === "over") return;
+      if (current === null || current.side !== "you" || !edits) return;
       const id = current.pointed.ids[0];
       const action: PlaytestAction | null =
         key === "t" && current.pointed.place === "battlefield"
@@ -359,7 +387,7 @@ export function PlaytestBoard({
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [act, current, view, primary, replaying, onSkip, locked]);
+  }, [act, current, view, primary, replaying, onSkip, edits]);
 
   // The picks the rules are asking for, by side — stable per view and picks, so the tables'
   // piles are not re-cut on every render.
@@ -421,6 +449,10 @@ export function PlaytestBoard({
   const lookYou = (l: ZoneLook) => setLook({ look: l, side: "you" });
   const lookOpponent = (l: ZoneLook) => setLook({ look: l, side: "opponent" });
   const lookedAt = look === null || view === null ? undefined : seatOfPlayer(view, look.side);
+  const goldfish = view?.goldfish ?? false;
+  /** The goldfish's life has reached 0 on this turn of the reader's; `null` while it is above. */
+  const deadOn = goldfish ? (opponent?.deadOn ?? null) : null;
+  const backLabel = returnTo === "deck" ? "Back to the deck" : "Back to setup";
 
   return (
     <div
@@ -432,6 +464,7 @@ export function PlaytestBoard({
       {felt !== null && (
         <div
           aria-hidden="true"
+          data-testid="board-felt"
           className="pointer-events-none absolute inset-0"
           style={{ background: felt }}
         />
@@ -486,7 +519,7 @@ export function PlaytestBoard({
               library: view.you.library,
               libraryLands: view.you.libraryCards.filter((c) => c.isLand).length,
             }}
-            onAct={goldfishAct}
+            onAct={onAct}
             onPoint={pointYou}
             onUnpoint={unpoint}
           />
@@ -503,13 +536,14 @@ export function PlaytestBoard({
                   opponents={view.opponents.length}
                   active={active === seat.player}
                   won={view.winner === seat.player}
-                  disabled={locked}
+                  sandbox={edits}
+                  steppers={sandboxOn}
                   marks={marks?.[seat.player]}
                   pick={theirPicks[seat.player]}
                   aimable={aimable.includes(seat.player)}
                   onAim={() => setPicks((p) => aimAttacker(p, view, seat.player))}
                   onLife={(life) => act({ type: "setLife", seat: seat.player, life })}
-                  onAct={goldfishAct}
+                  onAct={onAct}
                   onDrop={drop}
                   onPoint={pointThem[seat.player]}
                   onUnpoint={unpoint}
@@ -522,7 +556,8 @@ export function PlaytestBoard({
               <Battlefield
                 label="The opponent's battlefield"
                 cards={view.opponents[0].battlefield}
-                onAct={goldfishAct}
+                sandbox={edits}
+                onAct={onAct}
                 onDrop={drop}
                 onPoint={pointOpponent}
                 onUnpoint={unpoint}
@@ -541,13 +576,15 @@ export function PlaytestBoard({
             status={status}
             failed={error !== null}
             onStops={locked ? undefined : (stops) => act({ type: "setStops", stops })}
+            onSandbox={(on) => act({ type: "setSandbox", on })}
             className="absolute inset-x-[96px] top-[calc(50%-46px)] h-7"
           />
           <div data-table="you" className={YOUR_TABLE}>
             <Battlefield
               label="Your battlefield"
               cards={view.you.battlefield}
-              onAct={goldfishAct}
+              sandbox={edits}
+              onAct={onAct}
               onDrop={drop}
               onPoint={pointYou}
               onUnpoint={unpoint}
@@ -594,12 +631,14 @@ export function PlaytestBoard({
                       // its end first.
                       canUndo: view.canUndo && !busy,
                       canRedo: view.canRedo && !busy,
+                      sandbox: view.sandbox,
                     },
               playing: playing && !locked,
-              backLabel: "Back to setup",
+              sandbox: edits,
+              backLabel,
               playmat,
               commanderName: commander?.name ?? null,
-              onAct: goldfishAct,
+              onAct: act,
               onPlaymat: setPlaymat,
               onNewGame,
               onBack,
@@ -611,12 +650,14 @@ export function PlaytestBoard({
         </button>
         <button
           type="button"
-          aria-label="Back to the playtest setup"
+          aria-label={
+            returnTo === "deck" ? `Back to the ${deckName} deck` : "Back to the playtest setup"
+          }
           onClick={onBack}
           className={cn(CHROME_BUTTON, "h-9 gap-1 rounded-full pr-3 pl-2 text-[13px]")}
         >
           <ChevronLeft className="size-4" aria-hidden="true" />
-          Setup
+          {returnTo === "deck" ? deckName : "Setup"}
           <kbd className="ml-1 rounded border border-border px-1 font-mono text-[11px] text-dim">
             Esc
           </kbd>
@@ -628,8 +669,11 @@ export function PlaytestBoard({
           <div className="absolute top-0 left-1/2 -translate-x-1/2">
             <OpponentHand count={handCount} />
           </div>
+          {/* Right of their hand, and never under the help and log buttons: the box ends 116 px
+              from the edge, and a plate wider than it (a long deck name, the sandbox's stepper)
+              shortens its title rather than running under them. */}
           <div
-            className="absolute top-[5px]"
+            className="absolute top-[5px] right-[116px] flex min-w-0"
             style={{ left: `calc(50% + ${opponentHandWidth(handCount) / 2 + 64}px)` }}
           >
             <PlateFrame
@@ -637,13 +681,19 @@ export function PlaytestBoard({
               active={active === "opponent"}
               poison={opponent?.poison ?? 0}
               compact
+              className="min-w-0"
             >
               <LifePlate
                 seat="opponent"
-                title={`Opponent · ${opponentNames[0] ?? "Deck"}`}
+                title={
+                  deadOn !== null
+                    ? `Dead on your turn ${deadOn}`
+                    : `Opponent · ${opponentNames[0] ?? "Deck"}`
+                }
                 life={opponent?.life ?? 0}
-                highlight={view?.winner === "opponent"}
-                disabled={view === null || locked}
+                highlight={view?.winner === "opponent" || deadOn !== null}
+                readOnly={!sandboxOn}
+                disabled={!edits}
                 onChange={(life) => act({ type: "setLife", seat: "opponent", life })}
                 compact
               />
@@ -730,12 +780,13 @@ export function PlaytestBoard({
         </>
       )}
 
-      {/* The reader's columns, the goldfish's: command and exile left, graveyard and library
+      {/* The reader's columns, the artboard's: command and exile left, graveyard and library
           right. */}
       <div className={cn(YOUR_COLUMN, "left-3")}>
         <CommandZone
           view={you}
-          onAct={goldfishAct}
+          sandbox={edits}
+          onAct={onAct}
           onDrop={drop}
           onPoint={pointYou}
           onUnpoint={unpoint}
@@ -743,6 +794,7 @@ export function PlaytestBoard({
         />
         <ExileZone
           view={you}
+          sandbox={edits}
           onDrop={drop}
           onPoint={pointYou}
           onUnpoint={unpoint}
@@ -753,20 +805,29 @@ export function PlaytestBoard({
       <div className={cn(YOUR_COLUMN, "right-3 items-end")}>
         <GraveyardZone
           view={you}
+          sandbox={edits}
           onDrop={drop}
           onPoint={pointYou}
           onUnpoint={unpoint}
           onLook={lookYou}
           size={ZONE}
         />
-        <LibraryZone view={you} onAct={goldfishAct} onDrop={drop} onLook={lookYou} size={ZONE} />
+        <LibraryZone
+          view={you}
+          sandbox={edits}
+          onAct={onAct}
+          onDrop={drop}
+          onLook={lookYou}
+          size={ZONE}
+        />
       </div>
 
       {/* The foot: the reader's hand, their plate beside it, and the stage button. */}
       {tabled && (
         <HandFan
           cards={view.you.hand}
-          onAct={goldfishAct}
+          sandbox={edits}
+          onAct={onAct}
           onDrop={drop}
           onPoint={pointYou}
           onUnpoint={unpoint}
@@ -777,8 +838,8 @@ export function PlaytestBoard({
           }
         />
       )}
-      {/* Beside the hand, as on the goldfish — and at the very edge while a prompt is docked over
-          the hand, so the two never meet. */}
+      {/* Beside the hand — and at the very edge while a prompt is docked over the hand, so the
+          two never meet. */}
       <div
         className="absolute bottom-3"
         style={{
@@ -795,7 +856,8 @@ export function PlaytestBoard({
             life={you?.life ?? 0}
             cardId={commander?.cardId ?? null}
             highlight={view?.winner === "you"}
-            disabled={view === null || locked}
+            readOnly={!sandboxOn}
+            disabled={!edits}
             onChange={(life) => act({ type: "setLife", seat: "you", life })}
           />
         </PlateFrame>
@@ -816,11 +878,14 @@ export function PlaytestBoard({
                 className="size-[18px] animate-spin motion-reduce:animate-none"
                 aria-hidden="true"
               />
+              {/* The goldfish thinks about nothing: the engine is only playing the game on. */}
               {passing
                 ? "Passing turn…"
-                : four
-                  ? "Opponents are thinking…"
-                  : "Opponent is thinking…"}
+                : goldfish
+                  ? "Playing on…"
+                  : four
+                    ? "Opponents are thinking…"
+                    : "Opponent is thinking…"}
             </span>
           ) : (
             buttons !== null &&
@@ -888,6 +953,7 @@ export function PlaytestBoard({
           winner={view.winner}
           out={view.you.out}
           turn={view.turn}
+          backLabel={backLabel}
           onNewGame={onNewGame}
           onBack={onBack}
         />
@@ -917,7 +983,9 @@ export function PlaytestBoard({
               FOCUS,
             )}
           >
-            <span className="text-dim">{four ? "Opponents’ turns" : "Opponent’s turn"}</span>
+            <span className="text-dim">
+              {goldfish ? "Playing on" : four ? "Opponents’ turns" : "Opponent’s turn"}
+            </span>
             <span className="font-semibold">Skip</span>
             <SkipForward className="size-4" aria-hidden="true" />
           </button>
@@ -928,18 +996,21 @@ export function PlaytestBoard({
 
       {panel === "help" && (
         <HelpPanel heading="Playing a game" onClose={() => setPanel(null)}>
-          <PlaytestHelp />
+          <PlaytestHelp sandbox={sandboxOn} goldfish={goldfish} />
         </HelpPanel>
       )}
       {panel === "log" && <LogPanel log={log} onClose={() => setPanel(null)} />}
 
-      {look !== null && lookedAt !== undefined && (
+      {/* A library is looked through only with the sandbox's moves working; a graveyard or exile
+          is public, and opens read-only without them. */}
+      {look !== null && lookedAt !== undefined && (look.look.zone !== "library" || edits) && (
         <LibraryDialog
           look={look.look}
           view={lookedAt}
+          readOnly={!edits}
           opponent={look.side !== "you"}
           owner={playerPossessive(look.side, opponentCount)}
-          onAct={goldfishAct}
+          onAct={onAct}
           onClose={() => setLook(null)}
         />
       )}
@@ -970,7 +1041,7 @@ const OPPONENT_COLUMN =
 const YOUR_COLUMN =
   "absolute top-[calc(50%-18px)] bottom-[112px] flex flex-col justify-center gap-2";
 
-/** The foot's primary button — the goldfish's "Next turn", saying what this one does. */
+/** The foot's primary button, saying what it does: to combat, end the turn, attack, block. */
 function StageButton({ label, onPress }: { label: string; onPress: () => void }): JSX.Element {
   return (
     <button
@@ -1005,6 +1076,7 @@ function GameOver({
   winner,
   out,
   turn,
+  backLabel,
   onNewGame,
   onBack,
 }: {
@@ -1012,6 +1084,8 @@ function GameOver({
   /** The reader is out (`you.out`). */
   out: boolean;
   turn: number;
+  /** "Back to setup", "Back to the deck". */
+  backLabel: string;
   onNewGame: () => void;
   onBack: () => void;
 }): JSX.Element {
@@ -1051,34 +1125,54 @@ function GameOver({
             FOCUS,
           )}
         >
-          Back to setup
+          {backLabel}
         </button>
       </div>
     </section>
   );
 }
 
-/** The help panel's lines for this board: the goldfish's handling, and the rules' clicks. */
-function PlaytestHelp(): JSX.Element {
+/**
+ * The help panel's lines: the rules' clicks, always, and the sandbox's handling said as it stands
+ * — what it offers while on, how to turn it on while off.
+ */
+function PlaytestHelp({ sandbox, goldfish }: { sandbox: boolean; goldfish: boolean }): JSX.Element {
   return (
     <>
       <span>
         Double-click a card in hand, or drag it onto your battlefield, to play it by the rules.
       </span>
-      <span>Click a permanent to tap it; right-click it to activate an ability, and the rest.</span>
+      <span>Right-click a permanent to activate an ability.</span>
       <span>
         To attack, click each creature that should (it moves forward, ringed red), then press
         Attack.
       </span>
-      <span>
-        To block, click one of your creatures, then the attacker it blocks; both get a number. Click
-        a blocker again to take it off.
-      </span>
+      {!goldfish && (
+        <span>
+          To block, click one of your creatures, then the attacker it blocks; both get a number.
+          Click a blocker again to take it off.
+        </span>
+      )}
       <span>When the engine asks, click a highlighted card or pick an answer in the panel.</span>
-      <span className="text-dim">
-        Drag any of your cards anywhere to put it there by hand, outside the rules. The opponent’s
-        cards can only be looked at.
-      </span>
+      {sandbox ? (
+        <>
+          <span className="text-dim">
+            The sandbox is on: in your main phase, drag any of your cards anywhere, click a
+            permanent to tap it (Shift-click taps the pile), right-click any card on the table for
+            counters, copies and moves, and set any life total. A card the rules cannot play is put
+            down unpaid.
+          </span>
+          <span className="text-dim">
+            Point at one of your cards and press T, G, E or H to tap it, bury it, exile it or return
+            it to hand.
+          </span>
+        </>
+      ) : (
+        <span className="text-dim">
+          The sandbox is off: only the rules’ plays. Turn it on (the Sandbox button, or the game
+          menu) to move, tap and change cards by hand.
+        </span>
+      )}
       <span className="text-dim">
         Press Space for the button at the bottom right: to combat, end the turn, attack or block.
       </span>
@@ -1116,7 +1210,7 @@ function seatHolding(view: PlaytestView | null, id: number): PlaytestPlayer | nu
 }
 
 /** One seat's cards in `place`. */
-function zoneOf(seat: PlaytestSeat, place: GoldfishPlace): readonly GameCard[] {
+function zoneOf(seat: PlaytestSeat, place: GamePlace): readonly GameCard[] {
   switch (place) {
     case "hand":
       return seat.hand;
@@ -1134,8 +1228,10 @@ function zoneOf(seat: PlaytestSeat, place: GoldfishPlace): readonly GameCard[] {
 }
 
 /**
- * The card pointed at as `view` has it now, or `null` once it has left that zone — `GoldfishBoard`'s
- * `fresh`, on whichever seat it is on. A loose card is kept as it is.
+ * **The card pointed at, as `view` has it now**, or `null` once it has left that zone. A tap keeps
+ * a card's id (only a zone change mints a new one, CR 400.7) but not its state, and no new
+ * `mouseenter` fires on a card that was clicked where it lies — so the card held in state is
+ * re-read here, by id, on whichever seat it is on, every view. A loose card is kept as it is.
  */
 function fresh(
   held: { pointed: Pointed; side: Side } | null,

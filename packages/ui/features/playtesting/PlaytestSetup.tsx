@@ -7,7 +7,7 @@ import { FOCUS } from "@/lib/focus";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { viewMemory } from "@/lib/viewMemory";
-import type { PlaytestPicks } from "./play/usePlaytestGame";
+import { DEFAULT_DIFFICULTY, type PlaytestPicks } from "./play/usePlaytestGame";
 import {
   gapWords,
   supportSentence,
@@ -26,8 +26,9 @@ export interface SetupSeat {
   variant: DeckVariant;
 }
 
-/** How many sit at the table: the reader and one opponent, or the reader and three. */
-export type TableSize = "duel" | "fourPlayer";
+/** Who sits at the table: the reader and the goldfish, the reader and one opponent, or the reader
+ *  and three. */
+export type TableSize = "goldfish" | "duel" | "fourPlayer";
 
 /** The picks as the screen holds them: a seat may have no deck yet. */
 export interface SetupPicks {
@@ -35,8 +36,9 @@ export interface SetupPicks {
   variant: DeckVariant;
   table: TableSize;
   /**
-   * The three opponents' seats, always three: a duel plays the first, and the other two keep
-   * their picks while the reader goes back and forth between the two tables.
+   * The three opponents' seats, always three: a duel plays the first, the goldfish none, and the
+   * seats a table does not play keep their picks while the reader goes back and forth between
+   * the tables.
    */
   opponents: SetupSeat[];
   difficulty: PlaytestDifficulty;
@@ -50,7 +52,10 @@ export const DIFFICULTIES: readonly { id: PlaytestDifficulty; label: string }[] 
   { id: "veryHard", label: "Very hard" },
 ];
 
+/** The tables, in the order the choice draws them. `opponents` is how many deck seats it plays:
+ *  the goldfish is no deck's. */
 export const TABLES: readonly { id: TableSize; label: string; opponents: number }[] = [
+  { id: "goldfish", label: "Goldfish", opponents: 0 },
   { id: "duel", label: "1 opponent", opponents: 1 },
   { id: "fourPlayer", label: "3 opponents", opponents: 3 },
 ];
@@ -62,7 +67,7 @@ const NOTHING_PICKED: SetupPicks = {
   variant: "live",
   table: "duel",
   opponents: [EMPTY_SEAT, EMPTY_SEAT, EMPTY_SEAT],
-  difficulty: "medium",
+  difficulty: DEFAULT_DIFFICULTY,
 };
 
 /**
@@ -79,9 +84,9 @@ function firstVariant(deck: SetupDeck | undefined): DeckVariant {
 }
 
 /**
- * The Playtesting page's setup: the reader's deck and the opponent's — or, at a four-player
- * table, three opponents' (issue #994) — each in one of its lists, and how well the AI plays;
- * then Start.
+ * The Playtesting page's setup: the reader's deck and who it plays — the goldfish, one opponent's
+ * deck or, at a four-player table, three opponents' (issue #994) — each deck in one of its lists,
+ * and how well the AI plays; then Start.
  *
  * **Any of the reader's decks in any seat, the same one twice included**: a mirror match is a
  * real test of a deck, and a pod of one deck three times is a fair one for a Commander list.
@@ -90,8 +95,12 @@ function firstVariant(deck: SetupDeck | undefined): DeckVariant {
  * first, Actual second**, and only for a deck that keeps a plan (`theoryEnabled`); a deck with
  * one list has nothing to choose.
  *
- * **The table** is a duel by default, and "3 opponents" adds two more seats below the first. Start
- * waits for a deck in every seat shown; the seats a duel hides keep their picks.
+ * **The table** is a duel by default; "3 opponents" adds two more seats below the first, and
+ * **"Goldfish"** takes every opponent seat and the skill away: the goldfish is no deck, plays
+ * nothing and never loses, so there is nothing to pick for it — the board opens against it with
+ * the sandbox on, exactly as the deck editor's "Goldfish this deck" does. Start waits for a deck
+ * in every seat shown (the reader's alone, against the goldfish); the seats a table hides keep
+ * their picks.
  *
  * **What the rules engine plays of each deck is marked before it is picked** (issue #1078): a
  * glyph on each deck's row in the lists (for the list it is first dealt from), and under each seat
@@ -121,6 +130,7 @@ export function PlaytestSetup({
   const playable = decks.filter((d) => !d.archived);
   const byId = (id: number | null) => playable.find((d) => d.id === id);
   const seated = TABLES.find((t) => t.id === held.table)?.opponents ?? 1;
+  const goldfish = seated === 0;
   const four = seated > 1;
   // A remembered deck since archived or deleted is no longer a pick.
   const yours = byId(held.deckId);
@@ -163,12 +173,13 @@ export function PlaytestSetup({
         variant: deck.theoryEnabled ? seats[i].variant : "live",
       });
     }
-    onStart({
-      deckId: yours.id,
-      variant: yours.theoryEnabled ? held.variant : "live",
-      opponents,
-      difficulty: held.difficulty,
-    });
+    const variant = yours.theoryEnabled ? held.variant : "live";
+    // The goldfish plays no skill: its picks say only what the reader plays.
+    onStart(
+      goldfish
+        ? { deckId: yours.id, variant, opponents }
+        : { deckId: yours.id, variant, opponents, difficulty: held.difficulty },
+    );
   };
 
   return (
@@ -176,9 +187,10 @@ export function PlaytestSetup({
       <h2 className="sr-only">Playtesting</h2>
       <div className="flex w-full max-w-[640px] flex-col gap-7">
         <p className="m-0 text-sm text-dim">
-          Play one of your decks against another, or against three in a four-player game, each
-          opponent played by the rules engine’s AI. You decide in your main phases, when you attack
-          and block, and when a card asks you something; the rest plays itself.
+          Play one of your decks against the goldfish — an opponent that does nothing, to see how
+          your deck runs on its own — or against another of your decks, or three in a four-player
+          game, each played by the rules engine’s AI. You decide in your main phases, when you
+          attack and block, and when a card asks you something; the rest plays itself.
         </p>
 
         {loading ? (
@@ -234,25 +246,27 @@ export function PlaytestSetup({
               ))}
             </div>
 
-            <div className="flex flex-col gap-2">
-              <span id="playtest-difficulty" className={LABEL}>
-                {four ? "Opponents’ skill" : "Opponent’s skill"}
-              </span>
-              <div
-                role="group"
-                aria-labelledby="playtest-difficulty"
-                className="flex w-fit overflow-hidden rounded-md border border-border"
-              >
-                {DIFFICULTIES.map(({ id, label }) => (
-                  <Segment
-                    key={id}
-                    label={label}
-                    pressed={held.difficulty === id}
-                    onPress={() => pick({ difficulty: id })}
-                  />
-                ))}
+            {!goldfish && (
+              <div className="flex flex-col gap-2">
+                <span id="playtest-difficulty" className={LABEL}>
+                  {four ? "Opponents’ skill" : "Opponent’s skill"}
+                </span>
+                <div
+                  role="group"
+                  aria-labelledby="playtest-difficulty"
+                  className="flex w-fit overflow-hidden rounded-md border border-border"
+                >
+                  {DIFFICULTIES.map(({ id, label }) => (
+                    <Segment
+                      key={id}
+                      label={label}
+                      pressed={held.difficulty === id}
+                      onPress={() => pick({ difficulty: id })}
+                    />
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
 
             <div className="flex items-center gap-3">
               <button
@@ -276,10 +290,14 @@ export function PlaytestSetup({
               </button>
               {!ready && (
                 <span className="text-xs text-dim">
-                  {four ? "Pick all four decks to start." : "Pick both decks to start."}
+                  {goldfish
+                    ? "Pick your deck to start."
+                    : four
+                      ? "Pick all four decks to start."
+                      : "Pick both decks to start."}
                 </span>
               )}
-              {ready && !four && yours.id === theirs[0]?.id && (
+              {ready && seated === 1 && yours.id === theirs[0]?.id && (
                 <span className="text-xs text-dim">A mirror match.</span>
               )}
             </div>

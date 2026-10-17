@@ -5,7 +5,7 @@ import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
-import { CardFace } from "../goldfish/Inspect";
+import { CardFace } from "../table/Inspect";
 import { canConfirm, confirmLabel, pickCounter, pickTitle, pickZones, togglePick } from "./pick";
 import { cardOfRef } from "./prompt";
 import { OptionChips } from "./PromptPanel";

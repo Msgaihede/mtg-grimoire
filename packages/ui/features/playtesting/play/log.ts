@@ -1,35 +1,32 @@
 /**
- * The playtest log's sentences — what an action, the opponent's turn after it and the rules in
- * between did, as a reader would say it.
+ * The game log's sentences — what an action, the opponents' turns after it and the rules in
+ * between did, as a reader would say it. One game, goldfish or AI, and so one log: every fact on
+ * the wire (`PlaytestHappened`) is worded here, and nowhere else.
  *
- * **The goldfish's log, with a second player in it.** The lines are the goldfish's `LogLine`, cut
- * into turns by the same `byTurn` and drawn by the same `LogPanel`; the facts the two wires share
- * — a card put down by hand, a tap, a counter, a life total set — are worded by the goldfish's own
- * `sentence`, so one fact never reads two ways on two boards. What is new is whose doing it was:
- * the reader's lines read the goldfish's way ("Cast Sol Ring", "Drew Forest") and the opponent's
- * name them ("The opponent cast Lightning Bolt", "The opponent drew a card" — the wire never says
- * what they drew).
+ * **The reader's own lines read the way the old goldfish board's did** ("Cast Sol Ring",
+ * "Drew Forest", "Put Sol Ring onto the battlefield", "Tapped 2 × Forest", "Tarmogoyf has 2
+ * +1/+1 counters", "Kept six · put one on the bottom"), so nothing a reader of either old board
+ * was used to reads differently on the one board. What a second player adds is whose doing it
+ * was: an opponent's lines name them ("The opponent cast Lightning Bolt", "The opponent drew a
+ * card" — the wire never says what they drew), and so does a sandbox edit of an opponent's card
+ * ("Put the opponent's Grizzly Bears into their graveyard", "Tapped the opponent's Llanowar
+ * Elves").
  *
  * **At a four-player table each opponent is named** (`players.ts`): "Opponent 2 cast Lightning
- * Bolt", where a duel's single opponent stays "the opponent". A player knocked out is told as
- * `eliminated` — "Opponent 3 is out", and "You are out", which ends the reader's game.
+ * Bolt", where a duel's single opponent — the goldfish included — stays "the opponent". A player
+ * knocked out is told as `eliminated` — "Opponent 3 is out", and "You are out", which ends the
+ * reader's game.
  *
  * `turn` on a line is the game's turn (`PlaytestView.turn`, every seat's turns counted), so the
  * log's headings follow the table's own "Turn 5".
  */
-import type { GoldfishPlace, PlaytestHappened, PlaytestPlayer } from "@/lib/ipc";
-import {
-  kindOf,
-  lifeSentence,
-  sentence as goldfishSentence,
-  type LogKind,
-  type LogLine,
-} from "../goldfish/log";
+import type { GamePlace, PlaytestHappened, PlaytestPlayer } from "@/lib/ipc";
+import { lifeSentence, type LogKind, type LogLine } from "../table/log";
 import { playerName, playerPossessive } from "./players";
 import { promptTitle } from "./prompt";
 
 /** Where a card of the reader's went, as the end of a sentence. */
-const YOUR: Record<GoldfishPlace, string> = {
+const YOUR: Record<GamePlace, string> = {
   hand: "your hand",
   battlefield: "the battlefield",
   graveyard: "your graveyard",
@@ -40,7 +37,7 @@ const YOUR: Record<GoldfishPlace, string> = {
 };
 
 /** Where a card of the opponent's went. */
-const THEIR: Record<GoldfishPlace, string> = {
+const THEIR: Record<GamePlace, string> = {
   hand: "their hand",
   battlefield: "the battlefield",
   graveyard: "their graveyard",
@@ -49,6 +46,42 @@ const THEIR: Record<GoldfishPlace, string> = {
   libraryTop: "the top of their library",
   libraryBottom: "the bottom of their library",
 };
+
+/**
+ * Where the reader put a card of their own by hand, as the end of "Sol Ring to …" — the goldfish
+ * board's words, kept as they were (a sandbox move says "the graveyard", where a rules move says
+ * "your graveyard").
+ */
+const PUT_YOURS: Record<GamePlace, string> = {
+  hand: "your hand",
+  battlefield: "the battlefield",
+  graveyard: "the graveyard",
+  exile: "exile",
+  command: "the command zone",
+  libraryTop: "the top of the library",
+  libraryBottom: "the bottom of the library",
+};
+
+/** Where the reader put an opponent's card by hand, as the end of "Put the opponent's X …". */
+const PUT_THEIRS: Record<GamePlace, string> = {
+  hand: "into their hand",
+  battlefield: "onto the battlefield",
+  graveyard: "into their graveyard",
+  exile: "into exile",
+  command: "into the command zone",
+  libraryTop: "on top of their library",
+  libraryBottom: "on the bottom of their library",
+};
+
+const COUNT = ["no", "one", "two", "three", "four", "five", "six", "seven"];
+/** "seven", "eight" written as a number past the words a reader expects to see spelled. */
+function spelled(n: number): string {
+  return COUNT[n] ?? String(n);
+}
+
+function plural(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
 
 /** "Goblin Guide", "Goblin Guide and Ragavan", "A, B and C". */
 export function listed(names: readonly string[]): string {
@@ -60,8 +93,8 @@ export function listed(names: readonly string[]): string {
 function movedSentence(
   seat: PlaytestPlayer,
   name: string,
-  from: GoldfishPlace,
-  to: GoldfishPlace,
+  from: GamePlace,
+  to: GamePlace,
   opponents: number,
 ) {
   const you = seat === "you";
@@ -81,19 +114,84 @@ function movedSentence(
 }
 
 /**
+ * A card the reader put somewhere by hand (the sandbox), by whose card it was. The reader's own
+ * read the goldfish board's way: a card put down onto the battlefield, a spell put down unpaid
+ * ("Cast Ponder · not paid for" — a hand or command card put straight into the graveyard is the
+ * sandbox's spell cast for free), anything else "Sol Ring to the bottom of the library". An
+ * opponent's is put with its owner's name, into their own zones.
+ */
+function putSentence(
+  seat: PlaytestPlayer,
+  name: string,
+  from: GamePlace,
+  to: GamePlace,
+  opponents: number,
+) {
+  if (seat !== "you")
+    return `Put ${playerPossessive(seat, opponents, "mid")} ${name} ${PUT_THEIRS[to]}`;
+  if ((from === "hand" || from === "command") && to === "battlefield")
+    return `Put ${name} onto the battlefield`;
+  if ((from === "hand" || from === "command") && to === "graveyard")
+    return `Cast ${name} · not paid for`;
+  return `${name} to ${PUT_YOURS[to]}`;
+}
+
+/** A tap or an untap by hand: "Tapped 2 × Forest", "Untapped the opponent's Llanowar Elves". */
+function tappedSentence(
+  seat: PlaytestPlayer,
+  name: string,
+  count: number,
+  tapped: boolean,
+  opponents: number,
+) {
+  const verb = tapped ? "Tapped" : "Untapped";
+  const whose = seat === "you" ? "" : `${playerPossessive(seat, opponents, "mid")} `;
+  return count === 1 ? `${verb} ${whose}${name}` : `${verb} ${whose}${count} × ${name}`;
+}
+
+/** A card's counters after a change by hand: "Tarmogoyf has 2 +1/+1 counters", "Opponent 2's
+ *  Tarmogoyf has no +1/+1 counters". */
+function countersSentence(
+  seat: PlaytestPlayer,
+  name: string,
+  kind: string,
+  count: number,
+  opponents: number,
+) {
+  const card = seat === "you" ? name : `${playerPossessive(seat, opponents)} ${name}`;
+  return count === 0
+    ? `${card} has no ${kind} counters`
+    : `${card} has ${plural(count, `${kind} counter`)}`;
+}
+
+/**
  * One fact, as a sentence, or `null` for a fact the log does not repeat. `opponents` is how many
  * the game has: one keeps the duel's "The opponent", three name each ("Opponent 2 cast …").
+ * `goldfish` is a game against the goldfish, whose fatal blow is said as the old goldfish board said
+ * it — "The opponent is dead" — since no `eliminated` follows.
  */
-export function playtestSentence(h: PlaytestHappened, opponents = 1): string | null {
+export function playtestSentence(
+  h: PlaytestHappened,
+  opponents = 1,
+  goldfish = false,
+): string | null {
   switch (h.type) {
     case "mulliganed":
+      return `Mulligan ${h.mulligans} · drew seven`;
     case "kept":
+      return h.bottomed === 0
+        ? `Kept ${spelled(h.size)}`
+        : `Kept ${spelled(h.size)} · put ${spelled(h.bottomed)} on the bottom`;
     case "put":
+      return putSentence(h.seat, h.name, h.from, h.to, opponents);
     case "tapped":
+      return tappedSentence(h.seat, h.name, h.count, h.tapped, opponents);
     case "untappedAll":
+      return "Untapped everything";
     case "counters":
+      return countersSentence(h.seat, h.name, h.kind, h.count, opponents);
     case "shuffled":
-      return goldfishSentence(h);
+      return "Shuffled the library";
     case "lifeSet":
       return lifeSentence(
         h.seat === "you" ? "you" : "opponent",
@@ -134,6 +232,10 @@ export function playtestSentence(h: PlaytestHappened, opponents = 1): string | n
       return `${h.source} dealt ${h.amount} damage to ${h.target}`;
     case "life": {
       if (h.amount === 0) return null;
+      // The goldfish cannot lose, so nothing else says it would have: its plate's "dead on your
+      // turn N" and this line, the old goldfish board's words for the blow that got it there.
+      if (goldfish && h.seat !== "you" && h.total <= 0 && h.total - h.amount > 0)
+        return `${playerName(h.seat, opponents)} is dead`;
       const n = Math.abs(h.amount);
       const verb = h.amount < 0 ? "lost" : "gained";
       const to = h.amount < 0 ? `down to ${h.total}` : `up to ${h.total}`;
@@ -167,12 +269,17 @@ export function playtestKind(h: PlaytestHappened): LogKind {
   switch (h.type) {
     case "mulliganed":
     case "kept":
+      return "deal";
     case "put":
+      // A spell put down unpaid is a cast, as its line says; any other placing is a move.
+      return h.to === "graveyard" && (h.from === "hand" || h.from === "command") ? "cast" : "move";
     case "tapped":
     case "untappedAll":
+      return "tap";
     case "counters":
+      return "counter";
     case "shuffled":
-      return kindOf(h);
+      return "shuffle";
     case "lifeSet":
       return "life";
     case "turnBegan":
@@ -204,7 +311,8 @@ export function playtestKind(h: PlaytestHappened): LogKind {
 
 /**
  * The lines one step adds, newest first, ready to go on top of the log (`appendLog`). `turn` is
- * the turn the view after the step is on, and `opponents` how many opponents the game has.
+ * the turn the view after the step is on, `opponents` how many opponents the game has, and
+ * `goldfish` whether the one opponent is the goldfish (`PlaytestView.goldfish`).
  *
  * **A `turnBegan` moves the turn for the lines after it.** One call can carry the end of the
  * reader's turn, the whole of the opponent's and the start of the reader's next, and a line is
@@ -215,13 +323,14 @@ export function playtestLines(
   happened: readonly PlaytestHappened[],
   turn: number,
   opponents = 1,
+  goldfish = false,
 ): LogLine[] {
   const first = happened.find((h) => h.type === "turnBegan");
   let now = first?.type === "turnBegan" ? Math.max(0, first.turn - 1) : turn;
   const out: LogLine[] = [];
   for (const h of happened) {
     if (h.type === "turnBegan") now = h.turn;
-    const text = playtestSentence(h, opponents);
+    const text = playtestSentence(h, opponents, goldfish);
     if (text !== null) out.push({ turn: now, text, kind: playtestKind(h) });
   }
   return out.reverse();

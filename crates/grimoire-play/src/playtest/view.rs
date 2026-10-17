@@ -1,12 +1,11 @@
-//! What the playtest board is told: the game as the reader sees it from their seat, and what an
-//! action (theirs, the opponent's, the engine's) did.
+//! What the board is told: the game as the reader sees it from their seat, and what an action
+//! (theirs, an opponent's, the engine's) did — against the goldfish or against the AI alike.
 //!
-//! **Facts, not sentences**, as the goldfish's wire (`crate::view`): the page writes the log
-//! (`features/playtesting/play/log.ts`). Mirrored by hand in `packages/ui/lib/ipc/playtest.ts`,
-//! held field for field by `ipc.test.ts`. The card, its lane, its counters, the places a card can
-//! be put and the stops' two sides are the goldfish's own types: a card on this table is drawn by
-//! the same components as a card on that one. A player is a `PlaytestPlayer` rather than the
-//! goldfish's `Seat`: a game may have up to three opponents (issue #994), and a fact says which.
+//! **Facts, not sentences**: the page writes the log (`features/playtesting/play/log.ts`).
+//! Mirrored by hand in `packages/ui/lib/ipc/playtest.ts`, held field for field by `ipc.test.ts`.
+//! The card, its lane, its counters, the places a card can be put and the stops' two sides are the
+//! table's shared types (`crate::view`). A player is a `PlaytestPlayer` rather than a `Seat`: a
+//! game may have up to three opponents (issue #994), and a fact says which.
 //!
 //! **What the reader may not see is not sent.** An opponent's hand and library are counts, never
 //! cards; a card an opponent draws is "drew a card" with no name.
@@ -96,6 +95,15 @@ pub struct PlaytestView {
     /// The reader is ending the turn (`endTurn`): until it changes, the game stops only to block
     /// or to answer a question.
     pub ending_turn: bool,
+    /// The sandbox is on (`setSandbox`): the reader's hand may change the game outside the rules
+    /// — move, tap, counters, tokens, draws, life totals — on their own cards and on every card
+    /// the table shows, and a card the rules cannot play is put down unpaid. On from the start
+    /// against the goldfish, off against the AI.
+    pub sandbox: bool,
+    /// The opponent is the goldfish: one seat that keeps its hand, passes every priority and
+    /// never attacks or blocks, and that — like the reader — cannot lose (its `dead_on` says when
+    /// it would have). The game is never `Over`.
+    pub goldfish: bool,
     /// The reader's last action can be taken back (`PlaytestAction::Undo`), with all the opponent
     /// did after it. Never in a replay frame.
     pub can_undo: bool,
@@ -169,6 +177,10 @@ pub struct PlaytestSeat {
     pub mana_open: u32,
     /// The same open mana by type, and what is floating in the pool (`crate::view::ManaTable`).
     pub mana: ManaTable,
+    /// The goldfish's, which cannot lose: the reader's own turn, from 1, on which this player's
+    /// life first reached 0 or less — the board's "dead on your turn 5" — and `None` again once it
+    /// is back above 0. Always `None` for a player who can lose.
+    pub dead_on: Option<u32>,
 }
 
 /// The creatures in combat: each attacker and what it attacks, and each block.
@@ -382,9 +394,9 @@ pub enum Difficulty {
 
 /// Everything the board can ask of a game.
 ///
-/// The goldfish's sandbox moves are here under the goldfish's names — a hand on the reader's own
-/// cards is the escape hatch for a card the rules cannot play — and the rest is the rules:
-/// passing, attacking, blocking, and answering the engine.
+/// The rules — passing, attacking, blocking, answering the engine — and the sandbox: a hand on
+/// the table that moves, taps and counts whatever it likes, refused while the sandbox is off
+/// (`SetSandbox`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "type",
@@ -417,6 +429,11 @@ pub enum PlaytestAction {
     SetStops {
         stops: Vec<PlaytestStop>,
     },
+    /// Turn the sandbox on or off. A setting, as `SetStops`: taken at any stage, never undone,
+    /// and nothing plays on after it.
+    SetSandbox {
+        on: bool,
+    },
     /// Declare these attacks. Empty is no attack.
     Attack {
         attacks: Vec<PlaytestAttackPair>,
@@ -437,7 +454,9 @@ pub enum PlaytestAction {
     Auto,
     /// Take back the cast or activation the prompt came out of.
     Cancel,
-    // The sandbox, on the reader's own cards — the goldfish's actions.
+    // The sandbox, refused while it is off, in the reader's main phase only: on any card the
+    // reader owns or controls, and on any card the table shows (an opponent's battlefield,
+    // graveyard, exile or command zone) — never on an opponent's hand or library.
     Move {
         id: u64,
         to: Place,
@@ -551,19 +570,22 @@ pub enum PlaytestHappened {
         name: String,
         count: u32,
     },
-    /// The reader put a card somewhere by hand.
+    /// The reader put a card somewhere by hand; `seat` is whose card it is.
     Put {
+        seat: PlaytestPlayer,
         name: String,
         from: Place,
         to: Place,
     },
     Tapped {
+        seat: PlaytestPlayer,
         name: String,
         count: u32,
         tapped: bool,
     },
     UntappedAll,
     Counters {
+        seat: PlaytestPlayer,
         name: String,
         kind: String,
         count: u32,

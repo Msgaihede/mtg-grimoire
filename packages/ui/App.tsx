@@ -55,11 +55,12 @@ const TradePage = lazy(() =>
 const PlaytestingPage = lazy(() =>
   import("@/features/playtesting/PlaytestingPage").then((m) => ({ default: m.PlaytestingPage })),
 );
-// **The goldfish board**, the Decks view's third state: a game of the open deck on phase.rs's
-// rules engine. Lazy for the reason the rest are — a session that never plays one never fetches
-// its board, its drag targets or its menus.
+// **The goldfish**, the Decks view's third state: a game of the open deck against the goldfish on
+// phase.rs's rules engine — the playtest board, opened from the editor. Lazy for the reason the
+// rest are — a session that never plays one never fetches its board, its drag targets or its
+// menus. Its chunk and Playtesting's share the board.
 const GoldfishPage = lazy(() =>
-  import("@/features/playtesting/goldfish/GoldfishPage").then((m) => ({
+  import("@/features/playtesting/GoldfishPage").then((m) => ({
     default: m.GoldfishPage,
   })),
 );
@@ -114,9 +115,10 @@ function ActiveView({ update }: { update: Update }) {
   // grows a real one this file does not change and cannot be the thing that was forgotten. Trade
   // was the other, and is the proof: its page arrived and this branch was not touched.
   //
-  // **The goldfish board is the third state**, drawn in place of the editor while the store names
-  // the open deck (`goldfish` is cleared by every navigation, so it never names another). Keyed
-  // by deck and variant: a board for the theory list is a different game from the live one.
+  // **The board against the goldfish is the third state**, drawn in place of the editor while the
+  // store names the open deck (`goldfish` is cleared by every navigation, so it never names
+  // another). Keyed by deck and variant: a board for the theory list is a different game from the
+  // live one.
   if (goldfish !== null && goldfish.deckId === openDeckId) {
     return (
       <GoldfishPage

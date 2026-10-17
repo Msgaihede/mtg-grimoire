@@ -1,13 +1,15 @@
 /**
- * The playtest board: one game of a deck against one other, or against three in a four-player
- * game (issue #994), each opponent played by phase.rs's AI (`phase-ai`), over the same rules engine as the goldfish board (`crates/grimoire-play`, linked
- * by the desktop host alone).
+ * A game on a deck, over phase.rs's rules engine (`crates/grimoire-play`, linked by the desktop
+ * host alone): the reader's deck against **the goldfish** — an opponent that does nothing and
+ * never loses — or against one other deck, or three in a four-player game (issue #994), each
+ * played by phase.rs's AI (`phase-ai`). Goldfishing and playtesting are one game on one board;
+ * the goldfish is a playtest whose opponent takes no actions, with the sandbox on.
  *
  * **A domain of `../ipc.ts`** like the others, and read through `@/lib/ipc` only. The shapes are
  * `grimoire-play`'s `playtest/view.rs`, held field for field by `ipc.test.ts`. A card, its lane,
- * its counters and a place are the goldfish's own types, so the goldfish's table pieces draw this
- * board's cards too. A player is a {@link PlaytestPlayer}: a duel's two are spelled as the
- * goldfish's seats, and a four-player game adds `opponent2` and `opponent3`. **The engine supplies facts, the page writes the sentences**:
+ * its counters and a place are the table's shared types (`./table.ts`). A player is a
+ * {@link PlaytestPlayer}: a duel's two are spelled as the table's seats, and a four-player game
+ * adds `opponent2` and `opponent3`. **The engine supplies facts, the page writes the sentences**:
  * `PlaytestHappened` is which card went where and whose doing it was, and
  * `features/playtesting/play/log.ts` turns it into "The opponent cast Lightning Bolt".
  *
@@ -16,14 +18,7 @@
  * **A web or phone host refuses all four** — they are on the desktop's `DESKTOP_ONLY` list, and
  * the light app draws no Playtesting.
  */
-import type {
-  GameCard,
-  GoldfishPlace,
-  GoldfishSeat,
-  ManaTable,
-  MulliganView,
-  TokenOffer,
-} from "./goldfish";
+import type { GameCard, GamePlace, GameSeat, ManaTable, MulliganView, TokenOffer } from "./table";
 import { invoke } from "./invoke";
 
 /**
@@ -100,6 +95,19 @@ export interface PlaytestView {
   stops: PlaytestStop[];
   /** The reader is ending the turn: until it changes, only a block or a question stops it. */
   endingTurn: boolean;
+  /**
+   * The sandbox is on (`setSandbox`): the reader's hand may change the game outside the rules —
+   * move, tap, counters, tokens, draws, life totals — on their own cards and on every card the
+   * table shows, and a card the rules cannot play is put down unpaid. On from the start against
+   * the goldfish, off against the AI.
+   */
+  sandbox: boolean;
+  /**
+   * The opponent is the goldfish: one seat that keeps its hand, passes every priority, never
+   * attacks or blocks, and — like the reader — cannot lose (its `deadOn` says when it would
+   * have). The game is never `over`.
+   */
+  goldfish: boolean;
   /** The reader's last action can be taken back (`undo`), with all the opponent did after it.
    *  Never in a replay frame. */
   canUndo: boolean;
@@ -109,7 +117,7 @@ export interface PlaytestView {
 
 /** A step to stop at, on whose turn: the reader's, or any opponent's. */
 export interface PlaytestStop {
-  seat: GoldfishSeat;
+  seat: GameSeat;
   step: PlaytestStopStep;
 }
 
@@ -133,6 +141,12 @@ export interface PlaytestSeat {
   manaOpen: number;
   /** The same open mana by type, and what is floating in the pool. */
   mana: ManaTable;
+  /**
+   * The goldfish's, which cannot lose: the reader's own turn (counted from 1) on which this
+   * player's life first reached 0 or less — "dead on your turn 5" — and `null` again once it is
+   * back above 0. Always `null` for a player who can lose.
+   */
+  deadOn: number | null;
 }
 
 export interface PlaytestCombat {
@@ -248,13 +262,20 @@ export type PlaytestAction =
   | { type: "pass" }
   | { type: "endTurn" }
   | { type: "setStops"; stops: PlaytestStop[] }
+  /** Turn the sandbox on or off. A setting, as `setStops`: taken at any stage, never undone. */
+  | { type: "setSandbox"; on: boolean }
   | { type: "attack"; attacks: PlaytestAttackPair[] }
   | { type: "block"; blocks: PlaytestBlockPair[] }
   | { type: "choose"; index: number }
   | { type: "pickCards"; ids: number[] }
   | { type: "auto" }
   | { type: "cancel" }
-  | { type: "move"; id: number; to: GoldfishPlace }
+  /*
+   * The sandbox, refused while it is off, in the reader's main phase only: any card the reader
+   * owns or controls, and any card on the table (an opponent's battlefield, graveyard, exile or
+   * command zone) — never an opponent's hand or library.
+   */
+  | { type: "move"; id: number; to: GamePlace }
   | { type: "tap"; ids: number[]; tapped: boolean }
   | { type: "untapAll" }
   | { type: "counters"; id: number; kind: string; delta: number }
@@ -277,7 +298,7 @@ export type PlaytestHappened =
   | { type: "played"; seat: PlaytestPlayer; name: string }
   | { type: "cast"; seat: PlaytestPlayer; name: string }
   | { type: "activated"; seat: PlaytestPlayer; name: string }
-  | { type: "moved"; seat: PlaytestPlayer; name: string; from: GoldfishPlace; to: GoldfishPlace }
+  | { type: "moved"; seat: PlaytestPlayer; name: string; from: GamePlace; to: GamePlace }
   | { type: "drew"; seat: PlaytestPlayer; name: string | null }
   | { type: "attacked"; seat: PlaytestPlayer; names: string[] }
   | { type: "blocked"; seat: PlaytestPlayer; blocker: string; attacker: string }
@@ -292,10 +313,11 @@ export type PlaytestHappened =
     }
   | { type: "life"; seat: PlaytestPlayer; amount: number; total: number }
   | { type: "tokensCreated"; seat: PlaytestPlayer; name: string; count: number }
-  | { type: "put"; name: string; from: GoldfishPlace; to: GoldfishPlace }
-  | { type: "tapped"; name: string; count: number; tapped: boolean }
+  /** The reader put a card somewhere by hand; `seat` is whose card it is. */
+  | { type: "put"; seat: PlaytestPlayer; name: string; from: GamePlace; to: GamePlace }
+  | { type: "tapped"; seat: PlaytestPlayer; name: string; count: number; tapped: boolean }
   | { type: "untappedAll" }
-  | { type: "counters"; name: string; kind: string; count: number }
+  | { type: "counters"; seat: PlaytestPlayer; name: string; kind: string; count: number }
   | { type: "shuffled" }
   | { type: "lifeSet"; seat: PlaytestPlayer; life: number; was: number }
   | { type: "chose"; what: string }
@@ -353,9 +375,10 @@ export interface UnsupportedCard {
 export const playtestCommands = {
   /**
    * A new game: the reader's deck as it stands in `variant` against each of `opponents` (one for a
-   * duel, three for a four-player game), each played by the AI at `difficulty`. Answers at the
-   * reader's opening hand (or the first thing the reader decides). `seed` is the shuffle and the
-   * coin flip.
+   * duel, three for a four-player game), each played by the AI at `difficulty` — or, with **no
+   * opponents, against the goldfish** (`difficulty` unused; the reader plays first). Answers at
+   * the reader's opening hand (or the first thing the reader decides). `seed` is the shuffle and
+   * the coin flip.
    */
   playtestStart: (
     deckId: number,

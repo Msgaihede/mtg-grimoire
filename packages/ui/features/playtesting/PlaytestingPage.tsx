@@ -5,7 +5,8 @@ import type { PlaytestPicks } from "./play/usePlaytestGame";
 import { PlaytestSetup } from "./PlaytestSetup";
 
 /**
- * The Playtesting view: a setup screen, and the game it starts.
+ * The Playtesting view: a setup screen, and the game it starts — against the goldfish, one deck
+ * or three.
  *
  * A file of its own so the router branch names a page — it was a `WorkInProgress` sentence, and
  * `App.tsx`'s branch did not change when it grew into this, which is what that placeholder was a
@@ -29,7 +30,12 @@ export function PlaytestingPage(): JSX.Element {
         <PlaytestPage
           picks={playing}
           deckName={nameOf(playing.deckId)}
-          opponentNames={playing.opponents.map((o) => nameOf(o.deckId))}
+          // The goldfish has no deck to name it: its plate says what it is.
+          opponentNames={
+            playing.opponents.length === 0
+              ? ["Goldfish"]
+              : playing.opponents.map((o) => nameOf(o.deckId))
+          }
           onBack={back}
         />
       )}

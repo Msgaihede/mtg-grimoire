@@ -1,0 +1,206 @@
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import type { GameCard } from "@/lib/ipc";
+import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
+import { Battlefield } from "./Battlefield";
+
+let next = 1;
+function card(name: string, over: Partial<GameCard> = {}): GameCard {
+  return {
+    id: next++,
+    cardId: `p-${name}`,
+    name,
+    typeLine: "",
+    lane: "land",
+    manaValue: 0,
+    isLand: true,
+    isToken: false,
+    isCommander: false,
+    tapped: false,
+    counters: [],
+    power: null,
+    toughness: null,
+    tax: 0,
+    ...over,
+  };
+}
+
+function creature(name: string, over: Partial<GameCard> = {}): GameCard {
+  return card(name, { lane: "creature", isLand: false, power: 2, toughness: 2, ...over });
+}
+
+function setup(
+  cards: GameCard[],
+  {
+    sandbox = true,
+    readOnly = false,
+    onActivate,
+  }: { sandbox?: boolean; readOnly?: boolean; onActivate?: (id: number) => void } = {},
+) {
+  const onAct = vi.fn();
+  const onPoint = vi.fn();
+  const onUnpoint = vi.fn();
+  render(
+    <ContextMenuProvider>
+      <Battlefield
+        cards={cards}
+        sandbox={sandbox}
+        readOnly={readOnly}
+        onActivate={onActivate}
+        onAct={onAct}
+        onDrop={vi.fn()}
+        onPoint={onPoint}
+        onUnpoint={onUnpoint}
+      />
+    </ContextMenuProvider>,
+  );
+  return { onAct, onPoint, onUnpoint };
+}
+
+const menuRows = () => screen.queryAllByRole("menuitem").map((r) => r.textContent);
+
+describe("Battlefield", () => {
+  it("piles two Forests that look the same into one card marked ×2", () => {
+    setup([card("Forest"), card("Forest")]);
+    expect(screen.getByRole("button", { name: "2 Forests" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+    expect(screen.getByText("×2")).toBeInTheDocument();
+  });
+
+  it("draws a pile as its cards stacked, five at most, with the count on the chip", () => {
+    setup(Array.from({ length: 8 }, () => card("Forest")));
+    const pile = document.querySelector("[data-land]");
+    // The top card is the button; the four under it are drawn and hidden from a screen reader.
+    expect(pile?.querySelectorAll(':scope > div[aria-hidden="true"]')).toHaveLength(4);
+    expect(screen.getByText("×8")).toBeInTheDocument();
+  });
+
+  it("draws every card of a pile shorter than five", () => {
+    setup([card("Island"), card("Island"), card("Island")]);
+    const pile = document.querySelector("[data-land]");
+    expect(pile?.querySelectorAll(':scope > div[aria-hidden="true"]')).toHaveLength(2);
+  });
+
+  it("keeps a tapped Forest apart from an untapped one, and says which is tapped", () => {
+    setup([card("Forest"), card("Forest", { tapped: true })]);
+    expect(screen.getByRole("button", { name: "Forest" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Forest, tapped" })).toBeInTheDocument();
+    expect(screen.queryByText(/^×/)).not.toBeInTheDocument();
+  });
+
+  it("does not pluralise a name that already ends in s", () => {
+    setup([card("Plains", { tapped: true }), card("Plains", { tapped: true })]);
+    expect(screen.getByRole("button", { name: "2 Plains, tapped" })).toBeInTheDocument();
+  });
+
+  it("taps the top card of a pile on a click", () => {
+    const a = card("Forest");
+    const b = card("Forest");
+    const { onAct } = setup([a, b]);
+    fireEvent.click(screen.getByRole("button", { name: "2 Forests" }));
+    expect(onAct).toHaveBeenCalledWith({ type: "tap", ids: [a.id], tapped: true });
+  });
+
+  it("taps the whole pile on a Shift-click, and untaps a tapped one", () => {
+    const a = card("Plains", { tapped: true });
+    const b = card("Plains", { tapped: true });
+    const { onAct } = setup([a, b]);
+    fireEvent.click(screen.getByRole("button", { name: "2 Plains, tapped" }), { shiftKey: true });
+    expect(onAct).toHaveBeenCalledWith({ type: "tap", ids: [a.id, b.id], tapped: false });
+  });
+
+  it("badges a +1/+1 counter the way the card reads, and any other kind by name", () => {
+    setup([
+      creature("Tataru Taru", { counters: [{ kind: "+1/+1", count: 2 }] }),
+      card("Karn", { lane: "other", isLand: false, counters: [{ kind: "loyalty", count: 3 }] }),
+    ]);
+    expect(screen.getByText("+2/+2")).toBeInTheDocument();
+    expect(screen.getByText("3 loyalty")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Tataru Taru, +2/+2" })).toBeInTheDocument();
+  });
+
+  it("says a token is one", () => {
+    setup([
+      card("Treasure", { lane: "other", isLand: false, isToken: true, cardId: null }),
+      card("Treasure", { lane: "other", isLand: false, isToken: true, cardId: null }),
+    ]);
+    expect(screen.getByRole("button", { name: "2 Treasures, token" })).toBeInTheDocument();
+  });
+
+  it("lays creatures in front and lands and the rest behind", () => {
+    setup([
+      creature("Old Gnawbone"),
+      card("Forest"),
+      card("Sol Ring", { lane: "other", isLand: false }),
+    ]);
+    const front = screen.getByRole("region", { name: "Creatures" });
+    const back = screen.getByRole("region", { name: "Lands and other permanents" });
+    expect(within(front).getByRole("button", { name: "Old Gnawbone" })).toBeInTheDocument();
+    expect(within(back).getByRole("button", { name: "Forest" })).toBeInTheDocument();
+    expect(within(back).getByRole("button", { name: "Sol Ring" })).toBeInTheDocument();
+  });
+
+  it("points at a pile with its count, and lets go when the pointer leaves", () => {
+    const a = card("Forest");
+    const b = card("Forest");
+    const { onPoint, onUnpoint } = setup([a, b]);
+    const pile = screen.getByRole("button", { name: "2 Forests" });
+    fireEvent.mouseEnter(pile);
+    expect(onPoint).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ids: [a.id, b.id],
+        place: "battlefield",
+        line: "2 Forests on the battlefield",
+      }),
+    );
+    fireEvent.mouseLeave(pile);
+    expect(onUnpoint).toHaveBeenCalled();
+  });
+
+  it("offers an empty table as somewhere to play a card", () => {
+    setup([]);
+    expect(screen.getByRole("region", { name: "Battlefield" })).toHaveTextContent(
+      "Drag a card here to play it",
+    );
+  });
+});
+
+describe("Battlefield with the sandbox off", () => {
+  it("taps nothing on a click, and its menu is the rules' one row", async () => {
+    const ring = card("Sol Ring", { lane: "other", isLand: false });
+    const onActivate = vi.fn();
+    const { onAct } = setup([ring], { sandbox: false, onActivate });
+    const button = screen.getByRole("button", { name: "Sol Ring" });
+    fireEvent.click(button);
+    fireEvent.click(button, { shiftKey: true });
+    expect(onAct).not.toHaveBeenCalled();
+
+    fireEvent.contextMenu(button);
+    await screen.findByRole("menu");
+    expect(menuRows()).toEqual(["Activate ability"]);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Activate ability" }));
+    expect(onActivate).toHaveBeenCalledWith(ring.id);
+  });
+
+  it("opens no menu on a card with no ability to offer", () => {
+    setup([card("Forest")], { sandbox: false, readOnly: true });
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Forest" }));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+});
+
+describe("Battlefield's far side with the sandbox on", () => {
+  it("is tapped through its menu, never by a click, and offers no ability of its own", async () => {
+    const goblin = creature("Goblin Guide");
+    const { onAct } = setup([goblin], { readOnly: true, onActivate: vi.fn() });
+    const button = screen.getByRole("button", { name: "Goblin Guide" });
+    fireEvent.click(button);
+    expect(onAct).not.toHaveBeenCalled();
+
+    fireEvent.contextMenu(button);
+    await screen.findByRole("menu");
+    expect(menuRows()).not.toContain("Activate ability");
+    fireEvent.click(screen.getByRole("menuitem", { name: "Tap" }));
+    expect(onAct).toHaveBeenCalledWith({ type: "tap", ids: [goblin.id], tapped: true });
+  });
+});

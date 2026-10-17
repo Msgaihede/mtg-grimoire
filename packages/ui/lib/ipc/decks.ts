@@ -3067,12 +3067,7 @@ export const deckCommands = {
    * (`ENTRY_GONE`). Journalled like every token write — one history row, *Removed Treasure's TMOM
    * #12 printing*, and one undo step that puts it back.
    */
-  deckTokenRemove: (
-    deckId: number,
-    variant: DeckVariant,
-    oracleId: string,
-    entry: TokenEntryKey,
-  ) =>
+  deckTokenRemove: (deckId: number, variant: DeckVariant, oracleId: string, entry: TokenEntryKey) =>
     invoke<void>("deck_token_remove", {
       deckId,
       variant,
@@ -3146,8 +3141,7 @@ export const deckCommands = {
    *  archive here and no `coalesce` to hide behind: the old `decks.notes` column could never be
    *  emptied by a patch at all, so a multi-note model owns this path itself. The press is a
    *  destructive confirm, and the step is on the deck's undo stack. */
-  deckNoteDelete: (deckId: number, id: number) =>
-    invoke<void>("deck_note_delete", { deckId, id }),
+  deckNoteDelete: (deckId: number, id: number) => invoke<void>("deck_note_delete", { deckId, id }),
   /**
    * Name one more card on a note. Answers the **whole updated note**, so the band redraws from
    * one round trip.
@@ -3193,8 +3187,7 @@ export const deckCommands = {
    * answering `[]` when the read fails**, because the band's dialogs autosave and must never write
    * over lists nobody could read.
    */
-  deckTodoLists: (deckId: number): Promise<DeckTodoList[]> =>
-    invoke("deck_todo_lists", { deckId }),
+  deckTodoLists: (deckId: number): Promise<DeckTodoList[]> => invoke("deck_todo_lists", { deckId }),
   /**
    * Make a list at the end of the deck's own (`max(sort_order) + 1`) and answer it — the dialog's
    * first real change on a **New to-do list**, which is why a list opened and closed untouched is

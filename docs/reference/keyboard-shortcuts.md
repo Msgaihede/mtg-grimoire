@@ -263,24 +263,31 @@ belongs in the release note as one.
 
 ## Undo and redo on the game boards
 
-**`Ctrl+Z` takes the last action back on the goldfish board and the playtest board; `Ctrl+Y` or
-`Ctrl+Shift+Z` takes it again** (2026-10-14,
+**`Ctrl+Z` takes the last action back on the game board, against the goldfish or the AI; `Ctrl+Y`
+or `Ctrl+Shift+Z` takes it again** (2026-10-14,
 [issue #1022](https://github.com/Msgaihede/mtg-grimoire/issues/1022)). The deck editor's
 spellings, so a reader's hands learn undo once; the argument for the pair stays at
 `deckEditor.redo`.
 
-**Two scopes, because the boards are drawn in two places.** The playtest board is the Playtesting
-view, so its rows are `playtesting`'s — the first view scope to bind anything. The goldfish board
-is drawn *in place of* the deck editor (`App.tsx`), the way the editor is drawn in place of the
-decks page, so it is a scope of its own, `goldfish`: `activeScopes` swaps `deckEditor` for it while
-the store's board is open over the open deck, and the panel lists **Goldfish** instead of chords
-for an editor that is not on screen.
+**Two scopes, because the one board is drawn in two places.** Since 2026-10-17 goldfishing and
+playtesting are one game on one board ([playtest.md](playtest.md)), and both scopes hold the same
+list (`BOARD` in `lib/shortcuts.ts`). Opened from the Playtesting page's setup, the board is the
+Playtesting view, so its rows are `playtesting`'s — the first view scope to bind anything. Opened
+from the deck editor's "Goldfish this deck", it is drawn *in place of* the editor (`App.tsx`), the
+way the editor is drawn in place of the decks page, so it is a scope of its own, `goldfish`:
+`activeScopes` swaps `deckEditor` for it while the store's board is open over the open deck, and
+the panel lists **Goldfish** instead of chords for an editor that is not on screen. The board picks
+its scope from where it was opened (`returnTo`: `"setup"` or `"deck"`).
 
 `useUndoKeys` (`features/playtesting/undo.ts`) is the one binding for both. It yields to a text
 field (the life steppers keep the browser's own undo), to a dialog or menu over the board as the
-boards' other keys do, and to a held key; a press with nothing to go to is eaten rather than
-reaching the browser. The game's history is the engine's — [goldfish.md](goldfish.md#undo-and-redo)
+board's other keys do, and to a held key; a press with nothing to go to is eaten rather than
+reaching the browser. The game's history is the engine's — [playtest.md](playtest.md#undo-and-redo)
 has the design.
+
+The board's other keys are its own and not catalogued: Space presses the stage button (first main
+"To combat", second main "End turn"; the goldfish board's "Next turn" is gone), and T, G, E and H
+work only while the sandbox's moves do ([goldfish.md](goldfish.md#the-table)).
 
 ## `newWindow`
 

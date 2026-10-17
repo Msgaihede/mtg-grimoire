@@ -1,6 +1,7 @@
+import { StrictMode } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { PlaytestStep } from "@/lib/ipc";
+import type { PlaytestStep, PlaytestView } from "@/lib/ipc";
 import { openingHand, replayStep, turnFive } from "./fixtures";
 import { usePlaytestGame, type PlaytestPicks } from "./usePlaytestGame";
 
@@ -22,6 +23,14 @@ const PICKS: PlaytestPicks = {
   opponents: [{ deckId: 9, variant: "live" }],
   difficulty: "hard",
 };
+
+/** A game against the goldfish: no opponents picked, and so no skill. */
+const GOLDFISH: PlaytestPicks = { deckId: 7, variant: "live", opponents: [] };
+
+/** The opening hands of a goldfish game, as the engine deals it: the sandbox on. */
+function goldfishHand(): PlaytestView {
+  return { ...openingHand(), goldfish: true, sandbox: true };
+}
 
 beforeEach(() => {
   playtestStart.mockReset().mockResolvedValue({
@@ -183,5 +192,94 @@ describe("usePlaytestGame", () => {
     await waitFor(() => expect(result.current.view).toBe(step.view));
     expect(result.current.log).toHaveLength(before.length + 9);
     expect(result.current.log[0].text).toBe("Drew Island");
+  });
+  // The goldfish is a playtest whose opponent does nothing: the same command, no opponents.
+  it("deals the goldfish as a game with no opponents, and logs its deal as the goldfish did", async () => {
+    playtestStart.mockResolvedValue({ view: goldfishHand(), happened: [], frames: [] });
+    const { result } = renderHook(() => usePlaytestGame(GOLDFISH));
+    await waitFor(() => expect(result.current.view?.goldfish).toBe(true));
+    expect(playtestStart).toHaveBeenCalledWith(7, "live", [], "medium", expect.any(Number));
+    expect(result.current.log.map((l) => l.text)).toEqual(["Shuffled and drew seven"]);
+  });
+
+  it("says the goldfish's fatal blow in the log, which no elimination follows", async () => {
+    playtestStart.mockResolvedValue({ view: goldfishHand(), happened: [], frames: [] });
+    playtestAct.mockResolvedValue({
+      view: { ...turnFive().view, goldfish: true, sandbox: true },
+      happened: [{ type: "life", seat: "opponent", amount: -5, total: -1 }],
+      frames: [],
+    });
+    const { result } = renderHook(() => usePlaytestGame(GOLDFISH));
+    await waitFor(() => expect(result.current.view).not.toBeNull());
+    act(() => result.current.act({ type: "pass" }));
+    await waitFor(() => expect(result.current.log[0]?.text).toBe("The opponent is dead"));
+  });
+
+  // React's StrictMode mounts, unmounts and mounts again: two deals go out, and only the second
+  // is the page's. The first is put away, and its answer is never drawn.
+  it("draws only the second deal of StrictMode's double mount", async () => {
+    const first = goldfishHand();
+    const second = goldfishHand();
+    playtestStart
+      .mockResolvedValueOnce({ view: first, happened: [], frames: [] })
+      .mockResolvedValueOnce({ view: second, happened: [], frames: [] });
+    const { result } = renderHook(() => usePlaytestGame(GOLDFISH), { wrapper: StrictMode });
+    await waitFor(() => expect(result.current.view).toBe(second));
+    expect(playtestStart).toHaveBeenCalledTimes(2);
+    expect(playtestEnd).toHaveBeenCalledTimes(1);
+    expect(result.current.log.map((l) => l.text)).toEqual(["Shuffled and drew seven"]);
+  });
+
+  // Issue #1022: the engine takes the game back; the hook takes the action's lines off the log.
+  it("takes an undone action's lines off the log, and a redone one's back on", async () => {
+    playtestStart.mockResolvedValue({ view: goldfishHand(), happened: [], frames: [] });
+    playtestAct.mockImplementation(async (a) => {
+      const type = (a as { type: string }).type;
+      return {
+        view: turnFive().view,
+        happened: type === "shuffle" ? [{ type: "shuffled" }] : [],
+        frames: [],
+      };
+    });
+    const { result } = renderHook(() => usePlaytestGame(GOLDFISH));
+    await waitFor(() => expect(result.current.view).not.toBeNull());
+    const texts = () => result.current.log.map((l) => l.text);
+    act(() => result.current.act({ type: "shuffle" }));
+    await waitFor(() =>
+      expect(texts()).toEqual(["Shuffled the library", "Shuffled and drew seven"]),
+    );
+    act(() => result.current.act({ type: "undo" }));
+    await waitFor(() => expect(texts()).toEqual(["Shuffled and drew seven"]));
+    act(() => result.current.act({ type: "redo" }));
+    await waitFor(() =>
+      expect(texts()).toEqual(["Shuffled the library", "Shuffled and drew seven"]),
+    );
+    expect(playtestAct).toHaveBeenLastCalledWith({ type: "redo" });
+  });
+
+  // The sandbox is a setting, like the stops: the engine has nothing to undo for it, so an undo
+  // after it goes back past it to the last real action — and the log must go back the same way.
+  it("does not remember a sandbox toggle or the stops as an action for undo", async () => {
+    playtestStart.mockResolvedValue({ view: goldfishHand(), happened: [], frames: [] });
+    playtestAct.mockImplementation(async (a) => {
+      const type = (a as { type: string }).type;
+      return {
+        view: turnFive().view,
+        happened: type === "shuffle" ? [{ type: "shuffled" }] : [],
+        frames: [],
+      };
+    });
+    const { result } = renderHook(() => usePlaytestGame(GOLDFISH));
+    await waitFor(() => expect(result.current.view).not.toBeNull());
+    const texts = () => result.current.log.map((l) => l.text);
+    act(() => result.current.act({ type: "shuffle" }));
+    await waitFor(() => expect(texts()).toHaveLength(2));
+    act(() => {
+      result.current.act({ type: "setSandbox", on: false });
+      result.current.act({ type: "setStops", stops: [] });
+    });
+    await waitFor(() => expect(result.current.busy).toBe(false));
+    act(() => result.current.act({ type: "undo" }));
+    await waitFor(() => expect(texts()).toEqual(["Shuffled and drew seven"]));
   });
 });

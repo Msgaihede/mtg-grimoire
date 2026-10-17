@@ -1,10 +1,11 @@
 import { useEffect } from "react";
 import { isTextField } from "@/components/menu/useContextMenu";
 import { matchesShortcut, shortcut } from "@/lib/shortcuts";
-import { appendLog, type LogLine } from "./goldfish/log";
+import { appendLog, type LogLine } from "./table/log";
 
 /*
- * Undo and redo on both boards (issue #1022), the page's half.
+ * Undo and redo on the game board (issue #1022), the page's half — against the goldfish or the AI,
+ * from whichever page opened it.
  *
  * **The game's half is the engine's**: `crates/grimoire-play/src/history.rs` keeps the whole game
  * before each of the reader's actions, and `{ type: "undo" }` / `{ type: "redo" }` go back and
@@ -67,7 +68,7 @@ export function redoLog(book: LogBook): LogBook {
 }
 
 /** The chords, resolved at import so a renamed id throws before a press (`useDeckKeyboard`'s
- *  reason). */
+ *  reason). One board, catalogued under the two scopes it is drawn in. */
 const KEYS = {
   goldfish: { undo: shortcut("goldfish", "undo"), redo: shortcut("goldfish", "redo") },
   playtesting: { undo: shortcut("playtesting", "undo"), redo: shortcut("playtesting", "redo") },

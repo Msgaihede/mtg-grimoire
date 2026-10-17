@@ -2,8 +2,10 @@ import { useCallback, useEffect, useState, type JSX } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
 import type { PlaytestAction, PlaytestHappened, PlaytestView } from "@/lib/ipc";
-import { appendLog, type LogLine } from "../goldfish/log";
+import { appendLog, type LogLine } from "../table/log";
+import type { Playmat } from "../table/types";
 import {
+  GOLDFISH,
   attackStep,
   blockStep,
   castChoicePrompt,
@@ -16,7 +18,11 @@ import {
   fourPlayerCombat,
   fourPlayerLost,
   gameOver,
+  goldfishDead,
+  goldfishOpeningHand,
+  goldfishTurn,
   openingHand,
+  playLocally,
   replayStep,
   respondStep,
   scryPick,
@@ -41,6 +47,8 @@ function Board({
   error = null,
   happened,
   opponentNames = ["Boros Aggro"],
+  initialPlaymat,
+  returnTo,
 }: {
   view: PlaytestView | null;
   onAct: (a: PlaytestAction) => void;
@@ -49,8 +57,10 @@ function Board({
   error?: string | null;
   /** Facts to pop once the board is drawn (the damage story). */
   happened?: PlaytestHappened[];
-  /** One deck a duel, three a four-player table. */
-  opponentNames?: string[];
+  /** One deck a duel, three a four-player table; `["Goldfish"]` against the goldfish. */
+  opponentNames?: readonly string[];
+  initialPlaymat?: Playmat;
+  returnTo?: "setup" | "deck";
 }): JSX.Element {
   // Handed over a moment after the first paint, as a step's facts arrive after its view.
   const [later, setLater] = useState<PlaytestHappened[] | undefined>(undefined);
@@ -71,6 +81,46 @@ function Board({
       onBack={() => {}}
       onNewGame={() => {}}
       happened={later}
+      initialPlaymat={initialPlaymat}
+      returnTo={returnTo}
+    />
+  );
+}
+
+/**
+ * A goldfish game, played locally: each action goes to `onAct` (recorded) and to `playLocally`,
+ * the fixtures' outline of what the engine would answer to the sandbox's moves, so a reader
+ * clicking through the story sees the table move — and the Sandbox chip turn it off and on. The
+ * rules are Rust's and are not here: a play is a placement, and the stage button only records.
+ */
+function Played({
+  view: start,
+  onAct,
+  log = [],
+  initialPlaymat,
+}: {
+  view: PlaytestView;
+  onAct: (a: PlaytestAction) => void;
+  log?: LogLine[];
+  initialPlaymat?: Playmat;
+}): JSX.Element {
+  const [view, setView] = useState(start);
+  return (
+    <PlaytestBoard
+      deckName="Kenrith"
+      opponentNames={GOLDFISH}
+      view={view}
+      log={log}
+      error={null}
+      busy={false}
+      onAct={(a) => {
+        onAct(a);
+        setView((v) => playLocally(v, a));
+      }}
+      onBack={() => {}}
+      onNewGame={() => setView(start)}
+      initialPlaymat={initialPlaymat}
+      returnTo="deck"
     />
   );
 }
@@ -149,10 +199,13 @@ const meta = {
     docs: {
       description: {
         component:
-          "The playtest board — a deck against another of the reader's decks, the opponent " +
-          "played by phase.rs's AI. **Presentational**: a view in, actions out. The opponent's " +
-          "half is the reader's turned round; the middle line holds the turn, the stack and the " +
-          "combat. These stories record what the board asks; there is no engine behind them.",
+          "The board — a deck against the goldfish (an opponent that does nothing and never " +
+          "loses), or against another of the reader's decks played by phase.rs's AI. " +
+          "**Presentational**: a view in, actions out. The opponent's half is the reader's " +
+          "turned round; the middle line holds the turn, the stack and the combat. The Sandbox " +
+          "chip says whether the hand may change the game outside the rules. These stories " +
+          "record what the board asks; there is no engine behind them (the goldfish's answer " +
+          "the sandbox's moves in outline, so the table can be handled).",
       },
     },
   },
@@ -339,4 +392,105 @@ export const FourPlayerLost: Story = {
   play: async ({ canvasElement }) => {
     await expect(within(canvasElement).getByRole("heading", { name: "You lost" })).toBeVisible();
   },
+};
+
+/** The sandbox on against the AI: the reader's cards handled by hand, and the opponent's
+ *  permanents' menus — tap, counters, a copy, a move — though never dragged. */
+export const SandboxOn: Story = {
+  args: { view: { ...turnFive().view, sandbox: true } },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+    const chip = canvas.getByRole("button", { name: "Sandbox" });
+    await expect(chip).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(chip);
+    await expect(args.onAct).toHaveBeenLastCalledWith({ type: "setSandbox", on: false });
+  },
+};
+
+/** The game log from the turn-nine goldfish game, cut into turns, newest first. */
+const GOLDFISH_LOG: LogLine[] = [
+  { turn: 17, text: "The opponent took 7, down to 12", kind: "life" },
+  { turn: 17, text: "Created 5 Treasure tokens", kind: "token" },
+  { turn: 17, text: "Cast Consecrated Sphinx", kind: "cast" },
+  { turn: 17, text: "Played Urza's Saga", kind: "land" },
+  { turn: 17, text: "Drew Urza's Saga", kind: "draw" },
+  { turn: 17, text: "Your turn 17 begins", kind: "turn" },
+  { turn: 16, text: "The opponent drew a card and passed", kind: "draw" },
+  { turn: 16, text: "The opponent's turn 16 begins", kind: "turn" },
+  { turn: 15, text: "Cast Sol Ring", kind: "cast" },
+  { turn: 15, text: "Played Command Tower", kind: "land" },
+  { turn: 15, text: "Your turn 15 begins", kind: "turn" },
+  { turn: 0, text: "Kept seven", kind: "deal" },
+  { turn: 0, text: "Shuffled and drew seven", kind: "deal" },
+];
+
+/**
+ * Against the goldfish (the artboard *Goldfish · the table, turn 9*: the reader's ninth turn, the
+ * game's seventeenth): a busy table across from the goldfish's empty one, the sandbox on. Played
+ * locally — tap, drag, right-click, draw.
+ */
+export const Goldfish: Story = {
+  args: { view: goldfishTurn() },
+  render: (args) => <Played view={args.view!} onAct={args.onAct} log={GOLDFISH_LOG} />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByText("Opponent · Goldfish")).toBeVisible();
+    await expect(canvas.getByRole("button", { name: "Sandbox" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await expect(canvas.getByRole("button", { name: /Back to the Kenrith deck/ })).toBeVisible();
+  },
+};
+
+/** The goldfish game's log, cut into turns under a heading each, newest first. */
+export const GoldfishLog: Story = {
+  args: { view: goldfishTurn() },
+  render: (args) => <Played view={args.view!} onAct={args.onAct} log={GOLDFISH_LOG} />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "Log" }));
+    const log = canvas.getByRole("region", { name: "Game log" });
+    await expect(within(log).getByRole("heading", { name: "Turn 17" })).toBeVisible();
+    await expect(within(log).getByRole("heading", { name: "Opening hand" })).toBeVisible();
+  },
+};
+
+/** A crowded goldfish table: thirty more lands, and every row still one row. */
+export const GoldfishCrowded: Story = {
+  args: { view: goldfishTurn({ extraLands: 30 }) },
+  render: (args) => <Played view={args.view!} onAct={args.onAct} />,
+};
+
+/** A green felt behind the goldfish game (the game menu's Playmat). */
+export const GoldfishGreenFelt: Story = {
+  args: { view: goldfishTurn() },
+  render: (args) => <Played view={args.view!} onAct={args.onAct} initialPlaymat="green" />,
+};
+
+/** The goldfish game's opening hand: mulligan 2, the first free, one card to the bottom. */
+export const GoldfishOpeningHand: Story = {
+  args: { view: goldfishOpeningHand(), opponentNames: GOLDFISH, log: [], returnTo: "deck" },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByRole("heading", { name: "Opening hand" })).toBeVisible();
+    const hand = canvas.getByRole("group", { name: "Opening hand" });
+    await userEvent.click(within(hand).getAllByRole("button")[5]);
+    await userEvent.click(canvas.getByRole("button", { name: /keep 6/i }));
+    await expect(args.onAct).toHaveBeenCalledWith(expect.objectContaining({ type: "keep" }));
+  },
+};
+
+/** The goldfish at 0 since the reader's eighth turn: the plate says when, with a gold edge, and
+ *  the game goes on. */
+export const GoldfishDead: Story = {
+  args: { view: goldfishDead(), opponentNames: GOLDFISH, returnTo: "deck" },
+  play: async ({ canvasElement }) => {
+    await expect(within(canvasElement).getByText("Dead on your turn 8")).toBeVisible();
+  },
+};
+
+/** The engine playing the goldfish game on: no AI to think, so it says so. */
+export const GoldfishPlayingOn: Story = {
+  args: { view: goldfishTurn(), opponentNames: GOLDFISH, busy: true, returnTo: "deck" },
 };

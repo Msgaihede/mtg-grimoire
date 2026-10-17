@@ -1,6 +1,6 @@
 import { renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { LogLine } from "./goldfish/log";
+import type { LogLine } from "./table/log";
 import {
   UNDO_LIMIT,
   freshBook,

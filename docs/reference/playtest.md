@@ -1,22 +1,27 @@
-# Playtesting against phase.rs's AI
+# Playtesting: the one game, against phase.rs's AI or the goldfish
 
 A **playtest** is a game of the reader's deck against another of their decks, or against three in
-a four-player game, each opponent's seat played by **phase.rs's AI** (`phase-ai`). It runs on the
-same rules engine as the goldfish board, and its board is the goldfish's, with the opponents' half
-drawn above it, turned around.
+a four-player game, each opponent's seat played by **phase.rs's AI** (`phase-ai`) — or against
+**the goldfish**, an opponent that takes no actions. **Goldfishing is this game** (the owner's
+decision of 2026-10-17): one session, one wire, one board, and the goldfish is a seat across the
+table from the reader, drawn as a single AI opponent is. The opponents' half of the board is the
+reader's, turned around.
 
-Built 2026-10-13; four players added 2026-10-14 (issue #994). The owner's choices that shape it:
+Built 2026-10-13; four players added 2026-10-14 (issue #994); the goldfish and the sandbox setting
+folded in 2026-10-17. The owner's choices that shape it:
 
 | Question                 | Choice                                                                                                                                     |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| Who plays the opponent   | phase-ai, at a difficulty the reader picks                                                                                                 |
-| How strict the rules are | The rules decide, with a prompt for targets, modes and the rest. The goldfish's sandbox stays on the reader's own cards as an escape hatch |
-| Where a game starts      | The Playtesting page: your deck, the opponent's deck (any of your own), a difficulty                                                       |
-| How many opponents       | One, or three for a four-player game (issue #994): one player against three AI seats                                                       |
+| Who plays the opponent   | phase-ai, at a difficulty the reader picks; or the goldfish, which takes no actions (2026-10-17)                                           |
+| How strict the rules are | The rules decide, with a prompt for targets, modes and the rest                                                                            |
+| The sandbox              | A setting (2026-10-17): off by default against the AI, on against the goldfish. On, it edits every card the table shows, in the main phase |
+| Where a game starts      | The Playtesting page: your deck, who it plays (any of your own decks, or the goldfish), a difficulty; or the deck editor's goldfish button |
+| How many opponents       | The goldfish, one, or three for a four-player game (issue #994): one player against three AI seats                                         |
 | Priority                 | Arena-style auto-pass: the reader decides only in their main phases, in combat, and when the engine asks                                   |
 
-The engine, the nightly pin, the 16 MiB stack and the licences are [goldfish.md](goldfish.md)'s.
-The binding rules are in [`crates/grimoire-play/CLAUDE.md`](../../crates/grimoire-play/CLAUDE.md).
+The engine, the nightly pin, the 16 MiB stack, the hybrid model of rules and sandbox, the goldfish
+as an opponent (its emblems, its library, `deadOn`), the table's shared pieces and the licences are
+[goldfish.md](goldfish.md)'s. The binding rules are in [`crates/grimoire-play/CLAUDE.md`](../../crates/grimoire-play/CLAUDE.md).
 
 ## Contents
 
@@ -64,7 +69,9 @@ seconds. The board says "Opponent is thinking…" meanwhile.
 `advance` plays on by itself:
 
 1. If the game is over, it stops.
-2. If the AI can act, it runs the AI's batch and loops.
+2. If the AI can act, it runs the AI's batch and loops. If the goldfish is to decide, it answers
+   with `fish_answer` (pass, no attackers, no blockers, keep, else the first legal action) and
+   loops; the goldfish's steps are never replay frames of their own.
 3. Otherwise the reader is the one to act, and it is decided by what the engine waits on:
    - **The opening hand.** It stops.
    - **Priority.** It stops where `stops_here` says (below). Anywhere else it passes for the
@@ -102,10 +109,10 @@ step.
 
 **`pass` and `endTurn`.** `pass` passes priority once. In the first main phase it goes on to combat,
 so it stops at declare attackers if there is a creature to attack with, and at the second main
-phase otherwise. In the second main phase it ends the turn and plays the AI's. `endTurn`, from
-`main` or `respond`, passes until the turn changes: on the reader's turn with no attack and both
-main phases passed, and on the opponent's turn with no response or step stop. A block or a
-question still stops it. `view.endingTurn` says it is running.
+phase otherwise. In the second main phase it ends the turn and plays the opponent's, the AI's or
+the goldfish's. `endTurn`, from `main` or `respond`, passes until the turn changes: on the reader's
+turn with no attack and both main phases passed, and on the opponent's turn with no response or
+step stop. A block or a question still stops it. `view.endingTurn` says it is running.
 
 **Commander.** A commander on any side makes the game a Commander game: 40 life, the command
 zone, tax and 21 commander damage. Without one, the format is phase's `freeform` at 20 life.
@@ -118,13 +125,14 @@ though phase already counts 1.
 ## Four players
 
 Issue #994: one player against three AI opponents, the way a Commander pod sits. The session is the
-duel's, widened rather than forked: `Playtest::new` takes a list of `OpponentDeck`s, one to
-three (`MAX_OPPONENTS`), and a duel is the list of one.
+duel's, widened rather than forked: `Playtest::new` takes a list of `OpponentDeck`s, none to
+three (`MAX_OPPONENTS`). A duel is the list of one, and the empty list is the goldfish, one seat
+with no deck of the reader's in it.
 
 - **The seats.** The reader is `PlayerId(0)`, and the opponents `PlayerId(1)` on, in turn order.
   phase seats the first opponent as `DeckList.opponent` and the others as `ai_decks`. On the wire
   a player is a `PlaytestPlayer`: `you`, `opponent`, `opponent2`, `opponent3`. A duel's two are
-  spelled as the goldfish's `Seat`, so a duel's facts read as they always did. `view.opponents`
+  spelled as the table's `Seat` (`GameSeat`), so a duel's facts read as they always did. `view.opponents`
   holds each opponent's `PlaytestSeat`, which says whose it is (`player`) and whether they are out
   (`out`).
 - **The AI seats** are every opponent, one `run_ai_actions` batch for all of them: phase plays each
@@ -217,10 +225,21 @@ as one cast followed by phase's own `TargetSelection`. To the reader, the two re
 
 ## Casting, cancelling and the sandbox
 
-**`play`** takes the one legal `PlayLand` or `CastSpell` for that card. When the rules allow none
-(no land drop left, too little mana, nothing to target), **it is refused with a sentence**, unlike
-the goldfish, which puts the card down unpaid. Putting a card down unpaid against an opponent would
-be cheating it. Payment is phase's `Auto`, from untapped mana.
+**`play`** takes the one legal `PlayLand` or `CastSpell` for that card, or asks which of several
+(`CastChoice`, below). Payment is phase's `Auto`, from untapped mana. When the rules allow none (no
+land drop left, too little mana, nothing to target), what happens is the sandbox's:
+
+- **Sandbox off: it is refused with a sentence** that ends "Turn the sandbox on to put it down by
+  hand." Putting a card down unpaid against an opponent would be cheating it, so it is never done
+  unasked.
+- **Sandbox on, in the reader's main phase: it is put down unpaid** (`unpaid`), where it would have
+  gone — a permanent onto the battlefield, an instant or sorcery into the graveyard — told as
+  `put` and logged "Cast Ponder · not paid for". A commander from the command zone still raises its
+  tax (CR 903.8). Only when the rules offer no way: a card with one way is played, and one with
+  several is asked about, sandbox or not.
+
+A card elsewhere than the hand or the command zone is activated rather than played; in the sandbox,
+one with nothing to activate is put onto the battlefield (a double-click on a graveyard's creature).
 
 **`activate`** takes every legal action of a permanent's: an ability, equip, crew, station,
 saddle, transform, turn face up. These are found by the source field in the action's data
@@ -231,64 +250,111 @@ question each keep a checkpoint (`Pending`) while the engine asks the reader how
 `cancel` restores it. The first time priority is passed with the spell on the stack, the
 checkpoint is dropped: the spell is cast, and the AI may already be answering it.
 
-**The sandbox** is the goldfish's set of actions, on the reader's own cards only and in their main
-phase only, where nothing is half done: move a card anywhere by hand, tap, counters, token copies,
-preset tokens, draw, mill, shuffle and life totals. It is phase's debug actions. The engine permits
-them for the reader's seat (`debug_permitted`) and never for the AI's. The AI may well notice: it
-reads the state as it is. Tokens wear each deck's own printings, both seats', as on the goldfish
-(`goldfish.md`, _A token wears the deck's printing_).
+**The sandbox is a setting** (`setSandbox { on }`, `view.sandbox`), the owner's decision of
+2026-10-17: **off by default against the AI, on against the goldfish**, and the reader's to turn on
+or off at any stage. Like `setStops` it changes nothing on the table, plays nothing on, and is not
+remembered by undo. Its actions are a hand on the table: move a card anywhere, tap, untap all,
+counters, token copies, preset tokens, draw, mill, shuffle and life totals — phase's debug actions,
+which the engine permits for the reader's seat (`debug_permitted`) and never for the AI's.
 
-**A refused action changes nothing**, as on the goldfish: `act` restores its checkpoint on any
-`Err`.
+- **Off,** every one of them is refused: "That changes the game by hand. Turn the sandbox on in the
+  game menu to do it." `run` checks it first (`is_sandbox`), so no action slips past.
+- **On,** they are taken in the reader's main phase only, where nothing is half done, on the
+  reader's own cards anywhere and on **any card the table shows**: an opponent's battlefield,
+  graveyard, exile and command zone (`editable`). **Never an opponent's hand or library**, which
+  the reader may not see: "That card is in a zone you cannot see." The goldfish's emblems are out
+  of reach too.
+
+The AI may well notice: it reads the state as it is. Tokens wear each deck's own printings, every
+seat's ([goldfish.md](goldfish.md#the-table), _A token wears the deck's printing_). The hybrid model
+it comes from is [goldfish.md](goldfish.md#the-hybrid-model-what-is-a-rule-and-what-is-a-hand)'s.
+
+**A refused action changes nothing**: `act` restores its checkpoint on any `Err`.
 
 ## Undo and redo
 
 **`Ctrl+Z` goes back to the reader's last decision, with everything the opponent did after it;
-`Ctrl+Y` or `Ctrl+Shift+Z` comes forward again** (issue #1022, 2026-10-14). The goldfish's design
-([goldfish.md](goldfish.md#undo-and-redo)): the session keeps the whole game before each of the
-reader's actions, `{ type: "undo" }` and `{ type: "redo" }` on `playtest_act` restore one, and the
-view's `canUndo` and `canRedo` say whether either has anywhere to go.
+`Ctrl+Y` or `Ctrl+Shift+Z` comes forward again** (issue #1022, 2026-10-14), against the AI and the
+goldfish alike. The chords are the shortcut catalogue's
+([keyboard-shortcuts.md](keyboard-shortcuts.md#undo-and-redo-on-the-game-boards)), under the
+`playtesting` scope from the setup page and the `goldfish` scope over the deck editor (`returnTo`).
+**Undo** and **Redo** also head the game menu (`gameMenu`), greyed when there is nowhere to go and
+while the engine is busy, for a reader who does not know the chords.
 
-**What a moment holds here is more than the goldfish's**: the checkpoint (the `GameState`, the
-printings, the mulligan count, **and the AI's dice**), and the session's place around it — a cast
-half made (`Pending`), the board's own question, the end told, the turn being ended, the stop last
-stopped at. The dice are why redo restores rather than replays: the AI's turn after a redo is the
-one the reader saw, not a new roll. An undo after a different choice is a new roll, and the AI may
-well play otherwise.
+**The history is the engine's, and it is whole games, not inverses**
+(`crates/grimoire-play/src/history.rs`). Before every action it takes, the session keeps the game
+as it was. `GameState` is persistent (`im`), so a clone is a handful of reference counts. Going back
+is restoring one, which is exact for every action the board has, the rules' and the sandbox's
+alike; an inverse per action would be a second rules engine. A new action ends the redo trail. A
+hundred actions back is the limit (`UNDO_LIMIT`).
+
+**On the wire they are actions**, `{ type: "undo" }` and `{ type: "redo" }` on `playtest_act`: no
+new command, the engine's stack and the slot as for any action. They answer with the board as it
+was and no facts, and the view's `canUndo` and `canRedo` say whether either has anywhere to go. A
+refused action was never taken, so it is not remembered; nothing to undo is a refusal like any
+other.
+
+**What a moment holds**: the checkpoint (the `GameState`, the printings, the mulligan count, **the
+AI's dice**, the players told out, and the goldfish's `dead_on`), and the session's place around it
+— a cast half made (`Pending`), the board's own question, the end told, the turn being ended, the
+stop last stopped at. The dice are why redo restores rather than replays: the AI's turn after a redo
+is the one the reader saw, not a new roll. An undo after a different choice is a new roll, and the
+AI may well play otherwise. `dead_on` is why an undo past the goldfish's killing blow brings it back
+to life on its plate.
+
+**The log is the page's**, so the page keeps its side of the history the same way:
+`features/playtesting/undo.ts`' `LogBook` holds the whole log as it stood before each action, by
+the engine's own rules and limit so the two walk in step. Whole logs rather than a count of the
+lines an action added, because a replay logs its beats one by one, or merged when it is skipped or
+motion is reduced, and a count would have to agree with every way of logging them.
 
 **One action is one step back, and an action is the reader's.** The AI's turn is never a moment of
 its own: it happened inside the reader's action that passed to it, so undo lands where the reader
 last decided, never in the middle of the opponent's turn. Undo and redo answer with no facts and no
-frames, so nothing plays back. **The stops are a setting** (`setStops`): not remembered, and left
-as they are by undo. A finished game can be undone too, which is how a reader takes back the play
+frames, so nothing plays back. **The stops and the sandbox are settings** (`setStops`,
+`setSandbox`): not remembered, and left as they are by undo. A finished game can be undone too, which is how a reader takes back the play
 that lost it.
 
 ## What the reader may see
 
-Each opponent's hand and library are **counts** (`handCount`, `library`). Their `hand` and
-`libraryCards` are always empty on the wire. An opponent's draw is `drew` with no name, and a card
-going back from their hand to their library is not told at all. The AI itself reads the whole
-`GameState`. Whether it plays as if it knows the reader's hand is phase's business, not this
-board's.
+Each opponent's hand and library are **counts** (`handCount`, `library`), the goldfish's too.
+Their `hand` and `libraryCards` are always empty on the wire, and the sandbox never reaches them.
+An opponent's draw is `drew` with no name, and a card going back from their hand to their library
+is not told at all. The AI itself reads the whole `GameState`. Whether it plays as if it knows the
+reader's hand is phase's business, not this board's.
 
 ## The commands and the wire
 
-| Command                                                         | Does                                                                                                                                                                                                               |
-| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `playtest_start(deck_id, variant, opponents, difficulty, seed)` | Reads every deck (`play::deck_cards`), deals, and answers with a `PlaytestStep` at the reader's opening hand. `opponents` is one to three `PlaytestOpponent { deckId, variant }`. A fresh game replaces any other. |
-| `playtest_act(action)`                                          | One `PlaytestAction`, and everything the AI does after it until the reader next decides. A refusal is one sentence.                                                                                                |
-| `playtest_end()`                                                | Drops the game.                                                                                                                                                                                                    |
-| `playtest_support(deck_id, variant)`                            | What the engine plays of a deck, before a game: a `DeckSupport` (its different cards, and the `UnsupportedCard`s phase reads only in part). See [the setup page](#the-setup-page).                                 |
+| Command                                                         | Does                                                                                                                                                                                                                                                              |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `playtest_start(deck_id, variant, opponents, difficulty, seed)` | Reads every deck (`play::deck_cards`), deals, and answers with a `PlaytestStep` at the reader's opening hand. `opponents` is up to three `PlaytestOpponent { deckId, variant }`; **none is the goldfish** (`difficulty` unused). A fresh game replaces any other. |
+| `playtest_act(action)`                                          | One `PlaytestAction`, and everything the opponents do after it until the reader next decides. A refusal is one sentence and leaves the game exactly as it was.                                                                                                    |
+| `playtest_end()`                                                | Drops the game.                                                                                                                                                                                                                                                   |
+| `playtest_support(deck_id, variant)`                            | What the engine plays of a deck, before a game: a `DeckSupport` (its different cards, and the `UnsupportedCard`s phase reads only in part). See [the setup page](#the-setup-page).                                                                                |
 
-**The goldfish's slot arrangement, in a slot of its own** (`PlaytestSlot`: `Empty | Busy | Game`).
-A goldfish game and a playtest can be held at once. A call while the AI is thinking is told "The
-opponent is still thinking." All four commands are on `command_table::DESKTOP_ONLY`.
+**One game at a time, in one slot** (`PlaytestSlot`: `Empty | Busy | Game`), the goldfish's game
+and the AI's alike. An action takes the game out of the slot onto the engine's thread and puts it
+back after, so a call while one runs is told "The opponent is still thinking." rather than waiting.
+If the engine panics, the game is lost and the slot empties. All four commands are on
+`command_table::DESKTOP_ONLY`. The goldfish board's own three (`goldfish_start`, `goldfish_act`,
+`goldfish_end`) and its slot were removed on 2026-10-17, when its game became this one; the
+desktop's `facts` and `token_facts` live in `playtest/mod.rs` now.
 
-**The wire** is `playtest/view.rs` ↔ `packages/ui/lib/ipc/playtest.ts`. It reuses the goldfish's
-`GameCard`, `MulliganView`, `TokenOffer` and `Place`, so the goldfish's table pieces draw both
-boards, and the goldfish's `Seat` for a stop's side. A player is `PlaytestPlayer`. `ipc.test.ts`
-holds every struct field for field, every `PlaytestAction` and `PlaytestHappened` variant and
-field, and the string unions (`PlaytestStage`, `PlaytestPhase`, `Difficulty` and the rest).
+**The view is sent, never the state.** The whole `GameState` is hundreds of kilobytes. The view is
+what a board draws: each zone's cards, the lives, the mana open, the library, and the tokens the
+deck makes. The page sends actions one at a time, in order (`usePlaytestGame`'s serial queue), so
+each is read against the view it was made from.
+
+**The wire** is `playtest/view.rs` ↔ `packages/ui/lib/ipc/playtest.ts`, built on the table's
+shared types in `view.rs` ↔ `packages/ui/lib/ipc/table.ts`: `GameCard`, `Lane` (`GameLane`),
+`CardCounter`, `TokenOffer`, `Place` (`GamePlace`), `Seat` (`GameSeat`, a stop's side),
+`MulliganView` and `ManaTable`, which the pieces in `features/playtesting/table/` draw. A player is
+`PlaytestPlayer`. The goldfish adds no type of its own, only fields (2026-10-17):
+`PlaytestView.sandbox`, `PlaytestView.goldfish`, `PlaytestSeat.deadOn`, and the action `setSandbox
+{ on }`; and the sandbox's facts `put`, `tapped` and `counters` gained `seat`, since a card the
+reader moves by hand may be an opponent's. `ipc.test.ts` holds every struct field for field, every
+`PlaytestAction` and `PlaytestHappened` variant and field, and the string unions (`PlaytestStage`,
+`PlaytestPhase`, `Difficulty` and the rest).
 
 **Facts come from phase's events** (`tell`). Each applied action returns `GameEvent`s, and so does
 each of the AI's actions. They become the log's facts:
@@ -334,9 +400,12 @@ from "Very easy" to "Very hard", and starts on Medium. Start is `aria-disabled` 
 picked. The same deck on both sides is allowed, and labelled "A mirror match." The last picks are
 kept for the window's life in `viewMemory("playtesting.setup")`, never in storage.
 
-**The table** is a two-button group, "1 opponent" (the default) or "3 opponents". Three opponents
-show three dropdowns, "Opponent 1's deck" to "Opponent 3's", and Start waits for all four decks.
-Any deck may sit in any seat, twice over. The seats a duel hides keep their picks.
+**The table** is a three-button group: "Goldfish", "1 opponent" (the default) or "3 opponents".
+Three opponents show three dropdowns, "Opponent 1's deck" to "Opponent 3's", and Start waits for
+all four decks. Any deck may sit in any seat, twice over. **"Goldfish"** hides every opponent's
+seat and the difficulty: the goldfish is no deck and plays at no skill, so Start waits for the
+reader's deck alone, and the board opens against it with the sandbox on, exactly as the deck
+editor's "Goldfish this deck" does. The seats a table hides keep their picks.
 
 ### What the engine plays of a deck (issue #1078)
 
@@ -368,10 +437,28 @@ database read and cache lookups.
 
 ## The board
 
-`packages/ui/features/playtesting/play/`. `PlaytestPage` covers the window below the caption at
-`LAYER.stage`, as the goldfish's page does, and Escape goes back to the setup page.
-`PlaytestBoard` is presentational: a view in, actions out. `usePlaytestGame` is
-`useGoldfishGame`'s serial queue.
+`packages/ui/features/playtesting/play/`. **One board for every game on a deck**: whatever it draws
+for an AI game it draws for a goldfish game, and a change to it is a change to both. `PlaytestPage`
+covers the window below the caption at `LAYER.stage`, a rung between `header` and `popup`, so the
+board's own menus and dialogs open over it. `PlaytestBoard` is presentational: a view in, actions
+out, no `ipc`, which is what its stories stand on. `usePlaytestGame` is the serial queue that wires
+it to the engine. The pieces it is drawn with are the table's ([goldfish.md](goldfish.md#the-table)).
+
+**Opened from two places** (`returnTo`). The Playtesting page's setup opens it with `"setup"`, and
+the deck editor's "Goldfish this deck" through `features/playtesting/GoldfishPage.tsx`, a thin
+wrapper that picks `opponents: []`, names the plate "Goldfish" and passes `"deck"`. `returnTo`
+names the back button ("‹ Setup" or "‹ <deck name>"), the game menu's and the result banner's way
+back ("Back to setup", "Back to the deck"), and the undo chords' scope (`playtesting` or
+`goldfish`). Escape is the way back, and skips a replay instead while one runs. The goldfish page
+is the Decks view's third state: the store's `goldfish` names the open deck and variant, `App.tsx`
+draws the board in the editor's place, and every navigation clears it, so coming back to a deck
+finds the editor.
+
+**The goldfish is drawn in the duel layout** (the owner's choice of 2026-10-17), exactly as a single
+AI opponent is: its band with its face-down hand count, its plate, its zone columns and its empty
+table. Nothing of it is its own but the plate's title, which reads "Dead on your turn N" with the
+plate highlighted while `deadOn` is set, and the busy text, "Playing on…", since the goldfish
+thinks about nothing and the engine is only playing its turn.
 
 **Four players.** A duel's board is drawn exactly as before. At a four-player table the
 opponent's table, band and zone columns give way to three `OpponentArea`s side by side in the same
@@ -400,10 +487,12 @@ in Storybook's Chromium, from the board's box:
 Before the overhaul, a table at 1280 was 275 px and its cards about 61 px wide.
 
 - **The opponent's band** holds their face-down hand ("Hand · N"), their life plate, and the
-  chrome.
+  chrome. The duel's compact plate sits right of the hand in a box that ends 116 px from the right
+  edge, so it never runs under the help and log buttons: a plate wider than that (a long deck name,
+  the sandbox's stepper) shortens its title, and the full title is its tooltip.
 - **The tables** are inset 96 px from either side. On the opponent's table the creature lane is
   nearest the middle line and the back row is at the top.
-- **The zone columns** sit 12 px in, with 72 × 101 cards (the goldfish's are 180 × 252; 60 × 84 until issue #992 grew them a fifth), each zone's count on its card. On the
+- **The zone columns** sit 12 px in, with 72 × 101 cards (the artboard's are 180 × 252; 60 × 84 until issue #992 grew them a fifth), each zone's count on its card. On the
   opponent's side, library over graveyard is on the left and exile over command on the right. On
   the reader's side, command over exile is on the left and graveyard over library on the right.
 - **The stack** is real cards (52 × 73, up to three, then "+N") in the right gutter between the
@@ -413,7 +502,11 @@ Before the overhaul, a table at 1280 was 275 px and its cards about 61 px wide.
 
 **The middle line** is a turn tracker: Beginning · Main 1 · Combat · Main 2 · End, the current
 phase lit in the active seat's colour, and a caption that names the step, such as "Turn 6 ·
-Opponent's turn · Upkeep — you may respond". Beside it is the Stops button.
+Opponent's turn · Upkeep — you may respond". Beside it are the Stops button and **the Sandbox
+pill** (`aria-pressed`, lit while on): both are settings of the game rather than moves in it, and
+whether a click may change the game outside the rules is the first thing to know about it, so it is
+always in sight. The top band has no room for it, since the opponent's plate grows with its hand.
+The game menu has the same switch as a "Sandbox" radio row.
 
 **The plates.** The active seat's plate has a gold glow, and poison shows as a chip when it is
 above 0.
@@ -437,23 +530,33 @@ facts are found as a run of `step.happened`, and the end takes the rest.
 
 **The stage button**, bottom right. Space presses its primary action.
 
-| Stage                     | Primary                                                                                       | Also                  |
-| ------------------------- | --------------------------------------------------------------------------------------------- | --------------------- |
-| `main`, first main phase  | To combat (`pass`)                                                                            | End turn (`endTurn`)  |
-| `main`, second main phase | End turn (`pass`)                                                                             |                       |
-| `respond`                 | Pass (`pass`)                                                                                 | Pass turn (`endTurn`) |
-| `attack`                  | Attack with N, or No attack                                                                   |                       |
-| `block`                   | Confirm blocks, or No blocks                                                                  |                       |
-| busy                      | A spinner and "Opponent is thinking…" ("Passing turn…" while `endTurn` runs)                  |                       |
-| `over`                    | A centred banner ("You won", "You lost", "Draw"; "On turn N") with New game and Back to setup |                       |
+| Stage                     | Primary                                                                                                                            | Also                  |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| `main`, first main phase  | To combat (`pass`)                                                                                                                 | End turn (`endTurn`)  |
+| `main`, second main phase | End turn (`pass`)                                                                                                                  |                       |
+| `respond`                 | Pass (`pass`)                                                                                                                      | Pass turn (`endTurn`) |
+| `attack`                  | Attack with N, or No attack                                                                                                        |                       |
+| `block`                   | Confirm blocks, or No blocks                                                                                                       |                       |
+| busy                      | A spinner and "Opponent is thinking…" ("Playing on…" against the goldfish; "Passing turn…" while `endTurn` runs)                   |                       |
+| `over`                    | A centred banner ("You won", "You lost", "Draw"; "On turn N") with New game and the way back ("Back to setup", "Back to the deck") |                       |
 
 **Interactions.**
 
-- **Your cards** work as on the goldfish, plus "Activate ability" at the head of a battlefield
-  card's menu. In `respond`, the hand and the abilities are playable as in the main phase; the
-  sandbox is not.
+- **The sandbox decides most of what is offered.** The board works it out once (`edits`: the
+  sandbox on, the reader's main phase, nothing with the engine) and hands it to every piece.
+  - **Off:** no hand edits are drawn. A card's menu keeps only the rules' rows (Play, Cast, Activate
+    ability); a click does not tap; T, G, E and H do nothing; the only drag is a play onto the
+    table; the library pile is disabled; a graveyard or exile opens read-only; and every life plate
+    is read-only text (`LifePlate`'s `readOnly`). What is left is the rules'.
+  - **On:** the reader's cards have the whole hand — moves, taps, counters, token copies, draws,
+    the keys and every drag ([goldfish.md](goldfish.md#the-table)). **The opponents' battlefield
+    cards get a card menu** too (tap, counters, token copy, move), and their plates steppers. An
+    opponent's card is never dragged, and their hand and library stay counts.
+- **Your cards:** a double-click or a drop on the table plays a card from the hand or the command
+  zone, and "Activate ability" heads a battlefield card's menu. In `respond`, the hand and the
+  abilities are playable as in the main phase; the sandbox is not.
 - **The opponent's cards** can be pointed at for the preview, and their graveyard and exile open
-  read-only. They cannot be dragged, tapped or right-clicked, and their table takes no drops.
+  read-only. They are never dragged, and their table takes no drops (`refuse`).
 - **Attack:** a click toggles a creature that can only attack the opponent. A creature with
   planeswalkers or battles to choose from attacks the player by default (else its first target)
   and waits to be aimed. While it waits, its targets light up (the opponent's plate too, when it
@@ -476,34 +579,38 @@ facts are found as a run of `step.happened`, and the end takes the rest.
   options, and "Let the engine choose" and Cancel stay.
 - **Picks reset** with every new view.
 
-**The goldfish's pieces, widened rather than copied.** Several goldfish components gained optional
-props. When those props are absent, the goldfish draws exactly as before.
+**The table's shared pieces, widened rather than copied.** The pieces in
+`features/playtesting/table/` were the goldfish board's, and gained optional props for the playtest
+board (2026-10-13) rather than being copied; since 2026-10-17 this board is the only one they draw.
+For a seat that is not the reader's, and for the sandbox:
 
 - `Battlefield`: `flipped`, `readOnly`, `marks` (attack, block or chosen, with a badge), `pick`,
   `onActivate`, and `dense` (tighter padding).
-- `LifePlate`: `compact`, a one-row plate 38 px tall.
+- `LifePlate`: `compact`, a one-row plate 38 px tall; `readOnly`, the number as plain text with the
+  sandbox off.
 - `layoutTable` and `pilesOf`: an `apart` key, so an attacking creature does not join a pile with
   its untouched twin.
 - The zone components: a `size`, whose `compact` puts each zone's count on its card.
-- `useGoldfishDropTarget`: `refuse`.
+- `useTableDropTarget`: `refuse`, and `sandbox` (off, a zone takes only a play).
 - `LibraryDialog`: `opponent`, for a read-only look.
-- `cardMenu`: `onActivate`.
+- `cardMenu`: `onActivate`, and `sandbox` (off, only the rules' rows).
 - `HelpPanel`: its content.
 
-The views these pieces take are narrowed to `Pick<…>`s of the fields they read, so a
-`PlaytestSeat` fits where a `GoldfishView` did.
+The views these pieces take are narrowed to `Pick<…>`s of the fields they read, so any seat's
+`PlaytestSeat` fits.
 
 ## What is not there yet
 
 - **Holding priority over your own spell.** The reader's own spell on top never stops them, so
   they cannot respond to it themselves (a second spell on top of their first).
-- **Choosing who plays first.** It is the seed's coin flip.
+- **Choosing who plays first.** It is the seed's coin flip against the AI, and the reader against
+  the goldfish.
 - **Mana payment by hand.** Every cast is paid by phase's `Auto`.
 - **A split or a pile.** A search that splits its finds between zones, separate piles and
   distributions are still their generic options or `auto`.
 - **The light app.** Playtesting is not a destination there.
 - **A difficulty per opponent.** Every AI seat plays at the one difficulty.
-- **Two opponents, five or six.** phase seats up to six; the setup page offers a duel or four
-  players. `Playtest::new` takes one to three.
+- **Two opponents, five or six.** phase seats up to six; the setup page offers the goldfish, a duel
+  or four players. `Playtest::new` takes none to three.
 - **Commander damage on the board.** The rules count it (21 loses), but no plate shows it yet.
 - **Watching the AIs play on** after the reader is out.

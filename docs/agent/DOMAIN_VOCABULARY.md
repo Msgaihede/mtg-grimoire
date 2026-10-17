@@ -79,8 +79,9 @@ perfectly as the other. Say which.
 - A **deck validation rule** is a format's constraint checked by
   `packages/ui/features/decks/validation/` (singleton, deck size, banned cards) — a *rule break*
   in the deck editor. It wears the same red outline, which is the only thing the two share.
-- **The game's rules** are phase.rs's rules engine (`crates/grimoire-play`), what the goldfish
-  and playtest boards play by.
+- **The game's rules** are phase.rs's rules engine (`crates/grimoire-play`), what the game board
+  plays by — against the goldfish or the AI, one game since 2026-10-17. The board's **sandbox** is
+  the setting that lets the reader change the game by hand outside them; it is not a rule either.
 
 The folder **lock** is not a rule either: a lock changes what the app offers your decks, a rule
 changes only what is drawn.

@@ -93,7 +93,7 @@ card-scanner = { path = "../../../crates/card-scanner", features = ["corpus", "o
 # A workspace member, unlike the scanner. Modules arrive there a step at a time and `lib.rs`
 # re-exports each at the path it had here.
 grimoire-core = { path = "../../../crates/grimoire-core" }
-# The goldfish board's rules engine (phase.rs's, behind `grimoire-play`): this host's alone, since
+# The game board's rules engine (phase.rs's, behind `grimoire-play`): this host's alone, since
 # the light app leaves Playtesting out — the crate's manifest has why, and the 16 MiB stack every
 # call into it needs.
 grimoire-play = { path = "../../../crates/grimoire-play" }

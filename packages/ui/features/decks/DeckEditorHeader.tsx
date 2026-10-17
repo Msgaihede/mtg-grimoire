@@ -150,8 +150,8 @@ export interface DeckEditorHeaderProps {
   wideHeader: boolean;
   settingsIcon: boolean;
   /**
-   * Deal this list onto the goldfish board — a game against a target that does nothing, on the
-   * desktop's rules engine. **Absent where the edition has no Playtesting** (the light app's phone
+   * Deal this list onto the game board against the goldfish — an opponent that does nothing and
+   * never loses — on the desktop's rules engine. **Absent where the edition has no Playtesting** (the light app's phone
    * and browser faces, whose hosts have no engine), and then there is no button.
    */
   openGoldfish?: () => void;
@@ -385,12 +385,13 @@ export const DeckEditorHeader = memo(function DeckEditorHeader({
                 </>
               )}
 
-              {/* **Goldfish** — the board, dealt from the list on screen. Ahead of the transfer
-                  pair: it is the one action here that is about *playing* the deck rather than
-                  filing it. Not a layer: it leaves the editor for the board, as Back leaves it
-                  for the gallery. **An icon button at every width**, the fish alone (the
-                  owner's call, 2026-10-12) — so its name is the tooltip, always bound, as the
-                  other actions bind theirs once their words have gone. */}
+              {/* **Goldfish** — the game board against the goldfish, dealt from the list on
+                  screen. Ahead of the transfer pair: it is the one action here that is about
+                  *playing* the deck rather than filing it. Not a layer: it leaves the editor
+                  for the board, as Back leaves it for the gallery. **An icon button at every
+                  width**, the fish alone (the owner's call, 2026-10-12) — so its name is the
+                  tooltip, always bound, as the other actions bind theirs once their words have
+                  gone. */}
               {openGoldfish !== undefined && (
                 <button
                   type="button"

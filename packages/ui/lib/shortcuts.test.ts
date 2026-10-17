@@ -410,7 +410,7 @@ describe("activeScopes", () => {
     expect(activeScopes({ activeView: "wishlist", openDeckId: null })).toHaveLength(2);
   });
 
-  it("swaps the deck editor for the goldfish board when the board is open over it", () => {
+  it("swaps the deck editor for the board when it is open over it against the goldfish", () => {
     expect(activeScopes({ activeView: "decks", openDeckId: 12, goldfish: true })).toEqual([
       "global",
       "goldfish",
@@ -461,13 +461,19 @@ describe("the catalogue's shape", () => {
     expect(SHORTCUTS.goldfish.map((s) => s.id)).toEqual(["undo", "redo"]);
   });
 
-  // Issue #1022: both boards take the deck editor's spellings, so a reader's hands need learn
+  // Issue #1022: the board takes the deck editor's spellings, so a reader's hands need learn
   // undo and redo once.
-  it("gives both game boards the deck editor's undo and redo chords", () => {
+  it("gives the game board the deck editor's undo and redo chords", () => {
     for (const scope of ["playtesting", "goldfish"] as const) {
       expect(shortcut(scope, "undo").chords).toEqual(shortcut("deckEditor", "undo").chords);
       expect(shortcut(scope, "redo").chords).toEqual(shortcut("deckEditor", "redo").chords);
     }
+  });
+
+  // One game on one board: whether the setup page or the deck editor opened it, the panel lists
+  // the same keys under it.
+  it("describes the same board under the goldfish and playtesting scopes", () => {
+    expect(SHORTCUTS.goldfish).toBe(SHORTCUTS.playtesting);
   });
 
   // The other half of the cross-task contract: the panel renders these strings, so a reworded

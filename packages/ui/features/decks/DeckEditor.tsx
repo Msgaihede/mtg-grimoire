@@ -367,9 +367,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    */
   const closeDeck = useCallback(() => setOpenDeckId(null), [setOpenDeckId]);
   /**
-   * **To the goldfish board**, dealt from the list on screen — the Decks view's third state
-   * (`store.ts`' `goldfish`), drawn by `App.tsx` in this editor's place until the reader comes
-   * back. Only where the edition has Playtesting: the light app's hosts have no rules engine.
+   * **To the game board against the goldfish**, dealt from the list on screen — the Decks view's
+   * third state (`store.ts`' `goldfish`), drawn by `App.tsx` in this editor's place until the
+   * reader comes back. Only where the edition has Playtesting: the light app's hosts have no rules engine.
    */
   const setGoldfish = useAppStore((s) => s.setGoldfish);
   const playtests = editionHas(useEdition(), "playtesting");

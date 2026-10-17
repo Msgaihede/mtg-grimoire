@@ -74,21 +74,9 @@ const DESKTOP_ONLY: &[(&str, &str)] = &[
         "the window this host draws before its state exists",
     ),
     (
-        "goldfish_start",
-        "the goldfish board's rules engine is linked by this host alone — the light app leaves \
-         Playtesting out, and phase.rs's engine would be megabytes of the web module",
-    ),
-    (
-        "goldfish_act",
-        "the goldfish board's rules engine is this host's",
-    ),
-    (
-        "goldfish_end",
-        "the goldfish board's rules engine is this host's",
-    ),
-    (
         "playtest_start",
-        "the playtest board's rules engine and AI are linked by this host alone, as the goldfish's",
+        "the game board's rules engine and AI are linked by this host alone — the light app leaves \
+         Playtesting out, and phase.rs's engine would be megabytes of the web module",
     ),
     (
         "playtest_act",

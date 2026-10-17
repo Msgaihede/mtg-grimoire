@@ -272,8 +272,8 @@ jobs:
       # **All three run from the repository root, over every workspace member** (2026-10-02):
       # the app in `apps/desktop/src-tauri`, the engine in `crates/grimoire-core`, the light app's Android
       # host in `apps/light/src-tauri`, its web host in `crates/grimoire-web`, the browser's
-      # scanner in `crates/grimoire-scan` and the goldfish board's rules engine in
-      # `crates/grimoire-play`. This is the only job that runs the core's tests, and
+      # scanner in `crates/grimoire-scan` and the game board's rules engine (goldfish and
+      # playtest) in `crates/grimoire-play`. This is the only job that runs the core's tests, and
       # the only one that compiles it for Windows — `core` below builds it for the other two
       # targets and runs nothing.
       #

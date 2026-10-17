@@ -1,17 +1,11 @@
 import { useState, type JSX, type MouseEvent } from "react";
 import { OctagonPause } from "lucide-react";
-import type {
-  GameCard,
-  GoldfishSeat,
-  PlaytestStackItem,
-  PlaytestStop,
-  PlaytestView,
-} from "@/lib/ipc";
+import type { GameCard, GameSeat, PlaytestStackItem, PlaytestStop, PlaytestView } from "@/lib/ipc";
 import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
-import { CardFace } from "../goldfish/Inspect";
+import { CardFace } from "../table/Inspect";
 import { combatLine, type Picks } from "./combat";
 import { opponentNumber, playerPossessive, tableCards } from "./players";
 import { cardOfRef } from "./prompt";
@@ -26,6 +20,11 @@ import { trackerOf } from "./tracker";
  * one the game is in lit in the colour of the seat whose turn it is (gold for the reader, red for
  * any opponent), the ones already passed dimmed, and the turn's number before them.
  *
+ * **The sandbox's switch is here, beside the stops** (`SandboxButton`): both are settings of the
+ * game rather than moves in it, and whether the reader's hand may change the game outside the
+ * rules is the first thing to know about what a click will do — so it is always in sight, lit
+ * while it is on. The top band has no room for it: the opponent's plate grows with its hand.
+ *
  * **The last thing that happened is here too** (the log's newest line, or the engine's refusal),
  * where the eye already is between the two tables. A refusal is said in full text colour and
  * stays until the next action.
@@ -36,6 +35,7 @@ export function MiddleLine({
   status,
   failed,
   onStops,
+  onSandbox,
   className,
 }: {
   view: PlaytestView;
@@ -46,6 +46,8 @@ export function MiddleLine({
   failed: boolean;
   /** The stops' toggles send the whole new set; absent, there are no toggles (a replay). */
   onStops?: (stops: PlaytestStop[]) => void;
+  /** The sandbox's switch sends the setting it turns to; absent, the switch is only shown. */
+  onSandbox?: (on: boolean) => void;
   className?: string;
 }): JSX.Element {
   const combat = combatLine(view, picks);
@@ -53,6 +55,7 @@ export function MiddleLine({
     <div className={cn("flex items-center gap-3 px-1", className)}>
       <TurnTracker view={view} />
       <StopsButton stops={view.stops} many={view.opponents.length > 1} onStops={onStops} />
+      <SandboxButton on={view.sandbox} onSandbox={onSandbox} />
       {combat !== null && (
         <span className="flex-none text-xs whitespace-nowrap text-mana-r">{combat}</span>
       )}
@@ -200,6 +203,45 @@ const STACK_STEP = 20;
 const STACK_SHOWN = 3;
 
 /**
+ * The sandbox's switch (`setSandbox`): pressed, the reader's hand may move, tap and change any card
+ * the table shows, outside the rules; unpressed, only the rules' plays are offered. A setting the
+ * engine takes at any stage, so it is not greyed while a step waits on the reader.
+ */
+function SandboxButton({
+  on,
+  onSandbox,
+}: {
+  on: boolean;
+  onSandbox?: (on: boolean) => void;
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      disabled={onSandbox === undefined}
+      title={
+        on
+          ? "Sandbox on: move, tap and change any card by hand, outside the rules"
+          : "Sandbox off: only the rules' plays. Turn it on to change cards by hand"
+      }
+      onClick={() => onSandbox?.(!on)}
+      className={cn(
+        "inline-flex h-5 flex-none items-center gap-1 rounded-full border border-border px-2 text-[11px] text-dim",
+        "transition-colors motion-reduce:transition-none hover:border-accent hover:text-text disabled:opacity-45",
+        on && "border-accent text-accent hover:text-accent",
+        FOCUS,
+      )}
+    >
+      <span
+        aria-hidden="true"
+        className={cn("size-2 rounded-full border border-current", on && "bg-current")}
+      />
+      Sandbox
+    </button>
+  );
+}
+
+/**
  * The stops, by the tracker: a button that opens Arena's two rows of step toggles — "Your turn"
  * and "Opponent's turn" — each pressed step one the game stops at for the reader. Every toggle
  * sends the whole set (`setStops`); the reader's own main phases are always on and drawn so.
@@ -247,7 +289,7 @@ function StopsButton({
           )}
         >
           <span className="text-xs text-dim">Stop for me at these steps, to respond.</span>
-          {(["you", "opponent"] as GoldfishSeat[]).map((seat) => (
+          {(["you", "opponent"] as GameSeat[]).map((seat) => (
             <div
               key={seat}
               role="group"

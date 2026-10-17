@@ -68,6 +68,32 @@ export interface Shortcut {
 export type ShortcutScope = "global" | ViewId | "deckEditor" | "goldfish";
 
 /**
+ * **The game board's keys** — one board for the goldfish and the AI alike, so one list for the
+ * two scopes it is drawn under (`playtesting` and `goldfish`). Undo and redo (issue #1022): back
+ * to the reader's last decision, with all the opponents did after it, and forward again. The deck
+ * editor's spellings, for the deck editor's reason — the argument for the pair is at
+ * `deckEditor.redo` — and bound by `useUndoKeys`.
+ *
+ * **The board's other keys are its own and not listed here**: Space presses the stage button
+ * (first main "To combat", second main "End turn" — the goldfish board's old "Next turn" is gone)
+ * or skips a replay, and — only with the sandbox on — T taps or untaps the pointed card and G, E
+ * and H put it into the graveyard, into exile or into the hand.
+ * `PlaytestBoard` compares them itself rather than through {@link matchesShortcut}, so a row here
+ * would be one the panel advertises with nothing behind it.
+ */
+const BOARD: readonly Shortcut[] = [
+  { id: "undo", label: "Undo", chords: [{ key: "z", ctrl: true }] },
+  {
+    id: "redo",
+    label: "Redo",
+    chords: [
+      { key: "y", ctrl: true },
+      { key: "z", ctrl: true, shift: true },
+    ],
+  },
+];
+
+/**
  * The catalogue.
  *
  * **A `Record` over every scope rather than a partial map**, so the nine views are each present
@@ -153,10 +179,7 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
        * listed one of its two spellings until 2026-09-03. Under-stating what is bound is the
        * harmless direction, and it is still the direction a fence would have caught.
        */
-      chords: [
-        { key: "F10", shift: true },
-        { key: "ContextMenu" },
-      ],
+      chords: [{ key: "F10", shift: true }, { key: "ContextMenu" }],
     },
     { id: "zoom", label: "Resize the cards", chords: [{ pointer: "wheel", ctrl: true }] },
     {
@@ -194,21 +217,10 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
   scanner: [],
   trade: [],
   /**
-   * The playtest board's undo and redo (issue #1022): back to the reader's last decision, with all
-   * the opponent did after it. The deck editor's spellings, for the deck editor's reason — the
-   * argument for the pair is at `deckEditor.redo` — and bound by `useUndoKeys`.
+   * The game board, opened from the Playtesting page's setup — {@link BOARD}, which the goldfish
+   * scope draws too.
    */
-  playtesting: [
-    { id: "undo", label: "Undo", chords: [{ key: "z", ctrl: true }] },
-    {
-      id: "redo",
-      label: "Redo",
-      chords: [
-        { key: "y", ctrl: true },
-        { key: "z", ctrl: true, shift: true },
-      ],
-    },
-  ],
+  playtesting: BOARD,
   settings: [],
   deckEditor: [
     { id: "undo", label: "Undo", chords: [{ key: "z", ctrl: true }] },
@@ -236,21 +248,12 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
     { id: "remove", label: "Remove selected cards", chords: [{ key: "Delete" }] },
   ],
   /**
-   * The goldfish board, which — like the editor — is drawn *in place of* what the `decks` view
-   * would show (`App.tsx`), so it is a scope of its own rather than a view's. Undo and redo there
-   * (issue #1022) are the editor's spellings, bound by `useUndoKeys`.
+   * The same board, opened from the deck editor's "Goldfish this deck" — drawn, like the editor,
+   * *in place of* what the `decks` view would show (`App.tsx`), so it is a scope of its own rather
+   * than a view's, with the panel's heading saying where the reader is. Its keys are
+   * {@link BOARD}'s: one game on one board, whichever page opened it.
    */
-  goldfish: [
-    { id: "undo", label: "Undo", chords: [{ key: "z", ctrl: true }] },
-    {
-      id: "redo",
-      label: "Redo",
-      chords: [
-        { key: "y", ctrl: true },
-        { key: "z", ctrl: true, shift: true },
-      ],
-    },
-  ],
+  goldfish: BOARD,
 };
 
 /** A chord key that is one of the digit row's, matched on `e.code` too — see {@link matchesChord}. */
@@ -372,8 +375,8 @@ function cap(name: string): string {
  * `"global"` first and always, then exactly one more. **The editor replaces `decks` rather than
  * nesting under it**: `App.tsx` renders `openDeckId === null ? <DecksPage/> : <DeckEditor/>`, so
  * a `decks` section under an open editor would list chords for a page that is not on screen.
- * **The goldfish board replaces the editor the same way** (`goldfish`, the store's board open over
- * the open deck), so its section is drawn instead of the editor's.
+ * **The board against the goldfish replaces the editor the same way** (`goldfish`, the store's
+ * board open over the open deck), so its section is drawn instead of the editor's.
  *
  * Two fields already in the store and no registration machinery — a scope that registered itself
  * on mount would be a second source of truth about what is drawn, and the store already answers
@@ -382,7 +385,7 @@ function cap(name: string): string {
 export function activeScopes(s: {
   activeView: ViewId;
   openDeckId: number | null;
-  /** The goldfish board is drawn over the open deck. */
+  /** The board, against the goldfish, is drawn over the open deck. */
   goldfish?: boolean;
 }): readonly ShortcutScope[] {
   if (s.openDeckId !== null && s.goldfish === true) return ["global", "goldfish"];

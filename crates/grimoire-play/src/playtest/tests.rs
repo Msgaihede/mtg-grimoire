@@ -1,6 +1,8 @@
 //! Playtest games end to end — a green deck against a red one played by phase's AI — every test
 //! on the engine's stack. The AI plays at `VeryEasy` unless a test says otherwise: its other
-//! presets search with a 1.5 s budget a decision, and these tests are about the session.
+//! presets search with a 1.5 s budget a decision, and these tests are about the session. A game
+//! against the AI starts with the sandbox off, so a test that arranges the table by hand turns it
+//! on for that (`by_hand`) and back off; `goldfish_tests.rs` has the game against the goldfish.
 
 use crate::cards::CardFacts;
 use crate::on_engine_stack;
@@ -169,6 +171,7 @@ fn a_token_is_offered_and_drawn_in_the_printing_the_deck_sets() {
         let (mut game, _) =
             Playtest::new(&you, &[token], &against(red()), 2, Difficulty::VeryEasy).unwrap();
         game.act(A::Keep { bottom: vec![] }).unwrap();
+        game.act(A::SetSandbox { on: true }).unwrap();
         game.act(A::CreateToken { preset, count: 1 }).unwrap().view
     });
     let offer = view.tokens.iter().find(|t| t.name == "Treasure").unwrap();
@@ -188,25 +191,39 @@ fn find<'a>(cards: &'a [GameCard], name: &str) -> Option<&'a GameCard> {
     cards.iter().find(|c| c.name == name)
 }
 
+/// `work` with the sandbox on, and the sandbox as it was after: how a test arranges the table by
+/// hand without leaving a game against the AI any less strict than it found it.
+fn by_hand<T>(game: &mut Playtest, work: impl FnOnce(&mut Playtest) -> T) -> T {
+    let was = game.view().sandbox;
+    game.act(A::SetSandbox { on: true }).expect("sandbox on");
+    let out = work(game);
+    game.act(A::SetSandbox { on: was }).expect("sandbox back");
+    out
+}
+
 /// Draw (by hand) until the reader holds `name`, so a test does not depend on the shuffle.
 fn in_hand(game: &mut Playtest, name: &str) -> u64 {
-    for _ in 0..60 {
-        if let Some(c) = find(&game.view().you.hand, name) {
-            return c.id;
+    by_hand(game, |game| {
+        for _ in 0..60 {
+            if let Some(c) = find(&game.view().you.hand, name) {
+                return c.id;
+            }
+            game.act(A::Draw { count: 1 }).expect("draw");
         }
-        game.act(A::Draw { count: 1 }).expect("draw");
-    }
-    panic!("never drew {name}");
+        panic!("never drew {name}");
+    })
 }
 
 /// Put a card from the reader's hand onto the battlefield by hand.
 fn put_down(game: &mut Playtest, name: &str) {
     let id = in_hand(game, name);
-    game.act(A::Move {
-        id,
-        to: Place::Battlefield,
-    })
-    .expect("put down");
+    by_hand(game, |game| {
+        game.act(A::Move {
+            id,
+            to: Place::Battlefield,
+        })
+        .expect("put down")
+    });
 }
 
 /// End the reader's turn and answer whatever is in their way until their next main phase: no
@@ -734,6 +751,7 @@ fn a_medium_ai_plays_a_turn() {
 fn the_opponent_at_zero_life_ends_the_game_and_the_board_refuses_more() {
     let (over, refused) = engine(|| {
         let (mut game, _) = kept(2);
+        game.act(A::SetSandbox { on: true }).unwrap();
         let over = game
             .act(A::SetLife {
                 seat: PlaytestPlayer::Opponent,
@@ -751,23 +769,115 @@ fn the_opponent_at_zero_life_ends_the_game_and_the_board_refuses_more() {
     assert!(refused.unwrap_err().contains("game is over"));
 }
 
+/// The owner's decision of 2026-10-17: against the AI the sandbox starts off, and while it is off
+/// every hand on the table is refused, the game left as it was.
 #[test]
-fn the_sandbox_is_the_readers_main_phase_and_the_readers_cards() {
+fn the_sandbox_starts_off_against_the_ai_and_refuses_every_hand_edit() {
+    let (start, refused, after) = engine(|| {
+        let (mut game, step) = kept(3);
+        let id = step.view.you.hand[0].id;
+        let refused = [
+            game.act(A::Draw { count: 1 }),
+            game.act(A::Move {
+                id,
+                to: Place::Graveyard,
+            }),
+            game.act(A::SetLife {
+                seat: PlaytestPlayer::Opponent,
+                life: 1,
+            }),
+            game.act(A::UntapAll),
+        ];
+        (step.view, refused, game.view())
+    });
+    assert!(!start.sandbox && !start.goldfish);
+    for r in refused {
+        assert!(r.unwrap_err().contains("sandbox"));
+    }
+    assert_eq!(after.you.hand, start.you.hand);
+    assert_eq!(after.opponents[0].life, start.opponents[0].life);
+}
+
+/// With the sandbox on, the reader's hand reaches every card the table shows — an opponent's land
+/// too, back to its owner's hand — but never one they cannot see, and only in their main phase.
+#[test]
+fn the_sandbox_reaches_the_table_but_not_an_opponents_hidden_cards() {
     engine(|| {
         let (mut game, step) = kept(3);
-        // The AI's turn put its land on the battlefield; the reader may not move it.
-        let theirs = step.view.opponents[0].battlefield[0].id;
-        assert!(game
-            .act(A::Move {
-                id: theirs,
-                to: Place::Hand
+        let on = game.act(A::SetSandbox { on: true }).unwrap();
+        assert!(on.view.sandbox);
+        assert!(on.happened.is_empty(), "a setting happens nothing");
+        assert!(
+            !on.view.can_undo || step.view.can_undo,
+            "nor is it an action to undo"
+        );
+        // The AI's turn put its land on the battlefield; the sandbox may tap it and bounce it.
+        let theirs = step.view.opponents[0].battlefield[0].clone();
+        let tapped = game
+            .act(A::Tap {
+                ids: vec![theirs.id],
+                tapped: !theirs.tapped,
             })
-            .is_err());
+            .unwrap();
+        assert!(tapped.happened.iter().any(|h| matches!(
+            h,
+            H::Tapped {
+                seat: PlaytestPlayer::Opponent,
+                ..
+            }
+        )));
+        let bounced = game
+            .act(A::Move {
+                id: theirs.id,
+                to: Place::Hand,
+            })
+            .unwrap();
+        let left = &bounced.view.opponents[0].battlefield;
+        assert!(left.iter().all(|c| c.id != theirs.id));
+        assert_eq!(left.len() + 1, step.view.opponents[0].battlefield.len());
+        assert_eq!(
+            bounced.view.opponents[0].hand_count,
+            step.view.opponents[0].hand_count + 1
+        );
+        assert!(bounced.happened.contains(&H::Put {
+            seat: PlaytestPlayer::Opponent,
+            name: theirs.name.clone(),
+            from: Place::Battlefield,
+            to: Place::Hand,
+        }));
+        // Now it is in a hand the reader cannot see: out of reach. Its id is the engine's; the
+        // card keeps it in a hidden zone, which is exactly what must not be acted on.
+        let hidden = game.act(A::Move {
+            id: theirs.id,
+            to: Place::Graveyard,
+        });
+        assert!(hidden.is_err());
         let to_attack = game.act(A::Pass).unwrap();
         if to_attack.view.stage != Stage::Main {
             assert!(game.act(A::Draw { count: 1 }).is_err());
         }
     });
+}
+
+/// With the sandbox on, a card the rules cannot play against the AI is put down unpaid, as on the
+/// goldfish; with it off, the refusal says how to.
+#[test]
+fn a_card_the_rules_refuse_is_put_down_unpaid_only_in_the_sandbox() {
+    let (refused, put) = engine(|| {
+        let (mut game, _) = kept(2);
+        let bear = in_hand(&mut game, "Grizzly Bears");
+        let refused = game.act(A::Play { id: bear });
+        game.act(A::SetSandbox { on: true }).unwrap();
+        (refused, game.act(A::Play { id: bear }).unwrap())
+    });
+    assert!(refused.unwrap_err().contains("Turn the sandbox on"));
+    assert!(find(&put.view.you.battlefield, "Grizzly Bears").is_some());
+    assert!(put.happened.contains(&H::Put {
+        seat: PlaytestPlayer::You,
+        name: "Grizzly Bears".into(),
+        from: Place::Hand,
+        to: Place::Battlefield,
+    }));
 }
 
 #[test]
@@ -1124,6 +1234,7 @@ fn a_four_player_game_seats_three_opponents_in_turn_order_and_hides_their_hands(
 fn a_four_player_game_goes_on_without_an_opponent_who_is_out() {
     let (out, last) = engine(|| {
         let (mut game, _) = four(4);
+        game.act(A::SetSandbox { on: true }).unwrap();
         let out = game
             .act(A::SetLife {
                 seat: PlaytestPlayer::Opponent2,
@@ -1149,6 +1260,7 @@ fn a_four_player_game_goes_on_without_an_opponent_who_is_out() {
 fn the_reader_out_of_a_four_player_game_has_lost_it() {
     let (out, refused) = engine(|| {
         let (mut game, _) = four(4);
+        game.act(A::SetSandbox { on: true }).unwrap();
         let out = game
             .act(A::SetLife {
                 seat: PlaytestPlayer::You,
@@ -1207,10 +1319,12 @@ fn an_attack_names_the_opponent_it_is_at() {
     );
 }
 
+/// One to three opponents' decks — and none is the goldfish, not a refusal.
 #[test]
-fn a_game_has_from_one_to_three_opponents() {
-    let refused = engine(|| {
-        let none = Playtest::new(&green(), &[], &[], 4, Difficulty::VeryEasy).err();
+fn a_game_has_up_to_three_opponents_and_none_is_the_goldfish() {
+    let (none, four) = engine(|| {
+        let none =
+            Playtest::new(&green(), &[], &[], 4, Difficulty::VeryEasy).map(|(_, step)| step.view);
         let four = Playtest::new(
             &green(),
             &[],
@@ -1221,8 +1335,10 @@ fn a_game_has_from_one_to_three_opponents() {
         .err();
         (none, four)
     });
-    assert!(refused.0.unwrap().contains("not 0"));
-    assert!(refused.1.unwrap().contains("not 4"));
+    let goldfish = none.expect("no opponents is a goldfish game");
+    assert!(goldfish.goldfish && goldfish.sandbox);
+    assert_eq!(goldfish.opponents.len(), 1);
+    assert!(four.unwrap().contains("not 4"));
 }
 
 /// Issue #1027: two of the reader's triggers at once are put in order, and each answer names the
