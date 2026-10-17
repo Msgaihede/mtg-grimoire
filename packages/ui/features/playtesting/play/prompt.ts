@@ -211,9 +211,11 @@ export function cardOfRef(
       power: null,
       toughness: null,
       tax: 0,
+      attachedTo: null,
       foretold: false,
       canForetell: false,
       castable: false,
+      gaps: [],
     }
   );
 }

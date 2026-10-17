@@ -561,6 +561,40 @@ fn counters_change_power_and_toughness() {
 /// Issue #991: a token the deck keeps is offered and drawn in the printing the reader set for it,
 /// not phase's.
 #[test]
+fn a_card_the_engine_plays_only_in_part_carries_its_gaps_in_hand_and_on_the_battlefield() {
+    let mut cards = deck();
+    // Rules text no parser has a word for, as `support.rs`' tests use.
+    cards.push(card(
+        "Moonlit Bard",
+        Some("{1}{G}"),
+        "Creature — Elf Bard",
+        "Whenever the moon is full, sing a song of the old forest to every listener.",
+        Some(("2", "2")),
+        8,
+    ));
+    let (hand, battlefield, bears) = engine(move || {
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).unwrap();
+        let id = in_hand(&mut game, "Moonlit Bard");
+        let hand = game
+            .view()
+            .you
+            .hand
+            .into_iter()
+            .find(|c| c.id == id)
+            .unwrap();
+        put_down(&mut game, "Moonlit Bard");
+        put_down(&mut game, "Grizzly Bears");
+        let view = game.view();
+        let on = |name: &str| find(&view.you.battlefield, name).unwrap().clone();
+        (hand, on("Moonlit Bard"), on("Grizzly Bears"))
+    });
+    assert!(!hand.gaps.is_empty(), "in hand: {hand:?}");
+    assert_eq!(battlefield.gaps, hand.gaps, "the same face, the same gaps");
+    assert!(bears.gaps.is_empty(), "a card played in full has none");
+}
+
+#[test]
 fn a_token_is_offered_and_drawn_in_the_printing_the_deck_sets() {
     let (preset, oracle, source) = crate::tokens::a_treasure();
     let token = crate::tokens::a_treasure_facts(&oracle, &source);

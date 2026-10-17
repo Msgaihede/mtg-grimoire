@@ -5,7 +5,7 @@ import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
 import { Battlefield, type CardMark, type TablePick } from "../table/Battlefield";
 import type { TableDrag } from "../table/tableDrag";
-import type { ZoneSize } from "../table/layout";
+import type { Across, ZoneSize } from "../table/layout";
 import { LifePlate } from "../table/LifePlate";
 import type { Pointed, ZoneLook } from "../table/types";
 import { OpponentCommand, OpponentHand, OpponentLibrary, OpponentPile } from "./OpponentZones";
@@ -48,6 +48,7 @@ export function OpponentArea({
   steppers,
   marks,
   pick,
+  across,
   aimable,
   onAim,
   onLife,
@@ -73,6 +74,8 @@ export function OpponentArea({
   steppers: boolean;
   marks?: ReadonlyMap<number, CardMark>;
   pick?: TablePick;
+  /** The attachments that cross between this table and the others (`Battlefield`'s). */
+  across?: Across;
   /** The reader's attacker waiting to be aimed can attack this player: the plate is a target. */
   aimable: boolean;
   onAim: () => void;
@@ -174,6 +177,7 @@ export function OpponentArea({
             dense
             marks={marks}
             pick={pick}
+            across={across}
             className="h-full w-full"
           />
         </div>

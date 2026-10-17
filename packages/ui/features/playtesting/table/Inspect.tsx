@@ -4,6 +4,7 @@ import { CardImage } from "@/components/CardImage";
 import { cardImageUrl, type ImageVariant } from "@/lib/images";
 import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
+import { gapWords } from "../support";
 import type { Pointed } from "./types";
 
 /** How long the pointer rests on a card before its preview opens. */
@@ -144,19 +145,51 @@ export function Inspect({
         <CardFace card={card} variant="display" className="p-3 text-sm" />
       </div>
       <span className="text-xs text-dim">{caption}</span>
+      {card.gaps.length > 0 && (
+        <span className="text-xs text-accent">
+          {PARTLY} — {card.gaps.map(gapWords).join(" · ")}
+        </span>
+      )}
     </div>
   );
 }
+
+/** What a card the engine plays only in part is called under its preview. */
+const PARTLY = "Played only in part by the rules engine";
 
 /**
  * One card's face at whatever size its box is: the printing's picture, or — for a token the
  * engine has no printing for — a plain tile with its name and power/toughness, so it is still a
  * card-shaped thing on the table rather than a hole.
  *
+ * **A card the engine plays only in part wears a gold border** (`gaps`, issue #1093), wherever
+ * it is drawn — the hand, the battlefield, a pile, the preview — so the reader knows before
+ * playing it that the board may need setting right by hand. Gold is the setup screen's caution
+ * for the same verdict; the border sits inside the card, clear of the table's outline marks
+ * (attack, block, pick), which sit outside it.
+ *
  * `alt` defaults to empty because every caller but one wraps the face in a control that already
  * names the card; a second name inside it would be read twice.
  */
-export function CardFace({
+export function CardFace(props: {
+  card: GameCard;
+  variant?: ImageVariant;
+  alt?: string;
+  className?: string;
+}): JSX.Element {
+  if (props.card.gaps.length === 0) return <Face {...props} />;
+  return (
+    <span className="relative block h-full w-full" data-partly="">
+      <Face {...props} />
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 rounded-md border-2 border-accent"
+      />
+    </span>
+  );
+}
+
+function Face({
   card,
   variant = "grid",
   alt = "",

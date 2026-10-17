@@ -69,6 +69,10 @@ pub struct GameCard {
     /// What casting it from the command zone costs on top of its mana cost, in generic mana
     /// (CR 903.8). 0 for anything but a commander.
     pub tax: u32,
+    /// The permanent this Aura, Equipment or Fortification is attached to (CR 301.5, 303.4), by
+    /// its object id — whoever controls it, so an Aura on an opponent's creature names that
+    /// creature. `None` for anything unattached, off the battlefield, or attached to a player.
+    pub attached_to: Option<u64>,
     /// A card in exile that is foretold (CR 702.143): face down, cast later for its foretell cost.
     /// Only the reader's are in a view; an opponent's are face down, so not shown at all.
     pub foretold: bool,
@@ -79,6 +83,11 @@ pub struct GameCard {
     /// exile, a flashback card from the graveyard. Only ever set on a graveyard or exile card,
     /// and only in a view the reader can act in.
     pub castable: bool,
+    /// What the engine does not play of the face it shows: phase's coverage labels
+    /// (`card_face_gaps`, as `support.rs` sends them), empty for a face played in full and for a
+    /// token. A card with any is still played, but the parts named do nothing, so the board marks
+    /// it (issue #1093).
+    pub gaps: Vec<String>,
 }
 
 /// Where a permanent sits: creatures toward the opponent; behind them lands on the left and

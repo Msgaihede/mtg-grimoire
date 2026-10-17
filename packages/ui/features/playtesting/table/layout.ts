@@ -26,6 +26,12 @@ export const UNDER = 4;
 export const MARK = 14;
 /** The back row's divider: 14 px either side of a 1 px rule. */
 export const SPLIT = 29;
+/**
+ * Each Aura or Equipment attached to a card shows this many card-widths of its top edge above
+ * the card — its name bar, the way an attachment is tucked under its creature at a real table
+ * (issue #1073).
+ */
+export const ATTACHED = 0.16;
 /** A card's height over its width (the 5:7 frame). */
 export const ASPECT = 1.4;
 /** A tapped card lies on its side, so it takes this many card-widths of the row. */
@@ -79,6 +85,12 @@ export interface Pile {
   card: GameCard;
   ids: number[];
   tapped: boolean;
+  /**
+   * The Auras, Equipment and Fortifications attached to the card, nearest first, drawn tucked
+   * under it ({@link ATTACHED}). A card with any is a pile of its own, so this is never shared
+   * by twins.
+   */
+  attached: GameCard[];
 }
 
 /** What makes two cards one pile: the picture, the name, the state and the counters. */
@@ -95,19 +107,33 @@ function pileKey(c: GameCard): string {
  */
 export type PileApart = (card: GameCard) => string;
 
-/** The cards of one lane, grouped into piles in the order each pile's first card arrived. */
-export function pilesOf(cards: readonly GameCard[], lane: GameLane, apart?: PileApart): Pile[] {
+/** The cards of one lane, grouped into piles in the order each pile's first card arrived. A
+ *  card with attachments (`attached`, by its id) is a pile of its own, with them under it. */
+export function pilesOf(
+  cards: readonly GameCard[],
+  lane: GameLane,
+  apart?: PileApart,
+  attached?: ReadonlyMap<number, GameCard[]>,
+): Pile[] {
   const seen = new Map<string, Pile>();
   const out: Pile[] = [];
   for (const card of cards) {
     if (card.lane !== lane) continue;
-    const k = apart === undefined ? pileKey(card) : `${pileKey(card)}|${apart(card)}`;
+    const under = attached?.get(card.id) ?? [];
+    const own = under.length > 0 ? `|#${card.id}` : "";
+    const k = (apart === undefined ? pileKey(card) : `${pileKey(card)}|${apart(card)}`) + own;
     const pile = seen.get(k);
     if (pile !== undefined) {
       pile.ids.push(card.id);
       continue;
     }
-    const fresh: Pile = { key: String(card.id), card, ids: [card.id], tapped: card.tapped };
+    const fresh: Pile = {
+      key: String(card.id),
+      card,
+      ids: [card.id],
+      tapped: card.tapped,
+      attached: under,
+    };
     seen.set(k, fresh);
     out.push(fresh);
   }
@@ -125,9 +151,17 @@ export function pileWidth(pile: Pile, w: number): number {
   return Math.round(w * (pile.tapped ? TAPPED : 1)) + underOf(pile) * PILE;
 }
 
-/** How tall a pile's box is at card width `w`, its ×N marker's overhang included. */
+/** How much of each attachment shows above a card `w` wide. */
+export function attachedPeek(w: number): number {
+  return Math.round(w * ATTACHED);
+}
+
+/** How tall a pile's box is at card width `w`, its attachments' edges and its ×N marker's
+ *  overhang included. */
 export function pileHeight(pile: Pile, w: number): number {
-  return Math.round(w * ASPECT) + underOf(pile) * PILE + MARK;
+  return (
+    Math.round(w * ASPECT) + pile.attached.length * attachedPeek(w) + underOf(pile) * PILE + MARK
+  );
 }
 
 /**
@@ -148,16 +182,22 @@ export function fitWidth(
   const widths = piles.reduce((n, p) => n + (p.tapped ? TAPPED : 1), 0);
   const edges = piles.reduce((n, p) => n + underOf(p) * PILE, 0);
   const room = row - fixed - edges - GAP * (piles.length - 1);
-  return Math.max(FLOOR, Math.min(max, tallestWidth(laneHeight), Math.floor(room / widths) - 1));
+  // The pile with the most attachments is the tallest.
+  const most = piles.reduce((n, p) => Math.max(n, p.attached.length), 0);
+  return Math.max(
+    FLOOR,
+    Math.min(max, tallestWidth(laneHeight, most), Math.floor(room / widths) - 1),
+  );
 }
 
 /**
- * The widest an untapped card stands in a lane `laneHeight` px tall: a tapped card is as tall as
- * an untapped one is wide, so the lane's height bounds the untapped card — its height plus a
- * pile's edges and the marker must fit. What a sparse row is drawn at, before its width shrinks it.
+ * The widest an untapped card stands in a lane `laneHeight` px tall with `attached` cards tucked
+ * under it: a tapped card is as tall as an untapped one is wide, so the lane's height bounds the
+ * untapped card — its height plus a pile's edges, its attachments' edges and the marker must fit.
+ * What a sparse row is drawn at, before its width shrinks it.
  */
-export function tallestWidth(laneHeight: number): number {
-  return Math.floor((laneHeight - UNDER * PILE - MARK) / ASPECT);
+export function tallestWidth(laneHeight: number, attached = 0): number {
+  return Math.floor((laneHeight - UNDER * PILE - MARK) / (ASPECT + attached * ATTACHED));
 }
 
 /** Both lanes' piles and the card width each is drawn at. */
@@ -170,14 +210,73 @@ export interface TableLayout {
   backWidth: number;
 }
 
+/**
+ * What one table has of the attachments that cross between tables: an Aura one player controls
+ * on another player's creature is drawn under the creature, on the creature's table.
+ */
+export interface Across {
+  /** Other tables' cards attached to one of this table's. */
+  guests: readonly GameCard[];
+  /** The other tables' permanents: this table's cards attached to one of them leave its lanes. */
+  away: ReadonlySet<number>;
+}
+
+/** Each table's {@link Across}, in the order the tables were given. */
+export function acrossTables(tables: readonly (readonly GameCard[])[]): Across[] {
+  return tables.map((here, i) => {
+    const ids = new Set(here.map((c) => c.id));
+    const others = tables.filter((_, j) => j !== i).flat();
+    return {
+      guests: others.filter((c) => c.attachedTo !== null && ids.has(c.attachedTo)),
+      away: new Set(others.map((c) => c.id)),
+    };
+  });
+}
+
+/**
+ * The table's lanes and what rides under each card: `attached` by the id of the card each
+ * attachment is drawn under, and the lanes without them. An attachment on an attachment (an Aura
+ * on an Equipment) rides under the card at the bottom of the chain; one whose card is on no table
+ * shown stays in its own lane.
+ */
+export function attachmentsOf(
+  battlefield: readonly GameCard[],
+  across?: Across,
+): { lanes: GameCard[]; attached: Map<number, GameCard[]> } {
+  const byId = new Map(battlefield.map((c) => [c.id, c]));
+  const away = across?.away;
+  const rides = (c: GameCard) =>
+    c.attachedTo !== null && (byId.has(c.attachedTo) || away?.has(c.attachedTo) === true);
+  /** The card at the bottom of `c`'s chain on this table, at most a few links down. */
+  const root = (c: GameCard): number | null => {
+    let at = c;
+    for (let i = 0; i < 8 && at.attachedTo !== null; i++) {
+      const next = byId.get(at.attachedTo);
+      if (next === undefined) return away?.has(at.attachedTo) === true ? null : at.id;
+      at = next;
+    }
+    return at.attachedTo === null ? at.id : null;
+  };
+  const attached = new Map<number, GameCard[]>();
+  for (const c of [...battlefield, ...(across?.guests ?? [])]) {
+    if (c.attachedTo === null) continue;
+    const host = root(c);
+    if (host === null || host === c.id) continue;
+    attached.set(host, [...(attached.get(host) ?? []), c]);
+  }
+  return { lanes: battlefield.filter((c) => !rides(c)), attached };
+}
+
 export function layoutTable(
   battlefield: readonly GameCard[],
   { width, height }: { width: number; height: number },
   apart?: PileApart,
+  across?: Across,
 ): TableLayout {
-  const creatures = pilesOf(battlefield, "creature", apart);
-  const lands = pilesOf(battlefield, "land", apart);
-  const others = pilesOf(battlefield, "other", apart);
+  const { lanes, attached } = attachmentsOf(battlefield, across);
+  const creatures = pilesOf(lanes, "creature", apart, attached);
+  const lands = pilesOf(lanes, "land", apart, attached);
+  const others = pilesOf(lanes, "other", apart, attached);
   const laneHeight = Math.max(0, height / 2);
   const both = lands.length > 0 && others.length > 0;
   return {
