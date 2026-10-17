@@ -13,7 +13,7 @@
  *
  * **What the reader may not see is not sent**: an opponent's hand and library are counts.
  *
- * **A web or phone host refuses all three** — they are on the desktop's `DESKTOP_ONLY` list, and
+ * **A web or phone host refuses all four** — they are on the desktop's `DESKTOP_ONLY` list, and
  * the light app draws no Playtesting.
  */
 import type {
@@ -325,6 +325,30 @@ export interface PlaytestOpponent {
   variant: string;
 }
 
+/**
+ * What the rules engine plays of a deck (issue #1078): `grimoire-play`'s `support.rs`. Its
+ * different cards (two printings of one are one), and those phase.rs's parser reads only in part.
+ */
+export interface DeckSupport {
+  cards: number;
+  unsupported: UnsupportedCard[];
+}
+
+/**
+ * One card of a deck the engine plays only in part: dealt and played as a body with a cost and a
+ * type, with what `gaps` names doing nothing. A gap is phase's own coverage label —
+ * `Effect:…`, `Keyword:…`, `Trigger:…` — and the page words it (`features/playtesting/support.ts`).
+ */
+export interface UnsupportedCard {
+  /** The first printing's Scryfall id, for its picture. */
+  cardId: string;
+  name: string;
+  /** Copies in the deck, every printing together. */
+  quantity: number;
+  commander: boolean;
+  gaps: string[];
+}
+
 /** The playtest commands — spread into `ipc` by `../ipc.ts`. */
 export const playtestCommands = {
   /**
@@ -354,4 +378,10 @@ export const playtestCommands = {
   playtestAct: (action: PlaytestAction) => invoke<PlaytestStep>("playtest_act", { action }),
   /** Put the game away. Never rejects in a way worth showing. */
   playtestEnd: () => invoke<void>("playtest_end"),
+  /**
+   * What the rules engine plays of `deckId` as it stands in `variant` (issue #1078). Each card is
+   * parsed once per window, so asking about every deck costs each shared card once.
+   */
+  playtestSupport: (deckId: number, variant: string) =>
+    invoke<DeckSupport>("playtest_support", { deckId, variant }),
 };

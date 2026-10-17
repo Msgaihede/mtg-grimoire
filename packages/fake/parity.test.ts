@@ -38,6 +38,7 @@ const ABSENT: Record<string, string> = {
   playtest_start: "the rules engine and its AI are Rust's; the board's stories feed it views",
   playtest_act: "the rules engine and its AI are Rust's; the board's stories feed it views",
   playtest_end: "the rules engine and its AI are Rust's; the board's stories feed it views",
+  playtest_support: "what the rules engine plays of a deck is Rust's to say, from phase's parser",
 };
 
 /** Commands a plugin registers rather than `generate_handler!`; Tauri names them `plugin:…|…`. */

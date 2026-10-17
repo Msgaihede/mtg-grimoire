@@ -13,8 +13,8 @@ use std::sync::{Arc, Mutex};
 
 use grimoire_play::playtest::session::MAX_OPPONENTS;
 use grimoire_play::{
-    on_engine_stack, CardFacts, Difficulty, OpponentDeck, Playtest, PlaytestAction, PlaytestStep,
-    TokenFacts,
+    deck_support, on_engine_stack, CardFacts, DeckSupport, Difficulty, OpponentDeck, Playtest,
+    PlaytestAction, PlaytestStep, SupportCache, TokenFacts,
 };
 
 use crate::goldfish::{facts, token_facts};
@@ -165,4 +165,42 @@ pub fn playtest_end(slot: tauri::State<'_, PlaytestSlot>) {
             *held = Slot::Empty;
         }
     }
+}
+
+/// What the engine has said of each card it was asked about, for the window's life
+/// (`grimoire_play::support`): the setup screen asks about every deck, and decks share cards.
+/// One question at a time holds it, so a burst of them parses each shared card once.
+#[derive(Default)]
+pub struct PlaytestSupport(Arc<Mutex<SupportCache>>);
+
+/// What the rules engine plays of `deck_id` as it stands in `variant` (issue #1078): its
+/// different cards, and those phase.rs's parser reads only in part, each with phase's labels for
+/// what it leaves out. The Playtesting setup marks a deck and its cards by it before a game.
+#[tauri::command]
+pub async fn playtest_support(
+    state: tauri::State<'_, Arc<AppState>>,
+    support: tauri::State<'_, PlaytestSupport>,
+    deck_id: i64,
+    variant: String,
+) -> Result<DeckSupport, String> {
+    let app = state.inner().clone();
+    let cards = tauri::async_runtime::spawn_blocking(move || {
+        let conn = crate::sync::lock_db_read(&app);
+        grimoire_core::play::deck_cards(&conn, deck_id, &variant)
+    })
+    .await
+    .map_err(|e| format!("the deck could not be read: {e}"))??;
+    let cards: Vec<CardFacts> = cards.into_iter().map(facts).collect();
+    let known = support.0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        on_engine_stack(move || {
+            // A panic on an earlier question leaves answers that are still true.
+            let mut known = known
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            deck_support(&cards, &mut known)
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())??
 }
