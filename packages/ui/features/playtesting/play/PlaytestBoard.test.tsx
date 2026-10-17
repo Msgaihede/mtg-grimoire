@@ -1,9 +1,13 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PlaytestView } from "@/lib/ipc";
-import { goldfishDraggable } from "../goldfish/goldfishDrag";
-import { INSPECT_DELAY } from "../goldfish/Inspect";
+import type { GameCard, PlaytestView } from "@/lib/ipc";
+import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
+import { gameCard } from "../table/fixtures";
+import { tableDraggable } from "../table/tableDrag";
+import { INSPECT_DELAY } from "../table/Inspect";
+import type { Playmat } from "../table/types";
 import {
+  GOLDFISH,
   attackStep,
   blockStep,
   combatArrowsView,
@@ -11,6 +15,9 @@ import {
   fourPlayerAttack,
   fourPlayerLost,
   gameOver,
+  goldfishDead,
+  goldfishOpeningHand,
+  goldfishTurn,
   openingHand,
   respondStep,
   targetPrompt,
@@ -18,38 +25,64 @@ import {
 } from "./fixtures";
 import { PlaytestBoard } from "./PlaytestBoard";
 
-// Spied, not replaced: the board's cards still register as the goldfish's do, and the test can
-// ask which ones did.
-vi.mock("../goldfish/goldfishDrag", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../goldfish/goldfishDrag")>();
-  return { ...actual, goldfishDraggable: vi.fn(actual.goldfishDraggable) };
+// Spied, not replaced: the board's cards still register as they would, and the test can ask
+// which ones did.
+vi.mock("../table/tableDrag", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../table/tableDrag")>();
+  return { ...actual, tableDraggable: vi.fn(actual.tableDraggable) };
 });
 
-function setup(
+function board(
   view: PlaytestView | null,
-  { busy = false, replaying = false, opponentNames = ["Boros Aggro"] } = {},
+  handlers: {
+    onAct: (a: unknown) => void;
+    onBack: () => void;
+    onNewGame: () => void;
+    onSkip: () => void;
+  },
+  {
+    busy = false,
+    replaying = false,
+    opponentNames = ["Boros Aggro"] as readonly string[],
+    returnTo = undefined as "setup" | "deck" | undefined,
+    initialPlaymat = undefined as Playmat | undefined,
+  } = {},
 ) {
-  const onAct = vi.fn();
-  const onBack = vi.fn();
-  const onNewGame = vi.fn();
-  const onSkip = vi.fn();
-  render(
-    <PlaytestBoard
-      deckName="Simic Tempo"
-      opponentNames={opponentNames}
-      view={view}
-      log={[]}
-      error={null}
-      busy={busy}
-      onAct={onAct}
-      onBack={onBack}
-      onNewGame={onNewGame}
-      replaying={replaying}
-      onSkip={onSkip}
-    />,
+  return (
+    <ContextMenuProvider>
+      <PlaytestBoard
+        deckName="Simic Tempo"
+        opponentNames={opponentNames}
+        view={view}
+        log={[]}
+        error={null}
+        busy={busy}
+        onAct={handlers.onAct}
+        onBack={handlers.onBack}
+        onNewGame={handlers.onNewGame}
+        replaying={replaying}
+        onSkip={handlers.onSkip}
+        returnTo={returnTo}
+        initialPlaymat={initialPlaymat}
+      />
+    </ContextMenuProvider>
   );
-  return { onAct, onBack, onNewGame, onSkip };
 }
+
+function setup(view: PlaytestView | null, options: Parameters<typeof board>[2] = {}) {
+  const handlers = { onAct: vi.fn(), onBack: vi.fn(), onNewGame: vi.fn(), onSkip: vi.fn() };
+  const { rerender } = render(board(view, handlers, options));
+  return {
+    ...handlers,
+    rerender: (next: PlaytestView | null) => rerender(board(next, handlers, options)),
+  };
+}
+
+/** Turn 5 with the sandbox turned on. */
+const sandboxed = (view: PlaytestView = turnFive().view): PlaytestView => ({
+  ...view,
+  sandbox: true,
+});
 
 const yours = () => screen.getByRole("region", { name: "Your battlefield" });
 const theirs = () => screen.getByRole("region", { name: "The opponent's battlefield" });
@@ -93,7 +126,7 @@ describe("PlaytestBoard's opening hand", () => {
   it("previews a card rested on, and closes when the pointer leaves it", () => {
     setup(openingHand());
     const goyf = screen.getByRole("button", { name: "Tarmogoyf" });
-    const preview = () => screen.queryByTestId("goldfish-inspect");
+    const preview = () => screen.queryByTestId("card-inspect");
 
     fireEvent.mouseEnter(goyf);
     act(() => vi.advanceTimersByTime(INSPECT_DELAY));
@@ -179,23 +212,48 @@ describe("PlaytestBoard's prompt", () => {
 });
 
 describe("PlaytestBoard's opponent", () => {
-  it("never taps, drags or opens a menu on the opponent's cards", () => {
-    vi.mocked(goldfishDraggable).mockClear();
+  it("never taps or opens a menu on the opponent's cards with the sandbox off", () => {
     const { onAct } = setup(turnFive().view);
     const ragavan = within(theirs()).getByRole("button", { name: /^Ragavan/ });
     fireEvent.click(ragavan);
     fireEvent.contextMenu(ragavan);
     expect(onAct).not.toHaveBeenCalled();
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
-    const dragged = vi.mocked(goldfishDraggable).mock.calls.map(([{ element }]) => element);
+  });
+
+  it("never drags the opponent's cards, even with the sandbox on", () => {
+    vi.mocked(tableDraggable).mockClear();
+    setup(sandboxed());
+    const dragged = vi.mocked(tableDraggable).mock.calls.map(([{ element }]) => element);
     expect(dragged.length).toBeGreaterThan(0);
     expect(dragged.some((el) => theirs().contains(el))).toBe(false);
     expect(dragged.some((el) => yours().contains(el))).toBe(true);
   });
 
-  it("still taps the reader's own", () => {
+  it("opens the sandbox's menu on the opponent's cards with it on, and a click still taps none", async () => {
+    const { view, ragavan } = turnFive();
+    const { onAct } = setup(sandboxed(view));
+    const button = within(theirs()).getByRole("button", { name: /^Ragavan/ });
+    fireEvent.click(button);
+    expect(onAct).not.toHaveBeenCalled();
+    fireEvent.contextMenu(button);
+    await screen.findByRole("menu");
+    const rows = screen.getAllByRole("menuitem").map((r) => r.textContent);
+    expect(rows).not.toContain("Activate ability");
+    expect(rows).not.toContain("Play");
+    fireEvent.click(screen.getByRole("menuitem", { name: "Tap" }));
+    expect(onAct).toHaveBeenCalledWith({ type: "tap", ids: [ragavan.id], tapped: true });
+  });
+
+  it("gives the opponent's plate a life stepper only with the sandbox on", () => {
+    setup(turnFive().view);
+    expect(screen.queryByRole("spinbutton", { name: "Opponent's life" })).toBeNull();
+    expect(screen.getByText("Opponent's life:")).toBeInTheDocument();
+  });
+
+  it("taps the reader's own on a click with the sandbox on", () => {
     const { view, elves } = turnFive();
-    const { onAct } = setup(view);
+    const { onAct } = setup(sandboxed(view));
     fireEvent.click(within(yours()).getByRole("button", { name: /^Llanowar Elves/ }));
     expect(onAct).toHaveBeenCalledWith({ type: "tap", ids: [elves.id], tapped: true });
   });
@@ -355,5 +413,238 @@ describe("PlaytestBoard at a four-player table", () => {
   it("says the reader lost once they are out, though nobody has won", () => {
     setup(fourPlayerLost().view, { opponentNames: FOUR });
     expect(screen.getByRole("heading", { name: "You lost" })).toBeInTheDocument();
+  });
+});
+
+describe("PlaytestBoard's sandbox", () => {
+  it("is off: no click-to-tap, no T key, no library draws, plates read-only, the menu's rows grey", async () => {
+    const { view, elves } = turnFive();
+    const { onAct } = setup(view);
+    const elf = within(yours()).getByRole("button", { name: /^Llanowar Elves/ });
+    fireEvent.click(elf);
+    fireEvent.mouseEnter(elf);
+    fireEvent.keyDown(window, { key: "t" });
+    expect(onAct).not.toHaveBeenCalledWith(expect.objectContaining({ ids: [elves.id] }));
+    expect(onAct).not.toHaveBeenCalled();
+
+    const library = screen.getByRole("button", { name: "Library, 48 cards" });
+    expect(library).toBeDisabled();
+    expect(screen.queryByRole("spinbutton", { name: "Your life" })).toBeNull();
+
+    // A card in hand keeps Play and nothing else.
+    fireEvent.contextMenu(screen.getByRole("button", { name: /^Counterspell\. Drag to play/ }));
+    await screen.findByRole("menu");
+    expect(screen.getAllByRole("menuitem").map((r) => r.textContent)).toEqual(["Play"]);
+  });
+
+  it("greys the game menu's hand edits while off", async () => {
+    setup(turnFive().view);
+    fireEvent.click(screen.getByRole("button", { name: "Game menu" }));
+    await screen.findByRole("menu");
+    expect(screen.getByRole("menuitem", { name: "Untap everything" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(screen.getByRole("menuitemradio", { name: "Sandbox" })).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+  });
+
+  it("offers the game menu's hand edits while on, and the row turns it off", async () => {
+    const { onAct } = setup(sandboxed());
+    fireEvent.click(screen.getByRole("button", { name: "Game menu" }));
+    const row = await screen.findByRole("menuitemradio", { name: "Sandbox" });
+    expect(row).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("menuitem", { name: "Untap everything" })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+    fireEvent.click(row);
+    expect(onAct).toHaveBeenLastCalledWith({ type: "setSandbox", on: false });
+  });
+
+  it("is on: T taps the card pointed at, the library draws, the plates step", () => {
+    const { view, elves } = turnFive();
+    const { onAct } = setup(sandboxed(view));
+    fireEvent.mouseEnter(within(yours()).getByRole("button", { name: /^Llanowar Elves/ }));
+    fireEvent.keyDown(window, { key: "t" });
+    expect(onAct).toHaveBeenLastCalledWith({ type: "tap", ids: [elves.id], tapped: true });
+    fireEvent.click(screen.getByRole("button", { name: /^Library, 48 cards\. Click to draw/ }));
+    expect(onAct).toHaveBeenLastCalledWith({ type: "draw", count: 1 });
+    expect(screen.getByRole("spinbutton", { name: "Your life" })).toBeEnabled();
+    expect(screen.getByRole("spinbutton", { name: "Opponent's life" })).toBeEnabled();
+  });
+
+  it("takes no hand edits outside the reader's main phase, though it is on", () => {
+    const { onAct } = setup(sandboxed(respondStep().view));
+    fireEvent.click(within(yours()).getByRole("button", { name: /^Llanowar Elves/ }));
+    expect(onAct).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Library, 48 cards" })).toBeDisabled();
+    // The steppers are there, greyed, to come back to.
+    expect(screen.getByRole("spinbutton", { name: "Your life" })).toBeDisabled();
+  });
+
+  it("is turned on and off by the chip in the top band", () => {
+    const { onAct, rerender } = setup(turnFive().view);
+    const chip = screen.getByRole("button", { name: "Sandbox" });
+    expect(chip).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(chip);
+    expect(onAct).toHaveBeenLastCalledWith({ type: "setSandbox", on: true });
+    rerender(sandboxed());
+    expect(screen.getByRole("button", { name: "Sandbox" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Sandbox" }));
+    expect(onAct).toHaveBeenLastCalledWith({ type: "setSandbox", on: false });
+  });
+});
+
+describe("PlaytestBoard against the goldfish", () => {
+  it("names the goldfish's plate, and says the engine is playing on rather than thinking", () => {
+    setup(goldfishTurn(), { opponentNames: GOLDFISH, busy: true });
+    expect(screen.getByText("Opponent · Goldfish")).toBeInTheDocument();
+    expect(screen.getByText("Playing on…")).toBeInTheDocument();
+    expect(screen.queryByText(/thinking/)).toBeNull();
+  });
+
+  it("says on which of the reader's turns the goldfish died", () => {
+    setup(goldfishDead(), { opponentNames: GOLDFISH });
+    expect(screen.getByText("Dead on your turn 8")).toBeInTheDocument();
+  });
+
+  it("goes back to the deck it was opened from, under the goldfish's undo scope", async () => {
+    const { onBack, onAct } = setup(goldfishTurn(), {
+      opponentNames: GOLDFISH,
+      returnTo: "deck",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Back to the Simic Tempo deck" }));
+    expect(onBack).toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    expect(onAct).toHaveBeenLastCalledWith({ type: "undo" });
+    fireEvent.click(screen.getByRole("button", { name: "Game menu" }));
+    expect(await screen.findByRole("menuitem", { name: "Back to the deck" })).toBeInTheDocument();
+  });
+
+  it("names the result banner's way back by where the board came from", () => {
+    setup(gameOver().view, { returnTo: "deck" });
+    const over = screen.getByRole("region", { name: "Game over" });
+    expect(within(over).getByRole("button", { name: "Back to the deck" })).toBeInTheDocument();
+  });
+
+  it("draws the felt the board was opened on", () => {
+    setup(goldfishTurn(), { opponentNames: GOLDFISH, initialPlaymat: "green" });
+    expect(screen.getByTestId("board-felt")).toBeInTheDocument();
+  });
+});
+
+describe("PlaytestBoard's inspect preview", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  const rest = (ms: number) => act(() => vi.advanceTimersByTime(ms));
+  const preview = () => screen.queryByTestId("card-inspect");
+  const table = (battlefield: GameCard[]): PlaytestView => {
+    const view = goldfishTurn();
+    return { ...view, you: { ...view.you, battlefield } };
+  };
+
+  it("opens once the pointer has rested, closes at once, and waits again", () => {
+    setup(table([gameCard("Sol Ring")]), { opponentNames: GOLDFISH });
+    const ring = within(yours()).getByRole("button", { name: "Sol Ring" });
+
+    fireEvent.mouseEnter(ring);
+    rest(INSPECT_DELAY - 1);
+    expect(preview()).not.toBeInTheDocument();
+    rest(1);
+    expect(preview()).toBeInTheDocument();
+
+    fireEvent.mouseLeave(ring);
+    expect(preview()).not.toBeInTheDocument();
+
+    fireEvent.mouseEnter(ring);
+    rest(INSPECT_DELAY - 1);
+    expect(preview()).not.toBeInTheDocument();
+    rest(1);
+    expect(preview()).toBeInTheDocument();
+  });
+
+  it("waits again on the next card, however soon the pointer reaches it", () => {
+    setup(table([gameCard("Sol Ring"), gameCard("Rhystic Study")]), { opponentNames: GOLDFISH });
+    const ring = within(yours()).getByRole("button", { name: "Sol Ring" });
+    const study = within(yours()).getByRole("button", { name: "Rhystic Study" });
+
+    fireEvent.mouseEnter(ring);
+    rest(INSPECT_DELAY);
+    expect(preview()).toBeInTheDocument();
+
+    fireEvent.mouseLeave(ring);
+    fireEvent.mouseEnter(study);
+    expect(preview()).not.toBeInTheDocument();
+    rest(INSPECT_DELAY);
+    expect(preview()).toBeInTheDocument();
+  });
+
+  it("closes when the card is redrawn elsewhere and the pointer moves off where it was", () => {
+    const first = gameCard("Forest");
+    const second = gameCard("Forest", { tapped: true });
+    const { rerender } = setup(table([first, second]), { opponentNames: GOLDFISH });
+    const tapped = within(yours()).getByRole("button", { name: "Forest, tapped" });
+
+    fireEvent.mouseEnter(tapped);
+    rest(INSPECT_DELAY);
+    expect(preview()).toBeInTheDocument();
+
+    // Untapped, it joins the other Forest's pile: its own element is gone without a `mouseleave`.
+    rerender(table([first, { ...second, tapped: false }]));
+    expect(tapped).not.toBeInTheDocument();
+    fireEvent.pointerMove(screen.getByTestId("playtest-board"));
+    expect(preview()).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["the command zone", /in the command zone/],
+    ["the graveyard", /^Graveyard, /],
+    ["exile", /^Exile, /],
+  ])("closes at once when the pointer leaves a card in %s", (_zone, name) => {
+    const view = goldfishTurn();
+    setup(
+      {
+        ...view,
+        you: {
+          ...view.you,
+          command: [gameCard("Kenrith, the Returned King", { isCommander: true })],
+          exile: [gameCard("Counterspell")],
+        },
+      },
+      { opponentNames: GOLDFISH },
+    );
+    const card = screen.getByRole("button", { name });
+
+    fireEvent.mouseEnter(card);
+    rest(INSPECT_DELAY);
+    expect(preview()).toBeInTheDocument();
+
+    fireEvent.mouseLeave(card);
+    expect(preview()).not.toBeInTheDocument();
+  });
+
+  it("opens on a card of the goldfish game's opening hand, and closes when the pointer leaves it", () => {
+    setup(goldfishOpeningHand(), { opponentNames: GOLDFISH });
+    const ring = screen.getByRole("button", { name: "Sol Ring" });
+
+    fireEvent.mouseEnter(ring);
+    rest(INSPECT_DELAY);
+    expect(preview()).toHaveTextContent("Sol Ring · in your opening hand");
+
+    fireEvent.mouseLeave(ring);
+    expect(preview()).not.toBeInTheDocument();
+  });
+
+  it("stays open while the pointer moves over the card it shows", () => {
+    setup(table([gameCard("Sol Ring")]), { opponentNames: GOLDFISH });
+    const ring = within(yours()).getByRole("button", { name: "Sol Ring" });
+
+    fireEvent.mouseEnter(ring);
+    rest(INSPECT_DELAY);
+    fireEvent.pointerMove(ring);
+    expect(preview()).toBeInTheDocument();
   });
 });

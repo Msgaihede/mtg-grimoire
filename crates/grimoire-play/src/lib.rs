@@ -1,11 +1,11 @@
-//! Games played on a deck, over phase.rs's rules engine: the goldfish board (`session`, `view`)
-//! and a playtest against phase's AI (`playtest`). The `Cargo.toml` says what this crate is and
-//! why only the desktop links it.
+//! Games played on a deck, over phase.rs's rules engine: the reader's deck against the goldfish
+//! (an opponent that does nothing) or against phase's AI, one game either way (`playtest`). The
+//! `Cargo.toml` says what this crate is and why only the desktop links it.
 
 pub mod cards;
 mod history;
 pub mod playtest;
-pub mod session;
+mod table;
 pub mod tokens;
 pub mod view;
 
@@ -13,9 +13,7 @@ pub use cards::{CardFacts, FaceFacts};
 pub use playtest::{
     Difficulty, OpponentDeck, Playtest, PlaytestAction, PlaytestPlayer, PlaytestStep, PlaytestView,
 };
-pub use session::Goldfish;
 pub use tokens::TokenFacts;
-pub use view::{GoldfishAction, GoldfishStep, GoldfishView};
 
 /// The stack every call into the engine runs on. phase's own `.cargo/config.toml` sets
 /// `RUST_MIN_STACK` to 16 MiB because its recursion overflowed at 1 MiB; a Tauri command runs on
@@ -24,7 +22,7 @@ pub use view::{GoldfishAction, GoldfishStep, GoldfishView};
 pub const ENGINE_STACK: usize = 16 * 1024 * 1024;
 
 /// Run `work` on a thread of its own with [`ENGINE_STACK`], and wait for it. One thread per call:
-/// a goldfish action is a reader's click, and a spawn is tens of microseconds against the engine's
+/// an action is a reader's click, and a spawn is tens of microseconds against the engine's
 /// milliseconds. A panic in the engine is caught here and is one sentence, never the app.
 pub fn on_engine_stack<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
@@ -37,6 +35,3 @@ pub fn on_engine_stack<T: Send + 'static>(
         .join()
         .map_err(|_| "The rules engine failed on that action. Start a new game.".to_string())
 }
-
-#[cfg(test)]
-mod tests;

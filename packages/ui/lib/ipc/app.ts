@@ -39,9 +39,7 @@ import { invoke, type Unlisten } from "./invoke";
  * and nothing else, as it always has.
  */
 export type StartupStatus =
-  | { state: "loading" }
-  | { state: "ready" }
-  | { state: "failed"; message: string; reload?: true };
+  { state: "loading" } | { state: "ready" } | { state: "failed"; message: string; reload?: true };
 
 /**
  * How this copy of the app was installed, which decides what an update can do to it.
@@ -131,12 +129,7 @@ export interface UpdateProgressEvent {
  * arm on the Rust side is a type error here rather than a blank badge.
  */
 export type ErrorSource =
-  | "scryfall_api"
-  | "scryfall_image"
-  | "github_update"
-  | "database"
-  | "image_store"
-  | "relay";
+  "scryfall_api" | "scryfall_image" | "github_update" | "database" | "image_store" | "relay";
 
 /** The shape of a failure. Mirrors `errors::Kind` and the `CHECK` on `error_log.kind`. */
 export type ErrorKind = "rate_limited" | "timeout" | "http" | "io" | "parse" | "other";

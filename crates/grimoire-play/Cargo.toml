@@ -2,7 +2,7 @@
 name = "grimoire-play"
 # **The app's version**, as every workspace member's is: inherited from `[workspace.package]`.
 version.workspace = true
-description = "MTG Grimoire: games played on a deck — the goldfish board — over phase.rs's rules engine"
+description = "MTG Grimoire: games played on a deck — against the goldfish or phase.rs's AI — over phase.rs's rules engine"
 authors = ["Markus Seerup"]
 license.workspace = true
 edition.workspace = true
@@ -10,10 +10,11 @@ publish = false
 
 # **What this crate is**: the one place the app touches a rules engine. It takes the facts the
 # app already stores about a deck's cards (Scryfall's name, cost, type line, rules text, P/T),
-# has phase.rs's oracle parser turn them into the engine's card faces, and runs a game on them —
-# today the goldfish board (one player against a target that does nothing), later a game against
-# phase's AI (`phase-ai`, which takes the same `GameState`). It knows nothing of SQLite, Tauri or
-# a window: facts in, a view and what happened out. `docs/reference/goldfish.md` has the design.
+# has phase.rs's oracle parser turn them into the engine's card faces, and runs one game on them:
+# the reader's deck against the goldfish (an opponent that does nothing) or against decks played
+# by phase's AI (`phase-ai`, which takes the same `GameState`). It knows nothing of SQLite, Tauri
+# or a window: facts in, a view and what happened out. `docs/reference/goldfish.md` (the engine)
+# and `docs/reference/playtest.md` (the game) have the design.
 #
 # **Linked by the desktop host alone** (the owner's decision, 2026-10-12). The light app's spec
 # leaves Playtesting out of the phone and the browser, and the engine is ~1.9 million lines of
@@ -32,7 +33,7 @@ publish = false
 # `NOTICE` is credited in `docs/reference/goldfish.md`; three of its dependencies (`im`,
 # `bitmaps`, `sized-chunks`) are MPL-2.0, file-level copyleft, unmodified and compatible with
 # this repository's AGPL. Move the `rev` by a commit that runs the whole gate: the engine
-# changes daily, and this crate's tests are what say a move kept the goldfish board playing.
+# changes daily, and this crate's tests are what say a move kept the board playing.
 phase-engine = { git = "https://github.com/phase-rs/phase", rev = "b8d3b82c17f09d228b743bd762f3486a9be6d1ef" }
 # **phase.rs's AI, from the same commit** — the playtest board's opponent. Its `choose_action`
 # takes the very `GameState` the engine plays on, so the AI seat is one call per decision. Same

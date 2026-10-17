@@ -83,10 +83,10 @@ import searchwidthRsCore from "../../../crates/grimoire-core/src/searchwidth.rs?
 import searchwidthRsDesktop from "../../../apps/desktop/src-tauri/src/searchwidth/mod.rs?raw";
 import stackhideRsCore from "../../../crates/grimoire-core/src/stackhide.rs?raw";
 import stackhideRsDesktop from "../../../apps/desktop/src-tauri/src/stackhide/mod.rs?raw";
-// The goldfish board: the desktop's three commands, and the engine crate's actions they carry.
-import goldfishRs from "../../../apps/desktop/src-tauri/src/goldfish/mod.rs?raw";
-import goldfishViewRs from "../../../crates/grimoire-play/src/view.rs?raw";
-// The playtest board: the desktop's three commands, and the actions and facts of its wire.
+// The table's shared pieces on the game board's wire (a card, a place, a seat).
+import tableViewRs from "../../../crates/grimoire-play/src/view.rs?raw";
+// The game board — the goldfish and the AI alike: the desktop's three commands, and the actions
+// and facts of its wire.
 import playtestRs from "../../../apps/desktop/src-tauri/src/playtest/mod.rs?raw";
 import playtestViewRs from "../../../crates/grimoire-play/src/playtest/view.rs?raw";
 import startupRs from "../../../apps/desktop/src-tauri/src/startup.rs?raw";
@@ -922,57 +922,11 @@ describe("ipc argument names match the Rust command signatures", () => {
   };
 
   /**
-   * The goldfish board's three commands. `goldfish_act` carries one `GoldfishAction`, a Rust enum
-   * tagged `type` with camelCase variants and fields — so each variant this side can send is read
-   * out of `view.rs` rather than trusted, and so is each field a variant names.
-   */
-  it("sends the goldfish board's commands under the names their commands declare", async () => {
-    expect(goldfishRs.length, "goldfish/mod.rs was not read").toBeGreaterThan(1_000);
-
-    invoke.mockResolvedValue({});
-    await ipc.goldfishStart(4, "live", 99);
-    expect(invoke).toHaveBeenLastCalledWith("goldfish_start", {
-      deckId: 4,
-      variant: "live",
-      seed: 99,
-    });
-    await ipc.goldfishAct({ type: "move", id: 7, to: "libraryBottom" });
-    expect(invoke).toHaveBeenLastCalledWith("goldfish_act", {
-      action: { type: "move", id: 7, to: "libraryBottom" },
-    });
-    invoke.mockResolvedValue(undefined);
-    await ipc.goldfishEnd();
-    expect(invoke).toHaveBeenLastCalledWith("goldfish_end");
-
-    const declares = (command: string, param: string) =>
-      expect(goldfishRs, `\`${command}\` declares no \`${param}\``).toMatch(
-        new RegExp(`fn ${command}\\([^)]*\\b${param}\\s*:`, "s"),
-      );
-    declares("goldfish_start", "deck_id");
-    declares("goldfish_start", "variant");
-    declares("goldfish_start", "seed");
-    declares("goldfish_act", "action");
-    for (const registered of [
-      "goldfish::goldfish_start,",
-      "goldfish::goldfish_act,",
-      "goldfish::goldfish_end,",
-    ]) {
-      expect(desktopRs).toContain(registered);
-    }
-
-    // Every variant of `GoldfishAction` and `Happened`, with its fields, as Rust spells them
-    // once `rename_all` and `rename_all_fields` have made them camelCase.
-    const variants = (name: string) => rustVariants(goldfishViewRs, name);
-    expect(variants("GoldfishAction").length, "view.rs' actions were not read").toBeGreaterThan(10);
-    expect(variants("Happened").length, "view.rs' facts were not read").toBeGreaterThan(10);
-    expect(tsVariants("GoldfishAction")).toEqual(variants("GoldfishAction"));
-    expect(tsVariants("Happened")).toEqual(variants("Happened"));
-  });
-
-  /**
-   * The playtest board's three commands — the goldfish's arrangement: `playtest_act` carries one
-   * `PlaytestAction`, and each variant and field this side can send, and each fact it reads back,
-   * is read out of `playtest/view.rs` rather than trusted.
+   * The game board's three commands — the goldfish's game and the AI's alike, since goldfishing is
+   * a playtest against an opponent that does nothing. `playtest_act` carries one
+   * `PlaytestAction`, a Rust enum tagged `type` with camelCase variants and fields, so each
+   * variant and field this side can send, and each fact it reads back, is read out of
+   * `playtest/view.rs` rather than trusted.
    */
   it("sends the playtest board's commands under the names their commands declare", async () => {
     expect(playtestRs.length, "playtest/mod.rs was not read").toBeGreaterThan(1_000);
@@ -991,6 +945,19 @@ describe("ipc argument names match the Rust command signatures", () => {
       opponents,
       difficulty: "hard",
       seed: 99,
+    });
+    // No opponents is the goldfish: the same command, an empty list.
+    await ipc.playtestStart(4, "theory", [], "medium", 7);
+    expect(invoke).toHaveBeenLastCalledWith("playtest_start", {
+      deckId: 4,
+      variant: "theory",
+      opponents: [],
+      difficulty: "medium",
+      seed: 7,
+    });
+    await ipc.playtestAct({ type: "setSandbox", on: true });
+    expect(invoke).toHaveBeenLastCalledWith("playtest_act", {
+      action: { type: "setSandbox", on: true },
     });
     await ipc.playtestAct({ type: "block", blocks: [{ blocker: 3, attacker: 8 }] });
     expect(invoke).toHaveBeenLastCalledWith("playtest_act", {
@@ -1015,6 +982,8 @@ describe("ipc argument names match the Rust command signatures", () => {
     ]) {
       expect(desktopRs).toContain(registered);
     }
+    // The goldfish board's own commands are gone: its game is this one.
+    expect(desktopRs).not.toContain("goldfish::");
 
     const variants = (name: string) => rustVariants(playtestViewRs, name);
     expect(variants("PlaytestAction").length, "the actions were not read").toBeGreaterThan(15);
@@ -1034,6 +1003,16 @@ describe("ipc argument names match the Rust command signatures", () => {
       const union = ipcSource.slice(ipcSource.indexOf(`export type ${ts} =`));
       const words = [...union.slice(0, union.indexOf(";\n")).matchAll(/"(\w+)"/g)].map((m) => m[1]);
       expect(words, name).toEqual(variants(name));
+    }
+    // The table's string unions, `view.rs`' unit enums under a `Game` name.
+    for (const [ts, rust] of [
+      ["GameLane", "Lane"],
+      ["GamePlace", "Place"],
+      ["GameSeat", "Seat"],
+    ]) {
+      const union = ipcSource.slice(ipcSource.indexOf(`export type ${ts} =`));
+      const words = [...union.slice(0, union.indexOf(";\n")).matchAll(/"(\w+)"/g)].map((m) => m[1]);
+      expect(words, ts).toEqual(rustVariants(tableViewRs, rust));
     }
   });
 

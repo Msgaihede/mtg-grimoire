@@ -381,8 +381,7 @@ export const tagCommands = {
    * A blank or all-punctuation value answers `null` and never a tag — see the Rust for why that
    * is a guard rather than an accident.
    */
-  tagResolve: (asks: readonly TagLookup[]) =>
-    invoke<(TagRef | null)[]>("tag_resolve", { asks }),
+  tagResolve: (asks: readonly TagLookup[]) => invoke<(TagRef | null)[]>("tag_resolve", { asks }),
   /**
    * Stop offering a tag anywhere — Scryfall asks downstream apps for this in as many words,
    * because Tagger is crowdsourced and they cannot guarantee the data is free from abuse.

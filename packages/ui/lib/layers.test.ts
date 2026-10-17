@@ -35,7 +35,7 @@ describe("the layer scale", () => {
     expect(numberOf(LAYER.overlappingMark)).toBeLessThan(numberOf(LAYER.raised));
     expect(numberOf(LAYER.raised)).toBeLessThan(numberOf(LAYER.header));
     expect(numberOf(LAYER.header)).toBeLessThan(numberOf(LAYER.popup));
-    // The goldfish board covers the shell, and its own menus and dialogs open over it.
+    // The game board covers the shell, and its own menus and dialogs open over it.
     expect(numberOf(LAYER.header)).toBeLessThan(numberOf(LAYER.stage));
     expect(numberOf(LAYER.stage)).toBeLessThan(numberOf(LAYER.popup));
     // The filter quick bar's tray hangs over the collection's and the wishlist's docked search

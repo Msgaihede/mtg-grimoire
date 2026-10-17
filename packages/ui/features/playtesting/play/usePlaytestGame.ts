@@ -9,26 +9,46 @@ import {
   type PlaytestStep,
   type PlaytestView,
 } from "@/lib/ipc";
-import type { LogLine } from "../goldfish/log";
+import type { LogLine } from "../table/log";
 import { freshBook, redoLog, rememberLog, undoLog, writeLog, type LogBook } from "../undo";
 import { playtestLines } from "./log";
 import { framesOf, replayEntries, useReplay, type ReplayEntry } from "./useReplay";
 
-/** What a game is dealt from: the reader's deck and each opponent's — one for a duel, three for a
- *  four-player game — each in one of its lists, and how well the AI plays. */
+/** What a game is dealt from: the reader's deck in one of its lists, and each opponent's — none
+ *  for the goldfish, one for a duel, three for a four-player game — and how well the AI plays. */
 export interface PlaytestPicks {
   deckId: number;
   variant: DeckVariant;
-  /** In turn order after the reader: `ipc.playtestStart`'s `opponents`. */
+  /**
+   * In turn order after the reader: `ipc.playtestStart`'s `opponents`. **Empty is the goldfish**
+   * — the deck editor's "Goldfish this deck", and the setup page's Goldfish table.
+   */
   opponents: { deckId: number; variant: DeckVariant }[];
-  difficulty: PlaytestDifficulty;
+  /** How well the AI plays; {@link DEFAULT_DIFFICULTY} when left out, and unused by the goldfish,
+   *  whose page has nothing to pick. */
+  difficulty?: PlaytestDifficulty;
 }
 
+/** The setup page's own first pick, for a caller that has none to give. */
+export const DEFAULT_DIFFICULTY: PlaytestDifficulty = "medium";
+
 /**
- * One playtest's life on the page — `useGoldfishGame`'s, for its reasons: dealt when the board
- * mounts, put away when it leaves, every action sent **one at a time, in the order the reader
- * made them** (an action names cards by the ids of the view it was made on, CR 400.7), an answer
- * from an older deal dropped by the generation counter, and a fresh 53-bit seed per game.
+ * One game's life on the page, against the goldfish or the AI — one hook for one game.
+ *
+ * **Dealt when the board mounts and put away when it leaves** (`playtestEnd`), and **a new game
+ * is a new seed** (`crypto.getRandomValues`, 53 bits), which is the shuffle and the coin flip:
+ * the engine deals the same game from the same seed, which its own tests rely on and a reader
+ * never wants.
+ *
+ * **Every action is sent one at a time, in the order the reader made them.** An action names
+ * cards by the ids of the view it was made on (`GameCard.id` is a new id after every zone change,
+ * CR 400.7), so two drags fired before the first answer would otherwise race, and the second
+ * would name a card the first had already moved. Chained instead: each waits for the one before
+ * it, and one that names a card no longer there is refused by the engine in a sentence — shown,
+ * and the board kept as the last answer left it, so nothing is lost but that one action.
+ *
+ * **An answer from an older deal is dropped, not drawn** (the generation counter): a deal that
+ * StrictMode's second mount replaced, an action sent before New game.
  *
  * **An answer here can take seconds**, not milliseconds: `playtestAct` returns only once the AI
  * has played everything up to the reader's next decision — its whole turn, often. So `busy` is
@@ -40,11 +60,12 @@ export interface PlaytestPicks {
  * log and to the board's pops (`lastHappened`) as it is shown. While one plays the board is
  * read-only (`replaying`), and `skip` shows the end at once.
  *
- * **Undo and redo are actions** (`{ type: "undo" }`, issue #1022), as on the goldfish board: the
- * engine goes back to the reader's last decision with all the opponent did after it, and answers
- * with no facts and no frames, so nothing plays back. The log is kept beside the engine's history
- * as it stood before each action (`../undo.ts`' `LogBook`), once the last replay has been logged
- * whole.
+ * **Undo and redo are actions** (`{ type: "undo" }`, issue #1022): the engine goes back to the
+ * reader's last decision with all the opponents did after it, and answers with no facts and no
+ * frames, so nothing plays back. The log is kept beside the engine's history as it stood before
+ * each action (`../undo.ts`' `LogBook`), once the last replay has been logged whole. **The stops
+ * and the sandbox are settings, not actions** (`setStops`, `setSandbox`): the engine does not
+ * remember them for undo, so neither does the log.
  */
 const NONE: readonly PlaytestHappened[] = [];
 
@@ -75,7 +96,8 @@ function freshSeed(): number {
 }
 
 export function usePlaytestGame(picks: PlaytestPicks): PlaytestGame {
-  const { deckId, variant, difficulty } = picks;
+  const { deckId, variant } = picks;
+  const difficulty = picks.difficulty ?? DEFAULT_DIFFICULTY;
   // **The opponents by value, not by array**: a caller that builds the list afresh on every
   // render must not deal a new game on every render, which is what a dependency on the array's
   // identity would do. The same decks in the same seats are the same string.
@@ -96,7 +118,15 @@ export function usePlaytestGame(picks: PlaytestPicks): PlaytestGame {
     setView(entry.view);
     setLastHappened(entry.quiet ? NONE : entry.happened);
     setBook((b) =>
-      writeLog(b, playtestLines(entry.happened, entry.view.turn, entry.view.opponents.length)),
+      writeLog(
+        b,
+        playtestLines(
+          entry.happened,
+          entry.view.turn,
+          entry.view.opponents.length,
+          entry.view.goldfish,
+        ),
+      ),
     );
   }, []);
   const replay = useReplay(apply);
@@ -128,10 +158,14 @@ export function usePlaytestGame(picks: PlaytestPicks): PlaytestGame {
         ipc.playtestStart(deckId, variant, opponents, difficulty, freshSeed()).then(
           (step) => {
             if (mine !== generation.current) return;
-            const dealt = opponents.length > 1 ? "every deck" : "both decks";
-            setBook(
-              freshBook([{ turn: 0, text: `Shuffled ${dealt} and drew seven`, kind: "deal" }]),
-            );
+            // The goldfish's deck is nobody's to shuffle: the old goldfish board's first line.
+            const dealt =
+              opponents.length === 0
+                ? "Shuffled and drew seven"
+                : opponents.length > 1
+                  ? "Shuffled every deck and drew seven"
+                  : "Shuffled both decks and drew seven";
+            setBook(freshBook([{ turn: 0, text: dealt, kind: "deal" }]));
             show(step);
           },
           (e: unknown) => {
@@ -184,8 +218,9 @@ export function usePlaytestGame(picks: PlaytestPicks): PlaytestGame {
               setView(step.view);
               return;
             }
-            // The stops are a setting, which the engine does not remember as an action.
-            if (action.type !== "setStops") {
+            // The stops and the sandbox are settings, which the engine does not remember as
+            // actions: nothing to take back, so no log to go back to.
+            if (action.type !== "setStops" && action.type !== "setSandbox") {
               skip();
               setBook(rememberLog);
             }

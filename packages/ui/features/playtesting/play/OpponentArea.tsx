@@ -1,13 +1,13 @@
 import type { JSX } from "react";
-import type { GoldfishAction, GoldfishPlace, PlaytestSeat } from "@/lib/ipc";
+import type { GamePlace, PlaytestAction, PlaytestSeat } from "@/lib/ipc";
 import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
-import { Battlefield, type CardMark, type TablePick } from "../goldfish/Battlefield";
-import type { GoldfishDrag } from "../goldfish/goldfishDrag";
-import type { ZoneSize } from "../goldfish/layout";
-import { LifePlate } from "../goldfish/LifePlate";
-import type { Pointed, ZoneLook } from "../goldfish/types";
+import { Battlefield, type CardMark, type TablePick } from "../table/Battlefield";
+import type { TableDrag } from "../table/tableDrag";
+import type { ZoneSize } from "../table/layout";
+import { LifePlate } from "../table/LifePlate";
+import type { Pointed, ZoneLook } from "../table/types";
 import { OpponentCommand, OpponentHand, OpponentLibrary, OpponentPile } from "./OpponentZones";
 import { PlateFrame } from "./PlateFrame";
 import { playerName, playerPossessive } from "./players";
@@ -30,8 +30,11 @@ export const AREA_ZONE: ZoneSize = { width: 40, height: 56, compact: true };
  * line as on a duel's table. `data-plate` and `data-table` carry the player's own name, so the
  * arrows and the pops find each opponent apart.
  *
- * **Looked at, never handled**, as a duel's opponent is: the cards point for the preview, the
- * graveyard and exile open read-only, and a click picks only when the rules ask for one (`pick`).
+ * **Looked at, and handled only through the sandbox**, as a duel's opponent is: the cards point
+ * for the preview, the graveyard and exile open read-only, and a click picks only when the rules
+ * ask for one (`pick`). With the sandbox's moves working (`sandbox`) a permanent has the
+ * sandbox's card menu — tap, counters, a token copy, a move to its owner's zones — and with the
+ * sandbox on (`steppers`) the plate has a life stepper; nothing of theirs is ever dragged.
  * **A player who is out** (`seat.out`) stays drawn, dimmed, with "Out" across their table: the
  * others play on, and what they left behind is still worth a look.
  */
@@ -41,7 +44,8 @@ export function OpponentArea({
   opponents,
   active,
   won,
-  disabled,
+  sandbox,
+  steppers,
   marks,
   pick,
   aimable,
@@ -62,16 +66,19 @@ export function OpponentArea({
   active: boolean;
   /** This player won the game. */
   won: boolean;
-  /** No life to change: a game being dealt, an answer out, a replay. */
-  disabled: boolean;
+  /** The sandbox's moves work now (on, the reader's main phase, nothing out): the battlefield's
+   *  card menus, and a life stepper that can be pressed. */
+  sandbox: boolean;
+  /** The sandbox is on: the plate has a life stepper at all (greyed while `sandbox` is not). */
+  steppers: boolean;
   marks?: ReadonlyMap<number, CardMark>;
   pick?: TablePick;
   /** The reader's attacker waiting to be aimed can attack this player: the plate is a target. */
   aimable: boolean;
   onAim: () => void;
   onLife: (life: number) => void;
-  onAct: (action: GoldfishAction) => void;
-  onDrop: (drag: GoldfishDrag, to: GoldfishPlace) => void;
+  onAct: (action: PlaytestAction) => void;
+  onDrop: (drag: TableDrag, to: GamePlace) => void;
   onPoint: (pointed: Pointed) => void;
   onUnpoint: () => void;
   onLook: (look: ZoneLook) => void;
@@ -99,7 +106,8 @@ export function OpponentArea({
             label={`${name}'s life`}
             life={seat.life}
             highlight={won}
-            disabled={disabled || seat.out}
+            readOnly={!steppers}
+            disabled={!sandbox || seat.out}
             onChange={onLife}
             compact
             className="min-w-0"
@@ -156,6 +164,7 @@ export function OpponentArea({
           <Battlefield
             label={`${playerPossessive(seat.player, opponents)} battlefield`}
             cards={seat.battlefield}
+            sandbox={sandbox && !seat.out}
             onAct={onAct}
             onDrop={onDrop}
             onPoint={onPoint}

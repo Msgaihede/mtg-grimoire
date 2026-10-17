@@ -87,9 +87,9 @@ export const LAYER = {
   /** A table's sticky header row, over the rows scrolling under it. */
   header: "z-20",
   /**
-   * **A surface that takes the whole window below the caption**: the goldfish board, which covers
-   * the rail and `main` the way the artboard draws it (2026-10-12). Above a sticky header, since it
-   * is drawn over the view's own; **below {@link LAYER.popup}**, because its context menus, its
+   * **A surface that takes the whole window below the caption**: the game board (a goldfish game
+   * or a playtest), which covers the rail and `main` the way the artboard draws it (2026-10-12).
+   * Above a sticky header, since it is drawn over the view's own; **below {@link LAYER.popup}**, because its context menus, its
    * pickers and every dialog it opens are `popup` or higher and must open over it. The caption
    * (`LAYER.caption`) stays above it, so the window can still be closed.
    */

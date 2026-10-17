@@ -215,7 +215,7 @@ export type * from "./ipc/scanHistory";
 export type * from "./ipc/sync";
 export type * from "./ipc/prefs";
 export type * from "./ipc/app";
-export type * from "./ipc/goldfish";
+export type * from "./ipc/table";
 export type * from "./ipc/playtest";
 export { AUTO_BRACKET } from "./ipc/decks";
 
@@ -234,7 +234,6 @@ import { scanHistoryCommands } from "./ipc/scanHistory";
 import { syncCommands } from "./ipc/sync";
 import { prefCommands } from "./ipc/prefs";
 import { appCommands } from "./ipc/app";
-import { goldfishCommands } from "./ipc/goldfish";
 import { playtestCommands } from "./ipc/playtest";
 
 /**
@@ -258,6 +257,5 @@ export const ipc = {
   ...syncCommands,
   ...prefCommands,
   ...appCommands,
-  ...goldfishCommands,
   ...playtestCommands,
 };

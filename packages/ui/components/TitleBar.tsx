@@ -22,8 +22,9 @@ import { cn } from "@/lib/utils";
 const BAR_H = "h-[34px]";
 /**
  * Where a full-window surface starts so the caption stays uncovered: {@link BAR_H}'s height, as a
- * `top`. Written out whole beside it for Tailwind's scanner, and moved with it. The goldfish board
- * is the one reader (`LAYER.stage`).
+ * `top`. Written out whole beside it for Tailwind's scanner, and moved with it. The game board's
+ * frame (`PlaytestPage`, at `LAYER.stage`, whether Playtesting or the deck editor's goldfish opened
+ * it) is the one reader.
  */
 export const BELOW_CAPTION = "top-[34px]";
 

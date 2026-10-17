@@ -28,13 +28,10 @@ const ABSENT: Record<string, string> = {
   // Asked by `DesktopBoot` before `App` mounts. Storybook renders `App` and the boot screen
   // directly, so nothing in a story ever reaches this command.
   startup_status: "stories render past the desktop boot gate",
-  // The goldfish board's rules engine is phase.rs's, in Rust; the fake has no game to answer from.
-  // Its stories draw `GoldfishBoard` from a view and record what it asks (`goldfish/fixtures.ts`),
-  // and the page that calls these three is the one place a story does not reach.
-  goldfish_start: "the rules engine is Rust's; the board's stories feed it views directly",
-  goldfish_act: "the rules engine is Rust's; the board's stories feed it views directly",
-  goldfish_end: "the rules engine is Rust's; the board's stories feed it views directly",
-  // The playtest board's, likewise: phase.rs's engine and its AI, and `play/fixtures.ts`.
+  // The board's rules engine is phase.rs's, in Rust, and so is its AI; the fake has no game to
+  // answer from. Its stories draw `PlaytestBoard` from a view and record what it asks
+  // (`features/playtesting/play/fixtures.ts`) — the goldfish's game too, which is a playtest
+  // with no AI — and the page that calls these three is the one place a story does not reach.
   playtest_start: "the rules engine and its AI are Rust's; the board's stories feed it views",
   playtest_act: "the rules engine and its AI are Rust's; the board's stories feed it views",
   playtest_end: "the rules engine and its AI are Rust's; the board's stories feed it views",

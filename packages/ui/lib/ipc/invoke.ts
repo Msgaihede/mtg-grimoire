@@ -44,7 +44,7 @@ export type Unlisten = () => void;
  * `Error` throws. {@link ipcError} is what turned the other shapes into that string before, and
  * it is what does it here, so a caller that still wraps a rejection in it gets the same answer.
  */
-export const invoke = <T,>(command: string, args?: CallArgs, options?: CallOptions): Promise<T> =>
+export const invoke = <T>(command: string, args?: CallArgs, options?: CallOptions): Promise<T> =>
   // `Promise.resolve` around the call is for the suites, not for a host: every `Core` answers a
   // promise, but a test that stubs the transport with a bare `vi.fn()` answers `undefined`, and a
   // `.catch` straight on that would throw where the call used to go through. The command is

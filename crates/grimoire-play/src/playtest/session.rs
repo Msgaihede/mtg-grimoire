@@ -1,17 +1,20 @@
-//! One playtest game: the reader's deck against another, or against three in a four-player game
-//! (issue #994), each opponent's seat played by phase.rs's AI (`phase-ai`) on the same `GameState`
-//! the engine plays.
+//! One game: the reader's deck against **the goldfish** — an opponent that does nothing and never
+//! loses — or against another deck, or three in a four-player game (issue #994), each opponent's
+//! seat played by phase.rs's AI (`phase-ai`) on the same `GameState` the engine plays.
+//! Goldfishing and playtesting are this one game (the owner's decision of 2026-10-17): a goldfish
+//! game is a playtest whose opponent takes no actions, with the sandbox on.
 //!
 //! **The rules decide, and the reader decides only what a player at a table would** — the owner's
 //! choices of 2026-10-13. After every action the session plays on by itself (`advance`): the AI
-//! takes each of its decisions, and the reader's priority is passed for them, Arena-style, until
-//! the game next needs the reader (`PlaytestStage`): the opening hand, their main phase with an
-//! empty stack, their declare-attackers and declare-blockers steps, a question the engine asks
-//! them, and — `stops_here`'s smart stops and toggles — a moment to respond: the opponent's spell
-//! on the stack or combat after blocks when they could answer it, or a step they asked to stop
-//! at. Everything else — most of the AI's turn, a spell resolving, combat damage — happens inside
-//! the one call, and comes back as what happened and as replay frames (`PlaytestFrame`), the
-//! table after each thing worth showing.
+//! takes each of its decisions, the goldfish answers each of its own by doing nothing
+//! (`fish_answer`), and the reader's priority is passed for them, Arena-style, until the game next
+//! needs the reader (`PlaytestStage`): the opening hand, their main phase with an empty stack,
+//! their declare-attackers and declare-blockers steps, a question the engine asks them, and —
+//! `stops_here`'s smart stops and toggles — a moment to respond: the opponent's spell on the stack
+//! or combat after blocks when they could answer it, or a step they asked to stop at. Everything
+//! else — most of the AI's turn, a spell resolving, combat damage — happens inside the one call,
+//! and comes back as what happened and as replay frames (`PlaytestFrame`), the table after each
+//! thing worth showing.
 //!
 //! **A prompt is the engine's question as its legal answers.** phase has well over a hundred kinds
 //! of question, so no board draws each one: the view lists `legal_actions` with the facts in each
@@ -20,10 +23,19 @@
 //! enumeration offers only a few of its answers. A question with one answer is not asked at all
 //! (`sole_answer`): `advance` takes it, as the reader would have.
 //!
-//! **The goldfish's sandbox stays, on the reader's own cards.** Moving a card by hand, tapping,
-//! counters, tokens, draws and life totals are phase's debug actions, as on the goldfish board: the
-//! escape hatch for a card the parser does not play. They are taken in the reader's main phase
-//! only, where nothing is half-done.
+//! **The sandbox is a setting** (`setSandbox`): a hand on the table, phase's debug actions — move a
+//! card anywhere, tap, counters, tokens, draws, life totals — on the reader's own cards and on
+//! every card the table shows (never an opponent's hand or library), and a play the rules refuse
+//! put down unpaid instead (`play`). Taken in the reader's main phase only, where nothing is
+//! half-done. Off from the start against the AI, on against the goldfish; the reader turns it on
+//! or off whenever they like.
+//!
+//! **The goldfish never loses, and neither does the reader**: in a goldfish game a command-zone
+//! emblem with "you can't lose the game" (CR 104.3b, no `affected` — every player) is granted at
+//! the start, so a life total at 0 is a number on the board and not the end of the game; the
+//! goldfish's seat says on which of the reader's turns it would have died (`dead_on`). A second
+//! emblem gives the goldfish no maximum hand size (CR 402.2), so it keeps every card it draws and
+//! its turn puts nothing in its graveyard. Its library is `FISH_LIBRARY` lands that do nothing.
 //!
 //! **A refused action changes nothing**, and **a cast can be taken back until it is on the
 //! stack**: `act` restores its checkpoint on any `Err`, and a `Play` or `Activate` keeps one
@@ -35,6 +47,7 @@ use std::sync::Arc;
 
 use engine::ai_support::{has_meaningful_priority_action, legal_actions};
 use engine::game::combat::AttackTarget;
+use engine::game::effects::create_emblem::grant_emblem;
 use engine::game::engine::apply;
 use engine::game::mana_sources::max_mana_yield;
 use engine::game::turn_control::authorized_submitters;
@@ -49,8 +62,12 @@ use engine::types::format::FormatConfig;
 use engine::types::game_state::{MulliganDecisionPhase, StackEntryKind, WaitingFor};
 use engine::types::identifiers::ObjectId;
 use engine::types::phase::Phase;
+use engine::types::statics::StaticMode;
 use engine::types::zones::Zone;
-use engine::types::{parse_counter_type, GameState, PlayerId};
+use engine::types::{
+    parse_counter_type, ControllerRef, GameState, PlayerId, StaticDefinition, TargetFilter,
+    TypedFilter,
+};
 use phase_ai::auto_play::{run_ai_actions, AiActionsStop};
 use phase_ai::{create_config_for_players, AiConfig, AiDifficulty, AiSession, Platform};
 use rand::SeedableRng;
@@ -59,7 +76,7 @@ use serde_json::Value;
 
 use crate::cards::{self, CardFacts};
 use crate::history::{History, NOTHING_TO_REDO, NOTHING_TO_UNDO};
-use crate::session::{game_card, mana_table, place_of};
+use crate::table::{game_card, is_permanent, mana_table, place_of};
 use crate::tokens::{DeckTokens, TokenFacts};
 use crate::view::{GameCard, MulliganView, Place, Seat, TokenOffer};
 
@@ -76,6 +93,13 @@ const YOU: PlayerId = PlayerId(0);
 
 /// The most opponents a game seats: a four-player Commander table.
 pub const MAX_OPPONENTS: usize = 3;
+
+/// The goldfish's library: a card that does nothing, enough of them that it never runs out in a
+/// game anyone plays (it draws one a turn and never plays one). The emblem would keep it in the
+/// game with an empty library too; a library is what a mill or a "target player draws" has to act
+/// on.
+const FISH_CARD: &str = "Goldfish Scale";
+const FISH_LIBRARY: usize = 200;
 
 /// One opponent's deck: its cards as they stand, and its tokens in the printings the reader set.
 #[derive(Debug, Clone, Default)]
@@ -99,6 +123,9 @@ const NOT_NOW: &str = "Keep or mulligan the opening hand first.";
 const ALREADY_KEPT: &str = "The opening hand has already been kept.";
 const OVER: &str = "The game is over. Start a new one from the game menu.";
 const MAIN_ONLY: &str = "That can be done in your main phase, with nothing on the stack.";
+const SANDBOX_OFF: &str =
+    "That changes the game by hand. Turn the sandbox on in the game menu to do it.";
+const HIDDEN: &str = "That card is in a zone you cannot see.";
 const NO_PROMPT: &str = "The game is not asking you anything right now.";
 
 /// The game as it was, to go back to: a refused action, or a cast the reader takes back.
@@ -109,6 +136,8 @@ struct Checkpoint {
     mulligans: u8,
     rng: ChaCha8Rng,
     out_told: HashSet<PlayerId>,
+    /// The goldfish's `dead_on` (`PlaytestSeat::dead_on`).
+    dead_on: Option<u32>,
 }
 
 /// The printing an object is drawn by, with whose and what it was — so a printing can follow
@@ -151,6 +180,13 @@ pub struct Playtest {
     started: PlayerId,
     /// The opponents' seats, in turn order: `PlayerId(1)` on.
     opponents: Vec<PlayerId>,
+    /// The goldfish's seat, in a game against it: it answers every question of its own by doing
+    /// nothing (`fish_answer`), and `ai_seats` is empty.
+    fish: Option<PlayerId>,
+    /// The emblems that keep a goldfish game going; never shown, never counted as anyone's card.
+    rules: Vec<ObjectId>,
+    /// The reader's hand may change the game (`setSandbox`).
+    sandbox: bool,
     ai_seats: HashSet<PlayerId>,
     ai_configs: HashMap<PlayerId, AiConfig>,
     /// The config `auto` answers the reader's questions with.
@@ -165,6 +201,9 @@ pub struct Playtest {
     over_told: bool,
     /// The players whose leaving the game has been put in the log (`Eliminated`).
     out_told: HashSet<PlayerId>,
+    /// The reader's turn on which the goldfish's life first reached 0 or less, while it is still
+    /// there (`PlaytestSeat::dead_on`).
+    dead_on: Option<u32>,
     /// The steps the reader asked to stop at (`setStops`).
     stops: Vec<PlaytestStop>,
     /// The turn the reader is ending (`endTurn`): until it changes, nothing but a block or a
@@ -195,11 +234,13 @@ struct Moment {
 
 impl Playtest {
     /// A new game of `you` (the reader's deck as it stands) against each of `opponents` — one for
-    /// a duel, up to three for a four-player game — each played by the AI at `difficulty`. `seed`
-    /// is the shuffle, the coin flip for who plays first (the seed modulo the player count: 0 is
-    /// the reader, so in a duel an even seed), and the AI's dice. `your_tokens` and each
-    /// opponent's `tokens` are the deck's tokens in the printings the reader set, which a token is
-    /// offered and drawn by. Answers with the game at the reader's opening hand.
+    /// a duel, up to three for a four-player game — each played by the AI at `difficulty`; or,
+    /// with **no opponents, against the goldfish**, the reader on the play and the sandbox on
+    /// (`difficulty` is then unused). `seed` is the shuffle, the coin flip for who plays first
+    /// against the AI (the seed modulo the player count: 0 is the reader, so in a duel an even
+    /// seed), and the AI's dice. `your_tokens` and each opponent's `tokens` are the deck's tokens
+    /// in the printings the reader set, which a token is offered and drawn by. Answers with the
+    /// game at the reader's opening hand.
     pub fn new(
         you: &[CardFacts],
         your_tokens: &[TokenFacts],
@@ -207,19 +248,22 @@ impl Playtest {
         seed: u64,
         difficulty: Difficulty,
     ) -> Result<(Self, PlaytestStep), String> {
-        if opponents.is_empty() || opponents.len() > MAX_OPPONENTS {
+        if opponents.len() > MAX_OPPONENTS {
             return Err(format!(
                 "A game has from one to {MAX_OPPONENTS} opponents, not {}.",
                 opponents.len()
             ));
         }
-        let players = 1 + opponents.len();
+        let goldfish = opponents.is_empty();
+        // The goldfish is one seat, with no deck of the reader's in it.
+        let players = 1 + opponents.len().max(1);
         let all: Vec<CardFacts> = you
             .iter()
             .chain(opponents.iter().flat_map(|o| &o.cards))
             .cloned()
             .collect();
-        let db = Arc::new(cards::database(&all, &[])?);
+        let fish_card = goldfish.then(|| cards::synthetic(FISH_CARD, "Land", ""));
+        let db = Arc::new(cards::database(&all, fish_card.as_slice())?);
 
         let mut by_name = HashMap::new();
         let mut commanders = HashSet::new();
@@ -248,7 +292,13 @@ impl Playtest {
             return Err("Your deck has no cards to shuffle into a library.".into());
         }
         let seats: Vec<PlayerId> = (1..players).map(|n| PlayerId(n as u8)).collect();
-        let mut theirs = Vec::with_capacity(opponents.len());
+        let mut theirs = Vec::with_capacity(seats.len());
+        if goldfish {
+            theirs.push(PlayerDeckList {
+                main_deck: vec![FISH_CARD.to_string(); FISH_LIBRARY],
+                ..PlayerDeckList::default()
+            });
+        }
         for (deck, &seat) in opponents.iter().zip(&seats) {
             let (main, commander) = piles(&deck.cards, seat);
             if main.is_empty() {
@@ -276,7 +326,8 @@ impl Playtest {
         };
         let mut state = GameState::new(format, players as u8, seed);
         // The sandbox is phase's debug actions, which the engine refuses unless the game allows
-        // them and the player is on the list — the reader is, the AI is not.
+        // them and the player is on the list — the reader is, the AI is not. Whether the reader
+        // may use them right now is the session's `sandbox`.
         state.debug_mode = true;
         state.debug_permitted.insert(YOU);
 
@@ -297,6 +348,33 @@ impl Playtest {
         load_and_hydrate_decks(&mut state, &payload, Some(&db));
         state.all_card_names = db.card_names().into();
         install_card_db(&mut state, Arc::clone(&db));
+
+        let mut rules = Vec::new();
+        if goldfish {
+            let fish = seats[0];
+            // CR 104.3b: no `affected`, so it reaches every player (`sba::static_affects_player`)
+            // — the reader too, whose life at 0 is a number on the board as well.
+            rules.push(grant_emblem(
+                &mut state,
+                fish,
+                vec![StaticDefinition::new(StaticMode::CantLoseTheGame)],
+                Vec::new(),
+                Vec::new(),
+            ));
+            // CR 402.2, the goldfish's alone: it keeps every card it draws, so its turn discards
+            // nothing and the log and its graveyard stay quiet.
+            rules.push(grant_emblem(
+                &mut state,
+                fish,
+                vec![
+                    StaticDefinition::new(StaticMode::NoMaximumHandSize).affected(
+                        TargetFilter::Typed(TypedFilter::default().controller(ControllerRef::You)),
+                    ),
+                ],
+                Vec::new(),
+                Vec::new(),
+            ));
+        }
 
         let deck_names: HashSet<&str> = by_name
             .keys()
@@ -321,7 +399,12 @@ impl Playtest {
             Difficulty::Hard => AiDifficulty::Hard,
             Difficulty::VeryHard => AiDifficulty::VeryHard,
         };
-        let started = PlayerId((seed % players as u64) as u8);
+        // The goldfish never takes the first turn: a goldfish game counts the reader's turns.
+        let started = if goldfish {
+            YOU
+        } else {
+            PlayerId((seed % players as u64) as u8)
+        };
         let mut game = Playtest {
             state,
             printings: HashMap::new(),
@@ -331,10 +414,14 @@ impl Playtest {
             tokens,
             deck_tokens,
             started,
-            ai_seats: seats.iter().copied().collect(),
+            fish: goldfish.then(|| seats[0]),
+            rules,
+            sandbox: goldfish,
+            ai_seats: seats.iter().copied().filter(|_| !goldfish).collect(),
             // phase scales its search down for a table of three or more (its "paranoid" cap).
             ai_configs: seats
                 .iter()
+                .filter(|_| !goldfish)
                 .map(|&seat| {
                     (
                         seat,
@@ -356,11 +443,12 @@ impl Playtest {
             choice: None,
             over_told: false,
             out_told: HashSet::new(),
+            dead_on: None,
             stops: Vec::new(),
             ending: None,
             stopped_at: None,
             frames: Vec::new(),
-            frame_limit: FRAME_LIMIT * opponents.len(),
+            frame_limit: FRAME_LIMIT * seats.len(),
             history: History::default(),
         };
         game.assign_printings(you, YOU);
@@ -625,6 +713,8 @@ impl Playtest {
             tokens: self.tokens.clone(),
             stops: self.stops.clone(),
             ending_turn: self.ending == Some(s.turn_number),
+            sandbox: self.sandbox,
+            goldfish: self.fish.is_some(),
             // A replay frame is a moment inside an action, never one to go back to.
             can_undo: !watching && self.history.can_undo(),
             can_redo: !watching && self.history.can_redo(),
@@ -676,6 +766,11 @@ impl Playtest {
                 .map(|id| max_mana_yield(s, *id, seat))
                 .sum(),
             mana: mana_table(s, seat),
+            dead_on: if Some(seat) == self.fish {
+                self.dead_on
+            } else {
+                None
+            },
         }
     }
 
@@ -1129,17 +1224,20 @@ impl Playtest {
     /// Do what the board asked, play on until the reader next decides, and answer with the
     /// table then. A refusal is one sentence and leaves the game exactly as it was.
     ///
-    /// Every action taken but `setStops` (a setting) can be undone, and with it everything the
-    /// AI did after it up to the reader's next decision: undo goes back to the reader's last
-    /// decision, never into the middle of the opponent's turn. Undo and redo happen nothing and
-    /// play nothing back — taken at any stage, a finished game's included.
+    /// Every action taken but `setStops` and `setSandbox` (settings) can be undone, and with it
+    /// everything the AI did after it up to the reader's next decision: undo goes back to the
+    /// reader's last decision, never into the middle of the opponent's turn. Undo and redo happen
+    /// nothing and play nothing back — taken at any stage, a finished game's included.
     pub fn act(&mut self, action: PlaytestAction) -> Result<PlaytestStep, String> {
         match action {
             PlaytestAction::Undo => return self.travel(true),
             PlaytestAction::Redo => return self.travel(false),
             _ => {}
         }
-        let remembered = !matches!(action, PlaytestAction::SetStops { .. });
+        let remembered = !matches!(
+            action,
+            PlaytestAction::SetStops { .. } | PlaytestAction::SetSandbox { .. }
+        );
         let before = remembered.then(|| self.moment());
         let checkpoint = self.checkpoint();
         let mut happened = Vec::new();
@@ -1151,6 +1249,7 @@ impl Playtest {
                     self.history.record(before);
                 }
                 self.follow_printings();
+                self.mark_dead();
                 Ok(PlaytestStep {
                     view: self.view(),
                     happened,
@@ -1185,8 +1284,18 @@ impl Playtest {
             self.stops = stops;
             return Ok(());
         }
+        if let PlaytestAction::SetSandbox { on } = action {
+            // A setting too: the game is as it was, only what the reader's hand may do changes.
+            self.choice = choice;
+            self.sandbox = on;
+            return Ok(());
+        }
         if stage == PlaytestStage::Over {
             return Err(OVER.into());
+        }
+        if is_sandbox(&action) && !self.sandbox {
+            self.choice = choice;
+            return Err(SANDBOX_OFF.into());
         }
         match action {
             PlaytestAction::Mulligan => {
@@ -1429,13 +1538,22 @@ impl Playtest {
         }
     }
 
-    /// The rules only: the one way to play it, a question about which way, or a refusal.
+    /// The rules first: the one way to play it, or a question about which way. When the rules
+    /// offer none, the sandbox puts it down unpaid (`unpaid`), and without the sandbox it is a
+    /// refusal that says why. A card elsewhere than the hand or the command zone is activated
+    /// rather than played — or, in the sandbox, put onto the battlefield when it has nothing to
+    /// activate and is not there already (a double-click on a graveyard's creature).
     fn play(&mut self, id: ObjectId, out: &mut Vec<PlaytestHappened>) -> Result<(), String> {
         let obj = self.own(id)?;
-        if !matches!(obj.zone, Zone::Hand | Zone::Command) {
+        let name = obj.name.clone();
+        let zone = obj.zone;
+        let by_hand = self.sandbox && self.stage() == PlaytestStage::Main;
+        if !matches!(zone, Zone::Hand | Zone::Command) {
+            if by_hand && zone != Zone::Battlefield && self.abilities_of(id).is_empty() {
+                return self.put(id, Place::Battlefield, out);
+            }
             return self.activate(id, out);
         }
-        let name = obj.name.clone();
         let ways: Vec<GameAction> = self
             .answers()
             .into_iter()
@@ -1445,20 +1563,55 @@ impl Playtest {
                 _ => false,
             })
             .collect();
+        if ways.is_empty() && by_hand {
+            return self.unpaid(id, out);
+        }
+        let sandbox = self.sandbox;
         self.take_one(ways, "CastChoice", name.clone(), out, || {
-            format!(
+            let why = format!(
                 "{name} can't be played right now: no land drop left, too little mana, or nothing \
-                 it could target. Right-click it to put it down by hand."
-            )
+                 it could target."
+            );
+            if sandbox {
+                format!("{why} It can be put down by hand in your main phase.")
+            } else {
+                format!("{why} Turn the sandbox on to put it down by hand.")
+            }
         })
+    }
+
+    /// A card the rules will not play, put where it would have gone, unpaid — the goldfish's
+    /// escape hatch, the sandbox's now: a permanent onto the battlefield, an instant or sorcery
+    /// into the graveyard (it was "cast" and is done). The log says "not paid for" (`Put`).
+    fn unpaid(&mut self, id: ObjectId, out: &mut Vec<PlaytestHappened>) -> Result<(), String> {
+        let obj = self.own(id)?;
+        let from = place_of(obj.zone).ok_or(NOT_IN_GAME)?;
+        let to = if is_permanent(obj) {
+            Place::Battlefield
+        } else {
+            Place::Graveyard
+        };
+        if from == Place::Command && to == Place::Battlefield {
+            // CR 903.8: the commander was cast, paid or not — the next cast costs {2} more.
+            engine::game::commander::record_commander_cast(&mut self.state, id);
+        }
+        self.put(id, to, out)
     }
 
     /// The rules only: a permanent's one activated ability, a question about which, or a
     /// refusal.
     fn activate(&mut self, id: ObjectId, out: &mut Vec<PlaytestHappened>) -> Result<(), String> {
         let name = self.own(id)?.name.clone();
-        let ways: Vec<GameAction> = self
-            .answers()
+        let ways = self.abilities_of(id);
+        self.take_one(ways, "AbilityChoice", name.clone(), out, || {
+            format!("{name} has no ability you can activate right now.")
+        })
+    }
+
+    /// Every legal action `id` is the source of, but a play or a cast of it: its abilities, equip,
+    /// crew and the like (`names_source`).
+    fn abilities_of(&self, id: ObjectId) -> Vec<GameAction> {
+        self.answers()
             .into_iter()
             .filter(|a| {
                 !matches!(
@@ -1468,10 +1621,7 @@ impl Playtest {
                         | GameAction::CastSpell { .. }
                 ) && names_source(a, id)
             })
-            .collect();
-        self.take_one(ways, "AbilityChoice", name.clone(), out, || {
-            format!("{name} has no ability you can activate right now.")
-        })
+            .collect()
     }
 
     /// One way: taken. Several: the board asks which. None: `refusal`.
@@ -1509,7 +1659,8 @@ impl Playtest {
         });
     }
 
-    /// The goldfish's hand on a table, on the reader's own cards: no cost, no trigger.
+    /// The sandbox: a hand on the table, on the reader's cards and on any card the table shows —
+    /// no cost, no trigger. `run` has checked that it is on.
     fn sandbox(
         &mut self,
         action: PlaytestAction,
@@ -1519,14 +1670,19 @@ impl Playtest {
             PlaytestAction::Move { id, to } => self.put(ObjectId(id), to, out),
             PlaytestAction::Tap { ids, tapped } => {
                 let mut name = String::new();
+                let mut seat = PlaytestPlayer::You;
                 let mut count = 0;
                 for id in ids {
                     let id = ObjectId(id);
-                    let obj = self.own(id)?;
+                    let obj = self.editable(id)?;
+                    if obj.zone != Zone::Battlefield {
+                        return Err(NOT_IN_GAME.into());
+                    }
                     if obj.tapped == tapped {
                         continue;
                     }
                     name = obj.name.clone();
+                    seat = seat_of(obj.controller);
                     self.debug(DebugAction::SetTapped {
                         object_id: id,
                         tapped,
@@ -1535,6 +1691,7 @@ impl Playtest {
                 }
                 if count > 0 {
                     out.push(PlaytestHappened::Tapped {
+                        seat,
                         name,
                         count,
                         tapped,
@@ -1566,7 +1723,9 @@ impl Playtest {
             }
             PlaytestAction::Counters { id, kind, delta } => {
                 let id = ObjectId(id);
-                let name = self.own(id)?.name.clone();
+                let obj = self.editable(id)?;
+                let name = obj.name.clone();
+                let seat = seat_of(obj.controller);
                 let counter_type = parse_counter_type(&kind);
                 self.debug(DebugAction::ModifyCounters {
                     object_id: id,
@@ -1580,6 +1739,7 @@ impl Playtest {
                     .and_then(|o| o.counters.get(&counter_type).copied())
                     .unwrap_or(0);
                 out.push(PlaytestHappened::Counters {
+                    seat,
                     name,
                     kind: counter_type.display_phrase().into_owned(),
                     count,
@@ -1587,8 +1747,9 @@ impl Playtest {
                 Ok(())
             }
             PlaytestAction::TokenCopy { id } => {
+                // A copy of anyone's card is the reader's own token.
                 let id = ObjectId(id);
-                let name = self.own(id)?.name.clone();
+                let name = self.editable(id)?.name.clone();
                 self.debug(DebugAction::CreateTokenCopy {
                     source_id: id,
                     owner: YOU,
@@ -1688,21 +1849,23 @@ impl Playtest {
         }
     }
 
-    /// Put one of the reader's cards somewhere by hand: no cost, no trigger, no replacement.
+    /// Put a card somewhere by hand: no cost, no trigger, no replacement. Its owner's zone — an
+    /// opponent's card goes to their hand, their graveyard, their library.
     fn put(
         &mut self,
         id: ObjectId,
         to: Place,
         out: &mut Vec<PlaytestHappened>,
     ) -> Result<(), String> {
-        let obj = self.own(id)?;
+        let obj = self.editable(id)?;
         let from = place_of(obj.zone).ok_or(NOT_IN_GAME)?;
         if from == to && !matches!(to, Place::LibraryTop | Place::LibraryBottom) {
             return Ok(());
         }
         let name = obj.name.clone();
         let is_token = obj.is_token;
-        if to == Place::Command && !self.commanders.contains(&(YOU, name.clone())) {
+        let owner = obj.owner;
+        if to == Place::Command && !self.commanders.contains(&(owner, name.clone())) {
             return Err(format!(
                 "Only a commander goes to the command zone, and {name} is not one."
             ));
@@ -1727,18 +1890,25 @@ impl Playtest {
                 simulate: false,
             })?;
         }
-        out.push(PlaytestHappened::Put { name, from, to });
+        out.push(PlaytestHappened::Put {
+            seat: seat_of(owner),
+            name,
+            from,
+            to,
+        });
         Ok(())
     }
 
     // ── Playing on ────────────────────────────────────────────────────────────────────────
 
-    /// Play on until the reader next decides: the AI takes every decision of its own, and the
-    /// reader's priority is passed for them except where `stops_here` says otherwise. While the
-    /// reader ends a turn (`ending`), their main phases are passed and they declare no attackers.
+    /// Play on until the reader next decides: the AI takes every decision of its own, the
+    /// goldfish answers each of its own by doing nothing (`fish_answer`), and the reader's
+    /// priority is passed for them except where `stops_here` says otherwise. While the reader ends
+    /// a turn (`ending`), their main phases are passed and they declare no attackers.
     fn advance(&mut self, out: &mut Vec<PlaytestHappened>) -> Result<(), String> {
         for _ in 0..STEP_LIMIT {
             self.tell_out(out);
+            self.mark_dead();
             // The reader lost a game the others play on (CR 800.4a): it is over for them, and the
             // AIs' game among themselves is not played out.
             if self.reader_out() {
@@ -1763,6 +1933,13 @@ impl Playtest {
             }
             let actors = authorized_submitters(&self.state);
             if actors.iter().any(|p| self.ai_seats.contains(p)) && self.run_ai(out)? > 0 {
+                continue;
+            }
+            // The goldfish's every decision, one at a time and never a replay frame of its own:
+            // it does nothing worth watching, and what it does say (a draw) rides with the next.
+            if let Some(fish) = self.fish.filter(|f| actors.contains(f)) {
+                let answer = self.fish_answer()?;
+                self.apply(fish, answer, out)?;
                 continue;
             }
             if !actors.contains(&YOU) {
@@ -1905,8 +2082,50 @@ impl Playtest {
         (theirs || after_blocks) && has_meaningful_priority_action(s, &legal_actions(s))
     }
 
+    /// What the goldfish does with whatever it is asked: nothing. It keeps its hand, passes every
+    /// priority, declares no attackers and no blockers; anything else (a question a card of the
+    /// reader's puts to it) takes the engine's first legal answer.
+    fn fish_answer(&self) -> Result<GameAction, String> {
+        Ok(match &self.state.waiting_for {
+            WaitingFor::Priority { .. } => GameAction::PassPriority,
+            WaitingFor::DeclareAttackers { .. } => GameAction::DeclareAttackers {
+                attacks: Vec::new(),
+                bands: Vec::new(),
+            },
+            WaitingFor::DeclareBlockers { .. } => GameAction::DeclareBlockers {
+                assignments: Vec::new(),
+            },
+            WaitingFor::MulliganDecision { .. } => GameAction::MulliganDecision {
+                choice: MulliganChoice::Keep,
+            },
+            other => legal_actions(&self.state)
+                .into_iter()
+                .next()
+                .ok_or_else(|| {
+                    format!(
+                        "The rules engine is stuck at {}. Start a new game.",
+                        other.variant_name()
+                    )
+                })?,
+        })
+    }
+
+    /// The goldfish's `dead_on`, kept up with its life: the reader's turn it first reached 0 or
+    /// less, and nothing once it is back above 0.
+    fn mark_dead(&mut self) {
+        let Some(fish) = self.fish else {
+            return;
+        };
+        if self.player(fish).life > 0 {
+            self.dead_on = None;
+        } else if self.dead_on.is_none() {
+            self.dead_on = Some(self.player(YOU).turns_taken.max(1));
+        }
+    }
+
     /// A replay frame of the table now, with the facts since `from`, when there are any.
     fn frame(&mut self, from: usize, out: &[PlaytestHappened]) {
+        self.mark_dead();
         if out.len() > from && self.frames.len() < self.frame_limit {
             self.frames.push(PlaytestFrame {
                 view: self.view_as(true),
@@ -1960,13 +2179,33 @@ impl Playtest {
         &self.state.players[seat.0 as usize]
     }
 
-    /// One of the reader's own objects — the only ones the board acts on.
+    /// One of the reader's own objects — the only ones the rules let the board play or activate.
     fn own(&self, id: ObjectId) -> Result<&engine::game::GameObject, String> {
         self.state
             .objects
             .get(&id)
-            .filter(|o| o.owner == YOU || o.controller == YOU)
+            .filter(|o| !o.is_emblem && (o.owner == YOU || o.controller == YOU))
             .ok_or_else(|| NOT_IN_GAME.to_string())
+    }
+
+    /// An object the sandbox may act on: one of the reader's own, or anyone's that the table
+    /// shows — on the battlefield, in a graveyard, in exile or in the command zone. An opponent's
+    /// hand and library are what the reader may not see, and stay out of reach.
+    fn editable(&self, id: ObjectId) -> Result<&engine::game::GameObject, String> {
+        let o = self
+            .state
+            .objects
+            .get(&id)
+            .filter(|o| !o.is_emblem && !self.rules.contains(&id))
+            .ok_or_else(|| NOT_IN_GAME.to_string())?;
+        if o.owner == YOU || o.controller == YOU {
+            return Ok(o);
+        }
+        match o.zone {
+            Zone::Battlefield | Zone::Graveyard | Zone::Exile | Zone::Command => Ok(o),
+            Zone::Hand | Zone::Library => Err(HIDDEN.into()),
+            Zone::Stack => Err(NOT_IN_GAME.into()),
+        }
     }
 
     /// One action by `actor`, its events told as what happened.
@@ -2052,6 +2291,7 @@ impl Playtest {
             mulligans: self.mulligans,
             rng: self.rng.clone(),
             out_told: self.out_told.clone(),
+            dead_on: self.dead_on,
         }
     }
 
@@ -2061,7 +2301,26 @@ impl Playtest {
         self.mulligans = checkpoint.mulligans;
         self.rng = checkpoint.rng;
         self.out_told = checkpoint.out_told;
+        self.dead_on = checkpoint.dead_on;
     }
+}
+
+/// A hand on the table rather than the rules: the actions the sandbox takes, refused while it is
+/// off.
+fn is_sandbox(action: &PlaytestAction) -> bool {
+    matches!(
+        action,
+        PlaytestAction::Move { .. }
+            | PlaytestAction::Tap { .. }
+            | PlaytestAction::UntapAll
+            | PlaytestAction::Counters { .. }
+            | PlaytestAction::TokenCopy { .. }
+            | PlaytestAction::CreateToken { .. }
+            | PlaytestAction::Draw { .. }
+            | PlaytestAction::Mill { .. }
+            | PlaytestAction::Shuffle
+            | PlaytestAction::SetLife { .. }
+    )
 }
 
 /// The wire's name for a player: `PlayerId(n)` is `PlaytestPlayer::ALL[n]`. A game never seats

@@ -11,11 +11,12 @@
 //! wrapper names a window, so it cannot move. The doc comment on each line below describes the
 //! module, wherever its code now is; each `<module>/mod.rs` says what it kept and why.
 
-// **For the goldfish board's game** (and the playtest board's, `playtest::PlaytestSlot`), held in
-// Tauri's managed state (`goldfish::GoldfishSlot`), which must be `Send + Sync`. phase.rs's `GameState` is deep enough that proving it `Send` overflows the
-// compiler's default limit of 128 — measured 2026-10-12: `overflow evaluating the requirement
-// tauri::State<'_, GoldfishSlot> well-formed`, through `Box<grimoire_play::Goldfish>: Send` — and
-// 256 is the bound rustc suggested and is enough.
+// **For the game on the playtest board** (`playtest::PlaytestSlot`, the goldfish's game too), held
+// in Tauri's managed state, which must be `Send + Sync`. phase.rs's `GameState` is deep enough
+// that proving it `Send` overflows the compiler's default limit of 128 — measured 2026-10-12, on
+// the goldfish board's slot of then: `overflow evaluating the requirement tauri::State<'_,
+// GoldfishSlot> well-formed`, through `Box<grimoire_play::Goldfish>: Send` — and 256 is the bound
+// rustc suggested and is enough.
 #![recursion_limit = "256"]
 
 /// **The collection's and the wishlist's history, and the feed that reads it beside
@@ -119,8 +120,6 @@ pub use grimoire_core::folder_rules;
 /// that validates the document's *shape* and never its vocabulary — a widget kind this build
 /// has never heard of survives a round trip, which is what stops an older build quietly
 /// emptying a newer one's row.
-/// The goldfish board's three commands, over phase.rs's rules engine (`grimoire-play`).
-pub mod goldfish;
 pub mod home;
 /// **The resolution rule under the image cache.** Two columns of `cards`, the precedence
 /// between them and one predicate over a string — no filesystem and no protocol handler.
@@ -167,8 +166,8 @@ pub mod nav;
 /// SQLite's `date('now')`.
 pub mod new_printings;
 pub mod paths;
-/// The playtest board's three commands: a deck against another, the opponent played by phase.rs's
-/// AI over the goldfish's rules engine (`grimoire-play`).
+/// The game board's three commands, over phase.rs's rules engine (`grimoire-play`): a deck
+/// against the goldfish, or against another deck or three played by phase.rs's AI.
 pub mod playtest;
 /// **The home page's Price movers history** — user schema v45, a snapshot of today's price per
 /// owned printing and a read that compares against one. The day is SQLite's `date('now')`, never

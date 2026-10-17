@@ -65,7 +65,7 @@ const CRATES = [
   { name: "grimoire-web", dir: "crates/grimoire-web", toml: webToml, conf: null },
   // The browser's scanner: a module of its own, shipped beside the web host's from the same tag.
   { name: "grimoire-scan", dir: "crates/grimoire-scan", toml: scanToml, conf: null },
-  // The goldfish board's rules engine, linked by the desktop alone.
+  // The game board's rules engine (goldfish and playtest), linked by the desktop alone.
   { name: "grimoire-play", dir: "crates/grimoire-play", toml: playToml, conf: null },
 ];
 

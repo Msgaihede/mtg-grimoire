@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { PlaytestSetup, type SetupDeck } from "./PlaytestSetup";
@@ -110,6 +110,52 @@ describe("PlaytestSetup", () => {
     expect(onStart).toHaveBeenLastCalledWith(
       expect.objectContaining({ opponents: [{ deckId: 2, variant: "live" }] }),
     );
+  });
+
+  // The goldfish is no deck and plays no skill: only the reader's deck is asked for.
+  it("plays the goldfish with the reader's deck alone, and asks for nothing else", async () => {
+    const { onStart } = setup();
+    const table = screen.getByRole("group", { name: "Table" });
+    expect(
+      within(table)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["Goldfish", "1 opponent", "3 opponents"]);
+    await userEvent.click(within(table).getByRole("button", { name: "Goldfish" }));
+    expect(screen.queryByRole("button", { name: "Opponent’s deck" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Opponent’s skill" })).not.toBeInTheDocument();
+    const start = screen.getByRole("button", { name: "Start" });
+    expect(start).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByText("Pick your deck to start.")).toBeInTheDocument();
+    await pickDeck("Your deck", "Simic Tempo");
+    expect(start).toHaveAttribute("aria-disabled", "false");
+    await userEvent.click(start);
+    expect(onStart).toHaveBeenCalledWith({ deckId: 1, variant: "theory", opponents: [] });
+  });
+
+  // The picks outlive the page (`viewMemory`): the goldfish table among them, and the opponent
+  // seats it hid come back as they were.
+  it("remembers the goldfish table, and the seats it hid, for the next visit", async () => {
+    setup();
+    await pickDeck("Your deck", "Boros Aggro");
+    await pickDeck("Opponent’s deck", "Simic Tempo");
+    await userEvent.click(screen.getByRole("button", { name: "Goldfish" }));
+    cleanup();
+    const { onStart } = setup();
+    expect(screen.getByRole("button", { name: "Goldfish" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Start" }));
+    expect(onStart).toHaveBeenLastCalledWith({ deckId: 2, variant: "live", opponents: [] });
+    await userEvent.click(screen.getByRole("button", { name: "1 opponent" }));
+    await userEvent.click(screen.getByRole("button", { name: "Start" }));
+    expect(onStart).toHaveBeenLastCalledWith({
+      deckId: 2,
+      variant: "live",
+      opponents: [{ deckId: 1, variant: "theory" }],
+      difficulty: "medium",
+    });
   });
 
   it("asks for a deck when there is none", () => {

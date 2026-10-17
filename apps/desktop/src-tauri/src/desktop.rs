@@ -17,12 +17,12 @@ use crate::{
     activity, archive, camera, card, collection, collection_alloc, collection_folders, combos, db,
     deck, deck_audit, deck_completion, deck_meta, deck_missing, deck_notes, deck_pull, deck_query,
     deck_quick_add, deck_theory, deck_todos, deck_tokens, deck_undo, deckpane, decksort, errors,
-    export, goldfish, home, images, import, index, listview, markcolors, marketplace,
-    marketplace_feed, mirror, nav, new_printings, panelwidth, paths, playtest, price_history,
-    recent_cards, reset, scan_history, scanner, schema, scryfall, search, searchopen, searchwidth,
-    set_completion, share, shelffolds, stackhide, startup, startview, sticky_notes, sync,
-    sync_engine, sync_pair, tags, trade, upcoming_sets, update, value_history, window, wishlist,
-    wishlist_folders, wishlist_optimize, zoom,
+    export, home, images, import, index, listview, markcolors, marketplace, marketplace_feed,
+    mirror, nav, new_printings, panelwidth, paths, playtest, price_history, recent_cards, reset,
+    scan_history, scanner, schema, scryfall, search, searchopen, searchwidth, set_completion,
+    share, shelffolds, stackhide, startup, startview, sticky_notes, sync, sync_engine, sync_pair,
+    tags, trade, upcoming_sets, update, value_history, window, wishlist, wishlist_folders,
+    wishlist_optimize, zoom,
 };
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -615,9 +615,6 @@ pub fn run() {
             // Which shelves the reader folded — `search_open`'s pair, one level deeper.
             shelffolds::shelf_folds,
             shelffolds::set_shelf_folds,
-            goldfish::goldfish_start,
-            goldfish::goldfish_act,
-            goldfish::goldfish_end,
             playtest::playtest_start,
             playtest::playtest_act,
             playtest::playtest_end,
@@ -842,9 +839,8 @@ pub fn run() {
             //
             // Managed first, so the page's very first `startup_status` has something to ask.
             app.manage(startup::Startup::default());
-            // The goldfish board's one game, empty until a reader starts one from a deck.
-            app.manage(goldfish::GoldfishSlot::default());
-            // The playtest board's one game, empty until a reader starts one from Playtesting.
+            // The board's one game — the goldfish or the AI — empty until a reader starts one
+            // from a deck's goldfish button or from Playtesting.
             app.manage(playtest::PlaytestSlot::default());
             let handle = app.handle().clone();
             std::thread::Builder::new()

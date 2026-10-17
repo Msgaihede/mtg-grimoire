@@ -4,7 +4,7 @@ import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
-import { CardFace } from "../goldfish/Inspect";
+import { CardFace } from "../table/Inspect";
 import {
   cardOfRef,
   optionCards,

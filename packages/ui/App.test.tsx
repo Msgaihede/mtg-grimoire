@@ -649,8 +649,9 @@ it("draws the search view", async () => {
 });
 
 /**
- * **The occasional views stay out of the first chunk** (issue #557), the goldfish board with them. Nothing goes red when a
- * view is imported statically again — the app works, it only starts slower, and on the web app
+ * **The occasional views stay out of the first chunk** (issue #557), the deck editor's goldfish
+ * with them. Nothing goes red when a view is imported statically again — the app works, it only
+ * starts slower, and on the web app
  * that is the whole cost of a first visit. A static import of any of them anywhere in `App.tsx`
  * pulls its chunk, and the scanner's and Settings' dependencies with it, back into `index-*.js`.
  * Read as text because the build's chunk graph is not something a unit test can see.
@@ -661,7 +662,7 @@ it("loads the occasional views on first open rather than with the app", () => {
     "settings/SettingsPage",
     "trade/TradePage",
     "playtesting/PlaytestingPage",
-    "playtesting/goldfish/GoldfishPage",
+    "playtesting/GoldfishPage",
     "share/SharedPage",
   ]) {
     expect(appSource).toContain(`import("@/features/${view}")`);
@@ -1404,9 +1405,7 @@ it("announces a fold in the printings modal, and stays open so it can be read", 
   // And the deck really did lose a line: two Bolts went in, one came out. Counted off the deck's
   // own cards rather than off the screen — the wall behind the sentence is a wall of Lightning
   // Bolts, so an unscoped query by name is answered three times over by the modal itself.
-  await waitFor(() =>
-    expect(document.querySelectorAll(`[${DECK_CARD_ATTR}]`)).toHaveLength(1),
-  );
+  await waitFor(() => expect(document.querySelectorAll(`[${DECK_CARD_ATTR}]`)).toHaveLength(1));
 });
 
 /**

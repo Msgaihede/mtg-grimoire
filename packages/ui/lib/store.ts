@@ -646,15 +646,18 @@ interface AppState {
   openDeckId: number | null;
   setOpenDeckId: (id: number | null) => void;
   /**
-   * **The goldfish board, open over the deck editor** — the deck and the variant it deals from,
-   * or `null` when the editor is what is on screen.
+   * **The game board against the goldfish, open over the deck editor** — the deck and the
+   * variant it deals from, or `null` when the editor is what is on screen. The deck editor's
+   * "Goldfish this deck" is the way in; the board is the Playtesting page's own, with no opponent
+   * decks (`features/playtesting/GoldfishPage.tsx`).
    *
    * The Decks view's third state, and here for `openDeckId`'s reason: there is no router, and
    * "the board is up" has to be a fact `App.tsx` can read. **Non-null means the board is on
    * screen**: `App.tsx` draws it in place of the editor while this names the open deck, and every
    * navigation that could leave it — a view change, opening or closing a deck — sets it back to
    * `null`, so a reader who comes back to a deck finds the editor and not a game they left. The
-   * game itself is the engine's (`goldfish_start` deals a new one each time the board mounts).
+   * game itself is the engine's (`playtest_start` with no opponents deals a new one each time
+   * the board mounts).
    */
   goldfish: { deckId: number; variant: DeckVariant } | null;
   setGoldfish: (goldfish: { deckId: number; variant: DeckVariant } | null) => void;

@@ -17,7 +17,7 @@ import type {
   PlaytestStopStep,
   PlaytestView,
 } from "@/lib/ipc";
-import type { CardMark } from "../goldfish/Battlefield";
+import type { CardMark } from "../table/Battlefield";
 import { playerName, playerPossessive } from "./players";
 import { pickableCards } from "./prompt";
 

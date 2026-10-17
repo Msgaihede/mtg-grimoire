@@ -5,7 +5,7 @@
  * **The reader's own main phases always stop**: the board gives control there whatever the set
  * says (the `main` stage), so they are drawn as fixed on, never sent, and never toggled off.
  */
-import type { GoldfishSeat, PlaytestStop, PlaytestStopStep } from "@/lib/ipc";
+import type { GameSeat, PlaytestStop, PlaytestStopStep } from "@/lib/ipc";
 
 export const STOP_STEPS: readonly { step: PlaytestStopStep; label: string }[] = [
   { step: "upkeep", label: "Upkeep" },
@@ -20,13 +20,13 @@ export const STOP_STEPS: readonly { step: PlaytestStopStep; label: string }[] = 
 ];
 
 /** A stop the board always makes: the reader's own main phases. */
-export function fixedStop(seat: GoldfishSeat, step: PlaytestStopStep): boolean {
+export function fixedStop(seat: GameSeat, step: PlaytestStopStep): boolean {
   return seat === "you" && (step === "main1" || step === "main2");
 }
 
 export function hasStop(
   stops: readonly PlaytestStop[],
-  seat: GoldfishSeat,
+  seat: GameSeat,
   step: PlaytestStopStep,
 ): boolean {
   return fixedStop(seat, step) || stops.some((s) => s.seat === seat && s.step === step);
@@ -35,7 +35,7 @@ export function hasStop(
 /** The set with one stop turned on or off; a fixed stop is left as it is. */
 export function toggleStop(
   stops: readonly PlaytestStop[],
-  seat: GoldfishSeat,
+  seat: GameSeat,
   step: PlaytestStopStep,
 ): PlaytestStop[] {
   if (fixedStop(seat, step)) return [...stops];

@@ -4,10 +4,10 @@ import { CountTag } from "@/components/CountTag";
 import { GrimoireMark } from "@/components/GrimoireMark";
 import { FOCUS } from "@/lib/focus";
 import { cn } from "@/lib/utils";
-import { CardFace, pointerAt } from "../goldfish/Inspect";
-import type { ZoneSize } from "../goldfish/layout";
-import type { Pointed, ZoneLook } from "../goldfish/types";
-import { markSize } from "../goldfish/ZonePile";
+import { CardFace, pointerAt } from "../table/Inspect";
+import type { ZoneSize } from "../table/layout";
+import type { Pointed, ZoneLook } from "../table/types";
+import { markSize } from "../table/ZonePile";
 
 /**
  * The opponent's side of the zone columns and their hand — the reader's own turned 180°: library
@@ -16,7 +16,8 @@ import { markSize } from "../goldfish/ZonePile";
  *
  * **Looked at, never handled.** Their cards are the rules' and the AI's to move, so nothing here
  * is a drag source or a drop target and nothing has a menu: a face-up card can be pointed at (the
- * preview) and a face-up zone opened to look through, and that is all. What the reader may not
+ * preview) and a face-up zone opened to look through, and that is all. (The sandbox reaches their
+ * battlefield's cards through `Battlefield`'s menu, never these zones.) What the reader may not
  * see is not on the wire (`ipc/playtest.ts`): their hand and library are counts, drawn as backs.
  *
  * **Compact, always**: each zone's count is a `CountTag` on its card rather than a line under it,

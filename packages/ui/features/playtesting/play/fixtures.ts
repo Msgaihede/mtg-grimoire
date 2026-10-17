@@ -1,13 +1,19 @@
 /**
  * Playtest views for stories and tests — the board drawn without the engine.
  *
- * **The goldfish's fixtures' arrangement** (`../goldfish/fixtures.ts`): real printings from the
- * fake's card rows, so Storybook's `live` and `bundled` modes draw real pictures, and views shaped
- * as the engine answers them. There is no rules engine here and no AI; a story that is clicked
- * through records what the board asks rather than playing it.
+ * **The table's fixtures' arrangement** (`../table/fixtures.ts`): real printings from the fake's
+ * card rows, so Storybook's `live` and `bundled` modes draw real pictures, and views shaped as the
+ * engine answers them. There is no rules engine here and no AI; a story that is clicked through
+ * records what the board asks rather than playing it — except the goldfish's, whose sandbox moves
+ * {@link playLocally} answers in outline so the table can be handled.
+ *
+ * **Two decks sit down here**: the duel's Simic reader against an AI's Boros (`turnFive` and the
+ * views built on it, the sandbox off as it starts against the AI), and the table fixtures' Kenrith
+ * deck against **the goldfish** (`goldfishTurn` and its kin, the sandbox on as it starts there).
  */
 import type {
   GameCard,
+  PlaytestAction,
   PlaytestHappened,
   PlaytestPick,
   PlaytestPlayer,
@@ -15,7 +21,15 @@ import type {
   PlaytestStep,
   PlaytestView,
 } from "@/lib/ipc";
-import { gameCard, manaTable } from "../goldfish/fixtures";
+import {
+  emptySeat,
+  gameCard,
+  manaTable,
+  openingHandSeat,
+  playLocally as playSeat,
+  turnNineSeat,
+  turnNineTokens,
+} from "../table/fixtures";
 
 /** A Mountain: not among the fake's rows, so named and typed by hand (drawn as a plain tile). */
 function mountain(over: Partial<GameCard> = {}): GameCard {
@@ -44,6 +58,7 @@ function seat(player: PlaytestPlayer, over: Partial<PlaytestSeat>): PlaytestSeat
     libraryCards: [],
     manaOpen: 0,
     mana: manaTable(),
+    deadOn: null,
     ...over,
   };
 }
@@ -139,6 +154,8 @@ export function turnFive(): TurnFive {
     tokens: [],
     stops: [],
     endingTurn: false,
+    sandbox: false,
+    goldfish: false,
     canUndo: false,
     canRedo: false,
   };
@@ -738,4 +755,94 @@ export function fourPlayerLost(): FourPlayer {
       winner: null,
     },
   };
+}
+
+/** The goldfish game's one opponent name, as the page passes it: its plate reads "Opponent ·
+ *  Goldfish". */
+export const GOLDFISH: readonly string[] = ["Goldfish"];
+
+/**
+ * The goldfish's seat: it keeps every card it draws (eight in hand), plays none, and its library
+ * is the rest of its pile of basic lands — nothing in its zones, nothing on its table. Its hand
+ * and library are counts, as every opponent's are.
+ */
+export function goldfishSeat(over: Partial<PlaytestSeat> = {}): PlaytestSeat {
+  return emptySeat("opponent", { life: 40, handCount: 8, library: 193, ...over });
+}
+
+/**
+ * A goldfish game on the reader's ninth turn, their first main phase — the game's turn 17, since
+ * the goldfish's turns count too and the reader went first: the table fixtures' busy Kenrith
+ * table, the goldfish down to 12, the sandbox on.
+ */
+export function goldfishTurn({ extraLands = 0 }: { extraLands?: number } = {}): PlaytestView {
+  return {
+    ...turnFive().view,
+    turn: 17,
+    you: turnNineSeat({ extraLands }),
+    opponents: [goldfishSeat({ life: 12 })],
+    tokens: turnNineTokens(),
+    sandbox: true,
+    goldfish: true,
+    canUndo: true,
+  };
+}
+
+/** The goldfish at 0 since the reader's eighth turn: its plate says so, and the game plays on. */
+export function goldfishDead(): PlaytestView {
+  const view = goldfishTurn();
+  return { ...view, opponents: [{ ...view.opponents[0], life: 0, deadOn: 8 }] };
+}
+
+/** The goldfish game's opening hand: two mulligans in, the first free, one card to bottom. */
+export function goldfishOpeningHand(): PlaytestView {
+  return {
+    ...goldfishTurn(),
+    stage: "mulligan",
+    turn: 0,
+    phase: "beginning",
+    step: null,
+    mulligan: { mulligans: 2, bottom: 1, freeFirst: true },
+    you: openingHandSeat(),
+    opponents: [goldfishSeat({ handCount: 7, library: 194 })],
+    canUndo: false,
+  };
+}
+
+/**
+ * What a story's board does with an action — the engine's answer in outline, for clicking
+ * through a goldfish story: the reader's sandbox moves on their seat (`../table/fixtures.ts`'
+ * `playLocally`), a life total on any seat, the sandbox turned on or off, and a kept hand. The
+ * rules are not here: anything else comes back as it was. Never used outside stories and tests.
+ */
+export function playLocally(view: PlaytestView, action: PlaytestAction): PlaytestView {
+  switch (action.type) {
+    case "setSandbox":
+      return { ...view, sandbox: action.on };
+    case "setLife":
+      return action.seat === "you"
+        ? { ...view, you: { ...view.you, life: action.life } }
+        : {
+            ...view,
+            opponents: view.opponents.map((o) =>
+              o.player === action.seat ? { ...o, life: action.life } : o,
+            ),
+          };
+    case "keep": {
+      let you = view.you;
+      for (const id of action.bottom)
+        you = playSeat(you, { type: "move", id, to: "libraryBottom" });
+      return {
+        ...view,
+        stage: "main",
+        phase: "main1",
+        step: "main1",
+        turn: 1,
+        mulligan: null,
+        you,
+      };
+    }
+    default:
+      return { ...view, you: playSeat(view.you, action) };
+  }
 }

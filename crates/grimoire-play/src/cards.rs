@@ -6,7 +6,7 @@
 //! `build_oracle_face`, the function phase's own card-data export is built with — so a card
 //! played here is parsed exactly as it is on phase's site, and what its parser does not
 //! understand yet it does not understand here either (the card is still a body with a cost and a
-//! type, which is all a goldfish board needs to place it).
+//! type, which is all the sandbox needs to put it down by hand).
 //!
 //! **Only the deck's cards are parsed**, never the corpus: phase's whole export is ~93 MB and
 //! would have to be fetched from phase's host. Measured on the spike (2026-10-12): 14 ms for five
