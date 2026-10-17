@@ -86,6 +86,10 @@ const DESKTOP_ONLY: &[(&str, &str)] = &[
         "playtest_end",
         "the playtest board's rules engine and AI are this host's",
     ),
+    (
+        "playtest_support",
+        "what the playtest board's rules engine plays of a deck is this host's to say",
+    ),
 ];
 
 /// Commands the table has that this app does not register and never will, each with the

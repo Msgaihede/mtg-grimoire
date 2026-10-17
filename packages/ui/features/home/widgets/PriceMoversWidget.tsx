@@ -42,8 +42,9 @@
  * `Not in a folder` is the root of each cabinet; a deck's group and a deck's managed wishlist are
  * folders like any other, because a filter is not a write. A card may be one the reader does not
  * own: its price is remembered from the next snapshot on, because `useHomeLayout` hands every card
- * a Price movers widget names to `set_price_watch`. So a freshly chosen card has *no history yet*,
- * and says so in its own sentence ({@link CHOSEN_NO_HISTORY}) rather than the collection's. The
+ * a Price movers widget names to `set_price_watch`, which records it at once (issue #1080). So a
+ * freshly chosen card has *no history yet*, and says so in its own sentence
+ * ({@link chosenNoHistory}) rather than the collection's, naming when its window fills. The
  * choices are read off the config in `../priceMoversScope.ts`.
  *
  * ## A mover is a press
@@ -124,10 +125,21 @@ export const NOTHING_CHOSEN =
 /** Every chosen folder has been deleted since, and no card was chosen — a race another surface
  *  won, and never a reason to measure the whole collection in their place. */
 export const CHOSEN_GONE = "The chosen folders no longer exist.";
-/** History exists, and none of it is old enough for anything the reader chose — most often a card
- *  chosen this week, whose price is remembered only from the day it was chosen. */
-export const CHOSEN_NO_HISTORY =
-  "No price history for your chosen cards yet. Price changes show up here over time.";
+/**
+ * History exists, and none of it is old enough for anything the reader chose — most often a card
+ * chosen this week, whose price is remembered only from the day it was chosen (issue #1080). Says
+ * when the window will have something to measure, so a card chosen today does not read as a
+ * widget that ignored it.
+ */
+export function chosenNoHistory(range: PriceMoverWindow): string {
+  const when =
+    range === "7d"
+      ? "Moves over seven days show up a week after that."
+      : range === "30d"
+        ? "Moves over thirty days show up thirty days after that."
+        : "Moves show up from the next day on.";
+  return `No price history for your chosen cards yet. Their prices are remembered from the day you choose them. ${when}`;
+}
 
 /** How many matches the card search offers at once — a list under a field, not a results page. */
 const CARD_RESULTS = 8;
@@ -180,7 +192,7 @@ export function emptySentence(
   if (answer.since === null) {
     // Under a scope the day count is the whole table's, and says nothing about the cards the
     // reader chose — a card chosen on Tuesday has no week behind it however long the app has run.
-    if (chosen) return CHOSEN_NO_HISTORY;
+    if (chosen) return chosenNoHistory(range);
     return `Only ${plural(answer.days, "day")} of price history so far. Not enough for ${windowPhrase(range)} yet.`;
   }
   if (answer.movers.length > 0) return null;
@@ -624,7 +636,7 @@ function CardPicker({
         </ul>
       )}
       <p className="m-0 text-xs text-dim">
-        Prices of cards you don't own are remembered from the next price update on.
+        Prices of cards you don't own are remembered from the day you choose them.
       </p>
     </div>
   );

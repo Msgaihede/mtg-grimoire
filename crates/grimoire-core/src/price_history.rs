@@ -180,8 +180,8 @@ pub fn watched(conn: &Connection) -> Vec<String> {
 /// place; more than [`MAX_WATCHED`] distinct ids is refused in words rather than cut, so a page
 /// that asked for a card is never quietly told yes. **Writes nothing when the list is
 /// unchanged**, since the page sends it on every layout change that touches a Price movers
-/// widget.
-pub fn set_watched(conn: &Connection, card_ids: &[String]) -> Result<(), String> {
+/// widget — and answers whether it wrote, which is what [`watch`] asks.
+pub fn set_watched(conn: &Connection, card_ids: &[String]) -> Result<bool, String> {
     let mut list: Vec<&str> = Vec::new();
     for id in card_ids.iter().map(|id| id.trim()) {
         if !id.is_empty() && !list.contains(&id) {
@@ -192,10 +192,34 @@ pub fn set_watched(conn: &Connection, card_ids: &[String]) -> Result<(), String>
         return Err(TOO_MANY_WATCHED.to_owned());
     }
     if watched(conn) == list {
-        return Ok(());
+        return Ok(false);
     }
     let json = serde_json::to_string(&list).map_err(|e| e.to_string())?;
-    crate::app_meta::set_app_meta(conn, K_PRICE_WATCH, &json).map_err(|e| e.to_string())
+    crate::app_meta::set_app_meta(conn, K_PRICE_WATCH, &json).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+/// `set_price_watch`: [`set_watched`], and — when the list changed — today's [`snapshot`] at
+/// once (issue #1080).
+///
+/// **A card chosen now has its first price recorded now.** The snapshot's three callers are the
+/// launch, an ingest and a feed refresh, so before this a card chosen mid-session waited for the
+/// next of those to be remembered at all — on a desktop left open, days — and every window's
+/// baseline waited with it, while the widget said *no price history yet* and looked broken. A
+/// snapshot that changes nothing writes nothing, so a list that only dropped a card costs a read.
+///
+/// **Best-effort, the module's rule**: the list is stored whatever the snapshot does, and a
+/// snapshot that fails is logged and left to the next launch, ingest or feed refresh.
+pub fn watch(conn: &Connection, card_ids: &[String]) -> Result<(), String> {
+    if set_watched(conn, card_ids)? {
+        if let Err(e) = snapshot(conn) {
+            eprintln!(
+                "today's prices of the followed cards could not be recorded: {e}\nThe next \
+                 launch, sync or price refresh records them; nothing else is affected."
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Every finish there is, as a JSON array literal for `json_each` — what a wish with no
@@ -1776,6 +1800,40 @@ mod tests {
             !held_today(&conn).iter().any(|row| row.1 == "ring"),
             "the day holds its last snapshot's printings"
         );
+    }
+
+    /// **A card chosen now is remembered now** (issue #1080): `set_price_watch` snapshots on a
+    /// list that changed, so the card's history starts the day it is chosen and not at the next
+    /// launch, ingest or feed refresh. An unchanged list snapshots nothing.
+    #[test]
+    fn watching_a_card_records_its_price_today() {
+        let conn = conn();
+        let ring_today = |conn: &Connection| {
+            held_today(conn)
+                .iter()
+                .filter(|row| row.1 == "ring")
+                .count()
+        };
+        assert_eq!(ring_today(&conn), 0);
+
+        watch(&conn, &ids(&["ring"])).unwrap();
+        assert_eq!(watched(&conn), ids(&["ring"]));
+        assert!(
+            ring_today(&conn) > 0,
+            "the watched card is in today's snapshot"
+        );
+
+        // The same list again is no write and no snapshot: a row deleted behind its back stays gone.
+        conn.execute("DELETE FROM price_snapshots WHERE card_id = 'ring'", [])
+            .unwrap();
+        watch(&conn, &ids(&["ring"])).unwrap();
+        assert_eq!(ring_today(&conn), 0, "an unchanged list snapshots nothing");
+
+        // Letting go of it takes it out of today, as the next snapshot would have.
+        watch(&conn, &ids(&["ring", "bolt"])).unwrap();
+        assert!(ring_today(&conn) > 0);
+        watch(&conn, &[]).unwrap();
+        assert_eq!(ring_today(&conn), 0);
     }
 
     /// **A scope measures what it names and nothing else**: a collection folder (the root is

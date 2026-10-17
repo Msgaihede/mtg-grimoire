@@ -1,5 +1,5 @@
 import { useId, useState, type JSX } from "react";
-import { Play } from "lucide-react";
+import { ChevronRight, CircleCheck, Play, TriangleAlert } from "lucide-react";
 import type { DeckRow, DeckVariant, PlaytestDifficulty } from "@/lib/ipc";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import type { DropdownOption } from "@/components/Dropdown/types";
@@ -8,6 +8,14 @@ import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { viewMemory } from "@/lib/viewMemory";
 import { DEFAULT_DIFFICULTY, type PlaytestPicks } from "./play/usePlaytestGame";
+import {
+  gapWords,
+  supportSentence,
+  usePlaytestSupport,
+  type SupportAsk,
+  type SupportOf,
+  type SupportState,
+} from "./support";
 
 /** What the setup screen reads of a deck. */
 export type SetupDeck = Pick<DeckRow, "id" | "name" | "formatName" | "archived" | "theoryEnabled">;
@@ -94,8 +102,13 @@ function firstVariant(deck: SetupDeck | undefined): DeckVariant {
  * in every seat shown (the reader's alone, against the goldfish); the seats a table hides keep
  * their picks.
  *
+ * **What the rules engine plays of each deck is marked before it is picked** (issue #1078): a
+ * glyph on each deck's row in the lists (for the list it is first dealt from), and under each seat
+ * the deck's verdict and the cards phase.rs's parser reads only in part (`support.ts`). A deck
+ * with such cards can still be played; the reader is told, never stopped.
+ *
  * Presentational over the deck rows, so the page's `useDecks` is the one read and the tests and
- * stories hand it rows.
+ * stories hand it rows; the engine's verdict on them is the one thing asked here.
  */
 export function PlaytestSetup({
   decks,
@@ -127,11 +140,28 @@ export function PlaytestSetup({
   const pickSeat = (i: number, next: Partial<SetupSeat>) =>
     pick({ opponents: held.opponents.map((s, j) => (j === i ? { ...s, ...next } : s)) });
 
-  const options: DropdownOption[] = playable.map((d) => ({
-    value: String(d.id),
-    label: d.name,
-    ...(d.formatName === null ? {} : { hint: d.formatName }),
-  }));
+  // The seats' decks first, in the lists they are picked in; then every deck, in the list it is
+  // first dealt from, for the marks in the lists.
+  const asked: SupportAsk[] = [];
+  if (yours !== undefined) asked.push({ deckId: yours.id, variant: dealt(yours, held.variant) });
+  theirs.forEach((d, i) => {
+    if (d !== undefined) asked.push({ deckId: d.id, variant: dealt(d, seats[i].variant) });
+  });
+  const supportOf = usePlaytestSupport(
+    asked,
+    playable.map((d) => ({ deckId: d.id, variant: firstVariant(d) })),
+  );
+
+  const options: DropdownOption[] = playable.map((d) => {
+    const known = supportOf(d.id, firstVariant(d));
+    return {
+      value: String(d.id),
+      label: d.name,
+      ...(d.formatName === null ? {} : { hint: d.formatName }),
+      icon: <SupportGlyph state={known} />,
+      ...(known.state === "known" ? { title: supportSentence(known.support) } : {}),
+    };
+  });
 
   const start = () => {
     if (yours === undefined) return;
@@ -195,6 +225,7 @@ export function PlaytestSetup({
               <Seat
                 title="Your deck"
                 options={options}
+                supportOf={supportOf}
                 deck={yours}
                 variant={held.variant}
                 onDeck={(id) => pick({ deckId: id, variant: firstVariant(byId(id)) })}
@@ -206,6 +237,7 @@ export function PlaytestSetup({
                   key={i}
                   title={four ? `Opponent ${i + 1}’s deck` : "Opponent’s deck"}
                   options={options}
+                  supportOf={supportOf}
                   deck={theirs[i]}
                   variant={seat.variant}
                   onDeck={(id) => pickSeat(i, { deckId: id, variant: firstVariant(byId(id)) })}
@@ -278,10 +310,105 @@ export function PlaytestSetup({
 
 const LABEL = "text-[0.6875rem] tracking-[0.08em] text-dim uppercase";
 
+/** The list a deck is dealt from in a seat: the one picked, where it keeps two. */
+function dealt(deck: SetupDeck, variant: DeckVariant): DeckVariant {
+  return deck.theoryEnabled ? variant : "live";
+}
+
+/**
+ * A deck row's mark: green for a deck the engine plays whole, gold for one with cards it plays
+ * only in part — a caution rather than the red of a broken rule, since the deck still plays. The
+ * slot is held while the engine is still being asked, so the names do not shift as marks arrive.
+ */
+function SupportGlyph({ state }: { state: SupportState }): JSX.Element {
+  if (state.state !== "known") return <span className="size-3.5 shrink-0" aria-hidden="true" />;
+  return state.support.unsupported.length === 0 ? (
+    <CircleCheck className="size-3.5 shrink-0 text-ok" aria-hidden="true" />
+  ) : (
+    <TriangleAlert className="size-3.5 shrink-0 text-accent" aria-hidden="true" />
+  );
+}
+
+/**
+ * Under a seat: the engine's verdict on the deck picked there, and — folded, behind a press —
+ * the cards it plays only in part, each with what phase leaves out of it.
+ */
+function SupportNote({ state }: { state: SupportState }): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const listId = useId();
+  if (state.state === "checking") {
+    return <p className="m-0 text-xs text-dim">Checking the cards against the rules engine…</p>;
+  }
+  if (state.state === "failed") {
+    return (
+      <p className="m-0 text-xs text-dim">
+        The cards could not be checked against the rules engine.
+      </p>
+    );
+  }
+  const { support } = state;
+  const partly = support.unsupported;
+  return (
+    <div className="flex flex-col gap-1.5 text-xs">
+      <p className="m-0 flex items-start gap-1.5 text-dim">
+        <SupportGlyph state={state} />
+        <span>{supportSentence(support)}</span>
+      </p>
+      {partly.length > 0 && (
+        <>
+          <button
+            type="button"
+            aria-expanded={open}
+            aria-controls={listId}
+            onClick={() => setOpen((was) => !was)}
+            className={cn(
+              "inline-flex w-fit items-center gap-1 rounded-sm text-dim hover:text-text",
+              "transition-colors duration-150 motion-reduce:transition-none",
+              FOCUS,
+            )}
+          >
+            <ChevronRight
+              className={cn(
+                "size-3.5 transition-transform duration-150 motion-reduce:transition-none",
+                open && "rotate-90",
+              )}
+              aria-hidden="true"
+            />
+            {open
+              ? "Hide the cards"
+              : partly.length === 1
+                ? "Show the card"
+                : `Show the ${partly.length} cards`}
+          </button>
+          {open && (
+            <ul
+              id={listId}
+              aria-label="Cards the rules engine plays only in part"
+              className="m-0 flex list-none flex-col gap-1.5 p-0 pl-5"
+            >
+              {partly.map((card) => (
+                <li key={card.name} className="flex flex-col">
+                  <span className="text-text">
+                    {card.name}
+                    {card.quantity > 1 && <span className="text-dim"> ×{card.quantity}</span>}
+                    {card.commander && <span className="text-dim"> · commander</span>}
+                  </span>
+                  <span className="text-dim">{card.gaps.map(gapWords).join(" · ")}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 /** One seat's picks: the deck, and its list when it keeps two. */
 function Seat({
   title,
   options,
+  supportOf,
   deck,
   variant,
   onDeck,
@@ -289,12 +416,22 @@ function Seat({
 }: {
   title: string;
   options: DropdownOption[];
+  supportOf: SupportOf;
   deck: SetupDeck | undefined;
   variant: DeckVariant;
   onDeck: (id: number) => void;
   onVariant: (variant: DeckVariant) => void;
 }): JSX.Element {
   const id = useId();
+  const state = deck === undefined ? undefined : supportOf(deck.id, dealt(deck, variant));
+  // A row's mark is the list the deck is first dealt from; the closed trigger's is the list this
+  // seat deals, which the reader may have switched.
+  const seated =
+    state === undefined
+      ? options
+      : options.map((o) =>
+          o.value === String(deck?.id) ? { ...o, triggerIcon: <SupportGlyph state={state} /> } : o,
+        );
   return (
     <div className="flex flex-col gap-2">
       <label htmlFor={id} id={`${id}-label`} className={LABEL}>
@@ -304,7 +441,7 @@ function Seat({
         id={id}
         labelledBy={`${id}-label`}
         fill
-        options={options}
+        options={seated}
         value={deck === undefined ? "" : String(deck.id)}
         placeholder="Pick a deck"
         onChange={(value) => onDeck(Number(value))}
@@ -325,6 +462,7 @@ function Seat({
           <Segment label="Actual" pressed={variant === "live"} onPress={() => onVariant("live")} />
         </div>
       )}
+      {state !== undefined && <SupportNote state={state} />}
     </div>
   );
 }

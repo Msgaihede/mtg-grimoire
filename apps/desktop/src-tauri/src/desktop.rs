@@ -618,6 +618,7 @@ pub fn run() {
             playtest::playtest_start,
             playtest::playtest_act,
             playtest::playtest_end,
+            playtest::playtest_support,
             // Which stacks the reader hid in a deck — `shelf_folds`' pair, keyed by deck.
             stackhide::hidden_stacks,
             stackhide::set_stack_hidden,
@@ -842,6 +843,8 @@ pub fn run() {
             // The board's one game — the goldfish or the AI — empty until a reader starts one
             // from a deck's goldfish button or from Playtesting.
             app.manage(playtest::PlaytestSlot::default());
+            // What the engine plays of each card the Playtesting setup has asked about.
+            app.manage(playtest::PlaytestSupport::default());
             let handle = app.handle().clone();
             std::thread::Builder::new()
                 .name("startup".to_owned())

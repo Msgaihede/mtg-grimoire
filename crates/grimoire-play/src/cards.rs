@@ -204,32 +204,51 @@ fn engine_layout(layout: &str) -> &str {
     }
 }
 
-/// The faces of one card, parsed, each with what the export keys it by.
-fn faces_of(card: &CardFacts) -> Result<Vec<(String, Value)>, String> {
+/// Whether the engine knows `card` as faces of their own, each an entry of the export.
+fn is_multi(card: &CardFacts) -> bool {
     let layout = card.layout.as_deref().unwrap_or("normal");
-    let multi = card.faces.len() > 1 && MULTI_FACE.contains(&engine_layout(layout));
-    if !multi {
+    card.faces.len() > 1 && MULTI_FACE.contains(&engine_layout(layout))
+}
+
+/// Every face of one card, as phase's oracle parser reads it: one for most cards, each of a
+/// multi-faced card's in Scryfall's order.
+pub(crate) fn parsed_faces(card: &CardFacts) -> Result<Vec<CardFace>, String> {
+    if !is_multi(card) {
         let a = atomic(card, None)?;
-        let face = build_oracle_face(&a, card.oracle_id.clone());
-        return Ok(vec![(face.name.clone(), export_entry(&face, None, None))]);
+        return Ok(vec![build_oracle_face(&a, card.oracle_id.clone())]);
     }
     card.faces
         .iter()
         .enumerate()
         .map(|(index, f)| {
             let a = atomic(card, Some((f, index)))?;
-            let face = build_oracle_face_multi(&a, card.oracle_id.clone());
-            let entry = export_entry(&face, Some(engine_layout(layout)), Some(index));
-            Ok((face.name.clone(), entry))
+            Ok(build_oracle_face_multi(&a, card.oracle_id.clone()))
         })
         .collect()
+}
+
+/// The faces of one card, parsed, each with what the export keys it by.
+fn faces_of(card: &CardFacts) -> Result<Vec<(String, Value)>, String> {
+    let layout = card.layout.as_deref().unwrap_or("normal");
+    let multi = is_multi(card);
+    Ok(parsed_faces(card)?
+        .into_iter()
+        .enumerate()
+        .map(|(index, face)| {
+            let entry = if multi {
+                export_entry(&face, Some(engine_layout(layout)), Some(index))
+            } else {
+                export_entry(&face, None, None)
+            };
+            (face.name.clone(), entry)
+        })
+        .collect())
 }
 
 /// The name the engine knows a card by, which is what a deck list must say: a card of several
 /// faces is known by its front face (`Bala Ged Recovery`, never `… // Bala Ged Sanctuary`).
 pub fn engine_name(card: &CardFacts) -> String {
-    let layout = card.layout.as_deref().unwrap_or("normal");
-    if card.faces.len() > 1 && MULTI_FACE.contains(&engine_layout(layout)) {
+    if is_multi(card) {
         card.faces[0].name.clone()
     } else {
         card.name.clone()

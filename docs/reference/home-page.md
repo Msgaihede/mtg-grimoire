@@ -878,9 +878,12 @@ and only where priced, every printing a wish pins (an any-printing wish names no
 preferred finish is tracked in every finish) and every card on `app_meta.price_watch` — the
 device-local watch list `useHomeLayout` derives from the cards the page's Price movers widgets
 name and sends through `set_price_watch` (at most 500). Such a row is never a holding: the value
-graph reads only `copies > 0`. A card chosen today therefore has history from the next snapshot
-on, and until a window's baseline exists the widget says *no price history for your chosen cards
-yet* rather than counting the table's days.
+graph reads only `copies > 0`. **A changed watch list is snapshotted at once**
+([issue #1080](https://github.com/Msgaihede/mtg-grimoire/issues/1080)) — `price_history::watch`
+— so a card chosen today has history from today, not from the next launch, ingest or feed
+refresh, which on a desktop left open could be days. Until a window's baseline exists the widget
+says *no price history for your chosen cards yet* rather than counting the table's days, and
+names when that window fills (a week for `7d`, thirty days for `30d`, the next day for `all`).
 
 **A mover is a press, and it opens the Price history popup**
 ([issue #515](https://github.com/Msgaihede/mtg-grimoire/issues/515)). `price_history(card_id,

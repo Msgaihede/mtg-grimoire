@@ -1,10 +1,12 @@
 //! Games played on a deck, over phase.rs's rules engine: the reader's deck against the goldfish
-//! (an opponent that does nothing) or against phase's AI, one game either way (`playtest`). The
-//! `Cargo.toml` says what this crate is and why only the desktop links it.
+//! (an opponent that does nothing) or against phase's AI, one game either way (`playtest`), and
+//! what the engine plays of a deck before it (`support`). The `Cargo.toml` says what this crate is
+//! and why only the desktop links it.
 
 pub mod cards;
 mod history;
 pub mod playtest;
+pub mod support;
 mod table;
 pub mod tokens;
 pub mod view;
@@ -13,6 +15,7 @@ pub use cards::{CardFacts, FaceFacts};
 pub use playtest::{
     Difficulty, OpponentDeck, Playtest, PlaytestAction, PlaytestPlayer, PlaytestStep, PlaytestView,
 };
+pub use support::{deck_support, DeckSupport, SupportCache, UnsupportedCard};
 pub use tokens::TokenFacts;
 
 /// The stack every call into the engine runs on. phase's own `.cargo/config.toml` sets
