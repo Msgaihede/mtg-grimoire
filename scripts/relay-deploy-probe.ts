@@ -5,7 +5,7 @@ import type { Probe } from "./deploy-probe.ts";
 //   node scripts/relay-deploy-probe.ts [origin]     # origin: the relay's own address
 //
 // The probes are `docs/reference/hosted-relay-deploy.md`'s step 0, less the two that open a
-// socket: ten requests a stranger could make, each answered before any Durable Object, and each
+// socket: twelve requests a stranger could make, each answered before any Durable Object, and each
 // with the answer this tree's router gives (`relay-deploy-probe.test.ts` asks the router).
 //
 // **What it proves, and what it does not.** That the Worker answers, that the tables its doors
@@ -15,7 +15,7 @@ import type { Probe } from "./deploy-probe.ts";
 // exiting zero, and the version id it prints is in the job's log.
 //
 // **Two addresses since 2026-10-11.** The relay answers at `relay.mtg-grimoire.app` and, for
-// every build compiled before that day, still at its `workers.dev` address. After the ten, one
+// every build compiled before that day, still at its `workers.dev` address. After the twelve, one
 // request is made of the old address (`LEGACY_PROBES`): a deploy that turned it off — a config
 // that lost `workers_dev: true` does, and `wrangler deploy` exits 0 — stops every installed app
 // syncing, and this is what leaves that release a draft. Given an origin of its own, the script
@@ -83,6 +83,28 @@ export const PROBES: Probe[] = [
     says: "that is not an epoch",
   },
   {
+    // The integration's second PR (spec §12). Refused at the credential's shape, before any read,
+    // so it stores nothing and spends nothing but the limiter's count — and a relay without the
+    // route answers 404, which is what this tells apart.
+    name: "the roster route is there, and asks for a credential",
+    method: "POST",
+    path: "/g/abc/roster",
+    body: "{}",
+    status: 401,
+    means: { 404: "the deployed relay predates the roster document" },
+  },
+  {
+    name: "the rendezvous's signing slots have their table",
+    path: `/p/${"0".repeat(32)}/joinsig`,
+    status: 404,
+    // A relay without the slots answers this path a 404 too, the router's `not found` — so it is
+    // `says` that tells the two apart.
+    says: "nothing there",
+    means: {
+      500: "the route is live and the `pairing_slots` table is missing — migration 0001 not applied",
+    },
+  },
+  {
     name: "a page's pre-flight is answered",
     method: "OPTIONS",
     path: "/token",
@@ -117,14 +139,14 @@ export const PROBES: Probe[] = [
 /**
  * What the old address is asked: the pre-flight, which is answered ahead of every limiter and
  * every read, so six attempts of it spend nobody's budget. One request is enough — the address
- * is the same Worker, and the ten above have already said how that Worker answers.
+ * is the same Worker, and the twelve above have already said how that Worker answers.
  */
 export const LEGACY_PROBES: Probe[] = PROBES.filter(
   (probe) => probe.name === "a page's pre-flight is answered",
 );
 
 /**
- * Every sentence about what is wrong: the ten at `origin`, then the one at the old address when
+ * Every sentence about what is wrong: the twelve at `origin`, then the one at the old address when
  * `origin` is the relay's own. Each sentence from the old address names it, because the report's
  * heading names only `origin`.
  */

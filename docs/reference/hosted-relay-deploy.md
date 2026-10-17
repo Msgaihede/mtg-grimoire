@@ -17,7 +17,7 @@
 > wrangler infers `false` beside a route, and `RELAY_BASE_LEGACY` is that address, read by the
 > OAuth callback alone. **Every answer recorded on this page before that day was given at the
 > `workers.dev` address.** The commands below name the new one; either answers them the same.
-> `scripts/relay-deploy-probe.ts` asks the new address step 0's ten and the old one a
+> `scripts/relay-deploy-probe.ts` asks the new address step 0's twelve and the old one a
 > pre-flight, so a deploy that turned the old address off leaves its release a draft. The first
 > deploy of this config needs **Zone → Workers Routes → Edit** on `mtg-grimoire.app` in its token,
 > and **Patreon holds two redirect URIs** — step 3.
@@ -433,6 +433,22 @@ the streamed answer and compaction by length are what every existing device is s
    and `device` is the next thing the refresh door reads. **Pair every body probe with a control
    that differs by one field**, as the fourth does — a refusal read alone may come from an earlier
    check than the one you meant.
+
+   **Two more, for the Discord integration's second PR (the signed roster document, spec
+   `docs/superpowers/specs/2026-10-17-discord-integration-design.md` §12) — written 2026-10-17 and
+   never run against the host**; the answers below are this tree's router's, which
+   `scripts/relay-deploy-probe.ts` asks:
+   ```
+   curl -si "$H/g/abc/roster" -d '{}'
+   curl -si "$H/p/$(printf '0%.0s' {1..32})/joinsig"
+   ```
+   - **`401` on the first** is the route deployed — refused at the credential's shape, before any
+     read, so it stores nothing. **404 `not found`** is a relay without it.
+   - **`404 {"error":"nothing there"}` on the second** is the signing slots deployed with their
+     table, `pairing_slots` (migration `0001`); **404 with plain-text `not found`** is a relay
+     without them, and **500** is the route live and the migration not applied. `rosters`, the
+     migration's other table, has no credential-free tell: every read of it is behind the group's
+     auth.
 
    **Three more pairs, for the browser's half — and what they ask is a header, not a path or a
    body.** Each is a probe and its control, differing by the `Origin` and nothing else; all six are

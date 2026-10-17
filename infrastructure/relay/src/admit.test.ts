@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   admit,
   admitBody,
+  admitRestricted,
   admitToLog,
   bindDevice,
   DEVICE_BINDING,
@@ -10,6 +11,8 @@ import {
   isEnvelope,
   isSig,
   MAX_PUSH_BODY_CHARS,
+  quotaDay,
+  RESTRICTED_PUSHES_PER_DAY,
   SIG_CHARS,
   type Refusal,
 } from "./admit";
@@ -148,7 +151,7 @@ describe("deviceMismatch and bindDevice", () => {
     expect(DEVICE_MISMATCH).toBe("device_mismatch");
   });
 
-  it("only warns in this release: the mismatch is logged as fixed text and nothing is refused", () => {
+  it("only warns by default — every group not signed: logged as fixed text, nothing refused", () => {
     const warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     expect(DEVICE_BINDING).toBe("warn");
@@ -168,7 +171,7 @@ describe("deviceMismatch and bindDevice", () => {
     expect(warned).not.toHaveBeenCalled();
   });
 
-  it("answers the 403 once the mode is refuse — the one change the next release makes", () => {
+  it("answers the 403 when the mode is refuse — a signed group's (`index.ts`'s `bound`)", () => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     expect(code(bindDevice("push", { dev: "desk" }, "phone", "refuse"))).toBe("device_mismatch");
@@ -227,6 +230,26 @@ describe("admit", () => {
     );
     expect(code(admit(envelope({ epoch: 2, hlcMs: future }), 3, NOW))).toBe("stale_epoch");
     expect(code(admit(envelope({ epoch: 4, hlcMs: future }), 3, NOW))).toBe("epoch_ahead");
+  });
+});
+
+describe("admitRestricted", () => {
+  it("stores a restricted device's 64th push of the day and refuses its 65th", () => {
+    expect(RESTRICTED_PUSHES_PER_DAY).toBe(64);
+    expect(admitRestricted(0)).toBeNull();
+    expect(admitRestricted(RESTRICTED_PUSHES_PER_DAY - 1)).toBeNull();
+    expect(admitRestricted(RESTRICTED_PUSHES_PER_DAY)).toEqual({
+      status: 429,
+      code: "restricted_quota",
+      error: expect.any(String) as string,
+    });
+  });
+
+  it("counts by UTC day", () => {
+    expect(quotaDay(Date.UTC(2026, 9, 17, 23, 59, 59, 999))).toBe(
+      quotaDay(Date.UTC(2026, 9, 17, 0, 0)),
+    );
+    expect(quotaDay(Date.UTC(2026, 9, 18))).toBe(quotaDay(Date.UTC(2026, 9, 17)) + 1);
   });
 });
 
@@ -428,8 +451,9 @@ describe("POST /push, signed", () => {
 });
 
 /**
- * **The token's device against the body's, recorded and never refused in this release**
- * (`DEVICE_BINDING`). What is held here is the placement and the pass-through: a mismatch is one
+ * **The token's device against the body's, recorded and never refused in a group that is not
+ * signed** (`DEVICE_BINDING`) — every group here, which has no roster document; a signed group's
+ * refusal is `roster.test.ts`'s. What is held here is the placement and the pass-through: a mismatch is one
  * fixed line in the log and the request reaches its object as it would have; a match and a token
  * with no `dev` say nothing at all.
  */

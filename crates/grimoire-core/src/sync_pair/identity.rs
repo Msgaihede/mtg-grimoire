@@ -48,7 +48,14 @@ struct Stored {
 /// says NULL is a build from before the field — level 0, which signs nothing. Raise it when a
 /// build learns something a group may come to require of every member, never for a change an
 /// old build can safely ignore.
-pub const SIG_PROTO: i64 = 1;
+///
+/// **2 verifies rosters** (the Discord spec's PR 2): this build reads, checks and publishes the
+/// roster document ([`super::roster`]), follows a group into signed mode on a verified one,
+/// refuses a restricted device's ops and a sealer once restricted, and carries its signing key
+/// across a pairing (`joinsig`/`offersig`). It is the level PR 3's gate asks of **every** member
+/// before a restricted device may join, and this device writes it into its own entry of every
+/// document it publishes.
+pub const SIG_PROTO: i64 = 2;
 
 /// The group this device is in, if it is in one.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,8 +82,9 @@ pub struct Device {
     #[serde(skip)]
     pub public_key: [u8; 32],
     /// The peer's Ed25519 public key, which its envelopes are verified under
-    /// (`client::evaluate`). **`None` is every peer today**: the key crosses only in the
-    /// pairing slots the Discord spec's PR 2 adds, and a peer with none is accepted unsigned.
+    /// (`client::evaluate`). Filed by a pairing's sealed slot or a verified roster document;
+    /// `None` for a peer an older build paired and that has not amended itself in, which is
+    /// accepted unsigned outside signed mode.
     #[serde(skip)]
     pub sign_public: Option<[u8; 32]>,
     /// What the peer may write: `NULL` is a full member, which every device paired before
@@ -161,6 +169,12 @@ pub const NOT_IN_A_GROUP: &str = "This device is not in a pairing group.";
 
 /// What [`plan_rotation`] says when the id names nobody on the roster.
 const NOT_ON_THE_ROSTER: &str = "That device is not in this pairing group.";
+
+/// What every plan says on a device the group restricted (the Discord spec's §5: only `full`
+/// devices plan rotations, departures, joins and removals). **A sentence, not a silent no-op**: a
+/// restricted device is a bot, and a bot that asked is a bug to hear about.
+pub const RESTRICTED_CANNOT_PLAN: &str =
+    "This device may only read this pairing group, so it cannot change who is in it.";
 
 /// How many devices one group may hold — spec §4.
 ///
@@ -395,6 +409,18 @@ pub fn signing_key(conn: &Connection) -> rusqlite::Result<Option<SigningKeypair>
     signing_or_mint(conn, row.signing).map(Some)
 }
 
+/// This device's signing key **if it holds one, minting nothing** — what a reader that promises
+/// to write nothing asks (`roster::trust_parts`, judging a document it was handed).
+pub fn signing_key_if_held(conn: &Connection) -> rusqlite::Result<Option<SigningKeypair>> {
+    Ok(read(conn)?.and_then(|row| row.signing))
+}
+
+/// This device's id and X25519 public key, or `None` before it has an identity — read, never
+/// minted, for the same promise.
+pub fn public_identity(conn: &Connection) -> rusqlite::Result<Option<(String, [u8; 32])>> {
+    Ok(read(conn)?.map(|row| (row.device_id, row.keypair.public)))
+}
+
 /// The group this device is in, or `None`.
 pub fn group(conn: &Connection) -> rusqlite::Result<Option<Group>> {
     conn.query_row(
@@ -440,6 +466,7 @@ pub fn create_group(conn: &Connection, me: &Identity) -> rusqlite::Result<Group>
 pub fn found_group(conn: &Connection, g: &Group, me: &Identity) -> rusqlite::Result<()> {
     forget_superseded(conn)?;
     forget_log_position(conn)?;
+    super::roster::forget_group(conn)?;
     write_group(conn, g)?;
     // Capture turns on here: a new generation (the baseline claim design §4).
     emission::start_logging(conn)?;
@@ -486,6 +513,9 @@ pub fn join_group(
     }
     if held.is_none_or(|g| g.group_id != group_id) {
         forget_log_position(conn)?;
+        // Another group's rosters say nothing about this one — and, like the cursor, a re-pair
+        // into the same group keeps them.
+        super::roster::forget_group(conn)?;
     }
     write_group(
         conn,
@@ -571,13 +601,10 @@ pub fn sign_public_of(conn: &Connection, device_id: &str) -> rusqlite::Result<Op
     .map(|row| row.flatten().map(bytes32))
 }
 
-/// File a peer's signing key, capability and protocol level on its roster row.
-///
-/// ⚠️ **Tests only until the Discord spec's PR 2**, which carries these three across the pairing
-/// ceremony (`joinsig`/`offersig`) and the signed roster document. Nothing a shipped build does
-/// today may write them: a key filed by anything but a verified channel is a key a forger chose.
-/// [`add_device`] leaves all three as they are on a re-pair, so a later ceremony that carries
-/// them is the only way they change.
+/// File a peer's signing key, capability and protocol level on its roster row, all three at
+/// once — **a test's fixture**. What ships files them through two verified channels and no
+/// other: a pairing's sealed slots ([`file_sign_key`]) and an accepted roster document
+/// (`roster::accept`). A key filed by anything else is a key a forger chose.
 #[cfg(test)]
 pub(crate) fn file_signing(
     conn: &Connection,
@@ -594,7 +621,32 @@ pub(crate) fn file_signing(
     Ok(())
 }
 
+/// File the signing key and protocol level a peer sent through a pairing's sealed slot —
+/// `joinsig` on the initiator, `offersig` on the joiner (`pairing::poll`). **Its capability is
+/// not touched**: a pairing says nothing about what a device may do, and a restriction on file —
+/// or in `roster::RESTRICTED_EVER` — outlives a re-pair.
+///
+/// Sealed under the pair key the six digits authenticated, so this is a key the peer chose and
+/// nobody between the two devices could swap. [`add_device`] leaves all three v66 columns as they
+/// are on a re-pair, so a later ceremony that carries them is the only way they change.
+pub(crate) fn file_sign_key(
+    conn: &Connection,
+    device_id: &str,
+    sign_public: &[u8; 32],
+    proto: Option<i64>,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE sync_devices SET sign_public = ?2, proto = ?3 WHERE device_id = ?1",
+        params![device_id, sign_public.as_slice(), proto],
+    )?;
+    Ok(())
+}
+
 /// Put a device on the roster, or update the key and name of one already there.
+///
+/// **A device put back here is a device paired back**, behind six digits, so any removal this
+/// device recorded for it is forgotten (`roster::forget_removal`) — a later roster document may
+/// name it again.
 pub fn add_device(
     conn: &Connection,
     device_id: &str,
@@ -617,6 +669,7 @@ pub fn add_device(
               revoked_at = NULL",
         params![device_id, public_key.as_slice(), name],
     )?;
+    super::roster::forget_removal(conn, device_id)?;
     Ok(())
 }
 
@@ -889,6 +942,12 @@ fn plan_excluding(
     let Some(me) = read(conn).map_err(|e| e.to_string())? else {
         return Err(NOT_IN_A_GROUP.to_owned());
     };
+    // **Before anything is read or sealed** — and for every entrance, a departure included: a
+    // restricted device's departure is still a local one (`pairing::leave_group_now` leaves
+    // whatever the plan answers), it simply speaks for nobody on the way out.
+    if super::roster::is_restricted(conn, &me.device_id).map_err(|e| e.to_string())? {
+        return Err(RESTRICTED_CANNOT_PLAN.to_owned());
+    }
     let Some(current) = group(conn).map_err(|e| e.to_string())? else {
         return Err(NOT_IN_A_GROUP.to_owned());
     };
@@ -1261,6 +1320,10 @@ pub fn commit_rotation(
         params![removing],
     )
     .map_err(|e| e.to_string())?;
+    // **And remembered**, so a roster document from this epoch or before — the walk hands them
+    // back in order — can never put the row back (`roster::apply_members`).
+    super::roster::record_removal(&tx, removing, rotation.group.epoch)
+        .map_err(|e| e.to_string())?;
     // **After the delete, not before**, which is what makes the `WHERE` clause enough: the
     // departed row is gone, so re-arming cannot hand a full baseline to a peer that is never
     // going to answer. `revoked_at IS NULL` is still read because a database written by an
@@ -1422,6 +1485,26 @@ fn adopt(
     let holes: Vec<String> = (1..=stays.len()).map(|n| format!("?{n}")).collect();
     match sweep {
         Sweep::Prune => {
+            // **Each row the sweep deletes is remembered as removed at this epoch** first, for
+            // [`commit_rotation`]'s reason: a roster document from before it still names them.
+            let gone: Vec<String> = {
+                let mut stmt = tx
+                    .prepare(&format!(
+                        "SELECT device_id FROM sync_devices WHERE device_id NOT IN ({})",
+                        holes.join(", ")
+                    ))
+                    .map_err(|e| e.to_string())?;
+                let rows = stmt
+                    .query_map(rusqlite::params_from_iter(stays.iter()), |r| {
+                        r.get::<_, String>(0)
+                    })
+                    .map_err(|e| e.to_string())?;
+                rows.collect::<rusqlite::Result<_>>()
+                    .map_err(|e| e.to_string())?
+            };
+            for device in &gone {
+                super::roster::record_removal(&tx, device, epoch).map_err(|e| e.to_string())?;
+            }
             tx.execute(
                 &format!(
                     "DELETE FROM sync_devices WHERE device_id NOT IN ({})",
@@ -1517,6 +1600,9 @@ pub fn leave_group(conn: &Connection) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     forget_superseded(&tx).map_err(|e| e.to_string())?;
     forget_log_position(&tx).map_err(|e| e.to_string())?;
+    // The group's rosters go with the group — its mode, its chain, its removals — and
+    // `roster::RESTRICTED_EVER` does not: no path forgets who was once restricted.
+    super::roster::forget_group(&tx).map_err(|e| e.to_string())?;
     emission::keep_logging_mark(&tx).map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())
 }
@@ -2146,7 +2232,12 @@ mod tests {
                 continue;
             }
             let owned = if table == "sync_state" {
-                format!(" WHERE NOT (key GLOB '{SUPERSEDED}*' OR key = '{LAST_MANIFEST}')")
+                // The removal's own bookkeeping: the keys it supersedes, the manifest it
+                // publishes, and the removal it remembers for the roster document's sake.
+                format!(
+                    " WHERE NOT (key GLOB '{SUPERSEDED}*' OR key = '{LAST_MANIFEST}' OR key = '{}')",
+                    crate::sync_pair::roster::ROSTER_REMOVED
+                )
             } else {
                 String::new()
             };

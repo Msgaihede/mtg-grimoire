@@ -940,9 +940,10 @@ fn the_relay_is_asked_with_two_headers_and_no_other() {
         allowed, set,
         "the relay's pre-flight allows exactly the headers the engine sets"
     );
-    // Seven requests carry one or both; `GET /p/{rv}/{slot}` carries neither and costs no
-    // pre-flight at all. Counted so a call site that lost its header is seen here too.
-    assert_eq!(calls, 10, "the header calls in the two files");
+    // Ten requests carry one or both — the Discord spec's PR 2 added the quiet rendezvous post,
+    // the joiner's quiet `/keys` and the roster amendment; `GET /p/{rv}/{slot}` carries neither
+    // and costs no pre-flight at all. Counted so a call site that lost its header is seen here too.
+    assert_eq!(calls, 14, "the header calls in the two files");
 }
 
 /// Drive a whole round trip against a relay where **exactly one** of the three sync routes
@@ -6251,3 +6252,11 @@ mod paged;
 
 #[cfg(test)]
 mod signed;
+
+// ---------------------------------------------------------------------------------------
+// The roster document — the Discord spec's PR 2. A file of its own: `tests/rosters.rs`, gated
+// again for `paged`'s reason above.
+// ---------------------------------------------------------------------------------------
+
+#[cfg(test)]
+mod rosters;

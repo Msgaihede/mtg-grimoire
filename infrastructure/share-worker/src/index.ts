@@ -1,12 +1,12 @@
 import { handleSnapshot, handleUpload } from "./blob";
-import { authorised, json, type Env } from "./env";
+import { json, refused, type Env } from "./env";
 import { sweepLapsed } from "./lapse";
 import { handleShell, notFound } from "./page";
 import { handleCreate, handleList, handleRevoke } from "./shares";
 
 /**
  * The share Worker's entry: a router and the bearer gate. Every decision about a share is in
- * `shares.ts`; every decision about who may take one is in `env.ts`'s `authorised`.
+ * `shares.ts`; every decision about who may take one is in `env.ts`'s `refused`.
  *
  * **The whole entitlement asymmetry is which side of the gate a route stands on** (spec §5.4).
  * Publishing, uploading, listing and revoking need a token, which needs a membership. Viewing —
@@ -148,7 +148,8 @@ export default {
     // request that costs nothing to check, and an HMAC verify is not free.
     if (!expected.includes(request.method)) return methodNotAllowed(expected.join(", "));
 
-    if (!(await authorised(request, env, group))) return json({ error: "unauthorized" }, 401);
+    const refusal = await refused(request, env, group);
+    if (refusal !== null) return refusal;
 
     // One clock read for the whole request, passed down rather than taken again in each handler:
     // a row whose `created_at` and `updated_at` disagree by a millisecond is a row that looks

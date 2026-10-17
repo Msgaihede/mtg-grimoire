@@ -30,14 +30,40 @@
  * relay's own routes do not care — a removed device can push nothing at an epoch it holds no key
  * for — but a share is plaintext, so the share Worker checks `dev` against the group's newest
  * manifest. **Optional because a token minted by an older relay has none**, and such a token lives
- * at most a day; nothing in the relay reads it.
+ * at most a day. The relay reads it to bind a push's or an ack's body to the device it names
+ * (`admit.ts`'s `bindDevice`).
+ *
+ * **`cap` is what the group's newest signed roster document says the device may do, when that is
+ * not `full`** — `"read"` for the Discord bot's first release (issue #1096, spec §12). Minted by
+ * `claim.ts`'s `grantFor` from `roster.ts`'s `capOf`, and **absent on every token of a full
+ * device**, so a full device's token is the bytes it always was and every token minted before this
+ * existed reads as full. Read by three Workers: the relay keeps a restricted device's pushes under
+ * a daily cap, and the share Worker and the scan inbox refuse a restricted device outright
+ * ([`isRestricted`]). An open set of strings, not a closed union: a `cap` this build does not know
+ * is restricted, which is the direction to fail in.
  */
 export interface Claims {
   sub: string;
   grp: string;
   exp: number;
   dev?: string;
+  cap?: string;
 }
+
+/**
+ * Is this token a restricted device's? **Present and not `full`** — absent is every full device's
+ * token and every token minted before `cap` existed (spec §12).
+ */
+export function isRestricted(claims: Pick<Claims, "cap">): boolean {
+  return claims.cap !== undefined && claims.cap !== "full";
+}
+
+/**
+ * The code the share Worker and the scan inbox refuse a restricted device's token with — a 403,
+ * because the token is good and its device may not do this. Here, beside the claim, so the three
+ * Workers that know the claim spell its refusal once.
+ */
+export const RESTRICTED_DEVICE = "restricted_device";
 
 /**
  * Twenty-four hours. It is the revocation window, not a session length: a membership cancelled
@@ -161,16 +187,22 @@ export async function verify(token: string, secret: string, nowMs: number): Prom
   }
   if (typeof parsed !== "object" || parsed === null) return null;
 
-  const { sub, grp, exp, dev } = parsed as Partial<Claims>;
+  const { sub, grp, exp, dev, cap } = parsed as Partial<Claims>;
   if (typeof sub !== "string" || typeof grp !== "string") return null;
   if (typeof exp !== "number" || !Number.isFinite(exp)) return null;
   // Absent is an older relay's token; present and not a string is a shape no minter writes.
   if (dev !== undefined && typeof dev !== "string") return null;
+  // The same for `cap`, and refusing is the safe side: a `cap` that is not a string cannot be
+  // compared with `full`, and a token whose restriction cannot be read must not pass as full.
+  if (cap !== undefined && typeof cap !== "string") return null;
   // `<=` and not `<`: the instant it names is the first instant it is no longer good for.
   if (exp <= nowMs) return null;
 
   // Rebuilt from the checked fields rather than returned as-is, so a caller can never be handed a
-  // property this function did not check — and `dev` only when it was there, so a token without
-  // one reads back exactly as it was minted.
-  return dev === undefined ? { sub, grp, exp } : { sub, grp, exp, dev };
+  // property this function did not check — and `dev` and `cap` only when they were there, so a
+  // token without them reads back exactly as it was minted.
+  const claims: Claims = { sub, grp, exp };
+  if (dev !== undefined) claims.dev = dev;
+  if (cap !== undefined) claims.cap = cap;
+  return claims;
 }

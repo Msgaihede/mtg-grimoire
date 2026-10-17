@@ -1,4 +1,13 @@
-import { admit, admitBody, bindDevice, isEnvelope, type Refusal } from "./admit";
+import {
+  admit,
+  admitBody,
+  bindDevice,
+  DEVICE_BINDING,
+  deviceMismatch,
+  isEnvelope,
+  RESTRICTED_HEADER,
+  type Refusal,
+} from "./admit";
 import { Group } from "./group";
 import {
   GROUP_SEGMENT,
@@ -14,9 +23,10 @@ import { handlePair } from "./pair";
 import { required } from "./patreon";
 import { limited, type LimitedRoute, type Limiters } from "./ratelimit";
 import { handleRendezvousGet, handleRendezvousPut, sweepRendezvous } from "./rendezvous";
-import { handleKeys, handleRotate } from "./rotate";
+import { rosterMode } from "./roster";
+import { handleKeys, handleRoster, handleRotate } from "./rotate";
 import { bearerTicket } from "./ticket";
-import { verify, type Claims } from "./token";
+import { isRestricted, verify, type Claims } from "./token";
 
 /**
  * The Worker entry: a router, an authentication gate, a push's admission, and the hourly
@@ -33,8 +43,8 @@ import { verify, type Claims } from "./token";
  * relay they can also spend somebody else's Durable Object requests, which is the line that
  * meters (spec §8).
  *
- * **Two of the `/g/…` routes stand ahead of that gate, and the same sentence is why.** `/rotate`
- * and `/keys` decide every refusal out of D1, and the one Durable Object request either makes is an
+ * **Three of the `/g/…` routes stand ahead of that gate, and the same sentence is why.** `/rotate`,
+ * `/roster` and `/keys` decide every refusal out of D1, and the one Durable Object request either makes is an
  * *accepted* rotation posting its roster — which only a caller holding the group's current auth
  * can cause, and that auth mints a token at `/token`'s group door anyway — so nothing they can be
  * made to spend is on the metered line. And `/keys` in particular has to answer a device whose
@@ -48,15 +58,22 @@ import { verify, type Claims } from "./token";
  * request the gate exists to protect. The object keeps only the check it alone can make — whether
  * the group's log has room. `admitPush` below is the order.
  *
- * **A push and an ack are held to the token's device here too, and in this release that refuses
- * nothing.** The token's `dev` (issue #548) is compared with the device the body names — the
- * envelope's on a push, the ack's on an ack — and a mismatch is logged and passed on
- * (`admit.ts`'s `DEVICE_BINDING`, spec §2 F4). It stands here and not in the object for the
- * reason the rest of a push's admission does: the release that turns it into a 403 should not
- * have spent a Durable Object request on what it refuses.
+ * **A push and an ack are held to the token's device here too.** The token's `dev` (issue #548) is
+ * compared with the device the body names — the envelope's on a push, the ack's on an ack — and a
+ * mismatch is **refused `403 device_mismatch` in a group whose newest roster document is signed,
+ * and logged and passed on in every other** (`admit.ts`'s `DEVICE_BINDING`, spec §2 F4 and §12).
+ * Which of the two costs one D1 read, **made only for a mismatch** (`bound`), so an honest push or
+ * ack — every one a released client sends — reads nothing it did not read before. It stands here
+ * and not in the object for the reason the rest of a push's admission does: a refusal should not
+ * have spent a Durable Object request.
  *
- * **The five routes a caller reaches with no token are rate limited, and the bill is why again.**
- * `/claim`, `/token`, `/rotate`, `/keys` and the rendezvous each read D1 before they can refuse
+ * **A restricted device's push is counted against a daily cap** (`RESTRICTED_PUSHES_PER_DAY`):
+ * the token's `cap` says the device is restricted, which costs no read at all, and the Worker
+ * names the device to the object in a header only it can set. The count is the object's, since
+ * the object is where the push is stored.
+ *
+ * **The six routes a caller reaches with no token are rate limited, and the bill is why again.**
+ * `/claim`, `/token`, `/rotate`, `/roster`, `/keys` and the rendezvous each read D1 before they can refuse
  * anything, so the argument above — junk costs an invocation and nothing else — does not hold for
  * them. `ratelimit.ts` refuses a caller past its limit ahead of that read, after the method check
  * so a 405 spends none of anybody's budget. The routes behind the gate take no limit: an HMAC over
@@ -116,15 +133,28 @@ export interface Env extends Limiters, CorsEnv {
  * apply the same rule to the group id in a `/claim` body — see its doc for why the shared
  * string lives on that side.
  *
- * **`drop` and `roster` are absent on purpose**, and adding either would hand a device a lever
- * over the whole group's log. They are the object's internal paths: only this Worker builds them
- * — `claim.ts` when a membership ends, `rotate.ts` when a rotation is recorded — and a request
- * for one from outside is a 404 here like any other path that is not a route.
+ * **`drop` is absent on purpose**, and adding it would hand a device a lever over the whole
+ * group's log. It is the object's internal path: only this Worker builds it — `claim.ts` when a
+ * membership ends — and a request for it from outside is a 404 here like any other path that is
+ * not a route.
+ *
+ * ⚠️ **`roster` is on the pattern since the integration's second PR, and it is not the object's
+ * `roster`.** The object has an internal `/g/{group}/roster` too — the device list `rotate.ts`
+ * posts once a rotation is recorded — and this paragraph used to say that path was absent here
+ * for `drop`'s reason. The public `POST /g/{group}/roster` is a different request — a roster
+ * *document* amendment, stored in D1 (`rotate.ts`'s `handleRoster`) — and `route` answers it in
+ * the Worker, ahead of the gate, and **never forwards it**: the only request that reaches the
+ * object's `roster` is still the one `rotate.ts` builds. `rotate.test.ts`'s router tests hold
+ * that.
  */
-const ROUTE = new RegExp(`^/g/(${GROUP_SEGMENT})/(push|pull|ack|ws|rotate|keys)$`);
+const ROUTE = new RegExp(`^/g/(${GROUP_SEGMENT})/(push|pull|ack|ws|rotate|roster|keys)$`);
 
-/** `/p/{rv}/{slot}` — 32 hex characters, and one of exactly two slots. */
-const RENDEZVOUS = /^\/p\/([0-9a-f]{32})\/(offer|join)$/;
+/**
+ * `/p/{rv}/{slot}` — 32 hex characters, and one of four slots: the two blobs of the X25519
+ * handshake, and since the integration's second PR (spec §4, *Pairing*) the two that carry each
+ * side's signing key, `offersig` and `joinsig`.
+ */
+const RENDEZVOUS = /^\/p\/([0-9a-f]{32})\/(offer|join|offersig|joinsig)$/;
 
 const METHOD: Record<string, string> = {
   push: "POST",
@@ -132,6 +162,7 @@ const METHOD: Record<string, string> = {
   ack: "POST",
   ws: "GET",
   rotate: "POST",
+  roster: "POST",
   keys: "GET",
 };
 
@@ -254,14 +285,20 @@ async function currentEpoch(env: Env, group: string): Promise<number | null> {
  * 2. the body's text past the cap → 413 `too_large`, for a body that declared no length;
  * 3. not JSON → 400, and not an envelope → 400, in the words the object has always used — an
  *    envelope with a `sig` that is not a well-formed one among them (`isEnvelope`);
- * 4. the envelope's `device` against the token's `dev` (`bindDevice`) — **recorded and passed on
- *    in this release, never refused**; see `admit.ts`'s `DEVICE_BINDING`. Ahead of the D1 read,
- *    so that the release that does refuse it spends no read on a push it is about to turn away;
+ * 4. the envelope's `device` against the token's `dev` (`bound`) — **`403 device_mismatch` in a
+ *    signed group, recorded and passed on in any other**; see `admit.ts`'s `DEVICE_BINDING`.
+ *    Ahead of the epoch's D1 read, so a refused push spends no read beyond the one that decided
+ *    its refusal;
  * 5. `admit`'s four: `sealed` too large (413), the epoch behind (409) or ahead (422), the clock
  *    ahead (422).
  *
+ * Then a restricted device's push (`isRestricted`, off the token) is forwarded with the device
+ * named in `RESTRICTED_HEADER`, for the object's daily count — **`429 restricted_quota`** is the
+ * object's to answer, since the count is its state.
+ *
  * **The forwarded request is built from the text rather than passed through** (`forwarded`),
- * because reading the body consumed the original's stream.
+ * because reading the body consumed the original's stream — and because a rebuilt request carries
+ * no header the client sent, which is what lets the object trust `RESTRICTED_HEADER`.
  */
 async function admitPush(
   request: Request,
@@ -284,19 +321,46 @@ async function admitPush(
   }
   if (!isEnvelope(envelope)) return json({ error: "malformed envelope" }, 400);
 
-  const unbound = bindDevice("push", claims, envelope.device);
+  const unbound = await bound(env, group, "push", claims, envelope.device);
   if (unbound) return refuse(unbound);
 
   const refusal = admit(envelope, await currentEpoch(env, group), Date.now());
   if (refusal) return refuse(refusal);
 
-  return forwarded(request, text);
+  // `dev` when the token names one, which every restricted token does — `grantFor` mints `cap`
+  // only beside `dev` — and the envelope's device otherwise, which the binding above has held to
+  // the token's in every group that can hold a restricted device.
+  return forwarded(request, text, isRestricted(claims) ? (claims.dev ?? envelope.device) : null);
+}
+
+/**
+ * The device binding for one push or ack: `null` to go on, or the refusal — `bindDevice` under the
+ * mode the group is in.
+ *
+ * **A match reads nothing**, and that is every request an honest client sends: `deviceMismatch`
+ * is a comparison of two strings already in memory. **A mismatch reads the group's newest roster
+ * document** (`rosterMode`, one point read on `rosters`' primary key) and is refused if it is
+ * signed — or straight away, with no read, if the token is itself a restricted device's, since a
+ * `cap` is minted only from a signed document and the latch means the group is signed still.
+ * Every other mismatch is `DEVICE_BINDING`'s, which logs it and lets it pass.
+ */
+async function bound(
+  env: Env,
+  group: string,
+  route: "push" | "ack",
+  claims: Claims,
+  device: string,
+): Promise<Refusal | null> {
+  if (deviceMismatch(claims, device) === null) return null;
+  const signed = isRestricted(claims) || (await rosterMode(env, group)) === "signed";
+  return bindDevice(route, claims, device, signed ? "refuse" : DEVICE_BINDING);
 }
 
 /**
  * An ack, held to the token's device before its object: the `Request` to forward, or the
- * `Response` that refuses it — **and in this release it is always the request** (`admit.ts`'s
- * `DEVICE_BINDING`): a body whose `device` is not the token's `dev` is recorded and passed on.
+ * `Response` that refuses it — **`403 device_mismatch` for a body whose `device` is not the token's
+ * `dev` in a signed group**, and in any other the request, the mismatch recorded and passed on
+ * (`bound`, `admit.ts`'s `DEVICE_BINDING`).
  *
  * Why an ack is bound at all is the same field doing the damage: the object stores the cursor of
  * whatever `device` the body names, and that cursor is the device's place on the compaction
@@ -309,7 +373,12 @@ async function admitPush(
  * string `device` has no device to compare. Like a push, a forwarded body is rebuilt from the text
  * that was read, because reading it consumed the original's stream.
  */
-async function admitAck(request: Request, claims: Claims): Promise<Request | Response> {
+async function admitAck(
+  request: Request,
+  env: Env,
+  group: string,
+  claims: Claims,
+): Promise<Request | Response> {
   if (claims.dev === undefined) return request;
 
   const text = await request.text();
@@ -320,23 +389,23 @@ async function admitAck(request: Request, claims: Claims): Promise<Request | Res
     device = undefined;
   }
   if (typeof device === "string") {
-    const unbound = bindDevice("ack", claims, device);
+    const unbound = await bound(env, group, "ack", claims, device);
     if (unbound) return refuse(unbound);
   }
-  return forwarded(request, text);
+  return forwarded(request, text, null);
 }
 
 /**
- * A POST rebuilt from the body text the Worker already read, with only a content type: the
- * object reads no header of a push or an ack, and copying the original's `Content-Length` onto a
- * re-encoded body is a length the runtime could find disagreeing with the bytes it is sent.
+ * A POST rebuilt from the body text the Worker already read, with only a content type — and, for a
+ * restricted device's push, `RESTRICTED_HEADER` naming it. The object reads no other header of a
+ * push or an ack, and copying the original's `Content-Length` onto a re-encoded body is a length
+ * the runtime could find disagreeing with the bytes it is sent. **Nothing the client sent is
+ * copied**, which is what makes the one header the Worker adds one the object can believe.
  */
-function forwarded(request: Request, text: string): Request {
-  return new Request(request.url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: text,
-  });
+function forwarded(request: Request, text: string, restricted: string | null): Request {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (restricted !== null) headers[RESTRICTED_HEADER] = restricted;
+  return new Request(request.url, { method: "POST", headers, body: text });
 }
 
 /**
@@ -376,7 +445,7 @@ async function route(request: Request, env: Env, url: URL): Promise<Response> {
   const expected = METHOD[action];
   if (request.method !== expected) return methodNotAllowed(expected);
 
-  // **Ahead of the bearer gate and never behind it, and that is the whole point of these two
+  // **Ahead of the bearer gate and never behind it, and that is the whole point of these
   // routes.** A device that has just been rotated away from cannot mint a token — its auth is
   // stale — so a `/keys` behind the gate would refuse exactly the caller it exists to serve.
   // They carry their own credential and refuse out of D1; the one Durable Object request either
@@ -385,6 +454,11 @@ async function route(request: Request, env: Env, url: URL): Promise<Response> {
   // cost is a D1 read per request from anyone, which is what the limit in front of each bounds.
   if (action === "rotate") {
     return (await limited(request, env, "rotate")) ?? handleRotate(request, env, group);
+  }
+  // `/roster` takes `/rotate`'s door — the group's current auth — and so its place, and it
+  // never reaches the object: the object's own `roster` path is reached only by `rotate.ts`.
+  if (action === "roster") {
+    return (await limited(request, env, "roster")) ?? handleRoster(request, env, group);
   }
   if (action === "keys") {
     return (await limited(request, env, "keys")) ?? handleKeys(request, url, env, group);
@@ -441,7 +515,7 @@ async function route(request: Request, env: Env, url: URL): Promise<Response> {
     const admitted =
       action === "push"
         ? await admitPush(request, env, group, claims)
-        : await admitAck(request, claims);
+        : await admitAck(request, env, group, claims);
     if (admitted instanceof Response) return admitted;
     forward = admitted;
   }
