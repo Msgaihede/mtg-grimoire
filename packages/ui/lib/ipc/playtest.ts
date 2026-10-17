@@ -251,6 +251,14 @@ export interface PlaytestStackItem {
   cardId: string | null;
   seat: PlaytestPlayer;
   ability: boolean;
+  /**
+   * The cards it targets that the table shows — a permanent, a card in a graveyard, in exile or in
+   * the command zone, another spell on the stack — in the order chosen: the board's targeting
+   * arrows. A target in a hand or a library is never sent.
+   */
+  targets: number[];
+  /** The players it targets. */
+  targetPlayers: PlaytestPlayer[];
 }
 
 /** Everything the board can ask of a game. `id` is a {@link GameCard.id} from the current view. */

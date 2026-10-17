@@ -1,19 +1,20 @@
 /**
- * Combat drawn as arrows — the geometry, with nothing drawn: which arrows the combat makes, and
- * the curve each one takes between two boxes on the board.
+ * Combat and targets drawn as arrows — the geometry, with nothing drawn: which arrows the combat
+ * and the stack make, and the curve each one takes between two boxes on the board.
  *
  * **An arrow joins two things the board has already drawn** (`Anchor`): a card on a table, found
- * by the `data-point` its pile carries, or a player's life plate (`data-plate`, the player's
- * name: `you`, `opponent`, `opponent2`, `opponent3`). An attacker points at the card it attacks
- * or the plate of the player it attacks, and a blocker points at the attacker it blocks.
- * `CombatArrows` measures the anchors from the DOM; everything here is a pure function of the
- * boxes, so it is tested without one.
+ * by the `data-point` its pile carries, a card on the stack (`data-stack`, its stack item's id),
+ * or a player's life plate (`data-plate`, the player's name: `you`, `opponent`, `opponent2`,
+ * `opponent3`). An attacker points at the card it attacks or the plate of the player it attacks,
+ * a blocker points at the attacker it blocks, and a spell or ability on the stack points at each
+ * thing it targets (issue #1071). `BoardArrows` measures the anchors from the DOM; everything here
+ * is a pure function of the boxes, so it is tested without one.
  */
 import type { PlaytestPlayer, PlaytestView } from "@/lib/ipc";
 import { attacksOf, blocksOf, seatOf, type Picks } from "./combat";
 
 /** Something on the board an arrow or a pop is drawn at. */
-export type Anchor = { card: number } | { plate: PlaytestPlayer };
+export type Anchor = { card: number } | { stack: number } | { plate: PlaytestPlayer };
 
 /** A box on the board, in px from the board's own corner. */
 export interface Box {
@@ -33,8 +34,11 @@ export interface ArrowSpec {
   key: string;
   from: Anchor;
   to: Anchor;
-  /** Whose attack it draws — the reader's, or any opponent's — or a block. */
-  tone: "you" | "opponent" | "block";
+  /**
+   * Whose attack it draws — the reader's, or any opponent's — or a block; or whose spell or
+   * ability on the stack it is that targets (`targetYou`, `targetOpponent`).
+   */
+  tone: "you" | "opponent" | "block" | "targetYou" | "targetOpponent";
 }
 
 /**
@@ -71,6 +75,38 @@ export function combatArrows(view: PlaytestView, picks: Picks): ArrowSpec[] {
       to: { card: b.attacker },
       tone: "block",
     });
+  }
+  return out;
+}
+
+/**
+ * The arrows the stack makes: from each spell or ability on it to each thing it targets — a card
+ * on a table, another spell on the stack (a counterspell's), or a player's plate — in its
+ * controller's colour. Every target gets its arrow; one the board does not draw (an item below the
+ * stack column's first few, a card in a pile under its top) has no box, so `BoardArrows` leaves
+ * that arrow out.
+ */
+export function targetArrows(view: PlaytestView): ArrowSpec[] {
+  const out: ArrowSpec[] = [];
+  const onStack = new Set(view.stack.map((item) => item.id));
+  for (const item of view.stack) {
+    const tone = item.seat === "you" ? "targetYou" : "targetOpponent";
+    for (const target of item.targets) {
+      out.push({
+        key: `target-${item.id}-${target}`,
+        from: { stack: item.id },
+        to: onStack.has(target) ? { stack: target } : { card: target },
+        tone,
+      });
+    }
+    for (const player of item.targetPlayers) {
+      out.push({
+        key: `target-${item.id}-${player}`,
+        from: { stack: item.id },
+        to: { plate: player },
+        tone,
+      });
+    }
   }
   return out;
 }
@@ -133,11 +169,12 @@ export function arrowPath(from: Box, to: Box, { bend = 0.15, gap = 4 } = {}): Ar
 }
 
 /** The selector an anchor's element is found by. A card is looked for on the two tables only,
- *  so a stack chip or a hand card with the same id is never the one an arrow points at. */
+ *  so a stack chip or a hand card with the same id is never the one an arrow points at; a stack
+ *  item by its own `data-stack`. */
 export function anchorSelector(anchor: Anchor): string {
-  return "card" in anchor
-    ? `[data-table] [data-point="${anchor.card}"]`
-    : `[data-plate="${anchor.plate}"]`;
+  if ("card" in anchor) return `[data-table] [data-point="${anchor.card}"]`;
+  if ("stack" in anchor) return `[data-stack="${anchor.stack}"]`;
+  return `[data-plate="${anchor.plate}"]`;
 }
 
 /** An anchor's box on the board, or `null` when it is not drawn. */

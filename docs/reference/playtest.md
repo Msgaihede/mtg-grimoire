@@ -397,6 +397,12 @@ planeswalker's or a battle's id, or `null` for the opponent. In the attack stage
 the step's aggregate list. The combat view's `attacks` give every attacker's target, both seats',
 so the board can draw arrows.
 
+**A stack item names its targets** (issue #1071). Each `PlaytestStackItem` carries `targets`, the
+ids of the cards it targets that the table shows (a permanent, a card in a graveyard, in exile or in
+the command zone, another spell on the stack), and `targetPlayers`. They are read from the entry's
+`ResolvedAbility` and its `sub_ability` / `else_ability` chain, and from an equip's creature
+(`stack_targets`); a target in a hand or a library is left out, as the reader may not see it.
+
 **A printing follows its card.** phase keeps an object's id across zones and bumps its
 `incarnation`. The session still re-homes a printing whose object is gone, by seat and name
 (`follow_printings`), so a deck's second art stays on its card wherever the card goes.
@@ -526,6 +532,13 @@ card for a planeswalker or battle) and from each blocker to its attacker. The re
 gold, the opponent's red, and blocks a dashed blue. They are measured from the DOM
 (`[data-table] [data-point]`, `[data-plate]`) on every view, 220 ms later, and on a resize. An
 attacker is ringed, slid 14 px toward the middle, lifted and shadowed.
+
+**Targets are drawn.** A dotted, thinner arrow runs from each spell or ability on the stack
+(`[data-stack]`) to what it targets: a card on a table, another spell on the stack, or a player's
+plate, in the controller's colour (gold for the reader's, red for an opponent's). The same
+`BoardArrows` overlay draws them with combat's, so they show against the goldfish, against the AI
+and in a replay frame alike. A target the board does not draw (a card under a pile's top, a stack
+item past the first three) has no arrow.
 
 **Damage and life pop.** A `dealt` pops "−N" over the permanent it names (`targetId` on `seat`'s
 battlefield), and a `life` pops "−N" in red or "+N" in green by that seat's plate. The pops use the

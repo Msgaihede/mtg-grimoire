@@ -378,6 +378,13 @@ pub struct PlaytestStackItem {
     pub seat: PlaytestPlayer,
     /// An ability rather than a spell.
     pub ability: bool,
+    /// The cards it targets that the table shows — a permanent, a card in a graveyard, in exile
+    /// or in the command zone, another spell on the stack — in the order it chose them, for the
+    /// board's targeting arrows (issue #1071). A target the reader may not see (in a hand or a
+    /// library) is left out.
+    pub targets: Vec<u64>,
+    /// The players it targets.
+    pub target_players: Vec<PlaytestPlayer>,
 }
 
 /// What the AI opponent plays like: phase's difficulty presets, from random to competitive.
