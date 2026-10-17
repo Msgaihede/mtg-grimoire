@@ -33,6 +33,7 @@ import {
   type MoveOutcome,
 } from "@/lib/ipc";
 import type { Border } from "@/lib/border";
+import type { Universe } from "@/lib/universe";
 import { FINISHES, type Finish } from "@/lib/finish";
 import type { SortSpec } from "@/lib/sort";
 import { useMarketplace } from "@/lib/useMarketplace";
@@ -376,6 +377,9 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
    * Finish cell for both, and on this tab "foil" means a foil copy you can put in the deck.
    */
   const [borders, setBorders] = useState<readonly Border[]>([]);
+  // Universes Beyond or Within — a printing fact like the border, so it asks the All cards tab's
+  // question of the copy's printing.
+  const [universe, setUniverse] = useState<Universe | undefined>(undefined);
   const [finishes, setFinishes] = useState<readonly Finish[]>([]);
   const [manaValues, setManaValues] = useState<readonly number[]>([]);
   const [manaX, setManaX] = useState(false);
@@ -467,6 +471,7 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
     sets: setsParam,
     types: typesParamValue,
     borders: bordersParamValue,
+    universe,
     // **The copy's finish, as the collection page sends it** — `CollectionQuery.finishes`, and
     // never `printedFinishes`, which asks what a printing is published in and would offer a
     // nonfoil copy under `Foil`.
@@ -539,6 +544,7 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
     setsParam?.join(",") ?? "",
     typesParamValue?.join(",") ?? "",
     bordersParamValue?.join(",") ?? "",
+    universe ?? "",
     finishParam?.join(",") ?? "",
     raritiesParam?.join(",") ?? "",
     manaParam?.join(",") ?? "",
@@ -691,6 +697,11 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
      *  printing, so a borderless full-art copy answers two chips. */
     borders,
     toggleBorder: (border: Border) => setBorders((picked) => toggleIn(picked, border)),
+    /** Universes Beyond or Within over the printing; passing the value already set clears it,
+     *  the search's rule. */
+    universe,
+    setUniverse: (next: Universe | undefined) =>
+      setUniverse((current) => (current === next ? undefined : next)),
     /** The finish **this copy** is in — `useCollection`'s cell, not the All cards tab's. A
      *  printing held in two finishes is two rows, and each answers only its own chip. */
     finishes,
@@ -800,6 +811,7 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
       rarities,
       types,
       borders,
+      universe,
       finishes,
       priceMin,
       priceMax,
@@ -818,6 +830,7 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
       setSets([]);
       setTypes([]);
       setBorders([]);
+      setUniverse(undefined);
       setFinishes([]);
       setRarities([]);
       setPriceMin(undefined);

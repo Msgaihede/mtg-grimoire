@@ -9,6 +9,7 @@ import {
   type TagNamespace,
 } from "@/lib/ipc";
 import { BORDERS, type Border } from "@/lib/border";
+import type { Universe } from "@/lib/universe";
 import { FINISHES, type Finish } from "@/lib/finish";
 import { MANA_KEYS, type ManaKey } from "@/lib/mana";
 import { searchMarksMeta } from "@/lib/searchMarks";
@@ -321,6 +322,9 @@ export interface FilterState {
   /** The border chips — `regular`/`borderless`/`fullart` (`@/lib/border`), ORed with each other.
    *  One kind however many are pressed, for {@link types}' reason. */
   borders: readonly Border[];
+  /** Universes Beyond or Within, or neither — one kind, and optional so a surface that offers no
+   *  Universe cell need not say so. */
+  universe?: Universe | undefined;
   /**
    * The Finish cell's chips, and **one field for two questions, depending on the surface**. On
    * the card search it is the finishes a *printing* is published in (`printedFinishes` on the
@@ -373,6 +377,7 @@ export function activeFilterCount(f: FilterState): number {
     // narrowing of *which frame*, and three finishes pressed are one of *which finish*.
     f.borders.length > 0,
     f.finishes.length > 0,
+    f.universe !== undefined,
     // One term for the pair, not two: a band is one narrowing however many of its ends the
     // reader has moved — the argument the mana row's `manaValues || manaX` makes.
     f.priceMin !== undefined || f.priceMax !== undefined,
@@ -686,6 +691,7 @@ interface RememberedSearch {
   types: readonly string[];
   borders: readonly Border[];
   finishes: readonly Finish[];
+  universe: Universe | undefined;
   sets: readonly string[];
   manaValues: readonly number[];
   manaX: boolean;
@@ -791,6 +797,9 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   // the `FilterSurface` field the tray's cell reads; it reaches the wire as `printedFinishes`,
   // never as `finishes`, which on the collection's flattened payload means the copy's finish.
   const [finishes, setFinishes] = useState<readonly Finish[]>(seed?.finishes ?? []);
+  // Universes Beyond or Within (`@/lib/universe`) — one value, because the two partition the
+  // printings and both at once is no filter.
+  const [universe, setUniverse] = useState<Universe | undefined>(seed?.universe);
   const [sets, setSets] = useState<readonly string[]>(() =>
     options.initialSet ? [options.initialSet] : (seed?.sets ?? []),
   );
@@ -859,6 +868,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
       types,
       borders,
       finishes,
+      universe,
       sets,
       manaValues,
       manaX,
@@ -877,6 +887,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     types,
     borders,
     finishes,
+    universe,
     sets,
     manaValues,
     manaX,
@@ -1165,6 +1176,8 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     // vocabulary, and the two vocabularies share no word.
     bordersParamValue?.join(",") ?? "",
     printedFinishesParam?.join(",") ?? "",
+    // One word of a closed vocabulary or nothing, so it cannot be read as either neighbour.
+    universe ?? "",
     manaParam?.join(",") ?? "",
     // **A segment of its own, and the whole feature turns on it being here.** X is a second
     // axis over the same chips, so a key that carried only the numerals would answer "3, and
@@ -1236,6 +1249,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
         // published in foil" here, and `finishes` is the collection's word for the finish one
         // copy is in — see `SearchRequest.printedFinishes`.
         printedFinishes: printedFinishesParam,
+        universe,
         manaValues: manaParam,
         rarities: raritiesParam,
         // The band, at the marketplace this page is quoting. Absent ends are absent fields, so
@@ -1376,6 +1390,8 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     // `facets.ts` greys only what would change nothing, so an over-read count offers an option
     // that turns out empty, where an under-read one would hide cards nobody would report missing.
     // `index/facets.rs`'s `base` carries the same note from the other side.
+    // **Nor does the universe**, for the same reason: no dimension reads it, so it would mint a
+    // second facet key for counts that cannot differ, and they read high in the same direction.
     // The tag chips travel with the facets for the reason every other filter here does: the
     // counts that grey a chip and the wall that chip filters have to describe one corpus, or a
     // colour the picked motif has none of is still offered. Spread from the same object the
@@ -1588,6 +1604,13 @@ export function useCardSearch(options: CardSearchOptions = {}) {
      */
     finishes,
     toggleFinish: (finish: Finish) => setFinishes((picked) => toggleIn(picked, finish)),
+    /**
+     * Universes Beyond or Within. Passing the value already set clears it — {@link setOwned}'s
+     * rule, so a second press on `Beyond` is the way back out.
+     */
+    universe,
+    setUniverse: (next: Universe | undefined) =>
+      setUniverse((current) => (current === next ? undefined : next)),
     manaValues,
     toggleManaValue: (value: number) => setManaValues((picked) => toggleIn(picked, value)),
     /**
@@ -1681,6 +1704,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
       types,
       borders,
       finishes,
+      universe,
       priceMin,
       priceMax,
     }),
@@ -1790,6 +1814,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
       setTypes([]);
       setBorders([]);
       setFinishes([]);
+      setUniverse(undefined);
       setManaValues([]);
       setManaX(false);
       setOwned(undefined);
@@ -1822,6 +1847,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
       setTypes([]);
       setBorders([]);
       setFinishes([]);
+      setUniverse(undefined);
       setManaValues([]);
       setManaX(false);
       setOwned(undefined);
@@ -1892,6 +1918,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
       !typesParamValue &&
       !bordersParamValue &&
       !printedFinishesParam &&
+      universe === undefined &&
       !manaParam &&
       !manaX &&
       owned === undefined &&

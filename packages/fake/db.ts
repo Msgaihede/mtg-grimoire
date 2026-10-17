@@ -7005,6 +7005,19 @@ function matchesCardFilters(
     }
   }
 
+  // Universes Beyond or Within — `filters::picked_universe`: trimmed, lower-cased, and anything
+  // else is no filter. Beyond is Scryfall's `"universesbeyond"` in `promo_types` (quoted, as
+  // the Rust needle is), Within every printing without it — the NULL most cards carry included.
+  // An orphan answers neither: the universe is a claim only a card row can make.
+  if (f.universe) {
+    const picked = f.universe.trim().toLowerCase();
+    if (picked === "beyond" || picked === "within") {
+      if (!card) return false;
+      const beyond = (card.promoTypes ?? "").includes('"universesbeyond"');
+      if (beyond !== (picked === "beyond")) return false;
+    }
+  }
+
   // Omitted means true — and it keys on `is_paper`, which is the column `filters.rs` emits
   // and `PRINTINGS_WHERE` repeats. Nothing in the app filters on `digital`.
   if (f.paperOnly ?? true) {

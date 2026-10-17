@@ -21,6 +21,9 @@ function card(name: string, over: Partial<GameCard> = {}): GameCard {
     power: null,
     toughness: null,
     tax: 0,
+    foretold: false,
+    canForetell: false,
+    castable: false,
     ...over,
   };
 }

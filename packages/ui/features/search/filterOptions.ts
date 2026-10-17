@@ -8,6 +8,7 @@ import { MANA_KEYS, MANA_LABEL } from "@/lib/mana";
 import { sortOptions } from "@/lib/options";
 import { formatPrice } from "@/lib/prices";
 import type { SortDir } from "@/lib/sort";
+import { UNIVERSE_CHIP_LABEL } from "@/lib/universe";
 import { optionDisabled } from "./facets";
 import type { FilterSurface } from "./FilterBar";
 import { ANY_CARD, CARD_TYPES, SEARCH_SORT_OPTIONS } from "./useCardSearch";
@@ -354,6 +355,17 @@ export function activeChips<SortKey extends string>(
     });
   }
 
+  // `owned`'s rule below, one printing fact along: the setter says the surface can ask, the
+  // value says it is asking, and the chip names the universe in full where the cell's caption is
+  // not beside it.
+  const { setUniverse } = search;
+  if (setUniverse && search.universe !== undefined) {
+    chips.push({
+      label: UNIVERSE_CHIP_LABEL[search.universe],
+      remove: () => setUniverse(undefined),
+    });
+  }
+
   // The setter and not the value, because `owned`'s own third state *is* `undefined`: a surface
   // that cannot ask this question is told apart from one that is not currently asking it by which
   // of the two fields is here at all.
@@ -500,6 +512,9 @@ export type TrayCell =
   /** The printing's frame — `Regular`, `Borderless`, `Full art` (issue #573). A fact about the
    *  printing on every surface, so it reads one question wherever it is drawn. */
   | "border"
+  /** Universes Beyond or Universes Within — Scryfall's `universesbeyond` promo type and its
+   *  complement. A printing fact on every surface, like `border`. */
+  | "universe"
   | "price"
   | "printings"
   /** One cell, two questions — see the cell itself. Published finish on the card search, the
@@ -533,6 +548,7 @@ export const SEARCH_TRAY: readonly TrayCell[] = [
   "type",
   "border",
   "finish",
+  "universe",
   "price",
   "printings",
 ];

@@ -53,8 +53,8 @@ import {
   toggleAttacker,
   type Picks,
 } from "./combat";
-import { combatArrows } from "./arrows";
-import { CombatArrows } from "./CombatArrows";
+import { combatArrows, targetArrows } from "./arrows";
+import { BoardArrows } from "./BoardArrows";
 import { DamagePops } from "./DamagePops";
 import { MiddleLine, StackColumn } from "./MiddleLine";
 import { OpponentArea } from "./OpponentArea";
@@ -428,7 +428,10 @@ export function PlaytestBoard({
   }, [view, pickable, locked, stage, answers, act, setPicks]);
   const theirPick = theirPicks.opponent;
   const onActivate = useCallback((id: number) => act({ type: "activate", id }), [act]);
-  const arrows = useMemo(() => (view === null ? [] : combatArrows(view, picks)), [view, picks]);
+  const arrows = useMemo(
+    () => (view === null ? [] : [...combatArrows(view, picks), ...targetArrows(view)]),
+    [view, picks],
+  );
 
   const you = view?.you ?? null;
   const opponent = view?.opponents[0] ?? null;
@@ -959,7 +962,7 @@ export function PlaytestBoard({
         />
       )}
 
-      <CombatArrows root={root} arrows={arrows} />
+      <BoardArrows root={root} arrows={arrows} />
       <DamagePops root={root} view={view} happened={happened} />
 
       {/* **Read-only while the opponent's turn is played back**: one sheet over the whole board

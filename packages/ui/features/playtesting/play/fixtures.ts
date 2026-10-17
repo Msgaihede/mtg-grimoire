@@ -244,6 +244,7 @@ export function targetPrompt(): TurnFive {
         options: [option(0, t.ragavan), option(1, t.reckoner), option(2, t.goyf)],
         cancellable: true,
         pick: null,
+        keyword: null,
       },
       stack: [],
     },
@@ -283,6 +284,7 @@ export function orderTriggersPrompt(): TurnFive {
         options: [order(0, [t.delver, second]), order(1, [second, t.delver])],
         cancellable: false,
         pick: null,
+        keyword: null,
       },
       stack: [],
     },
@@ -325,12 +327,14 @@ export function castChoicePrompt(): TurnFive {
         ],
         cancellable: true,
         pick: null,
+        keyword: null,
       },
     },
   };
 }
 
-/** The opponent's Lightning Bolt on the stack over the reader's own Counterspell's target. */
+/** The opponent's Lightning Bolt at the reader's face, under the reader's own Counterspell at the
+ *  Bolt: an arrow from each to its target. */
 export function withStack(): TurnFive {
   const t = turnFive();
   const bolt = gameCard("Lightning Bolt");
@@ -340,8 +344,24 @@ export function withStack(): TurnFive {
     view: {
       ...t.view,
       stack: [
-        { id: counter.id, name: counter.name, cardId: counter.cardId, seat: "you", ability: false },
-        { id: bolt.id, name: bolt.name, cardId: bolt.cardId, seat: "opponent", ability: false },
+        {
+          id: counter.id,
+          name: counter.name,
+          cardId: counter.cardId,
+          seat: "you",
+          ability: false,
+          targets: [bolt.id],
+          targetPlayers: [],
+        },
+        {
+          id: bolt.id,
+          name: bolt.name,
+          cardId: bolt.cardId,
+          seat: "opponent",
+          ability: false,
+          targets: [],
+          targetPlayers: ["you"],
+        },
       ],
     },
   };
@@ -482,7 +502,7 @@ function pickPrompt(t: TurnFive, kind: string, source: string, pick: PlaytestPic
     view: {
       ...t.view,
       stage: "prompt",
-      prompt: { kind, source, options: [], cancellable: false, pick },
+      prompt: { kind, source, options: [], cancellable: false, pick, keyword: null },
     },
   };
 }
@@ -570,7 +590,15 @@ export function replayStep(): { step: PlaytestStep; start: PlaytestView } {
   };
   const f2 = {
     ...theirs(start, f1Bf, { phase: "main1" }),
-    stack: [{ ...bolt, seat: "opponent" as const, ability: false }],
+    stack: [
+      {
+        ...bolt,
+        seat: "opponent" as const,
+        ability: false,
+        targets: [],
+        targetPlayers: ["you" as const],
+      },
+    ],
   };
   const ragavan = { ...t.ragavan, tapped: true };
   const f3Bf = f1Bf.map((c) => (c.id === ragavan.id ? ragavan : c));
