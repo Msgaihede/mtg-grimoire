@@ -136,6 +136,8 @@ import { IMAGE_VARIANTS } from "@grimoire/ui/lib/images";
 import type {
   ActivityEntry,
   BracketCardRow,
+  DiscordLinkStart,
+  DiscordStatus,
   BreakdownRow,
   BulkMoveOutcome,
   BulkRemoveOutcome,
@@ -1635,6 +1637,15 @@ export interface FakeUpdate {
  * (`packages/ui/lib/core/hostMembership.ts`) with one sentence saying how sync turns on there, where
  * every other host refuses the name; and the Sync panel draws that sentence in place of its
  * membership half. `world.ts` puts the handler over the one world's table.
+ *
+ * **`discordLinking`**, **`discordLinked`**, **`discordEnrolled`**, **`discordGate`** and
+ * **`discordUnreachable`** are the Discord integration's states no press in a story can reach on
+ * its own (issue #1096, spec §13.6). The first four write the world, `applySupporterFault`'s
+ * shape (`applyDiscordFault`): a sign-in standing open whose claim never comes back approved
+ * (there is no browser here to approve it in); an account linked and ready to enrol the bot; the
+ * bot enrolled, last fetched two hours ago; and an account linked whose gate refuses, in
+ * {@link DISCORD_GATE_SENTENCE}. The fifth is the front not answering: `discord_link_begin` and
+ * `discord_enable` refuse in {@link DISCORD_UNREACHABLE}.
  */
 export type Fault =
   | "busy"
@@ -1669,7 +1680,12 @@ export type Fault =
   | "scanInboxFull"
   | "shareLapsed"
   | "lentStorage"
-  | "pairOnly";
+  | "pairOnly"
+  | "discordLinking"
+  | "discordLinked"
+  | "discordEnrolled"
+  | "discordGate"
+  | "discordUnreachable";
 
 /**
  * What the picture cache costs, as the Settings page's one button sees it.
@@ -2526,7 +2542,35 @@ export interface FakeDb {
   /** `scan_batch_lines` — keyed to the **batch**, so a row here is found through
    *  {@link FakeDb.scanBatches} and goes when its batch does. */
   scanBatchLines: FakeScanBatchLine[];
+  /** The Discord integration's `app_meta` rows — {@link FakeDiscord}. */
+  discord: FakeDiscord;
   fault: Fault | null;
+}
+
+/**
+ * The Discord integration's rows (issue #1096) — the pending sign-in, the link, and the bot's
+ * device, as `discord_status` reads them.
+ *
+ * **There is no front and no bot here, and this does not pretend there is one.** A sign-in is
+ * approved by the fake itself on its second claim (`FakePending.polled`'s stand-in for the far
+ * side), enrolling writes a device id and a stamp, and the bot never pulls. **The gate is a row
+ * rather than a derivation** from the pairing world: the engine's seven refusals read a signed
+ * roster and a relay flag this fake does not model, so a story names the refusal it wants with
+ * `discordGate`, and every other world answers ready.
+ *
+ * **Every time is Unix milliseconds and read off the wall clock**, unlike {@link stamp}'s
+ * seconds: `DiscordStatus`' unit, and the panel reads a request's deadline against `Date.now()`,
+ * so a seeded clock here would draw a sign-in that expired months ago.
+ */
+export interface FakeDiscord {
+  /** The link secret's row and the two the claim wrote beside it, or `null` for no link. */
+  link: { discordUserId: string; username: string } | null;
+  /** The pending link request, or `null`. `polls` counts `discord_link_poll`s against it. */
+  pending: { expiresAt: number; polls: number } | null;
+  /** The bot's device in the group, or `null` before it is enrolled. */
+  bot: { deviceId: string; lastPullAt: number | null } | null;
+  /** What `integration::gate` answers — `null` for ready. */
+  gate: string | null;
 }
 
 /**
@@ -3542,6 +3586,27 @@ export function applySupporterFault(db: FakeDb): void {
   }
 }
 
+/**
+ * The Discord states a story stands in rather than presses into — `applySupporterFault`'s shape
+ * and its reason: the panel has to draw them with nothing having been clicked. Exported so
+ * `discord.test.ts` can stand them up the way `installWorld` does.
+ */
+export function applyDiscordFault(db: FakeDb, now: number = Date.now()): void {
+  const link = { discordUserId: DISCORD_USER_ID, username: DISCORD_USERNAME };
+  if (db.fault === "discordLinking") {
+    db.discord = { ...db.discord, pending: { expiresAt: now + DISCORD_LINK_MS, polls: 0 } };
+  }
+  if (db.fault === "discordLinked") db.discord = { ...db.discord, link };
+  if (db.fault === "discordGate") db.discord = { ...db.discord, link, gate: DISCORD_GATE_SENTENCE };
+  if (db.fault === "discordEnrolled") {
+    db.discord = {
+      ...db.discord,
+      link,
+      bot: { deviceId: DISCORD_BOT_DEVICE_ID, lastPullAt: now - 2 * 60 * 60_000 },
+    };
+  }
+}
+
 export function mirrorFailedPass(db: FakeDb, now: number = Math.floor(Date.now() / 1000)): void {
   const root = "E:\\Backups\\MTG";
   db.mirror.root = root;
@@ -3817,6 +3882,9 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // tray, and the `scanHistory` seed is the one world in which somebody has.
     scanBatches: [],
     scanBatchLines: [],
+    // Not linked, which is every install until somebody switches the integration on: the
+    // `discord*` faults are the worlds that are anywhere else.
+    discord: { link: null, pending: null, bot: null, gate: null },
     fault: null,
     ...init,
   };
@@ -27406,6 +27474,125 @@ export function scannerAssetHandlers(db: FakeDb) {
   } satisfies Record<string, CommandHandler>;
 }
 
+/* ------------------------------------------------------------------------ Discord ---- */
+
+/** How long a link request stays claimable — ten minutes, the front's `/link/begin`. */
+export const DISCORD_LINK_MS = 10 * 60_000;
+
+/** The account every fake link signs in as. */
+export const DISCORD_USERNAME = "giradeli";
+export const DISCORD_USER_ID = "1029384756473829101";
+/** The bot's device id once it is enrolled. */
+export const DISCORD_BOT_DEVICE_ID = "bot-7f3a9c2e";
+
+/**
+ * The gate's refusal a story draws — `GROUP_FULL` in `crates/grimoire-core/src/integration.rs`,
+ * **copied rather than read**, because the panel draws whatever sentence it is handed and a story
+ * needs only one of the right shape. The three below are the fake's own words for refusals the
+ * desktop and the front own.
+ */
+export const DISCORD_GATE_SENTENCE =
+  "Your group already has five devices, and Discord would be a sixth. Remove one from the " +
+  "list of devices first.";
+export const DISCORD_UNREACHABLE =
+  "Couldn't reach the MTG Grimoire Discord service. Check your connection and try again.";
+export const DISCORD_LINK_EXPIRED = "The Discord sign-in expired. Turn the integration on again.";
+export const DISCORD_NOT_LINKED = "Sign in with Discord first.";
+
+/** The status `discord_status` answers, derived from the rows rather than stored. */
+function discordStatusOf(db: FakeDb): DiscordStatus {
+  const { link, pending, bot, gate } = db.discord;
+  return {
+    linked: link !== null,
+    username: link?.username ?? null,
+    discordUserId: link?.discordUserId ?? null,
+    linking: pending !== null,
+    linkExpiresAt: pending?.expiresAt ?? null,
+    enrolled: bot !== null,
+    botDeviceId: bot?.deviceId ?? null,
+    lastPullAt: bot?.lastPullAt ?? null,
+    // The gate is asked only of a linked account that has not enrolled — the one stage whose
+    // next press it decides; the desktop answers `None` everywhere else.
+    gate: link !== null && bot === null ? gate : null,
+  };
+}
+
+/**
+ * The Discord integration's six commands (`apps/desktop/src-tauri/src/discord/commands.rs`,
+ * issue #1096, spec §13.6) — the state machine unlinked → linking → linked → enrolled.
+ *
+ * **A table of its own rather than rows in {@link writeHandlers}**, `pluginHandlers`' reason: the
+ * busy sweep in `db.test.ts` walks that table asserting a running sync refuses everything in it,
+ * and which of these the desktop takes the write connection for is the desktop's to say — the
+ * fake makes no claim about the lock here, so none of them answers `busy`.
+ */
+export function discordHandlers(db: FakeDb) {
+  return {
+    /** `discord_status` — the rows, read, and the gate. */
+    discord_status: (): DiscordStatus => discordStatusOf(db),
+
+    /**
+     * `discord_link_begin` — store a request and answer where to send the reader. Linking again
+     * replaces any request already pending, as `POST /link/begin` mints a fresh one.
+     */
+    discord_link_begin: (): DiscordLinkStart => {
+      if (db.fault === "discordUnreachable") throw refuse(DISCORD_UNREACHABLE);
+      const expiresAt = Date.now() + DISCORD_LINK_MS;
+      db.discord.pending = { expiresAt, polls: 0 };
+      return {
+        authorizeUrl:
+          "https://discord.com/oauth2/authorize?client_id=000000000000000000&response_type=code" +
+          "&scope=identify+applications.commands&integration_type=1&state=storybook",
+        expiresAt,
+      };
+    },
+
+    /**
+     * `discord_link_poll` — the fake approves on the **second** claim, `FakePending.polled`'s
+     * stand-in for the far side: there is no browser here, so the first claim finds the reader
+     * still signing in and the second finds them done. Under `discordLinking` it never does.
+     */
+    discord_link_poll: (): DiscordStatus => {
+      const pending = db.discord.pending;
+      if (pending === null) return discordStatusOf(db);
+      if (Date.now() >= pending.expiresAt) {
+        db.discord.pending = null;
+        throw refuse(DISCORD_LINK_EXPIRED);
+      }
+      pending.polls += 1;
+      if (db.fault !== "discordLinking" && pending.polls >= 2) {
+        db.discord.pending = null;
+        db.discord.link = { discordUserId: DISCORD_USER_ID, username: DISCORD_USERNAME };
+      }
+      return discordStatusOf(db);
+    },
+
+    /** `discord_link_cancel` — forget the request. Local only, so it never refuses. */
+    discord_link_cancel: (): DiscordStatus => {
+      db.discord.pending = null;
+      return discordStatusOf(db);
+    },
+
+    /**
+     * `discord_enable` — the gate first, as the desktop asks it, then the bot enrolled. It never
+     * pulls here, so `lastPullAt` stays `null`: the panel's *hasn't fetched yet* line.
+     */
+    discord_enable: (): DiscordStatus => {
+      if (db.discord.link === null) throw refuse(DISCORD_NOT_LINKED);
+      if (db.discord.gate !== null) throw refuse(db.discord.gate);
+      if (db.fault === "discordUnreachable") throw refuse(DISCORD_UNREACHABLE);
+      db.discord.bot ??= { deviceId: DISCORD_BOT_DEVICE_ID, lastPullAt: null };
+      return discordStatusOf(db);
+    },
+
+    /** `discord_disable` — the bot out, the link gone, and the rows forgotten. */
+    discord_disable: (): DiscordStatus => {
+      db.discord = { link: null, pending: null, bot: null, gate: db.discord.gate };
+      return discordStatusOf(db);
+    },
+  } satisfies Record<string, CommandHandler>;
+}
+
 /* --------------------------------------------------------------------- the windows ---- */
 
 /**
@@ -27468,8 +27655,8 @@ export function pluginHandlers() {
 }
 
 /**
- * Reads ∪ writes ∪ the scanner ∪ the windows ∪ the plugins: the whole command table, which is
- * what a story registers.
+ * Reads ∪ writes ∪ the scanner ∪ Discord ∪ the windows ∪ the plugins: the whole command table,
+ * which is what a story registers.
  *
  * The first two halves close over the one `db`, so a write is visible to the next read — the
  * property that makes a story clickable rather than a snapshot. The scanner table mirrors no
@@ -27485,6 +27672,7 @@ export function allHandlers(db: FakeDb) {
     ...undoHandlers(db),
     ...scannerHandlers(db),
     ...scannerAssetHandlers(db),
+    ...discordHandlers(db),
     ...windowHandlers(),
     ...pluginHandlers(),
   };

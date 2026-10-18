@@ -762,6 +762,17 @@ pub fn run() {
             sync_pair::pairing::sync_device_rename,
             sync_pair::pairing::sync_device_revoke,
             sync_pair::pairing::sync_group_leave,
+            // Settings → Integrations → Discord (the Discord spec's §13.6): the panel's read, the
+            // account link's begin, poll and cancel, and the bot switched on — a pinned pairing
+            // that enters signed mode — and off. Registered from `discord::commands`, so these
+            // are `discord_status`, `discord_link_begin`, `discord_link_poll`,
+            // `discord_link_cancel`, `discord_enable` and `discord_disable`.
+            crate::discord::commands::discord_status,
+            crate::discord::commands::discord_link_begin,
+            crate::discord::commands::discord_link_poll,
+            crate::discord::commands::discord_link_cancel,
+            crate::discord::commands::discord_enable,
+            crate::discord::commands::discord_disable,
             // The scanner, its prefs and its tray. The session's state is the core's
             // `State.scanner`, reached through `AppState`; the prefs and the tray are `app_meta`
             // rows. See the core's `scanner` module.

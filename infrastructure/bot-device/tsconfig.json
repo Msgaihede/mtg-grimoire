@@ -1,0 +1,52 @@
+{
+  /* The bot device's type-check program. Every compiler option below is
+     `infrastructure/relay/tsconfig.json`'s byte for byte, and that file carries the argument for
+     why a Worker gets a program of its own: `@cloudflare/workers-types` declares `Request`,
+     `Response` and some four hundred other globals, and the app under `packages/ui/` must see the
+     DOM's versions of those names and nothing else.
+
+     A program of its own rather than a place in the Discord front's, for
+     `infrastructure/share-worker/tsconfig.json`'s reason: `mtg-grimoire-bot-device` is a deploy of
+     its own, and one program spanning two Workers lets an edit to one fail the other's check.
+
+     **`@grimoire/discord-worker/src/rpc` is the one module of another package's in it**, and
+     only as types: the Workers RPC both scripts are checked against (the design, §13.2). Imported
+     by the package's name (`scripts/workspace.test.ts`), with `import type`, so a deploy of this
+     folder bundles nothing of the front's.
+
+     **And the export writer, `@grimoire/ui/features/transfer/export/format`**, by the shared UI's
+     package name, for `/deck` (the design, §9): the golden-fenced writer itself rather than a
+     copy, so a list posted to Discord is the desktop's Export text byte for byte.
+
+     `src`'s `*.test.ts` are inside the program, as the relay's are: a test that does not
+     type-check can drift from what it asserts about. */
+  "compilerOptions": {
+    "target": "ES2022",
+    /* No `DOM`: this is not a browser. `@cloudflare/workers-types` supplies the fetch, stream
+       and URL globals workerd actually has, which are a different and smaller set. */
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["@cloudflare/workers-types"],
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    /* The shared UI's own alias, for the export writer this Worker imports
+       (`@grimoire/ui/features/transfer/…`): its modules spell their imports `@/…`, as every module
+       under `packages/ui` does. Types and the one value `fields.ts` takes (`@/lib/prices`);
+       `wrangler.jsonc`'s `alias` is the same line for the bundle. **`@/lib/ipc` is the one
+       exception**, pointed at `src/ipc.d.ts`: the barrel reaches Tauri and the DOM, and the
+       writer takes types from it and nothing else (that file says which). */
+    "paths": { "@/lib/ipc": ["./src/ipc.d.ts"], "@/*": ["../../packages/ui/*"] },
+    /* `src/wasm-types/` laid over the root's `dist-wasm/`: `engine.ts` imports the bot's glue by
+       its path in the build output, and on a checkout that has not built it this folder's
+       hand-written `bot/grimoire_bot.d.ts` is what that path finds. */
+    "rootDirs": ["../../dist-wasm", "./src/wasm-types"]
+  },
+  "include": ["src"]
+}

@@ -47,6 +47,7 @@
  *                                                  `.../identity.rs`, `.../invite.rs`
  * `DeckFolderPane`                                — `crates/grimoire-core/src/deckpane.rs`
  * `ShareRow`/`ShareFields`                        — `apps/desktop/src-tauri/src/share/commands.rs`
+ * `DiscordStatus`/`DiscordLinkStart`              — `apps/desktop/src-tauri/src/discord/commands.rs`
  * `ScannerAsset`/`ScannerStatus`/`ScannerSidecar`/
  * `ScannerCaptured`/`ScannerPrefs`/
  * `ScannerTrayRow`/`ScannerTrayChoice`             — `crates/grimoire-core/src/scanner.rs`
@@ -185,7 +186,7 @@
  *
  * **This file is the barrel since 2026-10-11 (issue #557); the mirror itself is in `./ipc/`, one
  * file per domain** — cards, collection, wishlist, decks, transfer, home, tags, combos, scanner,
- * share, trade, scan history, sync, prefs and the app, with the transport in `./ipc/invoke.ts`. It was one 11,000-line
+ * share, Discord, trade, scan history, sync, prefs and the app, with the transport in `./ipc/invoke.ts`. It was one 11,000-line
  * file, three quarters of it comment, and every feature branch edited it.
  *
  * **Everything outside `packages/ui/lib/ipc*` imports `@/lib/ipc`, never a domain file** — that
@@ -210,6 +211,7 @@ export type * from "./ipc/tags";
 export type * from "./ipc/combos";
 export type * from "./ipc/scanner";
 export type * from "./ipc/share";
+export type * from "./ipc/discord";
 export type * from "./ipc/trade";
 export type * from "./ipc/scanHistory";
 export type * from "./ipc/sync";
@@ -229,6 +231,7 @@ import { tagCommands } from "./ipc/tags";
 import { comboCommands } from "./ipc/combos";
 import { scannerCommands } from "./ipc/scanner";
 import { shareCommands } from "./ipc/share";
+import { discordCommands } from "./ipc/discord";
 import { tradeCommands } from "./ipc/trade";
 import { scanHistoryCommands } from "./ipc/scanHistory";
 import { syncCommands } from "./ipc/sync";
@@ -252,6 +255,7 @@ export const ipc = {
   ...comboCommands,
   ...scannerCommands,
   ...shareCommands,
+  ...discordCommands,
   ...tradeCommands,
   ...scanHistoryCommands,
   ...syncCommands,

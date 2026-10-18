@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { BackupPanel } from "@/features/settings/BackupPanel";
 import { CachePanel } from "@/features/settings/CachePanel";
 import { DangerZonePanel } from "@/features/settings/DangerZonePanel";
+import { DiscordPanel } from "@/features/settings/DiscordPanel";
 import { ErrorLogPanel } from "@/features/settings/ErrorLogPanel";
 import { HiddenTagsPanel } from "@/features/settings/HiddenTagsPanel";
 import { LabelsPanel } from "@/features/settings/LabelsPanel";
@@ -80,7 +81,7 @@ function asPanelId(word: string, panels: readonly PanelId[]): PanelId | null {
 /**
  * Settings.
  *
- * **A rail of seven entries and a pane, since 2026-09-03.** This page was one scroll of twelve
+ * **A rail of entries and a pane, since 2026-09-03.** This page was one scroll of twelve
  * panels until then, and the scroll's own rule — *ordered by what a press costs* — is still the
  * rule, but it survives **inside a group** rather than down the length of the page. An ordering
  * only helps a reader who already knows what they are scrolling towards; a rail is what tells
@@ -369,6 +370,13 @@ export function SettingsPage({ update }: { update: Update }) {
             backend itself — `BackupPanel`'s rule, and `SyncPanel`'s reason directly above it. */}
         {shown("review") && <ReviewPanel />}
 
+        {/* **The only panel under `Integrations`** (issue #1096), and the entry's reason for
+            existing: a service outside this install that the reader connects, which is neither
+            their own devices (`Sync`, above) nor anything about the folder on disk. It reaches
+            the backend itself — `BackupPanel`'s rule — so nothing here is threaded down. The
+            light edition leaves it out (`LIGHT_SETTINGS`): no light host has the commands. */}
+        {shown("discord") && <DiscordPanel />}
+
         {/* The page's one *undo*, and the only panel in `Tags`. The argument that used to sit here
             was about distance — the rail's live line tells a reader who has just hidden a tag that
             Settings is where it comes back, and the shorter the scroll to that list, the fewer of
@@ -445,9 +453,7 @@ export function SettingsPage({ update }: { update: Update }) {
             </p>
             {/* `break-all` because a Windows path has nothing to break at and this pane is ~632px
                 on a desk and ~350px on a phone — the surface this whole plan is for. */}
-            <p className="break-all font-mono text-sm">
-              {folder.data?.dataDir ?? "Unknown"}
-            </p>
+            <p className="break-all font-mono text-sm">{folder.data?.dataDir ?? "Unknown"}</p>
             {/* Plain text when there is something to report rather than the destructive red, which
                 is `ErrorLogPanel`'s tone and its reason: every affected image still displays — the
                 bytes were in hand when the write failed — so nothing on screen is broken. Dim when
@@ -499,9 +505,7 @@ export function SettingsPage({ update }: { update: Update }) {
             answer nothing when a query matched nothing. Dim and one line, because a search that
             found nothing is not a failure — the box above is still full of the words that did
             not match, which is the whole of what the reader needs in order to try again. */}
-        {visible.length === 0 && (
-          <p className="text-sm text-dim">No matching settings.</p>
-        )}
+        {visible.length === 0 && <p className="text-sm text-dim">No matching settings.</p>}
 
         {/* The foot of the pane on every edition: one policy covers every host. */}
         <p>

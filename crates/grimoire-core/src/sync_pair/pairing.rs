@@ -42,6 +42,11 @@ use serde::Serialize;
 pub struct Pending {
     /// True on the device that displayed the code.
     initiator: bool,
+    /// Who finishes this pairing: a person comparing six digits ([`confirm`]), or an integration
+    /// whose keys arrived over a second channel and are pinned ([`confirm_pinned`]). **Each
+    /// refuses the other's**, so an offer begun for Discord can never be finished by a reader's
+    /// press on *Codes match*, and a reader's offer can never be finished without the digits.
+    origin: Origin,
     group_id: [u8; 16],
     token: [u8; 16],
     /// Where both sides meet on the relay — `crypto::rendezvous_id(&token)`, derived
@@ -67,6 +72,17 @@ pub struct Pending {
     /// the flag the other one sets: `respond` and `confirm` only ever run against an initiator's
     /// `Pending`, and `poll`'s joiner branch is only ever reached on one.
     spent: bool,
+}
+
+/// Who a pairing in flight is finished by — see [`Pending`]'s `origin`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    /// A person compares six digits on two screens and presses *Codes match* ([`confirm`]). Every
+    /// joiner's pending is this one: a joiner never confirms.
+    Reader,
+    /// The integration's pinned pairing ([`begin_integration`], [`confirm_pinned`]): the joiner's
+    /// keys came back over TLS from the service that runs it, and are compared, not shown.
+    Integration,
 }
 
 /// What the reader is shown when a pairing starts.
@@ -200,6 +216,7 @@ pub fn begin(conn: &Connection, pending: &mut Option<Pending>) -> Result<Offer, 
 
     *pending = Some(Pending {
         initiator: true,
+        origin: Origin::Reader,
         group_id,
         token,
         rv,
@@ -212,6 +229,24 @@ pub fn begin(conn: &Connection, pending: &mut Option<Pending>) -> Result<Offer, 
         spent: false,
     });
     Ok(Offer { code, qr })
+}
+
+/// Start the integration's offer (the Discord spec's §13.4): [`begin`]'s invite, finished only by
+/// [`confirm_pinned`]. **Only into a group this device is already in** — an integration joins a
+/// reader's group and never founds one, and the gate (`integration::gate`) has asked for one
+/// already; asking again here is what makes the rule this function's rather than its caller's.
+pub fn begin_integration(
+    conn: &Connection,
+    pending: &mut Option<Pending>,
+) -> Result<Offer, String> {
+    if identity::group(conn).map_err(err)?.is_none() {
+        return Err(identity::NOT_IN_A_GROUP.to_owned());
+    }
+    let offer = begin(conn, pending)?;
+    if let Some(p) = pending.as_mut() {
+        p.origin = Origin::Integration;
+    }
+    Ok(offer)
 }
 
 /// The joining device reads the code, does the ECDH, posts its answer to the relay, and
@@ -278,6 +313,7 @@ pub async fn accept(
 
     *pending = Some(Pending {
         initiator: false,
+        origin: Origin::Reader,
         group_id: inv.group_id,
         token: inv.token,
         rv,
@@ -447,10 +483,13 @@ pub async fn confirm(db: &impl Store, pending: &mut Option<Pending>) -> Result<S
     if p.spent {
         return Err(ALREADY_USED.to_owned());
     }
+    if p.origin != Origin::Reader {
+        return Err(INTEGRATION_PAIRING.to_owned());
+    }
     let (Some(pair_key), Some(peer_public), Some(peer_id)) =
         (p.pair_key, p.peer_public, p.peer_device_id.clone())
     else {
-        return Err("The other device has not answered yet.".to_owned());
+        return Err(NOT_ANSWERED.to_owned());
     };
     let rv = p.rv.clone();
     let peer_name = p.peer_name.clone();
@@ -501,60 +540,18 @@ pub async fn confirm(db: &impl Store, pending: &mut Option<Pending>) -> Result<S
         },
     };
 
-    // `<group_id>\0<epoch>\0<32-byte key>` — the id and the epoch travel with the key because a
-    // key with no epoch cannot be compared against a later rotation, and since spec §2.2 nothing
-    // else travels at all. **This device's membership is not consulted here**, which is what
-    // makes pairing possible in either order: a reader may pair two devices and connect Patreon
-    // afterwards, or the other way round, and neither is a refusal.
-    //
-    // **The key is last, and anything ever added here goes before it.** The key is 32 raw bytes
-    // and may hold a zero of its own, so it can only ever be the *final* field: [`complete`]
-    // splits on zero bytes and takes everything left over as the key. A field appended after it
-    // would be swallowed by any group key containing a zero — about one pairing in eight — and
-    // would pass every test whose fixture key happened to contain none. The two ahead of it are
-    // safe there for the reason A's device id is safe as the clear prefix one step down: a hex
-    // group id and a decimal epoch carry no zero byte at all.
-    let mut plain = Vec::new();
-    plain.extend_from_slice(group.group_id.as_bytes());
-    plain.push(0);
-    plain.extend_from_slice(group.epoch.to_string().as_bytes());
-    plain.push(0);
-    plain.extend_from_slice(&group.group_key);
-
-    let sealed = crypto::seal(&pair_key, me.device_id.as_bytes(), &plain).map_err(err)?;
-
-    // **A's device id travels in the clear ahead of the sealed bytes**, for the reason B's key
-    // does one step back: it is this seal's associated data and B does not know it yet. It is
-    // hex, so it carries no zero byte of its own and the first one is the separator.
-    let mut blob = Vec::with_capacity(me.device_id.len() + 1 + sealed.len());
-    blob.extend_from_slice(me.device_id.as_bytes());
-    blob.push(0);
-    blob.extend_from_slice(&sealed);
-    let encoded = blob_encode(&blob);
+    // The layout, and why the key is its last field, are [`seal_offer`]'s.
+    let encoded = seal_offer(&pair_key, &me.device_id, &group)?;
 
     // **This device's signing slot first, then the offer**, for `accept`'s reason: a joiner that
     // has read `offer` finds `offersig` already there. It carries whether this group signs its
     // rosters, so a joiner learns that before it joins. Quiet on a relay that keeps no such slot.
-    let signing = db.with(|conn| {
-        identity::signing_key(conn)
-            .map_err(err)?
-            .ok_or_else(|| identity::NOT_IN_A_GROUP.to_owned())
-    })?;
     let mode = if signed {
         crate::sync_pair::roster::Mode::Signed
     } else {
         crate::sync_pair::roster::Mode::Open
     };
-    let offersig = seal_sig(
-        &pair_key,
-        &rv,
-        &SigSlot {
-            device: me.device_id.clone(),
-            ed25519: crate::sync_pair::roster::key_text(&signing.public),
-            proto: identity::SIG_PROTO,
-            mode: Some(mode.word().to_owned()),
-        },
-    )?;
+    let offersig = seal_offersig(db, &pair_key, &rv, &me.device_id, mode)?;
     client::post_rendezvous_if_kept(db, &rv, client::OFFER_SIG, &offersig).await?;
 
     // **Posted before anything commits.** A failed post ends this call right here, and nothing
@@ -601,6 +598,255 @@ pub async fn confirm(db: &impl Store, pending: &mut Option<Pending>) -> Result<S
 
     Ok(SealedKey {
         sealed_key: encoded,
+    })
+}
+
+/// The sealed group key [`confirm`] and [`confirm_pinned`] post to `offer`:
+/// `<device id>\0<seal of group_id\0epoch\0key>`.
+///
+/// `<group_id>\0<epoch>\0<32-byte key>` — the id and the epoch travel with the key because a
+/// key with no epoch cannot be compared against a later rotation, and since spec §2.2 nothing
+/// else travels at all. **This device's membership is not consulted here**, which is what makes
+/// pairing possible in either order: a reader may pair two devices and connect Patreon
+/// afterwards, or the other way round, and neither is a refusal.
+///
+/// **The key is last, and anything ever added here goes before it.** The key is 32 raw bytes and
+/// may hold a zero of its own, so it can only ever be the *final* field: [`complete`] splits on
+/// zero bytes and takes everything left over as the key. A field appended after it would be
+/// swallowed by any group key containing a zero — about one pairing in eight — and would pass
+/// every test whose fixture key happened to contain none. The two ahead of it are safe there for
+/// the reason A's device id is safe as the clear prefix: a hex group id and a decimal epoch carry
+/// no zero byte at all.
+///
+/// **A's device id travels in the clear ahead of the sealed bytes**, for the reason B's key does
+/// one step back: it is this seal's associated data and B does not know it yet. It is hex, so it
+/// carries no zero byte of its own and the first one is the separator.
+fn seal_offer(pair_key: &[u8; 32], me: &str, group: &identity::Group) -> Result<String, String> {
+    let mut plain = Vec::new();
+    plain.extend_from_slice(group.group_id.as_bytes());
+    plain.push(0);
+    plain.extend_from_slice(group.epoch.to_string().as_bytes());
+    plain.push(0);
+    plain.extend_from_slice(&group.group_key);
+
+    let sealed = crypto::seal(pair_key, me.as_bytes(), &plain).map_err(err)?;
+
+    let mut blob = Vec::with_capacity(me.len() + 1 + sealed.len());
+    blob.extend_from_slice(me.as_bytes());
+    blob.push(0);
+    blob.extend_from_slice(&sealed);
+    Ok(blob_encode(&blob))
+}
+
+/// This device's `offersig`: its id, its Ed25519 key, this build's level, and `mode`.
+fn seal_offersig(
+    db: &impl Store,
+    pair_key: &[u8; 32],
+    rv: &str,
+    me: &str,
+    mode: crate::sync_pair::roster::Mode,
+) -> Result<String, String> {
+    let signing = db.with(|conn| {
+        identity::signing_key(conn)
+            .map_err(err)?
+            .ok_or_else(|| identity::NOT_IN_A_GROUP.to_owned())
+    })?;
+    seal_sig(
+        pair_key,
+        rv,
+        &SigSlot {
+            device: me.to_owned(),
+            ed25519: crate::sync_pair::roster::key_text(&signing.public),
+            proto: identity::SIG_PROTO,
+            mode: Some(mode.word().to_owned()),
+        },
+    )
+}
+
+/// What [`confirm`] and [`confirm_pinned`] say before the joiner has answered.
+const NOT_ANSWERED: &str = "The other device has not answered yet.";
+
+/// What [`confirm`] says to an offer begun for an integration ([`begin_integration`]).
+pub const INTEGRATION_PAIRING: &str = "That pairing was started for Discord and finishes on its \
+     own - it has no six digits to compare.";
+
+/// What [`confirm_pinned`] says to an offer a reader began, whose six digits a person must
+/// compare.
+pub const NOT_AN_INTEGRATION_PAIRING: &str = "That pairing was started for a device whose six \
+     digits have to be compared, so it cannot be finished without them.";
+
+/// The joiner that answered is not the device the integration's service enrolled: its device id,
+/// its X25519 key or its Ed25519 key differs from the pinned one — or it sent no signing key at
+/// all. **Nothing has been posted or written when this is said.**
+pub const PIN_MISMATCH: &str = "The device that answered is not the one Discord enrolled, so it \
+     was not let into your group.";
+
+/// The pinned capability is not one an integration may hold. Only `read` ships (§11, PR 3);
+/// **never `full`** — a device that may do everything is paired by a person comparing digits.
+pub const PIN_NOT_RESTRICTED: &str = "An integration can only join your group as a device that \
+     reads it.";
+
+/// The relay this device uses did not keep `offersig`, so the joiner could not learn that the
+/// group signs its rosters — or this device's signing key, its one anchor. Refused before the
+/// offer is posted, so nothing is handed over.
+pub const NO_SIGNATURE_SLOTS: &str = "The sync relay cannot carry this pairing's signing keys \
+     yet, so Discord was not added. Try again after the next update.";
+
+/// The name an integration's device is filed under on every roster — this device's word, synced
+/// through `device_names`, because a restricted device's own name never applies anywhere.
+pub const INTEGRATION_DEVICE_NAME: &str = "Discord";
+
+/// What an integration's joiner must be, compared against what the pairing carried: its device
+/// id and both public keys, from the service that enrolled it, and the capability **this device**
+/// gives it (§9: *the desktop alone sets the capability*).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pinned {
+    pub device_id: String,
+    pub x25519: [u8; 32],
+    pub ed25519: [u8; 32],
+    pub capability: String,
+}
+
+impl Pinned {
+    /// The three values as the service answers them — base64url without padding, §13.2 — with
+    /// the capability. `None` when a key is not 32 bytes of base64url or the id is empty.
+    pub fn from_wire(
+        device_id: &str,
+        x25519: &str,
+        ed25519: &str,
+        capability: &str,
+    ) -> Option<Self> {
+        if device_id.is_empty() {
+            return None;
+        }
+        Some(Pinned {
+            device_id: device_id.to_owned(),
+            x25519: crate::sync_pair::roster::key32(x25519)?,
+            ed25519: crate::sync_pair::roster::key32(ed25519)?,
+            capability: capability.to_owned(),
+        })
+    }
+}
+
+/// What [`confirm_pinned`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PinnedJoin {
+    /// The integration's device, now on the roster as restricted.
+    pub device_id: String,
+    /// The epoch the group signs from — the one the join's rotation publishes (`signed_since`).
+    pub signed_since: i64,
+    /// Whether that rotation, and with it the group's first signed roster document, reached the
+    /// relay. **`false` is a debt, not a failure**: `identity::roster_is_dirty` is set, this
+    /// device is already latched, and the next sync's `client::publish_join` pays it signed.
+    pub published: bool,
+}
+
+/// **The integration's confirm** — the Discord spec's §13.4, the pinned pairing: no six digits,
+/// because the joiner's keys arrived twice, over two independent channels — sealed under the
+/// pair key at the rendezvous, and over TLS from the service that enrolled it — and are compared
+/// here instead of by a person.
+///
+/// 1. **The pin.** The pending must be an integration's ([`begin_integration`]); the joiner must
+///    have answered with its signing slot; and its device id, its X25519 key and its Ed25519 key
+///    must each equal `pinned`'s, or nothing moves ([`PIN_MISMATCH`]). The capability must be
+///    restricted ([`PIN_NOT_RESTRICTED`]) and the joiner at [`identity::SIG_PROTO`].
+/// 2. **The cap**, as [`confirm`] — the bot is one of the five.
+/// 3. **Seal at the current epoch and post `offersig` then `offer`**, `offersig` saying
+///    `mode: "signed"` — so the joiner latches before it joins, and takes this device's key as the
+///    one anchor its first document must be signed by. A relay that keeps no `offersig` is refused
+///    before the offer goes ([`NO_SIGNATURE_SLOTS`]).
+/// 4. **Commit, in one stretch**: the joiner on the roster under [`INTEGRATION_DEVICE_NAME`], its
+///    signing key and level, its capability and `restricted_ever` (`roster::restrict`), and **this
+///    device latched into signed mode** at the epoch the join publishes
+///    (`roster::enter_signed_mode`) — the one shipped caller of either.
+/// 5. **Publish the join** ([`client::publish_join`]): the rotation to `E = epoch + 1`, carrying
+///    the group's first signed roster document — signed by this device, every member with their
+///    keys and level, the bot `cap: "read"`. Every other device verifies it against the open
+///    document it last accepted, and follows the latch. Best effort, as for any join: a refusal is
+///    the debt [`PinnedJoin::published`] reports, paid signed on the next sync.
+pub async fn confirm_pinned(
+    db: &impl Store,
+    pending: &mut Option<Pending>,
+    pinned: Pinned,
+) -> Result<PinnedJoin, String> {
+    use crate::sync_pair::roster;
+
+    let me = db.with(|conn| identity::ensure(conn).map_err(err))?;
+    let p = pending.as_ref().ok_or(NOTHING_IN_FLIGHT)?;
+    if p.spent {
+        return Err(ALREADY_USED.to_owned());
+    }
+    if p.origin != Origin::Integration {
+        return Err(NOT_AN_INTEGRATION_PAIRING.to_owned());
+    }
+    let (Some(pair_key), Some(peer_public), Some(peer_id)) =
+        (p.pair_key, p.peer_public, p.peer_device_id.clone())
+    else {
+        return Err(NOT_ANSWERED.to_owned());
+    };
+    let rv = p.rv.clone();
+    let peer_sign = p.peer_sign.clone();
+
+    // **The pin, before anything else is read or sent.** Public values, so an ordinary compare.
+    let signed_key = peer_sign
+        .as_ref()
+        .and_then(|slot| roster::key32(&slot.ed25519));
+    if peer_id != pinned.device_id
+        || peer_public != pinned.x25519
+        || signed_key != Some(pinned.ed25519)
+    {
+        return Err(PIN_MISMATCH.to_owned());
+    }
+    if pinned.capability != roster::READ {
+        return Err(PIN_NOT_RESTRICTED.to_owned());
+    }
+    if peer_sign
+        .as_ref()
+        .is_none_or(|slot| slot.proto < identity::SIG_PROTO)
+    {
+        return Err(JOINER_TOO_OLD.to_owned());
+    }
+
+    // An integration joins the group this device is in, at the epoch it stands on — never one it
+    // founds, and never across a rotation: only a sync operation moves a group, and this one holds
+    // the lane from here to the commit.
+    let group = db.with(|conn| {
+        identity::room_for(conn, &peer_id)?;
+        identity::group(conn)
+            .map_err(err)?
+            .ok_or_else(|| identity::NOT_IN_A_GROUP.to_owned())
+    })?;
+    let encoded = seal_offer(&pair_key, &me.device_id, &group)?;
+    let offersig = seal_offersig(db, &pair_key, &rv, &me.device_id, roster::Mode::Signed)?;
+    if !client::post_rendezvous_if_kept(db, &rv, client::OFFER_SIG, &offersig).await? {
+        return Err(NO_SIGNATURE_SLOTS.to_owned());
+    }
+    client::post_rendezvous(db, &rv, "offer", &encoded).await?;
+
+    let signed_since = group.epoch + identity::JOIN_STEP;
+    db.with(|conn| {
+        let me = identity::ensure(conn).map_err(err)?;
+        identity::join_group(conn, &group.group_id, group.epoch, &group.group_key, &me)
+            .map_err(err)?;
+        identity::add_device(conn, &peer_id, &peer_public, INTEGRATION_DEVICE_NAME).map_err(err)?;
+        // The name every sibling draws, through `device_names` — the bot's own never applies.
+        identity::rename_device(conn, &peer_id, INTEGRATION_DEVICE_NAME).map_err(err)?;
+        file_peer_sign(conn, &peer_id, peer_sign.as_ref())?;
+        roster::restrict(conn, &peer_id, &pinned.capability).map_err(err)?;
+        roster::enter_signed_mode(conn, signed_since).map_err(err)
+    })?;
+
+    if let Some(p) = pending.as_mut() {
+        p.spent = true;
+    }
+
+    // The join's rotation, now built in signed mode: the group's first signed document.
+    let _ = client::publish_join(db).await;
+    let published = !db.with(identity::roster_is_dirty)?;
+    Ok(PinnedJoin {
+        device_id: peer_id,
+        signed_since,
+        published,
     })
 }
 
@@ -1144,6 +1390,16 @@ fn nothing_is_held_across_a_request(lane: &Lane<'_>, pending: &mut Option<Pendin
     fn sendable<T: crate::platform::Sendable>(_: T) {}
     sendable(accept(lane, &mut *pending, ""));
     sendable(confirm(lane, &mut *pending));
+    sendable(confirm_pinned(
+        lane,
+        &mut *pending,
+        Pinned {
+            device_id: String::new(),
+            x25519: [0; 32],
+            ed25519: [0; 32],
+            capability: String::new(),
+        },
+    ));
     sendable(poll(lane, &mut *pending, 0));
     sendable(remove_device(lane, ""));
     sendable(leave_group_now(lane));

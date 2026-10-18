@@ -1796,6 +1796,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "grimoire-bot"
+version = "0.55.0"
+dependencies = [
+ "base64 0.22.1",
+ "chacha20poly1305",
+ "console_error_panic_hook",
+ "getrandom 0.4.3",
+ "grimoire-core",
+ "hkdf",
+ "httpmock",
+ "js-sys",
+ "rsqlite-vfs",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
 name = "grimoire-core"
 version = "0.55.0"
 dependencies = [

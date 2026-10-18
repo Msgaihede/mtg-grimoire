@@ -22,12 +22,13 @@
 //!   one** signed it, its `prev` is that document's hash, and no device once restricted comes
 //!   back as full. From then on removal, rotation and capability move only on such a document.
 //!
-//! ⚠️ **Nothing a shipped build does *enters* signed mode in this release.** The device that
-//! enables it publishes the first signed document, and that press is the spec's PR 3;
-//! [`enter_signed_mode`] is its stand-in and exists only under `cfg(any(test, feature =
-//! "testing"))`. What ships is the *following* half: a verified signed document, signed by a full
-//! member this device already trusts, latches this device too — which is what lets PR 3's gate
-//! require every member at [`identity::SIG_PROTO`] 2 ("verifies rosters") before a bot may join.
+//! ⚠️ **One press enters signed mode, and nothing else does**: the integration's pinned pairing,
+//! `pairing::confirm_pinned` (the spec's §13.4). It latches this device at the epoch the bot's
+//! join publishes ([`enter_signed_mode`], `pub(crate)` and called from there alone), and that
+//! join's rotation carries the group's first signed document, signed by this device. Every other
+//! device follows: a verified signed document, signed by a full member it already trusts, latches
+//! it too — which is why `integration::gate` requires every member at [`identity::SIG_PROTO`] 2
+//! ("verifies rosters") before a bot may join.
 //!
 //! **The document is a string, verified over its exact bytes and never re-serialised.**
 //! [`to_text`] writes it once, deterministically (serde's field order, compact), and the relay
@@ -865,12 +866,33 @@ pub fn note_refused(conn: &Connection, text: &str, message: &str) {
     let _ = set(conn, ROSTER_REFUSED, &hashed);
 }
 
-/// Enter signed mode at `epoch` — **the stand-in for the spec's PR 3 enable press, and test-only
-/// in this release**. Nothing shipped calls it; the module doc says why.
-#[cfg(any(test, feature = "testing"))]
-pub fn enter_signed_mode(conn: &Connection, epoch: i64) -> rusqlite::Result<()> {
+/// Enter signed mode at `epoch` — **the integration's press, and nothing else's.** Its one
+/// shipped caller is `pairing::confirm_pinned`, in the stretch that files a restricted device,
+/// with `epoch` the one its join's rotation publishes; that rotation's document is then built and
+/// signed in signed mode ([`for_rotation`], [`authenticate`]). `pub(crate)` so no host can reach
+/// it, and this crate's tests use it as a fixture.
+///
+/// **Latched before the signed document is published, on purpose.** From the moment the bot holds
+/// the group key it can compute the open-mode MAC, so an open document is no longer a full
+/// device's word; this device stops accepting one at once, and a rotation it publishes from here
+/// on is signed — including the join's, when it has to be paid on a later trip.
+pub(crate) fn enter_signed_mode(conn: &Connection, epoch: i64) -> rusqlite::Result<()> {
+    if mode(conn) == Mode::Signed {
+        return Ok(());
+    }
     set(conn, ROSTER_MODE, Mode::Signed.word())?;
     set(conn, SIGNED_SINCE, &epoch.to_string())
+}
+
+/// File `device` as restricted to `capability`: its roster row, and [`RESTRICTED_EVER`] for good.
+/// The integration's pinned pairing is the one caller — **the device that pairs a bot is the one
+/// that sets what it may do** (the spec's §9), and a document only ever carries that word onward.
+pub(crate) fn restrict(conn: &Connection, device: &str, capability: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE sync_devices SET capability = ?2 WHERE device_id = ?1",
+        params![device, capability],
+    )?;
+    note_restricted(conn, &[device])
 }
 
 /// Latch signed mode at `epoch` because the device that paired this one said its group signs —

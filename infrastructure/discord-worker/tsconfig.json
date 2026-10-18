@@ -1,0 +1,44 @@
+{
+  /* The Discord front's type-check program. Every compiler option below is
+     `infrastructure/relay/tsconfig.json`'s byte for byte, and that file carries the argument for
+     why a Worker gets a program of its own: `@cloudflare/workers-types` declares `Request`,
+     `Response` and some four hundred other globals, and the app under `packages/ui/` must see the
+     DOM's versions of those names and nothing else.
+
+     A program of its own rather than a wider `include` in another Worker's, for
+     `infrastructure/share-worker/tsconfig.json`'s reason: `mtg-grimoire-discord` is a deploy of
+     its own, and one program spanning two Workers lets an edit to one fail the other's check.
+
+     **Nothing of another package is in it.** The script imports no module of the relay's, and
+     its tests stand D1 up over `node:sqlite` with this folder's own migration
+     (`src/fake.ts`), so there is no `alias` in `wrangler.jsonc` and no dependency in
+     `package.json` but the types and the runner. `src/sqlite.d.ts` declares the few names of
+     `node:sqlite` the fake uses, since `types` is pinned to `@cloudflare/workers-types`.
+
+     **`src/rpc.ts` is the one module another package reads**: the bot device's Worker
+     (`infrastructure/bot-device/`) imports its types by this package's name, so the two scripts
+     are checked against one interface. And `src/commands.ts` is loaded by Node as well, by
+     `scripts/discord-register.ts`, so it is plain data with nothing but erasable type syntax.
+
+     `src`'s `*.test.ts` are inside the program, as the relay's are: a test that does not
+     type-check can drift from what it asserts about. `src/vite.d.ts` declares the Vite imports
+     the tests read files as text by. */
+  "compilerOptions": {
+    "target": "ES2022",
+    /* No `DOM`: this is not a browser. `@cloudflare/workers-types` supplies the fetch, stream
+       and URL globals workerd actually has, which are a different and smaller set. */
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["@cloudflare/workers-types"],
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["src"]
+}

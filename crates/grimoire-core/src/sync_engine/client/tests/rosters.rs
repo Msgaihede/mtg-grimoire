@@ -528,6 +528,97 @@ async fn a_relay_without_the_amendment_route_is_skipped_quietly() {
     assert!(rd::last(&phone).unwrap().is_none());
 }
 
+/// ⚠ **A joiner's first trip racing the join's own rotation is not an error.** The joiner stands
+/// on the epoch it was offered; its trip finds that current and builds its amendment there; the
+/// device that paired it rotates before the post lands, so `/roster` — which asks for the
+/// group's *current* auth — answers `401`. `/keys`, read once more, is a rotation ahead: the
+/// next trip's `check_keys` adopts it, so nothing is recorded and nothing is adopted here. (The
+/// web smoke's relaunch step met exactly this row: "the relay answered 401 to this device's
+/// roster entry".)
+///
+/// **What makes it red**: recording every non-2xx from `/roster` as the trip's error.
+#[tokio::test]
+async fn an_amendment_a_rotation_overtook_is_left_for_the_next_trip() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    let server = MockServer::start_async().await;
+    let (phone, _me, _desk, group_id) = keyed_group();
+    set_state(&phone, RELAY_URL, &server.base_url()).unwrap();
+    let asked = Arc::new(AtomicUsize::new(0));
+    let keys_asked = asked.clone();
+    let (before, after) = (page(0, None, &[], None), page(1, None, &[], None));
+    server.mock(|when, then| {
+        when.method(GET).path(format!("/g/{group_id}/keys"));
+        then.respond_with(move |_: &HttpMockRequest| {
+            let body = if keys_asked.fetch_add(1, Ordering::SeqCst) == 0 {
+                &before
+            } else {
+                &after
+            };
+            HttpMockResponse::builder()
+                .status(200)
+                .header("content-type", "application/json")
+                .body(body.to_string())
+                .build()
+        });
+    });
+    let sent = Sent::default();
+    server.mock(|when, then| {
+        when.method(POST)
+            .path(format!("/g/{group_id}/roster"))
+            .is_true(tap(&sent));
+        then.status(401)
+            .json_body(serde_json::json!({ "error": "unauthorized" }));
+    });
+
+    check_keys(&phone).await.unwrap();
+    amend_roster(&phone).await;
+
+    assert_eq!(
+        amendments(&sent).len(),
+        1,
+        "built and sent at the epoch it stood on"
+    );
+    assert_eq!(
+        asked.load(Ordering::SeqCst),
+        2,
+        "the relay's epoch read once more"
+    );
+    assert!(error_rows(&phone).is_empty(), "{:?}", error_rows(&phone));
+    assert_eq!(identity::group(&phone).unwrap().unwrap().epoch, 0);
+    assert!(
+        rd::last(&phone).unwrap().is_none(),
+        "nothing taken as accepted"
+    );
+}
+
+/// **A `401` at the epoch the group still stands on is a refusal, and is recorded** — once, in
+/// the amendment's own sentence.
+#[tokio::test]
+async fn an_amendment_refused_at_the_current_epoch_is_recorded() {
+    let server = MockServer::start_async().await;
+    let (phone, _me, _desk, group_id) = keyed_group();
+    set_state(&phone, RELAY_URL, &server.base_url()).unwrap();
+    keys_answering(&server, &group_id, page(0, None, &[], None));
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{group_id}/roster"));
+        then.status(401)
+            .json_body(serde_json::json!({ "error": "unauthorized" }));
+    });
+
+    check_keys(&phone).await.unwrap();
+    amend_roster(&phone).await;
+
+    assert_eq!(
+        error_rows(&phone),
+        vec![("roster".to_owned(), "http".to_owned(), 1)]
+    );
+    assert_eq!(
+        rows_for(&phone, "roster"),
+        vec!["the relay answered 401 to this device's roster entry".to_owned()]
+    );
+}
+
 /// **A rotation carries the new epoch's document** — step 0, the manifest's devices as members,
 /// MAC'd under the **new** key — and once the relay takes it, it is this device's last accepted
 /// one.

@@ -59,11 +59,16 @@ resolver = "2"
 # names the workspace unifies them with the engine's, which asks the scanner for `corpus` and
 # with it SQLite. `scripts/build-wasm.ts` builds it with `-p`, in a build tree of its own.
 #
+# **`crates/grimoire-bot` is the Discord bot device** (the Discord spec's PR 3, 2026-10-18):
+# `grimoire-core` for workerd, over an encrypted page-store VFS on a Durable Object's SQL storage,
+# loaded by `infrastructure/bot-device`. Built for wasm32 by `scripts/build-wasm.ts --only bot`
+# with the `wasm` profile below, and never by a page.
+#
 # **`crates/grimoire-play` is the goldfish board's rules engine** (2026-10-12): phase.rs's
 # `phase-engine`, from its git repository, behind a crate only the desktop links. That git
 # dependency is why `rust-toolchain.toml` is a dated nightly — its repository's root manifest has a
 # nightly-only `cargo-features` line — and `docs/reference/goldfish.md` has the rest.
-members = ["apps/desktop/src-tauri", "crates/grimoire-core", "apps/light/src-tauri", "crates/grimoire-web", "crates/grimoire-scan", "crates/grimoire-play"]
+members = ["apps/desktop/src-tauri", "crates/grimoire-core", "apps/light/src-tauri", "crates/grimoire-web", "crates/grimoire-scan", "crates/grimoire-play", "crates/grimoire-bot"]
 exclude = ["crates/card-scanner"]
 
 # One version, edition and license for the five members, which inherit each with

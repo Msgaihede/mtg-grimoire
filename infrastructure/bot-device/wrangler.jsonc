@@ -1,0 +1,52 @@
+{
+  "$schema": "../wrangler/node_modules/wrangler/config-schema.json",
+  "name": "mtg-grimoire-bot-device",
+  "main": "src/index.ts",
+  // The relay's date, as every Worker on this account chose: nothing here wants a newer runtime.
+  "compatibility_date": "2026-08-27",
+
+  // ⚠️ **No route and no `workers.dev`, and that is the design** (the Discord spec §13.1): this
+  // script holds the bot's identity, the group key and the group's materialised data, so nothing
+  // on the internet can reach it. The one way in is the Discord front's `BOT` binding
+  // (`infrastructure/discord-worker/wrangler.jsonc`, `script_name` this Worker), over Workers RPC.
+  "workers_dev": false,
+  "preview_urls": false,
+
+  // **The TypeScript export writer**, by the shared UI's package name. Aliases because a deploy
+  // from a checkout runs no pnpm (`release.yml`'s Worker jobs install wrangler alone), and
+  // wrangler matches an alias against the whole specifier (`infrastructure/app-worker/
+  // wrangler.jsonc`). The `@/lib/prices` line is the one value the writer's graph imports through
+  // the shared UI's own alias (`fields.ts`). **The engine** is imported by path from
+  // `../../dist-wasm/bot/` — `node scripts/build-wasm.ts --only bot`'s output, not in git: build it
+  // before `wrangler dev` or a deploy (the README's runbook).
+  "alias": {
+    "@grimoire/ui/features/transfer/export/format": "../../packages/ui/features/transfer/export/format.ts",
+    "@grimoire/ui/features/transfer/export/arena": "../../packages/ui/features/transfer/export/arena.ts",
+    "@grimoire/ui/features/transfer/fields": "../../packages/ui/features/transfer/fields.ts",
+    "@/lib/prices": "../../packages/ui/lib/prices.ts",
+  },
+
+  // One object per Discord link, minted by the front with `newUniqueId()`. SQLite-backed storage,
+  // because the engine's page store is synchronous SQL (`src/store.ts`).
+  "durable_objects": {
+    "bindings": [{ "name": "BOT", "class_name": "BotDevice" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["BotDevice"] }],
+
+  // **No crons**: an object's pulls are its own alarms (`src/index.ts`). The account's cron
+  // triggers are counted across every Worker (`infrastructure/discord-worker/src/wrangler.test.ts`).
+
+  "vars": {
+    // Discord's application public key, hex — the same value the front has. The object checks
+    // every interaction's signature itself (§9), so a front that was compromised cannot make
+    // this answer for a forged one. A placeholder until the owner fills it.
+    "DISCORD_PUBLIC_KEY": "<set when the Discord application exists>",
+  },
+  // **One secret, never committed and never in `.dev.vars` in git**: `BOT_KEK`, 32 random bytes
+  // base64url — the key every stored page is sealed under (HKDF per object). `wrangler secret
+  // put BOT_KEK` on this Worker alone; the README has the runbook and what losing it means.
+
+  // **No logs.** The engine says nothing about rows, but an exception's text can name a card;
+  // the front's observability is off for the same reason (the spec §10, *no plaintext logs*).
+  "observability": { "enabled": false },
+}

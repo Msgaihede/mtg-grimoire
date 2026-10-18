@@ -3,7 +3,7 @@
  *
  * The page was one scroll of twelve panels until 2026-09-03 — ordered by what a press costs,
  * which is a real rule and still the rule *inside* a group, but an ordering only helps somebody
- * who already knows what they are scrolling towards. This module is the other half: seven groups
+ * who already knows what they are scrolling towards. This module is the other half: groups
  * a reader picks from, and a keyword per panel so that typing the word they actually have in
  * mind ("dropbox", "tcgplayer", "patreon") lands on the panel that answers it.
  *
@@ -31,6 +31,7 @@ export type PanelId =
   | "prices"
   | "sync"
   | "review"
+  | "discord"
   | "hidden-tags"
   | "start-view"
   | "theory-marks"
@@ -41,15 +42,9 @@ export type PanelId =
   | "errors"
   | "danger";
 
-/** The seven entries in the rail. */
+/** The entries in the rail. */
 export type GroupId =
-  | "updates"
-  | "carddata"
-  | "sync"
-  | "tags"
-  | "appearance"
-  | "storage"
-  | "errors";
+  "updates" | "carddata" | "sync" | "integrations" | "tags" | "appearance" | "storage" | "errors";
 
 /** What the rail's badge counts, where a group has one. */
 export type BadgeId = "review" | "errors";
@@ -103,6 +98,24 @@ export const PANELS: Record<PanelId, PanelMeta> = {
     title: "Needs review",
     group: "sync",
     keywords: "conflict conflicts resolved kept folder loop looks fine queue",
+  },
+  /**
+   * **The first panel under `Integrations`, and the reason the entry exists** (issue #1096).
+   *
+   * Not under `Sync`, though what it enables is a device in the reader's sync group: that entry
+   * is the reader's own devices, and what this panel connects is a chat app's account and a bot
+   * run by the operator. A second service of that kind belongs beside it, which is what the
+   * entry's name is for.
+   *
+   * **The keyword line is what a reader would type at Discord**, which is mostly Discord's own
+   * vocabulary — bot, slash commands, server — since nobody types this app's word for it.
+   * `sync` is deliberately absent: it is the `Sync` entry's word, and a reader who types it is
+   * looking for their devices.
+   */
+  discord: {
+    title: "Discord",
+    group: "integrations",
+    keywords: "bot slash commands chat server dm message account sign in authorize link",
   },
   "hidden-tags": {
     title: "Hidden tags",
@@ -225,7 +238,7 @@ type GroupMeta = {
 /**
  * The rail, top to bottom.
  *
- * **Seven entries, fewer than the panels they index**, which is the whole point: a list as long
+ * **Fewer entries than the panels they index**, which is the whole point: a list as long
  * as the page it indexes is a second scroll rather than a way through the first. Where two
  * panels answer one question they share an entry — `Needs review` is what sync asks of a reader,
  * and `Appearance`'s panels are what this app looks like when the reader is in front of it (the
@@ -246,6 +259,13 @@ type GroupMeta = {
  * else to change. Folding `Prices` into another entry is the alternative and it is a bigger
  * change than this one: every entry it could join answers a different question.
  *
+ * **`Integrations` sits directly under `Sync`** (issue #1096): the two are the rail's only
+ * entries about something outside this install — the reader's other devices, and a service
+ * their friends use — so they are read together. It holds one panel, `Discord`, and is a group
+ * of one for `Card data`'s reason below: the entry names the question, and a second service
+ * slots in under it with nothing else to change. **The light edition draws neither the panel nor
+ * the entry** (`LIGHT_SETTINGS`), which `groupsOf` does by itself.
+ *
  * **`Appearance` sits after `Tags` and before `Storage and data`**, which is the last entry
  * about the app itself before the three about the folder on disk. It is emphatically not a
  * section *of* `Tags`: see the comment on `theory-marks` in {@link PANELS} for the vocabulary
@@ -261,6 +281,7 @@ export const GROUPS: Record<GroupId, GroupMeta> = {
   updates: { label: "Updates" },
   carddata: { label: "Card data" },
   sync: { label: "Sync", badge: "review" },
+  integrations: { label: "Integrations" },
   tags: { label: "Tags" },
   appearance: { label: "Appearance" },
   storage: { label: "Storage and data" },

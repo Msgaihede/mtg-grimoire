@@ -1,0 +1,113 @@
+{
+  "$schema": "../wrangler/node_modules/wrangler/config-schema.json",
+  "name": "mtg-grimoire-discord",
+  "main": "src/index.ts",
+  // The relay's date, for the share Worker's reason: it runs beside them on the same account and
+  // nothing here wants a newer runtime. WebCrypto's `Ed25519`, which Discord's signature needs,
+  // and Workers RPC to another script's Durable Object are both older than it.
+  "compatibility_date": "2026-08-27",
+
+  // ⚠️ **The address, and it is compiled into the app**: a Custom Domain on the zone the web
+  // app's origin is the apex of, as the other Workers' are, so a deploy states the DNS record and
+  // the certificate itself. `https://discord.mtg-grimoire.app` is `DISCORD_BASE` below, the
+  // desktop's own `DISCORD_BASE` (the design, §13.6), the redirect URI the Discord application is
+  // told about (`/oauth/discord/callback`), and its Interactions Endpoint URL (`/interactions`).
+  // `src/wrangler.test.ts` holds the pattern and `DISCORD_BASE` together.
+  "routes": [{ "pattern": "discord.mtg-grimoire.app", "custom_domain": true }],
+  // **One address, written out rather than left to a default** — the scan inbox's line, for its
+  // reason: no build was ever cut with a `workers.dev` address for this Worker, so there is
+  // nobody to keep one answering for, and a preview URL would be one more address for every
+  // version ever uploaded, each bound to the same database and the same bots.
+  "workers_dev": false,
+  "preview_urls": false,
+
+  // **The relay's database — the same `database_name` and `database_id` as
+  // `infrastructure/relay/wrangler.jsonc` and `infrastructure/share-worker/wrangler.jsonc`** —
+  // so no new database has to be created, the share Worker's arrangement. This Worker reads no
+  // table of theirs and they read none of its: every table it owns is named `discord_…`
+  // (`migrations/0001_discord-links.sql`).
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "mtg-grimoire-relay",
+      "database_id": "5e0381b0-d2aa-4861-a725-26ca18ae00ef",
+      // This Worker's own list on the relay's database, in a table of its own, so neither of the
+      // other two lists can mark one of its files as applied — `migrations/README.md`.
+      "migrations_dir": "migrations",
+      "migrations_table": "d1_migrations_discord",
+    },
+  ],
+
+  // **The bot's Durable Objects, which are another script's** (the design, §9 and §13.1): the
+  // class `BotDevice` of `mtg-grimoire-bot-device` (`infrastructure/bot-device/`), one object
+  // per link. This Worker holds no sync key; that script holds the bot's identity, the group key
+  // and the reader's materialised data, has no route of its own, and is reached through this
+  // binding alone — `src/rpc.ts` is every call that crosses it.
+  //
+  // ⚠️ **That script deploys first.** A binding to a class of a script that does not exist yet is
+  // a deploy wrangler refuses, and its `migrations` (the class's `new_sqlite_classes`) are its
+  // own: this config has none, because it defines no class.
+  "durable_objects": {
+    "bindings": [
+      { "name": "BOT", "class_name": "BotDevice", "script_name": "mtg-grimoire-bot-device" },
+    ],
+  },
+
+  // The one route a stranger can reach that writes a row with nothing to show for it —
+  // `POST /link/begin` — ten a minute from one address. `src/index.ts`'s `LIMIT` repeats the
+  // numbers so a refusal can say how long to wait, and `src/wrangler.test.ts` holds them
+  // together. `period` takes 10 or 60 and nothing else. `namespace_id` is an integer of our own:
+  // the relay owns 1001–1003 and the scan inbox 2001, and reusing one would have two Workers
+  // spend each other's budget.
+  //
+  // **The claim is not limited**: the desktop polls it every two seconds, and it takes a
+  // 32-character code and the verifier behind a 43-character challenge, which nobody guesses.
+  // Every other route is behind Discord's signature or a 32-byte link secret.
+  //
+  // A name that drifts from `Env`'s is a binding the Worker reads as `undefined`, which it treats
+  // as "no limit" on purpose — the deploy would succeed and nothing would be limited.
+  "ratelimits": [
+    { "name": "RL_BEGIN", "namespace_id": "3001", "simple": { "limit": 10, "period": 60 } },
+  ],
+
+  // The daily sweep (`src/index.ts`'s `scheduled`): link requests past their ten minutes. They
+  // are also deleted on every begin and the moment a claim or a callback reads one, so this is
+  // only what nobody came back for on a day nobody began one.
+  //
+  // ⚠️ **Minute `45`**, because the relay owns minute `0` (`0 * * * *`, hourly) and the share
+  // Worker minute `30` (`30 3 * * *`): the three write the same D1 database, and nothing is
+  // gained by starting two passes on the same minute. **The free plan allows five cron triggers
+  // per account; this is the third** (the scan inbox, the web app's hosting and the bot device
+  // have none — the bot pulls in its Durable Objects' alarms, which are not cron triggers).
+  // `src/wrangler.test.ts` counts every Worker's.
+  "triggers": { "crons": ["45 3 * * *"] },
+
+  "vars": {
+    // **This Worker's own address**, with no trailing slash: the OAuth redirect URI is
+    // `{DISCORD_BASE}/oauth/discord/callback`, and Discord compares a redirect URI to the one
+    // the application lists byte for byte, so a slash here is a sign-in Discord refuses.
+    "DISCORD_BASE": "https://discord.mtg-grimoire.app",
+    // ⚠️ **Placeholders, deliberately ones that cannot be mistaken for a value** — the share
+    // Worker's `SHARE_BASE` was `<set on first deploy>` until its first deploy, for this reason.
+    // The application id and its public key are public (Discord prints both on the application's
+    // page) and so are `vars` and not secrets; they exist once the owner has created the
+    // application (`README.md`, *Deploying*, step 1). Until both are real, every route answers
+    // 503 `not_configured` (`src/env.ts`'s `configured`). The bot device's own
+    // `DISCORD_PUBLIC_KEY` is the same value, set in its own config.
+    "DISCORD_APPLICATION_ID": "<set when the Discord application exists>",
+    "DISCORD_PUBLIC_KEY": "<set when the Discord application exists>",
+  },
+
+  // **One secret, and it is not in this file**: `DISCORD_CLIENT_SECRET`, the application's
+  // OAuth2 client secret, which the callback exchanges a sign-in's code with. Cloudflare's to
+  // hold and the owner's to set (`wrangler secret put DISCORD_CLIENT_SECRET`), never a `var`,
+  // never in `.dev.vars`. It is none of the relay's: this Worker holds no secret of another
+  // Worker's and verifies none of the relay's tokens (`src/wrangler.test.ts` holds both).
+
+  // **No log, written out rather than left to a default**, the scan inbox's line for a sharper
+  // reason: a request here carries a link secret in its `authorization` header, an invite to a
+  // sync group in an enroll's body, and a sign-in's callback Discord's one-time code in its
+  // address. With observability on, Cloudflare would keep each for days. A fault is read live,
+  // with `wrangler tail`, by whoever is looking for one.
+  "observability": { "enabled": false },
+}

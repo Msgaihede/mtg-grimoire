@@ -75,6 +75,8 @@ import searchRsDesktop from "../../../apps/desktop/src-tauri/src/search/mod.rs?r
 import setCompletionRsCore from "../../../crates/grimoire-core/src/set_completion.rs?raw";
 import setCompletionRsDesktop from "../../../apps/desktop/src-tauri/src/set_completion/mod.rs?raw";
 import shareRs from "../../../apps/desktop/src-tauri/src/share/commands.rs?raw";
+// The Discord integration's six commands and its two structs (issue #1096, spec §13.6).
+import discordRs from "../../../apps/desktop/src-tauri/src/discord/commands.rs?raw";
 import panelwidthRsCore from "../../../crates/grimoire-core/src/panelwidth.rs?raw";
 import panelwidthRsDesktop from "../../../apps/desktop/src-tauri/src/panelwidth/mod.rs?raw";
 import shelffoldsRsCore from "../../../crates/grimoire-core/src/shelffolds.rs?raw";
@@ -5520,6 +5522,66 @@ describe("the share wrappers name the commands `share/commands.rs` registers", (
       url: "https://share.example/s/kQ2p7fMx9Lb0RtVw",
     });
     expect(out).toEqual(body);
+  });
+});
+
+/** The six, in the order spec §13.6 lists them. Every one answers `DiscordStatus` but begin. */
+const DISCORD_COMMANDS = [
+  ["discordStatus", "discord_status"],
+  ["discordLinkBegin", "discord_link_begin"],
+  ["discordLinkPoll", "discord_link_poll"],
+  ["discordLinkCancel", "discord_link_cancel"],
+  ["discordEnable", "discord_enable"],
+  ["discordDisable", "discord_disable"],
+] as const;
+
+/**
+ * The Discord wrappers against the commands `discord/commands.rs` defines (issue #1096, spec
+ * §13.6) — names, arguments, and where they are registered. The two structs need nothing here:
+ * the struct walk at the foot of this file finds `DiscordStatus` and `DiscordLinkStart` wherever
+ * in the workspace they are declared and holds them field for field.
+ *
+ * **No command takes an argument, and that is the claim worth a fence**: the desktop holds the
+ * link secret, the PKCE verifier and the bot's pinned keys, so a wrapper that grew one would be
+ * the page handing Rust a secret it should never have seen — or, `invoke` matching by name, a
+ * key Rust ignores while the press appears to work.
+ */
+describe("the Discord wrappers name the commands `discord/commands.rs` defines", () => {
+  it.each(DISCORD_COMMANDS)("%s is the desktop command %s, and not the core's", (_, command) => {
+    expect(discordRs, `\`${command}\` is not defined in discord/commands.rs`).toMatch(
+      new RegExp(`pub (?:async )?fn ${command}\\(`),
+    );
+    expect(desktopRs, `\`${command}\` is not registered`).toMatch(new RegExp(`::${command},`));
+    // Desktop only (spec §13.6). A row in the core's table would be a command both light hosts
+    // answer with no module behind it.
+    expect(commandsRs, `\`${command}\` is in the core's table`).not.toMatch(
+      new RegExp(`^\\s*(?:read|write|owned) ${command} in \\w+\\(`, "m"),
+    );
+  });
+
+  it.each(DISCORD_COMMANDS)("%s sends no arguments", async (method, command) => {
+    invoke.mockResolvedValue(null);
+
+    await ipc[method]();
+
+    expect(invoke).toHaveBeenCalledWith(command);
+    // The source too, so a wrapper that sent `{}` or an `undefined` payload is caught as well as
+    // one that sent a key: the command's name closes the `invoke` call.
+    expect(ipcSource).toContain(`("${command}")`);
+  });
+
+  /**
+   * The Rust half of *no arguments*: every parameter a command declares is Tauri's to inject
+   * (`State`, `AppHandle`, `Window`), never one the page would have to send.
+   */
+  it.each(DISCORD_COMMANDS)("%s declares nothing the page would have to send", (_, command) => {
+    const marker = new RegExp(`pub (?:async )?fn ${command}\\(([^)]*)\\)`, "s").exec(discordRs);
+    expect(marker, `no \`fn ${command}(\` in discord/commands.rs`).not.toBeNull();
+    const params = [...(marker?.[1] ?? "").matchAll(/(\w+)\s*:\s*([^,]+)/g)];
+    const sent = params.filter(
+      ([, , type]) => !/\b(?:State|AppHandle|Window|WebviewWindow)\b/.test(type),
+    );
+    expect(sent.map(([, name]) => name)).toEqual([]);
   });
 });
 

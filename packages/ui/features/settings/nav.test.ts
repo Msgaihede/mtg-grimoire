@@ -95,6 +95,7 @@ const RAIL: GroupId[] = [
   "updates",
   "carddata",
   "sync",
+  "integrations",
   "tags",
   "appearance",
   "storage",
@@ -106,6 +107,7 @@ const UNDER: Record<GroupId, PanelId[]> = {
   updates: ["updates"],
   carddata: ["prices"],
   sync: ["sync", "review"],
+  integrations: ["discord"],
   tags: ["hidden-tags"],
   appearance: ["start-view", "theory-marks", "labels"],
   storage: ["data-folder", "backup", "cache", "danger"],
@@ -135,9 +137,9 @@ describe("the settings rail", () => {
     expect([...ids].sort()).toEqual(declared.sort());
   });
 
-  it("has seven entries, in declaration order", () => {
+  it("has eight entries, in declaration order", () => {
     expect(GROUP_ORDER).toEqual(RAIL);
-    expect(GROUP_ORDER).toHaveLength(7);
+    expect(GROUP_ORDER).toHaveLength(8);
     // `GROUP_ORDER` is derived from `GROUPS`, so this is what would catch the two coming apart —
     // an entry with a label and no place in the rail, or the reverse.
     expect(Object.keys(GROUPS)).toEqual(RAIL);
@@ -163,6 +165,7 @@ describe("PANEL_ORDER", () => {
       "prices",
       "sync",
       "review",
+      "discord",
       "hidden-tags",
       "start-view",
       "theory-marks",
@@ -280,11 +283,7 @@ describe("visiblePanels", () => {
    * thing this repo's vocabulary rule forbids.
    */
   it("draws every appearance panel under their own group", () => {
-    expect(visiblePanels("appearance", "")).toEqual([
-      "start-view",
-      "theory-marks",
-      "labels",
-    ]);
+    expect(visiblePanels("appearance", "")).toEqual(["start-view", "theory-marks", "labels"]);
   });
 
   /**
@@ -311,7 +310,16 @@ describe("visiblePanels", () => {
    * reader types the word they have, and one of the two would answer nothing at all.
    */
   it("finds the colours by the words a reader would type", () => {
-    for (const query of ["colour", "color", "green", "checkmark", "theory mark", "customize", "red", "cross"]) {
+    for (const query of [
+      "colour",
+      "color",
+      "green",
+      "checkmark",
+      "theory mark",
+      "customize",
+      "red",
+      "cross",
+    ]) {
       expect(visiblePanels("updates", query)).toContain("theory-marks");
     }
   });
@@ -324,5 +332,26 @@ describe("visiblePanels", () => {
    */
   it("finds the labels without finding the tag panels", () => {
     expect(visiblePanels("updates", "label")).toEqual(["labels"]);
+  });
+
+  /**
+   * **`Integrations` holds Discord, and Discord is found by Discord's own words** (issue #1096) —
+   * the service's name, and what a reader calls the thing it gives them. The entry's label is in
+   * the haystack too, so "integration" lands on it with no keyword saying so.
+   */
+  it("finds the Discord panel by the words a reader would type", () => {
+    for (const query of ["discord", "bot", "slash commands", "server", "integration"]) {
+      expect(visiblePanels("updates", query)).toEqual(["discord"]);
+    }
+  });
+
+  /**
+   * **`sync` is the `Sync` entry's word and not this panel's**, though what the panel enables is a
+   * device in the reader's sync group: a reader who types it is looking for their devices, and a
+   * Discord panel among the answers would be the trip `Local cache`'s comment in `nav.ts` warns
+   * about.
+   */
+  it("keeps the Discord panel out of a search for sync", () => {
+    expect(visiblePanels("updates", "sync")).not.toContain("discord");
   });
 });

@@ -58,7 +58,7 @@ function update(over: Partial<Update> = {}): Update {
  * Press a rail entry, which is how every story below reaches a panel outside `Updates`.
  *
  * **Matched as a prefix of the accessible name rather than the whole of it**, because two of the
- * seven entries carry a badge and `SettingsNav` writes that count into the name as ` (3)`. A story
+ * rail's entries carry a badge and `SettingsNav` writes that count into the name as ` (3)`. A story
  * that named an entry exactly would pass on a seeded world with nothing waiting and fail on one
  * with something waiting, which is the wrong thing for a badge to be able to break.
  */
@@ -135,7 +135,7 @@ const meta = {
           "a round trip. `Needs review` shares its entry, because the rows it lists are what a " +
           "sync asks of a person.\n\n" +
           "What is genuinely still missing — import — says so at the foot of the rail, under " +
-          "the seven real destinations rather than as an eighth that draws nothing.",
+          "the real destinations rather than as one more that draws nothing.",
       },
     },
   },
@@ -145,13 +145,13 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
- * The page as a reader arrives at it: seven ways in, and the one group that opens by itself.
+ * The page as a reader arrives at it: eight ways in, and the one group that opens by itself.
  *
  * `Updates` is the landing group because it is the one thing that sends somebody to this page
  * without their having chosen to come — the ribbon's gold button says there is a new version and
  * this is where it lands.
  *
- * **The play's second half is the half that is new.** It reads the rail's seven entries off the
+ * **The play's second half is the half that is new.** It reads the rail's eight entries off the
  * tree, and then asserts that three panels which used to be on this page *are not* — which is
  * the whole of what the regrouping did, and the one claim a screenshot of this story cannot
  * make. Before 2026-09-03 the same play asserted seven headings were present at once.
@@ -163,13 +163,14 @@ type Story = StoryObj<typeof meta>;
 export const Default: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    // The rail, by its own landmark rather than by position — seven destinations, in `nav.ts`'s
+    // The rail, by its own landmark rather than by position — every destination, in `nav.ts`'s
     // declaration order, which is the only place that order is written.
     const rail = within(canvas.getByRole("navigation", { name: "Settings" }));
     for (const label of [
       "Updates",
       "Card data",
       "Sync",
+      "Integrations",
       "Tags",
       "Appearance",
       "Storage and data",
@@ -190,7 +191,9 @@ export const Default: Story = {
     // One panel from each of three other groups, absent — the pane draws one group, not every
     // panel the page has with a rail beside them. (No count: this line said twelve, the page has
     // never held that many since, and a prose-only edit routes to neither CI job.)
-    await expect(canvas.queryByRole("heading", { name: "Prices", level: 2 })).not.toBeInTheDocument();
+    await expect(
+      canvas.queryByRole("heading", { name: "Prices", level: 2 }),
+    ).not.toBeInTheDocument();
     await expect(
       canvas.queryByRole("heading", { name: "Hidden tags", level: 2 }),
     ).not.toBeInTheDocument();
@@ -228,7 +231,9 @@ export const Searching: Story = {
     await expect(
       await canvas.findByRole("heading", { name: "Backup", level: 2 }),
     ).toBeInTheDocument();
-    await expect(canvas.queryByRole("heading", { name: "Updates", level: 2 })).not.toBeInTheDocument();
+    await expect(
+      canvas.queryByRole("heading", { name: "Updates", level: 2 }),
+    ).not.toBeInTheDocument();
     await expect(rail.getByRole("button", { name: "Updates" })).not.toHaveAttribute("aria-current");
 
     // And back: the press clears the box, so the group answers again.

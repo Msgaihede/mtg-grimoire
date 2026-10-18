@@ -27,6 +27,7 @@ import lightToml from "../apps/light/src-tauri/Cargo.toml?raw";
 import webToml from "../crates/grimoire-web/Cargo.toml?raw";
 import scanToml from "../crates/grimoire-scan/Cargo.toml?raw";
 import playToml from "../crates/grimoire-play/Cargo.toml?raw";
+import botToml from "../crates/grimoire-bot/Cargo.toml?raw";
 import desktopConf from "../apps/desktop/src-tauri/tauri.conf.json?raw";
 import lightConf from "../apps/light/src-tauri/tauri.conf.json?raw";
 import appGradle from "../apps/light/src-tauri/gen/android/app/build.gradle.kts?raw";
@@ -67,6 +68,8 @@ const CRATES = [
   { name: "grimoire-scan", dir: "crates/grimoire-scan", toml: scanToml, conf: null },
   // The game board's rules engine (goldfish and playtest), linked by the desktop alone.
   { name: "grimoire-play", dir: "crates/grimoire-play", toml: playToml, conf: null },
+  // The Discord bot device: the engine for workerd, in the `BotDevice` Durable Object.
+  { name: "grimoire-bot", dir: "crates/grimoire-bot", toml: botToml, conf: null },
 ];
 
 /** A file with its `#` comment lines removed — these files explain themselves in prose. */
@@ -1500,6 +1503,8 @@ describe("deploys, across every workflow", () => {
       "infrastructure/share-worker",
       "infrastructure/app-worker",
       "infrastructure/scan-worker",
+      "infrastructure/discord-worker",
+      "infrastructure/bot-device",
     ]);
     // And the Worker's own manifest, in the folder the tool left, is not a second home for it.
     const worker = JSON.parse(appWorkerPackage);
@@ -1626,6 +1631,20 @@ describe("deploys, across every workflow", () => {
         ({ path, line }) => !path.endsWith("/release.yml") && /\bscan-worker\b/.test(line),
       ),
     ).toEqual([]);
+    // **The Discord integration's two Workers are named by no workflow at all** — the one
+    // deliberate exception to "a release deploys every Worker". Spec
+    // `2026-10-17-discord-integration-design.md` §9 and §11: they are deployed by hand, after
+    // the owner has provisioned the Discord application, `DISCORD_CLIENT_SECRET` and `BOT_KEK`
+    // (`infrastructure/discord-worker/README.md`, *Deploying*). A job added for either is a
+    // decision of the owner's, made here and in `DEPLOYS` together.
+    expect(
+      lines.filter(({ line }) =>
+        /\b(?:discord-worker|bot-device|mtg-grimoire-discord|mtg-grimoire-bot-device)\b/.test(line),
+      ),
+    ).toEqual([]);
+    for (const folder of ["infrastructure/discord-worker", "infrastructure/bot-device"]) {
+      expect(Object.values(DEPLOYS)).not.toContain(folder);
+    }
     // A Worker's folder is a working directory in exactly one job: its own.
     const jobs = jobsOf(releaseYml);
     for (const [name, job] of Object.entries(jobs)) {

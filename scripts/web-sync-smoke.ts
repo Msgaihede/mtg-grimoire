@@ -494,8 +494,10 @@ async function main() {
     if (entry.method !== "POST" || entry.path !== "/token" || entry.status !== 401) return false;
     if (asker(entry) !== `${second.name}, the group door`) return false;
     const at = requests.indexOf(entry);
+    // Ten back, not three: the trip's own amendment and its `/keys` (below) stand between, and
+    // the confirming device's own first trip after the rotation can too.
     const rotated = requests
-      .slice(Math.max(0, at - 3), at)
+      .slice(Math.max(0, at - 10), at)
       .some((earlier) => /\/rotate$/.test(earlier.path) && earlier.status === 200);
     const later = requests.slice(at + 1);
     const again = later.findIndex((next) => next.method === "POST" && next.path === "/token");
@@ -506,13 +508,35 @@ async function main() {
       later.slice(0, again).some((next) => next.method === "GET" && /\/keys$/.test(next.path))
     );
   };
+  // **The same moment, met one request earlier.** The trip posts this device's roster entry
+  // (`amend_roster`, the Discord spec's PR 2) after its key check and before the group door, at
+  // the epoch that check found — so a rotation landing in between now meets the amendment
+  // first, refused `401` under the auth just left. The engine reads `/keys` once more, finds the
+  // group a rotation ahead and records nothing (`client::rotated_past`); the next trip adopts it
+  // and amends at the new epoch if anything is still owed. Allowed in that shape alone — the
+  // joiner's, behind a `/rotate`, answered by a `/keys` — and only once.
+  const amendedAcrossARotation = (entry: RelayLog) => {
+    if (entry.method !== "POST" || !/\/roster$/.test(entry.path) || entry.status !== 401)
+      return false;
+    if (asker(entry) !== second.name) return false;
+    const at = requests.indexOf(entry);
+    const rotated = requests
+      .slice(Math.max(0, at - 10), at)
+      .some((earlier) => /\/rotate$/.test(earlier.path) && earlier.status === 200);
+    const next = requests[at + 1];
+    return rotated && next?.method === "GET" && /\/keys$/.test(next.path);
+  };
   const refused = requests.filter(
     // The rendezvous poll's 404 is the relay's "not yet", which the engine waits through.
     (entry) => entry.status >= 400 && !(entry.status === 404 && /^\/p\//.test(entry.path)),
   );
   const reasked = refused.filter(acrossARotation);
-  const refusals =
-    reasked.length > 1 ? refused : refused.filter((entry) => !reasked.includes(entry));
+  const reamended = refused.filter(amendedAcrossARotation);
+  const allowed = [
+    ...(reasked.length > 1 ? [] : reasked),
+    ...(reamended.length > 1 ? [] : reamended),
+  ];
+  const refusals = refused.filter((entry) => !allowed.includes(entry));
   if (refusals.length > 0) {
     const before = (entry: RelayLog) =>
       asked
@@ -563,6 +587,9 @@ async function main() {
       [...byRoute].map(([route, count]) => `${route} × ${count}`).join(", ") +
       (reasked.length === 1
         ? ". One token was asked across the join's rotation: refused, and given at the next ask, under the new key"
+        : "") +
+      (reamended.length === 1
+        ? ". One roster entry was posted across the join's rotation: refused, and left for the next trip"
         : ""),
   );
 

@@ -11,7 +11,7 @@
   "packageManager": "pnpm@11.5.0+sha512.dbfcc4f81cf48597afd4bc391ffdf12c11f1a9fb83a395bfa6b0a2d9cc2fd8ffebafdb1ccbd529632153f793904c2615b7f09fe1a345473fd1c35845172a8eb1",
   "scripts": {
     "dev": "vite --config apps/desktop/vite.config.ts",
-    "build": "tsc -p scripts && tsc -p scripts/tsconfig.workers.json && tsc -p packages/ui && tsc -p packages/fake && tsc -p apps/desktop && tsc -p apps/light && tsc -p apps/share && tsc -p .storybook && tsc -p infrastructure/relay && tsc -p infrastructure/share-worker && tsc -p infrastructure/app-worker && tsc -p infrastructure/scan-worker && tsc -p packages/ui/tsconfig.web-worker.json && tsc -p packages/ui/tsconfig.web-sw.json && vite build --config apps/desktop/vite.config.ts",
+    "build": "tsc -p scripts && tsc -p scripts/tsconfig.workers.json && tsc -p packages/ui && tsc -p packages/fake && tsc -p apps/desktop && tsc -p apps/light && tsc -p apps/share && tsc -p .storybook && tsc -p infrastructure/relay && tsc -p infrastructure/share-worker && tsc -p infrastructure/app-worker && tsc -p infrastructure/scan-worker && tsc -p infrastructure/discord-worker && tsc -p infrastructure/bot-device && tsc -p packages/ui/tsconfig.web-worker.json && tsc -p packages/ui/tsconfig.web-sw.json && vite build --config apps/desktop/vite.config.ts",
     "preview": "vite preview --config apps/desktop/vite.config.ts",
     "tauri": "cd apps/desktop && tauri",
     "tauri:fast": "node scripts/rust-fast.ts tauri",
@@ -37,7 +37,7 @@
     "web:deploy-guard": "node scripts/web-deploy-guard.ts",
     "lint:claude": "node scripts/check-claude-md.ts",
     "lint": "eslint . --max-warnings 0 && pnpm lint:claude",
-    "lint:rust": "cargo fmt -p mtg-grimoire -p grimoire-core -p grimoire-light -p grimoire-web -p grimoire-scan -p grimoire-play --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo check -p mtg-grimoire -p grimoire-light --locked",
+    "lint:rust": "cargo fmt -p mtg-grimoire -p grimoire-core -p grimoire-light -p grimoire-web -p grimoire-scan -p grimoire-play -p grimoire-bot --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo check -p mtg-grimoire -p grimoire-light --locked",
     "test": "vitest",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage --testTimeout=30000",
@@ -48,6 +48,7 @@
     "scanner:bench": "node scripts/scanner-bench.ts",
     "scanner:corpus": "node scripts/scanner-corpus.ts",
     "scanner:replay": "node scripts/scanner-replay.ts",
+    "discord:register": "node scripts/discord-register.ts",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
     "verify": "pnpm build && vite build --config apps/light/vite.config.ts && pnpm lint && pnpm lint:rust && pnpm test:run && cargo test --workspace && cargo test --manifest-path crates/card-scanner/Cargo.toml --target-dir crates/card-scanner/target --features cli"
