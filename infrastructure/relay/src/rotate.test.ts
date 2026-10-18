@@ -178,14 +178,6 @@ async function secretOf(
     .first();
 }
 
-/**
- * What every `/keys` 200 ends with for a group that has published no roster document — every
- * group before the Discord integration's second PR (spec §12). Spread after `removalStep` so the
- * assertions say both halves: the four fields a released build reads are what they were, and the
- * five after them are present and empty.
- */
-const NO_ROSTER = { roster: null, rosterMac: null, rosterSig: null, rosters: [], sig: 1 };
-
 // ---------------------------------------------------------------------------------------
 // POST /g/{group}/rotate
 // ---------------------------------------------------------------------------------------
@@ -836,7 +828,6 @@ describe("GET /keys", () => {
       blob: "blob-desk",
       devices: ["desk", "phone"],
       removalStep: 2,
-      ...NO_ROSTER,
     });
     // And `/keys` never reaches the Durable Object: it is D1 reads and nothing else, which is
     // half of why it can stand ahead of the bearer gate.
@@ -861,7 +852,6 @@ describe("GET /keys", () => {
       blob: "blob-desk-2",
       devices: ["desk"],
       removalStep: 2,
-      ...NO_ROSTER,
     });
 
     const removed = await worker.fetch(keysRequest("g1", hex64(1), "phone"), env);
@@ -871,7 +861,6 @@ describe("GET /keys", () => {
       blob: null,
       devices: ["desk"],
       removalStep: 2,
-      ...NO_ROSTER,
     });
   });
 
@@ -886,13 +875,7 @@ describe("GET /keys", () => {
     const response = await worker.fetch(keysRequest("g1", hex64(3), "desk"), env);
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({
-      epoch: 3,
-      blob: null,
-      devices: [],
-      removalStep: 2,
-      ...NO_ROSTER,
-    });
+    expect(await response.json()).toEqual({ epoch: 3, blob: null, devices: [], removalStep: 2 });
   });
 
   it("accepts an auth seven rotations behind and refuses one eight behind", async () => {
@@ -920,7 +903,6 @@ describe("GET /keys", () => {
       blob: "blob-9",
       devices: ["desk"],
       removalStep: 2,
-      ...NO_ROSTER,
     });
 
     expect((await worker.fetch(keysRequest("g1", hex64(1), "desk"), env)).status).toBe(401);
@@ -963,7 +945,6 @@ describe("GET /keys", () => {
       blob: null,
       devices: ["desk"],
       removalStep: 2,
-      ...NO_ROSTER,
     });
   });
 
@@ -1017,7 +998,6 @@ describe("GET /keys", () => {
       blob: "blob-6",
       devices: ["desk"],
       removalStep: 2,
-      ...NO_ROSTER,
     });
 
     expect(await recordRotation(env, "g1", 8, hex64(8), { desk: "blob-8" })).toBe(true);
@@ -1058,18 +1038,11 @@ describe("GET /keys?epoch=", () => {
       blob: "blob-desk-2",
       devices: ["desk", "phone"],
       removalStep: 2,
-      ...NO_ROSTER,
     });
 
     // The claim row is a row like any other: epoch 0, and the empty manifest it was seeded with.
     const claimed = await worker.fetch(keysRequest("g1", hex64(4), "desk", 0), env);
-    expect(await claimed.json()).toEqual({
-      epoch: 0,
-      blob: null,
-      devices: [],
-      removalStep: 2,
-      ...NO_ROSTER,
-    });
+    expect(await claimed.json()).toEqual({ epoch: 0, blob: null, devices: [], removalStep: 2 });
     expect(env.reached).toEqual([]);
   });
 
@@ -1088,7 +1061,6 @@ describe("GET /keys?epoch=", () => {
       blob: null,
       devices: ["desk"],
       removalStep: 2,
-      ...NO_ROSTER,
     });
 
     const inherited = await worker.fetch(keysRequest("g1", hex64(2), "constructor", 1), env);
@@ -1097,7 +1069,6 @@ describe("GET /keys?epoch=", () => {
       blob: null,
       devices: ["desk", "phone"],
       removalStep: 2,
-      ...NO_ROSTER,
     });
   });
 

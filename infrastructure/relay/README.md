@@ -133,10 +133,8 @@ verifies it **before the Durable Object hop**. The position is the point, not th
 
 `access` is `base64url(payload) "." base64url(HMAC-SHA256(payload, RELAY_HMAC_KEY))` over
 `{sub, grp, exp, dev}`, with a **24-hour** TTL (`TOKEN_TTL_MS`). `dev` is the device the door
-admitted, added 2026-10-01 for the share Worker's removed-device check, and a token without one
-(an older relay's) still verifies. **Since the Discord integration's first PR the relay reads it
-too, and refuses nothing over it yet**: a push whose envelope, or an ack whose body, names a device
-other than `dev` is logged and passed on — "Binding the token's device" below. The app trades its long-lived
+admitted, added 2026-10-01 for the share Worker's removed-device check; nothing in the relay
+reads it, and a token without one (an older relay's) still verifies. The app trades its long-lived
 `refresh` secret for a new one when fewer than six hours remain. That split is what makes lapse
 work: deleting `refresh_secret` is instantaneous, and an already-issued `access` dies of old age
 within a day.
@@ -242,15 +240,6 @@ devices under the group key, and the relay never sees it.
 manifest omits, so a removal and a departure each free one; and a row unseen for `DEVICE_TTL_MS`
 — ninety days — is not counted and is pruned when the count is taken, because a wiped data folder
 mints a *new* device id and would otherwise cost the reader a slot for ever.
-
-**Two more tables since the Discord integration's second PR**, both in
-`migrations/0001_roster-documents-and-signing-slots.sql` — the first file in that folder, and not
-in `schema.sql`, which stays the baseline production was built from:
-
-| Table | Key | Answers |
-| --- | --- | --- |
-| `rosters` | `(group_id, epoch, step)` | the signed roster document chain: the RD string as sent, its `mac` or `sig`, `created_at`. Every read is the key walked forwards or backwards, so no second index. Pruned by a rotation that carries an RD, to the key window. "The signed roster document" below |
-| `pairing_slots` | `(rv, slot)` | the rendezvous's `offersig` and `joinsig`, which `pairing_rendezvous`'s `CHECK (slot IN ('offer', 'join'))` cannot hold. No `CHECK` of its own |
 
 ## The flows
 
@@ -407,7 +396,7 @@ per group, addressed by `idFromName(group)`.
 
 | Request | Body | Answer |
 | --- | --- | --- |
-| `POST /g/{group}/push` | one `Envelope`, optionally signed (`sig`) | `200 {"cursor": <seq>}` — the stored row's seq; the refusals are below |
+| `POST /g/{group}/push` | one `Envelope` | `200 {"cursor": <seq>}` — the stored row's seq; the refusals are below |
 | `GET /g/{group}/pull?since={cursor}&device={id}` | — | `200 {"envelopes": [...], "cursor": <head>}` — everything after the cursor, streamed; and the device counts as heard, at most once a day. Every build released before paging asks this |
 | `GET /g/{group}/pull?since={cursor}&device={id}&limit={rows}` | — | `200 {"envelopes": [...], "cursor": <n>, "more": <bool>}` — one page; a `limit` that is not a whole number of at least one is `400 {"error": "bad limit"}`. "A pull, a page at a time" below |
 | `POST /g/{group}/ack` | `{"device": id, "cursor": n}` | `204` — and compaction runs; a departed device's ack is answered and not stored |
@@ -422,15 +411,13 @@ object's state to be refused. In the order a push meets them, every refusal but 
 | --- | --- | --- |
 | 1 | the declared `Content-Length` is over `MAX_PUSH_BODY_CHARS` (1 504 096 — the sealed cap plus 4 KiB) — **before a byte is read**; a missing or non-numeric header decides nothing | `413 too_large` |
 | 2 | the body's text is longer than that | `413 too_large` |
-| 3 | the body is not JSON, or not an envelope — a `sig` that is present and not 86 characters of unpadded base64url among them | `400 unreadable body` / `400 malformed envelope`, no code — the object's words, unchanged |
-| — | the envelope's `device` is not the token's `dev` | **in a signed group, `403 device_mismatch`**; in any other, logged and the push goes on (`DEVICE_BINDING`). Telling the two apart costs one read of the newest roster document, **made only for a mismatch** — none for a restricted token, whose `cap` already says the group is signed |
+| 3 | the body is not JSON, or not an envelope | `400 unreadable body` / `400 malformed envelope`, no code — the object's words, unchanged |
 | 4 | `sealed` is over `MAX_SEALED_CHARS` (1 500 000, `log.ts`) | `413 too_large` |
 | 5 | the envelope's epoch is below the group's — its newest `group_keys` row, one read on `group_keys_by_group` | `409 stale_epoch` |
 | 6 | … or above it | `422 epoch_ahead` |
 | 7 | `hlcMs` is more than `MAX_CLOCK_AHEAD_MS` (a day) past the relay's clock; exactly a day is admitted | `422 clock_ahead` |
 
-Then the object: an envelope naming another group is the `409 group mismatch` below; **a restricted
-device's push past its day's cap is `429 restricted_quota`** (the next section); and a log that
+Then the object: an envelope naming another group is the `409 group mismatch` below, and a log that
 this push would take past `MAX_GROUP_LOG_CHARS` (128 MiB of `sealed`) is **`507 quota`** — exactly
 at the cap is stored. The quota is the one refusal on the far side of the hop, because the log's
 size is the object's to know. **The object compacts before it refuses**: a full group refuses every
@@ -438,7 +425,7 @@ push, so no device's head moves and no ack would ever run a compaction again —
 rows aged past the thirty-day tail behind every ack would never be deleted and the group would stay
 full for good. The full scan is paid only by a push about to be refused.
 
-- **The sealed cap is the Durable Object's 2 MB row**, less headroom for the other seven columns;
+- **The sealed cap is the Durable Object's 2 MB row**, less headroom for the other six columns;
   `sealed` is base64url, one byte a character. It refuses no batch the app builds: a 512 KiB
   plaintext batch seals to 699 104 characters, about 47% of it, and the fattest batch ever measured
   sealed to 186 188. What meets it is one op that is alone larger than a batch — a note pasted in
@@ -466,160 +453,26 @@ full for good. The full scan is paid only by a push about to be refused.
   so the check would cost most exactly when the log is nearest the cap — and not `databaseSize`,
   which is a high-water mark that compaction never lowers. Every compaction recomputes it exactly.
 
-### A signed envelope, and binding the token's device
-
-**Issue #1096's first PR (spec `docs/superpowers/specs/2026-10-17-discord-integration-design.md`,
-§4 and §8), in this tree and not deployed until a release carries it.** Two changes, neither of
-which a reader sees, both ahead of the bot that is the reason for them.
-
-**An envelope may carry a seventh field, `sig`** — the sender's Ed25519 signature over the sealed
-batch, as base64url without padding: exactly 86 characters of `[A-Za-z0-9_-]` (`SIG_CHARS`,
-`isSig`). The relay **checks its shape and never its truth**: it holds no device's signing key (it
-learns them with the signed roster document, the integration's second PR), so a well-formed `sig`
-is stored whatever it signs. Absent is every envelope a released build pushes and is read exactly
-as before; present and anything else — a number, `null`, the padded 88, a truncated 85 — is the
-`400 malformed envelope` a missing `sealed` gets, at the Worker and again at the object.
-⚠️ **`null` counts as present**, so a client sends no `sig` key at all for an unsigned batch.
-
-- **Stored** in `log.sig`, a nullable `TEXT` column, last. A fresh object makes it in its `CREATE`;
-  a live one gains it on its first wake after the deploy from an `ALTER TABLE log ADD COLUMN sig
-  TEXT` the constructor runs only when `PRAGMA table_info(log)` does not list it — the
-  `acks.heard_at` mechanism, with **no backfill**: every row already stored was pushed unsigned,
-  and `NULL` says exactly that. Adding a nullable column rewrites no row.
-- **Served on both pulls, last, and only when the row has one.** The streamed answer and a page
-  read the same column list (`group.ts`'s `ANSWERED`), and `envelopeOf` leaves the key off a row
-  whose `sig` is `NULL` rather than writing `null` — so **an unsigned row's envelope is the six
-  fields it always was, to the byte**, and `group.test.ts` still holds the unpaged answer of an
-  unsigned log to the pre-paging bytes. A released build's serde ignores the field.
-- **Not counted against the quota.** `log_size` and `MAX_GROUP_LOG_CHARS` are sums of `sealed`;
-  a `sig` is a fixed 86 characters a row, and the 4 KiB `MAX_PUSH_BODY_CHARS` allows beyond the
-  sealed cap already covered it, so neither cap moved. Compaction reads no `sig` (it reads no
-  body at all) and no path copies a row, so there is nothing else for the column to follow.
-
-**Binding the token's device (spec §2, F4), warn-only.** Push and ack checked the token's `grp`
-and nothing else, and the object stores the cursor of whatever `device` an ack names — so any
-device of a group could ack as another and move that device's place on the compaction floor, or
-push an envelope stamped as another. The Worker now compares the token's `dev` with the device the
-body names, **after the gate and before the Durable Object hop** (`index.ts`'s `admitPush` and
-`admitAck`, `admit.ts`'s `bindDevice`):
-
-- **A mismatch is logged and passed on.** One `console.warn` of fixed text —
-  `device_mismatch on push` or `device_mismatch on ack` — with nothing the request carried: no
-  group, no device id, no token, no body. Workers Logs (`observability`) keeps it beside the
-  invocation's own line. The point of the release is that count: no client has ever been held to
-  its `dev`, and the flip waits on reading those lines and finding none from an honest one.
-- **The flip is one constant**: `DEVICE_BINDING` from `"warn"` to `"refuse"`, and the answer is
-  **`403 device_mismatch`** (`DEVICE_MISMATCH`), already built and tested in both modes.
-- **A token with no `dev`** — an older relay's, at most a day old — is never a mismatch, and its
-  ack is forwarded as the very request, unread. An ack with `dev` is read in the Worker for its
-  `device`, then forwarded rebuilt from the same text; one the Worker cannot read is forwarded
-  for the object to refuse in the words it always has.
-
-### The signed roster document, and what a restricted device may not do
-
-**Issue #1096's second PR (spec §5, §6 and §12, the wire contract), in this tree and not deployed
-until a release carries it.** A roster document (RD) says who is in a group at an epoch, with each
-member's X25519 and Ed25519 public keys and its `cap` — `full`, or `read` for the Discord bot's
-first release. The manifest a rotation publishes names devices and carries no public key, so a
-device that did not pair a peer could never verify one envelope it signed (spec §2, F1); an RD is
-how every device learns every member's keys, and how a group comes to hold a member that may read
-and not write. `src/roster.ts` is all of it.
-
-- **A string, stored and served verbatim.** Both authenticators cover
-  `"mtg-grimoire/roster/v1" ++ 0x00 ++ <the RD's bytes>`, so the relay parses a *copy* to judge it
-  and never writes one back. It reads leniently — an unknown field is ignored — and refuses every
-  known field in a shape §12 does not write, as **`400 malformed_roster`**: `v` other than 1,
-  another group's id, a `prev` that is not 64 hex or `null`, a key that is not 32 canonical
-  base64url bytes (an `ed25519` of `null` is a member with no signing key yet — an older device —
-  and is taken, though never as a signer), more than `MAX_GROUP_DEVICES` members or one named twice, past 8 KiB, and
-  neither or both of `rosterMac` (43 characters) and `rosterSig` (86).
-- **One chain per group**, ordered by `(epoch, step)`: `prev` is the hex SHA-256 of the newest
-  stored RD's string, and `null` only for a group's first. A rotation's RD is at its own epoch,
-  step 0; an amendment (`/roster`) is at the group's current epoch — its newest `group_keys` row —
-  and one step past the newest RD there, or step 0 when the newest RD is an epoch behind (an older
-  build rotated without one). Anything else, and a `prev` that is not the newest's hash, is
-  **`409 roster_conflict`**: the client refetches `/keys` and builds again. **The chain is kept
-  linear in SQL**: each store is one `INSERT … SELECT … WHERE` that also requires no RD after the
-  one `prev` was checked against, so two writers racing on one read cannot both land.
-- **Open mode stores the MAC unverified.** It is keyed from the epoch's group key, which the relay
-  has never held; clients check it, as they check every sealed batch. ⚠️ **An open RD may name no
-  member whose `cap` is not `full`** — this relay's own rule, not spelled in §12: a restricted
-  member of an open group could MAC an amendment promoting itself, so a restriction exists only
-  in a signed document.
-- **Signed mode is checked here, and it is a latch.** A signed RD must carry `rosterSig`, and its
-  `signer` must be a `full` member of the newest stored RD, verified with WebCrypto's Ed25519 under
-  the key *that* RD gives it — which is also the rule for **entering** signed mode: the first
-  signed RD is signed by a full member of the open one before it. **A group with no RD cannot
-  start signed** (no document to check a signer against). Once the newest RD is signed, an open
-  one is refused — and a rotation with no RD at all — as **`403 unsigned_roster`** on `/roster` and
-  **`403 unsigned_rotation`** on `/rotate`. A 403 rather than a 400 for the downgrade,
-  deliberately: every 400 here is decided from the body alone, and this one is decided by what the
-  group has stored. That is what takes rotation, eviction and self-promotion away from the bot,
-  which holds the group's auth (it must, to read) and cannot produce a full member's signature.
-- **A rotation's RD is stored before the rotation is recorded**, under the rotation's own epoch
-  bound, and deleted again if `recordRotation` then refuses — not in the batch after it, because a
-  guarded `INSERT` that matches nothing rolls nothing back, and a rotation accepted without its RD
-  is one every signed client holds as unverifiable. The cost is a window of one round trip in which
-  `/keys` can answer a `roster` an epoch ahead of its `epoch`; a client reads that as *not yet*.
-  A rotation with an RD prunes the RDs older than `EPOCH_HISTORY` epochs; one without prunes none,
-  so the newest — and the latch it carries — is never pruned.
-- **`/keys` answers them**: `roster`, `rosterMac`, `rosterSig` — the newest, or `null` each — then
-  `rosters`, every RD from epoch `since` on (default: the answered manifest's epoch), oldest first,
-  at most 16, each `{roster, rosterMac, rosterSig}`; then `sig: 1`, which a client's gate reads as
-  "this relay stores envelope signatures and roster documents" (spec §7). The four fields before
-  them are the bytes they were, first and in their order.
-
-**What a restricted device meets**, all of it keyed off the token's `cap`:
-
-- **`/token` mints `cap`** beside `dev` when the newest RD names the device with a `cap` other
-  than `full` (`capOf`, one D1 read per mint). Every door does, not only the group door §12 names:
-  `grantFor` is every door's. A full device's token has no `cap` key at all, so it is the bytes it
-  always was.
-- **Its pushes are capped at `RESTRICTED_PUSHES_PER_DAY` — 64 a UTC day** — as
-  **`429 restricted_quota`**. Stored, not refused (the relay cannot read what it carries, and every
-  peer refuses it), and counted in the Durable Object, in a `restricted_pushes` table of one row per
-  restricted device (`day`, `count`), point read and point written, created by the constructor like
-  the object's other tables. The Worker names the device in `x-grimoire-restricted` on the push it
-  forwards — which no client can set, because every push is rebuilt from its body text. 64 is far
-  past what one reader confirming adds produces, and 64 batches at the sealed cap is less than one
-  log's quota.
-- **The device binding refuses in a signed group**, `403 device_mismatch` on push and ack; outside
-  one it stays warn-only. The mode costs a read only on a mismatch.
-- **The share Worker and the scan inbox refuse it**, `403 restricted_device` (`isRestricted`): a
-  share is public plaintext, and a scan is a submission.
-
-⚠️ **The claim is as fresh as the token** — a day at most. A token minted before the RD that
-restricts its device carries no `cap`, and is treated as full by all of the above until it expires.
-
-**The pairing rendezvous gains two slots**, `offersig` and `joinsig` — each side's signing key and
-protocol level, under `pair_key` — with the same ten minutes, the same first-writer-wins and the
-same blob cap. ⚠️ **They live in a second table, `pairing_slots`**, because `pairing_rendezvous`'s
-`slot` is `CHECK`ed to `offer` and `join` and SQLite cannot widen a `CHECK` in place; the hourly
-sweep clears both. **Both new tables are `migrations/0001_roster-documents-and-signing-slots.sql`**,
-which a release applies before it deploys.
-
-**Three more `/g/…` routes stand *ahead* of the gate, and the placement is the point rather than an
+**Two more `/g/…` routes stand *ahead* of the gate, and the placement is the point rather than an
 exemption.** ⚠️ **This section said "every one of them is behind the bearer gate" until
-2026-08-30**, when the first two landed; `/roster` joined them with the roster document.
+2026-08-30**, when these landed.
 
 | Request | Body | Guarded by | Answer |
 | --- | --- | --- | --- |
-| `POST /g/{group}/rotate` | `{epoch, auth, keys}`, and optionally `roster` with `rosterMac` or `rosterSig` | the group's current auth | `200 {epoch}` for one past the group's newest (a join) or two past it (a removal or a departure); `409` behind or equal; `422` further ahead; the roster document's refusals below |
-| `POST /g/{group}/roster` | `{roster, rosterMac?, rosterSig?}` | the group's current auth | `200 {epoch, step}` — an amendment stored; `400 malformed_roster`, `409 roster_conflict`, `403 unsigned_roster` |
-| `GET /g/{group}/keys?device={id}[&epoch={n}][&since={n}]` | — | any auth the group has used within `EPOCH_HISTORY` epochs | `200 {epoch, blob, devices, removalStep: 2, roster, rosterMac, rosterSig, rosters, sig: 1}` — the newest manifest, or with `epoch` the one stored at exactly `n`, then the roster documents; `404 no_such_epoch` for none there |
+| `POST /g/{group}/rotate` | `{epoch, auth, keys}` | the group's current auth | `200 {epoch}` for one past the group's newest (a join) or two past it (a removal or a departure); `409` behind or equal; `422` further ahead |
+| `GET /g/{group}/keys?device={id}[&epoch={n}]` | — | any auth the group has used within `EPOCH_HISTORY` epochs | `200 {epoch, blob, devices, removalStep: 2}` — the newest manifest, or with `epoch` the one stored at exactly `n`; `404 no_such_epoch` for none there |
 
 A device that has just been rotated away from **cannot mint a token** — the auth it would present
 to `/token`'s group door is stale by definition — so a `/keys` behind the gate would refuse
 exactly the caller it exists to serve, and a removed device would sit for ever in a group it is no
-longer in. **Every refusal any of them makes is decided in the Worker, out of D1, and none reaches
+longer in. **Every refusal either route makes is decided in the Worker, out of D1, and none reaches
 the Durable Object** — which is what makes standing outside affordable: the gate is in front of
 the DO because a request that reaches one bills a Durable Object request whether it is honoured or
-refused. `/keys` and `/roster` never reach it at all. `/rotate` reaches it **exactly once, after D1 has
+refused. `/keys` never reaches it at all. `/rotate` reaches it **exactly once, after D1 has
 accepted the rotation**, to post the roster below — and a caller that gets that far holds the
 group's current auth, which mints a bearer token at `/token`'s group door and opens the gated
 routes anyway, so it can spend nothing here it could not already spend there. **Both are rate
-limited since 2026-10-01** (and `/roster` on `/rotate`'s binding, `RL_MINT`), with `/claim`,
-`/token` and the pairing rendezvous: what standing
+limited since 2026-10-01**, with `/claim`, `/token` and the pairing rendezvous: what standing
 outside the gate costs is a D1 read per request from anyone, and `src/ratelimit.ts` refuses a
 caller past its limit ahead of that read — per client address, through three `ratelimits`
 bindings in `wrangler.jsonc`, as a **429 with `code: "rate_limited"`** and never a 401. It fails
@@ -833,7 +686,7 @@ control**: a caller that is not a browser sends any `Origin` it likes, or none. 
 | | |
 | --- | --- |
 | The allow-list | `APP_ORIGINS` in `wrangler.jsonc`'s `vars` — comma-separated, shipped as exactly `https://mtg-grimoire.app`. Entries are trimmed and compared to the `Origin` header **exactly**: no wildcard, no suffix, no case folding, no trailing slash. Unset or empty allows nobody and throws at nobody. |
-| Routes that take CORS | `POST /claim`, `POST /token`, `GET`/`POST /p/{rv}/{offer,join,offersig,joinsig}`, `POST /g/{group}/rotate`, `POST /g/{group}/roster`, `GET /g/{group}/keys`, `POST /g/{group}/push`, `GET /g/{group}/pull`, `POST /g/{group}/ack` — every route a device calls with `fetch`. |
+| Routes that take CORS | `POST /claim`, `POST /token`, `GET`/`POST /p/{rv}/{offer,join}`, `POST /g/{group}/rotate`, `GET /g/{group}/keys`, `POST /g/{group}/push`, `GET /g/{group}/pull`, `POST /g/{group}/ack` — every route a device calls with `fetch`. |
 | Routes that do not | `/oauth/patreon/callback` and `/pair` (pages a browser navigates to), `/webhook/patreon` (Patreon's server), and `/g/{group}/ws` (an upgrade, which CORS does not govern). |
 | A pre-flight | `OPTIONS` on a CORS route, from an allowed origin, carrying `Access-Control-Request-Method` → **`204`** with `Access-Control-Allow-Origin: <that origin>`, `Access-Control-Allow-Methods: <the route's own>`, `Access-Control-Allow-Headers: authorization, content-type`, `Access-Control-Max-Age: 86400`, `Vary: Origin`. |
 | Every other answer to an allowed origin | the route's own response plus `Access-Control-Allow-Origin: <origin>` and `Vary: Origin` — **refusals included**: 400, 401, 403 `device_limit`, 405, 409, 413, 422, 429, and whatever a Durable Object said. |
@@ -960,23 +813,9 @@ a Rust test red.
 
 `src/admit.ts` — every refusal a push can meet, as pure functions in the order they are met: the
 Worker's checks ahead of the Durable Object hop (`admitBody`, `admit`), the object's quota
-(`admitToLog`), and the one envelope predicate both sides share (`isEnvelope`, with `isSig` and
-`SIG_CHARS` for the optional signature) — and the token's device against a push's or an ack's
-(`deviceMismatch`, `bindDevice`, `DEVICE_BINDING`, `DEVICE_MISMATCH`), and a restricted device's
-daily cap (`admitRestricted`, `RESTRICTED_PUSHES_PER_DAY`, `RESTRICTED_HEADER`, `quotaDay`).
+(`admitToLog`), and the one envelope predicate both sides share (`isEnvelope`).
 
-`src/token.ts` — mint and verify, the optional `dev` and `cap` claims, and `isRestricted` and
-`RESTRICTED_DEVICE`, which the share Worker and the scan inbox import. Pure, and tested the same
-way.
-
-`src/roster.ts` — the signed roster document (spec §12): `parseRoster` and `authenticatorOf` for
-its shape, `signedBytes`, `rosterHash` and `verifyRosterSig` (WebCrypto's SHA-256 and Ed25519),
-`judge` for the chain and the latch, the guarded stores (`storeAmendment`, `storeRotationRoster`)
-and their undo and prune, and the reads the other routes make of it — `latestRoster`,
-`rostersSince`, `rosterMode` for the device binding and `capOf` for the token door.
-`roster.test.ts` signs with keys WebCrypto generates, drives both routes through `worker.fetch`,
-and reads `crates/grimoire-core/src/__golden__/roster-v1.json` — the engine's own document, hash,
-MAC and signature — so the two languages are held to the same bytes.
+`src/token.ts` — mint and verify. Pure, and tested the same way.
 
 `src/entitlement.ts` — a Patreon patron status plus a clock to `active`/`grace`/`dead`. Pure.
 
@@ -995,12 +834,11 @@ cron's reconciliation, with its budget and interval.
 `REMOVAL_STEP`, `MAX_GROUP_DEVICES`, `DEVICE_TTL_MS`) that anything else capping, stepping or
 pruning must import rather than respell.
 
-`src/rotate.ts` — `POST /g/{group}/rotate`, `POST /g/{group}/roster` and `GET /g/{group}/keys`,
-the three routes that stand ahead of the bearer gate, and `sendRoster`, the one request any of
-them makes to a Durable Object.
+`src/rotate.ts` — `POST /g/{group}/rotate` and `GET /g/{group}/keys`, the two routes that stand
+ahead of the bearer gate, and `sendRoster`, the one request either makes to a Durable Object.
 
-`src/group.ts` — the Durable Object: its tables (`log` with `sig`, `acks` with `heard_at`, `departed`,
-`roster_epoch`, `log_size`, `restricted_pushes`), the handlers — the internal `drop` and `roster` among them — and a
+`src/group.ts` — the Durable Object: its tables (`log`, `acks` with `heard_at`, `departed`,
+`roster_epoch`, `log_size`), the handlers — the internal `drop` and `roster` among them — and a
 call into `log.ts` for every decision about which rows and into `admit.ts` for the quota.
 
 `src/index.ts` — the router, the auth gate, and a push's admission ahead of the object hop: the one
@@ -1053,9 +891,7 @@ an object rather than quietly:
 - **The constructor's own migration.** A Durable Object has no migration step: an object created
   before `acks.heard_at` existed adds it on its first wake after the deploy, when `PRAGMA
   table_info(acks)` does not list it, and backfills it with that moment — every existing device
-  counts as heard at the deploy, so none drops off the floor. `log.sig` is added the same way,
-  by a `PRAGMA table_info(log)` every constructor asks, with no backfill (`group.test.ts` runs it
-  over a log made in the old shape). **Whether workerd accepts `PRAGMA
+  counts as heard at the deploy, so none drops off the floor. **Whether workerd accepts `PRAGMA
   table_info` there is untested**, and every constructor asks it, a new object's included — so if
   it does not, every request that reaches any group's object 500s. The first pull after the deploy
   is the check.

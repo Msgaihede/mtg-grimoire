@@ -1547,11 +1547,7 @@ mod tests {
                  secret_key BLOB NOT NULL,
                  public_key BLOB NOT NULL,
                  name TEXT NOT NULL,
-                 created_at INTEGER NOT NULL,
-                 -- User schema v66's signing pair: `ensure` reads both and mints them on
-                 -- absence, so a fixture without the columns answers 'no such column'.
-                 sign_secret BLOB,
-                 sign_public BLOB
+                 created_at INTEGER NOT NULL
              );
              CREATE TABLE device_names (
                  device_id TEXT PRIMARY KEY,

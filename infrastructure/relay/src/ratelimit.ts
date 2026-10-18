@@ -3,7 +3,7 @@
  *
  * **What this buys is the D1 read, not the request.** `index.ts`'s bill argument — junk is
  * refused for the price of a Worker invocation alone — holds for the routes behind the bearer
- * gate and not for these six, which each read D1 before anything can refuse them. A limit here
+ * gate and not for these five, which each read D1 before anything can refuse them. A limit here
  * refuses the caller before that read. It does **not** keep the request off the account's
  * 100,000-a-day budget: the Worker has already been invoked to ask the question, and only a rule
  * in front of the Worker could spare that — which needs a zone. `relay.mtg-grimoire.app` has one
@@ -29,10 +29,7 @@
 export const LIMITS = {
   /** `/claim` — one per Connect press. */
   RL_CLAIM: { limit: 10, period: 60 },
-  /**
-   * `/token`, `/rotate` and `/roster` — a device mints about once every eighteen hours, and
-   * publishes a roster amendment when its own keys or protocol level change, which is rarer.
-   */
+  /** `/token` and `/rotate` — a device mints about once every eighteen hours. */
   RL_MINT: { limit: 30, period: 60 },
   /**
    * `/keys` and the pairing rendezvous — one `/keys` per sync trip, and a pairing dialog polls
@@ -49,7 +46,6 @@ const BINDING = {
   claim: "RL_CLAIM",
   token: "RL_MINT",
   rotate: "RL_MINT",
-  roster: "RL_MINT",
   keys: "RL_READ",
   rendezvous: "RL_READ",
 } as const satisfies Record<string, Binding>;
