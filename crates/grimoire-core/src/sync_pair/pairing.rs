@@ -56,10 +56,6 @@ pub struct Pending {
     peer_device_id: Option<String>,
     peer_name: Option<String>,
     pair_key: Option<[u8; 32]>,
-    /// The peer's Ed25519 key and protocol level, from its sealed signature slot — `joinsig`
-    /// read by the initiator ([`poll`]), `offersig` by the joiner. `None` from a build that posts
-    /// no such slot: before the Discord spec's PR 2, or through a relay that keeps none.
-    peer_sign: Option<SigSlot>,
     /// Set once this side's own part of the ceremony is finished — by [`confirm`] on the
     /// initiator, so a spent offer cannot serve a second joiner, and by [`poll`] on the joiner
     /// once [`complete`] succeeds, so a finished join answers a stable `"complete"` on every
@@ -208,7 +204,6 @@ pub fn begin(conn: &Connection, pending: &mut Option<Pending>) -> Result<Offer, 
         peer_device_id: None,
         peer_name: None,
         pair_key: None,
-        peer_sign: None,
         spent: false,
     });
     Ok(Offer { code, qr })
@@ -254,26 +249,6 @@ pub async fn accept(
     blob.extend_from_slice(&sealed);
 
     let rv = crypto::rendezvous_id(&inv.token);
-    // **The signing slot goes first, then the answer** — so an initiator that has read `join`
-    // finds `joinsig` already there, rather than racing it. An older relay keeps no such slot
-    // and answers so quietly; an older initiator never reads it. Either way `join` is posted
-    // exactly as it always was, and the six digits are unchanged.
-    let signing = db.with(|conn| {
-        identity::signing_key(conn)
-            .map_err(err)?
-            .ok_or_else(|| identity::NOT_IN_A_GROUP.to_owned())
-    })?;
-    let joinsig = seal_sig(
-        &pair_key,
-        &rv,
-        &SigSlot {
-            device: me.device_id.clone(),
-            ed25519: crate::sync_pair::roster::key_text(&signing.public),
-            proto: identity::SIG_PROTO,
-            mode: None,
-        },
-    )?;
-    client::post_rendezvous_if_kept(db, &rv, client::JOIN_SIG, &joinsig).await?;
     client::post_rendezvous(db, &rv, "join", &blob_encode(&blob)).await?;
 
     *pending = Some(Pending {
@@ -286,7 +261,6 @@ pub async fn accept(
         peer_device_id: None,
         peer_name: None,
         pair_key: Some(pair_key),
-        peer_sign: None,
         spent: false,
     });
     Ok(Handshake { sas })
@@ -346,66 +320,7 @@ pub fn respond(
 }
 
 /// What a device with no name of its own is filed as.
-pub(crate) const DEFAULT_PEER_NAME: &str = "Paired device";
-
-/// What one side's signature slot carries (`joinsig`, `offersig`): **the device it is about, its
-/// Ed25519 key and the protocol level it speaks** — and, from the initiator, whether its group
-/// signs its rosters, which is how a joiner learns that before it joins (`mode`).
-///
-/// JSON, sealed under the pair key with `b"sig" ++ rv` as associated data — the address both
-/// sides derived from the invite, so a slot lifted from another pairing opens for nobody. **The
-/// two slots share that AAD**, so `device` is what tells them apart: a relay that copied the
-/// joiner's own `joinsig` into `offersig` would hand the joiner its own id, which is not the
-/// initiator's, and the slot is refused. Fields this build does not know are ignored, so a later
-/// one can add some.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
-struct SigSlot {
-    device: String,
-    ed25519: String,
-    proto: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    mode: Option<String>,
-}
-
-/// What a signature slot is sealed against: `b"sig"` and the rendezvous id's characters.
-fn sig_aad(rv: &str) -> Vec<u8> {
-    let mut aad = b"sig".to_vec();
-    aad.extend_from_slice(rv.as_bytes());
-    aad
-}
-
-fn seal_sig(pair_key: &[u8; 32], rv: &str, slot: &SigSlot) -> Result<String, String> {
-    let plain = serde_json::to_vec(slot).map_err(err)?;
-    let sealed = crypto::seal(pair_key, &sig_aad(rv), &plain).map_err(err)?;
-    Ok(blob_encode(&sealed))
-}
-
-/// Open the peer's slot, **and refuse one that is not about `peer`** — see [`SigSlot`] for why
-/// the id is the check — or whose key is not 32 bytes.
-fn open_sig(pair_key: &[u8; 32], rv: &str, blob: &str, peer: &str) -> Result<SigSlot, String> {
-    let sealed = blob_decode(blob)?;
-    let plain = crypto::open(pair_key, &sig_aad(rv), &sealed).map_err(|_| NOT_A_SIG.to_owned())?;
-    let slot: SigSlot = serde_json::from_slice(&plain).map_err(|_| NOT_A_SIG.to_owned())?;
-    if slot.device != peer || crate::sync_pair::roster::key32(&slot.ed25519).is_none() {
-        return Err(NOT_A_SIG.to_owned());
-    }
-    Ok(slot)
-}
-
-/// What a signature slot that does not open, or is about another device, says.
-const NOT_A_SIG: &str = "The other device's signing key could not be read. Start a new pairing.";
-
-/// What an initiator in a group that signs its rosters says to a joiner that sent no signing key
-/// — a build from before the Discord spec's PR 2 — or one below [`identity::SIG_PROTO`].
-pub const JOINER_TOO_OLD: &str = "That device is running a version of MTG Grimoire that cannot \
-     check who is in this group, which this group needs from every device. Update it, then pair \
-     again.";
-
-/// What a joiner says when the group it is being let into signs its rosters and the device
-/// showing the code sent no signing key with its offer.
-pub const OFFER_UNSIGNED: &str = "The device showing the code is in a group that checks every \
-     device's signature, and this pairing did not carry its signing key. Update both devices, \
-     then start a new pairing.";
+const DEFAULT_PEER_NAME: &str = "Paired device";
 
 /// The initiator confirms the digits matched: the group key is sealed and posted to the relay,
 /// and only once that succeeds does the joiner go on the roster.
@@ -454,7 +369,6 @@ pub async fn confirm(db: &impl Store, pending: &mut Option<Pending>) -> Result<S
     };
     let rv = p.rv.clone();
     let peer_name = p.peer_name.clone();
-    let peer_sign = p.peer_sign.clone();
     // `p`'s borrow ends here — everything above is copied or cloned out of it, and everything
     // below reaches `pending` fresh, which is what lets the final line take it mutably again.
 
@@ -464,22 +378,6 @@ pub async fn confirm(db: &impl Store, pending: &mut Option<Pending>) -> Result<S
     // at the press rather than at a sync three minutes later. It excludes `peer_id`, so
     // re-running the ceremony with a device already in the group is never what fills it.
     db.with(|conn| identity::room_for(conn, &peer_id))?;
-
-    // **A group that signs its rosters takes no device that cannot verify one** (the Discord
-    // spec §7): a joiner that sent no `joinsig` is a build from before PR 2 — or below this
-    // build's level — and would accept every unsigned envelope a restricted device wrote. Refused
-    // before anything is sealed, so the reader can update it and press again. **An open group
-    // takes it as it always did.**
-    let signed = db.with(|conn| {
-        Ok(crate::sync_pair::roster::mode(conn) == crate::sync_pair::roster::Mode::Signed)
-    })?;
-    if signed
-        && peer_sign
-            .as_ref()
-            .is_none_or(|slot| slot.proto < identity::SIG_PROTO)
-    {
-        return Err(JOINER_TOO_OLD.to_owned());
-    }
 
     // **The candidate group, computed but not written.** `Some` is this device's group exactly
     // as it stands right now — sealing its *current* epoch, never one a rotation might move it
@@ -532,31 +430,6 @@ pub async fn confirm(db: &impl Store, pending: &mut Option<Pending>) -> Result<S
     blob.extend_from_slice(&sealed);
     let encoded = blob_encode(&blob);
 
-    // **This device's signing slot first, then the offer**, for `accept`'s reason: a joiner that
-    // has read `offer` finds `offersig` already there. It carries whether this group signs its
-    // rosters, so a joiner learns that before it joins. Quiet on a relay that keeps no such slot.
-    let signing = db.with(|conn| {
-        identity::signing_key(conn)
-            .map_err(err)?
-            .ok_or_else(|| identity::NOT_IN_A_GROUP.to_owned())
-    })?;
-    let mode = if signed {
-        crate::sync_pair::roster::Mode::Signed
-    } else {
-        crate::sync_pair::roster::Mode::Open
-    };
-    let offersig = seal_sig(
-        &pair_key,
-        &rv,
-        &SigSlot {
-            device: me.device_id.clone(),
-            ed25519: crate::sync_pair::roster::key_text(&signing.public),
-            proto: identity::SIG_PROTO,
-            mode: Some(mode.word().to_owned()),
-        },
-    )?;
-    client::post_rendezvous_if_kept(db, &rv, client::OFFER_SIG, &offersig).await?;
-
     // **Posted before anything commits.** A failed post ends this call right here, and nothing
     // above has written to the database — the candidate group was a local value, not a row.
     client::post_rendezvous(db, &rv, "offer", &encoded).await?;
@@ -584,11 +457,7 @@ pub async fn confirm(db: &impl Store, pending: &mut Option<Pending>) -> Result<S
             &peer_public,
             peer_name.as_deref().unwrap_or(DEFAULT_PEER_NAME),
         )
-        .map_err(err)?;
-        // **And the joiner's signing key, before the join is published**: the roster document the
-        // join's rotation carries is built from this roster, and it is how every other device in
-        // the group learns the key (F1).
-        file_peer_sign(conn, &peer_id, peer_sign.as_ref())
+        .map_err(err)
     })?;
 
     if let Some(p) = pending.as_mut() {
@@ -604,14 +473,22 @@ pub async fn confirm(db: &impl Store, pending: &mut Option<Pending>) -> Result<S
     })
 }
 
-/// Open the initiator's sealed key: `<device id>\0<sealed remainder>`, the remainder sealed under
-/// the pair key with that id as its associated data. **Pure — nothing is written**, which is what
-/// lets the joiner read the group it is offered before deciding to join it ([`poll`]).
-fn open_offer(pair_key: &[u8; 32], sealed_key: &str) -> Result<(String, identity::Group), String> {
+/// The joiner unwraps the group key and is in the group.
+pub fn complete(
+    conn: &Connection,
+    pending: &mut Option<Pending>,
+    sealed_key: &str,
+) -> Result<(), String> {
+    let me = identity::ensure(conn).map_err(err)?;
+    let p = pending.as_ref().ok_or(NOTHING_IN_FLIGHT)?;
+    let (Some(pair_key), Some(peer_public)) = (p.pair_key, p.peer_public) else {
+        return Err("This device has not read a pairing code yet.".to_owned());
+    };
+
     let blob = blob_decode(sealed_key)?;
     let split = blob.iter().position(|b| *b == 0).ok_or(NOT_A_KEY)?;
     let peer_id = String::from_utf8_lossy(&blob[..split]).into_owned();
-    let plain = crypto::open(pair_key, peer_id.as_bytes(), &blob[split + 1..]).map_err(err)?;
+    let plain = crypto::open(&pair_key, peer_id.as_bytes(), &blob[split + 1..]).map_err(err)?;
 
     // `<group_id>\0<epoch>\0<32-byte key>`, and **the key is read last because it is the one
     // field that may contain a zero byte of its own** — [`confirm`], which seals it, carries the
@@ -631,43 +508,8 @@ fn open_offer(pair_key: &[u8; 32], sealed_key: &str) -> Result<(String, identity
     if key_bytes.len() != 32 {
         return Err(NOT_A_KEY.to_owned());
     }
-    let mut group_key = [0u8; 32];
-    group_key.copy_from_slice(key_bytes);
-    Ok((
-        peer_id,
-        identity::Group {
-            group_id,
-            epoch,
-            group_key,
-        },
-    ))
-}
-
-/// File the signing key a peer's slot carried, when it carried one.
-fn file_peer_sign(conn: &Connection, peer: &str, slot: Option<&SigSlot>) -> Result<(), String> {
-    let Some(slot) = slot else {
-        return Ok(());
-    };
-    let Some(key) = crate::sync_pair::roster::key32(&slot.ed25519) else {
-        return Ok(());
-    };
-    identity::file_sign_key(conn, peer, &key, Some(slot.proto)).map_err(err)
-}
-
-/// The joiner unwraps the group key and is in the group.
-pub fn complete(
-    conn: &Connection,
-    pending: &mut Option<Pending>,
-    sealed_key: &str,
-) -> Result<(), String> {
-    let me = identity::ensure(conn).map_err(err)?;
-    let p = pending.as_ref().ok_or(NOTHING_IN_FLIGHT)?;
-    let (Some(pair_key), Some(peer_public)) = (p.pair_key, p.peer_public) else {
-        return Err("This device has not read a pairing code yet.".to_owned());
-    };
-
-    let (peer_id, group) = open_offer(&pair_key, sealed_key)?;
-    let (group_id, epoch, key) = (group.group_id, group.epoch, group.group_key);
+    let mut key = [0u8; 32];
+    key.copy_from_slice(key_bytes);
 
     // **A device already in a group may only rejoin the one it is in.** Joining a second group
     // overwrites the key this device is already syncing under, and nothing here can get it
@@ -837,30 +679,7 @@ async fn poll_initiator(
     match client::get_rendezvous(db, &rv, "join").await? {
         None => Ok(waiting_progress()),
         Some(blob) => {
-            // **`joinsig` is read before `respond` keeps anything**: the joiner posts it first, so
-            // it is there by now when it exists at all, and a read that fails leaves this poll
-            // with nothing kept — the next one reads both again.
-            let joinsig = client::get_rendezvous(db, &rv, client::JOIN_SIG).await?;
             let handshake = db.with(|conn| respond(conn, pending, &blob))?;
-            if let Some(joinsig) = joinsig {
-                let p = pending
-                    .as_mut()
-                    .expect("respond keeps the offer it answered");
-                let peer = p.peer_device_id.clone().unwrap_or_default();
-                let pair_key = p.pair_key.expect("respond derived the pair key");
-                match open_sig(&pair_key, &rv, &joinsig, &peer) {
-                    Ok(slot) => p.peer_sign = Some(slot),
-                    Err(refusal) => {
-                        // Forget the answer too, so the panel never shows digits for a joiner
-                        // whose slot was not its own.
-                        p.peer_public = None;
-                        p.peer_device_id = None;
-                        p.peer_name = None;
-                        p.pair_key = None;
-                        return Err(refusal);
-                    }
-                }
-            }
             Ok(compare_progress(handshake.sas))
         }
     }
@@ -884,42 +703,9 @@ async fn poll_joiner(
     match client::get_rendezvous(db, &rv, "offer").await? {
         None => Ok(compare_progress(sas)),
         Some(blob) => {
-            // **The initiator's signing slot, read before anything is written.** It was posted
-            // ahead of the offer, so it is here when it exists. Without one, the group is asked
-            // — with the key the offer carries, and quietly — whether it signs its rosters: a
-            // group that does would take this device in unable to verify the device it paired
-            // with, so it refuses (`OFFER_UNSIGNED`). With an open group, or an older relay,
-            // this is today's join.
-            let offersig = client::get_rendezvous(db, &rv, client::OFFER_SIG).await?;
-            let p = pending.as_ref().expect("poll already checked this is Some");
-            let pair_key = p
-                .pair_key
-                .expect("a joiner's pending always carries a pair key");
-            let (initiator, offered) = open_offer(&pair_key, &blob)?;
-            let slot = match offersig {
-                Some(offersig) => Some(open_sig(&pair_key, &rv, &offersig, &initiator)?),
-                None => {
-                    if client::relay_says_signed(db, &offered, &me.device_id).await {
-                        return Err(OFFER_UNSIGNED.to_owned());
-                    }
-                    None
-                }
-            };
             // One stretch: the group this device is in, the cap, the join and the roster row,
-            // all read and written against one state of the database — and the initiator's
-            // signing key, and the latch its slot may carry.
-            db.with(|conn| {
-                complete(conn, pending, &blob)?;
-                file_peer_sign(conn, &initiator, slot.as_ref())?;
-                if slot.as_ref().and_then(|s| s.mode.as_deref()) == Some("signed") {
-                    // **The six digits authenticated this, so it is a latch toward the stricter
-                    // rule** from the epoch this device joins at: from here an envelope must be
-                    // signed and the first roster document it takes must be signed by the
-                    // initiator, the one full member it already trusts.
-                    crate::sync_pair::roster::follow_signed(conn, offered.epoch).map_err(err)?;
-                }
-                Ok(())
-            })?;
+            // all read and written against one state of the database.
+            db.with(|conn| complete(conn, pending, &blob))?;
             // **Set only after `complete` succeeds, and read on every later poll before this
             // reaches the relay again.** Without it, a poll that landed after some *other* event
             // rotated the group (a peer's removal, a departure) would re-run `complete` with this
@@ -1216,25 +1002,14 @@ mod tests {
     }
 
     impl FakeRelay {
-        /// A relay that keeps all four slots — `offer`, `join` and the Discord spec's PR 2's
-        /// `offersig` and `joinsig`.
         async fn start() -> Self {
-            Self::keeping(r"^/p/[0-9a-f]{32}/(offer|join|offersig|joinsig)$").await
-        }
-
-        /// A relay from before the signature slots: `offer` and `join` only, and the route
-        /// answers 404 for anything else, as the deployed one's regex does.
-        async fn older() -> Self {
-            Self::keeping(r"^/p/[0-9a-f]{32}/(offer|join)$").await
-        }
-
-        async fn keeping(slots: &str) -> Self {
             let server = MockServer::start_async().await;
             let store: Arc<Mutex<HashMap<(String, String), String>>> = Arc::default();
 
             let read_store = store.clone();
             server.mock(|when, then| {
-                when.method(GET).path_matches(slots);
+                when.method(GET)
+                    .path_matches(r"^/p/[0-9a-f]{32}/(offer|join)$");
                 then.respond_with(move |req: &HttpMockRequest| {
                     let (rv, slot) = rv_slot(req.uri().path());
                     match read_store.lock().unwrap().get(&(rv, slot)) {
@@ -1250,7 +1025,8 @@ mod tests {
 
             let write_store = store.clone();
             server.mock(|when, then| {
-                when.method(POST).path_matches(slots);
+                when.method(POST)
+                    .path_matches(r"^/p/[0-9a-f]{32}/(offer|join)$");
                 then.respond_with(move |req: &HttpMockRequest| {
                     let (rv, slot) = rv_slot(req.uri().path());
                     let body: serde_json::Value =
@@ -1280,14 +1056,6 @@ mod tests {
                 .unwrap()
                 .get(&(rv.to_owned(), slot.to_owned()))
                 .cloned()
-        }
-
-        /// Empty a slot — what an older build that never posts it leaves there.
-        fn forget(&self, rv: &str, slot: &str) {
-            self.store
-                .lock()
-                .unwrap()
-                .remove(&(rv.to_owned(), slot.to_owned()));
         }
 
         /// Overwrite a slot directly, first-write-wins included. Stands in for a relay (or a
@@ -1738,13 +1506,6 @@ mod tests {
             .blob(&rv, "join")
             .expect("M's own accept posted somewhere");
         relay.set_blob(&rv, "join", &attacker_blob);
-        // **And its signature slot**, as a relay rewriting what it holds would: left as B's, the
-        // slot is sealed under B's pair key and the substitution is refused before any digits
-        // are drawn — stronger, and not the defence this test is about.
-        let attacker_sig = m_relay
-            .blob(&rv, client::JOIN_SIG)
-            .expect("M posted its slot");
-        relay.set_blob(&rv, client::JOIN_SIG, &attacker_sig);
 
         let progress = poll(&a, &mut pa, crate::platform::clock::now_ms())
             .await
@@ -3051,171 +2812,5 @@ mod tests {
             None,
             "the grant survived the departure"
         );
-    }
-
-    // -----------------------------------------------------------------------------------
-    // The signature slots — the Discord spec's PR 2: `joinsig` and `offersig`, each the
-    // device's Ed25519 key and protocol level sealed under the pair key, beside the two slots
-    // that were always there.
-    // -----------------------------------------------------------------------------------
-
-    fn row_for(conn: &Connection, device: &str) -> identity::Device {
-        identity::roster(conn)
-            .unwrap()
-            .into_iter()
-            .find(|d| d.device_id == device)
-            .expect("on the roster")
-    }
-
-    /// ⚠ **Both sides file the other's signing key and level from the pairing**, behind the six
-    /// digits — the channel a signed group anchors its first roster document on. Measured on each
-    /// roster against the key the other device really holds.
-    #[tokio::test]
-    async fn each_side_files_the_others_signing_key_from_its_sealed_slot() {
-        let relay = FakeRelay::start().await;
-        let (a, b) = (db(), db());
-        let (mut pa, mut pb) = (None, None);
-        pair_up(&relay, &a, &mut pa, &b, &mut pb).await;
-        poll(&b, &mut pb, crate::platform::clock::now_ms())
-            .await
-            .unwrap();
-
-        let (me_a, me_b) = (identity::ensure(&a).unwrap(), identity::ensure(&b).unwrap());
-        let on_a = row_for(&a, &me_b.device_id);
-        let on_b = row_for(&b, &me_a.device_id);
-        assert_eq!(on_a.sign_public, Some(me_b.signing.public));
-        assert_eq!(on_a.proto, Some(identity::SIG_PROTO));
-        assert_eq!(on_a.capability, None, "a pairing grants nothing but full");
-        assert_eq!(on_b.sign_public, Some(me_a.signing.public));
-        assert_eq!(on_b.proto, Some(identity::SIG_PROTO));
-        assert_eq!(
-            crate::sync_pair::roster::mode(&b),
-            crate::sync_pair::roster::Mode::Open,
-            "an open group's offer latched nothing"
-        );
-    }
-
-    /// **An older relay keeps neither slot, and pairing is exactly what it was**: both posts are
-    /// quiet, nothing is filed, nothing is recorded.
-    #[tokio::test]
-    async fn a_relay_without_the_signature_slots_pairs_as_before() {
-        let relay = FakeRelay::older().await;
-        let (a, b) = (db(), db());
-        let (mut pa, mut pb) = (None, None);
-        pair_up(&relay, &a, &mut pa, &b, &mut pb).await;
-        let done = poll(&b, &mut pb, crate::platform::clock::now_ms())
-            .await
-            .unwrap();
-        assert_eq!(done.stage, STAGE_COMPLETE);
-        let me_b = identity::ensure(&b).unwrap();
-        assert_eq!(row_for(&a, &me_b.device_id).sign_public, None);
-        for conn in [&a, &b] {
-            let rows: i64 = conn
-                .query_row(
-                    "SELECT count(*) FROM error_log WHERE operation = 'rendezvous'",
-                    [],
-                    |r| r.get(0),
-                )
-                .unwrap();
-            assert_eq!(rows, 0, "an older relay's 404 on a new slot was recorded");
-        }
-    }
-
-    /// ⚠ **An initiator whose group signs its rosters refuses a joiner that sent no signing key**
-    /// — a build from before PR 2 — before anything is sealed, with a sentence; **an open group
-    /// takes it**, as it always did.
-    #[tokio::test]
-    async fn a_joiner_with_no_signing_slot_is_refused_by_a_signed_group_and_taken_by_an_open_one() {
-        for signed in [true, false] {
-            let relay = FakeRelay::start().await;
-            let (a, b) = (db(), db());
-            relay.point(&a);
-            relay.point(&b);
-            let me = identity::ensure(&a).unwrap();
-            identity::create_group(&a, &me).unwrap();
-            if signed {
-                crate::sync_pair::roster::enter_signed_mode(&a, 0).unwrap();
-            }
-            let (mut pa, mut pb) = (None, None);
-            let offer = begin(&a, &mut pa).unwrap();
-            accept(&b, &mut pb, &offer.code).await.unwrap();
-            let rv = pa.as_ref().unwrap().rv.clone();
-            relay.forget(&rv, client::JOIN_SIG);
-            poll(&a, &mut pa, crate::platform::clock::now_ms())
-                .await
-                .unwrap();
-
-            let confirmed = confirm(&a, &mut pa).await;
-            if signed {
-                assert_eq!(confirmed.err().as_deref(), Some(JOINER_TOO_OLD));
-                assert_eq!(live(&a), 1, "the old joiner reached the roster");
-                assert!(
-                    relay.blob(&rv, "offer").is_none(),
-                    "the key was sealed to it"
-                );
-            } else {
-                confirmed.expect("an open group takes an older joiner");
-                assert_eq!(live(&a), 2);
-            }
-        }
-    }
-
-    /// ⚠ **A joiner offered a key with no `offersig`, by a group whose relay says it signs its
-    /// rosters, refuses** — before it writes anything — because it could not verify the device it
-    /// paired with. The relay's newest document says `signed`; nothing else changed.
-    #[tokio::test]
-    async fn a_joiner_refuses_an_unsigned_offer_into_a_group_that_signs() {
-        let relay = FakeRelay::start().await;
-        let (a, b) = (db(), db());
-        relay.point(&a);
-        relay.point(&b);
-        let me = identity::ensure(&a).unwrap();
-        let group = identity::create_group(&a, &me).unwrap();
-        let claims_signed = serde_json::json!({
-            "v": 1, "group": group.group_id, "epoch": 0, "step": 0, "prev": null,
-            "mode": "signed", "signer": me.device_id, "members": [],
-        })
-        .to_string();
-        relay.server.mock(|when, then| {
-            when.method(GET).path(format!("/g/{}/keys", group.group_id));
-            then.status(200).json_body(serde_json::json!({
-                "epoch": 0, "blob": null, "devices": [], "roster": claims_signed,
-                "rosterSig": null, "rosterMac": null, "rosters": [], "sig": 1,
-            }));
-        });
-        let (mut pa, mut pb) = (None, None);
-        let offer = begin(&a, &mut pa).unwrap();
-        accept(&b, &mut pb, &offer.code).await.unwrap();
-        poll(&a, &mut pa, crate::platform::clock::now_ms())
-            .await
-            .unwrap();
-        confirm(&a, &mut pa).await.unwrap();
-        let rv = pb.as_ref().unwrap().rv.clone();
-        relay.forget(&rv, client::OFFER_SIG);
-
-        let refused = poll(&b, &mut pb, crate::platform::clock::now_ms()).await;
-        assert_eq!(refused.err().as_deref(), Some(OFFER_UNSIGNED));
-        assert!(
-            identity::group(&b).unwrap().is_none(),
-            "the joiner joined anyway"
-        );
-    }
-
-    /// **A slot that is not the peer's own is refused** — here the relay hands the joiner its own
-    /// `joinsig` as the initiator's `offersig`, which shares its associated data: the device it
-    /// names is the joiner's, and nothing is joined.
-    #[tokio::test]
-    async fn a_reflected_signature_slot_is_refused() {
-        let relay = FakeRelay::start().await;
-        let (a, b) = (db(), db());
-        let (mut pa, mut pb) = (None, None);
-        pair_up(&relay, &a, &mut pa, &b, &mut pb).await;
-        let rv = pb.as_ref().unwrap().rv.clone();
-        let own = relay.blob(&rv, client::JOIN_SIG).unwrap();
-        relay.set_blob(&rv, client::OFFER_SIG, &own);
-
-        let refused = poll(&b, &mut pb, crate::platform::clock::now_ms()).await;
-        assert_eq!(refused.err().as_deref(), Some(NOT_A_SIG));
-        assert!(identity::group(&b).unwrap().is_none());
     }
 }

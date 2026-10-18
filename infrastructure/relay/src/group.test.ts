@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { quotaDay, RESTRICTED_HEADER, RESTRICTED_PUSHES_PER_DAY } from "./admit";
 import { fakeState, stubWorkerd, type FakeSocket, type FakeState } from "./fakeState";
 import { Group, type Envelope } from "./group";
 import {
@@ -225,14 +224,8 @@ const GROUP = "g1";
 
 interface Relay extends FakeState {
   object: Group;
-  /** Store one row as `device`, stamped `hlcMs`, signed when `sig` is given; answers its `seq`. */
-  push: (
-    device: string,
-    sealed: string,
-    hlcMs: number,
-    hlcCtr?: number,
-    sig?: string,
-  ) => Promise<number>;
+  /** Store one row as `device`, stamped `hlcMs`; answers its `seq`. */
+  push: (device: string, sealed: string, hlcMs: number, hlcCtr?: number) => Promise<number>;
   /** A pull, as its query string; answers the status, the parsed body and the body's text. */
   pull: (query: string) => Promise<{ status: number; text: string; body: Answer }>;
   ack: (device: string, cursor: number) => Promise<number>;
@@ -247,19 +240,15 @@ interface Answer {
   error?: string;
 }
 
-/**
- * A relay over `fake`, or over a fresh database. `fake` is for a test that has put something in
- * the database before the object's first wake — the shape of a log an older relay made.
- */
-function relay(fake: FakeState = fakeState("sqlite")): Relay {
+function relay(): Relay {
+  const fake = fakeState("sqlite");
   const object = new Group(fake.state);
   const at = (path: string) => `https://relay.example/g/${GROUP}/${path}`;
   return {
     ...fake,
     object,
-    async push(device, sealed, hlcMs, hlcCtr = 0, sig) {
+    async push(device, sealed, hlcMs, hlcCtr = 0) {
       const envelope: Envelope = { group: GROUP, device, epoch: 1, hlcMs, hlcCtr, sealed };
-      if (sig !== undefined) envelope.sig = sig;
       const response = await object.fetch(
         new Request(at("push"), { method: "POST", body: JSON.stringify(envelope) }),
       );
@@ -682,281 +671,5 @@ describe("a pull is the relay hearing from a device, paged or not", () => {
         query,
       ).toBeGreaterThan(1);
     }
-  });
-});
-
-/**
- * **A signed envelope's `sig`, stored and served** (issue #1096, spec §4 and §8): the relay keeps
- * it beside the row and hands it back on both answers, verifying nothing — and an unsigned row's
- * answer is the one it has always been, which the byte-for-byte tests above already hold over a
- * log of nothing but unsigned rows.
- */
-const SIG = "S".repeat(43) + "-_".repeat(21) + "z";
-const SIG2 = "T".repeat(86);
-
-describe("a signed push", () => {
-  it("is stored with its sig, and an unsigned one with none", async () => {
-    expect(SIG).toHaveLength(86);
-    const r = relay();
-    await r.push("b", "signed", 1, 0, SIG);
-    await r.push("b", "unsigned", 2);
-
-    expect(r.sql(`SELECT sealed, sig FROM log ORDER BY seq`)).toEqual([
-      { sealed: "signed", sig: SIG },
-      { sealed: "unsigned", sig: null },
-    ]);
-  });
-
-  it("is answered with its sig last on a page, and an unsigned row beside it without one", async () => {
-    const r = relay();
-    await r.push("b", "sealed-text", 7, 3, SIG);
-    await r.push("c", "plain", 8);
-
-    const { text } = await r.pull("since=0&device=a&limit=5");
-
-    expect(text).toBe(
-      `{"envelopes":[` +
-        `{"group":"g1","device":"b","epoch":1,"hlcMs":7,"hlcCtr":3,"sealed":"sealed-text","sig":"${SIG}"},` +
-        `{"group":"g1","device":"c","epoch":1,"hlcMs":8,"hlcCtr":0,"sealed":"plain"}` +
-        `],"cursor":2,"more":false}`,
-    );
-  });
-
-  it("is answered with its sig on the streamed pull, and only the signed rows carry one", async () => {
-    const r = relay();
-    await r.push("b", "first", 5, 0, SIG);
-    await r.push("c", "second", 3);
-    await r.push("a", "mine", 4, 0, SIG2);
-    await r.push("c", "third", 9, 1, SIG2);
-
-    const { text } = await r.pull("since=0&device=a");
-
-    expect(text).toBe(
-      `{"envelopes":[` +
-        `{"group":"g1","device":"c","epoch":1,"hlcMs":3,"hlcCtr":0,"sealed":"second"},` +
-        `{"group":"g1","device":"b","epoch":1,"hlcMs":5,"hlcCtr":0,"sealed":"first","sig":"${SIG}"},` +
-        `{"group":"g1","device":"c","epoch":1,"hlcMs":9,"hlcCtr":1,"sealed":"third","sig":"${SIG2}"}` +
-        `],"cursor":4}`,
-    );
-    // And the unpaged answer of a log with no signed row in it is still the old one, to the byte.
-    const plain = relay();
-    await plain.push("b", "x", 1);
-    expect((await plain.pull("since=0&device=a")).text).toBe(asItWasAnswered(plain, 0, "a"));
-    expect((await plain.pull("since=0&device=a")).text).not.toContain("sig");
-  });
-
-  it("refuses a malformed sig at the object as well, and stores nothing", async () => {
-    const r = relay();
-    for (const sig of [null, 7, SIG + "==", SIG.slice(2)]) {
-      const response = await r.object.fetch(
-        new Request(`https://relay.example/g/${GROUP}/push`, {
-          method: "POST",
-          body: JSON.stringify({
-            group: GROUP,
-            device: "b",
-            epoch: 1,
-            hlcMs: 1,
-            hlcCtr: 0,
-            sealed: "x",
-            sig,
-          }),
-        }),
-      );
-      expect(response.status).toBe(400);
-      expect(await response.json()).toEqual({ error: "malformed envelope" });
-    }
-    expect(r.sql(`SELECT count(*) AS n FROM log`)[0].n).toBe(0);
-  });
-
-  it("counts the sealed text and not the sig against the log's size", async () => {
-    const r = relay();
-    await r.push("b", "12345", 1, 0, SIG);
-
-    expect(r.sql(`SELECT chars FROM log_size`)[0].chars).toBe(5);
-  });
-});
-
-describe("a log an older relay made, with no sig column", () => {
-  /** The `log` table as every object made it before `sig` existed, with two rows already in it. */
-  function older(): FakeState {
-    const fake = fakeState("sqlite");
-    fake.sql(
-      `CREATE TABLE log (
-         seq       INTEGER PRIMARY KEY AUTOINCREMENT,
-         device    TEXT    NOT NULL,
-         epoch     INTEGER NOT NULL,
-         hlc_ms    INTEGER NOT NULL,
-         hlc_ctr   INTEGER NOT NULL,
-         sealed    TEXT    NOT NULL,
-         stored_at INTEGER NOT NULL
-       )`,
-    );
-    for (const [device, sealed, hlcMs] of [
-      ["b", "before-one", 1],
-      ["c", "before-two", 2],
-    ] as const) {
-      fake.sql(
-        `INSERT INTO log (device, epoch, hlc_ms, hlc_ctr, sealed, stored_at) VALUES (?, 1, ?, 0, ?, 0)`,
-        device,
-        hlcMs,
-        sealed,
-      );
-    }
-    return fake;
-  }
-
-  const columns = (fake: FakeState) =>
-    fake.sql(`PRAGMA table_info(log)`).map((column) => column.name);
-
-  it("gains the column on its first wake, last and nullable, its rows kept and left unsigned", async () => {
-    const fake = older();
-    expect(columns(fake)).not.toContain("sig");
-
-    const r = relay(fake);
-
-    expect(columns(fake)).toEqual([
-      "seq",
-      "device",
-      "epoch",
-      "hlc_ms",
-      "hlc_ctr",
-      "sealed",
-      "stored_at",
-      "sig",
-    ]);
-    // The shape a fresh object makes, so every object has one.
-    expect(columns(freshLog())).toEqual(columns(fake));
-    expect(fake.sql(`SELECT sealed, sig FROM log ORDER BY seq`)).toEqual([
-      { sealed: "before-one", sig: null },
-      { sealed: "before-two", sig: null },
-    ]);
-    // Its rows answered as they were, and a signed push after the wake carries its sig.
-    await r.push("b", "after", 3, 0, SIG);
-    expect((await r.pull("since=0&device=a")).text).toBe(
-      `{"envelopes":[` +
-        `{"group":"g1","device":"b","epoch":1,"hlcMs":1,"hlcCtr":0,"sealed":"before-one"},` +
-        `{"group":"g1","device":"c","epoch":1,"hlcMs":2,"hlcCtr":0,"sealed":"before-two"},` +
-        `{"group":"g1","device":"b","epoch":1,"hlcMs":3,"hlcCtr":0,"sealed":"after","sig":"${SIG}"}` +
-        `],"cursor":3}`,
-    );
-    // And the seq carried on from the rows already there: the table was altered, not remade.
-    expect(r.sql(`SELECT max(seq) AS seq FROM log`)[0].seq).toBe(3);
-  });
-
-  it("is altered once: a later wake finds the column and adds nothing", () => {
-    const fake = older();
-    new Group(fake.state);
-    const mark = fake.asked.length;
-
-    new Group(fake.state);
-
-    expect(fake.asked.slice(mark).some((one) => one.query.startsWith("ALTER TABLE log"))).toBe(
-      false,
-    );
-    expect(
-      fake.asked.slice(0, mark).filter((one) => one.query.startsWith("ALTER TABLE log")),
-    ).toHaveLength(1);
-  });
-
-  it("is never altered when the object was made with the column", () => {
-    const fake = fakeState("sqlite");
-    new Group(fake.state);
-
-    expect(fake.asked.some((one) => one.query.startsWith("ALTER TABLE log"))).toBe(false);
-  });
-});
-
-/** A fresh object's `log` table, for its shape. */
-function freshLog(): FakeState {
-  const fake = fakeState("sqlite");
-  new Group(fake.state);
-  return fake;
-}
-
-describe("a restricted device's pushes, counted per day", () => {
-  /** A push the Worker forwarded, naming `restricted` in the header when it is a restricted one. */
-  async function pushAs(object: Group, device: string, restricted: string | null, sealed = "s") {
-    const envelope: Envelope = { group: GROUP, device, epoch: 1, hlcMs: 1, hlcCtr: 0, sealed };
-    const headers: Record<string, string> = { "content-type": "application/json" };
-    if (restricted !== null) headers[RESTRICTED_HEADER] = restricted;
-    return object.fetch(
-      new Request(`https://relay.example/g/${GROUP}/push`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(envelope),
-      }),
-    );
-  }
-
-  it("stores the day's cap and refuses the next: 429 restricted_quota", async () => {
-    const fake = fakeState("sqlite");
-    const object = new Group(fake.state);
-
-    for (let i = 0; i < RESTRICTED_PUSHES_PER_DAY; i += 1) {
-      expect((await pushAs(object, "bot", "bot")).status).toBe(200);
-    }
-    const refused = await pushAs(object, "bot", "bot");
-    expect(refused.status).toBe(429);
-    expect(await refused.json()).toEqual({
-      error: expect.any(String) as string,
-      code: "restricted_quota",
-    });
-    // Nothing of the refused push is stored.
-    expect(fake.sql(`SELECT count(*) AS n FROM log`)).toEqual([{ n: RESTRICTED_PUSHES_PER_DAY }]);
-
-    // A full device's pushes — no header — are not counted and not capped.
-    expect((await pushAs(object, "desk", null)).status).toBe(200);
-    expect(fake.sql(`SELECT device FROM restricted_pushes`)).toEqual([{ device: "bot" }]);
-  });
-
-  it("starts the count again on the next UTC day", async () => {
-    const fake = fakeState("sqlite");
-    const object = new Group(fake.state);
-    fake.sql(
-      `INSERT INTO restricted_pushes (device, day, count) VALUES (?, ?, ?)`,
-      "bot",
-      quotaDay(Date.now()) - 1,
-      RESTRICTED_PUSHES_PER_DAY,
-    );
-
-    expect((await pushAs(object, "bot", "bot")).status).toBe(200);
-    expect(fake.sql(`SELECT day, count FROM restricted_pushes`)).toEqual([
-      { day: quotaDay(Date.now()), count: 1 },
-    ]);
-  });
-
-  it("counts only what it stored: a refused push spends none of the day", async () => {
-    const fake = fakeState("sqlite");
-    const object = new Group(fake.state);
-    for (let i = 0; i < RESTRICTED_PUSHES_PER_DAY; i += 1) await pushAs(object, "bot", "bot");
-
-    for (let i = 0; i < 3; i += 1) expect((await pushAs(object, "bot", "bot")).status).toBe(429);
-    // A push naming another group is refused ahead of the count, and moves nothing either.
-    const stray = await object.fetch(
-      new Request(`https://relay.example/g/${GROUP}/push`, {
-        method: "POST",
-        headers: { [RESTRICTED_HEADER]: "bot" },
-        body: JSON.stringify({
-          group: "g2",
-          device: "bot",
-          epoch: 1,
-          hlcMs: 1,
-          hlcCtr: 0,
-          sealed: "s",
-        }),
-      }),
-    );
-    expect(stray.status).toBe(409);
-    expect(fake.sql(`SELECT count FROM restricted_pushes`)).toEqual([
-      { count: RESTRICTED_PUSHES_PER_DAY },
-    ]);
-  });
-
-  it("forgets the count with the log when the group is dropped", async () => {
-    const fake = fakeState("sqlite");
-    const object = new Group(fake.state);
-    await pushAs(object, "bot", "bot");
-    await object.fetch(new Request(`https://relay.internal/g/${GROUP}/drop`, { method: "POST" }));
-    expect(fake.sql(`SELECT * FROM restricted_pushes`)).toEqual([]);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isRestricted, mint, RESTRICTED_DEVICE, TOKEN_TTL_MS, verify, type Claims } from "./token";
+import { mint, TOKEN_TTL_MS, verify, type Claims } from "./token";
 
 const SECRET = "a-relay-hmac-key-for-tests-only";
 const NOW = 1_756_000_000_000;
@@ -28,33 +28,6 @@ describe("token", () => {
   it("refuses a device claim that is not a string", async () => {
     const odd = { ...claims(), dev: 7 } as unknown as Claims;
     expect(await verify(await mint(odd, SECRET), SECRET, NOW)).toBeNull();
-  });
-
-  it("carries a restricted device's cap, and reads a token without one as it was minted", async () => {
-    // Spec §12: `cap` is minted only for a device the newest roster names as other than `full`,
-    // so every full device's token — and every token minted before the claim existed — has none.
-    const restricted = claims({ dev: "bot", cap: "read" });
-    expect(await verify(await mint(restricted, SECRET), SECRET, NOW)).toEqual(restricted);
-    expect(await verify(await mint(claims({ dev: "d" }), SECRET), SECRET, NOW)).not.toHaveProperty(
-      "cap",
-    );
-  });
-
-  it("refuses a cap claim that is not a string, rather than reading it as full", async () => {
-    for (const cap of [7, null, ["read"], { cap: "read" }, true]) {
-      const odd = { ...claims(), cap } as unknown as Claims;
-      expect(await verify(await mint(odd, SECRET), SECRET, NOW), String(cap)).toBeNull();
-    }
-  });
-
-  it("calls a token restricted when its cap is present and not full", () => {
-    expect(isRestricted({})).toBe(false);
-    expect(isRestricted({ cap: "full" })).toBe(false);
-    expect(isRestricted({ cap: "read" })).toBe(true);
-    expect(isRestricted({ cap: "add" })).toBe(true);
-    // A cap this build has never heard of is restricted: the direction to fail in.
-    expect(isRestricted({ cap: "something-new" })).toBe(true);
-    expect(RESTRICTED_DEVICE).toBe("restricted_device");
   });
 
   it("refuses a token signed with a different secret", async () => {

@@ -1,10 +1,4 @@
-import {
-  isRestricted,
-  RESTRICTED_DEVICE,
-  TOKEN_TTL_MS,
-  verify,
-  type Claims,
-} from "@grimoire/relay/src/token";
+import { TOKEN_TTL_MS, verify, type Claims } from "@grimoire/relay/src/token";
 
 /**
  * The share Worker's bindings, its two caps, and the bearer gate every `/g/…` route stands
@@ -123,9 +117,8 @@ export function shareUrl(env: Env, id: string): string {
 }
 
 /**
- * Is this request carrying a live token for **this** group, from a full device still in it? The
- * gate in front of every `/g/…` route, and the only thing that gates publishing: `null` to go on,
- * or the refusal to answer with.
+ * Is this request carrying a live token for **this** group, from a device still in it? The gate in
+ * front of every `/g/…` route, and the only thing that gates publishing.
  *
  * **A client-side check would be a suggestion** (spec §9), so the entitlement is enforced here:
  * the token comes from the relay's `/token` flow and an unentitled caller cannot mint one.
@@ -138,40 +131,17 @@ export function shareUrl(env: Env, id: string): string {
  * for *your own* group is exactly what an attacker has; without this comparison one membership
  * would open every group's shares on the account.
  *
- * **A restricted device is refused `403 restricted_device`** — a token whose `cap` claim is
- * present and not `full` (`token.ts`'s `isRestricted`; spec §2 F8 and §12). The relay mints one for
- * a device the group's signed roster names as restricted: the Discord bot, which holds the group
- * key so that it can read, and so could publish the whole collection as a public page if this
- * door took its token. A share is plaintext and public, which is exactly what a restricted device
- * must not be able to make. Checked from the claims alone, before the D1 read below — and a 403,
- * not the 401: the token is good, and its device may not do this.
- *
- * ⚠️ **The claim is as fresh as the token**, a day at most (`TOKEN_TTL_MS`): a token minted
- * before the group's newest roster named its device restricted carries no `cap`, and is let
- * through here until it expires. Closing that would be a read of `rosters` per request; the
- * pairing that brings a restricted device in is what has to see that its first token is minted
- * after the roster naming it.
- *
  * **And the signature is not the end of it — see {@link stillInGroup}.** It costs one D1 read per
  * gated request, which is traffic from at most five devices and never from a viewer.
  */
-export async function refused(request: Request, env: Env, group: string): Promise<Response | null> {
+export async function authorised(request: Request, env: Env, group: string): Promise<boolean> {
   const header = request.headers.get("authorization");
   const bearer = header?.startsWith("Bearer ") === true ? header.slice(7) : null;
   const claims = bearer
     ? await verify(bearer, required(env.RELAY_HMAC_KEY, "RELAY_HMAC_KEY"), Date.now())
     : null;
-  if (claims === null || claims.grp !== group) return json({ error: "unauthorized" }, 401);
-  if (isRestricted(claims)) {
-    return json(
-      {
-        error: "a restricted device may not publish, list or withdraw shares",
-        code: RESTRICTED_DEVICE,
-      },
-      403,
-    );
-  }
-  return (await stillInGroup(env, group, claims)) ? null : json({ error: "unauthorized" }, 401);
+  if (claims === null || claims.grp !== group) return false;
+  return stillInGroup(env, group, claims);
 }
 
 /**

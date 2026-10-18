@@ -77,7 +77,6 @@ The refusals, in the order they are checked — each before anything that costs 
 | 429 | `rate_limited` | more than 12 a minute from one address |
 | 500 | `no_key` | this Worker holds no `RELAY_HMAC_KEY`: it was deployed and its secret never set (*Deploying*) |
 | 401 | `unauthorized` | no bearer token, or one the relay's key does not verify — expired, another key's, edited, junk. One answer for all of them, and **ahead of everything about the scan**: a stranger's type, label and body are not read |
-| 403 | `restricted_device` | a live token whose `cap` claim is present and not `full` — a device a group's signed roster restricts, the Discord bot (the integration's second PR, spec §12). Ahead of everything about the scan, as the 401 is |
 | 415 | | not sent as `application/octet-stream` — **`image/jpeg`, one picture's type, among them** |
 | 400 | | no label, or one `src/label.ts` refuses (the sentence names the field, and the frame) — **a `run` of fewer than five frames among them** |
 | 413 | `run_limit` | over 2 MB by what the label's frames add up to, or by its `content-length` |

@@ -1,19 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   admit,
   admitBody,
-  admitRestricted,
   admitToLog,
-  bindDevice,
-  DEVICE_BINDING,
-  DEVICE_MISMATCH,
-  deviceMismatch,
   isEnvelope,
-  isSig,
   MAX_PUSH_BODY_CHARS,
-  quotaDay,
-  RESTRICTED_PUSHES_PER_DAY,
-  SIG_CHARS,
   type Refusal,
 } from "./admit";
 import { fakeEnvOver, fakeTables, type Tables } from "./fakeD1";
@@ -22,15 +13,6 @@ import { MAX_CLOCK_AHEAD_MS, MAX_GROUP_LOG_CHARS, MAX_SEALED_CHARS } from "./log
 import { mint, TOKEN_TTL_MS } from "./token";
 
 const NOW = 1_700_000_000_000;
-
-/**
- * A well-formed `sig`: 86 characters of base64url, every one of its 64 letters among them —
- * the shape a 64-byte Ed25519 signature takes unpadded. Not a signature of anything, which the
- * relay cannot tell: it verifies none.
- */
-const SIG = (
-  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_" + "Q".repeat(22)
-).slice(0, SIG_CHARS);
 
 /** An envelope that passes every check at epoch 3 and `NOW`, for a test to break one field of. */
 function envelope(over: Partial<Record<string, unknown>> = {}) {
@@ -67,7 +49,6 @@ describe("admitBody", () => {
   it("leaves room for the largest honest envelope, so the sealed cap is the one it meets", () => {
     // Every field at the most the route or the app allows: a 128-character group, a device id
     // four times the app's 32, and three numbers as long as a float can print an integer.
-    // And a signature, which is one length whatever it signs.
     const worst = JSON.stringify({
       group: "g".repeat(128),
       device: "d".repeat(128),
@@ -75,7 +56,6 @@ describe("admitBody", () => {
       hlcMs: Number.MAX_SAFE_INTEGER,
       hlcCtr: Number.MAX_SAFE_INTEGER,
       sealed: "s".repeat(MAX_SEALED_CHARS + 1),
-      sig: SIG,
     });
 
     expect(worst.length).toBeLessThanOrEqual(MAX_PUSH_BODY_CHARS);
@@ -99,85 +79,6 @@ describe("isEnvelope", () => {
     ]) {
       expect(isEnvelope(bad)).toBe(false);
     }
-  });
-
-  it("takes an envelope with no sig exactly as before, and one with a well-formed sig", () => {
-    // Every envelope a released build has pushed has no `sig` key at all.
-    expect("sig" in envelope()).toBe(false);
-    expect(isEnvelope(envelope())).toBe(true);
-    expect(SIG).toHaveLength(86);
-    expect(isEnvelope(envelope({ sig: SIG }))).toBe(true);
-    // Absent and `undefined` are one thing: a parsed body cannot hold an `undefined`.
-    expect(isEnvelope(envelope({ sig: undefined }))).toBe(true);
-  });
-
-  it("refuses a sig that is present and not 86 characters of unpadded base64url", () => {
-    for (const [why, sig] of [
-      ["null is present", null],
-      ["a number", 7],
-      ["an object", { sig: SIG }],
-      ["empty", ""],
-      ["one short", SIG.slice(1)],
-      ["one long", SIG + "A"],
-      ["padded, as base64 spells 64 bytes", SIG + "=="],
-      ["one padding character in the place of a letter", SIG.slice(1) + "="],
-      ["base64's + rather than base64url's -", "+" + SIG.slice(1)],
-      ["base64's / rather than base64url's _", "/" + SIG.slice(1)],
-      ["a space", " " + SIG.slice(1)],
-      ["a trailing newline", SIG.slice(1) + "\n"],
-      ["hex is the right alphabet at the wrong length", "ab".repeat(64)],
-    ] as const) {
-      expect(isEnvelope(envelope({ sig })), why).toBe(false);
-      expect(isSig(sig), why).toBe(false);
-    }
-  });
-});
-
-describe("deviceMismatch and bindDevice", () => {
-  afterEach(() => vi.restoreAllMocks());
-
-  it("is no mismatch for a token that names the device, or names none", () => {
-    expect(deviceMismatch({ dev: "desk" }, "desk")).toBeNull();
-    expect(deviceMismatch({}, "desk")).toBeNull();
-    expect(deviceMismatch({}, "")).toBeNull();
-  });
-
-  it("is a 403 device_mismatch for a token that names another device", () => {
-    expect(deviceMismatch({ dev: "desk" }, "phone")).toEqual({
-      status: 403,
-      code: "device_mismatch",
-      error: expect.any(String) as string,
-    });
-    expect(DEVICE_MISMATCH).toBe("device_mismatch");
-  });
-
-  it("only warns by default — every group not signed: logged as fixed text, nothing refused", () => {
-    const warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-
-    expect(DEVICE_BINDING).toBe("warn");
-    expect(bindDevice("push", { dev: "desk" }, "phone")).toBeNull();
-    expect(bindDevice("ack", { dev: "desk" }, "phone")).toBeNull();
-
-    // The code and the route, and not one thing the request carried.
-    expect(warned.mock.calls).toEqual([["device_mismatch on push"], ["device_mismatch on ack"]]);
-  });
-
-  it("says nothing for a match or a token with no device", () => {
-    const warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-
-    expect(bindDevice("push", { dev: "desk" }, "desk")).toBeNull();
-    expect(bindDevice("ack", {}, "anyone")).toBeNull();
-
-    expect(warned).not.toHaveBeenCalled();
-  });
-
-  it("answers the 403 when the mode is refuse — a signed group's (`index.ts`'s `bound`)", () => {
-    vi.spyOn(console, "warn").mockImplementation(() => undefined);
-
-    expect(code(bindDevice("push", { dev: "desk" }, "phone", "refuse"))).toBe("device_mismatch");
-    expect(bindDevice("ack", { dev: "desk" }, "phone", "refuse")?.status).toBe(403);
-    // A token that names no device is still no mismatch, in either mode.
-    expect(bindDevice("ack", {}, "phone", "refuse")).toBeNull();
   });
 });
 
@@ -230,26 +131,6 @@ describe("admit", () => {
     );
     expect(code(admit(envelope({ epoch: 2, hlcMs: future }), 3, NOW))).toBe("stale_epoch");
     expect(code(admit(envelope({ epoch: 4, hlcMs: future }), 3, NOW))).toBe("epoch_ahead");
-  });
-});
-
-describe("admitRestricted", () => {
-  it("stores a restricted device's 64th push of the day and refuses its 65th", () => {
-    expect(RESTRICTED_PUSHES_PER_DAY).toBe(64);
-    expect(admitRestricted(0)).toBeNull();
-    expect(admitRestricted(RESTRICTED_PUSHES_PER_DAY - 1)).toBeNull();
-    expect(admitRestricted(RESTRICTED_PUSHES_PER_DAY)).toEqual({
-      status: 429,
-      code: "restricted_quota",
-      error: expect.any(String) as string,
-    });
-  });
-
-  it("counts by UTC day", () => {
-    expect(quotaDay(Date.UTC(2026, 9, 17, 23, 59, 59, 999))).toBe(
-      quotaDay(Date.UTC(2026, 9, 17, 0, 0)),
-    );
-    expect(quotaDay(Date.UTC(2026, 9, 18))).toBe(quotaDay(Date.UTC(2026, 9, 17)) + 1);
   });
 });
 
@@ -307,28 +188,12 @@ function relay(): Relay {
   return { env, tables, reached };
 }
 
-/** A token for `g1`, naming `dev` when one is given — as every token since issue #548 does. */
-function bearer(dev?: string): Promise<string> {
-  const claims = { sub: "sub-0", grp: "g1", exp: Date.now() + TOKEN_TTL_MS };
-  return mint(dev === undefined ? claims : { ...claims, dev }, KEY);
-}
-
-async function push(env: Env, body: string, dev?: string): Promise<Response> {
+async function push(env: Env, body: string): Promise<Response> {
+  const token = await mint({ sub: "sub-0", grp: "g1", exp: Date.now() + TOKEN_TTL_MS }, KEY);
   return worker.fetch(
     new Request("https://relay.example/g/g1/push", {
       method: "POST",
-      headers: { authorization: `Bearer ${await bearer(dev)}` },
-      body,
-    }),
-    env,
-  );
-}
-
-async function ack(env: Env, body: string, dev?: string): Promise<Response> {
-  return worker.fetch(
-    new Request("https://relay.example/g/g1/ack", {
-      method: "POST",
-      headers: { authorization: `Bearer ${await bearer(dev)}` },
+      headers: { authorization: `Bearer ${token}` },
       body,
     }),
     env,
@@ -425,133 +290,5 @@ describe("POST /push, at the Worker", () => {
     // The 400 carries no code, in the words the object has always used.
     expect(await malformed.json()).toEqual({ error: "malformed envelope" });
     expect(reached).toHaveLength(0);
-  });
-});
-
-describe("POST /push, signed", () => {
-  it("forwards a push with a well-formed sig, its text untouched", async () => {
-    const { env, reached } = relay();
-    const body = live({ sig: SIG });
-
-    expect((await push(env, body)).status).toBe(200);
-    expect(reached).toHaveLength(1);
-    expect(await reached[0].text()).toBe(body);
-  });
-
-  it("refuses a malformed sig as a malformed envelope, without reaching the object", async () => {
-    const { env, reached } = relay();
-
-    for (const sig of [null, 7, SIG + "==", SIG.slice(1)]) {
-      const response = await push(env, live({ sig }));
-      expect(response.status).toBe(400);
-      expect(await response.json()).toEqual({ error: "malformed envelope" });
-    }
-    expect(reached).toHaveLength(0);
-  });
-});
-
-/**
- * **The token's device against the body's, recorded and never refused in a group that is not
- * signed** (`DEVICE_BINDING`) — every group here, which has no roster document; a signed group's
- * refusal is `roster.test.ts`'s. What is held here is the placement and the pass-through: a mismatch is one
- * fixed line in the log and the request reaches its object as it would have; a match and a token
- * with no `dev` say nothing at all.
- */
-describe("the token's device, on a push and an ack", () => {
-  afterEach(() => vi.restoreAllMocks());
-
-  it("records a push stamped as another device, and still forwards it", async () => {
-    const warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const { env, reached } = relay();
-    const body = live({ device: "phone" });
-
-    const response = await push(env, body, "desk");
-
-    expect(response.status).toBe(200);
-    expect(reached).toHaveLength(1);
-    expect(await reached[0].text()).toBe(body);
-    expect(warned.mock.calls).toEqual([["device_mismatch on push"]]);
-  });
-
-  it("says nothing of a push whose device is the token's, or a token that names none", async () => {
-    const warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const { env, reached } = relay();
-
-    expect((await push(env, live({ device: "desk" }), "desk")).status).toBe(200);
-    expect((await push(env, live({ device: "phone" }))).status).toBe(200);
-
-    expect(reached).toHaveLength(2);
-    expect(warned).not.toHaveBeenCalled();
-  });
-
-  it("does not let a mismatch stand in front of a refusal: a stale push is still a 409", async () => {
-    // Recorded, then admitted or refused exactly as an unbound push would be.
-    const warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const { env, tables, reached } = relay();
-    keyRow(tables, 3);
-
-    const response = await push(env, live({ device: "phone", epoch: 2 }), "desk");
-
-    expect(response.status).toBe(409);
-    expect(reached).toHaveLength(0);
-    expect(warned).toHaveBeenCalledTimes(1);
-  });
-
-  it("records an ack as another device, and still forwards it with its body", async () => {
-    const warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const { env, reached } = relay();
-    const body = '{"device":"phone","cursor":7}';
-
-    await ack(env, body, "desk");
-
-    expect(reached).toHaveLength(1);
-    expect(new URL(reached[0].url).pathname).toBe("/g/g1/ack");
-    expect(reached[0].method).toBe("POST");
-    expect(await reached[0].text()).toBe(body);
-    expect(warned.mock.calls).toEqual([["device_mismatch on ack"]]);
-  });
-
-  it("says nothing of an ack as the token's own device", async () => {
-    const warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const { env, reached } = relay();
-    const body = '{"device":"desk","cursor":7}';
-
-    await ack(env, body, "desk");
-
-    expect(await reached[0].text()).toBe(body);
-    expect(warned).not.toHaveBeenCalled();
-  });
-
-  it("forwards an ack under a token with no device as the very request, unread", async () => {
-    const warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const { env, reached } = relay();
-    const request = new Request("https://relay.example/g/g1/ack", {
-      method: "POST",
-      headers: { authorization: `Bearer ${await bearer()}` },
-      body: '{"device":"phone","cursor":7}',
-    });
-
-    await worker.fetch(request, env);
-
-    expect(reached).toEqual([request]);
-    expect(request.bodyUsed).toBe(false);
-    expect(warned).not.toHaveBeenCalled();
-  });
-
-  it("forwards an ack it cannot read for the object to refuse, in its own words", async () => {
-    const warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const { env, reached } = relay();
-
-    for (const body of ["not json", "null", '{"cursor":1}', '{"device":7,"cursor":1}']) {
-      await ack(env, body, "desk");
-    }
-
-    expect(await Promise.all(reached.map((each) => each.text()))).toEqual([
-      "not json",
-      "null",
-      '{"cursor":1}',
-      '{"device":7,"cursor":1}',
-    ]);
-    expect(warned).not.toHaveBeenCalled();
   });
 });

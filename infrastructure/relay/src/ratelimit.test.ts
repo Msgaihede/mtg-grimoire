@@ -74,11 +74,9 @@ const LIMITED = [
   { method: "POST", path: "/claim", binding: "RL_CLAIM", key: `claim:${IP}` },
   { method: "POST", path: "/token", binding: "RL_MINT", key: `token:${IP}` },
   { method: "POST", path: "/g/g1/rotate", binding: "RL_MINT", key: `rotate:${IP}` },
-  { method: "POST", path: "/g/g1/roster", binding: "RL_MINT", key: `roster:${IP}` },
   { method: "GET", path: "/g/g1/keys?device=deadbeef", binding: "RL_READ", key: `keys:${IP}` },
   { method: "GET", path: `/p/${RV}/offer`, binding: "RL_READ", key: `rendezvous:${IP}` },
   { method: "POST", path: `/p/${RV}/join`, binding: "RL_READ", key: `rendezvous:${IP}` },
-  { method: "GET", path: `/p/${RV}/joinsig`, binding: "RL_READ", key: `rendezvous:${IP}` },
 ] as const;
 
 describe("the unauthenticated routes are rate limited", () => {
@@ -153,7 +151,6 @@ describe("nothing else is rate limited", () => {
     { method: "GET", path: "/claim" },
     { method: "GET", path: "/token" },
     { method: "GET", path: "/g/g1/rotate" },
-    { method: "GET", path: "/g/g1/roster" },
     { method: "POST", path: "/g/g1/keys" },
     { method: "DELETE", path: `/p/${RV}/offer` },
   ])("$method $path is a 405 that spends none of the caller's budget", async ({ method, path }) => {

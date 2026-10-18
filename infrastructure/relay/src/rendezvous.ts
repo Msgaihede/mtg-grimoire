@@ -1,15 +1,7 @@
 import type { Env } from "./index";
 
 /**
- * The pairing rendezvous: four slots, ten minutes, and no authentication.
- *
- * **Two slots until the Discord integration's second PR, and two more since** (spec §4,
- * *Pairing*): `offer` and `join` carry the X25519 handshake's two blobs, and `offersig` and
- * `joinsig` carry each side's Ed25519 signing key and protocol level, sealed under the same
- * `pair_key`. Same ten minutes, same first-writer-wins, same blob cap; a build that knows only the
- * first two never asks for the others, and its pairing is the one it always was. ⚠️ **The new two
- * live in a table of their own, `pairing_slots`** — the first table's `slot` is `CHECK`ed to
- * `offer` and `join`, which SQLite cannot widen in place (`migrations/0001_…`). [`TABLE`] picks.
+ * The pairing rendezvous: two slots, ten minutes, and no authentication.
  *
  * **It stands ahead of the bearer gate for `/rotate` and `/keys`'s reason, not by exemption.** The
  * joining device is not in the group yet and cannot derive a group auth, so a rendezvous behind the
@@ -40,32 +32,10 @@ export const RENDEZVOUS_TTL_MS = 600_000;
 /**
  * The largest blob measured is the 224-character sealed key, so this is 9× headroom.
  * It is a cap on an **unauthenticated** write, which is the only reason it exists.
- *
- * **One cap for all four slots, and the signing slots fit it with room to spare**: a 32-byte
- * public key and a protocol number sealed under `pair_key` is under a hundred characters. There
- * is no cap per `rv` beyond the four slots themselves, so four rows is what one pairing can hold.
  */
 export const MAX_BLOB_CHARS = 2048;
 
-/**
- * Which table holds which slot — and so the set of slots there are. **Interpolated into the SQL
- * below, and safe to be**: the value is one of these two literals, chosen by a key the caller's
- * slot must already be, never the caller's text.
- */
-const TABLE: Readonly<Record<string, string>> = {
-  offer: "pairing_rendezvous",
-  join: "pairing_rendezvous",
-  offersig: "pairing_slots",
-  joinsig: "pairing_slots",
-};
-
-/**
- * The table for `slot`, or `undefined` for a slot there is not — `Object.hasOwn`, so a slot named
- * `constructor` is not found on the prototype.
- */
-function tableFor(slot: string): string | undefined {
-  return Object.hasOwn(TABLE, slot) ? TABLE[slot] : undefined;
-}
+const SLOTS = new Set(["offer", "join"]);
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -86,8 +56,7 @@ export async function handleRendezvousPut(
   slot: string,
   now: number,
 ): Promise<Response> {
-  const table = tableFor(slot);
-  if (table === undefined) return json({ error: "no such slot" }, 400);
+  if (!SLOTS.has(slot)) return json({ error: "no such slot" }, 400);
 
   let blob: unknown;
   try {
@@ -103,7 +72,7 @@ export async function handleRendezvousPut(
   // Clears a slot that has timed out, so a fresh write can land there again. This can never race
   // anyone: it only removes a row whose `expires_at` is already behind `now`, and nothing moves
   // `now` backwards.
-  await env.DB.prepare(`DELETE FROM ${table} WHERE rv = ? AND slot = ? AND expires_at <= ?`)
+  await env.DB.prepare(`DELETE FROM pairing_rendezvous WHERE rv = ? AND slot = ? AND expires_at <= ?`)
     .bind(rv, slot, now)
     .run();
 
@@ -111,7 +80,7 @@ export async function handleRendezvousPut(
   // which of two concurrent requests asked first, and `OR IGNORE` turns that refusal into
   // `changes: 0` instead of a thrown constraint error.
   const written = await env.DB.prepare(
-    `INSERT OR IGNORE INTO ${table} (rv, slot, blob, expires_at) VALUES (?, ?, ?, ?)`,
+    `INSERT OR IGNORE INTO pairing_rendezvous (rv, slot, blob, expires_at) VALUES (?, ?, ?, ?)`,
   )
     .bind(rv, slot, blob, now + RENDEZVOUS_TTL_MS)
     .run();
@@ -130,11 +99,10 @@ export async function handleRendezvousGet(
   slot: string,
   now: number,
 ): Promise<Response> {
-  const table = tableFor(slot);
-  if (table === undefined) return json({ error: "no such slot" }, 400);
+  if (!SLOTS.has(slot)) return json({ error: "no such slot" }, 400);
 
   const row = await env.DB.prepare(
-    `SELECT blob FROM ${table} WHERE rv = ? AND slot = ? AND expires_at > ?`,
+    `SELECT blob FROM pairing_rendezvous WHERE rv = ? AND slot = ? AND expires_at > ?`,
   )
     .bind(rv, slot, now)
     .first<{ blob: string }>();
@@ -143,8 +111,7 @@ export async function handleRendezvousGet(
   return json({ blob: row.blob });
 }
 
-/** Swept by the hourly cron, after `reconcile` — so a `reconcile` that throws skips it. Both tables. */
+/** Swept by the hourly cron, after `reconcile` — so a `reconcile` that throws skips it. */
 export async function sweepRendezvous(env: Env, now: number): Promise<void> {
   await env.DB.prepare(`DELETE FROM pairing_rendezvous WHERE expires_at <= ?`).bind(now).run();
-  await env.DB.prepare(`DELETE FROM pairing_slots WHERE expires_at <= ?`).bind(now).run();
 }
