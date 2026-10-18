@@ -16,9 +16,21 @@ import type { Frame, Label } from "./label";
 /** The suite's signing key: what the relay and this Worker would both hold. Not a secret. */
 export const KEY = "a-test-signing-key";
 
-/** A token of the relay's for a supporter's device, signed with `key` and dying at `exp`. */
-export const tokenFor = (exp: number, key: string = KEY): Promise<string> =>
-  mint({ sub: "patreon-user-1", grp: "a-sync-group-id", exp, dev: "a-device-id" }, key);
+/**
+ * A token of the relay's for a supporter's device, signed with `key` and dying at `exp` — with a
+ * `cap` claim when one is given, as the relay mints a restricted device's.
+ */
+export const tokenFor = (exp: number, key: string = KEY, cap?: string): Promise<string> =>
+  mint(
+    {
+      sub: "patreon-user-1",
+      grp: "a-sync-group-id",
+      exp,
+      dev: "a-device-id",
+      ...(cap === undefined ? {} : { cap }),
+    },
+    key,
+  );
 
 /**
  * A live token, minted once for the module: good until the year 2100, so a test that moves the

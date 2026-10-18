@@ -65,6 +65,12 @@ paired may not be on the manifest yet. A token with no `dev` (an older relay's) 
 rotation is refused. A group with no rows has never rotated and is not asked. One D1 read per gated
 request — traffic from at most five devices, never from a viewer.
 
+**A restricted device is refused `403 restricted_device`** (the Discord integration's second PR,
+spec §2 F8 and §12): a token whose `cap` claim is present and not `full` — the relay mints one for a
+device the group's signed roster document names as restricted, the Discord bot — may not publish,
+list or withdraw a share, decided from the claims before the D1 read. A share is public plaintext,
+which is what a device that may only read must not be able to make.
+
 ⚠️ **This needs the relay deployed first** so that tokens carry `dev`; until then every token
 minted before a group's newest rotation is refused, and a device sees one day of
 _"would not accept this device's membership"_ at most.
@@ -211,7 +217,7 @@ curl -s -w " %{http_code}\n" "$S/g/abc/bogus"
 **That day's answers were `404 text/html`, `200 text/javascript`, `{"error":"unauthorized"} 401`,
 `401` and `{"error":"not found"} 404`.** The first is a D1 read that found no share — a missing
 `shares` table is a 500 there. ⚠️ **The fourth is the secret's tell, and 500 means it is unset**:
-`authorised` calls `required(env.RELAY_HMAC_KEY, …)` before `verify` can refuse a malformed
+`refused` (`authorised` until the integration's second PR) calls `required(env.RELAY_HMAC_KEY, …)` before `verify` can refuse a malformed
 bearer. It answered **500** for the five minutes between the deploy and step 3, and **401**
 since. The third is its control — no bearer is 401 either way.
 

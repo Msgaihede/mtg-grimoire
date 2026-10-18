@@ -91,10 +91,11 @@ export interface FakeState {
 /**
  * Just enough of a `DurableObjectState` for `Group`.
  *
- * `"scenery"` is the state `ticket.test.ts` has always used: every `exec` answers one row that
- * satisfies both things the constructor asks — `PRAGMA table_info(acks)` finds a `heard_at`,
- * `SELECT 1 FROM log_size` finds a row — so no migration branch runs and nothing asserts on a
- * row. `"sqlite"` is a real database in memory, empty until the constructor makes its tables.
+ * `"scenery"` is the state `ticket.test.ts` has always used: every `exec` answers rows that
+ * satisfy all three things the constructor asks — `PRAGMA table_info(log)` finds a `sig`,
+ * `PRAGMA table_info(acks)` a `heard_at`, `SELECT 1 FROM log_size` a row — so no migration
+ * branch runs and nothing asserts on a row. `"sqlite"` is a real database in memory, empty until
+ * the constructor makes its tables.
  */
 export function fakeState(
   storage: "scenery" | "sqlite" = "scenery",
@@ -107,7 +108,7 @@ export function fakeState(
   let exec: (query: string, ...bindings: Cell[]) => ReturnType<typeof cursorOver>;
   let sql: FakeState["sql"];
   if (storage === "scenery") {
-    exec = () => cursorOver([{ name: "heard_at" }]);
+    exec = () => cursorOver([{ name: "heard_at" }, { name: "sig" }]);
     sql = () => [];
   } else {
     const db = new DatabaseSync(":memory:");

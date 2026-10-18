@@ -3,7 +3,9 @@
 //! The one layer of `sync_pair` that touches SQLite. Everything above it is pure, which is why
 //! the protocol tests never need a database and these tests never need a network.
 //!
-//! **The device's secret key and the group key live in the user database, in the clear.** There
+//! **The device's secret keys and the group key live in the user database, in the clear** — the
+//! X25519 secret it agrees keys with and, since user schema v66, the Ed25519 secret it signs
+//! envelopes with, side by side in one row and treated exactly alike. There
 //! is no OS keystore for a portable Windows exe a reader copies onto a stick, and inventing one
 //! would be a second store to lose. The consequence is exact: **copying the data folder copies
 //! the identity.** Somebody who has the database already has the collection it protects, so the
@@ -12,7 +14,7 @@
 //! that is decided, and it mints on absence only.
 
 use crate::sync_engine::emission;
-use crate::sync_pair::crypto::{self, Keypair};
+use crate::sync_pair::crypto::{self, Keypair, SigningKeypair};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
@@ -20,8 +22,40 @@ use serde::Serialize;
 pub struct Identity {
     pub device_id: String,
     pub keypair: Keypair,
+    /// The Ed25519 key every envelope this device pushes is signed with (user schema v66).
+    /// **Never absent on an `Identity`**: [`ensure`] mints it beside the X25519 pair on a fresh
+    /// install and on absence on an old one, so a caller holding one can sign.
+    pub signing: SigningKeypair,
     pub name: String,
 }
+
+/// The `sync_identity` row as it is stored — [`Identity`] with the signing key **optional**,
+/// because a row written before user schema v66 has NULL there until [`ensure`] or
+/// [`signing_key`] mints one. The readers that must write nothing ([`plan_rotation`] and the
+/// other planners) take this and never need the signing half.
+struct Stored {
+    device_id: String,
+    keypair: Keypair,
+    signing: Option<SigningKeypair>,
+    name: String,
+}
+
+/// The sync protocol level this build speaks: what `sync_devices.proto` records for a peer, and
+/// what the Discord spec's gate (§7) compares before a restricted device may join a group.
+///
+/// **1 is signed envelopes, verified when present** (user schema v66): this build signs every
+/// envelope it pushes and checks a signature from any peer whose key it holds. A peer whose row
+/// says NULL is a build from before the field — level 0, which signs nothing. Raise it when a
+/// build learns something a group may come to require of every member, never for a change an
+/// old build can safely ignore.
+///
+/// **2 verifies rosters** (the Discord spec's PR 2): this build reads, checks and publishes the
+/// roster document ([`super::roster`]), follows a group into signed mode on a verified one,
+/// refuses a restricted device's ops and a sealer once restricted, and carries its signing key
+/// across a pairing (`joinsig`/`offersig`). It is the level PR 3's gate asks of **every** member
+/// before a restricted device may join, and this device writes it into its own entry of every
+/// document it publishes.
+pub const SIG_PROTO: i64 = 2;
 
 /// The group this device is in, if it is in one.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +67,11 @@ pub struct Group {
 
 /// One row of the roster. The public key is not serialised — the webview draws a list of
 /// devices, and a key on that list is a key in a screenshot.
+///
+/// **The three v66 fields are not serialised either**, and not only for the key's reason:
+/// nothing on a screen draws them yet, and `packages/ui/lib/ipc.test.ts` holds `PairedDevice`
+/// to exactly the keys this struct sends, so a field the webview does not read stays off the
+/// wire until a panel does.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Device {
@@ -42,6 +81,21 @@ pub struct Device {
     pub revoked_at: Option<i64>,
     #[serde(skip)]
     pub public_key: [u8; 32],
+    /// The peer's Ed25519 public key, which its envelopes are verified under
+    /// (`client::evaluate`). Filed by a pairing's sealed slot or a verified roster document;
+    /// `None` for a peer an older build paired and that has not amended itself in, which is
+    /// accepted unsigned outside signed mode.
+    #[serde(skip)]
+    pub sign_public: Option<[u8; 32]>,
+    /// What the peer may write: `NULL` is a full member, which every device paired before
+    /// v66 is. The words are the Discord spec's (`full`, `read`, `add`) and the column carries
+    /// **no `CHECK`**, so a newer build's word is stored rather than refused.
+    #[serde(skip)]
+    pub capability: Option<String>,
+    /// The [`SIG_PROTO`] the peer advertised when it was paired, `None` for a peer that never
+    /// said — a build from before the field.
+    #[serde(skip)]
+    pub proto: Option<i64>,
 }
 
 /// How long a minted name may be, in characters.
@@ -116,6 +170,12 @@ pub const NOT_IN_A_GROUP: &str = "This device is not in a pairing group.";
 /// What [`plan_rotation`] says when the id names nobody on the roster.
 const NOT_ON_THE_ROSTER: &str = "That device is not in this pairing group.";
 
+/// What every plan says on a device the group restricted (the Discord spec's §5: only `full`
+/// devices plan rotations, departures, joins and removals). **A sentence, not a silent no-op**: a
+/// restricted device is a bot, and a bot that asked is a bug to hear about.
+pub const RESTRICTED_CANNOT_PLAN: &str =
+    "This device may only read this pairing group, so it cannot change who is in it.";
+
 /// How many devices one group may hold — spec §4.
 ///
 /// **One number, and the relay spells it again in `groupauth.ts`.** That is not a duplication
@@ -187,6 +247,11 @@ pub fn room_for(conn: &Connection, joining: &str) -> Result<(), String> {
 /// crossed either. It is cheap here and nowhere else — `ensure` is called from the six pairing
 /// entry points and from nothing on a hot path. [`plan_rotation`] deliberately reads the identity
 /// instead of ensuring one, because it promises to write nothing at all.
+///
+/// **The Ed25519 signing pair is minted here too, by the same rule** (user schema v66): beside
+/// the X25519 pair on a fresh install, and on absence on a row from before the rung — every
+/// existing install gains one the first time this runs, and keeps it after. A push does not wait
+/// for that: [`signing_key`] mints the same key on the same absence from the push path.
 pub fn ensure(conn: &Connection) -> rusqlite::Result<Identity> {
     if let Some(mut id) = read(conn)? {
         // **The placeholder is upgraded exactly once; a name a reader chose never is.**
@@ -227,15 +292,36 @@ pub fn ensure(conn: &Connection) -> rusqlite::Result<Identity> {
         // `DO NOTHING` insert is the whole repair, and it cannot undo a rename that arrived from
         // the group because a row already there wins.
         file_name_if_unfiled(conn, &id.device_id, &id.name)?;
-        return Ok(id);
+        // **And the signing key, on absence, for every install from before user schema v66** —
+        // the same rule as the identity itself, and the reason it is safe: a row that already
+        // holds a key keeps it, so a restored `user.db` is still the device it was, and its
+        // peers go on verifying it under the key they were given.
+        let signing = signing_or_mint(conn, id.signing.take())?;
+        return Ok(Identity {
+            device_id: id.device_id,
+            keypair: id.keypair,
+            signing,
+            name: id.name,
+        });
     }
     let device_id = hex(&crypto::random_bytes::<16>());
     let kp = crypto::keypair();
+    // **Minted beside the X25519 pair, in the same row and the same statement**, so no fresh
+    // install is ever a device that can agree keys and cannot sign.
+    let signing = crypto::signing_keypair();
     let name = mint_name();
     conn.execute(
-        "INSERT INTO sync_identity (id, device_id, secret_key, public_key, name, created_at)
-         VALUES (1, ?1, ?2, ?3, ?4, unixepoch())",
-        params![device_id, kp.secret.as_slice(), kp.public.as_slice(), name],
+        "INSERT INTO sync_identity
+             (id, device_id, secret_key, public_key, name, created_at, sign_secret, sign_public)
+         VALUES (1, ?1, ?2, ?3, ?4, unixepoch(), ?5, ?6)",
+        params![
+            device_id,
+            kp.secret.as_slice(),
+            kp.public.as_slice(),
+            name,
+            signing.secret.as_slice(),
+            signing.public.as_slice()
+        ],
     )?;
     // **A fresh install has to file its name too, or the joiner's "Paired device" is repaired
     // for nobody.** The upgrade above reaches installs carrying the old shared placeholder and
@@ -247,26 +333,92 @@ pub fn ensure(conn: &Connection) -> rusqlite::Result<Identity> {
     Ok(Identity {
         device_id,
         keypair: kp,
+        signing,
         name,
     })
 }
 
-fn read(conn: &Connection) -> rusqlite::Result<Option<Identity>> {
+fn read(conn: &Connection) -> rusqlite::Result<Option<Stored>> {
     conn.query_row(
-        "SELECT device_id, secret_key, public_key, name FROM sync_identity WHERE id = 1",
+        "SELECT device_id, secret_key, public_key, name, sign_secret, sign_public
+           FROM sync_identity WHERE id = 1",
         [],
         |r| {
-            Ok(Identity {
+            let sign_secret: Option<Vec<u8>> = r.get(4)?;
+            let sign_public: Option<Vec<u8>> = r.get(5)?;
+            Ok(Stored {
                 device_id: r.get(0)?,
                 keypair: Keypair {
                     secret: bytes32(r.get::<_, Vec<u8>>(1)?),
                     public: bytes32(r.get::<_, Vec<u8>>(2)?),
                 },
+                // **The secret decides whether there is a key; the public half follows it.** A
+                // row with a secret and no public half is derived again rather than re-minted —
+                // the secret is the identity, and replacing it would orphan every signature a
+                // peer already checked.
+                signing: sign_secret.map(|secret| {
+                    let secret = bytes32(secret);
+                    SigningKeypair {
+                        secret,
+                        public: sign_public
+                            .map(bytes32)
+                            .unwrap_or_else(|| crypto::signing_public(&secret)),
+                    }
+                }),
                 name: r.get(3)?,
             })
         },
     )
     .optional()
+}
+
+/// The signing key a stored row holds, or one minted into it now — [`ensure`]'s rule, on
+/// absence only. The `sign_secret IS NULL` guard is the same rule in SQL: a key a concurrent
+/// writer put there first is never overwritten, and the one this call minted is then dropped
+/// for the one stored.
+fn signing_or_mint(
+    conn: &Connection,
+    held: Option<SigningKeypair>,
+) -> rusqlite::Result<SigningKeypair> {
+    if let Some(key) = held {
+        return Ok(key);
+    }
+    let minted = crypto::signing_keypair();
+    let written = conn.execute(
+        "UPDATE sync_identity SET sign_secret = ?1, sign_public = ?2
+          WHERE id = 1 AND sign_secret IS NULL",
+        params![minted.secret.as_slice(), minted.public.as_slice()],
+    )?;
+    if written == 1 {
+        return Ok(minted);
+    }
+    Ok(read(conn)?.and_then(|row| row.signing).unwrap_or(minted))
+}
+
+/// This device's signing key, **minted on absence** — what every envelope it pushes is signed
+/// with (`client::post_ops`), or `None` on a device with no identity at all.
+///
+/// **Not [`ensure`]**, which would file a name and could upgrade the placeholder: a push is a hot
+/// path `ensure`'s own doc keeps it off. But the push cannot wait for `ensure` either — a device
+/// paired before user schema v66 may push for weeks before it next pairs or claims — so this
+/// mints the one missing thing, under `ensure`'s rule, and nothing else.
+pub fn signing_key(conn: &Connection) -> rusqlite::Result<Option<SigningKeypair>> {
+    let Some(row) = read(conn)? else {
+        return Ok(None);
+    };
+    signing_or_mint(conn, row.signing).map(Some)
+}
+
+/// This device's signing key **if it holds one, minting nothing** — what a reader that promises
+/// to write nothing asks (`roster::trust_parts`, judging a document it was handed).
+pub fn signing_key_if_held(conn: &Connection) -> rusqlite::Result<Option<SigningKeypair>> {
+    Ok(read(conn)?.and_then(|row| row.signing))
+}
+
+/// This device's id and X25519 public key, or `None` before it has an identity — read, never
+/// minted, for the same promise.
+pub fn public_identity(conn: &Connection) -> rusqlite::Result<Option<(String, [u8; 32])>> {
+    Ok(read(conn)?.map(|row| (row.device_id, row.keypair.public)))
 }
 
 /// The group this device is in, or `None`.
@@ -314,6 +466,7 @@ pub fn create_group(conn: &Connection, me: &Identity) -> rusqlite::Result<Group>
 pub fn found_group(conn: &Connection, g: &Group, me: &Identity) -> rusqlite::Result<()> {
     forget_superseded(conn)?;
     forget_log_position(conn)?;
+    super::roster::forget_group(conn)?;
     write_group(conn, g)?;
     // Capture turns on here: a new generation (the baseline claim design §4).
     emission::start_logging(conn)?;
@@ -360,6 +513,9 @@ pub fn join_group(
     }
     if held.is_none_or(|g| g.group_id != group_id) {
         forget_log_position(conn)?;
+        // Another group's rosters say nothing about this one — and, like the cursor, a re-pair
+        // into the same group keeps them.
+        super::roster::forget_group(conn)?;
     }
     write_group(
         conn,
@@ -410,7 +566,8 @@ fn write_group(conn: &Connection, g: &Group) -> rusqlite::Result<()> {
 /// silent, total, and on a real group the roster would simply lose members.
 pub fn roster(conn: &Connection) -> rusqlite::Result<Vec<Device>> {
     let mut stmt = conn.prepare(
-        "SELECT d.device_id, d.public_key, coalesce(n.name, d.name), d.added_at, d.revoked_at
+        "SELECT d.device_id, d.public_key, coalesce(n.name, d.name), d.added_at, d.revoked_at,
+                d.sign_public, d.capability, d.proto
            FROM sync_devices d
            LEFT JOIN device_names n ON n.device_id = d.device_id
           ORDER BY d.added_at, d.device_id",
@@ -422,12 +579,74 @@ pub fn roster(conn: &Connection) -> rusqlite::Result<Vec<Device>> {
             name: r.get(2)?,
             added_at: r.get(3)?,
             revoked_at: r.get(4)?,
+            sign_public: r.get::<_, Option<Vec<u8>>>(5)?.map(bytes32),
+            capability: r.get(6)?,
+            proto: r.get(7)?,
         })
     })?;
     rows.collect()
 }
 
+/// The Ed25519 key `device_id` signs with, if this device was ever given one — the lookup
+/// `client::evaluate` makes for every envelope it pulls. A removed row (an older build's stamp)
+/// answers too: its envelopes are refused upstream by the epoch, and a signature is no less
+/// that device's for it.
+pub fn sign_public_of(conn: &Connection, device_id: &str) -> rusqlite::Result<Option<[u8; 32]>> {
+    conn.query_row(
+        "SELECT sign_public FROM sync_devices WHERE device_id = ?1",
+        [device_id],
+        |r| r.get::<_, Option<Vec<u8>>>(0),
+    )
+    .optional()
+    .map(|row| row.flatten().map(bytes32))
+}
+
+/// File a peer's signing key, capability and protocol level on its roster row, all three at
+/// once — **a test's fixture**. What ships files them through two verified channels and no
+/// other: a pairing's sealed slots ([`file_sign_key`]) and an accepted roster document
+/// (`roster::accept`). A key filed by anything else is a key a forger chose.
+#[cfg(test)]
+pub(crate) fn file_signing(
+    conn: &Connection,
+    device_id: &str,
+    sign_public: &[u8; 32],
+    capability: Option<&str>,
+    proto: Option<i64>,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE sync_devices SET sign_public = ?2, capability = ?3, proto = ?4
+          WHERE device_id = ?1",
+        params![device_id, sign_public.as_slice(), capability, proto],
+    )?;
+    Ok(())
+}
+
+/// File the signing key and protocol level a peer sent through a pairing's sealed slot —
+/// `joinsig` on the initiator, `offersig` on the joiner (`pairing::poll`). **Its capability is
+/// not touched**: a pairing says nothing about what a device may do, and a restriction on file —
+/// or in `roster::RESTRICTED_EVER` — outlives a re-pair.
+///
+/// Sealed under the pair key the six digits authenticated, so this is a key the peer chose and
+/// nobody between the two devices could swap. [`add_device`] leaves all three v66 columns as they
+/// are on a re-pair, so a later ceremony that carries them is the only way they change.
+pub(crate) fn file_sign_key(
+    conn: &Connection,
+    device_id: &str,
+    sign_public: &[u8; 32],
+    proto: Option<i64>,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE sync_devices SET sign_public = ?2, proto = ?3 WHERE device_id = ?1",
+        params![device_id, sign_public.as_slice(), proto],
+    )?;
+    Ok(())
+}
+
 /// Put a device on the roster, or update the key and name of one already there.
+///
+/// **A device put back here is a device paired back**, behind six digits, so any removal this
+/// device recorded for it is forgotten (`roster::forget_removal`) — a later roster document may
+/// name it again.
 pub fn add_device(
     conn: &Connection,
     device_id: &str,
@@ -450,6 +669,7 @@ pub fn add_device(
               revoked_at = NULL",
         params![device_id, public_key.as_slice(), name],
     )?;
+    super::roster::forget_removal(conn, device_id)?;
     Ok(())
 }
 
@@ -722,6 +942,12 @@ fn plan_excluding(
     let Some(me) = read(conn).map_err(|e| e.to_string())? else {
         return Err(NOT_IN_A_GROUP.to_owned());
     };
+    // **Before anything is read or sealed** — and for every entrance, a departure included: a
+    // restricted device's departure is still a local one (`pairing::leave_group_now` leaves
+    // whatever the plan answers), it simply speaks for nobody on the way out.
+    if super::roster::is_restricted(conn, &me.device_id).map_err(|e| e.to_string())? {
+        return Err(RESTRICTED_CANNOT_PLAN.to_owned());
+    }
     let Some(current) = group(conn).map_err(|e| e.to_string())? else {
         return Err(NOT_IN_A_GROUP.to_owned());
     };
@@ -1094,6 +1320,10 @@ pub fn commit_rotation(
         params![removing],
     )
     .map_err(|e| e.to_string())?;
+    // **And remembered**, so a roster document from this epoch or before — the walk hands them
+    // back in order — can never put the row back (`roster::apply_members`).
+    super::roster::record_removal(&tx, removing, rotation.group.epoch)
+        .map_err(|e| e.to_string())?;
     // **After the delete, not before**, which is what makes the `WHERE` clause enough: the
     // departed row is gone, so re-arming cannot hand a full baseline to a peer that is never
     // going to answer. `revoked_at IS NULL` is still read because a database written by an
@@ -1255,6 +1485,26 @@ fn adopt(
     let holes: Vec<String> = (1..=stays.len()).map(|n| format!("?{n}")).collect();
     match sweep {
         Sweep::Prune => {
+            // **Each row the sweep deletes is remembered as removed at this epoch** first, for
+            // [`commit_rotation`]'s reason: a roster document from before it still names them.
+            let gone: Vec<String> = {
+                let mut stmt = tx
+                    .prepare(&format!(
+                        "SELECT device_id FROM sync_devices WHERE device_id NOT IN ({})",
+                        holes.join(", ")
+                    ))
+                    .map_err(|e| e.to_string())?;
+                let rows = stmt
+                    .query_map(rusqlite::params_from_iter(stays.iter()), |r| {
+                        r.get::<_, String>(0)
+                    })
+                    .map_err(|e| e.to_string())?;
+                rows.collect::<rusqlite::Result<_>>()
+                    .map_err(|e| e.to_string())?
+            };
+            for device in &gone {
+                super::roster::record_removal(&tx, device, epoch).map_err(|e| e.to_string())?;
+            }
             tx.execute(
                 &format!(
                     "DELETE FROM sync_devices WHERE device_id NOT IN ({})",
@@ -1350,6 +1600,9 @@ pub fn leave_group(conn: &Connection) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     forget_superseded(&tx).map_err(|e| e.to_string())?;
     forget_log_position(&tx).map_err(|e| e.to_string())?;
+    // The group's rosters go with the group — its mode, its chain, its removals — and
+    // `roster::RESTRICTED_EVER` does not: no path forgets who was once restricted.
+    super::roster::forget_group(&tx).map_err(|e| e.to_string())?;
     emission::keep_logging_mark(&tx).map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())
 }
@@ -1560,6 +1813,163 @@ mod tests {
         assert_eq!(first.keypair.public, second.keypair.public);
         assert_eq!(first.keypair.secret, second.keypair.secret);
         assert_eq!(first.device_id.len(), 32, "16 bytes as hex");
+    }
+
+    /// **A fresh install mints its Ed25519 pair beside the X25519 one**, in the one insert, and
+    /// the pair is a real one: the stored public half is the secret's, and a signature made with
+    /// it verifies. Asking again mints nothing.
+    #[test]
+    fn ensure_mints_a_signing_pair_on_a_fresh_install() {
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        assert_eq!(
+            crypto::signing_public(&me.signing.secret),
+            me.signing.public
+        );
+        assert!(crypto::verify(
+            &me.signing.public,
+            b"m",
+            &crypto::sign(&me.signing.secret, b"m")
+        ));
+        assert_ne!(
+            me.signing.secret, me.keypair.secret,
+            "two keys, not one key used twice"
+        );
+        let stored: (Vec<u8>, Vec<u8>) = conn
+            .query_row(
+                "SELECT sign_secret, sign_public FROM sync_identity WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(stored.0, me.signing.secret);
+        assert_eq!(stored.1, me.signing.public);
+
+        let again = ensure(&conn).unwrap();
+        assert_eq!(again.signing.secret, me.signing.secret);
+        assert_eq!(
+            signing_key(&conn).unwrap().unwrap().secret,
+            me.signing.secret,
+            "the push path reads the same key"
+        );
+    }
+
+    /// **An install from before user schema v66 gains a signing pair on absence, and keeps
+    /// everything else** — the device id, the X25519 pair and the name are the device it was,
+    /// which is `ensure`'s whole rule. Once minted the pair is the device's for good.
+    #[test]
+    fn an_existing_identity_gains_a_signing_pair_on_absence() {
+        let conn = db();
+        conn.execute(
+            "INSERT INTO sync_identity (id, device_id, secret_key, public_key, name, created_at)
+             VALUES (1, 'deadbeef', ?1, ?2, 'Desk', 0)",
+            params![[1u8; 32].as_slice(), [2u8; 32].as_slice()],
+        )
+        .unwrap();
+        let unsigned: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sync_identity WHERE sign_secret IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(unsigned, 1, "a v65 row, as the rung leaves it");
+
+        let me = ensure(&conn).unwrap();
+        assert_eq!(me.device_id, "deadbeef");
+        assert_eq!(me.keypair.secret, [1u8; 32]);
+        assert_eq!(me.keypair.public, [2u8; 32]);
+        assert_eq!(me.name, "Desk");
+        assert_eq!(
+            crypto::signing_public(&me.signing.secret),
+            me.signing.public
+        );
+        assert_ne!(me.signing.secret, [0u8; 32]);
+
+        let again = ensure(&conn).unwrap();
+        assert_eq!(again.signing.secret, me.signing.secret, "minted once");
+        assert_eq!(again.signing.public, me.signing.public);
+    }
+
+    /// **The push path mints on the same absence, without `ensure`'s other writes** — a device
+    /// paired before v66 pushes long before it next pairs. No identity at all is `None`, and
+    /// nothing is written.
+    #[test]
+    fn the_push_path_mints_the_signing_key_on_absence_and_nothing_else() {
+        let conn = db();
+        assert!(signing_key(&conn).unwrap().is_none(), "no identity, no key");
+        assert_eq!(count(&conn, "sync_identity"), 0, "and nothing minted");
+
+        conn.execute(
+            "INSERT INTO sync_identity (id, device_id, secret_key, public_key, name, created_at)
+             VALUES (1, 'deadbeef', zeroblob(32), zeroblob(32), ?1, 0)",
+            [PLACEHOLDER],
+        )
+        .unwrap();
+        let key = signing_key(&conn).unwrap().expect("minted on absence");
+        assert_eq!(signing_key(&conn).unwrap().unwrap().secret, key.secret);
+        let name: String = conn
+            .query_row("SELECT name FROM sync_identity", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            name, PLACEHOLDER,
+            "the placeholder is ensure's to upgrade, not the push's"
+        );
+        assert_eq!(count(&conn, "device_names"), 0, "and no name was filed");
+        assert_eq!(
+            ensure(&conn).unwrap().signing.secret,
+            key.secret,
+            "ensure finds the key the push minted"
+        );
+    }
+
+    /// **A peer's signing key, capability and level are read back off the roster, and a re-pair
+    /// leaves them** — `add_device` writes the X25519 key and the name and nothing of the three,
+    /// so only the ceremony that carries them (the spec's PR 2) can change them.
+    #[test]
+    fn the_roster_carries_a_peers_signing_key_and_a_repair_keeps_it() {
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        create_group(&conn, &me).unwrap();
+        add_device(&conn, "phone", &[9u8; 32], "Phone").unwrap();
+        let phone = |conn: &Connection| {
+            roster(conn)
+                .unwrap()
+                .into_iter()
+                .find(|d| d.device_id == "phone")
+                .unwrap()
+        };
+        let fresh = phone(&conn);
+        assert_eq!(
+            (fresh.sign_public, fresh.capability.as_deref(), fresh.proto),
+            (None, None, None),
+            "a peer paired today is a full member with no key on file"
+        );
+        assert_eq!(sign_public_of(&conn, "phone").unwrap(), None);
+        assert_eq!(sign_public_of(&conn, "nobody").unwrap(), None);
+
+        file_signing(&conn, "phone", &[4u8; 32], Some("read"), Some(SIG_PROTO)).unwrap();
+        add_device(&conn, "phone", &[8u8; 32], "Phone").unwrap();
+        let filed = phone(&conn);
+        assert_eq!(
+            filed.public_key, [8u8; 32],
+            "the re-pair moved the X25519 key"
+        );
+        assert_eq!(filed.sign_public, Some([4u8; 32]));
+        assert_eq!(filed.capability.as_deref(), Some("read"));
+        assert_eq!(filed.proto, Some(SIG_PROTO));
+        assert_eq!(sign_public_of(&conn, "phone").unwrap(), Some([4u8; 32]));
+
+        // None of the three reaches the webview: `PairedDevice` is held to the keys sent.
+        let json = serde_json::to_value(&filed).unwrap();
+        let mut keys: Vec<&str> = json
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["addedAt", "deviceId", "name", "revokedAt"]);
     }
 
     /// Two databases are two devices. A device id that was a constant would collide on every
@@ -1822,7 +2232,12 @@ mod tests {
                 continue;
             }
             let owned = if table == "sync_state" {
-                format!(" WHERE NOT (key GLOB '{SUPERSEDED}*' OR key = '{LAST_MANIFEST}')")
+                // The removal's own bookkeeping: the keys it supersedes, the manifest it
+                // publishes, and the removal it remembers for the roster document's sake.
+                format!(
+                    " WHERE NOT (key GLOB '{SUPERSEDED}*' OR key = '{LAST_MANIFEST}' OR key = '{}')",
+                    crate::sync_pair::roster::ROSTER_REMOVED
+                )
             } else {
                 String::new()
             };
@@ -2368,7 +2783,7 @@ mod tests {
             emission: None,
         }];
         let envelope =
-            wire::seal_batch(&group(&a).unwrap().unwrap(), &me_a.device_id, &ops).unwrap();
+            wire::seal_unsigned(&group(&a).unwrap().unwrap(), &me_a.device_id, &ops).unwrap();
         assert!(
             wire::open_batch(&group(&b).unwrap().unwrap(), &envelope).is_err(),
             "B could already read this, so the test proves nothing"
@@ -2465,6 +2880,9 @@ mod tests {
         let still = ensure(&conn).unwrap();
         assert_eq!(still.device_id, me.device_id, "the identity was re-minted");
         assert_eq!(still.keypair.secret, me.keypair.secret);
+        // The signing secret is the X25519 secret's twin and leaves with it — not at all.
+        assert_eq!(still.signing.secret, me.signing.secret);
+        assert_eq!(still.signing.public, me.signing.public);
     }
 
     // -------------------------------------------------------------------------------------

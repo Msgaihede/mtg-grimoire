@@ -104,6 +104,26 @@ sha2 = "0.10"
 # hold an RNG of its own, and `static_secrets` because a device's key is reused for every pairing
 # it ever does — an `EphemeralSecret` is consumed by its one `diffie_hellman`.
 x25519-dalek = { version = "3", features = ["static_secrets", "getrandom"] }
+# Each device's signing key (user schema v66, the Discord spec §3): Ed25519 over every envelope
+# it pushes, so a key holder that is not that device cannot write as it.
+#
+# **2.x and deliberately not 3.0, for `chacha20poly1305`'s reason below.** 3.0 sits on
+# `curve25519-dalek 5` — the one `x25519-dalek 3` already brought — but asks for its `digest`
+# feature and `sha2 0.11`, which stand `digest 0.11` and `hybrid-array` beside the one
+# `sha2 0.10 -> digest 0.10 -> generic-array 0.14` stack this tree carries. 2.x hashes with
+# `sha2 0.10`, the very crate `hkdf` uses, and the price is a second `curve25519-dalek` (4.x)
+# — arithmetic code with no array types to disagree about, which `cargo tree -d` shows as the
+# one new duplicate. When `x25519-dalek` and `hkdf` move to the 0.11 stack together, this
+# moves with them and the duplicate goes.
+#
+# **`default-features = false` drops `std`, `alloc` and `fast`.** Nothing here wants `std` or
+# `alloc` from it, and `fast` is `curve25519-dalek`'s precomputed basepoint tables — tens of
+# kilobytes in the web module to make one signature per pushed batch quicker than a request.
+# **No `rand_core` either**: `crypto::signing_keypair` builds the key from
+# `crypto::random_bytes`, the same CSPRNG every other key here comes from, so there is no
+# second RNG and nothing that refuses `wasm32-unknown-unknown`. `zeroize` wipes a
+# `SigningKey` when it drops, which costs nothing — `zeroize` is in the tree already.
+ed25519-dalek = { version = "2.2", default-features = false, features = ["zeroize"] }
 # **0.10 and deliberately not 0.11.** 0.11 moves RustCrypto's array types to `hybrid-array`,
 # which would stand a second array stack beside the `sha2 0.10 -> digest 0.10 -> crypto-common
 # 0.1 -> generic-array 0.14` this tree already carries. 0.10 and `hkdf 0.12` sit on that one.
@@ -118,6 +138,11 @@ x25519-dalek = { version = "3", features = ["static_secrets", "getrandom"] }
 # draws its own 24 bytes through `crypto::random_bytes`. So the line is a subtraction.
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
 hkdf = "0.12"
+# The roster document's open-mode MAC (the Discord spec §12): HMAC-SHA256 under a key HKDF derives
+# from the epoch's group key. **0.12 is the very crate `hkdf 0.12` is built on** — already in the
+# lock on the one `digest 0.10` stack — so naming it adds no crate, only the line that lets this
+# one call `Hmac` and its constant-time `verify_slice` directly.
+hmac = "0.12"
 # The sealed envelope as a JSON string. **base64url and not hex**: the relay stores ciphertext
 # as TEXT in a Durable Object, and hex would be twice the bytes over the wire and against the
 # 2 MB per-row cap where base64 is four thirds; URL-safe so the blob can be a path segment

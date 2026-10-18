@@ -525,7 +525,10 @@ mod tests {
                 "src/sync_engine/apply/emission_tests.rs",
                 "src/sync_engine/apply/tests.rs",
                 "src/sync_engine/client/tests.rs",
-                "src/sync_engine/client/tests/paged.rs"
+                "src/sync_engine/client/tests/paged.rs",
+                "src/sync_engine/client/tests/rosters.rs",
+                "src/sync_engine/client/tests/signed.rs",
+                "src/sync_pair/roster/tests.rs"
             ],
             "a module declared behind a test gate"
         );

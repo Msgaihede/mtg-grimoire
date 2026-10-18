@@ -108,6 +108,10 @@ The four layers behind it, and the boundary between them is that only the last t
   otherwise it marks `roster_dirty` and stays quiet, because publishing from a partial view would
   *be* the eviction rather than the fix. Carrying public keys in the manifest is the change that
   would close the rest, and it is a wire change on both sides that this branch does not make.
+  **Since the Discord spec's PR 2 the rest is closed where the relay keeps rosters**: a rotation
+  carries a [roster document](#the-roster-document-the-discord-specs-pr-2) naming every member with
+  its keys, and a device that adopts the epoch inserts the members it never met — the "wire change"
+  this paragraph used to defer. `adopt_epoch` itself still never inserts; the document does.
 - **`sync_pair::pairing`** — the state machine and the nine commands. Two of them do network I/O
   now (`accept`, `confirm`), so they and `poll` run on a blocking worker with a runtime of their
   own (`sync::on_a_worker`). **Since 2026-10-03 each takes the pending offer's lock and then the
@@ -350,8 +354,26 @@ database stays the device it was rather than silently forking. Two devices claim
 is worse than a device that has to be re-paired, and that one line is what decides which of those
 a restore produces.
 
+**The signing key lives beside it, by the same rules (user schema v66).** `sync_identity` holds a
+second pair, `sign_secret` and `sign_public` — Ed25519, the key every envelope this device pushes
+is signed with (*The envelope, measured*) — next to the X25519 pair it agrees keys with. It is
+minted **on absence**, exactly like the identity: beside the X25519 pair on a fresh install, and on
+an install from before the rung the first time `identity::ensure` runs or the push asks
+`identity::signing_key` — the push path mints the one missing thing and nothing else, because a
+device paired before v66 may push for weeks before it next pairs. A row that already holds a key
+keeps it, so a restored `user.db` signs as the device it was. An archive restore
+(`archive::replace`) treats it as it treats the X25519 secret: archives carry no `sync_` table,
+the restore empties `sync_devices` and leaves `sync_identity` alone, and so does leaving a group.
+A peer's key sits on its roster row, `sync_devices.sign_public`, beside its `capability` (`NULL`
+is a full member) and the `proto` level it advertised (`identity::SIG_PROTO` is this build's);
+they are written through two verified channels and no other: a pairing's sealed `joinsig` and
+`offersig` slots (`identity::file_sign_key`, the key and the level only), and an accepted
+[roster document](#the-roster-document-the-discord-specs-pr-2) — the Discord spec's PR 2
+([design](../superpowers/specs/2026-10-17-discord-integration-design.md) §3, §12).
+
 **No key crosses the IPC boundary.** `identity::Device.public_key` is `#[serde(skip)]` — the
-webview draws a list of devices, and a key on that list is a key in a screenshot — and
+webview draws a list of devices, and a key on that list is a key in a screenshot — and so are the
+v66 `sign_public`, `capability` and `proto`; and
 `pairing::Pending`'s fields are all private and none of them is `Serialize`. What crosses is the
 six digits (a string, because they are what a *person* compares) and two sealed blobs.
 
@@ -720,9 +742,14 @@ Three tables, all `Side::User` in `schema::TABLES` and all `None` in
 
 | Table | Holds |
 | --- | --- |
-| `sync_identity` | one row: this device's id, its X25519 keypair, its name |
+| `sync_identity` | one row: this device's id, its X25519 keypair, its name — and since v66 its Ed25519 signing pair, `sign_secret`/`sign_public`, nullable until minted on absence |
 | `sync_group` | one row: the group id, the epoch, the 32-byte group key |
-| `sync_devices` | the roster, `WITHOUT ROWID`. **A removed row is deleted since 2026-08-30**; `revoked_at` stays on the table for the migration's sake and is read but no longer written |
+| `sync_devices` | the roster, `WITHOUT ROWID`. **A removed row is deleted since 2026-08-30**; `revoked_at` stays on the table for the migration's sake and is read but no longer written. Since v66 a peer's `sign_public`, `capability` (no `CHECK`, so a newer word is kept) and `proto`, all nullable |
+
+**v66 (2026-10-17, issue #1096) is five nullable `ADD COLUMN`s on these two tables and writes no
+row.** Neither table syncs, so no capture spec moves; the rung owes `schema::fixtures::UNDO_V66`
+for `ADD COLUMN`'s loud reason, and `v66_adds_the_signing_columns_empty` holds the rewind to v65's
+text and the climb to head's.
 
 **Three tables rather than three `app_meta` rows**, and the difference is what a bad value costs.
 Every key in `app_meta` is a *preference* — `get_app_meta` swallows a read error and every caller
@@ -858,6 +885,7 @@ recipients, through a different route, and it is still the one this paragraph or
 
 | Crate | Pin | Why |
 | --- | --- | --- |
+| `ed25519-dalek` | `2.2`, `default-features = false` + `zeroize` — **not 3.0** | The envelope signature (user schema v66). 3.0 shares `curve25519-dalek 5` with `x25519-dalek` but needs `sha2 0.11`, the `hybrid-array` stack `chacha20poly1305`'s row refuses; 2.x hashes with the `sha2 0.10` already here and costs a second `curve25519-dalek` (4.x) — the one new duplicate `cargo tree -d` showed on 2026-10-17. No `std`, no `fast` tables, no `rand_core`: the key is `crypto::random_bytes`. |
 | `x25519-dalek` | `3`, features `static_secrets` + `getrandom` | `static_secrets` because a device's key is reused for every pairing it ever does — an `EphemeralSecret` is consumed by its one `diffie_hellman`. `getrandom` is what supplies `StaticSecret::random()`, so this crate never holds an RNG of its own. |
 | `chacha20poly1305` | `0.10`, **not 0.11** | 0.11 moves RustCrypto's array types to `hybrid-array`, which would stand a **second** array stack beside the `sha2 0.10 → digest 0.10 → crypto-common 0.1 → generic-array 0.14` this tree already carries. |
 | `hkdf` | `0.12` | Sits on that same stack. |
@@ -3664,11 +3692,80 @@ does not overwrite a sentence the reconciler already wrote about a printing that
 
 ## The envelope, measured
 
-`sync_engine::wire`. Six fields cross the network and **the relay sees nothing else**: `group`
-routes it, `device` and the two clock fields let the Durable Object order and compact without
-decrypting anything, and `sealed` is opaque. The op count is deliberately absent — "this device
-wrote 431 things today" is not needed in order to relay — and a test asserts the JSON has exactly
-those six keys.
+`sync_engine::wire`. Six fields cross the network, a seventh when the sender signed, and **the
+relay sees nothing else**: `group` routes it, `device` and the two clock fields let the Durable
+Object order and compact without decrypting anything, `sealed` is opaque, and `sig` is the
+sender's signature over the rest. The op count is deliberately absent — "this device wrote 431
+things today" is not needed in order to relay — and a test asserts the JSON has exactly those
+keys, with `sig` and without.
+
+### The seventh field: `sig` (user schema v66)
+
+**Encrypt-then-sign.** `wire::seal_batch` seals, then signs with the device's Ed25519 key
+(`identity::signing_key`, threaded through `client::post_ops` — the push and the baselines, the
+two callers, so nothing this device sends goes out unsigned). The signature covers exactly
+`wire::envelope_signing_bytes`:
+
+```
+b"mtg-grimoire/envelope/v1" 0x00 group 0x00 device 0x00 epoch 0x00 hlc_ms 0x00 hlc_ctr 0x00 sealed
+```
+
+— the three numbers as decimal text, `sealed` as its base64url characters — and travels as
+`sig`, base64url **without padding** (86 characters), `sealed`'s engine. The bytes are a wire to
+the relay and to every later build, pinned by `the_signing_bytes_are_pinned`. The clock fields are
+in it because the AEAD never covered them: until v66 a relay could restamp an envelope unseen.
+
+**Old and new builds read each other.** `Envelope` has no `deny_unknown_fields`, so an older build
+drops the key; `sig` is `#[serde(default, skip_serializing_if = "Option::is_none")]`, so an envelope
+without one parses as `None` and an unsigned envelope serialises to the bytes it always did.
+
+**Verified when present and known — open mode.** `client::open_checked`, ahead of `open_batch` on
+every pulled envelope, looks up the sender's `sync_devices.sign_public`: no key on file or no `sig`
+is accepted as before (`wire::Signed::Unchecked`); a signature the key refuses
+(`wire::Signed::Forged`) is `WireError::Forged`, refused before a byte is decrypted and stepped over
+exactly like an unreadable envelope — one `error_log` row, the cursor moves past it, a gap is
+opened — because a forgery never becomes the sender's and must not pin the log. Keys arrive through
+the pairing slots and the roster document since the Discord spec's PR 2, so a peer paired or
+amended by a current build is verified.
+
+**Required in signed mode.** At or after the epoch a group began signing
+(`roster::requires_signatures`, *The roster document* below) the unchecked arm is refused too —
+`WireError::Unverified`, no `sig` or no key on file, stepped over exactly like a forgery. **And
+whatever the mode, a restricted sender is refused unopened** (`WireError::Restricted`: a
+`sync_devices.capability` other than `full`, or a device in `restricted_ever`) — but *consumed*,
+not unreadable: one `error_log` row per sender per trip, the cursor passes it, nothing is held and
+no gap opens, so a `read` device's pushes can neither apply, nor pin the log, nor make every later
+emission read whole.
+
+**Every op inside must be the envelope's sender's — recorded in open mode, refused in signed mode.** `apply` attributes
+an op by its own `at.device`, so a signature over the envelope says nothing about an op stamped as
+somebody else (the spec's F3). `wire::foreign_ops` counts them after opening, and
+`client::binding` decides, **by mode rather than by a flipped constant**: `client::OP_BINDING`,
+`Record`, outside signed mode — one `error_log` row per envelope a trip reads, and the ops applied
+— and `Refuse` in a signed group, where the envelope is `WireError::Foreign` and stepped over. A
+group with no restricted device has no reason to start refusing, and its old builds would be the
+first to meet the refusal. **No honest flow puts another device's op in an envelope**, which is what
+makes refusing safe: the outbox is
+filled only by the capture triggers, which stamp `sync_identity.device_id`; `apply` writes under
+`capture::suppressed` and adds nothing to it; a baseline's claims are built by `baseline::build`
+under the emitter's own id (the horizon carries other devices' stamps, but in its own field, never
+as an op's `at`); `rebase` restamps with the same id; and a push refused as `stale_epoch` re-seals
+the same ops under the new key. Orphans, `sync_heard` and the rendezvous publish no ops at all.
+Recording first is the cheap way to learn the census missed a case.
+
+**The relay's side.** The relay checks `sig`'s shape and nothing more — exactly 86 characters of
+`[A-Za-z0-9_-]` — because it holds no device's signing key and verifies no signature. An envelope
+with no `sig` key is read exactly as before; one whose `sig` is present and not of that shape —
+`null` included, which is why an unsigned batch omits the key — is `400 malformed envelope`, at the
+Worker and again in the group's Durable Object. The object stores it in `log.sig`, a nullable
+column a live log gains on its first wake after the deploy (`PRAGMA table_info(log)`, then
+`ALTER TABLE log ADD COLUMN sig TEXT`, no backfill — every older row is unsigned), and both pull
+answers, streamed and paged, return it as the envelope's last field only when the row has one, so
+an unsigned row's bytes are unchanged. `sig` is not counted against the quota, and the push-body
+cap did not move. **The same release binds the token's `dev` claim** to the device a push's
+envelope or an ack's body names, in the Worker ahead of the object — **warn-only**: a mismatch is
+logged as the fixed line `device_mismatch on push|ack` and passed on (`admit::DEVICE_BINDING`),
+and the spec's PR 2 flips it to `403 device_mismatch`. A token with no `dev` is never a mismatch.
 
 The AAD is `group\0device\0epoch`, and **binding the epoch is what makes revocation mean
 something on the wire**: rotating the group key already stops a removed device reading anything
@@ -3721,6 +3818,166 @@ wire and against that cap; base64 is four thirds and URL-safe.
 
 ---
 
+## The roster document (the Discord spec's PR 2)
+
+`sync_pair::roster`. **Who is in a group at an epoch, with every member's keys, and the proof that
+somebody entitled to say so said it** — the answer to three holes the manifest could not close
+([the spec](../superpowers/specs/2026-10-17-discord-integration-design.md) §2): F1, a device that
+learned of a join by adopting an epoch knew the joiner's id and none of its keys; F2, any holder of
+the group key could publish a rotation naming whom it liked, and every device read *no blob for me*
+as its own removal; F3's half, nothing said which device may write. §12 of the spec is the wire,
+shared with the relay.
+
+### The bytes
+
+A JSON **string**, stored and served verbatim and never re-serialised —
+`{"v":1,"group","epoch","step","prev","mode","signer","members":[{"device","x25519","ed25519","cap","proto","since"}]}`,
+compact, in exactly that field order (`roster::to_text`, serde's declaration order). Keys are
+base64url without padding; `ed25519` is `null` for a member whose signing key nobody has filed (a
+build from before v66) and `proto` 0 for one that never advertised a level — never for the signer.
+`prev` is the lowercase hex SHA-256 of the previous document's characters, `null` for a group's
+first. The authenticator travels beside it, exactly one of two, over
+`b"mtg-grimoire/roster/v1" 0x00 <the characters>`:
+
+- `rosterMac`, **open mode only**: HMAC-SHA256 under
+  `HKDF-SHA256(ikm = the group key of the document's epoch, salt = the group id's characters,
+  info = "mtg-grimoire/roster-mac/v1")`, 32 bytes — 43 characters.
+- `rosterSig`: Ed25519 by `signer` — 86 characters.
+
+**`src/__golden__/roster-v1.json` pins a pair** — an open first document and the signed one that
+follows it — with their hashes, the MAC key, the MAC, a signing seed and the signature;
+`roster::tests::the_documents_bytes_and_authenticators_are_pinned` builds both from their parts and
+the relay's suite reads the same file. Checked independently of either (Python's `hmac`, `hashlib`
+and `cryptography`) when it was cut, 2026-10-17.
+
+### Two modes, and the second is a latch
+
+**Open** — no device ever restricted, so every key holder is a full device and a MAC under the
+group key is as strong as the group itself. It changes nothing about removal: in open mode the
+manifest decides, exactly as above, and an old relay or a group with no documents behaves as it
+always did. **An open document names full members only** (the relay answers
+`400 malformed_roster` otherwise, and the reader refuses one too).
+
+**Signed** — from the epoch a restricted device joins. A document is accepted only when a **full
+member of the previously accepted document** signed it (a member never seen restricted), its
+`prev` is that document's hash, and no device once restricted comes back as `full`. **The latch
+is monotonic**: once this device accepts a signed document (`roster_mode`, `signed_since`), it
+refuses every open one.
+
+⚠️ **Nothing shipped enters signed mode in this release.** The press that publishes a group's first
+signed document is the spec's PR 3; its stand-in, `roster::enter_signed_mode`, exists only under
+`cfg(any(test, feature = "testing"))`. What ships is the *following* half — a verified signed
+document, by a full member this device already trusts, latches it too — which is why
+`identity::SIG_PROTO` is **2, "verifies rosters"**, the level PR 3's gate will ask of every member.
+
+### The acceptance rule, and what is kept
+
+`roster::judge` is a pure function, in order: it parses at `v: 1` with a known mode word (unknown
+*fields* are dropped, unknown *words* refuse); it names this group; it is ahead of the last accepted
+by `(epoch, step)` — behind is *stale* and silent; the latch; no open document with a restricted
+member; nobody once restricted back as full; then the authenticator — a signed document's signature
+and chain as above, an open one's signature by such a member or its MAC under **its own epoch's**
+key, *later* when this device does not hold that key yet. **Open documents do not chain**: a device
+behind the relay's walk must still catch up, and in open mode the MAC already proves a key holder
+wrote it. With no previous document, a signed one is anchored by the full devices whose signing key
+this device filed through a pairing slot.
+
+`client::check_keys` walks every document `/keys` carries, oldest first, before comparing epochs —
+a signed one needs no key — and again after adopting a rotation, when the new key opens the open
+document it carried. ⚠️ **A document ahead of the manifest is *not yet*** — skipped, not taken, not
+refused: the relay writes a rotation's document before the rotation and deletes it again if the
+rotation is refused, so for one round trip `/keys` can answer a `roster` one epoch past its `epoch`.
+
+`sync_state` holds this device's view, **no schema rung**: `roster_mode`, `signed_since`,
+`roster_last` and `roster_last_hash` (what the next must follow), `roster_seen` (the relay's newest
+on the last answer, what a published document's `prev` names), `relay_rosters` (the last answer
+said `sig: 1`), `roster_removed`, and **`restricted_ever` — never cleared**, not by leaving, not by
+`forget_superseded`, not by changing group. Leaving or changing group forgets the rest
+(`roster::forget_group`).
+
+**Accepting a document fills the roster** (`roster::apply_members`) — F1. A member not on it is
+inserted, under *Paired device* until its synced name arrives and stamped as baselined, so learning
+of a peer costs no baseline its join did not already re-arm. Three rules keep that from undoing a
+removal or a pairing:
+
+- **Only from a document at or after this device's epoch, and never one at or before an epoch this
+  device saw the member removed at** (`roster_removed`, written by `commit_rotation` and by
+  `adopt_epoch`'s prune; forgotten by `add_device`, a re-pair). A document from before a removal
+  still names the removed device, and the walk hands such documents back in order.
+- **A key on file is never replaced.** An X25519 key filed at a pairing, behind six digits, would
+  otherwise be redirected by one document — and the next rotation's blob with it. A missing signing
+  key is filled in; a different one is recorded once and left.
+- **A row an older build stamped `revoked_at` is left alone**, and a capability only ever narrows —
+  which is how this device learns of its own restriction.
+
+### Publishing: every rotation carries one, and each device amends itself
+
+**A rotation** (`client::post_rotation`, for a removal, a departure and a join) carries
+`roster` — step 0 at the new epoch, the manifest's devices with every key this device holds — and
+its authenticator, the MAC under the **new** key or, in signed mode, this device's signature, where
+the relay refuses a rotation without one (`403 unsigned_rotation`). Only while the relay's last
+`/keys` said `sig: 1`: **an older relay is sent the body it always was.** In open mode a rotation
+whose document would name a restricted member goes without one rather than be refused whole. A
+`409 roster_conflict` reads `/keys` again and rebuilds on the relay's newest, once; a 2xx makes the
+document this device's last accepted.
+
+**An amendment** (`client::amend_roster`, once a trip, best effort, never on a held answer) is how
+a group paired before rosters existed learns every member's keys without a rotation: when the
+relay keeps rosters and its newest — the one this device accepted, or none — misses this device or
+carries stale keys or level for it, `POST /g/{group}/roster` under the group's auth with
+`{roster, rosterMac | rosterSig}`. At this device's epoch it is the newest with only this entry
+changed, at `step + 1`; when the newest is older (a rotation by a build that sent none) or there is
+none, a fresh step 0 at this epoch from this device's own pruned roster — in open mode a partial
+view evicts nobody, and the device it misses amends itself in. A `404` (no such route) is an older
+relay and is not recorded; `409 roster_conflict` reads again and retries once. **A restricted
+device never amends, and in signed mode only via its signature.**
+
+**Only full devices plan.** `identity::plan_excluding` refuses every entrance —
+`RESTRICTED_CANNOT_PLAN` — on a device whose capability is not full or that was ever restricted. A
+restricted device's *Leave group* still leaves locally; it simply speaks for nobody on the way out.
+
+### Signed mode: the relay's word moves nothing on its own
+
+`client::signed_key_change`, for a higher epoch in signed mode:
+
+- **No verified document at the new epoch** — `KeyOutcome::Held`, recorded once per epoch: nothing
+  adopted, nothing left. A relay, or a restricted device holding the auth, can publish an epoch;
+  only a full member can sign the document that makes it one.
+- **A verified document that omits this device** — the removal notice, and the only one. *No blob
+  for me* without one never leaves (§5).
+- **One that names it and no blob** — held.
+- **One that names it and a blob** — adopted, with the document's full members as the only sealers
+  and its members, not the relay's `devices`, as the manifest. The catch-up walk passes an epoch only
+  on a verified document at it.
+
+**Sealers are never restricted, in either mode** (`client::adopt_page`): a `read` bot holds an
+X25519 key on every roster, and trying it would let it choose the next epoch's key.
+
+### The pairing slots
+
+`joinsig` and `offersig` (`client::JOIN_SIG`, `OFFER_SIG`), each the device's id, Ed25519 key and
+`proto` as JSON sealed under the pair key with `b"sig" ++ rv` as associated data, base32 like the
+other two. **Each is posted before its partner** — `joinsig` before `join`, `offersig` before
+`offer` — so a side that has read the old slot finds the new one already there. **Both slots share
+the AAD, so the id is the check**: a relay that copied the joiner's own slot into `offersig` hands it
+its own id and is refused (`NOT_A_SIG`). An older relay keeps neither (`404`/`400`, read quietly by
+`client::post_rendezvous_if_kept`); an older build reads neither; `join` and `offer` are
+byte-identical to what they always were, and so are the six digits.
+
+- **The initiator** reads `joinsig` beside `join`, files the joiner's key and level before the join
+  is published (so the join's document carries them), and **in signed mode refuses a joiner with no
+  slot, or below `SIG_PROTO`**, before anything is sealed: `pairing::JOINER_TOO_OLD`. An open group
+  takes it as it always did.
+- **The joiner learns the group's mode from `offersig`'s `mode`** (`"open"` or `"signed"`), which the
+  six digits authenticated: `"signed"` latches it at the offered epoch, so its first document must
+  be signed by the initiator, its one anchor. **With no `offersig`** it asks `/keys` quietly, with the
+  offered key and before writing anything, whether the relay's newest document says `signed`
+  (`client::relay_says_signed`) — and refuses if so (`pairing::OFFER_UNSIGNED`). The relay's word is
+  enough in that direction: it could refuse a pairing anyway by withholding a slot, and it cannot
+  make a signed group look open, because an open document needs the group key's MAC.
+
+---
+
 ## The relay: five group routes, three of them behind an auth gate
 
 `infrastructure/relay/` is a Cloudflare Worker with one SQLite-backed Durable Object per pairing group.
@@ -3731,9 +3988,10 @@ wire and against that cap; base64 is four thirds and URL-safe.
 | `GET {relay}/g/{group}/pull?since={cursor}&device={id}&limit={rows}` | | 200 with `{ envelopes, cursor, more }` — a page; 400 `bad limit` | **bearer** |
 | `GET {relay}/g/{group}/pull?since={cursor}&device={id}` | | 200 with `{ envelopes, cursor }` — everything, streamed; what every build before step 6.5b sends | **bearer** |
 | `POST {relay}/g/{group}/ack` | `{ device, cursor }` | 204 — what compaction reads; a departed device's is not stored | **bearer** |
-| `POST {relay}/g/{group}/rotate` | `{ epoch, auth, keys }` | 200 with the epoch, for one past the group's (a join) or two past it (a removal or a departure); 409 behind or equal; 422 further | the group's current auth, and nothing else |
-| `GET {relay}/g/{group}/keys?device={id}[&epoch={n}]` | | 200 with `{ epoch, blob, devices, removalStep }` — with `epoch`, that epoch's manifest, or 404 `no_such_epoch` | any auth this group has used within eight epochs |
-| `POST /g/{group}/roster` — **internal** | `{ epoch, devices }` | 204 | built by the Worker after an accepted rotation; not on the public pattern, a 404 from outside |
+| `POST {relay}/g/{group}/rotate` | `{ epoch, auth, keys }`, and `roster` with `rosterMac` or `rosterSig` from a relay that keeps rosters (*The roster document*) | 200 with the epoch, for one past the group's (a join) or two past it (a removal or a departure); 409 behind or equal; 422 further | the group's current auth, and nothing else |
+| `GET {relay}/g/{group}/keys?device={id}[&epoch={n}][&since={n}]` | | 200 with `{ epoch, blob, devices, removalStep }` — with `epoch`, that epoch's manifest, or 404 `no_such_epoch` — and, from a relay that keeps rosters, `roster`, `rosterMac`, `rosterSig`, `rosters` (from `since`, oldest first) and `sig: 1` | any auth this group has used within eight epochs |
+| `POST {relay}/g/{group}/roster` | `{ roster, rosterMac \| rosterSig }` | 200 — an amendment at the current epoch; 409 `roster_conflict`, 403 `unsigned_roster`, 400 `malformed_roster` | the group's current auth, as `/rotate` |
+| the object's `/roster` — **internal** | `{ epoch, devices }` | 204 | built by the Worker after an accepted rotation and sent to the group's Durable Object; not the public amendment route above |
 
 **`/rotate` and `/keys` are `/g/…` routes that stand *ahead* of the bearer gate, and the placement
 is the point rather than an exemption.** A device that has just been rotated away from cannot mint a
@@ -3849,7 +4107,8 @@ attempt rather than on a group, because the group a pairing produces may not exi
 | `GET {relay}/p/{rv}/{slot}` | | 200 with `{ blob }`; 404 if empty | none |
 
 `slot` is `join` (B's response, written by B, read by A) or `offer` (A's sealed key, written by A,
-read by B). **These stand outside the bearer gate for the identical reason `/rotate` and `/keys`
+read by B) — and, since the Discord spec's PR 2, `joinsig` and `offersig` beside them, with the same
+ten minutes and the same first-writer-wins (*The pairing slots*, under the roster document). **These stand outside the bearer gate for the identical reason `/rotate` and `/keys`
 do, one step earlier in a device's life**: B is not in the group yet and cannot derive a token by
 construction, so a rendezvous behind the gate would refuse exactly the caller it exists to serve.
 Both are D1 only and **never reach a Durable Object**, which is what makes standing outside

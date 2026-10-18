@@ -73,7 +73,7 @@ fn one_at_a_time(device: &str, cards: &[&str]) -> Vec<Envelope> {
     let ops = outbox(&conn);
     assert_eq!(ops.len(), cards.len());
     ops.chunks(1)
-        .map(|op| wire::seal_batch(&group, device, op).unwrap())
+        .map(|op| wire::seal_unsigned(&group, device, op).unwrap())
         .collect()
 }
 
@@ -288,8 +288,8 @@ async fn a_page_handed_over_twice_applies_nothing_twice() {
     e.execute("UPDATE sync_ops SET pushed_at = unixepoch()", [])
         .unwrap();
     let group = identity::group(&c).unwrap().unwrap();
-    let ordinary = wire::seal_batch(&group, "dev-c", &outbox(&c)).unwrap();
-    let claim = wire::seal_batch(&group, "dev-e", &emission_of(&e, "dev-e")).unwrap();
+    let ordinary = wire::seal_unsigned(&group, "dev-c", &outbox(&c)).unwrap();
+    let claim = wire::seal_unsigned(&group, "dev-e", &emission_of(&e, "dev-e")).unwrap();
     let server = MockServer::start_async().await;
     paging(&server, &[vec![&ordinary], vec![&claim]]);
     let b = paired("dev-b", 0);
@@ -893,10 +893,10 @@ fn a_covered_put_and_its_claim() -> (Envelope, Envelope) {
     let a = paired("dev-a", 0);
     add_copy(&a, "bolt", 2);
     let group = identity::group(&a).unwrap().unwrap();
-    let put = wire::seal_batch(&group, "dev-a", &outbox(&a)).unwrap();
+    let put = wire::seal_unsigned(&group, "dev-a", &outbox(&a)).unwrap();
     a.execute("UPDATE sync_ops SET pushed_at = unixepoch()", [])
         .unwrap();
-    let claim = wire::seal_batch(&group, "dev-a", &emission_of(&a, "dev-a")).unwrap();
+    let claim = wire::seal_unsigned(&group, "dev-a", &emission_of(&a, "dev-a")).unwrap();
     (put, claim)
 }
 
@@ -988,8 +988,8 @@ fn a_copy_filed_into_a_binder_deleted_here_and_then_its_rename(
     let wrote = outbox(&a);
     assert_eq!(wrote.len(), 2, "the copy and the rename: {wrote:?}");
     let group = identity::group(&a).unwrap().unwrap();
-    let filed = wire::seal_batch(&group, "dev-a", &wrote[..1]).unwrap();
-    let renamed = wire::seal_batch(&group, "dev-a", &wrote[1..]).unwrap();
+    let filed = wire::seal_unsigned(&group, "dev-a", &wrote[..1]).unwrap();
+    let renamed = wire::seal_unsigned(&group, "dev-a", &wrote[1..]).unwrap();
 
     let receiver = move || {
         let b = with_the_binder();
@@ -1082,8 +1082,8 @@ async fn a_clock_held_sender_across_a_page_edge_ends_as_a_live_devices_pulls_do(
     let mut ops = outbox(&a);
     assert_eq!(ops.len(), 2, "{ops:?}");
     ops[1].at.ms = now + 2 * DAY_MS;
-    let early = wire::seal_batch(&group, "dev-a", &ops[..1]).unwrap();
-    let fast = wire::seal_batch(&group, "dev-a", &ops[1..]).unwrap();
+    let early = wire::seal_unsigned(&group, "dev-a", &ops[..1]).unwrap();
+    let fast = wire::seal_unsigned(&group, "dev-a", &ops[1..]).unwrap();
     let cards = |conn: &Connection| {
         ["early", "fast"]
             .into_iter()
@@ -1190,8 +1190,8 @@ fn a_baseline_in_two_chunks(references: bool) -> (Envelope, Envelope) {
     }
     let group = identity::group(&a).unwrap().unwrap();
     (
-        wire::seal_batch(&group, "dev-a", &ops[..2]).unwrap(),
-        wire::seal_batch(&group, "dev-a", &ops[2..]).unwrap(),
+        wire::seal_unsigned(&group, "dev-a", &ops[..2]).unwrap(),
+        wire::seal_unsigned(&group, "dev-a", &ops[2..]).unwrap(),
     )
 }
 
@@ -1330,8 +1330,8 @@ async fn an_older_builds_own_op_a_page_ahead_of_its_baseline_is_read_as_one_answ
         op.emission = None;
     }
     let group = identity::group(&a).unwrap().unwrap();
-    let edit = wire::seal_batch(&group, "dev-a", &[plus_one]).unwrap();
-    let baseline = wire::seal_batch(&group, "dev-a", &claims).unwrap();
+    let edit = wire::seal_unsigned(&group, "dev-a", &[plus_one]).unwrap();
+    let baseline = wire::seal_unsigned(&group, "dev-a", &claims).unwrap();
     let rows = [&edit, &baseline];
 
     let (unpaged, paged, live) = three_ways(&joined_fresh, &rows).await;
@@ -1406,7 +1406,7 @@ fn only_a_horizon_with_no_reference_is_an_older_builds_baseline() {
             .all(|op| op.horizon.is_none() && op.emission.is_none()),
         "an ordinary op carries a horizon or a reference"
     );
-    let sealed = |ops: &[Op]| wire::seal_batch(&group, "dev-a", ops).unwrap();
+    let sealed = |ops: &[Op]| wire::seal_unsigned(&group, "dev-a", ops).unwrap();
     let is_older = |envelopes: &[Envelope]| an_older_baseline_is_in(&a, &group, envelopes).unwrap();
     assert!(!is_older(&[sealed(&ordinary)]), "ordinary ops");
 

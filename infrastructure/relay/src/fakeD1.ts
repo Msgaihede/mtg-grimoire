@@ -61,6 +61,11 @@ const PRIMARY_KEY: Record<string, string[]> = {
   // because SQLite enforces it, so an entry-less table here would let two "concurrent" writes to
   // one empty slot both insert and the "refuses a second write" test would pass for no reason.
   pairing_rendezvous: ["rv", "slot"],
+  // The rendezvous's signing slots, for the same reason: first-writer-wins is this key.
+  pairing_slots: ["rv", "slot"],
+  // `roster.ts`'s chain: two writers racing for one `(epoch, step)` land one row only because the
+  // key is enforced, and its `OR IGNORE` reads that as `changes: 0` — the `409 roster_conflict`.
+  rosters: ["group_id", "epoch", "step"],
   /**
    * ⚠️ **`shares` is not the relay's table.** It belongs to the *share* Worker
    * (`infrastructure/share-worker/schema.sql`), which binds this same D1 database — spec §5.1's second Worker,
