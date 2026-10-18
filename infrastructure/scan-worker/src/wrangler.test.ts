@@ -207,13 +207,16 @@ describe("what must not be in this directory", () => {
       .filter(([name, text]) => !name.endsWith("/src/fake.ts") && /\benv\.RELAY_HMAC_KEY\b/.test(text))
       .map(([name]) => name.slice(name.lastIndexOf("/") + 1));
     expect(readers).toEqual(["auth.ts"]);
-    // It verifies and never mints: the one function of the relay's token module it may name.
+    // It verifies and never mints: what it may name of the relay's token module is `verify`, and
+    // since the integration's second PR the restricted-device test and its refusal's code —
+    // reading a claim, never writing one. `mint` is the name this list exists to keep out.
     const imported = script
       .filter(([name]) => !name.endsWith("/src/fake.ts"))
       .flatMap(([, text]) => [
         ...text.matchAll(/import \{([^}]+)\} from "@grimoire\/relay\/src\/token";/g),
       ])
       .flatMap(([, names]) => names.split(",").map((name) => name.trim()));
-    expect(imported).toEqual(["verify"]);
+    expect(imported).toEqual(["isRestricted", "RESTRICTED_DEVICE", "verify"]);
+    expect(imported).not.toContain("mint");
   });
 });

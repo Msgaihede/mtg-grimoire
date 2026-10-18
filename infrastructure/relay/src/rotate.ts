@@ -14,11 +14,32 @@ import {
 // this file to build its route table at module-evaluation time, so a value import back would
 // close a runtime cycle across exactly that construction. `import type` is erased outright.
 import type { Env } from "./index";
+import {
+  authenticatorOf,
+  judge,
+  latestRoster,
+  MALFORMED_ROSTER,
+  parseRoster,
+  pruneRosters,
+  ROSTER_CONFLICT,
+  rostersSince,
+  storeAmendment,
+  storedRoster,
+  storeRotationRoster,
+  UNSIGNED_ROSTER,
+  UNSIGNED_ROTATION,
+  unstoreRoster,
+  wireRoster,
+  type Authenticator,
+  type Roster,
+} from "./roster";
 
 /**
- * The group's two key-distribution routes. `POST /g/{group}/rotate` publishes a new epoch and
+ * The group's key-distribution routes. `POST /g/{group}/rotate` publishes a new epoch and
  * the group key rewrapped for every device that stays; `GET /g/{group}/keys` is how a device
- * finds out whether it is one of them.
+ * finds out whether it is one of them; and since the Discord integration's second PR,
+ * `POST /g/{group}/roster` amends the group's signed roster document at the epoch it stands on
+ * (`roster.ts`, spec §12) — which a rotation may also carry, for its new epoch.
  *
  * **Both stand ahead of `index.ts`'s bearer gate, and that placement is the point rather than an
  * exemption.** A device that has just been rotated away from cannot mint a token — the auth it
@@ -122,6 +143,27 @@ function json(body: unknown, status = 200): Response {
     status,
     headers: { "content-type": "application/json" },
   });
+}
+
+/** A refusal a client matches on by `code` — every roster refusal is one. */
+function refuse(status: number, code: string, error: string): Response {
+  return json({ error, code }, status);
+}
+
+/**
+ * The roster document a body carries, read off its three fields — `roster` (the RD string), and
+ * exactly one of `rosterMac` and `rosterSig` — or the `400 malformed_roster` that refuses it.
+ * Decided from the body alone, so both routes can ask it before D1 is read.
+ */
+function rosterIn(
+  body: { roster?: unknown; rosterMac?: unknown; rosterSig?: unknown },
+  group: string,
+): { next: Roster; text: string; auth: Authenticator } | Response {
+  const parsed = parseRoster(body.roster, group);
+  if (!parsed.ok) return refuse(400, MALFORMED_ROSTER, parsed.error);
+  const auth = authenticatorOf(body);
+  if (typeof auth === "string") return refuse(400, MALFORMED_ROSTER, auth);
+  return { next: parsed.roster, text: body.roster as string, auth };
 }
 
 /**
@@ -306,17 +348,42 @@ function manifestProblem(keys: unknown): string | null {
  * **And the manifest is the roster, so publishing one settles who holds a device slot and whom the
  * log waits for** — the `keepOnly` and the [`sendRoster`] below the 409. The first is spec §4.4's
  * whole implementation; the second is what stops a departed device's last ack pinning the log.
+ *
+ * **A rotation may carry the new epoch's roster document** (spec §12): `roster`, with `rosterMac`
+ * or `rosterSig`, at the rotation's own `epoch` and `step: 0` — anything else is
+ * `400 malformed_roster`, from the body alone. **Optional while the group is open**, so every
+ * build released before it goes on rotating exactly as it did; **required once the group is
+ * signed** — its newest RD says `signed` — and then signed by a full member of that RD, or the
+ * rotation is **`403 unsigned_rotation`** and nothing is recorded. That is what takes rotation
+ * away from a restricted device that holds the group's auth (spec §2, F2): it can present the
+ * credential, and cannot produce the signature.
+ *
+ * ⚠️ **The RD is stored before the rotation is recorded, and taken back if the rotation is then
+ * refused** — `roster.ts`'s `storeRotationRoster` says why the order is that way round and what
+ * it costs. Its own guard carries the rotation's epoch bound, so an epoch the rotation would be
+ * refused for writes no RD in the first place; a refusal after it is only ever a race.
  */
 export async function handleRotate(request: Request, env: Env, group: string): Promise<Response> {
   const presented = presentedCredential(request);
   if (presented === null) return json({ error: "unauthorized" }, 401);
 
-  let body: { epoch?: unknown; auth?: unknown; keys?: unknown };
+  type Body = {
+    epoch?: unknown;
+    auth?: unknown;
+    keys?: unknown;
+    roster?: unknown;
+    rosterMac?: unknown;
+    rosterSig?: unknown;
+  };
+  let body: Body;
   try {
-    body = (await request.json()) as { epoch?: unknown; auth?: unknown; keys?: unknown };
+    body = (await request.json()) as Body;
   } catch {
     return json({ error: "unreadable body" }, 400);
   }
+  // `null` as well as `{}`, which reads every field as absent: `request.json()` parses `null`, and
+  // the shape checks below must be reached rather than a property read on nothing.
+  body ??= {};
 
   // A non-integer epoch is refused rather than floored. `1.5` compares as greater than `1` and
   // would be stored as itself, so the group would stand on an epoch no device can ever derive
@@ -332,19 +399,65 @@ export async function handleRotate(request: Request, env: Env, group: string): P
   if (problem !== null) return json({ error: problem }, 400);
   const keys = body.keys as Record<string, string>;
 
+  // The roster document, when the body names any of its three fields — so a lone `rosterSig` is a
+  // malformed roster and not a rotation that quietly carries none.
+  const carries =
+    body.roster !== undefined || body.rosterMac !== undefined || body.rosterSig !== undefined;
+  const document = carries ? rosterIn(body, group) : null;
+  if (document instanceof Response) return document;
+  if (document !== null && (document.next.epoch !== epoch || document.next.step !== 0)) {
+    return refuse(400, MALFORMED_ROSTER, "malformed roster: a rotation's is its epoch, step 0");
+  }
+
   // **The group auth of the epoch being replaced, and nothing else.** Every device in the group
   // holds it, and a device removed from the group cannot derive the next one. The Patreon refresh
   // secret used to open this door too; see `retireOrphanedSecret` for why it no longer does.
   if (!(await authIsCurrent(env, group, presented))) return json({ error: "unauthorized" }, 401);
 
-  if (!(await recordRotation(env, group, epoch, auth, keys))) {
-    // Read after the refusal and only to word it — the decision was the statement above.
-    const current = (await groupEpoch(env, group)) ?? -1;
-    if (epoch > current + REMOVAL_STEP) {
-      return json({ error: "that rotation steps further ahead than any rotation may" }, 422);
+  // **The one read this route added**, and only after the auth: the group's mode is not told to
+  // a caller that has not shown it is in the group.
+  const latest = await latestRoster(env, group);
+  if (document === null) {
+    if (latest !== null && storedRoster(latest, group).mode === "signed") {
+      return refuse(403, UNSIGNED_ROTATION, "this group is signed, and that rotation is not");
     }
-    return json({ error: "that rotation does not advance the group's key" }, 409);
+  } else {
+    const refused = await judge(
+      document.next,
+      document.text,
+      document.auth,
+      latest,
+      group,
+      UNSIGNED_ROTATION,
+    );
+    if (refused !== null) return refuse(refused.status, refused.code, refused.error);
+    const stored = await storeRotationRoster(
+      env,
+      group,
+      document.next,
+      document.text,
+      document.auth,
+      latest,
+      Date.now(),
+    );
+    if (!stored) {
+      // Its guard is the rotation's epoch bound and the chain's: word whichever it was.
+      const refusal = await epochRefusal(env, group, epoch);
+      return (
+        refusal ?? refuse(409, ROSTER_CONFLICT, "that roster does not follow the group's newest")
+      );
+    }
   }
+
+  if (!(await recordRotation(env, group, epoch, auth, keys))) {
+    // The RD this rotation stored goes with it: a refused rotation must leave nothing behind.
+    if (document !== null) await unstoreRoster(env, group, document.next, document.text);
+    return (
+      (await epochRefusal(env, group, epoch)) ??
+      json({ error: "that rotation does not advance the group's key" }, 409)
+    );
+  }
+  if (document !== null) await pruneRosters(env, group, epoch);
 
   // **After the record and never before it: a refused rotation must free nothing.** The two
   // statements are not a transaction, so the order is the whole of the guarantee — `keepOnly`
@@ -372,8 +485,82 @@ export async function handleRotate(request: Request, env: Env, group: string): P
   return json({ epoch });
 }
 
+/**
+ * Why `/rotate` refuses `epoch` against the group's newest key row — **read after the refusal and
+ * only to word it**; the decision was the guarded statement before it. `null` when the epoch is
+ * one a rotation could take, which after a refused statement means the chain, not the epoch, was
+ * what moved.
+ */
+async function epochRefusal(env: Env, group: string, epoch: number): Promise<Response | null> {
+  const current = (await groupEpoch(env, group)) ?? -1;
+  if (epoch > current + REMOVAL_STEP) {
+    return json({ error: "that rotation steps further ahead than any rotation may" }, 422);
+  }
+  if (epoch <= current)
+    return json({ error: "that rotation does not advance the group's key" }, 409);
+  return null;
+}
+
 // ---------------------------------------------------------------------------------------
-// GET /g/{group}/keys?device={id}[&epoch={n}]
+// POST /g/{group}/roster
+// ---------------------------------------------------------------------------------------
+
+/**
+ * Amend the group's roster document at the epoch it stands on: `{ roster, rosterMac? , rosterSig? }`,
+ * with the RD's `epoch` the group's newest key row's and its `step` one past the newest RD at
+ * that epoch — or `0` when the newest RD is at an earlier one, which is every amendment a group
+ * makes after a rotation by an older build that carried none. Spec §12, *Amendments*: how a
+ * device adds or updates its own member entry, and how a group paired before signing keys
+ * existed learns every member's without a rotation.
+ *
+ * **`/rotate`'s door, and so its place**: the group's current auth in the `authorization` header,
+ * ahead of the bearer gate, rate limited with it (`RL_MINT`), and D1 only — it never reaches the
+ * Durable Object. The same order too: everything decided from the body, then the auth, then the
+ * reads, then the one guarded write.
+ *
+ * - **`400 malformed_roster`** — the body: an RD that does not parse, names another group, names
+ *   a restricted member while open, or carries neither or both authenticators (`roster.ts`).
+ * - **`401`** — a credential that is not the group's current auth.
+ * - **`409 roster_conflict`** — the RD is not at the position the group's chain is at: the wrong
+ *   epoch, the wrong step, a `prev` that is not the newest RD's hash, or a newer RD stored between
+ *   this request's read and its write. The client refetches `/keys` and builds again.
+ * - **`403 unsigned_roster`** — the group is signed and the RD is not signed by a full member of
+ *   the newest one, or a signed RD whose signature or signer does not hold.
+ * - **`200 { epoch, step }`** — stored.
+ */
+export async function handleRoster(request: Request, env: Env, group: string): Promise<Response> {
+  const presented = presentedCredential(request);
+  if (presented === null) return json({ error: "unauthorized" }, 401);
+
+  let body: { roster?: unknown; rosterMac?: unknown; rosterSig?: unknown } | null;
+  try {
+    body = (await request.json()) as typeof body;
+  } catch {
+    return json({ error: "unreadable body" }, 400);
+  }
+  const document = rosterIn(body ?? {}, group);
+  if (document instanceof Response) return document;
+  const { next, text, auth } = document;
+
+  if (!(await authIsCurrent(env, group, presented))) return json({ error: "unauthorized" }, 401);
+
+  const conflict = () =>
+    refuse(409, ROSTER_CONFLICT, "that roster is not at the group's newest position");
+  const epoch = await groupEpoch(env, group);
+  const latest = await latestRoster(env, group);
+  if (epoch === null || next.epoch !== epoch) return conflict();
+  const step = latest !== null && latest.epoch === epoch ? latest.step + 1 : 0;
+  if (next.step !== step) return conflict();
+
+  const refused = await judge(next, text, auth, latest, group, UNSIGNED_ROSTER);
+  if (refused !== null) return refuse(refused.status, refused.code, refused.error);
+
+  if (!(await storeAmendment(env, group, next, text, auth, latest, Date.now()))) return conflict();
+  return json({ epoch: next.epoch, step: next.step });
+}
+
+// ---------------------------------------------------------------------------------------
+// GET /g/{group}/keys?device={id}[&epoch={n}][&since={n}]
 // ---------------------------------------------------------------------------------------
 
 /**
@@ -406,6 +593,16 @@ export async function handleRotate(request: Request, env: Env, group: string): P
  * device in the group reading itself as removed on its next sync, all at once. The throw is a
  * 500: every device stalls exactly where it is, which is recoverable by fixing the row.
  *
+ * **Every 200 also carries the group's roster documents** (spec §12): `roster`, `rosterMac` and
+ * `rosterSig` are the newest RD and its authenticator, `null` each for a group that has published
+ * none; `rosters` is every RD from epoch `since` on, oldest first and at most `ROSTER_PAGE` (16),
+ * each as `{ roster, rosterMac, rosterSig }` — the catch-up walk a device makes from the epoch it
+ * stands on. **`since` defaults to the answered manifest's epoch** — the newest, or the one
+ * `epoch` asked for — and is read with `epoch`'s rule. And `sig: 1` says this relay stores
+ * envelope signatures and roster documents, which is half of the gate a client meets before it may
+ * enable a restricted device (spec §7). **The fields before them are what they always were**, in
+ * the order they always were; a released build's serde ignores the rest.
+ *
  * **Authentication comes before the lookup, so an unknown group is a 401 and not a 404.** The
  * 404 below is real and is the right answer to a group with no rows, but it is not reachable
  * from outside: the credential is checked against those same rows, so a group with none refuses
@@ -428,6 +625,8 @@ export async function handleKeys(
   // Decided from the query alone, so ahead of the D1 read below with the other shape checks.
   const asked = url.searchParams.get("epoch");
   if (asked !== null && !isEpoch(asked)) return json({ error: "that is not an epoch" }, 400);
+  const since = url.searchParams.get("since");
+  if (since !== null && !isEpoch(since)) return json({ error: "that is not an epoch" }, 400);
 
   // `authIsRecent` and not `authIsCurrent`, and the difference is the route's reason for
   // existing: a device that is behind a rotation and a device that was removed present the same
@@ -470,10 +669,17 @@ export async function handleKeys(
   // the field present, and that attribute is what makes its absence loud. Neither is a backstop
   // for the other, because only one of them existed for the window in which this was wrong.
   const blob = Object.hasOwn(manifest.keys, device) ? manifest.keys[device] : null;
+  // Two reads on `rosters`' primary key, served as stored: the RD strings are never parsed here,
+  // because a client verifies them over their exact bytes.
+  const latest = await latestRoster(env, group);
+  const page = await rostersSince(env, group, since === null ? manifest.epoch : Number(since));
   return json({
     epoch: manifest.epoch,
     blob,
     devices: Object.keys(manifest.keys),
     removalStep: REMOVAL_STEP,
+    ...wireRoster(latest),
+    rosters: page.map(wireRoster),
+    sig: 1,
   });
 }

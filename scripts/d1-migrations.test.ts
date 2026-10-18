@@ -136,6 +136,8 @@ describe("the tracked folders", () => {
         "group_devices",
         "group_keys",
         "pairing_rendezvous",
+        "pairing_slots",
+        "rosters",
         "shares",
       ]),
     );
