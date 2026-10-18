@@ -3,6 +3,13 @@
 Repo-specific gotchas for syncing this app's component layer to claude.ai/design.
 Read this before touching `.design-sync/config.json`.
 
+**The target is the Design System artifact, and no claude.ai/design project is pinned.**
+`/design-sync` publishes into `https://claude.ai/artifact/FvocuEAEkPVn6tcRfUvYVq` with the Artifact
+tool — see [Publishing to the Design System artifact](#publishing-to-the-design-system-artifact-2026-10-01).
+`config.json` has carried no `projectId` since **2026-10-18**, when Markus retired the legacy
+project (`6738b546-…`). So a missing `projectId` here is **not** a first sync: never create a
+claude.ai/design project for this repo and never pin one again without his say-so.
+
 ## What makes this repo unusual
 
 - **It is an application, not a component library.** No `dist/`, no `main`/`module`/`exports`.
@@ -209,7 +216,14 @@ artifact with the Artifact tool, which needs no `/design-login`. **On 2026-10-17
 artifact alone as `/design-sync`'s target** (offered: artifact, both, the legacy project, local
 only), so the legacy project's `_ds_sync.json` anchor is from 2026-09-27 and every sync since runs
 the driver with no `--remote` — the full-scope path, carried forward by the local grade cache
-when this checkout has one. What was done, in order:
+when this checkout has one. **On 2026-10-18 he asked to remove the legacy project**: its pin left
+`config.json`, and the project itself is deleted by hand at claude.ai/design, because `DesignSync`
+has no method that deletes a project. Nothing the artifact needs lived only there — its migration
+report (`project/assets/notes/MIGRATION-REPORT.md`) carried all 152 files and left out, kept
+aside and dropped nothing, and every component the 2026-09-27 sync added there has since been
+published here. The artifact's `project/design-system.json` still names the old project in its
+`source` block; that is the migration's provenance, which the page owns, so it was left alone.
+What was done, in order:
 
 1. **Build and grade locally**: `buildCmd`, then `package-build.mjs`, then
    `node .design-sync/card-art.mjs --copy ds-bundle`, `package-validate.mjs` and a scoped
