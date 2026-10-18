@@ -126,6 +126,12 @@ Related: the `running-the-app` skill (locks and ports), [live-ui-verification.md
   by-hand runbook runs it before `wrangler deploy`
   ([`infrastructure/app-worker/README.md`](../../infrastructure/app-worker/README.md)); a release deploys the tag and has no
   use for it.
+- `pnpm discord:register` — puts the Discord bot's slash commands
+  (`infrastructure/discord-worker/src/commands.ts`) on the application as its global commands,
+  one `PUT` of the whole list with a client-credentials token. Needs `DISCORD_APPLICATION_ID` and
+  `DISCORD_CLIENT_SECRET` in the environment, refuses before any request without both, and
+  prints neither. **The owner's to run, never an agent's unasked**: it changes what every reader
+  sees in Discord ([`infrastructure/discord-worker/README.md`](../../infrastructure/discord-worker/README.md), *Deploying*).
 
 ### Three things pnpm does that npm did not
 

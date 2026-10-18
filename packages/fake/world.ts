@@ -34,7 +34,13 @@
  *    {@link installWorld}.
  */
 import { QueryClient } from "@tanstack/react-query";
-import { allHandlers, applySupporterFault, errorLogSeed, mirrorFailedPass } from "./db";
+import {
+  allHandlers,
+  applyDiscordFault,
+  applySupporterFault,
+  errorLogSeed,
+  mirrorFailedPass,
+} from "./db";
 import type { FakeDb, Fault } from "./db";
 import { installCorpus } from "./images";
 import {
@@ -103,7 +109,6 @@ export interface InstallOptions {
  * to it — and a snapshot taken then would restore that instead of the app's own defaults.
  */
 const PRISTINE_STORE = useAppStore.getState();
-
 
 /** Wrappers this file put on a `queryFn`/`mutationFn`, so a second pass over an
  *  already-defaulted options object does not wrap one twice. */
@@ -245,6 +250,10 @@ export function installWorld(
   // has ended. Both write the world rather than branching in a handler, for the reason above:
   // neither is a refusal, and the panel has to draw the state with nothing having been pressed.
   applySupporterFault(db);
+  // And the Discord integration's standing states (issue #1096), for the same reason: a sign-in
+  // left open, a linked account, a gate's refusal and an enrolled bot are where a story starts,
+  // not what it presses.
+  applyDiscordFault(db);
 
   const scope = createScope(allHandlers(db));
   // The one fault that is about the *host*: a browser, which answers a name the desktop refuses —

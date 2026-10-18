@@ -20,6 +20,7 @@ function stub(name: string) {
 vi.mock("@/features/settings/BackupPanel", () => ({ BackupPanel: stub("panel:backup") }));
 vi.mock("@/features/settings/CachePanel", () => ({ CachePanel: stub("panel:cache") }));
 vi.mock("@/features/settings/DangerZonePanel", () => ({ DangerZonePanel: stub("panel:danger") }));
+vi.mock("@/features/settings/DiscordPanel", () => ({ DiscordPanel: stub("panel:discord") }));
 vi.mock("@/features/settings/ErrorLogPanel", () => ({ ErrorLogPanel: stub("panel:errors") }));
 vi.mock("@/features/settings/HiddenTagsPanel", () => ({ HiddenTagsPanel: stub("panel:hidden") }));
 vi.mock("@/features/settings/LabelsPanel", () => ({ LabelsPanel: stub("panel:labels") }));
@@ -73,7 +74,10 @@ function light(node: ReactNode) {
 }
 
 const rail = () => screen.getByRole("navigation", { name: "Settings" });
-const entries = () => within(rail()).getAllByRole("button").map((b) => b.textContent);
+const entries = () =>
+  within(rail())
+    .getAllByRole("button")
+    .map((b) => b.textContent);
 
 afterEach(() => useAppStore.setState({ pendingSettingsPanel: null }));
 
@@ -125,6 +129,20 @@ describe("Settings in the light edition", () => {
     await userEvent.type(screen.getByRole("searchbox", { name: "Search settings" }), "dropbox");
     expect(screen.getByText("No matching settings.")).toBeInTheDocument();
     expect(screen.queryByText("panel:backup")).toBeNull();
+  });
+
+  /**
+   * **Discord is the desktop's alone** (issue #1096): no light host registers a `discord_*`
+   * command, so the panel is off `LIGHT_SETTINGS` and its entry, which holds nothing else, goes
+   * with it — off the rail above, and out of reach of the search box here.
+   */
+  it("draws no Integrations entry and finds no Discord panel", async () => {
+    render(light(<SettingsPage update={NO_UPDATE} />));
+    expect(within(rail()).queryByRole("button", { name: "Integrations" })).toBeNull();
+
+    await userEvent.type(screen.getByRole("searchbox", { name: "Search settings" }), "discord");
+    expect(screen.getByText("No matching settings.")).toBeInTheDocument();
+    expect(screen.queryByText("panel:discord")).toBeNull();
   });
 
   it("drops a hand-off naming a panel it does not draw", async () => {

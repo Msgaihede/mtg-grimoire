@@ -48,7 +48,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "The way through Settings: seven groups, and a box that searches every panel in all " +
+          "The way through Settings: a rail of groups, and a box that searches every panel in all " +
           "of them at once.\n\n" +
           "**Fewer entries than there are panels**, deliberately: a rail as long as the page it " +
           "indexes is a second scroll rather than a way through the first, so panels that " +
@@ -133,7 +133,7 @@ export const BadgesLit: Story = {
     const canvas = within(canvasElement);
     await expect(canvas.getByRole("button", { name: "Sync (12)" })).toHaveTextContent("12");
     await expect(canvas.getByRole("button", { name: "Errors (41)" })).toBeInTheDocument();
-    // Nothing is drawn for a count of zero, and five of the seven groups have no badge at all.
+    // Nothing is drawn for a count of zero, and every group but two has no badge at all.
     await expect(canvas.queryByText("0")).not.toBeInTheDocument();
   },
 };

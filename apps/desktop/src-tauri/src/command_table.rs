@@ -90,6 +90,31 @@ const DESKTOP_ONLY: &[(&str, &str)] = &[
         "playtest_support",
         "what the playtest board's rules engine plays of a deck is this host's to say",
     ),
+    (
+        "discord_status",
+        "the Discord integration is desktop-only (the Discord spec §13.6)",
+    ),
+    (
+        "discord_link_begin",
+        "the Discord integration is desktop-only (the Discord spec §13.6)",
+    ),
+    (
+        "discord_link_poll",
+        "the Discord integration is desktop-only (the Discord spec §13.6)",
+    ),
+    (
+        "discord_link_cancel",
+        "the Discord integration is desktop-only (the Discord spec §13.6)",
+    ),
+    (
+        "discord_enable",
+        "the Discord integration is desktop-only: its pinned pairing enters signed mode for the \
+         whole group (the Discord spec §13.6)",
+    ),
+    (
+        "discord_disable",
+        "the Discord integration is desktop-only (the Discord spec §13.6)",
+    ),
 ];
 
 /// Commands the table has that this app does not register and never will, each with the

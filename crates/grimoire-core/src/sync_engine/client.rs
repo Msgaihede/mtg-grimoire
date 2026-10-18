@@ -1701,7 +1701,8 @@ async fn refresh_rosters(db: &impl Store) -> Result<(), String> {
 /// amends at all. **An older relay is never asked**: no `sig: 1` on its last `/keys` and nothing
 /// is built; a relay that answers the route `404` is one too, and is not recorded. A `409
 /// roster_conflict` — two devices amending at once — reads the relay again and builds on its
-/// newest, once.
+/// newest, once. **A `401` from a group that has rotated since the amendment was built is not
+/// recorded** ([`rotated_past`]): the joiner's first trip racing the join's own rotation.
 async fn amend_roster(db: &impl Store) {
     for attempt in 0..2 {
         let owed = db.with(|conn| {
@@ -1748,10 +1749,34 @@ async fn amend_roster(db: &impl Store) {
             }
             continue;
         }
+        if status == 401 && rotated_past(db, &group).await {
+            return;
+        }
         let message = format!("the relay answered {status} to this device's roster entry");
         say(db, "roster", Kind::Http, &message, Some(&url));
         return;
     }
+}
+
+/// Whether the relay's group has moved past `group.epoch` — **the one reason a `401` on
+/// `/roster` is not a refusal**, read off `/keys`, which accepts the auth `/roster` just turned
+/// away.
+///
+/// `/roster` asks for the group's *current* auth. A joiner that has just read its offer stands
+/// on the epoch it was offered, and the device that paired it publishes the join's rotation
+/// moments later: a trip that ran in between checks its keys, finds them current, builds its
+/// amendment at that epoch — and the rotation lands before the post. The `401` then says only
+/// "behind a rotation", which the next trip's [`check_keys`] adopts (or reads as the removal
+/// notice), and the amendment, if one is still owed, is built again at the new epoch. **At the
+/// same epoch it is a real refusal and is recorded**, as is a `/keys` that fails here (which
+/// records its own row too).
+async fn rotated_past(db: &impl Store, group: &Group) -> bool {
+    let Ok(Some((device, _, base))) = db.with(whereabouts) else {
+        return false;
+    };
+    fetch_key_page(db, &base, &device, group)
+        .await
+        .is_ok_and(|page| page.epoch > group.epoch)
 }
 
 // ---------------------------------------------------------------------------------------

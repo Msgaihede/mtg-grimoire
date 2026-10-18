@@ -84,8 +84,9 @@ describe("the editions' Settings entries", () => {
       "danger",
     ]);
     // Backup (the mirror) by the spec's name; the folder's path and the stored start view because
-    // a light install has neither to offer. Updates is drawn, without the updater (below).
-    for (const gone of ["backup", "data-folder", "start-view"] as const) {
+    // a light install has neither to offer; Discord because no light host has its commands.
+    // Updates is drawn, without the updater (below).
+    for (const gone of ["backup", "data-folder", "start-view", "discord"] as const) {
       expect(panelsOf(LIGHT_EDITION.settings)).not.toContain(gone);
     }
   });

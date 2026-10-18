@@ -114,6 +114,14 @@ export default mergeConfig(
         // bindings, a bucket and a limiter. `label.test.ts` and `wrangler.test.ts` read the
         // engine's Rust and this Worker's configuration as text and fail when they part.
         project("scan-worker", ["infrastructure/scan-worker/src/**/*.test.ts"]),
+        // The Discord integration's two Workers (spec `2026-10-17-discord-integration-design.md`
+        // §13), on the same terms. `infrastructure/discord-worker/` is the front — Discord's
+        // interactions, the account link — a plain handler over an injected `Env` whose D1 is a
+        // real SQLite built from its own migrations (`node:sqlite`) and whose bot namespace is a
+        // fake that records every call. `infrastructure/bot-device/` is the bot's Durable
+        // Object, reached only through the front's `BOT` binding.
+        project("discord-worker", ["infrastructure/discord-worker/src/**/*.test.ts"]),
+        project("bot-device", ["infrastructure/bot-device/src/**/*.test.ts"]),
         // The root package's own two folders, which belong to no other.
         //
         // The workbench's own folder. Nothing in it is a test since the fake moved out, and the

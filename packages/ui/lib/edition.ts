@@ -62,6 +62,12 @@ export type LightView = (typeof LIGHT_VIEWS)[number];
  *   name nothing the reader can act on.
  * - **`start-view`** — a light install opens where its URL says, and on Search when it says
  *   nothing (`LIGHT_START`). A stored start view is a question it does not ask.
+ * - **`discord`** — the Discord integration (issue #1096) is the desktop host's alone: its six
+ *   `discord_*` commands live in `apps/desktop/src-tauri/src/discord/`, and neither light host
+ *   registers them, because the bot is paired into the group by the device that runs the enable
+ *   flow and only the desktop does. A switch here could only ever answer *"There is no command
+ *   named discord_link_begin"*. Its rail entry, `Integrations`, holds nothing else, so it goes
+ *   too — `groupsOf` drops an entry with nothing left in it by itself.
  */
 export const LIGHT_SETTINGS = [
   "updates",

@@ -33,6 +33,7 @@ vi.mock("@/features/settings/HiddenTagsPanel", () => ({
 vi.mock("@/features/settings/MarketplacePanel", () => ({
   MarketplacePanel: stub("panel:prices"),
 }));
+vi.mock("@/features/settings/DiscordPanel", () => ({ DiscordPanel: stub("panel:discord") }));
 /**
  * **The one stub that reads a prop**, because the one prop this page computes for a panel is
  * the window count and nothing else on the page draws it. `data-windows` rather than text, so
@@ -180,6 +181,18 @@ describe("the Backup panel", () => {
   });
 });
 
+describe("the Discord panel", () => {
+  /** Issue #1096: the integration is its own rail entry, and the panel draws under it alone. */
+  it("is on the page under Integrations, and nowhere else", async () => {
+    render(wrap(<SettingsPage update={NO_UPDATE} />));
+    expect(screen.queryByText("panel:discord")).toBeNull();
+
+    await pickGroup("Integrations");
+
+    expect(screen.getByText("panel:discord")).toBeInTheDocument();
+  });
+});
+
 describe("the Updates panel", () => {
   /**
    * **This page is the panel's only caller, so the prop has no other test that can see it.**
@@ -266,9 +279,7 @@ describe("the data folder gets a home on the page", () => {
     render(wrap(<SettingsPage update={NO_UPDATE} />));
     await pickGroup("Storage and data");
 
-    expect(
-      await screen.findByText("No image errors this session."),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("No image errors this session.")).toBeInTheDocument();
   });
 
   /**

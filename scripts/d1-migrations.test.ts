@@ -1,5 +1,6 @@
-// The relay's D1, as a release changes it (`release.yml`, `relay-deploy` and `share-deploy`):
-// each Worker's `schema.sql` is the baseline — the shape production holds, having
+// The relay's D1, as a release changes it (`release.yml`, `relay-deploy` and `share-deploy`) and
+// as the owner changes it for the Discord front, which no release deploys: each Worker's
+// `schema.sql` is the baseline — the shape production holds, having
 // been built from these files by hand — and everything after it is a numbered file in that
 // Worker's `migrations/`, which wrangler applies once, in name order, and records in a table of
 // its own. The live database was compared with them on 2026-10-11 and matched
@@ -7,7 +8,9 @@
 //
 // Held here: the baselines do not change (a change to the schema is a new migration, never an
 // edit), the files are named so that name order is the order they were written in, the whole
-// chain applies to an empty database, and the two bindings name their folder and their table.
+// chain applies to an empty database, and the three bindings name their folder and their table.
+// **The Discord front's folder has no baseline**: its tables did not exist before its list, so
+// the list is the whole of its history.
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
@@ -15,6 +18,7 @@ import relaySchema from "../infrastructure/relay/schema.sql?raw";
 import shareSchema from "../infrastructure/share-worker/schema.sql?raw";
 import relayWrangler from "../infrastructure/relay/wrangler.jsonc?raw";
 import shareWrangler from "../infrastructure/share-worker/wrangler.jsonc?raw";
+import discordWrangler from "../infrastructure/discord-worker/wrangler.jsonc?raw";
 
 const RELAY = import.meta.glob<string>("/infrastructure/relay/migrations/*.sql", {
   query: "?raw",
@@ -22,6 +26,11 @@ const RELAY = import.meta.glob<string>("/infrastructure/relay/migrations/*.sql",
   eager: true,
 });
 const SHARE = import.meta.glob<string>("/infrastructure/share-worker/migrations/*.sql", {
+  query: "?raw",
+  import: "default",
+  eager: true,
+});
+const DISCORD = import.meta.glob<string>("/infrastructure/discord-worker/migrations/*.sql", {
   query: "?raw",
   import: "default",
   eager: true,
@@ -86,6 +95,8 @@ describe("the tracked folders", () => {
   it("name their files so that name order is the order they were written in", () => {
     expect(orderProblems(inOrder(RELAY).map(([name]) => name))).toEqual([]);
     expect(orderProblems(inOrder(SHARE).map(([name]) => name))).toEqual([]);
+    expect(orderProblems(inOrder(DISCORD).map(([name]) => name))).toEqual([]);
+    expect(inOrder(DISCORD).length).toBeGreaterThan(0);
   });
 
   it("refuses a name out of the pattern, a number used twice, and a gap", () => {
@@ -114,7 +125,7 @@ describe("the tracked folders", () => {
       "2026-09-26-refresh-device.sql",
       "2026-09-28-reconciled-at.sql",
     ]);
-    for (const [name] of [...inOrder(RELAY), ...inOrder(SHARE)]) {
+    for (const [name] of [...inOrder(RELAY), ...inOrder(SHARE), ...inOrder(DISCORD)]) {
       expect(name).not.toMatch(/^2026-/);
     }
   });
@@ -125,6 +136,7 @@ describe("the tracked folders", () => {
     for (const [, text] of inOrder(RELAY)) db.exec(text);
     db.exec(shareSchema);
     for (const [, text] of inOrder(SHARE)) db.exec(text);
+    for (const [, text] of inOrder(DISCORD)) db.exec(text);
     const tables = db
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
       .all()
@@ -132,6 +144,8 @@ describe("the tracked folders", () => {
     expect(tables).toEqual(
       expect.arrayContaining([
         "claim_codes",
+        "discord_link_requests",
+        "discord_links",
         "entitlements",
         "group_devices",
         "group_keys",
@@ -145,14 +159,18 @@ describe("the tracked folders", () => {
   });
 });
 
-describe("the two bindings", () => {
-  // One database, two Workers, two lists: a table each, so neither list can mark the other's
-  // file as applied.
+describe("the three bindings", () => {
+  // One database, three Workers, three lists: a table each, so no list can mark another's file
+  // as applied.
   it("name the tracked folder, and a bookkeeping table of their own", () => {
     expect(code(relayWrangler)).toContain('"migrations_dir": "migrations"');
     expect(code(relayWrangler)).toContain('"migrations_table": "d1_migrations"');
     expect(code(shareWrangler)).toContain('"migrations_dir": "migrations"');
     expect(code(shareWrangler)).toContain('"migrations_table": "d1_migrations_share"');
+    expect(code(discordWrangler)).toContain('"migrations_dir": "migrations"');
+    expect(code(discordWrangler)).toContain('"migrations_table": "d1_migrations_discord"');
     expect(code(relayWrangler)).not.toContain("d1_migrations_share");
+    expect(code(relayWrangler)).not.toContain("d1_migrations_discord");
+    expect(code(shareWrangler)).not.toContain("d1_migrations_discord");
   });
 });

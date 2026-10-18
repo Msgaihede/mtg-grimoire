@@ -1,6 +1,6 @@
 # External services, Workers and deploys
 
-Every network dependency the app has, what "optional" means for each one, and the four
+Every network dependency the app has, what "optional" means for each one, and the six
 Cloudflare Workers with their deploy state and secrets. Moved out of the root
 [`CLAUDE.md`](../../CLAUDE.md) without changing the wording, so every date and probe is still
 here. The root file keeps only the rules every agent needs (secrets, deploy asks, optional by
@@ -43,6 +43,7 @@ construction).
 - [The scanner's files, from this repository's GitHub release](#the-scanners-files-from-this-repositorys-github-release)
 - [The app Worker (the light app's web host)](#the-app-worker-the-light-apps-web-host)
 - [The scan Worker (the scanner's inbox)](#the-scan-worker-the-scanners-inbox)
+- [The Discord Workers (the front and the bot device)](#the-discord-workers-the-front-and-the-bot-device)
 
 ## Scryfall and the price feeds
 
@@ -395,3 +396,36 @@ deploys by hand — a Send is answered *the server answered 404* on a desktop or
 *could not be reached* in a browser. Ask the host before you believe this or its opposite.
 [`infrastructure/scan-worker/README.md`](../../infrastructure/scan-worker/README.md) is the
 runbook, with the probes a deployed one answers, and how the inbox is read and emptied.
+
+## The Discord Workers (the front and the bot device)
+
+**A _fifth_ and a _sixth_ Worker carry the Discord integration** (issue #1096, 2026-10-18;
+[the design](../superpowers/specs/2026-10-17-discord-integration-design.md) §9 and §13). The bot is
+a **device in the reader's sync group**: paired by the desktop, restricted to `read` by a signed
+roster document, holding the group key and therefore a decryptable copy of what syncs. The two
+Workers split what faces the internet from what holds the keys.
+
+- **`mtg-grimoire-discord`** (`infrastructure/discord-worker/`, `https://discord.mtg-grimoire.app`)
+  is the front: Discord's `/interactions` endpoint (it verifies Discord's Ed25519 signature,
+  answers `/card-search` from Scryfall itself, and forwards everything else), the OAuth account
+  link (PKCE-shaped: a challenge, a ten-minute request, a single-use claim with the verifier),
+  and the desktop's `/link/*` routes. It holds **no sync key**. Its one secret is
+  `DISCORD_CLIENT_SECRET`; the application id and public key are public `vars`, placeholders
+  until the owner creates the application, and the Worker answers 503 while they are.
+  `discord::DISCORD_BASE` in the desktop equals its `DISCORD_BASE` var, and a test reads both.
+- **`mtg-grimoire-bot-device`** (`infrastructure/bot-device/`) has **no route and no
+  `workers.dev` address**: only the front reaches it, through a Durable Object binding. Each
+  Durable Object is one link, runs grimoire-core (`crates/grimoire-bot`) over a page store in its
+  own SQLite storage encrypted under `BOT_KEK`, re-verifies Discord's signature itself, and answers
+  `/collection search`, `/wishlist search` and `/deck`. Unlinking deletes its storage.
+
+**Supporter-only by construction**: the bot pairs into a sync group and mints relay tokens like
+any device, and the enable gate (`integration::gate`) refuses a device that is not entitled.
+
+**Not deployed, and in no release job.** The Discord application, `DISCORD_CLIENT_SECRET`,
+`BOT_KEK` and — given the engine module's size and the Durable Object's CPU — the Workers Paid plan
+are the owner's to provide; the two READMEs are the runbook (the bot device first, then the
+front, then `pnpm discord:register`). Between now and then, and after, a deploy is by hand and
+asked for, as for every Worker, and no agent may unasked. Until then, switching the integration on
+answers that the Discord service could not be reached. Ask the host before you believe this or
+its opposite.

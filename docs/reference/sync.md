@@ -3864,11 +3864,13 @@ member of the previously accepted document** signed it (a member never seen rest
 is monotonic**: once this device accepts a signed document (`roster_mode`, `signed_since`), it
 refuses every open one.
 
-⚠️ **Nothing shipped enters signed mode in this release.** The press that publishes a group's first
-signed document is the spec's PR 3; its stand-in, `roster::enter_signed_mode`, exists only under
-`cfg(any(test, feature = "testing"))`. What ships is the *following* half — a verified signed
-document, by a full member this device already trusts, latches it too — which is why
-`identity::SIG_PROTO` is **2, "verifies rosters"**, the level PR 3's gate will ask of every member.
+⚠️ **One press enters signed mode, and nothing else does**: switching the Discord integration on,
+whose pinned pairing (`pairing::confirm_pinned`, *The pinned pairing* below) latches the device that
+pressed it and publishes the group's first signed document. `roster::enter_signed_mode` is
+`pub(crate)` and that is its one shipped caller. Every other device takes the *following* half — a
+verified signed document, by a full member it already trusts, latches it too — which is why
+`identity::SIG_PROTO` is **2, "verifies rosters"**, the level the integration's gate asks of every
+member.
 
 ### The acceptance rule, and what is kept
 
@@ -3929,7 +3931,11 @@ carries stale keys or level for it, `POST /g/{group}/roster` under the group's a
 changed, at `step + 1`; when the newest is older (a rotation by a build that sent none) or there is
 none, a fresh step 0 at this epoch from this device's own pruned roster — in open mode a partial
 view evicts nobody, and the device it misses amends itself in. A `404` (no such route) is an older
-relay and is not recorded; `409 roster_conflict` reads again and retries once. **A restricted
+relay and is not recorded; `409 roster_conflict` reads again and retries once. A `401` reads
+`/keys` once more (`client::rotated_past`): a relay a rotation ahead of the amendment's epoch is
+not recorded — a joiner's first trip that read its offer between the pairing device's post and
+the join's rotation, which the next trip's `check_keys` adopts — and at the same epoch it is a
+refusal and is (the web sync smoke met the first, 2026-10-18). **A restricted
 device never amends, and in signed mode only via its signature.**
 
 **Only full devices plan.** `identity::plan_excluding` refuses every entrance —
@@ -3975,6 +3981,64 @@ byte-identical to what they always were, and so are the six digits.
   (`client::relay_says_signed`) — and refuses if so (`pairing::OFFER_UNSIGNED`). The relay's word is
   enough in that direction: it could refuse a pairing anyway by withholding a slot, and it cannot
   make a signed group look open, because an open document needs the group key's MAC.
+
+### The pinned pairing: a device paired without six digits (the spec's PR 3)
+
+The Discord bot is a device in the reader's group — a `read` member of its signed roster document
+(the spec's §13). It is paired by the ordinary ceremony with one step replaced: **the joiner's keys
+arrive twice, over two independent channels, and are compared by the device instead of by a
+person.**
+
+1. **The gate** (`integration::gate`, asked first, and again on every status read): one sentence
+   for the first of — no group; no membership (`commands::entitled`); the relay's last `/keys`
+   did not say `sig: 1`; no roster document accepted here, or none naming this device as full
+   with its signing key at `SIG_PROTO`; a member — on that document **or** on this device's own
+   roster — with no signing key or below `SIG_PROTO` (*Update or remove "<name>" first*); five
+   devices already; a restricted device already listed, or once restricted and still listed. A
+   database it cannot read is a refusal too. It exists because the latch is for good: a member
+   that cannot verify a signature would go on taking rotations under the group key, which the bot
+   holds.
+2. **`pairing::begin_integration`** — `begin`'s invite on a `Pending` whose `origin` is
+   `Integration`, only into a group this device is in. **The two confirms refuse each other's
+   origin**: `confirm` answers `INTEGRATION_PAIRING`, `confirm_pinned` answers
+   `NOT_AN_INTEGRATION_PAIRING`, so no reader's press finishes a bot's pairing and no bot's
+   finishes a reader's. The desktop holds this `Pending` in its own command, never in
+   `State::pairing`, so the Sync panel's pairing neither sees nor disturbs it.
+3. The desktop hands the invite to the bot's service (`POST /link/enroll`); the bot runs
+   `pairing::accept` — `joinsig`, then `join` — and the service answers its device id and both
+   public keys over TLS. The desktop polls the rendezvous as usual until `join` is there.
+4. **`pairing::confirm_pinned(db, pending, Pinned { device_id, x25519, ed25519, capability })`**:
+   the joiner's id, its X25519 key and its `joinsig` Ed25519 key must each equal the pinned one,
+   or `PIN_MISMATCH` and nothing is posted or written; the capability must be `read`
+   (`PIN_NOT_RESTRICTED` — a full device is paired by digits) and the joiner at `SIG_PROTO`. Then
+   the cap, the seal at the current epoch, **`offersig` saying `signed`** (a relay that does not
+   keep the slot is refused before `offer` goes, `NO_SIGNATURE_SLOTS`: the joiner's one anchor is
+   this device's key in it), and `offer`. The commit, in one stretch: the bot on the roster under
+   *Discord* (`rename_device`, so the name syncs through `device_names` — the bot's own name never
+   applies anywhere), its signing key and level, `capability = 'read'` and `restricted_ever`
+   (`roster::restrict`), and **this device latched**: `roster_mode = signed`, `signed_since = E`,
+   the epoch the join publishes.
+5. **The join's rotation** (`client::publish_join`, unchanged) is now built in signed mode: the
+   group's first signed document at `E`, step 0, signed by this device, `prev` the open document
+   the relay last answered, every member with keys and level, the bot `cap: "read"`. A refusal is
+   the ordinary join debt (`roster_dirty`, `PinnedJoin::published == false`), and the next sync
+   pays it — signed, because the latch is already held.
+
+**Latched before the document is published, on purpose**: from the moment the bot holds the group
+key it can compute the open-mode MAC, so an open document is no longer a full device's word.
+
+**What follows on the others.** The bot, latched by `offersig` at the offered epoch, takes the
+signed document on its one anchor (the initiator's slot key), learns its own `read` capability
+from it, and adopts `E` with the document's full members as the only sealers. Every full device
+verifies it against the open document it last accepted — the signer a full member there, `prev`
+its hash — follows the latch, files the bot as `read`, and from then on refuses the bot's
+envelopes unopened (`WireError::Restricted`). `integration::tests` drives all of it against a
+relay that keeps state: a desk and a phone paired by digits, the bot by pins, the phone refusing
+an envelope the bot signed.
+
+**Removing the bot is an ordinary removal** (`pairing::remove_device`), and in signed mode its
+rotation carries a signed document that omits the bot; the bot stays in `restricted_ever` and the
+group stays signed — the latch has no way back. A later link pairs a new bot under a new device id.
 
 ---
 

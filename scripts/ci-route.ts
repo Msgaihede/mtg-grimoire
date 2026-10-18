@@ -377,6 +377,19 @@ export const ARMS = [
   // the arm above every tree's. `release.yml`'s `scan-deploy` deploys it, at a release tag.
   { match: ["infrastructure/scan-worker/*"], jobs: ["frontend"] },
 
+  // **The Discord integration's two Workers** (issue #1096, the design's §13):
+  // `infrastructure/discord-worker/`, the front Discord and the desktop ask, and
+  // `infrastructure/bot-device/`, the bot's Durable Object behind it. `frontend` type-checks
+  // both (`tsc -p` in `pnpm build`), lints them and runs their tests, and that is every job that
+  // reads them today. **Not `rust`**: no Rust source reads a file of either — the census holds
+  // that, and an arm that gains a reader gains `rust` with it. **Not `web`**: no build copies or
+  // runs them. **No workflow deploys either** (§9: deployed by hand, the owner provisions the
+  // Discord application and its secrets), so neither has a job of `release.yml`'s.
+  {
+    match: ["infrastructure/discord-worker/*", "infrastructure/bot-device/*"],
+    jobs: ["frontend"],
+  },
+
   // The one tool that deploys the hosting Worker, pinned with everything under it, in a folder
   // of its own that the workspace does not list. `release-rule.test.ts` reads its manifest and
   // lockfile (`frontend`), and the `web` job installs from them, with npm, for the sync smoke.

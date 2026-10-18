@@ -248,6 +248,8 @@ describe("the workspace's packages", () => {
       "/apps/light/ @grimoire/light",
       "/apps/share/ @grimoire/share",
       "/infrastructure/app-worker/ @grimoire/app-worker",
+      "/infrastructure/bot-device/ @grimoire/bot-device",
+      "/infrastructure/discord-worker/ @grimoire/discord-worker",
       "/infrastructure/relay/ @grimoire/relay",
       "/infrastructure/scan-worker/ @grimoire/scan-worker",
       "/infrastructure/share-worker/ @grimoire/share-worker",
@@ -287,6 +289,13 @@ describe("the workspace's packages", () => {
       // supporter's device, and checks the token the way the share Worker does
       // (`scan-worker/src/auth.ts`).
       "@grimoire/scan-worker": ["@grimoire/relay"],
+      // The Discord front imports nothing of another package's: its D1 is SQLite in the suite,
+      // and the bot's engine is the other script's.
+      "@grimoire/discord-worker": [],
+      // The bot device's Durable Object, checked against the front's RPC types and nothing else
+      // of it (`discord-worker/src/rpc.ts`, imported with `import type`), and the shared UI for
+      // the export writer alone, which writes a posted `/deck` exactly as the Export dialog does.
+      "@grimoire/bot-device": ["@grimoire/discord-worker", "@grimoire/ui"],
       "@grimoire/scripts": [],
     });
     // The shared UI reaches the fake from its tests and stories only.

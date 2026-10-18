@@ -301,3 +301,21 @@ export function supporterState(status: SupporterStatus | null): SupporterState {
 
 /** Every row carrying a sentence for the reader — `ipc.syncReviewList`. */
 export const REVIEW_KEY: QueryKey = ["sync", "review"];
+
+/**
+ * The Discord integration's status — `ipc.discordStatus` (issue #1096, spec §13.6).
+ *
+ * **Every command of the integration answers a fresh status**, and the panel writes that answer
+ * back under this key rather than invalidating it, so a press draws its outcome without a second
+ * read.
+ *
+ * **Not under `SYNC_KEY`**, though what the integration enables is a device in the sync group:
+ * that root's invalidations follow every relay trip, and this one is answered from local rows and
+ * the gate. A leaf of `["discord"]` rather than the root itself, so the panel's link poll can sit
+ * beside it ({@link DISCORD_POLL_KEY}) without a write to the status re-running a claim.
+ */
+export const DISCORD_KEY: QueryKey = ["discord", "status"];
+
+/** The link poll's own key — `ipc.discordLinkPoll`, every two seconds while a sign-in stands
+ *  open. A leaf beside {@link DISCORD_KEY}, never under it. */
+export const DISCORD_POLL_KEY: QueryKey = ["discord", "poll"];

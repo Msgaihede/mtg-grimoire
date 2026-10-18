@@ -230,3 +230,141 @@ re-serialised. Its shape is §5's minus `sig` (the signature travels beside it):
 - a push from a member whose `cap` is not `full` is still stored (it may carry nothing a peer will apply, and every peer refuses it), but the relay keeps it under a per-device daily cap: `429 restricted_quota`.
 
 Outside signed mode the device binding stays warn-only. **The share Worker and the scan inbox refuse a token whose `cap` claim is present and not `full`** (`403 restricted_device`).
+
+## 13. PR 3's contract (2026-10-18)
+
+Four parts are built against this section in parallel: the bot runtime (`crates/grimoire-bot`,
+`infrastructure/bot-device`), the Discord front (`infrastructure/discord-worker`), the engine and
+desktop enable flow, and the page. Every part pins the names below.
+
+### 13.1 The two Workers
+
+- **`mtg-grimoire-discord`** (`infrastructure/discord-worker/`, `https://discord.mtg-grimoire.app`,
+  a Custom Domain, no `workers.dev`). It is internet-facing. It holds **no sync key**.
+  - Binds: D1 (the relay's database, migrations table `d1_migrations_discord`), the bot's Durable
+    Object namespace as `BOT`, and a rate limiter.
+  - Vars: `DISCORD_BASE`, `DISCORD_APPLICATION_ID` and `DISCORD_PUBLIC_KEY`, placeholders until the
+    owner fills them; the Worker answers 503 while they are placeholders.
+  - Secret: `DISCORD_CLIENT_SECRET`.
+- **`mtg-grimoire-bot-device`** (`infrastructure/bot-device/`). It has **no route and no
+  `workers.dev`**; only the front reaches it, through `BOT`.
+  - It exports the Durable Object class `BotDevice`, which uses SQLite storage
+    (`new_sqlite_classes`).
+  - Secrets: `BOT_KEK` (32 bytes, base64url) and `DISCORD_PUBLIC_KEY` as a var.
+  - It holds the bot's identity, the group key and the materialised database. Each Durable Object
+    is one link.
+
+### 13.2 Front ⇄ Durable Object (Workers RPC on the `BOT` stub)
+
+```ts
+interface BotDeviceRpc {
+  enroll(req: { invite: string; capability: "read" }): Promise<
+    | { ok: true; deviceId: string; x25519: string; ed25519: string } // base64url, no padding
+    | { ok: false; code: "already_enrolled" | "bad_invite" | "pairing_failed"; error: string }
+  >;
+  interaction(req: { body: string; signature: string; timestamp: string }): Promise<{
+    status: number;
+    contentType: string;
+    body: string;
+  }>; // the DO re-verifies Discord's signature over the raw body itself
+  status(): Promise<{
+    enrolled: boolean;
+    deviceId: string | null;
+    paired: boolean;
+    lastPullAt: number | null;
+    error: string | null;
+  }>;
+  unlink(): Promise<void>; // `ctx.storage.deleteAll()`; the identity is gone for good
+}
+```
+
+The Durable Object id is minted by the front with `BOT.newUniqueId()` when a link is first
+claimed, and stored on the link row.
+
+### 13.3 Desktop ⇄ front (HTTPS)
+
+| Route | Body | Answers |
+| --- | --- | --- |
+| `POST /link/begin` | `{ challenge }`, where `challenge` is the base64url SHA-256 of a verifier | 200 `{ code, authorizeUrl, expiresAt }` |
+| `GET /oauth/discord/callback` | Discord's `code` and `state` | an HTML page |
+| `POST /link/claim` | `{ code, verifier }` | 202 `{ status: "pending" }`; 200 `{ status: "linked", secret, discordUserId, username }`; 403 `link_mismatch`; 409 `link_denied`; 410 `link_expired` |
+| `POST /link/enroll` | Bearer secret; `{ invite, capability: "read" }` | 200 `{ deviceId, x25519, ed25519 }`; 409 `already_enrolled`; 422 `bad_invite`; 502 `pairing_failed` |
+| `GET /link` | Bearer secret | 200 `{ discordUserId, username, enrolled, deviceId, paired, lastPullAt }`; 401 `not_linked` |
+| `DELETE /link` | Bearer secret | 204. The front calls `unlink()`, then deletes the link row |
+
+- `invite` is exactly `pairing::Offer.code`, the text the joiner's `pairing::accept` takes.
+- `authorizeUrl` asks for `scope=identify applications.commands` with `integration_type=1` and
+  `state=<code>`.
+- The link secret is 32 random bytes, base64url; the front stores only its SHA-256.
+
+### 13.4 The pinned pairing (engine)
+
+1. The desktop runs `pairing::begin`, then `POST /link/enroll`. The bot's Durable Object runs
+   `pairing::accept(invite)`, which posts `join` and `joinsig`, and answers its three public values.
+2. The desktop polls as usual. When the joiner's response arrives,
+   `pairing::confirm_pinned(db, pending, Pinned { device_id, x25519, ed25519, capability: "read" })`
+   refuses unless the joiner's device id and both keys equal the pinned ones (`PIN_MISMATCH`).
+   Otherwise it confirms without six digits, posts `offer` and `offersig` (`mode: "signed"`), and
+   **enters signed mode**: it publishes the first signed RD at the new epoch E, signed by this
+   device, naming every member with their keys and proto, and the bot with `cap: "read"`.
+3. The bot completes as a joiner normally does, adopts the signed RD, and begins pulling.
+
+### 13.5 The gate (engine, asked before step 1)
+
+`integration::gate(conn)` answers `Ready` or one refusal sentence for each of these:
+- not in a group;
+- this device's membership is not entitled (supporter-only);
+- the relay has not advertised `sig: 1`;
+- no accepted RD yet;
+- a member without a signing key, or below `SIG_PROTO` 2, named;
+- five devices already in the group;
+- a restricted device already present.
+
+### 13.6 The desktop's commands and IPC mirror (`packages/ui/lib/ipc/discord.ts`)
+
+```rust
+#[serde(rename_all = "camelCase")]
+pub struct DiscordStatus {
+    pub linked: bool,
+    pub username: Option<String>,
+    pub discord_user_id: Option<String>,
+    pub linking: bool,
+    pub link_expires_at: Option<i64>,
+    pub enrolled: bool,
+    pub bot_device_id: Option<String>,
+    pub last_pull_at: Option<i64>,
+    pub gate: Option<String>, // `None` = ready to enable; `Some(sentence)` = why not
+}
+
+pub struct DiscordLinkStart {
+    pub authorize_url: String,
+    pub expires_at: i64,
+}
+```
+
+Commands:
+- `discord_status`: local, plus the gate.
+- `discord_link_begin`, then `discord_link_poll`: the PKCE poll, every two seconds from the page.
+- `discord_link_cancel`.
+- `discord_enable`: gate, `begin`, enroll, pinned confirm. It answers `DiscordStatus`.
+- `discord_disable`: `pairing::remove_device(bot)`, then `DELETE /link`, then forget locally.
+
+All of them are desktop-only. The base is `DISCORD_BASE = "https://discord.mtg-grimoire.app"`,
+with the `discord_url` override in `sync_state`.
+
+### 13.7 What the bot answers (read-only)
+
+| Command | Answered by | From |
+| --- | --- | --- |
+| `/card-search card` | the front itself, with no Durable Object | Scryfall `cards/named?fuzzy=`; autocomplete from `cards/autocomplete` |
+| `/collection search card`, `/wishlist search card` | the Durable Object | its own database: entries by card name, joined to its slim corpus |
+| `/deck deck [format]` | the Durable Object | the deck's cards, written by the TypeScript export writer in `plain` (with finish), `arena`, `mtgo` or `moxfield` |
+
+- **Freshness.** The Durable Object answers from what it holds. When its last pull is over two
+  minutes old it pulls in an alarm, never inside an interaction.
+- **Slim corpus.** Printings its rows reference and it lacks are fetched from Scryfall's
+  `/cards/collection` in batches of 75. It keeps the name, set, collector number, finishes,
+  normal image URI, type line and USD price.
+- **Not linked.** A reader with no link gets an ephemeral sentence pointing to Settings →
+  Integrations.
+- **No adds.** `/collection add` and `/wishlist add` are not registered until PR 4.

@@ -103,6 +103,13 @@ it says `tags: ["autodocs"]`.
   state the app cannot be in. Nothing else about the world changes, which is the fault's whole
   point: no database write ever waits on a mirror write, so the story still edits decks and
   still shows every number it showed before. What is lost is a folder of text files.
+  **The five Discord faults stand the integration panel in each of its states** (issue #1096,
+  `applyDiscordFault`, written into the world rather than into a handler): `discordLinking` is a
+  sign-in left open whose claim never approves, `discordLinked` is linked with the gate ready,
+  `discordGate` is linked with the gate refusing in `DISCORD_GATE_SENTENCE` (a copy of the
+  engine's `GROUP_FULL`), `discordEnrolled` has the bot in the group, and `discordUnreachable`
+  has `discord_link_begin` and `discord_enable` refuse. With none of them the fake approves a
+  sign-in on its second `discord_link_poll`, so a story can walk the whole sign-in by pressing.
   **`artTagsMissing` and `artTagsFetchError` are the Oracle pair below, one dataset over**, and
   they are two more faults rather than a reuse of those two because the taxonomies are two files
   on two schedules: either can be absent, or failing, while the other is fine, and the Tags page

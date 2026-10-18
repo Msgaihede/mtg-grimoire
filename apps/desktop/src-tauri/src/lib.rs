@@ -102,6 +102,9 @@ pub mod deckpane;
 /// `deck_undo` and `errors` is where the next person looking for the deck gallery's settings
 /// will look.
 pub mod decksort;
+/// **Settings → Integrations → Discord**: the account link and the bot switched on and off as a
+/// restricted device in the reader's sync group (the Discord spec's §13.6).
+pub mod discord;
 /// **The error log**: what failed, when, how often. `grimoire-core`'s, re-exported — whole
 /// since the I/O step, when `kind_of` followed `scryfall` there.
 pub use grimoire_core::errors;

@@ -32,20 +32,21 @@ const box = () => screen.getByRole("searchbox", { name: "Search settings" });
 
 describe("SettingsNav", () => {
   /**
-   * The seven entries, in the order `nav.ts` declares them.
+   * The rail's entries, in the order `nav.ts` declares them.
    *
    * **The expected labels are written out rather than derived from `GROUP_ORDER`**, which is the
    * whole of what makes this test able to fail: an assertion that maps the same constant the
    * component maps passes over a rail rendered backwards, sorted alphabetically, or drawn from a
-   * different module entirely. Seven literals in a fixed order cannot agree with a bug.
+   * different module entirely. Literals in a fixed order cannot agree with a bug.
    */
-  it("draws the seven groups in the rail's own order", () => {
+  it("draws every group in the rail's own order", () => {
     setup();
 
     expect(entries().map((entry) => entry.textContent)).toEqual([
       "Updates",
       "Card data",
       "Sync",
+      "Integrations",
       "Tags",
       "Appearance",
       "Storage and data",

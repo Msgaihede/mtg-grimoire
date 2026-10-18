@@ -13,7 +13,7 @@
       <img src="/mtg-grimoire-mark.svg" alt="" />
       <h1>MTG Grimoire privacy policy</h1>
     </header>
-    <p class="dated">Effective 11 October 2026. This covers the MTG Grimoire apps for Android, for the web at mtg-grimoire.app, and for Windows and Linux.</p>
+    <p class="dated">Effective 18 October 2026. This covers the MTG Grimoire apps for Android, for the web at mtg-grimoire.app, and for Windows and Linux.</p>
 
     <p>MTG Grimoire is made by Markus Seerup. It is a tool for keeping track of a Magic: The Gathering collection. It has no accounts, shows no advertising, and contains no analytics, tracking or crash-reporting code.</p>
 
@@ -37,6 +37,7 @@
         <tr><td>relay.mtg-grimoire.app</td><td>Sync between your devices, described below — only while you pair a device, and from then on</td></tr>
         <tr><td>mtg-grimoire-relay.denmark-east.workers.dev</td><td>The same sync relay at its earlier address, which versions of the app up to 0.44.0 ask instead</td></tr>
         <tr><td>github.com</td><td>The card scanner's files, about 18 MB — only when you press the scanner's Download, and only in the Android app. GitHub hands the download on to its own file servers</td></tr>
+        <tr><td>discord.mtg-grimoire.app</td><td>The Discord integration, described below — only from the desktop apps, and only once you switch it on in Settings</td></tr>
         <tr><td>scans.mtg-grimoire.app</td><td>A scan from the card scanner — the last couple of seconds of its camera pictures — and the card you say it shows, described below — only when you press the scanner's Send, which the app offers only where a membership is connected to your sync group</td></tr>
       </tbody>
     </table>
@@ -77,10 +78,17 @@
     <h2>Sharing a collection</h2>
     <p>The desktop app can publish a read-only snapshot of a collection folder to a link. A published snapshot is stored on Cloudflare, readable by anyone who has the link, and contains the title and name you typed, the names of the folder and its sub-folders, the cards and their values, and their condition and language if you chose to include them. It never contains purchase prices, acquisition dates or private notes. It stays until you withdraw it from the app, and its link stops working if the membership it was published under ends. After you withdraw it, a record that it existed stays, with the title and the name you typed. The Android app and the web app cannot publish.</p>
 
+    <h2>The Discord integration</h2>
+    <p>The desktop apps can let you look up your cards from Discord, with slash commands that work in any server or chat. It is off until you switch it on in Settings, under Integrations, and it is offered only where a Patreon membership is connected to your sync group. The Android app and the web app do not have it.</p>
+    <p>Switching it on opens Discord's own sign-in page in your browser, where you approve MTG Grimoire; the app never sees your Discord password. The integration's service, which MTG Grimoire runs on Cloudflare at discord.mtg-grimoire.app, then keeps your Discord user id and your Discord user name, and a one-way check value of a random secret your desktop app holds, so that only that app can change the link.</p>
+    <p>Signing in shares nothing else. The next step is a separate choice, and the app asks you to confirm it: it adds a read-only device, run by MTG Grimoire on Cloudflare, to your sync group. Like any device in the group it holds the group's key, so — unlike the relay, which stores only what it cannot read — it holds a copy it can decrypt of everything that syncs: your collection, your wishlist and your decks, including your notes on them and the prices you paid. It uses that copy only to answer the commands you send it from Discord. When you use a command, Discord sends it to the service with your Discord user id, and the answer goes back to Discord to be shown where you typed it. The device cannot change anything in your group, and it takes one of the group's five device places.</p>
+    <p>Switching the integration off removes that device from your sync group, which changes the group's key so that it can read nothing synced afterwards, and deletes its copy, and deletes the link with your Discord id and name. Removing MTG Grimoire from your Discord account is done in Discord, under User Settings, then Authorized Apps.</p>
+
     <h2>Removing your data</h2>
     <ul>
       <li>Everything on a phone is removed by uninstalling the app; in a browser, by clearing the site's data; on a computer, by deleting the app's data folder. Settings also has a reset.</li>
       <li>A device leaves a sync group from Settings, under Sync; any device in the group can remove another. Removing a device stops it receiving anything new.</li>
+      <li>Switching off the Discord integration, in Settings under Integrations, removes its device from your sync group and deletes its copy of your cards, and your Discord id and name. To remove MTG Grimoire from your Discord account, use Discord's User Settings, then Authorized Apps.</li>
       <li>To have a scan you sent deleted, write to the address below with the reference the app showed when it was sent. Nothing stored with a scan says who sent it, so the reference is the only way it can be found.</li>
       <li>To have a group's records, a membership's record or a shared snapshot deleted from the relay, write to the address below and include the device identifier shown in Settings, under Sync — the line of letters and digits beneath this device's name. It is how the right records are found.</li>
     </ul>

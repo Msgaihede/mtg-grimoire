@@ -1,8 +1,11 @@
 name: CI
 
 on:
+  # `integrations/**` too: a long-lived integration branch (`integrations/discord`, the owner's
+  # decision of 2026-10-18) takes its feature PRs before it reaches `main`, and each of them is
+  # owed the same gate. Pushes still run on `main` alone.
   pull_request:
-    branches: [main]
+    branches: [main, "integrations/**"]
   push:
     branches: [main]
 

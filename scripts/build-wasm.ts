@@ -6,11 +6,19 @@
 //   node scripts/build-wasm.ts --names          the same, keeping every function's name
 //   node scripts/build-wasm.ts --only engine    the engine's module alone
 //   node scripts/build-wasm.ts --only scanner   the scanner's module alone
+//   node scripts/build-wasm.ts --only bot       the Discord bot device's module, and only so
 //
 // | Module | Package | Leaves |
 // | --- | --- | --- |
 // | the engine | `grimoire-web` | `dist-wasm/grimoire_web.js`, `grimoire_web_bg.wasm`, their `.d.ts` |
 // | the scanner | `grimoire-scan` | `dist-wasm/scanner/grimoire_scan.js`, `grimoire_scan_bg.wasm`, their `.d.ts` |
+// | the bot device | `grimoire-bot` | `dist-wasm/bot/grimoire_bot.js`, `grimoire_bot_bg.wasm`, their `.d.ts` |
+//
+// **The bot's module is not a page's and is built only when `--only bot` names it**: a run with
+// no `--only` builds the web app's two, as it always has. It is the engine again — SQLite and the
+// core — for workerd, where `infrastructure/bot-device/` imports it (the Discord spec's PR 3); its
+// size is held against Workers' script limit (`BOT_CEILING_BYTES`), measured compressed, the way
+// Cloudflare counts it.
 //
 // It prints each module's size in bytes and how long its build took. `--only` rebuilds one and
 // leaves the other's files where they were.
@@ -85,9 +93,10 @@
 // No `wasm-opt` and no `wasm-pack`: neither is required, and neither is on the machines that
 // build this.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TARGET = "wasm32-unknown-unknown";
@@ -105,12 +114,14 @@ const SIMD = "simd128";
  * `rustc` is told to turn on; `clang` is whether anything in its graph compiles C.
  */
 const MODULES: Record<
-  "engine" | "scanner",
+  "engine" | "scanner" | "bot",
   {
     package: string;
     module: string;
     out: string;
     exports: string[];
+    /** A `#[wasm_bindgen]` class the script constructs, and the methods it calls on one. */
+    classes?: Record<string, string[]>;
     glue: string;
     tree: string | null;
     features: string[];
@@ -137,7 +148,41 @@ const MODULES: Record<
     features: [SIMD],
     clang: false,
   },
+  bot: {
+    package: "grimoire-bot",
+    module: "grimoire_bot",
+    out: join(OUT, "bot"),
+    exports: [],
+    classes: {
+      Bot: [
+        "open",
+        "enroll",
+        "advance",
+        "status",
+        "collection_by_name",
+        "wishlist_by_name",
+        "names",
+        "decks",
+        "deck_cards",
+        "close",
+      ],
+    },
+    glue: "crates/grimoire-bot/src/glue.rs",
+    tree: null,
+    features: [],
+    clang: true,
+  },
 };
+
+/** The modules a run with no `--only` builds: the web app's. The bot's is asked for by name. */
+const DEFAULT_MODULES: (keyof typeof MODULES)[] = ["engine", "scanner"];
+
+/**
+ * **The most the bot's module may be, gzipped: 3 000 000 bytes** — Cloudflare's script limit on
+ * the Workers Free plan, which counts the upload compressed (10 MB on Paid). The module is the
+ * whole of the script that matters; the Durable Object's own JavaScript is kilobytes.
+ */
+const BOT_CEILING_GZIP_BYTES = 3_000_000;
 
 /** Keep the `name` section: a readable wasm stack, for somebody chasing a trap. */
 const KEEP_NAMES = process.argv.includes("--names");
@@ -191,7 +236,7 @@ function refuse(message: string): never {
 /** Which modules this run builds: both, or the one `--only` names. */
 function asked(): (keyof typeof MODULES)[] {
   const at = process.argv.indexOf("--only");
-  if (at === -1) return Object.keys(MODULES) as (keyof typeof MODULES)[];
+  if (at === -1) return DEFAULT_MODULES;
   const name = process.argv[at + 1];
   if (name === undefined || !Object.hasOwn(MODULES, name)) {
     refuse(`--only takes one of: ${Object.keys(MODULES).join(", ")}.`);
@@ -391,7 +436,16 @@ const { target_directory: TARGET_DIR, build_directory: BUILD_DIR = TARGET_DIR } 
 
 /** Build one module, run `wasm-bindgen` over it, hold it to its gates and print its size. */
 function build(name: keyof typeof MODULES) {
-  const { package: pkg, module, out, exports, glue: written, tree, features } = MODULES[name];
+  const {
+    package: pkg,
+    module,
+    out,
+    exports,
+    classes = {},
+    glue: written,
+    tree,
+    features,
+  } = MODULES[name];
   const started = performance.now();
   const target = tree === null ? TARGET_DIR : join(TARGET_DIR, tree);
   // A tree of its own takes its intermediates with it (the header says why `--target-dir`
@@ -442,6 +496,18 @@ function build(name: keyof typeof MODULES) {
   const missing = exports.filter(
     (fn) => !new RegExp(`^export (async )?function ${fn}\\b`, "m").test(source),
   );
+  for (const [cls, methods] of Object.entries(classes)) {
+    const body = new RegExp(`^export class ${cls}\\b[\\s\\S]*?^}`, "m").exec(source)?.[0];
+    if (body === undefined) {
+      missing.push(`class ${cls}`);
+      continue;
+    }
+    for (const method of methods) {
+      if (!new RegExp(`^\\s+(static )?${method}\\(`, "m").test(body)) {
+        missing.push(`${cls}.${method}`);
+      }
+    }
+  }
   if (missing.length > 0) {
     refuse(
       `${glue} does not export: ${missing.join(", ")}.\n` +
@@ -479,17 +545,33 @@ function build(name: keyof typeof MODULES) {
     );
   }
 
+  // Workers count a script compressed; the bot's is held to the Free plan's limit.
+  const gzip = gzipSync(readFileSync(wasm), { level: 9 }).length;
+  if (name === "bot" && gzip > BOT_CEILING_GZIP_BYTES) {
+    refuse(
+      `${wasm} is ${gzip} bytes through gzip -9, over the bot module's ceiling of\n` +
+        `${BOT_CEILING_GZIP_BYTES} — the Workers Free plan's script limit. Read what grew\n` +
+        "(`--only bot --names`) before raising it; the Paid plan's limit is 10 MB.",
+    );
+  }
+
   const seconds = ((performance.now() - started) / 1000).toFixed(1);
   console.log(
     `build-wasm: ${wasm} is ${statSync(wasm).size} bytes ` +
       `(profile \`${PROFILE}\`, ${simd ? "with" : "without"} \`${SIMD}\`, ` +
       `${KEEP_NAMES ? "function names kept" : "no function names"}, no wasm-opt` +
-      `${name === "engine" && !KEEP_NAMES ? `, ${ENGINE_CEILING_BYTES - size} under its ceiling` : ""}), ` +
-      `exporting ${exports.join(", ")}; built in ${seconds} s`,
+      `${name === "engine" && !KEEP_NAMES ? `, ${ENGINE_CEILING_BYTES - size} under its ceiling` : ""}` +
+      `; ${gzip} bytes through gzip -9), ` +
+      `exporting ${[...exports, ...Object.keys(classes)].join(", ")}; built in ${seconds} s`,
   );
 }
 
 // A run of both starts from an empty folder, so a file a module has stopped writing does not
 // outlive it; a run of one leaves the other's files alone.
-if (BUILDING.length === Object.keys(MODULES).length) rmSync(OUT, { recursive: true, force: true });
+// The bot's folder is left alone by that: it is not one of a page's modules.
+if (BUILDING === DEFAULT_MODULES && existsSync(OUT)) {
+  for (const entry of readdirSync(OUT)) {
+    if (entry !== "bot") rmSync(join(OUT, entry), { recursive: true, force: true });
+  }
+}
 for (const name of BUILDING) build(name);

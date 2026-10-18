@@ -30,7 +30,7 @@ on:
   # merges — the PR that added this workflow among them. Not a required check: `ci-ok` is the gate,
   # and an emulator's figures inform a review rather than decide one.
   pull_request:
-    branches: [main]
+    branches: [main, "integrations/**"]
     paths:
       - "apps/light/src-tauri/**"
       - "crates/grimoire-core/**"

@@ -21,6 +21,8 @@ const TS_TESTS = import.meta.glob<string>(
     "/infrastructure/share-worker/src/**/*.test.ts",
     "/infrastructure/app-worker/src/**/*.test.ts",
     "/infrastructure/scan-worker/src/**/*.test.ts",
+    "/infrastructure/discord-worker/src/**/*.test.ts",
+    "/infrastructure/bot-device/src/**/*.test.ts",
     "/apps/share/**/*.test.{ts,tsx}",
     "/apps/light/**/*.test.{ts,tsx}",
     "/scripts/**/*.test.ts",
@@ -321,6 +323,17 @@ describe("the arms", () => {
     ["infrastructure/scan-worker/package.json", T, F, F, F, F, F, F],
     ["infrastructure/scan-worker/README.md", F, F, F, F, F, F, F],
     ["infrastructure/scan-worker/tsconfig.json", T, F, F, F, T, F, T],
+    // The Discord integration's two Workers: checked, linted and tested by `frontend`, used by
+    // no build and deployed by no workflow. Their `tsc` programs are the glob's.
+    ["infrastructure/discord-worker/wrangler.jsonc", T, F, F, F, F, F, F],
+    ["infrastructure/discord-worker/src/index.ts", T, F, F, F, F, F, F],
+    ["infrastructure/discord-worker/migrations/0001_discord-links.sql", T, F, F, F, F, F, F],
+    ["infrastructure/discord-worker/package.json", T, F, F, F, F, F, F],
+    ["infrastructure/discord-worker/README.md", F, F, F, F, F, F, F],
+    ["infrastructure/discord-worker/tsconfig.json", T, F, F, F, T, F, T],
+    ["infrastructure/bot-device/wrangler.jsonc", T, F, F, F, F, F, F],
+    ["infrastructure/bot-device/src/index.ts", T, F, F, F, F, F, F],
+    ["infrastructure/bot-device/tsconfig.json", T, F, F, F, T, F, T],
     ["some/new/thing.txt", T, T, T, F, T, F, T],
     // The light app: its host, built into an APK, and its pages, which no Rust job reads — and
     // which are the web build's own page, where the phone's host is nothing to a browser.

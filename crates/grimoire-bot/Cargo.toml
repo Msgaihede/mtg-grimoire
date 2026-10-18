@@ -1,0 +1,70 @@
+[package]
+name = "grimoire-bot"
+# **The app's version**, as every workspace member's is: inherited from `[workspace.package]` in
+# the root manifest, which is the one release-please writes. The bot device ships from the same tag
+# as the engine it links, so one schema version is both.
+version.workspace = true
+description = "MTG Grimoire's Discord bot device: grimoire-core over an encrypted page store, for a Durable Object"
+authors = ["Markus Seerup"]
+license.workspace = true
+edition.workspace = true
+publish = false
+
+# **The Discord bot as a restricted sync device** (the Discord spec,
+# `docs/superpowers/specs/2026-10-17-discord-integration-design.md` §9 and §13): `grimoire-core`
+# compiled to WASM for **workerd**, loaded by the `BotDevice` Durable Object in
+# `infrastructure/bot-device/`. It holds the bot's identity and the group key, materialises the
+# group's data with the core's own sync client, and answers narrow read queries the Durable
+# Object's JavaScript renders into Discord messages.
+#
+# **The storage is a SQLite VFS of this crate's own** (`src/vfs.rs`): pages of the two database
+# files kept in the Durable Object's synchronous SQL storage, each sealed with XChaCha20-Poly1305
+# under a key derived from the `BOT_KEK` secret. No OPFS (workerd has none), and no in-memory
+# database (an isolate has 128 MB).
+#
+# **It builds natively as nearly nothing but its decisions**, as the web host does: only the
+# `#[wasm_bindgen]` shell (`src/glue.rs`) is gated to the target, so the VFS (over an in-memory
+# page store), the queries, the corpus fill and the enrolment state machine are compiled and
+# tested on a desktop.
+
+[lib]
+name = "grimoire_bot"
+# `cdylib` is the `.wasm` `wasm-bindgen` reads; `rlib` is what this crate's own tests link.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# **Never with its `testing` feature** — the core's manifest says why.
+grimoire-core = { path = "../grimoire-core" }
+# The VFS traits the browser's OPFS pool is built on (`sqlite-wasm-vfs` sits on the same crate),
+# so this VFS registers the way `grimoire-web` registers its pool. `no_std`, and its four `extern`
+# SQLite symbols resolve to whatever SQLite the build links: `sqlite-wasm-rs` on wasm32, the
+# bundled `libsqlite3-sys` natively — which is what lets this crate's tests run the VFS for real.
+rsqlite-vfs = "0.1"
+# The core's AEAD and KDF, at the core's versions, for the core's reasons (one `digest 0.10`
+# stack; no `getrandom 0.2`).
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+hkdf = "0.12"
+sha2 = "0.10"
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
+getrandom = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# The core's own SQLite lines, per target — see `crates/grimoire-core/Cargo.toml`.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+rusqlite = { version = "0.40", features = ["bundled", "hooks"] }
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+# ⚠️ Never `default-features = false` — the core's manifest says why.
+rusqlite = { version = "0.40", features = ["hooks"] }
+getrandom = { version = "0.4", features = ["wasm_js"] }
+# The root lockfile's, which is the version of the CLI `scripts/build-wasm.ts` insists on.
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+console_error_panic_hook = "0.1"
+
+[dev-dependencies]
+grimoire-core = { path = "../grimoire-core", features = ["testing"] }
+tokio = { version = "1", features = ["macros", "rt", "time"] }
+httpmock = "0.8"
