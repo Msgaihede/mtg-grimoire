@@ -67,6 +67,8 @@ fn now() -> i64 {
 /// and `device_names` are `WITHOUT ROWID` (`crate::changes::MARKED_BY_COMMAND`'s reason), the
 /// group and its state too.
 fn mark(state: &AppState) {
+    // `collection_folders` is a rowid table, so the hook already sees the folder a switch-on
+    // makes; it is not marked here.
     for table in ["sync_devices", "device_names", "sync_group", "sync_state"] {
         state.changes.mark_table(table);
     }
@@ -140,9 +142,9 @@ pub async fn discord_link_cancel(
     .map_err(|e| format!("could not cancel the Discord link: {e}"))?
 }
 
-/// **Switch Discord on**: the gate, `pairing::begin_integration`, `POST /link/enroll`, the wait
-/// for the bot's join, `pairing::confirm_pinned` — see [`flow::enable`]. Under a press's lane for
-/// the whole of it, on a worker.
+/// **Switch Discord on**: the gate, the *Added from Discord* folder, `pairing::begin_integration`,
+/// `POST /link/enroll`, the wait for the bot's join, `pairing::confirm_pinned` as `add` — see
+/// [`flow::enable`]. Under a press's lane for the whole of it, on a worker.
 #[tauri::command]
 pub async fn discord_enable(
     state: tauri::State<'_, Arc<AppState>>,

@@ -634,7 +634,7 @@ fn an_amendment_adds_this_device_and_is_owed_only_once() {
     let mine = first
         .member(&me.device_id)
         .expect("this device names itself");
-    assert_eq!(mine.proto, identity::SIG_PROTO);
+    assert_eq!(mine.proto, identity::PROTO);
     assert_eq!(
         mine.ed25519.as_deref().and_then(key32),
         Some(identity::signing_key(&conn).unwrap().unwrap().public)
@@ -680,6 +680,56 @@ fn an_amendment_adds_this_device_and_is_owed_only_once() {
     // A relay whose newest this device could not take: nothing is built on it.
     note_relay(&conn, true, Some("{\"v\":1}")).unwrap();
     assert_eq!(amendment(&conn).unwrap(), None);
+}
+
+/// ⚠ **A level that rose is an amendment owed** (the spec's §14.1): the newest document names this
+/// device with these very keys at `SIG_PROTO` 2 — what a build before PR 4 published — and the
+/// amendment brings its entry to this build's `PROTO`, touching nobody else's; once that is the
+/// newest, nothing more is owed.
+#[test]
+fn a_level_that_rose_is_amended_without_a_rotation() {
+    let (conn, me, group) = device();
+    let signing = identity::signing_key(&conn).unwrap().unwrap();
+    let at_two = Member {
+        device: me.device_id.clone(),
+        x25519: key_text(&me.keypair.public),
+        ed25519: Some(key_text(&signing.public)),
+        cap: FULL.into(),
+        proto: identity::SIG_PROTO,
+        since: 0,
+    };
+    let older = Roster {
+        v: VERSION,
+        group: group.group_id.clone(),
+        epoch: group.epoch,
+        step: 0,
+        prev: None,
+        mode: Mode::Open,
+        signer: me.device_id.clone(),
+        members: vec![at_two, member("dev-b", 2, None, FULL, 2, 0)],
+    };
+    let older_text = to_text(&older);
+    accept(&conn, &older_text, &older, false).unwrap();
+    note_relay(&conn, true, Some(&older_text)).unwrap();
+
+    let (_, text, _) = amendment(&conn)
+        .unwrap()
+        .expect("a level below this build's is owed an amendment");
+    let amended = parse(&text).unwrap();
+    assert_eq!((amended.epoch, amended.step), (group.epoch, 1));
+    let mine = amended.member(&me.device_id).unwrap();
+    assert_eq!(mine.proto, identity::PROTO);
+    assert_eq!(
+        mine.ed25519, older.members[0].ed25519,
+        "the keys did not move"
+    );
+    assert_eq!(
+        amended.members[1], older.members[1],
+        "nobody else's entry moved"
+    );
+
+    accept_own(&conn, &text).unwrap();
+    assert_eq!(amendment(&conn).unwrap(), None, "nothing is owed twice");
 }
 
 /// **An open document names full members only** — the relay's rule (`400 malformed_roster`),

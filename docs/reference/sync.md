@@ -365,7 +365,8 @@ keeps it, so a restored `user.db` signs as the device it was. An archive restore
 (`archive::replace`) treats it as it treats the X25519 secret: archives carry no `sync_` table,
 the restore empties `sync_devices` and leaves `sync_identity` alone, and so does leaving a group.
 A peer's key sits on its roster row, `sync_devices.sign_public`, beside its `capability` (`NULL`
-is a full member) and the `proto` level it advertised (`identity::SIG_PROTO` is this build's);
+is a full member) and the `proto` level it advertised (`identity::PROTO`, 3, is this build's —
+[The `add` capability](#the-add-capability-the-specs-pr-4) has the three levels);
 they are written through two verified channels and no other: a pairing's sealed `joinsig` and
 `offersig` slots (`identity::file_sign_key`, the key and the level only), and an accepted
 [roster document](#the-roster-document-the-discord-specs-pr-2) — the Discord spec's PR 2
@@ -3732,7 +3733,9 @@ amended by a current build is verified.
 (`roster::requires_signatures`, *The roster document* below) the unchecked arm is refused too —
 `WireError::Unverified`, no `sig` or no key on file, stepped over exactly like a forgery. **And
 whatever the mode, a restricted sender is refused unopened** (`WireError::Restricted`: a
-`sync_devices.capability` other than `full`, or a device in `restricted_ever`) — but *consumed*,
+`sync_devices.capability` other than `full`, or a device in `restricted_ever`) — **except an `add`
+member, whose envelope is opened and run through the allow-list
+([below](#the-add-capability-the-specs-pr-4))** — but *consumed*,
 not unreadable: one `error_log` row per sender per trip, the cursor passes it, nothing is held and
 no gap opens, so a `read` device's pushes can neither apply, nor pin the log, nor make every later
 emission read whole.
@@ -3870,7 +3873,8 @@ pressed it and publishes the group's first signed document. `roster::enter_signe
 `pub(crate)` and that is its one shipped caller. Every other device takes the *following* half — a
 verified signed document, by a full member it already trusts, latches it too — which is why
 `identity::SIG_PROTO` is **2, "verifies rosters"**, the level the integration's gate asks of every
-member.
+member — and since PR 4 it asks `identity::ADD_PROTO` 3 too ([The `add`
+capability](#the-add-capability-the-specs-pr-4)).
 
 ### The acceptance rule, and what is kept
 
@@ -3956,7 +3960,7 @@ restricted device's *Leave group* still leaves locally; it simply speaks for nob
   and its members, not the relay's `devices`, as the manifest. The catch-up walk passes an epoch only
   on a verified document at it.
 
-**Sealers are never restricted, in either mode** (`client::adopt_page`): a `read` bot holds an
+**Sealers are never restricted, in either mode** (`client::adopt_page`): an `add` bot holds an
 X25519 key on every roster, and trying it would let it choose the next epoch's key.
 
 ### The pairing slots
@@ -3973,7 +3977,10 @@ byte-identical to what they always were, and so are the six digits.
 - **The initiator** reads `joinsig` beside `join`, files the joiner's key and level before the join
   is published (so the join's document carries them), and **in signed mode refuses a joiner with no
   slot, or below `SIG_PROTO`**, before anything is sealed: `pairing::JOINER_TOO_OLD`. An open group
-  takes it as it always did.
+  takes it as it always did. **A group holding an `add` member** (on the roster or on the last
+  accepted document) also refuses a joiner below `ADD_PROTO`, `pairing::JOINER_TOO_OLD_FOR_ADDS`:
+  it would refuse every card Discord adds. A joiner of this build is never that device —
+  `PROTO >= ADD_PROTO` is a compile-time assertion in `pairing.rs`.
 - **The joiner learns the group's mode from `offersig`'s `mode`** (`"open"` or `"signed"`), which the
   six digits authenticated: `"signed"` latches it at the offered epoch, so its first document must
   be signed by the initiator, its one anchor. **With no `offersig`** it asks `/keys` quietly, with the
@@ -3984,8 +3991,8 @@ byte-identical to what they always were, and so are the six digits.
 
 ### The pinned pairing: a device paired without six digits (the spec's PR 3)
 
-The Discord bot is a device in the reader's group — a `read` member of its signed roster document
-(the spec's §13). It is paired by the ordinary ceremony with one step replaced: **the joiner's keys
+The Discord bot is a device in the reader's group — an `add` member of its signed roster document
+(the spec's §13 and §14; PR 3 paired it `read`, and no `read` bot was ever deployed). It is paired by the ordinary ceremony with one step replaced: **the joiner's keys
 arrive twice, over two independent channels, and are compared by the device instead of by a
 person.**
 
@@ -3993,7 +4000,9 @@ person.**
    for the first of — no group; no membership (`commands::entitled`); the relay's last `/keys`
    did not say `sig: 1`; no roster document accepted here, or none naming this device as full
    with its signing key at `SIG_PROTO`; a member — on that document **or** on this device's own
-   roster — with no signing key or below `SIG_PROTO` (*Update or remove "<name>" first*); five
+   roster — with no signing key or below `SIG_PROTO` (*Update or remove "<name>" first*); then a
+   member below `ADD_PROTO`, on either, the same way (`integration::update_or_remove_for_adds`,
+   *… cannot take cards added from Discord*); five
    devices already; a restricted device already listed, or once restricted and still listed. A
    database it cannot read is a refusal too. It exists because the latch is for good: a member
    that cannot verify a signature would go on taking rotations under the group key, which the bot
@@ -4009,18 +4018,20 @@ person.**
    public keys over TLS. The desktop polls the rendezvous as usual until `join` is there.
 4. **`pairing::confirm_pinned(db, pending, Pinned { device_id, x25519, ed25519, capability })`**:
    the joiner's id, its X25519 key and its `joinsig` Ed25519 key must each equal the pinned one,
-   or `PIN_MISMATCH` and nothing is posted or written; the capability must be `read`
-   (`PIN_NOT_RESTRICTED` — a full device is paired by digits) and the joiner at `SIG_PROTO`. Then
+   or `PIN_MISMATCH` and nothing is posted or written; the capability must be restricted — `add`,
+   which the desktop pins since PR 4, or `read` (`PIN_NOT_RESTRICTED` — a full device is paired by
+   digits) — and the joiner at `ADD_PROTO` for `add` (it applies its own adds by those rules) or
+   `SIG_PROTO` for `read` (`JOINER_TOO_OLD`). Then
    the cap, the seal at the current epoch, **`offersig` saying `signed`** (a relay that does not
    keep the slot is refused before `offer` goes, `NO_SIGNATURE_SLOTS`: the joiner's one anchor is
    this device's key in it), and `offer`. The commit, in one stretch: the bot on the roster under
    *Discord* (`rename_device`, so the name syncs through `device_names` — the bot's own name never
-   applies anywhere), its signing key and level, `capability = 'read'` and `restricted_ever`
+   applies anywhere), its signing key and level, `capability = 'add'` and `restricted_ever`
    (`roster::restrict`), and **this device latched**: `roster_mode = signed`, `signed_since = E`,
    the epoch the join publishes.
 5. **The join's rotation** (`client::publish_join`, unchanged) is now built in signed mode: the
    group's first signed document at `E`, step 0, signed by this device, `prev` the open document
-   the relay last answered, every member with keys and level, the bot `cap: "read"`. A refusal is
+   the relay last answered, every member with keys and level, the bot `cap: "add"`. A refusal is
    the ordinary join debt (`roster_dirty`, `PinnedJoin::published == false`), and the next sync
    pays it — signed, because the latch is already held.
 
@@ -4028,17 +4039,99 @@ person.**
 key it can compute the open-mode MAC, so an open document is no longer a full device's word.
 
 **What follows on the others.** The bot, latched by `offersig` at the offered epoch, takes the
-signed document on its one anchor (the initiator's slot key), learns its own `read` capability
+signed document on its one anchor (the initiator's slot key), learns its own `add` capability
 from it, and adopts `E` with the document's full members as the only sealers. Every full device
 verifies it against the open document it last accepted — the signer a full member there, `prev`
-its hash — follows the latch, files the bot as `read`, and from then on refuses the bot's
-envelopes unopened (`WireError::Restricted`). `integration::tests` drives all of it against a
+its hash — follows the latch, files the bot as `add`, and from then on takes from the bot exactly
+what [the `add` capability](#the-add-capability-the-specs-pr-4) allows. `integration::tests` drives all of it against a
 relay that keeps state: a desk and a phone paired by digits, the bot by pins, the phone refusing
 an envelope the bot signed.
 
 **Removing the bot is an ordinary removal** (`pairing::remove_device`), and in signed mode its
 rotation carries a signed document that omits the bot; the bot stays in `restricted_ever` and the
 group stays signed — the latch has no way back. A later link pairs a new bot under a new device id.
+
+### The `add` capability (the spec's PR 4)
+
+Since PR 4 ([the spec](../superpowers/specs/2026-10-17-discord-integration-design.md) §14) the
+desktop pairs the Discord bot as **`roster::ADD = "add"`**: it reads the group like any device and
+may add cards to the collection and the wishlist, after the reader presses *Confirm* in Discord, and
+do nothing else. `read` stays a word every build understands — refuse everything — and nothing pairs
+with it. `Member::is_full` did not change: only `full` is full, so an `add` member is restricted in
+every rule PR 2 gave a restricted device — never a sealer, a planner, a signer of a document or a
+baseline's sender, a `cap` claim on its token, the relay's daily quota and its 64 KiB push bound
+(`413 restricted_too_large`), refused by the share Worker and the scan inbox.
+
+**Three protocol levels** (`identity`): `SIG_PROTO` 2 is the level that signs and verifies rosters;
+`ADD_PROTO` 3 is the level that understands the `add` rules; `PROTO` 3 is what this build
+advertises — in `joinsig`/`offersig`, and in its own entry of every document it publishes or amends
+(`roster::own_entry`). **A device whose own entry on the newest document is below `PROTO` amends
+itself again** (`roster::amendment` compares the level as well as the keys), so a group paired at 2
+reaches 3 without a rotation; in signed mode only a full device amends, as before. The gate refuses
+the switch-on while any member is below `ADD_PROTO`, and a group holding an `add` member takes no
+joiner below it (*The pairing slots* above). **Why both**: a device below 3 refuses every op an
+`add` member sends — safe, since any word but `full` is restricted to it — but it would never see the
+reader's adds, and the group would diverge.
+
+**What a receiver accepts** (§14.2). `client::open_checked` opens an `add` member's envelope like a
+full device's and asks more of it: a signature verified under its key on file, in every mode (an
+unchecked one is `WireError::Unverified`); the op binding (`at.device == envelope.device`) refused
+in every mode; then **the stateless allow-list**, `integration::add::allowed`, over every op. **One
+op off it refuses the whole envelope**: `WireError::NotAnAdd`, consumed and recorded once per sender
+like `WireError::Restricted` — never held, never a gap. The list, frozen:
+
+- `kind` is `Put`, stamped by the sender; no `baseline`, no `horizon`, no `emission`;
+- `table` is `collection_entries` or `wishlist_entries`;
+- `counters` is exactly `{"quantity": n}`, `1 ≤ n ≤ 99` (`MAX_QUANTITY`);
+- `fields` is a subset of the table's identity fields (none at all is an increment), each a
+  non-empty string — `collection_entries`: `card_id`, `set_code`, `collector_number`, `lang`,
+  `finish` (`nonfoil|foil|etched`); `wishlist_entries`: `oracle_id`, `card_id`, `set_code`,
+  `collector_number`, `lang`, `name`, `preferred_finish` (one of the three, or `null`);
+- `parents` is exactly `{"folder": …}` — a folder uid for a collection entry, a folder uid or `null`
+  (the wishlist's root) for a wishlist entry;
+- at most `ADD_OPS_PER_ENVELOPE` = 25 ops.
+
+**Widening the list is a new capability word and a new gate** (§7), never an edit: a device that
+holds this list refuses whatever a wider one lets through.
+
+**Then the stateful guards** (`sync_engine::apply`), for an op whose sender is restricted:
+
+- **A collection add files only into a `kind = 'user'` folder.** A deck's folder or *Recently
+  removed* refuses the op (`apply::NOT_A_USER_FOLDER`, one row per apply); the kind is read from the
+  folder's row here, or from the insert the same page carries — a kind never changes, so every
+  device answers alike. A folder this device does not hold yet waits like any missing parent and is
+  asked again when it arrives.
+- **A create on a known uid is applied as an increment** — the counter, and no field.
+- **A grain match takes only the counter**: a fresh uid that meets an existing row's grain adds its
+  quantity to that row and changes none of its fields. The grain of an add is matched with the
+  columns' own defaults for the terms it leaves out (condition, flags…), the row its insert would
+  build.
+- **Restricted ops lose every last-writer and add-wins contest against unrestricted ones**
+  (`merge::Ranks`, `fold_ranked`, `Memory::merge_ranked`): every comparison is over
+  `(unrestricted, stamp)`, so a full device's field beats a restricted one and a full device's
+  delete beats a restricted counter, whatever the stamps — **a bot add can never resurrect a row the
+  reader deleted, nor undo a reader's edit**, however far ahead its clock runs. Two restricted ops
+  about one row merge as usual (the counters summed). With no restricted device named the ranked
+  fold is the plain fold, to the bit. The set ranked down is `roster::restricted_devices` — every
+  device ever restricted, and every row whose word is not `full` — read once per apply.
+
+**What the bot emits** (§14.3, `integration::add`). The bot's capture stays off (a `TEMP` trigger,
+`add::CAPTURE_OFF`, installed by its host): its engine's own writes never become ops. **`emit` is
+the only thing that puts an op in its outbox** — it builds the one `Put` the allow-list accepts,
+refuses unless this device's own capability is `add` (`NOT_AN_ADD_MEMBER`), lets the insert past the
+trigger for exactly one statement (`sync_state` key `add::EMITTING`, set and cleared in its own
+savepoint), and applies the op here through `apply::apply_own`, the same guarded path a receiver
+takes, so the bot's own reads agree with every other device's. `client::push_restricted` seals,
+signs and pushes the oldest 25 pending ops as one envelope per call — never a baseline, a join's
+publish or an amendment; a `429 restricted_quota` is an answer, not a failure (the outbox is kept and
+`client::RESTRICTED_QUOTA_AT` set, which the bot reads to refuse the next proposal).
+
+**The folder.** A collection add with no folder named goes to **Added from Discord**
+(`add::ADDED_FROM_DISCORD`): `add::default_folder` finds the oldest top-level `user` folder of that
+name, in any case. **The bot never creates folders**: the desktop's switch-on calls
+`add::ensure_added_folder` inside its write, after the gate and before the enroll — a full device's
+write, captured like any folder a reader makes, so the bot's first pull already has it. It stays
+whatever the switch-on does next: it is the reader's folder.
 
 ---
 

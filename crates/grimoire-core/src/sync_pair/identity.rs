@@ -40,8 +40,9 @@ struct Stored {
     name: String,
 }
 
-/// The sync protocol level this build speaks: what `sync_devices.proto` records for a peer, and
-/// what the Discord spec's gate (§7) compares before a restricted device may join a group.
+/// The sync protocol levels — what `sync_devices.proto` records for a peer, and what the Discord
+/// spec's gate (§7) compares before a restricted device may join a group. This one is the level
+/// that signs; [`ADD_PROTO`] and [`PROTO`] follow it.
 ///
 /// **1 is signed envelopes, verified when present** (user schema v66): this build signs every
 /// envelope it pushes and checks a signature from any peer whose key it holds. A peer whose row
@@ -53,9 +54,24 @@ struct Stored {
 /// roster document ([`super::roster`]), follows a group into signed mode on a verified one,
 /// refuses a restricted device's ops and a sealer once restricted, and carries its signing key
 /// across a pairing (`joinsig`/`offersig`). It is the level PR 3's gate asks of **every** member
-/// before a restricted device may join, and this device writes it into its own entry of every
-/// document it publishes.
+/// before a restricted device may join. **It is the floor for signing, not what this build
+/// advertises** — that is [`PROTO`].
 pub const SIG_PROTO: i64 = 2;
+
+/// **3 understands the `add` capability** (the Discord spec's PR 4, §14): this build opens an
+/// `add` member's envelopes, runs the allow-list over them (`integration::add::allowed`), applies
+/// what passes under the restricted rank (`sync_engine::merge::Ranks`) and the stateful guards in
+/// `sync_engine::apply`. A device below it refuses every op an `add` member sends — safe, but it
+/// never sees the reader's adds — so the gate asks it of every member before Discord is paired as
+/// `add`, and a group holding an `add` member takes no joiner below it.
+pub const ADD_PROTO: i64 = 3;
+
+/// **The level this build advertises**: in its pairing slots (`joinsig`/`offersig`), in its own
+/// entry of every roster document it publishes or amends (`roster::own_entry`), and so on every
+/// peer's `sync_devices.proto` row for it. A device whose own entry on the group's newest document
+/// is below this amends itself again on its next trip (`roster::amendment` compares the level as
+/// well as the keys), so a group paired at 2 reaches 3 without a rotation.
+pub const PROTO: i64 = 3;
 
 /// The group this device is in, if it is in one.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,8 +108,9 @@ pub struct Device {
     /// **no `CHECK`**, so a newer build's word is stored rather than refused.
     #[serde(skip)]
     pub capability: Option<String>,
-    /// The [`SIG_PROTO`] the peer advertised when it was paired, `None` for a peer that never
-    /// said — a build from before the field.
+    /// The protocol level the peer advertised when it was paired, or on the newest roster
+    /// document that named it ([`PROTO`] for this build); `None` for a peer that never said — a
+    /// build from before the field.
     #[serde(skip)]
     pub proto: Option<i64>,
 }

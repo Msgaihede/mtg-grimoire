@@ -301,3 +301,116 @@ describe("every other command, for a linked reader", () => {
     expect(h.bots.calls).toEqual([]);
   });
 });
+
+describe("an add's options and buttons", () => {
+  const SOL_RING_SLD: typeof SOL_RING = {
+    ...SOL_RING,
+    id: "sld-sol",
+    set: "sld",
+    set_name: "Secret Lair Drop",
+    collector_number: "1512",
+  };
+  const typing = (command: string, focused: string, value: string, card = "Sol Ring") =>
+    slash(
+      command,
+      "add",
+      [
+        { name: "card", value: focused === "card" ? value : card, focused: focused === "card" },
+        ...(focused === "card" ? [] : [{ name: focused, value, focused: true }]),
+      ],
+      asUser(),
+      AUTOCOMPLETE,
+    );
+
+  it("completes the card from Scryfall here, for either list, linked or not, asking no bot", async () => {
+    h.env.DB = untouchable;
+    for (const command of ["collection", "wishlist"]) {
+      const asked = internet();
+      const answer = await ask(typing(command, "card", "ring"));
+      expect(await answer.json()).toEqual({
+        type: 8,
+        data: { choices: [{ name: "Sol Ring", value: "Sol Ring" }] },
+      });
+      expect(asked[0].url.href).toBe("https://api.scryfall.com/cards/autocomplete?q=ring");
+    }
+    expect(h.bots.calls).toEqual([]);
+  });
+
+  it("completes the set with the card's printings, one printing a choice, kept to what was typed", async () => {
+    h.env.DB = untouchable;
+    const asked = internet({ cards: [SOL_RING, SOL_RING_SLD, DELVER] });
+    const all = await ask(typing("collection", "set", ""));
+    expect(await all.json()).toEqual({
+      type: 8,
+      data: {
+        choices: [
+          { name: "Commander 2021 (C21) #263", value: "c21/263" },
+          { name: "Secret Lair Drop (SLD) #1512", value: "sld/1512" },
+        ],
+      },
+    });
+    expect(asked[0].url.pathname).toBe("/cards/search");
+    expect(asked[0].url.searchParams.get("q")).toBe('!"Sol Ring" unique:prints');
+    expect(asked[0].headers.get("user-agent")).toBe(USER_AGENT);
+    const narrowed = await ask(typing("wishlist", "set", "sld"));
+    expect(((await narrowed.json()) as { data: { choices: unknown[] } }).data.choices).toEqual([
+      { name: "Secret Lair Drop (SLD) #1512", value: "sld/1512" },
+    ]);
+    expect(h.bots.calls).toEqual([]);
+  });
+
+  it("offers no set before a card is named, or for a card Scryfall does not know", async () => {
+    internet();
+    for (const card of ["", "No Such Card"]) {
+      const answer = await ask(typing("collection", "set", "", card));
+      expect(await answer.json()).toEqual({ type: 8, data: { choices: [] } });
+    }
+  });
+
+  it("hands the folder's completion to the reader's Durable Object, which holds the folders", async () => {
+    await linked(h);
+    const asked = internet();
+    h.bots.answers.interaction = {
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ type: 8, data: { choices: [{ name: "Binder", value: "uid-1" }] } }),
+    };
+    const answer = await ask(typing("collection", "folder", "bin"));
+    expect(await answer.json()).toEqual({
+      type: 8,
+      data: { choices: [{ name: "Binder", value: "uid-1" }] },
+    });
+    expect(h.bots.calls.map(({ method }) => method)).toEqual(["interaction"]);
+    expect(asked).toEqual([]);
+  });
+
+  it("hands the add itself, and a press on its buttons, to the Durable Object", async () => {
+    await linked(h);
+    await ask(slash("collection", "add", [{ name: "card", value: "Sol Ring" }]));
+    await ask({
+      type: 3,
+      id: "300000000000000002",
+      application_id: "100000000000000001",
+      token: "an-interaction-token",
+      data: { custom_id: "add:confirm:abc", component_type: 2 },
+      ...asUser(),
+    });
+    expect(
+      h.bots.calls.map(
+        ({ method, arg }) => `${method} ${JSON.parse((arg as { body: string }).body).type}`,
+      ),
+    ).toEqual(["interaction 2", "interaction 3"]);
+  });
+
+  it("tells a reader with no link where the switch is, when they add or press", async () => {
+    const answer = await ask(slash("wishlist", "add", [{ name: "card", value: "Sol Ring" }]));
+    expect(((await answer.json()) as { data: { content: string } }).data.content).toBe(NOT_LINKED);
+    const pressed = await ask({
+      type: 3,
+      data: { custom_id: "add:cancel:abc", component_type: 2 },
+      ...asUser(),
+    });
+    expect(((await pressed.json()) as { data: { content: string } }).data.content).toBe(NOT_LINKED);
+    expect(h.bots.calls).toEqual([]);
+  });
+});

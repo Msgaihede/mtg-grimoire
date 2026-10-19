@@ -129,7 +129,8 @@ pub mod index;
 /// given back between batches.
 pub mod ingest;
 /// **Integrations — a service paired into a reader's sync group as a restricted device** (the
-/// Discord spec): the gate asked before one may join. The pinned pairing is `sync_pair::pairing`'s.
+/// Discord spec): the gate asked before one may join, and `add` — what an `add` member may send,
+/// and the one op it writes per add. The pinned pairing is `sync_pair::pairing`'s.
 pub mod integration;
 /// **Opening the databases for a host that is not the desktop** — the steps `desktop::init_state`
 /// takes, less the two only the desktop has (the pre-27 conversion and the mirror's name): over a

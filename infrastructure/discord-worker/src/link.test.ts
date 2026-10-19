@@ -358,7 +358,7 @@ describe("the bearer routes", () => {
         const answer = await worker.fetch(
           desktop(method, path, {
             secret,
-            ...(method === "POST" ? jsonOf({ invite: INVITE, capability: "read" }) : {}),
+            ...(method === "POST" ? jsonOf({ invite: INVITE, capability: "add" }) : {}),
           }),
           h.env,
         );
@@ -375,7 +375,7 @@ describe("the bearer routes", () => {
 });
 
 describe("POST /link/enroll", () => {
-  const enroll = (h: Harness, body: unknown = { invite: INVITE, capability: "read" }) =>
+  const enroll = (h: Harness, body: unknown = { invite: INVITE, capability: "add" }) =>
     worker.fetch(desktop("POST", "/link/enroll", { secret: SECRET, ...jsonOf(body) }), h.env);
 
   it("hands the invite to the link's Durable Object and answers its three public values", async () => {
@@ -389,7 +389,7 @@ describe("POST /link/enroll", () => {
       ed25519: "e".repeat(43),
     });
     expect(h.bots.calls).toEqual([
-      { id: DO_ID, method: "enroll", arg: { invite: INVITE, capability: "read" } },
+      { id: DO_ID, method: "enroll", arg: { invite: INVITE, capability: "add" } },
     ]);
   });
 
@@ -417,17 +417,17 @@ describe("POST /link/enroll", () => {
     expect(await answer.json()).toMatchObject({ code: "pairing_failed" });
   });
 
-  it('refuses a body that is not { invite, capability: "read" }, before any Durable Object', async () => {
+  it('refuses a body that is not { invite, capability: "add" } — a read bot too — before any Durable Object', async () => {
     const h = harness();
     await linked(h);
     for (const body of [
       {},
       { invite: INVITE },
-      { invite: INVITE, capability: "add" },
+      { invite: INVITE, capability: "read" },
       { invite: INVITE, capability: "full" },
-      { invite: "", capability: "read" },
-      { invite: 7, capability: "read" },
-      { invite: "x".repeat(MAX_INVITE_CHARS + 1), capability: "read" },
+      { invite: "", capability: "add" },
+      { invite: 7, capability: "add" },
+      { invite: "x".repeat(MAX_INVITE_CHARS + 1), capability: "add" },
     ]) {
       const answer = await enroll(h, body);
       expect(answer.status, JSON.stringify(body).slice(0, 60)).toBe(400);

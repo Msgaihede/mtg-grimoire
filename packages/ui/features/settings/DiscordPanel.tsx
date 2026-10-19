@@ -15,20 +15,31 @@ import { PanelAlert, SettingsSection } from "./panelChrome";
 export const LINK_POLL_MS = 2_000;
 
 /**
+ * The folder a collection add lands in when none is named — `ADDED_FROM_DISCORD` in
+ * `crates/grimoire-core/src/integration/add.rs`, which the desktop makes on switch-on (spec
+ * §14.3, §14.5). Copied, not read: the panel only names it.
+ */
+export const ADDED_FROM_DISCORD = "Added from Discord";
+
+/**
  * What the reader can type in Discord once the bot is in their group, one line each — spec
- * §13.7, the read-only commands PR 3 registers. **Exported so the stories and the tests read the
- * list the panel draws.**
+ * §13.7's lookups and §14.4's two adds. **Exported so the stories and the tests read the list the
+ * panel draws.**
  *
  * `search` is a subcommand because Discord refuses a command that is both run on its own and the
- * parent of others, and `/collection add` is coming (spec §1) — which is why the parent is a
- * parent already.
+ * parent of others — and `/collection` is the parent of `add` too.
  */
 export const DISCORD_COMMANDS: readonly { command: string; does: string }[] = [
   {
     command: "/collection search",
     does: "Shows a card from your collection — its printings, finishes, quantities and folders.",
   },
+  {
+    command: "/collection add",
+    does: `Adds a card to your collection, in ${ADDED_FROM_DISCORD} unless you name a folder.`,
+  },
   { command: "/wishlist search", does: "Shows a card from your wishlist." },
+  { command: "/wishlist add", does: "Adds a card to your wishlist." },
   { command: "/card-search", does: "Shows any card from Scryfall, with its image and price." },
   {
     command: "/deck [format]",
@@ -57,9 +68,9 @@ export function lastPullLine(status: DiscordStatus, nowMs: number = Date.now()):
  * **Three stages, each one the next press.** Not linked: a switch that starts the sign-in —
  * `discord_link_begin`, Discord's authorize page in the reader's own browser, then a claim every
  * {@link LINK_POLL_MS} until they approve. Linked: *Add the bot to your sync group*, behind a
- * `ConfirmDialog` that says what that hands the operator, unless the gate refuses — then the
- * gate's sentence, and the button disabled. Enrolled: the bot's device, when it last fetched, and
- * the commands. Switching off from either of the last two asks first and runs `discord_disable`.
+ * `ConfirmDialog` that says what that hands the operator and what the bot may add, unless the
+ * gate refuses — then the gate's sentence, and the button disabled. Enrolled: the bot's device,
+ * when it last fetched, and the commands. Switching off from either of the last two asks first and runs `discord_disable`.
  *
  * **It reaches the backend itself**, `BackupPanel`'s rule: no other surface draws this state.
  * Every command answers a fresh status and it is written straight back under
@@ -220,9 +231,10 @@ export function DiscordPanel(): JSX.Element {
   return (
     <SettingsSection id="discord" title="Discord">
       <p className="text-sm text-dim">
-        Look up cards in your collection, your wishlist and your decks from Discord, with slash
-        commands that work in any server or chat — no bot to invite. The commands are answered by a
-        read-only device that joins your sync group, so this is a supporter feature, like sync.
+        Look up cards in your collection, your wishlist and your decks from Discord, and add cards
+        to your collection and wishlist, with slash commands that work in any server or chat — no
+        bot to invite. The commands are answered by a device that joins your sync group, so this is
+        a supporter feature, like sync.
       </p>
 
       {status === null ? (
@@ -301,8 +313,9 @@ export function DiscordPanel(): JSX.Element {
               ) : (
                 <div className="space-y-2">
                   <p className="text-sm text-dim">
-                    One step left: the bot joins your sync group as a read-only device, and the
-                    commands answer from its copy.
+                    One step left: the bot joins your sync group, and the commands answer from its
+                    copy. It can add cards when you confirm in Discord, and can never change or
+                    remove anything.
                   </p>
                   {/* The gate's sentence, as the engine wrote it — the reason the next step is
                       not open yet. Plain rather than red: it is a fact about the group, not
@@ -343,18 +356,21 @@ export function DiscordPanel(): JSX.Element {
       >
         {shown === "enable" ? (
           <>
-            The MTG Grimoire bot becomes a read-only device in your sync group. It can read
-            everything that syncs and change nothing. That means the MTG Grimoire Discord
-            service&rsquo;s servers hold a copy of your collection, wishlist and decks that they can
-            decrypt — unlike the sync relay, which stores only what it cannot read. The bot takes
-            one of your group&rsquo;s five device slots. You can remove it at any time by turning
-            the integration off.
+            The MTG Grimoire bot becomes a device in your sync group. It can read everything that
+            syncs, and it can add cards to your collection and your wishlist, but only after you
+            press Confirm in Discord. It can never change or remove anything. Cards it adds to your
+            collection go to <span className="font-medium">{ADDED_FROM_DISCORD}</span> unless you
+            name another folder; that folder is made now if you don&rsquo;t have one. Because the
+            bot reads your cards, the MTG Grimoire Discord service&rsquo;s servers hold a copy of
+            your collection, wishlist and decks that they can decrypt — unlike the sync relay, which
+            stores only what it cannot read. The bot takes one of your group&rsquo;s five device
+            slots. You can remove it at any time by turning the integration off.
           </>
         ) : (
           <>
             {status?.enrolled === true &&
               "This removes the bot from your sync group and deletes its copy of your " +
-                "collection, wishlist and decks. "}
+                "collection, wishlist and decks. Cards it already added stay. "}
             The slash commands stop answering for you. To remove MTG Grimoire from your Discord
             account as well, open Discord&rsquo;s User Settings, then Authorized Apps, and remove it
             there.
@@ -365,17 +381,18 @@ export function DiscordPanel(): JSX.Element {
   );
 }
 
-/** The bot as a device in the group: its id, when it last fetched, and what it answers. */
+/** The bot as a device in the group: its id, when it last fetched, what it answers, and what an
+ *  add asks of the reader. */
 function Enrolled({ status }: { status: DiscordStatus }): JSX.Element {
   return (
     <div className="space-y-3">
       <div className="space-y-1">
         <p className="text-sm">
-          The bot is in your sync group as a read-only device
+          The bot is in your sync group
           {status.botDeviceId !== null && (
             <>
               {" "}
-              <code className="font-mono text-xs text-dim">{status.botDeviceId}</code>
+              as <code className="font-mono text-xs text-dim">{status.botDeviceId}</code>
             </>
           )}
           .
@@ -393,7 +410,10 @@ function Enrolled({ status }: { status: DiscordStatus }): JSX.Element {
             </li>
           ))}
         </ul>
-        <p className="text-xs text-dim">Adding cards from Discord is coming in a later version.</p>
+        <p className="text-xs text-dim">
+          An add waits for you to press Confirm in Discord. The bot can never change or remove
+          anything.
+        </p>
       </div>
     </div>
   );

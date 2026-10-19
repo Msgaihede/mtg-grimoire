@@ -1,7 +1,9 @@
 /**
- * The two Scryfall requests this Worker makes, both for `/card-search`: a name's completions,
- * and a card by a name typed loosely (the design, §13.7 — the one command answered here, since it
- * reads nobody's data and needs no Durable Object).
+ * The Scryfall requests this Worker makes: a name's completions and a card by a name typed
+ * loosely, for `/card-search` (the design, §13.7 — the one command answered here, since it reads
+ * nobody's data and needs no Durable Object); and **a card's printings**, for the `set` option of
+ * `/collection add` and `/wishlist add`, whose `card` it completes too (§14.4). Every one of them
+ * is about cards and never about a reader.
  *
  * **Every request carries a `User-Agent` and an `Accept`**, which Scryfall's API rules require
  * and Cloudflare in front of it answers 403 without — the engine's `scryfall.rs` says the same of
@@ -119,4 +121,40 @@ export async function fuzzy(name: string): Promise<Lookup> {
 /** The image a card is shown with: its own, or its front face's. */
 export function imageOf(card: Card): string | null {
   return card.image_uris?.normal ?? card.card_faces?.[0]?.image_uris?.normal ?? null;
+}
+
+/** One printing, as the `set` option offers it. */
+export interface Printing {
+  set: string;
+  setName: string;
+  collectorNumber: string;
+}
+
+/**
+ * **Every printing of the card called exactly `name`**, newest first — Scryfall's
+ * `cards/search?q=!"<name>" unique:prints`, its first page (175 printings, more than any card
+ * has but a basic land, and an autocomplete shows 25). **An empty list on any failure**, for a
+ * name Scryfall does not know (its 404), and for an empty name.
+ */
+export async function printings(name: string): Promise<Printing[]> {
+  const trimmed = name.trim();
+  if (trimmed === "") return [];
+  const q = `!"${trimmed.replace(/"/g, "")}" unique:prints`;
+  // A day: a set is not reprinted into, and a new one is a day's news at most.
+  const answer = await ask(
+    `/cards/search?q=${encodeURIComponent(q)}&order=released&dir=desc`,
+    86_400,
+  );
+  if (answer === null || !answer.ok) return [];
+  try {
+    const body = (await answer.json()) as { data?: unknown };
+    if (!Array.isArray(body.data)) return [];
+    return body.data.filter(isCard).map((card) => ({
+      set: card.set,
+      setName: card.set_name,
+      collectorNumber: card.collector_number,
+    }));
+  } catch {
+    return [];
+  }
 }

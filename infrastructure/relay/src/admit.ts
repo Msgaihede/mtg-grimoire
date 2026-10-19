@@ -218,6 +218,50 @@ export const RESTRICTED_PUSHES_PER_DAY = 64;
 export const RESTRICTED_QUOTA = "restricted_quota";
 
 /**
+ * The largest push body a restricted device may send, in bytes: **64 KiB**. Spec §14.5.
+ *
+ * **Why a restricted device's push has a size of its own.** [`RESTRICTED_PUSHES_PER_DAY`] counts
+ * pushes, and with only [`MAX_PUSH_BODY_CHARS`] to hold each one, a compromised bot could still
+ * fill 64 × 1.5 MB = 96 MB of a group's log in a day — every byte of it pulled by every device.
+ * Bounding the push too brings that day down to 64 × 64 KiB = 4 MiB.
+ *
+ * **Why 64 KiB.** An `add` device sends what the engine's allow-list accepts and nothing else:
+ * `Put`s on `collection_entries` or `wishlist_entries` carrying identity fields, a quantity and a
+ * folder, **at most `ADD_OPS_PER_ENVELOPE = 25` to an envelope** (`grimoire_core::integration::add`).
+ * The fattest batch ever measured — two hundred *fully populated* `collection_entries` ops, notes,
+ * tags and prices included — sealed to 186 188 characters (`MAX_SEALED_CHARS`' doc), about 931 an
+ * op, so 25 of those would seal to ≈ 23 300, and an envelope's other fields and its signature add
+ * under 400. An allow-listed add carries less than a fully populated op does. 64 KiB is nearly
+ * three times the worst case an honest bot can build, so it is this bound and not the allow-list's
+ * own count that a bot meets only when it is not honest. A `read` device has nothing to push at
+ * all, and meets it the same way.
+ */
+export const RESTRICTED_PUSH_BYTES = 64 * 1024;
+
+/** The code a restricted device's push over [`RESTRICTED_PUSH_BYTES`] is refused with. */
+export const RESTRICTED_TOO_LARGE = "restricted_too_large";
+
+/**
+ * A restricted device's push body by its size: **413 `restricted_too_large`** over
+ * [`RESTRICTED_PUSH_BYTES`]. Exactly 64 KiB is admitted.
+ *
+ * `index.ts` asks this twice, as it asks [`admitBody`]: once of the declared `Content-Length`,
+ * before a byte is read, and once of the body's UTF-8 length once it is read. Only a push whose
+ * token carries a restricted `cap` is asked at all, so a full device's push never meets it.
+ * A 413 and not the quota's 429: it does not clear at midnight, it is this push that is wrong.
+ */
+export function admitRestrictedBody(bytes: number): Refusal | null {
+  // `> cap` refuses, rather than `<= cap` admitting, for `admitBody`'s reason: a Content-Length
+  // that is not a number is NaN, which decides nothing, and the text is measured next anyway.
+  if (!(bytes > RESTRICTED_PUSH_BYTES)) return null;
+  return {
+    status: 413,
+    code: RESTRICTED_TOO_LARGE,
+    error: "that push is larger than a restricted device may send",
+  };
+}
+
+/**
  * The header the Worker puts on a restricted device's push before it forwards it to the object,
  * naming the device the quota is counted against (the token's `dev`). **Trusted because no client
  * can set it**: `index.ts` rebuilds every push it forwards from the body text with one header of

@@ -10,6 +10,7 @@ use super::local;
 use crate::errors::{self, Kind, Source};
 use crate::sync_pair::identity;
 use crate::sync_pair::pairing::{self, Pending, Pinned, PinnedJoin};
+use grimoire_core::integration::add;
 use grimoire_core::state::Store;
 use grimoire_core::sync_pair::{crypto, roster};
 use sha2::{Digest, Sha256};
@@ -247,8 +248,9 @@ impl<S: Store> Remover for Removal<'_, S> {
 // The switch-on and the switch-off
 // ---------------------------------------------------------------------------------------
 
-/// **The switch-on** (§13.6, `discord_enable`): the gate, the offer, the enroll, the wait for the
-/// bot's join, the pinned confirm — and the bot's id kept.
+/// **The switch-on** (§13.6, `discord_enable`): the gate, the *Added from Discord* folder
+/// (`integration::add::ensure_added_folder`, §14.5), the offer, the enroll, the wait for the bot's
+/// join, the pinned confirm **as `add`** (§14.1) — and the bot's id kept.
 ///
 /// **Any failure once the bot has enrolled undoes the link** (`DELETE /link`, best effort, and
 /// forgotten here): the front would otherwise hold an enrolled bot that never joined, and refuse
@@ -268,6 +270,19 @@ pub async fn enable(
         return Err(ALREADY_ON.to_owned());
     }
     ceremony.gate()?;
+    // The folder a collection add lands in when none is named (spec §14.5): made here, by a full
+    // device, inside this store's write and before the bot is enrolled — so the bot's first pull
+    // already has it, and a bot that never joins leaves only an empty folder the reader can keep
+    // or delete. Kept by every later failure: it is the reader's folder, not the bot's.
+    // ⚠️ The refusal is worded outside the stretch: `for_a_reader` records through the store, and
+    // a stretch that asked the store again would wait on itself.
+    store
+        .with(|conn| {
+            add::ensure_added_folder(conn)
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        })
+        .map_err(|e| for_a_reader(store, "discord_enable", e))?;
     let invite = ceremony.begin()?;
     let answered = match front.enroll(&invite).await {
         Ok(answered) => answered,
@@ -282,7 +297,7 @@ pub async fn enable(
         &answered.device_id,
         &answered.x25519,
         &answered.ed25519,
-        roster::READ,
+        roster::ADD,
     );
     let outcome = match pinned {
         None => Err(BAD_KEYS.to_owned()),

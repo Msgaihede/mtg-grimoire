@@ -88,6 +88,7 @@
 
 use super::*;
 use crate::sync_engine::baseline::json_of;
+use crate::sync_engine::merge::fold;
 use serde::{Deserialize, Serialize};
 
 /// A row as it would be written: every field its spec lists that is known, its counters as
@@ -528,7 +529,7 @@ pub(super) fn folded_with_history(
     uid: &str,
     g: &Group,
 ) -> Result<Resolved, String> {
-    fold_with_history(conn, table, &[uid.to_owned()], &g.ops)
+    fold_with_history(conn, table, &[uid.to_owned()], g)
 }
 
 /// Whether a counter that is not a row at zero has reached it — the row would have gone.
@@ -594,7 +595,8 @@ fn waits_on(
 /// Write one op as a page of its own would be written, on a pass that decides everything. A
 /// group the write path does not write is this function's `Err`, in the path's own words.
 fn write_one(conn: &Connection, op: &Op, deleted: &BTreeSet<(&str, &str)>) -> Result<(), String> {
-    let groups = group(&[op]);
+    let ranks = ranks_of(conn)?;
+    let groups = group(&[op], &ranks);
     let mut report = ApplyReport::default();
     let mut soft: Vec<(&Group, String)> = Vec::new();
     // No row is one "the page places": this op is the ledger's own, not a page's.

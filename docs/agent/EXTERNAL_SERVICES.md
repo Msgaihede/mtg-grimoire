@@ -400,10 +400,14 @@ runbook, with the probes a deployed one answers, and how the inbox is read and e
 ## The Discord Workers (the front and the bot device)
 
 **A _fifth_ and a _sixth_ Worker carry the Discord integration** (issue #1096, 2026-10-18;
-[the design](../superpowers/specs/2026-10-17-discord-integration-design.md) §9 and §13). The bot is
-a **device in the reader's sync group**: paired by the desktop, restricted to `read` by a signed
-roster document, holding the group key and therefore a decryptable copy of what syncs. The two
-Workers split what faces the internet from what holds the keys.
+[the design](../superpowers/specs/2026-10-17-discord-integration-design.md) §9, §13 and §14). The
+bot is a **device in the reader's sync group**: paired by the desktop, restricted to **`add`** by a
+signed roster document (spec §14.1; `read` stays a word every build understands, and nothing pairs
+with it), holding the group key and therefore a decryptable copy of what syncs. `add` is the
+engine's allow-list: a `Put` of a collection or wishlist entry — identity fields, a quantity of
+1–99, a folder — and nothing else, so the bot can add cards and can never change or remove one;
+every receiving device checks it ([sync.md](../reference/sync.md#the-add-capability-the-specs-pr-4)).
+The two Workers split what faces the internet from what holds the keys.
 
 - **`mtg-grimoire-discord`** (`infrastructure/discord-worker/`, `https://discord.mtg-grimoire.app`)
   is the front: Discord's `/interactions` endpoint (it verifies Discord's Ed25519 signature,
@@ -417,7 +421,15 @@ Workers split what faces the internet from what holds the keys.
   `workers.dev` address**: only the front reaches it, through a Durable Object binding. Each
   Durable Object is one link, runs grimoire-core (`crates/grimoire-bot`) over a page store in its
   own SQLite storage encrypted under `BOT_KEK`, re-verifies Discord's signature itself, and answers
-  `/collection search`, `/wishlist search` and `/deck`. Unlinking deletes its storage.
+  `/collection search`, `/wishlist search` and `/deck` — and **`/collection add` and
+  `/wishlist add`**, each an ephemeral proposal with **Confirm** and **Cancel** buttons, kept in
+  the Durable Object's storage for 15 minutes with the proposer's Discord id. Only the proposer's
+  Confirm emits the add (`integration::add::emit`); a push and a pull follow in an alarm, never
+  inside the interaction. A collection add with no folder named goes to *Added from Discord*, which
+  the desktop makes on switch-on. Unlinking deletes its storage.
+- **The relay bounds what an `add` device pushes**: 64 pushes a UTC day (`429 restricted_quota`)
+  and 64 KiB a push (`413 restricted_too_large`), keyed off the token's `cap` claim; the share
+  Worker and the scan inbox refuse its token outright (`403 restricted_device`).
 
 **Supporter-only by construction**: the bot pairs into a sync group and mints relay tokens like
 any device, and the enable gate (`integration::gate`) refuses a device that is not entitled.

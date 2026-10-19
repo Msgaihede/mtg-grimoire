@@ -407,7 +407,7 @@ async fn a_round_trip_amends_this_device_onto_the_groups_first_document() {
         mine.ed25519.as_deref(),
         Some(rd::key_text(&identity::signing_key(&phone).unwrap().unwrap().public).as_str())
     );
-    assert_eq!(mine.proto, identity::SIG_PROTO);
+    assert_eq!(mine.proto, identity::PROTO);
     assert!(first.member("dev-remover").is_some() && first.member("tablet").is_some());
     let body: serde_json::Value = serde_json::from_str(&sent.lock().unwrap()[0].body).unwrap();
     let text = body["roster"].as_str().unwrap();

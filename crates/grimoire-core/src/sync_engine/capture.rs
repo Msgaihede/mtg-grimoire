@@ -696,8 +696,8 @@ const GUARD: &str = "(SELECT value FROM sync_state WHERE key = 'applying') IS NU
 /// The same rule [`super::hlc::Hlc::tick`] spells in Rust, in the one place SQL has to own it —
 /// and the two are held together by
 /// [`tests::the_trigger_stamp_agrees_with_the_rust_clock`].
-const STAMP_MS: &str = "max(c.ms, cast(unixepoch('subsec') * 1000 AS INTEGER))";
-const STAMP_CTR: &str =
+pub(crate) const STAMP_MS: &str = "max(c.ms, cast(unixepoch('subsec') * 1000 AS INTEGER))";
+pub(crate) const STAMP_CTR: &str =
     "CASE WHEN cast(unixepoch('subsec') * 1000 AS INTEGER) > c.ms THEN 0 ELSE c.ctr + 1 END";
 
 /// A sparse JSON object of the fields that changed.

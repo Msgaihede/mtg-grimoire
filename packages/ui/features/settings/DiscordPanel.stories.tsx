@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 import { DISCORD_GATE_SENTENCE, DISCORD_UNREACHABLE } from "@grimoire/fake/db";
-import { DISCORD_COMMANDS, DiscordPanel } from "./DiscordPanel";
+import { ADDED_FROM_DISCORD, DISCORD_COMMANDS, DiscordPanel } from "./DiscordPanel";
 
 const meta = {
   title: "Settings/DiscordPanel",
@@ -22,15 +22,18 @@ const meta = {
         component:
           "Settings → Integrations → Discord (issue #1096): a switch that signs the reader in " +
           "with Discord in their browser, then one press that adds the operator's bot to their " +
-          "sync group as a **read-only device**, so `/collection search`, `/wishlist search`, " +
-          "`/card-search` and `/deck` answer in any server or chat with no bot invited anywhere." +
+          "sync group as an **`add` device**, so `/collection search`, `/wishlist search`, " +
+          "`/card-search` and `/deck` answer in any server or chat with no bot invited anywhere, " +
+          "and `/collection add` and `/wishlist add` add a card once the reader presses Confirm " +
+          "in Discord — never changing or removing anything." +
           "\n\n" +
           "**Every story here is a seeded world**, `BackupPanel`'s arrangement: the panel reaches " +
           "the backend itself. The workbench has no Discord front and no browser, so the fake " +
           "approves a sign-in on its **second** claim and an enrolled bot never fetches. The " +
           "`discordLinking`, `discordLinked`, `discordGate`, `discordEnrolled` and " +
           "`discordUnreachable` faults are the states a press cannot reach.\n\n" +
-          "**Both consequential presses ask first**: adding the bot says plainly that the " +
+          "**Both consequential presses ask first**: adding the bot says plainly what it may " +
+          "add and where (*Added from Discord*, which the switch-on makes), and that the " +
           "operator's servers then hold a copy they can decrypt, and switching off says where " +
           "the app is removed from the reader's Discord account, which this panel cannot do.",
       },
@@ -131,12 +134,12 @@ export const LinkedReady: Story = {
     // The dialog is portalled out of the canvas, so it is found on the document.
     const dialog = within(await within(document.body).findByRole("dialog"));
     await expect(dialog.getByText(/can decrypt/i)).toBeInTheDocument();
+    await expect(dialog.getByText(/only after you press Confirm in Discord/i)).toBeInTheDocument();
+    await expect(dialog.getByText(ADDED_FROM_DISCORD)).toBeInTheDocument();
     await expect(dialog.getByText(/five device slots/i)).toBeInTheDocument();
     await userEvent.click(dialog.getByRole("button", { name: "Add the bot" }));
 
-    await expect(
-      await canvas.findByText(/is in your sync group as a read-only device/i),
-    ).toBeInTheDocument();
+    await expect(await canvas.findByText(/is in your sync group as/i)).toBeInTheDocument();
     await expect(canvas.getByText(/hasn't fetched your cards yet/i)).toBeInTheDocument();
   },
 };
@@ -151,7 +154,7 @@ export const Enrolled: Story = {
     for (const { command } of DISCORD_COMMANDS) {
       await expect(canvas.getByText(command)).toBeInTheDocument();
     }
-    await expect(canvas.getByText(/coming in a later version/i)).toBeInTheDocument();
+    await expect(canvas.getByText(/an add waits for you to press confirm/i)).toBeInTheDocument();
     await expect(await theSwitch(canvas)).toHaveAttribute("aria-checked", "true");
   },
 };

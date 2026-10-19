@@ -14,15 +14,20 @@
  * desktop handed the front over TLS (`enroll`), an interaction exactly as Discord signed it
  * (`interaction`, which the Durable Object verifies again itself), and answers about the device.
  * Each Durable Object is one link, one Discord account (`docs/superpowers/specs/
- * 2026-10-17-discord-integration-design.md`, §9 and §13).
+ * 2026-10-17-discord-integration-design.md`, §9, §13 and §14).
  */
 
 /** What `POST /link/enroll` hands the Durable Object: the desktop's invite, and the capability. */
 export interface EnrollRequest {
   /** Exactly `pairing::Offer.code` — the text the joiner's `pairing::accept` takes. */
   invite: string;
-  /** Read-only, in PR 3. The desktop alone sets a capability; this names what it asked for. */
-  capability: "read";
+  /**
+   * `add`, the one capability a bot is paired with (the design, §14.1): it may add cards to the
+   * collection and the wishlist, and only after its reader presses Confirm. `read` is a word every
+   * build still understands, and nothing pairs with it. The desktop alone sets a capability; this
+   * names what it asked for.
+   */
+  capability: "add";
 }
 
 /** The three public values the bot answers on joining, base64url without padding. */
@@ -69,7 +74,12 @@ export interface BotStatus {
 /** §13.2's interface: every method the front calls on a `BOT` stub. */
 export interface BotDeviceRpc {
   enroll(req: EnrollRequest): Promise<Enrolled | EnrollRefused>;
-  /** The Durable Object re-verifies Discord's signature over the raw body itself. */
+  /**
+   * Any interaction the front does not answer itself — a command, an autocomplete, a press on an
+   * add's Confirm or Cancel. The Durable Object re-verifies Discord's signature over the raw body
+   * itself. An add is answered with a deferred reply that the object then edits through the
+   * interaction's webhook (§14.4), so the answer is in Discord's three seconds whatever Scryfall does.
+   */
   interaction(req: InteractionRequest): Promise<InteractionAnswer>;
   status(): Promise<BotStatus>;
   /** `ctx.storage.deleteAll()`: the identity is gone for good. */

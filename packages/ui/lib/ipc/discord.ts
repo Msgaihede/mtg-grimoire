@@ -1,6 +1,7 @@
 /**
- * The Discord integration (issue #1096, spec §13.6): linking the reader's Discord account, then
- * pairing the operator's bot into their sync group as a **read-only device**, and taking it out.
+ * The Discord integration (issue #1096, spec §13.6 and §14.5): linking the reader's Discord
+ * account, then pairing the operator's bot into their sync group as an **`add` device** — it reads,
+ * and adds a card only after a Confirm in Discord — and taking it out.
  *
  * **One domain of `../ipc.ts`.** Nothing outside `packages/ui/lib/ipc*` imports this file: every
  * page, hook, story and test goes through `@/lib/ipc`, which re-exports these types and spreads

@@ -8,6 +8,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  DISCORD_ADDED_FOLDER,
   DISCORD_BOT_DEVICE_ID,
   DISCORD_GATE_SENTENCE,
   DISCORD_LINK_EXPIRED,
@@ -129,6 +130,40 @@ describe("the fake's Discord enable and disable", () => {
       lastPullAt: 1_760_700_000_000 - 2 * 60 * 60_000,
       gate: null,
     });
+  });
+
+  it("makes the Added from Discord folder on enable, once, and none when the gate refuses", () => {
+    const db = world("discordLinked");
+    const added = () => db.collectionFolders.filter((f) => f.name === DISCORD_ADDED_FOLDER);
+    expect(added()).toEqual([]);
+
+    discordHandlers(db).discord_enable();
+    expect(added()).toEqual([
+      expect.objectContaining({ parentId: null, kind: "user", deckId: null, locked: false }),
+    ]);
+    discordHandlers(db).discord_disable();
+    db.discord.link = { discordUserId: "1", username: "again" };
+    discordHandlers(db).discord_enable();
+    expect(added()).toHaveLength(1);
+
+    const gated = world("discordGate");
+    expect(() => discordHandlers(gated).discord_enable()).toThrow(DISCORD_GATE_SENTENCE);
+    expect(gated.collectionFolders).toEqual([]);
+  });
+
+  it("takes a folder of that name in another case as the one", () => {
+    const db = world("discordLinked");
+    db.collectionFolders.push({
+      id: 7,
+      parentId: null,
+      name: "added from discord",
+      kind: "user",
+      deckId: null,
+      sortOrder: 0,
+      locked: false,
+    });
+    discordHandlers(db).discord_enable();
+    expect(db.collectionFolders.map((f) => f.id)).toEqual([7]);
   });
 
   it("forgets the bot and the link on disable", () => {

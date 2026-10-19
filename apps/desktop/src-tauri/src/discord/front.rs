@@ -9,6 +9,7 @@
 
 use crate::errors::{self, Kind, Source};
 use grimoire_core::state::Store;
+use grimoire_core::sync_pair::roster;
 use serde::Deserialize;
 use std::time::Duration;
 
@@ -288,11 +289,12 @@ pub struct Enrolled {
     pub ed25519: String,
 }
 
-/// `POST /link/enroll` with the invite (`pairing::Offer.code`) and `capability: "read"`.
+/// `POST /link/enroll` with the invite (`pairing::Offer.code`) and `capability: "add"` — the one
+/// capability a switch-on pairs the bot as (spec §14.1), the same word the pin carries.
 pub async fn enroll(db: &impl Store, secret: &str, invite: &str) -> Result<Enrolled, String> {
     const OP: &str = "discord_enroll";
     let url = endpoint(db, "/link/enroll")?;
-    let body = serde_json::json!({ "invite": invite, "capability": "read" }).to_string();
+    let body = serde_json::json!({ "invite": invite, "capability": roster::ADD }).to_string();
     let (status, text) = send(
         db,
         OP,

@@ -22,6 +22,9 @@ export class Bot {
   names(kind: string, prefix: string, limit: number): string;
   decks(prefix: string): string;
   deck_cards(uid: string): string;
+  folders(prefix: string, limit: number): string;
+  target(table: string, folder: string): string;
+  add(add: string): string;
   close(): void;
 }
 

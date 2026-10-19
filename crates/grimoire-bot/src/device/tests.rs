@@ -126,7 +126,7 @@ async fn an_invite_pairs_the_bot_and_the_desktop_files_it_by_its_keys() {
             error: None
         }
     );
-    let answer = bot.enroll(&invite, "read").await;
+    let answer = bot.enroll(&invite, "add").await;
     let (device_id, x25519, ed25519) = joined(&answer);
     assert_eq!(x25519.len(), 43, "32 bytes, base64url without padding");
     assert_eq!(ed25519.len(), 43);
@@ -170,7 +170,7 @@ async fn an_invite_pairs_the_bot_and_the_desktop_files_it_by_its_keys() {
 
     // Paired, a second enroll is refused.
     let (_, _, again) = desktop(&relay);
-    assert_eq!(code(&bot.enroll(&again, "read").await), "already_enrolled");
+    assert_eq!(code(&bot.enroll(&again, "add").await), "already_enrolled");
 
     // A pull trip against a relay that has no `/keys`: an error, a retry, no purge yet.
     let now = grimoire_core::platform::clock::now_ms();
@@ -191,8 +191,8 @@ async fn the_same_invite_twice_is_one_join_and_the_same_keys() {
     let store = Arc::new(vfs::MemoryStore::new());
     let bot = device("obj-twice", &store, &relay);
     let (_desk, _pending, invite) = desktop(&relay);
-    let first = joined(&bot.enroll(&invite, "read").await);
-    let second = joined(&bot.enroll(&invite, "read").await);
+    let first = joined(&bot.enroll(&invite, "add").await);
+    let second = joined(&bot.enroll(&invite, "add").await);
     assert_eq!(first, second);
     assert_eq!(relay.joins(), 1, "the join is posted once");
 }
@@ -203,11 +203,16 @@ async fn a_bad_invite_or_capability_is_refused_before_anything_is_posted() {
     let store = Arc::new(vfs::MemoryStore::new());
     let bot = device("obj-bad", &store, &relay);
     assert_eq!(
-        code(&bot.enroll("not an invite", "read").await),
+        code(&bot.enroll("not an invite", "add").await),
         "bad_invite"
     );
     let (_desk, _pending, invite) = desktop(&relay);
     assert_eq!(code(&bot.enroll(&invite, "full").await), "bad_invite");
+    assert_eq!(
+        code(&bot.enroll(&invite, "read").await),
+        "bad_invite",
+        "nothing pairs as read any more (§14.1)"
+    );
     assert_eq!(relay.joins(), 0);
     assert!(!bot.status().enrolled);
 }
@@ -217,9 +222,9 @@ async fn a_used_invite_fails_the_pairing() {
     let relay = Rendezvous::start().await;
     let (_desk, _pending, invite) = desktop(&relay);
     let one = device("obj-used-1", &Arc::new(vfs::MemoryStore::new()), &relay);
-    joined(&one.enroll(&invite, "read").await);
+    joined(&one.enroll(&invite, "add").await);
     let two = device("obj-used-2", &Arc::new(vfs::MemoryStore::new()), &relay);
-    assert_eq!(code(&two.enroll(&invite, "read").await), "pairing_failed");
+    assert_eq!(code(&two.enroll(&invite, "add").await), "pairing_failed");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -229,7 +234,7 @@ async fn a_pairing_lost_to_an_eviction_fails_and_a_new_invite_starts_over() {
     let (_desk, _pending, invite) = desktop(&relay);
     let first_id = {
         let bot = device("obj-evict", &store, &relay);
-        joined(&bot.enroll(&invite, "read").await).0
+        joined(&bot.enroll(&invite, "add").await).0
     };
     // A new isolate over the same storage: the identity is there, the pairing in flight is not.
     let bot = device("obj-evict", &store, &relay);
@@ -242,7 +247,7 @@ async fn a_pairing_lost_to_an_eviction_fails_and_a_new_invite_starts_over() {
     assert_eq!(status.error.as_deref(), Some(INTERRUPTED));
     // The desktop enables again: a fresh invite, the same device.
     let (_desk2, _pending2, fresh) = desktop(&relay);
-    let again = joined(&bot.enroll(&fresh, "read").await);
+    let again = joined(&bot.enroll(&fresh, "add").await);
     assert_eq!(again.0, first_id, "the identity outlives the isolate");
     assert!(bot.status().error.is_none());
 }
@@ -351,4 +356,292 @@ fn the_kek_is_32_bytes_of_base64url() {
     assert_eq!(kek(&format!("{text}=")).unwrap(), [7u8; 32]);
     assert!(kek("c2hvcnQ").is_err());
     assert!(kek("***").is_err());
+}
+
+/// A device as a completed pairing leaves an `add` bot: in a group, paired, pulled once, and filed
+/// on its own roster with the `add` capability — with the collection's default folder, a binder and a
+/// deck's folder, as the desktop's rows would have arrived.
+fn an_add_bot(object: &str, relay: &Rendezvous) -> Device {
+    let bot = device(object, &Arc::new(vfs::MemoryStore::new()), relay);
+    bot.with_conn(|conn| {
+        let me = identity::ensure(conn).unwrap();
+        conn.execute(
+            "INSERT INTO sync_devices (device_id, public_key, name, added_at, capability, proto)
+             VALUES (?1, ?2, ?3, 0, 'add', ?4)
+             ON CONFLICT (device_id) DO UPDATE SET capability = 'add'",
+            rusqlite::params![
+                me.device_id,
+                me.keypair.public.to_vec(),
+                NAME,
+                identity::PROTO
+            ],
+        )
+        .unwrap();
+        set(conn, PHASE, PAIRED).unwrap();
+        set(conn, LAST_PULL, "1").unwrap();
+        conn.execute_batch(
+            "INSERT OR IGNORE INTO sync_group (id, group_id, epoch, group_key, joined_at)
+             VALUES (1, 'g', 0, zeroblob(32), 0);
+             INSERT OR IGNORE INTO sync_clock (id, ms, ctr) VALUES (1, 0, 0);
+             INSERT INTO decks (id, name, format_key, created_at, updated_at, sync_uid)
+             VALUES (1, 'Burn', 'modern', 0, 0, 'deck-uid');
+             INSERT INTO collection_folders (id, parent_id, name, kind, deck_id, sort_order,
+                                             created_at, updated_at)
+             VALUES (601, NULL, 'Added from Discord', 'user', NULL, 0, 0, 0),
+                    (602, NULL, 'Binder', 'user', NULL, 1, 0, 0),
+                    (603, NULL, 'Burn', 'deck', 1, 2, 0, 0);
+             UPDATE collection_folders SET sync_uid = 'folder-' || id WHERE id IN (601, 602, 603);",
+        )
+        .unwrap();
+    });
+    bot
+}
+
+fn bolt(folder: &str, quantity: i64) -> String {
+    serde_json::json!({
+        "table": "collection",
+        "cardId": "bolt-2x2",
+        "setCode": "2x2",
+        "collectorNumber": "117",
+        "lang": "en",
+        "finish": "foil",
+        "quantity": quantity,
+        "folderUid": folder,
+    })
+    .to_string()
+}
+
+fn outboxed(bot: &Device) -> i64 {
+    bot.with_conn(|conn| outbox(conn).unwrap())
+}
+
+fn said(text: &str) -> Refusal {
+    Refusal::Said(text.to_owned())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn an_add_goes_to_the_default_folder_and_is_the_one_op_in_the_outbox() {
+    let relay = Rendezvous::start().await;
+    let bot = an_add_bot("obj-add", &relay);
+    let now = 1_760_000_000_000;
+    assert_eq!(
+        bot.target("collection", "", now),
+        Ok(Target {
+            uid: Some("folder-601".to_owned()),
+            path: Some("Added from Discord".to_owned())
+        })
+    );
+    assert_eq!(outboxed(&bot), 0);
+    let uid = bot.add(&bolt("folder-601", 2), now).unwrap();
+    assert_eq!(outboxed(&bot), 1, "emit writes its op past capture_off");
+    let (held, folder): (i64, String) = bot.with_conn(|conn| {
+        conn.query_row(
+            "SELECT e.quantity, f.sync_uid FROM collection_entries e
+               JOIN collection_folders f ON f.id = e.folder_id WHERE e.sync_uid = ?1",
+            [&uid],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap()
+    });
+    assert_eq!(
+        (held, folder.as_str()),
+        (2, "folder-601"),
+        "applied here too"
+    );
+    // …and capture is still off for everything else the bot writes.
+    bot.with_conn(|conn| {
+        conn.execute(
+            "INSERT INTO collection_entries (card_id, set_code, collector_number, finish, quantity,
+                                             created_at, updated_at)
+             VALUES ('x', 'c21', '1', 'nonfoil', 1, 0, 0)",
+            [],
+        )
+        .unwrap();
+    });
+    assert_eq!(outboxed(&bot), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_wish_goes_to_the_wishlists_root() {
+    let relay = Rendezvous::start().await;
+    let bot = an_add_bot("obj-wish", &relay);
+    assert_eq!(
+        bot.target("wishlist", "ignored", 0),
+        Ok(Target {
+            uid: None,
+            path: None
+        })
+    );
+    let wish = serde_json::json!({
+        "table": "wishlist",
+        "oracleId": "o-bolt",
+        "name": "Lightning Bolt",
+        "printing": null,
+        "preferredFinish": null,
+        "quantity": 1,
+        "folderUid": null,
+    });
+    bot.add(&wish.to_string(), 0).unwrap();
+    assert_eq!(outboxed(&bot), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_folder_is_named_by_its_uid_or_path_and_refused_when_it_is_not_a_users() {
+    let relay = Rendezvous::start().await;
+    let bot = an_add_bot("obj-folders", &relay);
+    assert_eq!(
+        bot.target("collection", "folder-602", 0)
+            .unwrap()
+            .path
+            .as_deref(),
+        Some("Binder")
+    );
+    assert_eq!(
+        bot.target("collection", "binder", 0)
+            .unwrap()
+            .uid
+            .as_deref(),
+        Some("folder-602")
+    );
+    assert_eq!(
+        bot.target("collection", "folder-603", 0),
+        Err(said(NOT_A_USER_FOLDER))
+    );
+    assert_eq!(
+        bot.target("collection", "Nowhere", 0),
+        Err(said(NO_SUCH_FOLDER))
+    );
+    let completed: Vec<String> = bot
+        .folders("", 25)
+        .unwrap()
+        .into_iter()
+        .map(|c| c.value)
+        .collect();
+    assert_eq!(completed, ["folder-601", "folder-602"]);
+    // The default folder gone (the reader deleted it on the desktop): name one, or bring it back.
+    bot.with_conn(|conn| {
+        conn.execute("DELETE FROM collection_folders WHERE id = 601", [])
+            .unwrap();
+    });
+    assert_eq!(
+        bot.target("collection", " ", 0),
+        Err(said(NO_DEFAULT_FOLDER))
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_confirm_asks_again_for_the_folder_and_the_quota() {
+    let relay = Rendezvous::start().await;
+    let bot = an_add_bot("obj-confirm", &relay);
+    let now = 1_760_000_000_000;
+    bot.with_conn(|conn| {
+        conn.execute("DELETE FROM collection_folders WHERE id = 602", [])
+            .unwrap();
+    });
+    assert_eq!(bot.add(&bolt("folder-602", 1), now), Err(said(FOLDER_GONE)));
+    assert_eq!(
+        bot.add(&bolt("folder-603", 1), now),
+        Err(said(NOT_A_USER_FOLDER))
+    );
+    assert!(matches!(bot.add("{}", now), Err(Refusal::Failed(_))));
+    // The relay refused a push for its quota today: no command and no confirm until tomorrow.
+    bot.with_conn(|conn| {
+        set(conn, client::RESTRICTED_QUOTA_AT, &(now / 1000).to_string()).unwrap()
+    });
+    assert_eq!(bot.target("collection", "", now), Err(said(QUOTA)));
+    assert_eq!(bot.add(&bolt("folder-601", 1), now), Err(said(QUOTA)));
+    assert_eq!(outboxed(&bot), 0);
+    let tomorrow = now + 86_400_000;
+    assert!(bot.target("collection", "", tomorrow).is_ok());
+    assert!(bot.add(&bolt("folder-601", 1), tomorrow).is_ok());
+    assert_eq!(outboxed(&bot), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_read_bot_and_an_empty_outbox_push_nothing() {
+    let relay = Rendezvous::start().await;
+    let bot = an_add_bot("obj-nopush", &relay);
+    let lane = bot.state().lane().await;
+    // `add`, but nothing confirmed: no request.
+    assert_eq!(bot.push(&lane, 0).await, Ok(false));
+    drop(lane);
+    bot.add(&bolt("folder-601", 1), 0).unwrap();
+    bot.with_conn(|conn| {
+        conn.execute(
+            "UPDATE sync_devices SET capability = 'read' WHERE capability = 'add'",
+            [],
+        )
+        .unwrap();
+    });
+    let lane = bot.state().lane().await;
+    assert_eq!(
+        bot.push(&lane, 0).await,
+        Ok(false),
+        "a read device never pushes"
+    );
+    assert_eq!(outboxed(&bot), 1);
+}
+
+#[test]
+fn a_quota_day_is_the_relays_utc_day() {
+    assert_eq!(quota_day(0), 0);
+    assert_eq!(quota_day(86_399_999), 0);
+    assert_eq!(quota_day(86_400_000), 1);
+}
+
+/// An `add` bot holding a relay token with a day left, so a push asks the relay for nothing but
+/// the push itself.
+fn with_token(bot: &Device) {
+    bot.with_conn(|conn| {
+        set(conn, entitlement::ACCESS_TOKEN, "a-relay-token").unwrap();
+        let expires: i64 = conn
+            .query_row("SELECT unixepoch() + 86400", [], |r| r.get(0))
+            .unwrap();
+        set(conn, entitlement::ACCESS_EXPIRES, &expires.to_string()).unwrap();
+    });
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_push_takes_the_outbox_to_the_relay_and_a_quota_refusal_is_said_until_tomorrow() {
+    // The relay takes the envelope.
+    let relay = Rendezvous::start().await;
+    let took = relay.server.mock(|when, then| {
+        when.method(POST)
+            .path("/g/g/push")
+            .header("authorization", "Bearer a-relay-token");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(r#"{"cursor":1}"#);
+    });
+    let bot = an_add_bot("obj-push", &relay);
+    with_token(&bot);
+    bot.add(&bolt("folder-601", 2), 0).unwrap();
+    let lane = bot.state().lane().await;
+    assert_eq!(
+        bot.push(&lane, 0).await,
+        Ok(false),
+        "one envelope, nothing left"
+    );
+    drop(lane);
+    took.assert();
+    assert_eq!(outboxed(&bot), 0);
+
+    // The relay has had the day's pushes: the outbox is kept, and the day is said in words.
+    let relay = Rendezvous::start().await;
+    relay.server.mock(|when, then| {
+        when.method(POST).path("/g/g/push");
+        then.status(429)
+            .header("content-type", "application/json")
+            .body(r#"{"error":"the day's pushes are spent","code":"restricted_quota"}"#);
+    });
+    let bot = an_add_bot("obj-quota", &relay);
+    with_token(&bot);
+    bot.add(&bolt("folder-601", 1), 0).unwrap();
+    let now = grimoire_core::platform::clock::now_ms();
+    let lane = bot.state().lane().await;
+    assert_eq!(bot.push(&lane, now).await, Ok(false));
+    drop(lane);
+    assert_eq!(outboxed(&bot), 1, "kept for tomorrow");
+    assert_eq!(bot.target("collection", "", now), Err(said(QUOTA)));
+    assert!(bot.target("collection", "", now + 86_400_000).is_ok());
 }

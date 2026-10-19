@@ -1,11 +1,13 @@
 import {
   admit,
   admitBody,
+  admitRestrictedBody,
   bindDevice,
   DEVICE_BINDING,
   deviceMismatch,
   isEnvelope,
   RESTRICTED_HEADER,
+  RESTRICTED_PUSH_BYTES,
   type Refusal,
 } from "./admit";
 import { Group } from "./group";
@@ -67,10 +69,11 @@ import { isRestricted, verify, type Claims } from "./token";
  * and not in the object for the reason the rest of a push's admission does: a refusal should not
  * have spent a Durable Object request.
  *
- * **A restricted device's push is counted against a daily cap** (`RESTRICTED_PUSHES_PER_DAY`):
- * the token's `cap` says the device is restricted, which costs no read at all, and the Worker
- * names the device to the object in a header only it can set. The count is the object's, since
- * the object is where the push is stored.
+ * **A restricted device's push is counted against a daily cap** (`RESTRICTED_PUSHES_PER_DAY`)
+ * **and bounded by size** (`RESTRICTED_PUSH_BYTES`, `413 restricted_too_large`): the token's `cap`
+ * says the device is restricted, which costs no read at all, the size is refused here before the
+ * hop, and the Worker names the device to the object in a header only it can set. The count is
+ * the object's, since the object is where the push is stored.
  *
  * **The six routes a caller reaches with no token are rate limited, and the bill is why again.**
  * `/claim`, `/token`, `/rotate`, `/roster`, `/keys` and the rendezvous each read D1 before they can refuse
@@ -281,8 +284,11 @@ async function currentEpoch(env: Env, group: string): Promise<number | null> {
  * first it fails:
  *
  * 1. a declared `Content-Length` past the cap → 413 `too_large`, **before a byte is read**, so an
- *    honest client that built something enormous is not parsed at all;
- * 2. the body's text past the cap → 413 `too_large`, for a body that declared no length;
+ *    honest client that built something enormous is not parsed at all — and for a restricted
+ *    device's token, past `RESTRICTED_PUSH_BYTES` (64 KiB) → **413 `restricted_too_large`**, asked
+ *    first because it is the tighter of the two (spec §14.5);
+ * 2. the body's text past the cap → 413 `too_large`, for a body that declared no length — and a
+ *    restricted device's past 64 KiB of UTF-8 → 413 `restricted_too_large`, in the same order;
  * 3. not JSON → 400, and not an envelope → 400, in the words the object has always used — an
  *    envelope with a `sig` that is not a well-formed one among them (`isEnvelope`);
  * 4. the envelope's `device` against the token's `dev` (`bound`) — **`403 device_mismatch` in a
@@ -306,11 +312,14 @@ async function admitPush(
   group: string,
   claims: Claims,
 ): Promise<Request | Response> {
-  const declared = admitBody(Number(request.headers.get("content-length")));
+  const restricted = isRestricted(claims);
+  const length = Number(request.headers.get("content-length"));
+  const declared = (restricted ? admitRestrictedBody(length) : null) ?? admitBody(length);
   if (declared) return refuse(declared);
 
   const text = await request.text();
-  const oversized = admitBody(text.length);
+  const oversized =
+    (restricted ? admitRestrictedBody(utf8Bytes(text)) : null) ?? admitBody(text.length);
   if (oversized) return refuse(oversized);
 
   let envelope: unknown;
@@ -330,7 +339,17 @@ async function admitPush(
   // `dev` when the token names one, which every restricted token does — `grantFor` mints `cap`
   // only beside `dev` — and the envelope's device otherwise, which the binding above has held to
   // the token's in every group that can hold a restricted device.
-  return forwarded(request, text, isRestricted(claims) ? (claims.dev ?? envelope.device) : null);
+  return forwarded(request, text, restricted ? (claims.dev ?? envelope.device) : null);
+}
+
+/**
+ * A body's length in UTF-8 bytes, which is what `RESTRICTED_PUSH_BYTES` counts. A text already
+ * longer in characters than the bound is past it in bytes too — UTF-8 never spends fewer bytes
+ * than characters — so it is not encoded to find out; any other is at most 64 Ki characters.
+ */
+function utf8Bytes(text: string): number {
+  if (text.length > RESTRICTED_PUSH_BYTES) return text.length;
+  return new TextEncoder().encode(text).byteLength;
 }
 
 /**

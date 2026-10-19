@@ -12,8 +12,10 @@ which holds the bot's identity, the group key and the reader's materialised data
 holds no sync key and never sees a collection.** What it does:
 
 - **answers Discord** at `/interactions`: it checks Discord's Ed25519 signature before it reads a
-  byte as JSON, answers `/card-search` itself from Scryfall, tells a reader with no link where the
-  switch is, and hands every other interaction — exactly as Discord signed it — to the reader's
+  byte as JSON, answers `/card-search` itself from Scryfall, completes an add's `card` and `set`
+  from Scryfall too (a card's name and its printings are nobody's data), tells a reader with no
+  link where the switch is, and hands every other interaction — a command, the `folder`
+  completion, a press on an add's Confirm or Cancel — exactly as Discord signed it to the reader's
   own Durable Object, returning its answer verbatim. The Durable Object checks the signature again
   itself (`src/verify.ts`, `src/interactions.ts`);
 - **links a Discord account to a desktop**: OAuth2, shaped like PKCE so the desktop never sees a
@@ -29,7 +31,7 @@ holds no sync key and never sees a collection.** What it does:
 | `POST /link/begin`            | the desktop                    | `{ challenge }`, base64url SHA-256 of a verifier       | `200 { code, authorizeUrl, expiresAt }`; `429 rate_limited` past ten a minute from one address                                                                                                                                      |
 | `GET /oauth/discord/callback` | the reader's browser           | Discord's `code` and `state`, or `error=access_denied` | a self-contained page: linked, declined, expired, or Discord failed                                                                                                                                                                 |
 | `POST /link/claim`            | the desktop, every two seconds | `{ code, verifier }`                                   | `202 { status: "pending" }`; `200 { status: "linked", secret, discordUserId, username }`, once; `403 link_mismatch`; `409 link_denied`; `410 link_expired`                                                                          |
-| `POST /link/enroll`           | the desktop, `Bearer <secret>` | `{ invite, capability: "read" }`                       | `200 { deviceId, x25519, ed25519 }`; `409 already_enrolled`; `422 bad_invite`; `502 pairing_failed`                                                                                                                                 |
+| `POST /link/enroll`           | the desktop, `Bearer <secret>` | `{ invite, capability: "add" }`                        | `200 { deviceId, x25519, ed25519 }`; `409 already_enrolled`; `422 bad_invite`; `502 pairing_failed`                                                                                                                                 |
 | `GET /link`                   | the desktop, `Bearer <secret>` |                                                        | `200 { discordUserId, username, enrolled, deviceId, paired, lastPullAt }`; `502 bot_unavailable`                                                                                                                                    |
 | `DELETE /link`                | the desktop, `Bearer <secret>` |                                                        | `204`, after the Durable Object's `unlink()`; `502 bot_unavailable` and the link kept, to retry                                                                                                                                     |
 
@@ -84,11 +86,30 @@ link secret, an invite to a sync group, or Discord's one-time code.
 
 ## The commands
 
-`src/commands.ts` is the list `pnpm discord:register` puts on the application, PR 3's and no
-more: `/collection search card`, `/wishlist search card`, `/card-search card` and
-`/deck deck [format: plain|arena|mtgo|moxfield]`, every `card` and `deck` completed, as a user
-install (`integration_types: [1]`, `contexts: [0, 1, 2]`). **`/collection add` and
-`/wishlist add` are not registered until PR 4** gives the bot the `add` capability.
+`src/commands.ts` is the list `pnpm discord:register` puts on the application (the design, §13.7
+and §14.4), as a user install (`integration_types: [1]`, `contexts: [0, 1, 2]`):
+
+| Command                                  | Options                                                                                | Answered by                                                                                                    |
+| ---------------------------------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `/card-search`                           | `card`                                                                                 | this Worker, from Scryfall                                                                                     |
+| `/collection search`, `/wishlist search` | `card`                                                                                 | the reader's Durable Object; `card` completed from what they hold                                              |
+| `/deck`                                  | `deck`, `format: plain\|arena\|mtgo\|moxfield`                                         | the reader's Durable Object                                                                                    |
+| `/collection add`                        | `card` (required), `set`, `quantity` (1–99), `finish: nonfoil\|foil\|etched`, `folder` | the reader's Durable Object; `card` and `set` completed **here** from Scryfall, `folder` by the Durable Object |
+| `/wishlist add`                          | `card` (required), `set`, `quantity` (1–99), `finish`                                  | as above, with no folder                                                                                       |
+
+**An add's completions.** `card` is Scryfall's `cards/autocomplete`, as for `/card-search`. `set`
+is the printings of the card the `card` option holds as the reader types —
+`cards/search?q=!"<name>" unique:prints`, newest first, kept to those whose name or code holds
+what was typed — each choice one printing, named `Double Masters 2022 (2X2) #117` with the value
+`2x2/117`, because a set can hold several printings of one card. Every request carries the
+`User-Agent` and `Accept` Scryfall requires and is cached at the edge (`src/scryfall.ts`). Neither
+needs a link: they read nobody's data, and the command itself tells an unlinked reader where the
+switch is.
+
+**What an add is** is the bot device's (`../bot-device/README.md`, _Adding a card_): it answers
+privately with the add spelled out and a Confirm and a Cancel button, and only a press on
+Confirm by the reader who asked writes anything. The press is an interaction like any other
+(type 3), which this Worker forwards untouched.
 
 ## Deploying
 

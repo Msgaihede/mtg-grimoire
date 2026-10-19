@@ -3,6 +3,7 @@ import {
   admit,
   admitBody,
   admitRestricted,
+  admitRestrictedBody,
   admitToLog,
   bindDevice,
   DEVICE_BINDING,
@@ -12,6 +13,7 @@ import {
   isSig,
   MAX_PUSH_BODY_CHARS,
   quotaDay,
+  RESTRICTED_PUSH_BYTES,
   RESTRICTED_PUSHES_PER_DAY,
   SIG_CHARS,
   type Refusal,
@@ -250,6 +252,32 @@ describe("admitRestricted", () => {
       quotaDay(Date.UTC(2026, 9, 17, 0, 0)),
     );
     expect(quotaDay(Date.UTC(2026, 9, 18))).toBe(quotaDay(Date.UTC(2026, 9, 17)) + 1);
+  });
+});
+
+describe("admitRestrictedBody", () => {
+  it("admits a restricted device's push of exactly 64 KiB and refuses one byte more", () => {
+    expect(RESTRICTED_PUSH_BYTES).toBe(65_536);
+    expect(admitRestrictedBody(0)).toBeNull();
+    expect(admitRestrictedBody(RESTRICTED_PUSH_BYTES)).toBeNull();
+    expect(admitRestrictedBody(RESTRICTED_PUSH_BYTES + 1)).toEqual({
+      status: 413,
+      code: "restricted_too_large",
+      error: expect.any(String) as string,
+    });
+  });
+
+  it("decides nothing on a Content-Length that is not a number", () => {
+    expect(admitRestrictedBody(Number("not a length"))).toBeNull();
+  });
+
+  it("is far inside the general cap, and far above what 25 allow-listed adds seal to", () => {
+    expect(RESTRICTED_PUSH_BYTES).toBeLessThan(MAX_PUSH_BODY_CHARS);
+    // `MAX_SEALED_CHARS`' measured batch: 200 fully populated `collection_entries` ops sealed to
+    // 186 188 characters. 25 of them (`ADD_OPS_PER_ENVELOPE`), plus the envelope's other fields
+    // and a signature, is the worst an honest bot sends — and an allow-listed add is smaller.
+    const honestWorst = Math.ceil((186_188 / 200) * 25) + 400;
+    expect(honestWorst * 2).toBeLessThan(RESTRICTED_PUSH_BYTES);
   });
 });
 
