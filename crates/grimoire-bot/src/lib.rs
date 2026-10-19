@@ -1,16 +1,19 @@
 //! **The Discord bot as a restricted sync device** — the Discord spec
-//! (`docs/superpowers/specs/2026-10-17-discord-integration-design.md`) §9 and §13, PR 3.
+//! (`docs/superpowers/specs/2026-10-17-discord-integration-design.md`) §9 and §13 (PR 3), and §14
+//! (PR 4: the `add` capability).
 //!
 //! `grimoire-core` compiled to WASM for **workerd**, held by the `BotDevice` Durable Object in
 //! `infrastructure/bot-device/`, one object per Discord link. It is a device of the reader's sync
 //! group — paired by the desktop through an invite, holding its own identity and the group key —
-//! that pulls the group's ops with the core's own client and answers narrow reads. It is
-//! **read-only**: it never pushes (capture is off), and every device refuses what it would send.
+//! that pulls the group's ops with the core's own client and answers narrow reads. It is an
+//! **`add` device**: capture is off, so nothing it does to its own rows is ever an op; the one
+//! thing it sends is what a reader confirmed in Discord (`/collection add`, `/wishlist add`), as
+//! the single op `integration::add::emit` builds and every receiver's allow-list checks.
 //!
 //! | Module | Compiled for | Holds |
 //! | --- | --- | --- |
 //! | [`vfs`] | every target | The SQLite page store: pages in the Durable Object's SQL storage, sealed under `BOT_KEK` |
-//! | [`device`] | every target | One object's engine: enrol, the alarm's step (pairing, pull, corpus), status, the reads |
+//! | [`device`] | every target | One object's engine: enrol, the alarm's step (pairing, push, pull, corpus), status, the reads, an add's target and its emit |
 //! | [`queries`] | every target | The reads the Durable Object renders |
 //! | [`corpus`] | every target | The slim corpus, from Scryfall's `/cards/collection` |
 //! | `glue` | wasm32 only | The `#[wasm_bindgen]` class `Bot` and the JavaScript page store |

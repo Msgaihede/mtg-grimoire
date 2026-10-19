@@ -408,6 +408,79 @@ pub fn names(
     Ok(rows)
 }
 
+/// **An add's `folder` completion** (the Discord spec, §14.4): the collection's `kind = 'user'`
+/// folders whose path holds `prefix` anywhere, those that begin with it first, at most `limit`
+/// (never more than [`MAX_NAMES`]). The name is the folder's path (`Binder/Artifacts`) and the
+/// value its `sync_uid` — the one name of a folder every device of the group shares, and what
+/// `integration::add::CollectionAdd::folder_uid` is. A folder with no uid yet is no choice.
+///
+/// A deck's folder and the removed-cards folder are never offered: a bot's add to either is
+/// refused by every receiver (§14.2), so offering one would be offering a refusal.
+pub fn folders(conn: &Connection, prefix: &str, limit: usize) -> Result<Vec<Choice>, String> {
+    let limit = limit.clamp(1, MAX_NAMES);
+    let sql = format!(
+        "{COLLECTION_PATHS}
+         SELECT p.path, f.sync_uid
+           FROM collection_folders f JOIN paths p ON p.id = f.id
+          WHERE f.kind = 'user' AND f.sync_uid IS NOT NULL
+            AND instr(lower(p.path), lower(?1)) > 0
+          ORDER BY instr(lower(p.path), lower(?1)) <> 1, p.path COLLATE NOCASE, f.sync_uid
+          LIMIT ?2"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(err)?;
+    let rows = stmt
+        .query_map(params![prefix.trim(), limit as i64], |r| {
+            Ok(Choice {
+                name: clip(&r.get::<_, String>(0)?, MAX_CHOICE_CHARS),
+                value: r.get::<_, String>(1)?,
+            })
+        })
+        .map_err(err)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(err)?;
+    Ok(rows)
+}
+
+/// A collection folder an add names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Folder {
+    pub uid: String,
+    /// `Binder/Artifacts`, root first.
+    pub path: String,
+    /// `user`, `deck` or `removed`.
+    pub kind: String,
+}
+
+/// **The collection folder `uid_or_path` names**: its `sync_uid` (what the completion handed
+/// out), or — typed by hand — its path or its own name, the same any case, a user folder first.
+/// `None` when no folder with a uid is either.
+pub fn folder(conn: &Connection, uid_or_path: &str) -> Result<Option<Folder>, String> {
+    let wanted = uid_or_path.trim();
+    if wanted.is_empty() {
+        return Ok(None);
+    }
+    let sql = format!(
+        "{COLLECTION_PATHS}
+         SELECT f.sync_uid, p.path, f.kind
+           FROM collection_folders f JOIN paths p ON p.id = f.id
+          WHERE f.sync_uid IS NOT NULL
+            AND (f.sync_uid = ?1 OR p.path = ?1 COLLATE NOCASE OR f.name = ?1 COLLATE NOCASE)
+          ORDER BY f.sync_uid = ?1 DESC, f.kind = 'user' DESC, p.path = ?1 COLLATE NOCASE DESC,
+                   f.created_at, f.id
+          LIMIT 1"
+    );
+    conn.query_row(&sql, [wanted], |r| {
+        Ok(Folder {
+            uid: r.get(0)?,
+            path: r.get(1)?,
+            kind: r.get(2)?,
+        })
+    })
+    .optional()
+    .map_err(err)
+}
+
 const DECK_SUMMARY: &str = "SELECT coalesce(d.sync_uid, 'id:' || d.id), d.name, d.format_key,
         coalesce((SELECT sum(quantity) FROM deck_cards dc
                    WHERE dc.deck_id = d.id AND dc.variant = 'live'), 0)

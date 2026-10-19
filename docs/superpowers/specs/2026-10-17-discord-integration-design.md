@@ -368,3 +368,202 @@ with the `discord_url` override in `sync_state`.
 - **Not linked.** A reader with no link gets an ephemeral sentence pointing to Settings →
   Integrations.
 - **No adds.** `/collection add` and `/wishlist add` are not registered until PR 4.
+
+## 14. PR 4's contract (2026-10-19)
+
+PR 4 gives the bot the `add` capability and the two commands that use it. It is built against
+this section in three parts at once: the engine (`crates/grimoire-core`), the bot and the front
+(`crates/grimoire-bot`, `infrastructure/bot-device`, `infrastructure/discord-worker`), and the
+desktop, the page, the relay and the docs. Every part uses the names below. Nothing here is
+deployed: the bot has never run, so no `read` bot exists to migrate.
+
+### 14.1 One capability: a new enable pairs the bot as `add`
+
+- **`roster::ADD = "add"`.** Enabling Discord pairs the bot with `cap: "add"`, in place of `read`.
+  `"read"` stays a word every build understands (refuse everything), and nothing pairs with it.
+- `Member::is_full` does not change: only `full` is full. `add` is restricted in every rule that
+  PR 2 gave a restricted device: never a sealer, never a planner, never a baseline, a `cap` claim
+  on its token, the relay's daily quota, refused by the share Worker and the scan inbox.
+- **Protocol level.** `identity::PROTO = 3` is the level this build advertises, in pairing slots,
+  amendments and roster documents. `identity::ADD_PROTO = 3` is the level that understands the
+  `add` rules. `SIG_PROTO` stays 2 (the level that signs). A device whose filed level rose since
+  its last amendment amends its own entry again, so an existing group reaches 3 without a
+  rotation. In signed mode only a full device amends, as before.
+- **The gate** (§13.5) gains one refusal: a member below `ADD_PROTO`, named, with the same
+  *Update or remove <device> first.* sentence shape.
+- **Joining a group that holds an `add` member** is refused, on both sides, for a joiner below
+  `ADD_PROTO`. That device would refuse every bot op, so it would never see the reader's adds.
+  An older build that is already a member refuses an `add` member's ops (any word but `full` is
+  restricted). That is safe, but it diverges, which is what the gate is for.
+
+### 14.2 What a receiver accepts from an `add` member
+
+`client::open_checked` stops refusing an `add` sender outright. It opens the envelope (signature
+first, then the AEAD, then the binding, which is refused in signed mode), then runs the
+**stateless allow-list** over every op. **One op off the list refuses the whole envelope**:
+consumed and logged once, like `WireError::Restricted`, never held.
+
+The list:
+- `kind` is `Put`; `baseline` is false; there is no `horizon` and no `emission`.
+- `table` is `collection_entries` or `wishlist_entries`.
+- `counters` is exactly `{ "quantity": n }`, with `1 ≤ n ≤ 99`.
+- `fields` is a subset of the table's identity fields, and nothing else:
+  - `collection_entries`: `card_id`, `set_code`, `collector_number`, `lang`, `finish`
+    (`nonfoil|foil|etched`).
+  - `wishlist_entries`: `oracle_id`, `card_id`, `set_code`, `collector_number`, `lang`, `name`,
+    `preferred_finish` (`nonfoil|foil|etched` or null).
+- `parents` is exactly `{ "folder": … }`:
+  - for a collection entry, a folder uid (never null);
+  - for a wishlist entry, a folder uid or null (the wishlist's root).
+- An envelope carries at most `ADD_OPS_PER_ENVELOPE = 25` ops.
+
+Then the **stateful guards** in `apply`, for an op whose sender is restricted:
+- A collection entry's folder must be a `kind = 'user'` folder. A `deck` or `removed` folder
+  refuses the op (consumed and logged). A folder this device does not hold yet waits, as any
+  missing parent does, and is checked again when it arrives.
+- **A create on a known uid is applied as an increment**: only the counter, and no field.
+- **A grain match takes only the counter**: a fresh uid that meets an existing row's grain adds
+  its quantity to that row and changes none of its fields.
+- **Restricted ops lose every last-writer and add-wins contest against unrestricted ones**
+  (`merge::fold_remembering`, `Memory::merge`). Whatever their stamps, a full device's field
+  value beats a restricted one, and a full device's delete beats a restricted counter. So a bot
+  add can never resurrect a row the reader deleted, and can never undo a reader's edit.
+- Two restricted ops about one row merge with each other as usual (sum the counters).
+
+### 14.3 What the bot emits (`grimoire_core::integration::add`)
+
+```rust
+pub const ADDED_FROM_DISCORD: &str = "Added from Discord";
+pub const MAX_QUANTITY: i64 = 99;
+pub const ADD_OPS_PER_ENVELOPE: usize = 25;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionAdd {
+    pub card_id: String,          // Scryfall printing id
+    pub set_code: String,
+    pub collector_number: String,
+    pub lang: String,
+    pub finish: String,           // nonfoil | foil | etched
+    pub quantity: i64,            // 1..=99
+    pub folder_uid: String,       // a kind='user' collection folder's sync_uid
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WishlistAdd {
+    pub oracle_id: String,
+    pub name: String,
+    pub printing: Option<WishlistPrinting>, // None = any printing
+    pub preferred_finish: Option<String>,
+    pub quantity: i64,
+    pub folder_uid: Option<String>,         // None = the wishlist's root
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WishlistPrinting { pub card_id: String, pub set_code: String, pub collector_number: String, pub lang: String }
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "table", rename_all = "camelCase")]
+pub enum Add { Collection(CollectionAdd), Wishlist(WishlistAdd) }
+
+/// Builds the one `Put` the allow-list accepts, writes it to this device's outbox, and applies it
+/// here through the same guarded path a receiver uses, so the bot's own reads agree with every
+/// other device's. Refuses (one sentence) unless this device's own capability is `add`, the add
+/// passes the allow-list, and the folder is one the guards accept. Answers the row's sync_uid.
+pub fn emit(conn: &Connection, add: &Add) -> Result<String, String>;
+
+/// The folder a collection add goes to when none is named: the top-level `kind = 'user'`
+/// collection folder named `ADDED_FROM_DISCORD` (case-insensitive), the oldest if several.
+pub fn default_folder(conn: &Connection) -> rusqlite::Result<Option<String>>;
+
+/// Creates that folder if it is absent (a full device, inside the caller's write). The desktop
+/// calls it on enable. Answers its local id.
+pub fn ensure_added_folder(conn: &Connection) -> rusqlite::Result<i64>;
+```
+
+And in `sync_engine::client`:
+
+```rust
+/// Seal, sign and push this device's outbox: at most `ADD_OPS_PER_ENVELOPE` ops per envelope, one
+/// envelope per call. Never a baseline, a join publish or a roster amendment. Refuses unless this
+/// device's own capability is `add`. Answers how many ops were pushed (0 when the outbox is
+/// empty, with no request). A `429 restricted_quota` is an answer, not a failure: the outbox is
+/// kept for the next day.
+pub async fn push_restricted(db: &impl Store) -> Result<usize, String>;
+```
+
+The bot's capture stays off. `emit` is the only thing that ever puts an op in its outbox.
+
+### 14.4 The commands
+
+| Command | Options |
+| --- | --- |
+| `/collection add` | `card` (required, autocomplete), `set` (autocomplete: the card's printings), `quantity` (integer 1–99, default 1), `finish` (choices `nonfoil`, `foil`, `etched`; default the printing's first), `folder` (autocomplete: `kind = 'user'` folders) |
+| `/wishlist add` | `card` (required, autocomplete), `set` (autocomplete), `quantity` (1–99, default 1), `finish` (as above, optional) |
+
+- **Autocomplete.** The front answers `card` and `set` from Scryfall itself
+  (`cards/autocomplete`; `cards/search?q=!"<name>" unique:prints`). It forwards `folder` to the
+  Durable Object.
+- **Resolving.** The Durable Object resolves the printing from Scryfall: `cards/{set}/{number}`
+  when a set was chosen, `cards/named?exact=` otherwise, which is Scryfall's default printing. A
+  collection add without a set takes that printing, and the confirmation names it. A wishlist add
+  without a set is an any-printing entry (`oracle_id` and `name` only). A finish the printing is
+  not made in is refused in one sentence.
+- **The proposal.** The Durable Object keeps it in its own storage, apart from the engine's
+  database: `{ id, discordUserId, add, summary, expiresAt }`, with an id of 16 random bytes
+  (base64url) and a lifetime of `PROPOSAL_TTL_MS = 15 * 60 * 1000`. It answers an **ephemeral**
+  message (`flags: 64`) that states the add (*Add 2× Lightning Bolt — Double Masters 2022 (2X2)
+  #117, foil — to Added from Discord?*) with two buttons:
+  - `custom_id` `add:confirm:<id>`, style success, label **Confirm**;
+  - `custom_id` `add:cancel:<id>`, style secondary, label **Cancel**.
+- **A button press** (interaction type 3) is forwarded to the Durable Object through
+  `interaction()`, like any other. The Durable Object re-verifies Discord's signature, then:
+  - an unknown or expired proposal gets *That request has expired. Run the command again.*;
+  - a presser other than the proposer gets an ephemeral refusal, and the proposal stands;
+  - **Cancel** deletes it and updates the message (type 7) to *Cancelled.*, with no buttons;
+  - **Confirm** deletes it, re-checks the folder, runs `integration::add::emit`, updates the
+    message to *Added 2× Lightning Bolt … to Added from Discord. It reaches your devices on their
+    next sync.*, with no buttons, and sets an alarm a second away. The alarm pushes
+    (`push_restricted`), then pulls. **No network inside the interaction.**
+- **Refusals** are one ephemeral sentence each: not linked; not paired yet; the default folder is
+  missing (*Name a folder, or switch Discord off and on in Settings to bring back Added from
+  Discord.*); a folder that is not a user folder; a card Scryfall does not know; the day's quota
+  (*Discord has added as much as it may today; try again tomorrow.*).
+- `BotDeviceRpc.enroll` and `POST /link/enroll` take `capability: "add"`.
+  `pairing::Pinned.capability` is `"add"`.
+
+### 14.5 The desktop, the page and the relay
+
+- `discord_enable` calls `integration::add::ensure_added_folder` inside its write, before the
+  enroll, and pairs as `add`. Nothing else in its IPC changes shape.
+- The panel's copy and its enable dialog say what `add` means. The bot can add cards to the
+  collection and the wishlist, and only after you press Confirm in Discord. It can never change or
+  remove anything, and it adds to **Added from Discord** unless you name a folder. The privacy
+  policy's Discord section says the same.
+- **The relay bounds a restricted device's push by size**: a body over
+  `RESTRICTED_PUSH_BYTES = 64 * 1024` is refused with `413 restricted_too_large`. The per-day count
+  (`RESTRICTED_PUSHES_PER_DAY`) stays as PR 2 built it.
+
+### 14.6 As built
+
+- **`emit` sends an increment when the bot already holds the row**: a row with the same card,
+  finish, language and folder, other grain terms at their defaults. The op uses that row's own uid
+  and carries only `{quantity}` and `{folder}`, a shape the allow-list takes. On one shared uid,
+  the rank makes a reader's concurrent delete win on every device. A fresh uid would leave
+  devices disagreeing, depending on arrival order.
+- **The bot's capture stays off** through `integration::add::CAPTURE_OFF`, a TEMP trigger that
+  lets an outbox insert through only while the uncommitted `sync_state` key
+  `integration_emitting` is set, which only `emit` does. A restricted device's `run_once` pushes
+  nothing and builds no baseline. `push_restricted` is its only push.
+- **Proposals are sealed** with AES-GCM under HKDF(`BOT_KEK`, object id) in the Durable Object's
+  own SQL storage. A copy of the storage alone reads nothing, as for the page store.
+- **An add command is answered deferred** (type 5, ephemeral) once every check that needs no
+  network has passed. The Scryfall lookup and the proposal run in `ctx.waitUntil`, and the
+  original response is then edited through the interaction's webhook. A button press makes no
+  request.
+- **Known limit**: an increment on a known uid applies wherever that row now lives, provided the
+  op names a user folder. Refusing it because of the row's *current* folder would make the result
+  depend on arrival order. So a compromised bot can bump a row that a reader has since moved into
+  a deck's folder: it can only add, and only within the daily cap.

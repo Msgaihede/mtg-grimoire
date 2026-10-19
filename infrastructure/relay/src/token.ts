@@ -34,11 +34,11 @@
  * (`admit.ts`'s `bindDevice`).
  *
  * **`cap` is what the group's newest signed roster document says the device may do, when that is
- * not `full`** — `"read"` for the Discord bot's first release (issue #1096, spec §12). Minted by
+ * not `full`** — `"add"` for the Discord bot (issue #1096, spec §12 and §14.1). Minted by
  * `claim.ts`'s `grantFor` from `roster.ts`'s `capOf`, and **absent on every token of a full
  * device**, so a full device's token is the bytes it always was and every token minted before this
  * existed reads as full. Read by three Workers: the relay keeps a restricted device's pushes under
- * a daily cap, and the share Worker and the scan inbox refuse a restricted device outright
+ * a daily cap and a size bound, and the share Worker and the scan inbox refuse a restricted device outright
  * ([`isRestricted`]). An open set of strings, not a closed union: a `cap` this build does not know
  * is restricted, which is the direction to fail in.
  */

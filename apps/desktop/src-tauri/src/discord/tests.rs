@@ -264,7 +264,7 @@ async fn enroll_refusals_are_read_by_status() {
             when.method(POST)
                 .path("/link/enroll")
                 .header("authorization", "Bearer the-secret")
-                .body_includes("\"capability\":\"read\"")
+                .body_includes("\"capability\":\"add\"")
                 .body_includes("\"invite\":\"INVITE\"");
             then.status(code)
                 .json_body(serde_json::json!({ "error": "raw", "code": "x" }));
@@ -343,11 +343,18 @@ struct FakeFront<'a> {
     log: &'a Log,
     enroll: Result<Enrolled, String>,
     unlink: Result<(), String>,
+    /// The database the switch-on writes, when a test asks whether the *Added from Discord*
+    /// folder was already there at the enroll — `enroll +folder` in the log if it was.
+    seen: Option<&'a Connection>,
 }
 
 impl Front for FakeFront<'_> {
     async fn enroll(&self, invite: &str) -> Result<Enrolled, String> {
-        self.log.push(format!("enroll {invite}"));
+        let folder = match self.seen {
+            Some(conn) if added_folders(conn) == 1 => " +folder",
+            _ => "",
+        };
+        self.log.push(format!("enroll {invite}{folder}"));
         self.enroll.clone()
     }
     async fn unlink(&self) -> Result<(), String> {
@@ -390,17 +397,38 @@ fn front_of(log: &Log) -> FakeFront<'_> {
         log,
         enroll: Ok(answered()),
         unlink: Ok(()),
+        seen: None,
     }
 }
 
-/// ⚠ **The order**: the gate, the offer, the enroll with its invite, the wait, the confirm on the
-/// pins the enroll answered (as `read`) — and the bot's id kept.
+/// How many top-level user folders are named *Added from Discord*, in any case.
+fn added_folders(conn: &Connection) -> i64 {
+    conn.query_row(
+        "SELECT count(*) FROM collection_folders
+          WHERE kind = 'user' AND parent_id IS NULL AND name = ?1 COLLATE NOCASE",
+        [grimoire_core::integration::add::ADDED_FROM_DISCORD],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+/// ⚠ **The order**: the gate, the *Added from Discord* folder — there before the enroll — the
+/// offer, the enroll with its invite, the wait, the confirm on the pins the enroll answered **as
+/// `add`** (spec §14.1) — and the bot's id kept.
 #[tokio::test]
 async fn a_switch_on_runs_in_order_and_keeps_the_bot() {
     let conn = db();
+    // Capture armed, as a launch arms it: it names the folder (`sync_uid`), which is how the
+    // engine — and the bot, once it syncs — finds it.
+    grimoire_core::sync_engine::capture::install(&conn).unwrap();
     linked(&conn);
+    assert_eq!(added_folders(&conn), 0);
     let log = Log::default();
-    let joined = flow::enable(&conn, &mut ceremony(&log), &front_of(&log))
+    let front = FakeFront {
+        seen: Some(&conn),
+        ..front_of(&log)
+    };
+    let joined = flow::enable(&conn, &mut ceremony(&log), &front)
         .await
         .unwrap();
     assert_eq!(joined.device_id, "bot-1");
@@ -409,13 +437,38 @@ async fn a_switch_on_runs_in_order_and_keeps_the_bot() {
         [
             "gate",
             "begin",
-            "enroll INVITE",
+            "enroll INVITE +folder",
             "joined",
-            "confirm bot-1 read"
+            "confirm bot-1 add"
         ]
     );
+    assert_eq!(roster::ADD, "add");
     assert_eq!(local::bot(&conn).as_deref(), Some("bot-1"));
     assert!(local::link(&conn).is_some());
+    // The engine's own answer agrees: the folder a collection add lands in when none is named.
+    assert!(grimoire_core::integration::add::default_folder(&conn)
+        .unwrap()
+        .is_some());
+}
+
+/// The folder is made once: a switch-on into a collection that already has one — the reader's
+/// own, in another case, or the one an earlier switch-on made — makes no second.
+#[tokio::test]
+async fn a_switch_on_keeps_the_added_folder_it_finds() {
+    let conn = db();
+    grimoire_core::sync_engine::capture::install(&conn).unwrap();
+    linked(&conn);
+    conn.execute(
+        "INSERT INTO collection_folders (parent_id, name, kind, sort_order, created_at, updated_at)
+         VALUES (NULL, 'added from discord', 'user', 0, 0, 0)",
+        [],
+    )
+    .unwrap();
+    let log = Log::default();
+    flow::enable(&conn, &mut ceremony(&log), &front_of(&log))
+        .await
+        .unwrap();
+    assert_eq!(added_folders(&conn), 1);
 }
 
 #[tokio::test]
@@ -439,6 +492,8 @@ async fn a_switch_on_with_no_link_or_a_closed_gate_asks_nobody() {
     );
     assert_eq!(log.calls(), ["gate"]);
     assert!(local::link(&conn).is_some());
+    // A closed gate writes nothing, the folder included.
+    assert_eq!(added_folders(&conn), 0);
 }
 
 /// ⚠ **A failure after the enroll undoes the link** — the wait timing out, keys that are not keys,
@@ -477,6 +532,8 @@ async fn a_failure_after_the_enroll_undoes_the_link() {
         );
         assert!(local::link(&conn).is_none(), "{case}");
         assert!(local::bot(&conn).is_none(), "{case}");
+        // The folder is the reader's, made before the enroll, and stays.
+        assert_eq!(added_folders(&conn), 1, "{case}");
     }
 }
 

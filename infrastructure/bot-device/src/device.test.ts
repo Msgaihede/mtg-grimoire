@@ -208,16 +208,18 @@ describe("freshness", () => {
 describe("enrolling, alarms and unlinking", () => {
   it("enrolls through the engine and polls the rendezvous soon", async () => {
     const { device, engine, alarms } = await setUp();
-    const answer = await device.enroll({ invite: "INVITE", capability: "read" });
+    const answer = await device.enroll({ invite: "INVITE", capability: "add" });
     expect(answer).toEqual({ ok: true, deviceId: "dev", x25519: "x", ed25519: "e" });
-    expect(engine.calls).toEqual(["enroll INVITE read"]);
+    expect(engine.calls).toEqual(["enroll INVITE add"]);
     expect(alarms.sets).toEqual([NOW + 1500]);
   });
 
-  it("refuses an enrolment that asks for more than reading", async () => {
+  it("refuses an enrolment that asks for anything but adding — reading too", async () => {
     const { device, engine } = await setUp();
-    const answer = await device.enroll({ invite: "INVITE", capability: "full" as "read" });
-    expect(answer).toMatchObject({ ok: false, code: "bad_invite" });
+    for (const capability of ["read", "full"]) {
+      const answer = await device.enroll({ invite: "INVITE", capability: capability as "add" });
+      expect(answer).toMatchObject({ ok: false, code: "bad_invite" });
+    }
     expect(engine.calls).toEqual([]);
   });
 
@@ -262,7 +264,7 @@ describe("enrolling, alarms and unlinking", () => {
       lastPullAt: null,
       error: "BOT_KEK is not base64url",
     });
-    expect(await device.enroll({ invite: "x", capability: "read" })).toMatchObject({
+    expect(await device.enroll({ invite: "x", capability: "add" })).toMatchObject({
       ok: false,
       code: "pairing_failed",
     });

@@ -20,7 +20,10 @@ import type {
   InteractionRequest,
 } from "@grimoire/discord-worker/src/rpc";
 import { Device } from "./device";
+import { DISCORD_API } from "./discord";
 import { openEngine } from "./engine";
+import { Proposals, proposalKey } from "./proposals";
+import { API as SCRYFALL_API } from "./scryfall";
 import { SqlPageStore } from "./store";
 
 export interface Env {
@@ -28,9 +31,11 @@ export interface Env {
   BOT_KEK: string;
   /** Discord's application public key, hex. */
   DISCORD_PUBLIC_KEY: string;
-  /** Local runs only (`wrangler dev --local`): a relay and a Scryfall to point the engine at. */
+  /** Local runs only (`wrangler dev --local`): a relay and a Scryfall to point the engine at, and
+   *  a Discord API for an add's reply to be edited at. */
   BOT_RELAY_URL?: string;
   BOT_SCRYFALL_URL?: string;
+  BOT_DISCORD_API?: string;
 }
 
 export class BotDevice extends DurableObject<Env> implements BotDeviceRpc {
@@ -55,6 +60,15 @@ export class BotDevice extends DurableObject<Env> implements BotDeviceRpc {
       alarms: ctx.storage,
       publicKey: env.DISCORD_PUBLIC_KEY ?? "",
       now: () => Date.now(),
+      // An add's proposals, beside the page store and sealed under the same secret (`proposals.ts`).
+      proposals: new Proposals(ctx.storage, () =>
+        proposalKey(env.BOT_KEK ?? "", ctx.id.toString()),
+      ),
+      // An add's Scryfall lookup and its reply's edit run after the deferred answer has gone.
+      defer: (work) => ctx.waitUntil(work),
+      fetch: (input, init) => fetch(input, init),
+      scryfallUrl: env.BOT_SCRYFALL_URL || SCRYFALL_API,
+      discordApi: env.BOT_DISCORD_API || DISCORD_API,
     });
   }
 

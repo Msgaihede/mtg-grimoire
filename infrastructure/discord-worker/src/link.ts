@@ -359,7 +359,7 @@ export const ENROLL_STATUS: Record<EnrollRefused["code"], number> = {
   pairing_failed: 502,
 };
 
-/** `POST /link/enroll { invite, capability: "read" }`. */
+/** `POST /link/enroll { invite, capability: "add" }` — `add` and nothing else (§14.1). */
 export async function handleEnroll(request: Request, env: Env, link: LinkRow): Promise<Response> {
   const body = await jsonBody(request, MAX_INVITE_CHARS + 256);
   const invite = body?.invite;
@@ -367,13 +367,13 @@ export async function handleEnroll(request: Request, env: Env, link: LinkRow): P
     typeof invite !== "string" ||
     invite.trim() === "" ||
     invite.length > MAX_INVITE_CHARS ||
-    body?.capability !== "read"
+    body?.capability !== "add"
   ) {
-    return refusal(400, "bad_request", 'send { invite, capability: "read" }');
+    return refusal(400, "bad_request", 'send { invite, capability: "add" }');
   }
   let answer: Awaited<ReturnType<BotDeviceRpc["enroll"]>>;
   try {
-    answer = await botOf(env, link).enroll({ invite, capability: "read" });
+    answer = await botOf(env, link).enroll({ invite, capability: "add" });
   } catch {
     // The desktop has an invite waiting and nobody answered it: as far as it can tell the
     // pairing failed, and §13.3 has one answer for that.

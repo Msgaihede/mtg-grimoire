@@ -270,6 +270,14 @@ pub enum WireError {
     /// (`client::evaluate`).
     #[error("that batch is from a device that may only read this group")]
     Restricted,
+    /// From an `add` member (the Discord spec's §14.2), opened and verified, and **one of its ops
+    /// is off the allow-list** (`integration::add::allowed`, whose sentence this carries) — so the
+    /// whole envelope is refused. Consumed and recorded once per sender, exactly like
+    /// [`WireError::Restricted`]: never held, never a gap.
+    #[error(
+        "that batch is from a device that may only add cards, and it carried something else: {0}"
+    )]
+    NotAnAdd(String),
     /// Not a list of ops. On the way in: opened under the group key and did not parse, and
     /// **nothing in it says a newer build sealed it**, so no update of this device will ever read
     /// it. On the way out: ops [`seal_batch`] could not serialize.

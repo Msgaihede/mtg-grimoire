@@ -40,6 +40,13 @@ export interface DeckSummary {
   cards: number;
 }
 
+/** `device::Target`: where an add goes — a collection folder's uid and path, or for a wish,
+ *  `null` for both (the wishlist's root). */
+export interface Target {
+  uid: string | null;
+  path: string | null;
+}
+
 /** `device::Advanced`: what an alarm did. */
 export interface Advanced {
   nextInMs: number | null;
@@ -47,7 +54,8 @@ export interface Advanced {
   did: string;
 }
 
-/** A read's answer: `{ ok }` or `{ err }`. */
+/** A read's answer: `{ ok }` or `{ err }`. An add's (`target`, `add`) may also be
+ *  `{ refused }`: a sentence for the reader, in the engine's own words. */
 export type Answer<T> = { ok: T } | { err: string };
 
 /**
@@ -63,6 +71,15 @@ export interface Engine {
   names(kind: string, prefix: string, limit: number): string;
   decks(prefix: string): string;
   deck_cards(uid: string): string;
+  /** `{ ok: Choice[] }` — the reader's `kind = 'user'` collection folders, value the uid. */
+  folders(prefix: string, limit: number): string;
+  /** `{ ok: Target } | { refused } | { err }` — where an add to `table` goes, `folder` named or
+   *  `""` for the default; refused for a missing default, a folder that is not a user folder,
+   *  and the day's quota. */
+  target(table: string, folder: string): string;
+  /** `{ ok: uid } | { refused } | { err }` — `integration::add::emit` on the add's JSON, after
+   *  the folder and the quota are checked again. */
+  add(add: string): string;
   close(): void;
 }
 

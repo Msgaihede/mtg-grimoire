@@ -132,11 +132,36 @@
 //! [`orphans::sweep`], at the end of every pass, replays every entry whose parent is a row here
 //! again. An op that arrives for a row only the ledger holds is laid over its entry instead of
 //! being skipped. [`orphans`] is the whole of it.
+//!
+//! # An `add` member's ops are adds and nothing more
+//!
+//! The Discord spec's §14.2. What reaches here from an `add` member has passed its allow-list
+//! (`integration::add::allowed`, in `client::open_checked`): puts to two tables, a quantity, the
+//! card's identity and a folder. Four rules make those puts **adds** on every device, in every
+//! order, and the first three are this module's:
+//!
+//! * **A collection add files only into one of the reader's own folders** ([`off_limits`]): a
+//!   `deck` or `removed` folder refuses the op — consumed, recorded once ([`NOT_A_USER_FOLDER`]),
+//!   its watermark passed — and a folder not here yet waits like any missing parent, and is
+//!   asked again on the page that brings it.
+//! * **It never changes a row that is here** ([`updates`]): a field or a placement whose winning
+//!   stamp is a restricted device's is not written, so a create on a known uid is an increment
+//!   and a grain match takes only the counter. Only a row that was not here at all is built from
+//!   it.
+//! * **It is matched on the grain its insert would build** ([`restricted_grain`]): the terms it
+//!   does not carry at their columns' defaults.
+//! * **It loses every last-writer and add-wins contest to a full device's op**, whatever the
+//!   stamps — every fold here is [`fold_ranked`] under the page's [`Ranks`], and so is every
+//!   memory [`heard`] keeps. A reader's delete is never undone by a bot add, and a reader's edit
+//!   never by a bot's field.
+//!
+//! [`apply_own`] is the bot's own door to the same rules, for the op `integration::add::emit`
+//! has just put in its outbox.
 
 use crate::sync_engine::capture::{self, Absent, Parent, Spec};
 use crate::sync_engine::emission;
 use crate::sync_engine::hlc::Hlc;
-use crate::sync_engine::merge::{fold, fold_remembering, Horizon, Kind, Op, Resolved};
+use crate::sync_engine::merge::{fold_ranked, Horizon, Kind, Memory, Op, Ranks, Resolved};
 use rusqlite::types::Value as Sql;
 use rusqlite::{Connection, OptionalExtension};
 use std::collections::{BTreeMap, BTreeSet};
@@ -838,6 +863,19 @@ struct Group<'a> {
     ops: Vec<&'a Op>,
     /// The fold of the incoming ops alone. Counters come from here.
     resolved: Resolved,
+    /// Who loses by rank in every fold about this row ([`Ranks`]) — the page's one view of the
+    /// roster, carried so that each fold of the group, with history or without, ranks alike.
+    ranks: Ranks,
+}
+
+impl Group<'_> {
+    /// Whether every op of the group is a restricted device's — an `add` member's adds, and
+    /// nothing a full device said about the row. The stateful guards ask it ([`restricted_grain`]).
+    fn all_restricted(&self) -> bool {
+        self.ops
+            .iter()
+            .all(|op| self.ranks.is_restricted(&op.at.device))
+    }
 }
 
 /// Apply a batch of ops from other devices, holding every group whose parent has not arrived.
@@ -868,8 +906,89 @@ pub fn apply_page(
     waiting: Waiting,
 ) -> Result<(ApplyReport, Held), String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    let out = capture::suppressed(&tx, || apply_in(&tx, ops, held_back, waiting))?;
+    let out = capture::suppressed(&tx, || apply_in(&tx, ops, held_back, waiting, false))?;
     tx.commit().map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+/// **Apply one op this device wrote itself, as a receiver would apply it** — the one caller is
+/// `integration::add::emit`, which puts an `add` member's op in its own outbox and must hold what
+/// every other device will make of it, or the bot's own reads would disagree with the group's.
+///
+/// [`apply_page`] with three differences, each because the op is this device's: it is not
+/// dropped as its own; it is not remembered as heard (it is in `sync_ops`, which every fold
+/// already reads — remembered too, its counter would count twice in a row rebuilt here); and it
+/// moves no watermark (a device has none for itself). A parent that is not here is **released**,
+/// not held: there is no page to hand it back. Inside a `SAVEPOINT`, not a transaction, so it
+/// runs inside the caller's.
+pub fn apply_own(conn: &Connection, op: &Op) -> Result<ApplyReport, String> {
+    crate::db::in_savepoint(conn, "sync_apply_own", || {
+        capture::suppressed(conn, || {
+            apply_in(conn, std::slice::from_ref(op), &[], Waiting::Release, true)
+        })
+        .map(|(report, _)| report)
+    })
+}
+
+/// [`Ranks`] as this device's roster stands: every device ever restricted, and every row with a
+/// word other than `full` (`roster::restricted_devices`). Read once per apply.
+fn ranks_of(conn: &Connection) -> Result<Ranks, String> {
+    crate::sync_pair::roster::restricted_devices(conn)
+        .map(Ranks::new)
+        .map_err(|e| e.to_string())
+}
+
+/// What a collection add from a restricted device says when the folder it names is a deck's or
+/// *Recently removed* — never the reader's own. One row per apply that met any.
+pub const NOT_A_USER_FOLDER: &str = "a card another device added named a folder that is not one \
+     of yours (a deck's, or Recently removed), so it was not applied";
+
+/// **The restricted ops of the page that name a collection folder this device can tell is not a
+/// `kind = 'user'` one** — the Discord spec's §14.2, the stateful guard the allow-list cannot be:
+/// an `add` member may file a card only into one of the reader's own folders.
+///
+/// The folder's kind is read where it can be known: the folder's row here, or — for a folder the
+/// same page creates — the `kind` its insert carries. **A kind never changes** (no write updates
+/// `collection_folders.kind`), so the answer is the same on every device and in every order. A
+/// folder this device cannot place is left to the ordinary path, which waits for it as for any
+/// missing parent, and the guard is asked again on the page that brings it. An add naming the
+/// root, or no folder, is refused: an `add` member's collection add names a folder.
+fn off_limits<'a>(
+    conn: &Connection,
+    fresh: &[&'a Op],
+    page: &[Op],
+    ranks: &Ranks,
+) -> Result<Vec<&'a Op>, String> {
+    if ranks.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for op in fresh {
+        if op.table != "collection_entries" || !ranks.is_restricted(&op.at.device) {
+            continue;
+        }
+        let Some(Some(folder)) = op.parents.get("folder") else {
+            out.push(*op);
+            continue;
+        };
+        let here: Option<String> = conn
+            .prepare_cached("SELECT kind FROM collection_folders WHERE sync_uid = ?1")
+            .and_then(|mut stmt| stmt.query_row([folder], |r| r.get(0)).optional())
+            .map_err(|e| e.to_string())?;
+        let kind = here.or_else(|| {
+            page.iter()
+                .filter(|p| p.table == "collection_folders" && p.uid == *folder)
+                .find_map(|p| {
+                    p.fields
+                        .get("kind")
+                        .and_then(|k| k.as_str())
+                        .map(str::to_owned)
+                })
+        });
+        if kind.is_some_and(|k| k != crate::collection_folders::USER_KIND) {
+            out.push(*op);
+        }
+    }
     Ok(out)
 }
 
@@ -888,6 +1007,7 @@ fn apply_in(
     ops: &[Op],
     held_back: &[Op],
     waiting: Waiting,
+    own: bool,
 ) -> Result<(ApplyReport, Held), String> {
     let mut report = ApplyReport::default();
     let me: Option<String> = conn
@@ -902,7 +1022,8 @@ fn apply_in(
     // **Our own ops are dropped rather than applied**, and the relay is not trusted to have
     // done it: a counter is not idempotent, so one of this device's own `+1`s coming back
     // would be a card appearing out of nothing.
-    let mine = |op: &Op| me.as_deref() == Some(op.at.device.as_str());
+    let mine = |op: &Op| !own && me.as_deref() == Some(op.at.device.as_str());
+    let ranks = ranks_of(conn)?;
     let seen = |op: &Op| {
         watermarks
             .get(&op.at.device)
@@ -999,6 +1120,23 @@ fn apply_in(
         }
     }
 
+    // 1b. **A restricted device's collection add into a folder that is not the reader's own is
+    //     refused here** ([`off_limits`]): consumed and recorded, never grouped — so a full
+    //     device's ops about the same row, in the same page, are written as if it were not there.
+    let refused = off_limits(conn, &fresh, ops, &ranks)?;
+    if !refused.is_empty() {
+        fresh.retain(|op| !refused.iter().any(|r| std::ptr::eq(*r, *op)));
+        report.dropped += refused.len();
+        crate::errors::record(
+            conn,
+            crate::errors::Source::Relay,
+            "apply",
+            crate::errors::Kind::Other,
+            NOT_A_USER_FOLDER,
+            Some(&refused[0].at.device),
+        );
+    }
+
     // 2. One group per logical row, in an order that puts parents first.
     //
     // **The client's held-back ops join only a group that carries a claim**, never applied:
@@ -1037,7 +1175,7 @@ fn apply_in(
         .collect();
     let mut grouped: Vec<&Op> = fresh.clone();
     grouped.extend(held_back_ops.iter());
-    let mut groups = group(&grouped);
+    let mut groups = group(&grouped, &ranks);
     groups.sort_by_key(|g| {
         (
             meta_of(g.table).map_or(u8::MAX, |m| m.order),
@@ -1090,7 +1228,7 @@ fn apply_in(
             .map_err(|e| e.to_string())?;
         let mut pass = ApplyReport::default();
         let deferrals = run_groups(
-            conn, &groups, &blocked, &deleted, &lenient, waiting, &mut pass,
+            conn, &groups, &blocked, &deleted, &lenient, waiting, &mut pass, !own,
         )?;
         let found = blocks_of(&deferrals, &blocked);
         if found == blocked || round == cap {
@@ -1151,7 +1289,19 @@ fn apply_in(
         );
     }
 
-    advance_watermarks(conn, &groups, &committed)?;
+    let except = if own { me.as_deref() } else { None };
+    advance_watermarks(conn, &groups, &committed, except)?;
+    // A refused op is consumed, so its watermark passes it — unless its device is held below it,
+    // where the watermark must stay under the held op.
+    let holds = blocks_of(&committed, &Blocks::new());
+    for op in &refused {
+        if holds
+            .get(op.at.device.as_str())
+            .is_none_or(|(at, _)| op.at < *at)
+        {
+            raise_watermark(conn, &op.at)?;
+        }
+    }
     claims::settle(conn, &decided, &committed, me.as_deref())?;
     observe(conn, fresh.iter().map(|o| &o.at).max())?;
     // Read off the pass that committed, as the watermarks were: at the round cap the blocks the
@@ -1260,6 +1410,7 @@ thread_local! {
 /// that reasoning is a pass too many rather than a hang. **The cost** is up to three passes for
 /// each link of the longest chain of waiting groups, over only the groups still waiting; a page
 /// with nothing withheld and nothing waiting pays the one retry it always paid.
+#[allow(clippy::too_many_arguments)]
 fn run_groups<'a>(
     conn: &Connection,
     groups: &'a [Group<'a>],
@@ -1268,6 +1419,7 @@ fn run_groups<'a>(
     lenient: &BTreeSet<(&str, &str)>,
     waiting: Waiting,
     report: &mut ApplyReport,
+    remember: bool,
 ) -> Result<Vec<Deferral<'a>>, String> {
     let mut soft: Vec<(&Group, String)> = Vec::new();
     let mut out: Vec<Deferral<'a>> = Vec::new();
@@ -1292,7 +1444,8 @@ fn run_groups<'a>(
         // device arriving on a later pull meets it (issue #842). Inside the pass's savepoint, like
         // the write: a round rolled back forgets it again.
         match write_group(conn, g, report, &mut soft, deleted, &placed, Attempt::First)? {
-            Outcome::Written => heard::record(conn, g)?,
+            Outcome::Written if remember => heard::record(conn, g)?,
+            Outcome::Written => {}
             Outcome::Deferred(_) => failed.push(g),
         }
     }
@@ -1317,7 +1470,9 @@ fn run_groups<'a>(
                 conn, failed[i], report, &mut soft, deleted, &placed, attempt,
             )? {
                 Outcome::Written => {
-                    heard::record(conn, failed[i])?;
+                    if remember {
+                        heard::record(conn, failed[i])?;
+                    }
                     last[i] = None;
                     progressed = true;
                 }
@@ -1553,7 +1708,7 @@ fn cascade_onto_the_row_here(
 ) -> Result<bool, String> {
     let meta = shape.meta;
     let uid = &g.ops[0].uid;
-    let combined = fold_with_history(conn, meta.table, std::slice::from_ref(uid), &g.ops)?;
+    let combined = fold_with_history(conn, meta.table, std::slice::from_ref(uid), g)?;
     let placed = g.resolved.parents.get(p.key).map(|(_, at)| at);
     let stands = combined.parents.get(p.key).map(|(_, at)| at);
     if placed.is_none() || placed != stands {
@@ -1836,7 +1991,7 @@ fn read_watermarks(conn: &Connection) -> Result<BTreeMap<String, Hlc>, String> {
     Ok(out)
 }
 
-fn group<'a>(ops: &[&'a Op]) -> Vec<Group<'a>> {
+fn group<'a>(ops: &[&'a Op], ranks: &Ranks) -> Vec<Group<'a>> {
     let mut by_row: BTreeMap<(&str, &str), Vec<&'a Op>> = BTreeMap::new();
     for op in ops {
         by_row
@@ -1850,8 +2005,9 @@ fn group<'a>(ops: &[&'a Op]) -> Vec<Group<'a>> {
             let owned: Vec<Op> = ops.iter().map(|o| (*o).clone()).collect();
             Group {
                 table,
-                resolved: fold(&owned),
+                resolved: fold_ranked(&Memory::default(), &owned, ranks),
                 ops,
+                ranks: ranks.clone(),
             }
         })
         .collect()
@@ -2090,9 +2246,10 @@ fn fold_with_history(
     conn: &Connection,
     table: &str,
     uids: &[String],
-    incoming: &[&Op],
+    g: &Group,
 ) -> Result<Resolved, String> {
-    let mut memory = heard::recall(conn, table, uids)?;
+    let incoming = &g.ops;
+    let mut memory = heard::recall(conn, table, uids, &g.ranks)?;
     // A claim's emitter is not judged against its own earlier writes
     // ([`crate::sync_engine::merge::Memory::without`]).
     for op in incoming.iter().filter(|op| op.baseline) {
@@ -2105,7 +2262,7 @@ fn fold_with_history(
         }
         all.push(op);
     }
-    Ok(fold_remembering(&memory, &all))
+    Ok(fold_ranked(&memory, &all, &g.ranks))
 }
 
 /// This device's own ops for a row, out of `sync_ops`.
@@ -2150,12 +2307,14 @@ fn grain_values(
     parents: &BTreeMap<&'static str, Sql>,
 ) -> Option<Vec<Sql>> {
     let mut out = Vec::with_capacity(grain.sources.len());
+    let defaults = g.all_restricted();
     for source in grain.sources {
         match source {
-            Source::Field(f) => {
-                let v = g.resolved.fields.get(*f)?;
-                out.push(sql_value(&v.0));
-            }
+            Source::Field(f) => match g.resolved.fields.get(*f) {
+                Some(v) => out.push(sql_value(&v.0)),
+                None if defaults => out.push(restricted_grain(g.table, f)?),
+                None => return None,
+            },
             Source::Parent(key) => {
                 if !g.resolved.parents.contains_key(*key) {
                     return None;
@@ -2165,6 +2324,31 @@ fn grain_values(
         }
     }
     Some(out)
+}
+
+/// **The value a grain term an `add` member's op leaves out stands for** — the column's own
+/// default, the one an insert of that op writes — or `None` for a term with no default, which
+/// leaves the grain unasked.
+///
+/// An add carries the card's identity and nothing else (`integration::add::allowed`): no
+/// condition, no flags, no serial number. Its insert lands every one of those on the column's
+/// default, so the row it would build sits on the grain those defaults spell — and that is the
+/// grain it must be matched on, or an add of a card already held at that grain would insert
+/// beside it and fail the unique index. An increment carries no identity at all (no `card_id`,
+/// no `oracle_id`) and is found by its uid, as every sparse op is. Asked only of a group that is
+/// wholly restricted ([`Group::all_restricted`]): a full device's insert carries every term, and
+/// its sparse ops are found by uid. `defaults_are_the_columns_own` holds this to the schema.
+fn restricted_grain(table: &str, field: &str) -> Option<Sql> {
+    match (table, field) {
+        ("collection_entries", "condition") => Some(Sql::Text("NONE".to_owned())),
+        ("collection_entries", "lang") => Some(Sql::Text("en".to_owned())),
+        ("collection_entries", "altered" | "signed" | "proxy" | "misprint") => {
+            Some(Sql::Integer(0))
+        }
+        ("collection_entries", "serial_number" | "grading") => Some(Sql::Null),
+        ("wishlist_entries", "card_id" | "preferred_finish") => Some(Sql::Null),
+        _ => None,
+    }
 }
 
 fn write_group<'a>(
@@ -2335,7 +2519,7 @@ fn write_group<'a>(
     }
     uids.sort();
     uids.dedup();
-    let combined = fold_with_history(conn, meta.table, &uids, &g.ops)?;
+    let combined = fold_with_history(conn, meta.table, &uids, g)?;
 
     // **The ledger is told only where the placement under the gone parent is the one that
     // stands** — the moot arm's question, asked of the `SET NULL` arm: where this device moved
@@ -2786,6 +2970,13 @@ fn updates(
     combined: &Resolved,
     parents: &BTreeMap<&'static str, Sql>,
 ) -> Vec<(String, Sql)> {
+    // **A restricted device never changes a row that is here** (the Discord spec's §14.2): a
+    // field or a placement whose winning stamp is its is not written. Under the rank it wins only
+    // where no full device ever named that column — and an update is a row this device already
+    // holds, whose value there is a full device's word, or this device's own. So a create on a
+    // known uid is an increment, and a grain match takes only the counter; the insert path below
+    // is the one place a restricted op's fields are written, on a row that was not here at all.
+    let restricted = |at: &Hlc| g.ranks.is_restricted(&at.device);
     let mut out: Vec<(String, Sql)> = Vec::new();
     for f in spec.fields {
         let (Some((v, incoming)), Some((_, winner))) =
@@ -2793,7 +2984,7 @@ fn updates(
         else {
             continue;
         };
-        if incoming == winner {
+        if incoming == winner && !restricted(winner) {
             out.push(((*f).to_owned(), sql_value(v)));
         }
     }
@@ -2805,7 +2996,7 @@ fn updates(
         ) else {
             continue;
         };
-        if incoming == winner {
+        if incoming == winner && !restricted(winner) {
             out.push((p.col.to_owned(), v.clone()));
         }
     }
@@ -3171,7 +3362,7 @@ fn fold_onto_the_holder(
         uids.push(wears);
     }
     let survivor = rehome::fold_into_the_holder(conn, meta.table, holder, id, uid).ok()??;
-    let combined = fold_with_history(conn, meta.table, &uids, &g.ops).ok()?;
+    let combined = fold_with_history(conn, meta.table, &uids, g).ok()?;
     update_row(conn, meta, spec, g, &combined, parents, &survivor).ok()
 }
 
@@ -3379,6 +3570,7 @@ fn advance_watermarks(
     conn: &Connection,
     groups: &[Group],
     committed: &[Deferral],
+    except: Option<&str>,
 ) -> Result<(), String> {
     let holding: BTreeSet<(&str, &str)> = committed
         .iter()
@@ -3406,18 +3598,28 @@ fn advance_watermarks(
         }
     }
     for (device, at) in high {
-        conn.execute(
-            "INSERT INTO sync_peers (device_id, last_ms, last_ctr) VALUES (?1, ?2, ?3)
-             ON CONFLICT(device_id) DO UPDATE SET
-                 last_ms  = excluded.last_ms,
-                 last_ctr = excluded.last_ctr
-               WHERE (excluded.last_ms, excluded.last_ctr) > (sync_peers.last_ms,
-                                                              sync_peers.last_ctr)",
-            rusqlite::params![device, at.ms, at.ctr],
-        )
-        .map_err(|e| e.to_string())?;
+        // [`apply_own`]'s device: a device keeps no watermark for itself.
+        if except == Some(device) {
+            continue;
+        }
+        raise_watermark(conn, &at)?;
     }
     Ok(())
+}
+
+/// Raise `at.device`'s watermark to `at`, never lower it.
+fn raise_watermark(conn: &Connection, at: &Hlc) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO sync_peers (device_id, last_ms, last_ctr) VALUES (?1, ?2, ?3)
+         ON CONFLICT(device_id) DO UPDATE SET
+             last_ms  = excluded.last_ms,
+             last_ctr = excluded.last_ctr
+           WHERE (excluded.last_ms, excluded.last_ctr) > (sync_peers.last_ms,
+                                                          sync_peers.last_ctr)",
+        rusqlite::params![at.device, at.ms, at.ctr],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }
 
 mod claims;
@@ -3427,5 +3629,7 @@ mod rehome;
 
 #[cfg(test)]
 mod emission_tests;
+#[cfg(test)]
+mod restricted_tests;
 #[cfg(test)]
 mod tests;

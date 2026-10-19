@@ -17,10 +17,11 @@
 //!   everything. It is how a group paired before user schema v66 learns every member's keys —
 //!   each device *amends* its own entry under the MAC — and it changes nothing about removal:
 //!   the manifest still decides, exactly as it always did ([`crate::sync_engine::client`]).
-//! * **Signed** — once a restricted device (a `read` bot) holds the group key, the MAC proves
-//!   nothing, so a document is accepted only when a **full member of the previously accepted
-//!   one** signed it, its `prev` is that document's hash, and no device once restricted comes
-//!   back as full. From then on removal, rotation and capability move only on such a document.
+//! * **Signed** — once a restricted device (an `add` bot, or PR 3's `read` one) holds the group
+//!   key, the MAC proves nothing, so a document is accepted only when a **full member of the
+//!   previously accepted one** signed it, its `prev` is that document's hash, and no device once
+//!   restricted comes back as full. From then on removal, rotation and capability move only on
+//!   such a document.
 //!
 //! ⚠️ **One press enters signed mode, and nothing else does**: the integration's pinned pairing,
 //! `pairing::confirm_pinned` (the spec's §13.4). It latches this device at the epoch the bot's
@@ -28,7 +29,8 @@
 //! join's rotation carries the group's first signed document, signed by this device. Every other
 //! device follows: a verified signed document, signed by a full member it already trusts, latches
 //! it too — which is why `integration::gate` requires every member at [`identity::SIG_PROTO`] 2
-//! ("verifies rosters") before a bot may join.
+//! ("verifies rosters") before a bot may join, and at [`identity::ADD_PROTO`] 3 ("takes an `add`
+//! member's adds") since the bot joins as [`ADD`].
 //!
 //! **The document is a string, verified over its exact bytes and never re-serialised.**
 //! [`to_text`] writes it once, deterministically (serde's field order, compact), and the relay
@@ -63,8 +65,17 @@ const INFO_MAC: &[u8] = b"mtg-grimoire/roster-mac/v1";
 /// The capability every device paired before the Discord spec has: everything.
 pub const FULL: &str = "full";
 
-/// A device that may read the group and write nothing — the bot, first ship.
+/// A device that may read the group and write nothing — the bot as PR 3 paired it. Every build
+/// understands the word (refuse everything it sends), and nothing pairs with it any more.
 pub const READ: &str = "read";
+
+/// A device that may read the group and **add cards**, and nothing else — the bot since PR 4 (the
+/// spec's §14). **Restricted in every rule `read` is** — never a sealer, never a planner, never a
+/// baseline, never a document's signer, a `cap` claim on its token — because every one of those
+/// rules asks [`Member::is_full`] or [`is_restricted`], and only `full` is full. What it may send
+/// is the frozen allow-list (`integration::add::allowed`), and what a receiver does with it is
+/// `sync_engine::apply`'s restricted guards and `sync_engine::merge::Ranks`.
+pub const ADD: &str = "add";
 
 /// The two modes. Serialised as the words `open` and `signed`; **any other word refuses the
 /// document**, because a mode this build does not know is a rule it cannot keep.
@@ -574,6 +585,44 @@ pub fn self_restricted(conn: &Connection) -> rusqlite::Result<bool> {
     }
 }
 
+/// **Every device whose ops lose by rank here** (`sync_engine::merge::Ranks`): each one ever seen
+/// restricted, and each roster row whose capability is a word other than `full`. Read once per
+/// apply, so a page is ranked against one view of the roster.
+pub fn restricted_devices(conn: &Connection) -> rusqlite::Result<BTreeSet<String>> {
+    let mut out = restricted_ever(conn)?;
+    let mut stmt = conn.prepare_cached(
+        "SELECT device_id FROM sync_devices WHERE capability IS NOT NULL AND capability <> ?1",
+    )?;
+    for row in stmt.query_map([FULL], |r| r.get::<_, String>(0))? {
+        out.insert(row?);
+    }
+    Ok(out)
+}
+
+/// The word `device` is restricted to, as `sync_devices` holds it — `None` for a full member or a
+/// device not on the roster. **Only the exact word [`ADD`] opens an envelope**
+/// (`client::open_checked`); a device ever restricted with no word on its row is read as
+/// [`READ`], the safe direction.
+pub fn capability_of(conn: &Connection, device: &str) -> rusqlite::Result<Option<String>> {
+    let cap = own_capability(conn, device);
+    if cap.as_deref().is_some_and(|c| c != FULL) {
+        return Ok(cap);
+    }
+    if restricted_ever(conn)?.contains(device) {
+        return Ok(Some(READ.to_owned()));
+    }
+    Ok(None)
+}
+
+/// [`capability_of`] this device: what `integration::add::emit` and `client::push_restricted` ask
+/// before they write or send anything. `None` is a full device, or one in no group.
+pub fn self_capability(conn: &Connection) -> rusqlite::Result<Option<String>> {
+    match identity::public_identity(conn)? {
+        Some((me, _)) => capability_of(conn, &me),
+        None => Ok(None),
+    }
+}
+
 /// The last accepted document, read back.
 pub fn last(conn: &Connection) -> rusqlite::Result<Option<(String, Roster)>> {
     Ok(state(conn, ROSTER_LAST)?.and_then(|text| parse(&text).map(|rd| (text, rd))))
@@ -911,7 +960,8 @@ pub fn follow_signed(conn: &Connection, epoch: i64) -> rusqlite::Result<()> {
 // ---------------------------------------------------------------------------------------
 
 /// This device's own entry: its keys, the capability it was given (`full` unless a document said
-/// otherwise), this build's protocol level, and `since` as the caller knows it.
+/// otherwise), the level this build advertises ([`identity::PROTO`]), and `since` as the caller
+/// knows it.
 fn own_entry(conn: &Connection, since: i64) -> Result<Member, String> {
     let (me, x25519) = identity::public_identity(conn)
         .map_err(|e| e.to_string())?
@@ -930,7 +980,7 @@ fn own_entry(conn: &Connection, since: i64) -> Result<Member, String> {
         x25519: b64(&x25519),
         ed25519: Some(b64(&signing.public)),
         cap,
-        proto: identity::SIG_PROTO,
+        proto: identity::PROTO,
         since,
     })
 }

@@ -3,8 +3,9 @@
 //! and switching the bot on and off as a **restricted device in the reader's sync group**.
 //!
 //! * [`commands`] — the six `#[tauri::command]`s and the two structs the page mirrors.
-//! * [`flow`] — what they do: the link, the switch-on (gate → `pairing::begin_integration` →
-//!   `POST /link/enroll` → the bot's join → `pairing::confirm_pinned`) and the switch-off.
+//! * [`flow`] — what they do: the link, the switch-on (gate → the *Added from Discord* folder →
+//!   `pairing::begin_integration` → `POST /link/enroll` → the bot's join →
+//!   `pairing::confirm_pinned`, pairing the bot as `add`, spec §14) and the switch-off.
 //! * [`front`] — the five HTTPS requests, and every sentence a refusal becomes.
 //! * [`local`] — what this device keeps, in `sync_state` beside the sync identity.
 //!

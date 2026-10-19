@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { RESTRICTED_PUSH_BYTES } from "./admit";
 import { GROUP_SEGMENT } from "./claim";
 import { fakeEnv } from "./fakeD1";
 import { recordRotation, seedGroup } from "./groupauth";
@@ -999,6 +1000,50 @@ describe("a signed group's push and ack", () => {
       null,
       null,
     ]);
+  });
+
+  /**
+   * Spec §14.5: a restricted device's push over 64 KiB is refused before its object is reached —
+   * by its text, and by a declared length before a byte is read — while a full device's push of
+   * the same size goes on, and a restricted one at exactly 64 KiB is forwarded.
+   */
+  it("refuses a restricted device's push over 64 KiB: 413 restricted_too_large", async () => {
+    const { env } = await signedGroup();
+    env.reached.length = 0;
+    /** An envelope whose JSON body is exactly `bytes` long. */
+    const sized = (device: string, bytes: number) => {
+      const bare = JSON.stringify(envelope(device)).length - 1;
+      return { ...envelope(device), sealed: "s".repeat(bytes - bare) };
+    };
+    expect(JSON.stringify(sized("bot", RESTRICTED_PUSH_BYTES)).length).toBe(RESTRICTED_PUSH_BYTES);
+
+    for (const cap of ["add", "read"]) {
+      const over = await send(env, "push", sized("bot", RESTRICTED_PUSH_BYTES + 1), "bot", cap);
+      expect(over.status).toBe(413);
+      expect(await code(over)).toBe("restricted_too_large");
+    }
+    const declared = await worker.fetch(
+      new Request("https://relay.example/g/g1/push", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${await bearer("bot", "add")}`,
+          "content-length": String(RESTRICTED_PUSH_BYTES + 1),
+        },
+        body: JSON.stringify(envelope("bot")),
+      }),
+      env,
+    );
+    expect(declared.status).toBe(413);
+    expect(await code(declared)).toBe("restricted_too_large");
+    expect(env.reached).toEqual([]);
+
+    expect(
+      (await send(env, "push", sized("bot", RESTRICTED_PUSH_BYTES), "bot", "add")).status,
+    ).toBe(200);
+    expect((await send(env, "push", sized("desk", RESTRICTED_PUSH_BYTES + 1), "desk")).status).toBe(
+      200,
+    );
+    expect(env.reached).toEqual(["/g/g1/push", "/g/g1/push"]);
   });
 });
 

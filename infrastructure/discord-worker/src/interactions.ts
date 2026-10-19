@@ -1,8 +1,8 @@
-import { CARD_SEARCH } from "./commands";
+import { ADD, CARD_SEARCH } from "./commands";
 import { json, refusal, type Env } from "./env";
 import { cardEmbed, choice, escapeMarkdown } from "./format";
 import { botOf, linkOf } from "./link";
-import { autocomplete, fuzzy } from "./scryfall";
+import { autocomplete, fuzzy, printings } from "./scryfall";
 import { verified, type Signed } from "./verify";
 
 /**
@@ -13,11 +13,14 @@ import { verified, type Signed } from "./verify";
  * **Three kinds of answer, and only one of them reads anybody's data**:
  *
  * - **`/card-search` and its autocomplete are answered here**, from Scryfall: the command reads
- *   no reader's data, so it needs no link and no Durable Object.
+ *   no reader's data, so it needs no link and no Durable Object. So are **the `card` and `set`
+ *   completions of `/collection add` and `/wishlist add`** (the design, §14.4): a card's name and
+ *   its printings are Scryfall's, whoever is typing. The add's `folder` is the reader's, and goes
+ *   to their Durable Object like everything else.
  * - **A reader with no link** is told, privately, where to switch the integration on.
- * - **Everything else is the link's Durable Object's**: the interaction is handed to it exactly as
- *   Discord signed it — the body's text and the two signature headers — and its answer is
- *   returned verbatim. It verifies the signature again itself, holds the reader's data, and
+ * - **Everything else is the link's Durable Object's** — a command, an autocomplete, a press on an
+ *   add's Confirm or Cancel button: the interaction is handed to it exactly as Discord signed it —
+ *   the body's text and the two signature headers — and its answer is returned verbatim. It verifies the signature again itself, holds the reader's data, and
  *   decides every word of the reply. This Worker never sees a collection.
  *
  * **Who is asking is Discord's word, and only Discord's**: the user id comes from the signed body
@@ -112,6 +115,48 @@ async function cardSearchChoices(interaction: Interaction): Promise<Response> {
 }
 
 // ---------------------------------------------------------------------------------------
+// An add's `card` and `set`, from Scryfall
+// ---------------------------------------------------------------------------------------
+
+/** The subcommand an interaction names, and its options. */
+function subcommandOf(interaction: Interaction): { name: string; options: Option[] } | null {
+  const sub = (interaction.data?.options ?? []).find((option) => option.type === 1);
+  return sub === undefined ? null : { name: sub.name, options: sub.options ?? [] };
+}
+
+/** `Double Masters 2022 (2X2) #117`, the way the bot's answers spell a printing. */
+export function printingName(printing: {
+  setName: string;
+  set: string;
+  collectorNumber: string;
+}): string {
+  return `${printing.setName} (${printing.set.toUpperCase()}) #${printing.collectorNumber}`;
+}
+
+/**
+ * The choices for an add's focused `card` or `set`, or `null` when the focused option is neither
+ * (then it is the Durable Object's: the `folder`). A set's choices are the printings of the card
+ * the `card` option holds right now — Discord sends every option's current value with a
+ * keystroke — kept to those whose name or code holds what was typed.
+ */
+async function addChoices(options: Option[]): Promise<Response | null> {
+  const focused = options.find((option) => option.focused === true);
+  const typed = typeof focused?.value === "string" ? focused.value : "";
+  if (focused?.name === "card") {
+    return choices((await autocomplete(typed)).map((name) => choice(name, name)));
+  }
+  if (focused?.name !== "set") return null;
+  const card = stringOption(options, "card") ?? "";
+  const wanted = typed.trim().toLowerCase();
+  const found = (await printings(card))
+    .map((printing) =>
+      choice(printingName(printing), `${printing.set}/${printing.collectorNumber}`),
+    )
+    .filter((entry) => wanted === "" || entry.name.toLowerCase().includes(wanted));
+  return choices(found);
+}
+
+// ---------------------------------------------------------------------------------------
 // Everything else: the link's Durable Object
 // ---------------------------------------------------------------------------------------
 
@@ -171,6 +216,16 @@ export async function handleInteraction(request: Request, env: Env): Promise<Res
   }
   if (name === CARD_SEARCH && interaction.type === AUTOCOMPLETE) {
     return cardSearchChoices(interaction);
+  }
+
+  const sub = subcommandOf(interaction);
+  if (
+    interaction.type === AUTOCOMPLETE &&
+    (name === "collection" || name === "wishlist") &&
+    sub?.name === ADD
+  ) {
+    const answered = await addChoices(sub.options);
+    if (answered !== null) return answered;
   }
 
   const user = userOf(interaction);

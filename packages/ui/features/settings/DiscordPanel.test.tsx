@@ -218,8 +218,10 @@ describe("the Discord panel, linked", () => {
   });
 
   /**
-   * Adding the bot asks first, and the question says the four things the reader is agreeing to:
-   * a read-only device, a copy the operator can decrypt, a device slot, and that it can go.
+   * Adding the bot asks first, and the question says what the reader is agreeing to: a device
+   * that adds only after a Confirm in Discord and never changes or removes anything, the folder
+   * its adds land in, a copy the operator can decrypt, a device slot, and that it can go (spec
+   * §14.5).
    */
   it("asks before it adds the bot, then enables and draws the enrolled bot", async () => {
     current = LINKED;
@@ -234,7 +236,10 @@ describe("the Discord panel, linked", () => {
 
     await userEvent.click(await addButton());
     const dialog = await screen.findByRole("dialog", { name: "Add the bot to your sync group" });
-    expect(dialog).toHaveTextContent(/read-only device/i);
+    expect(dialog).toHaveTextContent(/add cards to your collection and your wishlist/i);
+    expect(dialog).toHaveTextContent(/only after you press Confirm in Discord/i);
+    expect(dialog).toHaveTextContent(/never change or remove anything/i);
+    expect(dialog).toHaveTextContent(/go to Added from Discord unless you name another folder/i);
     expect(dialog).toHaveTextContent(/collection, wishlist and decks/i);
     expect(dialog).toHaveTextContent(/can decrypt/i);
     expect(dialog).toHaveTextContent(/five device slots/i);
@@ -251,9 +256,7 @@ describe("the Discord panel, linked", () => {
 
     release({ ...ENROLLED, lastPullAt: null });
 
-    expect(
-      await screen.findByText(/is in your sync group as a read-only device/i),
-    ).toHaveTextContent("bot-7f3a9c2e");
+    expect(await screen.findByText(/is in your sync group as/i)).toHaveTextContent("bot-7f3a9c2e");
     expect(screen.getByText("The bot hasn't fetched your cards yet.")).toBeInTheDocument();
   });
 
@@ -291,14 +294,14 @@ describe("the Discord panel, enrolled", () => {
     current = ENROLLED;
     render(wrap(<DiscordPanel />));
 
-    expect(
-      await screen.findByText(/is in your sync group as a read-only device/i),
-    ).toHaveTextContent("bot-7f3a9c2e");
+    expect(await screen.findByText(/is in your sync group as/i)).toHaveTextContent("bot-7f3a9c2e");
     expect(screen.getByText("The bot last fetched your changes 2 hours ago.")).toBeInTheDocument();
     for (const { command } of DISCORD_COMMANDS) {
       expect(screen.getByText(command)).toBeInTheDocument();
     }
-    expect(screen.getByText(/adding cards from discord is coming/i)).toBeInTheDocument();
+    expect(screen.getByText(/an add waits for you to press confirm/i)).toBeInTheDocument();
+    expect(screen.getByText("/collection add")).toBeInTheDocument();
+    expect(screen.getByText("/wishlist add")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /add the bot/i })).toBeNull();
   });
 

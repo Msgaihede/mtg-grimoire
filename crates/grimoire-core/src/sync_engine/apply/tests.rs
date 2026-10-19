@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::sync_engine::capture;
+use crate::sync_engine::merge::fold;
 use rusqlite::Connection;
 
 /// A device in a group, with capture installed.

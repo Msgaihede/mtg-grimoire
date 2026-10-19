@@ -8,6 +8,7 @@
 
 use crate::sync_engine::hlc::Hlc;
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Whether an op asserts a row exists or that it is gone.
@@ -144,6 +145,66 @@ pub struct Resolved {
     /// gone — what add-wins compared, kept so that a [`Memory`] can be folded on from here.
     pub alive: Option<Hlc>,
     pub dead: Option<Hlc>,
+}
+
+/// **Who loses by rank** — the Discord spec's §14.2: a restricted device's op loses **every**
+/// last-writer and add-wins contest against an unrestricted one, whatever the two stamps say.
+///
+/// A stamp is a device's own word, and a restricted device chooses its own: an `add` bot whose
+/// clock ran a year ahead would otherwise win every field it ever named and outlive every delete
+/// a reader made. So every comparison [`fold_ranked`] and [`Memory::merge_ranked`] make is over
+/// `(unrestricted, stamp)` rather than the stamp alone: any unrestricted stamp beats any
+/// restricted one, and two of the same rank compare by stamp exactly as before — **so with no
+/// restricted device named this is [`fold`], to the bit**, and two restricted ops about one row
+/// merge with each other as usual. A stamp no device wrote ([`before_everything`], the ledger's
+/// own) is unrestricted, and a restricted op loses to it too: what this device kept of a row is a
+/// full device's word about it.
+///
+/// **Order-independent for [`fold`]'s reason**: the rank is a function of the stamp's device, so
+/// the key is still a total order over every stamp, and a fold over it is still a set's fold.
+/// What two devices must agree on is the set itself — every device a group ever restricted is
+/// named by its signed roster document, and `roster::restricted_devices` never forgets one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Ranks {
+    restricted: BTreeSet<String>,
+}
+
+impl Ranks {
+    /// No device restricted: every comparison is the stamp's.
+    pub fn none() -> Ranks {
+        Ranks::default()
+    }
+
+    /// Rank every device in `restricted` below every other.
+    pub fn new(restricted: BTreeSet<String>) -> Ranks {
+        Ranks { restricted }
+    }
+
+    pub fn is_restricted(&self, device: &str) -> bool {
+        self.restricted.contains(device)
+    }
+
+    /// Whether no device is ranked down — the case every group without an integration is in.
+    pub fn is_empty(&self) -> bool {
+        self.restricted.is_empty()
+    }
+
+    /// `a` against `b` by `(unrestricted, stamp)`.
+    pub fn cmp(&self, a: &Hlc, b: &Hlc) -> Ordering {
+        (!self.is_restricted(&a.device), a).cmp(&(!self.is_restricted(&b.device), b))
+    }
+
+    /// The later of two optional stamps by rank — [`Option::max`]'s shape, `None` below both.
+    fn later(&self, a: Option<Hlc>, b: Option<Hlc>) -> Option<Hlc> {
+        match (a, b) {
+            (Some(a), Some(b)) => Some(if self.cmp(&a, &b) == Ordering::Less {
+                b
+            } else {
+                a
+            }),
+            (a, b) => a.or(b),
+        }
+    }
 }
 
 /// A stamp below every stamp a device can issue: what a value this device **kept** of a row is
@@ -308,7 +369,12 @@ impl Memory {
     /// is what makes that so — or their deltas count twice; a claim is a maximum and a field a
     /// stamp, so either taken twice is the same answer.
     pub fn absorb(&mut self, ops: &[Op]) {
-        let r = fold_remembering(self, ops);
+        self.absorb_ranked(ops, &Ranks::none());
+    }
+
+    /// [`Memory::absorb`] under [`Ranks`] — what the applier absorbs a page with.
+    pub fn absorb_ranked(&mut self, ops: &[Op], ranks: &Ranks) {
+        let r = fold_ranked(self, ops, ranks);
         self.fields = r.fields;
         self.parents = r.parents;
         self.counters = r.counters;
@@ -373,9 +439,15 @@ impl Memory {
     /// grain. Fields and placements by stamp, the alive and dead stamps by the later, claims by
     /// the greater; counters add, as the two rows' counts did when they met.
     pub fn merge(&mut self, other: Memory) {
+        self.merge_ranked(other, &Ranks::none());
+    }
+
+    /// [`Memory::merge`] under [`Ranks`]: a restricted stamp loses each field, each placement and
+    /// the alive and dead stamps to an unrestricted one, as it does in [`fold_ranked`].
+    pub fn merge_ranked(&mut self, other: Memory, ranks: &Ranks) {
         for (k, (v, at)) in other.fields {
             match self.fields.get(&k) {
-                Some((_, held)) if *held >= at => {}
+                Some((_, held)) if ranks.cmp(held, &at) != Ordering::Less => {}
                 _ => {
                     self.fields.insert(k, (v, at));
                 }
@@ -383,7 +455,7 @@ impl Memory {
         }
         for (k, (p, at)) in other.parents {
             match self.parents.get(&k) {
-                Some((_, held)) if *held >= at => {}
+                Some((_, held)) if ranks.cmp(held, &at) != Ordering::Less => {}
                 _ => {
                     self.parents.insert(k, (p, at));
                 }
@@ -396,8 +468,8 @@ impl Memory {
             let held = self.claims.entry(k).or_insert(n);
             *held = (*held).max(n);
         }
-        self.alive = self.alive.take().max(other.alive);
-        self.dead = self.dead.take().max(other.dead);
+        self.alive = ranks.later(self.alive.take(), other.alive);
+        self.dead = ranks.later(self.dead.take(), other.dead);
         self.whole |= other.whole;
         self.through = self.through.take().max(other.through);
     }
@@ -433,6 +505,15 @@ pub fn fold(ops: &[Op]) -> Resolved {
 /// by stamp: an op this memory already took would have its deltas counted twice, which is the
 /// caller's to rule out, and the applier's watermark does.
 pub fn fold_remembering(memory: &Memory, ops: &[Op]) -> Resolved {
+    fold_ranked(memory, ops, &Ranks::none())
+}
+
+/// [`fold_remembering`] under [`Ranks`]: every field, placement and add-wins decision compares
+/// `(unrestricted, stamp)`, so a restricted device's op wins only against another restricted
+/// device's — and where nobody is restricted, this is [`fold_remembering`] exactly. The counters
+/// are not a contest: a restricted delta sums like any other.
+pub fn fold_ranked(memory: &Memory, ops: &[Op], ranks: &Ranks) -> Resolved {
+    let before = |a: &Hlc, b: &Hlc| ranks.cmp(a, b) == Ordering::Less;
     let mut out = Resolved {
         fields: memory.fields.clone(),
         parents: memory.parents.clone(),
@@ -459,12 +540,12 @@ pub fn fold_remembering(memory: &Memory, ops: &[Op]) -> Resolved {
 
         match op.kind {
             Kind::Del => {
-                if latest_dead.is_none_or(|d| *d < op.at) {
+                if latest_dead.is_none_or(|d| before(d, &op.at)) {
                     latest_dead = Some(&op.at);
                 }
             }
             Kind::Put => {
-                if latest_alive.is_none_or(|a| *a < op.at) {
+                if latest_alive.is_none_or(|a| before(a, &op.at)) {
                     latest_alive = Some(&op.at);
                 }
                 for (k, v) in &op.fields {
@@ -475,7 +556,7 @@ pub fn fold_remembering(memory: &Memory, ops: &[Op]) -> Resolved {
                         // the dedupe above drops a repeated stamp before this is asked — so
                         // the two spellings behave identically, which a mutation confirmed
                         // rather than a comment claiming otherwise.
-                        Some((_, held)) if *held >= op.at => {}
+                        Some((_, held)) if !before(held, &op.at) => {}
                         _ => {
                             out.fields.insert(k.clone(), (v.clone(), op.at.clone()));
                         }
@@ -497,7 +578,7 @@ pub fn fold_remembering(memory: &Memory, ops: &[Op]) -> Resolved {
                 }
                 for (k, p) in &op.parents {
                     match out.parents.get(k) {
-                        Some((_, held)) if *held >= op.at => {}
+                        Some((_, held)) if !before(held, &op.at) => {}
                         _ => {
                             out.parents.insert(k.clone(), (p.clone(), op.at.clone()));
                         }
@@ -518,7 +599,7 @@ pub fn fold_remembering(memory: &Memory, ops: &[Op]) -> Resolved {
     // above has already removed. What the tests do bite on is the *direction*: reversing it,
     // making a delete always win, or dropping the delete arm each turns three of them red.
     match (latest_dead, latest_alive) {
-        (Some(d), Some(a)) if *d > *a => out.deleted = true,
+        (Some(d), Some(a)) if before(a, d) => out.deleted = true,
         (Some(_), Some(_)) => out.resurrected = true,
         (Some(_), None) => out.deleted = true,
         _ => {}
@@ -1056,5 +1137,145 @@ mod tests {
         )
         .unwrap();
         assert_eq!(old.emission, None);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // The restricted rank (the Discord spec's §14.2)
+    // ---------------------------------------------------------------------------------------
+
+    fn bot_ranks() -> Ranks {
+        Ranks::new(["bot".to_owned()].into_iter().collect())
+    }
+
+    /// [`fold_ranked`] in both orders, and split across two pulls in both orders through a
+    /// [`Memory`] — every way two devices can be handed the same set.
+    fn ranked_every_way(ops: &[Op]) -> Resolved {
+        let ranks = bot_ranks();
+        let forward = fold_ranked(&Memory::default(), ops, &ranks);
+        let mut backward = ops.to_vec();
+        backward.reverse();
+        assert_eq!(forward, fold_ranked(&Memory::default(), &backward, &ranks));
+        for cut in 1..ops.len() {
+            for (first, second) in [
+                (&ops[..cut], &ops[cut..]),
+                (&backward[..cut], &backward[cut..]),
+            ] {
+                let mut memory = Memory::default();
+                memory.absorb_ranked(first, &ranks);
+                let split = fold_ranked(&memory, second, &ranks);
+                assert_eq!(split.fields, forward.fields, "split at {cut}");
+                assert_eq!(split.deleted, forward.deleted, "split at {cut}");
+                assert_eq!(split.counters, forward.counters, "split at {cut}");
+            }
+        }
+        forward
+    }
+
+    /// ⚠ **A full device's delete beats a restricted counter, whatever the stamps** — so a bot add
+    /// can never bring back a row the reader deleted, however far ahead the bot's clock runs.
+    #[test]
+    fn a_full_delete_beats_a_restricted_put_stamped_after_it() {
+        let r = ranked_every_way(&[
+            del("a", 1_000),
+            put("bot", 9_000, json!({}), json!({"quantity": 2})),
+        ]);
+        assert!(r.deleted, "{r:?}");
+        assert!(!r.resurrected);
+        // Without the rank it is the ordinary add-wins resurrection.
+        let plain = fold(&[
+            del("a", 1_000),
+            put("bot", 9_000, json!({}), json!({"quantity": 2})),
+        ]);
+        assert!(plain.resurrected && !plain.deleted);
+    }
+
+    /// ⚠ **A full device's field beats a restricted one, whatever the stamps**, and its placement
+    /// too — a bot add can never undo a reader's edit.
+    #[test]
+    fn a_full_field_beats_a_restricted_field_stamped_after_it() {
+        let mut bot = put(
+            "bot",
+            9_000,
+            json!({"set_code": "bot", "lang": "ja"}),
+            json!({"quantity": 1}),
+        );
+        bot.parents
+            .insert("folder".into(), Some("bot-folder".into()));
+        let mut reader = put("a", 1_000, json!({"set_code": "lea"}), json!({}));
+        reader
+            .parents
+            .insert("folder".into(), Some("binder".into()));
+        let r = ranked_every_way(&[bot, reader]);
+        assert_eq!(r.fields["set_code"].0, json!("lea"));
+        assert_eq!(r.parents["folder"].0.as_deref(), Some("binder"));
+        // A field only the restricted op names is its, and its counter sums.
+        assert_eq!(r.fields["lang"].0, json!("ja"));
+        assert_eq!(r.counters.get("quantity"), Some(&1));
+    }
+
+    /// Two restricted ops about one row merge with each other as usual: the later stamp's field,
+    /// and the counters summed.
+    #[test]
+    fn two_restricted_ops_merge_as_usual() {
+        let ranks = Ranks::new(["bot".to_owned(), "bot2".to_owned()].into_iter().collect());
+        let ops = [
+            put("bot", 1_000, json!({"lang": "en"}), json!({"quantity": 1})),
+            put("bot2", 2_000, json!({"lang": "de"}), json!({"quantity": 3})),
+        ];
+        let r = fold_ranked(&Memory::default(), &ops, &ranks);
+        assert_eq!(r.fields["lang"].0, json!("de"));
+        assert_eq!(r.counters.get("quantity"), Some(&4));
+        assert_eq!(r, fold(&ops), "same-rank ops fold as they always did");
+    }
+
+    /// With nobody restricted, the ranked fold is the fold — the guarantee every group without an
+    /// integration rests on.
+    #[test]
+    fn no_restricted_device_is_the_plain_fold() {
+        let ops = [
+            put("a", 1_000, json!({"notes": "x"}), json!({"quantity": 1})),
+            del("b", 2_000),
+            put("c", 1_500, json!({"notes": "y"}), json!({})),
+        ];
+        assert_eq!(
+            fold_ranked(&Memory::default(), &ops, &Ranks::none()),
+            fold(&ops)
+        );
+        assert_eq!(
+            fold_ranked(&Memory::default(), &ops, &bot_ranks()),
+            fold(&ops)
+        );
+    }
+
+    /// Two memories of one row merged under the rank keep the full device's field and its delete.
+    #[test]
+    fn a_ranked_memory_merge_keeps_the_full_devices_word() {
+        let ranks = bot_ranks();
+        let mut full = Memory::default();
+        full.absorb_ranked(
+            &[
+                put("a", 1_000, json!({"notes": "reader"}), json!({})),
+                del("a", 1_100),
+            ],
+            &ranks,
+        );
+        let mut bot = Memory::default();
+        bot.absorb_ranked(
+            &[put(
+                "bot",
+                9_000,
+                json!({"notes": "bot"}),
+                json!({"quantity": 1}),
+            )],
+            &ranks,
+        );
+        for (mut one, other) in [(full.clone(), bot.clone()), (bot, full)] {
+            one.merge_ranked(other, &ranks);
+            assert_eq!(one.fields["notes"].0, json!("reader"));
+            assert_eq!(one.alive.as_ref().map(|a| a.device.as_str()), Some("a"));
+            assert_eq!(one.dead.as_ref().map(|a| a.ms), Some(1_100));
+            let r = fold_ranked(&one, &[], &ranks);
+            assert!(r.deleted, "the bot's put brought the row back");
+        }
     }
 }

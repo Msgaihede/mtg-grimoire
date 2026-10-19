@@ -27499,6 +27499,38 @@ export const DISCORD_UNREACHABLE =
 export const DISCORD_LINK_EXPIRED = "The Discord sign-in expired. Turn the integration on again.";
 export const DISCORD_NOT_LINKED = "Sign in with Discord first.";
 
+/**
+ * The collection folder a Discord add lands in when none is named — `ADDED_FROM_DISCORD` in the
+ * engine (spec §14.3), copied as the gate's sentence is. {@link discordHandlers}' enable makes it.
+ */
+export const DISCORD_ADDED_FOLDER = "Added from Discord";
+
+/**
+ * `integration::add::ensure_added_folder` — the top-level `user` folder named
+ * {@link DISCORD_ADDED_FOLDER} in any case, made at the end of the root when there is none. Its id.
+ */
+function ensureDiscordFolder(db: FakeDb): number {
+  const wanted = DISCORD_ADDED_FOLDER.toLowerCase();
+  const found = db.collectionFolders
+    .filter(
+      (f) =>
+        f.kind === COLLECTION_USER_KIND && f.parentId === null && f.name.toLowerCase() === wanted,
+    )
+    .sort((a, b) => a.id - b.id)[0];
+  if (found !== undefined) return found.id;
+  const folder: FakeCollectionFolder = {
+    id: nextId(db.collectionFolders),
+    parentId: null,
+    name: DISCORD_ADDED_FOLDER,
+    kind: COLLECTION_USER_KIND,
+    deckId: null,
+    sortOrder: nextCollectionFolderOrder(db, null),
+    locked: false,
+  };
+  db.collectionFolders.push(folder);
+  return folder.id;
+}
+
 /** The status `discord_status` answers, derived from the rows rather than stored. */
 function discordStatusOf(db: FakeDb): DiscordStatus {
   const { link, pending, bot, gate } = db.discord;
@@ -27574,12 +27606,16 @@ export function discordHandlers(db: FakeDb) {
     },
 
     /**
-     * `discord_enable` — the gate first, as the desktop asks it, then the bot enrolled. It never
-     * pulls here, so `lastPullAt` stays `null`: the panel's *hasn't fetched yet* line.
+     * `discord_enable` — the gate first, as the desktop asks it, then the *Added from Discord*
+     * folder (spec §14.5), then the bot enrolled. **The folder comes before the enroll and stays
+     * when the front is down**, the desktop's order: it is the reader's folder, made by a full
+     * device. It never pulls here, so `lastPullAt` stays `null`: the panel's *hasn't fetched yet*
+     * line.
      */
     discord_enable: (): DiscordStatus => {
       if (db.discord.link === null) throw refuse(DISCORD_NOT_LINKED);
       if (db.discord.gate !== null) throw refuse(db.discord.gate);
+      ensureDiscordFolder(db);
       if (db.fault === "discordUnreachable") throw refuse(DISCORD_UNREACHABLE);
       db.discord.bot ??= { deviceId: DISCORD_BOT_DEVICE_ID, lastPullAt: null };
       return discordStatusOf(db);

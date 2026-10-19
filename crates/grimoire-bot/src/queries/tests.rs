@@ -299,3 +299,83 @@ fn a_deck_is_found_by_uid_or_by_name_and_listed_by_prefix() {
         .collect();
     assert_eq!(listed, vec!["Artifact Storm", "Burn"]);
 }
+
+/// The seeded pair's folders with the uids a pull would have given them, and a deck's folder
+/// beside them and the pair's own removed-cards folder.
+fn with_folder_uids() -> Connection {
+    let conn = seeded();
+    conn.execute_batch(
+        "UPDATE collection_folders SET sync_uid = 'uid-' || id;
+         INSERT INTO collection_folders (id, parent_id, name, kind, deck_id, sort_order, created_at,
+                                         updated_at, sync_uid)
+         VALUES (504, NULL, 'Artifact Storm', 'deck', 1, 2, 0, 0, 'uid-504'),
+                (506, NULL, 'Unsynced', 'user', NULL, 4, 0, 0, NULL);
+         UPDATE collection_folders SET sync_uid = 'uid-removed' WHERE kind = 'removed';
+         UPDATE collection_folders SET sync_uid = NULL WHERE id = 506;",
+    )
+    .unwrap();
+    conn
+}
+
+#[test]
+fn an_adds_folders_are_the_user_folders_by_path_with_their_uids() {
+    let conn = with_folder_uids();
+    let all: Vec<(String, String)> = folders(&conn, "", 25)
+        .unwrap()
+        .into_iter()
+        .map(|c| (c.name, c.value))
+        .collect();
+    assert_eq!(
+        all,
+        [
+            ("Binder".to_owned(), "uid-501".to_owned()),
+            ("Binder/Artifacts".to_owned(), "uid-502".to_owned()),
+            ("Box".to_owned(), "uid-503".to_owned()),
+        ],
+        "a deck's folder, the removed cards and a folder with no uid are never offered"
+    );
+    // Those that begin with what was typed come first; anywhere in the path counts.
+    let art: Vec<String> = folders(&conn, "art", 25)
+        .unwrap()
+        .into_iter()
+        .map(|c| c.name)
+        .collect();
+    assert_eq!(art, ["Binder/Artifacts"]);
+    let b: Vec<String> = folders(&conn, "B", 1)
+        .unwrap()
+        .into_iter()
+        .map(|c| c.name)
+        .collect();
+    assert_eq!(b, ["Binder"]);
+}
+
+#[test]
+fn a_folder_is_found_by_its_uid_its_path_or_its_name() {
+    let conn = with_folder_uids();
+    let by_uid = folder(&conn, "uid-502").unwrap().unwrap();
+    assert_eq!(
+        by_uid,
+        Folder {
+            uid: "uid-502".to_owned(),
+            path: "Binder/Artifacts".to_owned(),
+            kind: "user".to_owned()
+        }
+    );
+    assert_eq!(
+        folder(&conn, "binder/artifacts").unwrap().unwrap().uid,
+        "uid-502"
+    );
+    assert_eq!(folder(&conn, "ARTIFACTS").unwrap().unwrap().uid, "uid-502");
+    // A user folder before a deck's of the same name; the deck's is still found by its uid.
+    assert_eq!(
+        folder(&conn, "Artifact Storm").unwrap().unwrap().kind,
+        "deck"
+    );
+    assert_eq!(
+        folder(&conn, "uid-removed").unwrap().unwrap().kind,
+        "removed"
+    );
+    assert_eq!(folder(&conn, "Unsynced").unwrap(), None);
+    assert_eq!(folder(&conn, "  ").unwrap(), None);
+    assert_eq!(folder(&conn, "nowhere").unwrap(), None);
+}

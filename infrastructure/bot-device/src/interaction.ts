@@ -1,7 +1,8 @@
 /**
  * **An interaction, answered from what the device holds** (the Discord spec §13.7). The
  * signature has been checked by the time this runs (`index.ts`); this parses the interaction,
- * asks the engine, and draws the answer. It never pulls: a pull is an alarm's.
+ * asks the engine, and draws the answer. It never pulls: a pull is an alarm's. An add and a press
+ * on its buttons are `add.ts`'s (`device.ts` routes them there); everything else is here.
  */
 import { deckFormat, deckReply } from "./deck";
 import { choices, holdingReply, pong, privately, refused, type Reply } from "./render";
@@ -121,8 +122,20 @@ export function answer(
 function autocomplete(engine: Engine, interaction: Interaction, name: unknown): Reply {
   const focused = optionsOf(interaction).find((o) => o.focused === true);
   const typed = typeof focused?.value === "string" ? focused.value : "";
+  const sub = subcommand(interaction);
+  // An add's folder: the reader's own folders (§14.4). Its card and set are the front's, from
+  // Scryfall, and never reach here.
+  if (name === "collection" && sub === "add" && focused?.name === "folder") {
+    return choices(read<Choice[]>(engine.folders(typed, 25)) ?? []);
+  }
   let kind: string | null = null;
-  if ((name === "collection" || name === "wishlist") && focused?.name === "card") kind = name;
+  if (
+    (name === "collection" || name === "wishlist") &&
+    sub === "search" &&
+    focused?.name === "card"
+  ) {
+    kind = name;
+  }
   if (name === "deck" && focused?.name === "deck") kind = "deck";
   if (kind === null) return choices([]);
   return choices(read<Choice[]>(engine.names(kind, typed, 25)) ?? []);

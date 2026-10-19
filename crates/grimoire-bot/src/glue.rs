@@ -5,7 +5,9 @@
 //! *decides* is in [`crate::device`], where a desktop's `cargo test` reaches it.
 //!
 //! **Every method answers JSON text and none rejects or traps on a refusal**: `{"ok": …}` or
-//! `{"err": "<sentence>"}` for the reads, the front's own shapes for `enroll` and `status`. The
+//! `{"err": "<sentence>"}` for the reads, the front's own shapes for `enroll` and `status`, and for
+//! an add's two (`target`, `add`) also `{"refused": "<sentence>"}` — words for the reader, where an
+//! `err`'s are the engine's and go nowhere. The
 //! panic hook is installed when the module is instantiated, so a bug that does trap leaves its
 //! sentence in the Worker's log first.
 //!
@@ -21,7 +23,7 @@ use js_sys::{Array, Function, Reflect, Uint8Array};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
-use crate::device::{self, Device, Options};
+use crate::device::{self, Device, Options, Refusal};
 use crate::vfs::PageStore;
 
 #[wasm_bindgen(start)]
@@ -129,6 +131,15 @@ fn answer<T: Serialize>(result: Result<T, String>) -> String {
     match result {
         Ok(value) => json(&serde_json::json!({ "ok": value })),
         Err(e) => json(&serde_json::json!({ "err": e })),
+    }
+}
+
+/// An add's answer: `{"ok"}`, `{"refused"}` for the reader, or `{"err"}`.
+fn answer_add<T: Serialize>(result: Result<T, Refusal>) -> String {
+    match result {
+        Ok(value) => json(&serde_json::json!({ "ok": value })),
+        Err(Refusal::Said(why)) => json(&serde_json::json!({ "refused": why })),
+        Err(Refusal::Failed(e)) => json(&serde_json::json!({ "err": e })),
     }
 }
 
@@ -250,6 +261,38 @@ impl Bot {
             self.device()
                 .ok_or_else(|| CLOSED.to_owned())
                 .and_then(|d| d.deck_cards(uid)),
+        )
+    }
+
+    /// `folders(prefix, limit): string` — `{"ok": [{name, value}]}`: the collection's user
+    /// folders, by path, the value each one's uid.
+    pub fn folders(&self, prefix: &str, limit: u32) -> String {
+        answer(
+            self.device()
+                .ok_or_else(|| CLOSED.to_owned())
+                .and_then(|d| d.folders(prefix, limit as usize)),
+        )
+    }
+
+    /// `target(table, folder): string` — `{"ok": {uid, path}}`, `{"refused"}` or `{"err"}`:
+    /// where an add to `collection` or `wishlist` goes, `folder` named or `""` for the default.
+    pub fn target(&self, table: &str, folder: &str) -> String {
+        let now = grimoire_core::platform::clock::now_ms();
+        answer_add(
+            self.device()
+                .ok_or_else(|| Refusal::Failed(CLOSED.to_owned()))
+                .and_then(|d| d.target(table, folder, now)),
+        )
+    }
+
+    /// `add(add): string` — `{"ok": uid}`, `{"refused"}` or `{"err"}`: a reader's Confirm, the
+    /// `integration::add::Add` as JSON. No network.
+    pub fn add(&self, add: &str) -> String {
+        let now = grimoire_core::platform::clock::now_ms();
+        answer_add(
+            self.device()
+                .ok_or_else(|| Refusal::Failed(CLOSED.to_owned()))
+                .and_then(|d| d.add(add, now)),
         )
     }
 

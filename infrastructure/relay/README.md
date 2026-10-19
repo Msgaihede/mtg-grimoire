@@ -420,8 +420,8 @@ object's state to be refused. In the order a push meets them, every refusal but 
 
 | # | Refused when | Answer |
 | --- | --- | --- |
-| 1 | the declared `Content-Length` is over `MAX_PUSH_BODY_CHARS` (1 504 096 — the sealed cap plus 4 KiB) — **before a byte is read**; a missing or non-numeric header decides nothing | `413 too_large` |
-| 2 | the body's text is longer than that | `413 too_large` |
+| 1 | **a restricted device's token** (a `cap` other than `full`) and a declared `Content-Length` over `RESTRICTED_PUSH_BYTES` (65 536 — 64 KiB), asked first as the tighter bound; then any token's over `MAX_PUSH_BODY_CHARS` (1 504 096 — the sealed cap plus 4 KiB) — **both before a byte is read**; a missing or non-numeric header decides nothing | `413 restricted_too_large` / `413 too_large` |
+| 2 | the body is longer than either: a restricted device's in UTF-8 bytes, anybody's in characters | `413 restricted_too_large` / `413 too_large` |
 | 3 | the body is not JSON, or not an envelope — a `sig` that is present and not 86 characters of unpadded base64url among them | `400 unreadable body` / `400 malformed envelope`, no code — the object's words, unchanged |
 | — | the envelope's `device` is not the token's `dev` | **in a signed group, `403 device_mismatch`**; in any other, logged and the push goes on (`DEVICE_BINDING`). Telling the two apart costs one read of the newest roster document, **made only for a mismatch** — none for a restricted token, whose `cap` already says the group is signed |
 | 4 | `sealed` is over `MAX_SEALED_CHARS` (1 500 000, `log.ts`) | `413 too_large` |
@@ -519,8 +519,9 @@ body names, **after the gate and before the Durable Object hop** (`index.ts`'s `
 
 **Issue #1096's second PR (spec §5, §6 and §12, the wire contract), in this tree and not deployed
 until a release carries it.** A roster document (RD) says who is in a group at an epoch, with each
-member's X25519 and Ed25519 public keys and its `cap` — `full`, or `read` for the Discord bot's
-first release. The manifest a rotation publishes names devices and carries no public key, so a
+member's X25519 and Ed25519 public keys and its `cap` — `full`, or `add` for the Discord bot
+(`read` before spec §14; the relay reads any lower-case word, and every word but `full` is
+restricted). The manifest a rotation publishes names devices and carries no public key, so a
 device that did not pair a peer could never verify one envelope it signed (spec §2, F1); an RD is
 how every device learns every member's keys, and how a group comes to hold a member that may read
 and not write. `src/roster.ts` is all of it.
@@ -583,6 +584,14 @@ and not write. `src/roster.ts` is all of it.
   forwards — which no client can set, because every push is rebuilt from its body text. 64 is far
   past what one reader confirming adds produces, and 64 batches at the sealed cap is less than one
   log's quota.
+- **Each push is at most `RESTRICTED_PUSH_BYTES` — 64 KiB** — or **`413 restricted_too_large`**,
+  refused in the Worker before the hop, by the declared length and again by the body's UTF-8 length
+  (spec §14.5). It is what makes the day's cap a bound on bytes and not only on pushes: 64 pushes at
+  the sealed cap is 96 MB of a log every device pulls, 64 at this bound is 4 MiB. An `add` device
+  sends at most `ADD_OPS_PER_ENVELOPE` (25) allow-listed `Put`s to an envelope; 25 *fully populated*
+  `collection_entries` ops — notes, tags and prices, which an add never carries — seal to about
+  23 300 characters (the measured 200 at 186 188), so the bound is nearly three times the most an
+  honest bot builds.
 - **The device binding refuses in a signed group**, `403 device_mismatch` on push and ack; outside
   one it stays warn-only. The mode costs a read only on a mismatch.
 - **The share Worker and the scan inbox refuse it**, `403 restricted_device` (`isRestricted`): a
@@ -963,7 +972,8 @@ Worker's checks ahead of the Durable Object hop (`admitBody`, `admit`), the obje
 (`admitToLog`), and the one envelope predicate both sides share (`isEnvelope`, with `isSig` and
 `SIG_CHARS` for the optional signature) — and the token's device against a push's or an ack's
 (`deviceMismatch`, `bindDevice`, `DEVICE_BINDING`, `DEVICE_MISMATCH`), and a restricted device's
-daily cap (`admitRestricted`, `RESTRICTED_PUSHES_PER_DAY`, `RESTRICTED_HEADER`, `quotaDay`).
+daily cap (`admitRestricted`, `RESTRICTED_PUSHES_PER_DAY`, `RESTRICTED_HEADER`, `quotaDay`) and
+its size bound (`admitRestrictedBody`, `RESTRICTED_PUSH_BYTES`, `RESTRICTED_TOO_LARGE`).
 
 `src/token.ts` — mint and verify, the optional `dev` and `cap` claims, and `isRestricted` and
 `RESTRICTED_DEVICE`, which the share Worker and the scan inbox import. Pure, and tested the same

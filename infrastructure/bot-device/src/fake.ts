@@ -5,8 +5,9 @@
  */
 import { DatabaseSync } from "node:sqlite";
 import type { Alarms, Host } from "./device";
+import { Proposals } from "./proposals";
 import type { SqlStorageLike } from "./store";
-import type { BotStatus, Choice, DeckSummary, Engine, Holding } from "./types";
+import type { BotStatus, Choice, DeckSummary, Engine, Holding, Target } from "./types";
 import type { TransferCard } from "@grimoire/ui/features/transfer/TransferCard";
 
 export const PAIRED: BotStatus = {
@@ -28,6 +29,12 @@ export class FakeEngine implements Engine {
   advanced = '{"nextInMs":null,"purge":false,"did":"idle"}';
   broken = false;
   closed = false;
+  folderChoices: Choice[] = [];
+  /** What `target` answers: a folder, or a refusal's sentence. */
+  targeted: Target | { refused: string } = { uid: "uid-added", path: "Added from Discord" };
+  /** What `add` answers: a uid, or a refusal's sentence. Every add's JSON is kept. */
+  added: string | { refused: string } = "row-uid";
+  adds: unknown[] = [];
 
   #read(call: string, value: unknown): string {
     this.calls.push(call);
@@ -59,6 +66,22 @@ export class FakeEngine implements Engine {
   }
   deck_cards(uid: string): string {
     return this.#read(`deck ${uid}`, this.deck);
+  }
+  folders(prefix: string, limit: number): string {
+    return this.#read(`folders ${prefix} ${limit}`, this.folderChoices);
+  }
+  target(table: string, folder: string): string {
+    this.calls.push(`target ${table} ${folder}`);
+    if (this.broken) return '{"err":"the database is gone"}';
+    const t = this.targeted;
+    return JSON.stringify("refused" in t ? t : { ok: t });
+  }
+  add(add: string): string {
+    this.calls.push("add");
+    if (this.broken) return '{"err":"the database is gone"}';
+    this.adds.push(JSON.parse(add));
+    const a = this.added;
+    return JSON.stringify(typeof a === "string" ? { ok: a } : a);
   }
   close(): void {
     this.closed = true;
@@ -101,10 +124,62 @@ export async function signer() {
   };
 }
 
-/** A host over a fake engine, fake alarms and a clock a test sets. */
+/** A proposal key for the suite: HKDF has nothing to do with it, a test only needs a key. */
+export async function testKey(): Promise<CryptoKey> {
+  return crypto.subtle.importKey("raw", new Uint8Array(32).fill(9), "AES-GCM", false, [
+    "encrypt",
+    "decrypt",
+  ]);
+}
+
+/** A request the device made, as the stubbed `fetch` saw it. */
+export interface Asked {
+  url: string;
+  method: string;
+  headers: Headers;
+  body: string;
+}
+
+/**
+ * A host over a fake engine, fake alarms and a clock a test sets — and an add's world: proposals
+ * over a real SQLite, the deferred work collected (`settle()` awaits it), and one `fetch` that
+ * answers Scryfall from `record.cards` (keyed by the path it is asked at) and Discord's webhook
+ * with a 200, recording every request.
+ */
 export function host(engine: FakeEngine, publicKey: string, now = 1_760_000_060_000) {
   const alarms = new FakeAlarms();
-  const record = { purged: 0, opened: 0, now };
+  const storage = sqlStorage();
+  const deferred: Promise<unknown>[] = [];
+  const asked: Asked[] = [];
+  const record = {
+    purged: 0,
+    opened: 0,
+    now,
+    /** Scryfall's answers, by request path and query (`/cards/c21/263`). */
+    cards: {} as Record<string, unknown>,
+    /** When set, Scryfall answers this status to everything. */
+    scryfallStatus: null as number | null,
+  };
+  const fetcher = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    asked.push({
+      url,
+      method: init.method ?? "GET",
+      headers: new Headers(init.headers),
+      body: typeof init.body === "string" ? init.body : "",
+    });
+    const parsed = new URL(url);
+    if (parsed.host === "scryfall.test") {
+      if (record.scryfallStatus !== null)
+        return new Response("{}", { status: record.scryfallStatus });
+      const card = record.cards[parsed.pathname + parsed.search];
+      return card === undefined
+        ? new Response('{"object":"error"}', { status: 404 })
+        : new Response(JSON.stringify(card), { status: 200 });
+    }
+    return new Response("{}", { status: 200 });
+  }) as typeof fetch;
+  const proposals = new Proposals(storage, testKey);
   const h: Host = {
     open: () => {
       record.opened += 1;
@@ -116,8 +191,18 @@ export function host(engine: FakeEngine, publicKey: string, now = 1_760_000_060_
     alarms,
     publicKey,
     now: () => record.now,
+    proposals,
+    defer: (work) => {
+      deferred.push(work);
+    },
+    fetch: fetcher,
+    scryfallUrl: "https://scryfall.test",
+    discordApi: "https://discord.test/api/v10",
   };
-  return { host: h, alarms, record };
+  const settle = async () => {
+    while (deferred.length > 0) await deferred.shift();
+  };
+  return { host: h, alarms, record, proposals, storage, asked, settle };
 }
 
 /** `ctx.storage`'s SQL and `transactionSync`, over a real SQLite in memory. */

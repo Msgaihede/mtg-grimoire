@@ -393,7 +393,7 @@ export interface Asked {
 }
 
 /**
- * A stand-in for the internet: Scryfall's two endpoints over `cards`, and Discord's two OAuth
+ * A stand-in for the internet: Scryfall's three endpoints over `cards`, and Discord's two OAuth
  * endpoints, which answer `user` for the code `"good-code"` and refuse any other. `down` makes
  * every request fail as an unreachable host does; `status` makes Scryfall answer that status.
  * Every request is recorded.
@@ -427,6 +427,21 @@ export function internet(
           .map((card) => card.name)
           .filter((name) => name.toLowerCase().includes(q));
         return Promise.resolve(answer({ object: "catalog", data }));
+      }
+      if (url.pathname === "/cards/search") {
+        // Only the query `printings` sends: `!"<name>" unique:prints`.
+        const q = url.searchParams.get("q") ?? "";
+        const exact = /^!"(.*)" unique:prints$/.exec(q)?.[1]?.toLowerCase();
+        const data = cards.filter((card) => card.name.toLowerCase() === exact);
+        return Promise.resolve(
+          data.length === 0
+            ? answer({ object: "error", status: 404, code: "not_found" }, 404)
+            : answer({
+                object: "list",
+                has_more: false,
+                data: data.map((card) => ({ object: "card", ...card })),
+              }),
+        );
       }
       if (url.pathname === "/cards/named") {
         const wanted = (url.searchParams.get("fuzzy") ?? "").toLowerCase().replace(/[^a-z]/g, "");

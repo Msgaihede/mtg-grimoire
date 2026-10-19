@@ -304,7 +304,7 @@ pub async fn accept(
         &SigSlot {
             device: me.device_id.clone(),
             ed25519: crate::sync_pair::roster::key_text(&signing.public),
-            proto: identity::SIG_PROTO,
+            proto: identity::PROTO,
             mode: None,
         },
     )?;
@@ -437,6 +437,31 @@ pub const JOINER_TOO_OLD: &str = "That device is running a version of MTG Grimoi
      check who is in this group, which this group needs from every device. Update it, then pair \
      again.";
 
+/// What an initiator in a group holding an `add` member says to a joiner below
+/// [`identity::ADD_PROTO`]: it would refuse every card Discord adds.
+pub const JOINER_TOO_OLD_FOR_ADDS: &str = "That device is running a version of MTG Grimoire that \
+     cannot take cards added from Discord, which this group needs from every device. Update it, \
+     then pair again.";
+
+/// Whether this device's group holds an `add` member — on its roster, or on the last roster
+/// document it accepted. What [`confirm`] asks before it lets a joiner below
+/// [`identity::ADD_PROTO`] in.
+fn holds_an_add_member(conn: &Connection) -> rusqlite::Result<bool> {
+    use crate::sync_pair::roster;
+    let on_roster = identity::roster(conn)?
+        .iter()
+        .any(|d| d.revoked_at.is_none() && d.capability.as_deref() == Some(roster::ADD));
+    let on_document =
+        roster::last(conn)?.is_some_and(|(_, rd)| rd.members.iter().any(|m| m.cap == roster::ADD));
+    Ok(on_roster || on_document)
+}
+
+/// **The joiner's half of the same rule holds by construction**: a joiner of this build advertises
+/// [`identity::PROTO`], which is never below [`identity::ADD_PROTO`] — so it is never the device
+/// a group holding an `add` member must turn away, and a build that broke this would not compile.
+/// An older joiner runs older code; [`confirm`]'s [`JOINER_TOO_OLD_FOR_ADDS`] is what refuses it.
+const _: () = assert!(identity::PROTO >= identity::ADD_PROTO);
+
 /// What a joiner says when the group it is being let into signs its rosters and the device
 /// showing the code sent no signing key with its offer.
 pub const OFFER_UNSIGNED: &str = "The device showing the code is in a group that checks every \
@@ -518,6 +543,16 @@ pub async fn confirm(db: &impl Store, pending: &mut Option<Pending>) -> Result<S
             .is_none_or(|slot| slot.proto < identity::SIG_PROTO)
     {
         return Err(JOINER_TOO_OLD.to_owned());
+    }
+    // **And a group holding an `add` member takes no joiner below [`identity::ADD_PROTO`]** (the
+    // spec's §14.1): that build refuses every op the bot sends, so it would never see a card the
+    // reader added from Discord. Refused before anything is sealed, like the rule above.
+    if db.with(|conn| holds_an_add_member(conn).map_err(err))?
+        && peer_sign
+            .as_ref()
+            .is_none_or(|slot| slot.proto < identity::ADD_PROTO)
+    {
+        return Err(JOINER_TOO_OLD_FOR_ADDS.to_owned());
     }
 
     // **The candidate group, computed but not written.** `Some` is this device's group exactly
@@ -657,7 +692,7 @@ fn seal_offersig(
         &SigSlot {
             device: me.to_owned(),
             ed25519: crate::sync_pair::roster::key_text(&signing.public),
-            proto: identity::SIG_PROTO,
+            proto: identity::PROTO,
             mode: Some(mode.word().to_owned()),
         },
     )
@@ -681,10 +716,11 @@ pub const NOT_AN_INTEGRATION_PAIRING: &str = "That pairing was started for a dev
 pub const PIN_MISMATCH: &str = "The device that answered is not the one Discord enrolled, so it \
      was not let into your group.";
 
-/// The pinned capability is not one an integration may hold. Only `read` ships (§11, PR 3);
-/// **never `full`** — a device that may do everything is paired by a person comparing digits.
+/// The pinned capability is not one an integration may hold: `add` since PR 4 (§14.1) — what
+/// Discord is paired as — and `read`, which every build still understands. **Never `full`** — a
+/// device that may do everything is paired by a person comparing digits.
 pub const PIN_NOT_RESTRICTED: &str = "An integration can only join your group as a device that \
-     reads it.";
+     reads it, or reads it and adds cards.";
 
 /// The relay this device uses did not keep `offersig`, so the joiner could not learn that the
 /// group signs its rosters — or this device's signing key, its one anchor. Refused before the
@@ -749,7 +785,8 @@ pub struct PinnedJoin {
 /// 1. **The pin.** The pending must be an integration's ([`begin_integration`]); the joiner must
 ///    have answered with its signing slot; and its device id, its X25519 key and its Ed25519 key
 ///    must each equal `pinned`'s, or nothing moves ([`PIN_MISMATCH`]). The capability must be
-///    restricted ([`PIN_NOT_RESTRICTED`]) and the joiner at [`identity::SIG_PROTO`].
+///    restricted ([`PIN_NOT_RESTRICTED`]), and the joiner at [`identity::ADD_PROTO`] for `add`
+///    (it applies its own adds by those rules) or [`identity::SIG_PROTO`] for `read`.
 /// 2. **The cap**, as [`confirm`] — the bot is one of the five.
 /// 3. **Seal at the current epoch and post `offersig` then `offer`**, `offersig` saying
 ///    `mode: "signed"` — so the joiner latches before it joins, and takes this device's key as the
@@ -761,7 +798,7 @@ pub struct PinnedJoin {
 ///    (`roster::enter_signed_mode`) — the one shipped caller of either.
 /// 5. **Publish the join** ([`client::publish_join`]): the rotation to `E = epoch + 1`, carrying
 ///    the group's first signed roster document — signed by this device, every member with their
-///    keys and level, the bot `cap: "read"`. Every other device verifies it against the open
+///    keys and level, the bot with the pinned word (`cap: "add"`). Every other device verifies it against the open
 ///    document it last accepted, and follows the latch. Best effort, as for any join: a refusal is
 ///    the debt [`PinnedJoin::published`] reports, paid signed on the next sync.
 pub async fn confirm_pinned(
@@ -797,13 +834,16 @@ pub async fn confirm_pinned(
     {
         return Err(PIN_MISMATCH.to_owned());
     }
-    if pinned.capability != roster::READ {
+    if pinned.capability != roster::ADD && pinned.capability != roster::READ {
         return Err(PIN_NOT_RESTRICTED.to_owned());
     }
-    if peer_sign
-        .as_ref()
-        .is_none_or(|slot| slot.proto < identity::SIG_PROTO)
-    {
+    // An `add` bot must itself understand the `add` rules: it applies its own adds through them.
+    let needs = if pinned.capability == roster::ADD {
+        identity::ADD_PROTO
+    } else {
+        identity::SIG_PROTO
+    };
+    if peer_sign.as_ref().is_none_or(|slot| slot.proto < needs) {
         return Err(JOINER_TOO_OLD.to_owned());
     }
 
@@ -3340,10 +3380,10 @@ mod tests {
         let on_a = row_for(&a, &me_b.device_id);
         let on_b = row_for(&b, &me_a.device_id);
         assert_eq!(on_a.sign_public, Some(me_b.signing.public));
-        assert_eq!(on_a.proto, Some(identity::SIG_PROTO));
+        assert_eq!(on_a.proto, Some(identity::PROTO));
         assert_eq!(on_a.capability, None, "a pairing grants nothing but full");
         assert_eq!(on_b.sign_public, Some(me_a.signing.public));
-        assert_eq!(on_b.proto, Some(identity::SIG_PROTO));
+        assert_eq!(on_b.proto, Some(identity::PROTO));
         assert_eq!(
             crate::sync_pair::roster::mode(&b),
             crate::sync_pair::roster::Mode::Open,
@@ -3412,6 +3452,68 @@ mod tests {
             } else {
                 confirmed.expect("an open group takes an older joiner");
                 assert_eq!(live(&a), 2);
+            }
+        }
+    }
+
+    /// ⚠ **A group holding an `add` member refuses a joiner below `ADD_PROTO`** (the spec's §14.1)
+    /// — one that signs and verifies rosters, but would refuse every card Discord adds — before
+    /// anything is sealed; **the same joiner is taken once the group holds no `add` member**, and a
+    /// joiner of this build always is.
+    #[tokio::test]
+    async fn a_group_holding_an_add_member_refuses_a_joiner_below_add_proto() {
+        for (holds_add, joiner_proto) in [(true, 2), (false, 2), (true, identity::PROTO)] {
+            let relay = FakeRelay::start().await;
+            let (a, b) = (db(), db());
+            relay.point(&a);
+            relay.point(&b);
+            let me = identity::ensure(&a).unwrap();
+            identity::create_group(&a, &me).unwrap();
+            crate::sync_pair::roster::enter_signed_mode(&a, 0).unwrap();
+            if holds_add {
+                identity::add_device(&a, "bot", &[9u8; 32], "Discord").unwrap();
+                crate::sync_pair::roster::restrict(&a, "bot", crate::sync_pair::roster::ADD)
+                    .unwrap();
+            }
+            let (mut pa, mut pb) = (None, None);
+            let offer = begin(&a, &mut pa).unwrap();
+            accept(&b, &mut pb, &offer.code).await.unwrap();
+            // The joiner's slot, sealed again at the level under test.
+            let (rv, pair_key) = {
+                let p = pb.as_ref().unwrap();
+                (p.rv.clone(), p.pair_key.unwrap())
+            };
+            let me_b = identity::ensure(&b).unwrap();
+            let slot = seal_sig(
+                &pair_key,
+                &rv,
+                &SigSlot {
+                    device: me_b.device_id.clone(),
+                    ed25519: crate::sync_pair::roster::key_text(&me_b.signing.public),
+                    proto: joiner_proto,
+                    mode: None,
+                },
+            )
+            .unwrap();
+            relay.set_blob(&rv, client::JOIN_SIG, &slot);
+            poll(&a, &mut pa, crate::platform::clock::now_ms())
+                .await
+                .unwrap();
+            let before = live(&a);
+
+            let confirmed = confirm(&a, &mut pa).await;
+            let case = format!("holds add: {holds_add}, joiner at {joiner_proto}");
+            if holds_add && joiner_proto < identity::ADD_PROTO {
+                assert_eq!(
+                    confirmed.err().as_deref(),
+                    Some(JOINER_TOO_OLD_FOR_ADDS),
+                    "{case}"
+                );
+                assert_eq!(live(&a), before, "{case}: the joiner reached the roster");
+                assert!(relay.blob(&rv, "offer").is_none(), "{case}: the key went");
+            } else {
+                confirmed.expect(&case);
+                assert_eq!(live(&a), before + 1, "{case}");
             }
         }
     }

@@ -11,8 +11,10 @@ import type {
   InteractionAnswer,
   InteractionRequest,
 } from "@grimoire/discord-worker/src/rpc";
-import { answer } from "./interaction";
-import { refused } from "./render";
+import { press, startAdd, type AddHost, type Interaction } from "./add";
+import { ENGINE_FAILED, NOT_PAIRED, NOT_YET, answer } from "./interaction";
+import type { Proposals } from "./proposals";
+import { privately, refused, type Reply } from "./render";
 import type { Advanced, Engine } from "./types";
 import { discordSigned } from "./verify";
 
@@ -27,13 +29,45 @@ export interface Alarms {
 }
 
 /** What the device is built over. `open` makes the engine (once per instance, again after a
- *  purge); `purge` revokes the page store and deletes every byte of storage. */
+ *  purge); `purge` revokes the page store and deletes every byte of storage. The rest is an add's
+ *  (`add.ts`): where its proposals are kept, how its work outlives the answer (`ctx.waitUntil`),
+ *  and the `fetch` and the two addresses its Scryfall lookup and its reply's edit go to. */
 export interface Host {
   open(): Engine;
   purge(): Promise<void>;
   alarms: Alarms;
   publicKey: string;
   now(): number;
+  proposals: Proposals;
+  defer(work: Promise<unknown>): void;
+  fetch: typeof fetch;
+  scryfallUrl: string;
+  discordApi: string;
+}
+
+const APPLICATION_COMMAND = 2;
+const MESSAGE_COMPONENT = 3;
+
+/** The interaction's JSON, when it is an object — `answer` says what it is otherwise. */
+function parsed(body: string): Interaction | null {
+  try {
+    const value: unknown = JSON.parse(body);
+    return typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Interaction)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** `/collection add` or `/wishlist add`. */
+function isAdd(interaction: Interaction): boolean {
+  const name = interaction.data?.name;
+  return (
+    interaction.type === APPLICATION_COMMAND &&
+    (name === "collection" || name === "wishlist") &&
+    (interaction.data?.options ?? []).find((o) => o.type === 1)?.name === "add"
+  );
 }
 
 const NO_ENGINE: BotStatus = {
@@ -76,8 +110,10 @@ export class Device {
     if (engine === null) {
       return { ok: false, code: "pairing_failed", error: this.#failed ?? "the bot did not open" };
     }
-    if (typeof req?.invite !== "string" || req.capability !== "read") {
-      return { ok: false, code: "bad_invite", error: "the request names no invite to read with" };
+    // `add` and nothing else (§14.1): `read` is a word every build understands, and nothing
+    // pairs with it any more.
+    if (typeof req?.invite !== "string" || req.capability !== "add") {
+      return { ok: false, code: "bad_invite", error: "the request names no invite to add with" };
     }
     const answered = JSON.parse(await engine.enroll(req.invite, req.capability)) as
       Enrolled | EnrollRefused;
@@ -109,8 +145,36 @@ export class Device {
     if (status.paired && (status.lastPullAt === null || now - status.lastPullAt > STALE_MS)) {
       await this.#alarmBy(now);
     }
+    const interaction = parsed(req.body);
+    if (interaction !== null && (interaction.type === MESSAGE_COMPONENT || isAdd(interaction))) {
+      return this.#add(engine ?? stubEngine, status, interaction);
+    }
     if (engine === null) return answer(stubEngine, NO_ENGINE, req.body);
     return answer(engine, status, req.body);
+  }
+
+  /** An add, or a press on one's buttons (`add.ts`). */
+  async #add(engine: Engine, status: BotStatus, interaction: Interaction): Promise<Reply> {
+    const host: AddHost = {
+      engine,
+      proposals: this.#host.proposals,
+      now: () => this.#host.now(),
+      defer: (work) => this.#host.defer(work),
+      fetch: this.#host.fetch,
+      scryfallUrl: this.#host.scryfallUrl,
+      discordApi: this.#host.discordApi,
+      alarmBy: (at) => this.#alarmBy(at),
+    };
+    try {
+      if (interaction.type === MESSAGE_COMPONENT) {
+        return await press(host, interaction, status.paired, NOT_PAIRED);
+      }
+      if (!status.paired) return privately(NOT_PAIRED);
+      if (status.lastPullAt === null) return privately(NOT_YET);
+      return startAdd(host, interaction);
+    } catch {
+      return privately(ENGINE_FAILED);
+    }
   }
 
   /** `ctx.storage.deleteAll()` — the identity, the group key and every page, gone for good. */
@@ -146,5 +210,8 @@ const stubEngine: Engine = {
   names: () => '{"ok":[]}',
   decks: () => '{"ok":[]}',
   deck_cards: () => '{"ok":null}',
+  folders: () => '{"ok":[]}',
+  target: () => '{"err":"the bot did not open"}',
+  add: () => '{"err":"the bot did not open"}',
   close: () => {},
 };

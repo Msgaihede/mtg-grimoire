@@ -1,9 +1,11 @@
 //! **Integrations — a service that joins a reader's sync group as a restricted device** (the
 //! Discord spec, issue #1096). The bot is paired like any device, holds the group key and reads
-//! everything, and may write nothing: a `read` member of the group's signed roster document.
+//! everything, and may add cards and do nothing else: an `add` member of the group's signed
+//! roster document (PR 4, §14 — PR 3 paired it `read`).
 //!
 //! This module is the engine's half of *Settings → Integrations*: [`gate`], the question asked
-//! before any pairing starts (§13.5). The pairing itself is `sync_pair::pairing`'s —
+//! before any pairing starts (§13.5), and [`add`], what an `add` member writes and what every
+//! device takes from one. The pairing itself is `sync_pair::pairing`'s —
 //! [`begin_integration`](crate::sync_pair::pairing::begin_integration) and
 //! [`confirm_pinned`](crate::sync_pair::pairing::confirm_pinned) — and the network calls to the
 //! integration's own service are the desktop host's (`apps/desktop/src-tauri/src/discord/`).
@@ -13,12 +15,16 @@
 //! key on file, or a build below [`identity::SIG_PROTO`] 2 — would go on accepting envelopes and
 //! rotations under the group key alone, which the bot holds: exactly the forgery the signatures
 //! exist to stop. So every member must be ready *before* the bot arrives, and the reader is told
-//! which one is not.
+//! which one is not. **And since the bot adds, below [`identity::ADD_PROTO`] 3** a member would
+//! refuse every card the reader adds from Discord — safe, but the group would diverge — so the
+//! gate names that member too.
 
 use crate::sync_engine::commands;
 use crate::sync_pair::identity;
 use crate::sync_pair::roster;
 use rusqlite::Connection;
+
+pub mod add;
 
 /// What [`gate`] answers.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,10 +78,22 @@ pub fn update_or_remove(name: &str) -> String {
     )
 }
 
+/// A member that verifies rosters but is below [`identity::ADD_PROTO`]: it would refuse every
+/// card Discord adds. [`update_or_remove`]'s shape, with the device named.
+pub fn update_or_remove_for_adds(name: &str) -> String {
+    format!(
+        "Update or remove \"{name}\" first - it runs a version of MTG Grimoire that cannot take \
+         cards added from Discord."
+    )
+}
+
 /// A restricted device is in the group already — the integration's own, from a link that was
 /// never switched off, or another one's.
 pub fn already_restricted(name: &str) -> String {
-    format!("\"{name}\" is already in your group as a device that only reads. Remove it first.")
+    format!(
+        "\"{name}\" is already in your group as a device that may only read it or add cards. \
+         Remove it first."
+    )
 }
 
 /// **Whether an integration may be paired into this device's group now** — §13.5, in its order:
@@ -85,7 +103,9 @@ pub fn already_restricted(name: &str) -> String {
 /// 3. the relay has advertised `sig: 1` on its last `/keys` answer;
 /// 4. a roster document accepted here, naming this device with its signing key at this level;
 /// 5. **every member** — on that document and on this device's own roster — with a signing key
-///    and at [`identity::SIG_PROTO`] or above, the first that is not named;
+///    and at [`identity::SIG_PROTO`] or above, the first that is not named; then every member at
+///    [`identity::ADD_PROTO`] or above, the first that is not named
+///    ([`update_or_remove_for_adds`]) — the bot is paired as `add`;
 /// 6. fewer than five devices;
 /// 7. no restricted device present — on the roster, on the document, or once restricted and
 ///    still listed.
@@ -153,6 +173,17 @@ fn ask(conn: &Connection) -> rusqlite::Result<Option<String>> {
             return Ok(Some(update_or_remove(&d.name)));
         }
     }
+    // 5b — every member understands the `add` rules, in the same order.
+    for m in &document.members {
+        if m.device != me && m.proto < identity::ADD_PROTO {
+            return Ok(Some(update_or_remove_for_adds(&name_of(&m.device))));
+        }
+    }
+    for d in &rows {
+        if d.device_id != me && d.proto.unwrap_or(0) < identity::ADD_PROTO {
+            return Ok(Some(update_or_remove_for_adds(&d.name)));
+        }
+    }
 
     // 6
     if rows.len() >= identity::MAX_GROUP_DEVICES {
@@ -193,8 +224,11 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
+    /// A database as an open leaves one: at head, capture installed.
     fn db() -> Connection {
-        crate::schema::memory_pair()
+        let conn = crate::schema::memory_pair();
+        capture::install(&conn).unwrap();
+        conn
     }
 
     fn now() -> i64 {
@@ -244,6 +278,11 @@ mod tests {
         rosters: Vec<(String, String, String)>,
         rotations: Vec<serde_json::Value>,
         envelopes: Vec<serde_json::Value>,
+        /// Answer every push `429 restricted_quota`, as the relay does a restricted device past
+        /// its day's allowance.
+        quota: bool,
+        /// How many pushes were made, refused ones included.
+        pushes: usize,
     }
 
     struct Relay {
@@ -412,6 +451,22 @@ mod tests {
                 when.method(POST).path_matches(r"^/g/[0-9a-f]+/ack$");
                 then.status(204);
             });
+            let h = held.clone();
+            server.mock(|when, then| {
+                when.method(POST).path_matches(r"^/g/[0-9a-f]+/push$");
+                then.respond_with(move |req: &HttpMockRequest| {
+                    let mut held = h.lock().unwrap();
+                    held.pushes += 1;
+                    if held.quota {
+                        return json(429, serde_json::json!({ "code": "restricted_quota" }));
+                    }
+                    let envelope: serde_json::Value =
+                        serde_json::from_str(&req.body_string()).unwrap();
+                    held.envelopes.push(envelope);
+                    let cursor = held.envelopes.len() as i64;
+                    json(200, serde_json::json!({ "cursor": cursor }))
+                });
+            });
 
             Relay { server, held }
         }
@@ -481,6 +536,20 @@ mod tests {
         Pinned,
         crypto::SigningKeypair,
     ) {
+        bot_enrolls_as(relay, code, roster::ADD).await
+    }
+
+    /// [`bot_enrolls`], pinned with `capability`.
+    async fn bot_enrolls_as(
+        relay: &Relay,
+        code: &str,
+        capability: &str,
+    ) -> (
+        Connection,
+        Option<pairing::Pending>,
+        Pinned,
+        crypto::SigningKeypair,
+    ) {
         let bot = db();
         relay.point(&bot);
         let mut pending = None;
@@ -490,7 +559,7 @@ mod tests {
             &me.device_id,
             &roster::key_text(&me.keypair.public),
             &roster::key_text(&me.signing.public),
-            roster::READ,
+            capability,
         )
         .unwrap();
         (bot, pending, pinned, me.signing)
@@ -506,16 +575,17 @@ mod tests {
     /// the desk confirms on the pins with no six digits — and:
     ///
     /// * `offersig` says `signed`, so the bot latches before it joins;
-    /// * the bot is on the desk's roster as `read`, with both its keys, under *Discord*, and in
-    ///   `restricted_ever`;
+    /// * the bot is on the desk's roster as `add`, with both its keys and its level, under
+    ///   *Discord*, and in `restricted_ever`;
     /// * the desk is latched (`roster_mode = signed`, `signed_since` = the join's epoch);
     /// * the join's rotation carries the group's **first signed document** — signed by the desk,
-    ///   chained to the open one, every member with keys and level, the bot `cap: "read"`;
+    ///   chained to the open one, every member with keys and level, the bot `cap: "add"`;
     /// * the bot completes, verifies that document against the desk's key alone and adopts the
     ///   epoch; the phone verifies it against the open document it last accepted, follows the latch,
-    ///   learns the bot as `read` — **and refuses what the bot then pushes**.
+    ///   learns the bot as `add` — **and refuses what the bot's capture would push**, which is off
+    ///   the allow-list.
     #[tokio::test]
-    async fn a_pinned_pairing_files_the_bot_read_only_and_enters_signed_mode() {
+    async fn a_pinned_pairing_files_the_bot_as_an_add_member_and_enters_signed_mode() {
         let relay = Relay::start().await;
         let (desk, phone) = desk_and_phone(&relay).await;
         assert_eq!(gate(&desk), Gate::Ready);
@@ -541,12 +611,12 @@ mod tests {
         assert!(joined.published, "the signed join stayed a debt");
         assert!(!identity::roster_is_dirty(&desk).unwrap());
 
-        // The desk: the bot filed read-only, the latch, the restriction remembered.
+        // The desk: the bot filed as an `add` member, the latch, the restriction remembered.
         let filed = row(&desk, &pinned.device_id).expect("the bot is on the roster");
-        assert_eq!(filed.capability.as_deref(), Some(roster::READ));
+        assert_eq!(filed.capability.as_deref(), Some(roster::ADD));
         assert_eq!(filed.public_key, pinned.x25519);
         assert_eq!(filed.sign_public, Some(pinned.ed25519));
-        assert_eq!(filed.proto, Some(identity::SIG_PROTO));
+        assert_eq!(filed.proto, Some(identity::PROTO));
         assert_eq!(filed.name, pairing::INTEGRATION_DEVICE_NAME);
         assert_eq!(roster::mode(&desk), Mode::Signed);
         assert_eq!(
@@ -580,9 +650,9 @@ mod tests {
         assert_eq!(rd.members.len(), 3);
         for m in &rd.members {
             assert!(m.ed25519.is_some(), "{m:?}");
-            assert_eq!(m.proto, identity::SIG_PROTO, "{m:?}");
+            assert_eq!(m.proto, identity::PROTO, "{m:?}");
             let expected = if m.device == pinned.device_id {
-                roster::READ
+                roster::ADD
             } else {
                 roster::FULL
             };
@@ -609,10 +679,14 @@ mod tests {
         assert_eq!(identity::group(&bot).unwrap().unwrap().epoch, epoch);
         assert!(
             roster::self_restricted(&bot).unwrap(),
-            "the bot did not learn it may only read"
+            "the bot did not learn it is restricted"
+        );
+        assert_eq!(
+            roster::self_capability(&bot).unwrap().as_deref(),
+            Some(roster::ADD)
         );
 
-        // The phone follows the latch on the desk's signature, and learns the bot as read-only.
+        // The phone follows the latch on the desk's signature, and learns the bot as `add`.
         assert_eq!(
             client::check_keys(&phone).await.unwrap().outcome,
             KeyOutcome::Adopted
@@ -620,10 +694,10 @@ mod tests {
         assert_eq!(roster::mode(&phone), Mode::Signed);
         assert_eq!(roster::last(&phone).unwrap().unwrap().0, text);
         let learnt = row(&phone, &pinned.device_id).expect("the phone learnt the bot");
-        assert_eq!(learnt.capability.as_deref(), Some(roster::READ));
+        assert_eq!(learnt.capability.as_deref(), Some(roster::ADD));
         assert_eq!(learnt.sign_public, Some(pinned.ed25519));
 
-        // …and refuses what the bot pushes, signed or not.
+        // …and refuses what the bot's own capture would push: a whole row, off the allow-list.
         capture::install(&bot).unwrap();
         bot.execute(
             "INSERT INTO collection_entries
@@ -665,7 +739,239 @@ mod tests {
             .unwrap();
         assert_eq!(copies, 0, "the bot wrote to the phone");
         let rows = rows_for(&phone, "pull");
-        assert!(rows.iter().any(|r| r.contains("may only read")), "{rows:?}");
+        assert!(
+            rows.iter().any(|r| r.contains("may only add cards")),
+            "{rows:?}"
+        );
+    }
+
+    /// The desk, the phone and an `add` bot, paired by pins; the bot's capture switched off as its
+    /// host switches it, and every device capturing as an opened database does.
+    async fn with_an_add_bot(relay: &Relay) -> (Connection, Connection, Connection, i64) {
+        let (desk, phone) = desk_and_phone(relay).await;
+        let mut pending = None;
+        let offer = pairing::begin_integration(&desk, &mut pending).unwrap();
+        let (bot, mut bot_pending, pinned, _) = bot_enrolls(relay, &offer.code).await;
+        pairing::poll(&desk, &mut pending, now()).await.unwrap();
+        let joined = pairing::confirm_pinned(&desk, &mut pending, pinned)
+            .await
+            .unwrap();
+        pairing::poll(&bot, &mut bot_pending, now()).await.unwrap();
+        for conn in [&bot, &phone] {
+            assert_eq!(
+                client::check_keys(conn).await.unwrap().outcome,
+                KeyOutcome::Adopted
+            );
+        }
+        add::capture_off(&bot).unwrap();
+        bot.execute("DELETE FROM sync_ops", []).unwrap();
+        grant(&bot);
+        (desk, phone, bot, joined.signed_since)
+    }
+
+    fn copies_of(conn: &Connection, card: &str) -> (i64, i64) {
+        conn.query_row(
+            "SELECT count(*), coalesce(sum(quantity), 0) FROM collection_entries
+              WHERE card_id = ?1",
+            [card],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap()
+    }
+
+    fn pending_ops(conn: &Connection) -> i64 {
+        conn.query_row(
+            "SELECT count(*) FROM sync_ops WHERE pushed_at IS NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    fn bolt(folder_uid: &str, quantity: i64) -> add::Add {
+        add::Add::Collection(add::CollectionAdd {
+            card_id: "bolt-2x2".into(),
+            set_code: "2x2".into(),
+            collector_number: "117".into(),
+            lang: "en".into(),
+            finish: "foil".into(),
+            quantity,
+            folder_uid: folder_uid.into(),
+        })
+    }
+
+    /// ⚠ **An add, end to end** (the spec's §14): the desk makes *Added from Discord* (captured),
+    /// the bot pulls it, emits an add past its own capture-off trigger and reads it back at once,
+    /// pushes it as one signed envelope — and the phone and the desk each apply it, as an add.
+    /// A second add of the same printing is an increment on the row's own uid.
+    #[tokio::test]
+    async fn a_bot_add_reaches_every_device() {
+        let relay = Relay::start().await;
+        let (desk, phone, bot, epoch) = with_an_add_bot(&relay).await;
+        let base = relay.server.base_url();
+
+        add::ensure_added_folder(&desk).unwrap();
+        client::push(&desk, &base, "access-1").await.unwrap();
+        client::pull(&bot, &base, "access-1", Some(epoch))
+            .await
+            .unwrap();
+        let folder = add::default_folder(&bot)
+            .unwrap()
+            .expect("the bot learnt the folder");
+        assert_eq!(add::default_folder(&desk).unwrap(), Some(folder.clone()));
+
+        let uid = add::emit(&bot, &bolt(&folder, 2)).expect("the bot may add");
+        assert_eq!(copies_of(&bot, "bolt-2x2"), (1, 2), "the bot's own read");
+        assert_eq!(
+            pending_ops(&bot),
+            1,
+            "one op in the bot's outbox, and no other"
+        );
+        assert_eq!(client::get_state(&bot, add::EMITTING), None);
+
+        assert_eq!(client::push_restricted(&bot).await, Ok(1));
+        assert_eq!(pending_ops(&bot), 0);
+        assert_eq!(client::push_restricted(&bot).await, Ok(0));
+        let pushes = relay.held.lock().unwrap().pushes;
+
+        for conn in [&phone, &desk] {
+            let pulled = client::pull(conn, &base, "access-1", Some(epoch))
+                .await
+                .unwrap();
+            assert_eq!(copies_of(conn, "bolt-2x2"), (1, 2), "{pulled:?}");
+            let filed: String = conn
+                .query_row(
+                    "SELECT f.sync_uid FROM collection_entries e
+                       JOIN collection_folders f ON f.id = e.folder_id
+                      WHERE e.sync_uid = ?1",
+                    [&uid],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(filed, folder);
+        }
+
+        // A second add of the same printing names the row it already is.
+        assert_eq!(
+            add::emit(&bot, &bolt(&folder, 3)).as_deref(),
+            Ok(uid.as_str())
+        );
+        let op: String = bot
+            .query_row(
+                "SELECT fields FROM sync_ops WHERE pushed_at IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(op, "{}", "an increment carries no field");
+        assert_eq!(client::push_restricted(&bot).await, Ok(1));
+        client::pull(&phone, &base, "access-1", Some(epoch))
+            .await
+            .unwrap();
+        assert_eq!(copies_of(&phone, "bolt-2x2"), (1, 5));
+        assert_eq!(
+            relay.held.lock().unwrap().pushes,
+            pushes + 1,
+            "the empty push asked"
+        );
+    }
+
+    /// ⚠ **The relay's day's allowance is an answer, not a failure**: `429 restricted_quota` keeps
+    /// the outbox, says so in `restricted_quota_at`, and the next day's push sends it and clears it.
+    #[tokio::test]
+    async fn a_push_past_the_days_allowance_keeps_the_add() {
+        let relay = Relay::start().await;
+        let (desk, _phone, bot, epoch) = with_an_add_bot(&relay).await;
+        let base = relay.server.base_url();
+        add::ensure_added_folder(&desk).unwrap();
+        client::push(&desk, &base, "access-1").await.unwrap();
+        client::pull(&bot, &base, "access-1", Some(epoch))
+            .await
+            .unwrap();
+        let folder = add::default_folder(&bot).unwrap().unwrap();
+        add::emit(&bot, &bolt(&folder, 1)).unwrap();
+
+        relay.held.lock().unwrap().quota = true;
+        assert_eq!(client::push_restricted(&bot).await, Ok(0));
+        assert_eq!(pending_ops(&bot), 1, "the add was dropped");
+        assert!(client::get_state(&bot, client::RESTRICTED_QUOTA_AT).is_some());
+
+        relay.held.lock().unwrap().quota = false;
+        assert_eq!(client::push_restricted(&bot).await, Ok(1));
+        assert_eq!(pending_ops(&bot), 0);
+        assert_eq!(client::get_state(&bot, client::RESTRICTED_QUOTA_AT), None);
+    }
+
+    /// Only an `add` member pushes this way, and only an `add` member emits.
+    #[tokio::test]
+    async fn a_full_device_neither_emits_nor_pushes_restricted() {
+        let relay = Relay::start().await;
+        let (desk, _phone, _bot, _) = with_an_add_bot(&relay).await;
+        assert_eq!(
+            client::push_restricted(&desk).await,
+            Err(client::NOT_AN_ADD_DEVICE.to_owned())
+        );
+        add::ensure_added_folder(&desk).unwrap();
+        let folder = add::default_folder(&desk).unwrap().unwrap();
+        assert_eq!(
+            add::emit(&desk, &bolt(&folder, 1)),
+            Err(add::NOT_AN_ADD_MEMBER.to_owned())
+        );
+    }
+
+    /// An add into a folder the reader does not own is refused at the bot, before its outbox.
+    #[tokio::test]
+    async fn the_bot_refuses_an_add_into_a_folder_it_may_not_use() {
+        let relay = Relay::start().await;
+        let (_desk, _phone, bot, _) = with_an_add_bot(&relay).await;
+        let removed: Option<String> = bot
+            .query_row(
+                "SELECT sync_uid FROM collection_folders WHERE kind = 'removed'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        for folder in [removed.unwrap_or_default(), "nowhere".to_owned()] {
+            assert_eq!(
+                add::emit(&bot, &bolt(&folder, 1)),
+                Err(add::NOT_YOUR_FOLDER.to_owned())
+            );
+        }
+        assert_eq!(pending_ops(&bot), 0);
+        assert_eq!(
+            add::emit(&bot, &bolt("x", 0)),
+            Err(add::BAD_QUANTITY.to_owned())
+        );
+    }
+
+    /// ⚠ **A `read` pin still pairs, and every device refuses everything it sends** — the word
+    /// PR 3 paired with, which every build goes on understanding.
+    #[tokio::test]
+    async fn a_read_pin_still_pairs_and_still_writes_nothing() {
+        let relay = Relay::start().await;
+        let (desk, phone) = desk_and_phone(&relay).await;
+        let mut pending = None;
+        let offer = pairing::begin_integration(&desk, &mut pending).unwrap();
+        let (bot, mut bot_pending, pinned, _) =
+            bot_enrolls_as(&relay, &offer.code, roster::READ).await;
+        pairing::poll(&desk, &mut pending, now()).await.unwrap();
+        pairing::confirm_pinned(&desk, &mut pending, pinned.clone())
+            .await
+            .unwrap();
+        pairing::poll(&bot, &mut bot_pending, now()).await.unwrap();
+        client::check_keys(&bot).await.unwrap();
+        client::check_keys(&phone).await.unwrap();
+        assert_eq!(
+            row(&phone, &pinned.device_id)
+                .unwrap()
+                .capability
+                .as_deref(),
+            Some(roster::READ)
+        );
+        assert_eq!(
+            client::push_restricted(&bot).await,
+            Err(client::NOT_AN_ADD_DEVICE.to_owned())
+        );
     }
 
     /// One way to bend a pin: given a stranger's X25519 key and another signing key.
@@ -714,23 +1020,27 @@ mod tests {
     }
 
     /// An integration may only ever be pinned as restricted: a `full` pin is refused, whatever else
-    /// matches.
+    /// matches — and so is a word this build does not know.
     #[tokio::test]
     async fn a_full_pin_is_refused() {
         let relay = Relay::start().await;
         let (desk, _phone) = desk_and_phone(&relay).await;
         let mut pending = None;
         let offer = pairing::begin_integration(&desk, &mut pending).unwrap();
-        let (_bot, _, mut pinned, _) = bot_enrolls(&relay, &offer.code).await;
+        let (_bot, _, pinned, _) = bot_enrolls(&relay, &offer.code).await;
         pairing::poll(&desk, &mut pending, now()).await.unwrap();
-        pinned.capability = roster::FULL.into();
         let offers = relay.slot("offer");
-        assert_eq!(
-            pairing::confirm_pinned(&desk, &mut pending, pinned)
-                .await
-                .unwrap_err(),
-            pairing::PIN_NOT_RESTRICTED
-        );
+        for word in [roster::FULL, "admin"] {
+            let mut bent = pinned.clone();
+            bent.capability = word.into();
+            assert_eq!(
+                pairing::confirm_pinned(&desk, &mut pending, bent)
+                    .await
+                    .unwrap_err(),
+                pairing::PIN_NOT_RESTRICTED,
+                "{word}"
+            );
+        }
         assert_eq!(relay.slot("offer"), offers);
     }
 
@@ -853,7 +1163,7 @@ mod tests {
             x25519: roster::key_text(&me.keypair.public),
             ed25519: Some(roster::key_text(&me.signing.public)),
             cap: roster::FULL.into(),
-            proto: identity::SIG_PROTO,
+            proto: identity::PROTO,
             since: 0,
         }];
         for (i, (id, name, keyed, proto)) in peers.iter().enumerate() {
@@ -891,7 +1201,7 @@ mod tests {
 
     #[test]
     fn the_gate_is_ready_for_a_group_whose_every_member_verifies() {
-        assert_eq!(gate(&gated(&[("phone", "Phone", true, 2)])), Gate::Ready);
+        assert_eq!(gate(&gated(&[("phone", "Phone", true, 3)])), Gate::Ready);
     }
 
     #[test]
@@ -927,7 +1237,7 @@ mod tests {
     fn the_gate_names_a_member_that_cannot_verify() {
         assert_eq!(
             gate(&gated(&[
-                ("phone", "Phone", true, 2),
+                ("phone", "Phone", true, 3),
                 ("tablet", "Old tablet", false, 0)
             ])),
             Gate::Refused(update_or_remove("Old tablet"))
@@ -943,11 +1253,37 @@ mod tests {
         );
     }
 
+    /// ⚠ **A member that verifies rosters but is below `ADD_PROTO` is named** — it would refuse
+    /// every card Discord adds — on the document and on the roster, in the spec's sentence shape.
+    #[test]
+    fn the_gate_names_a_member_that_cannot_take_adds() {
+        assert_eq!(
+            gate(&gated(&[
+                ("phone", "Phone", true, 3),
+                ("laptop", "Laptop", true, 2)
+            ])),
+            Gate::Refused(update_or_remove_for_adds("Laptop"))
+        );
+        let conn = gated(&[("phone", "Phone", true, 3)]);
+        conn.execute(
+            "UPDATE sync_devices SET proto = 2 WHERE device_id = 'phone'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(
+            gate(&conn),
+            Gate::Refused(update_or_remove_for_adds("Phone"))
+        );
+        assert!(
+            update_or_remove_for_adds("Laptop").starts_with("Update or remove \"Laptop\" first")
+        );
+    }
+
     /// A peer this device paired whose key has not reached the document yet is still named: the
     /// roster is read as well as the document.
     #[test]
     fn the_gate_reads_the_roster_as_well_as_the_document() {
-        let conn = gated(&[("phone", "Phone", true, 2)]);
+        let conn = gated(&[("phone", "Phone", true, 3)]);
         identity::add_device(&conn, "new-one", &[44u8; 32], "New phone").unwrap();
         assert_eq!(gate(&conn), Gate::Refused(update_or_remove("New phone")));
     }
@@ -955,10 +1291,10 @@ mod tests {
     #[test]
     fn the_gate_refuses_a_sixth_device() {
         let conn = gated(&[
-            ("a", "A", true, 2),
-            ("b", "B", true, 2),
-            ("c", "C", true, 2),
-            ("d", "D", true, 2),
+            ("a", "A", true, 3),
+            ("b", "B", true, 3),
+            ("c", "C", true, 3),
+            ("d", "D", true, 3),
         ]);
         assert_eq!(gate(&conn), Gate::Refused(GROUP_FULL.into()));
     }
@@ -966,11 +1302,11 @@ mod tests {
     /// A restricted device on the roster — or one once restricted and still listed — is named.
     #[test]
     fn the_gate_refuses_a_second_restricted_device() {
-        let conn = gated(&[("phone", "Phone", true, 2), ("bot", "Discord", true, 2)]);
-        roster::restrict(&conn, "bot", roster::READ).unwrap();
+        let conn = gated(&[("phone", "Phone", true, 3), ("bot", "Discord", true, 3)]);
+        roster::restrict(&conn, "bot", roster::ADD).unwrap();
         assert_eq!(gate(&conn), Gate::Refused(already_restricted("Discord")));
 
-        let conn = gated(&[("phone", "Phone", true, 2), ("bot", "Old bot", true, 2)]);
+        let conn = gated(&[("phone", "Phone", true, 3), ("bot", "Old bot", true, 3)]);
         roster::restrict(&conn, "bot", roster::READ).unwrap();
         conn.execute(
             "UPDATE sync_devices SET capability = NULL WHERE device_id = 'bot'",

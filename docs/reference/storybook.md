@@ -110,6 +110,9 @@ it says `tags: ["autodocs"]`.
   engine's `GROUP_FULL`), `discordEnrolled` has the bot in the group, and `discordUnreachable`
   has `discord_link_begin` and `discord_enable` refuse. With none of them the fake approves a
   sign-in on its second `discord_link_poll`, so a story can walk the whole sign-in by pressing.
+  **`discord_enable` makes the *Added from Discord* collection folder** (`DISCORD_ADDED_FOLDER`,
+  top level, `user`, found again in any case) after the gate and before the enroll, the desktop's
+  order (spec §14.5) — so a refused gate makes none, and the front being down keeps it.
   **`artTagsMissing` and `artTagsFetchError` are the Oracle pair below, one dataset over**, and
   they are two more faults rather than a reuse of those two because the taxonomies are two files
   on two schedules: either can be absent, or failing, while the other is fine, and the Tags page

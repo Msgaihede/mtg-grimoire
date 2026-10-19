@@ -35,6 +35,10 @@
 //!
 //! Per-device and not synced, written by `apply` alone and inside its pass's savepoint, so a round
 //! rolled back takes its memories with it.
+//!
+//! **Every fold and merge here is ranked** ([`Ranks`], the Discord spec's §14.2): a restricted
+//! device's stamp loses to a full device's in a memory exactly as it does in a page, so a bot's
+//! add heard on one pull cannot outrank a reader's edit or delete heard on another.
 
 use super::*;
 use crate::sync_engine::merge::Memory;
@@ -66,12 +70,17 @@ fn write(conn: &Connection, table: &str, uid: &str, memory: &Memory) -> Result<(
 
 /// What this device remembers of a row that has worn `uids`, as one memory. Each name once:
 /// merging one memory twice would count its counters twice.
-pub(super) fn recall(conn: &Connection, table: &str, uids: &[String]) -> Result<Memory, String> {
+pub(super) fn recall(
+    conn: &Connection,
+    table: &str,
+    uids: &[String],
+    ranks: &Ranks,
+) -> Result<Memory, String> {
     let mut out = Memory::default();
     let names: BTreeSet<&String> = uids.iter().collect();
     for uid in names {
         if let Some(memory) = read(conn, table, uid)? {
-            out.merge(memory);
+            out.merge_ranked(memory, ranks);
         }
     }
     Ok(out)
@@ -82,7 +91,7 @@ pub(super) fn record(conn: &Connection, g: &Group) -> Result<(), String> {
     let uid = filed_under(conn, g.table, &g.ops[0].uid)?;
     let mut memory = read(conn, g.table, &uid)?.unwrap_or_default();
     let ops: Vec<Op> = g.ops.iter().map(|o| (*o).clone()).collect();
-    memory.absorb(&ops);
+    memory.absorb_ranked(&ops, &g.ranks);
     write(conn, g.table, &uid, &memory)
 }
 
@@ -124,7 +133,7 @@ pub(super) fn renamed(conn: &Connection, table: &str, from: &str, to: &str) -> R
         return Ok(());
     };
     let mut memory = read(conn, table, to)?.unwrap_or_default();
-    memory.merge(moved);
+    memory.merge_ranked(moved, &ranks_of(conn)?);
     write(conn, table, to, &memory)?;
     conn.execute(
         "DELETE FROM sync_heard WHERE tbl = ?1 AND uid = ?2",

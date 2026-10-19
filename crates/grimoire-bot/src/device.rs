@@ -21,13 +21,27 @@
 //!   desktop pins (the Discord spec §13.4). It is `joining` from then on.
 //! * **`advance`** is what an alarm runs. While `joining` it polls the rendezvous
 //!   (`pairing::poll`) until the desktop's `offer` arrives and the core completes the join; then
-//!   `paired`. While `paired` it makes one **pull trip** ([`Device::sync`]): `/keys`, a relay token
-//!   through the group door, the core's paged pull, the ack — **never a push, a baseline, a join
-//!   publish or a roster amendment**, which a restricted device may not make — and then a piece of
-//!   the slim corpus ([`crate::corpus`]). It answers when the next alarm should be.
+//!   `paired`. While `paired` it makes one **trip** ([`Device::sync`]): `/keys`, a relay token
+//!   through the group door, **the push of whatever a reader confirmed** (`client::push_restricted`,
+//!   only for an `add` device with something in its outbox), the core's paged pull, the ack —
+//!   **never a baseline, a join publish or a roster amendment**, which a restricted device may not
+//!   make — and then a piece of the slim corpus ([`crate::corpus`]). It answers when the next alarm
+//!   should be.
 //! * **Capture is off.** [`capture_off`] refuses every row the core's capture triggers would put in
-//!   `sync_ops` and empties that table, so nothing this device does to its own rows (its name, a
-//!   launch pass) is ever an op it could send.
+//!   `sync_ops`, so nothing this device does to its own rows (its name, a pull, a launch pass) is
+//!   ever an op it could send. **The one way into the outbox is [`Device::add`]**: a reader's
+//!   Confirm in Discord, through `integration::add::emit` (the Discord spec §14.3), which builds
+//!   exactly the op every receiver's allow-list takes.
+//!
+//! # Adding (the Discord spec §14.4)
+//!
+//! [`Device::target`] is asked when a command arrives — where the add goes (a named folder, or the
+//! default *Added from Discord*), and whether today's quota is spent — and [`Device::add`] when the
+//! reader presses Confirm, which asks both again and emits. Neither reaches the network: the
+//! push is the next alarm's, which the Durable Object sets a second away. A relay that answers
+//! the push with its daily quota is remembered by the core for the UTC day
+//! (`client::RESTRICTED_QUOTA_AT`), so the next command is told [`QUOTA`] in words instead of
+//! queueing an add that cannot leave until tomorrow.
 //!
 //! # What does not survive an eviction
 //!
@@ -41,7 +55,8 @@
 
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use grimoire_core::state::{State, Store};
+use grimoire_core::integration::add as adding;
+use grimoire_core::state::{self as core_state, Lane, State, Store};
 use grimoire_core::sync_engine::client::{self, KeyOutcome};
 use grimoire_core::sync_engine::entitlement;
 use grimoire_core::sync_pair::invite::Invite;
@@ -96,6 +111,68 @@ pub const INTERRUPTED: &str = "The pairing was interrupted before the desktop co
 /// What an expired pairing says.
 pub const EXPIRED: &str = "The pairing code expired before the desktop confirmed it. Switch \
                            Discord off and on again in Settings to start over.";
+
+/// An add with no folder named, when *Added from Discord* is not there (the Discord spec §14.4).
+pub const NO_DEFAULT_FOLDER: &str = "Name a folder, or switch Discord off and on in Settings to \
+                                     bring back Added from Discord.";
+/// A folder that is a deck's or the removed cards' — every receiver would refuse the add (§14.2).
+pub const NOT_A_USER_FOLDER: &str = "Discord can add only to your own folders, not to a deck's or \
+                                     to the removed cards. Pick another folder.";
+/// A folder typed by hand that names none.
+pub const NO_SUCH_FOLDER: &str = "None of your folders is called that. Pick one from the list.";
+/// A folder that went away between the command and the Confirm.
+pub const FOLDER_GONE: &str = "That folder is no longer in your collection. Run the command \
+                               again and pick another.";
+/// The relay's daily quota for a restricted device, spent (§14.4).
+pub const QUOTA: &str = "Discord has added as much as it may today; try again tomorrow.";
+
+/// A UTC day, as the relay counts its quota (`infrastructure/relay/src/admit.ts`'s `quotaDay`).
+pub fn quota_day(now_ms: i64) -> i64 {
+    now_ms.div_euclid(86_400_000)
+}
+
+/// Where an add goes: a collection folder's uid and path — or, for a wish, `None` for both (the
+/// wishlist's root, the only place §14.4's `/wishlist add` files a wish).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Target {
+    pub uid: Option<String>,
+    pub path: Option<String>,
+}
+
+/// Why an add did not go: a sentence for the reader ([`Refusal::Said`]), or a failure whose words
+/// are the engine's and go nowhere ([`Refusal::Failed`]; the Durable Object says its own fixed
+/// sentence instead).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Refusal {
+    Said(String),
+    Failed(String),
+}
+
+impl Refusal {
+    fn said(text: &str) -> Refusal {
+        Refusal::Said(text.to_owned())
+    }
+}
+
+/// How many ops wait in this device's outbox.
+fn outbox(conn: &Connection) -> Result<i64, String> {
+    conn.query_row(
+        "SELECT count(*) FROM sync_ops WHERE pushed_at IS NULL",
+        [],
+        |r| r.get(0),
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Whether the relay refused a push for its quota earlier on `now_ms`'s UTC day — the core's
+/// `client::RESTRICTED_QUOTA_AT` (unix seconds), which `push_restricted` sets on a
+/// `429 restricted_quota` and clears when a push lands.
+fn quota_spent(conn: &Connection, now_ms: i64) -> bool {
+    get(conn, client::RESTRICTED_QUOTA_AT)
+        .and_then(|v| v.parse::<i64>().ok())
+        .is_some_and(|secs| quota_day(secs.saturating_mul(1000)) == quota_day(now_ms))
+}
 
 /// What a host may set about a device: where Scryfall and the relay are. Production leaves both
 /// unset; a local smoke points them at local servers.
@@ -206,22 +283,19 @@ fn clear(conn: &Connection, key: &str) -> Result<(), String> {
 
 /// **Capture off**: every op this device's own writes would record is refused as it is written —
 /// a `TEMP` trigger on the connection, `BEFORE INSERT ON sync_ops`, that `RAISE(IGNORE)`s the row
-/// — and whatever an earlier open recorded is emptied.
+/// — **except while `integration::add::EMITTING` is set**, which `integration::add::emit` holds
+/// for the length of its one outbox `INSERT` and never commits. The trigger is the core's
+/// (`integration::add::CAPTURE_OFF`), so the key and the `WHEN` that reads it are one file's.
+/// Nothing is emptied: what `sync_ops` holds on this device is its adds, pushed or still to push.
 ///
 /// **The core's capture triggers stay installed**, because they do more than record: the insert
 /// trigger is also what mints a row's `sync_uid` (`capture::insert_trigger`), and a row with none
 /// breaks every later read that names it — measured under workerd, the first pull after the bot
 /// had filed its own name failed `Invalid column type Null … sync_uid`. `RAISE(IGNORE)` in a
 /// `BEFORE` trigger abandons that one `INSERT` and lets the trigger that issued it go on, so the
-/// uid is minted and no op is kept. `sync_ops` holds nothing but this device's own outbox and
-/// history, so an empty one is a device that never wrote, which is what a read-only bot is.
+/// uid is minted and no op is kept.
 pub fn capture_off(conn: &Connection) -> Result<(), String> {
-    conn.execute_batch(
-        "CREATE TEMP TRIGGER IF NOT EXISTS bot_capture_off BEFORE INSERT ON main.sync_ops
-         BEGIN SELECT RAISE(IGNORE); END;
-         DELETE FROM sync_ops;",
-    )
-    .map_err(|e| e.to_string())
+    adding::capture_off(conn).map_err(|e| e.to_string())
 }
 
 impl Device {
@@ -326,9 +400,12 @@ impl Device {
     }
 
     /// **`enroll(invite, capability)`** — join the desktop's group through its invite.
+    ///
+    /// `capability` is `add` and nothing else (the Discord spec §14.1): the desktop pairs the bot
+    /// as `add`, and `read` is a word every build understands that nothing pairs with any more.
     pub async fn enroll(&self, invite: &str, capability: &str) -> Enrolled {
-        if capability != roster::READ {
-            return Enrolled::refused("bad_invite", "The Discord bot can only be paired to read.");
+        if capability != roster::ADD {
+            return Enrolled::refused("bad_invite", "The Discord bot can only be paired to add.");
         }
         let Some(_turn) = self.turn() else {
             return Enrolled::refused(
@@ -552,6 +629,9 @@ impl Device {
             Ok(base) => base,
             Err(e) => return self.retry(&e),
         };
+        // **What a reader confirmed goes first**, so it reaches the group on this trip and a
+        // pull's own failure cannot hold it back. A push that fails is said after the pull.
+        let pushed = self.push(&lane, now_ms).await;
         if let Err(e) = client::pull(&lane, &base, &token, keys.relay_epoch).await {
             // What the pull took before it failed is acked, as the core's own trip does.
             let _ = client::ack(&lane, &base, &token).await;
@@ -562,7 +642,10 @@ impl Device {
         }
         let _ = lane.with(|conn| {
             set(conn, LAST_PULL, &now_ms.to_string())?;
-            clear(conn, ERROR)
+            match &pushed {
+                Err(e) => set(conn, ERROR, e),
+                Ok(_) => clear(conn, ERROR),
+            }
         });
         let scryfall = self
             .options
@@ -580,6 +663,8 @@ impl Device {
         let next = match filled {
             Ok(f) if f.throttled => THROTTLED_MS,
             Ok(f) if f.more => MORE_MS,
+            // More confirmed than one envelope carries: the rest on the next trip, soon.
+            Ok(_) if matches!(pushed, Ok(true)) => MORE_MS,
             Ok(_) => PULL_EVERY_MS,
             Err(e) => {
                 let _ = lane.with(|conn| set(conn, ERROR, &e));
@@ -591,6 +676,30 @@ impl Device {
             purge: false,
             did: "pulled",
         }
+    }
+
+    /// **The push** — one envelope of the outbox, when this device is an `add` device with
+    /// something waiting and today's quota is not known to be spent. `Ok(true)` when more is left
+    /// to send; `Err` is a sentence for the status, and the outbox is kept.
+    ///
+    /// A relay's `429 restricted_quota` is `push_restricted`'s `Ok(0)`, with
+    /// `client::RESTRICTED_QUOTA_AT` set: neither a command nor this trip asks again before
+    /// midnight UTC ([`quota_spent`]).
+    async fn push(&self, lane: &Lane<'_>, now_ms: i64) -> Result<bool, String> {
+        let (capability, waiting, spent) = lane.with(|conn| {
+            Ok((
+                roster::self_capability(conn).map_err(|e| e.to_string())?,
+                outbox(conn)?,
+                quota_spent(conn, now_ms),
+            ))
+        })?;
+        if capability.as_deref() != Some(roster::ADD) || waiting == 0 || spent {
+            return Ok(false);
+        }
+        let pushed = client::push_restricted(lane).await?;
+        // More waiting after an envelope that landed: the next trip soon. Nothing landed (the
+        // quota, the group's log full, no token): the next trip as usual.
+        Ok(pushed > 0 && lane.with(outbox)? > 0)
     }
 
     fn retry(&self, why: &str) -> Advanced {
@@ -648,6 +757,78 @@ impl Device {
 
     pub fn deck_cards(&self, uid: &str) -> Result<Option<queries::DeckList>, String> {
         queries::deck_cards(&self.conn(), uid)
+    }
+
+    /// **An add's `folder` completion** — [`queries::folders`].
+    pub fn folders(&self, prefix: &str, limit: usize) -> Result<Vec<queries::Choice>, String> {
+        queries::folders(&self.conn(), prefix, limit)
+    }
+
+    /// **Where an add to `table` goes**, asked when the command arrives (the Discord spec §14.4):
+    /// for the collection, the folder `folder` names (a uid from the completion, or a path typed
+    /// by hand) or, when it is empty, `integration::add::default_folder`; for the wishlist, its
+    /// root. Refused in a sentence for a default folder that is gone, a folder that is no user
+    /// folder or none at all, and the day's quota.
+    pub fn target(&self, table: &str, folder: &str, now_ms: i64) -> Result<Target, Refusal> {
+        let conn = self.conn();
+        if quota_spent(&conn, now_ms) {
+            return Err(Refusal::said(QUOTA));
+        }
+        match table {
+            "wishlist" => Ok(Target {
+                uid: None,
+                path: None,
+            }),
+            "collection" => {
+                let named = if folder.trim().is_empty() {
+                    let uid = adding::default_folder(&conn)
+                        .map_err(|e| Refusal::Failed(e.to_string()))?
+                        .ok_or_else(|| Refusal::said(NO_DEFAULT_FOLDER))?;
+                    queries::folder(&conn, &uid)
+                        .map_err(Refusal::Failed)?
+                        .ok_or_else(|| Refusal::said(NO_DEFAULT_FOLDER))?
+                } else {
+                    queries::folder(&conn, folder)
+                        .map_err(Refusal::Failed)?
+                        .ok_or_else(|| Refusal::said(NO_SUCH_FOLDER))?
+                };
+                if named.kind != "user" {
+                    return Err(Refusal::said(NOT_A_USER_FOLDER));
+                }
+                Ok(Target {
+                    uid: Some(named.uid),
+                    path: Some(named.path),
+                })
+            }
+            other => Err(Refusal::Failed(format!("no list is called {other}"))),
+        }
+    }
+
+    /// **A reader's Confirm** — `add` is `integration::add::Add` as the Durable Object kept it.
+    /// The quota and the folder are asked again (either can have changed in fifteen minutes),
+    /// then the core's `emit` writes the one op to the outbox and applies it here, inside a
+    /// user-facing write. Answers the row's `sync_uid`. **No network**: the push is the next
+    /// alarm's.
+    pub fn add(&self, add: &str, now_ms: i64) -> Result<String, Refusal> {
+        let add: adding::Add = serde_json::from_str(add)
+            .map_err(|e| Refusal::Failed(format!("the add is not readable: {e}")))?;
+        {
+            let conn = self.conn();
+            if quota_spent(&conn, now_ms) {
+                return Err(Refusal::said(QUOTA));
+            }
+            if let adding::Add::Collection(entry) = &add {
+                let folder = queries::folder(&conn, &entry.folder_uid)
+                    .map_err(Refusal::Failed)?
+                    .filter(|f| f.uid == entry.folder_uid)
+                    .ok_or_else(|| Refusal::said(FOLDER_GONE))?;
+                if folder.kind != "user" {
+                    return Err(Refusal::said(NOT_A_USER_FOLDER));
+                }
+            }
+        }
+        core_state::with_write(self.state(), |conn| adding::emit(conn, &add))
+            .map_err(Refusal::Failed)
     }
 
     /// The connection, for a test that seeds rows the way a pull would have.

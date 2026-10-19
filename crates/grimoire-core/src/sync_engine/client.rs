@@ -464,6 +464,8 @@ const CLOCK_AHEAD: &str = "clock_ahead";
 const TOO_LARGE: &str = "too_large";
 /// A push that would take the group's stored log over its quota. **507**.
 const QUOTA: &str = "quota";
+/// A restricted device's push past its daily allowance (the Discord spec's §12). **429**.
+const RESTRICTED_QUOTA: &str = "restricted_quota";
 
 /// A push the relay refused for a reason nothing else in this trip can clear, which **defers what
 /// is left of the push rather than failing the trip** ([`Pushed::deferred`]). Matched on the
@@ -493,6 +495,9 @@ pub enum Deferral {
     ClockAhead,
     /// 422 `epoch_ahead`: sealed at an epoch the relay has not reached.
     EpochAhead,
+    /// 429 `restricted_quota`: a restricted device ([`push_restricted`]) has pushed as much as the
+    /// relay lets it in a day. Kept for the next day.
+    RestrictedQuota,
 }
 
 impl Deferral {
@@ -504,6 +509,7 @@ impl Deferral {
             TOO_LARGE => Some(Deferral::TooLarge),
             QUOTA => Some(Deferral::Quota),
             EPOCH_AHEAD => Some(Deferral::EpochAhead),
+            RESTRICTED_QUOTA => Some(Deferral::RestrictedQuota),
             _ => None,
         }
     }
@@ -586,6 +592,7 @@ fn nothing_is_held_across_a_request(lane: &Lane<'_>, rotation: &identity::Rotati
     sendable(post_rendezvous_if_kept(lane, "", "", ""));
     sendable(get_rendezvous(lane, "", ""));
     sendable(amend_roster(lane));
+    sendable(push_restricted(lane));
     sendable(relay_says_signed(lane, &rotation.group, ""));
 }
 
@@ -2216,6 +2223,9 @@ fn refused_push(status: u16, code: Option<&str>) -> String {
                               changes were sealed under, so they wait here and are offered again \
                               on the next sync."
             .to_owned(),
+        Some(RESTRICTED_QUOTA) => "the relay has taken as much from this device as it may today, \
+                                   so what it added waits here until tomorrow."
+            .to_owned(),
         _ => format!("the relay answered {status} to a push"),
     }
 }
@@ -2560,6 +2570,125 @@ pub async fn push(db: &impl Store, base: &str, token: &str) -> Result<Pushed, St
 }
 
 // ---------------------------------------------------------------------------------------
+// An `add` member's push
+// ---------------------------------------------------------------------------------------
+
+/// `sync_state`: unix seconds of the last push the relay refused as `429 restricted_quota`, and
+/// absent once one lands. **What the bot reads to say *Discord has added as much as it may today*
+/// before it proposes another add** (the spec's §14.4) — the refusal itself reaches no reader,
+/// because it comes on an alarm's push, long after the press.
+pub const RESTRICTED_QUOTA_AT: &str = "restricted_quota_at";
+
+/// What [`push_restricted`] says on a device that is not an `add` member.
+pub const NOT_AN_ADD_DEVICE: &str =
+    "Only a device that may add cards to its group pushes this way, and this one may not.";
+
+/// The oldest of this device's pending ops, at most `limit` of them.
+fn unpushed_first(conn: &Connection, limit: usize) -> Result<Vec<(i64, Op)>, String> {
+    let sql = format!(
+        "{} WHERE pushed_at IS NULL ORDER BY seq LIMIT {limit}",
+        capture::OPS_SELECT
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], capture::op_from_row)
+        .map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<_>>()
+        .map_err(|e| e.to_string())
+}
+
+/// **Seal, sign and push an `add` member's outbox** (the Discord spec's §14.3): the oldest
+/// [`crate::integration::add::ADD_OPS_PER_ENVELOPE`] pending ops as **one** envelope, one per call
+/// — so every receiver's allow-list, which refuses a larger one, takes it whole. Never a baseline,
+/// a join's publish or a roster amendment: none is this device's to send.
+///
+/// * **Refused** ([`NOT_AN_ADD_DEVICE`]) unless this device's own capability is
+///   [`roster::ADD`], before anything is read or sent.
+/// * **`Ok(0)`, with no request**, when the outbox is empty, the device is in no group, or no
+///   token can be had (no membership) — nothing was sent, and the outbox is kept.
+/// * **`Ok(n)`** when the relay took the envelope: its `n` ops are stamped `pushed_at`, and
+///   [`RESTRICTED_QUOTA_AT`] is cleared.
+/// * **A refusal the relay will repeat is an answer, not a failure**: `429 restricted_quota` sets
+///   [`RESTRICTED_QUOTA_AT`] and answers `Ok(0)`, the outbox kept for the next day; `507 quota` and
+///   `422 epoch_ahead` answer `Ok(0)` the same way ([`Deferral`]). Each is recorded once, under
+///   `push`, as [`push`] records them.
+/// * **A `409 stale_epoch` is mended once**, as [`push`] mends it: [`check_keys`] adopts the
+///   rotation (or finds the device removed, `Ok(0)`) and the batch is sealed again.
+/// * Anything else — the network, a 5xx, a 401 — is `Err`, the outbox kept.
+pub async fn push_restricted(db: &impl Store) -> Result<usize, String> {
+    let limit = crate::integration::add::ADD_OPS_PER_ENVELOPE;
+    let stood = db.with(|conn| {
+        let cap = roster::self_capability(conn).map_err(|e| e.to_string())?;
+        if cap.as_deref() != Some(roster::ADD) {
+            return Err(NOT_AN_ADD_DEVICE.to_owned());
+        }
+        let Some((device, group)) = me(conn)? else {
+            return Ok(None);
+        };
+        let pending = unpushed_first(conn, limit)?;
+        if pending.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some((
+            device,
+            group,
+            signing_secret(conn)?,
+            entitlement::base(conn),
+            pending,
+        )))
+    })?;
+    let Some((device, mut group, sign_secret, base, pending)) = stood else {
+        return Ok(0);
+    };
+    let Some(token) = entitlement::access_token(db).await? else {
+        return Ok(0);
+    };
+    let seqs: Vec<i64> = pending.iter().map(|(seq, _)| *seq).collect();
+    let ops: Vec<Op> = pending.into_iter().map(|(_, op)| op).collect();
+    let url = format!("{base}/g/{}/push", group.group_id);
+
+    let mut landed = post_ops(db, &base, &token, &group, &device, &sign_secret, &ops).await;
+    if matches!(landed, Err(Refusal::Stale)) {
+        if check_keys(db).await?.outcome == KeyOutcome::Removed {
+            return Ok(0);
+        }
+        let Some((_, adopted)) = db.with(me)? else {
+            return Ok(0);
+        };
+        group = adopted;
+        landed = post_ops(db, &base, &token, &group, &device, &sign_secret, &ops).await;
+    }
+    match landed {
+        Ok(()) => {
+            db.with(|conn| {
+                stamp_pushed(conn, &seqs)?;
+                conn.execute(
+                    "DELETE FROM sync_state WHERE key = ?1",
+                    [RESTRICTED_QUOTA_AT],
+                )
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+            })?;
+            Ok(ops.len())
+        }
+        Err(Refusal::Deferred(Deferral::RestrictedQuota)) => {
+            db.with(|conn| {
+                set_state(conn, RESTRICTED_QUOTA_AT, &now_secs(conn)?.to_string())
+                    .map_err(|e| e.to_string())
+            })?;
+            Ok(0)
+        }
+        Err(Refusal::Deferred(_)) => Ok(0),
+        Err(Refusal::Stale) => Err(stale_twice(db, &url)),
+        Err(Refusal::ClockAhead) => {
+            say(db, "push", Kind::Http, CLOCK_STILL_AHEAD, Some(&url));
+            Err(CLOCK_STILL_AHEAD.to_owned())
+        }
+        Err(Refusal::Failed(message)) => Err(message),
+    }
+}
+
+// ---------------------------------------------------------------------------------------
 // Pull
 // ---------------------------------------------------------------------------------------
 
@@ -2629,20 +2758,33 @@ fn clock_sentence(conn: &Connection, device: &str, ahead_ms: i64) -> String {
 /// What a restricted device's refused envelopes record: its name, so two such devices are two
 /// rows — the error log's grain is the sentence.
 fn restricted_sentence(conn: &Connection, device: &str) -> String {
-    let name: String = conn
-        .query_row(
-            "SELECT coalesce(
-                 (SELECT name FROM device_names WHERE device_id = ?1),
-                 (SELECT name FROM sync_devices WHERE device_id = ?1),
-                 ?1)",
-            [device],
-            |r| r.get(0),
-        )
-        .unwrap_or_else(|_| device.to_owned());
+    let name = device_name(conn, device);
     format!(
         "Changes from {name} were not applied: that device may only read this group, so \
          every device refuses what it sends."
     )
+}
+
+/// What an `add` member's envelope refused by the allow-list records ([`WireError::NotAnAdd`]).
+fn not_an_add_sentence(conn: &Connection, device: &str) -> String {
+    let name = device_name(conn, device);
+    format!(
+        "Changes from {name} were not applied: that device may only add cards to this group, \
+         and it sent something else, so every device refuses it."
+    )
+}
+
+/// A device's name as the roster draws it — its synced name, its roster name, or its id.
+fn device_name(conn: &Connection, device: &str) -> String {
+    conn.query_row(
+        "SELECT coalesce(
+                 (SELECT name FROM device_names WHERE device_id = ?1),
+                 (SELECT name FROM sync_devices WHERE device_id = ?1),
+                 ?1)",
+        [device],
+        |r| r.get(0),
+    )
+    .unwrap_or_else(|_| device.to_owned())
 }
 
 /// Take everything the group has said since this device's cursor, and apply it.
@@ -3096,19 +3238,30 @@ fn binding(signed: bool) -> Binding {
 /// [`WireError::Unverified`], refused like a forgery, and a foreign op refuses its envelope
 /// ([`binding`]). **And a restricted sender is refused first, whatever the mode**, unopened:
 /// [`WireError::Restricted`], which the caller consumes rather than steps over.
+///
+/// **Except an `add` member** (the Discord spec's §14.2), whose envelope is opened like a full
+/// device's and asked more: a signature verified under its key on file, whatever the mode (an
+/// unchecked one is [`WireError::Unverified`]); the binding refused in every mode, since its ops
+/// are attributed to it alone; and then the **stateless allow-list** over every op
+/// (`integration::add::allowed`) — one op off it refuses the whole envelope as
+/// [`WireError::NotAnAdd`], consumed exactly like [`WireError::Restricted`]. What passes goes to
+/// `apply` like any batch, where the restricted guards and the rank take it. **Any other word
+/// but `full`** — `read`, or one a newer build wrote — stays [`WireError::Restricted`].
 fn open_checked(
     conn: &Connection,
     group: &Group,
     envelope: &Envelope,
 ) -> Result<Result<(Vec<Op>, usize), WireError>, String> {
-    if roster::is_restricted(conn, &envelope.device).map_err(|e| e.to_string())? {
+    let cap = roster::capability_of(conn, &envelope.device).map_err(|e| e.to_string())?;
+    let adds = cap.as_deref() == Some(roster::ADD);
+    if cap.is_some() && !adds {
         return Ok(Err(WireError::Restricted));
     }
     let signed = roster::requires_signatures(conn, envelope.epoch);
     let key = identity::sign_public_of(conn, &envelope.device).map_err(|e| e.to_string())?;
     match wire::signature(envelope, key.as_ref()) {
         wire::Signed::Forged => return Ok(Err(WireError::Forged)),
-        wire::Signed::Unchecked if signed => return Ok(Err(WireError::Unverified)),
+        wire::Signed::Unchecked if signed || adds => return Ok(Err(WireError::Unverified)),
         _ => {}
     }
     let batch = match wire::open_batch(group, envelope) {
@@ -3116,8 +3269,13 @@ fn open_checked(
         Err(e) => return Ok(Err(e)),
     };
     let foreign = wire::foreign_ops(envelope, &batch);
-    if foreign > 0 && binding(signed) == Binding::Refuse {
+    if foreign > 0 && (adds || binding(signed) == Binding::Refuse) {
         return Ok(Err(WireError::Foreign(foreign)));
+    }
+    if adds {
+        if let Err(why) = crate::integration::add::allowed(&envelope.device, &batch) {
+            return Ok(Err(WireError::NotAnAdd(why)));
+        }
     }
     Ok(Ok((batch, foreign)))
 }
@@ -3276,18 +3434,17 @@ fn evaluate(
                     opened.push((envelope, batch));
                     continue;
                 }
-                Err(WireError::Restricted) => {
+                Err(e @ (WireError::Restricted | WireError::NotAnAdd(_))) => {
                     // **Consumed, not unreadable**: refused in full, one row per sender, and
                     // neither held nor a gap — the cursor passes it, so a restricted device's
                     // pushes can neither pin the log nor make every later emission read whole.
+                    // An `add` member's envelope with an op off its allow-list is the same.
                     if !trip.refused.contains(&envelope.device) {
-                        note(
-                            conn,
-                            "pull",
-                            Kind::Other,
-                            &restricted_sentence(conn, &envelope.device),
-                            Some(&envelope.device),
-                        );
+                        let sentence = match e {
+                            WireError::NotAnAdd(_) => not_an_add_sentence(conn, &envelope.device),
+                            _ => restricted_sentence(conn, &envelope.device),
+                        };
+                        note(conn, "pull", Kind::Other, &sentence, Some(&envelope.device));
                         trip.refused.push(envelope.device.clone());
                     }
                     continue;
@@ -4028,7 +4185,15 @@ async fn round_trip(db: &impl Store, baselines: bool) -> Result<Option<RelayOutc
     // pull and the ack below do not depend on this device having been heard, and holding them
     // back with it stopped the device reading its group — and, for a full log, stopped the relay
     // compacting the very log that was full.
-    let pushed = push(db, &base, &token).await?;
+    // **A restricted device's trip pushes nothing and emits no baseline.** What an `add` member
+    // sends is [`push_restricted`]'s, a batch every receiver's allow-list takes; this push would
+    // cut its outbox two hundred ops to an envelope, and every peer would refuse the lot.
+    let restricted = db.with(|conn| roster::self_restricted(conn).map_err(|e| e.to_string()))?;
+    let pushed = if restricted {
+        Pushed::default()
+    } else {
+        push(db, &base, &token).await?
+    };
     let mut outcome = RelayOutcome {
         pushed: pushed.sent,
         ..RelayOutcome::default()
@@ -4075,7 +4240,7 @@ async fn round_trip(db: &impl Store, baselines: bool) -> Result<Option<RelayOutc
     // **No baseline behind a push deferred for the clock or the quota** — it would meet the same
     // refusal part of the way through and push its first chunks again on every trip
     // ([`Deferral::stops_baselines`]).
-    if baselines && !pushed.deferred.is_some_and(Deferral::stops_baselines) {
+    if baselines && !restricted && !pushed.deferred.is_some_and(Deferral::stops_baselines) {
         let (ops, history) = emit_baselines(db, &base, &token).await?;
         outcome.baseline_ops = ops;
         outcome.baseline_history = history;
