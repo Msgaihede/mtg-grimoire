@@ -138,7 +138,6 @@ Test requirements:
 - `apps/light/**/*.test.{ts,tsx}` executes in the Vitest suite.
 - A test that walks through `/scanner` meets a jsdom with no `navigator.mediaDevices`: the page must mount there without a throw or a console line. A test *about* the camera stubs `mediaDevices`, the `<video>`'s pixels and the canvas (`pages/ScannerPage.test.tsx`), and paces its `scanner_frame` answers — an answer already settled starves every timer in the file.
 - Tests mounting virtualized card walls must call `installLayout()` (`phone/testing.tsx`) to supply mock dimensions in jsdom.
-- Commits must match feature size (one commit per feature), cleanly grouping implementation, tests, and documentation for `release-please`.
 
 ---
 

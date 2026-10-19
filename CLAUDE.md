@@ -98,7 +98,7 @@ Worktree and deployment workflows are managed by skills in `.claude/skills/`:
 ## Global Rules
 
 - **Pre-commit verification**: Run `pnpm verify` only at the end of a feature before committing, not after each individual change. Avoid running test suites on intermediate edits to minimize churn and repetitive re-fixing.
-- **Commit style (one commit per feature)**: Commits must match the full size of a feature (code, tests, and docs together). Do not split a single feature across multiple commits; multi-commit features fragment and mess up the release-please changelog. Use Conventional Commits (`feat:`, `fix:`, `chore:`, `test:`, `docs:`).
+- **Commit style**: Use Conventional Commits (`feat:`, `fix:`, `chore:`, `test:`, `docs:`).
 - **No `@types/node` in webview code**: The frontend is a webview environment; `@types/node` is forbidden to prevent leaking Node types into browser code.
 - **Narrowest permissions**: When declaring Tauri plugin permissions, always request the narrowest required capability, never `:default`.
 - **`data/` is strictly local**: Never commit SQLite databases or test artifacts in `data/`. When seeding fixtures in tests, seed only user tables, never `cards` or `sync_meta`.
