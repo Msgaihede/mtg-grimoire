@@ -97,7 +97,3 @@ mtg-grimoire repository.
 Follow Conventional Commits: `<type>(<scope>): <description>`:
 - Types: `feat:`, `fix:`, `chore:`, `test:`, `docs:`
 - Scope is optional but encouraged for features/areas (e.g. `feat(decks):`, `fix(sync):`).
-- **One commit per feature (match feature size)**: Commits must match the full size of a feature,
-  bundling the implementation, tests, and documentation together. Never split a feature across
-  multiple commits (e.g. one for code and another for docs or follow-up fixes). Multiple commits
-  per feature mess up our `release-please` changelog by generating duplicate or fragmented entries.

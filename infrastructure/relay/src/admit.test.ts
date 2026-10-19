@@ -10,7 +10,7 @@ import {
   MAX_PUSH_BODY_CHARS,
   type Refusal,
 } from "./admit";
-import { fakeEnvOver, fakeTables, type Tables } from "./fakeD1";
+import { fakeEnvOver, fakeTables, type Row, type Tables } from "./fakeD1";
 import worker, { type Env } from "./index";
 import { MAX_CLOCK_AHEAD_MS, MAX_GROUP_LOG_CHARS, MAX_SEALED_CHARS } from "./log";
 import { mint, TOKEN_TTL_MS } from "./token";
@@ -121,7 +121,10 @@ describe("deviceMismatch and bindDevice", () => {
 
     expect(bindDevice("push", {}, "anyone")).toBeNull();
     expect(bindDevice("ack", {}, "anyone")).toBeNull();
-    expect(warned.mock.calls).toEqual([["token without dev on push"], ["token without dev on ack"]]);
+    expect(warned.mock.calls).toEqual([
+      ["token without dev on push"],
+      ["token without dev on ack"],
+    ]);
   });
 });
 
@@ -263,13 +266,14 @@ async function ack(env: Env, body: string, dev?: string | null): Promise<Respons
 }
 
 /** A `group_keys` row for `g1` at `epoch` — what `/rotate` and a claim's seed write. */
-function keyRow(tables: Tables, epoch: number): void {
+function keyRow(tables: Tables, epoch: number, over: Partial<Row> = {}): void {
   tables.group_keys.push({
     group_id: "g1",
     epoch,
     auth: "a".repeat(64),
     keys: "{}",
     created_at: 0,
+    ...over,
   });
 }
 
@@ -456,5 +460,131 @@ describe("the token's device, on a push and an ack", () => {
       '{"device":7,"cursor":1}',
     ]);
     expect(warned).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// Membership: a token minted before the newest rotation
+// ---------------------------------------------------------------------------------------
+
+/** A push at `body` under a token for `g1` minted at `mintedAt`, naming `dev` when given. */
+async function pushAs(env: Env, body: string, mintedAt: number, dev?: string): Promise<Response> {
+  const claims = { sub: "sub-0", grp: "g1", exp: mintedAt + TOKEN_TTL_MS };
+  const token = await mint(dev === undefined ? claims : { ...claims, dev }, KEY);
+  return worker.fetch(
+    new Request("https://relay.example/g/g1/push", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+      body,
+    }),
+    env,
+  );
+}
+
+describe("POST /push, from a device the newest rotation left out", () => {
+  /**
+   * A group at epoch 5 whose newest rotation, an hour ago, removed `gone` and kept `desk` and
+   * `laptop` — the removal's step of two, so 4 was never written.
+   */
+  function rotated(): Relay & { rotatedAt: number } {
+    const fixture = relay();
+    const rotatedAt = Date.now() - 60 * 60 * 1000;
+    keyRow(fixture.tables, 3, {
+      keys: JSON.stringify({ desk: "s1", laptop: "s2", gone: "s3" }),
+      created_at: rotatedAt - 60 * 60 * 1000,
+    });
+    keyRow(fixture.tables, 5, {
+      keys: JSON.stringify({ desk: "s4", laptop: "s5" }),
+      created_at: rotatedAt,
+    });
+    return { ...fixture, rotatedAt };
+  }
+
+  it("refuses a removed device at the group's current epoch without reaching the object", async () => {
+    const { env, reached, rotatedAt } = rotated();
+
+    const response = await pushAs(env, live({ epoch: 5, device: "gone" }), rotatedAt - 1, "gone");
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual(expect.objectContaining({ code: "stale_token" }));
+    expect(reached).toHaveLength(0);
+  });
+
+  it("refuses a removed device's push stamped as a remaining one before the membership check", async () => {
+    // The device binding stands ahead of the D1 read: a token for `gone` cannot borrow `desk`'s
+    // place on the manifest by naming it in the envelope.
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { env, reached, rotatedAt } = rotated();
+
+    const response = await pushAs(env, live({ epoch: 5, device: "desk" }), rotatedAt - 1, "gone");
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual(expect.objectContaining({ code: "device_mismatch" }));
+    expect(reached).toHaveLength(0);
+    vi.restoreAllMocks();
+  });
+
+  it("still answers a removed device's old epoch as stale_epoch, which the app already reads", async () => {
+    // An honest device removed between its `/keys` check and its push seals at the epoch it
+    // holds; the app's answer to `stale_epoch` is to ask `/keys` again, which is its removal.
+    const { env, reached, rotatedAt } = rotated();
+
+    const response = await pushAs(env, live({ epoch: 3, device: "gone" }), rotatedAt - 1, "gone");
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual(expect.objectContaining({ code: "stale_epoch" }));
+    expect(reached).toHaveLength(0);
+  });
+
+  it("admits a remaining device whose token predates the rotation and names it", async () => {
+    const { env, reached, rotatedAt } = rotated();
+
+    expect((await pushAs(env, live({ epoch: 5 }), rotatedAt - 1, "desk")).status).toBe(200);
+    expect(reached).toHaveLength(1);
+  });
+
+  it("refuses a pre-rotation token that names no device, so the app mints a fresh one", async () => {
+    // Every door has stamped `dev` since 2026-10-01, so this is a token from an older relay. It
+    // cannot say whether its device stayed; the app drops it and the next trip mints one that can.
+    const { env, reached, rotatedAt } = rotated();
+
+    const response = await pushAs(env, live({ epoch: 5 }), rotatedAt - 1);
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual(expect.objectContaining({ code: "stale_token" }));
+    expect(reached).toHaveLength(0);
+  });
+
+  it("admits any token minted at or after the rotation, named on its manifest or not", async () => {
+    // A device paired since holds a key the manifest does not name yet, and it could only have
+    // minted with the auth a removed device no longer derives.
+    const { env, reached, rotatedAt } = rotated();
+
+    expect(
+      (await pushAs(env, live({ epoch: 5, device: "joiner" }), rotatedAt, "joiner")).status,
+    ).toBe(200);
+    expect((await pushAs(env, live({ epoch: 5 }), rotatedAt + 1)).status).toBe(200);
+    expect(reached).toHaveLength(2);
+  });
+
+  it("leaves a group that never rotated alone, whatever its tokens carry", async () => {
+    const { env, reached } = relay();
+    const longAgo = Date.now() - TOKEN_TTL_MS + 60 * 1000;
+
+    expect((await pushAs(env, live({ epoch: 9 }), longAgo)).status).toBe(200);
+    expect(
+      (await pushAs(env, live({ epoch: 9, device: "anyone" }), longAgo, "anyone")).status,
+    ).toBe(200);
+    expect(reached).toHaveLength(2);
+  });
+
+  it("fails loudly on an unreadable manifest rather than refusing every device", async () => {
+    const { env, tables, reached, rotatedAt } = rotated();
+    tables.group_keys[1].keys = "not json";
+
+    await expect(pushAs(env, live({ epoch: 5 }), rotatedAt - 1, "desk")).rejects.toThrow(
+      "unreadable manifest",
+    );
+    expect(reached).toHaveLength(0);
   });
 });

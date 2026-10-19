@@ -136,6 +136,3 @@ WASM compilation check (requires LLVM/clang 18+):
 ```bash
 CC_wasm32_unknown_unknown="C:/Program Files/LLVM/bin/clang.exe" AR_wasm32_unknown_unknown="C:/Program Files/LLVM/bin/llvm-ar.exe" cargo build --lib -p grimoire-core --target wasm32-unknown-unknown
 ```
-
-Commit discipline:
-- One commit per feature matching feature size, combining changes, tests, and docs for `release-please`.
