@@ -442,6 +442,22 @@ pub fn store_access(conn: &Connection, access: &str, expires: i64) -> Result<(),
     tx.commit().map_err(|e| e.to_string())
 }
 
+/// Drop the held access token and nothing else, so the next [`access_token`] mints a fresh one
+/// through whichever door this device takes.
+///
+/// **For a token the relay has stopped taking on push while the membership stands** — a push
+/// answered `stale_token` (`client::post_ops`): minted before the group's newest key change and
+/// not naming a device that change kept. The refresh secret and the status stay, so nothing the
+/// panel reads moves and no lapse is drawn; [`clear`] and [`revoke`] are for a grant that is over.
+pub fn forget_access(conn: &Connection) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM sync_state WHERE key IN (?1, ?2)",
+        [ACCESS_TOKEN, ACCESS_EXPIRES],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
 /// Store what the relay last said about the membership.
 ///
 /// **An absent `since` deletes the row rather than leaving it**, or a grant that has lost its

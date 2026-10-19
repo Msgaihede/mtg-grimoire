@@ -35,7 +35,7 @@ missing, and survived a few hours past the deploy that shipped them. **Step 0 of
 those `curl`s written down**, and it is the only sentence in any of these files that cannot rot.
 
 **The device roll is deployed as well** — `group_devices`, the cap, `/claim` moving a binding,
-`keepOnly` — **and it adds no route, so no path probe can see it.** The tell is a body:
+`/rotate` freeing slots — **and it adds no route, so no path probe can see it.** The tell is a body:
 `POST /token {"refresh":"x"}` with **no `device`** answers **400 `that is not a device id`** on the
 live Worker (2026-09-28), and **401** once `"device":"deadbeef"` is added. ⚠️ **This paragraph said
 it was not deployed until that day**, on a `{"group":…,"auth":…}` probe the group door refuses as
@@ -236,10 +236,11 @@ on every `/token`, the hottest route this Worker has.
 **It holds no name, on purpose.** What a device is called is `device_names`, is synced between the
 devices under the group key, and the relay never sees it.
 
-**A slot frees two ways and neither is a sweep.** `/rotate`'s `keepOnly` deletes the rows its
-manifest omits, so a removal and a departure each free one; and a row unseen for `DEVICE_TTL_MS`
-— ninety days — is not counted and is pruned when the count is taken, because a wiped data folder
-mints a *new* device id and would otherwise cost the reader a slot for ever.
+**A slot frees two ways and neither is a sweep.** `/rotate` deletes the rows its manifest omits
+(read by `devicesOutside`, deleted inside `recordRotation`'s batch), so a removal and a departure
+each free one; and a row unseen for `DEVICE_TTL_MS` — ninety days — is not counted and is pruned
+when the count is taken, because a wiped data folder mints a *new* device id and would otherwise
+cost the reader a slot for ever.
 
 ## The flows
 
@@ -416,6 +417,7 @@ object's state to be refused. In the order a push meets them, every refusal but 
 | 5 | the envelope's epoch is below the group's — its newest `group_keys` row, one read on `group_keys_by_group` | `409 stale_epoch` |
 | 6 | … or above it | `422 epoch_ahead` |
 | 7 | `hlcMs` is more than `MAX_CLOCK_AHEAD_MS` (a day) past the relay's clock; exactly a day is admitted | `422 clock_ahead` |
+| 8 | the token was granted before the group's newest rotation (by its `ep`, or its mint time if it has none) and that rotation's manifest does not name its `dev` — or it has no `dev` at all. The same row as 5 and 6, so no second read; `token.ts`'s `stillInGroup`, the share Worker's rule | `409 stale_token` |
 
 Then the object: an envelope naming another group is the `409 group mismatch` below, and a log that
 this push would take past `MAX_GROUP_LOG_CHARS` (128 MiB of `sealed`) is **`507 quota`** — exactly
@@ -430,8 +432,21 @@ full for good. The full scan is paid only by a push about to be refused.
   plaintext batch seals to 699 104 characters, about 47% of it, and the fattest batch ever measured
   sealed to 186 188. What meets it is one op that is alone larger than a batch — a note pasted in
   the megabytes — and `wire::oversized` asks the app the same question before it sends one.
-- **`stale_epoch` stops a removed device writing under the key it was removed from** for the day
-  its token outlives the rotation, and tells a device merely behind one to catch up. **`epoch_ahead`
+- **`stale_epoch` stops a removed device writing under the key it was removed from**, and tells a
+  device merely behind a rotation to catch up. **It does not stop a removed device writing at the
+  epoch the group is on**: the relay cannot read the seal, `/keys` tells any recent auth the
+  epoch's number, and the token outlives the rotation by up to a day. **`stale_token` does**, with
+  the rule the share Worker's gate applies: a token granted at the newest epoch is taken whatever
+  the manifest says (a device paired since holds a key it does not name yet), and one granted
+  before it only for a device that manifest names. "Granted at" is the token's `ep`, the epoch whose
+  auth the door checked; a token without one is ordered by its mint time. It comes after 5 and 6, so a push at
+  an old epoch is still `stale_epoch` — the answer the app already reads as "ask `/keys`". **409
+  and never 401**, because a 401 on a sync route is the app's lapse and revokes the grant: the app
+  drops the held token and mints another on its next trip, which a device the rotation kept
+  pushes under and a removed one never reaches — that trip's `/keys` check is its removal. A
+  build without the code records "the relay answered 409 to a push" and fails the trip; its own
+  `/keys` check runs first on every trip, so no honest removed device gets this far, and every
+  door has minted `dev` since 2026-10-01, so no token without one is still alive. **`epoch_ahead`
   is the one that froze whole groups**: anyone holding a token could push `{epoch: 1e12}`, and
   every peer that pulled it held its cursor waiting for keys to an epoch that would never exist. A
   group with no key rows — claimed before `group_keys`, never seeded or rotated since — skips both
@@ -515,10 +530,14 @@ the newest manifest alone. A relay without this change ignores `epoch` and answe
 manifest, which the app detects by the answered epoch not being the one it asked for.
 
 `/rotate`'s manifest is capped at `MAX_GROUP_DEVICES` (**64 until 2026-08-30**, which was a bound
-on what D1 would store rather than a policy) and 4 KB per blob. **After `recordRotation` succeeds,
-and never before it** — a refused rotation must free nothing — it retires the refresh secret if the
-manifest omits its holder, calls `keepOnly` so the rotation frees the `group_devices` rows its
-manifest omits, and then, last and best effort, tells the log its roster.
+on what D1 would store rather than a policy) and 4 KB per blob. **Every write a rotation makes is
+one D1 `batch`, which runs as one transaction**: the guarded key-row insert, the
+`entitlements.group_auth` mirror, the history prune, the refresh secret's retirement when the
+manifest omits its holder, and the `group_devices` rows the manifest omits. Each write after the
+insert is guarded on the insert having landed, so a refused rotation frees and retires nothing, and
+a failed one (a D1 error, a cancelled request) leaves the key history, the mirror, the secret and
+the slots exactly where they were. Everything those writes depend on is read before the batch.
+Then, last and best effort, it tells the log its roster.
 
 `{group}` is constrained to `[A-Za-z0-9_-]{1,128}`, from **one** shared constant that `claim.ts`
 applies to the group id in a `/claim` body as well. Without the constraint, `%41` and `A` would
@@ -830,7 +849,7 @@ cron's reconciliation, with its budget and interval.
 
 `src/groupauth.ts` — the group key store and the device roll: `seedGroup`, `recordRotation`,
 `currentManifest`/`manifestAt`, `authIsCurrent`/`authIsRecent`, and
-`liveDeviceCount`/`admitDevice`/`keepOnly`/`forgetGroup`, plus the constants (`EPOCH_HISTORY`,
+`liveDeviceCount`/`admitDevice`/`devicesOutside`/`forgetGroup`, plus the constants (`EPOCH_HISTORY`,
 `REMOVAL_STEP`, `MAX_GROUP_DEVICES`, `DEVICE_TTL_MS`) that anything else capping, stepping or
 pruning must import rather than respell.
 

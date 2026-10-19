@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fakeEnv } from "./fakeD1";
+import { fakeEnv, fakeEnvOver, fakeTables } from "./fakeD1";
 import {
   admitDevice,
   authIsCurrent,
@@ -99,6 +99,20 @@ function relayEnv(...groups: string[]): Env & { reached: Reached[] } {
   const reached: Reached[] = [];
   return {
     ...fakeEnv(...groups),
+    RELAY_HMAC_KEY: "test-signing-key",
+    GROUP: recordingGroups(reached),
+    reached,
+  };
+}
+
+/**
+ * [`relayEnv`] for `g1`, over a database that throws from every statement `failOn` picks — a D1
+ * error, or the request cancelled before that statement ran.
+ */
+function failingRelayEnv(failOn: (sql: string) => boolean): Env & { reached: Reached[] } {
+  const reached: Reached[] = [];
+  return {
+    ...fakeEnvOver(fakeTables({ groups: ["g1"] }), { failOn }),
     RELAY_HMAC_KEY: "test-signing-key",
     GROUP: recordingGroups(reached),
     reached,
@@ -614,6 +628,71 @@ describe("POST /rotate — the group's log hears who is left", () => {
     }
     // Swallowed, not silenced: each failure is a line in the Worker's log.
     expect(errors).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// One rotation, one transaction
+// ---------------------------------------------------------------------------------------
+
+describe("POST /rotate — a rotation lands whole or not at all", () => {
+  // Every write a rotation makes after its key row, by a fragment of its SQL. Each one used to be
+  // a round trip of its own behind an insert that had already committed.
+  const followUps: [string, string][] = [
+    ["the mirror the group door reads", "SET group_epoch"],
+    ["the history prune", "DELETE FROM group_keys"],
+    ["the refresh secret's retirement", "SET refresh_secret = NULL"],
+    ["the removed device's slot", "DELETE FROM group_devices WHERE group_id = ? AND device_id"],
+  ];
+
+  it.each(followUps)("writes nothing when %s fails, and all of it on the retry", async (_, sql) => {
+    let armed = false;
+    const env = failingRelayEnv((text) => armed && text.replace(/\s+/g, " ").includes(sql));
+    await seedGroup(env, "g1", 0, hex64(0));
+    await holdSecret(env, "g1", hex64(0xbeef), "phone");
+    for (const device of ["desk", "phone"]) {
+      expect(await admitDevice(env, "g1", device, NOW)).toBe(true);
+    }
+
+    // The desk removes the phone, and one write after the key row fails.
+    armed = true;
+    await expect(
+      worker.fetch(
+        rotateRequest("g1", hex64(0), { epoch: 2, auth: hex64(2), keys: { desk: "blob-desk" } }),
+        env,
+      ),
+    ).rejects.toThrow(/injected failure/);
+    armed = false;
+
+    // **Nothing moved, and that is the state every device can recover from.** A key row at the
+    // new epoch with the mirror still on the old auth is the one it cannot: the auth the removal
+    // replaced would stay current at the group door, the auth it introduced would be refused
+    // there, and only the replaced one could publish the next rotation.
+    expect(await currentManifest(env, "g1")).toEqual({ epoch: 0, keys: {} });
+    expect(await authIsCurrent(env, "g1", hex64(0))).toBe(true);
+    expect(await authIsCurrent(env, "g1", hex64(2))).toBe(false);
+    expect(await authIsRecent(env, "g1", hex64(2))).toBe(false);
+    expect(await secretOf(env, "g1")).toEqual({
+      refresh_secret: hex64(0xbeef),
+      refresh_device: "phone",
+    });
+    expect(await devicesOf(env, "g1")).toEqual(["desk", "phone"]);
+    expect(env.reached).toEqual([]);
+
+    // The desk presses Remove again, which plans afresh: a new key, so a new auth and new blobs,
+    // at the same epoch — and the old auth is still the one that opens the door.
+    const retried = await worker.fetch(
+      rotateRequest("g1", hex64(0), { epoch: 2, auth: hex64(0x22), keys: { desk: "blob-2" } }),
+      env,
+    );
+
+    expect(retried.status).toBe(200);
+    expect(await currentManifest(env, "g1")).toEqual({ epoch: 2, keys: { desk: "blob-2" } });
+    expect(await authIsCurrent(env, "g1", hex64(0x22))).toBe(true);
+    expect(await authIsCurrent(env, "g1", hex64(0))).toBe(false);
+    expect(await secretOf(env, "g1")).toEqual({ refresh_secret: null, refresh_device: null });
+    expect(await devicesOf(env, "g1")).toEqual(["desk"]);
+    expect(env.reached).toHaveLength(1);
   });
 });
 

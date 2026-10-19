@@ -1005,8 +1005,8 @@ async function refreshDoor(env: Env, refresh: string, device: string): Promise<R
   // share gate checks this device against the manifest that removal published.
   const issuedAt = Date.now() - 1;
   // `group_epoch` from the row the secret is found in, for `authenticatedEpoch`'s reason: the
-  // token's `ep` is then an epoch at which this secret was still standing. That is exact while a
-  // rotation that retires the secret moves the mirror in the same write (`retireOrphanedSecret`).
+  // token's `ep` is then an epoch at which this secret was still standing. That is exact because a
+  // rotation retires the secret in the same batch that moves the mirror (`recordRotation`).
   const row = await env.DB.prepare(
     `SELECT subject, status, grace_until, group_id, refresh_secret, patreon_refresh, created_at,
             group_epoch

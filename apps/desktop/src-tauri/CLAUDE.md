@@ -99,6 +99,3 @@ Execute verification tests only at the end of a feature (not after each change):
 
 Test file isolation:
 - Tests that need file access must use `crate::scratch::path`, never `std::env::temp_dir()`, to prevent collisions across concurrent test runs.
-
-Commit discipline:
-- Commits match feature size (one commit per feature), combining host wrappers, tests, and configuration for `release-please`.

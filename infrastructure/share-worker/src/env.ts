@@ -1,4 +1,4 @@
-import { TOKEN_TTL_MS, verify, type Claims } from "@grimoire/relay/src/token";
+import { newestKeys, stillInGroup, verify } from "@grimoire/relay/src/token";
 
 /**
  * The share Worker's bindings, its two caps, and the bearer gate every `/g/…` route stands
@@ -131,8 +131,12 @@ export function shareUrl(env: Env, id: string): string {
  * for *your own* group is exactly what an attacker has; without this comparison one membership
  * would open every group's shares on the account.
  *
- * **And the signature is not the end of it — see {@link stillInGroup}.** It costs one D1 read per
- * gated request, which is traffic from at most five devices and never from a viewer.
+ * **And the signature is not the end of it**: a token outlives its device's removal by up to a
+ * day, and a share is plaintext, so the leftover token would let a removed laptop overwrite the
+ * group's binders or withdraw them (issue #548). `stillInGroup` is the rule — in the relay's
+ * `token.ts`, because the relay's push applies the same one — and the newest `group_keys` row it
+ * reads is one D1 read per gated request, which is traffic from at most five devices and never
+ * from a viewer. An unreadable manifest throws there, and a 500 here is the answer.
  */
 export async function authorised(request: Request, env: Env, group: string): Promise<boolean> {
   const header = request.headers.get("authorization");
@@ -141,65 +145,5 @@ export async function authorised(request: Request, env: Env, group: string): Pro
     ? await verify(bearer, required(env.RELAY_HMAC_KEY, "RELAY_HMAC_KEY"), Date.now())
     : null;
   if (claims === null || claims.grp !== group) return false;
-  return stillInGroup(env, group, claims);
-}
-
-/**
- * Was this token minted by a device the group has not since removed? Issue #548.
- *
- * **A token outlives its device's removal by up to a day** (`TOKEN_TTL_MS`), because it is signed
- * rather than looked up. The relay can live with that — a removed device holds no key for the new
- * epoch, so it can push nothing anyone will open — but a share is plaintext, and the leftover
- * token would let a removed laptop overwrite the group's binders or withdraw them.
- *
- * **The roster is the newest `group_keys` row**, the manifest a rotation published: its key set is
- * who is in the group at that epoch (`infrastructure/relay/schema.sql`). Every join, removal and departure is a
- * rotation, so a device the newest manifest omits is a device that has left — but only if its
- * token predates that manifest. A device that paired *after* it holds a key the manifest does not
- * name yet (a first claim seeds `{}`), and it could only have minted with the current group auth,
- * which a removed device no longer derives. So the rule is two clauses, and both are needed:
- *
- * * granted **at** the newest epoch → in the group, whatever the manifest says;
- * * granted **before** it → in the group only if that manifest names `dev`.
- *
- * **"At" is the token's `ep`**: the epoch whose auth the relay checked, read in the same row as
- * that auth (`groupauth.ts`'s `authenticatedEpoch`). Epochs order a grant against a rotation by
- * what the relay's door actually saw, so a removal that lands while a removed device's `/token` is
- * in flight — or whose mirror has not moved yet — leaves its token at the older epoch.
- *
- * A token with no `ep` was minted by an older relay and lives at most a day; it falls back to its
- * mint time, `exp − TOKEN_TTL_MS`, against the newest row's `created_at`, which orders the two by
- * clocks and is the weaker rule. A token with no `dev` either was minted by a relay older still,
- * and before the newest rotation it is refused rather than trusted — the cost is a day of "would
- * not accept this device's membership" on one device, once, after the relay update.
- *
- * **A group with no `group_keys` row has never rotated**, so nobody has ever been removed from it.
- *
- * An unreadable manifest throws rather than refusing, for `wireRow`'s reason: a 500 that names the
- * group is recoverable, where a quiet 401 would read as every device's membership ending at once.
- */
-async function stillInGroup(env: Env, group: string, claims: Claims): Promise<boolean> {
-  const newest = await env.DB.prepare(
-    `SELECT epoch, keys, created_at FROM group_keys WHERE group_id = ? ORDER BY epoch DESC LIMIT 1`,
-  )
-    .bind(group)
-    .first<{ epoch: number; keys: string; created_at: number }>();
-  if (newest === null) return true;
-  if (claims.ep !== undefined) {
-    if (claims.ep >= newest.epoch) return true;
-  } else if (claims.exp - TOKEN_TTL_MS >= newest.created_at) {
-    return true;
-  }
-  if (claims.dev === undefined) return false;
-
-  let roster: unknown;
-  try {
-    roster = JSON.parse(newest.keys);
-  } catch {
-    throw new Error(`group ${group} has an unreadable manifest`);
-  }
-  if (typeof roster !== "object" || roster === null || Array.isArray(roster)) {
-    throw new Error(`group ${group} has an unreadable manifest`);
-  }
-  return Object.prototype.hasOwnProperty.call(roster, claims.dev);
+  return stillInGroup(await newestKeys(env.DB, group), group, claims);
 }

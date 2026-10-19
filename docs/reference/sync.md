@@ -3774,10 +3774,16 @@ that could fail and would then refuse every push at the epoch the group has real
 clock is **422 `clock_ahead`**. The object keeps one check of its own: a log that this push would
 take past 128 MiB of `sealed` is **507 `quota`**, and it compacts before refusing — a full group
 moves no head and acks nothing, so no other path would ever compact it again. `stale_epoch` is what stops a removed device
-writing under the key it was removed from for the day its token outlives the rotation;
-`epoch_ahead` is what stops one envelope at `{ epoch: 1e12 }` freezing every peer's cursor on keys
-to an epoch that will never exist. A group with no key rows — claimed before `group_keys` and
-never seeded or rotated since — skips both. Clients match on `code`, never on the sentence.
+writing under the key it was removed from; `epoch_ahead` is what stops one envelope at
+`{ epoch: 1e12 }` freezing every peer's cursor on keys to an epoch that will never exist. A group
+with no key rows — claimed before `group_keys` and never seeded or rotated since — skips both.
+**Neither stops a removed device pushing at the epoch the group is on**, for the day its token
+outlives the rotation; **409 `stale_token`** does, after both and off the same row: a token granted
+before the newest rotation — by its `ep`, or by its mint time if it has none — is taken only for a
+device that rotation's manifest names — the share Worker's rule, one implementation in `token.ts`. The app answers it by dropping the held token
+(`entitlement::forget_access`, never a lapse) and deferring the push; the next trip mints a
+current token, or its `/keys` check finds the removal. Clients match on `code`, never on the
+sentence.
 
 **`/rotate` takes one epoch or two, and the refresh secret dies with its device's place in the
 group.** A join plans its own epoch plus one and a removal or a departure plus two, and a device
@@ -3928,13 +3934,13 @@ the relay keeps no directory of readers — one entitlement row bound to one gro
 that a reader logs into.
 
 `access` is `base64url(payload) "." base64url(HMAC-SHA256(payload, RELAY_HMAC_KEY))` over
-`{sub, grp, exp, dev}`, minted by the relay with a 24-hour TTL. `dev` — the device that presented
-itself to the door — was added on 2026-10-01 and is read only by the share Worker, which refuses a
-token granted before the group's newest rotation by a device that rotation's manifest omits
-([collection-sharing.md](collection-sharing.md), issue #548). Since 2026-10-19 the payload also
-carries `ep`, the group epoch whose auth the door checked, read in the same row as that auth; the
-share Worker orders a grant against a rotation by it, and by the mint time only for a token
-without one. The relay checks signature, expiry
+`{sub, grp, exp, dev, ep}`, minted by the relay with a 24-hour TTL. `dev` — the device that
+presented itself to the door — was added on 2026-10-01 for the share Worker, which refuses a token
+granted before the group's newest rotation by a device that rotation's manifest omits
+([collection-sharing.md](collection-sharing.md), issue #548); the relay's push applies the same rule
+(`stale_token`). `ep` (2026-10-19) is the group epoch whose auth the door checked, read in the same
+row as that auth; that rule orders a grant against a rotation by it, and by the mint time only for a
+token without one. The relay checks signature, expiry
 and `payload.grp` against the path segment with **zero storage reads**, so a junk request is
 refused in microseconds and **never bills a Durable Object request** — which is the line that
 actually costs money. What mints the token is a Patreon membership resolved server-side;
