@@ -3730,7 +3730,7 @@ wire and against that cap; base64 is four thirds and URL-safe.
 | `POST {relay}/g/{group}/push` | one `Envelope` | 200 with the stored cursor; refused with a `code` — see below | **bearer** |
 | `GET {relay}/g/{group}/pull?since={cursor}&device={id}&limit={rows}` | | 200 with `{ envelopes, cursor, more }` — a page; 400 `bad limit` | **bearer** |
 | `GET {relay}/g/{group}/pull?since={cursor}&device={id}` | | 200 with `{ envelopes, cursor }` — everything, streamed; what every build before step 6.5b sends | **bearer** |
-| `POST {relay}/g/{group}/ack` | `{ device, cursor }` | 204 — what compaction reads; a departed device's is not stored | **bearer** |
+| `POST {relay}/g/{group}/ack` | `{ device, cursor }` | 204 — what compaction reads; a departed device's is not stored, and a cursor past the log's newest row is stored as that row; 403 `device_mismatch` for a `device` that is not the token's `dev` | **bearer** |
 | `POST {relay}/g/{group}/rotate` | `{ epoch, auth, keys }` | 200 with the epoch, for one past the group's (a join) or two past it (a removal or a departure); 409 behind or equal; 422 further | the group's current auth, and nothing else |
 | `GET {relay}/g/{group}/keys?device={id}[&epoch={n}]` | | 200 with `{ epoch, blob, devices, removalStep }` — with `epoch`, that epoch's manifest, or 404 `no_such_epoch` | any auth this group has used within eight epochs |
 | `POST /g/{group}/roster` — **internal** | `{ epoch, devices }` | 204 | built by the Worker after an accepted rotation; not on the public pattern, a 404 from outside |
@@ -3766,7 +3766,8 @@ object's side in full, and *What is still owed* the three gaps it leaves.
 **A push is admitted in the Worker, after the gate and before the object**, for the gate's own
 reason — none of these needs the object's state to refuse, so none should cost an object request.
 In order: a body past 1 504 096 characters, declared or read, is **413 `too_large`**; one that is
-not JSON or not an envelope is the object's old **400**, without a code; `sealed` past 1 500 000 is
+not JSON or not an envelope is the object's old **400**, without a code; an envelope whose `device`
+is not the token's `dev` is **403 `device_mismatch`**, ahead of the D1 read; `sealed` past 1 500 000 is
 **413 `too_large`**; an epoch below the group's — its newest `group_keys` row, one D1 read, and
 not `entitlements.group_epoch`, whose mirror follows the rotation's insert in a second statement
 that could fail and would then refuse every push at the epoch the group has really reached — is **409
@@ -3784,6 +3785,20 @@ Worker's rule, one implementation in `token.ts`. The app answers it by dropping 
 (`entitlement::forget_access`, never a lapse) and deferring the push; the next trip mints a
 current token, or its `/keys` check finds the removal. Clients match on `code`, never on the
 sentence.
+
+**A push and an ack speak for the token's own device and no other.** The Worker compares the
+token's `dev` with the envelope's `device` on a push and the body's `device` on an ack, and a
+mismatch is **403 `device_mismatch`** that reaches no object (`admit.ts`'s `bindDevice`). An ack's
+`device` is whose place on the compaction floor it moves, so this is what keeps one device from
+moving another's. **The app cannot meet it**: the door mints `dev` from `sync_identity.device_id`
+(`entitlement::this_device`), and push, baselines and ack name that same id (`client::me`); it is
+not a `client::Deferral`, so a client that did meet it would fail the trip. A token with no `dev`
+— an older relay's, a day at most — is let past this check and logged; on a push, `stale_token`
+still refuses one minted before the newest rotation. **And the object stores an ack's
+cursor as at most the log's newest `seq`**, clamped rather than refused because a pull answers
+`max(since, newest)` and an emptied log leaves honest cursors above what remains; held lower, a
+device only keeps rows longer. [The relay's README](../../infrastructure/relay/README.md),
+"Binding the token's device", has the whole of it.
 
 **`/rotate` takes one epoch or two, and the refresh secret dies with its device's place in the
 group.** A join plans its own epoch plus one and a removal or a departure plus two, and a device
@@ -3935,9 +3950,11 @@ that a reader logs into.
 
 `access` is `base64url(payload) "." base64url(HMAC-SHA256(payload, RELAY_HMAC_KEY))` over
 `{sub, grp, exp, dev}`, minted by the relay with a 24-hour TTL. `dev` — the device that presented
-itself to the door — was added on 2026-10-01 and is read only by the share Worker, which refuses a
+itself to the door — was added on 2026-10-01 for the share Worker, which refuses a
 token minted before the group's newest rotation by a device that rotation's manifest omits
-([collection-sharing.md](collection-sharing.md), issue #548). The relay checks signature, expiry
+([collection-sharing.md](collection-sharing.md), issue #548). The relay reads it too, since the
+change that bound push and ack to it: a body naming another device is `403 device_mismatch`
+("A push and an ack speak for the token's own device" above). The relay checks signature, expiry
 and `payload.grp` against the path segment with **zero storage reads**, so a junk request is
 refused in microseconds and **never bills a Durable Object request** — which is the line that
 actually costs money. What mints the token is a Patreon membership resolved server-side;

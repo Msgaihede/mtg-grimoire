@@ -133,8 +133,9 @@ verifies it **before the Durable Object hop**. The position is the point, not th
 
 `access` is `base64url(payload) "." base64url(HMAC-SHA256(payload, RELAY_HMAC_KEY))` over
 `{sub, grp, exp, dev}`, with a **24-hour** TTL (`TOKEN_TTL_MS`). `dev` is the device the door
-admitted, added 2026-10-01 for the share Worker's removed-device check; nothing in the relay
-reads it, and a token without one (an older relay's) still verifies. The app trades its long-lived
+admitted, added 2026-10-01 for the share Worker's removed-device check, and a token without one
+(an older relay's) still verifies. **The relay holds a push and an ack to it**: a body that names a
+device other than `dev` is `403 device_mismatch` — "Binding the token's device" below. The app trades its long-lived
 `refresh` secret for a new one when fewer than six hours remain. That split is what makes lapse
 work: deleting `refresh_secret` is instantaneous, and an already-issued `access` dies of old age
 within a day.
@@ -400,7 +401,7 @@ per group, addressed by `idFromName(group)`.
 | `POST /g/{group}/push` | one `Envelope` | `200 {"cursor": <seq>}` — the stored row's seq; the refusals are below |
 | `GET /g/{group}/pull?since={cursor}&device={id}` | — | `200 {"envelopes": [...], "cursor": <head>}` — everything after the cursor, streamed; and the device counts as heard, at most once a day. Every build released before paging asks this |
 | `GET /g/{group}/pull?since={cursor}&device={id}&limit={rows}` | — | `200 {"envelopes": [...], "cursor": <n>, "more": <bool>}` — one page; a `limit` that is not a whole number of at least one is `400 {"error": "bad limit"}`. "A pull, a page at a time" below |
-| `POST /g/{group}/ack` | `{"device": id, "cursor": n}` | `204` — and compaction runs; a departed device's ack is answered and not stored |
+| `POST /g/{group}/ack` | `{"device": id, "cursor": n}` | `204` — and compaction runs; a departed device's ack is answered and not stored, and a cursor past the log's newest row is stored as that row. `403 device_mismatch` for a `device` that is not the token's `dev` |
 | `GET /g/{group}/ws?device={id}` | — | `101` — a hibernatable socket; see the last section. The bearer may be a sub-protocol, and a foreign `Origin` is a `403` — "The browser" below |
 
 **A push is admitted in the Worker, after the gate and before the Durable Object hop**, because a
@@ -413,11 +414,12 @@ object's state to be refused. In the order a push meets them, every refusal but 
 | 1 | the declared `Content-Length` is over `MAX_PUSH_BODY_CHARS` (1 504 096 — the sealed cap plus 4 KiB) — **before a byte is read**; a missing or non-numeric header decides nothing | `413 too_large` |
 | 2 | the body's text is longer than that | `413 too_large` |
 | 3 | the body is not JSON, or not an envelope | `400 unreadable body` / `400 malformed envelope`, no code — the object's words, unchanged |
-| 4 | `sealed` is over `MAX_SEALED_CHARS` (1 500 000, `log.ts`) | `413 too_large` |
-| 5 | the envelope's epoch is below the group's — its newest `group_keys` row, one read on `group_keys_by_group` | `409 stale_epoch` |
-| 6 | … or above it | `422 epoch_ahead` |
-| 7 | `hlcMs` is more than `MAX_CLOCK_AHEAD_MS` (a day) past the relay's clock; exactly a day is admitted | `422 clock_ahead` |
-| 8 | the token was minted before the group's newest rotation and that rotation's manifest does not name its `dev` — or it has no `dev` at all. The same row as 5 and 6, so no second read; `token.ts`'s `stillInGroup`, the share Worker's rule | `409 stale_token` |
+| 4 | the envelope's `device` is not the token's `dev` — ahead of the D1 read | `403 device_mismatch` |
+| 5 | `sealed` is over `MAX_SEALED_CHARS` (1 500 000, `log.ts`) | `413 too_large` |
+| 6 | the envelope's epoch is below the group's — its newest `group_keys` row, one read on `group_keys_by_group` | `409 stale_epoch` |
+| 7 | … or above it | `422 epoch_ahead` |
+| 8 | `hlcMs` is more than `MAX_CLOCK_AHEAD_MS` (a day) past the relay's clock; exactly a day is admitted | `422 clock_ahead` |
+| 9 | the token was minted before the group's newest rotation and that rotation's manifest does not name its `dev` — or it has no `dev` at all. The same row as 6 and 7, so no second read; `token.ts`'s `stillInGroup`, the share Worker's rule | `409 stale_token` |
 
 Then the object: an envelope naming another group is the `409 group mismatch` below, and a log that
 this push would take past `MAX_GROUP_LOG_CHARS` (128 MiB of `sealed`) is **`507 quota`** — exactly
@@ -466,6 +468,36 @@ full for good. The full scan is paid only by a push about to be refused.
   a running total in `log_size` rather than a `sum()` per push — Durable Object SQL bills rows read,
   so the check would cost most exactly when the log is nearest the cap — and not `databaseSize`,
   which is a high-water mark that compaction never lowers. Every compaction recomputes it exactly.
+
+### Binding the token's device
+
+**Each device speaks for itself and no other.** The gate checks the token's `grp`, which says only
+that the caller is in the group, and the object stores the cursor of whatever `device` an ack
+names — that cursor is the device's place on the compaction floor. So the Worker compares the
+token's `dev` with the device the body names, **after the gate and before the Durable Object hop**
+(`index.ts`'s `admitPush` and `admitAck`, `admit.ts`'s `bindDevice`):
+
+- **A mismatch is `403 device_mismatch`** (`DEVICE_MISMATCH`), on a push and on an ack, and reaches
+  no object; a push meets it ahead of the epoch's D1 read. It is logged as one `console.warn` of
+  fixed text — `device_mismatch on push` or `device_mismatch on ack` — with nothing the request
+  carried: no group, no device id, no token, no body.
+- **No honest client meets it.** Every door mints `dev` as the device it admitted (`claim.ts`'s
+  grant), and the app names that same id — `sync_identity.device_id`, which nothing re-mints — on
+  every push and every ack (`sync_engine::client`'s `me`; `entitlement`'s `this_device` at the
+  door). That is why this refuses rather than only recording.
+- **A token with no `dev`** — an older relay's, at most a day old — names no device to hold a body
+  to, so this check lets it through and logs `token without dev on push|ack` (`unboundToken`); a
+  push under one minted before the newest rotation is still `409 stale_token` (row 9). Its ack
+  is forwarded as the very request, unread. An ack under a token with `dev` is read in the Worker
+  for its `device`, then forwarded rebuilt from the same text; one the Worker cannot read is
+  forwarded for the object to refuse in the words it always has.
+
+**And no stored cursor points past the log's newest row.** The object stores an ack's cursor as at
+most the newest `seq` there is (`group.ts`'s `ack`, by `head`), and brings a stored one already past
+it back under on the device's next ack. **Clamped, not refused, because an honest cursor can stand
+there**: a pull answers `max(since, newest)`, and a compaction or a `drop` that empties the log
+leaves every device's cursor above what remains. Held lower, a device only holds the floor lower —
+rows are kept longer, never deleted sooner — and its next ack after the next push moves it on.
 
 **Two more `/g/…` routes stand *ahead* of the gate, and the placement is the point rather than an
 exemption.** ⚠️ **This section said "every one of them is behind the bearer gate" until
@@ -831,7 +863,8 @@ a Rust test red.
 
 `src/admit.ts` — every refusal a push can meet, as pure functions in the order they are met: the
 Worker's checks ahead of the Durable Object hop (`admitBody`, `admit`), the object's quota
-(`admitToLog`), and the one envelope predicate both sides share (`isEnvelope`).
+(`admitToLog`), and the one envelope predicate both sides share (`isEnvelope`) — and the token's
+device against a push's or an ack's (`deviceMismatch`, `bindDevice`, `DEVICE_MISMATCH`).
 
 `src/token.ts` — mint and verify. Pure, and tested the same way.
 

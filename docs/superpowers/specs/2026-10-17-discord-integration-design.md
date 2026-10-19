@@ -50,6 +50,12 @@ invocable and a parent of subcommands**, so the issue's `/collection <card_name>
 - **F4 — the relay does not bind a token's device to the body.** Push and ack check `claims.grp`
   only (`index.ts:375-381`); an ack stores whatever `body.device` names (`group.ts:543-562`). The
   bot could ack as another device and move its compaction floor.
+  **Closed in the relay on its own (2026-10-19)**, after PR 1's revert took the warn-only check
+  with it: push and ack now refuse a body naming a device other than the token's `dev` with
+  `403 device_mismatch` — refusing from the start, because every token carries `dev` and every
+  client names that same id — and the object stores no ack cursor past the log's newest row. The
+  relay's README, "Binding the token's device". §8's `dev` binding and §11's "(warn-only first)"
+  are that change and need not be built again.
 - **F5 — an insert is an edit.** `add_entry_filed` is an upsert by grain (`collection.rs:608-628`);
   a fresh-uid Put that meets an existing grain merges its non-grain fields (notes, tags,
   purchase price…) by last writer; a Put on a known uid is a full edit; a counter op beats a

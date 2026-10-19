@@ -1,4 +1,12 @@
-import { admit, admitBody, admitMember, isEnvelope, type Refusal } from "./admit";
+import {
+  admit,
+  admitBody,
+  admitMember,
+  bindDevice,
+  isEnvelope,
+  unboundToken,
+  type Refusal,
+} from "./admit";
 import { Group } from "./group";
 import {
   GROUP_SEGMENT,
@@ -47,6 +55,11 @@ import { newestKeys, stillInGroup, verify, type Claims } from "./token";
  * one D1 point read, where inside the object it would cost the Durable Object request the gate
  * exists to protect. The object keeps only the check it alone can make — whether
  * the group's log has room. `admitPush` below is the order.
+ *
+ * **A push and an ack are held to the token's device here too.** The token's `dev` is compared with
+ * the device the body names — the envelope's on a push, the ack's on an ack — and a mismatch is
+ * `403 device_mismatch` (`admit.ts`'s `bindDevice`). It stands here and not in the object for the
+ * reason the rest of a push's admission does: a refusal should not spend a Durable Object request.
  *
  * **The five routes a caller reaches with no token are rate limited, and the bill is why again.**
  * `/claim`, `/token`, `/rotate`, `/keys` and the rendezvous each read D1 before they can refuse
@@ -229,12 +242,15 @@ function refuse(refusal: Refusal): Response {
  *    honest client that built something enormous is not parsed at all;
  * 2. the body's text past the cap → 413 `too_large`, for a body that declared no length;
  * 3. not JSON → 400, and not an envelope → 400, in the words the object has always used;
- * 4. `admit`'s four: `sealed` too large (413), the epoch behind (409) or ahead (422), the clock
+ * 3. not JSON → 400, and not an envelope → 400, in the words the object has always used;
+ * 4. the envelope's `device` against the token's `dev` (`bindDevice`) → 403 `device_mismatch`,
+ *    ahead of the D1 read so a push stamped as another device costs none;
+ * 5. `admit`'s four: `sealed` too large (413), the epoch behind (409) or ahead (422), the clock
  *    ahead (422);
- * 5. a token minted before the group's newest rotation by a device it left out → 409
+ * 6. a token minted before the group's newest rotation by a device it left out → 409
  *    `stale_token` (`admitMember`, over `token.ts`'s `stillInGroup`).
  *
- * **4 and 5 read one row**, the newest `group_keys` row (`newestKeys`, one read on
+ * **5 and 6 read one row**, the newest `group_keys` row (`newestKeys`, one read on
  * `group_keys_by_group`). `/rotate` writes that row **before** it answers, so the rotating device
  * cannot push at its new epoch ahead of this read seeing it. **The key row and not
  * `entitlements.group_epoch`**, although the mirror is one point read too: `recordRotation`'s
@@ -244,10 +260,8 @@ function refuse(refusal: Refusal): Response {
  * `group_keys` existed and never seeded since: there is no epoch to compare and nobody has been
  * removed, so neither check refuses.
  *
- * **The forwarded request is built from the text rather than passed through**, because reading
- * the body consumed the original's stream, and it carries only a content type: the object reads no
- * header of a push, and copying the original's `Content-Length` onto a re-encoded body is a length
- * the runtime could find disagreeing with the bytes it is sent.
+ * **The forwarded request is built from the text rather than passed through** (`forwarded`),
+ * because reading the body consumed the original's stream.
  */
 async function admitPush(
   request: Request,
@@ -270,12 +284,55 @@ async function admitPush(
   }
   if (!isEnvelope(envelope)) return json({ error: "malformed envelope" }, 400);
 
+  const unbound = bindDevice("push", claims, envelope.device);
+  if (unbound) return refuse(unbound);
+
   const newest = await newestKeys(env.DB, group);
   const refusal =
     admit(envelope, newest === null ? null : newest.epoch, Date.now()) ??
     admitMember(stillInGroup(newest, group, claims));
   if (refusal) return refuse(refusal);
 
+  return forwarded(request, text);
+}
+
+/**
+ * An ack, held to the token's device before its object: the `Request` to forward, or the
+ * `Response` that refuses it — 403 `device_mismatch` when the body's `device` is not the token's
+ * `dev`. The object stores the cursor of whatever `device` the body names, and that cursor is the
+ * device's place on the compaction floor, so it is the one field worth checking.
+ *
+ * **A token with no `dev` forwards the original request untouched**, unread, and is recorded
+ * (`unboundToken`): it names nothing to hold the body to. **A body this cannot read is forwarded
+ * too**, as text, for the object to refuse in the words it always has (`400 unreadable body`,
+ * `400 malformed ack`): an ack with no string `device` has no device to compare.
+ */
+async function admitAck(request: Request, claims: Claims): Promise<Request | Response> {
+  if (claims.dev === undefined) {
+    unboundToken("ack");
+    return request;
+  }
+
+  const text = await request.text();
+  let device: unknown;
+  try {
+    device = (JSON.parse(text) as { device?: unknown } | null)?.device;
+  } catch {
+    device = undefined;
+  }
+  if (typeof device === "string") {
+    const unbound = bindDevice("ack", claims, device);
+    if (unbound) return refuse(unbound);
+  }
+  return forwarded(request, text);
+}
+
+/**
+ * A POST rebuilt from the body text the Worker already read, with only a content type: the
+ * object reads no header of a push or an ack, and copying the original's `Content-Length` onto a
+ * re-encoded body is a length the runtime could find disagreeing with the bytes it is sent.
+ */
+function forwarded(request: Request, text: string): Request {
   return new Request(request.url, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -381,8 +438,11 @@ async function route(request: Request, env: Env, url: URL): Promise<Response> {
   }
 
   let forward = request;
-  if (action === "push") {
-    const admitted = await admitPush(request, env, group, claims);
+  if (action === "push" || action === "ack") {
+    const admitted =
+      action === "push"
+        ? await admitPush(request, env, group, claims)
+        : await admitAck(request, claims);
     if (admitted instanceof Response) return admitted;
     forward = admitted;
   }

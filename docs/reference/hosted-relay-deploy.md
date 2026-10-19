@@ -89,8 +89,10 @@ order" says why, and [infrastructure/relay/README.md](../../infrastructure/relay
 
 **A seventh half — issue #548's `dev` claim (`f5223fdf`) — was deployed 2026-10-01 at 19:17 UTC**,
 from `main` at `2b845048`, version `ca3dfd11`. `token.ts` stamps the presenting device into every
-token and `verify` carries it through; nothing in the relay reads it, and it exists for the share
-Worker's gate. **No migration, no route, and no credential-free tell** — like the refresh-secret
+token and `verify` carries it through; nothing in the relay read it then, and it existed for the share
+Worker's gate. **The relay now holds a push and an ack to it** (`403 device_mismatch`, `admit.ts`'s
+`bindDevice`) — in this tree, and live only once a release deploys it; the relay's README,
+"Binding the token's device", has it. **No migration, no route, and no credential-free tell** — like the refresh-secret
 change it is known to be live from the tree that was deployed. Step 0's six probes and the two
 secret probes of item 8 were re-run straight after and answered as before. It was the first deploy
 an agent ran, at Markus's instruction that day; the rule below is otherwise unchanged.
