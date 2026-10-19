@@ -667,23 +667,67 @@ function execute(
 // The Env it hangs on
 // ---------------------------------------------------------------------------------------
 
-function fakeDatabase(tables: Tables): unknown {
+/**
+ * What a test can make the database do that it would not do on its own.
+ *
+ * `failOn` throws from every statement whose SQL it answers `true` for — a D1 error, or a request
+ * cancelled before that statement ran, which are the same thing to whatever wrote ahead of it.
+ */
+export interface FakeOptions {
+  failOn?: (sql: string) => boolean;
+}
+
+/** A copy of every table, row by row, to put back when a batch fails. */
+function snapshot(tables: Tables): Tables {
+  return Object.fromEntries(
+    Object.entries(tables).map(([name, rows]) => [name, rows.map((row) => ({ ...row }))]),
+  );
+}
+
+function restore(tables: Tables, saved: Tables): void {
+  for (const name of Object.keys(tables)) if (!(name in saved)) delete tables[name];
+  Object.assign(tables, saved);
+}
+
+function fakeDatabase(tables: Tables, options: FakeOptions = {}): unknown {
+  const run = (sql: string, params: Value[]) => {
+    if (options.failOn?.(sql) === true) throw new Error("fake sql: injected failure");
+    return execute(tables, sql, params);
+  };
   const statement = (sql: string, params: Value[]) => ({
     bind: (...values: Value[]) => statement(sql, values),
-    first: <T>() => Promise.resolve((execute(tables, sql, params).results[0] ?? null) as T | null),
+    first: <T>() => Promise.resolve((run(sql, params).results[0] ?? null) as T | null),
     all: <T>() =>
-      Promise.resolve({
-        success: true,
-        meta: {},
-        results: execute(tables, sql, params).results as T[],
-      }),
-    run: () =>
-      Promise.resolve({ success: true, meta: { changes: execute(tables, sql, params).changes } }),
+      Promise.resolve({ success: true, meta: {}, results: run(sql, params).results as T[] }),
+    run: () => {
+      try {
+        const { results, changes } = run(sql, params);
+        return Promise.resolve({ success: true, meta: { changes }, results });
+      } catch (error) {
+        return Promise.reject(error);
+      }
+    },
   });
   return {
     prepare: (sql: string) => statement(sql, []),
-    batch: (statements: { run: () => Promise<unknown> }[]) =>
-      Promise.all(statements.map((one) => one.run())),
+    /**
+     * **One transaction, as D1's is: in order, and all or nothing.** A statement that throws puts
+     * every table back as it was before the first one ran, and the batch rejects. This used to be
+     * a `Promise.all` that kept whatever ran ahead of the failure, which is a state D1 cannot be
+     * in — so a test that a rotation's writes land together or not at all passed whatever the
+     * code did, since the fake would have half-applied either way.
+     */
+    batch: async (statements: { run: () => Promise<unknown> }[]) => {
+      const saved = snapshot(tables);
+      const results: unknown[] = [];
+      try {
+        for (const one of statements) results.push(await one.run());
+      } catch (error) {
+        restore(tables, saved);
+        throw error;
+      }
+      return results;
+    },
   };
 }
 
@@ -762,9 +806,12 @@ export function fakeTables(options: { groups: string[]; bound?: boolean }): Tabl
   };
 }
 
-/** An `Env` over tables the caller already holds a reference to, so it can assert on them. */
-export function fakeEnvOver(tables: Tables): Env {
-  return { DB: fakeDatabase(tables) } as unknown as Env;
+/**
+ * An `Env` over tables the caller already holds a reference to, so it can assert on them —
+ * and, with `options`, one that fails where a test says to ([`FakeOptions`]).
+ */
+export function fakeEnvOver(tables: Tables, options: FakeOptions = {}): Env {
+  return { DB: fakeDatabase(tables, options) } as unknown as Env;
 }
 
 /**

@@ -1,13 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { fakeEnv, fakeEnvOver, fakeTables, type Tables } from "./fakeD1";
 import {
   admitDevice,
   authIsCurrent,
   authIsRecent,
   currentManifest,
+  devicesOutside,
   equalsConstantTime,
   forgetGroup,
-  keepOnly,
   liveDeviceCount,
   manifestAt,
   recordRotation,
@@ -472,34 +472,145 @@ describe("the device cap", () => {
   });
 });
 
-describe("keepOnly", () => {
-  it("deletes exactly the devices the manifest does not name, and inserts none", async () => {
+describe("devicesOutside", () => {
+  it("names exactly the devices the manifest does not, and deletes nothing", async () => {
     const tables = fakeTables({ groups: ["g1", "g2"] });
     const env = fakeEnvOver(tables);
     seat(tables, "g1", "desk", FRESH);
     seat(tables, "g1", "phone", FRESH);
     seat(tables, "g1", "laptop", FRESH);
     // ⚠️ **g2 holds a device named `phone` deliberately**, and that is the one thing making the
-    // cross-group assertion below able to fail: `phone` is the row this call deletes from g1, so
-    // a `DELETE … WHERE device_id = ?` that had lost its `group_id` would take g2's with it.
-    // Seated under any other name, a group-blind delete looks exactly like a correct one.
+    // cross-group assertion below able to fail: `phone` is the row this names from g1, so a
+    // `SELECT … WHERE device_id` that had lost its `group_id` would name g2's with it.
     seat(tables, "g2", "phone", FRESH);
     seat(tables, "g2", "desk", FRESH);
 
     // The manifest at the new epoch is the roster (#307), so a removal and a departure both free
-    // their slot through this one call and neither needs a mechanism of its own.
-    await keepOnly(env, "g1", ["desk", "laptop"]);
-    expect(idsIn(tables, "g1")).toEqual(["desk", "laptop"]);
-
-    // And another group keeps every device it had, including the one this rotation dropped from
-    // g1 — which is what stops one household's rotation freeing another's slots.
+    // their slot through this one read and neither needs a mechanism of its own.
+    expect(await devicesOutside(env, "g1", ["desk", "laptop"])).toEqual(["phone"]);
+    // A read: the deletes are `recordRotation`'s, so a refused rotation frees nothing.
+    expect(idsIn(tables, "g1")).toEqual(["desk", "laptop", "phone"]);
     expect(idsIn(tables, "g2")).toEqual(["desk", "phone"]);
 
     // A manifest may name a device that has never presented a token — it was sealed a key at
-    // pairing and has not synced yet. That is not an instruction to seat it: this call deletes,
-    // and `admitDevice` is the only thing that admits.
-    await keepOnly(env, "g1", ["desk", "never-connected"]);
+    // pairing and has not synced yet. That is not an instruction to seat it: `admitDevice` is
+    // the only thing that admits.
+    expect((await devicesOutside(env, "g1", ["desk", "never-connected"])).sort()).toEqual([
+      "laptop",
+      "phone",
+    ]);
+  });
+});
+
+describe("recordRotation's effects", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** g1 at epoch 0, its secret held by `phone`, with `desk` and `phone` seated. */
+  async function seeded(): Promise<{ tables: Tables; env: ReturnType<typeof fakeEnvOver> }> {
+    const tables = fakeTables({ groups: ["g1"] });
+    const env = fakeEnvOver(tables);
+    await seedGroup(env, "g1", 0, "auth-0");
+    tables.entitlements[0].refresh_secret = "secret";
+    tables.entitlements[0].refresh_device = "phone";
+    seat(tables, "g1", "desk", FRESH);
+    seat(tables, "g1", "phone", FRESH);
+    return { tables, env };
+  }
+
+  const removePhone = { retireSecret: "secret", dropDevices: ["phone"] };
+
+  it("applies them with the rotation it accepts", async () => {
+    const { tables, env } = await seeded();
+
+    expect(await recordRotation(env, "g1", 2, "auth-2", { desk: "blob" }, removePhone)).toBe(true);
+
+    expect(await authIsCurrent(env, "g1", "auth-2")).toBe(true);
+    expect(tables.entitlements[0].refresh_secret).toBeNull();
+    expect(tables.entitlements[0].refresh_device).toBeNull();
     expect(idsIn(tables, "g1")).toEqual(["desk"]);
+  });
+
+  it("leaves the mirror alone when a refused rotation repeats the claim's row", async () => {
+    // A claim's row holds `{}`, which is also the manifest of a refused rotation at that epoch.
+    // In the same millisecond as the claim — one frozen Worker clock — a guard on the stamp
+    // matched, and the mirror moved to the refused rotation's auth.
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const { tables, env } = await seeded();
+
+    expect(await recordRotation(env, "g1", 0, "auth-0b", {}, removePhone)).toBe(false);
+
+    expect(await authIsCurrent(env, "g1", "auth-0")).toBe(true);
+    expect(await authIsCurrent(env, "g1", "auth-0b")).toBe(false);
+    expect(tables.entitlements[0].refresh_secret).toBe("secret");
+    expect(idsIn(tables, "g1")).toEqual(["desk", "phone"]);
+  });
+
+  it("applies none of them with a rotation it refuses", async () => {
+    // **Every follow-up is guarded on the insert, because a transaction cannot branch.** One
+    // without the guard would run whenever the batch did: a refused rotation would still free
+    // the slots and retire the secret of the manifest it was refused for.
+    const { tables, env } = await seeded();
+
+    expect(await recordRotation(env, "g1", 0, "auth-0b", { desk: "blob" }, removePhone)).toBe(
+      false,
+    );
+    expect(await recordRotation(env, "g1", 3, "auth-3", { desk: "blob" }, removePhone)).toBe(
+      false,
+    );
+
+    expect(await authIsCurrent(env, "g1", "auth-0")).toBe(true);
+    expect(tables.entitlements[0].group_epoch).toBe(0);
+    expect(tables.entitlements[0].refresh_secret).toBe("secret");
+    expect(idsIn(tables, "g1")).toEqual(["desk", "phone"]);
+  });
+
+  it("leaves the mirror on the newest row when a refused rotation repeats an older one", async () => {
+    // The guard finds a row by its epoch and manifest; repeating an older rotation's finds that
+    // row. Only "and it is the newest" keeps the mirror from being moved back onto it.
+    const { tables, env } = await seeded();
+    expect(await recordRotation(env, "g1", 1, "auth-1", { desk: "blob-1" })).toBe(true);
+    expect(await recordRotation(env, "g1", 2, "auth-2", { desk: "blob-2" })).toBe(true);
+
+    expect(await recordRotation(env, "g1", 1, "auth-1", { desk: "blob-1" }, removePhone)).toBe(
+      false,
+    );
+
+    expect(await authIsCurrent(env, "g1", "auth-2")).toBe(true);
+    expect(tables.entitlements[0].group_epoch).toBe(2);
+    expect(tables.entitlements[0].refresh_secret).toBe("secret");
+    expect(idsIn(tables, "g1")).toEqual(["desk", "phone"]);
+  });
+
+  it("leaves the mirror on the row's auth when a refused rotation repeats the newest", async () => {
+    // Same epoch, same manifest, another auth: "the newest row" is true, and only the auth says
+    // the row is not this call's. The clock is pinned, as a Worker's is between two I/O calls, so
+    // nothing here can lean on the stamp telling the two writes apart.
+    const { tables, env } = await seeded();
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
+    expect(await recordRotation(env, "g1", 2, "auth-2", { desk: "blob-2" })).toBe(true);
+
+    expect(await recordRotation(env, "g1", 2, "auth-x", { desk: "blob-2" }, removePhone)).toBe(
+      false,
+    );
+
+    expect(await authIsCurrent(env, "g1", "auth-2")).toBe(true);
+    expect(await authIsCurrent(env, "g1", "auth-x")).toBe(false);
+    expect(tables.entitlements[0].refresh_secret).toBe("secret");
+    expect(idsIn(tables, "g1")).toEqual(["desk", "phone"]);
+  });
+
+  it("keeps a secret that changed between the caller's read and the batch", async () => {
+    // A claim landing between the read and the write mints a new secret, and the retirement is a
+    // compare-and-swap on the one that was read.
+    const { tables, env } = await seeded();
+    tables.entitlements[0].refresh_secret = "fresh";
+
+    expect(await recordRotation(env, "g1", 2, "auth-2", { desk: "blob" }, removePhone)).toBe(true);
+
+    expect(tables.entitlements[0].refresh_secret).toBe("fresh");
+    expect(await authIsCurrent(env, "g1", "auth-2")).toBe(true);
   });
 });
 
