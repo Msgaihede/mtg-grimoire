@@ -5,8 +5,8 @@ import {
   authIsCurrent,
   authIsRecent,
   currentManifest,
+  devicesOutside,
   groupEpoch,
-  keepOnly,
   manifestAt,
   recordRotation,
 } from "./groupauth";
@@ -145,15 +145,17 @@ function isEpoch(text: string): boolean {
 }
 
 /**
- * Retire the group's refresh secret if the manifest just adopted leaves out the device holding it
- * — the relay's half of a removal, since the removed device keeps whatever its `user.db` holds.
+ * The group's refresh secret if the manifest about to be adopted leaves out the device holding it,
+ * or `null` to keep it — the relay's half of a removal, since the removed device keeps whatever its
+ * `user.db` holds. Read only: the retirement is a write inside `recordRotation`'s batch.
  *
  * **Why this and not only the client's own clear.** `client::check_keys` clears the grant on a
  * device that finds itself off the manifest, but a *lost* phone never runs it, and whoever holds
  * its `user.db` holds the secret. That secret opens `/token`'s refresh door, so left alive it mints
  * tokens for the group that removed it — spending the group's requests and one of its five slots,
  * whose `last_seen` it keeps fresh so the TTL never frees it. The manifest is the roster
- * (spec §2.3); a secret outlives its device's membership by not one rotation.
+ * (spec §2.3); a secret outlives its device's membership by not one rotation — and, now that the
+ * retirement shares the rotation's transaction, not by a failed request after one either.
  *
  * ⚠️ **It no longer opens `/rotate`, and this is why that door was removed rather than guarded.**
  * The refresh secret used to be `/rotate`'s second credential; no shipped client ever presented it
@@ -168,32 +170,27 @@ function isEpoch(text: string): boolean {
  * on the refresh door, which the app answers by dropping the dead secret and minting through the
  * group door from then on (`entitlement::refused_secret`); pressing Connect again records it.
  *
- * **Read, then a compare-and-swap on the secret that was read**, because D1 has no interactive
- * transaction and a `/claim` can land between the two statements. The `WHERE refresh_secret = ?`
- * binds the value this function just read, never a presented one, so it is not a timing oracle
- * on a credential; and it works as a version check only because every claim mints a new secret — a
- * claim that landed in between has changed it, and this changes nothing.
+ * **Read here, then a compare-and-swap on the secret that was read**, because a `/claim` can land
+ * between the read and the batch. The swap binds the value this function read, never a presented
+ * one, so it is not a timing oracle on a credential; and it works as a version check only because
+ * every claim mints a new secret — a claim that landed in between has changed it, and the swap
+ * changes nothing.
  */
-async function retireOrphanedSecret(
+async function orphanedSecret(
   env: Env,
   group: string,
   keys: Record<string, string>,
-): Promise<void> {
+): Promise<string | null> {
   const row = await env.DB.prepare(
     `SELECT refresh_secret, refresh_device FROM entitlements WHERE group_id = ?`,
   )
     .bind(group)
     .first<{ refresh_secret: string | null; refresh_device: string | null }>();
-  if (row === null || row.refresh_secret === null) return;
+  if (row === null || row.refresh_secret === null) return null;
   // `Object.hasOwn` for `handleKeys`' reason: a holder named `constructor` must not be found on
   // the prototype of a manifest that does not name it.
-  if (row.refresh_device !== null && Object.hasOwn(keys, row.refresh_device)) return;
-  await env.DB.prepare(
-    `UPDATE entitlements SET refresh_secret = NULL, refresh_device = NULL
-      WHERE group_id = ? AND refresh_secret = ?`,
-  )
-    .bind(group, row.refresh_secret)
-    .run();
+  if (row.refresh_device !== null && Object.hasOwn(keys, row.refresh_device)) return null;
+  return row.refresh_secret;
 }
 
 /**
@@ -299,13 +296,15 @@ function manifestProblem(keys: unknown): string | null {
  *
  * **The order is: every check that costs nothing, then the ones that cost a D1 read, then the one
  * that costs a Durable Object request.** The credential's shape and the body's are decided in the
- * Worker's own memory; the credential's *value* and the epoch's are two round trips to D1; the
- * roster reaches the DO only once the rotation has been recorded. A caller who gets the body
- * wrong pays for none of it, and no refusal of any kind reaches the metered line.
+ * Worker's own memory; the credential's *value* is a D1 read, and the epoch is decided by the
+ * batch that records the rotation; the roster reaches the DO only once that batch has committed.
+ * A caller who gets the body wrong pays for none of it, and no refusal of any kind reaches the
+ * metered line.
  *
  * **And the manifest is the roster, so publishing one settles who holds a device slot and whom the
- * log waits for** — the `keepOnly` and the [`sendRoster`] below the 409. The first is spec §4.4's
- * whole implementation; the second is what stops a departed device's last ack pinning the log.
+ * log waits for** — the slot frees inside `recordRotation`'s batch, and the [`sendRoster`] after
+ * it. The first is spec §4.4's whole implementation; the second is what stops a departed device's
+ * last ack pinning the log.
  */
 export async function handleRotate(request: Request, env: Env, group: string): Promise<Response> {
   const presented = presentedCredential(request);
@@ -334,10 +333,25 @@ export async function handleRotate(request: Request, env: Env, group: string): P
 
   // **The group auth of the epoch being replaced, and nothing else.** Every device in the group
   // holds it, and a device removed from the group cannot derive the next one. The Patreon refresh
-  // secret used to open this door too; see `retireOrphanedSecret` for why it no longer does.
+  // secret used to open this door too; see `orphanedSecret` for why it no longer does.
   if (!(await authIsCurrent(env, group, presented))) return json({ error: "unauthorized" }, 401);
 
-  if (!(await recordRotation(env, group, epoch, auth, keys))) {
+  // **Every read the rotation needs, ahead of the one batch that writes it.** The secret to retire
+  // and the slots to free are decided here and applied inside `recordRotation`'s transaction, each
+  // guarded on its insert — so a refused rotation frees nothing and retires nothing (a device
+  // presenting a stale-but-live auth cannot hand back four slots by publishing an epoch the group
+  // then declines), and a failed one leaves the group exactly where it stood, mirror and all.
+  //
+  // **This is where a removal and a departure each give their slot back**, with no mechanism of
+  // their own: both publish a manifest, #307 made the manifest the roster, and the roll is
+  // reconciled against it. `Object.keys` and not the object, because the roll counts devices and
+  // holds no key material. **And where the refresh secret goes with its device**: a removed
+  // device's secret must not outlive the rotation that removed it.
+  const effects = {
+    retireSecret: await orphanedSecret(env, group, keys),
+    dropDevices: await devicesOutside(env, group, Object.keys(keys)),
+  };
+  if (!(await recordRotation(env, group, epoch, auth, keys, effects))) {
     // Read after the refusal and only to word it — the decision was the statement above.
     const current = (await groupEpoch(env, group)) ?? -1;
     if (epoch > current + REMOVAL_STEP) {
@@ -345,22 +359,6 @@ export async function handleRotate(request: Request, env: Env, group: string): P
     }
     return json({ error: "that rotation does not advance the group's key" }, 409);
   }
-
-  // **After the record and never before it: a refused rotation must free nothing.** The two
-  // statements are not a transaction, so the order is the whole of the guarantee — `keepOnly`
-  // ahead of the 409 above would let a device presenting a stale-but-live auth hand back four
-  // slots by publishing an epoch the group then declines to move to. Behind it, the only caller
-  // who can free a slot is one whose manifest the group has already adopted.
-  //
-  // **This is where a removal and a departure each give their slot back**, with no mechanism of
-  // their own: both publish a manifest, #307 made the manifest the roster, and `keepOnly`
-  // reconciles the device roll against it. `Object.keys` and not the object, because the roll
-  // counts devices and holds no key material.
-  //
-  // **And where the refresh secret goes with its device**, first, because it is a credential: a
-  // removed device's secret must not outlive the rotation that removed it.
-  await retireOrphanedSecret(env, group, keys);
-  await keepOnly(env, group, Object.keys(keys));
 
   // **Then the log, last and best effort** — `claim.ts`'s `releaseGroup` order, for its reason:
   // this is the only step that leaves D1, and a Durable Object that cannot be reached must not
