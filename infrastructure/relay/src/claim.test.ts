@@ -877,6 +877,133 @@ describe("/token — the five-device cap", () => {
   });
 });
 
+/**
+ * Run `during` once, as soon as the first statement whose SQL contains `fragment` has answered its
+ * `first()`: the gap between a door reading the caller's credential and minting its token.
+ */
+function afterRead(env: Env, fragment: string, during: () => Promise<void>): () => boolean {
+  const prepare = env.DB.prepare.bind(env.DB);
+  let fired = false;
+  vi.spyOn(env.DB, "prepare").mockImplementation((sql) => {
+    const statement = prepare(sql);
+    if (fired || !sql.includes(fragment)) return statement;
+    const bind = statement.bind.bind(statement);
+    vi.spyOn(statement, "bind").mockImplementation((...params) => {
+      const bound = bind(...params);
+      const first = bound.first.bind(bound) as () => Promise<unknown>;
+      vi.spyOn(bound, "first").mockImplementationOnce((async () => {
+        const result = await first();
+        fired = true;
+        await during();
+        return result;
+      }) as typeof bound.first);
+      return bound;
+    });
+    return statement;
+  });
+  return () => fired;
+}
+
+/**
+ * A removal of `DEVICE` while its `/token` is in flight: `desk` rotates the group from epoch 0 to
+ * 2 at `at`, publishing a manifest that names only itself, and the clock then moves on so a door
+ * that stamped its grant after this would date it later than the rotation.
+ */
+async function removeInFlight(
+  env: Env,
+  clock: { mockReturnValue(value: number): unknown },
+  at: number,
+): Promise<void> {
+  clock.mockReturnValue(at);
+  const rotation = await handleRotate(
+    new Request("https://relay.example/g/g1/rotate", {
+      method: "POST",
+      headers: { authorization: `Bearer ${AUTH_ONE}` },
+      body: JSON.stringify({ epoch: 2, auth: AUTH_TWO, keys: { desk: "blob" } }),
+    }),
+    env,
+    "g1",
+  );
+  expect(rotation.status).toBe(200);
+  clock.mockReturnValue(at + 100);
+}
+
+/**
+ * **The share Worker dates a token by `exp − TOKEN_TTL_MS` and asks the manifest only about one
+ * dated before the group's newest rotation** (`infrastructure/share-worker/src/env.ts`). So each
+ * door has to stamp its grant from before its credential check: a removal that lands during the
+ * door's later D1 round trips — or in the same millisecond as the check — must find the grant
+ * dated before it, or the removed device's token would read as post-rotation for a day.
+ * `handleClaim` pins the same rule in `/claim — current group auth`.
+ */
+describe("/token — a removal while the token is in flight", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** The newest rotation's `created_at`, which is what the share gate compares a mint time to. */
+  function rotatedAt(tables: Tables): number {
+    return Math.max(...tables.group_keys.map((row) => Number(row.created_at)));
+  }
+
+  it.each([0, 50])(
+    "dates a group-door grant before a removal %ims after its auth check",
+    async (lag) => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+      const { tables, env } = harness({ groups: ["g1"] });
+      await seedGroup(env, "g1", 0, AUTH_ONE);
+      const fired = afterRead(env, "SELECT group_auth FROM entitlements", () =>
+        removeInFlight(env, clock, NOW + lag),
+      );
+
+      const request = post("/token", { group: "g1", auth: AUTH_ONE, device: DEVICE });
+      const { status, body } = await answer(await handleToken(request, env));
+
+      expect(fired()).toBe(true);
+      expect(status).toBe(200);
+      const claims = await verify(body.access!, HMAC, Date.now());
+      expect(claims!.dev).toBe(DEVICE);
+      expect(claims!.exp - TOKEN_TTL_MS).toBeLessThan(rotatedAt(tables));
+    },
+  );
+
+  it.each([0, 50])(
+    "dates a refresh-door grant before a removal %ims after its secret was read",
+    async (lag) => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+      const { tables, env } = harness({ groups: ["g1"] });
+      await seedGroup(env, "g1", 0, AUTH_ONE);
+      tables.entitlements[0].refresh_device = DEVICE;
+      const fired = afterRead(env, "WHERE refresh_secret = ?", () =>
+        removeInFlight(env, clock, NOW + lag),
+      );
+
+      const request = post("/token", { refresh: "secret-0", device: DEVICE });
+      const { status, body } = await answer(await handleToken(request, env));
+
+      expect(fired()).toBe(true);
+      // The removal retired the secret, but only after this door had read it.
+      expect(tables.entitlements[0].refresh_secret).toBeNull();
+      expect(status).toBe(200);
+      const claims = await verify(body.access!, HMAC, Date.now());
+      expect(claims!.dev).toBe(DEVICE);
+      expect(claims!.exp - TOKEN_TTL_MS).toBeLessThan(rotatedAt(tables));
+    },
+  );
+
+  it("still dates a grant with no rotation in flight from the request it answers", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
+    const env = tokenEnv("g1");
+    await seedGroup(env, "g1", 0, AUTH_ONE);
+
+    const request = post("/token", { group: "g1", auth: AUTH_ONE, device: DEVICE });
+    const { body } = await answer(await handleToken(request, env));
+
+    const claims = await verify(body.access!, HMAC, NOW);
+    expect(claims!.exp).toBe(NOW - 1 + TOKEN_TTL_MS);
+  });
+});
+
 // ---------------------------------------------------------------------------------------
 // /claim's two new body fields
 // ---------------------------------------------------------------------------------------

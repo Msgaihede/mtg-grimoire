@@ -394,6 +394,11 @@ function randomSecret(): string {
  * worse, `String(env.RELAY_HMAC_KEY)`: an unset binding spelled that way signs every token with
  * the literal text `"undefined"`, and every token then verifies — for anyone who guesses that
  * the binding is unset. Unset has to be a loud 500.
+ *
+ * **`issuedAtMs` is required, and it is the caller's clock reading from before its auth check.**
+ * The share Worker dates a token by `exp − TOKEN_TTL_MS` and trusts one dated at or after the
+ * group's newest rotation without asking the manifest, so a stamp taken here — after the door's
+ * D1 round trips — would date a grant decided before a removal as if it came after it.
  */
 async function grantFor(
   env: Env,
@@ -402,7 +407,7 @@ async function grantFor(
   device: string,
   status: Status,
   createdAtMs: number,
-  issuedAtMs = Date.now(),
+  issuedAtMs: number,
 ): Promise<GroupGrant> {
   const exp = issuedAtMs + TOKEN_TTL_MS;
   const access = await mint(
@@ -973,6 +978,10 @@ interface TokenBody {
  * query and `groupDoor`'s are not one query with an `OR`.
  */
 async function refreshDoor(env: Env, refresh: string, device: string): Promise<Response> {
+  // Anchor the token before the secret is looked up, for `handleClaim`'s reason: a removal that
+  // retires this secret after the read below must still find the grant dated before it, so the
+  // share gate checks this device against the manifest that removal published.
+  const issuedAt = Date.now() - 1;
   const row = await env.DB.prepare(
     `SELECT subject, status, grace_until, group_id, refresh_secret, patreon_refresh, created_at
        FROM entitlements
@@ -1000,7 +1009,7 @@ async function refreshDoor(env: Env, refresh: string, device: string): Promise<R
   // break a device that is refreshing concurrently.
   const grant: Grant = {
     refresh,
-    ...(await grantFor(env, row.subject, row.group_id, device, status, row.created_at)),
+    ...(await grantFor(env, row.subject, row.group_id, device, status, row.created_at, issuedAt)),
   };
   return json(grant);
 }
@@ -1029,6 +1038,11 @@ async function groupDoor(
   // this door. The relay cannot tell the two apart and does not try: it answers the same bare
   // `unauthorized` to a device that is behind and to one that was removed — and, being ahead of
   // the row, says nothing about the membership to a caller that has not proved it is in the group.
+  //
+  // Anchor the token before checking its auth, including a rotation in the same millisecond, for
+  // `handleClaim`'s reason: a removal that lands during the round trips below must find the grant
+  // dated before it, so the share gate checks this device against the manifest it published.
+  const issuedAt = Date.now() - 1;
   if (!(await authIsCurrent(env, group, auth))) return json({ error: "unauthorized" }, 401);
 
   const row = await env.DB.prepare(
@@ -1063,6 +1077,7 @@ async function groupDoor(
     device,
     status,
     row.created_at,
+    issuedAt,
   );
   return json(grant);
 }

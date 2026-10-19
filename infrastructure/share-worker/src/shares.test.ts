@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { fakeEnvOver, type Tables } from "@grimoire/relay/src/fakeD1";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { handleToken } from "@grimoire/relay/src/claim";
+import { fakeEnvOver, fakeTables, type Tables } from "@grimoire/relay/src/fakeD1";
+import { recordRotation, seedGroup } from "@grimoire/relay/src/groupauth";
+import type { Env as RelayEnv } from "@grimoire/relay/src/index";
 import { mint, TOKEN_TTL_MS } from "@grimoire/relay/src/token";
 import worker, { type Env } from "./index";
 
@@ -580,6 +583,66 @@ describe("a device the group has removed", () => {
       env,
     );
     expect(res.status).toBe(401);
+  });
+
+  /**
+   * The relay's two `/token` doors and this gate over one database, with `REMOVED`'s removal
+   * recorded between the door reading its credential and minting. The door has already said yes,
+   * so it answers a token; what must hold is that the token reads as pre-rotation here, where the
+   * manifest that removal published is then asked and does not name it.
+   */
+  describe("while its token is in flight at the relay", () => {
+    const AUTH_ONE = "ab12".repeat(16);
+    const AUTH_TWO = "cd34".repeat(16);
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it.each([
+      ["group", "SELECT group_auth FROM entitlements", { group: "g1", auth: AUTH_ONE }],
+      ["refresh", "WHERE refresh_secret = ?", { refresh: "secret-0" }],
+    ])("refuses what the %s door minted for it", async (_door, fragment, credential) => {
+      const start = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+      const env = shareEnv(fakeTables({ groups: ["g1"] }));
+      await seedGroup(env as unknown as RelayEnv, "g1", 0, AUTH_ONE);
+      const prepare = env.DB.prepare.bind(env.DB);
+      let removed = false;
+      vi.spyOn(env.DB, "prepare").mockImplementation((sql) => {
+        const statement = prepare(sql);
+        if (removed || !sql.includes(fragment)) return statement;
+        const bind = statement.bind.bind(statement);
+        vi.spyOn(statement, "bind").mockImplementation((...params) => {
+          const bound = bind(...params);
+          const first = bound.first.bind(bound) as () => Promise<unknown>;
+          vi.spyOn(bound, "first").mockImplementationOnce((async () => {
+            const result = await first();
+            removed = true;
+            // Same millisecond as the door's read, then the door's own round trips go by.
+            await recordRotation(env as unknown as RelayEnv, "g1", 2, AUTH_TWO, { [STAYED]: "b" });
+            clock.mockReturnValue(start + 100);
+            return result;
+          }) as typeof bound.first);
+          return bound;
+        });
+        return statement;
+      });
+
+      const minted = await handleToken(
+        new Request("https://relay.example/token", {
+          method: "POST",
+          body: JSON.stringify({ ...credential, device: REMOVED }),
+        }),
+        env as unknown as RelayEnv,
+      );
+      expect(removed).toBe(true);
+      expect(minted.status).toBe(200);
+      const { access } = (await minted.json()) as { access: string };
+
+      expect((await worker.fetch(post("g1", access, META), env)).status).toBe(401);
+      expect((await worker.fetch(list("g1", access), env)).status).toBe(401);
+    });
   });
 
   it("asks nothing of a group that has never rotated", async () => {
