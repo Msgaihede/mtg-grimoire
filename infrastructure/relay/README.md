@@ -419,7 +419,7 @@ object's state to be refused. In the order a push meets them, every refusal but 
 | 6 | the envelope's epoch is below the group's — its newest `group_keys` row, one read on `group_keys_by_group` | `409 stale_epoch` |
 | 7 | … or above it | `422 epoch_ahead` |
 | 8 | `hlcMs` is more than `MAX_CLOCK_AHEAD_MS` (a day) past the relay's clock; exactly a day is admitted | `422 clock_ahead` |
-| 9 | the token was minted before the group's newest rotation and that rotation's manifest does not name its `dev` — or it has no `dev` at all. The same row as 6 and 7, so no second read; `token.ts`'s `stillInGroup`, the share Worker's rule | `409 stale_token` |
+| 9 | the token was granted before the group's newest rotation (by its `ep`, or its mint time if it has none) and that rotation's manifest does not name its `dev` — or it has no `dev` at all. The same row as 6 and 7, so no second read; `token.ts`'s `stillInGroup`, the share Worker's rule | `409 stale_token` |
 
 Then the object: an envelope naming another group is the `409 group mismatch` below, and a log that
 this push would take past `MAX_GROUP_LOG_CHARS` (128 MiB of `sealed`) is **`507 quota`** — exactly
@@ -438,9 +438,10 @@ full for good. The full scan is paid only by a push about to be refused.
   device merely behind a rotation to catch up. **It does not stop a removed device writing at the
   epoch the group is on**: the relay cannot read the seal, `/keys` tells any recent auth the
   epoch's number, and the token outlives the rotation by up to a day. **`stale_token` does**, with
-  the rule the share Worker's gate applies: a token minted at or after the newest rotation is
-  taken whatever the manifest says (a device paired since holds a key it does not name yet), and
-  one minted before it only for a device that manifest names. It comes after 5 and 6, so a push at
+  the rule the share Worker's gate applies: a token granted at the newest epoch is taken whatever
+  the manifest says (a device paired since holds a key it does not name yet), and one granted
+  before it only for a device that manifest names. "Granted at" is the token's `ep`, the epoch whose
+  auth the door checked; a token without one is ordered by its mint time. It comes after 5 and 6, so a push at
   an old epoch is still `stale_epoch` — the answer the app already reads as "ask `/keys`". **409
   and never 401**, because a 401 on a sync route is the app's lapse and revokes the grant: the app
   drops the held token and mints another on its next trip, which a device the rotation kept

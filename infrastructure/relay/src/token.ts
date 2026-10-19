@@ -31,12 +31,18 @@
  * ([`stillInGroup`]), and the relay holds a push and an ack to the device they name
  * (`admit.ts`'s `bindDevice`). **Optional because a token minted by an older relay has none**, and
  * such a token lives at most a day.
+ *
+ * **`ep` is the group epoch whose auth the door checked**, read in the same row as that auth
+ * (`groupauth.ts`'s `authenticatedEpoch`). [`stillInGroup`] orders a grant against the group's
+ * newest rotation by it, without comparing clocks, which a mint time cannot. Optional for `dev`'s
+ * reason, and a token without one is ordered by its mint time as before.
  */
 export interface Claims {
   sub: string;
   grp: string;
   exp: number;
   dev?: string;
+  ep?: number;
 }
 
 /**
@@ -161,18 +167,26 @@ export async function verify(token: string, secret: string, nowMs: number): Prom
   }
   if (typeof parsed !== "object" || parsed === null) return null;
 
-  const { sub, grp, exp, dev } = parsed as Partial<Claims>;
+  const { sub, grp, exp, dev, ep } = parsed as Partial<Claims>;
   if (typeof sub !== "string" || typeof grp !== "string") return null;
   if (typeof exp !== "number" || !Number.isFinite(exp)) return null;
   // Absent is an older relay's token; present and not a string is a shape no minter writes.
   if (dev !== undefined && typeof dev !== "string") return null;
+  // The same for `ep`, and an epoch is a non-negative integer or it is not one the relay wrote.
+  if (ep !== undefined && !(Number.isSafeInteger(ep) && ep >= 0)) return null;
   // `<=` and not `<`: the instant it names is the first instant it is no longer good for.
   if (exp <= nowMs) return null;
 
   // Rebuilt from the checked fields rather than returned as-is, so a caller can never be handed a
-  // property this function did not check — and `dev` only when it was there, so a token without
-  // one reads back exactly as it was minted.
-  return dev === undefined ? { sub, grp, exp } : { sub, grp, exp, dev };
+  // property this function did not check — and `dev` and `ep` only when they were there, so a
+  // token without them reads back exactly as it was minted.
+  return {
+    sub,
+    grp,
+    exp,
+    ...(dev === undefined ? {} : { dev }),
+    ...(ep === undefined ? {} : { ep }),
+  };
 }
 
 /**
@@ -196,13 +210,20 @@ export async function verify(token: string, secret: string, nowMs: number): Prom
  * name yet (a first claim seeds `{}`), and it could only have minted with the current group auth,
  * which a removed device no longer derives. So the rule is two clauses, and both are needed:
  *
- * * minted **at or after** the newest rotation → in the group, whatever the manifest says;
- * * minted **before** it → in the group only if that manifest names `dev`.
+ * * granted **at** the newest epoch → in the group, whatever the manifest says;
+ * * granted **before** it → in the group only if that manifest names `dev`.
  *
- * Mint time is `exp − TOKEN_TTL_MS`: `claim.ts`'s `grantFor` is the only minter and stamps `exp`
- * exactly that far past its issue time. A token with no `dev` was minted by a relay older than the
- * change that added it (2026-10-01), and before the newest rotation it is refused rather than
- * trusted — it cannot say which device it is for.
+ * **"At" is the token's `ep`**: the epoch whose auth the relay's door checked, read in the same row
+ * as that auth. Epochs order a grant against a rotation by what the door actually saw, so a
+ * removal that lands while a removed device's `/token` is in flight — or whose mirror has not
+ * moved yet — leaves its token at the older epoch.
+ *
+ * A token with no `ep` was minted by an older relay and lives at most a day; it falls back to its
+ * mint time, `exp − TOKEN_TTL_MS` (`claim.ts`'s `grantFor` stamps `exp` exactly that far past its
+ * issue time), against the newest row's `created_at` — the weaker rule, because it compares two
+ * clocks. A token with no `dev` was minted by a relay older than the change that added it
+ * (2026-10-01), and before the newest rotation it is refused rather than trusted — it cannot say
+ * which device it is for.
  *
  * **A group with no `group_keys` row has never rotated**, so nobody has ever been removed from it.
  *
@@ -211,7 +232,11 @@ export async function verify(token: string, secret: string, nowMs: number): Prom
  */
 export function stillInGroup(newest: NewestKeys | null, group: string, claims: Claims): boolean {
   if (newest === null) return true;
-  if (claims.exp - TOKEN_TTL_MS >= newest.created_at) return true;
+  if (claims.ep !== undefined) {
+    if (claims.ep >= newest.epoch) return true;
+  } else if (claims.exp - TOKEN_TTL_MS >= newest.created_at) {
+    return true;
+  }
   if (claims.dev === undefined) return false;
 
   let roster: unknown;

@@ -467,10 +467,25 @@ describe("the token's device, on a push and an ack", () => {
 // Membership: a token minted before the newest rotation
 // ---------------------------------------------------------------------------------------
 
-/** A push at `body` under a token for `g1` minted at `mintedAt`, naming `dev` when given. */
-async function pushAs(env: Env, body: string, mintedAt: number, dev?: string): Promise<Response> {
-  const claims = { sub: "sub-0", grp: "g1", exp: mintedAt + TOKEN_TTL_MS };
-  const token = await mint(dev === undefined ? claims : { ...claims, dev }, KEY);
+/**
+ * A push at `body` under a token for `g1` minted at `mintedAt`, naming `dev` when given and
+ * granted at epoch `ep` when given.
+ */
+async function pushAs(
+  env: Env,
+  body: string,
+  mintedAt: number,
+  dev?: string,
+  ep?: number,
+): Promise<Response> {
+  const claims = {
+    sub: "sub-0",
+    grp: "g1",
+    exp: mintedAt + TOKEN_TTL_MS,
+    ...(dev === undefined ? {} : { dev }),
+    ...(ep === undefined ? {} : { ep }),
+  };
+  const token = await mint(claims, KEY);
   return worker.fetch(
     new Request("https://relay.example/g/g1/push", {
       method: "POST",
@@ -565,6 +580,27 @@ describe("POST /push, from a device the newest rotation left out", () => {
     ).toBe(200);
     expect((await pushAs(env, live({ epoch: 5 }), rotatedAt + 1)).status).toBe(200);
     expect(reached).toHaveLength(2);
+  });
+
+  it("orders a token that carries an epoch by it, and not by when it was minted", async () => {
+    // Granted at 3 and minted after the rotation's stamp: still behind it, so the manifest is asked
+    // and `gone` is refused. Granted at 5 and minted before the stamp: at the newest epoch.
+    const { env, reached, rotatedAt } = rotated();
+
+    const behind = await pushAs(
+      env,
+      live({ epoch: 5, device: "gone" }),
+      rotatedAt + 1_000,
+      "gone",
+      3,
+    );
+    expect(behind.status).toBe(409);
+    expect(await behind.json()).toEqual(expect.objectContaining({ code: "stale_token" }));
+    expect(
+      (await pushAs(env, live({ epoch: 5, device: "joiner" }), rotatedAt - 1_000, "joiner", 5))
+        .status,
+    ).toBe(200);
+    expect(reached).toHaveLength(1);
   });
 
   it("leaves a group that never rotated alone, whatever its tokens carry", async () => {
