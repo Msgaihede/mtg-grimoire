@@ -657,6 +657,76 @@ describe("an ack's compaction, and a full log's", () => {
   });
 });
 
+/** Every stored ack, as `device → cursor`. */
+const cursors = (r: Relay) =>
+  Object.fromEntries(
+    r.sql(`SELECT device, cursor FROM acks ORDER BY device`).map((row) => [row.device, row.cursor]),
+  );
+
+/**
+ * **No stored cursor points past the log's newest row.** An ack names a place in the log, and a
+ * cursor past the end of it is a place on the compaction floor that no device could have read to.
+ */
+describe("an ack's cursor, bounded by the log's newest row", () => {
+  it("stores a cursor past the newest row as the newest row", async () => {
+    const r = relay();
+    for (const n of [1, 2, 3]) await r.push("b", `row-${n}`, n);
+
+    expect(await r.ack("a", 1e308)).toBe(204);
+    expect(await r.ack("b", 4)).toBe(204);
+
+    expect(cursors(r)).toEqual({ a: 3, b: 3 });
+  });
+
+  it("stores a cursor at or below the newest row as it came, and still never walks it back", async () => {
+    const r = relay();
+    for (const n of [1, 2, 3]) await r.push("b", `row-${n}`, n);
+
+    await r.ack("a", 2);
+    expect(cursors(r)).toEqual({ a: 2 });
+    await r.ack("a", 1);
+    expect(cursors(r)).toEqual({ a: 2 });
+    await r.ack("a", 3);
+    expect(cursors(r)).toEqual({ a: 3 });
+  });
+
+  it("brings a stored cursor already past the newest row back under it on the device's next ack", async () => {
+    const r = relay();
+    for (const n of [1, 2, 3]) await r.push("b", `row-${n}`, n);
+    await r.ack("a", 1);
+    r.sql(`UPDATE acks SET cursor = 1e308 WHERE device = 'a'`);
+
+    await r.ack("a", 2);
+
+    expect(cursors(r)).toEqual({ a: 3 });
+  });
+
+  it("holds an empty log's acks at zero, and moves on once a row is pushed", async () => {
+    const r = relay();
+
+    await r.ack("a", 50);
+    expect(cursors(r)).toEqual({ a: 0 });
+
+    await r.push("b", "first", 1);
+    await r.ack("a", 1);
+    expect(cursors(r)).toEqual({ a: 1 });
+  });
+
+  it("leaves a sleeping device's unacked rows to the floor, however far another acks past the end", async () => {
+    const r = relay();
+    for (const n of [1, 2, 3, 4]) await r.push("b", `row-${n}`, n);
+    // Every row is past the thirty-day tail: only the floor keeps any of them.
+    r.sql(`UPDATE log SET stored_at = ?`, Date.now() - TAIL_MS - 60_000);
+    await r.ack("a", 2);
+
+    expect(await r.ack("b", 1e308)).toBe(204);
+
+    // `a` acked 2 and holds the floor there; `b` stands at the newest row, 4, and no further.
+    expect(cursors(r)).toEqual({ a: 2, b: 4 });
+    expect(r.sql(`SELECT seq FROM log ORDER BY seq`).map((row) => row.seq)).toEqual([3, 4]);
+  });
+});
+
 describe("a pull is the relay hearing from a device, paged or not", () => {
   it("refreshes a stale heard_at on either kind of pull", async () => {
     for (const query of ["since=0&device=a", "since=0&device=a&limit=5"]) {

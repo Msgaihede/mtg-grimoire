@@ -29,8 +29,8 @@
  * share Worker (issue #548): a token outlives the device's removal by up to `TOKEN_TTL_MS`, and the
  * relay's own routes do not care — a removed device can push nothing at an epoch it holds no key
  * for — but a share is plaintext, so the share Worker checks `dev` against the group's newest
- * manifest. **Optional because a token minted by an older relay has none**, and such a token lives
- * at most a day; nothing in the relay reads it.
+ * manifest. The relay holds a push and an ack to it too (`admit.ts`'s `bindDevice`). **Optional
+ * because a token minted by an older relay has none**, and such a token lives at most a day.
  */
 export interface Claims {
   sub: string;
