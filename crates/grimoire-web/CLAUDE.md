@@ -104,7 +104,3 @@ Formatting and clippy:
   ```bash
   CC_wasm32_unknown_unknown="C:/Program Files/LLVM/bin/clang.exe" AR_wasm32_unknown_unknown="C:/Program Files/LLVM/bin/llvm-ar.exe" cargo clippy -p grimoire-web --lib --target wasm32-unknown-unknown --locked -- -D warnings
   ```
-
-Commit discipline:
-- One commit per feature matching feature size, bundling code, tests, and documentation together for clean `release-please` changelogs.
-

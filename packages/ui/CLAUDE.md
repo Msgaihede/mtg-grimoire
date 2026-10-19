@@ -122,6 +122,3 @@ Run verification tests only at the end of feature work:
 | --- | --- |
 | `pnpm test` / `pnpm exec vitest packages/ui/` | Run frontend unit and component tests |
 | `pnpm lint` | Run ESLint and token verification |
-
-Commit discipline:
-- Commits match feature size (one commit per feature), bundling components, stories, and tests together for `release-please`.
