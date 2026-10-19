@@ -5069,6 +5069,86 @@ async fn a_push_the_relay_keeps_refusing_still_lets_the_trip_pull_and_ack() {
     }
 }
 
+/// ⚠ **A push refused as `stale_token` drops the held token, and the next trip mints a fresh one
+/// and sends what waited.** The relay answers it to a token minted before the group's newest key
+/// change that does not name a device the change kept — for a device still in the group, a token
+/// from a relay too old to stamp `dev`. Its membership is untouched, so nothing a lapse or a
+/// removal costs may happen here: the refresh secret stays, *Membership ended* is not drawn, the
+/// group is not left, and no row says sync is broken. The trip still pulls and acks.
+///
+/// **What makes it red**: reading the 409 as a lapse (the grant revoked), failing the trip, keeping
+/// the held token — the next trip would push under it again until it expired, a day of nothing
+/// sent — or stamping the refused ops.
+#[tokio::test]
+async fn a_push_under_a_stale_token_mints_a_fresh_one_on_the_next_trip_and_ends_nothing() {
+    let server = MockServer::start_async().await;
+    keys_mock(&server, 0);
+    let refused = server.mock(|when, then| {
+        when.method(POST)
+            .path(format!("/g/{GROUP}/push"))
+            .header("authorization", "Bearer access-1");
+        then.status(409)
+            .json_body(serde_json::json!({ "error": "x", "code": "stale_token" }));
+    });
+    let taken = server.mock(|when, then| {
+        when.method(POST)
+            .path(format!("/g/{GROUP}/push"))
+            .header("authorization", "Bearer access-2");
+        then.status(200)
+            .json_body(serde_json::json!({ "cursor": 1 }));
+    });
+    let minted = server.mock(|when, then| {
+        when.method(POST).path("/token");
+        then.status(200).body(
+            r#"{"access":"access-2","refresh":"refresh-2","expires":1900000000,"status":"active","since":1740000000}"#,
+        );
+    });
+    let pulled = server.mock(|when, then| {
+        when.method(GET).path(format!("/g/{GROUP}/pull"));
+        then.status(200)
+            .json_body(serde_json::json!({ "envelopes": [], "cursor": 7 }));
+    });
+    let acked = server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{GROUP}/ack"));
+        then.status(204);
+    });
+    let a = paired("dev-a", 0);
+    set_state(&a, RELAY_URL, &server.base_url()).unwrap();
+    grant(&a);
+    add_copy(&a, "c1", 1);
+    let waiting = unpushed_count(&a);
+    assert!(waiting > 0);
+
+    let first = run_once(&a).await.unwrap().unwrap();
+
+    assert_eq!(first.pushed, 0);
+    assert_eq!(unpushed_count(&a), waiting, "the refused ops were stamped");
+    assert_eq!(
+        get_state(&a, entitlement::ACCESS_TOKEN),
+        None,
+        "the token survived"
+    );
+    assert_eq!(
+        entitlement::refresh_secret(&a).as_deref(),
+        Some("refresh-1"),
+        "the grant went with the token"
+    );
+    assert!(!entitlement::membership_ended(&a), "drawn as a lapse");
+    assert!(identity::group(&a).unwrap().is_some(), "left the group");
+    assert_eq!(error_rows(&a), vec![], "recorded as a broken sync");
+    assert_eq!((pulled.calls(), acked.calls(), minted.calls()), (1, 1, 0));
+
+    let second = run_once(&a).await.unwrap().unwrap();
+
+    assert!(second.pushed >= waiting as usize, "{second:?}");
+    assert_eq!(unpushed_count(&a), 0);
+    assert_eq!((refused.calls(), minted.calls(), taken.calls()), (1, 1, 1));
+    assert_eq!(
+        get_state(&a, entitlement::ACCESS_TOKEN).as_deref(),
+        Some("access-2")
+    );
+}
+
 /// ⚠ **A refused chunk stops the push there, and nothing after it is sent.** A later chunk landing
 /// ahead of an earlier one would carry this device's watermark on every other device past the ops
 /// still waiting here, and when they went at last they would be skipped as seen.

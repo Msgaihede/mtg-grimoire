@@ -3774,10 +3774,16 @@ that could fail and would then refuse every push at the epoch the group has real
 clock is **422 `clock_ahead`**. The object keeps one check of its own: a log that this push would
 take past 128 MiB of `sealed` is **507 `quota`**, and it compacts before refusing — a full group
 moves no head and acks nothing, so no other path would ever compact it again. `stale_epoch` is what stops a removed device
-writing under the key it was removed from for the day its token outlives the rotation;
-`epoch_ahead` is what stops one envelope at `{ epoch: 1e12 }` freezing every peer's cursor on keys
-to an epoch that will never exist. A group with no key rows — claimed before `group_keys` and
-never seeded or rotated since — skips both. Clients match on `code`, never on the sentence.
+writing under the key it was removed from; `epoch_ahead` is what stops one envelope at
+`{ epoch: 1e12 }` freezing every peer's cursor on keys to an epoch that will never exist. A group
+with no key rows — claimed before `group_keys` and never seeded or rotated since — skips both.
+**Neither stops a removed device pushing at the epoch the group is on**, for the day its token
+outlives the rotation; **409 `stale_token`** does, after both and off the same row: a token minted
+before the newest rotation is taken only for a device that rotation's manifest names — the share
+Worker's rule, one implementation in `token.ts`. The app answers it by dropping the held token
+(`entitlement::forget_access`, never a lapse) and deferring the push; the next trip mints a
+current token, or its `/keys` check finds the removal. Clients match on `code`, never on the
+sentence.
 
 **`/rotate` takes one epoch or two, and the refresh secret dies with its device's place in the
 group.** A join plans its own epoch plus one and a removal or a departure plus two, and a device

@@ -1,4 +1,4 @@
-import { admit, admitBody, isEnvelope, type Refusal } from "./admit";
+import { admit, admitBody, admitMember, isEnvelope, type Refusal } from "./admit";
 import { Group } from "./group";
 import {
   GROUP_SEGMENT,
@@ -9,14 +9,13 @@ import {
   reconcile,
 } from "./claim";
 import { allowedOrigin, preflight, withCors, type CorsEnv } from "./cors";
-import { groupEpoch } from "./groupauth";
 import { handlePair } from "./pair";
 import { required } from "./patreon";
 import { limited, type LimitedRoute, type Limiters } from "./ratelimit";
 import { handleRendezvousGet, handleRendezvousPut, sweepRendezvous } from "./rendezvous";
 import { handleKeys, handleRotate } from "./rotate";
 import { bearerTicket } from "./ticket";
-import { verify } from "./token";
+import { newestKeys, stillInGroup, verify, type Claims } from "./token";
 
 /**
  * The Worker entry: a router, an authentication gate, a push's admission, and the hourly
@@ -42,10 +41,11 @@ import { verify } from "./token";
  * it would refuse exactly the caller it exists to serve. See `rotate.ts`.
  *
  * **A push is read here before it reaches its object, and the same bill is why.** The token only
- * says the caller is in the group; a batch too large to store, one sealed at an epoch the group
- * has left or not reached, or one stamped a week ahead is refused here for the price of a Worker
- * invocation and one D1 point read, where inside the object it would cost the Durable Object
- * request the gate exists to protect. The object keeps only the check it alone can make — whether
+ * says the caller was in the group when it minted; a batch too large to store, one sealed at an
+ * epoch the group has left or not reached, one stamped a week ahead, or one under a token the
+ * group's newest rotation has outlived is refused here for the price of a Worker invocation and
+ * one D1 point read, where inside the object it would cost the Durable Object request the gate
+ * exists to protect. The object keeps only the check it alone can make — whether
  * the group's log has room. `admitPush` below is the order.
  *
  * **The five routes a caller reaches with no token are rate limited, and the bill is why again.**
@@ -221,23 +221,6 @@ function refuse(refusal: Refusal): Response {
 }
 
 /**
- * The epoch the group stands on, for `admit`: the newest `group_keys` row (`groupEpoch`, one read
- * on `group_keys_by_group`). `/rotate` writes that row **before** it answers, so the rotating
- * device cannot push at its new epoch ahead of this read seeing it.
- *
- * **The key row and not `entitlements.group_epoch`**, although the mirror is one point read too.
- * `recordRotation`'s insert *is* the rotation's acceptance, and the mirror follows in a second
- * statement; a mirror that failed to follow would otherwise refuse every push at the epoch the
- * group has really moved to (`epoch_ahead`), with nothing left that could move it.
- *
- * `null` for a group with no key rows — one claimed before `group_keys` existed and never seeded
- * since. `admit` skips the epoch check then: there is nothing to compare against.
- */
-async function currentEpoch(env: Env, group: string): Promise<number | null> {
-  return groupEpoch(env, group);
-}
-
-/**
  * A push, admitted or refused, after the bearer gate and before its object: the `Request` to
  * forward, or the `Response` that refuses it. Checked in this order, and a push is answered by the
  * first it fails:
@@ -247,14 +230,31 @@ async function currentEpoch(env: Env, group: string): Promise<number | null> {
  * 2. the body's text past the cap → 413 `too_large`, for a body that declared no length;
  * 3. not JSON → 400, and not an envelope → 400, in the words the object has always used;
  * 4. `admit`'s four: `sealed` too large (413), the epoch behind (409) or ahead (422), the clock
- *    ahead (422).
+ *    ahead (422);
+ * 5. a token minted before the group's newest rotation by a device it left out → 409
+ *    `stale_token` (`admitMember`, over `token.ts`'s `stillInGroup`).
+ *
+ * **4 and 5 read one row**, the newest `group_keys` row (`newestKeys`, one read on
+ * `group_keys_by_group`). `/rotate` writes that row **before** it answers, so the rotating device
+ * cannot push at its new epoch ahead of this read seeing it. **The key row and not
+ * `entitlements.group_epoch`**, although the mirror is one point read too: `recordRotation`'s
+ * insert *is* the rotation's acceptance and the mirror follows in a second statement, so a mirror
+ * that failed to follow would otherwise refuse every push at the epoch the group has really moved
+ * to (`epoch_ahead`), with nothing left that could move it. No row is a group claimed before
+ * `group_keys` existed and never seeded since: there is no epoch to compare and nobody has been
+ * removed, so neither check refuses.
  *
  * **The forwarded request is built from the text rather than passed through**, because reading
  * the body consumed the original's stream, and it carries only a content type: the object reads no
  * header of a push, and copying the original's `Content-Length` onto a re-encoded body is a length
  * the runtime could find disagreeing with the bytes it is sent.
  */
-async function admitPush(request: Request, env: Env, group: string): Promise<Request | Response> {
+async function admitPush(
+  request: Request,
+  env: Env,
+  group: string,
+  claims: Claims,
+): Promise<Request | Response> {
   const declared = admitBody(Number(request.headers.get("content-length")));
   if (declared) return refuse(declared);
 
@@ -270,7 +270,10 @@ async function admitPush(request: Request, env: Env, group: string): Promise<Req
   }
   if (!isEnvelope(envelope)) return json({ error: "malformed envelope" }, 400);
 
-  const refusal = admit(envelope, await currentEpoch(env, group), Date.now());
+  const newest = await newestKeys(env.DB, group);
+  const refusal =
+    admit(envelope, newest === null ? null : newest.epoch, Date.now()) ??
+    admitMember(stillInGroup(newest, group, claims));
   if (refusal) return refuse(refusal);
 
   return new Request(request.url, {
@@ -379,7 +382,7 @@ async function route(request: Request, env: Env, url: URL): Promise<Response> {
 
   let forward = request;
   if (action === "push") {
-    const admitted = await admitPush(request, env, group);
+    const admitted = await admitPush(request, env, group, claims);
     if (admitted instanceof Response) return admitted;
     forward = admitted;
   }

@@ -85,10 +85,11 @@ export function admitBody(chars: number): Refusal | null {
  *    row; see that constant.
  * 2. **An epoch below the group's → 409 `stale_epoch`.** Two devices send one, and it is the
  *    right answer to both. A device *removed* from the group still holds the key it was removed
- *    from and a token that lives up to a day, and this is what stops it writing under that key in
- *    the meantime; a device merely *behind* a rotation is told to catch up, and the app re-reads
- *    `/keys`, adopts the new key and seals again. 409 because the push is fine and the group has
- *    moved.
+ *    from and a token that lives up to a day, and this stops it writing under that key; a device
+ *    merely *behind* a rotation is told to catch up, and the app re-reads `/keys`, adopts the new
+ *    key and seals again. 409 because the push is fine and the group has moved. **It does not
+ *    stop a removed device writing at the epoch the group is on** — the relay cannot read the
+ *    seal, and `/keys` tells any recent auth the epoch's number. [`admitMember`] does that.
  * 3. **An epoch above the group's → 422 `epoch_ahead`.** No shipped client seals ahead of the
  *    relay — `/rotate` records the new epoch in D1 *before* the rotating device commits it and
  *    pushes at it — so this is a push nothing honest sends. It is also the one that did the most
@@ -132,6 +133,31 @@ export function admit(
     };
   }
   return null;
+}
+
+/**
+ * A push past `admit`, from a token `token.ts`'s `stillInGroup` has answered for: **409
+ * `stale_token`** when it was minted before the group's newest rotation by a device that rotation
+ * left out, or by a relay too old to say which device it was.
+ *
+ * **After `admit` and not before it**, so a push at an epoch the group has left is still
+ * `stale_epoch` — the answer every released app reads as "ask `/keys`", which is how a device
+ * removed between its key check and its push finds out. What is left for this one is a push at the
+ * current epoch, which no removed device running the app sends.
+ *
+ * **409 and never 401.** A 401 on a sync route is the app's lapse (`client::lapsed`): it revokes
+ * the grant and draws *Membership ended*. The token is what is stale here, not the membership — a
+ * device the manifest still names under a token with no `dev` is in the group and needs only a new
+ * token, which the app mints on its next trip once it has dropped this one. A build that does not
+ * know the code records the refusal and retries; its next `/keys` check is a removal's notice.
+ */
+export function admitMember(stillInGroup: boolean): Refusal | null {
+  if (stillInGroup) return null;
+  return {
+    status: 409,
+    code: "stale_token",
+    error: "that token predates the group's newest key change and is not for a device still in it",
+  };
 }
 
 /**
