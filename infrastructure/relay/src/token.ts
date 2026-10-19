@@ -28,8 +28,9 @@
  * **`dev` is the device that presented itself to `/token` or `/claim`**, added 2026-10-01 for the
  * share Worker (issue #548): a token outlives the device's removal by up to `TOKEN_TTL_MS`, so the
  * share Worker's gate and the relay's push check `dev` against the group's newest manifest
- * ([`stillInGroup`]). **Optional because a token minted by an older relay has none**, and such a
- * token lives at most a day.
+ * ([`stillInGroup`]), and the relay holds a push and an ack to the device they name
+ * (`admit.ts`'s `bindDevice`). **Optional because a token minted by an older relay has none**, and
+ * such a token lives at most a day.
  *
  * **`ep` is the group epoch whose auth the door checked**, read in the same row as that auth
  * (`groupauth.ts`'s `authenticatedEpoch`). [`stillInGroup`] orders a grant against the group's

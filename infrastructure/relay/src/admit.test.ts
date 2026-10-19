@@ -1,8 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   admit,
   admitBody,
   admitToLog,
+  bindDevice,
+  DEVICE_MISMATCH,
+  deviceMismatch,
   isEnvelope,
   MAX_PUSH_BODY_CHARS,
   type Refusal,
@@ -79,6 +82,49 @@ describe("isEnvelope", () => {
     ]) {
       expect(isEnvelope(bad)).toBe(false);
     }
+  });
+});
+
+describe("deviceMismatch and bindDevice", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("is no mismatch for a token that names the device, or names none", () => {
+    expect(deviceMismatch({ dev: "desk" }, "desk")).toBeNull();
+    expect(deviceMismatch({}, "desk")).toBeNull();
+    expect(deviceMismatch({}, "")).toBeNull();
+  });
+
+  it("is a 403 device_mismatch for a token that names another device", () => {
+    expect(deviceMismatch({ dev: "desk" }, "phone")).toEqual({
+      status: 403,
+      code: "device_mismatch",
+      error: expect.any(String) as string,
+    });
+    expect(DEVICE_MISMATCH).toBe("device_mismatch");
+  });
+
+  it("refuses a mismatch on either route and logs it as fixed text", () => {
+    const warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    expect(code(bindDevice("push", { dev: "desk" }, "phone"))).toBe("device_mismatch");
+    expect(bindDevice("ack", { dev: "desk" }, "phone")?.status).toBe(403);
+
+    // The code and the route, and not one thing the request carried.
+    expect(warned.mock.calls).toEqual([["device_mismatch on push"], ["device_mismatch on ack"]]);
+  });
+
+  it("passes a match silently, and a token with no device with a line that says so", () => {
+    const warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    expect(bindDevice("push", { dev: "desk" }, "desk")).toBeNull();
+    expect(warned).not.toHaveBeenCalled();
+
+    expect(bindDevice("push", {}, "anyone")).toBeNull();
+    expect(bindDevice("ack", {}, "anyone")).toBeNull();
+    expect(warned.mock.calls).toEqual([
+      ["token without dev on push"],
+      ["token without dev on ack"],
+    ]);
   });
 });
 
@@ -188,12 +234,31 @@ function relay(): Relay {
   return { env, tables, reached };
 }
 
-async function push(env: Env, body: string): Promise<Response> {
-  const token = await mint({ sub: "sub-0", grp: "g1", exp: Date.now() + TOKEN_TTL_MS }, KEY);
+/**
+ * A token for `g1` minted for `dev` — `"desk"`, the device `envelope()` names, as every door has
+ * minted since 2026-10-01 — or for no device at all when `dev` is `null`, as an older relay did.
+ */
+function bearer(dev: string | null = "desk"): Promise<string> {
+  const claims = { sub: "sub-0", grp: "g1", exp: Date.now() + TOKEN_TTL_MS };
+  return mint(dev === null ? claims : { ...claims, dev }, KEY);
+}
+
+async function push(env: Env, body: string, dev?: string | null): Promise<Response> {
   return worker.fetch(
     new Request("https://relay.example/g/g1/push", {
       method: "POST",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { authorization: `Bearer ${await bearer(dev)}` },
+      body,
+    }),
+    env,
+  );
+}
+
+async function ack(env: Env, body: string, dev?: string | null): Promise<Response> {
+  return worker.fetch(
+    new Request("https://relay.example/g/g1/ack", {
+      method: "POST",
+      headers: { authorization: `Bearer ${await bearer(dev)}` },
       body,
     }),
     env,
@@ -294,6 +359,110 @@ describe("POST /push, at the Worker", () => {
   });
 });
 
+/**
+ * **The token's device against the body's**, at the Worker: a push or an ack that names a device
+ * other than the token's `dev` is a 403 and never reaches its object; one that names the token's
+ * own is forwarded as it came; and a token with no `dev` is let through and recorded.
+ */
+describe("the token's device, on a push and an ack", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("refuses a push stamped as another device without reaching the object or D1", async () => {
+    const warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { env, tables, reached } = relay();
+    // A key row at another epoch: were the D1 read made first, this would be a 409.
+    keyRow(tables, 9);
+
+    const response = await push(env, live({ device: "phone" }), "desk");
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual(expect.objectContaining({ code: "device_mismatch" }));
+    expect(reached).toHaveLength(0);
+    expect(warned.mock.calls).toEqual([["device_mismatch on push"]]);
+  });
+
+  it("forwards a push stamped as the token's own device, its text untouched", async () => {
+    const warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { env, reached } = relay();
+    const body = live({ device: "desk" });
+
+    expect((await push(env, body, "desk")).status).toBe(200);
+
+    expect(reached).toHaveLength(1);
+    expect(await reached[0].text()).toBe(body);
+    expect(warned).not.toHaveBeenCalled();
+  });
+
+  it("forwards a push under a token with no device, and records that it did", async () => {
+    const warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { env, reached } = relay();
+
+    expect((await push(env, live({ device: "phone" }), null)).status).toBe(200);
+
+    expect(reached).toHaveLength(1);
+    expect(warned.mock.calls).toEqual([["token without dev on push"]]);
+  });
+
+  it("refuses an ack as another device without reaching the object", async () => {
+    const warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { env, reached } = relay();
+
+    const response = await ack(env, '{"device":"phone","cursor":1e308}', "desk");
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual(expect.objectContaining({ code: "device_mismatch" }));
+    expect(reached).toHaveLength(0);
+    expect(warned.mock.calls).toEqual([["device_mismatch on ack"]]);
+  });
+
+  it("forwards an ack as the token's own device with its body", async () => {
+    const warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { env, reached } = relay();
+    const body = '{"device":"desk","cursor":7}';
+
+    await ack(env, body, "desk");
+
+    expect(reached).toHaveLength(1);
+    expect(new URL(reached[0].url).pathname).toBe("/g/g1/ack");
+    expect(reached[0].method).toBe("POST");
+    expect(await reached[0].text()).toBe(body);
+    expect(warned).not.toHaveBeenCalled();
+  });
+
+  it("forwards an ack under a token with no device as the very request, unread, and records it", async () => {
+    const warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { env, reached } = relay();
+    const request = new Request("https://relay.example/g/g1/ack", {
+      method: "POST",
+      headers: { authorization: `Bearer ${await bearer(null)}` },
+      body: '{"device":"phone","cursor":7}',
+    });
+
+    await worker.fetch(request, env);
+
+    expect(reached).toEqual([request]);
+    expect(request.bodyUsed).toBe(false);
+    expect(warned.mock.calls).toEqual([["token without dev on ack"]]);
+  });
+
+  it("forwards an ack it cannot read for the object to refuse, in its own words", async () => {
+    const warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { env, reached } = relay();
+
+    for (const body of ["not json", "null", '{"cursor":1}', '{"device":7,"cursor":1}']) {
+      await ack(env, body, "desk");
+    }
+
+    expect(await Promise.all(reached.map((each) => each.text()))).toEqual([
+      "not json",
+      "null",
+      '{"cursor":1}',
+      '{"device":7,"cursor":1}',
+    ]);
+    expect(warned).not.toHaveBeenCalled();
+  });
+});
+
 // ---------------------------------------------------------------------------------------
 // Membership: a token minted before the newest rotation
 // ---------------------------------------------------------------------------------------
@@ -349,11 +518,25 @@ describe("POST /push, from a device the newest rotation left out", () => {
   it("refuses a removed device at the group's current epoch without reaching the object", async () => {
     const { env, reached, rotatedAt } = rotated();
 
-    const response = await pushAs(env, live({ epoch: 5 }), rotatedAt - 1, "gone");
+    const response = await pushAs(env, live({ epoch: 5, device: "gone" }), rotatedAt - 1, "gone");
 
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual(expect.objectContaining({ code: "stale_token" }));
     expect(reached).toHaveLength(0);
+  });
+
+  it("refuses a removed device's push stamped as a remaining one before the membership check", async () => {
+    // The device binding stands ahead of the D1 read: a token for `gone` cannot borrow `desk`'s
+    // place on the manifest by naming it in the envelope.
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { env, reached, rotatedAt } = rotated();
+
+    const response = await pushAs(env, live({ epoch: 5, device: "desk" }), rotatedAt - 1, "gone");
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual(expect.objectContaining({ code: "device_mismatch" }));
+    expect(reached).toHaveLength(0);
+    vi.restoreAllMocks();
   });
 
   it("still answers a removed device's old epoch as stale_epoch, which the app already reads", async () => {
@@ -361,7 +544,7 @@ describe("POST /push, from a device the newest rotation left out", () => {
     // holds; the app's answer to `stale_epoch` is to ask `/keys` again, which is its removal.
     const { env, reached, rotatedAt } = rotated();
 
-    const response = await pushAs(env, live({ epoch: 3 }), rotatedAt - 1, "gone");
+    const response = await pushAs(env, live({ epoch: 3, device: "gone" }), rotatedAt - 1, "gone");
 
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual(expect.objectContaining({ code: "stale_epoch" }));
@@ -392,7 +575,9 @@ describe("POST /push, from a device the newest rotation left out", () => {
     // minted with the auth a removed device no longer derives.
     const { env, reached, rotatedAt } = rotated();
 
-    expect((await pushAs(env, live({ epoch: 5 }), rotatedAt, "joiner")).status).toBe(200);
+    expect(
+      (await pushAs(env, live({ epoch: 5, device: "joiner" }), rotatedAt, "joiner")).status,
+    ).toBe(200);
     expect((await pushAs(env, live({ epoch: 5 }), rotatedAt + 1)).status).toBe(200);
     expect(reached).toHaveLength(2);
   });
@@ -402,12 +587,19 @@ describe("POST /push, from a device the newest rotation left out", () => {
     // and `gone` is refused. Granted at 5 and minted before the stamp: at the newest epoch.
     const { env, reached, rotatedAt } = rotated();
 
-    const behind = await pushAs(env, live({ epoch: 5 }), rotatedAt + 1_000, "gone", 3);
+    const behind = await pushAs(
+      env,
+      live({ epoch: 5, device: "gone" }),
+      rotatedAt + 1_000,
+      "gone",
+      3,
+    );
     expect(behind.status).toBe(409);
     expect(await behind.json()).toEqual(expect.objectContaining({ code: "stale_token" }));
-    expect((await pushAs(env, live({ epoch: 5 }), rotatedAt - 1_000, "joiner", 5)).status).toBe(
-      200,
-    );
+    expect(
+      (await pushAs(env, live({ epoch: 5, device: "joiner" }), rotatedAt - 1_000, "joiner", 5))
+        .status,
+    ).toBe(200);
     expect(reached).toHaveLength(1);
   });
 
@@ -416,7 +608,9 @@ describe("POST /push, from a device the newest rotation left out", () => {
     const longAgo = Date.now() - TOKEN_TTL_MS + 60 * 1000;
 
     expect((await pushAs(env, live({ epoch: 9 }), longAgo)).status).toBe(200);
-    expect((await pushAs(env, live({ epoch: 9 }), longAgo, "anyone")).status).toBe(200);
+    expect(
+      (await pushAs(env, live({ epoch: 9, device: "anyone" }), longAgo, "anyone")).status,
+    ).toBe(200);
     expect(reached).toHaveLength(2);
   });
 
