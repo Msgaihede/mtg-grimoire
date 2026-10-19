@@ -463,6 +463,9 @@ const CLOCK_AHEAD: &str = "clock_ahead";
 const TOO_LARGE: &str = "too_large";
 /// A push that would take the group's stored log over its quota. **507**.
 const QUOTA: &str = "quota";
+/// A push under a token minted before the group's newest key change, by a device that change did
+/// not keep — or one too old to name its device. **409**, and never the 401 [`lapsed`] reads.
+const STALE_TOKEN: &str = "stale_token";
 
 /// A push the relay refused for a reason nothing else in this trip can clear, which **defers what
 /// is left of the push rather than failing the trip** ([`Pushed::deferred`]). Matched on the
@@ -492,6 +495,13 @@ pub enum Deferral {
     ClockAhead,
     /// 422 `epoch_ahead`: sealed at an epoch the relay has not reached.
     EpochAhead,
+    /// 409 `stale_token`: the token predates the group's newest key change and does not name a
+    /// device it kept. [`post_ops`] has already dropped the held token
+    /// ([`entitlement::forget_access`]), so the next trip mints one that is current — a device the
+    /// change kept pushes then, and one it removed hears so from that trip's [`check_keys`].
+    /// **Not recorded**: for a device still in the group it mends itself, and the reader has
+    /// nothing to do.
+    StaleToken,
 }
 
 impl Deferral {
@@ -1543,7 +1553,7 @@ enum Refusal {
     /// baseline's refusal needs a sentence of its own ([`emit_baselines`]).
     ClockAhead,
     /// A refusal retrying will not clear inside this trip ([`Deferral`]), already recorded in
-    /// [`refused_push`]'s sentence.
+    /// [`refused_push`]'s sentence — but for [`Deferral::StaleToken`], which records nothing.
     Deferred(Deferral),
     /// Anything else, already recorded (or a lapse, which records nothing): the sentence to
     /// answer with.
@@ -1603,6 +1613,12 @@ async fn post_ops(
         match code.as_deref() {
             Some(STALE_EPOCH) => return Err(Refusal::Stale),
             Some(CLOCK_AHEAD) => return Err(Refusal::ClockAhead),
+            Some(STALE_TOKEN) => {
+                return Err(match db.with(entitlement::forget_access) {
+                    Ok(()) => Refusal::Deferred(Deferral::StaleToken),
+                    Err(e) => Refusal::Failed(e),
+                })
+            }
             _ => {}
         }
         let message = refused_push(status, code.as_deref());
