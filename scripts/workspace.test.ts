@@ -317,7 +317,38 @@ describe("what each package imports", () => {
   });
 });
 
+/**
+ * Modules in one folder whose import specifiers differ only in case, one line each.
+ * `QuickSearch.tsx` beside `quickSearch.ts` resolved apart on Linux and built; on Windows'
+ * filesystem `./QuickSearch` found the `.ts` first and the 0.56.0 release's desktop build failed
+ * (2026-10-19). A checkout on Windows holds one of two such files, so CI's Linux legs are the
+ * only place the pair can be seen.
+ */
+function caseCollisionsIn(paths: readonly string[]) {
+  const stemOf = (path: string) => path.replace(/\.(d\.ts|tsx?|jsx?|[mc][jt]s)$/, "");
+  const seen = new Map<string, string>();
+  const out = [];
+  for (const path of [...paths].sort()) {
+    const other = seen.get(stemOf(path).toLowerCase());
+    if (other === undefined) seen.set(stemOf(path).toLowerCase(), path);
+    else if (stemOf(other) !== stemOf(path)) out.push(`${other} ↔ ${path}`);
+  }
+  return out;
+}
+
+describe("every module's name", () => {
+  it("differs from its neighbours' by more than case", () => {
+    expect(caseCollisionsIn(Object.keys(CODE))).toEqual([]);
+  });
+});
+
 describe("the rule's own guards", () => {
+  it("finds two modules whose names differ only in case", () => {
+    expect(
+      caseCollisionsIn(["/a/Search.tsx", "/a/search.ts", "/a/Search.test.tsx", "/b/search.ts"]),
+    ).toEqual(["/a/Search.tsx ↔ /a/search.ts"]);
+  });
+
   // A sweep over nothing passes everything above.
   it("reads the tree", () => {
     expect(Object.keys(CODE).length).toBeGreaterThan(1200);

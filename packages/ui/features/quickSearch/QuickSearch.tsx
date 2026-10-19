@@ -8,7 +8,7 @@ import { chordParts, matchesShortcut, shortcut } from "@/lib/shortcuts";
 import { useAppStore } from "@/lib/store";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
-import type { QuickItem, QuickItemKind, QuickTarget } from "./quickSearch";
+import type { QuickItem, QuickItemKind, QuickTarget } from "./results";
 import { useQuickSearch } from "./useQuickSearch";
 
 const QUICK_SEARCH = shortcut("global", "quickSearch");
@@ -68,7 +68,7 @@ function useGoTo(): (target: QuickTarget) => void {
 /**
  * The header's quick search (issue #1098) — a field centred in the title bar that drops a list of
  * grouped results under itself: decks and deck folders, the collection's folders and cards, the
- * wishlist's, the whole corpus, and the Settings panels, in that order (`quickSearch.ts` argues
+ * wishlist's, the whole corpus, and the Settings panels, in that order (`results.ts` argues
  * it). With nothing typed the list is what the reader touched last; typing narrows it.
  *
  * **A combobox, `QuickAdd`'s shape**: the caret stays in the field, ↑/↓ walk every row across the
