@@ -18,7 +18,7 @@ import {
   settingItems,
   type FolderLike,
   type QuickGroup,
-} from "./quickSearch";
+} from "./results";
 
 /** What a list search asks for, over the page size: a handful more than a group draws, because
  *  rows merge (one per printing per folder) and name matches are sorted above the rest. */
