@@ -31,12 +31,19 @@
  * for — but a share is plaintext, so the share Worker checks `dev` against the group's newest
  * manifest. **Optional because a token minted by an older relay has none**, and such a token lives
  * at most a day; nothing in the relay reads it.
+ *
+ * **`ep` is the group epoch whose auth the door checked**, read in the same row as that auth, and
+ * is also the share Worker's alone: a token whose `ep` is behind the group's newest rotation was
+ * granted before it, so the share Worker asks that rotation's manifest about `dev`. An epoch
+ * orders a grant against a rotation without comparing clocks, which a mint time cannot. Optional
+ * for `dev`'s reason, and a token without one is judged by its mint time as before.
  */
 export interface Claims {
   sub: string;
   grp: string;
   exp: number;
   dev?: string;
+  ep?: number;
 }
 
 /**
@@ -161,16 +168,24 @@ export async function verify(token: string, secret: string, nowMs: number): Prom
   }
   if (typeof parsed !== "object" || parsed === null) return null;
 
-  const { sub, grp, exp, dev } = parsed as Partial<Claims>;
+  const { sub, grp, exp, dev, ep } = parsed as Partial<Claims>;
   if (typeof sub !== "string" || typeof grp !== "string") return null;
   if (typeof exp !== "number" || !Number.isFinite(exp)) return null;
   // Absent is an older relay's token; present and not a string is a shape no minter writes.
   if (dev !== undefined && typeof dev !== "string") return null;
+  // The same for `ep`, and an epoch is a non-negative integer or it is not one the relay wrote.
+  if (ep !== undefined && !(Number.isSafeInteger(ep) && ep >= 0)) return null;
   // `<=` and not `<`: the instant it names is the first instant it is no longer good for.
   if (exp <= nowMs) return null;
 
   // Rebuilt from the checked fields rather than returned as-is, so a caller can never be handed a
-  // property this function did not check — and `dev` only when it was there, so a token without
-  // one reads back exactly as it was minted.
-  return dev === undefined ? { sub, grp, exp } : { sub, grp, exp, dev };
+  // property this function did not check — and `dev` and `ep` only when they were there, so a
+  // token without them reads back exactly as it was minted.
+  return {
+    sub,
+    grp,
+    exp,
+    ...(dev === undefined ? {} : { dev }),
+    ...(ep === undefined ? {} : { ep }),
+  };
 }

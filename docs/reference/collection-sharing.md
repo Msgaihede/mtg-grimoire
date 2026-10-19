@@ -663,9 +663,10 @@ the same NULL reason — `folder_uid = ?` matches nothing at all for a whole-col
 `infrastructure/share-worker/` — a **second** Cloudflare Worker beside `infrastructure/relay/`, binding the same D1 database and
 the same `RELAY_HMAC_KEY` so it can verify a token the relay minted without a service binding.
 **`infrastructure/relay/`'s source and its deploy were untouched by this feature until 2026-10-01**, when issue
-#548 added a `dev` claim to the token the relay mints: the share gate refuses a token minted before
+#548 added a `dev` claim to the token the relay mints: the share gate refuses a token granted before
 the group's newest rotation by a device that rotation's manifest omits, which closes the day a
-removed device's leftover token could still publish and withdraw. `infrastructure/share-worker/README.md` has the
+removed device's leftover token could still publish and withdraw. An `ep` claim (2026-10-19) says
+which epoch the grant was made at, so "before" is decided by epoch rather than by clock. `infrastructure/share-worker/README.md` has the
 rule and what it leaves open; the relay has to be deployed first.
 
 **The reason is blast radius rather than tidiness.** Sync is a paid feature people depend on;

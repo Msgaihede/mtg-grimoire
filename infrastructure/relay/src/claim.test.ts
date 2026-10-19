@@ -393,6 +393,20 @@ describe("/token — the refresh door", () => {
     expect(body.since).toBe(0);
   });
 
+  it("stamps the epoch the secret's own row stands on, and none for a group never seeded", async () => {
+    // Read in the same statement that found the secret, so the epoch is one it was standing at.
+    const env = tokenEnv("g1", "g2");
+    await seedGroup(env, "g1", 4, AUTH_ONE);
+
+    const seeded = post("/token", { refresh: "secret-0", device: DEVICE });
+    const unseeded = post("/token", { refresh: "secret-1", device: DEVICE });
+    const keyed = (await answer(await handleToken(seeded, env))).body;
+    const bare = (await answer(await handleToken(unseeded, env))).body;
+
+    expect((await verify(keyed.access!, HMAC, Date.now()))!.ep).toBe(4);
+    expect(await verify(bare.access!, HMAC, Date.now())).not.toHaveProperty("ep");
+  });
+
   it("refuses a secret no row holds", async () => {
     const env = tokenEnv("g1");
 
@@ -481,8 +495,20 @@ describe("/token — the group door", () => {
     // `dev` is what the share Worker checks against the group's newest manifest, so a removed
     // device's leftover token cannot publish or revoke (issue #548).
     expect(claims?.dev).toBe(DEVICE);
+    // `ep` is the epoch that auth was current at, which the share Worker orders the grant by.
+    expect(claims?.ep).toBe(3);
     // The milliseconds-to-seconds boundary, asserted where it actually crosses.
     expect(body.expires).toBe(unixSeconds(Number(claims?.exp)));
+  });
+
+  it("refuses a current auth with no epoch mirrored beside it", async () => {
+    // No relay write sets one column without the other; a row that has one has nothing to stamp.
+    const { tables, env } = harness({ groups: ["g1"] });
+    await seedGroup(env, "g1", 0, AUTH_ONE);
+    tables.entitlements[0].group_epoch = null;
+
+    const request = post("/token", { group: "g1", auth: AUTH_ONE, device: DEVICE });
+    expect((await answer(await handleToken(request, env))).status).toBe(401);
   });
 
   it("refuses an auth the group is not standing on", async () => {
@@ -952,7 +978,7 @@ describe("/token — a removal while the token is in flight", () => {
       const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
       const { tables, env } = harness({ groups: ["g1"] });
       await seedGroup(env, "g1", 0, AUTH_ONE);
-      const fired = afterRead(env, "SELECT group_auth FROM entitlements", () =>
+      const fired = afterRead(env, "group_auth FROM entitlements", () =>
         removeInFlight(env, clock, NOW + lag),
       );
 
@@ -963,6 +989,7 @@ describe("/token — a removal while the token is in flight", () => {
       expect(status).toBe(200);
       const claims = await verify(body.access!, HMAC, Date.now());
       expect(claims!.dev).toBe(DEVICE);
+      expect(claims!.ep).toBe(0);
       expect(claims!.exp - TOKEN_TTL_MS).toBeLessThan(rotatedAt(tables));
     },
   );
@@ -987,9 +1014,31 @@ describe("/token — a removal while the token is in flight", () => {
       expect(status).toBe(200);
       const claims = await verify(body.access!, HMAC, Date.now());
       expect(claims!.dev).toBe(DEVICE);
+      expect(claims!.ep).toBe(0);
       expect(claims!.exp - TOKEN_TTL_MS).toBeLessThan(rotatedAt(tables));
     },
   );
+
+  it("stamps the epoch the auth was checked at while a recorded rotation's mirror lags", async () => {
+    // A rotation's row is written before the mirror moves, so for a moment the old auth is still
+    // current to the door. The token must carry the epoch that auth belongs to, not the newest
+    // row's: the share Worker then asks the newest manifest, which does not name this device.
+    const { tables, env } = harness({ groups: ["g1"] });
+    await seedGroup(env, "g1", 0, AUTH_ONE);
+    tables.group_keys.push({
+      group_id: "g1",
+      epoch: 2,
+      auth: AUTH_TWO,
+      keys: JSON.stringify({ desk: "blob" }),
+      created_at: Date.now() - 1000,
+    });
+
+    const request = post("/token", { group: "g1", auth: AUTH_ONE, device: DEVICE });
+    const { status, body } = await answer(await handleToken(request, env));
+
+    expect(status).toBe(200);
+    expect((await verify(body.access!, HMAC, Date.now()))!.ep).toBe(0);
+  });
 
   it("still dates a grant with no rotation in flight from the request it answers", async () => {
     vi.spyOn(Date, "now").mockReturnValue(NOW);
@@ -1161,6 +1210,8 @@ describe("/claim — current group auth (#752)", () => {
         expect(status).toBe(200);
         const claims = await verify(body.access!, HMAC, Date.now());
         expect(claims!.exp - TOKEN_TTL_MS).toBeLessThan(NOW + 100);
+        // Granted at the epoch the removal then left behind.
+        expect(claims!.ep).toBe(0);
       }
       // A claim that won the write was then retired by removal; one that lost cannot replace it.
       expect(tables.entitlements[0].refresh_secret).not.toBe(body.refresh);
@@ -1265,10 +1316,12 @@ describe("/claim — registering the group's relay key", () => {
     const { tables, env } = harness({ groups: ["g1"], bound: false });
     withCode(tables);
 
-    const { status } = await answer(await handleClaim(post("/claim", WELL_FORMED), env));
+    const { status, body } = await answer(await handleClaim(post("/claim", WELL_FORMED), env));
 
     expect(status).toBe(200);
     expect(tables.entitlements[0].group_id).toBe("g1");
+    // The epoch it just seeded, read back the way the doors read theirs.
+    expect((await verify(body.access!, HMAC, Date.now()))!.ep).toBe(0);
     // The manifest starts empty — a group of one has nobody to rewrap for — but the ROW has to
     // exist, because `recordRotation` refuses an epoch that does not advance one.
     expect(tables.group_keys).toHaveLength(1);
@@ -1429,6 +1482,8 @@ describe("/claim — the binding moves rather than being refused", () => {
     // *caught up* finds — and the only one in which `INSERT OR IGNORE` has a conflict to ignore,
     // since `group_keys` is keyed on `(group_id, epoch)`.
     keyed(tables, "g1", 0);
+    // The mirror's two columns, written together as every relay write writes them.
+    tables.entitlements[0].group_epoch = 0;
     tables.entitlements[0].group_auth = AUTH_TWO;
     seat(tables, "g1", "desk");
 

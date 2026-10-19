@@ -420,6 +420,34 @@ export async function authIsCurrent(env: Env, group: string, auth: string): Prom
 }
 
 /**
+ * `authIsCurrent`'s question, answered with the epoch the group stands on when the answer is yes,
+ * or `null` for no. What the two `/token` doors and `/claim` stamp into a token's `ep`.
+ *
+ * **The epoch comes from the same row read as the auth it is compared with**, because the two
+ * mirror columns are only ever written together: whatever moment that read lands in, the pair is
+ * one epoch's. An epoch read from `group_keys` in a second statement could be newer than the auth
+ * just checked — a rotation recorded whose mirror has not moved yet — and a token stamped with it
+ * would read as post-rotation to the share Worker for a device that rotation removed.
+ *
+ * A current auth with no mirrored epoch is no write this relay makes, and is refused rather than
+ * answered without one.
+ */
+export async function authenticatedEpoch(
+  env: Env,
+  group: string,
+  auth: string,
+): Promise<number | null> {
+  const row = await env.DB.prepare(
+    `SELECT group_epoch, group_auth FROM entitlements WHERE group_id = ?`,
+  )
+    .bind(group)
+    .first<{ group_epoch: number | null; group_auth: string | null }>();
+  if (row === null || row.group_auth === null) return null;
+  if (!equalsConstantTime(row.group_auth, auth)) return null;
+  return row.group_epoch;
+}
+
+/**
  * Is this an auth the group has used within the last [`EPOCH_HISTORY`] epochs? The weaker question
  * `/keys` asks, and it is weaker on purpose.
  *

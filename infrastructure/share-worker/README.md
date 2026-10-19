@@ -58,12 +58,17 @@ attacker has.
 outlives its device's removal by up to a day, and a share is plaintext, so a removed laptop could
 otherwise overwrite or withdraw the group's binders for that long. The gate reads the group's
 newest `group_keys` row — the manifest a rotation published, whose key set is the roster — and
-refuses a token minted **before** that rotation by a device (`dev`, stamped by the relay since the
-same date) that the manifest omits. A token minted at or after it passes: only the group's
+refuses a token granted **before** that rotation by a device (`dev`, stamped by the relay since the
+same date) that the manifest omits. A token granted at the newest epoch passes: only the group's
 _current_ auth mints one, and a removed device no longer derives it, while a device that has just
 paired may not be on the manifest yet. A token with no `dev` (an older relay's) predating the
 rotation is refused. A group with no rows has never rotated and is not asked. One D1 read per gated
 request — traffic from at most five devices, never from a viewer.
+
+**"Before" is the token's `ep`** (2026-10-19): the epoch whose auth the relay's door checked, read
+in the same row as that auth, so a grant is ordered against a rotation by what the door saw rather
+than by comparing two clocks. A token with no `ep` — an older relay's, alive a day at most — is
+ordered by its mint time (`exp − TOKEN_TTL_MS`) against the row's `created_at`, as before.
 
 ⚠️ **This needs the relay deployed first** so that tokens carry `dev`; until then every token
 minted before a group's newest rotation is refused, and a device sees one day of

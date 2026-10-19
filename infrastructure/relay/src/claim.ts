@@ -1,6 +1,7 @@
 import { decide, type Status } from "./entitlement";
 import {
   admitDevice,
+  authenticatedEpoch,
   authIsCurrent,
   forgetGroup,
   groupEpoch,
@@ -399,6 +400,10 @@ function randomSecret(): string {
  * The share Worker dates a token by `exp − TOKEN_TTL_MS` and trusts one dated at or after the
  * group's newest rotation without asking the manifest, so a stamp taken here — after the door's
  * D1 round trips — would date a grant decided before a removal as if it came after it.
+ *
+ * **`epoch` is the one the caller's credential was checked at, read in the same row**, and it is
+ * what the share Worker actually orders a grant by: see `Claims`. `null` only on the refresh door
+ * for a group whose mirror has never been seeded, and the token then carries no `ep`.
  */
 async function grantFor(
   env: Env,
@@ -407,13 +412,21 @@ async function grantFor(
   device: string,
   status: Status,
   createdAtMs: number,
+  epoch: number | null,
   issuedAtMs: number,
 ): Promise<GroupGrant> {
   const exp = issuedAtMs + TOKEN_TTL_MS;
   const access = await mint(
-    // `dev` is read by the share Worker alone — see `Claims`. Every door has already checked it
-    // with `deviceIn` and admitted it to the roll, so it is the device the grant is really for.
-    { sub: subject, grp: group, exp, dev: device },
+    // `dev` and `ep` are read by the share Worker alone — see `Claims`. Every door has already
+    // checked `dev` with `deviceIn` and admitted it to the roll, so it is the device the grant is
+    // really for.
+    {
+      sub: subject,
+      grp: group,
+      exp,
+      dev: device,
+      ...(epoch === null ? {} : { ep: epoch }),
+    },
     required(env.RELAY_HMAC_KEY, "RELAY_HMAC_KEY"),
   );
   return {
@@ -733,7 +746,9 @@ export async function handleClaim(request: Request, env: Env): Promise<Response>
   // same millisecond. If removal overtakes a successful binding write, the share gate must
   // see a pre-rotation token. First seeding still stamps after its new empty manifest.
   const authenticatedAt = Date.now() - 1;
-  if (keyedEpoch !== null && !(await authIsCurrent(env, group, auth))) {
+  // The epoch that auth was current at, from the same row, is the one the token carries.
+  const authedEpoch = keyedEpoch === null ? null : await authenticatedEpoch(env, group, auth);
+  if (keyedEpoch !== null && authedEpoch === null) {
     return json({ error: "unauthorized" }, 401);
   }
 
@@ -875,6 +890,12 @@ export async function handleClaim(request: Request, env: Env): Promise<Response>
   // because `row.group_id === group` by then.
   await seedGroup(env, group, epoch, auth);
 
+  // A first claim has only now made its auth current, so it reads the epoch it seeded back the
+  // same way the doors read theirs — before taking a slot, so a refusal here seats nobody.
+  // Refused rather than minted without one: this claim's auth is not the group's after seeding.
+  const grantEpoch = authedEpoch ?? (await authenticatedEpoch(env, group, auth));
+  if (grantEpoch === null) return json({ error: "unauthorized" }, 401);
+
   // **Last, because a claim issues a token and the cap is a fence around tokens (spec §4.2).**
   // A claim that registered nothing would hand a sixth device a grant here and 403 it at its
   // next `/token` a day later — a Connect that reported success and a sync that never worked.
@@ -895,6 +916,7 @@ export async function handleClaim(request: Request, env: Env): Promise<Response>
       device,
       status,
       row.created_at,
+      grantEpoch,
       keyedEpoch === null ? Date.now() : authenticatedAt,
     )),
   };
@@ -982,13 +1004,17 @@ async function refreshDoor(env: Env, refresh: string, device: string): Promise<R
   // retires this secret after the read below must still find the grant dated before it, so the
   // share gate checks this device against the manifest that removal published.
   const issuedAt = Date.now() - 1;
+  // `group_epoch` from the row the secret is found in, for `authenticatedEpoch`'s reason: the
+  // token's `ep` is then an epoch at which this secret was still standing. That is exact while a
+  // rotation that retires the secret moves the mirror in the same write (`retireOrphanedSecret`).
   const row = await env.DB.prepare(
-    `SELECT subject, status, grace_until, group_id, refresh_secret, patreon_refresh, created_at
+    `SELECT subject, status, grace_until, group_id, refresh_secret, patreon_refresh, created_at,
+            group_epoch
        FROM entitlements
       WHERE refresh_secret = ?`,
   )
     .bind(refresh)
-    .first<EntitlementRow>();
+    .first<EntitlementRow & { group_epoch: number | null }>();
 
   // No row is a revoked or never-issued secret; a row with no group has never been claimed and
   // there is nothing to stamp into `grp`. Both are the same sentence to the app.
@@ -1009,7 +1035,16 @@ async function refreshDoor(env: Env, refresh: string, device: string): Promise<R
   // break a device that is refreshing concurrently.
   const grant: Grant = {
     refresh,
-    ...(await grantFor(env, row.subject, row.group_id, device, status, row.created_at, issuedAt)),
+    ...(await grantFor(
+      env,
+      row.subject,
+      row.group_id,
+      device,
+      status,
+      row.created_at,
+      row.group_epoch,
+      issuedAt,
+    )),
   };
   return json(grant);
 }
@@ -1018,11 +1053,11 @@ async function refreshDoor(env: Env, refresh: string, device: string): Promise<R
  * The group door: any device that holds the group key, and therefore no Patreon secret at all.
  * Spec §2.2, and the whole of item 3 — a device that has only ever paired can mint its own token.
  *
- * **The auth is checked before the row is loaded, through `authIsCurrent` rather than a `WHERE
- * group_auth = ?`.** That helper is where the comparison is constant-time and where "current"
- * is defined; a second spelling of the question here would be a second thing to get wrong, and
- * an index probe on a secret besides. It costs one extra point read on `entitlements`, against
- * a route that is asked once a day per device.
+ * **The auth is checked before the row is loaded, through `authenticatedEpoch` rather than a
+ * `WHERE group_auth = ?`.** `groupauth.ts` is where the comparison is constant-time and where
+ * "current" is defined; a second spelling of the question here would be a second thing to get
+ * wrong, and an index probe on a secret besides. It costs one extra point read on
+ * `entitlements`, against a route that is asked once a day per device.
  *
  * **The answer omits `refresh` and nothing here has one to omit.** `grantFor` is not given the
  * secret, so the omission is structural rather than a deletion somebody could forget.
@@ -1043,7 +1078,11 @@ async function groupDoor(
   // `handleClaim`'s reason: a removal that lands during the round trips below must find the grant
   // dated before it, so the share gate checks this device against the manifest it published.
   const issuedAt = Date.now() - 1;
-  if (!(await authIsCurrent(env, group, auth))) return json({ error: "unauthorized" }, 401);
+  // The epoch comes back with the answer, from the row the auth was compared in, and is the one
+  // the token carries: an epoch read anywhere later could already be a rotation's that removed
+  // this device.
+  const epoch = await authenticatedEpoch(env, group, auth);
+  if (epoch === null) return json({ error: "unauthorized" }, 401);
 
   const row = await env.DB.prepare(
     `SELECT subject, status, grace_until, group_id, refresh_secret, patreon_refresh, created_at
@@ -1052,8 +1091,8 @@ async function groupDoor(
   )
     .bind(group)
     .first<EntitlementRow>();
-  // Unreachable while `authIsCurrent` reads `entitlements.group_auth` — no row is no auth. Kept
-  // because the day that helper is taught to read `group_keys` instead, this line is the only
+  // Unreachable while `authenticatedEpoch` reads `entitlements.group_auth` — no row is no auth.
+  // Kept because the day that helper is taught to read `group_keys` instead, this line is the only
   // thing standing between a group with no membership and a token (spec §2.4).
   if (row === null) return json({ error: "unauthorized" }, 401);
 
@@ -1077,6 +1116,7 @@ async function groupDoor(
     device,
     status,
     row.created_at,
+    epoch,
     issuedAt,
   );
   return json(grant);

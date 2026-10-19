@@ -159,13 +159,19 @@ export async function authorised(request: Request, env: Env, group: string): Pro
  * name yet (a first claim seeds `{}`), and it could only have minted with the current group auth,
  * which a removed device no longer derives. So the rule is two clauses, and both are needed:
  *
- * * minted **at or after** the newest rotation → in the group, whatever the manifest says;
- * * minted **before** it → in the group only if that manifest names `dev`.
+ * * granted **at** the newest epoch → in the group, whatever the manifest says;
+ * * granted **before** it → in the group only if that manifest names `dev`.
  *
- * Mint time is `exp − TOKEN_TTL_MS`: `claim.ts`'s `grantFor` is the only minter and stamps `exp`
- * exactly that far past its own clock. A token with no `dev` was minted by a relay older than the
- * claim, and before the newest rotation it is refused rather than trusted — the cost is a day of
- * "would not accept this device's membership" on one device, once, after the relay update.
+ * **"At" is the token's `ep`**: the epoch whose auth the relay checked, read in the same row as
+ * that auth (`groupauth.ts`'s `authenticatedEpoch`). Epochs order a grant against a rotation by
+ * what the relay's door actually saw, so a removal that lands while a removed device's `/token` is
+ * in flight — or whose mirror has not moved yet — leaves its token at the older epoch.
+ *
+ * A token with no `ep` was minted by an older relay and lives at most a day; it falls back to its
+ * mint time, `exp − TOKEN_TTL_MS`, against the newest row's `created_at`, which orders the two by
+ * clocks and is the weaker rule. A token with no `dev` either was minted by a relay older still,
+ * and before the newest rotation it is refused rather than trusted — the cost is a day of "would
+ * not accept this device's membership" on one device, once, after the relay update.
  *
  * **A group with no `group_keys` row has never rotated**, so nobody has ever been removed from it.
  *
@@ -174,12 +180,16 @@ export async function authorised(request: Request, env: Env, group: string): Pro
  */
 async function stillInGroup(env: Env, group: string, claims: Claims): Promise<boolean> {
   const newest = await env.DB.prepare(
-    `SELECT keys, created_at FROM group_keys WHERE group_id = ? ORDER BY epoch DESC LIMIT 1`,
+    `SELECT epoch, keys, created_at FROM group_keys WHERE group_id = ? ORDER BY epoch DESC LIMIT 1`,
   )
     .bind(group)
-    .first<{ keys: string; created_at: number }>();
+    .first<{ epoch: number; keys: string; created_at: number }>();
   if (newest === null) return true;
-  if (claims.exp - TOKEN_TTL_MS >= newest.created_at) return true;
+  if (claims.ep !== undefined) {
+    if (claims.ep >= newest.epoch) return true;
+  } else if (claims.exp - TOKEN_TTL_MS >= newest.created_at) {
+    return true;
+  }
   if (claims.dev === undefined) return false;
 
   let roster: unknown;
