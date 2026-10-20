@@ -26,7 +26,7 @@ import { cn } from "@/lib/utils";
 import {
   distribution,
   DISTRIBUTION_HEADING,
-  sizedCards,
+  libraryCards,
   type DistributionBy,
 } from "../deckBuckets";
 import { DEFAULT_HAND_SIZE, handOdds, ODDS_MODES, type OddsMode } from "../openingHand";
@@ -79,8 +79,8 @@ const FIGURE = "text-right font-mono text-xs tabular-nums text-text";
 /**
  * The odds table, its three controls and the bars beside it.
  *
- * @param cards the deck's rows unfiltered — narrowed here to {@link sizedCards}, which is the
- * library an opening hand is actually drawn from.
+ * @param cards the deck's rows unfiltered — narrowed here to {@link libraryCards}, which is the
+ * library an opening hand is actually drawn from: the sized piles less the command zone.
  * @param by the cut, from the card above. Buckets are **not** folded on this side: a table row is
  * legible at any length, and a reader who set the cut to `Card name` did it to find one card.
  * @param odds the question's three numbers, held by `DeckStats` — see this file's header.
@@ -99,10 +99,10 @@ export function OpeningHandOdds({
 }): JSX.Element {
   const { mode, want, hand } = odds;
 
-  const sized = useMemo(() => sizedCards(cards), [cards]);
+  const library = useMemo(() => libraryCards(cards), [cards]);
   /** The population — **copies, not rows**, which is the only reading the hypergeometric
    *  arithmetic in `openingHand.ts` is true under. */
-  const deck = useMemo(() => sized.reduce((n, card) => n + card.quantity, 0), [sized]);
+  const deck = useMemo(() => library.reduce((n, card) => n + card.quantity, 0), [library]);
 
   const rows = useMemo(
     () =>
@@ -112,10 +112,10 @@ export function OpeningHandOdds({
       // scanning down it meets the biggest number first. `compareLabels` breaks the tie for the
       // reason every option list in the app uses it: a pinned collation, so two machines draw one
       // deck the same way round.
-      [...distribution(sized, by)].sort(
+      [...distribution(library, by)].sort(
         (a, b) => b.count - a.count || compareLabels(a.label, b.label),
       ),
-    [sized, by],
+    [library, by],
   );
 
   /**
