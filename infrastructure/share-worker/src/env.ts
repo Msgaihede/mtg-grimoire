@@ -85,6 +85,35 @@ export const MAX_SHARES_PER_GROUP = 20;
 export const MAX_BLOB_BYTES = 8 * 1024 * 1024;
 
 /**
+ * `shares/{id}/` — the folder every snapshot of one share is written under, spelled here because
+ * two files need it: `blob.ts` names one object inside it, and `handleRevoke` empties it.
+ */
+export function snapshotPrefix(id: string): string {
+  return `shares/${id}/`;
+}
+
+/**
+ * Delete every snapshot this share has ever left in R2, and not only the one its row points at.
+ *
+ * **The folder and not the key, because the key is not the whole truth.** An upload deletes the
+ * object it superseded only *after* its row has moved (`blob.ts` argues why that order cannot be
+ * turned round), so an R2 failure at that one step leaves an object nothing points at — never
+ * served, since the public route compares against the row, but plaintext in the bucket. Withdrawing
+ * is the press that says the binder is gone, so it is where those are reclaimed.
+ *
+ * One `list` page at a time, deleted as it is read: a page is at most 1,000 keys, which is also
+ * the most one `delete` takes. An empty folder costs the `list` and no `delete`.
+ */
+export async function deleteSnapshots(env: Env, id: string): Promise<void> {
+  let cursor: string | undefined;
+  do {
+    const page = await env.SHARES.list({ prefix: snapshotPrefix(id), cursor });
+    if (page.objects.length > 0) await env.SHARES.delete(page.objects.map((object) => object.key));
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor !== undefined);
+}
+
+/**
  * `infrastructure/relay/src/rotate.ts` and `infrastructure/relay/src/claim.ts` each carry these five lines and neither exports
  * them; this is the third copy, for the reason `rotate.ts:93-97` gives about the second. Reaching
  * across a directory boundary for a five-line helper would couple two Workers' deploys to make

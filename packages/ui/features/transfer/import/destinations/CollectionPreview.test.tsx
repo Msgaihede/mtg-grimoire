@@ -584,6 +584,27 @@ describe("CollectionPreview, over a file that names its binders", () => {
     expect(onDone).not.toHaveBeenCalled();
   });
 
+  /** Issue #1173: the retry finishes the file — no second copy of `Value Binder`'s cards, and no
+   *  second `Selvala` deck. */
+  it("imports each binder once across a refused press and a retry", async () => {
+    const user = userEvent.setup();
+    collectionImportCommit
+      .mockResolvedValueOnce(outcome({ added: 1 }))
+      .mockRejectedValueOnce("database is locked")
+      .mockResolvedValue(outcome({ added: 1 }));
+    const { onDone, report } = mount(MANABOX, { folders: [SELVALA_GROUP] });
+
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    await waitFor(() => expect(report).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("button", { name: "Import" }));
+
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(collectionFolderCreate).toHaveBeenCalledTimes(1);
+    expect(deckCreate).toHaveBeenCalledTimes(1);
+    expect(collectionImportCommit.mock.calls.map((call) => call[2])).toEqual([50, 40, 40]);
+    expect(onDone).toHaveBeenCalledWith("3 cards imported into 1 folder (1 new) and 1 new deck.");
+  });
+
   it("is the plain collection step again once unticked", async () => {
     const user = userEvent.setup();
     const { onDone } = mount(MANABOX, { folders: FOLDERS });

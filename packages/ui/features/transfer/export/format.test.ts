@@ -57,7 +57,7 @@ describe("formatExport", () => {
 
   it("writes a CSV with a header row", () => {
     expect(formatExport([BOLT], "csv", defaultFields("csv", "deck"))).toBe(
-      "Quantity,Name,Set,Collector number,Category,Finish\n2,Lightning Bolt,lea,161,Main deck,\n",
+      "Quantity,Name,Set,Collector number,Category,Finish,Category active\n2,Lightning Bolt,lea,161,Main deck,,yes\n",
     );
   });
 
@@ -207,7 +207,9 @@ describe("formatExport", () => {
         "csv",
         defaultFields("csv", "deck"),
       ),
-    ).toBe("Quantity,Name,Set,Collector number,Category,Finish\n1,Sol Ring,LTC,285,Ramp,\n");
+    ).toBe(
+      "Quantity,Name,Set,Collector number,Category,Finish,Category active\n1,Sol Ring,LTC,285,Ramp,,yes\n",
+    );
   });
 
   it("round-trips through this app's own importer", () => {
@@ -453,7 +455,7 @@ describe("what a reader could not get back before issue #555", () => {
         defaultFields("csv", "deck"),
       ),
     ).toBe(
-      'Quantity,Name,Set,Collector number,Category,Finish\n1,Sol Ring,LTC,285,"Ramp, Fixing {x} [y]",\n',
+      'Quantity,Name,Set,Collector number,Category,Finish,Category active\n1,Sol Ring,LTC,285,"Ramp, Fixing {x} [y]",,yes\n',
     );
   });
 
@@ -815,6 +817,19 @@ describe("fold discriminators", () => {
 
     expect(formatExport([main, side], "mtgo", defaultFields("mtgo", DECK))).toBe(
       "1 Lightning Bolt\nSB: 1 Lightning Bolt\n",
+    );
+  });
+
+  it("writes the commander as an MTGO SB: line, the zone MTGO's Commander decks keep it in (issue #1180)", () => {
+    const commander = card({
+      name: "Bruna, Light of Alabaster",
+      categoryName: "Commander",
+      categoryKind: "commander",
+    });
+    const main = card({ name: "Sol Ring" });
+
+    expect(formatExport([commander, main], "mtgo", defaultFields("mtgo", DECK))).toBe(
+      "SB: 1 Bruna, Light of Alabaster\n1 Sol Ring\n",
     );
   });
 

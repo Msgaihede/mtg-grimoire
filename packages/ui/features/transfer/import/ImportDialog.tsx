@@ -188,7 +188,7 @@ function ImportBody({
    * differently. What stays here is the drawing and the desktop's file handle.
    */
   const source = useImportSource();
-  const { text, readAs, parsed, step, resolve, resolved, toSource } = source;
+  const { text, readAs, parsed, resolve, previewed, toSource } = source;
   const { readFile } = useImport();
 
   // The caret starts in the box the reader has to fill, which is `CreateDeckDialog`'s rule and
@@ -220,7 +220,7 @@ function ImportBody({
     ? `Couldn't read a card list from a file — ${ipcError(readFile.error)}`
     : null;
 
-  if (step === "preview" && resolved !== null && destination !== undefined) {
+  if (previewed !== null && destination !== undefined) {
     return (
       <>
         {/* What reading a spreadsheet cost — the columns nothing read, a missing count column —
@@ -242,12 +242,12 @@ function ImportBody({
             "border-b border-border px-5 py-2.5 empty:hidden",
           )}
         >
-          <CsvNotes list={parsed} />
+          <CsvNotes list={previewed.list} />
         </div>
         <destination.Preview
-          list={parsed}
-          resolved={resolved.rows}
-          tags={resolved.tags}
+          list={previewed.list}
+          resolved={previewed.resolved.rows}
+          tags={previewed.resolved.tags}
           onDone={onDone}
           // The desktop's half of `report`: every import here is said as a toast once it lands
           // or is refused — the dialog closes on a landing, and a list filed into a deck, a
@@ -280,8 +280,9 @@ function ImportBody({
               // Both halves of the round trip — the picker being up and the file being
               // read, which are one command's wait now — because a second press does nothing
               // useful in either. The label does not change: an action keeps its name through
-              // the whole flow.
-              disabled={readFile.isPending}
+              // the whole flow. Shut while the list is read too: the press resolves the box as
+              // it is, and a file landing under it is a list nobody previewed (issue #1172).
+              disabled={readFile.isPending || resolve.isPending}
               className={cn(
                 "rounded-md border border-border px-2 py-0.5 text-[0.6875rem] text-dim",
                 "transition-colors duration-[var(--duration-fast)] ease-standard",
@@ -299,6 +300,9 @@ function ImportBody({
             ref={listRef}
             value={text}
             onChange={(e) => source.type(e.target.value)}
+            // Read-only, not disabled, while "Reading…": the caret and a selection stay, and
+            // the text the preview will show is the text on screen (issue #1172).
+            readOnly={resolve.isPending}
             rows={14}
             spellCheck={false}
             aria-describedby={readAs === "windows-1252" ? `${id}-encoding` : undefined}

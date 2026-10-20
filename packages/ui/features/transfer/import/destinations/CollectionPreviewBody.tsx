@@ -54,7 +54,7 @@ import type { ImportDefaults } from "../../prefs";
 import { CommitBar, useImportCommit } from "../shared/CommitBar";
 import { ModeRadios } from "../shared/ModeRadios";
 import { ImportProblems } from "../shared/Problems";
-import { BinderImportStopped, useImport } from "../useImport";
+import { BinderImportStopped, binderImportProgress, useImport } from "../useImport";
 import { BinderSort, binderDoneMessage } from "./BinderSort";
 import { hasBinders, planBinderImport } from "./binders";
 import { planCollectionImport, type CollectionPlan } from "./collection";
@@ -166,6 +166,13 @@ export function CollectionPreviewBody({
   const [byBinder, setByBinder] = useState(true);
   const sorting = binderPlan !== null && byBinder;
   const { importBinders } = useImport();
+  /**
+   * What this step's sorted presses have written (issue #1173): a press refused part-way leaves
+   * Import enabled, and the next press finishes the file from where it stopped rather than adding
+   * the groups that landed a second time — the binder path's twin of {@link made} below. Mutated
+   * by the write itself and never drawn, so it is state only for its lazy, once-per-step start.
+   */
+  const [binderProgress] = useState(binderImportProgress);
 
   /**
    * The reader's own drawers, top to bottom in the order the wall draws them, each labelled with
@@ -276,32 +283,35 @@ export function CollectionPreviewBody({
       // One toast for the whole press, however many binders it wrote: what landed on a success,
       // and on a refusal how far it got — a warning when some groups landed before it stopped,
       // since those copies are in the collection now, and a refusal when none did.
-      importBinders.mutate(binderPlan.groups, {
-        onSuccess: (result) => {
-          report?.({
-            title: `Imported ${cards(result.copies)} into your collection`,
-            body: binderDoneMessage(result),
-            tone: "success",
-          });
-          onDone(binderDoneMessage(result));
+      importBinders.mutate(
+        { groups: binderPlan.groups, progress: binderProgress },
+        {
+          onSuccess: (result) => {
+            report?.({
+              title: `Imported ${cards(result.copies)} into your collection`,
+              body: binderDoneMessage(result),
+              tone: "success",
+            });
+            onDone(binderDoneMessage(result));
+          },
+          onError: (e) => {
+            const stopped = e instanceof BinderImportStopped ? e : null;
+            report?.(
+              stopped !== null && stopped.copies > 0
+                ? {
+                    title: `Imported ${count(stopped.copies)} of ${cards(stopped.total)} into your collection`,
+                    body: stopped.message,
+                    tone: "warning",
+                  }
+                : {
+                    title: "Couldn't import into your collection",
+                    body: ipcError(e),
+                    tone: "error",
+                  },
+            );
+          },
         },
-        onError: (e) => {
-          const stopped = e instanceof BinderImportStopped ? e : null;
-          report?.(
-            stopped !== null && stopped.copies > 0
-              ? {
-                  title: `Imported ${count(stopped.copies)} of ${cards(stopped.total)} into your collection`,
-                  body: stopped.message,
-                  tone: "warning",
-                }
-              : {
-                  title: "Couldn't import into your collection",
-                  body: ipcError(e),
-                  tone: "error",
-                },
-          );
-        },
-      });
+      );
       return;
     }
     commit.mutate(undefined, {

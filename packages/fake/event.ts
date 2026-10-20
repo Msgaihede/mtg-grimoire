@@ -22,7 +22,7 @@
  * `scanner:assets` (`ScannerAssetsProgress`, subscribed by `useScannerAssets` while the scanner's
  * files are owed or on their way — **a twelfth, and one that grep cannot count**: the core emits
  * it through the state's event sink, `scanner_assets::PROGRESS_EVENT`, and no `app.emit` names
- * it; here `scannerAssetHandlers`' fetch is what says it),
+ * it; here `scannerAssetHandlers`' fetch is what says it, through {@link worldEmitter}),
  * `startup:changed` (`StartupStatus`, reached through `ipc.onStartupChanged` by `DesktopBoot`,
  * which gates the whole app on it) and
  * `db:changed` (`DbChanged`, subscribed once by `useCrossWindowRefresh`). **That last one is
@@ -45,8 +45,8 @@
  * whichever world is being mounted, and the map goes when that story unmounts, so nothing
  * has to be swept.
  */
-import { activeScope, listeningScopes } from "./scope";
-import type { FakeListener } from "./scope";
+import { activeScope, listeningScopes, standing } from "./scope";
+import type { FakeListener, FakeScope } from "./scope";
 
 export async function listen<T>(
   event: string,
@@ -70,11 +70,44 @@ export async function listen<T>(
  * exactly one world is ever mounted, so this is one story's event either way. A docs page
  * does not run `play` functions unless `parameters.docs.story.autoplay` says to, which
  * nothing here does.
+ *
+ * **This is the `play` function's emit, not a handler's.** A command handler does hold a world —
+ * the one its call is answering as — and says its events through {@link worldEmitter}.
  */
 export function emitFake<T>(event: string, payload: T): void {
-  for (const scope of listeningScopes()) {
-    for (const cb of scope.listeners.get(event) ?? []) cb({ payload });
-  }
+  for (const scope of listeningScopes()) deliver(scope, event, payload);
+}
+
+/**
+ * The emit of the world this call is answering as, **read now and kept** — what a command
+ * handler in `db.ts` says its events with, where a `play` uses {@link emitFake}.
+ *
+ * A handler is the one emitter that knows its world: `core.ts`' `invoke` points the fake at the
+ * caller's world before it calls one, so the active scope at the top of a handler *is* that
+ * world. Read later it is not — `scanner_assets_fetch` awaits between its stretches, and by the
+ * time it says `done` the pointer may name another story on the page, or the next test's. So the
+ * scope is captured once, before the first `await`, as `invoke` captures its own, and its events
+ * go to that world's listeners and no other's: a press on one story of a docs page is not a bar
+ * moving on its neighbours, and a fetch a finished test left running is not heard by the next
+ * test's `useScannerAssets` (issue #1191).
+ *
+ * **And to nobody once that world has gone with another standing** — `scope.ts`' `standing`,
+ * the same rule `invoke` re-points by. A world's subscribers leave with its components as a
+ * rule, but a test that subscribed by hand and never unsubscribed would otherwise go on hearing
+ * a world that is over.
+ *
+ * A synchronous handler would emit to the right world either way; it takes its emitter the same
+ * way so that one rule covers every handler, and a handler that grows an `await` cannot regress.
+ */
+export function worldEmitter(): <T>(event: string, payload: T) => void {
+  const scope = activeScope();
+  return (event, payload) => {
+    if (standing(scope)) deliver(scope, event, payload);
+  };
+}
+
+function deliver<T>(scope: FakeScope, event: string, payload: T): void {
+  for (const cb of scope.listeners.get(event) ?? []) cb({ payload });
 }
 
 /** Drop the active world's subscribers. Nothing in the decorator calls it — a world's map

@@ -7070,6 +7070,413 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
       ).toBe(false);
     }
   });
+
+  /**
+   * **The walk's other half: every closed union in `ipc.ts` is held to the Rust that spells its
+   * words** (issue #1185).
+   *
+   * The interface walk reads field names, and a union is never one of those. `ErrorKind`,
+   * `CollectionSortKey`, `TokenMode` and some sixty more are closed lists of words, most of them
+   * behind a total `Record<Union, string>` label map or a `switch` — so a variant Rust adds is a
+   * label that renders `undefined`, and a word this side keeps after Rust dropped it is a menu
+   * row the backend refuses, while every suite stays green. A few had a test of their own
+   * (`SyncPhase`, the trade words, `StartupStatus`); most had none, and "is this checked?" was
+   * the question the interface walk was written to stop asking.
+   *
+   * So this walks them the same way. It reads every `export type X = …` that is **a union of
+   * string literals** (`"a" | "b"`) or **a tagged union of object literals** (`{ kind: "a"; … }
+   * | …`, a member named by another exported alias followed — `FolderRule`'s `FolderRuleGroup`),
+   * and compares its words with the words Rust puts on the wire. Where Rust keeps them is
+   * {@link unionHomes}' entry, or by default a `pub enum` of the union's own name:
+   *
+   * * `enum` — a serde enum's variants, spelled by its `rename_all` and each variant's `rename`,
+   *   less any `skip`. A string union needs an untagged enum, and a tagged union an enum whose
+   *   `tag = "…"` is the field this side discriminates on.
+   * * `consts` — `const`s of one file: a `&str`, or an array of `&str`s, of tuples (their first
+   *   word: `REVIEWABLE`'s pairs) or of rows (their `key`: the sort tables). Another `const` of
+   *   the same file named in one is followed (`managed_wishlist::MODES`' `OFF`).
+   * * `fn` — `Type::name` or a free `name`: the words its body matches on (`"a" =>`), returns
+   *   from an arm (`=> "a"`) or compares with (`== "a"`). A `format!` sentence is none of those,
+   *   so the words a refusal *mentions* are never read as words it accepts.
+   *
+   * A union with no home fails by name, unless it is on {@link looseUnions} with the reason
+   * there is no closed list to hold it to — and every reason there is a forgiving reader
+   * (`Window::parse` takes anything but `30d` and `all` as a week) or a word written inline in
+   * SQL, which a reader can grep.
+   *
+   * **Sets, not orders** — the condition scale's bargain below: a dropdown's order is this side's
+   * to choose. And **equality, not containment**: a word only one side knows is a drift whichever
+   * side it is on. Unions of other types (`Game | "any"`, `Finish | "detect"`) are not read: what
+   * they add to a walked union is this side's own.
+   */
+  describe("the string unions, against the words Rust spells", () => {
+    /** Where a union's words live in Rust, when it is not a `pub enum` of the union's name. */
+    type UnionHome =
+      { enum: string; in?: string } | { consts: string[]; in: string } | { fn: string; in: string };
+
+    /**
+     * TypeScript union → its Rust words, where the default (a serde `pub enum` of the same name)
+     * is not it. `in` is a path fragment, for `renamed`'s reason: a short name gets one even
+     * while it is unique, so a namesake added anywhere fails here and not in somebody else's
+     * change.
+     */
+    const unionHomes: Record<string, UnionHome> = {
+      // `errors.rs`' two closed lists, CHECK-constrained in SQL and keyed by hand: no serde.
+      ErrorSource: { fn: "Source::key", in: "grimoire-core/src/errors.rs" },
+      ErrorKind: { fn: "Kind::key", in: "grimoire-core/src/errors.rs" },
+      FeedPhase: { consts: ["FEED_PHASES"], in: "grimoire-core/src/marketplace_feed.rs" },
+      // The sort tables: a column's `key`, and the priced sorts' beside it.
+      SearchSortKey: {
+        consts: ["SEARCH_SORTS", "SEARCH_PRICE_SORT"],
+        in: "grimoire-core/src/search.rs",
+      },
+      CollectionSortKey: {
+        consts: ["COLLECTION_SORTS", "COLLECTION_PRICE_SORTS"],
+        in: "grimoire-core/src/collection.rs",
+      },
+      WishlistSortKey: {
+        consts: ["WISHLIST_SORTS", "WISHLIST_PRICE_SORTS"],
+        in: "grimoire-core/src/wishlist.rs",
+      },
+      TransferImportMode: { fn: "valid_mode", in: "grimoire-core/src/collection.rs" },
+      ShelfFoldPage: { consts: ["PAGES"], in: "grimoire-core/src/shelffolds.rs" },
+      FolderRuleOp: { enum: "GroupOp", in: "grimoire-core/src/folder_rules.rs" },
+      ComboBracketTag: { consts: ["BRACKET_TAGS"], in: "grimoire-core/src/combos.rs" },
+      ComboPhase: { consts: ["PHASES"], in: "grimoire-core/src/combos.rs" },
+      CategoryKind: { consts: ["CATEGORY_KINDS"], in: "grimoire-core/src/schema.rs" },
+      DeckVariant: { consts: ["DECK_VARIANTS"], in: "grimoire-core/src/schema.rs" },
+      DeckAuditKind: { consts: ["AUDIT_KINDS"], in: "grimoire-core/src/schema.rs" },
+      ManagedWishlistMode: { consts: ["MODES"], in: "grimoire-core/src/managed_wishlist.rs" },
+      TokenMode: { consts: ["TOKEN_MODES"], in: "grimoire-core/src/deck.rs" },
+      // The second word survives in the column's CHECK and on the sync wire — see the union.
+      DeckCoverKind: {
+        consts: ["COVER_CARD_ART", "COVER_CUSTOM"],
+        in: "grimoire-core/src/deck.rs",
+      },
+      Game: { consts: ["GAMES"], in: "grimoire-core/src/schema.rs" },
+      DeckTokenState: { consts: ["TOKEN_STATES"], in: "grimoire-core/src/deck_tokens.rs" },
+      ValueSplit: { fn: "Split::parse", in: "grimoire-core/src/value_history.rs" },
+      PlaytestDifficulty: { enum: "Difficulty", in: "grimoire-play/src/playtest/view.rs" },
+      ScanBatchStatus: { consts: ["STATUSES"], in: "grimoire-core/src/scan_history.rs" },
+      // The scanner's, which this side prefixes for the reason `renamed` gives for pairing's.
+      ScannerMethod: { enum: "Method", in: "card-scanner/src/session.rs" },
+      ScannerRule: { enum: "CommitRule", in: "card-scanner/src/track.rs" },
+      ScannerAssetSource: { enum: "AssetSource", in: "grimoire-core/src/scanner.rs" },
+      ScannerAssetsPhase: {
+        consts: ["PHASE_DOWNLOADING", "PHASE_CHECKING", "PHASE_DONE", "PHASE_ERROR"],
+        in: "grimoire-core/src/scanner_assets.rs",
+      },
+      ScannerLockPhase: { enum: "Phase", in: "card-scanner/src/lock.rs" },
+      ScannerMarkReading: { enum: "MarkReading", in: "card-scanner/src/ocr.rs" },
+      ScannerOutcome: { enum: "Outcome", in: "card-scanner/src/resolve.rs" },
+      SyncPhase: { consts: ["PHASES"], in: "grimoire-core/src/sync.rs" },
+      ReviewTable: { consts: ["REVIEWABLE"], in: "sync_engine/commands.rs" },
+      // The table's three, which this side names for the game rather than the view.
+      GameLane: { enum: "Lane", in: "grimoire-play/src/view.rs" },
+      GamePlace: { enum: "Place", in: "grimoire-play/src/view.rs" },
+      GameSeat: { enum: "Seat", in: "grimoire-play/src/view.rs" },
+      TagPhase: { consts: ["PHASES"], in: "grimoire-core/src/tags/mod.rs" },
+      TradeSide: { consts: ["SIDES"], in: "grimoire-core/src/trade.rs" },
+      TradeStatus: { consts: ["STATUSES"], in: "grimoire-core/src/trade.rs" },
+      TradeSource: { consts: ["SOURCES"], in: "grimoire-core/src/trade.rs" },
+      ImportMode: { consts: ["IMPORT_MODES"], in: "grimoire-core/src/import.rs" },
+      // The light app's host keeps a `StartupStatus` of its own; this mirrors the desktop's.
+      StartupStatus: { enum: "StartupStatus", in: "desktop/src-tauri/src/startup.rs" },
+    };
+
+    /**
+     * TypeScript union → why there is no closed Rust list to hold it to, in one line a reader can
+     * check. A forgiving reader is the usual reason: it names the words it acts on and takes
+     * anything else as its default, so the default's own word is spelled nowhere.
+     */
+    const looseUnions: Record<string, string> = {
+      CategoryOrigin:
+        "never sent and never checked: `deck_meta.rs` writes `'user'` and `'auto'` inline in its INSERTs",
+      PriceMoverWindow:
+        "`price_history::Window::parse` reads `30d` and `all` and takes anything else as a week",
+      PriceMoverDirection:
+        "`price_history::Direction::parse` reads `up` and `down` and takes anything else as `both`",
+      DeckCompletionCompare:
+        "`deck_completion::Compare::from_opt` reads `theory` and takes anything else as `collection`",
+      ArtWeightFloor:
+        "`filters.rs` names `ART_WEIGHT_FLOOR_STRONG` alone; `any` is anything else, absent included",
+      TagNamespace:
+        "`tags::query` writes the two words inline, and `namespaces_for` also takes `both`, an input",
+      ScannerTrayLayout:
+        "`ScannerPrefs.tray_layout` is a `String` stored as written; the crate names only `grid`",
+    };
+
+    /**
+     * `text` cut at each `sep` outside every bracket, string and comment — the one scanner both
+     * languages are read with here. `first` stops at the first cut, which is how a declaration's
+     * end is found: an enum's `}`, a const's `;`, a type alias's `;`.
+     */
+    const splitTop = (text: string, sep: string, first = false): string[] => {
+      const parts: string[] = [];
+      let depth = 0;
+      let from = 0;
+      for (let i = 0; i < text.length; i++) {
+        const c = text[i];
+        if (c === '"') {
+          while (++i < text.length && text[i] !== '"') if (text[i] === "\\") i++;
+        } else if (c === "/" && text[i + 1] === "/") {
+          i = text.indexOf("\n", i);
+          if (i < 0) break;
+        } else if (c === "/" && text[i + 1] === "*") {
+          i = text.indexOf("*/", i) + 1;
+          if (i < 1) break;
+        } else if (depth === 0 && c === sep) {
+          parts.push(text.slice(from, i));
+          if (first) return parts;
+          from = i + 1;
+        } else if ("([{".includes(c)) depth++;
+        else if (")]}".includes(c)) depth--;
+      }
+      parts.push(text.slice(from));
+      return parts;
+    };
+
+    const uncomment = (text: string) =>
+      text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\s)\/\/.*$/gm, "$1");
+
+    /** The text of `export type <name> = …;`, comments stripped, or `undefined`. */
+    const tsAliasBody = (name: string): string | undefined => {
+      const at = new RegExp(`^export type ${name}\\s*=`, "m").exec(ipcSource);
+      if (!at) return undefined;
+      return uncomment(splitTop(ipcSource.slice(at.index + at[0].length), ";", true)[0]).trim();
+    };
+
+    /**
+     * A union's words, and the field it is tagged on when its members are objects — or
+     * `undefined` for an alias that is not a closed union of either kind.
+     */
+    const tsUnion = (name: string): { tag?: string; words: string[] } | undefined => {
+      const body = tsAliasBody(name);
+      if (body === undefined) return undefined;
+      const members = splitTop(body, "|")
+        .map((m) => m.trim())
+        .filter((m) => m !== "");
+      if (members.length < 2) return undefined;
+      if (members.every((m) => /^"[^"]*"$/.test(m))) {
+        return { words: members.map((m) => m.slice(1, -1)) };
+      }
+      // A tagged member is an object literal whose first property is a string literal, or an
+      // exported alias of one — followed once, which is all `FolderRuleGroup` needs.
+      const tagged = members.map((m) => {
+        const object = /^[A-Z]\w*$/.test(m) ? tsAliasBody(m) : m;
+        return /^\{\s*(\w+)\s*:\s*"([^"]*)"/.exec(object ?? "");
+      });
+      if (tagged.some((t) => t === null)) return undefined;
+      const tags = new Set(tagged.map((t) => t![1]));
+      if (tags.size !== 1) return undefined;
+      return { tag: [...tags][0], words: tagged.map((t) => t![2]) };
+    };
+
+    /** Every source that declares `enum <name> {`, narrowed by `in`. */
+    const enumHomes = (name: string, within?: string): string[] =>
+      Object.keys(RUST_SOURCES).filter(
+        (path) =>
+          new RegExp(`^\\s*(?:pub(?:\\([^)]*\\))?\\s+)?enum ${name}\\s*\\{`, "m").test(
+            RUST_SOURCES[path],
+          ) &&
+          (within === undefined || path.includes(within)),
+      );
+
+    /** serde's spelling of a variant under the enum's `rename_all`. */
+    const spell = (variant: string, renameAll: string | undefined, where: string): string => {
+      switch (renameAll) {
+        case undefined:
+          return variant;
+        case "camelCase":
+          return variant[0].toLowerCase() + variant.slice(1);
+        case "lowercase":
+          return variant.toLowerCase();
+        case "snake_case":
+          return variant.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
+        default:
+          throw new Error(
+            `${where} is \`rename_all = "${renameAll}"\`, which this walk does not spell`,
+          );
+      }
+    };
+
+    /** The words a serde enum puts on the wire, and the field it is tagged on, if any. */
+    const enumWords = (path: string, name: string): { tag?: string; words: string[] } => {
+      const src = RUST_SOURCES[path];
+      const at = new RegExp(`^\\s*(?:pub(?:\\([^)]*\\))?\\s+)?enum ${name}\\s*\\{`, "m").exec(src)!;
+      // The enum's own attributes: the run of lines above it back to the end of whatever came
+      // before — `rustWireKeys`' rule, which a `#[serde(` split over lines is inside of too.
+      const above = srcLines(src.slice(0, at.index));
+      let from = above.length - 1;
+      while (from > 0 && above[from - 1].trim() !== "" && !/[;}]\s*$/.test(above[from - 1])) from--;
+      const attrs = above.slice(from).join("\n");
+      expect(
+        attrs,
+        `\`${name}\` (${path}) derives no serde: give its union a \`fn\` or \`consts\` home`,
+      ).toMatch(/\b(?:Serialize|Deserialize)\b/);
+      const renameAll = /\brename_all\s*=\s*"([^"]+)"/.exec(attrs)?.[1];
+      const tag = /\btag\s*=\s*"([^"]+)"/.exec(attrs)?.[1];
+      const body = splitTop(src.slice(at.index + at[0].length), "}", true)[0];
+      const words = splitTop(body, ",").flatMap((variant) => {
+        const text = uncomment(variant);
+        const serde = [...text.matchAll(/#\[serde\(([^\]]*)\)\]/g)].map((m) => m[1]).join(" ");
+        const ident = /^\s*([A-Z]\w*)/.exec(text.replace(/#\[[^\]]*\]/g, ""))?.[1];
+        if (ident === undefined || /\bskip\b/.test(serde)) return [];
+        const rename = /\brename\s*=\s*"([^"]+)"/.exec(serde)?.[1];
+        return [rename ?? spell(ident, renameAll, `\`${name}\` (${path})`)];
+      });
+      return { tag, words };
+    };
+
+    /** The words a `const` holds — see {@link unionHomes}' `consts`. */
+    const constWords = (src: string, name: string, where: string): string[] => {
+      const at = new RegExp(`\\bconst ${name}\\s*:[^=]*=`).exec(src);
+      expect(at, `\`const ${name}\` is not in ${where}`).not.toBeNull();
+      const value = splitTop(src.slice(at!.index + at![0].length), ";", true)[0].trim();
+      const word = (item: string): string[] => {
+        const text = uncomment(item).trim();
+        if (/^"[^"]*"$/.test(text)) return [text.slice(1, -1)];
+        if (/^[A-Z][A-Z0-9_]*$/.test(text)) return constWords(src, text, where);
+        // A pair is its first word; a row is its `key`.
+        const first = /^\(\s*"([^"]*)"/.exec(text)?.[1] ?? /\bkey\s*:\s*"([^"]*)"/.exec(text)?.[1];
+        expect(
+          first,
+          `\`${name}\` (${where}) holds \`${text}\`, which this walk cannot read`,
+        ).toBeDefined();
+        return [first!];
+      };
+      const list = /^&?\[([\s\S]*)\]$/.exec(value);
+      return list
+        ? splitTop(list[1], ",")
+            .filter((item) => uncomment(item).trim() !== "")
+            .flatMap(word)
+        : word(value);
+    };
+
+    /** The words a function matches on, returns from an arm, or compares with. */
+    const fnWords = (src: string, name: string, where: string): string[] => {
+      const [type, fn] = name.includes("::") ? name.split("::") : [undefined, name];
+      // A method is looked for in each `impl Type {` in turn, so a namesake on another type
+      // in the same file is never read for it.
+      const scopes =
+        type === undefined
+          ? [src]
+          : [...src.matchAll(new RegExp(`^impl ${type}\\s*\\{`, "gm"))].map(
+              (m) => splitTop(src.slice(m.index + m[0].length), "}", true)[0],
+            );
+      const scope = scopes.find((s) => new RegExp(`\\bfn ${fn}\\s*\\(`).test(s));
+      expect(scope, `\`fn ${name}\` is not in ${where}`).toBeDefined();
+      const sig = new RegExp(`\\bfn ${fn}\\s*\\(`).exec(scope!)!;
+      const open = scope!.indexOf("{", sig.index);
+      const body = uncomment(splitTop(scope!.slice(open + 1), "}", true)[0]);
+      return [...body.matchAll(/"([^"]*)"\s*(?:=>|\|)|=>\s*"([^"]*)"|==\s*"([^"]*)"/g)].map(
+        (m) => m[1] ?? m[2] ?? m[3],
+      );
+    };
+
+    const aliases = [...ipcSource.matchAll(/^export type ([A-Za-z0-9_]+)\s*=/gm)].map((m) => m[1]);
+    const unions = aliases.flatMap((ts) => {
+      const union = tsUnion(ts);
+      return union === undefined ? [] : [{ ts, ...union }];
+    });
+    const unionNames = new Set(unions.map((u) => u.ts));
+
+    /** What the walk decided about each union: a home it is checked against, or why not. */
+    const unionWalk = unions
+      .filter((u) => !(u.ts in looseUnions))
+      .map((u) => {
+        const home: UnionHome = unionHomes[u.ts] ?? { enum: u.ts };
+        const homes =
+          "enum" in home
+            ? enumHomes(home.enum, home.in)
+            : Object.keys(RUST_SOURCES).filter((p) => p.includes(home.in));
+        return { ...u, home, homes };
+      });
+
+    it("finds ipc.ts' closed unions, of both kinds", () => {
+      // A parser that read nothing would pass every row below vacuously.
+      expect(unions.length).toBeGreaterThan(50);
+      expect(unionNames).toContain("ErrorKind");
+      expect(unionNames).toContain("CollectionSortKey");
+      // Tagged, and with a member named by an alias.
+      expect(unions.find((u) => u.ts === "FolderRule")).toMatchObject({ tag: "kind" });
+      expect(unions.find((u) => u.ts === "FolderRule")?.words).toContain("group");
+      // Not closed unions: a type joined to a word, and an alias of one.
+      expect(unionNames).not.toContain("DeckGame");
+      expect(unionNames).not.toContain("OracleTagPhase");
+    });
+
+    it("holds every union to a Rust home, or names why it cannot", () => {
+      const loose = unionWalk.flatMap((w) =>
+        w.homes.length === 1
+          ? []
+          : "enum" in w.home
+            ? [
+                `${w.ts}: \`enum ${w.home.enum}\` is declared ` +
+                  (w.homes.length === 0
+                    ? (w.home.in === undefined
+                        ? "nowhere in the workspace"
+                        : `nowhere under \`${w.home.in}\``) +
+                      " — give it a `unionHomes` entry naming where its words are, or put it on " +
+                      "`looseUnions` with the reason there is no closed list"
+                    : `in ${w.homes.join(", ")} — give its \`unionHomes\` entry an \`in\``),
+              ]
+            : [`${w.ts}: \`in: "${w.home.in}"\` matches ${w.homes.length} sources, not one`],
+      );
+      expect(loose).toEqual([]);
+    });
+
+    /** A home in a row's title, the way `walked` names a struct and its file. */
+    const homeLabel = (home: UnionHome): string =>
+      "enum" in home
+        ? `enum ${home.enum}`
+        : "consts" in home
+          ? home.consts.join(" + ")
+          : `fn ${home.fn}`;
+    const unionRows = unionWalk.flatMap((w) =>
+      w.homes.length === 1 ? [[w.ts, homeLabel(w.home), w.homes[0]] as const] : [],
+    );
+    const unionAt = new Map(unionWalk.map((w) => [w.ts, w]));
+
+    it.each(unionRows)("the %s union agrees with %s, word for word (%s)", (ts, _label, path) => {
+      const { home, tag, words } = unionAt.get(ts)!;
+      const src = RUST_SOURCES[path];
+      const rust: { tag?: string; words: string[] } =
+        "enum" in home
+          ? enumWords(path, home.enum)
+          : "consts" in home
+            ? { words: home.consts.flatMap((c) => constWords(src, c, path)) }
+            : { words: fnWords(src, home.fn, path) };
+      // A tagged union is tagged on the same field, and a string union is not tagged at all —
+      // a tagged enum's unit variant is `{ "kind": "a" }` on the wire, never `"a"`.
+      expect(rust.tag, `the field \`${ts}\` is tagged on`).toBe(tag);
+      // The tables' guard: a pass has to mean "both found words", never "both found nothing".
+      expect(rust.words.length, `nothing read out of ${path}`).toBeGreaterThan(1);
+      expect(new Set(words).size, `\`${ts}\` names a word twice`).toBe(words.length);
+      expect([...words].sort()).toEqual([...new Set(rust.words)].sort());
+    });
+
+    /** `renamed` and `unmirrored`'s rot, for the same reason: an entry has to name a union. */
+    it("keeps no stale entry on either list, and no name on both", () => {
+      for (const name of Object.keys(unionHomes)) {
+        expect(
+          unionNames.has(name),
+          `\`unionHomes\` names \`${name}\`, which is no union of ipc.ts`,
+        ).toBe(true);
+        expect(
+          name in looseUnions,
+          `\`${name}\` is on both \`unionHomes\` and \`looseUnions\``,
+        ).toBe(false);
+      }
+      for (const [name, reason] of Object.entries(looseUnions)) {
+        expect(
+          unionNames.has(name),
+          `\`looseUnions\` names \`${name}\`, which is no union of ipc.ts`,
+        ).toBe(true);
+        expect(reason.length, `\`looseUnions.${name}\` gives no reason`).toBeGreaterThan(10);
+      }
+    });
+  });
 });
 
 /**

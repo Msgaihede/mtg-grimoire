@@ -1,4 +1,4 @@
-import { MAX_BLOB_BYTES, json, type Env } from "./env";
+import { MAX_BLOB_BYTES, json, snapshotPrefix, type Env } from "./env";
 import { UNAVAILABLE, WITHDRAWN } from "./page";
 import { LAPSED, publicShare, REVOKED } from "./shares";
 
@@ -38,7 +38,7 @@ const MAX_SWAPS = 5;
 
 /** `shares/{id}/{hash}.json.gz` — spelled once, because the public route rebuilds it to compare. */
 function objectKey(id: string, hash: string): string {
-  return `shares/${id}/${hash}.json.gz`;
+  return `${snapshotPrefix(id)}${hash}.json.gz`;
 }
 
 /**
@@ -230,7 +230,15 @@ export async function handleUpload(
   // an *unchanged* collection is content-addressed to the same key: a delete that skipped this
   // comparison would erase the object it had just written, leaving every link 404ing while the
   // row pointed confidently at it.
-  if (previous !== null && previous !== key) await env.SHARES.delete(previous);
+  //
+  // ⚠️ **A failed delete here is swallowed, and withdrawing is what reclaims it** (issue #1193).
+  // The publish has already happened — the row serves the new snapshot — so a 500 would tell the
+  // app it failed, and its retry is the same bytes, the same key, and no delete at all: the old
+  // object stayed behind either way. It is never served (the public route compares against the
+  // row), and `handleRevoke` empties the share's whole folder rather than deleting one key.
+  if (previous !== null && previous !== key) {
+    await env.SHARES.delete(previous).catch(() => undefined);
+  }
 
   return json({ hash });
 }

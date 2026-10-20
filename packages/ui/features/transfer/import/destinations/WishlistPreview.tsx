@@ -11,13 +11,14 @@ import { useMemo, useState, type JSX } from "react";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import type { DropdownOption } from "@/components/Dropdown/types";
 import { offerUndo } from "@/lib/bulkUndo";
-import { count } from "@/lib/counts";
+import { count, plural, verb } from "@/lib/counts";
 import { ipc, ipcError, type DeckFinish, type TransferImportMode } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 import type { DestinationPreviewProps, ImportDestination, ImportModeOption } from "../destination";
 import { CommitBar, useImportCommit } from "../shared/CommitBar";
 import { ModeRadios } from "../shared/ModeRadios";
 import { ImportProblems } from "../shared/Problems";
+import { ProblemList } from "./DeckPreviewBody";
 import { planWishlistImport, toWishlistImportItems } from "./wishlist";
 
 export const WISHLIST_MODES: readonly ImportModeOption[] = [
@@ -147,6 +148,16 @@ export function WishlistPreview({
           hintMisses={plan.hintMisses}
           parseIssues={plan.parseIssues}
         />
+
+        {/* The collection preview's own fold notice (issue #1176): a file that lands as fewer
+            wishes than it has lines says which lines joined which, and that their notes went
+            with them rather than being dropped. */}
+        {plan.folded.length > 0 && (
+          <ProblemList
+            caption={`${plural(plan.folded.length, "line")} duplicated an earlier wish and ${verb(plan.folded.length, "was", "were")} merged into it`}
+            lines={plan.folded.map((f) => `line ${f.lineNumber} → line ${f.into} · ${f.name}`)}
+          />
+        )}
       </div>
 
       <CommitBar

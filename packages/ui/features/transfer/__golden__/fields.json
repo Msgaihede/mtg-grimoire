@@ -8,6 +8,7 @@
       "collectorNumber",
       "category",
       "finish",
+      "categoryActive",
       "label",
       "labelColor",
       "lang",
@@ -217,6 +218,7 @@
       "collectorNumber",
       "category",
       "finish",
+      "categoryActive",
       "label",
       "labelColor",
       "lang",
@@ -425,7 +427,8 @@
       "setCode",
       "collectorNumber",
       "category",
-      "finish"
+      "finish",
+      "categoryActive"
     ],
     "csv.collection": [
       "quantity",

@@ -131,15 +131,6 @@ export interface TagToken {
   end: number;
 }
 
-/** What one query string says: the tags, and whatever is left for FTS. */
-export interface ParsedTagQuery {
-  /** The unrecognised words, rejoined with single spaces. This is what rides as
-   *  `SearchRequest.text`, so `dragon atag:dragon` searches the name *and* filters by the
-   *  motif. */
-  text: string;
-  tokens: TagToken[];
-}
-
 /** What one query string says, in full: the free text, the tags, and the typed predicates. */
 export interface ParsedQuery {
   /** The unrecognised words, rejoined with single spaces — `SearchRequest.text`. */
@@ -1565,20 +1556,6 @@ export function parseQuery(input: string): ParsedQuery {
     } else predicates.push({ ...read.predicate, start, end });
   }
   return { text: words.join(" "), tags, predicates };
-}
-
-/**
- * {@link parseQuery} with the predicates dropped — the shape this module answered before the
- * grammar widened.
- *
- * It exists so that a caller which has not yet been taught about predicates keeps compiling and
- * keeps working *for tags*. A predicate in the string is neither a token nor free text here, so
- * a box still on this function silently ignores one; every such caller is being repointed at
- * {@link parseQuery} in the same change, and this should have no readers left after it.
- */
-export function parseTagQuery(input: string): ParsedTagQuery {
-  const { text, tags } = parseQuery(input);
-  return { text, tokens: tags };
 }
 
 /**

@@ -73,15 +73,13 @@ beforeEach(() => {
 
 describe("useDangerZone", () => {
   /**
-   * The four roots, and three of them are joins rather than the table that was emptied. This is
+   * The five roots, and four of them are joins rather than the table that was emptied. This is
    * the assertion that would have caught the obvious version of this hook — the one that
    * invalidates `["collection"]` and leaves every search row still claiming an `ownedQuantity`.
    *
-   * **`["wishlist"]` is a fifth that used to be here and is now pinned as an absence**, which is
-   * the more interesting half: a wish counted the copies that already filled it, so a wipe moved
-   * a figure on every row of that page. It reads nothing out of `collection_entries` any more, so
-   * a collection clear leaves the wishlist saying exactly what it said before — and this
-   * assertion is what would go red if the root came back.
+   * **`["wishlist"]` is the one that went missing once** (issue #1179): a wish reports the copies
+   * the collection holds of it (`ownedExact`, `ownedOther`, `ownedPlaces`), so a wipe moves a
+   * figure on every row of that page, and this is what goes red if the root is dropped again.
    */
   it("marks every root a cleared collection can have made wrong", async () => {
     const { result } = renderHook(() => useDangerZone(), { wrapper });
@@ -89,25 +87,27 @@ describe("useDangerZone", () => {
     act(() => result.current.collection.run());
 
     await waitFor(() => expect(invalidate).toHaveBeenCalled());
-    expect(invalidatedRoots().sort()).toEqual(["card", "cards", "collection", "decks"]);
+    expect(invalidatedRoots().sort()).toEqual(["card", "cards", "collection", "decks", "wishlist"]);
   });
 
   /**
-   * **Two roots, and the second is what schema v25 added.** Every deck's group is a
+   * **Three roots, and the second is what schema v25 added.** Every deck's group is a
    * `collection_folders` row, so a wipe takes the whole set of them and files the copies they
    * were holding into `Recently removed` — the collection's folder tree, its summary and its
-   * list are all changed by that press. The **card** roots are still an absence worth pinning:
-   * a copy that changes folder is a copy the reader still owns, `CardSummary.ownedQuantity` is
-   * a sum over quantities, and no quantity moved — so the search wall cannot read differently
-   * afterwards, and neither can the wishlist, which reads no collection figure at all.
+   * list are all changed by that press. **The third is the managed wishlists'** (issue #1179):
+   * deleting a deck drops the wishlist folders it managed, with their wishes, and a Wishlist that
+   * kept drawing them would refuse every write to them. The **card** roots are still an absence
+   * worth pinning: a copy that changes folder is a copy the reader still owns,
+   * `CardSummary.ownedQuantity` is a sum over quantities, and no quantity moved — so the search
+   * wall cannot read differently afterwards.
    */
-  it("marks the decks and the collection when the decks are cleared", async () => {
+  it("marks the decks, the collection and the wishlist when the decks are cleared", async () => {
     const { result } = renderHook(() => useDangerZone(), { wrapper });
 
     act(() => result.current.decks.run());
 
     await waitFor(() => expect(invalidate).toHaveBeenCalled());
-    expect(invalidatedRoots().sort()).toEqual(["collection", "decks"]);
+    expect(invalidatedRoots().sort()).toEqual(["collection", "decks", "wishlist"]);
   });
 
   /** A toast, since the confirmation that asked has closed: the outcome sentence in the toast's

@@ -26,7 +26,10 @@ has the binding rules for that area (the index is in the root file).
   object — and `packages/ui/lib/ipc.test.ts` reads the Rust
   source text and fails on drift. **Every** `export interface` there is held to the Rust struct of
   its name (or the one its `renamed` entry names) field for field, or sits on `unmirrored` with
-  a one-line reason — a new interface on neither fails by name (issue #557). The light app's Android host (`apps/light/src-tauri`) and the web
+  a one-line reason — a new interface on neither fails by name (issue #557). **Every** closed
+  union there (`"a" | "b"`, or tagged objects `{ kind: "a"; … } | …`) is held the same way to
+  the words Rust spells — a serde enum of its name, or its `unionHomes` entry (an enum, `const`s,
+  or a `fn`'s match arms) — or sits on `looseUnions` with a reason (issue #1185). The light app's Android host (`apps/light/src-tauri`) and the web
   host (`crates/grimoire-web`) link the same core, so they answer the same mirror.
 - Where each folder sits, and where it was before 2026-10-08:
   [repository-layout.md](../reference/repository-layout.md).

@@ -362,6 +362,16 @@ function csvFinish(raw: string): DeckFinish {
   return null;
 }
 
+/**
+ * A `Category active` cell that says the pile is switched off — this app writes `no`, and the
+ * spellings a hand-edited sheet reaches for are read the same way. **Anything else, blank among
+ * it, is a pile that counts**, `csvFinish`'s rule for a word it does not know: a file that never
+ * had the column must import exactly as it did before the column existed.
+ */
+function csvInactive(raw: string): boolean {
+  return /^(?:no|n|false|0|inactive|off)$/.test(raw.trim().toLowerCase());
+}
+
 /** The ceiling on one row's count — the per-line reader's own, whose `qty` group is four digits.
  *  A CSV that could say more than a decklist can would be the one door a typo walks through. */
 const MAX_COPIES = 9999;
@@ -1002,7 +1012,10 @@ function parseCsvGrid(
       // vocabulary has never heard of lands here.
       categoryName: knownSection === null ? categoryCell : null,
       finish: csvFinish(cell("finish")),
-      excluded: false,
+      // **Read only beside a pile the row names** (issue #1174), the way `{noDeck}` only ever
+      // arrives inside a bracket: a `no` on a row with no `Category` cell says a pile is off
+      // without saying which, and the auto-sort's choice is not a pile the file switched off.
+      excluded: categoryCell !== null && csvInactive(cell("categoryActive")),
       // A CSV says a label in two columns where Archidekt says it in one group, because a cell
       // holds one value. Both are read — a column this app writes and cannot read back is a
       // round trip that loses something silently, which is what `decklists.test.ts`' fixed point
@@ -1152,12 +1165,20 @@ export function parseDecklist(text: string): ParsedList {
       continue;
     }
     if (inAbout) {
+      // The block holds `Name …` lines and nothing else, so only those are consumed: any other
+      // line ends it and is read below like every other line (issue #1177). Swallowing until a
+      // heading would silently drop `About` / `Name Burn` / `4 Lightning Bolt`'s whole main deck
+      // when the export has no `Deck` line — and nothing in this parser is ever dropped silently.
+      //
       // The first `Name` wins, so the answer does not depend on how much was pasted after it.
       // Arena writes exactly one; a second is malformed input, and last-wins would let a
       // second list appended to the first quietly rename the deck.
       const named = /^name\s+(.+)$/i.exec(trimmed);
-      if (named && suggestedName === null) suggestedName = named[1].trim();
-      continue;
+      if (named) {
+        if (suggestedName === null) suggestedName = named[1].trim();
+        continue;
+      }
+      inAbout = false;
     }
 
     // MTGO's `SB:` is a **one-line** override, not a heading. It travels on the line it marks

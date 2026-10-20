@@ -707,8 +707,8 @@ describe("ExportDialog", () => {
       expect(inactiveBox()).toBeChecked();
       await user.click(screen.getByRole("button", { name: /Copy/ }));
       expect(copy).toHaveBeenLastCalledWith(
-        "Quantity,Name,Set,Collector number,Category,Finish\n" +
-          "1,Sol Ring,ltc,285,Ramp,\n6,Forest,ltc,285,Cuts,\n",
+        "Quantity,Name,Set,Collector number,Category,Finish,Category active\n" +
+          "1,Sol Ring,ltc,285,Ramp,,yes\n6,Forest,ltc,285,Cuts,,no\n",
       );
     });
 
@@ -782,7 +782,7 @@ describe("ExportDialog", () => {
     await user.click(await screen.findByRole("radio", { name: "CSV" }));
     await user.click(screen.getByRole("button", { name: /Copy/ }));
     expect(copy).toHaveBeenCalledWith(
-      "Quantity,Name,Set,Collector number,Category,Finish\n2,Lightning Bolt,lea,161,Main deck,\n",
+      "Quantity,Name,Set,Collector number,Category,Finish,Category active\n2,Lightning Bolt,lea,161,Main deck,,yes\n",
     );
   });
 

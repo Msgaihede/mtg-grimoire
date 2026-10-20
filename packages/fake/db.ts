@@ -101,7 +101,7 @@
  */
 import { CARDS, type FakeCard } from "./cards";
 import type { CommandHandler } from "./core";
-import { emitFake } from "./event";
+import { worldEmitter } from "./event";
 import { qrMatrix } from "./qr";
 import {
   FAKE_FRAME_MS,
@@ -18804,14 +18804,14 @@ export function writeHandlers(db: FakeDb) {
      * leaves nothing moved**, the snapshot-and-restore stand-in for the transaction
      * {@link collection_import_commit} uses, and rejects with that refusal's own sentence.
      *
-     * One {@link EntryChange} per id, in the order sent and each id once ({@link distinctIds}),
-     * because after a merge the row a caller sent is not the row the copies are in — two rows of
-     * one grain moved into one binder answer the same survivor twice. An id that names nothing is
-     * {@link ENTRY_GONE}, the single command's answer, and rolls the press back with it: unlike a
-     * remove, a move of a row that is not there has nothing it could have meant. **The crate's
-     * twin was not yet written when this was**, so its refusals and its dedupe follow the brief,
-     * `collection_set_folder` and `collection::distinct_ids`' own doc, which names a move beside
-     * a removal — check them against `collection_folders.rs` once it lands.
+     * Each id is moved once ({@link distinctIds}), but the answer is **one {@link EntryChange}
+     * per id sent, in the order sent, a repeat answered like the first** — `set_entries_folder`'s
+     * `ids.iter().filter_map(landed.get)`. After a merge the row a caller sent is not the row the
+     * copies are in, so two rows of one grain moved into one binder answer the same survivor
+     * twice, and **each change's quantity is read back once the whole press is in**: the first of
+     * those two would otherwise report the survivor before the second folded into it. An id that
+     * names nothing is {@link ENTRY_GONE}, the single command's answer, and rolls the press back
+     * with it: unlike a remove, a move of a row that is not there has nothing it could have meant.
      */
     collection_set_folder_many: (args: {
       ids: readonly number[];
@@ -18819,15 +18819,25 @@ export function writeHandlers(db: FakeDb) {
     }): BulkMoveOutcome => {
       refuseIfBusy(db);
       const before = db.collectionEntries.map((e) => ({ ...e }));
-      const changes: EntryChange[] = [];
+      const landed = new Map<number, EntryChange>();
       try {
         for (const id of distinctIds(args.ids)) {
-          changes.push(setEntryFolder(db, id, args.folderId));
+          landed.set(id, setEntryFolder(db, id, args.folderId));
         }
       } catch (e) {
         db.collectionEntries = before.map((row) => ({ ...row }));
         throw e;
       }
+      // A later entry can fold into the row an earlier one landed on, so each change is read back
+      // once the whole press is in rather than trusted from the moment it was made.
+      for (const change of landed.values()) {
+        const now = db.collectionEntries.find((e) => e.id === change.id);
+        if (now) change.quantity = now.quantity;
+      }
+      const changes = args.ids.flatMap((id) => {
+        const change = landed.get(id);
+        return change ? [{ ...change }] : [];
+      });
       return { changes, undoId: collectionUndo(db, before) };
     },
 
@@ -23848,6 +23858,7 @@ export function writeHandlers(db: FakeDb) {
      * `fresh` while a story watches.
      */
     marketplace_feed_refresh: (args: { marketplace: string }): MarketplaceFeedStatus => {
+      const emit = worldEmitter();
       refuseIfBusy(db);
       const feed = FEED_MARKETPLACES.find((m) => m.id === args.marketplace);
       if (!feed) {
@@ -23862,7 +23873,7 @@ export function writeHandlers(db: FakeDb) {
       // right event name with the right payload. A story that wants to *watch* a fetch emits
       // `marketplace:progress` itself, which is also how it stands in for the refresh the
       // backend starts at app start with nobody having pressed anything.
-      emitFake("marketplace:progress", {
+      emit("marketplace:progress", {
         marketplace: feed.id,
         phase: "downloading",
         done: 0,
@@ -23883,7 +23894,7 @@ export function writeHandlers(db: FakeDb) {
             count: 1,
           },
         ];
-        emitFake("marketplace:progress", {
+        emit("marketplace:progress", {
           marketplace: feed.id,
           phase: "error",
           done: 0,
@@ -23901,7 +23912,7 @@ export function writeHandlers(db: FakeDb) {
       ];
       const meta = marketplaceFeedMeta(fresh, CLOCK_BASE).find((m) => m.marketplace === feed.id)!;
       db.marketplaceFeeds = [...db.marketplaceFeeds.filter((f) => f.marketplace !== feed.id), meta];
-      emitFake("marketplace:progress", {
+      emit("marketplace:progress", {
         marketplace: feed.id,
         phase: "done",
         done: meta.rowCount,
@@ -23942,10 +23953,11 @@ export function writeHandlers(db: FakeDb) {
      * `refresh_if_due` starts at launch with nobody having pressed anything.
      */
     oracle_tags_refresh: (args: { force: boolean }): OracleTagStatus => {
+      const emit = worldEmitter();
       if (!args.force && !isTaxonomyStale(db.oracleTagMeta?.checkedAt ?? null, CLOCK_BASE)) {
         return toTagStatus(db.oracleTagMeta);
       }
-      emitFake("oracle-tags:progress", { phase: "checking", done: 0, total: 0 });
+      emit("oracle-tags:progress", { phase: "checking", done: 0, total: 0 });
       if (db.fault === "oracleTagsFetchError") {
         // **The rows stay.** A failed fetch leaves the previous taxonomy exactly where it was —
         // stale categories beat none, and the type-line fallback is always available — so this
@@ -23965,14 +23977,14 @@ export function writeHandlers(db: FakeDb) {
             count: 1,
           },
         ];
-        emitFake("oracle-tags:progress", { phase: "error", done: 0, total: 0 });
+        emit("oracle-tags:progress", { phase: "error", done: 0, total: 0 });
         throw refuse(
           "The card tags could not be downloaded. Cards will be filed by type until the next " +
             "refresh.",
         );
       }
-      emitFake("oracle-tags:progress", { phase: "downloading", done: 0, total: ORACLE_TAG_BYTES });
-      emitFake("oracle-tags:progress", {
+      emit("oracle-tags:progress", { phase: "downloading", done: 0, total: ORACLE_TAG_BYTES });
+      emit("oracle-tags:progress", {
         phase: "downloading",
         done: ORACLE_TAG_BYTES,
         total: ORACLE_TAG_BYTES,
@@ -23981,7 +23993,7 @@ export function writeHandlers(db: FakeDb) {
       // and emits `("ingesting", 0, 0)` **once**. The ribbon draws an indeterminate bar for the
       // whole ingest because there is genuinely no number, and a fixture that invented one here
       // would be storying a bar the app cannot draw.
-      emitFake("oracle-tags:progress", { phase: "ingesting", done: 0, total: 0 });
+      emit("oracle-tags:progress", { phase: "ingesting", done: 0, total: 0 });
       // All four tables together, because one file writes all four and the swap is atomic: a
       // watermark with no taxonomy behind it is the state the backend goes out of its way never
       // to leave, since it is what makes the next check 304 past an empty database.
@@ -23989,7 +24001,7 @@ export function writeHandlers(db: FakeDb) {
       db.oracleTagTaxonomy = oracleTagRows();
       db.oracleTagParents = oracleTagEdges();
       db.oracleTagMeta = oracleTagMeta(CLOCK_BASE);
-      emitFake("oracle-tags:progress", { phase: "done", done: 0, total: 0 });
+      emit("oracle-tags:progress", { phase: "done", done: 0, total: 0 });
       return toTagStatus(db.oracleTagMeta);
     },
 
@@ -24009,10 +24021,11 @@ export function writeHandlers(db: FakeDb) {
      * nor the *oracle* refresh may ever wait on it.
      */
     art_tags_refresh: (args: { force: boolean }): TagStatus => {
+      const emit = worldEmitter();
       if (!args.force && !isTaxonomyStale(db.artTagMeta?.checkedAt ?? null, CLOCK_BASE)) {
         return toTagStatus(db.artTagMeta);
       }
-      emitFake("art-tags:progress", { phase: "checking", done: 0, total: 0 });
+      emit("art-tags:progress", { phase: "checking", done: 0, total: 0 });
       if (db.fault === "artTagsFetchError") {
         // **The rows stay.** A failed fetch leaves the previous taxonomy exactly where it was —
         // an art theme somebody is mid-deck on must not evaporate because a download timed out —
@@ -24032,24 +24045,24 @@ export function writeHandlers(db: FakeDb) {
             count: 1,
           },
         ];
-        emitFake("art-tags:progress", { phase: "error", done: 0, total: 0 });
+        emit("art-tags:progress", { phase: "error", done: 0, total: 0 });
         throw refuse(
           "The art tags could not be downloaded. The Tags page will show what it already had " +
             "until the next refresh.",
         );
       }
-      emitFake("art-tags:progress", { phase: "downloading", done: 0, total: ART_TAG_BYTES });
-      emitFake("art-tags:progress", {
+      emit("art-tags:progress", { phase: "downloading", done: 0, total: ART_TAG_BYTES });
+      emit("art-tags:progress", {
         phase: "downloading",
         done: ART_TAG_BYTES,
         total: ART_TAG_BYTES,
       });
-      emitFake("art-tags:progress", { phase: "ingesting", done: 0, total: 0 });
+      emit("art-tags:progress", { phase: "ingesting", done: 0, total: 0 });
       db.artTags = artTagIllustrations(db.cards);
       db.artTagTaxonomy = artTagRows();
       db.artTagParents = artTagEdges();
       db.artTagMeta = artTagMeta(CLOCK_BASE);
-      emitFake("art-tags:progress", { phase: "done", done: 0, total: 0 });
+      emit("art-tags:progress", { phase: "done", done: 0, total: 0 });
       return toTagStatus(db.artTagMeta);
     },
 
@@ -24084,10 +24097,11 @@ export function writeHandlers(db: FakeDb) {
      * story can drive in either direction.
      */
     combos_refresh: (args: { force: boolean }): ComboStatus => {
+      const emit = worldEmitter();
       if (!args.force && !isComboStale(db.comboMeta?.checkedAt ?? null, CLOCK_BASE)) {
         return toComboStatus(db);
       }
-      emitFake("combos:progress", { phase: "checking", done: 0, total: 0 });
+      emit("combos:progress", { phase: "checking", done: 0, total: 0 });
       if (db.fault === "combosFetchError") {
         // **The rows stay.** A failed fetch leaves the previous combos exactly where they were —
         // a bracket advisory drawn from week-old combo data beats one drawn from none — so this
@@ -24115,12 +24129,12 @@ export function writeHandlers(db: FakeDb) {
             count: 1,
           },
         ];
-        emitFake("combos:progress", { phase: "error", done: 0, total: 0 });
+        emit("combos:progress", { phase: "error", done: 0, total: 0 });
         // `ComboError::Http`'s own sentence, which is what the command hands back verbatim.
         throw refuse("could not reach Commander Spellbook: operation timed out");
       }
-      emitFake("combos:progress", { phase: "downloading", done: 0, total: COMBO_FEED_BYTES });
-      emitFake("combos:progress", {
+      emit("combos:progress", { phase: "downloading", done: 0, total: COMBO_FEED_BYTES });
+      emit("combos:progress", {
         phase: "downloading",
         done: COMBO_FEED_BYTES,
         total: COMBO_FEED_BYTES,
@@ -24130,14 +24144,14 @@ export function writeHandlers(db: FakeDb) {
       // blocking thread with no channel back. The panel draws an indeterminate bar for the whole
       // ingest because there is genuinely no number, and a fixture that invented one here would
       // be storying a bar the app cannot draw.
-      emitFake("combos:progress", { phase: "ingesting", done: 0, total: 0 });
+      emit("combos:progress", { phase: "ingesting", done: 0, total: 0 });
       // All three tables together, because one file writes all three and the swap is atomic: a
       // watermark with no combos behind it is the state the backend goes out of its way never to
       // leave, since it is what makes the next check 304 past an empty table.
       db.combos = comboRows(db.cards);
       db.comboCards = comboCardRows(db.cards);
       db.comboMeta = comboFeedMeta(CLOCK_BASE);
-      emitFake("combos:progress", { phase: "done", done: 0, total: 0 });
+      emit("combos:progress", { phase: "done", done: 0, total: 0 });
       return toComboStatus(db);
     },
 
@@ -24292,17 +24306,18 @@ export function writeHandlers(db: FakeDb) {
      * is an argument (`Settings/UpdatePanel`'s `Downloading`).
      */
     update_download: (): UpdateStatus => {
+      const emit = worldEmitter();
       const current = toUpdateStatus(db);
       const release = current.available;
       if (release === null) throw refuse(NO_UPDATE);
       if (current.asset === null) throw refuse(noDownloadFor(release.version));
       const size = current.asset.size;
-      emitFake("update:progress", { done: 0, total: size });
+      emit("update:progress", { done: 0, total: size });
       if (db.fault === "updateError") {
         const want = (current.asset.digest ?? "").replace(/^sha256:/, "");
         throw refuse(checksumFailed(want, WRONG_DIGEST));
       }
-      emitFake("update:progress", { done: size, total: size });
+      emit("update:progress", { done: size, total: size });
       db.update.staged = { version: release.version };
       return toUpdateStatus(db);
     },
@@ -27396,8 +27411,11 @@ export function scannerAssetHandlers(db: FakeDb) {
       const { owed: files, bytes: total } = owed();
       // Nothing owed is nothing fetched: no request, no event, and the same answer.
       if (files.length === 0) return owed();
+      // The world this press was made in, read before the first `await`: the pointer may name
+      // another story's world — or the next test's — by the time the download lands.
+      const emit = worldEmitter();
       const say = (progress: Omit<ScannerAssetsProgress, "total">) =>
-        emitFake<ScannerAssetsProgress>("scanner:assets", { ...progress, total });
+        emit<ScannerAssetsProgress>("scanner:assets", { ...progress, total });
       fetching = true;
       try {
         say({ phase: "downloading", file: files[0].key, done: 0, message: null });

@@ -25,7 +25,14 @@ import { SITE_DATA_WARNING } from "@grimoire/ui/lib/core/web/storage";
 import { useAppStore } from "@grimoire/ui/lib/store";
 import { SPECS } from "@grimoire/ui/features/decks/validation/fixtures";
 import { validateDeck } from "@grimoire/ui/features/decks/validation/engine";
-import type { CollectionPage, DeckDetail, DeckRow, EntryChange, SearchResponse } from "@grimoire/ui/lib/ipc";
+import type {
+  CollectionPage,
+  DeckDetail,
+  DeckRow,
+  EntryChange,
+  ScannerAssetsProgress,
+  SearchResponse,
+} from "@grimoire/ui/lib/ipc";
 
 /** The one row every isolation test edits: `starter`'s first collection entry, four copies of
  *  Lightning Bolt `2x2 117`. */
@@ -350,6 +357,61 @@ describe("two worlds at once", () => {
     // across to the second to do it.
     expect(heard).toEqual(["second"]);
     unmountSecond();
+  });
+
+  /**
+   * A handler is not a `play`: it holds a world, the one its call is answering as, and what it
+   * says is that world's to hear — a Refresh pressed on one story of a docs page is not a bar
+   * moving on its neighbour's.
+   */
+  it("gives a handler's event to the world that answered the call, not to every mounted one", async () => {
+    const heard: string[] = [];
+
+    const first = installWorld({ seed: "starter" });
+    const unmountFirst = first.mount();
+    await first.run(() => listen("oracle-tags:progress", () => heard.push("first")));
+
+    const second = installWorld({ seed: "starter" });
+    const unmountSecond = second.mount();
+    await second.run(() => listen("oracle-tags:progress", () => heard.push("second")));
+
+    await first.run(() => invoke("oracle_tags_refresh", { force: true }));
+    expect(new Set(heard)).toEqual(new Set(["first"]));
+    unmountFirst();
+    unmountSecond();
+  });
+
+  /**
+   * **Issue #1191.** `scanner_assets_fetch` awaits between its stretches, so a test that presses
+   * Download and ends mid-fetch leaves it talking into the next test. Its events are its own
+   * world's: the next world's `useScannerAssets` hears none of them, and the finished world —
+   * whose subscriber was never taken down here — hears nothing after it went.
+   */
+  it("keeps a download's events in its own world after that world has gone", async () => {
+    const finished = installWorld({ seed: "empty", fault: "scannerMissing" });
+    const unmountFinished = finished.mount();
+    const heardByFinished: string[] = [];
+    await finished.run(() =>
+      listen<ScannerAssetsProgress>("scanner:assets", (e) => heardByFinished.push(e.payload.phase)),
+    );
+    const fetching = finished.run(() => invoke("scanner_assets_fetch"));
+    expect(heardByFinished).toEqual(["downloading"]);
+    unmountFinished();
+
+    const next = installWorld({ seed: "empty", fault: "scannerMissing" });
+    const unmountNext = next.mount();
+    const heardByNext: string[] = [];
+    await next.run(() =>
+      listen<ScannerAssetsProgress>("scanner:assets", (e) => heardByNext.push(e.payload.phase)),
+    );
+
+    await fetching;
+    expect(heardByNext).toEqual([]);
+    expect(heardByFinished).toEqual(["downloading"]);
+    // The fetch ended the fault in its own world and left the next one owing its files.
+    expect(finished.db.fault).toBeNull();
+    expect(next.db.fault).toBe("scannerMissing");
+    unmountNext();
   });
 
   it("leaves the app store alone for a world that is sharing a page", () => {
