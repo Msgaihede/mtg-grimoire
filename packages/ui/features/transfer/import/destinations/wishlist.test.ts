@@ -57,6 +57,40 @@ describe("planWishlistImport", () => {
     );
     expect(plan.items).toHaveLength(1);
     expect(plan.items[0].quantity).toBe(3);
+    expect(plan.folded).toEqual([{ lineNumber: 2, into: 1, name: "Sol Ring" }]);
+  });
+
+  it("keeps a folded line's notes beside the first line's", () => {
+    // Issue #1176: the same printing wished in two folders exports as two rows; a re-import
+    // folds them into one wish, and the second row's note used to vanish with no word.
+    const plan = planWishlistImport(
+      listOf(
+        line({ extra: { notes: "for the cube" } }),
+        line({ lineNumber: 2, extra: { notes: " for Atraxa " } }),
+        line({ lineNumber: 3, extra: { notes: "for the cube" } }),
+        line({ lineNumber: 4 }),
+      ),
+      [hit(0, "c1"), hit(1, "c1"), hit(2, "c1"), hit(3, "c1")],
+      OPTIONS,
+    );
+    expect(plan.items).toHaveLength(1);
+    expect(plan.items[0].notes).toBe("for the cube; for Atraxa");
+    expect(plan.folded.map((f) => f.lineNumber)).toEqual([2, 3, 4]);
+  });
+
+  it("takes a later line's note when the first line had none", () => {
+    const plan = planWishlistImport(
+      listOf(line({ extra: { notes: "  " } }), line({ lineNumber: 2, extra: { notes: "later" } })),
+      [hit(0, "c1"), hit(1, "c1")],
+      OPTIONS,
+    );
+    expect(plan.items[0].notes).toBe("later");
+  });
+
+  it("sends no notes when no line said any", () => {
+    const plan = planWishlistImport(listOf(line()), [hit(0, "c1")], OPTIONS);
+    expect(plan.items[0].notes).toBeNull();
+    expect(plan.folded).toEqual([]);
   });
 
   it("pins the printing when the match's oracle id is null, even though the line named none", () => {
