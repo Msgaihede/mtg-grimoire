@@ -147,8 +147,9 @@ fn decode_body(name: &str, text: &str) -> Result<Vec<u8>, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        // Used from Rust only — the capability grants the page none of them (`Cargo.toml` says
-        // why). `fs` before `dialog`, which reads through it.
+        // `fs` and `dialog` are used from Rust only — the capability grants the page neither; the
+        // opener it grants as the desktop's exact pair (`Cargo.toml` says why). `fs` before
+        // `dialog`, which reads through it.
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
