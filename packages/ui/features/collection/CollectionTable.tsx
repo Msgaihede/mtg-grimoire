@@ -902,6 +902,9 @@ export const CollectionTable = memo(function CollectionTable({
         rows={tableRows}
         columns={columns}
         label="Your collection"
+        // The entry, so a quantity box being typed in never outlives the copy it was typed
+        // against — issue #1111, and `rowKey`'s own note.
+        rowKey={(row) => (isBand(row) ? bandKey(row.band) : row.id)}
         // The data rows matching the filters; `VirtualTable` adds the bands it has loaded.
         total={total}
         listKey={listKey}
