@@ -94,10 +94,15 @@ pub async fn prewarm_collection(
     state: tauri::State<'_, std::sync::Arc<crate::sync::AppState>>,
 ) -> Result<usize, String> {
     let state = state.inner().clone();
-    let keys = {
-        let conn = crate::sync::lock_db_read(&state);
-        prewarm_keys(&conn, MAX_PREWARM).map_err(|e| e.to_string())?
-    };
+    // On the blocking pool, like every other command's read: `db_read` is a mutex a long
+    // search holds, and this walk is the collection's size (issue #1150).
+    let reader = Arc::clone(&state);
+    let keys = tauri::async_runtime::spawn_blocking(move || {
+        let conn = crate::sync::lock_db_read(&reader);
+        prewarm_keys(&conn, MAX_PREWARM).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("could not read what to pre-warm: {e}"))??;
     let queued = keys.len();
     tauri::async_runtime::spawn(async move {
         warm(
