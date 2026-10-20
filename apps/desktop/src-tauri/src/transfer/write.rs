@@ -424,15 +424,15 @@ pub fn format_export(cards: &[Card], format: Format, fields: &[FieldId]) -> Stri
         // MTGO's own export omits the printing entirely — it resolves a name against whatever
         // copies a player owns rather than pinning one, so naming a set here would be a promise
         // this format was never in a position to keep. `SB:` is a one-line override rather than
-        // a heading, which is exactly how the importer reads it back.
+        // a heading, which is exactly how the importer reads it back. **The commander is `SB:`
+        // too** (issue #1180): MTGO has no command zone in a list, and a Commander deck there is
+        // the 99 with the commander in the sideboard — unprefixed, it is a 100th main-deck card.
         Format::Mtgo => rows
             .iter()
             .map(|card| {
-                let section = section_of(card);
-                let prefix = if section == Some("Sideboard") || section == Some("Companion") {
-                    "SB: "
-                } else {
-                    ""
+                let prefix = match section_of(card) {
+                    Some("Sideboard" | "Companion" | "Commander") => "SB: ",
+                    _ => "",
                 };
                 format!("{prefix}{}", line(card))
             })
@@ -835,6 +835,22 @@ mod tests {
             &[FieldId::Quantity, FieldId::Name],
         );
         assert_eq!(text, "SB: 1 Lightning Bolt\n");
+    }
+
+    #[test]
+    fn mtgo_puts_the_commander_in_the_sideboard() {
+        let commander = Card {
+            name: "Bruna, Light of Alabaster".into(),
+            category_name: Some("Commander".into()),
+            category_kind: Some("commander".into()),
+            ..side_bolt()
+        };
+        let text = format_export(
+            &[commander],
+            Format::Mtgo,
+            &[FieldId::Quantity, FieldId::Name],
+        );
+        assert_eq!(text, "SB: 1 Bruna, Light of Alabaster\n");
     }
 
     #[test]

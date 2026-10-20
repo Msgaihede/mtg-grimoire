@@ -31,8 +31,11 @@ measured in `format.test.ts` (`does not round-trip TCGplayer`) rather than left 
 carried the same write-only label through Tasks 1–9 — nothing in `parse.ts` read a comma-separated
 line — and stopped being true in Task 10; see "CSV, both directions" below.
 
-**Three decisions worth carrying past the table.** `mtgo` writes `SB: ` on a sideboard or companion
-card as a one-line override rather than a heading — the same shape its own reader expects. `arena`
+**Three decisions worth carrying past the table.** `mtgo` writes `SB: ` on a sideboard, companion
+or commander card as a one-line override rather than a heading — the same shape its own reader
+expects. The commander rides `SB:` because MTGO keeps a Commander deck's commander in the
+sideboard (issue #1180); read back, it lands in the sideboard and the command-zone choice is
+`automatic`/`ask`, exactly as it was when it came back as a main-deck line. `arena`
 and `mtgo` write only the piles a reader has switched *on* (`ACTIVE_ONLY` in `format.ts`); no other
 format drops a row, and `tcgplayer` is the one flat format that keeps a switched-off pile, because
 the cart is usually exactly what the reader still has to buy. `archidekt` is the only writer whose
