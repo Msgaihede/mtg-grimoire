@@ -910,7 +910,9 @@ a closure parameter never spells its type.
 second run changes nothing — a module whose file is gone from `apps/desktop/src-tauri/src` is skipped and
 each one-off step checks whether it has been done. `--dry` prints what would stay, move and widen
 without writing. The splitter rejoins every Rust file in both crates byte for byte, which
-`scripts/lib/rs-items.test.ts` holds on every run. Git records 51 renames.
+`scripts/lib/rs-items.test.ts` holds on every run. Git records 51 renames. The step scripts
+(`core-step-4`, `5b`, `5c`, `6b`, `7`) targeted the pre-2026-10-08 layout and were deleted on
+2026-10-20; git history keeps them.
 
 - **It was right about the cut on its first run and wrong about three smaller things**, each
   found by the compiler and fixed in the script rather than in its output: a constant used only

@@ -1,4 +1,4 @@
-// The splitter `scripts/core-step-4.ts` moves a module with, held to the one property that
+// The splitter the light app's core steps moved modules with, held to the one property that
 // makes moving a hundred thousand lines with it safe — its pieces rejoin to its input — and to
 // the handful of Rust spellings that would put a cut in the wrong place.
 import { describe, expect, it } from "vitest";
