@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -46,6 +46,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import { useAppStore } from "@/lib/store";
+import { useNotifications } from "@/lib/notifications";
 import { AUTO_CATEGORY } from "./autoCategory";
 import { CollectionSearchTab } from "./CollectionSearchTab";
 import { readDragData } from "./dnd";
@@ -1050,6 +1051,40 @@ describe("CollectionSearchTab", () => {
     await userEvent.click(await screen.findByRole("button", { name: /^Add Lightning Bolt/ }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("That row is gone");
+  });
+
+  /**
+   * Issue #1162: a tile's Add commits with nothing waiting on the move in flight, so two presses
+   * overlap — and `mutate`'s per-call callbacks belonged to the second press alone. Both moves are
+   * held open until both are made; the first is refused after the second lands, and each says so.
+   */
+  it("toasts every overlapping move, and the refusal of the earlier one", async () => {
+    const answers: { resolve: (v: unknown) => void; reject: (e: unknown) => void }[] = [];
+    collectionToDeck.mockImplementation(
+      () => new Promise((resolve, reject) => answers.push({ resolve, reject })),
+    );
+    tab();
+    const add = await screen.findByRole("button", { name: /^Add Lightning Bolt/ });
+
+    await userEvent.click(add);
+    await userEvent.click(add);
+    await waitFor(() => expect(answers).toHaveLength(2));
+
+    await act(async () => {
+      answers[1].resolve({ entryId: 9, fromDeck: null, deckCardId: 41, quantity: 1 });
+      answers[0].reject("That row is gone");
+    });
+
+    await waitFor(() => {
+      const notices = useNotifications.getState().notices;
+      expect(notices.map((n) => [n.tone, n.title])).toEqual(
+        expect.arrayContaining([
+          ["success", "Moved 1 copy of “Lightning Bolt” into the deck"],
+          ["error", "Couldn't move “Lightning Bolt” into the deck"],
+        ]),
+      );
+      expect(notices).toHaveLength(2);
+    });
   });
 
   /**
