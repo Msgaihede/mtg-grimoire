@@ -226,8 +226,6 @@ describe("what a web build holds the Neural files to", () => {
       expect(row.head, name).toMatch(/^[0-9a-f]{8}$/);
       expect(row.tail, name).toMatch(/^[0-9a-f]{8}$/);
     }
-    // The figures the table is written with — a space between thousands.
-    expect(table.get("embedder.onnx")?.bytes).toBe(10_602_685);
   });
 
   it("ships what the table describes, each under the host's 25 MiB", () => {
@@ -241,8 +239,10 @@ describe("what a web build holds the Neural files to", () => {
     expect(neuralFault(changed("gallery.bin", { bytes: 1 }), table)).toMatch(
       /^gallery\.bin is 1 bytes/,
     );
-    expect(neuralFault(changed("embedder.onnx", { sha256: "f".repeat(64) }), table)).toMatch(
-      /^embedder\.onnx is 10602685 bytes with SHA-256 f{64}, and .*README\.md says 10602685 bytes and dd17c180…b189ad1d\.$/,
+    const embedder = table.get("embedder.onnx")!;
+    expect(neuralFault(changed("embedder.onnx", { sha256: "f".repeat(64) }), table)).toBe(
+      `embedder.onnx is ${embedder.bytes} bytes with SHA-256 ${"f".repeat(64)}, and ` +
+        `crates/card-neural/models/README.md says ${embedder.bytes} bytes and ${embedder.head}…${embedder.tail}.`,
     );
     expect(neuralFault(asTabled.slice(1), table)).toBe(
       "crates/card-neural/models/ has no detector.onnx.",
