@@ -264,8 +264,9 @@ export interface BulkRemoveOutcome {
 
 /** What `Move to` over several entries did — one transaction (issue #555). */
 export interface BulkMoveOutcome {
-  /** One per id, in the order they were sent — each {@link EntryChange} says where that entry's
-   *  copies ended up, which after a merge is a different row's id. */
+  /** One per id sent, in the order they were sent, a repeated id answered again like its first —
+   *  each {@link EntryChange} says where that entry's copies ended up, which after a merge is a
+   *  different row's id, with that row's quantity once the whole press has landed. */
   changes: EntryChange[];
   /** See {@link ImportCommitOutcome.undoId}. */
   undoId: number | null;

@@ -18804,14 +18804,14 @@ export function writeHandlers(db: FakeDb) {
      * leaves nothing moved**, the snapshot-and-restore stand-in for the transaction
      * {@link collection_import_commit} uses, and rejects with that refusal's own sentence.
      *
-     * One {@link EntryChange} per id, in the order sent and each id once ({@link distinctIds}),
-     * because after a merge the row a caller sent is not the row the copies are in — two rows of
-     * one grain moved into one binder answer the same survivor twice. An id that names nothing is
-     * {@link ENTRY_GONE}, the single command's answer, and rolls the press back with it: unlike a
-     * remove, a move of a row that is not there has nothing it could have meant. **The crate's
-     * twin was not yet written when this was**, so its refusals and its dedupe follow the brief,
-     * `collection_set_folder` and `collection::distinct_ids`' own doc, which names a move beside
-     * a removal — check them against `collection_folders.rs` once it lands.
+     * Each id is moved once ({@link distinctIds}), but the answer is **one {@link EntryChange}
+     * per id sent, in the order sent, a repeat answered like the first** — `set_entries_folder`'s
+     * `ids.iter().filter_map(landed.get)`. After a merge the row a caller sent is not the row the
+     * copies are in, so two rows of one grain moved into one binder answer the same survivor
+     * twice, and **each change's quantity is read back once the whole press is in**: the first of
+     * those two would otherwise report the survivor before the second folded into it. An id that
+     * names nothing is {@link ENTRY_GONE}, the single command's answer, and rolls the press back
+     * with it: unlike a remove, a move of a row that is not there has nothing it could have meant.
      */
     collection_set_folder_many: (args: {
       ids: readonly number[];
@@ -18819,15 +18819,25 @@ export function writeHandlers(db: FakeDb) {
     }): BulkMoveOutcome => {
       refuseIfBusy(db);
       const before = db.collectionEntries.map((e) => ({ ...e }));
-      const changes: EntryChange[] = [];
+      const landed = new Map<number, EntryChange>();
       try {
         for (const id of distinctIds(args.ids)) {
-          changes.push(setEntryFolder(db, id, args.folderId));
+          landed.set(id, setEntryFolder(db, id, args.folderId));
         }
       } catch (e) {
         db.collectionEntries = before.map((row) => ({ ...row }));
         throw e;
       }
+      // A later entry can fold into the row an earlier one landed on, so each change is read back
+      // once the whole press is in rather than trusted from the moment it was made.
+      for (const change of landed.values()) {
+        const now = db.collectionEntries.find((e) => e.id === change.id);
+        if (now) change.quantity = now.quantity;
+      }
+      const changes = args.ids.flatMap((id) => {
+        const change = landed.get(id);
+        return change ? [{ ...change }] : [];
+      });
       return { changes, undoId: collectionUndo(db, before) };
     },
 

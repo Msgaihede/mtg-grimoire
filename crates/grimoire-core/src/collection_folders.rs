@@ -1051,9 +1051,10 @@ fn file_by_hand(
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BulkMoveOutcome {
-    /// One per id, **in the order they were sent** — each says where that entry's copies ended
-    /// up, which after a merge is a different row's id, with that row's quantity once the whole
-    /// press has landed.
+    /// One per id **sent**, in the order they were sent and a repeated id answered again like its
+    /// first — each says where that entry's copies ended up, which after a merge is a different
+    /// row's id, with that row's quantity once the whole press has landed. The entries themselves
+    /// are moved once each (`collection::distinct_ids`).
     pub changes: Vec<EntryChange>,
     /// See [`crate::collection::ImportCommitOutcome::undo_id`].
     pub undo_id: Option<u64>,
