@@ -36,6 +36,7 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
 - **Adding a new CI job**:
   - A new job gated on changes must be added to five places: `ci-route.ts`'s `JOBS`, the classify step's output check,
     `changes.outputs`, `ci-ok`'s `needs` array, and `ci-ok`'s success-or-skipped evaluation loop.
+- **Every job has a deadline**: `timeout-minutes` on each job, a few times its warm run (a job has six hours by default, and a hung one holds `ci-ok` that long). `scripts/ci-route.test.ts` fails on a job without one; `scripts/release-rule.test.ts` holds `release.yml`'s.
 - **Concurrency control**:
   - Pull request runs cancel in-progress runs when new commits arrive (`cancel-in-progress: true`).
   - Pushes to `main` use dedicated concurrency groups so history is never cancelled mid-route.

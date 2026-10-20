@@ -61,6 +61,8 @@ jobs:
   release-please:
     name: release-please
     runs-on: ubuntu-22.04
+    # Warm: under a minute. Every later push's changelog run waits in `release` behind it.
+    timeout-minutes: 15
     # Tags and releases, the release branch and its PR, and the labels it keeps on that PR.
     permissions:
       contents: write
@@ -110,6 +112,9 @@ jobs:
     needs: release-please
     if: needs.release-please.outputs.release_created == 'true'
     runs-on: ${{ matrix.os }}
+    # Warm: ~25 min on Linux. A hung leg would hold the `release` concurrency group for six
+    # hours, replacing every later push's changelog run while pending.
+    timeout-minutes: 90
     # Uploads to the draft: tauri-action's bundles, and the portable zip below.
     permissions:
       contents: write
@@ -1340,6 +1345,7 @@ jobs:
     needs: [release-please, build, android-sign, relay-deploy, share-deploy, scan-deploy, web-deploy, play-upload]
     if: needs.release-please.outputs.release_created == 'true'
     runs-on: ubuntu-22.04
+    timeout-minutes: 10
     # Flips the draft to published, and nothing else.
     permissions:
       contents: write

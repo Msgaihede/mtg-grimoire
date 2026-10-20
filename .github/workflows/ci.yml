@@ -38,6 +38,9 @@ jobs:
   changes:
     name: changes
     runs-on: ubuntu-22.04
+    # A job has six hours by default; a hung job here holds `ci-ok` that long. Each
+    # deadline below is a few times the job's warm run (2026-10-19).
+    timeout-minutes: 10
     outputs:
       frontend: ${{ steps.classify.outputs.frontend }}
       rust: ${{ steps.classify.outputs.rust }}
@@ -129,6 +132,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-22.04
+    # Warm: the slowest shard ~6 min.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -195,6 +200,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.storybook == 'true'
     runs-on: ubuntu-22.04
+    # Warm: ~1 min.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -217,6 +224,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ${{ matrix.os }}
+    # Warm: ~26 min on both legs; a cold Windows compile runs well past it.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -420,6 +429,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.core == 'true'
     runs-on: ubuntu-24.04
+    # Warm: ~4 min.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -533,6 +544,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.android == 'true'
     runs-on: ubuntu-24.04
+    # Warm: ~12 min; `release.yml`'s `android` has the same hour.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -653,6 +666,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-24.04
+    # Warm: ~6 min; three smoke steps hold 10 minutes each of their own.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -926,6 +941,7 @@ jobs:
     # is not portable, so a Linux leg would not be a cheaper version of this job — it
     # would be a different and failing one.
     runs-on: windows-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -944,6 +960,7 @@ jobs:
     if: always()
     needs: [changes, frontend, rust, core, powershell, storybook, android, web]
     runs-on: ubuntu-22.04
+    timeout-minutes: 5
     steps:
       - name: Fail unless every dependency succeeded or was deliberately skipped
         env:
