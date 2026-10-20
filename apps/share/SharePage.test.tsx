@@ -84,6 +84,15 @@ describe("SharePage", () => {
     expect(tiles()).toHaveLength(2);
   });
 
+  it("gates every picture on the wall behind the browser's lazy load", () => {
+    // Issue #1154: the wall mounts every row with no virtualiser, so a binder of thousands of
+    // rows opened on a phone would otherwise ask for every picture at once.
+    mount(snapshot());
+    const pictures = within(wall()).getAllByRole("img");
+    expect(pictures.length).toBeGreaterThan(0);
+    for (const img of pictures) expect(img).toHaveAttribute("loading", "lazy");
+  });
+
   it("narrows the wall from the search box", async () => {
     const user = userEvent.setup();
     mount(snapshot());
