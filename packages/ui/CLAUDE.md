@@ -63,7 +63,7 @@ For global repo workflow, style, and testing conventions, refer to:
   - Centered over scrim at `LAYER.overlay`.
   - Modals must be bounded to window (`grid-rows-[minmax(0,1fr)]`) with internal scrolling (`min-h-0 flex-1 overflow-y-auto`).
   - Never mount modals inside `@container` elements (containment breaks `position: fixed`).
-  - **A face can lend its dialogs a finger's gestures** (`lib/dialogHost.ts`): under a `DialogHostContext` every open `Dialog` claims a Back step (`claimBack`, closed through `onDismiss`) and, with `swipeToClose`, a header that drags down to close through `onClose`. Only the light app's phone face provides one; with none (the desktop, every story) nothing changes. A dialog whose `open` is already a history entry passes `placeBacked`.
+  - **A face can lend its dialogs a finger's gestures** (`lib/dialogHost.ts`): under a `DialogHostContext` every open `Dialog` claims a Back step (`claimBack`, closed through `onDismiss`; a refused Back claims a fresh one) and, with `swipeToClose`, a header that drags down to close through `onClose`. Only the light app's phone face provides one; with none (the desktop, every story) nothing changes. A dialog whose `open` is already a history entry passes `placeBacked`.
 - **Escape dismissal protocol (`useDismissOnEscape`)**:
   - Inner dismissibles (dialogs, popups) register in the window capture phase (`preventDefault()`). Outer layers listen in bubble phase.
   - Search inputs clear on Escape when non-empty (`clearFieldOnEscape`) before dismissing parent views.
@@ -115,6 +115,7 @@ For global repo workflow, style, and testing conventions, refer to:
 | `packages/ui/lib/` | Infrastructure (`ipc.ts`, `layers.ts`, `motion.ts`, `shortcuts.ts`, `tokens.ts`) |
 
 - **Occasional views are lazy**: `App.tsx` loads Scanner, Settings, Trade, Playtesting (its setup page and the game board, one chunk), the deck editor's goldfish (`features/playtesting/GoldfishPage`, a thin wrapper over the same board) and Shared with `React.lazy` under one `Suspense`; a static import of any of them puts its chunk back in the first load (`App.test.tsx` fences it).
+- **A view that throws stays in its box** (issue #1181): `components/ViewBoundary` wraps that `Suspense` inside `AppShell`, keyed by where the reader stands, so the caption and the rail outlive a failed render or chunk. The desktop's root has `RootBoundary` (it draws `TitleBar` itself — the window has no other caption) and `onUncaughtError`; the light app's is `FaceBoundary`.
 
 Run verification tests only at the end of feature work:
 

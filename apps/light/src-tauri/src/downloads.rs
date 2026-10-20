@@ -9,13 +9,18 @@
 //!
 //! - **`light_downloads`** → `{ held, metered, due }` — whether the launch is holding, whether the
 //!   network said metered, and each due download over 5 MB with its measured size
-//!   ([`grimoire_core::downloads`]);
+//!   ([`grimoire_core::downloads`]). **While it holds, each ask looks at the link again**
+//!   ([`recheck`]): the page asks as it mounts and each time it comes back to the front, and
+//!   Android resumes this process rather than launching a new one (`MainActivity` moves the task
+//!   to the back), so an ask is the only moment a reader back on Wi-Fi can be noticed. An ask that
+//!   finds the link unmetered lets the hold go and starts the downloads, and answers `held: false`;
 //! - **`light_downloads_start`** `{ always }` → starts exactly what the launch would have, and with
 //!   `always` stores that a metered link need not ask again.
 //!
 //! **A host without these commands draws no prompt**: the page reads a refusal as nothing to ask,
 //! so the desktop binary under `mobile:tauri` and the Storybook fake are unaffected. *Not now* is
-//! the page's alone — it sends nothing, and the next launch asks again.
+//! the page's alone — it sends nothing, the hold stays, and the page asks again when it next
+//! comes to the front or when the reader presses the offer it keeps while the hold lasts.
 //!
 //! **The check fails open.** A JNI call that cannot be made (no context yet, a refused
 //! permission) answers "not metered" and the launch downloads as it always has: a prompt the
@@ -76,6 +81,17 @@ pub fn decide(state: &State, hold: &Hold, metered: bool) -> bool {
     start
 }
 
+/// Look at the link again while holding: `true` to start the downloads now — the hold is let go,
+/// so exactly one ask (or one press of `light_downloads_start`) starts them. A link still metered
+/// keeps the hold; a launch that never held has nothing to let go.
+pub fn recheck(hold: &Hold, metered: bool) -> bool {
+    if !hold.held.load(Ordering::SeqCst) {
+        return false;
+    }
+    hold.metered.store(metered, Ordering::SeqCst);
+    !metered && hold.held.swap(false, Ordering::SeqCst)
+}
+
 /// Answer one of the two commands — [`answers`] said it is one.
 pub async fn answer(
     state: Arc<State>,
@@ -84,6 +100,15 @@ pub async fn answer(
     args: Option<Value>,
 ) -> Result<Value, String> {
     if name == STATUS {
+        // Only a holding launch asks Android anything: an ask on an unheld one costs nothing.
+        if hold.held.load(Ordering::SeqCst) {
+            let metered = tauri::async_runtime::spawn_blocking(metered)
+                .await
+                .map_err(|e| format!("{STATUS}: {e}"))?;
+            if recheck(hold, metered) {
+                crate::spawn_downloads(&state);
+            }
+        }
         let held = hold.held.load(Ordering::SeqCst);
         let due = if held {
             let s = Arc::clone(&state);
@@ -212,6 +237,31 @@ mod tests {
             grimoire_core::app_meta::set_app_meta(&conn, K_ON_METERED, "always").unwrap();
         }
         assert!(decide(&s, &Hold::default(), true));
+    }
+
+    #[test]
+    fn a_hold_is_let_go_when_the_link_is_no_longer_metered() {
+        let s = state("light-dl-recheck");
+        let hold = Hold::default();
+        assert!(!decide(&s, &hold, true));
+        // Still metered: the hold stays, and nothing starts.
+        assert!(!recheck(&hold, true));
+        assert!(hold.held.load(Ordering::SeqCst));
+        // Back on Wi-Fi: the hold goes, once — a second ask starts nothing more.
+        assert!(recheck(&hold, false));
+        assert!(!hold.held.load(Ordering::SeqCst));
+        assert!(!hold.metered.load(Ordering::SeqCst));
+        assert!(!recheck(&hold, false));
+    }
+
+    #[test]
+    fn a_launch_that_never_held_has_nothing_to_recheck() {
+        let s = state("light-dl-recheck-unheld");
+        let hold = Hold::default();
+        assert!(decide(&s, &hold, false));
+        assert!(!recheck(&hold, false));
+        assert!(!recheck(&hold, true));
+        assert!(!hold.held.load(Ordering::SeqCst));
     }
 
     #[test]

@@ -378,20 +378,23 @@ export function CollectionSearchTab({
     // **A receipt per press** (the owner's rule: every move of a card between the collection and
     // a deck says so — this tab's press is none of the exempt three). The line under the wall
     // still says where a copy came *from* when it left another deck; the toast says what moved.
+    //
+    // **`mutateAsync(...).then`, not `mutate`'s per-call callbacks** (issue #1162): a tile's Add
+    // commits straight through here with nothing waiting on the write in flight, and a `mutate`
+    // call's callbacks are replaced by the next call on the same observer — so two quick presses
+    // were two moves and one receipt, and an earlier press's refusal went unsaid. Each promise is
+    // its own press's; the rejection arm is the handler, and `move.error` still feeds the line.
     if (tile.add) {
-      move.mutate(
-        { row: tile.add, pile, quantity: 1 },
-        {
-          onSuccess: (outcome) => {
-            if (outcome.quantity === 0) return;
-            notify.success(
-              `Moved ${plural(outcome.quantity, "copy", "copies")} of “${tile.name}” into the deck`,
-              outcome.fromDeck === null ? undefined : { body: `From “${outcome.fromDeck}”` },
-            );
-          },
-          onError: (error) =>
-            notify.error(`Couldn't move “${tile.name}” into the deck`, { body: ipcError(error) }),
+      move.mutateAsync({ row: tile.add, pile, quantity: 1 }).then(
+        (outcome) => {
+          if (outcome.quantity === 0) return;
+          notify.success(
+            `Moved ${plural(outcome.quantity, "copy", "copies")} of “${tile.name}” into the deck`,
+            outcome.fromDeck === null ? undefined : { body: `From “${outcome.fromDeck}”` },
+          );
         },
+        (error) =>
+          notify.error(`Couldn't move “${tile.name}” into the deck`, { body: ipcError(error) }),
       );
     }
   };

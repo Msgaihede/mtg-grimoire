@@ -1242,6 +1242,85 @@ describe("prices", () => {
 });
 
 /**
+ * `sorting::held_price_expr` — what one held copy costs: a deck row, a collection entry, an open
+ * trade line (issue #1187). A row that names a finish is priced at it with no fallback; a row
+ * that names none, or names a `nonfoil` its printing is not sold in (issue #983), takes the
+ * `nonfoil → foil → etched` chain.
+ */
+describe("a held copy's price", () => {
+  /** `mh2 259`, Urza's Saga: usd 39.86, usd_foil 67.89 — sold in both. */
+  const URZA = printing("mh2", "259");
+  /** `acr 211`, Restart Sequence: sold in etched only, usd_etched 2.07. */
+  const RESTART = printing("acr", "211");
+
+  it("prices a deck row at the finish it names, in its category total and the deck's value", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 1, cardId: URZA.id, finish: "foil" }),
+        deckCard({ id: 2, cardId: URZA.id, finish: null }),
+        // A `foil` row on a printing never sold in foil is a statement, and stays unpriced.
+        deckCard({ id: 3, cardId: RESTART.id, finish: "foil" }),
+      ],
+    });
+    const r = readHandlers(db);
+    const detail = r.deck_get({ id: 1, variant: "live" })!;
+    const unit = (id: number) => detail.cards.find((c) => c.id === id)!.unitPrice;
+    expect(unit(1)).toBe(67.89);
+    expect(unit(2)).toBe(39.86);
+    expect(unit(3)).toBeNull();
+    expect(detail.categories.find((c) => c.kind === "main")!.totalPrice).toBeCloseTo(107.75, 2);
+    const [value] = r.deck_values({});
+    expect(value.value).toBeCloseTo(107.75, 2);
+    expect(value.unpriced).toBe(1);
+  });
+
+  it("prices a nonfoil copy of an etched-only printing by the chain, and a foil one strictly", () => {
+    const db = makeDb({
+      collectionEntries: [
+        entry({ id: 1, cardId: RESTART.id, finish: "nonfoil" }),
+        entry({ id: 2, cardId: RESTART.id, finish: "foil" }),
+      ],
+    });
+    const r = readHandlers(db);
+    const items = r.collection_list({ query: { limit: 10, offset: 0 } }).items;
+    expect(items.find((i) => i.finish === "nonfoil")!.unitPrice).toBe(2.07);
+    expect(items.find((i) => i.finish === "foil")!.unitPrice).toBeNull();
+    expect(r.collection_summary({ query: { limit: 0, offset: 0 } }).value).toBeCloseTo(2.07);
+    expect(r.price_history({ cardId: RESTART.id, finish: "nonfoil" }).now).toBe(2.07);
+  });
+
+  it("prices an open trade's nonfoil line on an etched-only printing by the chain", () => {
+    const db = makeDb();
+    const w = writeHandlers(db);
+    const id = w.trade_create({ trade: {} });
+    w.trade_add_lines({
+      id,
+      side: "theirs",
+      lines: [{ cardId: RESTART.id, finish: "nonfoil", quantity: 1, source: "search" }],
+    });
+    expect(readHandlers(db).trade_get({ id })!.lines[0].unitPrice).toBe(2.07);
+  });
+
+  it("records today's price of a newly watched card, and nothing for an unchanged list", () => {
+    const db = makeDb({ priceHistory: [] });
+    const w = writeHandlers(db);
+    w.set_price_watch({ cardIds: [URZA.id] });
+    const today = db.priceHistory.filter(
+      (s) => s.marketplace === "tcgplayer" && s.cardId === URZA.id,
+    );
+    // Every finish the marketplace prices, at `copies = 0`; the etched one it does not is no row.
+    expect(today.map((s) => [s.finish, s.price, s.copies, s.takenAt])).toEqual([
+      ["nonfoil", 39.86, 0, CLOCK_BASE],
+      ["foil", 67.89, 0, CLOCK_BASE],
+    ]);
+    const before = db.priceHistory;
+    w.set_price_watch({ cardIds: [` ${URZA.id} `] });
+    expect(db.priceHistory).toBe(before);
+  });
+});
+
+/**
  * Which printing stands for a collapsed row — `released_at DESC, price ASC NULLS LAST, id DESC`.
  *
  * **The corpus cannot show this and a fixture has to.** The rule only bites when two printings
@@ -2037,10 +2116,8 @@ describe("the plugin commands", () => {
 });
 
 /**
- * **Driven through the writes that record history, which is not all of them.** The five card
- * writes record none here — see `journalled`'s doc, and note that Storybook's history drawer has
- * never listed a card add either, so the two are consistent rather than one being broken. A
- * category rename is the smallest write that *does*, and it exercises the same wrapper.
+ * Driven mostly through a category rename, the smallest write that records history; the card
+ * writes file steps through the same wrapper, and the last few cases drive them.
  */
 describe("undo and redo", () => {
   /** A step is recorded by the wrapper rather than by each handler, so a new deck write is
@@ -2175,6 +2252,159 @@ describe("undo and redo", () => {
 
     expect(() => h.deck_undo_apply({ deckId: 1, auditId: undo })).toThrow(/edited since/);
     expect(db.decks[0].name).toBe("Renamed");
+  });
+
+  /** Issue #1186: the card writes file steps of their own, so a Ctrl+Z after three of them takes
+   *  back the last one — never the category made before them, and never all three with it. */
+  it("files a step for each card write and undoes only the last", () => {
+    const db = makeDeckDb({ decks: [deck()] });
+    const h = allHandlers(db);
+    const ramp = h.deck_category_create({ deckId: 1, variant: "live", name: "Ramp" });
+    const add = (cardId: string) =>
+      h.deck_add_card({
+        deckId: 1,
+        cardId,
+        categoryId: ramp.id,
+        categoryName: null,
+        variant: "live",
+        quantity: 1,
+      });
+    add(BOLT.id);
+    add(BOLT_2X2.id);
+    h.deck_set_card_quantity({
+      deckId: 1,
+      cardId: BOLT.id,
+      categoryId: ramp.id,
+      variant: "live",
+      quantity: 3,
+    });
+
+    const state = h.deck_undo_state({ deckId: 1, redoId: null });
+    expect(state.undo).toMatchObject({ kind: "quantity", cardId: BOLT.id });
+    h.deck_undo_apply({ deckId: 1, auditId: state.undo!.id });
+
+    const quantities = () =>
+      Object.fromEntries(db.deckCards.map((c) => [c.cardId, c.quantity] as const));
+    expect(db.deckCategories.some((c) => c.id === ramp.id)).toBe(true);
+    expect(quantities()).toEqual({ [BOLT.id]: 1, [BOLT_2X2.id]: 1 });
+
+    h.deck_redo_apply({ deckId: 1, auditId: state.undo!.id });
+    expect(quantities()).toEqual({ [BOLT.id]: 3, [BOLT_2X2.id]: 1 });
+  });
+
+  /** Each card write's row is its crate twin's kind, so the history drawer words it. */
+  it("records the crate's kind for every card write", () => {
+    const db = makeDeckDb({ decks: [deck()] });
+    const h = allHandlers(db);
+    const main = categoryId(1, "main");
+    const side = categoryId(1, "side");
+    const kinds = () => db.deckAudit.map((a) => a.kind);
+    h.deck_add_card({
+      deckId: 1,
+      cardId: BOLT.id,
+      categoryId: main,
+      categoryName: null,
+      variant: "live",
+      quantity: 2,
+    });
+    h.deck_move_card({
+      deckId: 1,
+      cardId: BOLT.id,
+      fromCategoryId: main,
+      toCategoryId: side,
+      toCategoryName: null,
+      variant: "live",
+    });
+    h.deck_swap_printing({
+      deckId: 1,
+      fromCardId: BOLT.id,
+      toCardId: BOLT_2X2.id,
+      categoryId: side,
+      variant: "live",
+    });
+    h.deck_set_card_quantity({
+      deckId: 1,
+      cardId: BOLT_2X2.id,
+      categoryId: side,
+      variant: "live",
+      quantity: 0,
+    });
+
+    expect(kinds()).toEqual(["add", "move", "swap", "remove"]);
+    expect(db.deckUndo.map((s) => s.auditId)).toEqual(db.deckAudit.map((a) => a.id));
+    expect(db.deckAudit.map((a) => a.delta)).toEqual([2, 0, 0, -2]);
+  });
+
+  /** A step puts back only the label it changed: the table is app-wide, and a rename made from
+   *  another deck since is not this deck's to revert. */
+  it("leaves another deck's label rename alone", () => {
+    const db = makeDeckDb({ decks: [deck(), deck({ id: 2, name: "Other" })] });
+    const h = allHandlers(db);
+    const mine = h.deck_label_create({ deckId: 1, name: "Combo", color: "#ff0000" });
+    const theirs = h.deck_label_create({ deckId: 2, name: "Removal", color: "#00ff00" });
+    h.deck_label_update({ deckId: 1, id: mine.id, name: "Engine", color: "#ff0000" });
+    h.deck_label_update({ deckId: 2, id: theirs.id, name: "Answers", color: "#00ff00" });
+
+    const undo = h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id;
+    h.deck_undo_apply({ deckId: 1, auditId: undo });
+
+    const name = (id: number) => db.deckLabels.find((l) => l.id === id)?.name;
+    expect(name(mine.id)).toBe("Combo");
+    expect(name(theirs.id)).toBe("Answers");
+  });
+
+  /** Undo is an edit: it moves the deck to the top of the gallery, and puts back no disclosure
+   *  — `DECK_FIELDS` names neither `updated_at` nor `tokens_open`. */
+  it("moves updatedAt forward and leaves the disclosures as they are", () => {
+    const db = makeDeckDb({ decks: [deck()] });
+    const h = allHandlers(db);
+    h.deck_update({ id: 1, patch: { name: "Renamed" } });
+    const edited = db.decks[0].updatedAt;
+    h.deck_update({ id: 1, patch: { tokensOpen: true } });
+
+    h.deck_undo_apply({
+      deckId: 1,
+      auditId: h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id,
+    });
+
+    expect(db.decks[0].name).toBe("Test deck");
+    expect(db.decks[0].tokensOpen).toBe(true);
+    expect(db.decks[0].updatedAt).toBeGreaterThan(edited);
+  });
+
+  /**
+   * `apply_reversal`'s check: a write that files no step changed what the step would put back,
+   * so the undo is refused, **retired** — the next Ctrl+Z is the change below it — and writes
+   * nothing. A redo refused the same way changes nothing either.
+   */
+  it("retires an undo the deck no longer matches, and refuses a stale redo", () => {
+    const db = makeDeckDb({ decks: [deck()] });
+    const h = allHandlers(db);
+    h.deck_update({ id: 1, patch: { name: "Renamed" } });
+    const below = h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id;
+    h.deck_add_card({
+      deckId: 1,
+      cardId: BOLT.id,
+      categoryId: categoryId(1, "main"),
+      categoryName: null,
+      variant: "live",
+      quantity: 2,
+    });
+    const step = h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id;
+    // A write with no step of its own — a sync pull, or the cut — moved the row the step made.
+    db.deckCards[0].quantity = 5;
+
+    expect(() => h.deck_undo_apply({ deckId: 1, auditId: step })).toThrow(/taken off the undo/);
+    expect(db.deckCards[0].quantity).toBe(5);
+    expect(h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id).toBe(below);
+
+    h.deck_undo_apply({ deckId: 1, auditId: below });
+    expect(db.decks[0].name).toBe("Test deck");
+    expect(db.deckCards[0].quantity).toBe(5);
+
+    db.decks[0].name = "Changed elsewhere";
+    expect(() => h.deck_redo_apply({ deckId: 1, auditId: below })).toThrow(/edited since/);
+    expect(db.decks[0].name).toBe("Changed elsewhere");
   });
 });
 
@@ -5249,7 +5479,9 @@ describe("the collection's folders", () => {
         entry({ id: 1, cardId: BOLT.id, quantity: 2, folderId: 1 }),
         // A row at zero: still a row, and worth nothing — so it moves neither figure.
         entry({ id: 2, cardId: BOLT_2X2.id, quantity: 0, folderId: 1 }),
-        entry({ id: 3, cardId: FOIL_ONLY.id, finish: "nonfoil", quantity: 3, folderId: 2 }),
+        // An etched copy of a foil-only printing names a finish nobody quotes: unpriced, where a
+        // `nonfoil` one would take the chain (issue #983).
+        entry({ id: 3, cardId: FOIL_ONLY.id, finish: "etched", quantity: 3, folderId: 2 }),
         entry({ id: 4, cardId: BOLT.id, quantity: 9, folderId: null }),
       ],
     });
@@ -21132,7 +21364,9 @@ describe("deck completion", () => {
       wanted: 7,
       owned: 4,
       missing: 3,
-      unpricedMissing: 0,
+      // The two foils: `lea` is sold in nonfoil only, and a row that names `foil` is priced at
+      // foil or not at all (`deck_card_price_expr`).
+      unpricedMissing: 2,
     });
     const diff = reads.deck_theory_diff({ deckId: 1, marketplace: "tcgplayer" });
     expect(row.missing).toBe(diff.reduce((n, r) => n + r.quantity, 0));

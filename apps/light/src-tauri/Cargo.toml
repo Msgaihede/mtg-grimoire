@@ -35,9 +35,13 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
-# **Three plugins, each used from Rust only and granted to the page not at all** (phase 4, step
-# 4.3): `capabilities/light.json` names no `dialog:`, `fs:` or `opener:` permission, so no script in
-# the webview can reach them — the desktop's rule for its file dialogs (issue #545), kept here.
+# **Three plugins.** `dialog` and `fs` are used from Rust only and granted to the page not at all
+# (phase 4, step 4.3): `capabilities/light.json` names no `dialog:` or `fs:` permission, so no
+# script in the webview can reach them — the desktop's rule for its file dialogs (issue #545), kept
+# here. The opener is granted to the page, as the desktop's exact pair (`opener:allow-open-url` and
+# `opener:allow-default-urls`, never `opener:default`): a link out of the app leaves through
+# `@tauri-apps/plugin-opener` (`packages/ui/lib/core/tauri.ts`), and `navigation.rs` uses it from
+# Rust too.
 # - `dialog` opens the system picker and the save dialog — on Android the Storage Access
 #   Framework, which answers a `content://` URI rather than a path;
 # - `fs` writes and reads that URI (`Fs::open` asks the Android side for a file descriptor);

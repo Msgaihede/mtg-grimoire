@@ -49,6 +49,13 @@ export function wireFinish(f: string): Finish | null {
  *   a browser has never heard of.
  * * **`rarity={null}` on the chin.** Rarity is not on the wire (spec §3's absences), so the gem
  *   says *unknown* rather than being derived from a corpus this page does not have.
+ *
+ * **`loading="lazy"`, always** (issue #1154). Both walls this tile is drawn on — the binder and
+ * the deck's Grid — mount every row they are handed, with no virtualiser to bound them, and a
+ * binder runs to thousands of distinct rows. `CardArt`'s rule for exactly that wall is the
+ * browser's own gate: without it a phone opening a chat link asks for every picture at once,
+ * over mobile data. The frame keeps the card's aspect ratio before its picture arrives, so the
+ * gate measures real tiles rather than a column of zero-height images that all look on screen.
  */
 export function ShareTile({
   card,
@@ -93,6 +100,7 @@ export function ShareTile({
         rarity={null}
         chin={{ setCode: card.s, collectorNumber: card.cn }}
         zoom={DEFAULT_ZOOM}
+        loading="lazy"
         // `undefined` rather than `null`: the chin draws no money slot for the first and an em
         // dash for the second, which is precisely the difference between "nobody asked" and
         // "nobody quoted". Both are live states on this page.

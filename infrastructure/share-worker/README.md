@@ -171,12 +171,17 @@ page strangers open.
 `src/lapse.ts` is a **daily cron on this Worker**, `30 3 * * *`. It reads `entitlements` — the
 relay's table, in the D1 database the two Workers share — and writes `shares.state`: a group whose
 subject is `dead` has its **live** shares darkened to `lapsed`, and a group whose subject is
-`active` or in `grace` has its **lapsed** shares lit again.
+`active`, or in `grace` with a `grace_until` that has not passed, has its **lapsed** shares lit
+again.
 
 **It reads the stored `status` and does not re-run `decide`.** `infrastructure/relay/src/claim.ts`'s `reconcile`
 is what moves a subject through `active → grace → dead` against Patreon; a second opinion here
 would be one account with two answers to when a membership ended. `grace` **serves** — a declined
-card is a failed payment Patreon retries, not a cancellation the reader chose.
+card is a failed payment Patreon retries, not a cancellation the reader chose — **but only inside
+its window**: the pass reads `grace_until` as the relay's `settle` does, because the row says
+`grace` until the relay's cron next reaches it, and `/token` has refused the reader since the
+deadline. Until issue #1117 a stored `grace` served on its status alone, so a row the cron could
+not settle kept its links live for ever.
 
 **`revoked` is never touched.** The reader's own press is terminal and the cron's flip is
 reversible, which is the whole reason `state` is a state rather than a `revoked_at` stamp. The

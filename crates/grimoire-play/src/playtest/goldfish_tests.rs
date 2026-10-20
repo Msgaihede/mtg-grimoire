@@ -1145,6 +1145,45 @@ fn a_refused_action_is_not_remembered() {
     });
 }
 
+/// Issue #1143: a refused answer to the board's own question leaves the question open, as the
+/// whole moment is put back and not the engine's state alone — the next answer is taken and
+/// Cancel still has something to take back.
+#[test]
+fn a_refused_answer_to_the_boards_question_keeps_it_open() {
+    let (refused, asked, after, cancelled) = engine(|| {
+        let mut cards = deck();
+        cards.push(card(
+            "Twin Relic",
+            Some("{1}"),
+            "Artifact",
+            "{1}: You gain 1 life.\n{2}: You gain 2 life.",
+            None,
+            1,
+        ));
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+        for _ in 0..3 {
+            put_down(&mut game, "Forest");
+        }
+        let relic = put_down(&mut game, "Twin Relic");
+        let asked = game.act(A::Activate { id: relic }).unwrap();
+        let refused = game.act(A::Choose { index: 99 }).unwrap_err();
+        let after = game.view();
+        (refused, asked, after, game.act(A::Cancel).unwrap())
+    });
+    assert_eq!(refused, "That answer is no longer on offer.");
+    let prompt = asked.view.prompt.as_ref().expect("a question");
+    assert_eq!(prompt.kind, "AbilityChoice", "{:?}", asked.happened);
+    assert_eq!(after.stage, Stage::Prompt);
+    assert_eq!(
+        after.prompt.as_ref(),
+        Some(prompt),
+        "the same question, still open"
+    );
+    assert_eq!(cancelled.view.stage, Stage::Main);
+    assert!(cancelled.view.prompt.is_none());
+}
+
 /// Issue #1075: a card the reader cannot pay for is cast without paying (CR 118.9), not put down,
 /// so a trigger that asks whether it was cast — Wakening Sun's Avatar's "if you cast it from your
 /// hand" — happens. The free cast's emblem is gone after it: the next spell is paid for.
