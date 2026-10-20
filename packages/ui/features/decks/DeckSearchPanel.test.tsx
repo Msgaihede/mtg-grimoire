@@ -116,6 +116,7 @@ import { DECK_SEARCH_WIDTH_KEY } from "./useDeckSearchWidth";
 import { AUTO_CATEGORY } from "./autoCategory";
 import { useDeck } from "./useDeck";
 import { useAppStore } from "@/lib/store";
+import { useNotifications } from "@/lib/notifications";
 
 const BOLT: CardSummary = {
   promoTypes: null,
@@ -1546,6 +1547,43 @@ describe("DeckSearchPanel", () => {
     );
 
     expect(await screen.findByRole("alert")).toHaveTextContent("The database is busy with a sync");
+  });
+
+  /**
+   * Issue #1162: the button is never disabled mid-write, so presses overlap — and a `mutate`
+   * call's own callbacks were replaced by the next press's, which left three adds with one toast
+   * and an earlier press's refusal unsaid. Each press holds its own write open here until all
+   * three have been made, then they answer out of order: the first is refused, the others land.
+   */
+  it("toasts every press, and every refusal, when the adds overlap", async () => {
+    const answers: { resolve: (v: unknown) => void; reject: (e: unknown) => void }[] = [];
+    deckAddCard.mockImplementation(
+      () => new Promise((resolve, reject) => answers.push({ resolve, reject })),
+    );
+    await openPanel();
+    const add = await screen.findByRole("button", { name: "Add Lightning Bolt to Main deck" });
+
+    await userEvent.click(add);
+    await userEvent.click(add);
+    await userEvent.click(add);
+    await waitFor(() => expect(answers).toHaveLength(3));
+
+    await act(async () => {
+      answers[2].resolve({ id: 7, quantity: 2, removed: false });
+      answers[1].resolve({ id: 7, quantity: 3, removed: false });
+      answers[0].reject("The database is busy with a sync — try again in a moment.");
+    });
+
+    await waitFor(() => {
+      const notices = useNotifications.getState().notices;
+      expect(notices.filter((n) => n.tone === "success")).toHaveLength(2);
+      expect(notices.filter((n) => n.tone === "error")).toEqual([
+        expect.objectContaining({
+          title: "Couldn't add “Lightning Bolt” to the deck",
+          body: "The database is busy with a sync — try again in a moment.",
+        }),
+      ]);
+    });
   });
 
   /**

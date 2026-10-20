@@ -119,7 +119,7 @@ const STEP_LIMIT: usize = 2000;
 /// view, so a runaway loop of triggers cannot make a step huge.
 const FRAME_LIMIT: usize = 80;
 
-const NOT_IN_GAME: &str = "That card is no longer where it was. The board has been refreshed.";
+const NOT_IN_GAME: &str = "That card is no longer where it was.";
 const NOT_NOW: &str = "Keep or mulligan the opening hand first.";
 const ALREADY_KEPT: &str = "The opening hand has already been kept.";
 const OVER: &str = "The game is over. Start a new one from the game menu.";
@@ -237,10 +237,11 @@ pub struct Playtest {
     history: History<Moment>,
 }
 
-/// The whole of a game an action can change, for undo and redo: the checkpoint a refusal goes
-/// back to, and the session's own place in the game around it — a cast half made, the board's
-/// own question, the end told, the turn being ended, the stop last stopped at. The stops the
-/// reader set are a setting, not the game, and stay as they are.
+/// The whole of a game an action can change, for undo and redo and for a refusal, which goes
+/// back to it whole (issue #1143): the engine's checkpoint, and the session's own place in the
+/// game around it — a cast half made, the board's own question, the end told, the turn being
+/// ended, the stop last stopped at. The stops the reader set are a setting, not the game, and
+/// stay as they are.
 struct Moment {
     checkpoint: Checkpoint,
     pending: Option<Pending>,
@@ -1547,8 +1548,9 @@ impl Playtest {
             action,
             PlaytestAction::SetStops { .. } | PlaytestAction::SetSandbox { .. }
         );
-        let before = remembered.then(|| self.moment());
-        let checkpoint = self.checkpoint();
+        // The whole moment, not the checkpoint alone: a refusal puts back the session's own place
+        // in the game too — the board's question, a cast half made, the turn being ended.
+        let before = self.moment();
         let mut happened = Vec::new();
         let choice = self.choice.take();
         self.frames.clear();
@@ -1557,7 +1559,7 @@ impl Playtest {
             .and_then(|()| self.end_free())
         {
             Ok(()) => {
-                if let Some(before) = before {
+                if remembered {
                     self.history.record(before);
                 }
                 self.follow_printings();
@@ -1570,7 +1572,7 @@ impl Playtest {
             }
             Err(e) => {
                 self.frames.clear();
-                self.restore(checkpoint);
+                self.go_to(before);
                 Err(e)
             }
         }
@@ -1606,7 +1608,6 @@ impl Playtest {
             return Err(OVER.into());
         }
         if is_sandbox(&action) && !self.sandbox {
-            self.choice = choice;
             return Err(SANDBOX_OFF.into());
         }
         match action {
@@ -1687,7 +1688,7 @@ impl Playtest {
                 let answer = answers
                     .into_iter()
                     .nth(index as usize)
-                    .ok_or("That answer is no longer on offer. The board has been refreshed.")?;
+                    .ok_or("That answer is no longer on offer.")?;
                 if let Some(c) = choice {
                     self.begin(c.source);
                 }
@@ -1762,10 +1763,8 @@ impl Playtest {
                 self.restore(pending.checkpoint);
                 Ok(())
             }
+            // The board's own question stays open, as it was: `act` puts it back on a refusal.
             _ if stage == PlaytestStage::Prompt => {
-                // The board's own question is put back: an action that is not an answer leaves
-                // it open, as it was.
-                self.choice = choice;
                 Err("Answer the question first, or cancel it.".into())
             }
 
@@ -2670,12 +2669,7 @@ impl Playtest {
         } else {
             self.history.redo(now).ok_or(NOTHING_TO_REDO)?
         };
-        self.restore(then.checkpoint);
-        self.pending = then.pending;
-        self.choice = then.choice;
-        self.over_told = then.over_told;
-        self.ending = then.ending;
-        self.stopped_at = then.stopped_at;
+        self.go_to(then);
         self.frames.clear();
         Ok(PlaytestStep {
             view: self.view(),
@@ -2693,6 +2687,16 @@ impl Playtest {
             ending: self.ending,
             stopped_at: self.stopped_at,
         }
+    }
+
+    /// Back to `then`, whole: for undo and redo, and for a refusal.
+    fn go_to(&mut self, then: Moment) {
+        self.restore(then.checkpoint);
+        self.pending = then.pending;
+        self.choice = then.choice;
+        self.over_told = then.over_told;
+        self.ending = then.ending;
+        self.stopped_at = then.stopped_at;
     }
 
     fn checkpoint(&self) -> Checkpoint {

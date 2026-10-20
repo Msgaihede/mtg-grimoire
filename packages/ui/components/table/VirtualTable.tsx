@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -240,6 +241,7 @@ export function VirtualTable<Row>({
   stickyBand,
   revealIndex,
   keepRow,
+  rowKey,
 }: {
   rows: Row[];
   columns: TableColumn<Row>[];
@@ -395,6 +397,20 @@ export function VirtualTable<Row>({
    * absent draws exactly what the table always drew. Inert under `grow`, which draws every row.
    */
   keepRow?: number | null;
+  /**
+   * Which entry a row **is**, for what its cells hold — a collection entry's id, a wish's, a
+   * deck line's key. Never the row's own React key, which stays its position (see the note on
+   * the row's key below); it keys each cell's *contents* instead, so a cell that holds state of
+   * its own — a `QuantityStepper`'s half-typed draft and the caret in it — is a new one the
+   * moment a different entry moves into its row.
+   *
+   * **Without it that state outlives the entry** (issue #1111): the reader types "0" over "10",
+   * that save deletes the entry, the next one slides up into the same position, and the box —
+   * still focused, still showing the draft — sends the next digit to a card the reader never
+   * touched. Absent, the cells are keyed by position as the row is, which is right only for a
+   * table whose cells hold no state.
+   */
+  rowKey?: (row: Row) => string | number;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const tip = useTooltip();
@@ -1008,14 +1024,18 @@ export function VirtualTable<Row>({
                     }
                   : {})}
               >
-                {column.cell(row)}
+                {/* Keyed by the entry rather than the slot — see `rowKey`. One child, so the key
+                    drops the cell's state without ever being a duplicate among siblings. */}
+                <Fragment key={rowKey?.(row)}>{column.cell(row)}</Fragment>
               </span>
             )),
           };
           // Keyed by row position, not by id: two pages fetched either side of a write can
           // carry the same row twice, and a duplicate key is a React warning plus a dropped
           // row. The key rides on whatever the caller renders, so a wrapper element — which
-          // would break the `rowgroup`'s children — is never needed.
+          // would break the `rowgroup`'s children — is never needed. What the cells hold is
+          // keyed by the entry instead (`rowKey`, issue #1111), so a row's position surviving a
+          // write never hands one entry's half-typed quantity to the next.
           return renderRow ? (
             <RowSlot key={key}>{renderRow(props, row)}</RowSlot>
           ) : (

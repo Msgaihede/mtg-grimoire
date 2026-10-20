@@ -648,6 +648,9 @@ pub fn page_from_body(body: &str) -> Result<Vec<ReleaseInfo>, String> {
 /// re-compared against the running version every time, which is what makes it
 /// self-clearing — after an update lands, yesterday's cached release is no longer newer and
 /// the notice goes away with no bookkeeping.
+///
+/// **Synchronous, so never called from an `async fn`.** It takes `db_read`, which a long
+/// search holds; the async paths ask [`status_async`] instead.
 pub fn status(state: &AppState, updater: &Updater) -> UpdateStatus {
     status_for(
         state,
@@ -655,6 +658,37 @@ pub fn status(state: &AppState, updater: &Updater) -> UpdateStatus {
         updater.busy.load(Ordering::SeqCst),
         crate::sync::lock_plain(&updater.staged).is_some(),
     )
+}
+
+/// [`status`] on the blocking pool — what every `async fn` here, and the commands, answer with.
+pub async fn status_async(
+    state: &Arc<AppState>,
+    updater: &Arc<Updater>,
+) -> Result<UpdateStatus, String> {
+    let updater = Arc::clone(updater);
+    off_runtime(state, "read the update status", move |state| {
+        status(state, &updater)
+    })
+    .await
+}
+
+/// Run one database touch on the blocking pool, for the `async fn`s in this module.
+///
+/// **Every connection lock this module takes from an `async fn` goes through here** (issue
+/// #1150). Both connections are `std::sync::Mutex`es: one held by an ingest batch or a long
+/// search parks the tokio worker that asked, and that worker is one of the few answering
+/// `mtgimg://` and every other async command. `what` finishes "could not …", and reads to
+/// `note_github` as the I/O failure it is when it says "read" or "write"; the only failure
+/// it reports is a panic inside `f`.
+async fn off_runtime<T: Send + 'static>(
+    state: &Arc<AppState>,
+    what: &'static str,
+    f: impl FnOnce(&AppState) -> T + Send + 'static,
+) -> Result<T, String> {
+    let state = Arc::clone(state);
+    tauri::async_runtime::spawn_blocking(move || f(&state))
+        .await
+        .map_err(|e| format!("could not {what}: {e}"))
 }
 
 /// [`status`] with the [`Updater`]'s three answers passed in, so a test can ask it about any
@@ -712,7 +746,12 @@ pub async fn check(
 ) -> Result<UpdateStatus, String> {
     let result = check_inner(state, updater, force).await;
     if let Err(e) = &result {
-        note_github(state, "check", e);
+        let message = e.clone();
+        // Best effort, like the note itself: a panic writing the log is not the answer.
+        let _ = off_runtime(state, "write the error log", move |state| {
+            note_github(state, "check", &message)
+        })
+        .await;
     }
     result
 }
@@ -727,7 +766,10 @@ pub async fn check(
 /// The startup check is the reason this matters. It runs in a spawned task whose only
 /// current report is an `eprintln!` — no window is listening, nothing is written down — so
 /// an update check that has been failing for a month is invisible in a shipped build.
-fn note_github(state: &Arc<AppState>, operation: &str, message: &str) {
+///
+/// Synchronous — it waits up to `WRITE_LOCK_WAIT` for the writer — so [`check`] and
+/// [`download`] call it through [`off_runtime`].
+fn note_github(state: &AppState, operation: &str, message: &str) {
     let kind = if message.contains("rate limiting") {
         crate::errors::Kind::RateLimited
     } else if message.contains("not readable JSON") {
@@ -757,9 +799,12 @@ async fn check_inner(
     force: bool,
 ) -> Result<UpdateStatus, String> {
     let now = unix_now();
-    let last = last_check_at(&crate::sync::lock_db_read(state));
+    let last = off_runtime(state, "read the last update check", |state| {
+        last_check_at(&crate::sync::lock_db_read(state))
+    })
+    .await?;
     if !should_check(last, now, force) {
-        return Ok(status(state, updater));
+        return status_async(state, updater).await;
     }
     // Named, not `_guard`, because **where it is dropped is load-bearing**: every `Ok` path
     // below drops it explicitly before building the answer. `status` reports `busy` by
@@ -799,8 +844,13 @@ async fn check_inner(
     };
 
     {
-        let conn = crate::sync::lock_db(state);
-        let written = record_check(&conn, now, &page);
+        // The writer, with no time limit, so never on a tokio worker: an ingest batch holds
+        // it for as long as the batch takes.
+        let written = off_runtime(state, "write the update check", move |state| {
+            record_check(&crate::sync::lock_db(state), now, &page)
+        })
+        .await
+        .and_then(|written| written);
         // **Propagated for a real page and swallowed for a missing repository**, which is
         // the asymmetry this arm has carried since it was written: the 404 case has already
         // decided to report success, and a failed `app_meta` write on the way out of it
@@ -811,7 +861,7 @@ async fn check_inner(
     }
     // Before the answer, never after. See the guard's binding above.
     drop(guard);
-    Ok(status(state, updater))
+    status_async(state, updater).await
 }
 
 // ---------------------------------------------------------------------------------------
@@ -829,7 +879,11 @@ pub async fn download(
 ) -> Result<UpdateStatus, String> {
     let result = download_inner(state, updater, app).await;
     if let Err(e) = &result {
-        note_github(state, "download", e);
+        let message = e.clone();
+        let _ = off_runtime(state, "write the error log", move |state| {
+            note_github(state, "download", &message)
+        })
+        .await;
     }
     result
 }
@@ -839,7 +893,7 @@ async fn download_inner(
     updater: &Arc<Updater>,
     app: &tauri::AppHandle,
 ) -> Result<UpdateStatus, String> {
-    let current = status(state, updater);
+    let current = status_async(state, updater).await?;
     let release = current
         .available
         .ok_or_else(|| "there is no update to download.".to_owned())?;
@@ -909,7 +963,7 @@ async fn download_inner(
     };
     *crate::sync::lock_plain(&updater.staged) = Some(staged);
     drop(guard);
-    Ok(status(state, updater))
+    status_async(state, updater).await
 }
 
 /// Stream one asset to `dest`, hashing as it goes, and answer the digest.

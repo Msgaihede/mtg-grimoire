@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { DesktopBoot } from "./DesktopBoot";
+import { RootBoundary } from "./RootBoundary";
 import { installKeyboardModality } from "@grimoire/ui/lib/keyboardModality";
 import { installNativeDragGuard } from "@grimoire/ui/lib/nativeDrag";
 import "./desktop.css";
@@ -30,13 +31,24 @@ installKeyboardModality(window);
 // a property of the window, not of any view. `lib/nativeDrag.ts` has the reading.
 installNativeDragGuard(window);
 
-ReactDOM.createRoot(root).render(
+// **A throw no boundary caught still says so** (issue #1181). React 19 unmounts the whole tree
+// for one, and `RootBoundary` below is there so that it does not have to — this is for the throw
+// that gets past it, the fallback's own caption included, so the record carries the component
+// stack rather than nothing.
+ReactDOM.createRoot(root, {
+  onUncaughtError: (error, info) => console.error(error, info.componentStack),
+}).render(
   <React.StrictMode>
     {/* **The root does not render `App` directly: its queries need a database that is not
         open yet.** Rust opens it on a background thread, so the window can paint while a
         migration runs — and until that thread finishes, every command `App` asks on its first
         render errors. `DesktopBoot` holds `App` back until `startup_status` says the folder is
         open, and draws the caption and a loader meanwhile. */}
-    <DesktopBoot />
+    {/* Outermost, so a throw anywhere under it — the gate, the shell, a provider — leaves the
+        window a caption and a reload rather than nothing. A failing view is caught lower, inside
+        the shell (`ViewBoundary`). */}
+    <RootBoundary>
+      <DesktopBoot />
+    </RootBoundary>
   </React.StrictMode>,
 );

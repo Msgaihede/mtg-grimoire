@@ -1,9 +1,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::db::{LEGACY_DB, USER_DB};
+
 /// Which directory this build stores its database in, given what the process knows about
-/// itself: beside the executable when that is writable, the per-user folder otherwise.
-pub fn data_dir_for(exe_dir: Option<&Path>, appdata_dir: &Path) -> PathBuf {
+/// itself: beside the executable when that is writable, the per-user folder otherwise — or a
+/// refusal, when the folder beside the executable already holds a collection it cannot write
+/// to (see [`resolve_data_dir`]). The `Err` is the whole message the startup page draws.
+pub fn data_dir_for(exe_dir: Option<&Path>, appdata_dir: &Path) -> Result<PathBuf, String> {
     match exe_dir {
         Some(dir) => resolve_data_dir(dir, appdata_dir),
         // No executable path (an unusual host, a deleted binary): the portable location
@@ -11,21 +15,70 @@ pub fn data_dir_for(exe_dir: Option<&Path>, appdata_dir: &Path) -> PathBuf {
         None => {
             let fallback = appdata_dir.join("data");
             let _ = fs::create_dir_all(&fallback);
-            fallback
+            Ok(fallback)
         }
     }
 }
 
-/// Prefer `<exe dir>/data` if creatable+writable, else `<appdata>/data`.
-pub fn resolve_data_dir(exe_dir: &Path, appdata_dir: &Path) -> PathBuf {
+/// Prefer `<exe dir>/data` if creatable+writable, else `<appdata>/data` — **unless
+/// `<exe dir>/data` already holds a collection** (`user.db`, or a pre-27 `mtg.db`), which is
+/// an error instead (issue #1147).
+///
+/// The fallback is for a copy that never had a portable folder: an installed build under
+/// `Program Files`, where the per-user folder is the only place it could ever have written.
+/// A portable folder with a database in it is a different case — a stick with its
+/// write-protect switch on, Controlled Folder Access, an antivirus refusing the probe — and
+/// falling back there opened an empty collection and a first-run download with no word why.
+/// Whatever was edited that session went to AppData and vanished from view once the stick was
+/// writable again, leaving two databases that had diverged. Refusing to start, naming the
+/// folder, is the only answer that loses nothing.
+pub fn resolve_data_dir(exe_dir: &Path, appdata_dir: &Path) -> Result<PathBuf, String> {
+    resolve_with(exe_dir, appdata_dir, dir_writable)
+}
+
+/// [`resolve_data_dir`] with the probe handed in, because a test cannot make a folder
+/// unwritable on every host — a test run as root writes through `0o555`, and Windows' read-only
+/// attribute does not stop a file being created in a directory.
+fn resolve_with(
+    exe_dir: &Path,
+    appdata_dir: &Path,
+    writable: impl Fn(&Path) -> bool,
+) -> Result<PathBuf, String> {
     let portable = exe_dir.join("data");
-    if dir_writable(&portable) {
-        portable
-    } else {
-        let fallback = appdata_dir.join("data");
-        let _ = fs::create_dir_all(&fallback);
-        fallback
+    if writable(&portable) {
+        return Ok(portable);
     }
+    if let Some(db) = existing_collection(&portable) {
+        return Err(read_only_portable(&portable, &db));
+    }
+    let fallback = appdata_dir.join("data");
+    let _ = fs::create_dir_all(&fallback);
+    Ok(fallback)
+}
+
+/// The collection file already in `dir`, if there is one — `user.db`, or the single-file
+/// `mtg.db` a pre-27 build left, which the next launch converts. `corpus.db` alone does not
+/// count: it is rebuilt from Scryfall, and a folder holding only that has nothing to lose.
+fn existing_collection(dir: &Path) -> Option<PathBuf> {
+    [USER_DB, LEGACY_DB]
+        .iter()
+        .map(|name| dir.join(name))
+        .find(|path| path.is_file())
+}
+
+/// The refusal [`resolve_data_dir`] returns: which folder, which file, the likely causes, and
+/// that nothing was opened anywhere else.
+fn read_only_portable(dir: &Path, db: &Path) -> String {
+    format!(
+        "MTG Grimoire cannot write to its data folder:\n  {dir}\n\
+         Your collection is in {db}, so the app has not started from an empty one somewhere \
+         else.\n\
+         Check that the drive is not write-protected (a lock switch on a USB stick or SD card), \
+         and that Windows Controlled Folder Access or an antivirus program is not blocking \
+         MTG Grimoire from this folder. Then start the app again.",
+        dir = dir.display(),
+        db = db.display(),
+    )
 }
 
 /// Can this app actually put files in `dir`? Creates it if it is not there yet.
@@ -66,7 +119,7 @@ mod tests {
         let app = tmp.join("app");
         std::fs::create_dir_all(&exe).unwrap();
 
-        let resolved = resolve_data_dir(&exe, &app);
+        let resolved = resolve_data_dir(&exe, &app).unwrap();
 
         let expected = exe.join("data");
         let _ = std::fs::remove_dir_all(&tmp);
@@ -105,7 +158,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         let app = tmp.join("app");
 
-        let resolved = data_dir_for(None, &app);
+        let resolved = data_dir_for(None, &app).unwrap();
 
         let created = app.join("data").is_dir();
         let _ = std::fs::remove_dir_all(&tmp);
@@ -123,12 +176,55 @@ mod tests {
         std::fs::write(&exe, b"not a directory").unwrap();
         let app = tmp.join("app");
 
-        let resolved = resolve_data_dir(&exe, &app);
+        let resolved = resolve_data_dir(&exe, &app).unwrap();
 
         let expected = app.join("data");
         let existed = resolved.is_dir();
         let _ = std::fs::remove_dir_all(&tmp);
         assert_eq!(resolved, expected);
         assert!(existed, "fallback data dir should have been created");
+    }
+
+    /// Issue #1147: a portable folder that already holds the collection and cannot be written
+    /// to is a refusal naming the folder — never a quiet switch to an empty per-user database.
+    #[test]
+    fn an_unwritable_portable_collection_refuses_instead_of_falling_back() {
+        for name in [USER_DB, LEGACY_DB] {
+            let tmp = crate::scratch::path("paths-readonly");
+            let _ = std::fs::remove_dir_all(&tmp);
+            let exe = tmp.join("exe");
+            let data = exe.join("data");
+            let app = tmp.join("app");
+            std::fs::create_dir_all(&data).unwrap();
+            std::fs::write(data.join(name), b"pretend database").unwrap();
+
+            let resolved = resolve_with(&exe, &app, |_| false);
+
+            let fallback_made = app.join("data").exists();
+            let _ = std::fs::remove_dir_all(&tmp);
+            let message = resolved.expect_err(name);
+            assert!(message.contains(&data.display().to_string()), "{message}");
+            assert!(message.contains(name), "{message}");
+            assert!(message.contains("write-protected"), "{message}");
+            assert!(!fallback_made, "no per-user folder is made for a refusal");
+        }
+    }
+
+    /// The fallback still stands for a portable folder with nothing to lose: absent, empty, or
+    /// holding only the rebuildable `corpus.db`.
+    #[test]
+    fn an_unwritable_portable_folder_without_a_collection_still_falls_back() {
+        let tmp = crate::scratch::path("paths-readonly-empty");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let exe = tmp.join("exe");
+        let data = exe.join("data");
+        let app = tmp.join("app");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join(crate::db::CORPUS_DB), b"pretend corpus").unwrap();
+
+        let resolved = resolve_with(&exe, &app, |_| false);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        assert_eq!(resolved, Ok(app.join("data")));
     }
 }

@@ -819,6 +819,17 @@ export async function handleClaim(request: Request, env: Env): Promise<Response>
   // -1 represents no key rows, so a first seed that raced this request also fails closed.
   // The auth comparison here fences a write; the initial credential check remains constant-time.
   //
+  // ⚠️ **The auth is fenced against `group_keys` and not against the mirror**, which is the same
+  // fact — `recordRotation` writes the newest row and `entitlements.group_auth` in one batch, and
+  // `(group_id, epoch)` is a key, so the newest epoch holds exactly one auth — read from the home
+  // the release below does not empty. Fenced on the mirror, a claim onto a dead holder's group
+  // would clear the row it is about to compare against and refuse itself.
+  const current = `coalesce((SELECT max(epoch) FROM group_keys WHERE group_id = ?), -1) = ?
+          AND (? = -1 OR (SELECT count(*) FROM group_keys
+                           WHERE group_id = ? AND epoch = ? AND auth = ?) > 0)`;
+  const keyed = keyedEpoch ?? -1;
+  const fenced = [row.subject, previous, group, keyed, keyed, group, keyed, auth];
+
   // **A fresh secret on every claim, and the device it was handed to beside it** (the group-wide
   // design's §4: reconnecting mints a fresh secret). This read `row.refresh_secret ??
   // randomSecret()`, so a re-claim handed back the secret already stored — and that secret opened
@@ -830,37 +841,53 @@ export async function handleClaim(request: Request, env: Env): Promise<Response>
   // this answers (`entitlement::claim` → `store_grant`), so the device pressing Connect is never
   // left holding the secret this press replaced; a *different* device that held it meets a 401 on
   // the refresh door and continues through the group door.
+  //
+  // **The mirror moves with the binding when the group is keyed**, because the fence has just
+  // proved `auth` is the group's at `keyedEpoch`. That is what makes taking a dead holder's group
+  // one transaction: the group's current auth leaves the released row and lands on this one
+  // together, so no `/token` in between reads a group with no current auth — a 401 the app takes
+  // for a lapse. Unkeyed there is no auth to vouch for, and the columns are left to `seedGroup`.
+  const mirror = keyedEpoch === null ? "" : ", group_epoch = ?, group_auth = ?";
+  const mirrored = keyedEpoch === null ? [] : [keyedEpoch, auth];
   const refresh = randomSecret();
   let bound: D1Result;
   try {
-    bound = await env.DB.prepare(
-      `UPDATE entitlements
-          SET group_id = ?, refresh_secret = ?, refresh_device = ?, status = ?, checked_at = ?
-        WHERE subject = ? AND (group_id IS NULL OR group_id = ?)
-          AND coalesce((SELECT max(epoch) FROM group_keys WHERE group_id = ?), -1) = ?
-          AND (? = -1 OR (SELECT count(*) FROM entitlements WHERE group_id = ? AND group_auth = ?) > 0)`,
-    )
-      .bind(
-        group,
-        refresh,
-        device,
-        status,
-        now,
-        row.subject,
-        previous,
-        group,
-        keyedEpoch ?? -1,
-        keyedEpoch ?? -1,
-        group,
-        auth,
-      )
-      .run();
+    [, bound] = await env.DB.batch([
+      // **A dead holder gives the group up, in the same transaction as the bind that takes it**
+      // (issue #1192). `revoke` sets `status = 'dead'` and leaves `group_id` where it is, so once a
+      // payer's pledge ended the unique index below turned every other member's Connect into the
+      // 409 that is meant for a shared subscription wearing two names — leaving and re-pairing
+      // every device, or a hand edit of D1, were the only ways out. A dead row serves nobody, so
+      // the one subscription per group the index protects is still one.
+      //
+      // "Dead" is `settle`'s, spelled in SQL so that a grace window that closed with nothing to
+      // announce it releases too — the row `revoke` has not yet been asked about. It carries the
+      // bind's own fences, the claimer's row named by subject, so a bind that is about to change
+      // nothing releases nothing: a batch rolls back on a throw and not on a zero. The mirror is
+      // cleared with the binding, since a row bound to no group has no current auth to hold.
+      env.DB.prepare(
+        `UPDATE entitlements SET group_id = NULL, group_epoch = NULL, group_auth = NULL
+          WHERE group_id = ? AND subject <> ?
+            AND status <> 'active'
+            AND (status <> 'grace' OR grace_until IS NULL OR grace_until <= 0 OR grace_until < ?)
+            AND (SELECT count(*) FROM entitlements
+                  WHERE subject = ? AND (group_id IS NULL OR group_id = ?)) > 0
+            AND ${current}`,
+      ).bind(group, row.subject, now, ...fenced),
+      env.DB.prepare(
+        `UPDATE entitlements
+            SET group_id = ?, refresh_secret = ?, refresh_device = ?, status = ?, checked_at = ?${mirror}
+          WHERE subject = ? AND (group_id IS NULL OR group_id = ?) AND ${current}`,
+      ).bind(group, refresh, device, status, now, ...mirrored, ...fenced),
+    ]);
   } catch {
     // `entitlements_group` is unique, so this is another *subject* holding that group id — a
     // shared subscription wearing two names, which is the thing that constraint is really about
-    // and the one case the 409 still exists for. Reached by catching the failure rather than by
-    // asking a question first: D1 has no interactive transaction, so a `SELECT` and then an
-    // `UPDATE` is two round trips with a window between them.
+    // and the one case the 409 still exists for. A holder whose membership is dead has already
+    // given the group up in the statement ahead of this one, so the subject reaching here is one
+    // that is still served. Reached by catching the failure rather than by asking a question
+    // first: D1 has no interactive transaction, so a `SELECT` and then an `UPDATE` is two round
+    // trips with a window between them.
     return json({ error: "that sync group is bound to another membership" }, 409);
   }
   if (bound.meta.changes === 0) {
@@ -1310,33 +1337,67 @@ export async function reconcile(env: Env): Promise<void> {
  * and that is right for a reader Patreon says has no membership — but a document this code
  * cannot parse is the *absence* of an answer, and turning that into a cancellation is how one
  * shape change on Patreon's side becomes a mass revocation in a job nobody is watching.
+ *
+ * ⚠️ **The rotated refresh token is written the moment Patreon hands it over, before the identity
+ * read.** Patreon rotates the refresh token on every use (`patreon.ts`), so the stored one is dead
+ * as soon as `refreshTokens` returns. Until issue #1117 the new one was written only beside the
+ * decision, after `fetchIdentity` — so one 5xx or one unreadable document there threw it away,
+ * every later pass failed at the refresh for ever, and the backstop was off for that subject: a
+ * missed cancellation webhook left its group syncing for as long as the relay ran.
+ *
+ * **A failure still settles the window, and decides nothing else.** Whatever Patreon did not
+ * answer, a grace window that has closed is a local fact — the same one `/token` acts on — and a
+ * row that throws on every pass (a revoked grant) would otherwise sit in `grace` for ever, which
+ * is a status the share Worker's lapse reads. An `active` row that throws stays `active`: an
+ * unanswered question is not a cancellation.
+ *
+ * **At most two `UPDATE`s a row, which `RECONCILE_BUDGET`'s D1 arithmetic counts on.** The token
+ * write is one; the decision is the other, and a `dead` decision is `revoke`'s own `UPDATE` rather
+ * than a second one before it — `revoke` writes everything a dead row's decision would.
  */
 async function reconcileOne(env: Env, row: EntitlementRow): Promise<void> {
   const now = Date.now();
 
   if (row.patreon_refresh === null || row.patreon_refresh === "") {
-    if (settle(row.status, row.grace_until, now) === "dead") {
-      await revoke(env, row.subject, row.group_id);
-    }
+    await settleWindow(env, row, now);
     return;
   }
 
-  const tokens = await refreshTokens(row.patreon_refresh, env);
-  const identity = await fetchIdentity(tokens.accessToken, env);
-  if (identity === null) {
-    throw new Error("patreon answered an identity document with no user id");
+  let identity: Identity;
+  try {
+    const tokens = await refreshTokens(row.patreon_refresh, env);
+    await env.DB.prepare(`UPDATE entitlements SET patreon_refresh = ? WHERE subject = ?`)
+      .bind(tokens.refreshToken, row.subject)
+      .run();
+
+    const read = await fetchIdentity(tokens.accessToken, env);
+    if (read === null) {
+      throw new Error("patreon answered an identity document with no user id");
+    }
+    identity = read;
+  } catch (error) {
+    await settleWindow(env, row, now);
+    throw error;
   }
 
   const decision = decide(identity.patronStatus, now, row.grace_until);
-  await env.DB.prepare(
-    `UPDATE entitlements
-        SET status = ?, grace_until = ?, patreon_refresh = ?, checked_at = ?
-      WHERE subject = ?`,
-  )
-    .bind(decision.status, decision.graceUntil, tokens.refreshToken, now, row.subject)
-    .run();
+  if (decision.status === "dead") {
+    await revoke(env, row.subject, row.group_id);
+    return;
+  }
 
-  if (decision.status === "dead") await revoke(env, row.subject, row.group_id);
+  await env.DB.prepare(
+    `UPDATE entitlements SET status = ?, grace_until = ?, checked_at = ? WHERE subject = ?`,
+  )
+    .bind(decision.status, decision.graceUntil, now, row.subject)
+    .run();
+}
+
+/** A row Patreon gave no answer about: revoke it if its grace window has closed, else nothing. */
+async function settleWindow(env: Env, row: EntitlementRow, now: number): Promise<void> {
+  if (settle(row.status, row.grace_until, now) === "dead") {
+    await revoke(env, row.subject, row.group_id);
+  }
 }
 
 /**

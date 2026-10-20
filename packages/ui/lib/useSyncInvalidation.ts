@@ -27,6 +27,13 @@ import { queryClient } from "@/lib/query";
  * answered. The key is `useScannerStatus`'s `SCANNER_STATUS_KEY`, spelled here because a
  * `lib` module does not import a feature — `useScannerStatus.test.ts` holds the two equal.
  *
+ * `["newPrintings"]` because the home page's New printings feed is half `deck_cards` and half the
+ * corpus, and **the sync is what brings the new printings in**. The feed sits under a root of its
+ * own rather than `["decks"]` (so a deck write does not refetch it), which means `["decks"]`
+ * here does not reach it — and a feed on screen across a sync kept the pre-sync list until it
+ * remounted (#1182). The key is `features/home/keys.ts`'s `NEW_PRINTINGS_ROOT`, spelled here for
+ * the scanner's reason — `keys.test.tsx` holds the two equal.
+ *
  * `["formatSpecs"]` is deliberately **not** here: that table is seeded by a migration, and a
  * sync cannot touch it. It is the one query in the app with a flat `staleTime: Infinity`.
  */
@@ -39,6 +46,7 @@ export const SYNC_INVALIDATED = [
   ["decks"],
   ["trade"],
   ["scanner", "status"],
+  ["newPrintings"],
 ];
 
 /** Mark all of it stale; only the queries actually on screen pay for a refetch. */

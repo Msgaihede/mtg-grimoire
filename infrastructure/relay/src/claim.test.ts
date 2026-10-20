@@ -1473,6 +1473,114 @@ describe("/claim — the binding moves rather than being refused", () => {
     expect(dropped).toEqual([]);
   });
 
+  /**
+   * Issue #1192: the payer's pledge ends, and another member of the same group connects their own
+   * Patreon and pastes the code. `revoke` leaves a dead row's `group_id` where it was, so the bind
+   * used to meet `entitlements_group` and answer the 409 meant for a shared subscription.
+   *
+   * `sub-0` holds the code and has never claimed; `sub-1` is the lapsed payer, bound to `g1` and
+   * holding its mirror at the epoch `g1` stands on, as every relay write leaves it.
+   */
+  function lapsedHolder(holder: { status: string; grace_until: number | null }): Harness {
+    const made = harness({ groups: ["unused", "g1"] });
+    withCode(made.tables);
+    keyed(made.tables, "g1", 0);
+    Object.assign(made.tables.entitlements[0], { group_id: null, refresh_secret: null });
+    Object.assign(made.tables.entitlements[1], { ...holder, group_epoch: 0, group_auth: AUTH_TWO });
+    seat(made.tables, "g1", "desk");
+    return made;
+  }
+
+  it.each([
+    ["revoked", () => ({ status: "dead", grace_until: null })],
+    // **The row `revoke` has not been asked about yet.** A window closes with nothing to announce
+    // it, so a claim that released only `status = 'dead'` would still refuse this one.
+    // Built inside the test rather than here: the table is read before this file's clock is set.
+    ["out of grace", () => ({ status: "grace", grace_until: Date.now() - 1000 })],
+  ])("takes the group over from a %s holder, mirror and all", async (_, holder) => {
+    const { tables, env, dropped } = lapsedHolder(holder());
+
+    const { status } = await answer(
+      await handleClaim(post("/claim", { ...WELL_FORMED, auth: AUTH_TWO }), env),
+    );
+
+    expect(status).toBe(200);
+    expect(tables.entitlements[0]).toMatchObject({
+      group_id: "g1",
+      group_epoch: 0,
+      group_auth: AUTH_TWO,
+    });
+    // The lapsed row holds no group and no auth for one, so nothing can mint for `g1` off it.
+    expect(tables.entitlements[1]).toMatchObject({
+      group_id: null,
+      group_epoch: null,
+      group_auth: null,
+    });
+    // ⚠️ **And the group itself is taken over, not taken apart.** Its manifest is what every
+    // remaining device reads its membership off; an emptied one is all of them removed at once.
+    expect(tables.group_keys).toHaveLength(1);
+    expect(JSON.parse(String(tables.group_keys[0].keys))).toEqual({ desk: "blob" });
+    expect(idsIn(tables, "g1")).toEqual([DEVICE, "desk"]);
+    expect(dropped).toEqual([]);
+  });
+
+  it("leaves the group alone when the lapsed holder's old secret is presented after", async () => {
+    // The out-of-grace holder still holds `secret-1`. Settled at the refresh door it would be
+    // revoked, and `revoke` drops the log of the group the row names — the one just taken over —
+    // were the row still to name it.
+    const { env, dropped } = lapsedHolder({ status: "grace", grace_until: Date.now() - 1000 });
+    await handleClaim(post("/claim", { ...WELL_FORMED, auth: AUTH_TWO }), env);
+
+    const { status } = await answer(
+      await handleToken(post("/token", { refresh: "secret-1", device: "desk" }), env),
+    );
+
+    expect(status).toBe(401);
+    expect(dropped).toEqual([]);
+  });
+
+  it("still refuses a holder whose grace window is open", async () => {
+    // A declined card is seven days of service, and the subscription is still serving `g1`: two
+    // subjects on it would be the shared subscription `entitlements_group` exists to stop.
+    const { tables, env } = lapsedHolder({ status: "grace", grace_until: Date.now() + 60_000 });
+
+    const { status, body } = await answer(
+      await handleClaim(post("/claim", { ...WELL_FORMED, auth: AUTH_TWO }), env),
+    );
+
+    expect(status).toBe(409);
+    expect(body.error).toBe("that sync group is bound to another membership");
+    expect(tables.entitlements[0].group_id).toBeNull();
+    expect(tables.entitlements[1]).toMatchObject({ group_id: "g1", group_auth: AUTH_TWO });
+  });
+
+  it("releases nothing when a rotation lands between the auth check and the bind", async () => {
+    // **The release carries the bind's fences, and this is the race they are for.** A batch rolls
+    // back on a throw and not on a zero, so a release fenced on less than the bind would unbind
+    // the lapsed row while the bind that should have followed changed nothing — a group held by
+    // no row at all, whose every device then fails `authIsCurrent`.
+    const { tables, env } = lapsedHolder({ status: "dead", grace_until: null });
+    const batch = env.DB.batch.bind(env.DB);
+    env.DB.batch = ((statements: D1PreparedStatement[]) => {
+      tables.group_keys.push({
+        group_id: "g1",
+        epoch: 2,
+        auth: AUTH_ONE,
+        keys: "{}",
+        created_at: 0,
+      });
+      return batch(statements);
+    }) as typeof env.DB.batch;
+
+    const { status } = await answer(
+      await handleClaim(post("/claim", { ...WELL_FORMED, auth: AUTH_TWO }), env),
+    );
+
+    expect(status).toBe(401);
+    expect(tables.entitlements[0].group_id).toBeNull();
+    expect(tables.entitlements[1]).toMatchObject({ group_id: "g1", group_auth: AUTH_TWO });
+  });
+
   it("takes nothing apart when the group claimed is the one already bound", async () => {
     // A reader who sold the laptop holding the refresh secret connects Patreon again and
     // re-claims the group they are still in. `seedGroup` is `INSERT OR IGNORE` for this: writing
@@ -1676,12 +1784,21 @@ function jsonResponse(body: unknown, status = 200): Response {
  * `refusing` is a set of refresh tokens the token endpoint answers `400` to — **a reader who
  * revoked the app's access on Patreon's side**, which throws on every attempt for ever and is the
  * row a queue ordered by success would starve behind.
+ *
+ * `identityFails` maps a refresh token to how the identity read goes wrong **after** that token
+ * was successfully traded: `"5xx"` is a `503`, `"unreadable"` a document with no user id. The
+ * token endpoint has already rotated the token by then, which is issue #1117's whole case.
  */
 function fakePatreon(
-  options: { refusing?: Set<string>; statusOf?: Record<string, string> } = {},
+  options: {
+    refusing?: Set<string>;
+    statusOf?: Record<string, string>;
+    identityFails?: Record<string, "5xx" | "unreadable">;
+  } = {},
 ): Patreon {
   const refusing = options.refusing ?? new Set<string>();
   const statusOf = options.statusOf ?? {};
+  const identityFails = options.identityFails ?? {};
   const patreon: Patreon = { asked: [], fetches: 0 };
   vi.stubGlobal(
     "fetch",
@@ -1696,6 +1813,8 @@ function fakePatreon(
         );
       }
       const token = (init?.headers?.authorization ?? "").replace("Bearer access-for-", "");
+      if (identityFails[token] === "5xx") return Promise.resolve(jsonResponse({}, 503));
+      if (identityFails[token] === "unreadable") return Promise.resolve(jsonResponse({}));
       return Promise.resolve(
         jsonResponse({
           data: { id: `user-${token}` },
@@ -1879,6 +1998,91 @@ describe("reconcile — an hourly pass on a budget", () => {
     const before = patreon.asked.length;
     await reconcile(env);
     expect(patreon.asked.slice(before)).toEqual(["token-sub-0+"]);
+  });
+
+  /**
+   * ⚠️ **Issue #1117.** Patreon rotates the refresh token on every use, so once the token endpoint
+   * has answered, the stored token is dead. The new one used to be written only beside the
+   * decision, after the identity read — so one failure there threw it away, and every later pass
+   * presented a token Patreon had already retired. Both ways the read can fail are pinned: a
+   * `503`, and a document the code cannot read, which throws rather than deciding.
+   */
+  it.each(["5xx", "unreadable"] as const)(
+    "keeps the rotated refresh token when the identity read fails (%s)",
+    async (failure) => {
+      const { tables, env, dropped } = queue(1);
+      const patreon = fakePatreon({ identityFails: { "token-sub-0": failure } });
+
+      await reconcile(env);
+
+      const row = tables.entitlements[0];
+      expect(patreon.asked).toEqual(["token-sub-0"]);
+      expect(row.patreon_refresh).toBe("token-sub-0+");
+      // **A failure decides nothing**: the row is still serving and its log is untouched.
+      expect(row.status).toBe("active");
+      expect(dropped).toEqual([]);
+
+      // And the next pass presents the token Patreon handed over, not the one it retired.
+      row.reconciled_at = null;
+      await reconcile(env);
+      expect(patreon.asked).toEqual(["token-sub-0", "token-sub-0+"]);
+      expect(row.patreon_refresh).toBe("token-sub-0++");
+    },
+  );
+
+  /**
+   * A grace window that closed is a local fact, and Patreon not answering does not keep it open.
+   * Without this a row whose grant was revoked would sit in `grace` for ever — the status the
+   * share Worker's lapse reads. A window still open, or an `active` row, is left exactly as it was.
+   */
+  it("settles a closed grace window even when Patreon cannot be asked", async () => {
+    const { tables, env, dropped } = queue(3);
+    for (const index of [0, 1]) {
+      tables.entitlements[index].status = "grace";
+    }
+    tables.entitlements[0].grace_until = Date.now() - 1;
+    tables.entitlements[1].grace_until = Date.now() + 60 * 60 * 1000;
+    fakePatreon({ refusing: new Set(tokensOf(tables, [0, 1, 2])) });
+
+    await reconcile(env);
+
+    expect(tables.entitlements.map((row) => row.status)).toEqual(["dead", "grace", "active"]);
+    expect(tables.entitlements[0].refresh_secret).toBeNull();
+    expect(dropped).toEqual(["/g/g0/drop"]);
+  });
+
+  /**
+   * `RECONCILE_BUDGET`'s second ceiling: fifty D1 queries an invocation, with three left for the
+   * sweeps `scheduled` runs after this pass. The heaviest row is a cancellation — the token write
+   * and `revoke`'s `UPDATE` — and a whole budget of them must still fit.
+   */
+  it("stays inside fifty D1 queries when every row is a cancellation", async () => {
+    const { tables, env } = queue(RECONCILE_BUDGET);
+    const statusOf = Object.fromEntries(
+      tokensOf(tables, range(0, RECONCILE_BUDGET)).map((token) => [token, "former_patron"]),
+    );
+    fakePatreon({ statusOf });
+    const db = env.DB;
+    let queries = 0;
+    Object.assign(env, {
+      DB: {
+        prepare: (sql: string) => {
+          queries += 1;
+          return db.prepare(sql);
+        },
+        batch: (sent: D1PreparedStatement[]) => {
+          queries += sent.length;
+          return db.batch(sent);
+        },
+      },
+    });
+
+    await reconcile(env);
+
+    expect(tables.entitlements.every((row) => row.status === "dead")).toBe(true);
+    // One `SELECT`, one stamp, and two `UPDATE`s a row.
+    expect(queries).toBe(2 + 2 * RECONCILE_BUDGET);
+    expect(queries).toBeLessThanOrEqual(50 - 3);
   });
 
   it("counts a row with no Patreon token against the budget, and settles it locally", async () => {

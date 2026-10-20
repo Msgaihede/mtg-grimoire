@@ -88,7 +88,13 @@ export function useDeckCardQuery(deckId: number, input: string): DeckCardQuery {
   const tags = useMemo(() => {
     if (asks.length === 0) return { terms: {}, pending: false, unknown: false };
     const answers = resolution.data;
-    if (answers === undefined) return { terms: {}, pending: true, unknown: false };
+    // A refused lookup never answers, so it fails closed as an unknown name does (issue #1165)
+    // rather than sitting "pending" for good — which left the deck narrowed by the free text
+    // alone, the tag dropped. Only while nothing was ever answered: a last answer still stands.
+    if (answers === undefined) {
+      const refused = resolution.isError;
+      return { terms: {}, pending: !refused, unknown: refused };
+    }
     const chips: TagChip[] = [];
     let unknown = false;
     parsed.tags.forEach((token, i) => {
@@ -108,7 +114,7 @@ export function useDeckCardQuery(deckId: number, input: string): DeckCardQuery {
     // keyword for one, because Scryfall has none to borrow.
     const { artTags, oracleTags } = termsFor({ chips, namespace: "both", floor: "any" });
     return { terms: { artTags, oracleTags }, pending: false, unknown };
-  }, [asks, parsed, resolution.data]);
+  }, [asks, parsed, resolution.data, resolution.isError]);
 
   const filters = useMemo((): Pick<CardFilters, "predicates" | "oracleTags" | "artTags"> => {
     const out: Pick<CardFilters, "predicates" | "oracleTags" | "artTags"> = {};

@@ -3,6 +3,10 @@
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
 - Data dir is `<exe dir>/data`, falling back to `%APPDATA%/com.mtggrimoire.app/data`.
+  **Except when `<exe dir>/data` already holds `user.db` or `mtg.db` and cannot be written**
+  (a write-protected stick, Controlled Folder Access, an antivirus refusing the probe): that is
+  a startup refusal naming the folder, never the fallback — which used to open an empty
+  collection there and leave two diverging databases (issue #1147, `paths::resolve_data_dir`).
   **Under `tauri dev` the exe is `target/debug/`, so the databases are
   `target/debug/data/user.db` and `corpus.db`** — not `apps/desktop/src-tauri/data/`, and
   **not one file since schema 27**: the reader's tables are `main` and the rebuildable ones are

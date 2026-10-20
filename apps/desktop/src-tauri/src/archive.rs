@@ -181,6 +181,11 @@ fn save_archive(path: &Path, data: &Value) -> Result<(), String> {
     Ok(())
 }
 
+/// How many automatic ZIPs [`automatic_backup`] keeps per reason. The same bound as the core's
+/// `user.v{N}.db` copies: a full archive per update or restore forever would grow without limit
+/// on a USB stick (issue #1148).
+const AUTOMATIC_BACKUPS_KEPT: usize = 3;
+
 /// A durable backup must finish before an updater launches or a restore changes any rows.
 pub fn automatic_backup(
     conn: &rusqlite::Connection,
@@ -205,6 +210,8 @@ pub fn automatic_backup(
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(path);
+    } else {
+        prune_automatic_backups(&dir, reason);
     }
     result
 }
@@ -222,6 +229,34 @@ fn snapshot(state: &AppState) -> Result<Value, String> {
         .or(shared.as_deref())
         .expect("one or the other");
     grimoire_core::archive::dump(conn)
+}
+
+/// Keep the newest [`AUTOMATIC_BACKUPS_KEPT`] `mtg-grimoire-{reason}-{ns}.zip` archives by
+/// stamp, and leave every other file in the folder alone — another reason's archives, the
+/// core's `user.v{N}.db` copies and the reader's own files. Pruning is best-effort: the new
+/// backup is already durable, so a file that cannot be removed is no reason to stop an update.
+fn prune_automatic_backups(dir: &Path, reason: &str) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let prefix = format!("mtg-grimoire-{reason}-");
+    let mut archives: Vec<(u128, std::path::PathBuf)> = entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let name = entry.file_name();
+            let stamp = name
+                .to_str()?
+                .strip_prefix(&prefix)?
+                .strip_suffix(".zip")?
+                .parse()
+                .ok()?;
+            Some((stamp, entry.path()))
+        })
+        .collect();
+    archives.sort_by_key(|a| std::cmp::Reverse(a.0));
+    for (_, path) in archives.into_iter().skip(AUTOMATIC_BACKUPS_KEPT) {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 #[tauri::command]
@@ -447,6 +482,52 @@ mod tests {
         assert_eq!(grimoire_core::archive::dump(&reader).unwrap(), before);
         writer.execute_batch("ROLLBACK").unwrap();
         drop((reader, writer));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn automatic_backups_keep_the_newest_per_reason_and_nothing_else() {
+        let conn = crate::schema::memory_pair();
+        let dir = crate::scratch::path("archive-auto-prune");
+        let backups = dir.join("backups");
+        std::fs::create_dir_all(&backups).unwrap();
+        // Older than anything a real clock stamps now, so the new archive is the newest.
+        let others = [
+            "mtg-grimoire-before-update-1.zip",
+            "mtg-grimoire-before-update-2.zip",
+            "mtg-grimoire-before-update-3.zip",
+            "mtg-grimoire-before-restore-1.zip",
+            "mtg-grimoire-before-update-x.zip",
+            "mtg-grimoire-before-update-4.zip.bak",
+            "user.v46.db",
+            "my-own-backup.zip",
+        ];
+        for name in others {
+            std::fs::write(backups.join(name), b"").unwrap();
+        }
+        automatic_backup(&conn, &dir, "before-update").unwrap();
+        let mut names: Vec<String> = std::fs::read_dir(&backups)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        let newest = names
+            .iter()
+            .find(|name| !others.contains(&name.as_str()))
+            .unwrap()
+            .clone();
+        let mut expected: Vec<String> = others
+            .iter()
+            .filter(|name| **name != "mtg-grimoire-before-update-1.zip")
+            .map(|name| name.to_string())
+            .chain([newest.clone()])
+            .collect();
+        expected.sort();
+        assert_eq!(names, expected);
+        assert_eq!(
+            read_archive(&backups.join(newest)).unwrap(),
+            grimoire_core::archive::dump(&conn).unwrap()
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 

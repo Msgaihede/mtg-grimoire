@@ -20,14 +20,22 @@ import { sweepLapsed } from "./lapse";
  * which is the whole reason the `AND state = ?` guard can be tested at all.
  */
 
+/** The instant every pass below is judged at, unless a case says otherwise. */
+const NOW = 1_760_000_000_000;
+
 /** An entitlement row as `reconcile` leaves it: the status is a fact, not a judgement to redo. */
-function ent(subject: string, group: string | null, status: string): Row {
+function ent(
+  subject: string,
+  group: string | null,
+  status: string,
+  graceUntil: number | null = null,
+): Row {
   return {
     subject,
     source: "patreon",
     external_id: subject,
     status,
-    grace_until: null,
+    grace_until: graceUntil,
     group_id: group,
     refresh_secret: "s",
     patreon_refresh: null,
@@ -102,11 +110,48 @@ describe("the lapse sweep", () => {
    */
   it("leaves a subject in their grace window serving", async () => {
     const tables: Tables = {
-      entitlements: [ent("s1", "g1", "grace")],
+      entitlements: [ent("s1", "g1", "grace", NOW + 60_000)],
+      shares: [share("a", "g1", "live"), share("b", "g1", "lapsed")],
+    };
+    await sweepLapsed(lapseEnv(tables), NOW);
+    expect(stateOf(tables, "a")).toBe("live");
+    expect(stateOf(tables, "b")).toBe("live");
+  });
+
+  /** The deadline instant is the last one inside the window, as `decide` and `settle` read it. */
+  it("still serves at the deadline's own instant", async () => {
+    const tables: Tables = {
+      entitlements: [ent("s1", "g1", "grace", NOW)],
       shares: [share("a", "g1", "live")],
     };
-    await sweepLapsed(lapseEnv(tables));
+    await sweepLapsed(lapseEnv(tables), NOW);
     expect(stateOf(tables, "a")).toBe("live");
+  });
+
+  /**
+   * ⚠️ **A stored `grace` whose window has closed does not serve** — issue #1117. The relay's
+   * `/token` settles such a row `dead` the moment it is asked, but the row itself says `grace`
+   * until the relay's cron reaches it, and a row Patreon refuses on every pass might never be
+   * reached successfully. Read as a bare status, its links stayed live for ever.
+   */
+  it("darkens a grace window that has closed", async () => {
+    const tables: Tables = {
+      entitlements: [ent("s1", "g1", "grace", NOW - 1)],
+      shares: [share("a", "g1", "live")],
+    };
+    await sweepLapsed(lapseEnv(tables), NOW);
+    expect(stateOf(tables, "a")).toBe("lapsed");
+  });
+
+  /** `settle` reads a window with no deadline as closed, and so does this pass. */
+  it("darkens a grace row with no deadline", async () => {
+    const tables: Tables = {
+      entitlements: [ent("s1", "g1", "grace", null), ent("s2", "g2", "grace", 0)],
+      shares: [share("a", "g1", "live"), share("b", "g2", "live")],
+    };
+    await sweepLapsed(lapseEnv(tables), NOW);
+    expect(stateOf(tables, "a")).toBe("lapsed");
+    expect(stateOf(tables, "b")).toBe("lapsed");
   });
 
   /**
