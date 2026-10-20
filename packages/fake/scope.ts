@@ -116,9 +116,10 @@ export function createScope(commands: CommandTable = {}): FakeScope {
  */
 let active: FakeScope = createScope();
 
-/** Scopes whose story is **mounted**. Only {@link import("./event").emitFake} reads this: an
- *  event goes to every story on the page that has a listener for it, because a `play` holds
- *  no handle on a scope and nothing else could choose between them. */
+/** Scopes whose story is **mounted**. {@link import("./event").emitFake} reads it — an event a
+ *  `play` emits goes to every story on the page that has a listener for it, because a `play`
+ *  holds no handle on a scope and nothing else could choose between them — and {@link standing}
+ *  does, for the calls and the handler events that do hold one. */
 const mounted = new Set<FakeScope>();
 
 export function activeScope(): FakeScope {
@@ -164,6 +165,9 @@ export function runInScope<T>(scope: FakeScope, fn: () => T): T {
  * {@link listeningScopes}' rule, for its reason: with nothing mounted there is no "another
  * world" to prefer — `core.test.ts`, and every test that installs worlds without mounting them —
  * so the pointer goes back as it always did.
+ *
+ * `event.ts`' `worldEmitter` asks the same question of a handler's event as it lands: a download
+ * still talking after its world has gone says it to nobody (issue #1191).
  */
 export function standing(scope: FakeScope): boolean {
   return mounted.size === 0 || mounted.has(scope);
