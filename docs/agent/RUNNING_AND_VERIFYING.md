@@ -84,7 +84,14 @@ Related: the `running-the-app` skill (locks and ports), [live-ui-verification.md
   workerd (`wrangler dev --local`, a local D1, nothing that reaches Cloudflare), by the relay's
   real name and under the shipped policy; `--measure` adds a minute's profile of the idle
   loop, twice. It runs the pinned wrangler (`npm ci --ignore-scripts --prefix
-  infrastructure/wrangler` first), or the `wrangler.js` that `WRANGLER` names.
+  infrastructure/wrangler` first), or the `wrangler.js` that `WRANGLER` names. **A walk whose
+  browser's network service died is walked once more** (Chrome 155.0.8059.39's fault, issue
+  #1296 — `scripts/web-smoke/fault.ts`); any other failure is final. A wait that never ends
+  names the requests left unanswered, what each socket heard and the relay's last lines;
+  `SYNC_SMOKE_RELAY_LOG=<file>`, `SMOKE_BROWSER_LOG=<file>` and `SMOKE_CRASH_DUMPS=<dir>` keep
+  the relay's output, each browser's and a crashed process's minidump. ⚠️ Chrome and wrangler
+  both obey `HTTPS_PROXY`: behind one, unset it for the run, or every relay request goes to the
+  proxy. Two walks in one checkout no longer remove each other's wrangler bundle.
   **`pnpm web:sync-pull --ops <n>`** is a measurement on that harness, not a check: what
   a `pull` of `n` ops costs the engine's Worker and the relay (`--live` and `--join` are the two
   neighbouring cases; [light-app.md](../reference/light-app.md) §10.5, and §10.5b for the
