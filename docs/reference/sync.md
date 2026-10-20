@@ -526,9 +526,9 @@ device would put it back in the group on every device that adopts.
 **The filter in `pairing::status` stays** and is belt-and-braces now: it shipped one PR ahead of
 the delete, and what it still covers is rows written by builds that predate it.
 
-**Five refusals**, each a sentence rather than a constraint failure. ⚠️ **Re-counted 2026-08-30:
+**Six refusals**, each a sentence rather than a constraint failure. ⚠️ **Re-counted 2026-10-20:
 three until the group-wide design added the membership check, four until the device cap added
-the fifth.** The count is written here because the list is written here; it is not a fact about
+the fifth, five until `confirm` began asking `/keys` first (issue #1114) added the sixth.** The count is written here because the list is written here; it is not a fact about
 a tree.
 
 - **This device cannot revoke itself.** Leaving a group is a different act with different
@@ -552,6 +552,15 @@ a tree.
   never what fills the group. That matches `admitDevice`'s upsert at the relay end, and it is the
   one case a reader runs the ceremony a second time for. See "Five devices" below for why this
   refusal is a message and the relay is the fence.
+- **A device the relay has removed cannot pair anyone in** (`pairing::REMOVED_BEFORE_CONFIRM`).
+  `pairing::confirm` runs `client::check_keys` before it reads the group it seals (issue #1114):
+  a rotation rings only the sockets it closes, so a device that stayed can sit at an old epoch
+  for hours, and the key it sealed there handed the joiner an epoch the relay had moved past —
+  whose newer manifest, not naming the joiner, its first `/keys` read as a removal. A device
+  behind adopts first, so the seal carries the relay's epoch and `room_for` counts the swept
+  roster; a device the check finds removed has already left its group and refuses, with nothing
+  posted. **A failed check is not a refusal**: a group with no membership answers `/keys` with a
+  401, and pairing must not need one.
 - **A group with no membership cannot remove a device** (`identity::NO_MEMBERSHIP`, checked by
   `commands::entitled` before anything moves):
 
