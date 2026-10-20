@@ -798,6 +798,30 @@ describe("release.yml", () => {
     expect(code(releaseYml)).not.toMatch(/always\(\)|failure\(\)|cancelled\(\)|continue-on-error/);
   });
 
+  // **A release ships the commit it is tagged at** (#1197). The `release` group is shared by every
+  // push to `main`, so the run that creates a release can be a later push's — on a newer commit
+  // than the release PR's merge, which is what release-please tags. Every checkout on a release
+  // names the tagged commit, and release-please refuses to go on without one: an empty `ref`
+  // checks out `github.sha` without a word.
+  it("builds, signs and deploys the commit release-please tagged, not the run's", () => {
+    const TAGGED = "          ref: ${{ needs.release-please.outputs.sha }}";
+    expect(jobs["release-please"]).toMatch(/^ {6}sha: \$\{\{ steps\.release\.outputs\.sha \}\}$/m);
+    const [, guard] = stepsOf(jobs["release-please"]);
+    expect(guard).toMatch(/^ {8}if: steps\.release\.outputs\.release_created == 'true'$/m);
+    expect(guard).toContain('if [ -z "$SHA" ]; then');
+    expect(guard).toContain("exit 1");
+    let checkouts = 0;
+    for (const [name, job] of Object.entries(jobs)) {
+      if (name === "release-please" || CHANGELOG_JOBS.includes(name)) continue;
+      expect(job, name).not.toContain("github.sha");
+      for (const step of stepsOf(job).filter((s) => /^uses: actions\/checkout@/.test(s))) {
+        expect(step.split("\n"), name).toContain(TAGGED);
+        checkouts++;
+      }
+    }
+    expect(checkouts).toBeGreaterThanOrEqual(11);
+  });
+
   // **A release is a push to `main` and nothing else.** A `workflow_dispatch` or a
   // `pull_request` trigger would let a branch's copy of this file run — and ask for the release
   // environment — with only that environment's branch rule in the way.
@@ -1382,7 +1406,7 @@ describe("release.yml", () => {
     const [notes, flip] = stepsOf(jobs.publish);
     expect(stepsOf(jobs.publish)).toHaveLength(2);
     expect(notes).toContain('file="changelog/$VERSION.md"');
-    expect(notes).toContain("SHA: ${{ github.sha }}");
+    expect(notes).toContain("SHA: ${{ needs.release-please.outputs.sha }}");
     expect(notes).toContain('"repos/$REPO/contents/$file?ref=$SHA" > notes.md');
     expect(notes).toContain('gh release edit "$TAG" --notes-file notes.md --repo "$REPO"');
     // **Notes never hold a release up**: nothing in the step can end it non-zero.
