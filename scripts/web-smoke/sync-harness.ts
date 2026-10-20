@@ -13,7 +13,7 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -317,7 +317,11 @@ export async function startRelay(pageOrigin: string) {
   let failed!: (error: Error) => void;
   const listening = new Promise<void>((found, lost) => ((ready = found), (failed = lost)));
   let pending = "";
+  // `SYNC_SMOKE_RELAY_LOG=<file>`: everything wrangler and workerd print, kept whole — with
+  // `WRANGLER_LOG=debug`, the dev proxy's pauses and reloads too.
+  const keep = process.env.SYNC_SMOKE_RELAY_LOG;
   const hear = (chunk: Buffer) => {
+    if (keep) appendFileSync(keep, chunk);
     pending += chunk;
     const lines = pending.split(/\r?\n/);
     pending = lines.pop() ?? "";
