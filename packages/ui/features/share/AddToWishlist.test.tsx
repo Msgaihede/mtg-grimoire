@@ -71,9 +71,10 @@ const wanting = (
       : new Map([[wishGrainKey(cardId, at.finish ?? null, at.folderId ?? null), quantity]]),
 });
 
-function mount(
-  props: Partial<Parameters<typeof AddToWishlist>[0]> = {},
-): { onAdded: ReturnType<typeof vi.fn>; onClose: ReturnType<typeof vi.fn> } {
+function mount(props: Partial<Parameters<typeof AddToWishlist>[0]> = {}): {
+  onAdded: ReturnType<typeof vi.fn>;
+  onClose: ReturnType<typeof vi.fn>;
+} {
   const onAdded = vi.fn();
   const onClose = vi.fn();
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -160,14 +161,14 @@ describe("adding picked rows from somebody else's binder", () => {
     ).toBeInTheDocument();
     // …and the one that is not says nothing, rather than "Already wanted: 0".
     expect(
-      within(screen.getByRole("listitem", { name: /^Sol Ring/ })).queryByText(/Already on wishlist/),
+      within(screen.getByRole("listitem", { name: /^Sol Ring/ })).queryByText(
+        /Already on wishlist/,
+      ),
     ).toBeNull();
     // And the dialog says out loud what the press will do, naming the destination it will do it
     // to — the one number in this dialog that is entitled to the word *raises*.
     expect(
-      screen.getByText(
-        "1 already in your wishlist. Its quantity will increase.",
-      ),
+      screen.getByText("1 already in your wishlist. Its quantity will increase."),
     ).toBeInTheDocument();
   });
 
@@ -292,6 +293,32 @@ describe("adding picked rows from somebody else's binder", () => {
       title: "Added 1 of 2 cards to your wishlist",
       body: "The card database is busy finishing a sync.",
       tone: "warning",
+    });
+  });
+
+  /** Issue #1173: pressing Add again after a partial add adds only the rest — the first press's
+   *  cards are not raised to 2. */
+  it("adds only the cards that did not land when pressed again", async () => {
+    const user = userEvent.setup();
+    wishlistAdd
+      .mockResolvedValueOnce({ id: 1, quantity: 1, removed: false })
+      .mockRejectedValueOnce("The card database is busy finishing a sync.");
+    const { onAdded, onClose } = mount({
+      cards: [card(), card({ id: "sol", n: "Sol Ring", s: "c21", cn: "263" })],
+    });
+
+    await screen.findByRole("option", { name: "Trade targets" });
+    await user.click(addButton());
+    await screen.findByRole("alert");
+    const retry = screen.getByRole("button", { name: "Add the remaining 1 card" });
+    await user.click(retry);
+
+    await waitFor(() => expect(onAdded).toHaveBeenCalled());
+    expect(onClose).toHaveBeenCalled();
+    expect(wishlistAdd.mock.calls.map(([wish]) => wish.cardId)).toEqual(["bolt", "sol", "sol"]);
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Added 2 cards to your wishlist",
+      tone: "success",
     });
   });
 
