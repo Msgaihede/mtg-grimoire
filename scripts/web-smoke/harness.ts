@@ -599,6 +599,11 @@ async function launch(profile: string, extra: string[] = []) {
     // Asked for rather than measured: whatever it still tries meets the resolver above.
     "--disable-background-networking",
     "--disable-component-update",
+    // `SMOKE_CRASH_DUMPS=<dir>`: a crashed process's minidump, kept where the run's profile —
+    // removed when it ends — would otherwise have held it.
+    ...(process.env.SMOKE_CRASH_DUMPS
+      ? [`--crash-dumps-dir=${process.env.SMOKE_CRASH_DUMPS}`]
+      : []),
     ...extra,
   ];
   // A runner's kernel refuses the sandbox's namespaces to an unprivileged process, and the only
