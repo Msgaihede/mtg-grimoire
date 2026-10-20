@@ -193,14 +193,24 @@ export async function startRelay(pageOrigin: string) {
   const env = { ...process.env, WRANGLER_SEND_METRICS: "false", NO_COLOR: "1", FORCE_COLOR: "0" };
   // What wrangler keeps beside the Worker while it runs: the bundle it built, in `tmp/`. A
   // wrangler told to stop removes its own; one stopped as Windows stops a process tree does
-  // not, so whatever is there afterwards that was not there before is this run's, and goes.
+  // not, so what this run's wrangler made there is this run's, and goes.
+  //
+  // **What it made is read once, when it says it is ready**, and not at the end as "whatever
+  // is there that was not there before". A second run in the same checkout makes its own
+  // bundle meanwhile, and the end-of-run reading removed that one too — under a wrangler still
+  // watching it, which then rebuilt, failed ("Could not resolve …/middleware-loader.entry.ts")
+  // and held every request to its relay unanswered (measured 2026-10-20: two loops side by
+  // side, a run in four failing at a different step each time). A run that never got as far
+  // as ready falls back to the end-of-run reading: nothing of another run's can be newer.
   const scratch = join(ROOT, "infrastructure/relay/.wrangler/tmp");
-  const before = new Set(existsSync(scratch) ? readdirSync(scratch) : []);
+  const entries = () => (existsSync(scratch) ? readdirSync(scratch) : []);
+  const before = new Set(entries());
+  let made: string[] | null = null;
   const mine = () => [
     join(ROOT, persist),
-    ...(existsSync(scratch) ? readdirSync(scratch) : [])
-      .filter((entry) => !before.has(entry))
-      .map((entry) => join(scratch, entry)),
+    ...(made ?? entries().filter((entry) => !before.has(entry))).map((entry) =>
+      join(scratch, entry),
+    ),
   ];
   undo.push(async () => {
     // Each on its own, and none of them the run's verdict: one that will not go is named.
@@ -354,6 +364,7 @@ export async function startRelay(pageOrigin: string) {
   );
   setTimeout(() => failed(new Error("the local relay never said it was ready")), 90_000).unref();
   await listening;
+  made = entries().filter((entry) => !before.has(entry));
   return { port, log, said, pid: child.pid, inspector };
 }
 
