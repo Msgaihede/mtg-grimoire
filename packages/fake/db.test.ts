@@ -2037,10 +2037,8 @@ describe("the plugin commands", () => {
 });
 
 /**
- * **Driven through the writes that record history, which is not all of them.** The five card
- * writes record none here — see `journalled`'s doc, and note that Storybook's history drawer has
- * never listed a card add either, so the two are consistent rather than one being broken. A
- * category rename is the smallest write that *does*, and it exercises the same wrapper.
+ * Driven mostly through a category rename, the smallest write that records history; the card
+ * writes file steps through the same wrapper, and the last few cases drive them.
  */
 describe("undo and redo", () => {
   /** A step is recorded by the wrapper rather than by each handler, so a new deck write is
@@ -2175,6 +2173,159 @@ describe("undo and redo", () => {
 
     expect(() => h.deck_undo_apply({ deckId: 1, auditId: undo })).toThrow(/edited since/);
     expect(db.decks[0].name).toBe("Renamed");
+  });
+
+  /** Issue #1186: the card writes file steps of their own, so a Ctrl+Z after three of them takes
+   *  back the last one — never the category made before them, and never all three with it. */
+  it("files a step for each card write and undoes only the last", () => {
+    const db = makeDeckDb({ decks: [deck()] });
+    const h = allHandlers(db);
+    const ramp = h.deck_category_create({ deckId: 1, variant: "live", name: "Ramp" });
+    const add = (cardId: string) =>
+      h.deck_add_card({
+        deckId: 1,
+        cardId,
+        categoryId: ramp.id,
+        categoryName: null,
+        variant: "live",
+        quantity: 1,
+      });
+    add(BOLT.id);
+    add(BOLT_2X2.id);
+    h.deck_set_card_quantity({
+      deckId: 1,
+      cardId: BOLT.id,
+      categoryId: ramp.id,
+      variant: "live",
+      quantity: 3,
+    });
+
+    const state = h.deck_undo_state({ deckId: 1, redoId: null });
+    expect(state.undo).toMatchObject({ kind: "quantity", cardId: BOLT.id });
+    h.deck_undo_apply({ deckId: 1, auditId: state.undo!.id });
+
+    const quantities = () =>
+      Object.fromEntries(db.deckCards.map((c) => [c.cardId, c.quantity] as const));
+    expect(db.deckCategories.some((c) => c.id === ramp.id)).toBe(true);
+    expect(quantities()).toEqual({ [BOLT.id]: 1, [BOLT_2X2.id]: 1 });
+
+    h.deck_redo_apply({ deckId: 1, auditId: state.undo!.id });
+    expect(quantities()).toEqual({ [BOLT.id]: 3, [BOLT_2X2.id]: 1 });
+  });
+
+  /** Each card write's row is its crate twin's kind, so the history drawer words it. */
+  it("records the crate's kind for every card write", () => {
+    const db = makeDeckDb({ decks: [deck()] });
+    const h = allHandlers(db);
+    const main = categoryId(1, "main");
+    const side = categoryId(1, "side");
+    const kinds = () => db.deckAudit.map((a) => a.kind);
+    h.deck_add_card({
+      deckId: 1,
+      cardId: BOLT.id,
+      categoryId: main,
+      categoryName: null,
+      variant: "live",
+      quantity: 2,
+    });
+    h.deck_move_card({
+      deckId: 1,
+      cardId: BOLT.id,
+      fromCategoryId: main,
+      toCategoryId: side,
+      toCategoryName: null,
+      variant: "live",
+    });
+    h.deck_swap_printing({
+      deckId: 1,
+      fromCardId: BOLT.id,
+      toCardId: BOLT_2X2.id,
+      categoryId: side,
+      variant: "live",
+    });
+    h.deck_set_card_quantity({
+      deckId: 1,
+      cardId: BOLT_2X2.id,
+      categoryId: side,
+      variant: "live",
+      quantity: 0,
+    });
+
+    expect(kinds()).toEqual(["add", "move", "swap", "remove"]);
+    expect(db.deckUndo.map((s) => s.auditId)).toEqual(db.deckAudit.map((a) => a.id));
+    expect(db.deckAudit.map((a) => a.delta)).toEqual([2, 0, 0, -2]);
+  });
+
+  /** A step puts back only the label it changed: the table is app-wide, and a rename made from
+   *  another deck since is not this deck's to revert. */
+  it("leaves another deck's label rename alone", () => {
+    const db = makeDeckDb({ decks: [deck(), deck({ id: 2, name: "Other" })] });
+    const h = allHandlers(db);
+    const mine = h.deck_label_create({ deckId: 1, name: "Combo", color: "#ff0000" });
+    const theirs = h.deck_label_create({ deckId: 2, name: "Removal", color: "#00ff00" });
+    h.deck_label_update({ deckId: 1, id: mine.id, name: "Engine", color: "#ff0000" });
+    h.deck_label_update({ deckId: 2, id: theirs.id, name: "Answers", color: "#00ff00" });
+
+    const undo = h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id;
+    h.deck_undo_apply({ deckId: 1, auditId: undo });
+
+    const name = (id: number) => db.deckLabels.find((l) => l.id === id)?.name;
+    expect(name(mine.id)).toBe("Combo");
+    expect(name(theirs.id)).toBe("Answers");
+  });
+
+  /** Undo is an edit: it moves the deck to the top of the gallery, and puts back no disclosure
+   *  — `DECK_FIELDS` names neither `updated_at` nor `tokens_open`. */
+  it("moves updatedAt forward and leaves the disclosures as they are", () => {
+    const db = makeDeckDb({ decks: [deck()] });
+    const h = allHandlers(db);
+    h.deck_update({ id: 1, patch: { name: "Renamed" } });
+    const edited = db.decks[0].updatedAt;
+    h.deck_update({ id: 1, patch: { tokensOpen: true } });
+
+    h.deck_undo_apply({
+      deckId: 1,
+      auditId: h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id,
+    });
+
+    expect(db.decks[0].name).toBe("Test deck");
+    expect(db.decks[0].tokensOpen).toBe(true);
+    expect(db.decks[0].updatedAt).toBeGreaterThan(edited);
+  });
+
+  /**
+   * `apply_reversal`'s check: a write that files no step changed what the step would put back,
+   * so the undo is refused, **retired** — the next Ctrl+Z is the change below it — and writes
+   * nothing. A redo refused the same way changes nothing either.
+   */
+  it("retires an undo the deck no longer matches, and refuses a stale redo", () => {
+    const db = makeDeckDb({ decks: [deck()] });
+    const h = allHandlers(db);
+    h.deck_update({ id: 1, patch: { name: "Renamed" } });
+    const below = h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id;
+    h.deck_add_card({
+      deckId: 1,
+      cardId: BOLT.id,
+      categoryId: categoryId(1, "main"),
+      categoryName: null,
+      variant: "live",
+      quantity: 2,
+    });
+    const step = h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id;
+    // A write with no step of its own — a sync pull, or the cut — moved the row the step made.
+    db.deckCards[0].quantity = 5;
+
+    expect(() => h.deck_undo_apply({ deckId: 1, auditId: step })).toThrow(/taken off the undo/);
+    expect(db.deckCards[0].quantity).toBe(5);
+    expect(h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id).toBe(below);
+
+    h.deck_undo_apply({ deckId: 1, auditId: below });
+    expect(db.decks[0].name).toBe("Test deck");
+    expect(db.deckCards[0].quantity).toBe(5);
+
+    db.decks[0].name = "Changed elsewhere";
+    expect(() => h.deck_redo_apply({ deckId: 1, auditId: below })).toThrow(/edited since/);
+    expect(db.decks[0].name).toBe("Changed elsewhere");
   });
 });
 
