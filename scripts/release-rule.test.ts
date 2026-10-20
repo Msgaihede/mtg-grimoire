@@ -850,6 +850,8 @@ describe("release.yml", () => {
   });
 
   it.each([
+    "release-please",
+    "build",
     "android",
     "android-sign",
     "web",
@@ -862,6 +864,7 @@ describe("release.yml", () => {
     "announce",
     "changelog-write",
     "changelog-commit",
+    "publish",
   ])("%s has a deadline", (name) => {
     expect(jobs[name]).toMatch(/^ {4}timeout-minutes: \d+$/m);
   });
