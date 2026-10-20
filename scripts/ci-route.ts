@@ -163,8 +163,8 @@ export const ARMS = [
   // The release notes, one file a release (`changelog/0.43.0.md`). `frontend`, because
   // `scripts/changelog/files.test.ts` reads every one and holds it to the shape the generator
   // writes — and a correction to a published note is a pull request that changes nothing else.
-  // It reads them through `import.meta.glob`, which `ci-route.test.ts`'s census does not see,
-  // so this arm is here by hand. **Above the prose arm**, whose `*.md` would take them.
+  // It reads them through `import.meta.glob`, which `ci-route.test.ts`'s census follows since
+  // issue #1196. **Above the prose arm**, whose `*.md` would take them.
   { match: ["changelog/*"], jobs: ["frontend"] },
 
   // **The Neural scanner's model files** (2026-10-20): `crates/card-neural/models/`, in git as a
@@ -173,6 +173,23 @@ export const ARMS = [
   // build's pin on the four files (`apps/light/vite.config.ts`), and `assets.test.ts` reads it.
   // **Above the prose arm**, whose `*.md` would take the README and skip the build that reads it.
   { match: ["crates/card-neural/models/*"], jobs: CORE_SIDE },
+
+  // **Every CLAUDE.md** (issue #1196). `scripts/claude-md.test.ts` requires the ones it names and
+  // holds each to a line budget, so one deleted is red in `frontend` and nowhere else — the
+  // `changes` job's own `check-claude-md.ts` run catches the budget, not a file that is gone. The
+  // test finds them with a walk, and the census holds this arm to that walk. **Above the training
+  // pipeline's arm**, which runs nothing, **and the prose arm**.
+  { match: ["CLAUDE.md", "*/CLAUDE.md"], jobs: ["frontend"] },
+
+  // **The two Workers' prose** (issue #1196): `hosting.test.ts` and `wrangler.test.ts` sweep
+  // every file of their Worker, README among them, for an account id — anything shaped like
+  // one — and a secret's name. So a runbook that pastes `CLOUDFLARE_ACCOUNT_ID=<32 hex>` is red in
+  // `frontend` before it lands on `main`, not on the next unrelated pull request. `frontend` only:
+  // no build reads a Markdown file. **Above the prose arm**, whose `*.md` would take them.
+  {
+    match: ["infrastructure/app-worker/*.md", "infrastructure/scan-worker/*.md"],
+    jobs: ["frontend"],
+  },
 
   // **The Neural training pipeline** (2026-10-20): Python that runs on Modal and on the two
   // `neural-*.yml` workflows' runners, and nowhere in this gate — no crate compiles it, no job
@@ -183,8 +200,11 @@ export const ARMS = [
   { match: ["crates/card-neural/train/*"], jobs: [] },
 
   // Affects no job. Nothing here is compiled, linted or tested: `eslint .` never sees a `.md`,
-  // and no test on either side reads one (`ci-route.test.ts` holds that to the census). **Keep
-  // this list small — it is the only arm that can wrongly skip work.**
+  // and every `.md` a test reads has an arm above this one. `ci-route.test.ts` holds that to the
+  // census — `?raw` imports, `import.meta.glob` patterns and `claude-md.test.ts`'s walk — and
+  // what the census cannot see is a read through `node:fs` by a computed path, so a new one of
+  // those owes this arm an exception by hand. **Keep this list small — it is the only arm that
+  // can wrongly skip work.**
   {
     match: ["docs/*", "*.md", ".vscode/*", ".gitignore", ".gitattributes"],
     jobs: [],
@@ -392,8 +412,9 @@ export const ARMS = [
   // tests, and that is every job that reads it. **Not `rust`**: no Rust source reads a file here
   // — the crossing runs the other way, as it does for the hosting Worker (`label.test.ts` and
   // `wrangler.test.ts` read `crates/grimoire-core/src/scanner_submit.rs`), and the engine's arm
-  // already sets `frontend`. **Not `web`**: no build copies or runs it. Its README is prose, by
-  // the arm above every tree's. `release.yml`'s `scan-deploy` deploys it, at a release tag.
+  // already sets `frontend`. **Not `web`**: no build copies or runs it. Its README is
+  // `frontend`'s alone, by the arm above the prose arm. `release.yml`'s `scan-deploy` deploys it,
+  // at a release tag.
   { match: ["infrastructure/scan-worker/*"], jobs: ["frontend"] },
 
   // The one tool that deploys the hosting Worker, pinned with everything under it, in a folder
