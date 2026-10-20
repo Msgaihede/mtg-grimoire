@@ -85,7 +85,7 @@ Related: the `running-the-app` skill (locks and ports), [live-ui-verification.md
   real name and under the shipped policy; `--measure` adds a minute's profile of the idle
   loop, twice. It runs the pinned wrangler (`npm ci --ignore-scripts --prefix
   infrastructure/wrangler` first), or the `wrangler.js` that `WRANGLER` names. **A walk whose
-  browser's network service died is walked again, at most twice** (Chrome 155.0.8059.39's fault, issue
+  browser's network service died is walked again, up to five walks in all** (Chrome 155.0.8059.39's fault, issue
   #1296 — `scripts/web-smoke/fault.ts`); any other failure is final. A wait that never ends
   names the requests left unanswered, what each socket heard and the relay's last lines;
   `SYNC_SMOKE_RELAY_LOG=<file>`, `SMOKE_BROWSER_LOG=<file>` and `SMOKE_CRASH_DUMPS=<dir>` keep

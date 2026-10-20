@@ -45,9 +45,11 @@
 // happen ({@link BrowserFault}). A run that asks for it ({@link attempts}) then runs the whole walk
 // again from nothing — new relay, new browsers, new profiles — **a bounded number of times, and
 // only for this**: any other failure is final at once, and a fault on the last walk is a failure
-// that says it is the browser's. The sync walk takes three: under load the fault met one walk in
-// five to one in three in the reproduction, which a single second walk would still leave red a
-// few runs in a hundred.
+// that says it is the browser's. **The sync walk takes five.** A walk alone on an idle machine met
+// the fault about one time in four (2 walks in 8), and two side by side about as often (13 in
+// 46), so three walks would still leave a run red a few times in a hundred and five leave it red
+// about once in two hundred. A faulted walk stops at its fault — mostly in its first half-minute
+// — so the five fit CI's ten minutes.
 
 /** What Chrome writes, on any host, when its network service died under it. */
 export const NETWORK_SERVICE_DIED = "Network service crashed or was terminated";
