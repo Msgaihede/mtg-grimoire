@@ -6,7 +6,8 @@
 //! - **`open(directory)`** — the OPFS pool, the two databases on one connection, the state;
 //! - **`call(name, args, body?)`** — every command, forwarded to `grimoire_core::dispatch`, so
 //!   a command the core's table does not have is refused here in the table's own words;
-//! - **`listen(handler)`** — the engine's events, handed to the Worker's script.
+//! - **`listen(handler)`** — the engine's events, handed to the Worker's script;
+//! - **`scanner_labels()`** — every printing's label as bytes, for the scanner's own Worker.
 //!
 //! Built with `node scripts/build-wasm.ts` into `dist-wasm/` (`wasm-bindgen --target web`:
 //! `grimoire_web.js` and `grimoire_web_bg.wasm`).

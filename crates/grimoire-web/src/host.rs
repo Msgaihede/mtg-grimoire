@@ -1,8 +1,8 @@
 //! **What the web host does, with no browser in it** — so every decision it makes is compiled
 //! and tested on a desktop.
 //!
-//! `glue.rs` is the browser: three `#[wasm_bindgen]` exports, the OPFS pool, a `thread_local`
-//! for the state. Everything those three *decide* is here, and each takes what a browser would
+//! `glue.rs` is the browser: four `#[wasm_bindgen]` exports, the OPFS pool, a `thread_local`
+//! for the state. Everything those four *decide* is here, and each takes what a browser would
 //! have handed it as an argument: where the databases are ([`start`]), whether the state exists
 //! yet ([`call`]), and whether somebody already asked ([`Once`]).
 

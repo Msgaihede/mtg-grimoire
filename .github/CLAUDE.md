@@ -17,9 +17,9 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
   - Uses `git diff --name-only --no-renames` (`fetch-depth: 0`) and pipes changed paths to `scripts/ci-route.ts`.
   - Evaluated using strict `case` semantics: **first match wins**, and `*` crosses `/`.
   - `apps/desktop/src-tauri/**` routes to `frontend` and `rust` (frontend tests inspect Rust files as text).
-  - `crates/grimoire-core/**` routes to `frontend`, `rust`, and `core` (must stay above `crates/*`).
-  - `crates/*` routes to `frontend`, `rust`, and `core` (covers `crates/card-scanner`).
-  - `crates/grimoire-web/**` and `crates/grimoire-scan/**` (the web host's two modules) route to `frontend`, `rust`, and `web`.
+  - `crates/grimoire-web/**` and `crates/grimoire-scan/**` (the web host's two modules) route to `frontend`, `rust`, and `web`; `crates/grimoire-play/**` (desktop-only) to `frontend` and `rust`. All must sit above `crates/grimoire-core/*` and `crates/*`.
+  - `crates/grimoire-core/**` routes to `frontend`, `rust`, `core`, and `web` (must stay above `crates/*`).
+  - `crates/*` routes to `frontend`, `rust`, `core`, and `web` (covers `crates/card-scanner`).
   - `apps/light/src-tauri/**` (the phone's host) routes to `frontend`, `rust`, and `android`; `apps/light/vite.config.ts` to `frontend`, `rust`, `android`, and `web`; `apps/light/vite.sw.ts` to `frontend` and `web`. All three must sit above `apps/light/*`, which routes the rest of the light app to `frontend`, `storybook`, and `web`.
   - `apps/desktop/index.html` routes to `frontend` and `storybook` (above `apps/desktop/*`, which with `packages/ui/*` routes to `frontend`, `storybook`, and `web`); `packages/fake/*` to `frontend` and `storybook` (`packages/fake/aliases.ts` to `web` as well, above it).
   - Root `vite.base.ts`, `vite.watch.ts`, `vitest.config.ts`, `tsconfig*.json` and `infrastructure/*/tsconfig.json` route to `frontend`, `storybook`, and `web`.
@@ -72,7 +72,7 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
   - All third-party GitHub actions must use full 40-character commit SHAs with trailing version tags (`@<sha> # vX.Y.Z`).
   - Dependabot updates action SHAs weekly via grouped pull requests over `/` and `/.github/actions/*`.
   - `persist-credentials: false` is required on all checkouts to prevent leaking tokens.
-  - Workflows must declare `permissions: {}` top-level and grant minimal required permissions per job.
+  - Workflows must declare a top-level `permissions:` that grants no write (`{}` in `release.yml` and `scanner-bundle.yml`, `contents: read` in `ci.yml` and `android-emulator.yml`) and grant anything more per job.
   - **Fence**: `scripts/actions-pinned.test.ts` enforces action SHA pinning and permissions.
 - **Scripts a workflow runs must exist**: `scripts/workflow-scripts.test.ts` fails if a workflow, composite action, Tauri hook or package script calls a `pnpm <name>` that `package.json` lacks. It reads only `pnpm <name>`, `pnpm run <name>` and the `-w` forms, refuses a `--` on a pnpm line, and refuses any npm, npx, pnpx or corepack line but the deploy tool's `npm ci --ignore-scripts`.
 
