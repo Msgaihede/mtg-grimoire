@@ -25107,8 +25107,8 @@ export function writeHandlers(db: FakeDb) {
      *
      * **All five `share_*` commands are in `writeHandlers`, and two of them are reads.** That is
      * `sync_relay_status`' call one feature over and it is the crate's own words rather than an
-     * inference: four of the five go through `on_the_write_connection`, so a running sync really
-     * does refuse them. Which table a handler sits in here is a fact about the *lock*, never
+     * inference: four of the five go through `on_the_lane`, which takes the sync lane as a press
+     * does, so a running sync really does refuse them. Which table a handler sits in here is a fact about the *lock*, never
      * about whether the command sounds like a read. **`share_open` is the fifth and the
      * exception since 2026-09-28** (issue #545): it holds no connection while it fetches, so it
      * answers through a sync — see its own doc below.
