@@ -283,7 +283,6 @@ it("stops listening when it unmounts", async () => {
  * subscribe itself.
  */
 
-
 /**
  * Outside a Tauri window (a plain `vite dev`, a story) the registration never lands —
  * `lib/core/tauri.ts` swallows it — and losing the fast path costs less here than anywhere
