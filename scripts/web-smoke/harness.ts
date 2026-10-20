@@ -49,6 +49,9 @@ type FixtureCard = {
   card_faces?: { image_uris?: Record<string, string> }[];
 };
 type Fixture = { body: Buffer; headers: Record<string, string | null> };
+/** A request `intercept` let through to a host that really answers, and how continuing it went:
+ *  `null` until the browser answered the `continueRequest`, then `"ok"` or its refusal. */
+type Passed = { method: string; url: string; at: number; continued: string | null };
 type Routes = Map<string, Fixture>;
 type BrowseOptions = {
   args?: string[];
@@ -696,6 +699,8 @@ async function intercept(
 ) {
   /** Each cross-origin request that has a fixture, in order: `{ method, url, headers }`. */
   const asked: { method: string; url: string; headers: Record<string, string> }[] = [];
+  /** Each request `through` let go, in order. */
+  const passed: Passed[] = [];
   /** URLs whose answer waits on a caller: `url -> promise`. */
   const held = new Map<string, Promise<void>>();
   /** No network: a request that has a fixture is still written down, and then fails. */
@@ -709,8 +714,18 @@ async function intercept(
       return answer("Fetch.continueRequest");
     }
     if (through(request.url)) {
+      const entry: Passed = {
+        method: request.method,
+        url: request.url,
+        at: Date.now(),
+        continued: null,
+      };
+      passed.push(entry);
       await gate(request);
-      return answer("Fetch.continueRequest");
+      return browser.send("Fetch.continueRequest", { requestId }).then(
+        () => (entry.continued = "ok"),
+        (error: Error) => (entry.continued = error.message),
+      );
     }
     // The fragment-free URL as asked, query included: a fixture answers one address.
     const route = routes.get(request.url);
@@ -748,6 +763,7 @@ async function intercept(
 
   return {
     asked,
+    passed,
     /** Take every other host away, or give them back. */
     offline(gone: boolean) {
       offline = gone;
@@ -896,11 +912,13 @@ async function openPage(
     if (exceptionDetails) throw new Error(exceptionDetails.exception?.description ?? "threw");
     return result.value as T;
   };
-  /** Poll until `expression` is truthy; answer its value, or say what the page showed instead. */
+  /** Poll until `expression` is truthy; answer its value, or say what the page showed instead —
+   *  and `more`, what else a run can say about why it never was. */
   const until = async <T = unknown>(
     what: string,
     expression: string,
     withinMs = 90_000,
+    more: () => Promise<string> = async () => "",
   ): Promise<NonNullable<T>> => {
     const stop = performance.now() + withinMs;
     for (;;) {
@@ -910,7 +928,8 @@ async function openPage(
       if (value) return value;
       if (performance.now() > stop || performance.now() - started > run.deadlineMs) {
         const shown = await evaluate("document.body.innerText").catch(() => "(no document)");
-        return fail(`${what} — never happened. The page shows:\n${shown}`);
+        const also = await more().catch((error) => ` (and asking why failed: ${error.message})`);
+        return fail(`${what} — never happened.${also} The page shows:\n${shown}`);
       }
       await pause(250);
     }

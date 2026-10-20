@@ -388,13 +388,19 @@ export async function device(
   // Before the page exists: a card file that is to be kept on its way is held from the first
   // ask. `releaseCards` lets it — and every later ask for it — through.
   const releaseCards = own.holdCards ? hosts.hold(CARDS_FILE) : () => undefined;
-  const page = await openPage(
+  const opened = await openPage(
     browser,
     `${origin}/settings`,
     hosts.check,
     policy,
     viewport(browser, width, height),
   );
+  // Every wait on the page says, when it never ends, what `trouble` finds.
+  const page = {
+    ...opened,
+    until: <T = unknown>(what: string, expression: string, withinMs?: number) =>
+      opened.until<T>(what, expression, withinMs, trouble),
+  };
   // The page's own requests and their failures; the engine's are its Worker's, switched on by
   // the harness as the Worker starts.
   await browser.send("Network.enable", {}, page.sessionId);
@@ -456,8 +462,32 @@ export async function device(
       const closed = mine("Network.webSocketClosed").length > 0 ? "closed" : "open";
       return `${shape(new URL(made.url).pathname)} ${closed}, heard [${heard.join(", ")}]`;
     });
+    // Each request to the relay the browser sent and never finished or failed, and where the
+    // interception left it: a request that hangs leaves a loop `connecting` with nothing logged.
+    const ended = new Set(
+      [...events("Network.loadingFinished"), ...events("Network.loadingFailed")].map(
+        (event) => `${event.sessionId} ${event.params.requestId}`,
+      ),
+    );
+    const now = Date.now();
+    const hanging = events("Network.requestWillBeSent")
+      .filter(
+        (sent) =>
+          sent.params.request.url.startsWith(`${relay.base}/`) &&
+          !ended.has(`${sent.sessionId} ${sent.params.requestId}`),
+      )
+      .map((sent) => {
+        const { method, url } = sent.params.request;
+        const held = hosts.passed.filter((entry) => entry.method === method && entry.url === url);
+        const continued = held.at(-1)?.continued ?? "never paused";
+        return (
+          `${method} ${shape(new URL(url).pathname)} for ` +
+          `${Math.round((now - sent.params.wallTime * 1000) / 1000)} s (continued: ${continued})`
+        );
+      });
     return (
       ` Requests that failed: ${failed.join("; ") || "none"}. Logged: ${logged.join("; ") || "nothing"}.` +
+      ` Unanswered: ${hanging.join("; ") || "none"}.` +
       ` Sockets: ${sockets.join("; ") || "none"}.` +
       (alert ? ` The page's alert: ${alert}` : "")
     );
