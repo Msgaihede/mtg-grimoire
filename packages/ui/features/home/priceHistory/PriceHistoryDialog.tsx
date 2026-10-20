@@ -465,12 +465,11 @@ function useMountOpener(openerRef: React.RefObject<HTMLElement | null>): void {
  * A real radio group rather than three toggles: exactly one range is true at a time, and
  * `aria-checked` is the only thing that says which to a reader who cannot see the fill.
  *
- * **Every range is a Tab stop, as in the app's other button radio groups** (`NoteCardsDialog`,
- * `TheoryDiffDialog`, `ExportDialog`), and the arrows move the choice as well. Not a roving
- * `tabIndex`: `trapTab` counts every `<button>` in the panel as a stop whatever its `tabIndex`, so
- * a roving group is a list that disagrees with the trap's — harmless in the middle of the panel,
- * and the silent Tab-out-of-an-`aria-modal` bug that file documents the day the group is first or
- * last.
+ * **One Tab stop, and the arrows move the choice** — a roving `tabIndex` through `radioKeys`,
+ * as every radio group in the app is since #558. ⚠️ `trapTab` still counts every `<button>` in
+ * the panel as a stop whatever its `tabIndex`, so the group's list of stops disagrees with the
+ * trap's — harmless while the group sits in the middle of the panel, and the silent
+ * Tab-out-of-an-`aria-modal` bug the day it is first or last (#1184).
  *
  * **Drawn as the deck editor's `Theory | Actual` switch** — one bordered, clipped group, the
  * pressed half filled — because it is the same kind of control: a choice of which one thing the

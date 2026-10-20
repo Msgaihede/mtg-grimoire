@@ -3679,8 +3679,8 @@ pub fn delete_deck(conn: &Connection, id: i64) -> Result<(), String> {
 }
 
 /// One `deck_cards` row on its way from a deck to its copy — every column that describes the
-/// card, with the two that describe *which deck's* category and label it is (`category_id`,
-/// `label_id`) still holding the source's ids, for [`duplicate_deck`] to remap.
+/// card, with `category_id` still holding the source's id, for [`duplicate_deck`] to remap.
+/// `label_id` comes across verbatim: a label is one app-wide row (user schema v21).
 struct CopiedCard {
     category_id: i64,
     label_id: Option<i64>,
@@ -3715,8 +3715,8 @@ struct CopiedCard {
 /// **`notes` was on that list until user schema v43 and its replacement is not**, which is a
 /// change of substance rather than of spelling. A single paragraph was a property of the deck
 /// and copied like `description`; `deck_notes` is a table of rows the reader wrote deliberately,
-/// each able to name cards, and copying it would need the same two id maps the categories and
-/// labels below need — for rows nobody asked to have twice. A copy is a draft, and a draft
+/// each able to name cards, and copying it would need the same kind of id map the categories
+/// below need — for rows nobody asked to have twice. A copy is a draft, and a draft
 /// starts with an empty notebook.
 /// `separate_x_group` is on that side of the line for the plainest reason available: it decides
 /// how the list is *read*, and a copy that reads differently from its original is a surprise
@@ -3754,13 +3754,13 @@ struct CopiedCard {
 /// and the copy's categories do not exist yet at that statement. The copy is born on
 /// [`AUTO_CATEGORY`] and pointed at its own pile once the map is built.
 ///
-/// **Categories and labels are new rows with new ids**, and the cards are remapped onto them.
-/// This is the part a "copy the cards" implementation gets wrong invisibly: `deck_cards`
-/// stores a `category_id`, so copying a card row verbatim would file the copy's card under
-/// the *original's* category — and then deleting the original would take the copy's cards
-/// with it through `ON DELETE CASCADE`. Two id maps, built as the rows are written, are what
-/// keep the copy a copy. `label_id` maps the same way and falls back to NULL, which cannot
-/// happen (a card's label is a label of its own deck) but is the honest answer if it ever does.
+/// **Categories are new rows with new ids**, and the cards are remapped onto them. This is the
+/// part a "copy the cards" implementation gets wrong invisibly: `deck_cards` stores a
+/// `category_id`, so copying a card row verbatim would file the copy's card under the
+/// *original's* category — and then deleting the original would take the copy's cards with it
+/// through `ON DELETE CASCADE`. The id map, built as the rows are written, is what keeps the
+/// copy a copy. **`label_id` is copied verbatim**: since user schema v21 a label is one app-wide
+/// row, not a deck's, so the copy wears the very labels its original does.
 ///
 /// The copy is **not** handed [`crate::deck_meta::ensure_predefined_categories`]: it inherits
 /// the source's four per list, because every deck has them — the v8 migration backfilled every
@@ -3903,13 +3903,13 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
     // `INSERT … SELECT` above deliberately leaves at its own DEFAULT for that reason. It holds a
     // `deck_categories.id`, and the copy's piles are the new rows just written, so carrying the
     // number across verbatim would point the duplicate at a pile of the *original* — the exact
-    // failure the two id maps exist to prevent for `deck_cards`, and a quieter one here, because
+    // failure the id map exists to prevent for `deck_cards`, and a quieter one here, because
     // nothing would break: adds would simply file into a column the reader is not looking at.
     //
     // `AUTO_CATEGORY` is the answer for a source that was already on Auto (it is in no map, and
     // it is what the copy was born with) and for a source pointing at a pile that has gone,
     // which the clean-up in [`crate::deck_meta::delete_category`] means cannot happen and which
-    // is the honest answer if it ever does — `label_id`'s fallback below, for its reason.
+    // is the honest answer if it ever does.
     let source_default: i64 = tx
         .query_row(
             "SELECT default_category_id FROM decks WHERE id = ?1",

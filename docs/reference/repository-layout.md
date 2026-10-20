@@ -10,8 +10,8 @@ reasons: [the spec](../superpowers/specs/2026-10-08-repository-layout-and-worksp
 | `apps/share/` | The public viewer page the share Worker serves. |
 | `packages/ui/` | The shared frontend: `components/`, `features/`, `lib/`. `@/` means this folder. All three apps are built from it. |
 | `packages/fake/` | The engine faked in TypeScript, for Storybook, the tests and the light app's `--mode fake`. |
-| `crates/` | The shared Rust: `grimoire-core` (the engine), `card-scanner`, and the web host's two modules, `grimoire-web` and `grimoire-scan`. |
-| `infrastructure/` | The three Cloudflare Workers: `relay/`, `share-worker/`, `app-worker/`. |
+| `crates/` | The shared Rust: `grimoire-core` (the engine), `card-scanner`, the web host's two modules, `grimoire-web` and `grimoire-scan`, and `grimoire-play` (the goldfish board's rules engine, desktop-only). |
+| `infrastructure/` | The four Cloudflare Workers: `relay/`, `share-worker/`, `app-worker/`, `scan-worker/`. |
 
 **Build outputs** sit in the app that makes them — `apps/desktop/dist/`, `apps/light/dist-web/`,
 `apps/light/dist-mobile/`, `apps/share/dist-share/` — except two that cargo makes or feeds:
@@ -89,7 +89,7 @@ one dependency, a lockfile of its own, installed with `npm ci --ignore-scripts`.
 deploy job installs it and nothing else.
 
 **TypeScript** has one program per package (`tsc -p <folder>`), all extending `tsconfig.base.json`
-except the three Workers'. **Vitest** has one project per package, rooted at the repository:
+except the four Workers'. **Vitest** has one project per package, rooted at the repository:
 `pnpm exec vitest run --project light`.
 
 ## Where things were
